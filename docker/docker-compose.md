@@ -33,6 +33,27 @@ docker compose run --rm -it niminal ./niminal
 `python3` fixture servers from inside the container. Pass `-it` for the
 TUI so keybindings work.
 
+## Idle resource smoke
+
+SCOPE wants ~0% CPU while sitting at the prompt. From the repo root:
+
+```sh
+./scripts/idle_smoke.sh                 # 60s default
+IDLE_SECS=15 ./scripts/idle_smoke.sh    # quicker check
+nimble idleSmoke
+```
+
+Or in Docker (Linux `/proc` path — preferred for wakeup counts):
+
+```sh
+docker compose run --rm niminal ./scripts/idle_smoke.sh
+```
+
+The script builds niminal, starts it in console mode with a dummy API key
+(no provider calls), blocks at the prompt, samples CPU / RSS / voluntary
+context switches, then sends `/quit`. It fails if the deltas look like a
+poll loop.
+
 ## Env vars
 
 Any host environment variable listed in `docker-compose.yml` under

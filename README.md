@@ -7,6 +7,7 @@ A minimal native coding agent written in Nim.
 ```sh
 nimble build
 nimble test
+nimble idleSmoke   # ~60s at prompt; near-zero CPU (see scripts/idle_smoke.sh)
 ```
 
 niminal depends on the sibling [nimgent](../nimgent) package (LLM client
@@ -60,6 +61,9 @@ Configuration example:
 ```
 
 Run `./niminal` from the workspace you want the agent to modify.
+Pass a prompt on the command line for a one-shot turn that exits when
+done: `./niminal fix the failing parser test`. Add `-i` /
+`--interactive` to run that prompt and then keep the REPL open.
 Use `/session` to print the current session ID and `/resume` to list or
 resume sessions. `/resume` lists this workspace (newest 20), with recency
 and the first user message; `/resume ID` restores that transcript and

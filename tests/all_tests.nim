@@ -22,6 +22,7 @@ import nimgent/[anthropic, openrouter]
 import ../src/tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
 import ../src/extensions
 import ../src/hooks
+import ../src/main
 
 proc freshDir(): string =
   result = getTempDir() / ("niminal-test-" & $getCurrentProcessId() & "-" &
@@ -2211,4 +2212,31 @@ echo '{"arguments":{"command":"echo from-hook"}}'
     agent.session.addUserMessage("go")
     agent.runTurn(quietUi())
     check seen == "echo from-hook"
+
+suite "cli prompt args":
+  test "prompt words are one-shot by default":
+    let cli = parseCliArgs(["fix", "the", "parser"])
+    check cli.error.len == 0
+    check cli.prompt == "fix the parser"
+    check not cli.interactive
+    check not cli.resumeLatest
+
+  test "--interactive keeps the REPL after a prompt":
+    let cli = parseCliArgs(["-i", "do", "x"])
+    check cli.interactive
+    check cli.prompt == "do x"
+    let again = parseCliArgs(["--interactive", "--", "-weird", "flag"])
+    check again.interactive
+    check again.prompt == "-weird flag"
+
+  test "session and resume combine with a prompt":
+    let cli = parseCliArgs(["--resume", "--session", "abc", "continue"])
+    check cli.resumeLatest
+    check cli.sessionId == "abc"
+    check cli.prompt == "continue"
+
+  test "unknown flag errors before the prompt":
+    let cli = parseCliArgs(["--nope", "hello"])
+    check cli.error.len > 0
+    check "Unknown option" in cli.error
 

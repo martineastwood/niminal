@@ -11,3 +11,6 @@ requires "nim >= 2.0.0"
 
 task test, "Run the test suite":
   exec "nim c -r --hints:off tests/all_tests.nim"
+
+task idleSmoke, "Idle CPU/wakeup smoke (IDLE_SECS=60 by default)":
+  exec "scripts/idle_smoke.sh"
