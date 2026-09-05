@@ -4,6 +4,7 @@ import std/[json, strutils]
 import config, session, compaction, instructions, skills, models_dev, commands
 import workspace
 import images
+import extensions
 import nimgent
 import nimgent/[anthropic, openai]
 import tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
@@ -40,6 +41,8 @@ type
     tools*: ToolRegistry
     ## Runtime thinking override; empty means use config.thinking.
     thinking*: string
+    ## Startup warnings from extension discovery (invalid manifests, collisions).
+    extensionWarnings*: seq[string]
 
 proc effectiveThinking*(agent: Agent): string =
   if agent.thinking.len > 0: agent.thinking else: agent.config.thinking
@@ -137,6 +140,8 @@ proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   result.tools.register(write[0], write[1])
   result.tools.register(bash[0], bash[1])
   result.tools.register(skill[0], skill[1])
+  result.extensionWarnings = result.tools.registerExtensions(
+    config.workspace, config.maxToolOutputBytes)
 
 proc buildRequest*(agent: Agent): ProviderRequest =
   let opts = providerOptions(agent.config, agent.thinking)

@@ -20,6 +20,7 @@ import ../src/commands
 import nimgent
 import nimgent/[anthropic, openrouter]
 import ../src/tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
+import ../src/extensions
 
 proc freshDir(): string =
   result = getTempDir() / ("niminal-test-" & $getCurrentProcessId() & "-" &
@@ -1731,4 +1732,127 @@ suite "images":
     check req.messages[0].content[1].kind == ckImage
     check req.messages[0].content[1].data.len > 0
     check req.messages[0].content[1].path == "tile.png"
+
+suite "external tools":
+  proc writeExt(root, folder, name, runBody: string, timeout = 30) =
+    let dir = root / folder / "tools" / name
+    createDir(dir)
+    var manifest = %*{
+      "name": name,
+      "description": "Test tool " & name,
+      "command": ["./run"],
+      "input_schema": {"type": "object", "properties": {}}
+    }
+    if timeout != 30:
+      manifest["timeout_seconds"] = %timeout
+    writeFile(dir / "tool.json", $manifest)
+    writeFile(dir / "run", "#!/bin/sh\n" & runBody & "\n")
+    inclFilePermissions(dir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
+
+  proc findExt(tools: seq[ExtensionTool], name: string): ExtensionTool =
+    for t in tools:
+      if t.name == name:
+        return t
+    raise newException(ValueError, "extension not found: " & name)
+
+  test "valid manifest registers; broken tool.json warns and is skipped":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".niminal", "echo_ok", "cat >/dev/null\necho '{\"ok\":true}'")
+    createDir(root / ".niminal" / "tools" / "broken")
+    writeFile(root / ".niminal" / "tools" / "broken" / "tool.json", "{not json")
+    var reg: ToolRegistry
+    let warnings = reg.registerExtensions(root)
+    var hasBroken = false
+    for w in warnings:
+      if "broken" in w:
+        hasBroken = true
+    check hasBroken
+    var names: seq[string] = @[]
+    for d in reg.definitions:
+      names.add d.name
+    check "echo_ok" in names
+    check "broken" notin names
+
+  test ".niminal tools override .agent tools with the same name":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".agent", "shared", "cat >/dev/null\necho '{\"from\":\".agent\"}'")
+    writeExt(root, ".niminal", "shared", "cat >/dev/null\necho '{\"from\":\".niminal\"}'")
+    let discovered = discoverExtensions(root)
+    let shared = findExt(discovered.tools, "shared")
+    check ".niminal" in shared.dir
+    let result = runExtension(shared, %*{}, root)
+    check not result.isError
+    check "\".niminal\"" in result.output
+
+  test "builtin name is skipped with a warning":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".niminal", "bash", "echo '{\"nope\":true}'")
+    var reg: ToolRegistry
+    let warnings = reg.registerExtensions(root)
+    var collision = false
+    for w in warnings:
+      if "bash" in w and "built-in" in w:
+        collision = true
+    check collision
+    for d in reg.definitions:
+      check d.name != "bash"
+
+  test "script extension succeeds":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".niminal", "greet",
+      "cat >/dev/null\necho '{\"hello\":\"world\"}'")
+    let ext = findExt(discoverExtensions(root).tools, "greet")
+    let result = runExtension(ext, %*{"x": 1}, root)
+    check not result.isError
+    check "\"hello\"" in result.output
+    check "\"world\"" in result.output
+
+  test "binary extension succeeds":
+    let root = freshDir()
+    defer: removeDir(root)
+    let dir = root / ".niminal" / "tools" / "echo_json"
+    createDir(dir)
+    writeFile(dir / "tool.json", $(%*{
+      "name": "echo_json",
+      "description": "Echo a JSON object",
+      "command": ["/bin/echo", "{\"bin\":true}"],
+      "input_schema": {"type": "object", "properties": {}}
+    }))
+    let ext = findExt(discoverExtensions(root).tools, "echo_json")
+    let result = runExtension(ext, %*{}, root)
+    check not result.isError
+    check "\"bin\"" in result.output
+
+  test "nonzero exit is an error":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".niminal", "fail",
+      "echo '{\"error\":\"nope\"}'\nexit 1")
+    let ext = findExt(discoverExtensions(root).tools, "fail")
+    let result = runExtension(ext, %*{}, root)
+    check result.isError
+    check "\"error\"" in result.output
+
+  test "timeout_seconds expires a sleeping tool":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".niminal", "slow", "sleep 5\necho '{}'", timeout = 1)
+    let ext = findExt(discoverExtensions(root).tools, "slow")
+    let result = runExtension(ext, %*{}, root)
+    check result.isError
+    check "TIMEOUT" in result.output
+
+  test "non-JSON stdout is an error and includes raw text":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".niminal", "plain", "cat >/dev/null\necho not-json-at-all")
+    let ext = findExt(discoverExtensions(root).tools, "plain")
+    let result = runExtension(ext, %*{}, root)
+    check result.isError
+    check "not valid JSON" in result.output
+    check "not-json-at-all" in result.output
 

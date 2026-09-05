@@ -29,6 +29,7 @@ workspace and overlays `~/.niminal/config.json`. Global files live in
 - `~/.niminal/config.json` — default provider and model
 - `~/.niminal/AGENTS.md` — personal instructions (all projects)
 - `~/.niminal/skills/` — global skills
+- `~/.niminal/tools/` — global external tools
 - `~/.niminal/sessions/` — saved sessions
 - `~/.niminal/models-dev.json` — cached model metadata
 
@@ -74,3 +75,10 @@ their metadata is advertised to the model and full bodies are loaded
 only through the `read_skill` tool. Type `/<skill>` (optionally followed by
 a request) to load a skill into the next turn. Built-in commands win when
 names collide.
+
+External tools are discovered the same way under `tools/` instead of
+`skills/`: `~/.niminal/tools/`, `<workspace>/.agent/tools/`, then
+`<workspace>/.niminal/tools/` (later roots override the same name). Each
+child directory needs a `tool.json` and an executable; the agent reads
+manifests at startup and only spawns the process when the model calls the
+tool. Built-in tool names always win over extensions.
