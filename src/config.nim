@@ -3,6 +3,7 @@
 ## write target in place.
 
 import std/[json, os, strutils]
+import nimgent
 import models_dev, compaction
 
 const
@@ -56,15 +57,6 @@ proc normalizeThinking*(value: string): string =
   if v in ThinkingLevels: return v
   raise newException(ValueError,
     "invalid thinking level '" & value & "' (use " & ThinkingLevels.join("|") & ")")
-
-proc thinkingBudgetTokens*(level: string): int =
-  case normalizeThinking(level)
-  of "minimal": 1024
-  of "low": 2048
-  of "medium": 8000
-  of "high": 16000
-  of "xhigh", "max": 32000
-  else: 0
 
 proc snapToEfforts*(want: string, efforts: openArray[string]): string =
   ## Nearest canonical rung. Tie goes to the higher effort. `none` never snaps up.
@@ -124,66 +116,37 @@ proc resolveThinking(provider, model, want: string): ThinkingPlan =
   let p = provider.toLowerAscii
   let caps = lookupReasoningCaps(provider, model)
 
-  proc sendEffort(plan: var ThinkingPlan, effort: string, explicitNone = false) =
-    if effort.len == 0 or (effort == "none" and not explicitNone):
-      plan.label = "off"
-      return
-    if effort == "none":
-      plan.label = "off"
-      if p == "openrouter":
-        plan.options["reasoning"] = %*{"effort": "none"}
-      elif p == "openai":
-        plan.options["reasoning_effort"] = %"none"
-      return
-    plan.label = effort
-    case p
-    of "openrouter":
-      plan.options["reasoning"] = %*{"effort": effort}
-    of "openai":
-      plan.options["reasoning_effort"] = %effort
-    of "anthropic":
-      let budget = thinkingBudgetTokens(effort)
-      if budget > 0:
-        plan.options["thinking"] = %*{"type": "enabled", "budget_tokens": budget}
-    else:
-      discard
-
   if caps.known and not caps.reasoning:
     return
   if caps.known and caps.efforts.len > 0:
     let snapped = snapToEfforts(want, caps.efforts)
-    sendEffort(result, snapped, explicitNone = snapped == "none")
+    if snapped.len == 0 or snapped == "none":
+      result.label = "off"
+      return
+    result.label = snapped
+    result.options = thinkingOptions(p, snapped)
     return
   if caps.known and caps.toggle:
     if want == "none":
       result.label = "off"
     else:
       result.label = "on"
-      if p == "openrouter":
-        result.options["reasoning"] = %*{"enabled": true}
-      elif p == "openai":
-        result.options["reasoning_effort"] = %"medium"
-      elif p == "anthropic":
-        sendEffort(result, "high")
+      result.options = thinkingOptions(p, want, twToggle)
     return
   if caps.known and caps.budgetTokens:
     if want == "none":
       result.label = "off"
       return
     result.label = want
-    case p
-    of "openrouter":
-      result.options["reasoning"] = %*{"max_tokens": thinkingBudgetTokens(want)}
-    of "openai":
-      result.options["reasoning_effort"] = %want
-    of "anthropic":
-      sendEffort(result, want)
-    else:
-      discard
+    result.options = thinkingOptions(p, want, twMaxTokens)
     return
   if caps.known:
     return
-  sendEffort(result, want)
+  if want == "none":
+    result.label = "off"
+    return
+  result.label = want
+  result.options = thinkingOptions(p, want)
 
 proc providerOptions*(config: AgentConfig, thinkingOverride = ""): JsonNode =
   let raw = if thinkingOverride.len > 0: thinkingOverride else: config.thinking

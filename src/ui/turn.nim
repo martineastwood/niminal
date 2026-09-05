@@ -129,6 +129,14 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
               return false
             tui[].render()
             true
+          of seToolCallDelta:
+            tui[].finishThinking()
+            discard tui[].pollBusy(0)
+            if tui[].wasInterrupted or tui[].shouldExit:
+              cancelled = true
+              return false
+            tui[].render()
+            true
           of seFinished:
             true
           of seWake:
