@@ -19,6 +19,7 @@ services:
       - OPENROUTER_API_KEY
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
+      - HYPER_API_KEY
       - HOME=/workspace-volatile
     # Idle so `docker compose up` stays Up. Shell in with:
     #   docker compose exec niminal bash

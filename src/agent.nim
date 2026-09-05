@@ -95,6 +95,9 @@ proc attachProvider(agent: var Agent) =
   of "anthropic":
     agent.provider = makeAnthropicProvider(agent.config.apiKey,
       agent.config.model, agent.config.endpoint, agent.config.requestTimeout)
+  of "hyper":
+    agent.provider = makeHyperProvider(agent.config.apiKey,
+      agent.config.endpoint, agent.config.requestTimeout)
   else:
     raise newException(ValueError, "unsupported provider: " & agent.config.provider)
 

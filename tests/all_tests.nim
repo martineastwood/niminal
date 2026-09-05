@@ -366,6 +366,23 @@ suite "OpenRouter provider":
     config.thinking = "none"
     check "reasoning" notin providerOptions(config)
 
+  test "hyper provider defaults and thinking map to reasoning.effort":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", "{}")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    writeFile(root / "config.json", """{"default_provider":"hyper"}""")
+    var config = loadConfig(root, root / "config.json")
+    check config.provider == "hyper"
+    check config.model == "deepseek-v4-flash"
+    check config.apiKeyEnv == "HYPER_API_KEY"
+    check config.endpoint == "https://hyper.charm.land/v1/chat/completions"
+    config.thinking = "high"
+    check providerOptions(config)["reasoning"]["effort"].getStr == "high"
+    config.thinking = "none"
+    check "reasoning" notin providerOptions(config)
+
 suite "persistent agent sessions":
   test "new session files can be resumed":
     let root = freshDir()

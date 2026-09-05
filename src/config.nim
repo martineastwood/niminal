@@ -7,7 +7,7 @@ import nimgent
 import models_dev, compaction
 
 const
-  WiredProviders* = ["openrouter", "openai", "anthropic"]
+  WiredProviders* = ["openrouter", "openai", "anthropic", "hyper"]
 
 type
   AgentConfig* = object
@@ -172,6 +172,7 @@ proc defaultApiKeyEnv*(provider: string): string =
   of "openrouter": "OPENROUTER_API_KEY"
   of "openai": "OPENAI_API_KEY"
   of "anthropic": "ANTHROPIC_API_KEY"
+  of "hyper": "HYPER_API_KEY"
   else: ""
 
 proc defaultEndpoint*(provider: string): string =
@@ -179,6 +180,7 @@ proc defaultEndpoint*(provider: string): string =
   of "openrouter": "https://openrouter.ai/api/v1/chat/completions"
   of "openai": "https://api.openai.com/v1/responses"
   of "anthropic": "https://api.anthropic.com/v1/messages"
+  of "hyper": "https://hyper.charm.land/v1/chat/completions"
   else: ""
 
 proc loadJsonFile(path: string): JsonNode =
@@ -280,6 +282,7 @@ proc applyDoc(config: var AgentConfig, doc: JsonNode) =
     config.model = case config.provider
       of "openrouter": "deepseek/deepseek-v4-flash-0731"
       of "openai": "gpt-5"
+      of "hyper": "deepseek-v4-flash"
       else: "claude-3-5-sonnet-latest"
   config.defaultModel = config.model
   config.fillProvider(config.provider)
