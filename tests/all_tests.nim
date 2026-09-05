@@ -21,6 +21,7 @@ import nimgent
 import nimgent/[anthropic, openrouter]
 import ../src/tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
 import ../src/extensions
+import ../src/hooks
 
 proc freshDir(): string =
   result = getTempDir() / ("niminal-test-" & $getCurrentProcessId() & "-" &
@@ -1855,4 +1856,214 @@ suite "external tools":
     check result.isError
     check "not valid JSON" in result.output
     check "not-json-at-all" in result.output
+
+suite "lifecycle hooks":
+  proc writeHook(root, folder, name, event, runBody: string,
+                 tools: seq[string] = @[], timeout = 30) =
+    let dir = root / folder / "hooks" / name
+    createDir(dir)
+    var manifest = %*{
+      "name": name,
+      "event": event,
+      "command": ["./run"]
+    }
+    if tools.len > 0:
+      manifest["tools"] = %tools
+    if timeout != 30:
+      manifest["timeout_seconds"] = %timeout
+    writeFile(dir / "hook.json", $manifest)
+    writeFile(dir / "run", "#!/bin/sh\n" & runBody & "\n")
+    inclFilePermissions(dir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
+
+  proc findHook(hooks: seq[Hook], name: string): Hook =
+    for h in hooks:
+      if h.name == name:
+        return h
+    raise newException(ValueError, "hook not found: " & name)
+
+  proc quietUi(): TurnSink =
+    TurnSink(
+      emit: proc(level: MsgLevel, text: string) = discard,
+      render: proc() = discard,
+      onChange: proc() = discard,
+      commitGenerate: proc(response: ProviderResponse, final: bool) = discard,
+      toolStart: proc(call: ContentBlock) = discard,
+      toolResult: proc(output: string, isError: bool) = discard,
+      poll: proc() = discard,
+      wasInterrupted: proc(): bool = false,
+      noteInterrupted: proc() = discard,
+      generate: proc(provider: Provider,
+                     request: ProviderRequest): ProviderResponse =
+        provider.generate(request)
+    )
+
+  test "invalid hook.json warns and is skipped":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "ok", "session_start", "echo '{}'")
+    createDir(root / ".niminal" / "hooks" / "broken")
+    writeFile(root / ".niminal" / "hooks" / "broken" / "hook.json", "{nope")
+    let discovered = discoverHooks(root)
+    var hasBroken = false
+    for w in discovered.warnings:
+      if "broken" in w:
+        hasBroken = true
+    check hasBroken
+    var names: seq[string] = @[]
+    for h in discovered.hooks:
+      names.add h.name
+    check "ok" in names
+    check "broken" notin names
+
+  test ".niminal hooks override .agent hooks with the same name":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".agent", "shared", "session_start",
+      "echo '{\"from\":\".agent\"}'")
+    writeHook(root, ".niminal", "shared", "session_start",
+      "echo '{\"from\":\".niminal\"}'")
+    let shared = findHook(discoverHooks(root).hooks, "shared")
+    check ".niminal" in shared.dir
+
+  test "pre_tool_call allow false skips the tool":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "block", "pre_tool_call",
+      "cat >/dev/null\necho '{\"allow\":false,\"reason\":\"nope\"}'")
+    writeFile(root / "marker.txt", "keep")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.workspace = root
+    config.compactionEnabled = false
+    config.contextWindow = 1_000_000
+    let hooks = discoverHooks(root).hooks
+    var ran = false
+    var reg: ToolRegistry
+    reg.register(
+      ToolDefinition(name: "touch", description: "t",
+        inputSchema: %*{"type": "object"}),
+      proc(input: JsonNode): ToolResult =
+        ran = true
+        writeFile(root / "ran.txt", "yes")
+        ToolResult(output: "ran", isError: false))
+    let provider = TestProvider(
+      name: "test",
+      responses: @[
+        ProviderResponse(content: @[
+          toolUse("1", "touch", %*{})]),
+        ProviderResponse(content: @[text("done")])
+      ])
+    var agent = Agent(config: config, provider: provider,
+      session: initSession(), tools: reg, hooks: hooks)
+    agent.session.workspace = root
+    agent.session.addUserMessage("go")
+    agent.runTurn(quietUi())
+    check not ran
+    check not fileExists(root / "ran.txt")
+    check agent.session.events.len >= 2
+    var sawDeny = false
+    for e in agent.session.events:
+      if e.kind == sekToolResult and e.toolError and "nope" in e.toolOutput:
+        sawDeny = true
+    check sawDeny
+
+  test "broken pre hook fails open and the tool still runs":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "broken", "pre_tool_call",
+      "cat >/dev/null\necho not-json")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.workspace = root
+    config.compactionEnabled = false
+    config.contextWindow = 1_000_000
+    let hooks = discoverHooks(root).hooks
+    var ran = false
+    var reg: ToolRegistry
+    reg.register(
+      ToolDefinition(name: "touch", description: "t",
+        inputSchema: %*{"type": "object"}),
+      proc(input: JsonNode): ToolResult =
+        ran = true
+        ToolResult(output: "ran", isError: false))
+    let provider = TestProvider(
+      name: "test",
+      responses: @[
+        ProviderResponse(content: @[toolUse("1", "touch", %*{})]),
+        ProviderResponse(content: @[text("done")])
+      ])
+    var agent = Agent(config: config, provider: provider,
+      session: initSession(), tools: reg, hooks: hooks)
+    agent.session.workspace = root
+    agent.session.addUserMessage("go")
+    var warns: seq[string] = @[]
+    var ui = quietUi()
+    ui.emit = proc(level: MsgLevel, text: string) =
+      if level == mlWarn: warns.add text
+    agent.runTurn(ui)
+    check ran
+    check warns.len >= 1
+    check "broken" in warns[0]
+
+  test "any matching pre hook deny blocks":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "allow-a", "pre_tool_call",
+      "cat >/dev/null\necho '{\"allow\":true}'")
+    writeHook(root, ".niminal", "deny-b", "pre_tool_call",
+      "cat >/dev/null\necho '{\"allow\":false,\"reason\":\"second\"}'")
+    let outcome = runHooks(discoverHooks(root).hooks, hePreToolCall,
+      preToolPayload("bash", %*{"command": "ls"}), root, "bash")
+    check not outcome.allowed
+    check "second" in outcome.reason
+
+  test "tools filter skips non-matching tools":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "bash-only", "pre_tool_call",
+      "cat >/dev/null\necho '{\"allow\":false,\"reason\":\"bash-blocked\"}'",
+      tools = @["bash"])
+    let hooks = discoverHooks(root).hooks
+    let forRead = runHooks(hooks, hePreToolCall,
+      preToolPayload("read", %*{"path": "x"}), root, "read")
+    check forRead.allowed
+    let forBash = runHooks(hooks, hePreToolCall,
+      preToolPayload("bash", %*{"command": "x"}), root, "bash")
+    check not forBash.allowed
+    check "bash-blocked" in forBash.reason
+
+  test "post_tool_call receives output and is_error":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "capture", "post_tool_call",
+      "cat > post-input.json\necho '{}'")
+    let hooks = discoverHooks(root).hooks
+    let outcome = runHooks(hooks, hePostToolCall,
+      postToolPayload("bash", %*{"command": "echo hi"}, "exit_code: 0", false),
+      root, "bash")
+    check outcome.allowed
+    check fileExists(root / "post-input.json")
+    let doc = parseJson(readFile(root / "post-input.json"))
+    check doc["tool"].getStr == "bash"
+    check doc["output"].getStr == "exit_code: 0"
+    check doc["is_error"].getBool == false
+
+  test "/new fires session_end then session_start":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "log-end", "session_end",
+      "echo end >> hook-log.txt\necho '{}'")
+    writeHook(root, ".niminal", "log-start", "session_start",
+      "echo start >> hook-log.txt\necho '{}'")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.workspace = root
+    var agent = initAgent(config)
+    check agent.hooks.len >= 2
+    if fileExists(root / "hook-log.txt"):
+      removeFile(root / "hook-log.txt")
+    check agent.processInput("/new", quietUi())
+    check fileExists(root / "hook-log.txt")
+    let log = readFile(root / "hook-log.txt")
+    check log == "end\nstart\n"
 

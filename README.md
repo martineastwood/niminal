@@ -30,6 +30,7 @@ workspace and overlays `~/.niminal/config.json`. Global files live in
 - `~/.niminal/AGENTS.md` — personal instructions (all projects)
 - `~/.niminal/skills/` — global skills
 - `~/.niminal/tools/` — global external tools
+- `~/.niminal/hooks/` — global lifecycle hooks
 - `~/.niminal/sessions/` — saved sessions
 - `~/.niminal/models-dev.json` — cached model metadata
 
@@ -82,3 +83,12 @@ External tools are discovered the same way under `tools/` instead of
 child directory needs a `tool.json` and an executable; the agent reads
 manifests at startup and only spawns the process when the model calls the
 tool. Built-in tool names always win over extensions.
+
+Lifecycle hooks use the same discovery layout under `hooks/` with a
+`hook.json` per child directory. Supported events: `pre_tool_call`,
+`post_tool_call`, `session_start`, `session_end`. Hooks are ephemeral
+JSON processes (stdin in, JSON out). Failures are fail-open (warn and
+continue); only an explicit `{"allow": false}` from `pre_tool_call`
+blocks a tool. Later roots override the same hook `name`. Opening
+niminal fires `session_start`; `/new` and `/resume` fire `session_end`
+then `session_start`; clean exit fires `session_end`.

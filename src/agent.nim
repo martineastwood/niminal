@@ -4,7 +4,7 @@ import std/[json, strutils]
 import config, session, compaction, instructions, skills, models_dev, commands
 import workspace
 import images
-import extensions
+import extensions, hooks
 import nimgent
 import nimgent/[anthropic, openai]
 import tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
@@ -39,10 +39,13 @@ type
     provider*: Provider
     session*: Session
     tools*: ToolRegistry
+    hooks*: seq[Hook]
     ## Runtime thinking override; empty means use config.thinking.
     thinking*: string
     ## Startup warnings from extension discovery (invalid manifests, collisions).
     extensionWarnings*: seq[string]
+    ## Startup warnings from hook discovery (invalid manifests).
+    hookWarnings*: seq[string]
 
 proc effectiveThinking*(agent: Agent): string =
   if agent.thinking.len > 0: agent.thinking else: agent.config.thinking
@@ -142,6 +145,9 @@ proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   result.tools.register(skill[0], skill[1])
   result.extensionWarnings = result.tools.registerExtensions(
     config.workspace, config.maxToolOutputBytes)
+  let discovered = discoverHooks(config.workspace)
+  result.hooks = discovered.hooks
+  result.hookWarnings = discovered.warnings
 
 proc buildRequest*(agent: Agent): ProviderRequest =
   let opts = providerOptions(agent.config, agent.thinking)
@@ -212,6 +218,30 @@ proc maybeAutoCompact*(agent: var Agent,
     return
   result = agent.runCompaction(onEvent = onEvent)
 
+proc emitHookWarnings(ui: TurnSink, warnings: openArray[string]) =
+  for w in warnings:
+    ui.emit(mlWarn, "hook: " & w)
+
+proc fireSessionHooks*(agent: var Agent, event: HookEvent, ui: TurnSink) =
+  let payload = sessionPayload(agent.session.id, agent.config.workspace)
+  let outcome = runHooks(agent.hooks, event, payload, agent.config.workspace,
+    maxOutputBytes = agent.config.maxToolOutputBytes)
+  emitHookWarnings(ui, outcome.warnings)
+
+proc fireSessionHooks*(agent: var Agent, event: HookEvent) =
+  ## No UI: write fail-open warnings to stderr.
+  let payload = sessionPayload(agent.session.id, agent.config.workspace)
+  let outcome = runHooks(agent.hooks, event, payload, agent.config.workspace,
+    maxOutputBytes = agent.config.maxToolOutputBytes)
+  for w in outcome.warnings:
+    stderr.writeLine "hook: " & w
+
+proc switchSession(agent: var Agent, next: Session, ui: TurnSink) =
+  ## session_end on the old transcript, then session_start on the new one.
+  agent.fireSessionHooks(heSessionEnd, ui)
+  agent.session = next
+  agent.fireSessionHooks(heSessionStart, ui)
+
 proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
   ## Execute a parsed builtin. Caller has already filtered slNone/slSkill/slError/slQuit.
   case cmd.kind
@@ -242,7 +272,8 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
     else:
       ui.emit(mlError, "Could not refresh model metadata; using existing cache.")
   of slNew:
-    agent.session = loadSession(agent.config.sessionDir, workspace = agent.config.workspace)
+    let next = loadSession(agent.config.sessionDir, workspace = agent.config.workspace)
+    agent.switchSession(next, ui)
     if not ui.showSession.isNil:
       ui.showSession(agent.session)
     ui.onChange()
@@ -280,7 +311,7 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
       if not ok:
         ui.emit(mlPlain, err)
       else:
-        agent.session = sess
+        agent.switchSession(sess, ui)
         agent.restoreSessionModel()
         if sess.workspace.len > 0 and sess.workspace != agent.config.workspace:
           ui.emit(mlWarn, "This session was started in " & sess.workspace)
@@ -362,12 +393,25 @@ proc runTurn*(agent: var Agent, ui: TurnSink) =
         ui.noteInterrupted()
         return
       let bad = invalidToolCall(call)
-      let toolResult =
-        if bad.len > 0: ToolResult(output: bad, isError: true)
+      var toolResult: ToolResult
+      if bad.len > 0:
+        toolResult = ToolResult(output: bad, isError: true)
+      else:
+        let pre = runHooks(agent.hooks, hePreToolCall,
+          preToolPayload(call.name, call.input), agent.config.workspace,
+          call.name, agent.config.maxToolOutputBytes)
+        emitHookWarnings(ui, pre.warnings)
+        if not pre.allowed:
+          toolResult = ToolResult(output: pre.reason, isError: true)
         else:
-          agent.tools.execute(call.name, call.input, proc (): bool =
+          toolResult = agent.tools.execute(call.name, call.input, proc (): bool =
             ui.poll()
             ui.wasInterrupted())
+          let post = runHooks(agent.hooks, hePostToolCall,
+            postToolPayload(call.name, call.input, toolResult.output,
+              toolResult.isError),
+            agent.config.workspace, call.name, agent.config.maxToolOutputBytes)
+          emitHookWarnings(ui, post.warnings)
       agent.session.addToolResult(call, toolResult.output, toolResult.isError,
         toolResult.images)
       ui.toolResult(toolResult.output, toolResult.isError)

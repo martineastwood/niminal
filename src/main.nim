@@ -1,5 +1,5 @@
 import std/[os, strutils, terminal]
-import config, agent, session, models_dev
+import config, agent, session, models_dev, hooks
 import ui/[console, tui, turn]
 
 proc catalogStartupNote(): string =
@@ -19,9 +19,12 @@ proc runConsole(agent: var Agent, catalogNote = "") =
     echo catalogNote.color(cDim)
   for warning in agent.extensionWarnings:
     echo ("extension: " & warning).color(cDim)
+  for warning in agent.hookWarnings:
+    echo ("hook: " & warning).color(cDim)
   echo "Type /help for commands.".color(cDim)
 
   let ui = consoleSink()
+  defer: agent.fireSessionHooks(heSessionEnd)
   while true:
     printPrompt()
     try:
@@ -47,6 +50,8 @@ proc runTUI(agent: var Agent, catalogNote = "") =
     tui.addLine("\e[2m" & catalogNote & "\e[0m")
   for warning in agent.extensionWarnings:
     tui.addLine("\e[2mextension: " & warning & "\e[0m")
+  for warning in agent.hookWarnings:
+    tui.addLine("\e[2mhook: " & warning & "\e[0m")
   if agent.session.events.len > 0:
     tui.addLine("")
     tui.replaySession(agent.session)
@@ -72,6 +77,7 @@ proc runTUI(agent: var Agent, catalogNote = "") =
     tui.setBusy(false)
     tui.render()
     if not keepGoing: break
+  agent.fireSessionHooks(heSessionEnd)
 
 proc runMain*() =
   let args = commandLineParams()
@@ -103,6 +109,8 @@ proc runMain*() =
     stderr.writeLine "STARTUP_FAILED"
     stderr.writeLine e.msg
     quit(1)
+
+  agent.fireSessionHooks(heSessionStart)
 
   if stdout.isatty:
     runTUI(agent, catalogNote)
