@@ -21,10 +21,18 @@ proc formatToolHunk*(name: string, input: JsonNode, useColor: bool): seq[string]
     return
   case name
   of "edit":
-    result.add prefixLines(input.getOrDefault("old_text").getStr, "- ", "\e[31m",
-      useColor)
-    result.add prefixLines(input.getOrDefault("new_text").getStr, "+ ", "\e[32m",
-      useColor)
+    let reps = input.getOrDefault("replacements")
+    if not reps.isNil and reps.kind == JArray and reps.len > 0:
+      for r in reps:
+        result.add prefixLines(r.getOrDefault("old_text").getStr, "- ", "\e[31m",
+          useColor)
+        result.add prefixLines(r.getOrDefault("new_text").getStr, "+ ", "\e[32m",
+          useColor)
+    else:
+      result.add prefixLines(input.getOrDefault("old_text").getStr, "- ", "\e[31m",
+        useColor)
+      result.add prefixLines(input.getOrDefault("new_text").getStr, "+ ", "\e[32m",
+        useColor)
   of "write":
     result.add prefixLines(input.getOrDefault("content").getStr, "+ ", "\e[32m",
       useColor)

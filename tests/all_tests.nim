@@ -19,7 +19,7 @@ import ../src/skills
 import ../src/commands
 import nimgent
 import nimgent/[anthropic, openrouter]
-import ../src/tools/[tool, read_tool, edit_tool, write_tool, bash_tool]
+import ../src/tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
 
 proc freshDir(): string =
   result = getTempDir() / ("niminal-test-" & $getCurrentProcessId() & "-" &
@@ -84,6 +84,55 @@ suite "workspace and file tools":
       "new_text": "new", "expected_version": "stale"})
     check stale.isError
     check "version changed" in stale.output
+
+  test "edit applies several unique replacements or none":
+    let root = freshDir()
+    defer: removeDir(root)
+    let path = root / "sample.txt"
+    writeFile(path, "aaa\nbbb\nccc\n")
+    let edit = makeEditTool(initWorkspace(root))
+    let ok = invoke(edit, %*{
+      "path": "sample.txt",
+      "replacements": [
+        {"old_text": "aaa", "new_text": "AAA"},
+        {"old_text": "ccc", "new_text": "CCC"}
+      ]
+    })
+    check not ok.isError
+    check "replacements: 2" in ok.output
+    check readFile(path) == "AAA\nbbb\nCCC\n"
+    writeFile(path, "same\nsame\nkeep\n")
+    let bad = invoke(edit, %*{
+      "path": "sample.txt",
+      "replacements": [
+        {"old_text": "keep", "new_text": "kept"},
+        {"old_text": "same", "new_text": "x"}
+      ]
+    })
+    check bad.isError
+    check readFile(path) == "same\nsame\nkeep\n"
+
+  test "grep and glob find workspace files":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / "src")
+    writeFile(root / "src" / "a.nim", "proc hello =\n  discard\n")
+    writeFile(root / "src" / "b.txt", "hello world\n")
+    writeFile(root / "readme.md", "hello docs\n")
+    check globMatch("src/a.nim", "**/*.nim")
+    check globMatch("a.nim", "**/*.nim")
+    check globMatch("src/a.nim", "src/*")
+    check not globMatch("src/a.nim", "*.nim")
+    let grep = invoke(makeGrepTool(initWorkspace(root)),
+      %*{"pattern": "hello", "glob": "**/*.nim"})
+    check not grep.isError
+    check "src/a.nim:1:" in grep.output
+    check "b.txt" notin grep.output
+    let glob = invoke(makeGlobTool(initWorkspace(root)),
+      %*{"pattern": "**/*.txt"})
+    check not glob.isError
+    check "src/b.txt" in glob.output
+    check "a.nim" notin glob.output
 
   test "write creates and protects existing files":
     let root = freshDir()
@@ -601,6 +650,11 @@ suite "slash commands":
     check rows.len == 2
     check "\e[48;5;81m" in rows[0]
     check "\e[48;5;236m" in rows[1]
+    check suggestionStep(-1, -1, 3) == 0
+    check suggestionStep(-1, 1, 3) == 0
+    check suggestionStep(0, -1, 3) == 0
+    check suggestionStep(0, 1, 3) == 1
+    check suggestionStep(2, 1, 3) == 2
 
   test "highlights malformed command input":
     let highlighted = highlightSlashCommand("/model refresh")
@@ -716,6 +770,10 @@ suite "slash commands":
     check "+ after" in colored[1]
     check formatToolHunk("write", %*{"content": "hello\nworld"}, false) ==
       @["+ hello", "+ world"]
+    check formatToolHunk("edit", %*{"replacements": [
+      {"old_text": "a", "new_text": "A"},
+      {"old_text": "b", "new_text": "B"}
+    ]}, false) == @["- a", "+ A", "- b", "+ B"]
     var session = initSession()
     let call = toolUse("1", "edit",
       %*{"path": "f.nim", "old_text": "before", "new_text": "after"})
@@ -1298,6 +1356,12 @@ suite "ansi wrap":
     check cache[0] == "hello world"
     check cache[^1] == "next line"
 
+  test "stream paint coalesces unless newline or forced":
+    check streamPaintDue(0, 0.01, "hi") == false
+    check streamPaintDue(0, 0.04, "hi")
+    check streamPaintDue(0, 0.01, "hi\n")
+    check streamPaintDue(0, 0.0, "hi", force = true)
+
 suite "composer and cost":
   test "paste normalizes CR LF to LF":
     check normalizePasteText("a\r\nb\rc") == "a\nb\nc"
@@ -1413,15 +1477,12 @@ suite "file mentions":
     check "<file" notin expandMentions(root, "see @src/bin.dat")
     check expandMentions(root, "user@host") == "user@host"
 
-  test "workspace file list is cached until invalidate":
+  test "workspace file list sees files written after the first call":
     let root = freshDir()
     defer: removeDir(root)
-    invalidateWorkspaceFileList()
     writeFile(root / "a.txt", "a")
     check "a.txt" in listWorkspaceFiles(root)
     writeFile(root / "b.txt", "b")
-    check "b.txt" notin listWorkspaceFiles(root)
-    invalidateWorkspaceFileList()
     check "b.txt" in listWorkspaceFiles(root)
 
 suite "images":

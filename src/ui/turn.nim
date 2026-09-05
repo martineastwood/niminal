@@ -1,11 +1,18 @@
 ## Mode-blind sink for agent turns (console or TUI).
 ## Agent talks only to TurnSink; adapters own presentation details.
 
+import std/times
 import nimgent
 import term
 import ../session
 import console
 import tui
+
+const streamPaintSec* = 0.032
+
+proc streamPaintDue*(lastAt, now: float, delta: string, force = false): bool =
+  ## Paint on force, a newline, or ~30ms since the last paint.
+  force or '\n' in delta or now - lastAt >= streamPaintSec
 
 type
   MsgLevel* = enum
@@ -104,8 +111,14 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
     generate: proc (provider: Provider, request: ProviderRequest): ProviderResponse =
       cancelled = false
       var started = false
+      var lastPaint = 0.0
       var req = request
       req.wakeFd = interruptFd()
+      proc paint(delta = "", force = false) =
+        let now = epochTime()
+        if streamPaintDue(lastPaint, now, delta, force):
+          tui[].render()
+          lastPaint = now
       let abort = proc (): bool =
         discard tui[].pollBusy(0)
         if tui[].wasInterrupted or tui[].shouldExit:
@@ -121,11 +134,12 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
             if tui[].wasInterrupted or tui[].shouldExit:
               cancelled = true
               return false
-            tui[].render()
+            paint(ev.text)
             true
           of seTextDelta:
             tui[].finishThinking()
-            if not started:
+            let first = not started
+            if first:
               tui[].beginStream()
               started = true
             tui[].appendStream(ev.text)
@@ -133,7 +147,7 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
             if tui[].wasInterrupted or tui[].shouldExit:
               cancelled = true
               return false
-            tui[].render()
+            paint(ev.text, first)
             true
           of seToolCallDelta:
             tui[].finishThinking()
@@ -141,7 +155,7 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
             if tui[].wasInterrupted or tui[].shouldExit:
               cancelled = true
               return false
-            tui[].render()
+            paint(force = true)
             true
           of seFinished:
             true
@@ -150,7 +164,6 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
             if tui[].wasInterrupted or tui[].shouldExit:
               cancelled = true
               return false
-            tui[].render()
             true
         , abort = abort)
         if cancelled:

@@ -6,7 +6,7 @@ import workspace
 import images
 import nimgent
 import nimgent/[anthropic, openai]
-import tools/[tool, read_tool, edit_tool, write_tool, bash_tool]
+import tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
 import ui/turn
 
 const baseSystemPrompt = """
@@ -15,9 +15,11 @@ change the repo; do not only describe a plan.
 
 Tools:
 - read: file contents with line numbers and a version hash. Read a file before editing it.
-- edit: one unique old_text → new_text. Pass expected_version from that read.
+- grep: literal substring search. Optional glob and subdirectory path.
+- glob: list files matching a glob (e.g. **/*.nim).
+- edit: unique old_text → new_text. Use replacements=[{old_text,new_text},…] for several hunks in one call. Pass expected_version from that read.
 - write: create a file, or replace one only with overwrite=true. Prefer edit for existing files.
-- bash: run commands in the workspace (tests, git, rg).
+- bash: run commands in the workspace (tests, git). Prefer grep/glob over bash for finding files.
 - read_skill: load a listed skill when it fits the task.
 
 Rules:
@@ -124,9 +126,13 @@ proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   let read = makeReadTool(ws)
   let edit = makeEditTool(ws)
   let write = makeWriteTool(ws)
+  let grep = makeGrepTool(ws)
+  let glob = makeGlobTool(ws)
   let bash = makeBashTool(ws.root, config.maxToolOutputBytes)
   let skill = makeSkillTool(config.workspace)
   result.tools.register(read[0], read[1])
+  result.tools.register(grep[0], grep[1])
+  result.tools.register(glob[0], glob[1])
   result.tools.register(edit[0], edit[1])
   result.tools.register(write[0], write[1])
   result.tools.register(bash[0], bash[1])

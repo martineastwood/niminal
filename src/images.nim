@@ -181,7 +181,6 @@ proc saveWorkspaceImage*(ws: Workspace, raw: string):
   let name = "clip-" & $getCurrentProcessId() & "-" &
     $int(epochTime() * 1000) & extForMime(c.mime)
   writeFile(dir / name, raw)
-  invalidateWorkspaceFileList()
   (true, "@.niminal/clips/" & name, "")
 
 proc unquotePath(s: string): string =

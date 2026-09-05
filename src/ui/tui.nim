@@ -191,6 +191,7 @@ type
     height: int
     lineHeights: seq[int]
     sources: seq[string]
+    wrapped: seq[seq[string]]
 
 proc invalidateVisual(tui: var TUI) =
   tui.layoutValid = false
@@ -337,12 +338,14 @@ proc itemSources(item: ScrollItem): seq[string] =
     result.add ""
 
 proc itemLayout(item: ScrollItem, w: int):
-    tuple[h: int, heights: seq[int], sources: seq[string]] =
+    tuple[h: int, heights: seq[int], sources: seq[string],
+          wrapped: seq[seq[string]]] =
   result.sources = itemSources(item)
   for s in result.sources:
-    let n = wrapLineCount(s, w)
-    result.heights.add n
-    result.h += n
+    let rows = wrapLineForWidth(s, w)
+    result.wrapped.add rows
+    result.heights.add rows.len
+    result.h += rows.len
 
 proc ensureLayout(tui: var TUI) =
   if tui.layoutValid: return
@@ -352,7 +355,7 @@ proc ensureLayout(tui: var TUI) =
   for i, item in tui.scrollback.pairs:
     let lay = itemLayout(item, w)
     tui.layoutSpans.add LayoutSpan(itemIdx: i, height: lay.h,
-      lineHeights: lay.heights, sources: lay.sources)
+      lineHeights: lay.heights, sources: lay.sources, wrapped: lay.wrapped)
     tui.layoutRows += lay.h
   tui.layoutValid = true
 
@@ -372,10 +375,9 @@ proc visualAt(tui: TUI, i: int): string =
       let local = i - acc
       for j, h in span.lineHeights:
         if local < inner + h:
-          if j < 0 or j >= span.sources.len: return
-          let wrapped = wrapLineForWidth(span.sources[j], max(1, tui.width))
+          if j < 0 or j >= span.wrapped.len: return
           let idx = local - inner
-          if idx >= 0 and idx < wrapped.len: return wrapped[idx]
+          if idx >= 0 and idx < span.wrapped[j].len: return span.wrapped[j][idx]
           return
         inner += h
       return
@@ -662,6 +664,13 @@ proc inputRows(tui: TUI): int =
 proc resetSuggestion(tui: var TUI) =
   tui.suggestionIndex = -1
 
+proc suggestionStep*(index, delta, count: int): int =
+  ## First arrow (or a fresh list) lands on 0. No wrap — the top match
+  ## stays selected instead of jumping to the last row.
+  if count <= 0: return -1
+  if index < 0: return 0
+  clamp(index + delta, 0, count - 1)
+
 proc slashSuggestions(tui: var TUI): seq[string] =
   let key = tui.input & "\0" & $tui.cursor
   if key == tui.sugKey:
@@ -669,6 +678,7 @@ proc slashSuggestions(tui: var TUI): seq[string] =
   tui.sugCache = commandSuggestions(tui.input, tui.workspace, tui.sessionDir,
     tui.modelPicker, tui.cursor)
   tui.sugKey = key
+  tui.suggestionIndex = if tui.sugCache.len > 0: 0 else: -1
   tui.sugCache
 
 proc moveSuggestion(tui: var TUI, delta: int): bool =
@@ -676,11 +686,10 @@ proc moveSuggestion(tui: var TUI, delta: int): bool =
   if suggestions.len == 0:
     tui.resetSuggestion()
     return false
-  if tui.suggestionIndex < 0:
-    tui.suggestionIndex = if delta < 0: suggestions.high else: 0
-  else:
-    tui.suggestionIndex = (tui.suggestionIndex + delta + suggestions.len) mod
-      suggestions.len
+  let next = suggestionStep(tui.suggestionIndex, delta, suggestions.len)
+  if next == tui.suggestionIndex:
+    return tui.suggestionIndex >= 0
+  tui.suggestionIndex = next
   tui.scrollbackDirty = true
   true
 
@@ -767,6 +776,7 @@ proc spliceToolWrap(tui: var TUI, idx: int) =
       s.height = lay.h
       s.lineHeights = lay.heights
       s.sources = lay.sources
+      s.wrapped = lay.wrapped
       if lay.h == old:
         tui.dirtyVisRow = acc + max(0, lay.h - 1)
       else:
@@ -876,6 +886,15 @@ proc toolCallSummary(call: ContentBlock): string =
       path
   of "edit", "write":
     call.input.getOrDefault("path").getStr
+  of "glob":
+    call.input.getOrDefault("pattern").getStr
+  of "grep":
+    var s = call.input.getOrDefault("pattern").getStr
+    let g = call.input.getOrDefault("glob").getStr
+    if g.len > 0: s.add "  " & g
+    let p = call.input.getOrDefault("path").getStr
+    if p.len > 0: s.add "  " & p
+    s
   of "bash":
     let cmd = call.input.getOrDefault("command").getStr
     if cmd.len > 80: cmd[0 ..< 77] & "..." else: cmd
@@ -952,10 +971,29 @@ proc finishThinking*(tui: var TUI) =
 proc addItemLine(items: var seq[ScrollItem], text: string) =
   items.add ScrollItem(kind: skLine, text: text)
 
+const markdownResumeTail = 40
+
+proc assistantTextCount(session: Session): int =
+  for event in session.events:
+    if event.kind != sekAssistant: continue
+    for b in event.message.content:
+      if b.kind == ckText and b.text.len > 0: inc result
+
+proc addAssistantVisual(items: var seq[ScrollItem], text: string, markdown: bool) =
+  if markdown:
+    for line in renderMarkdown(text, true).splitLines:
+      items.addItemLine(line)
+  else:
+    for line in text.splitLines:
+      items.addItemLine(line)
+  items.addItemLine("")
+
 proc transcriptItems(session: Session): seq[ScrollItem] =
   ## Compact visual history: user cards, tool cards, rendered assistant text.
-  ## ponytail: markdown-renders every assistant event at load; defer per-item
-  ## if huge-transcript resume is still a hitch after path-only images.
+  ## ponytail: only the last 40 assistant texts get markdown on resume;
+  ## older stay plain so huge transcripts don't hitch at load.
+  let mdFrom = max(0, assistantTextCount(session) - markdownResumeTail)
+  var textIdx = 0
   for i in 0 ..< session.events.len:
     let event = session.events[i]
     case event.kind
@@ -978,9 +1016,8 @@ proc transcriptItems(session: Session): seq[ScrollItem] =
         case b.kind
         of ckText:
           if b.text.len == 0: continue
-          for line in renderMarkdown(b.text, true).splitLines:
-            result.addItemLine(line)
-          result.addItemLine("")
+          result.addAssistantVisual(b.text, textIdx >= mdFrom)
+          inc textIdx
         of ckToolUse:
           result.add ScrollItem(kind: skTool, tool: makeToolCard(b))
         of ckThinking:
@@ -1151,7 +1188,7 @@ proc render*(tui: var TUI) =
 
   let view = composerView(tui.input, tui.cursor, tui.composerInner)
   let inRows = min(max(1, view.lines.len), maxInputRows)
-  let suggestions = tui.slashSuggestions
+  let suggestions = if tui.busy: @[] else: tui.slashSuggestions
   let menuRows =
     if suggestions.len == 0: 0
     else: min(suggestions.len, min(10, max(0, h - inRows - 3)))

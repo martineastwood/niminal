@@ -81,19 +81,36 @@ const
   skipDirNames = [".git", "node_modules", "nimbledeps", "nimcache", "dist",
                   "build", ".cache", "target", ".next", ".turbo"]
 
-var
-  gFileListRoot = ""
-  gFileList: seq[string]
-  gFileListReady = false
-
-proc invalidateWorkspaceFileList*() =
-  ## Drop the @-mention file cache (write/edit/new clip).
-  gFileListRoot = ""
-  gFileList.setLen(0)
-  gFileListReady = false
-
 proc canonRel*(path: string): string =
   path.replace('\\', '/')
+
+proc globMatchAt(s: string, si: int, p: string, pi: int): bool =
+  if pi >= p.len: return si >= s.len
+  if p[pi] == '*' and pi + 1 < p.len and p[pi + 1] == '*':
+    var n = pi + 2
+    if n < p.len and p[n] == '/': inc n
+    if globMatchAt(s, si, p, n): return true
+    var i = si
+    while i < s.len:
+      inc i
+      if globMatchAt(s, i, p, n): return true
+    return false
+  if p[pi] == '*':
+    if globMatchAt(s, si, p, pi + 1): return true
+    var i = si
+    while i < s.len and s[i] != '/':
+      inc i
+      if globMatchAt(s, i, p, pi + 1): return true
+    return false
+  if si >= s.len: return false
+  if p[pi] == '?' or p[pi] == s[si]:
+    return globMatchAt(s, si + 1, p, pi + 1)
+  false
+
+proc globMatch*(path, pattern: string): bool =
+  ## `*` is one path segment, `**` is any depth, `?` is one character.
+  if pattern.len == 0: return false
+  globMatchAt(path.canonRel, 0, pattern.replace('\\', '/'), 0)
 
 proc gitTrackedFiles(root: string): seq[string] =
   if not dirExists(root / ".git"):
@@ -134,22 +151,11 @@ proc walkWorkspaceFiles(root: string): seq[string] =
 
 proc listWorkspaceFiles*(root: string): seq[string] =
   ## Git-tracked + untracked (honoring gitignore) when `root` is a repo.
-  ## Otherwise a bounded directory walk.
-  ## ponytail: cached until process exit or invalidateWorkspaceFileList;
-  ## a new file during the session is a write/edit, which invalidates.
-  var key = root
-  try:
-    key = expandFilename(root)
-  except CatchableError:
-    discard
-  if gFileListReady and gFileListRoot == key:
-    return gFileList
+  ## Otherwise a bounded directory walk. No cache — callers are grep/glob
+  ## and @-mentions (already keyed in the TUI).
   result = gitTrackedFiles(root)
   if result.len == 0 and not dirExists(root / ".git"):
     result = walkWorkspaceFiles(root)
-  gFileListRoot = key
-  gFileList = result
-  gFileListReady = true
 
 proc suggestMentionFiles*(root, query: string, cap = mentionFileCap): seq[string] =
   let q = query.toLowerAscii
