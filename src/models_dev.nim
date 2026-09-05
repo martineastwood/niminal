@@ -31,10 +31,6 @@ proc setModelsDevCachePath*(path: string) =
   gCatalog = nil
   gLoadedAt = 0
 
-proc clearModelsDevCache*() =
-  gCatalog = nil
-  gLoadedAt = 0
-
 proc contextFromModelNode(node: JsonNode): int =
   if node.isNil or node.kind != JObject: return 0
   let limit = node.getOrDefault("limit")
@@ -74,23 +70,6 @@ proc findModelNodeAnywhere(catalog: JsonNode, model: string): JsonNode =
     for key, node in models:
       if modelKeyMatch(key, want, bare) and not node.isNil and node.kind == JObject:
         return node
-
-proc findInProvider(catalog: JsonNode, provider, model: string): int =
-  contextFromModelNode(findModelNode(catalog, provider, model))
-
-proc findAnywhere(catalog: JsonNode, model: string): int =
-  ## First name match with a published context window.
-  if catalog.isNil or catalog.kind != JObject: return 0
-  let want = model.toLowerAscii
-  let bare = if "/" in model: model.rsplit('/', 1)[^1].toLowerAscii else: want
-  for _, prov in catalog:
-    if prov.isNil or prov.kind != JObject: continue
-    let models = prov.getOrDefault("models")
-    if models.isNil or models.kind != JObject: continue
-    for key, node in models:
-      if modelKeyMatch(key, want, bare):
-        let n = contextFromModelNode(node)
-        if n > 0: return n
 
 proc loadCatalogFromDisk(path: string): JsonNode =
   if not fileExists(path): return nil
@@ -182,16 +161,7 @@ proc lookupReasoningCaps*(provider, model: string): ReasoningCaps =
 
 proc lookupContextWindow*(provider, model: string): int =
   ## Context tokens for `provider`/`model`, or 0 if unknown / offline.
-  if model.len == 0: return 0
-  let catalog = ensureCatalog()
-  let p = provider.toLowerAscii.strip
-  result = findInProvider(catalog, p, model)
-  if result > 0: return
-  # OpenRouter ids are often used even when provider string differs.
-  if p != "openrouter":
-    result = findInProvider(catalog, "openrouter", model)
-    if result > 0: return
-  result = findAnywhere(catalog, model)
+  contextFromModelNode(resolveModelNode(provider, model))
 
 proc nodeAcceptsImages(node: JsonNode): bool =
   if node.isNil or node.kind != JObject: return false
@@ -282,13 +252,6 @@ proc modelsDevCacheStale*(maxAgeSeconds = catalogStaleSeconds): bool =
   let path = cachePath()
   if not fileExists(path): return true
   epochTime() - getLastModificationTime(path).toUnix.float >= maxAgeSeconds.float
-
-proc refreshModelsDevIfStale*(maxAgeSeconds = catalogStaleSeconds):
-    tuple[attempted, ok: bool] =
-  ## Fetch when the cache file is missing or older than `maxAgeSeconds`.
-  if not modelsDevCacheStale(maxAgeSeconds):
-    return (false, true)
-  (true, refreshModelsDevCache())
 
 type
   CatalogModel* = object

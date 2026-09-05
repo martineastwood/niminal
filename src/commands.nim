@@ -196,11 +196,6 @@ proc expandSkill*(workspace: string, cmd: SlashCommand): string =
   if cmd.arg.len > 0:
     result.add "\n\n" & cmd.arg
 
-proc expandSkillSlash*(workspace, input: string): string =
-  ## If input is `/skill` or `/skill …`, return the skill body plus rest.
-  let text = expandSkill(workspace, parseSlash(input, workspace))
-  if text.len == 0: input else: text
-
 const
   modelSearchMin = 2
   modelSearchCap = 50

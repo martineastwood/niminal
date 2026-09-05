@@ -4,18 +4,13 @@
 ## runExtension is public so lifecycle hooks can reuse the same protocol later.
 
 import std/[algorithm, json, os, osproc, posix, strformat, strutils, times]
-when defined(macosx) or defined(freebsd) or defined(netbsd) or
-     defined(openbsd) or defined(dragonfly):
-  import posix/kqueue
 import config
 import nimgent
+import childproc
 import tools/tool
-import ui/term
 
 const
   DefaultTimeout* = 30
-  TailKeep = 20_000
-  TermGiveUpMs = 200
   BuiltinToolNames* = ["bash", "edit", "glob", "grep", "read", "read_skill", "write"]
 
 type
@@ -30,119 +25,6 @@ type
   DiscoverResult* = object
     tools*: seq[ExtensionTool]
     warnings*: seq[string]
-
-proc requestStop(p: Process, hard: bool) =
-  let pid = Pid(p.processID)
-  let sig = if hard: SIGKILL else: SIGTERM
-  if getpgid(pid) == pid:
-    discard posix.kill(-pid, sig)
-  else:
-    discard posix.kill(pid, sig)
-
-proc waitProcess(p: Process, timeoutMs: int, watchInterrupt: bool): bool =
-  if timeoutMs < 0:
-    return false
-  when defined(macosx) or defined(freebsd) or defined(netbsd) or
-       defined(openbsd) or defined(dragonfly):
-    let kqFD = kqueue()
-    if kqFD == -1:
-      return p.peekExitCode() != -1
-    defer: discard posix.close(kqFD)
-    var changes: array[2, KEvent]
-    var n = 0
-    changes[n] = KEvent(ident: p.processID.uint, filter: cshort(EVFILT_PROC),
-      flags: EV_ADD.cushort, fflags: NOTE_EXIT)
-    inc n
-    if watchInterrupt:
-      let fd = interruptFd()
-      if fd >= 0:
-        changes[n] = KEvent(ident: fd.uint, filter: cshort(EVFILT_READ),
-          flags: EV_ADD.cushort)
-        inc n
-    var tmspec: Timespec
-    tmspec.tv_sec = posix.Time(timeoutMs div 1000)
-    tmspec.tv_nsec = (timeoutMs mod 1000) * 1_000_000
-    var ev: KEvent
-    while true:
-      let count = kevent(kqFD, addr changes[0], n.cint, addr ev, 1, addr tmspec)
-      if count < 0:
-        if osLastError().cint == EINTR:
-          continue
-        return p.peekExitCode() != -1
-      return count > 0
-  else:
-    var fds: array[3, TPollfd]
-    var n = 0
-    fds[n] = TPollfd(fd: p.outputHandle.cint, events: POLLIN or POLLHUP)
-    inc n
-    let errFd = p.errorHandle.cint
-    if errFd != p.outputHandle.cint:
-      fds[n] = TPollfd(fd: errFd, events: POLLIN or POLLHUP)
-      inc n
-    var stdinFd: cint = -1
-    if watchInterrupt:
-      stdinFd = interruptFd()
-      if stdinFd >= 0:
-        fds[n] = TPollfd(fd: stdinFd, events: POLLIN)
-        inc n
-    while true:
-      let ready = poll(addr fds[0], Tnfds(n), timeoutMs.cint)
-      if ready < 0:
-        if osLastError().cint == EINTR:
-          continue
-        return p.peekExitCode() != -1
-      if ready == 0:
-        return false
-      var buf: array[256, char]
-      for i in 0 ..< n:
-        if fds[i].fd == stdinFd:
-          continue
-        if (fds[i].revents and (POLLIN or POLLHUP)) != 0:
-          while posix.read(fds[i].fd, addr buf[0], buf.len) > 0:
-            discard
-      return true
-
-proc stopChild(p: Process) =
-  requestStop(p, hard = false)
-  let giveUp = epochTime() + TermGiveUpMs / 1000
-  while p.peekExitCode == -1:
-    let left = int((giveUp - epochTime()) * 1000)
-    if left <= 0:
-      break
-    discard waitProcess(p, left, watchInterrupt = false)
-  if p.peekExitCode == -1:
-    requestStop(p, hard = true)
-    discard p.waitForExit(1000)
-
-type
-  WaitEnd = enum
-    weExited, weTimeout, weCancelled
-
-proc waitForChild(p: Process, timeout: int):
-                 tuple[endKind: WaitEnd, exitCode: int] =
-  let deadline = epochTime() + timeout.float
-  let watchInterrupt = watchingInterrupt()
-  while true:
-    let code = p.peekExitCode()
-    if code != -1:
-      return (weExited, code)
-    if cancelRequested():
-      stopChild(p)
-      return (weCancelled, -1)
-    let remaining = deadline - epochTime()
-    if remaining <= 0:
-      stopChild(p)
-      return (weTimeout, -1)
-    discard waitProcess(p, max(1, int(remaining * 1000)), watchInterrupt)
-
-proc truncateOutput(output: string, limit: int): string =
-  let outputLimit = max(2, limit)
-  if output.len <= outputLimit:
-    return output
-  let keep = min(TailKeep, outputLimit div 2)
-  let head = output[0 ..< (outputLimit - keep)]
-  let tail = output[^keep .. ^1]
-  head & "\n\n[... truncated " & $(output.len - outputLimit) & " bytes ...]\n\n" & tail
 
 proc resolveCommand(toolDir, cmd0: string): string =
   if cmd0.isAbsolute:

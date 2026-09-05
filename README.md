@@ -71,7 +71,8 @@ Use `/session` to print the current session ID and `/resume` to list or
 resume sessions. `/resume` lists this workspace (newest 20), with recency
 and the first user message; `/resume ID` restores that transcript and
 the last model used. A session from another project still loads by ID,
-with a warning. `/model name` switches the model for later turns.
+with a warning. Sessions without a workspace header are hidden from
+workspace-filtered lists. `/model name` switches the model for later turns.
 `./niminal --resume` continues the latest session for this workspace.
 A specific session can be selected with `./niminal --session ID`.
 

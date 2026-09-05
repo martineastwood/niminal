@@ -40,15 +40,10 @@ type
     session*: Session
     tools*: ToolRegistry
     hooks*: seq[Hook]
-    ## Runtime thinking override; empty means use config.thinking.
-    thinking*: string
     ## Startup warnings from extension discovery (invalid manifests, collisions).
     extensionWarnings*: seq[string]
     ## Startup warnings from hook discovery (invalid manifests).
     hookWarnings*: seq[string]
-
-proc effectiveThinking*(agent: Agent): string =
-  if agent.thinking.len > 0: agent.thinking else: agent.config.thinking
 
 proc statusFooter*(agent: Agent): string =
   ## TUI status-bar text: model, usage, context fill, session id, thinking.
@@ -76,7 +71,7 @@ proc statusFooter*(agent: Agent): string =
         parts.add color & "ctx " & $pct & "%\e[0m"
   if agent.session.id.len > 0:
     parts.add "\e[2m#" & agent.session.id & "\e[0m"
-  let level = thinkingStatus(agent.config, agent.thinking)
+  let level = thinkingStatus(agent.config)
   if level == "off":
     parts.add "\e[2mthink:off\e[0m"
   elif level.len > 0:
@@ -170,7 +165,6 @@ proc rescanPlugins(agent: var Agent, ui: TurnSink) =
 
 proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   result.config = config
-  result.thinking = config.thinking
   result.attachProvider()
   result.session = loadSession(config.sessionDir, sessionId, config.workspace)
   if sessionId.len > 0:
@@ -178,7 +172,7 @@ proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   result.reloadToolsAndHooks()
 
 proc buildRequest*(agent: Agent): ProviderRequest =
-  let opts = providerOptions(agent.config, agent.thinking)
+  let opts = providerOptions(agent.config)
   var maxTok = agent.config.maxTokens
   if "thinking" in opts:
     let budget = opts["thinking"]["budget_tokens"].getInt
@@ -207,13 +201,12 @@ proc buildRequest*(agent: Agent): ProviderRequest =
 
 proc setThinking*(agent: var Agent, value: string): string =
   try:
-    agent.thinking = normalizeThinking(value)
-    agent.config.thinking = agent.thinking
+    agent.config.thinking = normalizeThinking(value)
     persistModel(agent.config)
-    if agent.thinking.len == 0:
+    if agent.config.thinking.len == 0:
       result = "(provider default)"
     else:
-      result = agent.thinking
+      result = agent.config.thinking
   except ValueError as e:
     result = "ERROR: " & e.msg
 
@@ -302,7 +295,7 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
       ui.onChange()
   of slThinking:
     if cmd.arg.len == 0:
-      let level = thinkingStatus(agent.config, agent.thinking)
+      let level = thinkingStatus(agent.config)
       ui.emit(mlPlain, if level.len == 0: "(provider default)" else: level)
     else:
       ui.emit(mlPlain, agent.setThinking(cmd.arg))
@@ -338,8 +331,8 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
     ui.emit(mlPlain, "File: " & agent.session.path)
     if agent.session.workspace.len > 0:
       ui.emit(mlPlain, "Workspace: " & agent.session.workspace)
-    let think = if agent.effectiveThinking.len == 0: "(default)"
-                else: agent.effectiveThinking
+    let think = if agent.config.thinking.len == 0: "(default)"
+                else: agent.config.thinking
     ui.emit(mlPlain, "Thinking: " & think)
   of slResume:
     if cmd.arg.len == 0:

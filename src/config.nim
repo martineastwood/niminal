@@ -151,14 +151,12 @@ proc resolveThinking(provider, model, want: string): ThinkingPlan =
   result.label = want
   result.options = thinkingOptions(p, want)
 
-proc providerOptions*(config: AgentConfig, thinkingOverride = ""): JsonNode =
-  let raw = if thinkingOverride.len > 0: thinkingOverride else: config.thinking
-  let want = if raw.len == 0: "" else: normalizeThinking(raw)
+proc providerOptions*(config: AgentConfig): JsonNode =
+  let want = if config.thinking.len == 0: "" else: normalizeThinking(config.thinking)
   resolveThinking(config.provider, config.model, want).options
 
-proc thinkingStatus*(config: AgentConfig, thinkingOverride = ""): string =
-  let raw = if thinkingOverride.len > 0: thinkingOverride else: config.thinking
-  let want = if raw.len == 0: "" else: normalizeThinking(raw)
+proc thinkingStatus*(config: AgentConfig): string =
+  let want = if config.thinking.len == 0: "" else: normalizeThinking(config.thinking)
   resolveThinking(config.provider, config.model, want).label
 
 proc unquote*(value: string): string =

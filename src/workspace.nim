@@ -19,9 +19,6 @@ proc hashContent*(content: string): string =
     hash = (hash xor uint64(ord(ch))) * 1099511628211'u64
   toHex(hash, 16).toLowerAscii()
 
-proc versionOf*(path: string): string =
-  if fileExists(path): hashContent(readFile(path)) else: ""
-
 proc resolve*(ws: Workspace, path: string): string =
   ## Resolve a tool-supplied path against the workspace root and reject
   ## anything that escapes it. Symlinks are resolved before the check so a link

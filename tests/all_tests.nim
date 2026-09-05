@@ -339,23 +339,23 @@ suite "session":
     var there = initSession(root / "there.jsonl", "there")
     there.workspace = "/proj/there"
     there.addUserMessage("other repo")
-    var legacy = initSession(root / "legacy.jsonl", "legacy")
-    legacy.addUserMessage("old file")
+    var orphan = initSession(root / "orphan.jsonl", "orphan")
+    orphan.addUserMessage("no header")
     setLastModificationTime(root / "there.jsonl", fromUnix(3_000))
     setLastModificationTime(root / "here.jsonl", fromUnix(2_000))
-    setLastModificationTime(root / "legacy.jsonl", fromUnix(1_000))
+    setLastModificationTime(root / "orphan.jsonl", fromUnix(1_000))
     let reloaded = initSession(root / "here.jsonl", "here")
     check reloaded.workspace == "/proj/here"
     check reloaded.events.len == 1
     let raw = readFile(root / "here.jsonl")
     check raw.startsWith("{\"type\":\"session\"")
-    check listSessionIds(root, "/proj/here") == @["here", "legacy"]
-    check listSessionIds(root, "/proj/there") == @["there", "legacy"]
+    check listSessionIds(root, "/proj/here") == @["here"]
+    check listSessionIds(root, "/proj/there") == @["there"]
+    check listSessionIds(root) == @["there", "here", "orphan"]
     let infos = listSessions(root, "/proj/here")
-    check infos.len == 2
+    check infos.len == 1
     check infos[0].id == "here"
     check infos[0].workspace == "/proj/here"
-    check infos[1].id == "legacy"
     check peekSession(root, "there").workspace == "/proj/there"
 
   test "session picker caps at newest 20":
@@ -705,7 +705,7 @@ suite "slash commands":
     check commandError("/review", root) == ""
     check commandError("/review the diff", root) == ""
     check "Unknown command" in commandError("/review", root / "empty")
-    let expanded = expandSkillSlash(root, "/review src/foo.nim")
+    let expanded = expandSkill(root, parseSlash("/review src/foo.nim", root))
     check "Follow the \"review\" skill." in expanded
     check "Be thorough." in expanded
     check "src/foo.nim" in expanded
@@ -743,6 +743,7 @@ suite "slash commands":
     let root = freshDir()
     defer: removeDir(root)
     var sess = initSession(root / "abc123.jsonl", "abc123")
+    sess.workspace = root
     sess.addUserMessage("fix the parser")
     setLastModificationTime(root / "abc123.jsonl", fromUnix(1_000))
     check "/resume abc123" in commandSuggestions("/resume", root, root)
@@ -1309,7 +1310,8 @@ suite "thinking / reasoning options":
     check providerOptions(config).len == 0
     check thinkingStatus(config) == ""
     check thinkingChoices("openrouter", "dumb").len == 0
-    var agent = Agent(config: config, thinking: "high")
+    config.thinking = "high"
+    var agent = Agent(config: config)
     check "think:" notin agent.statusFooter
 
 suite "markdown rendering":

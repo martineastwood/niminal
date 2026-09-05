@@ -59,9 +59,6 @@ proc estimateEventTokens*(event: SessionEvent, workspace = ""): int =
   case event.kind
   of sekUser, sekAssistant:
     result = estimateContentTokens(event.message.content, workspace)
-  of sekToolCall:
-    result += estimateTokens(event.toolName)
-    if not event.toolInput.isNil: result += estimateTokens($event.toolInput)
   of sekToolResult:
     result = estimateTokens(event.toolOutput)
     for img in event.toolImages:
@@ -145,10 +142,6 @@ proc serializeEvent(event: SessionEvent, toolCap = 2000): string =
         result.add "[" & part.mimeType & "]\n"
       of ckToolResult:
         discard
-  of sekToolCall:
-    result = "tool_call " & event.toolName & " "
-    if not event.toolInput.isNil: result.add $event.toolInput
-    result.add "\n"
   of sekToolResult:
     var outp = event.toolOutput
     if outp.len > toolCap * 4:
@@ -198,10 +191,10 @@ proc generateSummary*(provider: Provider, model: string,
     options: newJObject()
   )
   var response: ProviderResponse
+  var acc = ""
   if onEvent.isNil:
     response = generateText(provider, req)
   else:
-    var acc = ""
     var cancelled = false
     let abort = proc (): bool = not onEvent(StreamEvent(kind: seWake))
     response = streamText(provider, req, proc (ev: StreamEvent): bool =
@@ -213,13 +206,9 @@ proc generateSummary*(provider: Provider, model: string,
       true, abort = abort)
     if cancelled:
       raise newException(ValueError, "compaction interrupted")
-    result = acc.strip
-    if result.len == 0:
-      result = response.textContent().strip
-    if result.len == 0:
-      raise newException(ValueError, "compaction produced an empty summary")
-    return
-  result = response.textContent().strip
+  result = acc.strip
+  if result.len == 0:
+    result = response.textContent().strip
   if result.len == 0:
     raise newException(ValueError, "compaction produced an empty summary")
 

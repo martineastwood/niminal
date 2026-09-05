@@ -1023,9 +1023,6 @@ proc transcriptItems(session: Session): seq[ScrollItem] =
           discard
         of ckImage:
           discard
-    of sekToolCall:
-      result.add ScrollItem(kind: skTool,
-        tool: makeToolCard(toolUse(event.toolId, event.toolName, event.toolInput)))
     of sekToolResult:
       result.finishToolCard(event.toolId, event.toolOutput, event.toolError)
     of sekCompaction:

@@ -10,7 +10,6 @@ type
   SessionEventKind* = enum
     sekUser = "user"
     sekAssistant = "assistant"
-    sekToolCall = "tool_call"
     sekToolResult = "tool_result"
     sekCompaction = "compaction"
     sekName = "name"
@@ -21,10 +20,8 @@ type
       message*: Message
       model*: string
       usage*: Usage
-    of sekToolCall, sekToolResult:
+    of sekToolResult:
       toolId*: string
-      toolName*: string
-      toolInput*: JsonNode
       toolOutput*: string
       toolError*: bool
       toolImages*: seq[ImageContent]
@@ -118,10 +115,6 @@ proc eventJson(event: SessionEvent): JsonNode =
           "cache_write_tokens": event.usage.cacheWriteTokens,
           "cache_reported": event.usage.cacheReported
         }
-  of sekToolCall:
-    result["id"] = %event.toolId
-    result["name"] = %event.toolName
-    result["input"] = event.toolInput
   of sekToolResult:
     result["id"] = %event.toolId
     result["output"] = %event.toolOutput
@@ -182,9 +175,6 @@ proc parseEvent(node: JsonNode): SessionEvent =
       usage.cacheWriteTokens = u.getOrDefault("cache_write_tokens").getInt
       usage.cacheReported = u.getOrDefault("cache_reported").getBool
     SessionEvent(kind: sekAssistant, message: msg, model: model, usage: usage)
-  of "tool_call":
-    SessionEvent(kind: sekToolCall, toolId: node["id"].getStr,
-      toolName: node["name"].getStr, toolInput: node["input"])
   of "tool_result":
     SessionEvent(kind: sekToolResult, toolId: node["id"].getStr,
       toolOutput: node["output"].getStr, toolError: node["is_error"].getBool,
@@ -278,10 +268,6 @@ proc messagesFrom*(session: Session, startIdx: int): seq[Message] =
     case event.kind
     of sekUser, sekAssistant:
       result.add event.message
-    of sekToolCall:
-      if result.len == 0 or result[^1].role != roleAssistant:
-        result.add Message(role: roleAssistant, content: @[])
-      result[^1].content.add toolUse(event.toolId, event.toolName, event.toolInput)
     of sekToolResult:
       if result.len == 0 or result[^1].role != roleUser:
         result.add Message(role: roleUser, content: @[])
@@ -346,23 +332,8 @@ proc clipPreview(text: string, maxRunes = 48): string =
   if runeLen(one) <= maxRunes: return one
   runeSubStr(one, 0, maxRunes - 1) & "…"
 
-proc readSessionWorkspace(path: string): string =
-  ## Workspace from the first JSONL record, or empty (legacy / missing).
-  if not fileExists(path): return
-  for line in lines(path):
-    let stripped = line.strip
-    if stripped.len == 0: continue
-    try:
-      let node = parseJson(stripped)
-      if node.getOrDefault("type").getStr == "session":
-        return node.getOrDefault("workspace").getStr
-    except CatchableError:
-      discard
-    return ""
-
 proc belongsToWorkspace(fileWorkspace, wanted: string): bool =
-  ## Header-less (legacy) files match every workspace.
-  wanted.len == 0 or fileWorkspace.len == 0 or fileWorkspace == wanted
+  wanted.len == 0 or fileWorkspace == wanted
 
 proc peekFile(mtime: Time, id, path: string): SessionInfo =
   result = SessionInfo(id: id, mtime: mtime, preview: "(empty)")
@@ -417,7 +388,7 @@ proc peekSession*(sessionDir, id: string): SessionInfo =
 proc listSessions*(sessionDir: string, workspace = "",
                    limit = sessionListLimit): seq[SessionInfo] =
   ## Newest mtime first. Preview is the first user message, clipped.
-  ## `workspace` hides other projects; header-less files still appear.
+  ## `workspace` hides sessions from other projects.
   for e in collectSessionFiles(sessionDir):
     let info = peekFile(e.mtime, e.id, e.path)
     if not belongsToWorkspace(info.workspace, workspace):
@@ -428,11 +399,8 @@ proc listSessions*(sessionDir: string, workspace = "",
 
 proc listSessionIds*(sessionDir: string, workspace = ""): seq[string] =
   ## Session ids in `sessionDir`, newest mtime first. Uncapped.
-  for e in collectSessionFiles(sessionDir):
-    if workspace.len > 0 and
-        not belongsToWorkspace(readSessionWorkspace(e.path), workspace):
-      continue
-    result.add e.id
+  for info in listSessions(sessionDir, workspace, limit = 0):
+    result.add info.id
 
 proc sessionLabel*(info: SessionInfo, now = getTime()): string =
   let title = if info.name.len > 0: info.name else: info.preview
