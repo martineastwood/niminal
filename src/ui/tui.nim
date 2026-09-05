@@ -103,19 +103,12 @@ proc highlightSlashCommand*(input: string, workspace = getCurrentDir()): string 
     result.add argColor & rest & "\e[0m"
 
 proc highlightMentions(input: string): string =
-  const chars = {'A'..'Z', 'a'..'z', '0'..'9', '_', '.', '/', '-', '+'}
   var i = 0
-  while i < input.len:
-    if input[i] == '@' and (i == 0 or input[i - 1] in {' ', '\t'}):
-      var j = i + 1
-      while j < input.len and input[j] in chars:
-        inc j
-      if j > i + 1:
-        result.add "\e[1;36m" & input[i ..< j] & "\e[0m"
-        i = j
-        continue
-    result.add input[i]
-    inc i
+  for at, tokEnd in mentionTokens(input):
+    result.add input[i ..< at]
+    result.add "\e[1;36m" & input[at ..< tokEnd] & "\e[0m"
+    i = tokEnd
+  result.add input[i .. ^1]
 
 proc highlightComposerLine*(input: string, workspace = getCurrentDir()): string =
   if input.strip.startsWith("/"):

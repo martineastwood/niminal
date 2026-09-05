@@ -68,10 +68,8 @@ proc printStartupBanner(agent: Agent, catalogNote: string) =
   echo ("Session: " & agent.session.id).color(cDim)
   if catalogNote.len > 0:
     echo catalogNote.color(cDim)
-  for warning in agent.extensionWarnings:
-    echo ("extension: " & warning).color(cDim)
-  for warning in agent.hookWarnings:
-    echo ("hook: " & warning).color(cDim)
+  for line in agent.discoveryWarningLines:
+    echo line.color(cDim)
 
 proc runOneShot(agent: var Agent, prompt: string, catalogNote = "") =
   ## Run a single turn from a CLI prompt, then exit.
@@ -111,10 +109,8 @@ proc runTUI(agent: var Agent, catalogNote = "", initialPrompt = "") =
   tui.addLine("\e[2mSession: " & agent.session.id & "\e[0m")
   if catalogNote.len > 0:
     tui.addLine("\e[2m" & catalogNote & "\e[0m")
-  for warning in agent.extensionWarnings:
-    tui.addLine("\e[2mextension: " & warning & "\e[0m")
-  for warning in agent.hookWarnings:
-    tui.addLine("\e[2mhook: " & warning & "\e[0m")
+  for line in agent.discoveryWarningLines:
+    tui.addLine("\e[2m" & line & "\e[0m")
   if agent.session.events.len > 0:
     tui.addLine("")
     tui.replaySession(agent.session)

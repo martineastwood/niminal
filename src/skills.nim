@@ -56,36 +56,12 @@ proc readMetadata(path: string): SkillMetadata =
          not stripped.startsWith("#"):
       result.description = stripped
 
-proc addSkills(result: var seq[SkillMetadata], root: string) =
-  if not dirExists(root):
-    return
-  var paths: seq[string] = @[]
-  for kind, path in walkDir(root):
-    if kind == pcDir and fileExists(path / "SKILL.md"):
-      paths.add path / "SKILL.md"
-  paths.sort()
-  for path in paths:
-    let skill = readMetadata(path)
-    if skill.name.len == 0:
-      continue
-    var replaced = false
-    for i in 0 ..< result.len:
-      if result[i].name.toLowerAscii == skill.name.toLowerAscii:
-        result[i] = skill
-        replaced = true
-        break
-    if not replaced:
-      result.add skill
-
-proc globalSkillsDir(): string =
-  niminalConfigDir() / "skills"
-
 proc discoverSkills*(workspace: string): seq[SkillMetadata] =
   ## Later roots override the same skill name: global → `.agent` → `.niminal`.
-  addSkills(result, globalSkillsDir())
-  let root = if dirExists(workspace): expandFilename(workspace) else: workspace
-  addSkills(result, root / ".agent" / "skills")
-  addSkills(result, root / ".niminal" / "skills")
+  for dir in collectPluginDirs(workspace, "skills", "SKILL.md"):
+    let skill = readMetadata(dir / "SKILL.md")
+    if skill.name.len > 0:
+      result.overrideNamed(skill)
   result.sort(proc(a, b: SkillMetadata): int =
     let byName = cmp(a.name.toLowerAscii, b.name.toLowerAscii)
     if byName != 0: byName else: cmp(a.path, b.path))

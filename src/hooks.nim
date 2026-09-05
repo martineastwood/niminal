@@ -7,15 +7,6 @@ import std/[algorithm, json, os, strutils]
 import config
 import extensions
 
-const
-  DefaultTimeout = 30
-  HookEvents* = [
-    "pre_tool_call", "post_tool_call",
-    "session_start", "session_end",
-    "pre_compact", "post_compact",
-    "turn_start", "turn_end"
-  ]
-
 type
   HookEvent* = enum
     hePreToolCall = "pre_tool_call"
@@ -54,16 +45,10 @@ type
     instruction*: string
 
 proc parseEvent(s: string): tuple[ok: bool, event: HookEvent] =
-  case s.strip.toLowerAscii
-  of "pre_tool_call": (true, hePreToolCall)
-  of "post_tool_call": (true, hePostToolCall)
-  of "session_start": (true, heSessionStart)
-  of "session_end": (true, heSessionEnd)
-  of "pre_compact": (true, hePreCompact)
-  of "post_compact": (true, hePostCompact)
-  of "turn_start": (true, heTurnStart)
-  of "turn_end": (true, heTurnEnd)
-  else: (false, hePreToolCall)
+  try:
+    (true, parseEnum[HookEvent](s.strip.toLowerAscii))
+  except ValueError:
+    (false, hePreToolCall)
 
 proc parseHookManifest(path: string): tuple[ok: bool, hook: Hook, err: string] =
   var doc: JsonNode
@@ -82,13 +67,9 @@ proc parseHookManifest(path: string): tuple[ok: bool, hook: Hook, err: string] =
   let ev = parseEvent(doc["event"].getStr)
   if not ev.ok:
     return (false, Hook(), "unknown event: " & doc["event"].getStr)
-  if "command" notin doc or doc["command"].kind != JArray or doc["command"].len == 0:
-    return (false, Hook(), "command must be a nonempty array")
-  var command: seq[string] = @[]
-  for item in doc["command"]:
-    if item.kind != JString or item.getStr.len == 0:
-      return (false, Hook(), "command entries must be nonempty strings")
-    command.add item.getStr
+  let command = parseCommandArray(doc)
+  if not command.ok:
+    return (false, Hook(), command.err)
 
   var tools: seq[string] = @[]
   if "tools" in doc:
@@ -99,49 +80,27 @@ proc parseHookManifest(path: string): tuple[ok: bool, hook: Hook, err: string] =
         return (false, Hook(), "tools entries must be nonempty strings")
       tools.add item.getStr.strip.toLowerAscii
 
-  var timeout = DefaultTimeout
-  if "timeout_seconds" in doc:
-    if doc["timeout_seconds"].kind != JInt:
-      return (false, Hook(), "timeout_seconds must be an integer")
-    timeout = max(1, doc["timeout_seconds"].getInt)
+  let timeout = parseTimeoutSeconds(doc)
+  if not timeout.ok:
+    return (false, Hook(), timeout.err)
 
   result.ok = true
   result.hook = Hook(
     name: name,
     event: ev.event,
     tools: tools,
-    command: command,
-    timeoutSeconds: timeout,
+    command: command.command,
+    timeoutSeconds: timeout.timeout,
     dir: path.parentDir)
 
-proc addHooks(result: var HookDiscoverResult, root: string) =
-  if not dirExists(root):
-    return
-  var dirs: seq[string] = @[]
-  for kind, path in walkDir(root):
-    if kind == pcDir and fileExists(path / "hook.json"):
-      dirs.add path
-  dirs.sort()
-  for dir in dirs:
+proc discoverHooks*(workspace: string): HookDiscoverResult =
+  ## Later roots override the same hook name: global → `.agent` → `.niminal`.
+  for dir in collectPluginDirs(workspace, "hooks", "hook.json"):
     let parsed = parseHookManifest(dir / "hook.json")
     if not parsed.ok:
       result.warnings.add "skipping " & dir & ": " & parsed.err
       continue
-    var replaced = false
-    for i in 0 ..< result.hooks.len:
-      if result.hooks[i].name.toLowerAscii == parsed.hook.name.toLowerAscii:
-        result.hooks[i] = parsed.hook
-        replaced = true
-        break
-    if not replaced:
-      result.hooks.add parsed.hook
-
-proc discoverHooks*(workspace: string): HookDiscoverResult =
-  ## Later roots override the same hook name: global → `.agent` → `.niminal`.
-  addHooks(result, niminalConfigDir() / "hooks")
-  let root = if dirExists(workspace): expandFilename(workspace) else: workspace
-  addHooks(result, root / ".agent" / "hooks")
-  addHooks(result, root / ".niminal" / "hooks")
+    result.hooks.overrideNamed(parsed.hook)
   result.hooks.sort(proc(a, b: Hook): int =
     let byName = cmp(a.name.toLowerAscii, b.name.toLowerAscii)
     if byName != 0: byName else: cmp(a.dir, b.dir))

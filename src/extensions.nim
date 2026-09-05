@@ -13,7 +13,7 @@ import tools/tool
 import ui/term
 
 const
-  DefaultTimeout = 30
+  DefaultTimeout* = 30
   TailKeep = 20_000
   TermGiveUpMs = 200
   BuiltinToolNames* = ["bash", "edit", "glob", "grep", "read", "read_skill", "write"]
@@ -150,6 +150,26 @@ proc resolveCommand(toolDir, cmd0: string): string =
   else:
     toolDir / cmd0
 
+proc parseCommandArray*(doc: JsonNode):
+    tuple[ok: bool, command: seq[string], err: string] =
+  if "command" notin doc or doc["command"].kind != JArray or doc["command"].len == 0:
+    return (false, @[], "command must be a nonempty array")
+  for item in doc["command"]:
+    if item.kind != JString or item.getStr.len == 0:
+      return (false, @[], "command entries must be nonempty strings")
+    result.command.add item.getStr
+  result.ok = true
+
+proc parseTimeoutSeconds*(doc: JsonNode, default = DefaultTimeout):
+    tuple[ok: bool, timeout: int, err: string] =
+  result.ok = true
+  result.timeout = default
+  if "timeout_seconds" notin doc:
+    return
+  if doc["timeout_seconds"].kind != JInt:
+    return (false, default, "timeout_seconds must be an integer")
+  result.timeout = max(1, doc["timeout_seconds"].getInt)
+
 proc parseManifest(path: string): tuple[ok: bool, tool: ExtensionTool, err: string] =
   var doc: JsonNode
   try:
@@ -165,59 +185,32 @@ proc parseManifest(path: string): tuple[ok: bool, tool: ExtensionTool, err: stri
     return (false, ExtensionTool(), "missing name")
   if description.len == 0:
     return (false, ExtensionTool(), "missing description")
-  if "command" notin doc or doc["command"].kind != JArray or doc["command"].len == 0:
-    return (false, ExtensionTool(), "command must be a nonempty array")
-  var command: seq[string] = @[]
-  for item in doc["command"]:
-    if item.kind != JString or item.getStr.len == 0:
-      return (false, ExtensionTool(), "command entries must be nonempty strings")
-    command.add item.getStr
+  let command = parseCommandArray(doc)
+  if not command.ok:
+    return (false, ExtensionTool(), command.err)
   if "input_schema" notin doc or doc["input_schema"].kind != JObject:
     return (false, ExtensionTool(), "input_schema must be a JSON object")
-
-  var timeout = DefaultTimeout
-  if "timeout_seconds" in doc:
-    if doc["timeout_seconds"].kind != JInt:
-      return (false, ExtensionTool(), "timeout_seconds must be an integer")
-    timeout = max(1, doc["timeout_seconds"].getInt)
+  let timeout = parseTimeoutSeconds(doc)
+  if not timeout.ok:
+    return (false, ExtensionTool(), timeout.err)
 
   result.ok = true
   result.tool = ExtensionTool(
     name: name,
     description: description,
-    command: command,
-    timeoutSeconds: timeout,
+    command: command.command,
+    timeoutSeconds: timeout.timeout,
     inputSchema: doc["input_schema"],
     dir: path.parentDir)
 
-proc addTools(result: var DiscoverResult, root: string) =
-  if not dirExists(root):
-    return
-  var dirs: seq[string] = @[]
-  for kind, path in walkDir(root):
-    if kind == pcDir and fileExists(path / "tool.json"):
-      dirs.add path
-  dirs.sort()
-  for dir in dirs:
+proc discoverExtensions*(workspace: string): DiscoverResult =
+  ## Later roots override the same tool name: global → `.agent` → `.niminal`.
+  for dir in collectPluginDirs(workspace, "tools", "tool.json"):
     let parsed = parseManifest(dir / "tool.json")
     if not parsed.ok:
       result.warnings.add "skipping " & dir & ": " & parsed.err
       continue
-    var replaced = false
-    for i in 0 ..< result.tools.len:
-      if result.tools[i].name.toLowerAscii == parsed.tool.name.toLowerAscii:
-        result.tools[i] = parsed.tool
-        replaced = true
-        break
-    if not replaced:
-      result.tools.add parsed.tool
-
-proc discoverExtensions*(workspace: string): DiscoverResult =
-  ## Later roots override the same tool name: global → `.agent` → `.niminal`.
-  addTools(result, niminalConfigDir() / "tools")
-  let root = if dirExists(workspace): expandFilename(workspace) else: workspace
-  addTools(result, root / ".agent" / "tools")
-  addTools(result, root / ".niminal" / "tools")
+    result.tools.overrideNamed(parsed.tool)
   result.tools.sort(proc(a, b: ExtensionTool): int =
     let byName = cmp(a.name.toLowerAscii, b.name.toLowerAscii)
     if byName != 0: byName else: cmp(a.dir, b.dir))

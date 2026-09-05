@@ -239,7 +239,8 @@ proc applyMention*(input: string, cursor: int, selected: string):
   result.text = input[0 ..< m.at] & selected & " " & input[m.tokEnd .. ^1]
   result.cursor = m.at + selected.len + 1
 
-proc findMentions*(text: string): seq[string] =
+iterator mentionTokens*(text: string): tuple[at, tokEnd: int] =
+  ## `@path` tokens, same rules as mentionAt (not `user@host`).
   var i = 0
   while i < text.len:
     if text[i] == '@' and (i == 0 or text[i - 1] in {' ', '\t', '\n'}):
@@ -247,15 +248,16 @@ proc findMentions*(text: string): seq[string] =
       while j < text.len and text[j] in mentionPathChars:
         inc j
       if j > i + 1:
-        let path = text[i + 1 ..< j]
-        var seen = false
-        for x in result:
-          if x == path: seen = true
-        if not seen:
-          result.add path
+        yield (i, j)
       i = j
     else:
       inc i
+
+proc findMentions*(text: string): seq[string] =
+  for at, tokEnd in mentionTokens(text):
+    let path = text[at + 1 ..< tokEnd]
+    if path notin result:
+      result.add path
 
 const mentionAttachBytes = 100_000
 

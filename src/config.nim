@@ -1,8 +1,11 @@
 ## JSON settings: global ~/.niminal/config.json, overlay .niminal/config.json.
 ## Known fields only on load (missing keys get defaults). Saves patch the
 ## write target in place.
+##
+## Plugin search roots (skills, tools, hooks) also live here: global
+## `~/.niminal`, then `.agent`, then `.niminal`. Later wins by name.
 
-import std/[json, os, strutils]
+import std/[algorithm, json, os, strutils]
 import nimgent
 import models_dev, compaction
 
@@ -166,6 +169,33 @@ proc unquote*(value: string): string =
 
 proc niminalConfigDir*(): string =
   getHomeDir() / ".niminal"
+
+proc pluginRoots*(workspace, folder: string): seq[string] =
+  ## Search order: global → `.agent` → `.niminal`. Later wins by name.
+  result.add niminalConfigDir() / folder
+  let root = if dirExists(workspace): expandFilename(workspace) else: workspace
+  result.add root / ".agent" / folder
+  result.add root / ".niminal" / folder
+
+proc collectPluginDirs*(workspace, folder, manifest: string): seq[string] =
+  ## Dirs that contain `manifest`, later roots last.
+  for root in pluginRoots(workspace, folder):
+    if not dirExists(root):
+      continue
+    var dirs: seq[string]
+    for kind, path in walkDir(root):
+      if kind == pcDir and fileExists(path / manifest):
+        dirs.add path
+    dirs.sort()
+    result.add dirs
+
+proc overrideNamed*[T](items: var seq[T], item: T) =
+  ## Replace the first item with the same case-insensitive `.name`, or append.
+  for i in 0 ..< items.len:
+    if items[i].name.toLowerAscii == item.name.toLowerAscii:
+      items[i] = item
+      return
+  items.add item
 
 proc defaultApiKeyEnv*(provider: string): string =
   case provider.toLowerAscii

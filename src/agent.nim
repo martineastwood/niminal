@@ -149,11 +149,24 @@ proc reloadToolsAndHooks*(agent: var Agent) =
   agent.hooks = discovered.hooks
   agent.hookWarnings = discovered.warnings
 
-proc emitDiscoveryWarnings(agent: Agent, ui: TurnSink) =
+proc discoveryWarningLines*(agent: Agent): seq[string] =
   for warning in agent.extensionWarnings:
-    ui.emit(mlWarn, "extension: " & warning)
+    result.add "extension: " & warning
   for warning in agent.hookWarnings:
-    ui.emit(mlWarn, "hook: " & warning)
+    result.add "hook: " & warning
+
+proc reportLines(ui: TurnSink, level: MsgLevel, lines: openArray[string],
+                 prefix = "") =
+  for line in lines:
+    let text = prefix & line
+    if not ui.emit.isNil:
+      ui.emit(level, text)
+    else:
+      stderr.writeLine text
+
+proc rescanPlugins(agent: var Agent, ui: TurnSink) =
+  agent.reloadToolsAndHooks()
+  reportLines(ui, mlWarn, agent.discoveryWarningLines)
 
 proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   result.config = config
@@ -209,27 +222,20 @@ proc compactionPoll(ui: TurnSink): StreamCallback =
     ui.poll()
     not ui.wasInterrupted()
 
-proc emitHookWarnings(ui: TurnSink, warnings: openArray[string]) =
-  for w in warnings:
-    ui.emit(mlWarn, "hook: " & w)
-
-proc warnHooks(ui: TurnSink, warnings: openArray[string]) =
-  if not ui.emit.isNil:
-    emitHookWarnings(ui, warnings)
-  else:
-    for w in warnings:
-      stderr.writeLine "hook: " & w
+proc runLifecycle(agent: var Agent, event: HookEvent, payload: JsonNode,
+                  ui: TurnSink, toolName = ""): HookOutcome =
+  result = runHooks(agent.hooks, event, payload, agent.config.workspace,
+    toolName, agent.config.maxToolOutputBytes)
+  reportLines(ui, mlWarn, result.warnings, "hook: ")
 
 proc runCompaction*(agent: var Agent, instruction = "",
                     onEvent: StreamCallback = nil,
                     ui: TurnSink = default(TurnSink)): CompactionResult =
   let tokensBefore = estimatedContextTokens(agent.session)
   var instruction = instruction
-  let pre = runHooks(agent.hooks, hePreCompact,
+  let pre = agent.runLifecycle(hePreCompact,
     preCompactPayload(agent.session.id, agent.config.workspace, instruction,
-      tokensBefore),
-    agent.config.workspace, maxOutputBytes = agent.config.maxToolOutputBytes)
-  warnHooks(ui, pre.warnings)
+      tokensBefore), ui)
   if not pre.allowed:
     result.message = if pre.reason.len > 0: pre.reason else: "blocked by hook"
     return
@@ -248,12 +254,10 @@ proc runCompaction*(agent: var Agent, instruction = "",
       onEvent)
   except CatchableError as e:
     result.message = "Compaction failed: " & e.msg
-  let post = runHooks(agent.hooks, hePostCompact,
+  discard agent.runLifecycle(hePostCompact,
     postCompactPayload(agent.session.id, agent.config.workspace,
       result.didCompact, result.summary, result.firstKeptIndex,
-      result.tokensBefore, result.message),
-    agent.config.workspace, maxOutputBytes = agent.config.maxToolOutputBytes)
-  warnHooks(ui, post.warnings)
+      result.tokensBefore, result.message), ui)
 
 proc maybeAutoCompact*(agent: var Agent,
                        onEvent: StreamCallback = nil,
@@ -267,32 +271,20 @@ proc maybeAutoCompact*(agent: var Agent,
     return
   result = agent.runCompaction(onEvent = onEvent, ui = ui)
 
-proc fireSessionHooks*(agent: var Agent, event: HookEvent, ui: TurnSink) =
-  let payload = sessionPayload(agent.session.id, agent.config.workspace)
-  let outcome = runHooks(agent.hooks, event, payload, agent.config.workspace,
-    maxOutputBytes = agent.config.maxToolOutputBytes)
-  emitHookWarnings(ui, outcome.warnings)
-
-proc fireSessionHooks*(agent: var Agent, event: HookEvent) =
-  ## No UI: write fail-open warnings to stderr.
-  let payload = sessionPayload(agent.session.id, agent.config.workspace)
-  let outcome = runHooks(agent.hooks, event, payload, agent.config.workspace,
-    maxOutputBytes = agent.config.maxToolOutputBytes)
-  for w in outcome.warnings:
-    stderr.writeLine "hook: " & w
+proc fireSessionHooks*(agent: var Agent, event: HookEvent,
+                       ui: TurnSink = default(TurnSink)) =
+  discard agent.runLifecycle(event,
+    sessionPayload(agent.session.id, agent.config.workspace), ui)
 
 proc fireTurnHooks(agent: var Agent, event: HookEvent, ui: TurnSink,
                    interrupted = false) =
-  let payload = turnPayload(agent.session.id, agent.config.workspace, interrupted)
-  let outcome = runHooks(agent.hooks, event, payload, agent.config.workspace,
-    maxOutputBytes = agent.config.maxToolOutputBytes)
-  emitHookWarnings(ui, outcome.warnings)
+  discard agent.runLifecycle(event,
+    turnPayload(agent.session.id, agent.config.workspace, interrupted), ui)
 
 proc switchSession(agent: var Agent, next: Session, ui: TurnSink) =
   ## session_end on the old transcript, rescan tools/hooks, then session_start.
   agent.fireSessionHooks(heSessionEnd, ui)
-  agent.reloadToolsAndHooks()
-  agent.emitDiscoveryWarnings(ui)
+  agent.rescanPlugins(ui)
   agent.session = next
   agent.fireSessionHooks(heSessionStart, ui)
 
@@ -381,8 +373,7 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
       ui.emit(mlOk, agent.session.name)
       ui.onChange()
   of slReload:
-    agent.reloadToolsAndHooks()
-    agent.emitDiscoveryWarnings(ui)
+    agent.rescanPlugins(ui)
     ui.emit(mlOk, "Reloaded tools and hooks.")
     ui.onChange()
   of slQuit, slNone, slError, slSkill:
@@ -464,10 +455,8 @@ proc runTurn*(agent: var Agent, ui: TurnSink) =
         toolResult = ToolResult(output: bad, isError: true)
       else:
         var args = if call.input.isNil: newJObject() else: call.input
-        let pre = runHooks(agent.hooks, hePreToolCall,
-          preToolPayload(call.name, args), agent.config.workspace,
-          call.name, agent.config.maxToolOutputBytes)
-        emitHookWarnings(ui, pre.warnings)
+        let pre = agent.runLifecycle(hePreToolCall,
+          preToolPayload(call.name, args), ui, call.name)
         if not pre.allowed:
           toolResult = ToolResult(output: pre.reason, isError: true)
         else:
@@ -476,11 +465,9 @@ proc runTurn*(agent: var Agent, ui: TurnSink) =
           toolResult = agent.tools.execute(call.name, args, proc (): bool =
             ui.poll()
             ui.wasInterrupted())
-          let post = runHooks(agent.hooks, hePostToolCall,
+          let post = agent.runLifecycle(hePostToolCall,
             postToolPayload(call.name, args, toolResult.output,
-              toolResult.isError),
-            agent.config.workspace, call.name, agent.config.maxToolOutputBytes)
-          emitHookWarnings(ui, post.warnings)
+              toolResult.isError), ui, call.name)
           if post.hasOutput:
             toolResult.output = post.output
           if post.hasIsError:
@@ -516,8 +503,7 @@ proc processInput*(agent: var Agent, input: string, ui: TurnSink): bool =
     true
   of slQuit:
     false
-  of slHelp, slModel, slModelsRefresh, slThinking, slProvider, slSession,
-     slNew, slCompact, slResume, slReload, slName:
+  else:
     applySlash(agent, cmd, ui)
     true
 

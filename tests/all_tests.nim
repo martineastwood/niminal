@@ -32,6 +32,38 @@ proc freshDir(): string =
 proc invoke(pair: (ToolDefinition, ToolProc), input: JsonNode): ToolResult =
   pair[1](input)
 
+proc writeExt(root, folder, name, runBody: string, timeout = 30) =
+  let dir = root / folder / "tools" / name
+  createDir(dir)
+  var manifest = %*{
+    "name": name,
+    "description": "Test tool " & name,
+    "command": ["./run"],
+    "input_schema": {"type": "object", "properties": {}}
+  }
+  if timeout != 30:
+    manifest["timeout_seconds"] = %timeout
+  writeFile(dir / "tool.json", $manifest)
+  writeFile(dir / "run", "#!/bin/sh\n" & runBody & "\n")
+  inclFilePermissions(dir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
+
+proc writeHook(root, folder, name, event, runBody: string,
+               tools: seq[string] = @[], timeout = 30) =
+  let dir = root / folder / "hooks" / name
+  createDir(dir)
+  var manifest = %*{
+    "name": name,
+    "event": event,
+    "command": ["./run"]
+  }
+  if tools.len > 0:
+    manifest["tools"] = %tools
+  if timeout != 30:
+    manifest["timeout_seconds"] = %timeout
+  writeFile(dir / "hook.json", $manifest)
+  writeFile(dir / "run", "#!/bin/sh\n" & runBody & "\n")
+  inclFilePermissions(dir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
+
 type
   TestProvider = ref object of Provider
     responses: seq[ProviderResponse]
@@ -348,6 +380,21 @@ suite "OpenRouter provider":
     check config.apiKeyEnv == "OPENROUTER_API_KEY"
     check config.endpoint == "https://openrouter.ai/api/v1/chat/completions"
     check niminalConfigDir().extractFilename == ".niminal"
+
+  test "plugin dirs are global, then .agent, then .niminal":
+    let root = freshDir()
+    defer: removeDir(root)
+    let ws = expandFilename(root)
+    check pluginRoots(root, "hooks") == @[
+      niminalConfigDir() / "hooks",
+      ws / ".agent" / "hooks",
+      ws / ".niminal" / "hooks"]
+    createDir(root / ".agent" / "hooks" / "x")
+    writeFile(root / ".agent" / "hooks" / "x" / "hook.json", "{}")
+    createDir(root / ".niminal" / "hooks" / "y")
+    writeFile(root / ".niminal" / "hooks" / "y" / "hook.json", "{}")
+    check collectPluginDirs(root, "hooks", "hook.json") ==
+      @[ws / ".agent" / "hooks" / "x", ws / ".niminal" / "hooks" / "y"]
 
   test "openai provider defaults and thinking map to reasoning.effort":
     let root = freshDir()
@@ -1482,6 +1529,7 @@ suite "file mentions":
     check mentionAt("@", 1).query.len == 0
     check mentionAt("look at @src", 12).query == "src"
     check mentionAt("nope", 2).active == false
+    check findMentions("see @a and\n@b and @a") == @["a", "b"]
 
   test "applyMention splices the token":
     let ins = applyMention("fix @src", 8, "@src/agent.nim")
@@ -1755,21 +1803,6 @@ suite "images":
     check req.messages[0].content[1].path == "tile.png"
 
 suite "external tools":
-  proc writeExt(root, folder, name, runBody: string, timeout = 30) =
-    let dir = root / folder / "tools" / name
-    createDir(dir)
-    var manifest = %*{
-      "name": name,
-      "description": "Test tool " & name,
-      "command": ["./run"],
-      "input_schema": {"type": "object", "properties": {}}
-    }
-    if timeout != 30:
-      manifest["timeout_seconds"] = %timeout
-    writeFile(dir / "tool.json", $manifest)
-    writeFile(dir / "run", "#!/bin/sh\n" & runBody & "\n")
-    inclFilePermissions(dir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
-
   proc findExt(tools: seq[ExtensionTool], name: string): ExtensionTool =
     for t in tools:
       if t.name == name:
@@ -1878,23 +1911,6 @@ suite "external tools":
     check "not-json-at-all" in result.output
 
 suite "lifecycle hooks":
-  proc writeHook(root, folder, name, event, runBody: string,
-                 tools: seq[string] = @[], timeout = 30) =
-    let dir = root / folder / "hooks" / name
-    createDir(dir)
-    var manifest = %*{
-      "name": name,
-      "event": event,
-      "command": ["./run"]
-    }
-    if tools.len > 0:
-      manifest["tools"] = %tools
-    if timeout != 30:
-      manifest["timeout_seconds"] = %timeout
-    writeFile(dir / "hook.json", $manifest)
-    writeFile(dir / "run", "#!/bin/sh\n" & runBody & "\n")
-    inclFilePermissions(dir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
-
   proc findHook(hooks: seq[Hook], name: string): Hook =
     for h in hooks:
       if h.name == name:
@@ -2099,16 +2115,8 @@ suite "lifecycle hooks":
       names.add d.name
     check "late_tool" notin names
     check agent.hooks.len == 0
-    let toolDir = root / ".niminal" / "tools" / "late_tool"
-    createDir(toolDir)
-    writeFile(toolDir / "tool.json", $(%*{
-      "name": "late_tool",
-      "description": "Added after start",
-      "command": ["./run"],
-      "input_schema": {"type": "object", "properties": {}}
-    }))
-    writeFile(toolDir / "run", "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true}'\n")
-    inclFilePermissions(toolDir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
+    writeExt(root, ".niminal", "late_tool",
+      "cat >/dev/null\necho '{\"ok\":true}'")
     writeHook(root, ".niminal", "late_hook", "session_start",
       "echo late >> late-log.txt\necho '{}'")
     check agent.processInput("/new", quietUi())
@@ -2137,16 +2145,8 @@ suite "lifecycle hooks":
       names.add d.name
     check "late_tool" notin names
     check agent.hooks.len == 0
-    let toolDir = root / ".niminal" / "tools" / "late_tool"
-    createDir(toolDir)
-    writeFile(toolDir / "tool.json", $(%*{
-      "name": "late_tool",
-      "description": "Added after start",
-      "command": ["./run"],
-      "input_schema": {"type": "object", "properties": {}}
-    }))
-    writeFile(toolDir / "run", "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true}'\n")
-    inclFilePermissions(toolDir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
+    writeExt(root, ".niminal", "late_tool",
+      "cat >/dev/null\necho '{\"ok\":true}'")
     writeHook(root, ".niminal", "late_hook", "session_start",
       "echo late >> late-log.txt\necho '{}'")
     check agent.processInput("/reload", quietUi())
