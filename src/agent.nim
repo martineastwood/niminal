@@ -94,7 +94,7 @@ proc attachProvider(agent: var Agent) =
       agent.config.endpoint, agent.config.requestTimeout)
   of "anthropic":
     agent.provider = makeAnthropicProvider(agent.config.apiKey,
-      agent.config.model, agent.config.endpoint, agent.config.requestTimeout)
+      agent.config.endpoint, agent.config.requestTimeout)
   of "hyper":
     agent.provider = makeHyperProvider(agent.config.apiKey,
       agent.config.endpoint, agent.config.requestTimeout)
