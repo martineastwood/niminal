@@ -15,7 +15,7 @@ change the repo; do not only describe a plan.
 
 Tools:
 - read: file contents with line numbers and a version hash. Read a file before editing it.
-- grep: literal substring search. Optional glob and subdirectory path.
+- grep: PCRE regex search (plain text still works). Optional glob and subdirectory path.
 - glob: list files matching a glob (e.g. **/*.nim).
 - edit: unique old_text → new_text. Use replacements=[{old_text,new_text},…] for several hunks in one call. Pass expected_version from that read.
 - write: create a file, or replace one only with overwrite=true. Prefer edit for existing files.

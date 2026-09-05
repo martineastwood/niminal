@@ -128,6 +128,13 @@ suite "workspace and file tools":
     check not grep.isError
     check "src/a.nim:1:" in grep.output
     check "b.txt" notin grep.output
+    let grepRe = invoke(makeGrepTool(initWorkspace(root)),
+      %*{"pattern": "proc\\s+hello"})
+    check not grepRe.isError
+    check "src/a.nim:1:" in grepRe.output
+    let badRe = invoke(makeGrepTool(initWorkspace(root)), %*{"pattern": "("})
+    check badRe.isError
+    check "invalid pattern" in badRe.output
     let glob = invoke(makeGlobTool(initWorkspace(root)),
       %*{"pattern": "**/*.txt"})
     check not glob.isError

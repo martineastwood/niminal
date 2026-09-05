@@ -1,6 +1,6 @@
 ## grep and glob — find files and content without shelling out to bash.
 
-import std/[json, os, strutils]
+import std/[json, os, re, strutils]
 import tool, ../workspace, nimgent
 
 const
@@ -23,9 +23,10 @@ proc isProbablyBinary(content: string): bool =
 
 proc grepWorkspace*(root, pattern, glob, relPath: string, maxHits: int,
                     insensitive: bool): seq[string] =
-  ## Literal substring search over the current workspace file list.
+  ## PCRE search over the current workspace file list. Raises RegexError.
   if pattern.len == 0: return
-  let needle = if insensitive: pattern.toLowerAscii else: pattern
+  let flags = if insensitive: {reIgnoreCase, reStudy} else: {reStudy}
+  let rx = re(pattern, flags)
   let hits = max(1, min(maxHits, maxGrepHits))
   for rel in listWorkspaceFiles(root):
     if not underPrefix(rel, relPath): continue
@@ -42,8 +43,7 @@ proc grepWorkspace*(root, pattern, glob, relPath: string, maxHits: int,
     var lineno = 0
     for line in content.splitLines:
       inc lineno
-      let hay = if insensitive: line.toLowerAscii else: line
-      if needle notin hay: continue
+      if find(line, rx) < 0: continue
       result.add rel & ":" & $lineno & ":" & line
       if result.len >= hits: return
 
@@ -59,11 +59,11 @@ proc globWorkspace*(root, pattern, relPath: string, maxHits: int): seq[string] =
 proc makeGrepTool*(ws: Workspace): (ToolDefinition, ToolProc) =
   let def = ToolDefinition(
     name: "grep",
-    description: "Search file contents for a literal substring. Filter with glob (e.g. **/*.nim) and optional subdirectory path.",
+    description: "Search file contents with a PCRE regex (plain text still works). Filter with glob (e.g. **/*.nim) and optional subdirectory path.",
     inputSchema: %*{
       "type": "object",
       "properties": {
-        "pattern": {"type": "string", "description": "Literal substring to find."},
+        "pattern": {"type": "string", "description": "PCRE regex. Escape specials (e.g. foo\\()."},
         "glob": {"type": "string", "description": "Only search files matching this glob."},
         "path": {"type": "string", "description": "Subdirectory relative to the workspace."},
         "case_insensitive": {"type": "boolean", "description": "Ignore case. Default false."},
@@ -84,8 +84,12 @@ proc makeGrepTool*(ws: Workspace): (ToolDefinition, ToolProc) =
         return ToolResult(output: e.msg, isError: true)
     let maxHits = if "max_matches" in input: input["max_matches"].getInt
                   else: defaultGrepHits
-    let hits = grepWorkspace(ws.root, pattern, input.getOrDefault("glob").getStr,
-      rel, maxHits, input.getOrDefault("case_insensitive").getBool)
+    var hits: seq[string]
+    try:
+      hits = grepWorkspace(ws.root, pattern, input.getOrDefault("glob").getStr,
+        rel, maxHits, input.getOrDefault("case_insensitive").getBool)
+    except RegexError as e:
+      return ToolResult(output: "invalid pattern: " & e.msg, isError: true)
     if hits.len == 0:
       return ToolResult(output: "No matches.")
     var buf = hits.join("\n")
