@@ -90,7 +90,9 @@ External tools are discovered the same way under `tools/` instead of
 child directory needs a `tool.json` and an executable; the agent reads
 manifests at startup and only spawns the process when the model calls the
 tool. Built-in tool names always win over extensions. Tools and hooks are
-rescanned on `/new` and `/resume` (as well as process start).
+rescanned on `/reload`, `/new`, and `/resume` (as well as process start).
+`/reload` keeps the current session; skills and `AGENTS.md` are already
+read from disk on every turn.
 
 Lifecycle hooks use the same discovery layout under `hooks/` with a
 `hook.json` per child directory. Supported events: `pre_tool_call`,

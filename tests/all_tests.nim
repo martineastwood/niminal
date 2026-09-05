@@ -551,6 +551,8 @@ suite "slash commands":
     check parseSlash("/name").arg.len == 0
     check parseSlash("/name Fix parser").kind == slName
     check parseSlash("/name Fix parser").arg == "Fix parser"
+    check parseSlash("/reload").kind == slReload
+    check "takes no arguments" in commandError("/reload extra")
     check resumeOpensPicker("/resume")
     check not resumeOpensPicker("/resume abc")
     check not resumeOpensPicker("hello")
@@ -2121,6 +2123,44 @@ suite "lifecycle hooks":
     check foundHook
     check fileExists(root / "late-log.txt")
     check "late" in readFile(root / "late-log.txt")
+
+  test "/reload rescans tools and hooks without a new session":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.workspace = root
+    var agent = initAgent(config)
+    let sessionId = agent.session.id
+    var names: seq[string] = @[]
+    for d in agent.tools.definitions:
+      names.add d.name
+    check "late_tool" notin names
+    check agent.hooks.len == 0
+    let toolDir = root / ".niminal" / "tools" / "late_tool"
+    createDir(toolDir)
+    writeFile(toolDir / "tool.json", $(%*{
+      "name": "late_tool",
+      "description": "Added after start",
+      "command": ["./run"],
+      "input_schema": {"type": "object", "properties": {}}
+    }))
+    writeFile(toolDir / "run", "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true}'\n")
+    inclFilePermissions(toolDir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
+    writeHook(root, ".niminal", "late_hook", "session_start",
+      "echo late >> late-log.txt\necho '{}'")
+    check agent.processInput("/reload", quietUi())
+    check agent.session.id == sessionId
+    names = @[]
+    for d in agent.tools.definitions:
+      names.add d.name
+    check "late_tool" in names
+    var foundHook = false
+    for h in agent.hooks:
+      if h.name == "late_hook":
+        foundHook = true
+    check foundHook
+    check not fileExists(root / "late-log.txt")
 
   test "pre_tool_call can rewrite arguments":
     let root = freshDir()

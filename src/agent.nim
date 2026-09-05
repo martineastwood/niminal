@@ -380,6 +380,11 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
       agent.session.setName(cmd.arg)
       ui.emit(mlOk, agent.session.name)
       ui.onChange()
+  of slReload:
+    agent.reloadToolsAndHooks()
+    agent.emitDiscoveryWarnings(ui)
+    ui.emit(mlOk, "Reloaded tools and hooks.")
+    ui.onChange()
   of slQuit, slNone, slError, slSkill:
     discard
 
@@ -512,7 +517,7 @@ proc processInput*(agent: var Agent, input: string, ui: TurnSink): bool =
   of slQuit:
     false
   of slHelp, slModel, slModelsRefresh, slThinking, slProvider, slSession,
-     slNew, slCompact, slResume, slName:
+     slNew, slCompact, slResume, slReload, slName:
     applySlash(agent, cmd, ui)
     true
 

@@ -26,6 +26,7 @@ type
     slNew
     slCompact
     slResume
+    slReload
     slName
     slQuit
 
@@ -66,6 +67,8 @@ const CommandSpecs* = [
     description: "summarize older context"),
   CommandSpec(kind: slResume, name: "/resume", usage: "/resume [ID]",
     description: "list this project's sessions, or resume one"),
+  CommandSpec(kind: slReload, name: "/reload", usage: "/reload",
+    description: "rescan tools, extensions, and hooks"),
   CommandSpec(kind: slName, name: "/name", usage: "/name [title]",
     description: "show or set the session name"),
   CommandSpec(kind: slQuit, name: "/quit", usage: "/quit",
@@ -139,7 +142,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   result.kind = matched.spec.kind
   result.arg = arg
   case matched.spec.kind
-  of slHelp, slProvider, slSession, slNew, slQuit:
+  of slHelp, slProvider, slSession, slNew, slQuit, slReload:
     if parts.len > 1:
       return fail(command & " takes no arguments")
   of slModel:
