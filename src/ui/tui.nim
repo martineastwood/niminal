@@ -185,6 +185,7 @@ type
     selBRow, selBCol: int
     layoutSpans: seq[LayoutSpan]
     layoutRows: int
+    spinnerAt: int
 
   LayoutSpan = object
     itemIdx: int
@@ -652,7 +653,7 @@ proc shutdown*(tui: var TUI) =
 const
   maxInputRows = 8
   statusHints = "esc clears · @ file · ^v clip · click tool · drag copy · wheel/pgup scroll"
-  busyLabel = "\e[2mworking\e[0m"
+  spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 proc composerInner(tui: TUI): int =
   max(1, tui.width - 2)
@@ -1120,10 +1121,14 @@ proc cancelStream*(tui: var TUI) =
 proc discardStream*(tui: var TUI) =
   tui.resetStream()
 
+proc busySpinner(tui: TUI): string =
+  "\e[2m" & spinnerFrames[tui.spinnerAt mod spinnerFrames.len] & " working\e[0m"
+
 proc setBusy*(tui: var TUI, busy: bool) =
   tui.busy = busy
   if busy:
     tui.interrupted = false
+    tui.spinnerAt = 0
   tui.scrollbackDirty = true
 
 proc setFooter*(tui: var TUI, text: string) =
@@ -1185,6 +1190,8 @@ proc render*(tui: var TUI) =
     tui.scrollOffset = min(tui.scrollOffset, tui.maxScroll)
 
   if h < 4: return
+  if tui.busy:
+    inc tui.spinnerAt
 
   let view = composerView(tui.input, tui.cursor, tui.composerInner)
   let inRows = min(max(1, view.lines.len), maxInputRows)
@@ -1248,7 +1255,7 @@ proc render*(tui: var TUI) =
     setCursor(0, inputTop + r)
     let lineIdx = firstVisible + r
     if tui.busy and r == 0:
-      stdout.write(busyLabel & "\e[K\e[0m")
+      stdout.write(tui.busySpinner() & "\e[K\e[0m")
     elif lineIdx < view.lines.len:
       let body = view.lines[lineIdx]
       if menuRows > 0:
