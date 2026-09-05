@@ -62,7 +62,7 @@ proc consoleSink*(): TurnSink =
     noteInterrupted: noop,
     showSession: show,
     generate: proc (provider: Provider, request: ProviderRequest): ProviderResponse =
-      provider.generate(request)
+      generateText(provider, request)
   )
 
 proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
@@ -106,8 +106,14 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
       var started = false
       var req = request
       req.wakeFd = interruptFd()
+      let abort = proc (): bool =
+        discard tui[].pollBusy(0)
+        if tui[].wasInterrupted or tui[].shouldExit:
+          cancelled = true
+          return true
+        false
       try:
-        result = provider.generateStream(req, proc (ev: StreamEvent): bool =
+        result = streamText(provider, req, proc (ev: StreamEvent): bool =
           case ev.kind
           of seThinkingDelta:
             tui[].appendThinking(ev.text)
@@ -146,7 +152,7 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
               return false
             tui[].render()
             true
-        )
+        , abort = abort)
         if cancelled:
           tui[].cancelStream()
       except CatchableError:

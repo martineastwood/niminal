@@ -199,17 +199,18 @@ proc generateSummary*(provider: Provider, model: string,
   )
   var response: ProviderResponse
   if onEvent.isNil:
-    response = provider.generate(req)
+    response = generateText(provider, req)
   else:
     var acc = ""
     var cancelled = false
-    response = provider.generateStream(req, proc (ev: StreamEvent): bool =
+    let abort = proc (): bool = not onEvent(StreamEvent(kind: seWake))
+    response = streamText(provider, req, proc (ev: StreamEvent): bool =
       if ev.kind == seTextDelta:
         acc.add ev.text
       if not onEvent(ev):
         cancelled = true
         return false
-      true)
+      true, abort = abort)
     if cancelled:
       raise newException(ValueError, "compaction interrupted")
     result = acc.strip
