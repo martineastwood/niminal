@@ -2067,3 +2067,111 @@ suite "lifecycle hooks":
     let log = readFile(root / "hook-log.txt")
     check log == "end\nstart\n"
 
+  test "pre_tool_call can rewrite arguments":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "rewrite", "pre_tool_call",
+      """cat >/dev/null
+echo '{"arguments":{"command":"echo rewritten"}}'
+""")
+    let outcome = runHooks(discoverHooks(root).hooks, hePreToolCall,
+      preToolPayload("bash", %*{"command": "echo original"}), root, "bash")
+    check outcome.allowed
+    check not outcome.arguments.isNil
+    check outcome.arguments["command"].getStr == "echo rewritten"
+
+  test "post_tool_call can rewrite output and is_error":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "redact", "post_tool_call",
+      """cat >/dev/null
+echo '{"output":"[REDACTED]","is_error":false}'
+""")
+    let outcome = runHooks(discoverHooks(root).hooks, hePostToolCall,
+      postToolPayload("read", %*{"path": ".env"}, "SECRET=1", false),
+      root, "read")
+    check outcome.hasOutput
+    check outcome.output == "[REDACTED]"
+    check outcome.hasIsError
+    check not outcome.isError
+
+  test "pre_compact can cancel or inject instruction":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "guide", "pre_compact",
+      """cat >/dev/null
+echo '{"instruction":"keep the migration work"}'
+""")
+    let guided = runHooks(discoverHooks(root).hooks, hePreCompact,
+      preCompactPayload("s1", root, "", 1000), root)
+    check guided.allowed
+    check guided.instruction == "keep the migration work"
+    writeHook(root, ".niminal", "block-compact", "pre_compact",
+      """cat >/dev/null
+echo '{"allow":false,"reason":"not now"}'
+""")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.workspace = root
+    var agent = initAgent(config)
+    let blocked = agent.runCompaction("user note", ui = quietUi())
+    check not blocked.didCompact
+    check "not now" in blocked.message
+
+  test "turn_start and turn_end fire around a turn":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "log-turn-start", "turn_start",
+      "echo start >> turn-log.txt\necho '{}'")
+    writeHook(root, ".niminal", "log-turn-end", "turn_end",
+      "echo end >> turn-log.txt\necho '{}'")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.workspace = root
+    config.compactionEnabled = false
+    config.contextWindow = 1_000_000
+    let hooks = discoverHooks(root).hooks
+    let provider = TestProvider(
+      name: "test",
+      responses: @[ProviderResponse(content: @[text("hi")])])
+    var agent = Agent(config: config, provider: provider,
+      session: initSession(), hooks: hooks)
+    agent.session.workspace = root
+    agent.session.addUserMessage("go")
+    agent.runTurn(quietUi())
+    check readFile(root / "turn-log.txt") == "start\nend\n"
+
+  test "rewritten arguments reach the tool":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeHook(root, ".niminal", "force-cmd", "pre_tool_call",
+      """cat >/dev/null
+echo '{"arguments":{"command":"echo from-hook"}}'
+""")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.workspace = root
+    config.compactionEnabled = false
+    config.contextWindow = 1_000_000
+    var seen = ""
+    var reg: ToolRegistry
+    reg.register(
+      ToolDefinition(name: "bash", description: "b",
+        inputSchema: %*{"type": "object"}),
+      proc(input: JsonNode): ToolResult =
+        seen = input["command"].getStr
+        ToolResult(output: "ok", isError: false))
+    let provider = TestProvider(
+      name: "test",
+      responses: @[
+        ProviderResponse(content: @[
+          toolUse("1", "bash", %*{"command": "echo original"})]),
+        ProviderResponse(content: @[text("done")])
+      ])
+    var agent = Agent(config: config, provider: provider,
+      session: initSession(), tools: reg, hooks: discoverHooks(root).hooks)
+    agent.session.workspace = root
+    agent.session.addUserMessage("go")
+    agent.runTurn(quietUi())
+    check seen == "echo from-hook"
+

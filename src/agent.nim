@@ -194,8 +194,35 @@ proc compactionPoll(ui: TurnSink): StreamCallback =
     ui.poll()
     not ui.wasInterrupted()
 
+proc emitHookWarnings(ui: TurnSink, warnings: openArray[string]) =
+  for w in warnings:
+    ui.emit(mlWarn, "hook: " & w)
+
+proc warnHooks(ui: TurnSink, warnings: openArray[string]) =
+  if not ui.emit.isNil:
+    emitHookWarnings(ui, warnings)
+  else:
+    for w in warnings:
+      stderr.writeLine "hook: " & w
+
 proc runCompaction*(agent: var Agent, instruction = "",
-                    onEvent: StreamCallback = nil): CompactionResult =
+                    onEvent: StreamCallback = nil,
+                    ui: TurnSink = default(TurnSink)): CompactionResult =
+  let tokensBefore = estimatedContextTokens(agent.session)
+  var instruction = instruction
+  let pre = runHooks(agent.hooks, hePreCompact,
+    preCompactPayload(agent.session.id, agent.config.workspace, instruction,
+      tokensBefore),
+    agent.config.workspace, maxOutputBytes = agent.config.maxToolOutputBytes)
+  warnHooks(ui, pre.warnings)
+  if not pre.allowed:
+    result.message = if pre.reason.len > 0: pre.reason else: "blocked by hook"
+    return
+  if pre.instruction.len > 0:
+    if instruction.len > 0:
+      instruction = instruction & "\n" & pre.instruction
+    else:
+      instruction = pre.instruction
   try:
     result = prepareAndCompact(
       agent.session,
@@ -206,9 +233,16 @@ proc runCompaction*(agent: var Agent, instruction = "",
       onEvent)
   except CatchableError as e:
     result.message = "Compaction failed: " & e.msg
+  let post = runHooks(agent.hooks, hePostCompact,
+    postCompactPayload(agent.session.id, agent.config.workspace,
+      result.didCompact, result.summary, result.firstKeptIndex,
+      result.tokensBefore, result.message),
+    agent.config.workspace, maxOutputBytes = agent.config.maxToolOutputBytes)
+  warnHooks(ui, post.warnings)
 
 proc maybeAutoCompact*(agent: var Agent,
-                       onEvent: StreamCallback = nil): CompactionResult =
+                       onEvent: StreamCallback = nil,
+                       ui: TurnSink = default(TurnSink)): CompactionResult =
   if not agent.config.compactionEnabled:
     result.message = "auto-compaction disabled"
     return
@@ -216,11 +250,7 @@ proc maybeAutoCompact*(agent: var Agent,
   if not shouldCompact(agent.session, window, agent.config.reserveTokens):
     result.message = "below threshold"
     return
-  result = agent.runCompaction(onEvent = onEvent)
-
-proc emitHookWarnings(ui: TurnSink, warnings: openArray[string]) =
-  for w in warnings:
-    ui.emit(mlWarn, "hook: " & w)
+  result = agent.runCompaction(onEvent = onEvent, ui = ui)
 
 proc fireSessionHooks*(agent: var Agent, event: HookEvent, ui: TurnSink) =
   let payload = sessionPayload(agent.session.id, agent.config.workspace)
@@ -235,6 +265,13 @@ proc fireSessionHooks*(agent: var Agent, event: HookEvent) =
     maxOutputBytes = agent.config.maxToolOutputBytes)
   for w in outcome.warnings:
     stderr.writeLine "hook: " & w
+
+proc fireTurnHooks(agent: var Agent, event: HookEvent, ui: TurnSink,
+                   interrupted = false) =
+  let payload = turnPayload(agent.session.id, agent.config.workspace, interrupted)
+  let outcome = runHooks(agent.hooks, event, payload, agent.config.workspace,
+    maxOutputBytes = agent.config.maxToolOutputBytes)
+  emitHookWarnings(ui, outcome.warnings)
 
 proc switchSession(agent: var Agent, next: Session, ui: TurnSink) =
   ## session_end on the old transcript, then session_start on the new one.
@@ -280,7 +317,7 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
   of slCompact:
     ui.emit(mlWarn, "Compacting…")
     ui.render()
-    let res = agent.runCompaction(cmd.arg, compactionPoll(ui))
+    let res = agent.runCompaction(cmd.arg, compactionPoll(ui), ui)
     if res.didCompact: ui.emit(mlOk, res.message)
     else: ui.emit(mlDim, res.message)
     ui.onChange()
@@ -343,7 +380,7 @@ proc retryAfterOverflow(agent: var Agent, e: ref ProviderError,
   ui.emit(mlWarn, "Context overflow — compacting and retrying…")
   ui.render()
   let res = agent.runCompaction("Prioritize recovering from context overflow.",
-    compactionPoll(ui))
+    compactionPoll(ui), ui)
   ui.emit(mlDim, res.message)
   res.didCompact
 
@@ -357,9 +394,10 @@ proc persistInterruptedToolResults(session: var Session,
     session.addToolResult(calls[i], "Interrupted before tool execution.", true)
 
 proc runTurn*(agent: var Agent, ui: TurnSink) =
+  agent.fireTurnHooks(heTurnStart, ui)
   var overflowRetried = false
   while true:
-    emitAutoCompact(ui, agent.maybeAutoCompact(compactionPoll(ui)))
+    emitAutoCompact(ui, agent.maybeAutoCompact(compactionPoll(ui), ui))
     let request = agent.buildRequest()
     var response: ProviderResponse
     try:
@@ -368,21 +406,26 @@ proc runTurn*(agent: var Agent, ui: TurnSink) =
       if retryAfterOverflow(agent, e, overflowRetried, ui):
         continue
       ui.emit(mlError, e.msg)
-      break
+      agent.fireTurnHooks(heTurnEnd, ui)
+      return
     except CatchableError as e:
       # Overflow is only flagged on ProviderError; other failures surface as-is.
       ui.emit(mlError, e.msg)
-      break
+      agent.fireTurnHooks(heTurnEnd, ui)
+      return
 
     if ui.wasInterrupted():
-      break
+      agent.fireTurnHooks(heTurnEnd, ui, interrupted = true)
+      return
 
     overflowRetried = false
     agent.session.addAssistantResponse(response)
     let calls = response.toolCalls()
     let final = calls.len == 0
     ui.commitGenerate(response, final)
-    if final: break
+    if final:
+      agent.fireTurnHooks(heTurnEnd, ui)
+      return
 
     for i in 0 ..< calls.len:
       let call = calls[i]
@@ -391,27 +434,35 @@ proc runTurn*(agent: var Agent, ui: TurnSink) =
       if ui.wasInterrupted():
         agent.session.persistInterruptedToolResults(calls, i)
         ui.noteInterrupted()
+        agent.fireTurnHooks(heTurnEnd, ui, interrupted = true)
         return
       let bad = invalidToolCall(call)
       var toolResult: ToolResult
       if bad.len > 0:
         toolResult = ToolResult(output: bad, isError: true)
       else:
+        var args = if call.input.isNil: newJObject() else: call.input
         let pre = runHooks(agent.hooks, hePreToolCall,
-          preToolPayload(call.name, call.input), agent.config.workspace,
+          preToolPayload(call.name, args), agent.config.workspace,
           call.name, agent.config.maxToolOutputBytes)
         emitHookWarnings(ui, pre.warnings)
         if not pre.allowed:
           toolResult = ToolResult(output: pre.reason, isError: true)
         else:
-          toolResult = agent.tools.execute(call.name, call.input, proc (): bool =
+          if not pre.arguments.isNil:
+            args = pre.arguments
+          toolResult = agent.tools.execute(call.name, args, proc (): bool =
             ui.poll()
             ui.wasInterrupted())
           let post = runHooks(agent.hooks, hePostToolCall,
-            postToolPayload(call.name, call.input, toolResult.output,
+            postToolPayload(call.name, args, toolResult.output,
               toolResult.isError),
             agent.config.workspace, call.name, agent.config.maxToolOutputBytes)
           emitHookWarnings(ui, post.warnings)
+          if post.hasOutput:
+            toolResult.output = post.output
+          if post.hasIsError:
+            toolResult.isError = post.isError
       agent.session.addToolResult(call, toolResult.output, toolResult.isError,
         toolResult.images)
       ui.toolResult(toolResult.output, toolResult.isError)
@@ -419,6 +470,7 @@ proc runTurn*(agent: var Agent, ui: TurnSink) =
       if ui.wasInterrupted():
         agent.session.persistInterruptedToolResults(calls, i + 1)
         ui.noteInterrupted()
+        agent.fireTurnHooks(heTurnEnd, ui, interrupted = true)
         return
 
 proc processInput*(agent: var Agent, input: string, ui: TurnSink): bool =

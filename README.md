@@ -86,9 +86,13 @@ tool. Built-in tool names always win over extensions.
 
 Lifecycle hooks use the same discovery layout under `hooks/` with a
 `hook.json` per child directory. Supported events: `pre_tool_call`,
-`post_tool_call`, `session_start`, `session_end`. Hooks are ephemeral
-JSON processes (stdin in, JSON out). Failures are fail-open (warn and
-continue); only an explicit `{"allow": false}` from `pre_tool_call`
-blocks a tool. Later roots override the same hook `name`. Opening
-niminal fires `session_start`; `/new` and `/resume` fire `session_end`
-then `session_start`; clean exit fires `session_end`.
+`post_tool_call`, `session_start`, `session_end`, `pre_compact`,
+`post_compact`, `turn_start`, `turn_end`. Hooks are ephemeral JSON
+processes (stdin in, JSON out). Failures are fail-open (warn and
+continue); only an explicit `{"allow": false}` from `pre_tool_call` or
+`pre_compact` blocks. `pre_tool_call` may return rewritten `arguments`;
+`post_tool_call` may return rewritten `output` / `is_error`;
+`pre_compact` may return an extra `instruction`. Later roots override
+the same hook `name`. Opening niminal fires `session_start`; `/new` and
+`/resume` fire `session_end` then `session_start`; clean exit fires
+`session_end`. Each model turn fires `turn_start` / `turn_end`.
