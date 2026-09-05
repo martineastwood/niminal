@@ -1,0 +1,8 @@
+niminal
+nimcache/
+tests/all_tests
+*.dSYM/
+.cursor/
+.niminal/
+.nimble/
+SCOPE.md

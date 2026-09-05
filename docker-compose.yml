@@ -1,0 +1,24 @@
+services:
+  niminal:
+    build: .
+    image: niminal:dev
+    container_name: niminal
+    # The repo is mounted read-write so code edits are picked up by
+    # rebuilds/tests, and so sessions/config written by niminal persist
+    # on the host. The container starts in the workspace root.
+    # Sibling nimgent is mounted at /nimgent so --path:"../nimgent/src"
+    # from /workspace resolves correctly.
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - ../nimgent:/nimgent
+    # Any host env var listed here is passed into the container, so e.g.
+    #   OPENROUTER_API_KEY=... docker compose up
+    # just works. Uncomment or add more variables as needed.
+    environment:
+      - OPENROUTER_API_KEY
+      - ANTHROPIC_API_KEY
+      - HOME=/workspace-volatile
+    # Idle so `docker compose up` stays Up. Shell in with:
+    #   docker compose exec niminal bash
+    command: ["sleep", "infinity"]

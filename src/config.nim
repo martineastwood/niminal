@@ -1,0 +1,362 @@
+## JSON settings: global ~/.niminal/config.json, overlay .niminal/config.json.
+## Known fields only on load (missing keys get defaults). Saves patch the
+## write target in place.
+
+import std/[json, os, strutils]
+import models_dev, compaction
+
+const
+  WiredProviders* = ["openrouter", "anthropic"]
+
+type
+  AgentConfig* = object
+    workspace*: string
+    writePath*: string   ## project config if it exists, else global
+    provider*: string
+    model*: string
+    ## Merged default_model at load; `/model` updates `model` and the write file.
+    defaultModel*: string
+    apiKeyEnv*: string
+    endpoint*: string
+    siteUrl*: string
+    siteName*: string
+    maxTokens*: int
+    contextWindow*: int
+    compactionEnabled*: bool
+    reserveTokens*: int
+    keepRecentTokens*: int
+    thinking*: string
+    requestTimeout*: int
+    maxToolOutputBytes*: int
+    sessionDir*: string
+    providers: JsonNode  ## merged `providers` object
+
+const
+  ThinkingLevels* = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+proc guessContextWindow*(model: string): int =
+  let m = model.toLowerAscii
+  if "gemini" in m: return 1_048_576
+  if "claude" in m: return 200_000
+  if "gpt-5" in m or "gpt-4.1" in m: return 1_048_576
+  if "gpt-4o" in m or "o1" in m or "o3" in m: return 200_000
+  if "deepseek" in m: return 128_000
+  if "qwen" in m: return 128_000
+  128_000
+
+proc effectiveContextWindow*(config: AgentConfig): int =
+  if config.contextWindow > 0: return config.contextWindow
+  let fromCatalog = lookupContextWindow(config.provider, config.model)
+  if fromCatalog > 0: return fromCatalog
+  guessContextWindow(config.model)
+
+proc normalizeThinking*(value: string): string =
+  let v = value.strip.toLowerAscii
+  if v.len == 0: return ""
+  if v in ThinkingLevels: return v
+  raise newException(ValueError,
+    "invalid thinking level '" & value & "' (use " & ThinkingLevels.join("|") & ")")
+
+proc thinkingBudgetTokens*(level: string): int =
+  case normalizeThinking(level)
+  of "minimal": 1024
+  of "low": 2048
+  of "medium": 8000
+  of "high": 16000
+  of "xhigh", "max": 32000
+  else: 0
+
+proc snapToEfforts*(want: string, efforts: openArray[string]): string =
+  ## Nearest canonical rung. Tie goes to the higher effort. `none` never snaps up.
+  if want.len == 0: return ""
+  for e in efforts:
+    if e == want: return want
+  if want == "none": return ""
+  proc idx(s: string): int =
+    result = -1
+    for i, x in ThinkingLevels:
+      if x == s: return i
+  let wi = idx(want)
+  if wi < 0: return ""
+  var bestI = -1
+  var bestD = 100
+  for e in efforts:
+    let ei = idx(e)
+    if ei < 0: continue
+    let d = abs(ei - wi)
+    if bestI < 0 or d < bestD or (d == bestD and ei > bestI):
+      bestD = d
+      bestI = ei
+      result = e
+
+proc thinkingChoices*(provider, model: string): seq[string] =
+  ## `/thinking` menu for this model. Catalog miss → full ladder.
+  let caps = lookupReasoningCaps(provider, model)
+  if not caps.known:
+    for x in ThinkingLevels: result.add x
+    return
+  if not caps.reasoning:
+    return
+  result.add "none"
+  if caps.efforts.len > 0:
+    for x in ThinkingLevels:
+      if x == "none": continue
+      for e in caps.efforts:
+        if e == x:
+          result.add x
+          break
+    return
+  if caps.toggle:
+    result.add "high"
+    return
+  if caps.budgetTokens:
+    for x in ThinkingLevels:
+      if x != "none": result.add x
+
+type
+  ThinkingPlan = object
+    label: string
+    options: JsonNode
+
+proc resolveThinking(provider, model, want: string): ThinkingPlan =
+  result.options = newJObject()
+  if want.len == 0: return
+  let p = provider.toLowerAscii
+  let caps = lookupReasoningCaps(provider, model)
+
+  proc sendEffort(plan: var ThinkingPlan, effort: string, explicitNone = false) =
+    if effort.len == 0 or (effort == "none" and not explicitNone):
+      plan.label = "off"
+      return
+    if effort == "none":
+      plan.label = "off"
+      if p == "openrouter":
+        plan.options["reasoning"] = %*{"effort": "none"}
+      return
+    plan.label = effort
+    case p
+    of "openrouter":
+      plan.options["reasoning"] = %*{"effort": effort}
+    of "anthropic":
+      let budget = thinkingBudgetTokens(effort)
+      if budget > 0:
+        plan.options["thinking"] = %*{"type": "enabled", "budget_tokens": budget}
+    else:
+      discard
+
+  if caps.known and not caps.reasoning:
+    return
+  if caps.known and caps.efforts.len > 0:
+    let snapped = snapToEfforts(want, caps.efforts)
+    sendEffort(result, snapped, explicitNone = snapped == "none")
+    return
+  if caps.known and caps.toggle:
+    if want == "none":
+      result.label = "off"
+    else:
+      result.label = "on"
+      if p == "openrouter":
+        result.options["reasoning"] = %*{"enabled": true}
+      elif p == "anthropic":
+        sendEffort(result, "high")
+    return
+  if caps.known and caps.budgetTokens:
+    if want == "none":
+      result.label = "off"
+      return
+    result.label = want
+    case p
+    of "openrouter":
+      result.options["reasoning"] = %*{"max_tokens": thinkingBudgetTokens(want)}
+    of "anthropic":
+      sendEffort(result, want)
+    else:
+      discard
+    return
+  if caps.known:
+    return
+  sendEffort(result, want)
+
+proc providerOptions*(config: AgentConfig, thinkingOverride = ""): JsonNode =
+  let raw = if thinkingOverride.len > 0: thinkingOverride else: config.thinking
+  let want = if raw.len == 0: "" else: normalizeThinking(raw)
+  resolveThinking(config.provider, config.model, want).options
+
+proc thinkingStatus*(config: AgentConfig, thinkingOverride = ""): string =
+  let raw = if thinkingOverride.len > 0: thinkingOverride else: config.thinking
+  let want = if raw.len == 0: "" else: normalizeThinking(raw)
+  resolveThinking(config.provider, config.model, want).label
+
+proc unquote*(value: string): string =
+  result = value.strip
+  if result.len >= 2 and ((result[0] == '"' and result[^1] == '"') or
+                          (result[0] == '\'' and result[^1] == '\'')):
+    result = result[1 .. ^2]
+
+proc niminalConfigDir*(): string =
+  getHomeDir() / ".niminal"
+
+proc defaultApiKeyEnv*(provider: string): string =
+  case provider.toLowerAscii
+  of "openrouter": "OPENROUTER_API_KEY"
+  of "anthropic": "ANTHROPIC_API_KEY"
+  else: ""
+
+proc defaultEndpoint*(provider: string): string =
+  case provider.toLowerAscii
+  of "openrouter": "https://openrouter.ai/api/v1/chat/completions"
+  of "anthropic": "https://api.anthropic.com/v1/messages"
+  else: ""
+
+proc loadJsonFile(path: string): JsonNode =
+  if path.len == 0 or not fileExists(path):
+    return newJObject()
+  try:
+    result = parseJson(readFile(path))
+    if result.isNil or result.kind != JObject:
+      result = newJObject()
+  except CatchableError:
+    result = newJObject()
+
+proc overlay(base, over: JsonNode): JsonNode =
+  if over.isNil or over.kind != JObject:
+    return if base.isNil: newJObject() else: copy(base)
+  if base.isNil or base.kind != JObject:
+    return copy(over)
+  result = copy(base)
+  for k, v in over:
+    if v.kind == JObject and k in result and result[k].kind == JObject:
+      result[k] = overlay(result[k], v)
+    else:
+      result[k] = copy(v)
+
+proc jobj(n: JsonNode, key: string): JsonNode =
+  if n.isNil or n.kind != JObject or key notin n: return newJObject()
+  let v = n[key]
+  if v.kind == JObject: v else: newJObject()
+
+proc jstr(n: JsonNode, key: string, fallback = ""): string =
+  if n.isNil or n.kind != JObject or key notin n: return fallback
+  let v = n[key]
+  case v.kind
+  of JString: v.getStr
+  of JInt: $v.getInt
+  else: fallback
+
+proc jint(n: JsonNode, key: string, fallback: int): int =
+  if n.isNil or n.kind != JObject or key notin n: return fallback
+  let v = n[key]
+  case v.kind
+  of JInt: v.getInt
+  of JString:
+    try: parseInt(v.getStr)
+    except ValueError: fallback
+  else: fallback
+
+proc jbool(n: JsonNode, key: string, fallback: bool): bool =
+  if n.isNil or n.kind != JObject or key notin n: return fallback
+  let v = n[key]
+  case v.kind
+  of JBool: v.getBool
+  of JString: v.getStr.toLowerAscii notin ["0", "false", "no", "off"]
+  of JInt: v.getInt != 0
+  else: fallback
+
+proc providerBlock(config: AgentConfig, provider: string): JsonNode =
+  jobj(config.providers, provider)
+
+proc fillProvider*(config: var AgentConfig, provider: string) =
+  let p = provider.toLowerAscii
+  config.provider = p
+  let settings = config.providerBlock(p)
+  config.apiKeyEnv = jstr(settings, "api_key_env")
+  if config.apiKeyEnv.len == 0:
+    config.apiKeyEnv = defaultApiKeyEnv(p)
+  config.endpoint = jstr(settings, "endpoint")
+  if config.endpoint.len == 0:
+    config.endpoint = defaultEndpoint(p)
+  config.siteUrl = jstr(settings, "site_url")
+  config.siteName = jstr(settings, "site_name")
+
+proc keyedWiredProviders*(config: AgentConfig): seq[string] =
+  for p in WiredProviders:
+    var envName = jstr(config.providerBlock(p), "api_key_env")
+    if envName.len == 0:
+      envName = defaultApiKeyEnv(p)
+    if envName.len > 0 and getEnv(envName).len > 0:
+      result.add p
+
+proc expandConfigPath(value, fallback: string): string =
+  if value.len == 0:
+    return fallback
+  if value == "~":
+    return getHomeDir()
+  if value.startsWith("~/"):
+    return (getHomeDir() / value[2 .. ^1]).normalizedPath
+  if value.isAbsolute:
+    return value.normalizedPath
+  (getCurrentDir() / value).normalizedPath
+
+proc applyDoc(config: var AgentConfig, doc: JsonNode) =
+  config.providers = jobj(doc, "providers")
+  config.provider = jstr(doc, "default_provider", "openrouter")
+  if config.provider.len == 0:
+    config.provider = "openrouter"
+  config.model = jstr(doc, "default_model")
+  if config.model.len == 0:
+    config.model = if config.provider == "openrouter":
+      "deepseek/deepseek-v4-flash-0731"
+    else:
+      "claude-3-5-sonnet-latest"
+  config.defaultModel = config.model
+  config.fillProvider(config.provider)
+  let agent = jobj(doc, "agent")
+  config.maxTokens = jint(agent, "max_tokens", 4096)
+  config.contextWindow = jint(agent, "context_window", 0)
+  config.compactionEnabled = jbool(agent, "compaction_enabled", true)
+  config.reserveTokens = jint(agent, "reserve_tokens", defaultReserveTokens)
+  config.keepRecentTokens = jint(agent, "keep_recent_tokens", defaultKeepRecentTokens)
+  var thinking = jstr(agent, "thinking")
+  let envThinking = getEnv("NIMINAL_THINKING")
+  if envThinking.len > 0:
+    thinking = envThinking
+  config.thinking = if thinking.len == 0: "" else: normalizeThinking(thinking)
+  config.requestTimeout = jint(agent, "request_timeout", 300)
+  config.sessionDir = expandConfigPath(jstr(agent, "session_dir"),
+    niminalConfigDir() / "sessions")
+  config.maxToolOutputBytes = jint(jobj(jobj(doc, "tools"), "bash"),
+    "max_output_bytes", 100_000)
+
+proc persistModel*(config: AgentConfig) =
+  ## Patch model, provider, and thinking on the write target.
+  if config.writePath.len == 0: return
+  var doc = loadJsonFile(config.writePath)
+  if config.provider.len > 0:
+    doc["default_provider"] = %config.provider
+  if config.model.len > 0:
+    doc["default_model"] = %config.model
+  if config.thinking.len > 0:
+    if "agent" notin doc or doc["agent"].kind != JObject:
+      doc["agent"] = newJObject()
+    doc["agent"]["thinking"] = %config.thinking
+  elif "agent" in doc and doc["agent"].kind == JObject and "thinking" in doc["agent"]:
+    delete(doc["agent"], "thinking")
+  let dir = config.writePath.parentDir
+  if dir.len > 0: createDir(dir)
+  writeFile(config.writePath, pretty(doc) & "\n")
+
+proc loadConfig*(workspace = getCurrentDir(), configPath = "",
+                 globalPath = ""): AgentConfig =
+  result.workspace = expandFilename(workspace)
+  if configPath.len > 0:
+    result.writePath = configPath
+    result.applyDoc(loadJsonFile(configPath))
+    return
+  let globalFile = if globalPath.len > 0: globalPath
+                   else: niminalConfigDir() / "config.json"
+  let projectFile = result.workspace / ".niminal" / "config.json"
+  result.writePath = if fileExists(projectFile): projectFile else: globalFile
+  result.applyDoc(overlay(loadJsonFile(globalFile), loadJsonFile(projectFile)))
+
+proc apiKey*(config: AgentConfig): string =
+  getEnv(config.apiKeyEnv)

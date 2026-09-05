@@ -1,0 +1,179 @@
+## Workspace boundary enforcement and file helpers shared by the file tools.
+
+import std/[os, osproc, streams, strutils]
+
+type
+  Workspace* = object
+    root*: string
+
+  WorkspaceError* = object of CatchableError
+
+proc initWorkspace*(root: string): Workspace =
+  Workspace(root: expandFilename(root))
+
+proc hashContent*(content: string): string =
+  ## FNV-1a version identifier. It only needs to detect concurrent edits, not
+  ## resist an attacker, so avoid a crypto dependency in the small binary.
+  var hash = 14695981039346656037'u64
+  for ch in content:
+    hash = (hash xor uint64(ord(ch))) * 1099511628211'u64
+  toHex(hash, 16).toLowerAscii()
+
+proc versionOf*(path: string): string =
+  if fileExists(path): hashContent(readFile(path)) else: ""
+
+proc resolve*(ws: Workspace, path: string): string =
+  ## Resolve a tool-supplied path against the workspace root and reject
+  ## anything that escapes it. Symlinks are resolved before the check so a link
+  ## inside the workspace cannot be used to reach outside it.
+  if path.len == 0:
+    raise newException(WorkspaceError, "path must not be empty")
+
+  var abs = if path.isAbsolute: path else: ws.root / path
+  abs = abs.normalizedPath
+
+  # expandFilename requires the file to exist; for new files check the closest
+  # existing ancestor instead.
+  var probe = abs
+  var suffix: seq[string] = @[]
+  while probe.len > 0 and not fileExists(probe) and not dirExists(probe):
+    let (parent, name) = probe.splitPath
+    if parent == probe or name.len == 0: break
+    suffix.add name
+    probe = parent
+
+  var real: string
+  if probe.len > 0 and (fileExists(probe) or dirExists(probe)):
+    real = expandFilename(probe)
+    for i in countdown(suffix.high, 0):
+      real = real / suffix[i]
+  else:
+    real = abs
+
+  let root = ws.root.normalizedPath
+  if real != root and not real.startsWith(root & DirSep):
+    raise newException(WorkspaceError,
+      "path is outside the workspace: " & path)
+  real
+
+proc relative*(ws: Workspace, path: string): string =
+  try: relativePath(path, ws.root) except CatchableError: path
+
+proc writeFileAtomic*(path, content: string) =
+  ## Write via a temporary file in the same directory, then rename, so readers
+  ## never observe a partially written file.
+  let dir = path.parentDir
+  if dir.len > 0: createDir(dir)
+  let tmp = path & ".niminal-tmp-" & $getCurrentProcessId()
+  try:
+    writeFile(tmp, content)
+    if fileExists(path):
+      # Preserve the existing permission bits.
+      setFilePermissions(tmp, getFilePermissions(path))
+    moveFile(tmp, path)
+  except CatchableError as e:
+    removeFile(tmp)
+    raise e
+
+const
+  mentionFileCap* = 50
+  walkFileCap = 8_000
+  skipDirNames = [".git", "node_modules", "nimbledeps", "nimcache", "dist",
+                  "build", ".cache", "target", ".next", ".turbo"]
+
+var
+  gFileListRoot = ""
+  gFileList: seq[string]
+  gFileListReady = false
+
+proc invalidateWorkspaceFileList*() =
+  ## Drop the @-mention file cache (write/edit/new clip).
+  gFileListRoot = ""
+  gFileList.setLen(0)
+  gFileListReady = false
+
+proc canonRel*(path: string): string =
+  path.replace('\\', '/')
+
+proc gitTrackedFiles(root: string): seq[string] =
+  if not dirExists(root / ".git"):
+    return
+  var p: Process
+  try:
+    p = startProcess("git", workingDir = root,
+      args = ["ls-files", "-co", "--exclude-standard", "--", "."],
+      options = {poUsePath, poStdErrToStdOut})
+  except CatchableError:
+    return
+  defer: p.close()
+  let outp = p.outputStream.readAll()
+  let code = p.waitForExit()
+  if code != 0:
+    return
+  for line in outp.splitLines:
+    let rel = line.strip.canonRel
+    if rel.len == 0: continue
+    if fileExists(root / rel):
+      result.add rel
+
+proc walkWorkspaceFiles(root: string): seq[string] =
+  var stack: seq[tuple[dir, rel: string]] = @[(root, "")]
+  while stack.len > 0:
+    let (dir, rel) = stack.pop()
+    for kind, path in walkDir(dir):
+      if result.len >= walkFileCap: return
+      let name = path.extractFilename
+      if kind == pcDir:
+        var skip = false
+        for s in skipDirNames:
+          if name == s: skip = true
+        if skip: continue
+        stack.add (path, if rel.len == 0: name else: rel / name)
+      elif kind == pcFile:
+        result.add (if rel.len == 0: name else: rel / name).canonRel
+
+proc listWorkspaceFiles*(root: string): seq[string] =
+  ## Git-tracked + untracked (honoring gitignore) when `root` is a repo.
+  ## Otherwise a bounded directory walk.
+  ## ponytail: cached until process exit or invalidateWorkspaceFileList;
+  ## a new file during the session is a write/edit, which invalidates.
+  var key = root
+  try:
+    key = expandFilename(root)
+  except CatchableError:
+    discard
+  if gFileListReady and gFileListRoot == key:
+    return gFileList
+  result = gitTrackedFiles(root)
+  if result.len == 0 and not dirExists(root / ".git"):
+    result = walkWorkspaceFiles(root)
+  gFileListRoot = key
+  gFileList = result
+  gFileListReady = true
+
+proc suggestMentionFiles*(root, query: string, cap = mentionFileCap): seq[string] =
+  let q = query.toLowerAscii
+  let files = listWorkspaceFiles(root)
+  var seen: seq[string]
+  for f in files:
+    if result.len >= cap: break
+    let base = f.extractFilename.toLowerAscii
+    if q.len == 0 or base.startsWith(q):
+      let mention = "@" & f
+      var dup = false
+      for x in seen:
+        if x == mention: dup = true
+      if not dup:
+        seen.add mention
+        result.add mention
+  if q.len == 0 or result.len >= cap: return
+  for f in files:
+    if result.len >= cap: return
+    if q notin f.toLowerAscii: continue
+    let mention = "@" & f
+    var dup = false
+    for x in seen:
+      if x == mention: dup = true
+    if not dup:
+      seen.add mention
+      result.add mention

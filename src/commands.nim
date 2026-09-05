@@ -1,0 +1,424 @@
+## Slash-command vocabulary and parsing.
+##
+## CommandSpecs is the name/usage table. parseSlash is the only interpreter:
+## live validation (commandError) and execution (agent) both read SlashCommand.
+
+import std/[os, strutils]
+import config
+import session
+import skills
+import models_dev
+import workspace
+import images
+import nimgent
+
+type
+  SlashKind* = enum
+    slNone            ## ordinary text, or an in-progress composer prefix
+    slError
+    slSkill
+    slHelp
+    slModel
+    slModelsRefresh
+    slThinking
+    slProvider
+    slSession
+    slNew
+    slCompact
+    slResume
+    slName
+    slQuit
+
+  SlashCommand* = object
+    kind*: SlashKind
+    arg*: string          ## thinking level, resume id, compact instruction, skill rest
+    error*: string
+    skillName*: string
+
+  CommandSpec* = object
+    kind*: SlashKind
+    name*: string
+    usage*: string
+    description*: string
+
+  ModelPicker* = object
+    currentModel*: string
+    defaultModel*: string
+    currentProvider*: string
+    keyedProviders*: seq[string]
+
+const CommandSpecs* = [
+  CommandSpec(kind: slHelp, name: "/help", usage: "/help",
+    description: "show this help"),
+  CommandSpec(kind: slModel, name: "/model", usage: "/model [name]",
+    description: "show or set the model"),
+  CommandSpec(kind: slModelsRefresh, name: "/models", usage: "/models refresh",
+    description: "refresh cached model metadata"),
+  CommandSpec(kind: slThinking, name: "/thinking", usage: "/thinking <level>",
+    description: "show or set reasoning"),
+  CommandSpec(kind: slProvider, name: "/provider", usage: "/provider",
+    description: "show the current provider"),
+  CommandSpec(kind: slSession, name: "/session", usage: "/session",
+    description: "show the current session"),
+  CommandSpec(kind: slNew, name: "/new", usage: "/new",
+    description: "start a new persistent session"),
+  CommandSpec(kind: slCompact, name: "/compact", usage: "/compact [instructions]",
+    description: "summarize older context"),
+  CommandSpec(kind: slResume, name: "/resume", usage: "/resume [ID]",
+    description: "list this project's sessions, or resume one"),
+  CommandSpec(kind: slName, name: "/name", usage: "/name [title]",
+    description: "show or set the session name"),
+  CommandSpec(kind: slQuit, name: "/quit", usage: "/quit",
+    description: "exit"),
+  CommandSpec(kind: slQuit, name: "/exit", usage: "/exit",
+    description: "exit")
+]
+
+proc helpText*(): string =
+  result = "Commands:\n"
+  for spec in CommandSpecs:
+    result.add "  " & spec.usage
+    result.add " ".repeat(max(1, 25 - spec.usage.len))
+    result.add spec.description & "\n"
+
+proc specNamed(token: string): tuple[found: bool, spec: CommandSpec] =
+  for spec in CommandSpecs:
+    if spec.name == token:
+      return (true, spec)
+
+proc usageOf(kind: SlashKind): string =
+  for spec in CommandSpecs:
+    if spec.kind == kind:
+      return spec.usage
+
+proc isBuiltinSlash(token: string): bool =
+  specNamed(token).found
+
+proc commandParts(input: string): seq[string] =
+  input.strip.splitWhitespace
+
+proc namedSkill(workspace, token: string): string =
+  ## Canonical skill name if `token` is `/name` and not a builtin.
+  if not token.startsWith("/") or token.len < 2 or isBuiltinSlash(token):
+    return ""
+  let name = token[1 .. ^1]
+  if " " in name or '/' in name:
+    return ""
+  for skill in discoverSkills(workspace):
+    if skill.name.toLowerAscii == name.toLowerAscii:
+      return skill.name
+
+proc restAfterCommand(input, command: string): string =
+  let stripped = input.strip
+  if stripped.len <= command.len: ""
+  else: stripped[command.len .. ^1].strip
+
+proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
+  ## Classify `input`. Trailing space on arg-taking commands is in-progress
+  ## (slNone, no error) so the composer does not flash usage while typing.
+  let parts = commandParts(input)
+  if parts.len == 0 or not parts[0].startsWith("/"):
+    return
+  let command = parts[0]
+  let trailingSpace = input.len > 0 and input[^1] in {' ', '\t'}
+  let arg = restAfterCommand(input, command)
+  let matched = specNamed(command)
+  if parts.len == 1 and trailingSpace and matched.found and
+     matched.spec.kind in {slModelsRefresh, slThinking, slResume, slModel, slName}:
+    return
+
+  proc fail(msg: string): SlashCommand =
+    SlashCommand(kind: slError, error: msg)
+
+  if not matched.found:
+    let skill = namedSkill(workspace, command)
+    if skill.len > 0:
+      return SlashCommand(kind: slSkill, skillName: skill, arg: arg)
+    return fail("Unknown command '" & command & "'; try /help")
+
+  result.kind = matched.spec.kind
+  result.arg = arg
+  case matched.spec.kind
+  of slHelp, slProvider, slSession, slNew, slQuit:
+    if parts.len > 1:
+      return fail(command & " takes no arguments")
+  of slModel:
+    if parts.len > 2:
+      return fail("Usage: " & matched.spec.usage)
+    if parts.len == 2:
+      if parts[1] == "refresh":
+        return fail("Unknown /model option 'refresh'; did you mean " &
+          usageOf(slModelsRefresh) & "?")
+      result.arg = parts[1]
+  of slModelsRefresh:
+    if parts.len != 2 or parts[1] != "refresh":
+      return fail("Usage: " & matched.spec.usage)
+  of slThinking:
+    if parts.len > 2:
+      return fail("Usage: /thinking [" & ThinkingLevels.join("|") & "]")
+    if parts.len == 2:
+      try:
+        result.arg = normalizeThinking(parts[1])
+      except ValueError:
+        return fail("Invalid thinking level '" & parts[1] &
+          "' (use " & ThinkingLevels.join("|") & ")")
+  of slCompact:
+    discard
+  of slResume:
+    if parts.len > 2:
+      return fail("Usage: " & matched.spec.usage)
+    if parts.len == 2:
+      result.arg = parts[1]
+  of slName:
+    result.arg = arg
+  of slNone, slError, slSkill:
+    return fail("Unknown command '" & command & "'; try /help")
+
+proc resumeOpensPicker*(input: string): bool =
+  ## Bare `/resume` should open the in-composer session menu, not dump a list.
+  let cmd = parseSlash(input)
+  cmd.kind == slResume and cmd.arg.len == 0
+
+proc commandError*(input: string, workspace = getCurrentDir()): string =
+  parseSlash(input, workspace).error
+
+proc expandSkill*(workspace: string, cmd: SlashCommand): string =
+  ## Skill body for a parsed `/skill` command, or empty if it cannot be loaded.
+  if cmd.kind != slSkill:
+    return ""
+  let loaded = loadSkill(workspace, cmd.skillName)
+  if not loaded.ok:
+    return ""
+  result = "Follow the \"" & cmd.skillName & "\" skill.\n\n" & loaded.content
+  if cmd.arg.len > 0:
+    result.add "\n\n" & cmd.arg
+
+proc expandSkillSlash*(workspace, input: string): string =
+  ## If input is `/skill` or `/skill …`, return the skill body plus rest.
+  let text = expandSkill(workspace, parseSlash(input, workspace))
+  if text.len == 0: input else: text
+
+const
+  modelSearchMin = 2
+  modelSearchCap = 50
+  mentionPathChars = {'A'..'Z', 'a'..'z', '0'..'9', '_', '.', '/', '-', '+'}
+
+proc mentionAt*(input: string, cursor: int):
+    tuple[active: bool, at, tokEnd: int, query: string] =
+  ## `@path` token containing `cursor`. Inactive for `user@host`.
+  let c = clamp(cursor, 0, input.len)
+  var i = c
+  while i > 0 and input[i - 1] in mentionPathChars:
+    dec i
+  var at = -1
+  if i > 0 and input[i - 1] == '@':
+    at = i - 1
+  elif i < input.len and input[i] == '@':
+    at = i
+  else:
+    return
+  if at > 0 and input[at - 1] notin {' ', '\t', '\n'}:
+    return
+  var j = at + 1
+  while j < input.len and input[j] in mentionPathChars:
+    inc j
+  if c < at or c > j:
+    return
+  (true, at, j, input[at + 1 ..< min(c, j)])
+
+proc applyMention*(input: string, cursor: int, selected: string):
+    tuple[text: string, cursor: int] =
+  let m = mentionAt(input, cursor)
+  if not m.active:
+    result.text = input & selected
+    result.cursor = result.text.len
+    return
+  result.text = input[0 ..< m.at] & selected & " " & input[m.tokEnd .. ^1]
+  result.cursor = m.at + selected.len + 1
+
+proc findMentions*(text: string): seq[string] =
+  var i = 0
+  while i < text.len:
+    if text[i] == '@' and (i == 0 or text[i - 1] in {' ', '\t', '\n'}):
+      var j = i + 1
+      while j < text.len and text[j] in mentionPathChars:
+        inc j
+      if j > i + 1:
+        let path = text[i + 1 ..< j]
+        var seen = false
+        for x in result:
+          if x == path: seen = true
+        if not seen:
+          result.add path
+      i = j
+    else:
+      inc i
+
+const mentionAttachBytes = 100_000
+
+proc wrapTextAttachment(ws: Workspace, resolved, raw: string): string =
+  ## File body wrapped for the model, or empty if this is not attachable text.
+  let probe = raw[0 ..< min(raw.len, 4096)]
+  if '\0' in probe:
+    return
+  var body = raw
+  if body.len > mentionAttachBytes:
+    body = body[0 ..< mentionAttachBytes] & "\n…(truncated)\n"
+  let path = ws.relative(resolved).canonRel
+  result = "<file path=\"" & path & "\">\n" & body
+  if not body.endsWith("\n"):
+    result.add "\n"
+  result.add "</file>\n"
+
+proc expandUserContent*(workspace, text: string): seq[ContentBlock] =
+  ## Typed text plus @file bodies; image files become Pi-style image blocks.
+  let paths = findMentions(text)
+  if paths.len == 0:
+    return @[text(text)]
+  let ws = initWorkspace(workspace)
+  var attached = ""
+  var imgBlocks: seq[ContentBlock]
+  for path in paths:
+    var resolved: string
+    try:
+      resolved = ws.resolve(path)
+    except WorkspaceError:
+      continue
+    if not fileExists(resolved) or dirExists(resolved):
+      continue
+    let raw = readFile(resolved)
+    let classified = classifyImage(raw)
+    if classified.mime.len > 0:
+      if classified.ok:
+        imgBlocks.add image(classified.mime, "", path)
+      else:
+        attached.add "\n[" & classified.err & ": " & path & "]\n"
+      continue
+    let blob = wrapTextAttachment(ws, resolved, raw)
+    if blob.len > 0:
+      attached.add "\n"
+      attached.add blob
+  if attached.len == 0:
+    result.add text(text)
+  else:
+    result.add text(text & "\n" & attached)
+  result.add imgBlocks
+
+proc expandMentions*(workspace, text: string): string =
+  ## Text-only view of expandUserContent (tests and anything that cannot take blocks).
+  for b in expandUserContent(workspace, text):
+    if b.kind == ckText:
+      return b.text
+  text
+
+proc addUniqueId(ids: var seq[string], id: string) =
+  if id.len == 0: return
+  for x in ids:
+    if x == id: return
+  ids.add id
+
+proc suggestModels(query: string, picker: ModelPicker): seq[string] =
+  var recents: seq[string]
+  recents.addUniqueId(picker.currentModel)
+  recents.addUniqueId(picker.defaultModel)
+  let q = query.toLowerAscii
+  if q.len < modelSearchMin:
+    for id in recents:
+      if q.len == 0 or q in id.toLowerAscii:
+        result.add "/model " & id
+    return
+  var skip: seq[string]
+  for id in recents:
+    if q in id.toLowerAscii:
+      result.add "/model " & id
+      skip.add id
+  let remaining = modelSearchCap - result.len
+  if remaining <= 0: return
+  for row in searchCatalogModels(picker.keyedProviders, query, remaining,
+      picker.currentProvider, skip):
+    result.add "/model " & row.id
+
+proc commandSuggestions*(input: string, workspace = getCurrentDir(),
+                         sessionDir = "", picker = ModelPicker(),
+                         cursor = -1): seq[string] =
+  let cur = if cursor < 0: input.len else: cursor
+  let stripped = input.strip
+  if stripped.startsWith("/"):
+    let parts = commandParts(input)
+    if parts.len == 0:
+      return
+    let command = parts[0]
+    let trailingSpace = input.len > 0 and input[^1] in {' ', '\t'}
+    let incomplete = parts.len == 1 or trailingSpace
+    let matched = specNamed(command)
+    if matched.found:
+      case matched.spec.kind
+      of slModelsRefresh:
+        if incomplete: return @[matched.spec.usage]
+      of slThinking:
+        if incomplete:
+          for level in thinkingChoices(picker.currentProvider, picker.currentModel):
+            result.add matched.spec.name & " " & level
+          return
+      of slResume:
+        let prefix = if parts.len >= 2: parts[1] else: ""
+        if sessionDir.len > 0 and (parts.len <= 1 or incomplete or prefix.len > 0):
+          for info in listSessions(sessionDir, workspace):
+            if prefix.len == 0 or info.id.startsWith(prefix):
+              result.add "/resume " & info.id
+          if result.len > 0:
+            return
+        if incomplete: return @[matched.spec.usage]
+      of slModel:
+        if parts.len > 1 and "refresh".startsWith(parts[1].toLowerAscii):
+          return @[usageOf(slModelsRefresh)]
+        let query = if parts.len >= 2: parts[1] else: ""
+        return suggestModels(query, picker)
+      else: discard
+    if parts.len > 1:
+      return
+    for spec in CommandSpecs:
+      if spec.name.startsWith(command):
+        result.add spec.usage
+    for skill in discoverSkills(workspace):
+      if skill.name.len == 0 or " " in skill.name: continue
+      let slash = "/" & skill.name
+      if isBuiltinSlash(slash): continue
+      if slash.startsWith(command) and slash notin result:
+        result.add slash
+    return
+  let m = mentionAt(input, cur)
+  if m.active:
+    return suggestMentionFiles(workspace, m.query)
+
+proc commandSuggestionDescription*(suggestion: string,
+                                   workspace = getCurrentDir(),
+                                   sessionDir = ""): string =
+  const resumePrefix = "/resume "
+  const modelPrefix = "/model "
+  if sessionDir.len > 0 and suggestion.startsWith(resumePrefix):
+    let id = suggestion[resumePrefix.len .. ^1].strip
+    let info = peekSession(sessionDir, id)
+    if info.id.len > 0:
+      return sessionLabel(info)
+  if suggestion.startsWith(modelPrefix):
+    let id = suggestion[modelPrefix.len .. ^1]
+    if id.len > 0 and id[0] != '[':
+      let (found, row) = findCatalogModel(id, WiredProviders)
+      if found:
+        result = row.provider
+        if row.context > 0:
+          result.add "  " & formatContextK(row.context)
+        return
+      return "set the model"
+  if suggestion.startsWith("@") and suggestion.len > 1:
+    return "file"
+  for spec in CommandSpecs:
+    if suggestion == spec.usage or
+       suggestion.startsWith(spec.name & " "):
+      return spec.description
+  if suggestion.startsWith("/") and suggestion.len > 1:
+    let name = suggestion[1 .. ^1]
+    for skill in discoverSkills(workspace):
+      if skill.name.toLowerAscii == name.toLowerAscii:
+        return skill.description
