@@ -280,6 +280,23 @@ suite "OpenRouter provider":
     check config.endpoint == "https://openrouter.ai/api/v1/chat/completions"
     check niminalConfigDir().extractFilename == ".niminal"
 
+  test "openai provider defaults and thinking map to reasoning_effort":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", "{}")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    writeFile(root / "config.json", """{"default_provider":"openai"}""")
+    var config = loadConfig(root, root / "config.json")
+    check config.provider == "openai"
+    check config.model == "gpt-5"
+    check config.apiKeyEnv == "OPENAI_API_KEY"
+    check config.endpoint == "https://api.openai.com/v1/chat/completions"
+    config.thinking = "high"
+    check providerOptions(config)["reasoning_effort"].getStr == "high"
+    config.thinking = "none"
+    check "reasoning_effort" notin providerOptions(config)
+
 suite "persistent agent sessions":
   test "new session files can be resumed":
     let root = freshDir()
@@ -510,19 +527,25 @@ suite "slash commands":
     let cache = root / "models-dev.json"
     writeFile(cache, $(%*{
       "openrouter": {"models": {"deepseek/x": {"limit": {"context": 1000}}}},
+      "openai": {"models": {"gpt-5": {"limit": {"context": 1048576}}}},
       "anthropic": {"models": {"claude-sonnet-4-6": {"limit": {"context": 200000}}}}
     }))
     setModelsDevCachePath(cache)
     defer: setModelsDevCachePath("")
     putEnv("OPENROUTER_API_KEY", "or-test")
+    putEnv("OPENAI_API_KEY", "oa-test")
     putEnv("ANTHROPIC_API_KEY", "an-test")
     defer:
       delEnv("OPENROUTER_API_KEY")
+      delEnv("OPENAI_API_KEY")
       delEnv("ANTHROPIC_API_KEY")
     var config = loadConfig(root, root / "config.json")
     config.sessionDir = root / "sessions"
     var agent = initAgent(config)
     check agent.config.provider == "openrouter"
+    check agent.processInput("/model gpt-5")
+    check agent.config.model == "gpt-5"
+    check agent.config.provider == "openai"
     check agent.processInput("/model claude-sonnet-4-6")
     check agent.config.model == "claude-sonnet-4-6"
     check agent.config.provider == "anthropic"

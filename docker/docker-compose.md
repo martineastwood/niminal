@@ -8,7 +8,7 @@
   `docker compose run` without rebuilding the image,
 - mounts the sibling `../nimgent` package at `/nimgent` so
   `--path:"../nimgent/src"` from `/workspace` resolves,
-- forwards `OPENROUTER_API_KEY` and `ANTHROPIC_API_KEY` from your shell
+- forwards `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY` from your shell
   environment into the container, and
 - stays running (`sleep infinity`) so you can open a shell in it.
 
@@ -48,6 +48,7 @@ list in `docker-compose.yml`, e.g.:
 ```yaml
     environment:
       - OPENROUTER_API_KEY
+      - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
       - ANY_OTHER_VAR
 ```

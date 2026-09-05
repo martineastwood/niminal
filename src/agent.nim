@@ -5,7 +5,7 @@ import config, session, compaction, instructions, skills, models_dev, commands
 import workspace
 import images
 import nimgent
-import nimgent/[anthropic, openrouter]
+import nimgent/[anthropic, openai]
 import tools/[tool, read_tool, edit_tool, write_tool, bash_tool]
 import ui/turn
 
@@ -81,6 +81,9 @@ proc attachProvider(agent: var Agent) =
     agent.provider = makeOpenRouterProvider(agent.config.apiKey,
       agent.config.endpoint, agent.config.requestTimeout,
       agent.config.siteUrl, agent.config.siteName)
+  of "openai":
+    agent.provider = makeOpenAIProvider(agent.config.apiKey,
+      agent.config.endpoint, agent.config.requestTimeout)
   of "anthropic":
     agent.provider = makeAnthropicProvider(agent.config.apiKey,
       agent.config.model, agent.config.endpoint, agent.config.requestTimeout)

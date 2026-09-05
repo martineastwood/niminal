@@ -20,7 +20,8 @@ the sibling checkout is present).
 Windows is not supported natively. Use [WSL](https://learn.microsoft.com/windows/wsl) and build inside the Linux environment.
 
 Set the provider's API key before starting the agent:
-`OPENROUTER_API_KEY` for OpenRouter or `ANTHROPIC_API_KEY` for Anthropic.
+`OPENROUTER_API_KEY` for OpenRouter, `OPENAI_API_KEY` for OpenAI, or
+`ANTHROPIC_API_KEY` for Anthropic.
 Optional project configuration is read from `.niminal/config.json` in the
 workspace and overlays `~/.niminal/config.json`. Global files live in
 `~/.niminal/`:
@@ -44,6 +45,9 @@ Configuration example:
   "providers": {
     "openrouter": {
       "api_key_env": "OPENROUTER_API_KEY"
+    },
+    "openai": {
+      "api_key_env": "OPENAI_API_KEY"
     }
   },
   "agent": {

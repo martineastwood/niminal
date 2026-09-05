@@ -6,7 +6,7 @@ import std/[json, os, strutils]
 import models_dev, compaction
 
 const
-  WiredProviders* = ["openrouter", "anthropic"]
+  WiredProviders* = ["openrouter", "openai", "anthropic"]
 
 type
   AgentConfig* = object
@@ -132,11 +132,15 @@ proc resolveThinking(provider, model, want: string): ThinkingPlan =
       plan.label = "off"
       if p == "openrouter":
         plan.options["reasoning"] = %*{"effort": "none"}
+      elif p == "openai":
+        plan.options["reasoning_effort"] = %"none"
       return
     plan.label = effort
     case p
     of "openrouter":
       plan.options["reasoning"] = %*{"effort": effort}
+    of "openai":
+      plan.options["reasoning_effort"] = %effort
     of "anthropic":
       let budget = thinkingBudgetTokens(effort)
       if budget > 0:
@@ -157,6 +161,8 @@ proc resolveThinking(provider, model, want: string): ThinkingPlan =
       result.label = "on"
       if p == "openrouter":
         result.options["reasoning"] = %*{"enabled": true}
+      elif p == "openai":
+        result.options["reasoning_effort"] = %"medium"
       elif p == "anthropic":
         sendEffort(result, "high")
     return
@@ -168,6 +174,8 @@ proc resolveThinking(provider, model, want: string): ThinkingPlan =
     case p
     of "openrouter":
       result.options["reasoning"] = %*{"max_tokens": thinkingBudgetTokens(want)}
+    of "openai":
+      result.options["reasoning_effort"] = %want
     of "anthropic":
       sendEffort(result, want)
     else:
@@ -199,12 +207,14 @@ proc niminalConfigDir*(): string =
 proc defaultApiKeyEnv*(provider: string): string =
   case provider.toLowerAscii
   of "openrouter": "OPENROUTER_API_KEY"
+  of "openai": "OPENAI_API_KEY"
   of "anthropic": "ANTHROPIC_API_KEY"
   else: ""
 
 proc defaultEndpoint*(provider: string): string =
   case provider.toLowerAscii
   of "openrouter": "https://openrouter.ai/api/v1/chat/completions"
+  of "openai": "https://api.openai.com/v1/chat/completions"
   of "anthropic": "https://api.anthropic.com/v1/messages"
   else: ""
 
@@ -304,10 +314,10 @@ proc applyDoc(config: var AgentConfig, doc: JsonNode) =
     config.provider = "openrouter"
   config.model = jstr(doc, "default_model")
   if config.model.len == 0:
-    config.model = if config.provider == "openrouter":
-      "deepseek/deepseek-v4-flash-0731"
-    else:
-      "claude-3-5-sonnet-latest"
+    config.model = case config.provider
+      of "openrouter": "deepseek/deepseek-v4-flash-0731"
+      of "openai": "gpt-5"
+      else: "claude-3-5-sonnet-latest"
   config.defaultModel = config.model
   config.fillProvider(config.provider)
   let agent = jobj(doc, "agent")
