@@ -177,7 +177,7 @@ proc defaultApiKeyEnv*(provider: string): string =
 proc defaultEndpoint*(provider: string): string =
   case provider.toLowerAscii
   of "openrouter": "https://openrouter.ai/api/v1/chat/completions"
-  of "openai": "https://api.openai.com/v1/chat/completions"
+  of "openai": "https://api.openai.com/v1/responses"
   of "anthropic": "https://api.anthropic.com/v1/messages"
   else: ""
 

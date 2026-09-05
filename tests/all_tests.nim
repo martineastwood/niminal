@@ -170,6 +170,16 @@ suite "session":
     check recovered.messages[0].content[0].text == "hello"
     check recovered.messages[1].content[0].text == "world"
 
+  test "tool use parse_error round-trips":
+    let root = freshDir()
+    defer: removeDir(root)
+    let path = root / "pe.jsonl"
+    var original = initSession(path, "pe")
+    original.addAssistantResponse(ProviderResponse(content: @[
+      toolUseFromArgs("c1", "echo", "{nope")]))
+    let recovered = initSession(path, "pe")
+    check invalidToolCall(recovered.messages[0].content[0]).len > 0
+
   test "lists session ids newest first":
     let root = freshDir()
     defer: removeDir(root)
@@ -280,7 +290,7 @@ suite "OpenRouter provider":
     check config.endpoint == "https://openrouter.ai/api/v1/chat/completions"
     check niminalConfigDir().extractFilename == ".niminal"
 
-  test "openai provider defaults and thinking map to reasoning_effort":
+  test "openai provider defaults and thinking map to reasoning.effort":
     let root = freshDir()
     defer: removeDir(root)
     writeFile(root / "models-dev.json", "{}")
@@ -291,11 +301,11 @@ suite "OpenRouter provider":
     check config.provider == "openai"
     check config.model == "gpt-5"
     check config.apiKeyEnv == "OPENAI_API_KEY"
-    check config.endpoint == "https://api.openai.com/v1/chat/completions"
+    check config.endpoint == "https://api.openai.com/v1/responses"
     config.thinking = "high"
-    check providerOptions(config)["reasoning_effort"].getStr == "high"
+    check providerOptions(config)["reasoning"]["effort"].getStr == "high"
     config.thinking = "none"
-    check "reasoning_effort" notin providerOptions(config)
+    check "reasoning" notin providerOptions(config)
 
 suite "persistent agent sessions":
   test "new session files can be resumed":

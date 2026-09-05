@@ -87,8 +87,11 @@ proc eventJson(event: SessionEvent): JsonNode =
       of ckText:
         result["content"].add %*{"type": "text", "text": part.text}
       of ckToolUse:
-        result["content"].add %*{"type": "tool_use", "id": part.id,
+        var tu = %*{"type": "tool_use", "id": part.id,
           "name": part.name, "input": part.input}
+        if part.parseError.len > 0:
+          tu["parse_error"] = %part.parseError
+        result["content"].add tu
       of ckThinking:
         result["content"].add %*{"type": "thinking", "thinking": part.thinking,
           "signature": part.signature}
@@ -143,7 +146,9 @@ proc parseImages(node: JsonNode): seq[ImageContent] =
 proc parseBlock(node: JsonNode): ContentBlock =
   case node["type"].getStr
   of "text": text(node["text"].getStr)
-  of "tool_use": toolUse(node["id"].getStr, node["name"].getStr, node["input"])
+  of "tool_use":
+    toolUse(node["id"].getStr, node["name"].getStr, node["input"],
+      node.getOrDefault("parse_error").getStr)
   of "thinking":
     ContentBlock(kind: ckThinking, thinking: node["thinking"].getStr,
       signature: if "signature" in node: node["signature"].getStr else: "")

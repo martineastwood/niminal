@@ -350,9 +350,13 @@ proc runTurn*(agent: var Agent, ui: TurnSink) =
         agent.session.persistInterruptedToolResults(calls, i)
         ui.noteInterrupted()
         return
-      let toolResult = agent.tools.execute(call.name, call.input, proc (): bool =
-        ui.poll()
-        ui.wasInterrupted())
+      let bad = invalidToolCall(call)
+      let toolResult =
+        if bad.len > 0: ToolResult(output: bad, isError: true)
+        else:
+          agent.tools.execute(call.name, call.input, proc (): bool =
+            ui.poll()
+            ui.wasInterrupted())
       agent.session.addToolResult(call, toolResult.output, toolResult.isError,
         toolResult.images)
       ui.toolResult(toolResult.output, toolResult.isError)
