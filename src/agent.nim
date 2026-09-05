@@ -121,6 +121,37 @@ proc restoreSessionModel(agent: var Agent) =
   if found and storedModel.len > 0:
     agent.applyModel(storedModel, persist = false)
 
+proc reloadToolsAndHooks*(agent: var Agent) =
+  ## Rescan external tools and hooks from disk (builtins stay the same set).
+  var reg: ToolRegistry
+  let ws = initWorkspace(agent.config.workspace)
+  let read = makeReadTool(ws)
+  let edit = makeEditTool(ws)
+  let write = makeWriteTool(ws)
+  let grep = makeGrepTool(ws)
+  let glob = makeGlobTool(ws)
+  let bash = makeBashTool(ws.root, agent.config.maxToolOutputBytes)
+  let skill = makeSkillTool(agent.config.workspace)
+  reg.register(read[0], read[1])
+  reg.register(grep[0], grep[1])
+  reg.register(glob[0], glob[1])
+  reg.register(edit[0], edit[1])
+  reg.register(write[0], write[1])
+  reg.register(bash[0], bash[1])
+  reg.register(skill[0], skill[1])
+  agent.extensionWarnings = reg.registerExtensions(
+    agent.config.workspace, agent.config.maxToolOutputBytes)
+  agent.tools = reg
+  let discovered = discoverHooks(agent.config.workspace)
+  agent.hooks = discovered.hooks
+  agent.hookWarnings = discovered.warnings
+
+proc emitDiscoveryWarnings(agent: Agent, ui: TurnSink) =
+  for warning in agent.extensionWarnings:
+    ui.emit(mlWarn, "extension: " & warning)
+  for warning in agent.hookWarnings:
+    ui.emit(mlWarn, "hook: " & warning)
+
 proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   result.config = config
   result.thinking = config.thinking
@@ -128,26 +159,7 @@ proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   result.session = loadSession(config.sessionDir, sessionId, config.workspace)
   if sessionId.len > 0:
     result.restoreSessionModel()
-  let ws = initWorkspace(config.workspace)
-  let read = makeReadTool(ws)
-  let edit = makeEditTool(ws)
-  let write = makeWriteTool(ws)
-  let grep = makeGrepTool(ws)
-  let glob = makeGlobTool(ws)
-  let bash = makeBashTool(ws.root, config.maxToolOutputBytes)
-  let skill = makeSkillTool(config.workspace)
-  result.tools.register(read[0], read[1])
-  result.tools.register(grep[0], grep[1])
-  result.tools.register(glob[0], glob[1])
-  result.tools.register(edit[0], edit[1])
-  result.tools.register(write[0], write[1])
-  result.tools.register(bash[0], bash[1])
-  result.tools.register(skill[0], skill[1])
-  result.extensionWarnings = result.tools.registerExtensions(
-    config.workspace, config.maxToolOutputBytes)
-  let discovered = discoverHooks(config.workspace)
-  result.hooks = discovered.hooks
-  result.hookWarnings = discovered.warnings
+  result.reloadToolsAndHooks()
 
 proc buildRequest*(agent: Agent): ProviderRequest =
   let opts = providerOptions(agent.config, agent.thinking)
@@ -274,8 +286,10 @@ proc fireTurnHooks(agent: var Agent, event: HookEvent, ui: TurnSink,
   emitHookWarnings(ui, outcome.warnings)
 
 proc switchSession(agent: var Agent, next: Session, ui: TurnSink) =
-  ## session_end on the old transcript, then session_start on the new one.
+  ## session_end on the old transcript, rescan tools/hooks, then session_start.
   agent.fireSessionHooks(heSessionEnd, ui)
+  agent.reloadToolsAndHooks()
+  agent.emitDiscoveryWarnings(ui)
   agent.session = next
   agent.fireSessionHooks(heSessionStart, ui)
 
