@@ -7,6 +7,7 @@
 
 import std/[strutils, sequtils]
 from std/unicode import runeLen
+import theme
 
 type
   RenderState = enum
@@ -17,7 +18,9 @@ type
 proc renderInline(text: string, useColor: bool): string =
   ## Render inline markdown: `code`, ***bold italic***, **bold**, *italic*, links.
   result = text
-  if not useColor:
+  let t = currentTheme
+  let color = useColor and t.colorsOn
+  if not color:
     var i = 0
     var acc = ""
     while i < result.len:
@@ -67,26 +70,26 @@ proc renderInline(text: string, useColor: bool): string =
     if result[i] == '`':
       let close = result.find('`', i + 1)
       if close > 0:
-        acc.add "\x1b[33m" & result[i + 1 ..< close] & "\x1b[0m"
+        acc.add t.paint(t.warning, result[i + 1 ..< close])
         i = close + 1
         continue
     if i + 2 < result.len and result[i] == '*' and result[i + 1] == '*' and result[i + 2] == '*':
       let close = result.find("***", i + 3)
       if close > 0:
-        # Bold + italic + bright yellow so it stays visible on common terminals.
-        acc.add "\x1b[1;3;93m" & result[i + 3 ..< close] & "\x1b[0m"
+        # Bold + italic on the heading color.
+        acc.add t.italicHeading & result[i + 3 ..< close] & t.reset
         i = close + 3
         continue
     if i + 1 < result.len and result[i] == '*' and result[i + 1] == '*':
       let close = result.find("**", i + 2)
       if close > 0:
-        acc.add "\x1b[1;93m" & result[i + 2 ..< close] & "\x1b[0m"
+        acc.add t.paint(t.heading, result[i + 2 ..< close])
         i = close + 2
         continue
     if i + 1 < result.len and result[i] == '*' and result[i + 1] != '*':
       let close = result.find('*', i + 1)
       if close > 0:
-        acc.add "\x1b[3m" & result[i + 1 ..< close] & "\x1b[0m"
+        acc.add "\e[3m" & result[i + 1 ..< close] & t.reset
         i = close + 1
         continue
     if result[i] == '[':
@@ -96,7 +99,7 @@ proc renderInline(text: string, useColor: bool): string =
         if closeParen > 0:
           let label = result[i + 1 ..< closeBr]
           let url = result[closeBr + 2 ..< closeParen]
-          acc.add "\x1b[4m" & label & "\x1b[0m" & " \x1b[2m" & url & "\x1b[0m"
+          acc.add "\e[4m" & label & t.reset & " " & t.paint(t.dim, url)
           i = closeParen + 1
           continue
     acc.add result[i]
@@ -125,6 +128,8 @@ proc isTableSeparator(line: string): bool =
 proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
   ## Render a markdown table with Unicode box-drawing characters.
   if rows.len == 0: return
+  let t = currentTheme
+  let color = useColor and t.colorsOn
 
   let numCols = rows[0].len
   # Calculate column widths
@@ -139,8 +144,8 @@ proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
   let midBorder = "├" & colWidths.mapIt("─".repeat(it + 2)).join("┼") & "┤"
   let botBorder = "└" & colWidths.mapIt("─".repeat(it + 2)).join("┴") & "┘"
 
-  if useColor:
-    result.add "\x1b[2m" & topBorder & "\x1b[0m"
+  if color:
+    result.add t.paint(t.dim, topBorder)
   else:
     result.add topBorder
 
@@ -148,27 +153,29 @@ proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
     var line = "│"
     for c in 0 ..< numCols:
       let cell = if c < row.len: row[c] else: ""
-      let rendered = renderInline(cell, useColor)
+      let rendered = renderInline(cell, color)
       let pad = colWidths[c] - runeLen(renderInline(cell, false))
       let content = " " & rendered & " ".repeat(pad) & " "
-      if r == 0 and useColor:
-        line.add "\x1b[1;93m" & content & "\x1b[0m│"
+      if r == 0 and color:
+        line.add t.heading & content & t.reset & "│"
       else:
         line.add content & "│"
     result.add line
     if r == 0:
-      if useColor:
-        result.add "\x1b[2m" & midBorder & "\x1b[0m"
+      if color:
+        result.add t.paint(t.dim, midBorder)
       else:
         result.add midBorder
 
-  if useColor:
-    result.add "\x1b[2m" & botBorder & "\x1b[0m"
+  if color:
+    result.add t.paint(t.dim, botBorder)
   else:
     result.add botBorder
 
 proc renderMarkdown*(text: string, useColor: bool): string =
   ## Render a markdown response to a string with optional ANSI colors.
+  let t = currentTheme
+  let color = useColor and t.colorsOn
   var lines = text.splitLines
   var rendered: seq[string] = @[]
   var state = rsNormal
@@ -190,37 +197,38 @@ proc renderMarkdown*(text: string, useColor: bool): string =
         tableRows = @[parseTableRow(line)]
         continue
       if line.strip == "---" or line.strip == "***":
-        if useColor:
-          rendered.add "\x1b[2m" & "─".repeat(40) & "\x1b[0m"
+        if color:
+          rendered.add t.paint(t.dim, "─".repeat(40))
         else:
           rendered.add "─".repeat(40)
         continue
       if line.startsWith("# "):
-        let body = renderInline(line[2 .. ^1].strip, useColor)
-        rendered.add (if useColor: "\x1b[1m\x1b[35m" & body & "\x1b[0m" else: body)
+        let body = renderInline(line[2 .. ^1].strip, color)
+        rendered.add (if color: "\e[1m" & t.model & body & t.reset else: body)
       elif line.startsWith("## "):
-        let body = renderInline(line[3 .. ^1].strip, useColor)
-        rendered.add (if useColor: "\x1b[1;93m" & body & "\x1b[0m" else: body)
+        let body = renderInline(line[3 .. ^1].strip, color)
+        rendered.add (if color: t.paint(t.heading, body) else: body)
       elif line.startsWith("### "):
-        let body = renderInline(line[4 .. ^1].strip, useColor)
-        rendered.add (if useColor: "\x1b[1;93m" & body & "\x1b[0m" else: body)
+        let body = renderInline(line[4 .. ^1].strip, color)
+        rendered.add (if color: t.paint(t.heading, body) else: body)
       elif line.startsWith("> "):
-        let body = renderInline(line[2 .. ^1], useColor)
-        rendered.add (if useColor: "\x1b[2m" & "│ " & body & "\x1b[0m" else: "│ " & body)
+        let body = renderInline(line[2 .. ^1], color)
+        rendered.add (if color: t.paint(t.dim, "│ " & body) else: "│ " & body)
       elif line.len >= 2 and line[0] in {'-', '*'} and line[1] == ' ':
-        let body = renderInline(line[2 .. ^1], useColor)
-        rendered.add (if useColor: "\x1b[36m" & "• " & "\x1b[0m" & body else: "• " & body)
+        let body = renderInline(line[2 .. ^1], color)
+        rendered.add (if color: t.paint(t.accent, "• ") & body else: "• " & body)
       elif line.len >= 3 and line[0].isDigit and line[1] == '.' and line[2] == ' ':
         let dot = line.find(". ")
         let num = line[0 ..< dot]
-        let body = renderInline(line[dot + 2 .. ^1], useColor)
-        rendered.add (if useColor: "\x1b[36m" & num & ".\x1b[0m " & body else: num & ". " & body)
+        let body = renderInline(line[dot + 2 .. ^1], color)
+        rendered.add (if color: t.paint(t.accent, num & ".") & " " & body
+                      else: num & ". " & body)
       else:
-        rendered.add renderInline(line, useColor)
+        rendered.add renderInline(line, color)
     of rsCodeBlock:
       if line.startsWith("```"):
-        if useColor:
-          rendered.add "\x1b[2m" & codeLines.join("\n") & "\x1b[0m"
+        if color:
+          rendered.add t.paint(t.dim, codeLines.join("\n"))
         else:
           rendered.add codeLines.join("\n")
         state = rsNormal
@@ -233,7 +241,7 @@ proc renderMarkdown*(text: string, useColor: bool): string =
         tableRows.add parseTableRow(line)
       else:
         # Table ended — render it
-        rendered.add renderTable(tableRows, useColor)
+        rendered.add renderTable(tableRows, color)
         tableRows = @[]
         state = rsNormal
         # Re-process this line in normal mode
@@ -243,17 +251,17 @@ proc renderMarkdown*(text: string, useColor: bool): string =
             codeLang = line[3 .. ^1].strip
             codeLines = @[]
           else:
-            rendered.add renderInline(line, useColor)
+            rendered.add renderInline(line, color)
 
   # Unterminated code block
   if state == rsCodeBlock and codeLines.len > 0:
-    if useColor:
-      rendered.add "\x1b[2m" & codeLines.join("\n") & "\x1b[0m"
+    if color:
+      rendered.add t.paint(t.dim, codeLines.join("\n"))
     else:
       rendered.add codeLines.join("\n")
 
   # Unterminated table
   if state == rsTable and tableRows.len > 0:
-    rendered.add renderTable(tableRows, useColor)
+    rendered.add renderTable(tableRows, color)
 
   result = rendered.join("\n")

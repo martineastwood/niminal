@@ -12,6 +12,7 @@ import ../src/ui/diff
 import ../src/ui/turn
 import ../src/ui/tui
 import ../src/ui/input
+import ../src/ui/theme
 import ../src/models_dev
 import ../src/compaction
 import ../src/instructions
@@ -720,6 +721,7 @@ suite "slash commands":
     check "/model" in selected
     check "show the current model" in selected
     check "\e[48;5;236m" in idle
+    check Dark256.text in idle
     check "/help" in idle
     check "show this help" in idle
     let rows = formatCommandMenu(@["/model", "/models refresh"], 0, 2, 60)
@@ -770,7 +772,7 @@ suite "slash commands":
       "ok\nline2", false)
     session.addCompaction("summary", 0, 10)
     let text = transcriptLines(session).join("\n")
-    check userRail in text
+    check userRail() in text
     check "fix the parser" in text
     check "Looking." in text
     check "● read" in text
@@ -2298,4 +2300,101 @@ suite "cli prompt args":
     let cli = parseCliArgs(["--nope", "hello"])
     check cli.error.len > 0
     check "Unknown option" in cli.error
+
+suite "themes":
+  test "dark 256 matches historical SGR":
+    check Dark256.accent == "\e[36m"
+    check Dark256.panelBg == "\e[48;5;236m"
+    check Dark256.selectedBg == "\e[48;5;81m"
+    check Dark256.selectedFg == "\e[30m"
+    check Dark256.boldAccent == "\e[1;36m"
+    check Dark256.heading == "\e[1;93m"
+    check Dark256.dim == "\e[2m"
+    check Dark256.text == "\e[37m"
+    let compiled = compileNamedTheme("dark", cd256)
+    check compiled.ok
+    check compiled.theme.accent == Dark256.accent
+    check compiled.theme.panelBg == Dark256.panelBg
+
+  test "truecolor hex compiles to 38;2":
+    let t = compileTheme(DarkSpec, cdTrue)
+    check "38;2;" in t.accent
+    check "48;2;" in t.panelBg
+    check t.dim == "\e[2m"
+    check t.reset == "\e[0m"
+
+  test "depth none strips color":
+    let t = compileTheme(DarkSpec, cdNone)
+    check t.accent.len == 0
+    check t.panelBg.len == 0
+    check not t.colorsOn
+
+  test "16-color drops panels":
+    let t = compileTheme(DarkSpec, cd16)
+    check t.accent.len > 0
+    check t.panelBg.len == 0
+    check t.selectedBg.len == 0
+
+  test "json theme loads required tokens":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".niminal" / "themes")
+    writeFile(root / ".niminal" / "themes" / "seafoam.json", """
+{
+  "name": "seafoam",
+  "colors": {
+    "accent": "#7fdbca",
+    "success": "#9ece6a",
+    "error": "#f7768e",
+    "warning": "#e0af68",
+    "muted": 242,
+    "dim": 240,
+    "text": "",
+    "heading": "#c0caf5",
+    "model": "#bb9af7",
+    "panelBg": "#1a1b26",
+    "selectedBg": "#7fdbca",
+    "selectedFg": "#1a1b26"
+  }
+}
+""")
+    let loaded = findUserTheme("seafoam", root)
+    check loaded.ok
+    check loaded.spec.name == "seafoam"
+    let compiled = compileNamedTheme("seafoam", cdTrue, root)
+    check compiled.ok
+    check compiled.theme.name == "seafoam"
+    check "38;2;" in compiled.theme.accent
+    check "seafoam" in listThemeNames(root)
+
+  test "json rejects missing token and unknown name":
+    let bad = parseThemeJson(parseJson("""{"name":"x","colors":{"accent":"#fff"}}"""))
+    check not bad.ok
+    check "missing" in bad.err
+    let root = freshDir()
+    defer: removeDir(root)
+    let unknown = compileNamedTheme("nope", cd256, root)
+    check not unknown.ok
+
+  test "/theme parse and suggestions":
+    check parseSlash("/theme").kind == slTheme
+    check parseSlash("/theme").arg.len == 0
+    check parseSlash("/theme dark").kind == slTheme
+    check parseSlash("/theme dark").arg == "dark"
+    check parseSlash("/theme dark extra").kind == slError
+    check "/theme dark" in commandSuggestions("/theme ")
+    check "/theme light" in commandSuggestions("/theme li")
+
+  test "config theme field loads and persists":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".niminal")
+    writeFile(root / ".niminal" / "config.json", """{"theme":"light","default_provider":"openrouter"}""")
+    let cfg = loadConfig(root)
+    check cfg.theme == "light"
+    var patched = cfg
+    patched.theme = "dark"
+    persistModel(patched)
+    let again = loadConfig(root)
+    check again.theme == "dark"
 

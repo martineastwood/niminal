@@ -4,6 +4,7 @@
 import std/times
 import nimgent
 import term
+import theme
 import ../session
 import console
 import tui
@@ -39,14 +40,15 @@ proc noop() = discard
 proc consoleSink*(): TurnSink =
   var lastCall: ContentBlock
   proc emit(level: MsgLevel, text: string) =
+    let t = currentTheme
     case level
     of mlPlain: echo text
-    of mlWarn: echo text.color(cYellow)
-    of mlOk: echo text.color(cGreen)
-    of mlDim: echo text.color(cDim)
+    of mlWarn: echo t.paint(t.warning, text)
+    of mlOk: echo t.paint(t.success, text)
+    of mlDim: echo t.paint(t.dim, text)
     of mlError:
-      echo "PROVIDER_FAILED".color(cRed)
-      echo text.color(cRed)
+      echo t.paint(t.error, "PROVIDER_FAILED")
+      echo t.paint(t.error, text)
   proc show(session: Session) =
     if session.events.len == 0:
       echo "Started a new session: " & session.id
@@ -76,14 +78,15 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
   ## `footer` supplies status-bar text (typically agent.statusFooter).
   var cancelled = false
   proc emit(level: MsgLevel, text: string) =
+    let t = currentTheme
     let line = case level
       of mlPlain: text
-      of mlWarn: "\e[33m" & text & "\e[0m"
-      of mlOk: "\e[32m" & text & "\e[0m"
-      of mlDim: "\e[2m" & text & "\e[0m"
-      of mlError: "\e[31m" & text & "\e[0m"
+      of mlWarn: t.paint(t.warning, text)
+      of mlOk: t.paint(t.success, text)
+      of mlDim: t.paint(t.dim, text)
+      of mlError: t.paint(t.error, text)
     if level == mlError:
-      tui[].addLine("\e[31mPROVIDER_FAILED\e[0m")
+      tui[].addLine(t.paint(t.error, "PROVIDER_FAILED"))
     tui[].addLine(line)
   TurnSink(
     emit: emit,
@@ -105,7 +108,7 @@ proc tuiSink*(tui: ptr TUI, footer: proc (): string {.closure.}): TurnSink =
     wasInterrupted: proc (): bool =
       tui[].wasInterrupted or tui[].shouldExit or cancelled,
     noteInterrupted: proc () =
-      tui[].addLine("\e[33mInterrupted\e[0m"),
+      tui[].addLine(currentTheme.paint(currentTheme.warning, "Interrupted")),
     showSession: proc (session: Session) =
       tui[].loadSessionView(session),
     generate: proc (provider: Provider, request: ProviderRequest): ProviderResponse =

@@ -2,6 +2,7 @@
 
 import std/[json, strutils]
 import config, session, compaction, instructions, skills, models_dev, commands
+import ui/theme
 import workspace
 import images
 import extensions, hooks
@@ -48,34 +49,35 @@ type
 proc statusFooter*(agent: Agent): string =
   ## TUI status-bar text: model, usage, context fill, session id, thinking.
   var parts: seq[string] = @[]
+  let t = currentTheme
   let (found, storedModel, usage) = agent.session.lastAssistant
   let model = if storedModel.len > 0: storedModel else: agent.config.model
   if model.len > 0:
-    parts.add "\e[35m" & model & "\e[0m"
+    parts.add t.paint(t.model, model)
   if found:
     let labels = formatUsageLabels(usage)
     for label in labels:
-      parts.add "\e[2m" & label & "\e[0m"
+      parts.add t.paint(t.dim, label)
     let cost = formatUsageCost(agent.config.provider, model, usage)
     if cost.len > 0:
-      parts.add "\e[2m" & cost & "\e[0m"
+      parts.add t.paint(t.dim, cost)
     let window = agent.config.effectiveContextWindow
     if labels.len > 0 and window > 0:
       let used = contextTokens(usage)
       if used > 0:
         let pct = min(100, used * 100 div window)
         let color =
-          if pct >= 90: "\e[31m"
-          elif pct >= 70: "\e[33m"
-          else: "\e[2m"
-        parts.add color & "ctx " & $pct & "%\e[0m"
+          if pct >= 90: t.error
+          elif pct >= 70: t.warning
+          else: t.dim
+        parts.add t.paint(color, "ctx " & $pct & "%")
   if agent.session.id.len > 0:
-    parts.add "\e[2m#" & agent.session.id & "\e[0m"
+    parts.add t.paint(t.dim, "#" & agent.session.id)
   let level = thinkingStatus(agent.config)
   if level == "off":
-    parts.add "\e[2mthink:off\e[0m"
+    parts.add t.paint(t.dim, "think:off")
   elif level.len > 0:
-    parts.add "\e[33mthink:" & level & "\e[0m"
+    parts.add t.paint(t.warning, "think:" & level)
   parts.join("  ")
 
 proc attachProvider(agent: var Agent) =
@@ -281,6 +283,20 @@ proc switchSession(agent: var Agent, next: Session, ui: TurnSink) =
   agent.session = next
   agent.fireSessionHooks(heSessionStart, ui)
 
+proc setTheme*(agent: var Agent, value: string): string =
+  ## Persist and compile theme for live chrome. Transcript waits for /new|/resume|restart.
+  let name = value.strip.toLowerAscii
+  if name.len == 0:
+    return agent.config.theme
+  let err = applyTheme(name, workspace = agent.config.workspace)
+  if err.len > 0:
+    return "ERROR: " & err
+  agent.config.theme = name
+  persistModel(agent.config)
+  result = currentTheme.name
+  if name == "auto":
+    result = "auto → " & currentTheme.name
+
 proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
   ## Execute a parsed builtin. Caller has already filtered slNone/slSkill/slError/slQuit.
   case cmd.kind
@@ -300,6 +316,21 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
     else:
       ui.emit(mlPlain, agent.setThinking(cmd.arg))
       ui.onChange()
+  of slTheme:
+    if cmd.arg.len == 0:
+      var lines = "theme: " & agent.config.theme
+      if agent.config.theme == "auto" or agent.config.theme != currentTheme.name:
+        lines.add " → " & currentTheme.name
+      lines.add "\navailable: " & listThemeNames(agent.config.workspace).join(", ")
+      ui.emit(mlPlain, lines)
+    else:
+      let msg = agent.setTheme(cmd.arg)
+      if msg.startsWith("ERROR:"):
+        ui.emit(mlError, msg)
+      else:
+        # ponytail: live chrome flips now; painted transcript waits for /new,/resume,restart.
+        ui.emit(mlOk, msg & " (transcript on /new, /resume, or restart)")
+        ui.onChange()
   of slProvider:
     ui.emit(mlPlain, agent.provider.name)
   of slModelsRefresh:
@@ -311,6 +342,7 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
     else:
       ui.emit(mlError, "Could not refresh model metadata; using existing cache.")
   of slNew:
+    discard applyTheme(agent.config.theme, workspace = agent.config.workspace)
     let next = loadSession(agent.config.sessionDir, workspace = agent.config.workspace)
     agent.switchSession(next, ui)
     if not ui.showSession.isNil:
@@ -350,6 +382,7 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
       if not ok:
         ui.emit(mlPlain, err)
       else:
+        discard applyTheme(agent.config.theme, workspace = agent.config.workspace)
         agent.switchSession(sess, ui)
         agent.restoreSessionModel()
         if sess.workspace.len > 0 and sess.workspace != agent.config.workspace:

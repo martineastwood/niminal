@@ -20,6 +20,7 @@ type
     model*: string
     ## Merged default_model at load; `/model` updates `model` and the write file.
     defaultModel*: string
+    theme*: string
     apiKeyEnv*: string
     endpoint*: string
     siteUrl*: string
@@ -313,6 +314,9 @@ proc applyDoc(config: var AgentConfig, doc: JsonNode) =
       of "hyper": "deepseek-v4-flash"
       else: "claude-3-5-sonnet-latest"
   config.defaultModel = config.model
+  config.theme = jstr(doc, "theme", "auto")
+  if config.theme.len == 0:
+    config.theme = "auto"
   config.fillProvider(config.provider)
   let agent = jobj(doc, "agent")
   config.maxTokens = jint(agent, "max_tokens", 4096)
@@ -332,13 +336,15 @@ proc applyDoc(config: var AgentConfig, doc: JsonNode) =
     "max_output_bytes", 100_000)
 
 proc persistModel*(config: AgentConfig) =
-  ## Patch model, provider, and thinking on the write target.
+  ## Patch model, provider, thinking, and theme on the write target.
   if config.writePath.len == 0: return
   var doc = loadJsonFile(config.writePath)
   if config.provider.len > 0:
     doc["default_provider"] = %config.provider
   if config.model.len > 0:
     doc["default_model"] = %config.model
+  if config.theme.len > 0:
+    doc["theme"] = %config.theme
   if config.thinking.len > 0:
     if "agent" notin doc or doc["agent"].kind != JObject:
       doc["agent"] = newJObject()

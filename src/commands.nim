@@ -11,6 +11,7 @@ import models_dev
 import workspace
 import images
 import nimgent
+import ui/theme
 
 type
   SlashKind* = enum
@@ -28,6 +29,7 @@ type
     slResume
     slReload
     slName
+    slTheme
     slQuit
 
   SlashCommand* = object
@@ -71,6 +73,8 @@ const CommandSpecs* = [
     description: "rescan tools, extensions, and hooks"),
   CommandSpec(kind: slName, name: "/name", usage: "/name [title]",
     description: "show or set the session name"),
+  CommandSpec(kind: slTheme, name: "/theme", usage: "/theme [name]",
+    description: "show or set the UI theme"),
   CommandSpec(kind: slQuit, name: "/quit", usage: "/quit",
     description: "exit"),
   CommandSpec(kind: slQuit, name: "/exit", usage: "/exit",
@@ -127,7 +131,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   let arg = restAfterCommand(input, command)
   let matched = specNamed(command)
   if parts.len == 1 and trailingSpace and matched.found and
-     matched.spec.kind in {slModelsRefresh, slThinking, slResume, slModel, slName}:
+     matched.spec.kind in {slModelsRefresh, slThinking, slResume, slModel, slName, slTheme}:
     return
 
   proc fail(msg: string): SlashCommand =
@@ -174,6 +178,11 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
       result.arg = parts[1]
   of slName:
     result.arg = arg
+  of slTheme:
+    if parts.len > 2:
+      return fail("Usage: " & matched.spec.usage)
+    if parts.len == 2:
+      result.arg = parts[1].toLowerAscii
   of slNone, slError, slSkill:
     return fail("Unknown command '" & command & "'; try /help")
 
@@ -374,6 +383,14 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
           return @[usageOf(slModelsRefresh)]
         let query = if parts.len >= 2: parts[1] else: ""
         return suggestModels(query, picker)
+      of slTheme:
+        let prefix = if parts.len >= 2: parts[1].toLowerAscii else: ""
+        for name in listThemeNames(workspace):
+          if prefix.len == 0 or name.toLowerAscii.startsWith(prefix):
+            result.add matched.spec.name & " " & name
+        if result.len > 0:
+          return
+        if incomplete: return @[matched.spec.usage]
       else: discard
     if parts.len > 1:
       return

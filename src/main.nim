@@ -1,6 +1,6 @@
 import std/[os, strutils, terminal]
 import config, agent, session, models_dev, hooks
-import ui/[console, tui, turn]
+import ui/[console, tui, turn, theme]
 
 type
   CliArgs* = object
@@ -55,21 +55,22 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
 
 proc catalogStartupNote(): string =
   if not modelsDevCacheStale(): return ""
-  echo "Refreshing model catalog…".color(cDim)
+  echo currentTheme.paint(currentTheme.dim, "Refreshing model catalog…")
   if refreshModelsDevCache():
     "Model catalog updated."
   else:
     "Could not refresh model catalog; using cache."
 
 proc printStartupBanner(agent: Agent, catalogNote: string) =
-  echo "niminal — minimal coding agent".color(cBold)
-  echo ("Provider: " & agent.config.provider & "  Model: " & agent.config.model).color(cDim)
-  echo ("Workspace: " & agent.config.workspace).color(cDim)
-  echo ("Session: " & agent.session.id).color(cDim)
+  let t = currentTheme
+  echo t.paint("\e[1m", "niminal — minimal coding agent")
+  echo t.paint(t.dim, "Provider: " & agent.config.provider & "  Model: " & agent.config.model)
+  echo t.paint(t.dim, "Workspace: " & agent.config.workspace)
+  echo t.paint(t.dim, "Session: " & agent.session.id)
   if catalogNote.len > 0:
-    echo catalogNote.color(cDim)
+    echo t.paint(t.dim, catalogNote)
   for line in agent.discoveryWarningLines:
-    echo line.color(cDim)
+    echo t.paint(t.dim, line)
 
 proc runOneShot(agent: var Agent, prompt: string, catalogNote = "") =
   ## Run a single turn from a CLI prompt, then exit.
@@ -80,7 +81,7 @@ proc runOneShot(agent: var Agent, prompt: string, catalogNote = "") =
 
 proc runConsole(agent: var Agent, catalogNote = "", initialPrompt = "") =
   printStartupBanner(agent, catalogNote)
-  echo "Type /help for commands.".color(cDim)
+  echo currentTheme.paint(currentTheme.dim, "Type /help for commands.")
 
   let ui = consoleSink()
   defer: agent.fireSessionHooks(heSessionEnd)
@@ -101,21 +102,22 @@ proc runTUI(agent: var Agent, catalogNote = "", initialPrompt = "") =
   var tui = initTUI(agent.config.workspace, agent.config.sessionDir)
   defer: tui.shutdown()
   tui.modelPicker = modelPickerFrom(agent)
+  let t = currentTheme
 
-  tui.addLine("\e[1;93mniminal — minimal coding agent\e[0m")
-  tui.addLine("\e[2mProvider: " & agent.config.provider &
-    "  Model: " & agent.config.model & "\e[0m")
-  tui.addLine("\e[2mWorkspace: " & agent.config.workspace & "\e[0m")
-  tui.addLine("\e[2mSession: " & agent.session.id & "\e[0m")
+  tui.addLine(t.paint(t.heading, "niminal — minimal coding agent"))
+  tui.addLine(t.paint(t.dim, "Provider: " & agent.config.provider &
+    "  Model: " & agent.config.model))
+  tui.addLine(t.paint(t.dim, "Workspace: " & agent.config.workspace))
+  tui.addLine(t.paint(t.dim, "Session: " & agent.session.id))
   if catalogNote.len > 0:
-    tui.addLine("\e[2m" & catalogNote & "\e[0m")
+    tui.addLine(t.paint(t.dim, catalogNote))
   for line in agent.discoveryWarningLines:
-    tui.addLine("\e[2m" & line & "\e[0m")
+    tui.addLine(t.paint(t.dim, line))
   if agent.session.events.len > 0:
     tui.addLine("")
     tui.replaySession(agent.session)
   else:
-    tui.addLine("\e[2mType /help for commands.\e[0m")
+    tui.addLine(t.paint(t.dim, "Type /help for commands."))
     tui.addLine("")
 
   tui.setFooter(agent.statusFooter)
@@ -162,6 +164,7 @@ proc runMain*() =
 
   var sessionId = cli.sessionId
   let config = loadConfig(getCurrentDir())
+  discard applyTheme(config.theme, detectDepth(), config.workspace)
   if cli.resumeLatest and sessionId.len == 0:
     let ids = listSessionIds(config.sessionDir, config.workspace)
     if ids.len > 0:

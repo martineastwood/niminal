@@ -14,22 +14,22 @@ import term
 import input
 import ansi
 import diff
+import theme
 import ../commands
 import ../workspace
 import ../images
 
-## User turns: cyan rail + charcoal row (OpenCode-style). `\e[K` at paint
+## User turns: accent rail + panel row (OpenCode-style). `\e[K` at paint
 ## fills the rest of the row while the background is still open.
-const userRail* = "\e[36m▌\e[0m\e[48;5;236m "
-
 proc userCardLines(body: string): seq[string] =
-  result.add userRail
+  let rail = userRail()
+  result.add rail
   if body.len == 0:
-    result.add userRail
+    result.add rail
   else:
     for line in body.splitLines:
-      result.add userRail & line
-  result.add userRail
+      result.add rail & line
+  result.add rail
   result.add ""
 
 proc wrapLineForWidth(line: string, w: int): seq[string] =
@@ -58,15 +58,16 @@ proc clipAscii(s: string, width: int): string =
 
 proc formatCommandMenuLine*(usage, description: string, selected: bool,
                             labelWidth, width: int): string =
-  ## OpenCode-style row: charcoal panel, two columns, full-width selection.
+  ## OpenCode-style row: panel, two columns, full-width selection.
   ## Background stays open so the TUI `\e[K` fills the rest of the row.
+  let t = currentTheme
   let label = padRight(usage, max(labelWidth, usage.len))
   let descWidth = max(0, width - 1 - label.len - 2)
   let desc = clipAscii(description, descWidth)
   if selected:
-    result = "\e[48;5;81m\e[30m " & label & "  " & desc
+    result = t.selectedBg & t.selectedFg & " " & label & "  " & desc
   else:
-    result = "\e[48;5;236m\e[37m " & label & "\e[90m  " & desc
+    result = t.panelBg & t.text & " " & label & t.muted & "  " & desc
 
 proc formatCommandMenu*(suggestions: openArray[string], selected, rows, width: int,
                         workspace = getCurrentDir(), sessionDir = ""): seq[string] =
@@ -92,21 +93,23 @@ proc highlightSlashCommand*(input: string, workspace = getCurrentDir()): string 
   var tokenEnd = tokenStart
   while tokenEnd < input.len and input[tokenEnd] notin {' ', '\t'}:
     inc tokenEnd
+  let t = currentTheme
   let command = input[tokenStart ..< tokenEnd]
   let parsed = parseSlash(command, workspace)
   let known = parsed.kind notin {slNone, slError}
-  let commandColor = if known: "\e[1;36m" else: "\e[1;31m"
-  result = input[0 ..< tokenStart] & commandColor & command & "\e[0m"
+  let commandColor = if known: t.boldAccent else: t.boldError
+  result = input[0 ..< tokenStart] & t.paint(commandColor, command)
   if tokenEnd < input.len:
     let rest = input[tokenEnd .. ^1]
-    let argColor = if commandError(input, workspace).len > 0: "\e[31m" else: "\e[33m"
-    result.add argColor & rest & "\e[0m"
+    let argColor = if commandError(input, workspace).len > 0: t.error else: t.warning
+    result.add t.paint(argColor, rest)
 
 proc highlightMentions(input: string): string =
+  let t = currentTheme
   var i = 0
   for at, tokEnd in mentionTokens(input):
     result.add input[i ..< at]
-    result.add "\e[1;36m" & input[at ..< tokEnd] & "\e[0m"
+    result.add t.paint(t.boldAccent, input[at ..< tokEnd])
     i = tokEnd
   result.add input[i .. ^1]
 
@@ -270,10 +273,11 @@ proc hunkStatHint(hunk: seq[string]): string =
     let p = stripAnsi(line)
     if p.startsWith("+ "): inc plus
     elif p.startsWith("- "): inc minus
+  let t = currentTheme
   if plus == 0 and minus == 0: return ""
-  result = "  \e[32m+" & $plus
+  result = "  " & t.success & "+" & $plus
   if minus > 0:
-    result.add "\e[90m \e[31m-" & $minus
+    result.add t.muted & " " & t.error & "-" & $minus
 
 proc isExpandable*(card: ToolCard): bool =
   if card.pending: return false
@@ -281,12 +285,11 @@ proc isExpandable*(card: ToolCard): bool =
 
 proc toolCardLines*(card: ToolCard): seq[string] =
   ## Collapsed summary by default; `expanded` shows the full output.
-  let rail =
-    if card.isError: "\e[31m▌\e[0m\e[48;5;236m "
-    else: "\e[36m▌\e[0m\e[48;5;236m "
+  let t = currentTheme
+  let rail = toolRail(t, card.isError)
   let title =
-    if card.isError: "\e[31m● " & card.name
-    else: "\e[36m● " & card.name
+    if card.isError: t.error & "● " & card.name
+    else: t.accent & "● " & card.name
   let lines = cardLines(card)
   let showHunk = not card.isError and card.hunk.len > 0
   let preview = previewLines(card, toolPreviewLines)
@@ -301,27 +304,27 @@ proc toolCardLines*(card: ToolCard): seq[string] =
   var stats = ""
   if showHunk:
     stats = hunkStatHint(card.hunk)
-  result.add rail & title & "\e[90m  " & card.summary & stats & "\e[90m" & hint
+  result.add rail & title & t.muted & "  " & card.summary & stats & t.muted & hint
   if card.pending:
     if card.name == "think":
       for line in preview:
-        result.add rail & "\e[2m" & line
+        result.add rail & t.dim & line
     else:
-      result.add rail & "\e[2mworking"
+      result.add rail & t.dim & "working"
     return
-  proc paint(line: string): string =
+  proc paintLine(line: string): string =
     if showHunk: rail & line
-    elif card.isError: rail & "\e[31m" & line
-    else: rail & "\e[2m" & line
+    elif card.isError: rail & t.error & line
+    else: rail & t.dim & line
   if card.expanded:
     let shown = min(lines.len, toolExpandMaxLines)
     for i in 0 ..< shown:
-      result.add paint(lines[i])
+      result.add paintLine(lines[i])
     if lines.len > shown:
-      result.add rail & "\e[2m↳ … " & $(lines.len - shown) & " more truncated"
+      result.add rail & t.dim & "↳ … " & $(lines.len - shown) & " more truncated"
   else:
     for line in preview:
-      result.add paint(line)
+      result.add paintLine(line)
 
 proc itemSources(item: ScrollItem): seq[string] =
   case item.kind
@@ -1026,7 +1029,7 @@ proc transcriptItems(session: Session): seq[ScrollItem] =
     of sekToolResult:
       result.finishToolCard(event.toolId, event.toolOutput, event.toolError)
     of sekCompaction:
-      result.addItemLine("\e[2mContext compacted\e[0m")
+      result.addItemLine(currentTheme.paint(currentTheme.dim, "Context compacted"))
       result.addItemLine("")
     of sekName:
       discard
@@ -1094,25 +1097,27 @@ proc clearScrollback(tui: var TUI) =
 proc loadSessionView*(tui: var TUI, session: Session) =
   ## Replace the transcript when switching sessions (`/resume`, `/new`).
   tui.clearScrollback()
+  let t = currentTheme
   if session.events.len == 0:
-    tui.addLine("\e[2mNew session #" & session.id & "\e[0m")
+    tui.addLine(t.paint(t.dim, "New session #" & session.id))
     tui.addLine("")
   else:
-    tui.addLine("\e[2mResumed #" & session.id & "\e[0m")
+    tui.addLine(t.paint(t.dim, "Resumed #" & session.id))
     tui.addLine("")
     tui.replaySession(session)
 
 proc cancelStream*(tui: var TUI) =
   tui.finishThinking()
   tui.resetStream()
-  tui.addLine("\e[33mInterrupted\e[0m")
+  tui.addLine(currentTheme.paint(currentTheme.warning, "Interrupted"))
   tui.addLine("")
 
 proc discardStream*(tui: var TUI) =
   tui.resetStream()
 
 proc busySpinner(tui: TUI): string =
-  "\e[2m" & spinnerFrames[tui.spinnerAt mod spinnerFrames.len] & " working\e[0m"
+  let t = currentTheme
+  t.paint(t.dim, spinnerFrames[tui.spinnerAt mod spinnerFrames.len] & " working")
 
 proc setBusy*(tui: var TUI, busy: bool) =
   tui.busy = busy
@@ -1131,18 +1136,19 @@ proc wasInterrupted*(tui: TUI): bool =
   tui.interrupted
 
 proc statusLine(tui: var TUI, w: int): string =
+  let t = currentTheme
   var parts: seq[string] = @[]
   if tui.scrollOffset > 0:
-    parts.add "\e[36m↑" & $tui.scrollOffset & "\e[0m"
+    parts.add t.paint(t.accent, "↑" & $tui.scrollOffset)
   if tui.footerText.len > 0:
     parts.add tui.footerText
   if not tui.busy:
     let error = commandError(tui.input, tui.workspace)
     let suggestions = tui.slashSuggestions
     if error.len > 0:
-      parts.add "\e[31m" & error & "\e[0m"
+      parts.add t.paint(t.error, error)
     elif suggestions.len == 0:
-      parts.add "\e[2m" & statusHints & "\e[0m"
+      parts.add t.paint(t.dim, statusHints)
   let joined = parts.join("  ")
   let visible = stripAnsi(joined)
   if runeLen(visible) > w:
@@ -1226,7 +1232,8 @@ proc render*(tui: var TUI) =
     tui.dirtyVisRow = -1
 
   setCursor(0, sepRow)
-  stdout.write("\e[2m" & "─".repeat(w) & "\e[0m\e[K")
+  let t = currentTheme
+  stdout.write(t.dim & "─".repeat(w) & t.reset & "\e[K")
 
   let menuLines = formatCommandMenu(suggestions, tui.suggestionIndex, menuRows, w,
     tui.workspace, tui.sessionDir)
@@ -1235,8 +1242,8 @@ proc render*(tui: var TUI) =
     if r < menuLines.len:
       stdout.write(menuLines[r])
     else:
-      stdout.write("\e[48;5;236m")
-    stdout.write("\e[K\e[0m")
+      stdout.write(t.panelBg)
+    stdout.write("\e[K" & t.reset)
 
   let firstVisible = max(0, min(view.row, max(0, view.lines.len - inRows)))
   let firstLogical = tui.input.split('\n', maxsplit = 1)[0]
@@ -1245,18 +1252,18 @@ proc render*(tui: var TUI) =
     setCursor(0, inputTop + r)
     let lineIdx = firstVisible + r
     if tui.busy and r == 0:
-      stdout.write(tui.busySpinner() & "\e[K\e[0m")
+      stdout.write(tui.busySpinner() & "\e[K" & t.reset)
     elif lineIdx < view.lines.len:
       let body = view.lines[lineIdx]
       if menuRows > 0:
-        stdout.write("\e[36m▌\e[0m\e[48;5;236m " & body & "\e[K\e[0m")
+        stdout.write(userRail() & body & "\e[K" & t.reset)
       else:
-        let prefix = if lineIdx == 0: "\e[36m> \e[0m" else: "  "
+        let prefix = if lineIdx == 0: t.accent & "> " & t.reset else: "  "
         let displayed =
           if lineIdx == 0 and highlightFirst:
             highlightComposerLine(body, tui.workspace)
           else: body
-        stdout.write(prefix & displayed & "\e[K\e[0m")
+        stdout.write(prefix & displayed & "\e[K" & t.reset)
     else:
       stdout.write("\e[K")
 
