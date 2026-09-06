@@ -88,6 +88,8 @@ proc eventJson(event: SessionEvent): JsonNode =
           "name": part.name, "input": part.input}
         if part.parseError.len > 0:
           tu["parse_error"] = %part.parseError
+        if part.hosted.len > 0:
+          tu["hosted"] = %part.hosted
         result["content"].add tu
       of ckThinking:
         result["content"].add %*{"type": "thinking", "thinking": part.thinking,
@@ -95,6 +97,8 @@ proc eventJson(event: SessionEvent): JsonNode =
       of ckToolResult:
         var tr = %*{"type": "tool_result", "tool_use_id": part.toolUseId,
           "content": part.output, "is_error": part.isError}
+        if part.hosted.len > 0:
+          tr["hosted"] = %part.hosted
         if part.images.len > 0:
           var imgs = newJArray()
           for img in part.images:
@@ -103,6 +107,23 @@ proc eventJson(event: SessionEvent): JsonNode =
         result["content"].add tr
       of ckImage:
         result["content"].add imageJson(part.toImage)
+      of ckFile:
+        var f = %*{"type": "file", "mimeType": part.file.mimeType}
+        if part.file.path.len > 0:
+          f["path"] = %part.file.path
+        elif part.file.data.len > 0:
+          f["data"] = %part.file.data
+        if part.file.filename.len > 0:
+          f["filename"] = %part.file.filename
+        result["content"].add f
+      of ckSource:
+        var s = %*{"type": "source", "url": part.source.url,
+          "title": part.source.title}
+        if part.source.id.len > 0: s["id"] = %part.source.id
+        if part.source.citedText.len > 0: s["cited_text"] = %part.source.citedText
+        if not part.source.raw.isNil and part.source.raw.kind == JObject:
+          s["raw"] = part.source.raw
+        result["content"].add s
     if event.kind == sekAssistant:
       if event.model.len > 0:
         result["model"] = %event.model
@@ -141,16 +162,25 @@ proc parseBlock(node: JsonNode): ContentBlock =
   of "text": text(node["text"].getStr)
   of "tool_use":
     toolUse(node["id"].getStr, node["name"].getStr, node["input"],
-      node.getOrDefault("parse_error").getStr)
+      node.getOrDefault("parse_error").getStr,
+      node.getOrDefault("hosted").getStr)
   of "thinking":
     ContentBlock(kind: ckThinking, thinking: node["thinking"].getStr,
       signature: if "signature" in node: node["signature"].getStr else: "")
   of "tool_result":
     toolResult(node["tool_use_id"].getStr, node["content"].getStr,
       if "is_error" in node: node["is_error"].getBool else: false,
-      parseImages(node.getOrDefault("images")))
+      parseImages(node.getOrDefault("images")),
+      node.getOrDefault("hosted").getStr)
   of "image":
     image(parseImage(node))
+  of "file":
+    file(node.getOrDefault("mimeType").getStr, node.getOrDefault("data").getStr,
+      node.getOrDefault("path").getStr, node.getOrDefault("filename").getStr)
+  of "source":
+    source(node.getOrDefault("url").getStr, node.getOrDefault("title").getStr,
+      node.getOrDefault("id").getStr, node.getOrDefault("cited_text").getStr,
+      if node.getOrDefault("raw").kind == JObject: node["raw"] else: nil)
   else:
     raise newException(ValueError, "unknown content block")
 

@@ -1004,6 +1004,9 @@ proc transcriptItems(session: Session): seq[ScrollItem] =
         of ckImage:
           if body.len > 0: body.add "\n"
           body.add "[" & b.mimeType & "]"
+        of ckFile:
+          if body.len > 0: body.add "\n"
+          body.add "[" & fileLabel(b.file) & "]"
         else:
           discard
       for line in userCardLines(body):
@@ -1016,7 +1019,8 @@ proc transcriptItems(session: Session): seq[ScrollItem] =
           result.addAssistantVisual(b.text, textIdx >= mdFrom)
           inc textIdx
         of ckToolUse:
-          result.add ScrollItem(kind: skTool, tool: makeToolCard(b))
+          result.add ScrollItem(kind: skTool,
+            tool: makeToolCard(b, pending = b.hosted.len == 0))
         of ckThinking:
           if b.thinking.len > 0:
             result.add ScrollItem(kind: skTool, tool: ToolCard(
@@ -1026,6 +1030,15 @@ proc transcriptItems(session: Session): seq[ScrollItem] =
           discard
         of ckImage:
           discard
+        of ckFile:
+          result.addItemLine(currentTheme.paint(currentTheme.dim,
+            "[" & fileLabel(b.file) & "]"))
+        of ckSource:
+          var line = if b.source.title.len > 0: b.source.title else: b.source.url
+          if b.source.url.len > 0 and b.source.title.len > 0:
+            line.add "  " & b.source.url
+          if line.len > 0:
+            result.addItemLine(currentTheme.paint(currentTheme.dim, line))
     of sekToolResult:
       result.finishToolCard(event.toolId, event.toolOutput, event.toolError)
     of sekCompaction:

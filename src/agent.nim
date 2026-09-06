@@ -78,6 +78,10 @@ proc statusFooter*(agent: Agent): string =
     parts.add t.paint(t.dim, "think:off")
   elif level.len > 0:
     parts.add t.paint(t.warning, "think:" & level)
+  if webSearchActive(agent.config):
+    parts.add t.paint(t.warning, "web")
+  elif agent.config.webSearch:
+    parts.add t.paint(t.dim, "web:n/a")
   parts.join("  ")
 
 proc attachProvider(agent: var Agent) =
@@ -190,6 +194,9 @@ proc buildRequest*(agent: Agent): ProviderRequest =
     maxTokens: maxTok,
     options: opts
   )
+  if webSearchActive(agent.config):
+    result.tools.add ToolDefinition(name: "web_search", hosted: "web_search")
+    result.system.add "Hosted tool: web_search — the provider searches the public web. Use it for current docs, APIs, and facts not in the repo."
   let projectInstructions = loadProjectInstructions(agent.config.workspace)
   if projectInstructions.len > 0:
     result.system.add projectInstructions
@@ -212,6 +219,11 @@ proc setThinking*(agent: var Agent, value: string): string =
       result = agent.config.thinking
   except ValueError as e:
     result = "ERROR: " & e.msg
+
+proc setWebSearch*(agent: var Agent, on: bool): string =
+  agent.config.webSearch = on
+  persistModel(agent.config)
+  webSearchStatus(agent.config)
 
 proc compactionPoll(ui: TurnSink): StreamCallback =
   proc (_: StreamEvent): bool =
@@ -316,6 +328,12 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
       ui.emit(mlPlain, if level.len == 0: "(provider default)" else: level)
     else:
       ui.emit(mlPlain, agent.setThinking(cmd.arg))
+      ui.onChange()
+  of slWeb:
+    if cmd.arg.len == 0:
+      ui.emit(mlPlain, webSearchStatus(agent.config))
+    else:
+      ui.emit(mlPlain, agent.setWebSearch(cmd.arg == "on"))
       ui.onChange()
   of slTheme:
     if cmd.arg.len == 0:

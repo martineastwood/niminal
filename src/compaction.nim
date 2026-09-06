@@ -54,6 +54,11 @@ proc estimateContentTokens(parts: openArray[ContentBlock], workspace = "",
         result += imageTokenEstimate(img, workspace)
     of ckImage:
       result += imageTokenEstimate(part.toImage, workspace)
+    of ckFile:
+      result += (if part.file.data.len == 0: 2000
+                 else: estimateTokens(part.file.data))
+    of ckSource:
+      result += estimateTokens(part.source.url & part.source.title)
 
 proc estimateEventTokens*(event: SessionEvent, workspace = ""): int =
   case event.kind
@@ -129,6 +134,8 @@ proc serializeEvent(event: SessionEvent, toolCap = 2000): string =
       case part.kind
       of ckText: result.add part.text & "\n"
       of ckImage: result.add "[" & part.mimeType & "]\n"
+      of ckFile: result.add "[" & fileLabel(part.file) & "]\n"
+      of ckSource: result.add "[" & part.source.title & "](" & part.source.url & ")\n"
       else: discard
   of sekAssistant:
     result = "assistant:\n"
@@ -140,6 +147,10 @@ proc serializeEvent(event: SessionEvent, toolCap = 2000): string =
         result.add "tool_call " & part.name & " " & $part.input & "\n"
       of ckImage:
         result.add "[" & part.mimeType & "]\n"
+      of ckFile:
+        result.add "[" & fileLabel(part.file) & "]\n"
+      of ckSource:
+        result.add "[" & part.source.title & "](" & part.source.url & ")\n"
       of ckToolResult:
         discard
   of sekToolResult:

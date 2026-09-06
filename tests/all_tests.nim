@@ -582,6 +582,7 @@ suite "slash commands":
     check "/models refresh" in commandSuggestions("/mo")
     check "/provider [name]" in commandSuggestions("/pr")
     check "/thinking high" in commandSuggestions("/thinking ")
+    check "/web on" in commandSuggestions("/web ")
     check "/provider hyper" in commandSuggestions("/provider ")
     check "/provider hyper" in commandSuggestions("/provider hy")
     check parseSlash("/help").kind == slHelp
@@ -616,6 +617,11 @@ suite "slash commands":
     check "did you mean /models refresh" in commandError("/model refresh")
     check "Unknown command" in commandError("/definitely-not-a-command")
     check "Invalid thinking level" in commandError("/thinking extreme")
+    check parseSlash("/web").kind == slWeb
+    check parseSlash("/web").arg.len == 0
+    check parseSlash("/web on").arg == "on"
+    check parseSlash("/web off").arg == "off"
+    check "Invalid /web value" in commandError("/web maybe")
 
   test "model picker recents then substring search":
     let root = freshDir()
@@ -1229,6 +1235,38 @@ suite "json config":
     let again = loadConfig(root, path)
     check again.thinking == "high"
 
+  test "persist patches web_search and buildRequest gates on provider":
+    let root = freshDir()
+    defer: removeDir(root)
+    let path = root / "config.json"
+    writeFile(path, """{"default_provider":"openrouter","agent":{"max_tokens":7}}""")
+    var config = loadConfig(root, path)
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    check not agent.config.webSearch
+    check not webSearchActive(agent.config)
+    check agent.setWebSearch(true) == "on (no effect until openai or anthropic)"
+    var hosted = false
+    for t in agent.buildRequest().tools:
+      if t.hosted == "web_search": hosted = true
+    check not hosted
+    let doc = parseJson(readFile(path))
+    check doc["agent"]["web_search"].getBool
+    check doc["agent"]["max_tokens"].getInt == 7
+    agent.applyProvider("anthropic", persist = false)
+    check webSearchActive(agent.config)
+    hosted = false
+    var sawHint = false
+    let req = agent.buildRequest()
+    for t in req.tools:
+      if t.hosted == "web_search": hosted = true
+    for s in req.system:
+      if "web_search" in s: sawHint = true
+    check hosted
+    check sawHint
+    check agent.setWebSearch(false) == "off"
+    check "web_search" notin readFile(path)
+
   test "persist creates global when no project config exists":
     let root = freshDir()
     defer: removeDir(root)
@@ -1674,6 +1712,30 @@ suite "images":
           found = true
           check c.images.len == 1
     check found
+
+  test "session round-trips file, source, and hosted tool blocks":
+    let root = freshDir()
+    defer: removeDir(root)
+    let path = root / "src.jsonl"
+    var sess = initSession(path, "src")
+    sess.addUserMessage(@[text("see"), file("application/pdf", "QUJD",
+      filename = "spec.pdf")])
+    sess.addAssistantResponse(ProviderResponse(content: @[
+      toolUse("s1", "web_search", %*{"query": "nim"}, hosted = "web_search"),
+      toolResult("s1", """[{"url":"https://nim-lang.org"}]""", hosted = "web_search"),
+      text("Nim"),
+      source("https://nim-lang.org", "Nim", raw = %*{"encrypted_index": "idx"})
+    ]))
+    let loaded = initSession(path, "src")
+    let user = loaded.events[0].message.content
+    check user[1].kind == ckFile
+    check user[1].file.filename == "spec.pdf"
+    check user[1].file.data == "QUJD"
+    let asst = loaded.events[1].message.content
+    check asst[0].hosted == "web_search"
+    check asst[1].hosted == "web_search"
+    check asst[3].kind == ckSource
+    check asst[3].source.raw["encrypted_index"].getStr == "idx"
 
   test "dropImages and catalog: known text-only strips, unknown keeps":
     let root = freshDir()

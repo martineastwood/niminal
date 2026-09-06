@@ -22,6 +22,7 @@ type
     slModel
     slModelsRefresh
     slThinking
+    slWeb
     slProvider
     slSession
     slNew
@@ -58,6 +59,8 @@ const CommandSpecs* = [
     description: "refresh cached model metadata"),
   CommandSpec(kind: slThinking, name: "/thinking", usage: "/thinking <level>",
     description: "show or set reasoning"),
+  CommandSpec(kind: slWeb, name: "/web", usage: "/web [on|off]",
+    description: "show or set hosted web search"),
   CommandSpec(kind: slProvider, name: "/provider", usage: "/provider [name]",
     description: "show or set the provider"),
   CommandSpec(kind: slSession, name: "/session", usage: "/session",
@@ -130,7 +133,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   let arg = restAfterCommand(input, command)
   let matched = specNamed(command)
   if parts.len == 1 and trailingSpace and matched.found and
-     matched.spec.kind in {slModelsRefresh, slThinking, slResume, slModel,
+     matched.spec.kind in {slModelsRefresh, slThinking, slWeb, slResume, slModel,
                            slProvider, slName, slTheme}:
     return
 
@@ -178,6 +181,15 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
       except ValueError:
         return fail("Invalid thinking level '" & parts[1] &
           "' (use " & ThinkingLevels.join("|") & ")")
+  of slWeb:
+    if parts.len > 2:
+      return fail("Usage: /web [on|off]")
+    if parts.len == 2:
+      case parts[1].toLowerAscii
+      of "on", "off":
+        result.arg = parts[1].toLowerAscii
+      else:
+        return fail("Invalid /web value '" & parts[1] & "' (use on|off)")
   of slCompact:
     discard
   of slResume:
@@ -378,6 +390,9 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
           for level in thinkingChoices(picker.currentProvider, picker.currentModel):
             result.add matched.spec.name & " " & level
           return
+      of slWeb:
+        if incomplete:
+          return @["/web on", "/web off"]
       of slResume:
         let prefix = if parts.len >= 2: parts[1] else: ""
         if sessionDir.len > 0 and (parts.len <= 1 or incomplete or prefix.len > 0):

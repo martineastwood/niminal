@@ -35,9 +35,10 @@ workspace and overlays `~/.niminal/config.json`. Global files live in
 - `~/.niminal/sessions/` — saved sessions
 - `~/.niminal/models-dev.json` — cached model metadata
 
-`/model` and `/thinking` write immediately: to the project file if it exists,
-otherwise to the global file (created if needed). `/model` sets
-`default_provider` and `default_model`; `/thinking` sets `agent.thinking`.
+`/model`, `/thinking`, and `/web` write immediately: to the project file if it
+exists, otherwise to the global file (created if needed). `/model` sets
+`default_provider` and `default_model`; `/thinking` sets `agent.thinking`;
+`/web on` sets `agent.web_search` (hosted search on OpenAI and Anthropic only).
 
 Configuration example:
 
@@ -58,7 +59,8 @@ Configuration example:
   },
   "agent": {
     "max_tokens": 4096,
-    "request_timeout": 300
+    "request_timeout": 300,
+    "web_search": false
   }
 }
 ```

@@ -148,6 +148,18 @@ proc hydrateMessages*(ws: Workspace, messages: seq[Message]): seq[Message] =
         else:
           let name = if p.path.len > 0: p.path else: p.mimeType
           parts.add text("[missing image: " & name & "]")
+      of ckFile:
+        if p.file.data.len > 0 or p.file.path.len == 0:
+          parts.add p
+        else:
+          try:
+            var f = p.file
+            f.data = encode(readFile(ws.resolve(f.path)))
+            if f.mimeType.len == 0:
+              f.mimeType = "application/octet-stream"
+            parts.add file(f)
+          except CatchableError:
+            parts.add text("[missing file: " & fileLabel(p.file) & "]")
       of ckToolResult:
         var q = p
         var imgs: seq[ImageContent] = @[]

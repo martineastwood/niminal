@@ -31,6 +31,7 @@ type
     reserveTokens*: int
     keepRecentTokens*: int
     thinking*: string
+    webSearch*: bool  ## hosted web_search; only sent on openai/anthropic
     requestTimeout*: int
     maxToolOutputBytes*: int
     sessionDir*: string
@@ -155,6 +156,14 @@ proc resolveThinking(provider, model, want: string): ThinkingPlan =
 proc providerOptions*(config: AgentConfig): JsonNode =
   let want = if config.thinking.len == 0: "" else: normalizeThinking(config.thinking)
   resolveThinking(config.provider, config.model, want).options
+
+proc webSearchActive*(config: AgentConfig): bool =
+  config.webSearch and config.provider.toLowerAscii in ["openai", "anthropic"]
+
+proc webSearchStatus*(config: AgentConfig): string =
+  if webSearchActive(config): "on"
+  elif config.webSearch: "on (no effect until openai or anthropic)"
+  else: "off"
 
 proc thinkingStatus*(config: AgentConfig): string =
   let want = if config.thinking.len == 0: "" else: normalizeThinking(config.thinking)
@@ -321,14 +330,19 @@ proc applyDoc(config: var AgentConfig, doc: JsonNode) =
   if envThinking.len > 0:
     thinking = envThinking
   config.thinking = if thinking.len == 0: "" else: normalizeThinking(thinking)
+  config.webSearch = jbool(agent, "web_search", false)
   config.requestTimeout = jint(agent, "request_timeout", 300)
   config.sessionDir = expandConfigPath(jstr(agent, "session_dir"),
     niminalConfigDir() / "sessions")
   config.maxToolOutputBytes = jint(jobj(jobj(doc, "tools"), "bash"),
     "max_output_bytes", 100_000)
 
+proc ensureAgentObj(doc: var JsonNode) =
+  if "agent" notin doc or doc["agent"].kind != JObject:
+    doc["agent"] = newJObject()
+
 proc persistModel*(config: AgentConfig) =
-  ## Patch model, provider, thinking, and theme on the write target.
+  ## Patch model, provider, thinking, web_search, and theme on the write target.
   if config.writePath.len == 0: return
   var doc = loadJsonFile(config.writePath)
   if config.provider.len > 0:
@@ -338,11 +352,15 @@ proc persistModel*(config: AgentConfig) =
   if config.theme.len > 0:
     doc["theme"] = %config.theme
   if config.thinking.len > 0:
-    if "agent" notin doc or doc["agent"].kind != JObject:
-      doc["agent"] = newJObject()
+    ensureAgentObj(doc)
     doc["agent"]["thinking"] = %config.thinking
   elif "agent" in doc and doc["agent"].kind == JObject and "thinking" in doc["agent"]:
     delete(doc["agent"], "thinking")
+  if config.webSearch:
+    ensureAgentObj(doc)
+    doc["agent"]["web_search"] = %true
+  elif "agent" in doc and doc["agent"].kind == JObject and "web_search" in doc["agent"]:
+    delete(doc["agent"], "web_search")
   let dir = config.writePath.parentDir
   if dir.len > 0: createDir(dir)
   writeFile(config.writePath, pretty(doc) & "\n")
