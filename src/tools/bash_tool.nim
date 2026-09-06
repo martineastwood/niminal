@@ -48,7 +48,6 @@ proc makeBashTool*(workDir: string,
       # after exec fails with EACCES. setsid makes the tracked pid a
       # session leader before the shell runs so kill(-pid) reaches
       # grandchildren.
-      # ponytail: needs `setsid` on PATH (util-linux). Upgrade: posix_spawn SETPGROUP.
       spawnCmd = "setsid"
       spawnArgs = @[shell] & shellArgs
     else:

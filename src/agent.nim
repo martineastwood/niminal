@@ -347,7 +347,6 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
       if msg.startsWith("ERROR:"):
         ui.emit(mlError, msg)
       else:
-        # ponytail: live chrome flips now; painted transcript waits for /new,/resume,restart.
         ui.emit(mlOk, msg & " (transcript on /new, /resume, or restart)")
         ui.onChange()
   of slProvider:

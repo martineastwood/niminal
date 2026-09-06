@@ -59,7 +59,6 @@ proc modelKeyMatch(key, want, bare: string): bool =
   k == want or k == bare or k.endsWith("/" & bare)
 
 proc findModelNodeAnywhere(catalog: JsonNode, model: string): JsonNode =
-  ## ponytail: O(providers×models) on miss; exact/provider lookup is the hot path.
   if catalog.isNil or catalog.kind != JObject: return nil
   let want = model.toLowerAscii
   let bare = if "/" in model: model.rsplit('/', 1)[^1].toLowerAscii else: want

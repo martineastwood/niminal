@@ -11,7 +11,6 @@ proc prefixLines(text, marker, color: string, useColor: bool): seq[string] =
   for line in text.splitLines:
     let body = marker & line
     if useColor and color.len > 0:
-      # ponytail: no SGR reset — TUI card background stays open until paint.
       result.add color & body
     else:
       result.add body

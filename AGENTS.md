@@ -1,0 +1,1 @@
+Follow YAGNI principles, and one-liner solutions

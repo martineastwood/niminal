@@ -987,7 +987,7 @@ proc addAssistantVisual(items: var seq[ScrollItem], text: string, markdown: bool
 
 proc transcriptItems(session: Session): seq[ScrollItem] =
   ## Compact visual history: user cards, tool cards, rendered assistant text.
-  ## ponytail: only the last 40 assistant texts get markdown on resume;
+  ## Only the last 40 assistant texts get markdown on resume;
   ## older stay plain so huge transcripts don't hitch at load.
   let mdFrom = max(0, assistantTextCount(session) - markdownResumeTail)
   var textIdx = 0
