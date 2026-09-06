@@ -48,7 +48,6 @@ type
     currentModel*: string
     defaultModel*: string
     currentProvider*: string
-    keyedProviders*: seq[string]
 
 const CommandSpecs* = [
   CommandSpec(kind: slHelp, name: "/help", usage: "/help",
@@ -59,8 +58,8 @@ const CommandSpecs* = [
     description: "refresh cached model metadata"),
   CommandSpec(kind: slThinking, name: "/thinking", usage: "/thinking <level>",
     description: "show or set reasoning"),
-  CommandSpec(kind: slProvider, name: "/provider", usage: "/provider",
-    description: "show the current provider"),
+  CommandSpec(kind: slProvider, name: "/provider", usage: "/provider [name]",
+    description: "show or set the provider"),
   CommandSpec(kind: slSession, name: "/session", usage: "/session",
     description: "show the current session"),
   CommandSpec(kind: slNew, name: "/new", usage: "/new",
@@ -131,7 +130,8 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   let arg = restAfterCommand(input, command)
   let matched = specNamed(command)
   if parts.len == 1 and trailingSpace and matched.found and
-     matched.spec.kind in {slModelsRefresh, slThinking, slResume, slModel, slName, slTheme}:
+     matched.spec.kind in {slModelsRefresh, slThinking, slResume, slModel,
+                           slProvider, slName, slTheme}:
     return
 
   proc fail(msg: string): SlashCommand =
@@ -146,9 +146,18 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   result.kind = matched.spec.kind
   result.arg = arg
   case matched.spec.kind
-  of slHelp, slProvider, slSession, slNew, slQuit, slReload:
+  of slHelp, slSession, slNew, slQuit, slReload:
     if parts.len > 1:
       return fail(command & " takes no arguments")
+  of slProvider:
+    if parts.len > 2:
+      return fail("Usage: " & matched.spec.usage)
+    if parts.len == 2:
+      let name = parts[1].toLowerAscii
+      if name notin WiredProviders:
+        return fail("Unknown provider '" & parts[1] & "' (use " &
+          WiredProviders.join("|") & ")")
+      result.arg = name
   of slModel:
     if parts.len > 2:
       return fail("Usage: " & matched.spec.usage)
@@ -343,8 +352,8 @@ proc suggestModels(query: string, picker: ModelPicker): seq[string] =
       skip.add id
   let remaining = modelSearchCap - result.len
   if remaining <= 0: return
-  for row in searchCatalogModels(picker.keyedProviders, query, remaining,
-      picker.currentProvider, skip):
+  for row in searchCatalogModels(@[picker.currentProvider], query, remaining,
+      skip = skip):
     result.add "/model " & row.id
 
 proc commandSuggestions*(input: string, workspace = getCurrentDir(),
@@ -387,6 +396,14 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
         let prefix = if parts.len >= 2: parts[1].toLowerAscii else: ""
         for name in listThemeNames(workspace):
           if prefix.len == 0 or name.toLowerAscii.startsWith(prefix):
+            result.add matched.spec.name & " " & name
+        if result.len > 0:
+          return
+        if incomplete: return @[matched.spec.usage]
+      of slProvider:
+        let prefix = if parts.len >= 2: parts[1].toLowerAscii else: ""
+        for name in WiredProviders:
+          if prefix.len == 0 or name.startsWith(prefix):
             result.add matched.spec.name & " " & name
         if result.len > 0:
           return

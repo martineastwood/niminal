@@ -98,14 +98,16 @@ proc attachProvider(agent: var Agent) =
   else:
     raise newException(ValueError, "unsupported provider: " & agent.config.provider)
 
+proc applyProvider*(agent: var Agent, name: string, persist = true) =
+  ## Set provider for this process and persist to the write-target config.
+  agent.config.fillProvider(name)
+  agent.attachProvider()
+  if persist:
+    persistModel(agent.config)
+
 proc applyModel*(agent: var Agent, id: string, persist = true) =
   ## Set model for this process and persist to the write-target config.
-  let keyed = keyedWiredProviders(agent.config)
-  let (found, row) = findCatalogModel(id, keyed, agent.config.provider)
   agent.config.model = id
-  if found and row.provider != agent.config.provider:
-    agent.config.fillProvider(row.provider)
-    agent.attachProvider()
   if persist:
     persistModel(agent.config)
 
@@ -113,8 +115,7 @@ proc modelPickerFrom*(agent: Agent): ModelPicker =
   ModelPicker(
     currentModel: agent.config.model,
     defaultModel: agent.config.defaultModel,
-    currentProvider: agent.config.provider,
-    keyedProviders: keyedWiredProviders(agent.config))
+    currentProvider: agent.config.provider)
 
 proc restoreSessionModel(agent: var Agent) =
   let (found, storedModel, _) = agent.session.lastAssistant
@@ -332,7 +333,12 @@ proc applySlash(agent: var Agent, cmd: SlashCommand, ui: TurnSink) =
         ui.emit(mlOk, msg & " (transcript on /new, /resume, or restart)")
         ui.onChange()
   of slProvider:
-    ui.emit(mlPlain, agent.provider.name)
+    if cmd.arg.len == 0:
+      ui.emit(mlPlain, agent.provider.name)
+    else:
+      agent.applyProvider(cmd.arg)
+      ui.emit(mlPlain, agent.config.provider & "  " & agent.config.model)
+      ui.onChange()
   of slModelsRefresh:
     ui.emit(mlWarn, "Refreshing model metadata…")
     ui.render()

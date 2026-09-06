@@ -282,14 +282,6 @@ proc fillProvider*(config: var AgentConfig, provider: string) =
   config.siteUrl = jstr(settings, "site_url")
   config.siteName = jstr(settings, "site_name")
 
-proc keyedWiredProviders*(config: AgentConfig): seq[string] =
-  for p in WiredProviders:
-    var envName = jstr(config.providerBlock(p), "api_key_env")
-    if envName.len == 0:
-      envName = defaultApiKeyEnv(p)
-    if envName.len > 0 and getEnv(envName).len > 0:
-      result.add p
-
 proc expandConfigPath(value, fallback: string): string =
   if value.len == 0:
     return fallback

@@ -580,8 +580,16 @@ suite "slash commands":
   test "suggests commands and validates arguments":
     check "/model [name]" in commandSuggestions("/mo")
     check "/models refresh" in commandSuggestions("/mo")
+    check "/provider [name]" in commandSuggestions("/pr")
     check "/thinking high" in commandSuggestions("/thinking ")
+    check "/provider hyper" in commandSuggestions("/provider ")
+    check "/provider hyper" in commandSuggestions("/provider hy")
     check parseSlash("/help").kind == slHelp
+    check parseSlash("/provider").kind == slProvider
+    check parseSlash("/provider").arg.len == 0
+    check parseSlash("/provider hyper").kind == slProvider
+    check parseSlash("/provider hyper").arg == "hyper"
+    check "Unknown provider" in commandError("/provider nope")
     check parseSlash("hello").kind == slNone
     check parseSlash("/thinking high").kind == slThinking
     check parseSlash("/thinking high").arg == "high"
@@ -631,15 +639,21 @@ suite "slash commands":
     let picker = ModelPicker(
       currentModel: "deepseek/deepseek-v4-flash-0731",
       defaultModel: "deepseek/deepseek-v4-flash-0731",
-      currentProvider: "openrouter",
-      keyedProviders: @["openrouter", "anthropic"])
+      currentProvider: "openrouter")
     let recents = commandSuggestions("/model ", picker = picker)
     check recents == @["/model deepseek/deepseek-v4-flash-0731"]
     let short = commandSuggestions("/model d", picker = picker)
     check short == @["/model deepseek/deepseek-v4-flash-0731"]
     let hits = commandSuggestions("/model clau", picker = picker)
     check "/model anthropic/claude-sonnet-4" in hits
-    check "/model claude-sonnet-4-6" in hits
+    check "/model claude-sonnet-4-6" notin hits
+    let other = ModelPicker(
+      currentModel: "claude-sonnet-4-6",
+      defaultModel: "claude-sonnet-4-6",
+      currentProvider: "anthropic")
+    let otherHits = commandSuggestions("/model clau", picker = other)
+    check "/model claude-sonnet-4-6" in otherHits
+    check "/model anthropic/claude-sonnet-4" notin otherHits
     check commandSuggestionDescription("/model claude-sonnet-4-6") ==
       "anthropic  200k"
     check commandSuggestionDescription("/model deepseek/deepseek-v4-flash-0731") ==
@@ -657,7 +671,7 @@ suite "slash commands":
     setLastModificationTime(cache, fromUnix(1_000))
     check modelsDevCacheStale()
 
-  test "/model switches provider when the catalog says so":
+  test "/model stays on the current provider":
     let root = freshDir()
     defer: removeDir(root)
     let cache = root / "models-dev.json"
@@ -681,18 +695,41 @@ suite "slash commands":
     check agent.config.provider == "openrouter"
     check agent.processInput("/model gpt-5")
     check agent.config.model == "gpt-5"
-    check agent.config.provider == "openai"
+    check agent.config.provider == "openrouter"
     check agent.processInput("/model claude-sonnet-4-6")
     check agent.config.model == "claude-sonnet-4-6"
+    check agent.config.provider == "openrouter"
+    check agent.processInput("/provider anthropic")
     check agent.config.provider == "anthropic"
-    check agent.config.defaultModel == "deepseek/deepseek-v4-flash-0731"
+    check agent.config.model == "claude-sonnet-4-6"
     check agent.processInput("/model not-in-catalog")
     check agent.config.model == "not-in-catalog"
     check agent.config.provider == "anthropic"
     let again = loadConfig(root, root / "config.json")
     check again.model == "not-in-catalog"
     check again.provider == "anthropic"
-    check again.defaultModel == "not-in-catalog"
+
+  test "/provider switches wired providers without a catalog entry":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", "{}")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    writeFile(root / "config.json", """{"default_provider":"openrouter"}""")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    check agent.config.provider == "openrouter"
+    check agent.processInput("/provider hyper")
+    check agent.config.provider == "hyper"
+    check agent.provider.name == "hyper"
+    check agent.config.endpoint == "https://hyper.charm.land/v1/chat/completions"
+    check agent.processInput("/model deepseek-v4-pro")
+    check agent.config.model == "deepseek-v4-pro"
+    check agent.config.provider == "hyper"
+    let again = loadConfig(root, root / "config.json")
+    check again.provider == "hyper"
+    check again.model == "deepseek-v4-pro"
 
   test "slash skill names expand and appear in suggestions":
     let root = freshDir()
