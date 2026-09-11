@@ -14,3 +14,4 @@ Open the local URL printed by Astro. Production builds use `npm run build`.
 
 Documentation pages live in `src/content/docs/`, grouped by project. The
 sidebar is configured in `astro.config.mjs`.
+# niminal
