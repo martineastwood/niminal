@@ -1,7 +1,16 @@
-# Niminal documentation
+# niminal
 
-The Niminal docs use [Astro Starlight](https://starlight.astro.build) with the
-[Starlight Black](https://starlight-theme-black.vercel.app/) theme.
+The umbrella landing page for the Niminal stack, served at
+[niminal.dev](https://niminal.dev).
+
+Each project documents itself on its own subdomain:
+
+| Project | Docs |
+| --- | --- |
+| nimlet | https://nimlet.niminal.dev |
+| nimgent | https://nimgent.niminal.dev |
+| nimterm | https://nimterm.niminal.dev |
+| nimwire | https://nimwire.niminal.dev |
 
 ## Development
 
@@ -12,6 +21,5 @@ npm run dev
 
 Open the local URL printed by Astro. Production builds use `npm run build`.
 
-Documentation pages live in `src/content/docs/`, grouped by project. The
-sidebar is configured in `astro.config.mjs`.
-# niminal
+The page lives in `src/pages/index.astro`. Docs content belongs in the project
+repositories, not here.
