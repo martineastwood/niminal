@@ -33,10 +33,16 @@ one-at-a-time / all). The choice is persisted in the active config as
 
 ## Other controls
 
+- External editor: Ctrl-G opens `$VISUAL`, then `$EDITOR`, then `nano`.
+- Composer editing: Ctrl-Z undoes, Ctrl-W/Alt-D delete words, and Ctrl-Y yanks
+  the last deleted text.
+- Shell shortcuts: `!command` runs and sends output to the model;
+  `!!command` runs without sending output to the model.
 - The event-driven TUI and what "near-zero idle CPU" means in practice
   (`NIMTERM_PERF=1` for frame/latency diagnostics)
-- Composer editing: Enter, Shift+Enter, cursor movement,
-  Home/End, history
+- Composer editing: Enter, Shift+Enter, cursor movement, Home/End, history
+- Keybindings can be overridden in the top-level `keybindings` object in
+  `config.json`; values are key strings or arrays of key strings.
 - Transcript: scrolling (PgUp/PgDn, wheel), selecting and copying text,
   Ctrl-O to toggle tool output and thinking details, `/copy`
 - Footer and `/stats`: model, context, token usage, cost
