@@ -23,3 +23,7 @@ Open the local URL printed by Astro. Production builds use `npm run build`.
 
 The page lives in `src/pages/index.astro`. Docs content belongs in the project
 repositories, not here.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
