@@ -3,14 +3,18 @@
 The landing page for the Niminal stack, served at
 [niminal.dev](https://niminal.dev).
 
-It is a static site: `index.html`, `styles.css`, `site.webmanifest`, and the
-favicon files (`favicon.ico` and the generated PNGs). There is no
-build step and no dependencies. Open `index.html` in a browser to preview it, or
-serve the directory:
+It is a static site with no build step and no dependencies. Page markup lives
+in `index.html`. Images, CSS, and the web manifest live in `assets/`.
+
+Open `index.html` in a browser to preview it, or serve the directory:
 
 ```sh
 python3 -m http.server 4321
 ```
+
+Pushes to `main` deploy the site to GitHub Pages via
+`.github/workflows/pages.yml`. Enable GitHub Pages for this repository with
+**GitHub Actions** as the source.
 
 The page links to each project's own documentation site:
 
