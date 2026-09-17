@@ -1,28 +1,26 @@
 # niminal
 
-The umbrella landing page for the Niminal stack, served at
+The landing page for the Niminal stack, served at
 [niminal.dev](https://niminal.dev).
 
-Each project documents itself on its own subdomain:
-
-| Project | Docs |
-| --- | --- |
-| nimlet | https://nimlet.niminal.dev |
-| nimgent | https://nimgent.niminal.dev |
-| nimterm | https://nimterm.niminal.dev |
-| nimwire | https://nimwire.niminal.dev |
-
-## Development
+It is a static site: `index.html`, `styles.css`, and `favicon.svg`. There is no
+build step and no dependencies. Open `index.html` in a browser to preview it, or
+serve the directory:
 
 ```sh
-npm install
-npm run dev
+python3 -m http.server 4321
 ```
 
-Open the local URL printed by Astro. Production builds use `npm run build`.
+The page links to each project's own documentation site:
 
-The page lives in `src/pages/index.astro`. Docs content belongs in the project
-repositories, not here.
+| Project | Docs | Source |
+| --- | --- | --- |
+| nimlet | https://nimlet.niminal.dev | https://github.com/martineastwood/nimlet |
+| nimgent | https://nimgent.niminal.dev | https://github.com/martineastwood/nimgent |
+| nimwire | https://nimwire.niminal.dev | https://github.com/martineastwood/nimwire |
+| nimterm | https://nimterm.niminal.dev | https://github.com/martineastwood/nimterm |
+
+Project documentation lives in the project repositories, not here.
 
 ## License
 
