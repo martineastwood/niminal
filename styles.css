@@ -6,8 +6,8 @@
   --border: #232329;
   --text: #ededf2;
   --muted: #9b9ba6;
-  --accent: #8b9cff;
-  --accent-soft: rgba(139, 156, 255, 0.12);
+  --accent: rgb(242, 186, 68);
+  --accent-soft: rgba(242, 186, 68, 0.12);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --radius: 0.875rem;
 }
@@ -23,7 +23,7 @@ html {
 body {
   margin: 0;
   background:
-    radial-gradient(60rem 30rem at 50% -12rem, rgba(139, 156, 255, 0.14), transparent 70%),
+    radial-gradient(60rem 30rem at 50% -12rem, rgba(242, 186, 68, 0.14), transparent 70%),
     var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -92,6 +92,7 @@ a {
   fill: var(--accent);
 }
 
+
 .site-nav {
   display: flex;
   align-items: center;
@@ -128,6 +129,15 @@ h1 {
   font-size: clamp(2.25rem, 6vw, 3.75rem);
   line-height: 1.08;
   letter-spacing: -0.03em;
+}
+
+.hero-sub {
+  margin: 0.75rem 0 0;
+  font-size: clamp(1.25rem, 2.6vw, 1.75rem);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  font-weight: 500;
+  color: var(--muted);
 }
 
 .lede {
@@ -259,6 +269,9 @@ code {
 }
 
 .terminal {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -290,6 +303,7 @@ code {
 }
 
 .terminal-body {
+  flex: 1;
   margin: 0;
   padding: 1.125rem 1rem;
   overflow-x: auto;
@@ -313,22 +327,27 @@ code {
   display: grid;
   gap: 2.5rem;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-  align-items: start;
+  align-items: stretch;
   margin-top: 2.5rem;
 }
 
 .features {
-  margin: 2.25rem 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
   gap: 1.5rem 2rem;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  grid-template-columns: 1fr;
 }
 
 .features li {
   border-top: 1px solid var(--border);
   padding-top: 1rem;
+}
+
+.features li:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .features p {

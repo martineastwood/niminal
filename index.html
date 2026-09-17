@@ -1,38 +1,43 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>niminal: the AI stack for Nim</title>
-  <meta name="description" content="A native AI application stack for Nim. nimlet is a local coding agent built on nimgent, nimwire, and nimterm: streaming models, typed tools, agents, MCP servers, and terminal UIs, compiled to small native binaries." />
+  <title>Niminal: the AI stack for Nim</title>
+  <meta name="description"
+    content="Open-source Nim libraries for streaming models, typed tools, agents, MCP servers, and terminal UIs, plus nimlet, a local coding agent. Compile to a small native binary with fast startup and low memory use." />
   <meta name="theme-color" content="#08080a" />
   <meta property="og:title" content="niminal: the AI stack for Nim" />
-  <meta property="og:description" content="Streaming models, typed tools, structured output, agents, MCP servers, and terminal interfaces, written in Nim and compiled to small native binaries." />
+  <meta property="og:description"
+    content="nimgent, nimwire, and nimterm are Nim libraries for AI apps. nimlet is a local coding agent built from them: a native binary with fast startup and low memory use." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://niminal.dev/" />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <link rel="icon" href="/favicon.ico" sizes="48x48" />
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="32x32" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/site.webmanifest" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
+
 <body>
   <a class="skip" href="#main">Skip to content</a>
 
   <header class="site-header">
     <div class="wrap header-inner">
       <a class="brand" href="/">
-        <svg class="brand-mark" viewBox="0 0 128 128" aria-hidden="true">
-          <path fill-rule="evenodd" d="M81 36 64 0 47 36l-1 2-9-10a6 6 0 0 0-9 9l10 10h-2L0 64l36 17h2L28 91a6 6 0 1 0 9 9l9-10 1 2 17 36 17-36v-2l9 10a6 6 0 1 0 9-9l-9-9 2-1 36-17-36-17-2-1 9-9a6 6 0 1 0-9-9l-9 10v-2Zm-17 2-2 5c-4 8-11 15-19 19l-5 2 5 2c8 4 15 11 19 19l2 5 2-5c4-8 11-15 19-19l5-2-5-2c-8-4-15-11-19-19l-2-5Z" clip-rule="evenodd" />
-        </svg>
-        <span>niminal</span>
+        <img class="brand-mark" src="/favicon-32x32.png" alt="" />
+        <!-- legacy inline mark retained in source history; navbar uses favicon -->
+        <path fill-rule="evenodd"
+          d="M81 36 64 0 47 36l-1 2-9-10a6 6 0 0 0-9 9l10 10h-2L0 64l36 17h2L28 91a6 6 0 1 0 9 9l9-10 1 2 17 36 17-36v-2l9 10a6 6 0 1 0 9-9l-9-9 2-1 36-17-36-17-2-1 9-9a6 6 0 1 0-9-9l-9 10v-2Zm-17 2-2 5c-4 8-11 15-19 19l-5 2 5 2c8 4 15 11 19 19l2 5 2-5c4-8 11-15 19-19l5-2-5-2c-8-4-15-11-19-19l-2-5Z"
+          clip-rule="evenodd" />
+        <span>Niminal</span>
       </a>
       <nav class="site-nav">
-        <a href="#nimlet">nimlet</a>
-        <a href="#stack">stack</a>
-        <a href="https://github.com/martineastwood/niminal">GitHub</a>
+        <a href="#nimlet">Nimlet</a>
+        <a href="#stack">Stack</a>
+        <a href="https://github.com/martineastwood/nimgent">GitHub</a>
       </nav>
     </div>
   </header>
@@ -40,16 +45,17 @@
   <main id="main">
     <section class="hero">
       <div class="wrap">
-        <p class="eyebrow">Native AI for Nim</p>
+        <p class="eyebrow">Open source, written in Nim</p>
         <h1>The AI stack for Nim</h1>
+        <p class="hero-sub">Libraries for native AI apps</p>
         <p class="lede">
-          Streaming models, typed tools, structured output, agents, MCP servers,
-          and terminal interfaces, written in Nim and compiled to small native
-          binaries.
+          nimgent, nimwire, and nimterm are Nim libraries for model calls, agents,
+          RAG, MCP servers, and terminal UIs. Compile them to a small native binary:
+          fast startup, low memory, no interpreter runtime. Nimlet is the coding
+          agent built from the same libraries.
         </p>
         <p class="actions">
-          <a class="btn primary" href="https://nimlet.niminal.dev/">Use nimlet</a>
-          <a class="btn" href="#stack">Build with the stack</a>
+          <a class="btn" href="https://github.com/martineastwood/nimgent">Nimgent on GitHub</a>
         </p>
         <pre class="code"><code><span class="kw">import</span> nimgent
 <span class="kw">import</span> nimgent/providers/openai
@@ -62,8 +68,14 @@
 
 echo response.text</code></pre>
         <p class="hero-note">
-          One typed API across providers. Install a package with <code>nimble install nimgent</code>,
-          <code>nimble install nimwire</code>, or <code>nimble install nimterm</code>.
+          The same typed generation API works across providers, including <code>OpenRouter</code>, <code>OpenAI</code>,
+          <code>Anthropic</code>,
+          <code>Gemini</code>, <code>Mistral</code>, <code>Hyper</code>, <code>OpenCode</code>,
+          and ChatGPT-backed Codex through <code>/login</code>.
+        </p>
+        <p class="hero-note">Install with
+          <code>nimble install nimgent</code>, <code>nimble install nimwire</code>, or
+          <code>nimble install nimterm</code>.
         </p>
       </div>
     </section>
@@ -72,14 +84,13 @@ echo response.text</code></pre>
       <div class="wrap">
         <div class="section-head">
           <p class="eyebrow">Coding agent</p>
-          <h2>nimlet changes your project</h2>
+          <h2>Fast to start, light on memory, idle until it works</h2>
           <p class="section-lede">
-            nimlet is a local coding agent for software projects. Run it in a repository,
-            describe the change you want, and it inspects the files, edits them, runs the
-            commands you approve, and keeps the session for later. It ships as a compiled
-            native binary, so the machine running it needs no language toolchain.
-            nimlet is built on top of the Niminal stack: nimgent for models and tools,
-            nimwire for MCP, and nimterm for the terminal interface.
+            Run Nimlet in a repository, describe the change you want, and it inspects
+            files, edits them, runs the commands you approve, and keeps the session.
+            The native binary starts quickly, uses little memory, and the CPU stays idle while it
+            waits. nimgent handles models and tools, nimwire handles MCP, and nimterm
+            handles the terminal UI.
           </p>
         </div>
 
@@ -102,20 +113,25 @@ echo response.text</code></pre>
 
           <ul class="features">
             <li>
-              <h3>Quiet while you decide</h3>
-              <p>It blocks while waiting on you, a provider, or a subprocess. No polls, no timers, no idle CPU.</p>
+              <h3>Small process</h3>
+              <p>Compiled to native code, not interpreted. Startup is fast, memory use stays low, meaning you can run
+                multiple
+                Nimlet processes without a heavy runtime per instance.</p>
+            </li>
+            <li>
+              <h3>Blocks when waiting</h3>
+              <p>It waits on you, a provider, or a subprocess. No polls, no timers, no idle CPU.</p>
             </li>
             <li>
               <h3>Your provider, your keys</h3>
-              <p>Requests go straight to the provider you pick. Credentials stay in your environment or in <code>~/.nimlet/auth.json</code>.</p>
+              <p>Requests go straight to the provider you pick. Credentials stay in your environment or in
+                <code>~/.nimlet/auth.json</code>.
+              </p>
             </li>
             <li>
-              <h3>Control where it counts</h3>
-              <p>Reads, searches, and workspace edits run freely. Shell commands and extensions ask the first time, with per-session and per-project grants.</p>
-            </li>
-            <li>
-              <h3>Built to be extended</h3>
-              <p>Add project instructions, skills, prompt templates, external tools, or a persistent extension in any language.</p>
+              <h3>Shell needs approval</h3>
+              <p>Reads, searches, and workspace edits run freely. Shell commands and extensions ask the first time, with
+                per-session and per-project grants.</p>
             </li>
           </ul>
         </div>
@@ -131,7 +147,7 @@ echo response.text</code></pre>
 <span class="prompt">$</span> nimlet</code></pre>
 
         <p class="actions">
-          <a class="btn primary" href="https://nimlet.niminal.dev/">Read the nimlet docs</a>
+          <a class="btn primary" href="https://nimlet.niminal.dev/">Read the Nimlet docs</a>
           <a class="btn" href="https://github.com/martineastwood/nimlet">Source</a>
         </p>
       </div>
@@ -141,10 +157,11 @@ echo response.text</code></pre>
       <div class="wrap">
         <div class="section-head">
           <p class="eyebrow">Libraries</p>
-          <h2>Three Nim packages nimlet is built from</h2>
+          <h2>Three packages you can use without nimlet</h2>
           <p class="section-lede">
-            Each library stands on its own. Build an agent, an MCP server your editor can
-            talk to, or a terminal interface for a service you already have.
+            Each library stands on its own. Use nimgent for model calls and agents,
+            nimwire for an MCP server, or nimterm for a terminal UI. nimlet is one
+            application that links all three.
           </p>
         </div>
 
@@ -153,12 +170,14 @@ echo response.text</code></pre>
             <h3>nimgent</h3>
             <p class="pkg">nimble install nimgent</p>
             <p class="desc">
-              A Nim SDK for LLM apps and agents. One typed API for generation,
-              streaming, tools, structured output, agents, conversations,
-              retrieval, and MCP clients, with providers you can swap.
+              A Nim SDK for language-model apps and agents. One typed API for
+              generation, streaming, tools, structured output, agents, conversations,
+              retrieval, and MCP clients. Swap providers without rewriting the call site.
             </p>
             <ul>
-              <li>The same generation code across OpenAI, Anthropic, Gemini, OpenRouter, Mistral, and your own provider</li>
+              <li>Same generation code across OpenAI, Anthropic, Gemini, OpenRouter, Mistral, Hyper, OpenCode, and your
+                own provider
+              </li>
               <li>Streaming text, typed tools, and structured output</li>
               <li>Agents, conversations, embeddings, and retrieval</li>
             </ul>
@@ -184,7 +203,7 @@ echo response.text</code></pre>
             <h3>nimterm</h3>
             <p class="pkg">nimble install nimterm</p>
             <p class="desc">
-              Terminal UI primitives for Nim. A testable canvas, layout, themes,
+              Terminal agent UI primitives for Nim. A testable canvas, layout, themes,
               Markdown, widgets, and the lifecycle events an agent transcript needs.
             </p>
             <ul>
@@ -195,28 +214,21 @@ echo response.text</code></pre>
             <p class="more"><a href="https://nimterm.niminal.dev/">nimterm.niminal.dev</a></p>
           </li>
         </ul>
-
-        <p class="builds-on">
-          <span class="strong">nimlet</span> is the application these packages came from, and it
-          declares all three as dependencies. Its model calls, tools, and sessions run through
-          <span class="strong">nimgent</span>, and its interactive interface is built with
-          <span class="strong">nimterm</span>.
-        </p>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
     <div class="wrap footer-inner">
-      <p>MIT licensed, built in Nim.</p>
+      <p>MIT licensed. Written in Nim.</p>
       <nav class="footer-links">
         <a href="https://github.com/martineastwood/nimlet">nimlet</a>
         <a href="https://github.com/martineastwood/nimgent">nimgent</a>
         <a href="https://github.com/martineastwood/nimwire">nimwire</a>
         <a href="https://github.com/martineastwood/nimterm">nimterm</a>
-        <a href="https://github.com/martineastwood/niminal">niminal</a>
       </nav>
     </div>
   </footer>
 </body>
+
 </html>

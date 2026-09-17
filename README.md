@@ -4,7 +4,7 @@ The landing page for the Niminal stack, served at
 [niminal.dev](https://niminal.dev).
 
 It is a static site: `index.html`, `styles.css`, `site.webmanifest`, and the
-favicon files (`favicon.svg`, `favicon.ico`, and the generated PNGs). There is no
+favicon files (`favicon.ico` and the generated PNGs). There is no
 build step and no dependencies. Open `index.html` in a browser to preview it, or
 serve the directory:
 
