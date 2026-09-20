@@ -1327,8 +1327,9 @@ void bind_extensions(niminal::Agent& agent,
         if (!session) throw std::runtime_error("session is unavailable");
         const auto tokens = estimate_session_tokens(*session);
         return json{{"tokens", tokens},
-                    {"limit", kContextWindow},
-                    {"percent", std::min(100, tokens * 100 / kContextWindow)}};
+                    {"limit", kDefaultContextWindow},
+                    {"percent",
+                     std::min(100, tokens * 100 / kDefaultContextWindow)}};
       }
       throw std::runtime_error("unknown host request: " + method);
     });

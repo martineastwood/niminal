@@ -81,6 +81,18 @@ Config load_config_file(const fs::path& path) {
       const int max_steps = doc["max_steps"].get<int>();
       if (max_steps >= 0) cfg.max_steps = max_steps;
     }
+    if (doc.contains("compaction_enabled") && doc["compaction_enabled"].is_boolean())
+      cfg.compaction_enabled = doc["compaction_enabled"].get<bool>();
+    if (doc.contains("reserve_tokens") && doc["reserve_tokens"].is_number_integer() &&
+        doc["reserve_tokens"].get<int>() >= 0)
+      cfg.reserve_tokens = doc["reserve_tokens"].get<int>();
+    if (doc.contains("keep_recent_tokens") &&
+        doc["keep_recent_tokens"].is_number_integer() &&
+        doc["keep_recent_tokens"].get<int>() >= 0)
+      cfg.keep_recent_tokens = doc["keep_recent_tokens"].get<int>();
+    if (doc.contains("context_window") && doc["context_window"].is_number_integer() &&
+        doc["context_window"].get<int>() >= 0)
+      cfg.context_window = doc["context_window"].get<int>();
     if (doc.contains("providers") && doc["providers"].is_object()) {
       for (auto& [name, block] : doc["providers"].items()) {
         if (block.is_object() && block.contains("last_model") &&
@@ -112,6 +124,12 @@ void save_config_file(const fs::path& path, const Config& cfg) {
               {"steering_mode", cfg.steering_mode},
               {"follow_up_mode", cfg.follow_up_mode}};
   if (cfg.max_steps > 0) doc["max_steps"] = cfg.max_steps;
+  if (!cfg.compaction_enabled) doc["compaction_enabled"] = false;
+  if (cfg.reserve_tokens != kDefaultReserveTokens)
+    doc["reserve_tokens"] = cfg.reserve_tokens;
+  if (cfg.keep_recent_tokens != kDefaultKeepRecentTokens)
+    doc["keep_recent_tokens"] = cfg.keep_recent_tokens;
+  if (cfg.context_window > 0) doc["context_window"] = cfg.context_window;
   if (!cfg.api_url.empty()) doc["api_url"] = cfg.api_url;
   if (!cfg.thinking.empty()) doc["thinking"] = cfg.thinking;
   if (!cfg.last_models.empty()) {

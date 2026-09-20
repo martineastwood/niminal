@@ -17,7 +17,11 @@ int main() {
 
   auto missing = load_config_file(path);
   if (missing.model != "openai/gpt-4o-mini" || missing.provider != "openrouter" ||
-      missing.max_steps != 0 || missing.show_thinking) {
+      missing.max_steps != 0 || missing.show_thinking ||
+      !missing.compaction_enabled ||
+      missing.reserve_tokens != niminal::app::kDefaultReserveTokens ||
+      missing.keep_recent_tokens != niminal::app::kDefaultKeepRecentTokens ||
+      missing.context_window != 0) {
     std::cerr << "default model mismatch\n";
     return 1;
   }
@@ -32,6 +36,9 @@ int main() {
   cfg.steering_mode = "all";
   cfg.follow_up_mode = "one-at-a-time";
   cfg.max_steps = 12;
+  cfg.reserve_tokens = 32768;
+  cfg.keep_recent_tokens = 40000;
+  cfg.context_window = 256000;
   save_config_file(path, cfg);
   auto loaded = load_config_file(path);
   if (loaded.model != cfg.model || loaded.api_url != cfg.api_url ||
@@ -40,8 +47,33 @@ int main() {
       loaded.steering_mode != "all" ||
       loaded.follow_up_mode != "one-at-a-time" ||
       loaded.max_steps != 12 ||
+      loaded.reserve_tokens != 32768 ||
+      loaded.keep_recent_tokens != 40000 ||
+      loaded.context_window != 256000 ||
       loaded.last_models["openrouter"] != "openai/gpt-4o-mini") {
     std::cerr << "roundtrip mismatch\n";
+    return 1;
+  }
+
+  {
+    std::ofstream out(path);
+    out << R"({"compaction_enabled":false})";
+  }
+  auto disabled = load_config_file(path);
+  if (disabled.compaction_enabled) {
+    std::cerr << "compaction_enabled should load\n";
+    return 1;
+  }
+
+  {
+    std::ofstream out(path);
+    out << R"({"reserve_tokens":-1,"keep_recent_tokens":-5,"context_window":-2})";
+  }
+  auto negative = load_config_file(path);
+  if (negative.reserve_tokens != niminal::app::kDefaultReserveTokens ||
+      negative.keep_recent_tokens != niminal::app::kDefaultKeepRecentTokens ||
+      negative.context_window != 0) {
+    std::cerr << "negative compaction values should use defaults\n";
     return 1;
   }
 

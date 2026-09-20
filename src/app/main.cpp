@@ -516,7 +516,7 @@ int main(int argc, char** argv) {
   niminal::app::bind_session(agent, session);
   niminal::app::bind_compaction(agent, session, [](const std::string& msg) {
     if (!msg.empty()) std::cerr << msg << '\n';
-  });
+  }, {}, cfg);
   if (!provider_from_cli) {
     if (auto p = session.last_provider();
         !p.empty() && niminal::app::find_provider(p)) {
@@ -542,7 +542,7 @@ int main(int argc, char** argv) {
                                 [](const std::string& msg) {
                                   if (!msg.empty()) std::cerr << msg << '\n';
                                 },
-                                extensions);
+                                extensions, cfg);
   for (const auto& warning : extensions->warnings())
     std::cerr << warning << '\n';
   auto start_hook = extensions->dispatch(

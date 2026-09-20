@@ -65,6 +65,28 @@ Set `max_steps` in that file to limit the tool loop for each user turn. Omit it
 or set it to `0` for the default unbounded loop. The `--max-steps N` flag
 overrides the config value for the current process, and `0` means unlimited.
 
+Compaction tuning also lives in that file:
+
+```json
+{
+  "compaction_enabled": false,
+  "context_window": 200000,
+  "reserve_tokens": 32768,
+  "keep_recent_tokens": 40000
+}
+```
+
+- `compaction_enabled` (default `true`) turns automatic compaction off.
+  `/compact` and overflow recovery still work when you ask for them.
+- `context_window` (default `128000`) is the token budget compaction measures
+  against.
+- `reserve_tokens` (default `16384`) is headroom kept for the answer;
+  compaction triggers when the estimated context exceeds
+  `context_window - reserve_tokens`.
+- `keep_recent_tokens` (default `20000`) is the recent history kept verbatim
+  while older turns are summarized.
+- The summary generation itself is capped at 4096 output tokens.
+
 Thinking traces appear as a compact preview in the TUI by default. Set
 `"show_thinking": true` in `~/.niminal/config.json` to show the full streamed
 trace in the transcript.

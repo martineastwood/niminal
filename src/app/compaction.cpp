@@ -155,7 +155,8 @@ std::string build_summary_prompt(const std::string& previous,
 
 CompactResult compact_session(Session& session, niminal::Agent& agent,
                               const std::string& requested_instruction,
-                              const std::shared_ptr<ExtensionRuntime>& extensions) {
+                              const std::shared_ptr<ExtensionRuntime>& extensions,
+                              const Config& cfg) {
   CompactResult result;
   result.message = "Nothing to compact (recent history fits in keep window).";
   int tokens_before = estimate_session_tokens(session);
@@ -202,7 +203,7 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
     previous = session.events[static_cast<size_t>(compact)].value("summary", "");
     from = session.events[static_cast<size_t>(compact)].value("first_kept_index", 0);
   }
-  int cut = find_cut_index(session, kKeepRecentTokens, from);
+  int cut = find_cut_index(session, cfg.keep_recent_tokens, from);
   if (cut < 0) {
     if (extensions) {
       auto post = extensions->dispatch(
@@ -248,6 +249,7 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
   niminal::ChatRequest req;
   agent.fill_chat(req);
   req.messages = json::array({std::move(sys), std::move(user)});
+  req.max_tokens = kSummaryMaxTokens;
 
   auto summary = niminal::complete_chat(req);
   while (!summary.empty() &&
@@ -279,9 +281,13 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
 
 void bind_compaction(niminal::Agent& agent, Session& session,
                      std::function<void(const std::string&)> note,
-                     const std::shared_ptr<ExtensionRuntime>& extensions) {
-  agent.before_request = [&agent, &session, note, extensions] {
-    if (!should_compact(session)) return;
+                     const std::shared_ptr<ExtensionRuntime>& extensions,
+                     const Config& cfg) {
+  agent.before_request = [&agent, &session, note, extensions, cfg] {
+    if (!cfg.compaction_enabled) return;
+    int window = cfg.context_window > 0 ? cfg.context_window
+                                        : kDefaultContextWindow;
+    if (!should_compact(session, window, cfg.reserve_tokens)) return;
     if (note) note("Context is large; compacting…");
     auto result = compact_session(session, agent, {}, extensions);
     agent.messages = session.openai_messages();
@@ -289,12 +295,12 @@ void bind_compaction(niminal::Agent& agent, Session& session,
       for (const auto& warning : result.warnings) note(warning);
     if (note) note(result.message);
   };
-  agent.recover_overflow = [&agent, &session, note, extensions] {
+  agent.recover_overflow = [&agent, &session, note, extensions, cfg] {
     if (note) note("Context overflow — compacting and retrying…");
     try {
       auto result = compact_session(
           session, agent, "Prioritize recovering from context overflow.",
-          extensions);
+          extensions, cfg);
       agent.messages = session.openai_messages();
       if (note)
         for (const auto& warning : result.warnings) note(warning);

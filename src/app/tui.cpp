@@ -1051,7 +1051,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   bind_compaction(agent, session, [&](const std::string& msg) {
     if (msg.empty()) return;
     post_ui(StreamEvent{EventKind::status, msg, {}, {}});
-  }, extensions);
+  }, extensions, cfg);
   agent.take_steering = [&] {
     std::lock_guard<std::mutex> lock(steering_mu);
     auto out = std::move(steering);
@@ -1087,7 +1087,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     }, &session);
     bind_compaction(agent, session, [&](const std::string& msg) {
       if (!msg.empty()) post_ui(StreamEvent{EventKind::status, msg, {}, {}});
-    }, extensions);
+    }, extensions, cfg);
     for (const auto& warning : extensions->warnings())
       blocks.push_back(Block{BlockKind::status, warning});
     auto started = extensions->dispatch(
@@ -1328,7 +1328,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           return;
         }
         try {
-          auto result = compact_session(session, agent, arg, extensions);
+          auto result =
+              compact_session(session, agent, arg, extensions, cfg);
           agent.messages = session.openai_messages();
           for (const auto& warning : result.warnings)
             blocks.push_back(Block{BlockKind::status, warning});
@@ -1382,7 +1383,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
             } else if (kind == "compact") {
               auto compacted = compact_session(
                   session, agent,
-                  action->value("instruction", std::string()), extensions);
+                  action->value("instruction", std::string()), extensions, cfg);
               agent.messages = session.openai_messages();
               blocks.push_back(Block{BlockKind::status, compacted.message});
             }
