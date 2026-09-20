@@ -75,6 +75,8 @@ Config load_config_file(const fs::path& path) {
       cfg.thinking = doc["thinking"].get<std::string>();
     if (doc.contains("show_thinking") && doc["show_thinking"].is_boolean())
       cfg.show_thinking = doc["show_thinking"].get<bool>();
+    if (doc.contains("theme") && doc["theme"].is_string())
+      cfg.theme = doc["theme"].get<std::string>();
     load_queue_mode(doc, "steering_mode", cfg.steering_mode);
     load_queue_mode(doc, "follow_up_mode", cfg.follow_up_mode);
     if (doc.contains("max_steps") && doc["max_steps"].is_number_integer()) {
@@ -121,6 +123,7 @@ void save_config_file(const fs::path& path, const Config& cfg) {
   json doc = {{"provider", cfg.provider},
               {"model", cfg.model},
               {"show_thinking", cfg.show_thinking},
+              {"theme", cfg.theme},
               {"steering_mode", cfg.steering_mode},
               {"follow_up_mode", cfg.follow_up_mode}};
   if (cfg.max_steps > 0) doc["max_steps"] = cfg.max_steps;

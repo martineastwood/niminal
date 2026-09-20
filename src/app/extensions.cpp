@@ -732,6 +732,7 @@ struct ExtensionRuntime::Impl {
   std::vector<ExtensionNotice> notices;
   std::vector<ExtensionUserMessage> user_messages;
   std::vector<ExtensionEntry> entries;
+  std::atomic<bool> actions_pending{false};
   ExtensionUiCallbacks ui;
   std::function<void(const std::string&, const std::string&)> tool_update;
   std::function<json(const std::string&, const json&)> host_request;
@@ -831,6 +832,10 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process,
          deliver_as == "follow_up"))
       impl.user_messages.push_back({content, deliver_as});
   }
+  if (response.contains("status") || response.contains("notification") ||
+      response.contains("widget") || response.contains("entry") ||
+      response.contains("user_message"))
+    impl.actions_pending = true;
 }
 
 void handle_incoming(ExtensionRuntime::Impl& impl, Process& process,
@@ -1215,9 +1220,7 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
   return outcome;
 }
 
-void ExtensionRuntime::pump() {
-  /* Process readers capture unsolicited actions as they arrive. */
-}
+bool ExtensionRuntime::pump() { return impl_->actions_pending.exchange(false); }
 
 void ExtensionRuntime::stop() {
   if (!impl_ || impl_->stopped) return;

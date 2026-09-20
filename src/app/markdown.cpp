@@ -405,16 +405,16 @@ std::string spans_outline(const std::vector<Span>& spans) {
   return out;
 }
 
-Element style_span(const Span& s) {
+Element style_span(const Span& s, const Theme& theme) {
   Element e = text(s.text);
   if (s.code) {
-    e = e | color(Color::GreenLight);
+    e = e | color(theme.code);
   } else if (s.underline) {
-    e = e | underlined | color(Color::CyanLight);
+    e = e | underlined | color(theme.accent);
   } else if (s.bold) {
-    e = e | bold | color(Color::YellowLight);
+    e = e | bold | color(theme.emphasis);
   } else if (s.italic) {
-    e = e | italic | color(Color::MagentaLight);
+    e = e | italic | color(theme.italic);
   }
   if (s.bold && !s.code) e = e | bold;
   if (s.italic && !s.code) e = e | italic;
@@ -423,13 +423,13 @@ Element style_span(const Span& s) {
   return e;
 }
 
-Elements flow_spans(const std::vector<Span>& spans) {
+Elements flow_spans(const std::vector<Span>& spans, const Theme& theme) {
   Elements flow;
   bool first_token = true;
   auto push = [&](Span sp) {
     if (sp.text.empty()) return;
     if (!first_token && sp.text.front() != ' ') sp.text = " " + sp.text;
-    flow.push_back(style_span(sp));
+    flow.push_back(style_span(sp, theme));
     first_token = false;
   };
   for (const auto& span : spans) {
@@ -455,42 +455,42 @@ Elements flow_spans(const std::vector<Span>& spans) {
   return flow;
 }
 
-Element wrap_spans(const std::vector<Span>& spans) {
-  auto flow = flow_spans(spans);
+Element wrap_spans(const std::vector<Span>& spans, const Theme& theme) {
+  auto flow = flow_spans(spans, theme);
   if (flow.empty()) return emptyElement();
   FlexboxConfig cfg;
   cfg.wrap = FlexboxConfig::Wrap::Wrap;
   return flexbox(std::move(flow), cfg);
 }
 
-Element render_block(const Block& b) {
+Element render_block(const Block& b, const Theme& theme) {
   switch (b.kind) {
     case Block::blank:
       return separatorEmpty();
     case Block::hr:
       return separatorLight() | dim;
     case Block::heading: {
-      auto title = wrap_spans(b.spans) | bold;
+      auto title = wrap_spans(b.spans, theme) | bold;
       if (b.level == 1)
-        return vbox({title | color(Color::CyanLight), separatorLight() | dim});
-      if (b.level == 2) return title | color(Color::CyanLight);
-      if (b.level == 3) return title | color(Color::Cyan);
-      return title | color(Color::Cyan) | dim;
+        return vbox({title | color(theme.accent), separatorLight() | dim});
+      if (b.level == 2) return title | color(theme.accent);
+      if (b.level == 3) return title | color(theme.quote);
+      return title | color(theme.quote) | dim;
     }
     case Block::list: {
       std::string pad(static_cast<size_t>(b.level * 2), ' ');
-      return hbox({text(pad + b.prefix), wrap_spans(b.spans) | xflex});
+      return hbox({text(pad + b.prefix), wrap_spans(b.spans, theme) | xflex});
     }
     case Block::quote:
-      return hbox({text("│ ") | color(Color::BlueLight) | dim,
-                   wrap_spans(b.spans) | xflex}) |
-             color(Color::BlueLight);
+      return hbox({text("│ ") | color(theme.quote) | dim,
+                   wrap_spans(b.spans, theme) | xflex}) |
+             color(theme.quote);
     case Block::code: {
       Elements rows;
       if (!b.lang.empty()) rows.push_back(text(b.lang) | dim);
       for (const auto& line : b.code_lines)
-        rows.push_back(text(line.empty() ? " " : line) | color(Color::GreenLight));
-      if (rows.empty()) rows.push_back(text(" ") | color(Color::GreenLight));
+        rows.push_back(text(line.empty() ? " " : line) | color(theme.code));
+      if (rows.empty()) rows.push_back(text(" ") | color(theme.code));
       return hbox({text("│ ") | dim, vbox(std::move(rows)) | xflex});
     }
     case Block::table: {
@@ -498,7 +498,7 @@ Element render_block(const Block& b) {
       for (size_t r = 0; r < b.rows.size(); ++r) {
         std::vector<Element> row;
         for (const auto& cell : b.rows[r]) {
-          auto e = wrap_spans(parse_inline(cell));
+          auto e = wrap_spans(parse_inline(cell), theme);
           if (r == 0) e = e | bold;
           row.push_back(std::move(e));
         }
@@ -511,29 +511,29 @@ Element render_block(const Block& b) {
       return table.Render() | dim;
     }
     case Block::para:
-      return wrap_spans(b.spans);
+      return wrap_spans(b.spans, theme);
   }
   return emptyElement();
 }
 
 }  // namespace
 
-Element render_markdown(std::string_view source) {
+Element render_markdown(std::string_view source, const Theme& theme) {
   Elements rows;
   auto blocks = parse_blocks(source);
   for (size_t i = 0; i < blocks.size();) {
     if (blocks[i].kind == Block::quote) {
       Elements lines;
       while (i < blocks.size() && blocks[i].kind == Block::quote) {
-        lines.push_back(wrap_spans(blocks[i].spans));
+        lines.push_back(wrap_spans(blocks[i].spans, theme));
         ++i;
       }
-      rows.push_back(hbox({text("│ ") | color(Color::BlueLight) | dim,
+      rows.push_back(hbox({text("│ ") | color(theme.quote) | dim,
                            vbox(std::move(lines)) | xflex}) |
-                     color(Color::BlueLight));
+                     color(theme.quote));
       continue;
     }
-    rows.push_back(render_block(blocks[i]));
+    rows.push_back(render_block(blocks[i], theme));
     ++i;
   }
   if (rows.empty()) return emptyElement();

@@ -102,7 +102,7 @@ class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
       std::function<nlohmann::json(const std::string&, const nlohmann::json&)>
           callback);
   HookOutcome dispatch(HookEvent event, const nlohmann::json& payload);
-  void pump();
+  bool pump();
   void stop();
 
   std::vector<ExtensionNotice> take_notices();

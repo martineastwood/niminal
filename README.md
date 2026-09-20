@@ -119,15 +119,16 @@ the first message creates an append-only JSONL file under
 - Alt-J or Shift-Enter inserts a newline
 - Esc interrupts a running turn, or clears the composer when idle
 - Ctrl-C quits
-- `/help`, `/provider`, `/model`, `/thinking`, `/permissions`, `/trust`, `/yolo`,
-  `/models refresh`, `/session`, `/name`, `/resume`, `/search`, `/fork`,
+- `/help`, `/provider`, `/model`, `/thinking`, `/theme`, `/permissions`, `/trust`,
+  `/yolo`, `/models refresh`, `/session`, `/name`, `/resume`, `/search`, `/fork`,
   `/export`, `/delete`, `/restore`, `/new`, `/clear`, `/copy`, `/compact`,
   `/reload`, `/skill:NAME`, `/NAME`, `/quit`
 
 - Tab completes a slash command. Up/Down moves through the list. Type `/model `
   to pick from the models.dev catalog for the active provider (filter from two
   characters). Type `/thinking ` to pick a level the current model supports.
-  Type `/resume ` and Tab to pick a session.
+  Type `/theme ` to pick `light`, `dark`, or `auto`. Type `/resume ` and Tab to
+  pick a session.
 
 Skills are `SKILL.md` files under `~/.niminal/skills/<name>/` or the current
 workspace's `.agent/skills/<name>/`, `.agents/skills/<name>/`, or
@@ -280,6 +281,13 @@ models, niminal keeps that saved level and maps it to whatever the new model
 actually accepts, using models.dev `reasoning` / `reasoning_options` plus
 Anthropic's adaptive effort names. `/thinking` with no argument prints the
 mapped level. Unset thinking leaves the provider default.
+
+The TUI ships one dark and one light palette. `/theme light`, `/theme dark`, and
+`/theme auto` save `theme` to `~/.niminal/config.json`, and `/theme` with no
+argument prints the mode plus the palette auto resolved to. `auto` (the default)
+asks the terminal for its background color with an OSC 11 query at startup, falls
+back to `COLORFGBG`, and assumes dark when neither answers. Set `"theme"` in the
+config file to pick a palette without touching the TUI.
 
 On startup, niminal loads the config file, then applies `NIMINAL_MODEL` /
 `NIMINAL_API_URL` / `NIMINAL_THINKING` if they are set, then `--provider`,

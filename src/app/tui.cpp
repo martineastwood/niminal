@@ -10,6 +10,7 @@
 #include "prompts.hpp"
 #include "session.hpp"
 #include "skills.hpp"
+#include "theme.hpp"
 #include "thinking.hpp"
 #include "trust.hpp"
 
@@ -94,7 +95,7 @@ std::optional<std::string> read_text_file(const std::filesystem::path& path) {
   return text;
 }
 
-Element render_diff_card(const Block& block) {
+Element render_diff_card(const Block& block, const Theme& theme) {
   Elements lines;
   std::istringstream in(block.text);
   std::string line;
@@ -103,16 +104,16 @@ Element render_diff_card(const Block& block) {
     if (skip_header) { skip_header = false; continue; }  // skip @@ marker
     Element row = text(line.empty() ? " " : line);
     if (!line.empty() && line.front() == '+')
-      row = row | color(Color::GreenLight);
+      row = row | color(theme.add);
     else if (!line.empty() && line.front() == '-')
-      row = row | color(Color::RedLight);
+      row = row | color(theme.del);
     else if (!line.empty() && line.front() == '!')
-      row = row | color(Color::YellowLight);
+      row = row | color(theme.meta);
     else
       row = row | dim;
     lines.push_back(std::move(row));
   }
-  auto badge_color = block.created ? Color::GreenLight : Color::CyanLight;
+  auto badge_color = block.created ? theme.add : theme.accent;
   auto badge = text(block.created ? "created" : "updated") | bold | color(badge_color);
   return vbox({hbox({badge, text("  " + block.path) | bold | dim}),
                separatorLight() | dim, vbox(std::move(lines))});
@@ -180,22 +181,22 @@ std::string tool_summary(const std::string& name, const std::string& args) {
   return "▸ " + name + "  " + one_line(detail, 120);
 }
 
-Decorator block_style(BlockKind kind) {
+Decorator block_style(BlockKind kind, const Theme& theme) {
   switch (kind) {
     case BlockKind::user:
-      return color(Color::CyanLight);
+      return color(theme.accent);
     case BlockKind::tool:
-      return color(Color::Yellow);
+      return color(theme.meta);
     case BlockKind::thinking:
       return [](Element e) { return e | dim | italic; };
     case BlockKind::diff:
-      return color(Color::GrayLight);
+      return color(theme.muted);
     case BlockKind::error:
-      return color(Color::Red);
+      return color(theme.error);
     case BlockKind::status:
-      return color(Color::GrayLight);
+      return color(theme.muted);
     case BlockKind::approval:
-      return color(Color::YellowLight);
+      return color(theme.meta);
     case BlockKind::assistant:
       return Decorator([](Element e) { return e; });
   }
@@ -284,6 +285,7 @@ constexpr SlashSpec kSlash[] = {
     {"/provider", "/provider [name]", "show or set the provider"},
     {"/model", "/model [ID]", "show or set the model"},
     {"/thinking", "/thinking [level]", "show or set reasoning"},
+    {"/theme", "/theme [mode]", "show or set light|dark|auto"},
     {"/permissions", "/permissions [clear]", "show or clear tool grants"},
     {"/trust", "/trust [on|off]", "show or set project resource trust"},
     {"/yolo", "/yolo [off]", "auto-approve tools for this process"},
@@ -460,6 +462,16 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
     if (!out.empty()) return out;
   }
 
+  if (cmd == "/theme" && (trailing || !arg.empty())) {
+    std::vector<Suggestion> out;
+    for (auto mode : {ThemeMode::automatic, ThemeMode::light, ThemeMode::dark}) {
+      std::string name = theme_mode_name(mode);
+      if (!arg.empty() && !starts_with(name, lower_copy(arg))) continue;
+      out.push_back({"/theme " + name, name});
+    }
+    if (!out.empty()) return out;
+  }
+
   if (cmd == "/models" && (trailing || !arg.empty())) {
     if (arg.empty() || starts_with("refresh", arg))
       return {{"/models refresh", "/models refresh  fetch models.dev"}};
@@ -584,6 +596,8 @@ const char* kHelp = R"(/help              this list
 /model ID          set the model and save ~/.niminal/config.json
 /thinking          show the current reasoning level
 /thinking LEVEL    set none|minimal|low|medium|high|xhigh|max
+/theme             show the current theme
+/theme MODE        set light|dark|auto (auto follows the terminal background)
 /permissions       show remembered tool grants
 /permissions clear clear project tool grants
 /trust             show project resource trust
@@ -627,6 +641,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
             const std::vector<std::string>* allowed_tools) {
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
+  ThemeMode theme_mode = parse_theme_mode(cfg.theme).value_or(ThemeMode::automatic);
+  Theme theme = resolve_theme(theme_mode);
   std::atomic<bool> local_cancel{false};
   if (!agent.cancel) agent.cancel = &local_cancel;
   auto* cancel = agent.cancel;
@@ -1595,6 +1611,39 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         }
         return;
       }
+      if (cmd == "/theme") {
+        if (arg.empty()) {
+          blocks.push_back(Block{
+              BlockKind::status,
+              std::string("theme: ") + theme_mode_name(theme_mode) +
+                  (theme_mode == ThemeMode::automatic
+                       ? std::string(" (") + theme_mode_name(detect_terminal_theme()) +
+                             ")"
+                       : std::string())});
+          return;
+        }
+        auto mode = parse_theme_mode(arg);
+        if (!mode) {
+          blocks.push_back(
+              Block{BlockKind::error, "Usage: /theme [light|dark|auto]"});
+          return;
+        }
+        theme_mode = *mode;
+        theme = resolve_theme(theme_mode);
+        cfg.theme = theme_mode_name(theme_mode);
+        try {
+          save_config(cfg);
+          blocks.push_back(Block{BlockKind::status,
+                                 std::string("theme set to ") +
+                                     theme_mode_name(theme_mode) + "\nsaved " +
+                                     config_path().string()});
+        } catch (const std::exception& e) {
+          blocks.push_back(Block{
+              BlockKind::error,
+              std::string("theme set for this session, save failed: ") + e.what()});
+        }
+        return;
+      }
       if (cmd == "/models") {
         if (arg != "refresh") {
           blocks.push_back(Block{BlockKind::error, "Usage: /models refresh"});
@@ -1734,13 +1783,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   InputOption input_opt;
   input_opt.multiline = true;
   input_opt.cursor_position = &cursor;
-  input_opt.transform = [](InputState state) {
-    state.element |= color(Color::White);
+  input_opt.transform = [&theme](InputState state) {
+    state.element |= color(theme.input_fg);
     if (state.is_placeholder) state.element |= dim;
     if (state.focused)
-      state.element |= bgcolor(Color::RGB(45, 45, 45));
+      state.element |= bgcolor(theme.input_bg);
     else if (state.hovered)
-      state.element |= bgcolor(Color::GrayDark);
+      state.element |= bgcolor(theme.hover_bg);
     return state.element;
   };
   auto input = Input(&draft, "describe a change", input_opt);
@@ -1791,22 +1840,22 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     Elements entries;
     for (const auto& block : blocks) {
       if (block.kind == BlockKind::diff) {
-        entries.push_back(render_diff_card(block));
+        entries.push_back(render_diff_card(block, theme));
         entries.push_back(separatorEmpty());
         continue;
       }
       auto label = block_label(block.kind);
       auto body = block.kind == BlockKind::assistant
-                      ? render_markdown(block.text)
+                      ? render_markdown(block.text, theme)
                       : paragraph(block.kind == BlockKind::thinking
                                      ? (cfg.show_thinking
                                             ? block.text
                                             : clip_text(block.text, 360, 4))
                                      : block.text) |
-                            block_style(block.kind);
+                            block_style(block.kind, theme);
       if (label && *label)
         entries.push_back(
-            vbox({text(label) | bold | block_style(block.kind), body}));
+            vbox({text(label) | bold | block_style(block.kind, theme), body}));
       else
         entries.push_back(body);
       entries.push_back(separatorEmpty());
@@ -1820,9 +1869,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count();
-        activity_line = kSpin[(ms / 80) % 10];
+        activity_line = kSpin[(ms / 200) % 10];
         activity_line += ' ';
-        screen.RequestAnimationFrame();
       }
       activity_line += activity.empty()
                            ? (cancel->load() ? "Stopping…" : "Thinking…")
@@ -1876,7 +1924,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       if (!widget_rows.empty()) stack.push_back(vbox(std::move(widget_rows)));
     }
     stack.push_back(text(activity_line.empty() ? " " : activity_line) |
-                    color(Color::CyanLight));
+                    color(theme.accent));
     stack.push_back(separatorLight() | dim);
     stack.push_back(hbox({text(busy ? "…" : "› ") | bold,
                           wrapped_input->Render() | xflex |
@@ -1886,7 +1934,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         filler(),
         text(agent.provider + "/" + agent.model +
              (yolo_mode ? " [yolo]" : "")) |
-            color(Color::CyanLight),
+            color(theme.accent),
         text(think.empty() ? std::string() : (":" + think)) | dim,
     }));
     return vbox(std::move(stack));
@@ -2068,8 +2116,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   }
   std::thread extension_thread([&] {
     while (ui_alive) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
       if (!ui_alive) break;
+      const bool extension_changed = extensions && extensions->pump();
+      if (!busy && !extension_changed) continue;
       screen.Post([apply_extension_actions, &screen] {
         try {
           apply_extension_actions();
