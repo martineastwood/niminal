@@ -593,6 +593,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         blocks.back().text += ev.text;
         activity = "Responding…";
         break;
+      case EventKind::thinking_delta:
+      case EventKind::tool_output_delta:
+        break;
       case EventKind::tool_call:
         blocks.push_back(
             Block{BlockKind::tool, tool_summary(ev.tool_name, ev.text)});
@@ -617,6 +620,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       case EventKind::done:
         busy = false;
         activity.clear();
+        break;
+      case EventKind::run_start:
+      case EventKind::step_start:
+      case EventKind::step_end:
+      case EventKind::run_end:
+      case EventKind::assistant_message:
         break;
     }
     if (stick_bottom) transcript_y = 1.f;

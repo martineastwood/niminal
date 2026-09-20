@@ -160,14 +160,47 @@ Print mode still runs one turn and exits:
 /path/to/niminal/build/niminal "Explain what this repo does in one paragraph."
 ```
 
+JSON mode emits the same turn as versioned JSONL events, which is useful when
+another program drives niminal:
+
+```sh
+/path/to/niminal/build/niminal --mode json "Explain what this repo does."
+cat README.md | /path/to/niminal/build/niminal --mode json "Summarize this"
+```
+
+The stream starts and ends with `session_start` and `session_end`, and includes
+the user message, streamed assistant deltas, tool calls and results, step
+boundaries, and the final assistant message. Diagnostics stay on stderr.
+
+RPC mode keeps the process running and accepts one JSON command per stdin line:
+
+```sh
+/path/to/niminal/build/niminal --mode rpc
+```
+
+For example, inspect the session and then shut it down:
+
+```sh
+printf '%s\n' \
+  '{"id":"1","type":"get_state"}' \
+  '{"id":"2","type":"shutdown"}' \
+  | /path/to/niminal/build/niminal --mode rpc
+```
+
+Start a turn with `prompt`, queue `steer` or `follow_up` messages while it is
+busy, inspect queues with `get_state`, and stop it with `interrupt` or
+`shutdown`. Every response and event is versioned JSONL. Queue delivery modes
+are `all` and `one-at-a-time`, and are saved in `~/.niminal/config.json` as
+`steering_mode` and `follow_up_mode`.
+
 Optional environment:
 
 - `NIMINAL_MODEL` (overrides `~/.niminal/config.json`)
 - `NIMINAL_API_URL` (overrides the config file, default OpenRouter chat completions)
 - `NIMINAL_THINKING` (overrides `thinking` in the config file)
 
-Optional flags: `--model ID`, `--provider NAME`, `--thinking LEVEL`, `--max-steps N`,
-`--resume`, `--session ID`, `--no-session`.
+Optional flags: `--model ID`, `--provider NAME`, `--thinking LEVEL`, `--mode json|rpc`,
+`--api-key KEY`, `--max-steps N`, `--resume`, `--session ID`, `--no-session`.
 
 File tools stay inside the current directory. `grep` and `glob` use git's
 tracked and untracked files and honor `.gitignore`, so `build/` stays out of

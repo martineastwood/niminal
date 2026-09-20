@@ -3,7 +3,9 @@
 #include "compaction.hpp"
 #include "config.hpp"
 #include "instructions.hpp"
+#include "json_mode.hpp"
 #include "provider.hpp"
+#include "rpc.hpp"
 #include "session.hpp"
 #include "skills.hpp"
 #include "thinking.hpp"
@@ -31,6 +33,9 @@ const char* kUsage =
     "  --model ID         Model (config, NIMINAL_MODEL, or the provider default)\n"
     "  --provider NAME    anthropic|google|hyper|mistral|openai|opencode|opencodezen|openrouter\n"
     "  --thinking LEVEL   none|minimal|low|medium|high|xhigh|max\n"
+    "  --mode json        emit versioned JSONL events and exit\n"
+    "  --mode rpc         serve JSONL commands until shutdown or EOF\n"
+    "  --api-key KEY      use an API key for this process\n"
     "  --max-steps N      Tool loop cap (default 16)\n"
     "  --resume           Resume the latest session for this workspace\n"
     "  --session ID       Resume a specific session\n"
@@ -122,6 +127,9 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
       case niminal::EventKind::text_delta:
         std::cout << ev.text << std::flush;
         break;
+      case niminal::EventKind::thinking_delta:
+      case niminal::EventKind::tool_output_delta:
+        break;
       case niminal::EventKind::tool_call:
         std::cout << "\n[" << ev.tool_name;
         if (!ev.text.empty()) std::cout << " " << ev.text;
@@ -143,6 +151,11 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
         std::cerr << ev.text << '\n';
         break;
       case niminal::EventKind::done:
+      case niminal::EventKind::run_start:
+      case niminal::EventKind::step_start:
+      case niminal::EventKind::step_end:
+      case niminal::EventKind::run_end:
+      case niminal::EventKind::assistant_message:
         break;
     }
   };
@@ -154,6 +167,59 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
     std::cerr << e.what() << '\n';
     return 1;
   }
+}
+
+std::string trim_copy(std::string text) {
+  const auto first = text.find_first_not_of(" \t\r\n");
+  if (first == std::string::npos) return {};
+  const auto last = text.find_last_not_of(" \t\r\n");
+  return text.substr(first, last - first + 1);
+}
+
+std::string merge_piped_prompt(const std::string& prompt, std::string piped) {
+  piped = trim_copy(std::move(piped));
+  if (piped.empty()) return prompt;
+  if (prompt.empty()) return piped;
+  return piped + "\n\n" + prompt;
+}
+
+int run_json(niminal::Agent& agent, niminal::app::Session& session,
+             const std::string& prompt) {
+  bool failed = false;
+  bool saw_error_event = false;
+  int active_step = -1;
+  agent.run_id = session.id + ":turn:" + std::to_string(session.events.size());
+  auto send = [](const nlohmann::json& event) {
+    if (event.is_null()) return;
+    std::cout << event.dump() << '\n' << std::flush;
+  };
+  send(niminal::app::session_event("session_start", session.id));
+  agent.on_event = [&](const niminal::StreamEvent& event) {
+    if (event.kind == niminal::EventKind::error) {
+      failed = true;
+      saw_error_event = true;
+    }
+    if (event.kind == niminal::EventKind::step_start) active_step = event.step;
+    if (event.kind == niminal::EventKind::run_start)
+      send(niminal::app::message_event(event.session_id, event.turn_id, "user",
+                                       event.text));
+    send(niminal::app::json_event(event));
+  };
+  try {
+    agent.run(prompt);
+  } catch (const std::exception& e) {
+    failed = true;
+    if (!saw_error_event) {
+      niminal::StreamEvent error{niminal::EventKind::error, e.what(), {}, {}};
+      error.run_id = agent.run_id;
+      error.session_id = session.id;
+      error.turn_id = agent.run_id;
+      error.step = active_step;
+      send(niminal::app::json_event(error));
+    }
+  }
+  send(niminal::app::session_event("session_end", session.id, !failed));
+  return failed ? 1 : 0;
 }
 
 }  // namespace
@@ -177,6 +243,9 @@ int main(int argc, char** argv) {
   bool provider_from_cli = false;
   bool resume_latest = false;
   bool no_session = false;
+  bool json_mode = false;
+  bool rpc_mode = false;
+  std::string api_key;
   std::string session_id;
   std::vector<std::string> prompt_parts;
 
@@ -221,6 +290,30 @@ int main(int argc, char** argv) {
       }
       continue;
     }
+    if (a == "--mode") {
+      if (i + 1 >= argc) {
+        std::cerr << "Usage: niminal --mode json|rpc [prompt…]\n";
+        return 2;
+      }
+      std::string mode = argv[++i];
+      for (char& c : mode)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+      if (mode != "json" && mode != "rpc") {
+        std::cerr << "Unknown mode: " << mode << " (use json|rpc)\n";
+        return 2;
+      }
+      json_mode = mode == "json";
+      rpc_mode = mode == "rpc";
+      continue;
+    }
+    if (a == "--api-key") {
+      if (i + 1 >= argc) {
+        std::cerr << kUsage;
+        return 2;
+      }
+      api_key = argv[++i];
+      continue;
+    }
     if (a == "--max-steps") {
       if (i + 1 >= argc) {
         std::cerr << kUsage;
@@ -256,14 +349,31 @@ int main(int argc, char** argv) {
     prompt_parts.push_back(std::move(a));
   }
 
+  if (rpc_mode && !prompt_parts.empty()) {
+    std::cerr << "RPC mode accepts commands on stdin, not a CLI prompt.\n";
+    return 2;
+  }
+
   if (no_session && (resume_latest || !session_id.empty())) {
     std::cerr << "--no-session cannot be combined with --resume or --session\n";
+    return 2;
+  }
+
+  std::string prompt = join(prompt_parts);
+  if (json_mode && !isatty(STDIN_FILENO)) {
+    std::ostringstream piped;
+    piped << std::cin.rdbuf();
+    prompt = merge_piped_prompt(prompt, piped.str());
+  }
+  if (json_mode && prompt.empty()) {
+    std::cerr << "Non-interactive mode requires a prompt or piped stdin.\n";
     return 2;
   }
 
   niminal::app::Workspace ws(std::filesystem::current_path());
   std::atomic<bool> cancel{false};
   auto agent = make_agent(ws, cfg, max_steps, &cancel);
+  if (!api_key.empty()) agent.api_key = api_key;
 
   niminal::app::Session session;
   try {
@@ -304,6 +414,17 @@ int main(int argc, char** argv) {
   }
   niminal::app::apply_provider(agent, cfg);
 
+  if (json_mode || rpc_mode) {
+    try {
+      session.recover_interrupted_tools();
+    } catch (const std::exception& e) {
+      std::cerr << e.what() << '\n';
+      return 1;
+    }
+    agent.messages = session.openai_messages();
+    if (rpc_mode) return niminal::app::run_rpc(agent, session, cfg);
+    return run_json(agent, session, prompt);
+  }
   if (prompt_parts.empty()) {
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
       std::cerr << "niminal needs a terminal for the TUI, or pass a prompt for "
@@ -319,5 +440,5 @@ int main(int argc, char** argv) {
     return 1;
   }
   agent.messages = session.openai_messages();
-  return run_print(agent, join(prompt_parts));
+  return run_print(agent, prompt);
 }

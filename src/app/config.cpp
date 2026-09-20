@@ -12,6 +12,20 @@ namespace niminal::app {
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+namespace {
+
+bool valid_queue_mode(const std::string& mode) {
+  return mode == "all" || mode == "one-at-a-time";
+}
+
+void load_queue_mode(const json& doc, const char* key, std::string& target) {
+  if (doc.contains(key) && doc[key].is_string() &&
+      valid_queue_mode(doc[key].get<std::string>()))
+    target = doc[key].get<std::string>();
+}
+
+}  // namespace
+
 std::filesystem::path config_path() {
   const char* home = std::getenv("HOME");
   if (!home || !*home)
@@ -59,6 +73,8 @@ Config load_config_file(const fs::path& path) {
     }
     if (doc.contains("thinking") && doc["thinking"].is_string())
       cfg.thinking = doc["thinking"].get<std::string>();
+    load_queue_mode(doc, "steering_mode", cfg.steering_mode);
+    load_queue_mode(doc, "follow_up_mode", cfg.follow_up_mode);
     if (doc.contains("providers") && doc["providers"].is_object()) {
       for (auto& [name, block] : doc["providers"].items()) {
         if (block.is_object() && block.contains("last_model") &&
@@ -84,7 +100,10 @@ Config load_config() {
 
 void save_config_file(const fs::path& path, const Config& cfg) {
   fs::create_directories(path.parent_path());
-  json doc = {{"provider", cfg.provider}, {"model", cfg.model}};
+  json doc = {{"provider", cfg.provider},
+              {"model", cfg.model},
+              {"steering_mode", cfg.steering_mode},
+              {"follow_up_mode", cfg.follow_up_mode}};
   if (!cfg.api_url.empty()) doc["api_url"] = cfg.api_url;
   if (!cfg.thinking.empty()) doc["thinking"] = cfg.thinking;
   if (!cfg.last_models.empty()) {

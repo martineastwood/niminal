@@ -121,7 +121,9 @@ add_executable(niminal_app
   src/app/mentions.cpp
   src/app/models_dev.cpp
   src/app/thinking.cpp
-  src/app/prompts.cpp)
+  src/app/prompts.cpp
+  src/app/json_mode.cpp
+  src/app/rpc.cpp)
 target_sources(niminal_app PRIVATE src/app/skills.cpp)
 set_target_properties(niminal_app PROPERTIES OUTPUT_NAME niminal)
 target_include_directories(niminal_app PRIVATE src/app)
@@ -137,6 +139,11 @@ target_compile_options(niminal_workspace_test PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(niminal_mentions_test tests/mentions_test.cpp src/app/mentions.cpp src/app/workspace.cpp)
 target_include_directories(niminal_mentions_test PRIVATE src/app)
 target_compile_options(niminal_mentions_test PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(niminal_json_mode_test tests/json_mode_test.cpp src/app/json_mode.cpp)
+target_include_directories(niminal_json_mode_test PRIVATE src/app include)
+target_link_libraries(niminal_json_mode_test PRIVATE nlohmann_json::nlohmann_json)
+target_compile_options(niminal_json_mode_test PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(niminal_tools_test
   tests/tools_test.cpp
@@ -223,6 +230,7 @@ target_compile_options(niminal_thinking_test PRIVATE -Wall -Wextra -Wpedantic)
 enable_testing()
 add_test(NAME workspace COMMAND niminal_workspace_test)
 add_test(NAME mentions COMMAND niminal_mentions_test)
+add_test(NAME json_mode COMMAND niminal_json_mode_test)
 add_test(NAME tools COMMAND niminal_tools_test)
 add_test(NAME instructions COMMAND niminal_instructions_test)
 add_test(NAME skills COMMAND niminal_skills_test)

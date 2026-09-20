@@ -41,6 +41,16 @@ bool looks_overflow(std::string_view msg) {
           s.find("overflow") != std::string::npos);
 }
 
+json parse_tool_input(const std::string& arguments) {
+  if (arguments.empty()) return json::object();
+  try {
+    auto input = json::parse(arguments);
+    return input.is_object() ? input : json::object();
+  } catch (...) {
+    return json::object();
+  }
+}
+
 }  // namespace
 
 json Agent::request_messages() const {
@@ -90,8 +100,23 @@ void Agent::fill_chat(ChatRequest& req) const {
 std::string Agent::run(const std::string& prompt) {
   if (system_extra_loader) system_extra = system_extra_loader();
   if (!messages.is_array()) messages = json::array();
+  const std::string active_run_id =
+      run_id.empty()
+          ? (conversation_id.empty() ? "session" : conversation_id) +
+                ":turn:" + std::to_string(messages.size())
+          : run_id;
+  int step = -1;
+  auto emit = [&](StreamEvent event) {
+    if (event.run_id.empty()) event.run_id = active_run_id;
+    if (event.session_id.empty()) event.session_id = conversation_id;
+    if (event.turn_id.empty()) event.turn_id = active_run_id;
+    if (event.step < 0 && step >= 0) event.step = step;
+    if (event.model.empty()) event.model = model;
+    if (on_event) on_event(std::move(event));
+  };
   messages.push_back(json{{"role", "user"}, {"content", prompt}});
   if (persist_user) persist_user(prompt);
+  emit(StreamEvent{EventKind::run_start, prompt, {}, {}});
 
   const json tools_json = tools_payload(tools);
   auto inject_steering = [&]() -> int {
@@ -101,7 +126,19 @@ std::string Agent::run(const std::string& prompt) {
       if (text.empty()) continue;
       messages.push_back(json{{"role", "user"}, {"content", text}});
       if (persist_user) persist_user(text);
-      if (on_event) on_event(StreamEvent{EventKind::user, text, {}, {}});
+      emit(StreamEvent{EventKind::user, text, {}, {}});
+      ++n;
+    }
+    return n;
+  };
+  auto inject_follow_up = [&]() -> int {
+    if (!take_follow_up) return 0;
+    int n = 0;
+    for (auto& text : take_follow_up()) {
+      if (text.empty()) continue;
+      messages.push_back(json{{"role", "user"}, {"content", text}});
+      if (persist_user) persist_user(text);
+      emit(StreamEvent{EventKind::user, text, {}, {}});
       ++n;
     }
     return n;
@@ -109,7 +146,7 @@ std::string Agent::run(const std::string& prompt) {
 
   try {
     bool overflow_retried = false;
-    for (int step = 0; step < max_steps; ++step) {
+    for (step = 0; step < max_steps; ++step) {
       if (cancelled()) throw Cancelled();
       inject_steering();
       if (before_request) before_request();
@@ -118,6 +155,13 @@ std::string Agent::run(const std::string& prompt) {
       fill_chat(req);
       req.messages = request_messages();
       req.tools = tools_json;
+      emit(StreamEvent{EventKind::step_start, {}, {}, {}});
+      req.on_event = [&, step](const StreamEvent& event) {
+        auto tagged = event;
+        tagged.step = step;
+        tagged.model = model;
+        emit(std::move(tagged));
+      };
       ChatResult result;
       try {
         result = stream_chat(req);
@@ -137,24 +181,36 @@ std::string Agent::run(const std::string& prompt) {
       if (result.tool_calls.empty()) {
         if (persist_assistant)
           persist_assistant(result.text, result.tool_calls, model, result.usage);
+        StreamEvent assistant{EventKind::assistant_message, result.text, {}, {}};
+        assistant.final = true;
+        emit(std::move(assistant));
+        StreamEvent step_end{EventKind::step_end, {}, {}, {}};
+        step_end.usage = result.usage;
+        emit(std::move(step_end));
         if (inject_steering() > 0) continue;
-        if (on_event)
-          on_event(StreamEvent{EventKind::done, {}, {}, {}});
+        if (inject_follow_up() > 0) continue;
+        emit(StreamEvent{EventKind::run_end, {}, {}, {}});
+        emit(StreamEvent{EventKind::done, {}, {}, {}});
         return result.text;
       }
 
       json assistant = {{"role", "assistant"}, {"content", result.text}};
       json calls = json::array();
+      if (!result.text.empty()) {
+        StreamEvent message{EventKind::assistant_message, result.text, {}, {}};
+        message.final = false;
+        emit(std::move(message));
+      }
       for (const auto& call : result.tool_calls) {
         calls.push_back({
             {"id", call.id},
             {"type", "function"},
             {"function", {{"name", call.name}, {"arguments", call.arguments}}},
         });
-        if (on_event) {
-          on_event(StreamEvent{EventKind::tool_call, call.arguments, call.name,
-                               call.id});
-        }
+        StreamEvent tool_call{EventKind::tool_call, call.arguments, call.name,
+                              call.id};
+        tool_call.input = parse_tool_input(call.arguments);
+        emit(std::move(tool_call));
       }
       assistant["tool_calls"] = std::move(calls);
       messages.push_back(std::move(assistant));
@@ -176,15 +232,14 @@ std::string Agent::run(const std::string& prompt) {
 
       auto apply_tool_result = [&](const ToolCall& call,
                                    const std::string& output) {
-        if (on_event) {
-          on_event(
-              StreamEvent{EventKind::tool_result, output, call.name, call.id});
-        }
+        StreamEvent tool_result{EventKind::tool_result, output, call.name, call.id};
+        tool_result.is_error = cancelled() || output == "interrupted" ||
+                               output.rfind("tool error:", 0) == 0 ||
+                               output.rfind("unknown tool:", 0) == 0;
+        const bool is_error = tool_result.is_error;
+        emit(std::move(tool_result));
         if (persist_tool) {
-          bool err = cancelled() || output == "interrupted" ||
-                     output.rfind("tool error:", 0) == 0 ||
-                     output.rfind("unknown tool:", 0) == 0;
-          persist_tool(call.id, output, err);
+          persist_tool(call.id, output, is_error);
         }
         messages.push_back(json{
             {"role", "tool"},
@@ -216,13 +271,14 @@ std::string Agent::run(const std::string& prompt) {
           ++i;
         }
       }
+      StreamEvent step_end{EventKind::step_end, {}, {}, {}};
+      step_end.usage = result.usage;
+      emit(std::move(step_end));
     }
     throw Error("max_steps reached (" + std::to_string(max_steps) + ")");
   } catch (const Cancelled&) {
-    if (on_event) {
-      on_event(StreamEvent{EventKind::error, "interrupted", {}, {}});
-      on_event(StreamEvent{EventKind::done, {}, {}, {}});
-    }
+    emit(StreamEvent{EventKind::error, "interrupted", {}, {}});
+    emit(StreamEvent{EventKind::done, {}, {}, {}});
     return {};
   }
 }

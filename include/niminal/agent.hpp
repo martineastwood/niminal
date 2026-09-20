@@ -40,8 +40,10 @@ struct Agent {
   std::function<void(const std::string& id, const std::string& output, bool error)>
       persist_tool;
   std::function<std::vector<std::string>()> take_steering;
+  std::function<std::vector<std::string>()> take_follow_up;
   std::function<void()> before_request;
   std::function<bool()> recover_overflow;
+  std::string run_id;
 
   json request_messages() const;
   void fill_chat(ChatRequest& req) const;

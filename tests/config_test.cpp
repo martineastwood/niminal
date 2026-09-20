@@ -27,10 +27,14 @@ int main() {
   cfg.api_url = "https://api.anthropic.com/v1/chat/completions";
   cfg.last_models["openrouter"] = "openai/gpt-4o-mini";
   cfg.thinking = "high";
+  cfg.steering_mode = "all";
+  cfg.follow_up_mode = "one-at-a-time";
   save_config_file(path, cfg);
   auto loaded = load_config_file(path);
   if (loaded.model != cfg.model || loaded.api_url != cfg.api_url ||
       loaded.provider != "anthropic" || loaded.thinking != "high" ||
+      loaded.steering_mode != "all" ||
+      loaded.follow_up_mode != "one-at-a-time" ||
       loaded.last_models["openrouter"] != "openai/gpt-4o-mini") {
     std::cerr << "roundtrip mismatch\n";
     return 1;
@@ -43,6 +47,17 @@ int main() {
   auto inferred = load_config_file(path);
   if (inferred.provider != "mistral") {
     std::cerr << "infer provider from api_url\n";
+    return 1;
+  }
+
+  {
+    std::ofstream out(path);
+    out << R"({"steering_mode":"bad","follow_up_mode":"all"})";
+  }
+  auto modes = load_config_file(path);
+  if (modes.steering_mode != "one-at-a-time" ||
+      modes.follow_up_mode != "all") {
+    std::cerr << "invalid queue mode should use defaults\n";
     return 1;
   }
 

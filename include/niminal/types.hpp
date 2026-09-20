@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -20,21 +21,52 @@ struct Cancelled : Error {
   Cancelled() : Error("interrupted") {}
 };
 
+struct Usage {
+  int input_tokens = 0;
+  int output_tokens = 0;
+  int cache_read_tokens = 0;
+  int cache_write_tokens = 0;
+  bool cache_reported = false;
+};
+
 enum class EventKind {
   text_delta,
+  thinking_delta,
   tool_call,
+  tool_output_delta,
   tool_result,
   user,
   status,
   error,
   done,
+  run_start,
+  step_start,
+  step_end,
+  run_end,
+  assistant_message,
 };
 
 struct StreamEvent {
+  StreamEvent() = default;
+  StreamEvent(EventKind kind, std::string text, std::string tool_name,
+              std::string tool_id)
+      : kind(kind), text(std::move(text)), tool_name(std::move(tool_name)),
+        tool_id(std::move(tool_id)) {}
+
   EventKind kind = EventKind::text_delta;
   std::string text;
   std::string tool_name;
   std::string tool_id;
+  json input;
+  bool is_error = false;
+  bool final = false;
+  int step = -1;
+  int duration_ms = 0;
+  std::string run_id;
+  std::string session_id;
+  std::string turn_id;
+  std::string model;
+  Usage usage;
 };
 
 struct ToolCall {
@@ -49,14 +81,6 @@ struct Tool {
   json parameters;
   std::function<std::string(const json&)> run;
   bool read_only = false;
-};
-
-struct Usage {
-  int input_tokens = 0;
-  int output_tokens = 0;
-  int cache_read_tokens = 0;
-  int cache_write_tokens = 0;
-  bool cache_reported = false;
 };
 
 inline void add_usage(Usage& a, const Usage& b) {
