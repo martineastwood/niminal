@@ -65,6 +65,10 @@ Set `max_steps` in that file to limit the tool loop for each user turn. Omit it
 or set it to `0` for the default unbounded loop. The `--max-steps N` flag
 overrides the config value for the current process, and `0` means unlimited.
 
+Thinking traces appear as a compact preview in the TUI by default. Set
+`"show_thinking": true` in `~/.niminal/config.json` to show the full streamed
+trace in the transcript.
+
 The agent always speaks one request shape: OpenAI-style messages and tools.
 niminal translates that to the provider's native API before it goes on the
 wire, including prompt cache:

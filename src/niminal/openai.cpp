@@ -23,6 +23,22 @@ void emit(const ChatRequest& request, StreamEvent ev) {
   if (request.on_event) request.on_event(ev);
 }
 
+void emit_thinking(const ChatRequest& request, const std::string& text) {
+  if (!text.empty())
+    emit(request, StreamEvent{EventKind::thinking_delta, text, {}, {}});
+}
+
+void emit_thinking_value(const ChatRequest& request, const json& value) {
+  if (value.is_string()) {
+    emit_thinking(request, value.get<std::string>());
+  } else if (value.is_array()) {
+    for (const auto& item : value) emit_thinking_value(request, item);
+  } else if (value.is_object()) {
+    for (const auto* key : {"text", "content", "reasoning", "reasoning_content"})
+      if (value.contains(key)) emit_thinking_value(request, value[key]);
+  }
+}
+
 void require_request(const ChatRequest& request) {
   if (request.api_key.empty())
     throw Error("missing API key (set " +
@@ -492,6 +508,8 @@ void consume_anthropic(const ChatRequest& request, ChatResult& result,
         result.text += piece;
         emit(request, StreamEvent{EventKind::text_delta, piece, {}, {}});
       }
+    } else if (dtype == "thinking_delta") {
+      emit_thinking(request, delta.value("thinking", ""));
     } else if (dtype == "input_json_delta" &&
                i < static_cast<int>(acc.args.size())) {
       acc.args[static_cast<size_t>(i)] += delta.value("partial_json", "");
@@ -552,9 +570,11 @@ void consume_google(const ChatRequest& request, ChatResult& result,
   int i = 0;
   for (const auto& part : cand["content"]["parts"]) {
     if (!part.is_object()) continue;
-    if (part.contains("text") && part["text"].is_string() &&
-        !(part.contains("thought") && part["thought"].is_boolean() &&
-          part["thought"].get<bool>())) {
+    const bool thought = part.contains("thought") && part["thought"].is_boolean() &&
+                         part["thought"].get<bool>();
+    if (thought) {
+      emit_thinking_value(request, part);
+    } else if (part.contains("text") && part["text"].is_string()) {
       auto piece = part["text"].get<std::string>();
       if (!piece.empty()) {
         result.text += piece;
@@ -588,6 +608,8 @@ void consume_openai(const ChatRequest& request, ChatResult& result,
     result.finish_reason = choice["finish_reason"].get<std::string>();
   if (!choice.contains("delta") || !choice["delta"].is_object()) return;
   const auto& delta = choice["delta"];
+  for (const auto* key : {"reasoning_content", "reasoning", "reasoning_details"})
+    if (delta.contains(key)) emit_thinking_value(request, delta[key]);
   if (delta.contains("content")) {
     std::string piece;
     const auto& content = delta["content"];
@@ -597,8 +619,16 @@ void consume_openai(const ChatRequest& request, ChatResult& result,
       for (const auto& part : content) {
         if (part.is_string())
           piece += part.get<std::string>();
-        else if (part.is_object())
-          piece += part.value("text", "");
+        else if (part.is_object()) {
+          const auto type = part.value("type", "");
+          const bool thought = type == "reasoning" || type == "thinking" ||
+                               (part.contains("thought") && part["thought"].is_boolean() &&
+                                part["thought"].get<bool>());
+          if (thought)
+            emit_thinking_value(request, part);
+          else
+            piece += part.value("text", "");
+        }
       }
     }
     if (!piece.empty()) {

@@ -17,7 +17,7 @@ int main() {
 
   auto missing = load_config_file(path);
   if (missing.model != "openai/gpt-4o-mini" || missing.provider != "openrouter" ||
-      missing.max_steps != 0) {
+      missing.max_steps != 0 || missing.show_thinking) {
     std::cerr << "default model mismatch\n";
     return 1;
   }
@@ -28,6 +28,7 @@ int main() {
   cfg.api_url = "https://api.anthropic.com/v1/chat/completions";
   cfg.last_models["openrouter"] = "openai/gpt-4o-mini";
   cfg.thinking = "high";
+  cfg.show_thinking = true;
   cfg.steering_mode = "all";
   cfg.follow_up_mode = "one-at-a-time";
   cfg.max_steps = 12;
@@ -35,6 +36,7 @@ int main() {
   auto loaded = load_config_file(path);
   if (loaded.model != cfg.model || loaded.api_url != cfg.api_url ||
       loaded.provider != "anthropic" || loaded.thinking != "high" ||
+      !loaded.show_thinking ||
       loaded.steering_mode != "all" ||
       loaded.follow_up_mode != "one-at-a-time" ||
       loaded.max_steps != 12 ||

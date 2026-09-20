@@ -1,6 +1,7 @@
 #include "tui.hpp"
 #include "compaction.hpp"
 #include "config.hpp"
+#include "diff.hpp"
 #include "markdown.hpp"
 #include "mentions.hpp"
 #include "models_dev.hpp"
@@ -24,10 +25,15 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
+#include <optional>
+#include <sstream>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -36,12 +42,76 @@ namespace {
 
 using namespace ftxui;
 
-enum class BlockKind { user, assistant, tool, error, status };
+enum class BlockKind {
+  user,
+  assistant,
+  thinking,
+  tool,
+  diff,
+  error,
+  status,
+};
 
 struct Block {
   BlockKind kind = BlockKind::assistant;
   std::string text;
+  std::string path;
+  bool created = false;
+
+  Block() = default;
+  Block(BlockKind kind, std::string text)
+      : kind(kind), text(std::move(text)) {}
+  Block(BlockKind kind, std::string text, std::string path, bool created)
+      : kind(kind),
+        text(std::move(text)),
+        path(std::move(path)),
+        created(created) {}
 };
+
+struct PendingFileChange {
+  std::filesystem::path path;
+  std::string relative;
+  bool before_exists = false;
+  std::string before;
+};
+
+std::optional<std::string> read_text_file(const std::filesystem::path& path) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(path, ec) ||
+      std::filesystem::file_size(path, ec) > 200'000)
+    return std::nullopt;
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return std::nullopt;
+  std::ostringstream out;
+  out << in.rdbuf();
+  auto text = out.str();
+  if (text.find('\0') != std::string::npos) return std::nullopt;
+  return text;
+}
+
+Element render_diff_card(const Block& block) {
+  Elements lines;
+  std::istringstream in(block.text);
+  std::string line;
+  while (std::getline(in, line)) {
+    auto row = text(line);
+    if (!line.empty() && line.front() == '+')
+      row |= color(Color::GreenLight);
+    else if (!line.empty() && line.front() == '-')
+      row |= color(Color::RedLight);
+    else if (!line.empty() && line.front() == '@')
+      row |= color(Color::CyanLight);
+    else if (!line.empty() && line.front() == '!')
+      row |= color(Color::YellowLight);
+    else
+      row |= dim;
+    lines.push_back(std::move(row));
+  }
+  return vbox({hbox({text(block.created ? "created " : "updated ") | bold,
+                      text(block.path)}),
+               separatorLight(), vbox(std::move(lines))}) |
+         border | color(Color::GrayLight);
+}
 
 std::string clip_text(std::string text, size_t max_chars, int max_lines) {
   int lines = 1;
@@ -111,6 +181,10 @@ Decorator block_style(BlockKind kind) {
       return color(Color::Cyan);
     case BlockKind::tool:
       return color(Color::YellowLight) | dim;
+    case BlockKind::thinking:
+      return dim;
+    case BlockKind::diff:
+      return color(Color::GrayLight);
     case BlockKind::error:
       return color(Color::Red);
     case BlockKind::status:
@@ -129,6 +203,10 @@ const char* block_label(BlockKind kind) {
       return "niminal";
     case BlockKind::tool:
       return "tool";
+    case BlockKind::thinking:
+      return "thinking";
+    case BlockKind::diff:
+      return "";
     case BlockKind::error:
       return "error";
     case BlockKind::status:
@@ -248,6 +326,12 @@ void add_unique(std::vector<std::string>& ids, const std::string& id) {
   ids.push_back(id);
 }
 
+void sort_suggestions(std::vector<Suggestion>& out) {
+  std::sort(out.begin(), out.end(), [](const Suggestion& a, const Suggestion& b) {
+    return lower_copy(a.fill) < lower_copy(b.fill);
+  });
+}
+
 std::vector<Suggestion> suggest_models(const std::string& query,
                                        std::string_view provider,
                                        const std::vector<std::string>& recents) {
@@ -308,6 +392,7 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
                      "/skill:" + skill.name +
                          (skill.description.empty() ? "" : "  " + skill.description)});
     }
+    sort_suggestions(out);
     return out;
   }
 
@@ -356,6 +441,7 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
       out.push_back({"/provider " + std::string(spec->name),
                      std::string(spec->name) + "  " + spec->default_model});
     }
+    sort_suggestions(out);
     if (!out.empty()) return out;
   }
 
@@ -386,6 +472,7 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
                                          ? std::string()
                                          : "  " + command.description)});
   }
+  sort_suggestions(out);
   return out;
 }
 
@@ -507,6 +594,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   auto* cancel = agent.cancel;
 
   std::vector<Block> blocks;
+  std::mutex file_changes_mu;
+  std::unordered_map<std::string, PendingFileChange> file_changes;
   blocks.push_back(Block{
       BlockKind::status,
       "enter send  ·  /help  ·  alt-j newline  ·  esc interrupt/clear  ·  ctrl-c quit",
@@ -684,6 +773,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         activity = "Responding…";
         break;
       case EventKind::thinking_delta:
+        if (blocks.empty() || blocks.back().kind != BlockKind::thinking)
+          blocks.push_back(Block{BlockKind::thinking, {}});
+        blocks.back().text += ev.text;
+        activity = "Thinking…";
+        break;
       case EventKind::tool_output_delta:
         break;
       case EventKind::tool_call:
@@ -703,6 +797,33 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         activity = "Approval needed";
         break;
       case EventKind::tool_result:
+        if (!ev.tool_id.empty()) {
+          std::optional<PendingFileChange> pending;
+          {
+            std::lock_guard lock(file_changes_mu);
+            auto it = file_changes.find(ev.tool_id);
+            if (it != file_changes.end()) {
+              pending = std::move(it->second);
+              file_changes.erase(it);
+            }
+          }
+          if (pending && !ev.is_error) {
+            std::error_code ec;
+            const bool after_exists =
+                std::filesystem::is_regular_file(pending->path, ec);
+            auto after = after_exists ? read_text_file(pending->path)
+                                      : std::optional<std::string>{};
+            if (!after_exists || after) {
+              auto diff = make_file_diff(
+                  pending->before_exists, pending->before, after_exists,
+                  after.value_or(std::string()));
+              if (diff.changed)
+                blocks.push_back(Block{BlockKind::diff, std::move(diff.body),
+                                       std::move(pending->relative),
+                                       diff.created});
+            }
+          }
+        }
         activity = "Waiting for model…";
         break;
       case EventKind::user:
@@ -735,6 +856,30 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   };
 
   auto post_ui = [&](StreamEvent ev) {
+    if (ev.kind == EventKind::tool_call &&
+        (ev.tool_name == "edit" || ev.tool_name == "write")) {
+      try {
+        auto path_arg = ev.input.is_object()
+                            ? ev.input.value("path", std::string())
+                            : std::string();
+        if (!path_arg.empty()) {
+          auto path = workspace.resolve(path_arg);
+          auto relative = workspace.relative(path);
+          std::error_code ec;
+          const bool before_exists =
+              std::filesystem::is_regular_file(path, ec);
+          auto before = before_exists ? read_text_file(path)
+                                      : std::optional<std::string>{};
+          if (!before_exists || before) {
+            std::lock_guard lock(file_changes_mu);
+            file_changes[ev.tool_id] = PendingFileChange{
+                std::move(path), std::move(relative), before_exists,
+                before.value_or(std::string())};
+          }
+        }
+      } catch (...) {
+      }
+    }
     if (!ui_alive) return;
     screen.Post([apply_event, apply_extension_actions, ev, &screen] {
       try {
@@ -1406,10 +1551,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   auto view = Renderer(layout, [&] {
     Elements entries;
     for (const auto& block : blocks) {
+      if (block.kind == BlockKind::diff) {
+        entries.push_back(render_diff_card(block));
+        entries.push_back(separatorEmpty());
+        continue;
+      }
       auto label = block_label(block.kind);
       auto body = block.kind == BlockKind::assistant
                       ? render_markdown(block.text)
-                      : paragraph(block.text) | block_style(block.kind);
+                      : paragraph(block.kind == BlockKind::thinking
+                                     ? (cfg.show_thinking
+                                            ? block.text
+                                            : clip_text(block.text, 360, 4))
+                                     : block.text) |
+                            block_style(block.kind);
       if (label && *label)
         entries.push_back(
             vbox({text(label) | bold | block_style(block.kind), body}));

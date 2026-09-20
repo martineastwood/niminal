@@ -67,21 +67,9 @@ set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   ftxui
   GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-  GIT_TAG v6.1.9
+  GIT_TAG v7.0.1
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(ftxui)
-
-# FTXUI's insert-mode input uses a thin bar cursor that is hard to see in many
-# terminals; a block cursor is much easier to spot.
-set(_ftxui_input "${ftxui_SOURCE_DIR}/src/ftxui/component/input.cpp")
-if(EXISTS "${_ftxui_input}")
-  file(READ "${_ftxui_input}" _ftxui_input_src)
-  if(_ftxui_input_src MATCHES "focusCursorBarBlinking")
-    string(REPLACE "focusCursorBarBlinking" "focusCursorBlockBlinking"
-           _ftxui_input_src "${_ftxui_input_src}")
-    file(WRITE "${_ftxui_input}" "${_ftxui_input_src}")
-  endif()
-endif()
 
 add_library(niminal
   src/niminal/http.cpp
@@ -127,6 +115,7 @@ add_executable(niminal_app
 target_sources(niminal_app PRIVATE src/app/skills.cpp)
 target_sources(niminal_app PRIVATE src/app/permissions.cpp src/app/trust.cpp)
 target_sources(niminal_app PRIVATE src/app/extensions.cpp)
+target_sources(niminal_app PRIVATE src/app/diff.cpp)
 set_target_properties(niminal_app PROPERTIES OUTPUT_NAME niminal)
 target_include_directories(niminal_app PRIVATE src/app)
 target_link_libraries(niminal_app PRIVATE
@@ -258,6 +247,10 @@ target_include_directories(niminal_extensions_test PRIVATE src/app include)
 target_link_libraries(niminal_extensions_test PRIVATE niminal::niminal)
 target_compile_options(niminal_extensions_test PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(niminal_diff_test tests/diff_test.cpp src/app/diff.cpp)
+target_include_directories(niminal_diff_test PRIVATE src/app)
+target_compile_options(niminal_diff_test PRIVATE -Wall -Wextra -Wpedantic)
+
 enable_testing()
 add_test(NAME workspace COMMAND niminal_workspace_test)
 add_test(NAME mentions COMMAND niminal_mentions_test)
@@ -277,3 +270,4 @@ add_test(NAME thinking COMMAND niminal_thinking_test)
 add_test(NAME permissions COMMAND niminal_permissions_test)
 add_test(NAME trust COMMAND niminal_trust_test)
 add_test(NAME extensions COMMAND niminal_extensions_test)
+add_test(NAME diff COMMAND niminal_diff_test)
