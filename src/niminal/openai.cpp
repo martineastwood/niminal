@@ -744,14 +744,18 @@ std::string complete_chat(const ChatRequest& request) {
 Usage parse_chat_usage(const json& usage) {
   Usage out;
   if (!usage.is_object()) return out;
-  out.input_tokens = usage.value("prompt_tokens", 0);
-  if (!out.input_tokens) out.input_tokens = usage.value("input_tokens", 0);
-  if (!out.input_tokens) out.input_tokens = usage.value("promptTokenCount", 0);
-  out.output_tokens = usage.value("completion_tokens", 0);
-  if (!out.output_tokens) out.output_tokens = usage.value("output_tokens", 0);
+  auto count = [](const json& object, const char* key) {
+    auto it = object.find(key);
+    return it != object.end() && it->is_number_integer() ? it->get<int>() : 0;
+  };
+  out.input_tokens = count(usage, "prompt_tokens");
+  if (!out.input_tokens) out.input_tokens = count(usage, "input_tokens");
+  if (!out.input_tokens) out.input_tokens = count(usage, "promptTokenCount");
+  out.output_tokens = count(usage, "completion_tokens");
+  if (!out.output_tokens) out.output_tokens = count(usage, "output_tokens");
   if (!out.output_tokens) {
-    out.output_tokens = usage.value("candidatesTokenCount", 0) +
-                        usage.value("thoughtsTokenCount", 0);
+    out.output_tokens = count(usage, "candidatesTokenCount") +
+                        count(usage, "thoughtsTokenCount");
   }
   json details = json::object();
   if (usage.contains("prompt_tokens_details") &&
@@ -761,21 +765,21 @@ Usage parse_chat_usage(const json& usage) {
            usage["input_tokens_details"].is_object())
     details = usage["input_tokens_details"];
   if (details.is_object()) {
-    out.cache_read_tokens = details.value("cached_tokens", 0);
-    out.cache_write_tokens = details.value("cache_write_tokens", 0);
+    out.cache_read_tokens = count(details, "cached_tokens");
+    out.cache_write_tokens = count(details, "cache_write_tokens");
     out.cache_reported = details.contains("cached_tokens") ||
                          details.contains("cache_write_tokens");
   }
   if (usage.contains("cache_read_input_tokens")) {
-    out.cache_read_tokens = usage.value("cache_read_input_tokens", 0);
+    out.cache_read_tokens = count(usage, "cache_read_input_tokens");
     out.cache_reported = true;
   }
   if (usage.contains("cache_creation_input_tokens")) {
-    out.cache_write_tokens = usage.value("cache_creation_input_tokens", 0);
+    out.cache_write_tokens = count(usage, "cache_creation_input_tokens");
     out.cache_reported = true;
   }
   if (usage.contains("cachedContentTokenCount")) {
-    out.cache_read_tokens = usage.value("cachedContentTokenCount", 0);
+    out.cache_read_tokens = count(usage, "cachedContentTokenCount");
     out.cache_reported = true;
   }
   if (out.cache_read_tokens > 0 || out.cache_write_tokens > 0)

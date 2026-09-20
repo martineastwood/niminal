@@ -90,7 +90,7 @@ the first message creates an append-only JSONL file under
 - Esc interrupts a running turn, or clears the composer when idle
 - Ctrl-C quits
 - `/help`, `/provider`, `/model`, `/thinking`, `/models refresh`, `/session`, `/name`, `/resume`,
-  `/new`, `/clear`, `/copy`, `/compact`, `/skill:NAME`, `/quit`
+  `/new`, `/clear`, `/copy`, `/compact`, `/skill:NAME`, `/NAME`, `/quit`
 
 - Tab completes a slash command. Up/Down moves through the list. Type `/model `
   to pick from the models.dev catalog for the active provider (filter from two
@@ -102,6 +102,26 @@ workspace's `.niminal/skills/<name>/` (workspace skills win on name conflicts).
 The optional frontmatter `description` appears in slash suggestions and tells
 the model when to load the skill itself. Invoke one directly with
 `/skill:NAME optional request`.
+
+Prompt templates are Markdown files that become bare slash commands. Put them in
+`~/.agents/prompts/`, `~/.niminal/prompts/`, or one of the workspace folders
+`.agent/prompts/`, `.agents/prompts/`, and `.niminal/prompts/`. Later folders win
+when names collide. For example, save this as `.niminal/prompts/review.md`:
+
+```markdown
+---
+description: Review the current changes.
+---
+
+Review the current diff for correctness and style.
+Focus on: $ARGUMENTS
+```
+
+Type `/review parser edge cases` in the TUI. niminal sends the expanded body,
+with `$ARGUMENTS` or `$@` replaced by the text after `/review`. The first useful
+body line is used as the suggestion description when frontmatter is omitted.
+Templates are flat, only `*.md` files directly inside those folders are found,
+and files over 100,000 bytes are ignored. Built-in commands keep their names.
 
 `/model ID`, `/provider NAME`, and `/thinking LEVEL` are saved to
 `~/.niminal/config.json`. The thinking value is a shared ladder

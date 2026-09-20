@@ -176,5 +176,15 @@ int main() {
     std::cerr << "google usage\n";
     return 1;
   }
+  auto null_usage = niminal::parse_chat_usage(nlohmann::json{
+      {"prompt_tokens", nullptr},
+      {"completion_tokens", nullptr},
+      {"cache_read_input_tokens", nullptr},
+  });
+  if (null_usage.input_tokens || null_usage.output_tokens ||
+      null_usage.cache_read_tokens) {
+    std::cerr << "null usage\n";
+    return 1;
+  }
   return 0;
 }

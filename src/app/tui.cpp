@@ -4,6 +4,7 @@
 #include "markdown.hpp"
 #include "models_dev.hpp"
 #include "provider.hpp"
+#include "prompts.hpp"
 #include "session.hpp"
 #include "skills.hpp"
 #include "thinking.hpp"
@@ -198,6 +199,12 @@ constexpr SlashSpec kSlash[] = {
     {"/exit", "/exit", "exit"},
 };
 
+bool is_builtin_slash(std::string_view command) {
+  for (const auto& spec : kSlash)
+    if (command == spec.name) return true;
+  return false;
+}
+
 struct Suggestion {
   std::string fill;
   std::string label;
@@ -336,6 +343,15 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
     if (std::string(spec.usage) != spec.name && fill.back() != ':') fill += ' ';
     out.push_back({fill, std::string(spec.usage) + "  " + spec.hint});
   }
+  for (const auto& prompt : discover_prompts(workspace)) {
+    auto slash = "/" + prompt.name;
+    if (is_builtin_slash(lower_copy(slash))) continue;
+    if (!starts_with(lower_copy(slash), cmd)) continue;
+    out.push_back({slash + " ", slash +
+                                      (prompt.description.empty()
+                                           ? std::string()
+                                           : "  " + prompt.description)});
+  }
   return out;
 }
 
@@ -426,6 +442,7 @@ const char* kHelp = R"(/help              this list
 /copy              copy the last error or assistant reply
 /compact           summarize older history; keep recent turns
 /skill:NAME [text] load a skill and optionally give it a request
+/NAME [text]       expand a Markdown prompt template
 /quit              exit
 
 Enter sends. While a turn runs, Enter queues a steering message.
@@ -696,6 +713,37 @@ int run_tui(niminal::Agent& agent, const std::filesystem::path& cwd,
                                " interrupted tool call(s)."
                          : "");
 
+  auto send_prompt = [&](std::string prompt) {
+    prompt = trim_copy(std::move(prompt));
+    if (prompt.empty()) return;
+    remember_input(prompt);
+    if (busy) {
+      {
+        std::lock_guard<std::mutex> lock(steering_mu);
+        steering.push_back(prompt);
+      }
+      blocks.push_back(Block{BlockKind::status, "Queued: " + prompt});
+      return;
+    }
+    join_worker();
+    cancel->store(false);
+    blocks.push_back(Block{BlockKind::user, prompt});
+    busy = true;
+    activity = "Thinking…";
+    worker = std::thread([&agent, &busy, &ui_alive, post_ui,
+                          prompt = std::move(prompt)] {
+      try {
+        agent.run(prompt);
+      } catch (const std::exception& e) {
+        if (ui_alive) {
+          post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
+        } else {
+          busy = false;
+        }
+      }
+    });
+  };
+
   auto start_turn = [&](std::string prompt) {
     prompt = trim_copy(std::move(prompt));
     if (prompt.empty()) return;
@@ -713,6 +761,17 @@ int run_tui(niminal::Agent& agent, const std::filesystem::path& cwd,
                                       })) {
         blocks.push_back(Block{BlockKind::error, "unknown skill " + name});
         return;
+      }
+    }
+
+    if (prompt[0] == '/' && !skill_request) {
+      auto [cmd, arg] = split_slash(prompt);
+      if (!is_builtin_slash(cmd)) {
+        if (auto template_prompt = load_prompt(cwd, cmd.substr(1))) {
+          auto expanded = expand_prompt(cwd, template_prompt->name, arg);
+          send_prompt(expanded.empty() ? prompt : std::move(expanded));
+          return;
+        }
       }
     }
 
@@ -944,32 +1003,7 @@ int run_tui(niminal::Agent& agent, const std::filesystem::path& cwd,
       return;
     }
 
-    remember_input(prompt);
-    if (busy) {
-      {
-        std::lock_guard<std::mutex> lock(steering_mu);
-        steering.push_back(prompt);
-      }
-      blocks.push_back(Block{BlockKind::status, "Queued: " + prompt});
-      return;
-    }
-    join_worker();
-    cancel->store(false);
-    blocks.push_back(Block{BlockKind::user, prompt});
-    busy = true;
-    activity = "Thinking…";
-    worker = std::thread([&agent, &busy, &ui_alive, post_ui,
-                          prompt = std::move(prompt)] {
-      try {
-        agent.run(prompt);
-      } catch (const std::exception& e) {
-        if (ui_alive) {
-          post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
-        } else {
-          busy = false;
-        }
-      }
-    });
+    send_prompt(std::move(prompt));
   };
 
   InputOption input_opt;
