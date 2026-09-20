@@ -1,11 +1,14 @@
 #include "extensions.hpp"
+#include "session.hpp"
 #include "trust.hpp"
 
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
+#include <stdexcept>
 
 namespace fs = std::filesystem;
 using niminal::app::ExtensionRuntime;
@@ -15,12 +18,16 @@ int main() {
   auto root = fs::temp_directory_path() / "niminal-extensions-test";
   auto home = root / "home";
   auto dir = root / ".niminal" / "extensions" / "fixture";
+  auto host_dir = root / ".niminal" / "extensions" / "host";
+  auto parallel_dir = root / ".niminal" / "extensions" / "parallel";
   auto tool_dir = root / ".niminal" / "tools" / "echo_json";
   auto broken_tool_dir = root / ".niminal" / "tools" / "broken";
   auto collision_tool_dir = root / ".niminal" / "tools" / "collision";
   fs::remove_all(root);
   fs::create_directories(home);
   fs::create_directories(dir);
+  fs::create_directories(host_dir);
+  fs::create_directories(parallel_dir);
   fs::create_directories(tool_dir);
   fs::create_directories(broken_tool_dir);
   fs::create_directories(collision_tool_dir);
@@ -60,6 +67,7 @@ for line in sys.stdin:
         reply["entry"] = {"count":1}
         reply["user_message"] = {"content":"background done", "deliver_as":"follow_up"}
     elif kind == "tool":
+        send({"type":"tool_update", "id":message.get("id"), "content":"halfway"})
         reply["content"] = [{"type":"text","text":"extension tool result"}]
         reply["is_error"] = False
     elif kind == "event" and message.get("event") == "tool_call":
@@ -78,6 +86,84 @@ for line in sys.stdin:
 )PY";
   }
   fs::permissions(dir / "extension.py",
+                  fs::perms::owner_read | fs::perms::owner_write |
+                      fs::perms::owner_exec);
+  {
+    std::ofstream out(host_dir / "extension.json");
+    out << R"({"name":"host","command":["./extension.py"]})";
+  }
+  {
+    std::ofstream out(host_dir / "extension.py");
+    out << R"PY(#!/usr/bin/env python3
+import json, sys
+def send(value):
+    print(json.dumps(value), flush=True)
+def host(method, **fields):
+    send({"type":"host_request", "id":method, "method":method, **fields})
+    for line in sys.stdin:
+        response = json.loads(line)
+        if response.get("type") == "host_response" and response.get("id") == method:
+            return response
+    return {"cancelled":True}
+def ui(method, **fields):
+    send({"type":"ui_request", "id":method, "method":method, **fields})
+    for line in sys.stdin:
+        response = json.loads(line)
+        if response.get("type") == "ui_response" and response.get("id") == method:
+            return response
+    return {"cancelled":True}
+send({"type":"register", "commands":[{"name":"host","description":"Host requests"}]})
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("type") == "shutdown":
+        break
+    if message.get("type") != "command":
+        continue
+    payload = {}
+    if message.get("arguments") == "model":
+        payload["model"] = host("model.complete", system_prompt="Summarize",
+                                 prompt="history", max_tokens=123)
+    elif message.get("arguments") == "ui":
+        payload["question"] = ui("question", prompt="Pick one",
+                                  options=["Red", "Blue"])
+        payload["confirm"] = ui("confirm", prompt="Continue?")
+        payload["input"] = ui("input", prompt="Branch?")
+        payload["password"] = ui("password", prompt="Token?")
+    else:
+        payload["info"] = host("session.info")
+        payload["name"] = host("session.name", name="handoff source")
+        payload["usage"] = host("context.usage")
+        payload["editor"] = host("ui.editor", title="Edit handoff", text="draft")
+    send({"type":"response", "id":message.get("id"), "payload":payload})
+)PY";
+  }
+  fs::permissions(host_dir / "extension.py",
+                  fs::perms::owner_read | fs::perms::owner_write |
+                      fs::perms::owner_exec);
+  {
+    std::ofstream out(parallel_dir / "extension.json");
+    out << R"({"name":"parallel","command":["./extension.py"]})";
+  }
+  {
+    std::ofstream out(parallel_dir / "extension.py");
+    out << R"PY(#!/usr/bin/env python3
+import json, sys
+def send(value):
+    print(json.dumps(value), flush=True)
+json.loads(sys.stdin.readline())
+send({"type":"register", "commands":[{"name":"parallel","description":"Parallel"}]})
+first = json.loads(sys.stdin.readline())
+second = json.loads(sys.stdin.readline())
+def result(message):
+    return "first" if message.get("arguments") == "one" else "second"
+send({"type":"response", "id":second.get("id"), "message":result(second)})
+send({"type":"response", "id":first.get("id"), "message":result(first)})
+for line in sys.stdin:
+    if json.loads(line).get("type") == "shutdown":
+        break
+)PY";
+  }
+  fs::permissions(parallel_dir / "extension.py",
                   fs::perms::owner_read | fs::perms::owner_write |
                       fs::perms::owner_exec);
   {
@@ -102,19 +188,49 @@ for line in sys.stdin:
 
   std::atomic<bool> cancel{false};
   auto runtime = ExtensionRuntime::start(root, "session", &cancel);
-  if (runtime->commands().size() != 1) {
+  if (runtime->commands().size() != 3) {
     std::cerr << "extension registration failed\n";
     return 1;
   }
   auto command = runtime->invoke("hello", "world");
   if (command.value("message", "") != "Hello world") return 1;
+  runtime->set_host_request([](const std::string& method,
+                               const nlohmann::json& request) {
+    if (method != "model.complete" || request.value("max_tokens", 0) != 123)
+      throw std::runtime_error("unexpected model request");
+    return nlohmann::json{{"text", "generated"},
+                          {"model", "test/model"},
+                          {"finish_reason", "stop"}};
+  });
+  auto model_host = runtime->invoke("host", "model");
+  if (model_host["payload"]["model"]["result"].value("text", "") !=
+          "generated" ||
+      model_host["payload"]["model"]["result"].value("model", "") !=
+          "test/model")
+    return 1;
+  auto first = std::async(std::launch::async,
+                          [&] { return runtime->invoke("parallel", "one"); });
+  auto second = std::async(std::launch::async,
+                           [&] { return runtime->invoke("parallel", "two"); });
+  auto first_result = first.get();
+  auto second_result = second.get();
+  if (first_result.value("message", "") != "first" ||
+      second_result.value("message", "") != "second")
+    return 1;
   auto tools = runtime->tools();
+  std::vector<std::string> updates;
+  runtime->set_tool_update([&updates](const std::string&, const std::string& text) {
+    updates.push_back(text);
+  });
   niminal::Tool* persistent = nullptr;
   for (auto& tool : tools)
     if (tool.name == "ext_echo") persistent = &tool;
+  std::string persistent_output;
+  if (persistent) persistent_output = persistent->run(nlohmann::json::object());
   if (!persistent || !persistent->read_only || !persistent->extension ||
-      persistent->run(nlohmann::json::object()) != "extension tool result")
+      persistent_output != "extension tool result")
     return 1;
+  if (updates != std::vector<std::string>{"halfway"}) return 1;
   niminal::Tool* external = nullptr;
   for (auto& tool : tools)
     if (tool.name == "echo_json") external = &tool;
@@ -170,7 +286,55 @@ for line in sys.stdin:
   niminal::Agent agent;
   agent.conversation_id = "session";
   niminal::app::install_extension_tools(agent, runtime);
-  niminal::app::bind_extensions(agent, runtime, root);
+  niminal::app::Session session;
+  session.id = "session";
+  session.workspace = root.string();
+  session.persist = false;
+  session.add_user("existing context");
+  niminal::app::bind_extensions(agent, runtime, root, {}, &session);
+  niminal::app::ExtensionUiCallbacks ui;
+  ui.editor = [](const std::string& title, const std::string& text) {
+    if (title != "Edit handoff" || text != "draft")
+      throw std::runtime_error("unexpected editor request");
+    return std::string("edited handoff");
+  };
+  runtime->set_ui_callbacks(std::move(ui));
+  niminal::app::ExtensionUiCallbacks dialogs;
+  dialogs.question = [](const std::string& prompt,
+                         const std::vector<std::string>& options) {
+    if (prompt == "Pick one" && options.size() == 2) return options[1];
+    if (prompt == "Continue?" && options.size() == 2) return std::string("Yes");
+    throw std::runtime_error("unexpected question request");
+  };
+  dialogs.input = [](const std::string& prompt, bool secret) {
+    if (prompt == "Branch?" && !secret) return std::string("feature");
+    if (prompt == "Token?" && secret) return std::string("secret-token");
+    throw std::runtime_error("unexpected input request");
+  };
+  runtime->set_ui_callbacks(std::move(dialogs));
+  auto ui_host = runtime->invoke("host", "ui");
+  if (ui_host["payload"]["question"]["answer"] != "Blue" ||
+      ui_host["payload"]["confirm"]["confirmed"] != true ||
+      ui_host["payload"]["input"]["answer"] != "feature" ||
+      ui_host["payload"]["password"]["answer"] != "secret-token")
+    return 1;
+  niminal::app::ExtensionUiCallbacks editor;
+  editor.editor = [](const std::string& title, const std::string& text) {
+    if (title != "Edit handoff" || text != "draft")
+      throw std::runtime_error("unexpected editor request");
+    return std::string("edited handoff");
+  };
+  runtime->set_ui_callbacks(std::move(editor));
+  auto host = runtime->invoke("host", "session");
+  if (host["payload"]["info"]["result"].value("id", "") != "session" ||
+      host["payload"]["info"]["result"].value("event_count", 0) != 1 ||
+      host["payload"]["name"]["result"].value("name", "") !=
+          "handoff source" ||
+      host["payload"]["usage"]["result"].value("tokens", 0) <= 0 ||
+      host["payload"]["usage"]["result"].value("limit", 0) <= 0 ||
+      host["payload"]["editor"]["result"].value("text", "") !=
+          "edited handoff")
+    return 1;
   nlohmann::json arguments{{"command", "original"}};
   std::string reason;
   niminal::ToolCall call{"tool", "bash", R"({"command":"original"})"};

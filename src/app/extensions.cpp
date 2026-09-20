@@ -1,13 +1,18 @@
 #include "extensions.hpp"
 
+#include "compaction.hpp"
 #include "config.hpp"
+#include "session.hpp"
 #include "trust.hpp"
+
+#include <niminal/openai.hpp>
 
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cctype>
+#include <condition_variable>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
@@ -18,6 +23,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <cstdlib>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -68,11 +74,13 @@ std::vector<fs::path> extension_dirs(const fs::path& workspace) {
   try {
     auto global = config_path().parent_path();
     bases.push_back(global.parent_path() / ".agents" / "extensions");
+    bases.push_back(global.parent_path() / ".nimlet" / "extensions");
     bases.push_back(global / "extensions");
   } catch (...) {
   }
   if (project_resources_trusted(workspace)) {
     bases.push_back(workspace / ".agents" / "extensions");
+    bases.push_back(workspace / ".nimlet" / "extensions");
     bases.push_back(workspace / ".niminal" / "extensions");
   }
   std::vector<fs::path> result;
@@ -93,12 +101,16 @@ std::vector<fs::path> extension_dirs(const fs::path& workspace) {
 std::vector<fs::path> external_tool_dirs(const fs::path& workspace) {
   std::vector<fs::path> bases;
   try {
+    auto global = config_path().parent_path();
+    bases.push_back(global.parent_path() / ".agents" / "tools");
+    bases.push_back(global.parent_path() / ".nimlet" / "tools");
     bases.push_back(config_path().parent_path() / "tools");
   } catch (...) {
   }
   if (project_resources_trusted(workspace)) {
     bases.push_back(workspace / ".agent" / "tools");
     bases.push_back(workspace / ".agents" / "tools");
+    bases.push_back(workspace / ".nimlet" / "tools");
     bases.push_back(workspace / ".niminal" / "tools");
   }
   std::vector<fs::path> result;
@@ -279,6 +291,7 @@ class Process {
   ~Process() { stop(); }
 
   void send(const json& message) {
+    std::lock_guard lock(send_mutex_);
     auto line = message.dump() + "\n";
     size_t offset = 0;
     while (offset < line.size()) {
@@ -289,6 +302,56 @@ class Process {
       }
       offset += static_cast<size_t>(n);
     }
+  }
+
+  void start_reader(std::function<void(const std::string&)> callback) {
+    on_line_ = std::move(callback);
+    reader_stopping_.store(false);
+    {
+      std::lock_guard lock(state_mutex_);
+      reader_exited_ = false;
+      reader_error_.clear();
+    }
+    reader_ = std::thread([this] { read_loop(); });
+  }
+
+  void wait_for_response(const std::string& id, std::atomic<bool>* cancel,
+                        json& response) {
+    std::unique_lock lock(state_mutex_);
+    while (true) {
+      auto it = responses_.find(id);
+      if (it != responses_.end()) {
+        response = std::move(it->second);
+        responses_.erase(it);
+        return;
+      }
+      if (cancel && cancel->load())
+        throw std::runtime_error("extension request cancelled");
+      if (reader_exited_)
+        throw std::runtime_error(reader_error_.empty()
+                                     ? "extension exited before responding"
+                                     : reader_error_);
+      if (timeout_ms >= 0) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - last_activity_)
+                                 .count();
+        if (elapsed >= timeout_ms)
+          throw std::runtime_error("extension response timed out");
+      }
+      state_cv_.wait_for(lock, std::chrono::milliseconds(50));
+    }
+  }
+
+  void store_response(const std::string& id, json response) {
+    std::lock_guard lock(state_mutex_);
+    responses_[id] = std::move(response);
+    last_activity_ = std::chrono::steady_clock::now();
+    state_cv_.notify_all();
+  }
+
+  void mark_activity() {
+    std::lock_guard lock(state_mutex_);
+    last_activity_ = std::chrono::steady_clock::now();
   }
 
   std::string receive(int timeout, std::atomic<bool>* cancel) {
@@ -332,32 +395,16 @@ class Process {
     }
   }
 
-  std::string try_receive() {
-    auto newline = buffer_.find('\n');
-    if (newline == std::string::npos) {
-      pollfd pfd{output_, POLLIN, 0};
-      if (poll(&pfd, 1, 0) <= 0) return {};
-      char chunk[4096];
-      auto count = read(output_, chunk, sizeof(chunk));
-      if (count <= 0) return {};
-      buffer_.append(chunk, static_cast<size_t>(count));
-      newline = buffer_.find('\n');
-      if (newline == std::string::npos) return {};
-    }
-    auto line = buffer_.substr(0, newline);
-    buffer_.erase(0, newline + 1);
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    return line;
-  }
-
   void stop() {
     if (pid_ <= 0) return;
     try {
       send(json{{"type", "shutdown"}});
     } catch (...) {
     }
+    reader_stopping_.store(true);
     close(input_);
     input_ = -1;
+    if (reader_.joinable()) reader_.join();
     for (int i = 0; i < 10; ++i) {
       int status = 0;
       if (waitpid(pid_, &status, WNOHANG) == pid_) {
@@ -377,10 +424,77 @@ class Process {
   }
 
  private:
+  void read_loop() {
+    std::string error;
+    while (!reader_stopping_.load()) {
+      bool had_line = false;
+      while (true) {
+        const auto newline = buffer_.find('\n');
+        if (newline == std::string::npos) break;
+        auto line = buffer_.substr(0, newline);
+        buffer_.erase(0, newline + 1);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        mark_activity();
+        if (on_line_) {
+          try {
+            on_line_(line);
+          } catch (const std::exception& e) {
+            error = e.what();
+            reader_stopping_.store(true);
+            break;
+          }
+        }
+        had_line = true;
+      }
+      if (reader_stopping_.load()) break;
+      if (had_line) continue;
+      pollfd pfd{output_, POLLIN | POLLHUP, 0};
+      int ready;
+      do {
+        ready = poll(&pfd, 1, 50);
+      } while (ready < 0 && errno == EINTR);
+      if (ready <= 0) continue;
+      char chunk[4096];
+      const auto count = read(output_, chunk, sizeof(chunk));
+      if (count == 0) {
+        error = "extension exited before responding";
+        break;
+      }
+      if (count < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+          continue;
+        error = std::strerror(errno);
+        break;
+      }
+      buffer_.append(chunk, static_cast<size_t>(count));
+      if (buffer_.size() > kMaxLineBytes) {
+        error = "extension response is too large";
+        break;
+      }
+    }
+    {
+      std::lock_guard lock(state_mutex_);
+      reader_error_ = std::move(error);
+      reader_exited_ = true;
+    }
+    state_cv_.notify_all();
+  }
+
   pid_t pid_ = -1;
   int input_ = -1;
   int output_ = -1;
   std::string buffer_;
+  std::mutex send_mutex_;
+  std::mutex state_mutex_;
+  std::condition_variable state_cv_;
+  std::map<std::string, json> responses_;
+  std::chrono::steady_clock::time_point last_activity_ =
+      std::chrono::steady_clock::now();
+  std::thread reader_;
+  std::function<void(const std::string&)> on_line_;
+  std::atomic<bool> reader_stopping_{false};
+  bool reader_exited_ = false;
+  std::string reader_error_;
 };
 
 std::string read_external_output(const fs::path& path) {
@@ -546,7 +660,67 @@ struct RegisteredTool {
   bool read_only = false;
 };
 
+std::string shell_quote(const std::string& value) {
+  std::string out = "'";
+  for (char c : value) {
+    if (c == '\'') out += "'\\''";
+    else out += c;
+  }
+  return out + "'";
+}
+
+std::string edit_text_externally_impl(const std::string& text) {
+  const char* visual = std::getenv("VISUAL");
+  const char* editor = visual && *visual ? visual : std::getenv("EDITOR");
+  const std::string command = editor && *editor ? editor : "nano";
+  const auto stamp = std::to_string(getpid()) + "-" +
+                     std::to_string(std::chrono::steady_clock::now()
+                                        .time_since_epoch()
+                                        .count());
+  const auto path = fs::temp_directory_path() / ("niminal-editor-" + stamp + ".md");
+  try {
+    {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      if (!out) throw std::runtime_error("cannot create editor buffer");
+      out << text;
+    }
+    const auto invocation = command + " " + shell_quote(path.string());
+    const auto pid = fork();
+    if (pid < 0) throw std::runtime_error(std::strerror(errno));
+    if (pid == 0) {
+      execl("/bin/sh", "sh", "-c", invocation.c_str(), nullptr);
+      _exit(127);
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0)
+      throw std::runtime_error(std::strerror(errno));
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+      throw std::runtime_error(command + " exited with code " +
+                               std::to_string(WIFEXITED(status)
+                                                  ? WEXITSTATUS(status)
+                                                  : 1));
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream result;
+    result << in.rdbuf();
+    const auto edited = result.str();
+    std::error_code ec;
+    fs::remove(path, ec);
+    return edited;
+  } catch (...) {
+    std::error_code ec;
+    fs::remove(path, ec);
+    throw;
+  }
+  std::error_code ec;
+  fs::remove(path, ec);
+  return {};
+}
+
 }  // namespace
+
+std::string edit_text_externally(const std::string& text) {
+  return edit_text_externally_impl(text);
+}
 
 struct ExtensionRuntime::Impl {
   std::vector<std::unique_ptr<Process>> processes;
@@ -558,6 +732,10 @@ struct ExtensionRuntime::Impl {
   std::vector<ExtensionNotice> notices;
   std::vector<ExtensionUserMessage> user_messages;
   std::vector<ExtensionEntry> entries;
+  ExtensionUiCallbacks ui;
+  std::function<void(const std::string&, const std::string&)> tool_update;
+  std::function<json(const std::string&, const json&)> host_request;
+  std::mutex callbacks_mutex;
   std::atomic<int> next_id{0};
   bool stopped = false;
 };
@@ -582,6 +760,34 @@ ExtensionRuntime::ExtensionRuntime(fs::path workspace, std::atomic<bool>* cancel
       cancel_(cancel) {}
 
 ExtensionRuntime::~ExtensionRuntime() { stop(); }
+
+void ExtensionRuntime::set_ui_callbacks(ExtensionUiCallbacks callbacks) {
+  std::lock_guard lock(impl_->callbacks_mutex);
+  impl_->ui = std::move(callbacks);
+}
+
+std::string ExtensionRuntime::edit_text(const std::string& title,
+                                        const std::string& text) {
+  std::function<std::string(const std::string&, const std::string&)> editor;
+  {
+    std::lock_guard lock(impl_->callbacks_mutex);
+    editor = impl_->ui.editor;
+  }
+  if (!editor) throw std::runtime_error("interactive editor is unavailable");
+  return editor(title, text);
+}
+
+void ExtensionRuntime::set_host_request(
+    std::function<json(const std::string&, const json&)> callback) {
+  std::lock_guard lock(impl_->callbacks_mutex);
+  impl_->host_request = std::move(callback);
+}
+
+void ExtensionRuntime::set_tool_update(
+    std::function<void(const std::string&, const std::string&)> callback) {
+  std::lock_guard lock(impl_->callbacks_mutex);
+  impl_->tool_update = std::move(callback);
+}
 
 namespace {
 
@@ -627,44 +833,117 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process,
   }
 }
 
+void handle_incoming(ExtensionRuntime::Impl& impl, Process& process,
+                     const std::string& line) {
+  json incoming;
+  try {
+    incoming = json::parse(line);
+  } catch (...) {
+    return;
+  }
+  const auto type = string_field(incoming, "type");
+  if (type == "response") {
+    process.store_response(string_field(incoming, "id"), std::move(incoming));
+    return;
+  }
+  if (type == "ui_request") {
+    const auto method = string_field(incoming, "method");
+    ExtensionUiCallbacks callbacks;
+    {
+      std::lock_guard lock(impl.callbacks_mutex);
+      callbacks = impl.ui;
+    }
+    json response{{"type", "ui_response"},
+                  {"id", string_field(incoming, "id")},
+                  {"cancelled", true}};
+    try {
+      if (method == "question") {
+        const auto answer = callbacks.question
+                                ? callbacks.question(
+                                      string_field(incoming, "prompt"),
+                                      string_array(incoming, "options"))
+                                : std::string();
+        response["answer"] = answer;
+        response["cancelled"] = answer.empty();
+      } else if (method == "confirm") {
+        const auto answer = callbacks.question
+                                ? callbacks.question(
+                                      string_field(incoming, "prompt"),
+                                      {"Yes", "No"})
+                                : std::string();
+        response["confirmed"] = answer == "Yes";
+        response["cancelled"] = answer.empty();
+      } else if (method == "input" || method == "password") {
+        const auto answer = callbacks.input
+                                ? callbacks.input(string_field(incoming, "prompt"),
+                                                  method == "password")
+                                : std::string();
+        response["answer"] = answer;
+        response["cancelled"] = answer.empty();
+      }
+    } catch (const std::exception& e) {
+      response["error"] = e.what();
+    }
+    process.send(response);
+    return;
+  }
+  if (type == "host_request") {
+    std::function<json(const std::string&, const json&)> callback;
+    {
+      std::lock_guard lock(impl.callbacks_mutex);
+      callback = impl.host_request;
+    }
+    json response{{"type", "host_response"},
+                  {"id", string_field(incoming, "id")}};
+    try {
+      if (!callback) {
+        response["cancelled"] = true;
+        response["error"] = "host request is unavailable";
+      } else {
+        response["result"] = callback(string_field(incoming, "method"),
+                                       incoming);
+      }
+    } catch (const Cancelled&) {
+      response["cancelled"] = true;
+    } catch (const std::exception& e) {
+      response["error"] = e.what();
+    }
+    process.send(response);
+    return;
+  }
+  if (type == "tool_update") {
+    std::function<void(const std::string&, const std::string&)> callback;
+    {
+      std::lock_guard lock(impl.callbacks_mutex);
+      callback = impl.tool_update;
+    }
+    if (callback) {
+      try {
+        callback(string_field(incoming, "id"),
+                 string_field(incoming, "content"));
+      } catch (...) {
+      }
+    }
+    return;
+  }
+  capture_actions(impl, process, incoming);
+}
+
 json request(ExtensionRuntime::Impl& impl, Process& process, json message,
              std::atomic<bool>* cancel) {
-  std::lock_guard process_lock(process.mutex);
-  auto id = string_field(message, "id");
+  const auto id = string_field(message, "id");
+  process.mark_activity();
   process.send(message);
-  while (true) {
-    std::string line;
-    try {
-      line = process.receive(process.timeout_ms, cancel);
-    } catch (...) {
-      if (cancel && cancel->load()) {
-        try { process.send(json{{"type", "cancel"}, {"id", id}}); } catch (...) {}
-      }
-      throw;
+  try {
+    json response;
+    process.wait_for_response(id, cancel, response);
+    capture_actions(impl, process, response);
+    return response;
+  } catch (...) {
+    if (cancel && cancel->load()) {
+      try { process.send(json{{"type", "cancel"}, {"id", id}}); } catch (...) {}
     }
-    json incoming;
-    try {
-      incoming = json::parse(line);
-    } catch (...) {
-      continue;
-    }
-    auto type = string_field(incoming, "type");
-    if (type == "response" && string_field(incoming, "id") == id) {
-      capture_actions(impl, process, incoming);
-      return incoming;
-    }
-    if (type == "ui_request") {
-      process.send(json{{"type", "ui_response"},
-                        {"id", string_field(incoming, "id")},
-                        {"answer", ""}, {"confirmed", false},
-                        {"cancelled", true}});
-    } else if (type == "host_request") {
-      process.send(json{{"type", "host_response"},
-                        {"id", string_field(incoming, "id")},
-                        {"error", "host request is unavailable"}});
-    } else if (type != "tool_update") {
-      capture_actions(impl, process, incoming);
-    }
+    throw;
   }
 }
 
@@ -673,13 +952,17 @@ bool read_only_capabilities(const json& tool) {
   if (it == tool.end()) return false;
   if (!it->is_array()) throw std::runtime_error("capabilities must be an array");
   bool any = false;
+  bool read_only = true;
   for (const auto& item : *it) {
     if (!item.is_string()) throw std::runtime_error("capabilities must be strings");
-    auto value = item.get<std::string>();
-    if (value != "read" && value != "user") return false;
+    auto value = lower_copy(item.get<std::string>());
+    if (value != "read" && value != "write" && value != "shell" &&
+        value != "network" && value != "user")
+      throw std::runtime_error("unknown capability: " + value);
     any = true;
+    read_only = read_only && value == "read";
   }
-  return any;
+  return any && read_only;
 }
 
 }  // namespace
@@ -746,6 +1029,12 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(
         }
       }
       runtime->impl_->processes.push_back(std::move(process));
+      auto* active = runtime->impl_->processes.back().get();
+      const std::weak_ptr<ExtensionRuntime> weak_runtime = runtime;
+      active->start_reader([weak_runtime, active](const std::string& line) {
+        if (auto runtime = weak_runtime.lock())
+          handle_incoming(*runtime->impl_, *active, line);
+      });
     } catch (const std::exception& e) {
       runtime->commands_.resize(command_count);
       runtime->impl_->tools.resize(tool_count);
@@ -927,20 +1216,7 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
 }
 
 void ExtensionRuntime::pump() {
-  for (auto& process : impl_->processes) {
-    std::unique_lock lock(process->mutex, std::try_to_lock);
-    if (!lock.owns_lock()) continue;
-    while (true) {
-      auto line = process->try_receive();
-      if (line.empty()) break;
-      try {
-        auto message = json::parse(line);
-        if (string_field(message, "type") != "response")
-          capture_actions(*impl_, *process, message);
-      } catch (...) {
-      }
-    }
-  }
+  /* Process readers capture unsolicited actions as they arrive. */
 }
 
 void ExtensionRuntime::stop() {
@@ -997,7 +1273,66 @@ json session_hook_payload(const std::string& session_id,
 void bind_extensions(niminal::Agent& agent,
                      const std::shared_ptr<ExtensionRuntime>& runtime,
                      const fs::path& workspace,
-                     std::function<void(const std::string&)> note) {
+                     std::function<void(const std::string&)> note,
+                     Session* session) {
+  if (runtime) {
+    const std::weak_ptr<ExtensionRuntime> weak_runtime = runtime;
+    runtime->set_host_request([&agent, session, weak_runtime](
+                                  const std::string& method,
+                                  const json& request) {
+      if (method == "model.complete") {
+        const auto prompt = request.value("prompt", std::string());
+        if (prompt.empty()) throw std::invalid_argument("prompt is required");
+        niminal::ChatRequest completion;
+        agent.fill_chat(completion);
+        completion.messages = json::array();
+        const auto system = request.value("system_prompt", std::string());
+        if (!system.empty())
+          completion.messages.push_back(
+              json{{"role", "system"}, {"content", system}});
+        completion.messages.push_back(json{{"role", "user"},
+                                           {"content", prompt}});
+        completion.tools = json::array();
+        completion.max_tokens = request.value("max_tokens", 0);
+        completion.conversation_id =
+            (session ? session->id : agent.conversation_id) + ":extension";
+        completion.stream = false;
+        completion.on_event = {};
+        const auto text = niminal::complete_chat(completion);
+        return json{{"text", text}, {"model", agent.model},
+                    {"finish_reason", "stop"}};
+      }
+      if (method == "ui.editor") {
+        auto runtime = weak_runtime.lock();
+        if (!runtime) throw std::runtime_error("extension host is unavailable");
+        return json{{"text", runtime->edit_text(
+                                request.value("title", std::string()),
+                                request.value("text", std::string()))}};
+      }
+      if (method == "session.info") {
+        if (!session) throw std::runtime_error("session is unavailable");
+        return json{{"id", session->id},
+                    {"name", session->name},
+                    {"path", session->path},
+                    {"workspace", session->workspace},
+                    {"event_count", session->events.size()}};
+      }
+      if (method == "session.name") {
+        if (!session) throw std::runtime_error("session is unavailable");
+        if (request.contains("name"))
+          session->add_name(request.value("name", std::string()));
+        return json{{"name", session->name}};
+      }
+      if (method == "context.usage") {
+        if (!session) throw std::runtime_error("session is unavailable");
+        const auto tokens = estimate_session_tokens(*session);
+        return json{{"tokens", tokens},
+                    {"limit", kContextWindow},
+                    {"percent", std::min(100, tokens * 100 / kContextWindow)}};
+      }
+      throw std::runtime_error("unknown host request: " + method);
+    });
+  }
   auto report = [note](const HookOutcome& outcome) {
     if (!note) return;
     for (const auto& warning : outcome.warnings) note(warning);
@@ -1078,13 +1413,22 @@ void bind_extensions(niminal::Agent& agent,
 
 void install_extension_tools(
     niminal::Agent& agent,
-    const std::shared_ptr<ExtensionRuntime>& runtime) {
+    const std::shared_ptr<ExtensionRuntime>& runtime,
+    const std::vector<std::string>* allowed) {
   agent.tools.erase(
       std::remove_if(agent.tools.begin(), agent.tools.end(),
                      [](const niminal::Tool& tool) { return tool.extension; }),
       agent.tools.end());
   if (!runtime) return;
   auto tools = runtime->tools();
+  if (allowed) {
+                tools.erase(std::remove_if(tools.begin(), tools.end(), [&](const auto& tool) {
+                  auto name = lower_copy(tool.name);
+                  return std::find(allowed->begin(), allowed->end(), name) ==
+                         allowed->end();
+                }),
+                tools.end());
+  }
   agent.tools.insert(agent.tools.end(),
                      std::make_move_iterator(tools.begin()),
                      std::make_move_iterator(tools.end()));

@@ -19,6 +19,7 @@ struct ChatRequest {
   std::string key_hint = "OPENROUTER_API_KEY";
   json messages;
   json tools;
+  int max_tokens = 0;
   json extra = json::object();
   std::string conversation_id;
   std::map<std::string, std::string> extra_headers;

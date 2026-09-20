@@ -241,6 +241,8 @@ target_compile_options(niminal_trust_test PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(niminal_extensions_test
   tests/extensions_test.cpp
   src/app/extensions.cpp
+  src/app/session.cpp
+  src/app/compaction.cpp
   src/app/config.cpp
   src/app/trust.cpp)
 target_include_directories(niminal_extensions_test PRIVATE src/app include)

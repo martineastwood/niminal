@@ -11,6 +11,15 @@
 
 namespace niminal::app {
 
+class Session;
+
+struct ExtensionUiCallbacks {
+  std::function<std::string(const std::string&, const std::vector<std::string>&)>
+      question;
+  std::function<std::string(const std::string&, bool)> input;
+  std::function<std::string(const std::string&, const std::string&)> editor;
+};
+
 enum class HookEvent {
   tool_call,
   tool_result,
@@ -65,6 +74,8 @@ struct ExtensionEntry {
   nlohmann::json data;
 };
 
+std::string edit_text_externally(const std::string& text);
+
 class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
  public:
   struct Impl;
@@ -81,6 +92,13 @@ class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
   std::vector<niminal::Tool> tools();
   nlohmann::json invoke(const std::string& name, const std::string& arguments,
                         const nlohmann::json& context = {});
+  void set_ui_callbacks(ExtensionUiCallbacks callbacks);
+  std::string edit_text(const std::string& title, const std::string& text);
+  void set_tool_update(
+      std::function<void(const std::string&, const std::string&)> callback);
+  void set_host_request(
+      std::function<nlohmann::json(const std::string&, const nlohmann::json&)>
+          callback);
   HookOutcome dispatch(HookEvent event, const nlohmann::json& payload);
   void pump();
   void stop();
@@ -106,9 +124,11 @@ nlohmann::json session_hook_payload(const std::string& session_id,
 void bind_extensions(niminal::Agent& agent,
                      const std::shared_ptr<ExtensionRuntime>& runtime,
                      const std::filesystem::path& workspace,
-                     std::function<void(const std::string&)> note = {});
+                     std::function<void(const std::string&)> note = {},
+                     Session* session = nullptr);
 void install_extension_tools(
     niminal::Agent& agent,
-    const std::shared_ptr<ExtensionRuntime>& runtime);
+    const std::shared_ptr<ExtensionRuntime>& runtime,
+    const std::vector<std::string>* allowed = nullptr);
 
 }  // namespace niminal::app

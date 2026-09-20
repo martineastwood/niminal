@@ -25,6 +25,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -33,6 +34,8 @@
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <termios.h>
+#include <unistd.h>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -586,7 +589,8 @@ Ctrl-C quits.)";
 
 int run_tui(niminal::Agent& agent, Workspace& workspace,
             Config& cfg, Session& session,
-            std::shared_ptr<ExtensionRuntime>& extensions, bool yolo) {
+            std::shared_ptr<ExtensionRuntime>& extensions, bool yolo,
+            const std::vector<std::string>* allowed_tools) {
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
   std::atomic<bool> local_cancel{false};
@@ -618,6 +622,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   bool pasting = false;
   bool stick_bottom = true;
   std::atomic<bool> ui_alive{true};
+  const auto ui_thread = std::this_thread::get_id();
   std::thread worker;
   PermissionPolicy permissions(cwd);
   bool yolo_mode = yolo;
@@ -630,6 +635,91 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     bool can_remember = false;
     PermissionDecision decision = PermissionDecision::deny;
   } approval;
+
+  struct UiCall {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool done = false;
+    std::exception_ptr error;
+  };
+  auto run_on_ui = [&](std::function<void()> callback) {
+    if (std::this_thread::get_id() == ui_thread) {
+      callback();
+      return;
+    }
+    auto call = std::make_shared<UiCall>();
+    screen.Post([call, callback = std::move(callback)] {
+      try {
+        callback();
+      } catch (...) {
+        call->error = std::current_exception();
+      }
+      {
+        std::lock_guard lock(call->mutex);
+        call->done = true;
+      }
+      call->condition.notify_one();
+    });
+    std::unique_lock lock(call->mutex);
+    call->condition.wait(lock, [&] { return call->done || !ui_alive; });
+    if (!call->done) throw std::runtime_error("interactive UI is unavailable");
+    if (call->error) std::rethrow_exception(call->error);
+  };
+
+  auto configure_extension_ui = [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
+    if (!runtime) return;
+    ExtensionUiCallbacks callbacks;
+    callbacks.question = [&](const std::string& prompt,
+                             const std::vector<std::string>& options) {
+      std::string answer;
+      run_on_ui([&] {
+        screen.WithRestoredIO([&] {
+          std::cout << "\n" << prompt;
+          if (!options.empty()) {
+            std::cout << "\n";
+            for (size_t i = 0; i < options.size(); ++i)
+              std::cout << "  [" << (i + 1) << "] " << options[i] << "\n";
+          }
+          std::cout << "> " << std::flush;
+          std::getline(std::cin, answer);
+          if (!options.empty() && answer.size() == 1 &&
+              answer[0] >= '1' &&
+              answer[0] <= static_cast<char>('0' + options.size()))
+            answer = options[static_cast<size_t>(answer[0] - '1')];
+        });
+      });
+      return answer;
+    };
+    callbacks.input = [&](const std::string& prompt, bool secret) {
+      std::string answer;
+      run_on_ui([&] {
+        screen.WithRestoredIO([&] {
+          std::cout << "\n" << prompt << ": " << std::flush;
+          termios old_termios{};
+          const bool hidden = secret && tcgetattr(STDIN_FILENO, &old_termios) == 0;
+          if (hidden) {
+            auto hidden_termios = old_termios;
+            hidden_termios.c_lflag &= static_cast<unsigned long>(~ECHO);
+            tcsetattr(STDIN_FILENO, TCSANOW, &hidden_termios);
+          }
+          std::getline(std::cin, answer);
+          if (hidden) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &old_termios);
+            std::cout << "\n";
+          }
+        });
+      });
+      return answer;
+    };
+    callbacks.editor = [&](const std::string&, const std::string& text) {
+      std::string edited;
+      run_on_ui([&] {
+        screen.WithRestoredIO([&] { edited = edit_text_externally(text); });
+      });
+      return edited;
+    };
+    runtime->set_ui_callbacks(std::move(callbacks));
+  };
   int suggest_i = 0;
   std::string suggest_sig;
   std::filesystem::path session_dir;
@@ -896,9 +986,19 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   };
 
   agent.on_event = [&](const StreamEvent& ev) { post_ui(ev); };
+  auto configure_extension_updates =
+      [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
+        if (!runtime) return;
+        runtime->set_tool_update([&post_ui](const std::string&,
+                                            const std::string& content) {
+          post_ui(StreamEvent{EventKind::status, content, {}, {}});
+        });
+      };
+  configure_extension_updates(extensions);
+  configure_extension_ui(extensions);
   bind_extensions(agent, extensions, cwd, [&](const std::string& warning) {
     post_ui(StreamEvent{EventKind::status, warning, {}, {}});
-  });
+  }, &session);
   agent.approve_tool = [&](const niminal::ToolCall& call,
                            const niminal::Tool&) {
     if (yolo_mode) return true;
@@ -979,10 +1079,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     }
     if (extensions) extensions->stop();
     extensions = ExtensionRuntime::start(cwd, session.id, cancel);
-    install_extension_tools(agent, extensions);
+    install_extension_tools(agent, extensions, allowed_tools);
+    configure_extension_updates(extensions);
+    configure_extension_ui(extensions);
     bind_extensions(agent, extensions, cwd, [&](const std::string& warning) {
       post_ui(StreamEvent{EventKind::status, warning, {}, {}});
-    });
+    }, &session);
     bind_compaction(agent, session, [&](const std::string& msg) {
       if (!msg.empty()) post_ui(StreamEvent{EventKind::status, msg, {}, {}});
     }, extensions);
@@ -1849,6 +1951,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   join_worker();
   if (catalog_thread.joinable()) catalog_thread.join();
   extension_thread.join();
+  if (extensions) {
+    extensions->set_tool_update({});
+    extensions->set_ui_callbacks({});
+  }
   agent.on_event = {};
   agent.take_steering = {};
   agent.take_follow_up = {};

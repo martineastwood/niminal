@@ -185,6 +185,7 @@ json openai_chat_body(const ChatRequest& request) {
   if (request.stream && request.stream_usage)
     payload["stream_options"] = json{{"include_usage", true}};
   payload["messages"] = request.messages;
+  if (request.max_tokens > 0) payload["max_tokens"] = request.max_tokens;
   normalize_messages(payload["messages"]);
   if (request.session_routing && !request.conversation_id.empty())
     payload["session_id"] = request.conversation_id;
@@ -222,7 +223,7 @@ json anthropic_tools(const json& tools) {
 json anthropic_body(const ChatRequest& request) {
   json payload = json::object();
   payload["model"] = request.model;
-  payload["max_tokens"] = 16384;
+  payload["max_tokens"] = request.max_tokens > 0 ? request.max_tokens : 16384;
   payload["stream"] = request.stream;
   json system = json::array();
   json messages = json::array();
@@ -373,6 +374,10 @@ json google_body(const ChatRequest& request) {
     payload["systemInstruction"] = std::move(sys);
   }
   payload["contents"] = std::move(contents);
+  if (request.max_tokens > 0) {
+    payload["generationConfig"] =
+        json{{"maxOutputTokens", request.max_tokens}};
+  }
   auto decls = google_tools(request.tools);
   if (!decls.empty()) {
     json tool = json::object();

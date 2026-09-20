@@ -15,7 +15,9 @@
 #include "tui.hpp"
 #include "workspace.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -38,6 +40,7 @@ const char* kUsage =
     "  --mode json        emit versioned JSONL events and exit\n"
     "  --mode rpc         serve JSONL commands until shutdown or EOF\n"
     "  --api-key KEY      use an API key for this process\n"
+    "  --tools LIST       restrict tools (comma-separated, or none)\n"
     "  --max-steps N      Tool loop cap (0 means unlimited)\n"
     "  --yolo             Auto-approve tools for this process\n"
     "  --approve          Load project-local niminal resources\n"
@@ -107,6 +110,31 @@ std::string join(const std::vector<std::string>& parts) {
     out << parts[i];
   }
   return out.str();
+}
+
+std::string normalize_tool_name(std::string name) {
+  const auto first = name.find_first_not_of(" \t\r\n");
+  if (first == std::string::npos) return {};
+  const auto last = name.find_last_not_of(" \t\r\n");
+  name = name.substr(first, last - first + 1);
+  for (char& c : name)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return name;
+}
+
+bool tool_allowed(const std::vector<std::string>& allowed,
+                  const std::string& name) {
+  const auto normalized = normalize_tool_name(name);
+  return std::find(allowed.begin(), allowed.end(), normalized) != allowed.end();
+}
+
+void restrict_tools(niminal::Agent& agent,
+                    const std::vector<std::string>& allowed) {
+  agent.tools.erase(
+      std::remove_if(agent.tools.begin(), agent.tools.end(), [&](const auto& tool) {
+        return !tool_allowed(allowed, tool.name);
+      }),
+      agent.tools.end());
 }
 
 niminal::Agent make_agent(niminal::app::Workspace& ws, const niminal::app::Config& cfg,
@@ -261,6 +289,8 @@ int main(int argc, char** argv) {
   std::string api_key;
   std::string session_id;
   std::vector<std::string> prompt_parts;
+  std::vector<std::string> allowed_tools;
+  bool tools_specified = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -325,6 +355,29 @@ int main(int argc, char** argv) {
         return 2;
       }
       api_key = argv[++i];
+      continue;
+    }
+    if (a == "--tools") {
+      if (i + 1 >= argc) {
+        std::cerr << kUsage;
+        return 2;
+      }
+      tools_specified = true;
+      const std::string value = argv[++i];
+      if (normalize_tool_name(value) == "none") {
+        allowed_tools.clear();
+      } else {
+        std::stringstream names(value);
+        std::string name;
+        while (std::getline(names, name, ',')) {
+          name = normalize_tool_name(std::move(name));
+          if (name.empty()) {
+            std::cerr << "Tool names must not be empty\n";
+            return 2;
+          }
+          if (!tool_allowed(allowed_tools, name)) allowed_tools.push_back(name);
+        }
+      }
       continue;
     }
     if (a == "--max-steps") {
@@ -434,6 +487,7 @@ int main(int argc, char** argv) {
     std::cerr << "Project-local resources skipped (use --approve or /trust on).\n";
   std::atomic<bool> cancel{false};
   auto agent = make_agent(ws, cfg, max_steps, &cancel);
+  if (tools_specified) restrict_tools(agent, allowed_tools);
   if (!api_key.empty()) agent.api_key = api_key;
 
   niminal::app::Session session;
@@ -477,11 +531,13 @@ int main(int argc, char** argv) {
 
   auto extensions = niminal::app::ExtensionRuntime::start(
       ws.root(), session.id, &cancel);
-  niminal::app::install_extension_tools(agent, extensions);
+  niminal::app::install_extension_tools(
+      agent, extensions, tools_specified ? &allowed_tools : nullptr);
   niminal::app::bind_extensions(agent, extensions, ws.root(),
                                 [](const std::string& warning) {
                                   std::cerr << warning << '\n';
-                                });
+                                },
+                                &session);
   niminal::app::bind_compaction(agent, session,
                                 [](const std::string& msg) {
                                   if (!msg.empty()) std::cerr << msg << '\n';
@@ -538,7 +594,9 @@ int main(int argc, char** argv) {
                    "print mode.\n";
       return 2;
     }
-    int code = niminal::app::run_tui(agent, ws, cfg, session, extensions, yolo);
+    int code = niminal::app::run_tui(
+        agent, ws, cfg, session, extensions, yolo,
+        tools_specified ? &allowed_tools : nullptr);
     stop_extensions();
     return code;
   }
