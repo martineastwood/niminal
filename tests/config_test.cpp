@@ -16,7 +16,8 @@ int main() {
   auto path = dir / "config.json";
 
   auto missing = load_config_file(path);
-  if (missing.model != "openai/gpt-4o-mini" || missing.provider != "openrouter") {
+  if (missing.model != "openai/gpt-4o-mini" || missing.provider != "openrouter" ||
+      missing.max_steps != 0) {
     std::cerr << "default model mismatch\n";
     return 1;
   }
@@ -29,12 +30,14 @@ int main() {
   cfg.thinking = "high";
   cfg.steering_mode = "all";
   cfg.follow_up_mode = "one-at-a-time";
+  cfg.max_steps = 12;
   save_config_file(path, cfg);
   auto loaded = load_config_file(path);
   if (loaded.model != cfg.model || loaded.api_url != cfg.api_url ||
       loaded.provider != "anthropic" || loaded.thinking != "high" ||
       loaded.steering_mode != "all" ||
       loaded.follow_up_mode != "one-at-a-time" ||
+      loaded.max_steps != 12 ||
       loaded.last_models["openrouter"] != "openai/gpt-4o-mini") {
     std::cerr << "roundtrip mismatch\n";
     return 1;
@@ -58,6 +61,16 @@ int main() {
   if (modes.steering_mode != "one-at-a-time" ||
       modes.follow_up_mode != "all") {
     std::cerr << "invalid queue mode should use defaults\n";
+    return 1;
+  }
+
+  {
+    std::ofstream out(path);
+    out << R"({"max_steps":-1})";
+  }
+  auto unlimited = load_config_file(path);
+  if (unlimited.max_steps != 0) {
+    std::cerr << "negative max_steps should use unlimited default\n";
     return 1;
   }
 

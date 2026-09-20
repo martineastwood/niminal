@@ -153,7 +153,7 @@ std::string Agent::run(const std::string& prompt) {
 
   try {
     bool overflow_retried = false;
-    for (step = 0; step < max_steps; ++step) {
+    for (step = 0; max_steps <= 0 || step < max_steps; ++step) {
       if (cancelled()) throw Cancelled();
       inject_steering();
       if (before_request) before_request();

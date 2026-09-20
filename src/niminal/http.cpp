@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -28,6 +29,7 @@ struct WriteBuf {
   std::string pending;
   std::function<void(std::string_view)>* on_data = nullptr;
   std::atomic<bool>* cancel = nullptr;
+  std::exception_ptr error;
 };
 
 size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -48,18 +50,25 @@ void flush_sse_line(WriteBuf& buf, std::string_view line) {
 
 size_t write_sse(char* ptr, size_t size, size_t nmemb, void* userdata) {
   auto* buf = static_cast<WriteBuf*>(userdata);
+  if (buf->error) return 0;
   if (buf->cancel && buf->cancel->load()) return 0;
-  buf->pending.append(ptr, size * nmemb);
-  if (buf->body) buf->body->append(ptr, size * nmemb);
-  size_t start = 0;
-  while (start < buf->pending.size()) {
-    auto nl = buf->pending.find('\n', start);
-    if (nl == std::string::npos) break;
-    flush_sse_line(*buf, std::string_view(buf->pending).substr(start, nl - start));
-    start = nl + 1;
+  try {
+    buf->pending.append(ptr, size * nmemb);
+    if (buf->body) buf->body->append(ptr, size * nmemb);
+    size_t start = 0;
+    while (start < buf->pending.size()) {
+      auto nl = buf->pending.find('\n', start);
+      if (nl == std::string::npos) break;
+      flush_sse_line(*buf,
+                     std::string_view(buf->pending).substr(start, nl - start));
+      start = nl + 1;
+    }
+    buf->pending.erase(0, start);
+    return size * nmemb;
+  } catch (...) {
+    buf->error = std::current_exception();
+    return 0;
   }
-  buf->pending.erase(0, start);
-  return size * nmemb;
 }
 
 curl_slist* slist_from(const std::map<std::string, std::string>& headers) {
@@ -130,7 +139,7 @@ HttpResponse HttpClient::post(std::string_view url,
                               const std::map<std::string, std::string>& headers,
                               std::string_view body) {
   HttpResponse out;
-  WriteBuf buf{&out.body, {}, nullptr, nullptr};
+  WriteBuf buf{&out.body, {}, nullptr, nullptr, {}};
   auto* hdrs = slist_from(headers);
   std::string url_owned(url);
   std::string body_owned(body);
@@ -155,7 +164,7 @@ void HttpClient::post_sse(
     std::atomic<bool>* cancel) {
   auto on_data_mut = on_data;
   std::string raw;
-  WriteBuf buf{&raw, {}, &on_data_mut, cancel};
+  WriteBuf buf{&raw, {}, &on_data_mut, cancel, {}};
   auto* hdrs = slist_from(headers);
   std::string url_owned(url);
   std::string body_owned(body);
@@ -175,6 +184,10 @@ void HttpClient::post_sse(
   long status = 0;
   curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &status);
   curl_slist_free_all(hdrs);
+  if (buf.error) {
+    if (cancel && cancel->load()) throw Cancelled();
+    std::rethrow_exception(buf.error);
+  }
   if (cancel && cancel->load() &&
       (rc == CURLE_ABORTED_BY_CALLBACK || rc == CURLE_WRITE_ERROR))
     throw Cancelled();
@@ -187,7 +200,7 @@ void HttpClient::post_sse(
 
 HttpResponse HttpClient::get(std::string_view url, long timeout_seconds) {
   HttpResponse out;
-  WriteBuf buf{&out.body, {}, nullptr, nullptr};
+  WriteBuf buf{&out.body, {}, nullptr, nullptr, {}};
   auto* hdrs = slist_from({});
   std::string url_owned(url);
   std::string ca = default_ca_file();

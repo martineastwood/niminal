@@ -13,6 +13,7 @@ struct Config {
   std::string thinking;
   std::string steering_mode = "one-at-a-time";
   std::string follow_up_mode = "one-at-a-time";
+  int max_steps = 0;  // 0 means unlimited.
   std::map<std::string, std::string> last_models;
 };
 

@@ -38,7 +38,7 @@ const char* kUsage =
     "  --mode json        emit versioned JSONL events and exit\n"
     "  --mode rpc         serve JSONL commands until shutdown or EOF\n"
     "  --api-key KEY      use an API key for this process\n"
-    "  --max-steps N      Tool loop cap (default 32)\n"
+    "  --max-steps N      Tool loop cap (0 means unlimited)\n"
     "  --yolo             Auto-approve tools for this process\n"
     "  --approve          Load project-local niminal resources\n"
     "  --no-approve       Skip project-local niminal resources\n"
@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  int max_steps = 32;
+  int max_steps = cfg.max_steps;
   bool model_from_cli = false;
   bool provider_from_cli = false;
   bool resume_latest = false;
@@ -332,7 +332,16 @@ int main(int argc, char** argv) {
         std::cerr << kUsage;
         return 2;
       }
-      max_steps = std::atoi(argv[++i]);
+      try {
+        max_steps = std::stoi(argv[++i]);
+      } catch (...) {
+        std::cerr << "--max-steps must be a non-negative integer (0 means unlimited).\n";
+        return 2;
+      }
+      if (max_steps < 0) {
+        std::cerr << "--max-steps must be a non-negative integer (0 means unlimited).\n";
+        return 2;
+      }
       continue;
     }
     if (a == "--yolo") {

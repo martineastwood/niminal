@@ -75,6 +75,10 @@ Config load_config_file(const fs::path& path) {
       cfg.thinking = doc["thinking"].get<std::string>();
     load_queue_mode(doc, "steering_mode", cfg.steering_mode);
     load_queue_mode(doc, "follow_up_mode", cfg.follow_up_mode);
+    if (doc.contains("max_steps") && doc["max_steps"].is_number_integer()) {
+      const int max_steps = doc["max_steps"].get<int>();
+      if (max_steps >= 0) cfg.max_steps = max_steps;
+    }
     if (doc.contains("providers") && doc["providers"].is_object()) {
       for (auto& [name, block] : doc["providers"].items()) {
         if (block.is_object() && block.contains("last_model") &&
@@ -104,6 +108,7 @@ void save_config_file(const fs::path& path, const Config& cfg) {
               {"model", cfg.model},
               {"steering_mode", cfg.steering_mode},
               {"follow_up_mode", cfg.follow_up_mode}};
+  if (cfg.max_steps > 0) doc["max_steps"] = cfg.max_steps;
   if (!cfg.api_url.empty()) doc["api_url"] = cfg.api_url;
   if (!cfg.thinking.empty()) doc["thinking"] = cfg.thinking;
   if (!cfg.last_models.empty()) {

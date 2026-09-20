@@ -224,7 +224,8 @@ json anthropic_body(const ChatRequest& request) {
       if (!msg.is_object()) continue;
       auto role = msg.value("role", "");
       if (role == "system") {
-        for (auto& part : text_parts(msg["content"])) system.push_back(std::move(part));
+        for (auto& part : text_parts(msg.value("content", json(""))))
+          system.push_back(std::move(part));
         continue;
       }
       if (role == "tool") {
@@ -301,7 +302,7 @@ json google_body(const ChatRequest& request) {
       if (!msg.is_object()) continue;
       auto role = msg.value("role", "");
       if (role == "system") {
-        for (const auto& part : text_parts(msg["content"])) {
+        for (const auto& part : text_parts(msg.value("content", json("")))) {
           json p = json::object();
           p["text"] = part.value("text", "");
           system_parts.push_back(std::move(p));
@@ -463,6 +464,7 @@ struct AnthropicStream {
 void consume_anthropic(const ChatRequest& request, ChatResult& result,
                        AnthropicStream& acc, const json& chunk) {
   throw_if_error(chunk);
+  if (!chunk.is_object()) return;
   auto type = chunk.value("type", "");
   if (type == "message_start" && chunk.contains("message") &&
       chunk["message"].is_object()) {
@@ -479,7 +481,8 @@ void consume_anthropic(const ChatRequest& request, ChatResult& result,
   if (type == "content_block_delta") {
     int i = chunk.value("index", 0);
     if (i < 0 || i >= static_cast<int>(acc.content.size())) return;
-    const auto& delta = chunk.value("delta", json::object());
+    json delta = chunk.value("delta", json::object());
+    if (!delta.is_object()) return;
     auto dtype = delta.value("type", "");
     if (dtype == "text_delta") {
       auto piece = delta.value("text", "");
@@ -507,7 +510,8 @@ void consume_anthropic(const ChatRequest& request, ChatResult& result,
   if (type == "message_delta") {
     if (chunk.contains("usage"))
       merge_usage(result.usage, parse_chat_usage(chunk["usage"]));
-    auto reason = chunk.value("delta", json::object()).value("stop_reason", "");
+    json delta = chunk.value("delta", json::object());
+    auto reason = delta.is_object() ? delta.value("stop_reason", "") : "";
     if (reason == "tool_use") result.finish_reason = "tool_calls";
     else if (reason == "max_tokens") result.finish_reason = "length";
     else if (!reason.empty()) result.finish_reason = "stop";
@@ -529,19 +533,28 @@ void finish_anthropic(ChatResult& result, AnthropicStream& acc) {
 void consume_google(const ChatRequest& request, ChatResult& result,
                     std::map<int, ToolCall>& calls, const json& chunk) {
   throw_if_error(chunk);
+  if (!chunk.is_object()) return;
   if (chunk.contains("usageMetadata") && chunk["usageMetadata"].is_object())
     merge_usage(result.usage, parse_chat_usage(chunk["usageMetadata"]));
-  if (!chunk.contains("candidates") || chunk["candidates"].empty()) return;
+  if (!chunk.contains("candidates") || !chunk["candidates"].is_array() ||
+      chunk["candidates"].empty())
+    return;
   const auto& cand = chunk["candidates"][0];
-  auto reason = cand.value("finishReason", "");
+  if (!cand.is_object()) return;
+  auto reason = cand.contains("finishReason") && cand["finishReason"].is_string()
+                    ? cand["finishReason"].get<std::string>()
+                    : std::string();
   if (reason == "STOP") result.finish_reason = "stop";
   else if (reason == "MAX_TOKENS") result.finish_reason = "length";
-  if (!cand.contains("content") || !cand["content"].contains("parts")) return;
+  if (!cand.contains("content") || !cand["content"].is_object() ||
+      !cand["content"].contains("parts") || !cand["content"]["parts"].is_array())
+    return;
   int i = 0;
   for (const auto& part : cand["content"]["parts"]) {
     if (!part.is_object()) continue;
     if (part.contains("text") && part["text"].is_string() &&
-        !part.value("thought", false)) {
+        !(part.contains("thought") && part["thought"].is_boolean() &&
+          part["thought"].get<bool>())) {
       auto piece = part["text"].get<std::string>();
       if (!piece.empty()) {
         result.text += piece;
@@ -563,13 +576,17 @@ void consume_google(const ChatRequest& request, ChatResult& result,
 void consume_openai(const ChatRequest& request, ChatResult& result,
                     std::map<int, ToolCall>& calls, const json& chunk) {
   throw_if_error(chunk);
+  if (!chunk.is_object()) return;
   if (chunk.contains("usage") && chunk["usage"].is_object())
     merge_usage(result.usage, parse_chat_usage(chunk["usage"]));
-  if (!chunk.contains("choices") || chunk["choices"].empty()) return;
+  if (!chunk.contains("choices") || !chunk["choices"].is_array() ||
+      chunk["choices"].empty())
+    return;
   const auto& choice = chunk["choices"][0];
-  if (choice.contains("finish_reason") && !choice["finish_reason"].is_null())
+  if (!choice.is_object()) return;
+  if (choice.contains("finish_reason") && choice["finish_reason"].is_string())
     result.finish_reason = choice["finish_reason"].get<std::string>();
-  if (!choice.contains("delta")) return;
+  if (!choice.contains("delta") || !choice["delta"].is_object()) return;
   const auto& delta = choice["delta"];
   if (delta.contains("content")) {
     std::string piece;
@@ -589,13 +606,14 @@ void consume_openai(const ChatRequest& request, ChatResult& result,
       emit(request, StreamEvent{EventKind::text_delta, piece, {}, {}});
     }
   }
-  if (!delta.contains("tool_calls")) return;
+  if (!delta.contains("tool_calls") || !delta["tool_calls"].is_array()) return;
   for (const auto& tc : delta["tool_calls"]) {
+    if (!tc.is_object()) continue;
     int index = tc.value("index", 0);
     auto& acc = calls[index];
     if (tc.contains("id") && tc["id"].is_string())
       acc.id = tc["id"].get<std::string>();
-    if (tc.contains("function")) {
+    if (tc.contains("function") && tc["function"].is_object()) {
       const auto& fn = tc["function"];
       if (fn.contains("name") && fn["name"].is_string())
         acc.name = fn["name"].get<std::string>();
@@ -606,8 +624,12 @@ void consume_openai(const ChatRequest& request, ChatResult& result,
 }
 
 std::string openai_text(const json& body) {
-  if (!body.contains("choices") || body["choices"].empty()) return {};
-  const auto& content = body["choices"][0]["message"]["content"];
+  if (!body.contains("choices") || !body["choices"].is_array() ||
+      body["choices"].empty() || !body["choices"][0].is_object())
+    return {};
+  const auto& message = body["choices"][0]["message"];
+  if (!message.is_object() || !message.contains("content")) return {};
+  const auto& content = message["content"];
   if (content.is_string()) return content.get<std::string>();
   return join_text(content);
 }
@@ -622,9 +644,14 @@ std::string anthropic_text(const json& body) {
 }
 
 std::string google_text(const json& body) {
-  if (!body.contains("candidates") || body["candidates"].empty()) return {};
-  const auto& parts = body["candidates"][0]["content"]["parts"];
-  if (!parts.is_array()) return {};
+  if (!body.contains("candidates") || !body["candidates"].is_array() ||
+      body["candidates"].empty() || !body["candidates"][0].is_object())
+    return {};
+  const auto& cand = body["candidates"][0];
+  if (!cand.contains("content") || !cand["content"].is_object() ||
+      !cand["content"].contains("parts") || !cand["content"]["parts"].is_array())
+    return {};
+  const auto& parts = cand["content"]["parts"];
   std::string text;
   for (const auto& part : parts)
     if (part.is_object() && part.contains("text"))
@@ -697,7 +724,7 @@ ChatResult stream_chat(const ChatRequest& request) {
                   req.cancel);
   } catch (const Cancelled&) {
     throw;
-  } catch (const json::parse_error& e) {
+  } catch (const json::exception& e) {
     throw Error(std::string("stream json: ") + e.what());
   }
 

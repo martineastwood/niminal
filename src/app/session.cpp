@@ -152,7 +152,7 @@ void Session::add_assistant(const std::string& text, const json& tool_calls,
 niminal::Usage Session::usage_totals() const {
   niminal::Usage total;
   for (const auto& event : events) {
-    if (event.value("type", "") != "assistant") continue;
+    if (!event.is_object() || event.value("type", "") != "assistant") continue;
     niminal::Usage u;
     u.input_tokens = event.value("prompt_tokens", 0);
     u.output_tokens = event.value("completion_tokens", 0);

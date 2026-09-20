@@ -24,7 +24,7 @@ struct Agent {
   bool stream_usage = true;
   bool apply_cache = true;
   bool prompt_cache_key = true;
-  int max_steps = 32;
+  int max_steps = 0;  // 0 means unlimited.
   std::vector<Tool> tools;
   json messages = json::array();
   json extra = json::object();

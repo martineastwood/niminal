@@ -79,6 +79,11 @@ int main() {
   if (totals.input_tokens != 100 || totals.output_tokens != 20 ||
       totals.cache_read_tokens != 80)
     return fail("usage_totals");
+  s.events.push_back(json("not-an-object"));
+  s.events.push_back(json::array());
+  auto still = s.usage_totals();
+  if (still.input_tokens != 100 || still.output_tokens != 20)
+    return fail("usage_totals skips non-objects");
 
   auto other = create_session(dir, "/tmp/ws-b");
   other.add_user("other workspace");

@@ -61,6 +61,10 @@ Switching provider restores that provider's last model from
 `~/.niminal/config.json`. `/provider` alone prints the active name, model,
 endpoint, and which env var supplies the key.
 
+Set `max_steps` in that file to limit the tool loop for each user turn. Omit it
+or set it to `0` for the default unbounded loop. The `--max-steps N` flag
+overrides the config value for the current process, and `0` means unlimited.
+
 The agent always speaks one request shape: OpenAI-style messages and tools.
 niminal translates that to the provider's native API before it goes on the
 wire, including prompt cache:
@@ -283,8 +287,8 @@ Optional environment:
 - `NIMINAL_THINKING` (overrides `thinking` in the config file)
 
 Optional flags: `--model ID`, `--provider NAME`, `--thinking LEVEL`, `--mode json|rpc`,
-`--api-key KEY`, `--max-steps N`, `--resume`, `--session ID`, `--no-session`,
-`--yolo`, `--approve`, `--no-approve`.
+`--api-key KEY`, `--max-steps N`, `--resume`, `--session ID`, `--no-session`, `--yolo`,
+`--approve`, `--no-approve`.
 
 File tools stay inside the current directory. `grep` and `glob` use git's
 tracked and untracked files and honor `.gitignore`, so `build/` stays out of

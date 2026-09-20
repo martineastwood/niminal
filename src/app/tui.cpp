@@ -80,17 +80,24 @@ std::string tool_summary(const std::string& name, const std::string& args) {
   } catch (...) {
     return "▸ " + name + "  " + one_line(args, 120);
   }
+  if (!j.is_object())
+    return "▸ " + name + (args.empty() ? "" : "  " + one_line(args, 120));
   std::string detail;
   if (name == "bash")
-    detail = "$ " + j.value("command", std::string());
+    detail = "$ " + (j.contains("command") && j["command"].is_string()
+                         ? j["command"].get<std::string>()
+                         : std::string());
   else if (name == "skill")
-    detail = j.value("name", std::string());
-  else if (j.contains("path")) {
+    detail = j.contains("name") && j["name"].is_string()
+                 ? j["name"].get<std::string>()
+                 : std::string();
+  else if (j.contains("path") && j["path"].is_string()) {
     detail = j["path"].get<std::string>();
-    if (j.contains("pattern")) detail += "  " + j["pattern"].get<std::string>();
-    else if (j.contains("old_text"))
+    if (j.contains("pattern") && j["pattern"].is_string())
+      detail += "  " + j["pattern"].get<std::string>();
+    else if (j.contains("old_text") && j["old_text"].is_string())
       detail += "  " + one_line(j["old_text"].get<std::string>(), 60);
-  } else if (j.contains("pattern"))
+  } else if (j.contains("pattern") && j["pattern"].is_string())
     detail = j["pattern"].get<std::string>();
   else if (!j.empty())
     detail = j.dump();
@@ -582,10 +589,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   auto load_history = [&] {
     history.clear();
     for (const auto& event : session.events) {
-      if (event.value("type", "") != "user") continue;
+      if (!event.is_object() || event.value("type", "") != "user") continue;
       std::string text;
       for (const auto& part : event.value("content", json::array()))
-        if (part.value("type", "") == "text") text += part.value("text", "");
+        if (part.is_object() && part.value("type", "") == "text")
+          text += part.value("text", "");
       if (!text.empty()) history.push_back(std::move(text));
     }
     if (history.size() > 500)
@@ -722,8 +730,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   auto post_ui = [&](StreamEvent ev) {
     if (!ui_alive) return;
     screen.Post([apply_event, apply_extension_actions, ev, &screen] {
-      apply_event(ev);
-      apply_extension_actions();
+      try {
+        apply_event(ev);
+        apply_extension_actions();
+      } catch (const std::exception& e) {
+        try {
+          apply_event(StreamEvent{EventKind::error, e.what(), {}, {}});
+        } catch (...) {
+        }
+      }
       screen.RequestAnimationFrame();
     });
   };
@@ -840,19 +855,21 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           "This session was started in " + session.workspace});
     }
     for (const auto& event : session.events) {
+      if (!event.is_object()) continue;
       auto type = event.value("type", "");
       if (type == "user") {
         std::string text;
-        if (event.contains("content"))
+        if (event.contains("content") && event["content"].is_array())
           for (const auto& part : event["content"])
-            if (part.value("type", "") == "text")
+            if (part.is_object() && part.value("type", "") == "text")
               text += part.value("text", "");
         if (!text.empty())
           blocks.push_back(Block{BlockKind::user, std::move(text)});
       } else if (type == "assistant") {
         std::string text;
-        if (event.contains("content")) {
+        if (event.contains("content") && event["content"].is_array()) {
           for (const auto& part : event["content"]) {
+            if (!part.is_object()) continue;
             auto ptype = part.value("type", "");
             if (ptype == "text") text += part.value("text", "");
             if (ptype == "tool_use") {
@@ -863,7 +880,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
               json input = part.value("input", json::object());
               blocks.push_back(Block{
                   BlockKind::tool,
-                  tool_summary(part.value("name", ""), input.dump())});
+                  tool_summary(part.value("name", ""),
+                               input.is_object() ? input.dump() : std::string())});
             }
           }
         }
@@ -1033,6 +1051,21 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         blocks.push_back(Block{BlockKind::status, "Copied to clipboard."});
         return;
       }
+      if (cmd == "/yolo") {
+        if (arg.empty() || arg == "on") {
+          yolo_mode = true;
+          blocks.push_back(Block{
+              BlockKind::status,
+              "YOLO mode: all tools auto-approved for this process."});
+        } else if (arg == "off") {
+          yolo_mode = false;
+          blocks.push_back(Block{BlockKind::status,
+                                 "YOLO mode disabled; tool approvals are on."});
+        } else {
+          blocks.push_back(Block{BlockKind::error, "Usage: /yolo [off]"});
+        }
+        return;
+      }
       if (cmd == "/compact") {
         if (busy) {
           blocks.push_back(Block{
@@ -1171,21 +1204,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           }
         } else {
           blocks.push_back(Block{BlockKind::error, "Usage: /trust [on|off]"});
-        }
-        return;
-      }
-      if (cmd == "/yolo") {
-        if (arg.empty() || arg == "on") {
-          yolo_mode = true;
-          blocks.push_back(Block{
-              BlockKind::status,
-              "YOLO mode: all tools auto-approved for this process."});
-        } else if (arg == "off") {
-          yolo_mode = false;
-          blocks.push_back(Block{BlockKind::status,
-                                 "YOLO mode disabled; tool approvals are on."});
-        } else {
-          blocks.push_back(Block{BlockKind::error, "Usage: /yolo [off]"});
         }
         return;
       }
@@ -1428,7 +1446,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       think = thinking_choices(agent.provider, agent.model).empty()
                   ? std::string()
                   : (cfg.thinking.empty() ? "default" : "off");
-    auto usage = format_usage_line(session.usage_totals());
+    std::string usage;
+    try {
+      usage = format_usage_line(session.usage_totals());
+    } catch (...) {
+    }
 
     auto suggestions = current_suggestions();
     Elements suggest_rows;
@@ -1647,7 +1669,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       if (!ui_alive) break;
       screen.Post([apply_extension_actions, &screen] {
-        apply_extension_actions();
+        try {
+          apply_extension_actions();
+        } catch (...) {
+        }
         screen.RequestAnimationFrame();
       });
     }
