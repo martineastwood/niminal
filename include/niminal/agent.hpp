@@ -1,0 +1,52 @@
+#pragma once
+
+#include <niminal/types.hpp>
+
+#include <atomic>
+#include <functional>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace niminal {
+
+struct ChatRequest;
+
+struct Agent {
+  std::string system;
+  std::string model = "openai/gpt-4o-mini";
+  std::string provider = "openrouter";
+  std::string api_key;
+  std::string api_url = "https://openrouter.ai/api/v1/chat/completions";
+  std::string key_hint = "OPENROUTER_API_KEY";
+  std::map<std::string, std::string> extra_headers;
+  bool session_routing = true;
+  bool stream_usage = true;
+  bool apply_cache = true;
+  bool prompt_cache_key = true;
+  int max_steps = 16;
+  std::vector<Tool> tools;
+  json messages = json::array();
+  json extra = json::object();
+  std::function<void(const StreamEvent&)> on_event;
+  std::atomic<bool>* cancel = nullptr;
+  std::vector<std::string> system_extra;
+  std::function<std::vector<std::string>()> system_extra_loader;
+  std::string conversation_id;
+  std::function<void(const std::string&)> persist_user;
+  std::function<void(const std::string& text, const std::vector<ToolCall>& calls,
+                     const std::string& model, const Usage& usage)>
+      persist_assistant;
+  std::function<void(const std::string& id, const std::string& output, bool error)>
+      persist_tool;
+  std::function<std::vector<std::string>()> take_steering;
+  std::function<void()> before_request;
+  std::function<bool()> recover_overflow;
+
+  json request_messages() const;
+  void fill_chat(ChatRequest& req) const;
+  bool cancelled() const { return cancel && cancel->load(); }
+  std::string run(const std::string& prompt);
+};
+
+}  // namespace niminal

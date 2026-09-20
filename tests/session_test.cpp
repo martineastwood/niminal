@@ -1,0 +1,173 @@
+#include "session.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
+
+namespace fs = std::filesystem;
+using niminal::app::create_session;
+using niminal::app::list_sessions;
+using niminal::app::load_session;
+using niminal::app::valid_session_id;
+using json = nlohmann::json;
+
+static int fail(const char* msg) {
+  std::cerr << msg << '\n';
+  return 1;
+}
+
+int main() {
+  if (valid_session_id("") || valid_session_id("../x") ||
+      valid_session_id("id.jsonl") || !valid_session_id("1789233281025102"))
+    return fail("valid_session_id");
+
+  auto dir = fs::temp_directory_path() / "niminal-session-test";
+  fs::remove_all(dir);
+  fs::create_directories(dir);
+
+  auto s = create_session(dir, "/tmp/ws-a");
+  if (s.id.empty() || !valid_session_id(s.id)) return fail("create id");
+  if (fs::exists(s.path)) return fail("lazy create wrote a file");
+
+  s.add_user("why is the parser test failing?");
+  if (!fs::exists(s.path)) return fail("first event should write the file");
+
+  {
+    std::ifstream in(s.path);
+    std::string line;
+    std::getline(in, line);
+    auto header = json::parse(line);
+    if (header.value("type", "") != "session" ||
+        header.value("workspace", "") != "/tmp/ws-a")
+      return fail("session header");
+  }
+
+  json calls = json::array({json{
+      {"id", "call_1"},
+      {"type", "function"},
+      {"function", {{"name", "bash"}, {"arguments", "{\"command\":\"npm test\"}"}}},
+  }});
+  s.add_assistant("running tests", calls, "openai/gpt-4o-mini");
+  s.add_tool_result("call_1", "exit_code: 1", true);
+  s.add_name("fix the parser");
+  s.add_selection("anthropic/claude-sonnet-4", "openrouter");
+
+  auto loaded = load_session(dir, s.id);
+  if (loaded.name != "fix the parser") return fail("name");
+  if (loaded.workspace != "/tmp/ws-a") return fail("workspace");
+  if (loaded.events.size() != 5) return fail("event count");
+  if (loaded.last_model() != "anthropic/claude-sonnet-4")
+    return fail("last_model prefers selection");
+  if (loaded.last_provider() != "openrouter")
+    return fail("last_provider");
+  auto msgs = loaded.openai_messages();
+  if (msgs.size() != 3) return fail("openai_messages should skip name/selection");
+  if (msgs[0].value("role", "") != "user") return fail("user role");
+  if (msgs[1].value("role", "") != "assistant" ||
+      !msgs[1].contains("tool_calls"))
+    return fail("assistant tool_calls");
+  if (msgs[2].value("role", "") != "tool") return fail("tool role");
+  if (loaded.last_assistant_text() != "running tests")
+    return fail("last_assistant_text");
+
+  s.add_assistant("usage turn", json::array(), "openai/gpt-4o-mini",
+                  niminal::Usage{100, 20, 80, 0, true});
+  auto totals = s.usage_totals();
+  if (totals.input_tokens != 100 || totals.output_tokens != 20 ||
+      totals.cache_read_tokens != 80)
+    return fail("usage_totals");
+
+  auto other = create_session(dir, "/tmp/ws-b");
+  other.add_user("other workspace");
+  auto listed = list_sessions(dir, "/tmp/ws-a", 20);
+  if (listed.size() != 1 || listed[0].id != s.id)
+    return fail("list filters by workspace");
+  if (listed[0].name != "fix the parser") return fail("list name");
+
+  auto pending = create_session(dir, "/tmp/ws-a");
+  pending.add_user("run it");
+  pending.add_assistant("", json::array({json{
+                             {"id", "call_x"},
+                             {"function", {{"name", "bash"}, {"arguments", "{}"}}},
+                         }}),
+                        "openai/gpt-4o-mini");
+  auto recovered = load_session(dir, pending.id);
+  if (recovered.recover_interrupted_tools() != 1)
+    return fail("recover count");
+  if (recovered.recover_interrupted_tools() != 0)
+    return fail("recover is idempotent");
+  auto last = recovered.events.back();
+  if (last.value("type", "") != "tool_result" || !last.value("is_error", false))
+    return fail("interrupted tool_result");
+  if (last.value("output", "").find("Interrupted before a tool result") ==
+      std::string::npos)
+    return fail("interrupted wording");
+
+  auto damaged = create_session(dir, "/tmp/ws-a");
+  damaged.add_user("keep me");
+  {
+    std::ofstream out(damaged.path, std::ios::app);
+    out << "{\"type\":\"assistant\",\"role\":\"assistant\",\"content\":[";
+  }
+  auto repaired = load_session(dir, damaged.id);
+  if (repaired.events.size() != 1) return fail("damaged last line ignored");
+  repaired.add_user("after recovery");
+  auto again = load_session(dir, damaged.id);
+  if (again.events.size() != 2) return fail("append after damage");
+
+  auto compact = create_session(dir, "/tmp/ws-a");
+  compact.add_user("old question");
+  compact.add_assistant("old answer", json::array(), "openai/gpt-4o-mini");
+  compact.add_user("new question");
+  compact.add_assistant("new answer", json::array(), "openai/gpt-4o-mini");
+  compact.add_compaction("Earlier work: old question.", 2, 400);
+  if (compact.latest_compaction_index() != 4)
+    return fail("latest_compaction_index");
+  auto sliced = compact.openai_messages();
+  if (sliced.size() != 3) return fail("compaction prepends summary then kept turns");
+  auto summary = sliced[0].value("content", "");
+  if (summary.find("<summary>") == std::string::npos ||
+      summary.find("old question") == std::string::npos)
+    return fail("compaction summary wrapper");
+  if (sliced[1].value("content", "") != "new question")
+    return fail("kept user after cut");
+  if (sliced[2].value("content", "") != "new answer")
+    return fail("kept assistant after cut");
+  bool found_backup = false;
+  for (const auto& entry : fs::directory_iterator(dir)) {
+    auto name = entry.path().filename().string();
+    if (name.find(damaged.id + ".jsonl.recovery-") == 0) found_backup = true;
+  }
+  if (!found_backup) return fail("recovery backup");
+
+  auto clash_id = create_session(dir, "/tmp/ws-a");
+  clash_id.add_user("keep");
+  {
+    std::ofstream out(clash_id.path, std::ios::app);
+    out << "{\"type\":\"assistant\",\"role\":\"assistant\",\"content\":[";
+  }
+  auto clash = load_session(dir, clash_id.id);
+  {
+    std::ofstream out(clash_id.path, std::ios::app);
+    out << "MUTATED";
+  }
+  try {
+    clash.add_user("should fail");
+    return fail("changed on disk should throw");
+  } catch (const std::runtime_error& e) {
+    if (std::string(e.what()).find("Session changed on disk") ==
+        std::string::npos)
+      return fail("changed on disk message");
+  }
+
+  auto mem = create_session(dir, "/tmp/ws-a");
+  mem.persist = false;
+  mem.path.clear();
+  mem.add_user("ephemeral");
+  if (!mem.events.empty() && fs::exists(dir / (mem.id + ".jsonl")))
+    return fail("no-session must not write");
+
+  fs::remove_all(dir);
+  return 0;
+}
