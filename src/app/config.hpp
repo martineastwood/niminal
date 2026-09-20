@@ -10,6 +10,8 @@ constexpr int kDefaultContextWindow = 128'000;
 constexpr int kDefaultReserveTokens = 16'384;
 constexpr int kDefaultKeepRecentTokens = 20'000;
 constexpr int kSummaryMaxTokens = 4'096;
+constexpr int kDefaultThinkingPreviewChars = 360;
+constexpr int kDefaultThinkingPreviewLines = 4;
 
 struct Config {
   std::string provider = "openrouter";
@@ -17,6 +19,8 @@ struct Config {
   std::string api_url = "https://openrouter.ai/api/v1/chat/completions";
   std::string thinking;
   bool show_thinking = false;
+  int thinking_preview_chars = kDefaultThinkingPreviewChars;
+  int thinking_preview_lines = kDefaultThinkingPreviewLines;
   std::string theme = "auto";
   std::string steering_mode = "one-at-a-time";
   std::string follow_up_mode = "one-at-a-time";

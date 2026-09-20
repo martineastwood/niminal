@@ -87,9 +87,10 @@ Compaction tuning also lives in that file:
   while older turns are summarized.
 - The summary generation itself is capped at 4096 output tokens.
 
-Thinking traces appear as a compact preview in the TUI by default. Set
-`"show_thinking": true` in `~/.niminal/config.json` to show the full streamed
-trace in the transcript.
+Thinking traces appear as a compact preview in the TUI by default, capped at
+`thinking_preview_chars` characters (default `360`) and `thinking_preview_lines`
+lines (default `4`). Set `"show_thinking": true` in `~/.niminal/config.json` to
+show the full streamed trace in the transcript instead.
 
 The agent always speaks one request shape: OpenAI-style messages and tools.
 niminal translates that to the provider's native API before it goes on the

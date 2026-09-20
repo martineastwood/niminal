@@ -21,6 +21,10 @@ int main() {
       !missing.compaction_enabled ||
       missing.reserve_tokens != niminal::app::kDefaultReserveTokens ||
       missing.keep_recent_tokens != niminal::app::kDefaultKeepRecentTokens ||
+      missing.thinking_preview_chars !=
+          niminal::app::kDefaultThinkingPreviewChars ||
+      missing.thinking_preview_lines !=
+          niminal::app::kDefaultThinkingPreviewLines ||
       missing.context_window != 0) {
     std::cerr << "default model mismatch\n";
     return 1;
@@ -33,6 +37,8 @@ int main() {
   cfg.last_models["openrouter"] = "openai/gpt-4o-mini";
   cfg.thinking = "high";
   cfg.show_thinking = true;
+  cfg.thinking_preview_chars = 1200;
+  cfg.thinking_preview_lines = 12;
   cfg.steering_mode = "all";
   cfg.follow_up_mode = "one-at-a-time";
   cfg.max_steps = 12;
@@ -49,6 +55,8 @@ int main() {
       loaded.max_steps != 12 ||
       loaded.reserve_tokens != 32768 ||
       loaded.keep_recent_tokens != 40000 ||
+      loaded.thinking_preview_chars != 1200 ||
+      loaded.thinking_preview_lines != 12 ||
       loaded.context_window != 256000 ||
       loaded.last_models["openrouter"] != "openai/gpt-4o-mini") {
     std::cerr << "roundtrip mismatch\n";

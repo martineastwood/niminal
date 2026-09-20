@@ -1850,7 +1850,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
                       : paragraph(block.kind == BlockKind::thinking
                                      ? (cfg.show_thinking
                                             ? block.text
-                                            : clip_text(block.text, 360, 4))
+                                            : clip_text(block.text,
+                                                        cfg.thinking_preview_chars,
+                                                        cfg.thinking_preview_lines))
                                      : block.text) |
                             block_style(block.kind, theme);
       if (label && *label)
