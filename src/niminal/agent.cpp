@@ -234,6 +234,7 @@ std::string Agent::run(const std::string& prompt) {
         return result.text;
       }
 
+      empty_responses = 0;
       json assistant = {{"role", "assistant"}, {"content", result.text}};
       json calls = json::array();
       if (!result.text.empty()) {
