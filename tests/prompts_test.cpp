@@ -1,4 +1,5 @@
 #include "prompts.hpp"
+#include "trust.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -33,6 +34,9 @@ int main() {
     out << "First useful line\nmore details";
   }
 
+  niminal::app::set_project_resources_trusted(root / "workspace", false);
+  if (niminal::app::discover_prompts(root / "workspace").size() != 2) return 1;
+  niminal::app::set_project_resources_trusted(root / "workspace", true);
   auto prompts = niminal::app::discover_prompts(root / "workspace");
   if (prompts.size() != 3) return 1;
   auto review = niminal::app::load_prompt(root / "workspace", "REVIEW");

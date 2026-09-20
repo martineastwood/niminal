@@ -24,7 +24,7 @@ struct Agent {
   bool stream_usage = true;
   bool apply_cache = true;
   bool prompt_cache_key = true;
-  int max_steps = 16;
+  int max_steps = 32;
   std::vector<Tool> tools;
   json messages = json::array();
   json extra = json::object();
@@ -39,6 +39,15 @@ struct Agent {
       persist_assistant;
   std::function<void(const std::string& id, const std::string& output, bool error)>
       persist_tool;
+  std::function<bool(const ToolCall&, const Tool&)> approve_tool;
+  std::function<bool(const ToolCall&, json& arguments, std::string& reason)>
+      before_tool;
+  std::function<void(const ToolCall&, const json& arguments, std::string& output,
+                     bool& is_error)>
+      after_tool;
+  std::function<void(json& request_messages)> augment_context;
+  std::function<void()> turn_start;
+  std::function<void(bool interrupted)> turn_end;
   std::function<std::vector<std::string>()> take_steering;
   std::function<std::vector<std::string>()> take_follow_up;
   std::function<void()> before_request;

@@ -184,13 +184,18 @@ void Session::add_selection(const std::string& model, const std::string& provide
   append(std::move(event));
 }
 
+void Session::add_extension(const std::string& extension, const json& data) {
+  append(json{{"type", "extension"}, {"extension", extension}, {"data", data}});
+}
+
 void Session::add_compaction(const std::string& summary, int first_kept_index,
-                             int tokens_before) {
+                             int tokens_before, const json& details) {
   json event = json::object();
   event["type"] = "compaction";
   event["summary"] = summary;
   event["first_kept_index"] = first_kept_index;
   event["tokens_before"] = tokens_before;
+  if (!details.is_null() && !details.empty()) event["details"] = details;
   append(event);
 }
 

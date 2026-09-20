@@ -58,6 +58,15 @@ nlohmann::json json_event(const niminal::StreamEvent& event) {
       out["tool_name"] = event.tool_name;
       if (!event.input.is_null()) out["input"] = event.input;
       break;
+    case niminal::EventKind::approval_required:
+      out["type"] = "approval_required";
+      out["step"] = event.step;
+      out["tool_id"] = event.tool_id;
+      out["tool_name"] = event.tool_name;
+      out["description"] = event.text;
+      out["can_remember"] = event.can_remember;
+      if (!event.input.is_null()) out["input"] = event.input;
+      break;
     case niminal::EventKind::tool_output_delta:
       out["type"] = "tool_output_delta";
       out["step"] = event.step;

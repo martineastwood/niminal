@@ -4,11 +4,13 @@
 #include "markdown.hpp"
 #include "mentions.hpp"
 #include "models_dev.hpp"
+#include "permissions.hpp"
 #include "provider.hpp"
 #include "prompts.hpp"
 #include "session.hpp"
 #include "skills.hpp"
 #include "thinking.hpp"
+#include "trust.hpp"
 
 #include <niminal/openai.hpp>
 
@@ -20,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <iostream>
 #include <mutex>
@@ -187,6 +190,9 @@ constexpr SlashSpec kSlash[] = {
     {"/provider", "/provider [name]", "show or set the provider"},
     {"/model", "/model [ID]", "show or set the model"},
     {"/thinking", "/thinking [level]", "show or set reasoning"},
+    {"/permissions", "/permissions [clear]", "show or clear tool grants"},
+    {"/trust", "/trust [on|off]", "show or set project resource trust"},
+    {"/yolo", "/yolo [off]", "auto-approve tools for this process"},
     {"/models", "/models refresh", "refresh the models.dev catalog"},
     {"/session", "/session", "show the current session"},
     {"/name", "/name [title]", "show or set the session name"},
@@ -195,6 +201,7 @@ constexpr SlashSpec kSlash[] = {
     {"/clear", "/clear", "same as /new"},
     {"/copy", "/copy", "copy the last error or reply"},
     {"/compact", "/compact", "summarize older session history"},
+    {"/reload", "/reload", "reload trusted project resources"},
     {"/skill:", "/skill:NAME [request]", "load a skill"},
     {"/quit", "/quit", "exit"},
     {"/exit", "/exit", "exit"},
@@ -270,7 +277,9 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
                                           const std::string& workspace,
                                           std::string_view provider,
                                           std::string_view model,
-                                          const std::vector<std::string>& recents) {
+                                          const std::vector<std::string>& recents,
+                                          const std::vector<ExtensionCommand>&
+                                              extension_commands) {
   if (draft.empty() || draft[0] != '/' || draft.find('\n') != std::string::npos)
     return {};
   auto [cmd, arg] = split_slash(draft);
@@ -354,6 +363,15 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
                                            ? std::string()
                                            : "  " + prompt.description)});
   }
+  for (const auto& command : extension_commands) {
+    auto slash = "/" + command.name;
+    if (is_builtin_slash(lower_copy(slash))) continue;
+    if (!starts_with(lower_copy(slash), cmd)) continue;
+    out.push_back({slash + " ", slash +
+                                    (command.description.empty()
+                                         ? std::string()
+                                         : "  " + command.description)});
+  }
   return out;
 }
 
@@ -434,6 +452,12 @@ const char* kHelp = R"(/help              this list
 /model ID          set the model and save ~/.niminal/config.json
 /thinking          show the current reasoning level
 /thinking LEVEL    set none|minimal|low|medium|high|xhigh|max
+/permissions       show remembered tool grants
+/permissions clear clear project tool grants
+/trust             show project resource trust
+/trust on|off      enable or disable project resources
+/yolo              auto-approve tools for this process
+/yolo off          return to normal approval prompts
 /models refresh    download the models.dev catalog for /model suggestions
 /session           show the current session
 /name [title]      show or set the session name
@@ -443,6 +467,7 @@ const char* kHelp = R"(/help              this list
 /clear             same as /new
 /copy              copy the last error or assistant reply
 /compact           summarize older history; keep recent turns
+/reload            reload trusted project resources
 /skill:NAME [text] load a skill and optionally give it a request
 /NAME [text]       expand a Markdown prompt template
 /quit              exit
@@ -459,7 +484,8 @@ Ctrl-C quits.)";
 }  // namespace
 
 int run_tui(niminal::Agent& agent, Workspace& workspace,
-            Config& cfg, Session& session) {
+            Config& cfg, Session& session,
+            std::shared_ptr<ExtensionRuntime>& extensions, bool yolo) {
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
   std::atomic<bool> local_cancel{false};
@@ -479,6 +505,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   std::string live_draft;
   std::mutex steering_mu;
   std::vector<std::string> steering;
+  std::vector<std::string> follow_up;
+  std::vector<std::string> idle_extension_messages;
+  std::function<void(std::string)> deliver_extension_now;
+  std::vector<ExtensionEntry> extension_entries_pending;
   std::atomic<bool> busy{false};
   std::string activity;
   float transcript_y = 1.f;
@@ -486,6 +516,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   bool stick_bottom = true;
   std::atomic<bool> ui_alive{true};
   std::thread worker;
+  PermissionPolicy permissions(cwd);
+  bool yolo_mode = yolo;
+  struct ApprovalGate {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool pending = false;
+    bool resolved = false;
+    std::string tool_id;
+    bool can_remember = false;
+    PermissionDecision decision = PermissionDecision::deny;
+  } approval;
   int suggest_i = 0;
   std::string suggest_sig;
   std::filesystem::path session_dir;
@@ -505,8 +546,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       for (const auto& path : suggest_mentioned_files(workspace, mention->query))
         items.push_back({path, "@" + path, true});
     } else {
+      static const std::vector<ExtensionCommand> no_commands;
+      const auto& commands = extensions ? extensions->commands() : no_commands;
       items = slash_suggestions(draft, session_dir, cwd.string(), agent.provider,
-                                agent.model, recents);
+                                agent.model, recents, commands);
     }
     std::string sig;
     for (const auto& item : items) {
@@ -585,6 +628,38 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     cursor = static_cast<int>(draft.size());
   };
 
+  auto apply_extension_actions = [&] {
+    if (!extensions) return;
+    extensions->pump();
+    for (auto& notice : extensions->take_notices())
+      blocks.push_back(Block{
+          notice.level == "error" ? BlockKind::error : BlockKind::status,
+          std::move(notice.message)});
+    auto entries = extensions->take_entries();
+    extension_entries_pending.insert(extension_entries_pending.end(),
+                                     std::make_move_iterator(entries.begin()),
+                                     std::make_move_iterator(entries.end()));
+    if (!busy) {
+      for (const auto& entry : extension_entries_pending)
+        session.add_extension(entry.extension, entry.data);
+      extension_entries_pending.clear();
+    }
+    for (auto& message : extensions->take_user_messages()) {
+      if (!busy && deliver_extension_now) {
+        deliver_extension_now(std::move(message.content));
+      } else if (!busy) {
+        idle_extension_messages.push_back(std::move(message.content));
+      } else {
+        std::lock_guard lock(steering_mu);
+        if (message.deliver_as == "steer") steering.push_back(message.content);
+        else follow_up.push_back(message.content);
+        blocks.push_back(Block{BlockKind::status,
+                               "Extension queued (" + message.deliver_as +
+                                   "): " + message.content});
+      }
+    }
+  };
+
   auto apply_event = [&](StreamEvent ev) {
     switch (ev.kind) {
       case EventKind::text_delta:
@@ -601,6 +676,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
             Block{BlockKind::tool, tool_summary(ev.tool_name, ev.text)});
         activity = ev.tool_name.empty() ? "Waiting for model…"
                                         : "Running " + ev.tool_name + "…";
+        break;
+      case EventKind::approval_required:
+        blocks.push_back(Block{
+            BlockKind::status,
+            "● " + ev.tool_name + "\n│ Allow " + ev.tool_name +
+                (ev.text.empty() ? std::string() : ": " + ev.text) +
+                "\n│ [enter] once  [s] session" +
+                (ev.can_remember ? "  [p] project" : "") +
+                "  [n] deny"});
+        activity = "Approval needed";
         break;
       case EventKind::tool_result:
         activity = "Waiting for model…";
@@ -636,26 +721,112 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
 
   auto post_ui = [&](StreamEvent ev) {
     if (!ui_alive) return;
-    screen.Post([apply_event, ev, &screen] {
+    screen.Post([apply_event, apply_extension_actions, ev, &screen] {
       apply_event(ev);
+      apply_extension_actions();
       screen.RequestAnimationFrame();
     });
   };
 
   agent.on_event = [&](const StreamEvent& ev) { post_ui(ev); };
+  bind_extensions(agent, extensions, cwd, [&](const std::string& warning) {
+    post_ui(StreamEvent{EventKind::status, warning, {}, {}});
+  });
+  agent.approve_tool = [&](const niminal::ToolCall& call,
+                           const niminal::Tool&) {
+    if (yolo_mode) return true;
+    auto check = permissions.check(call);
+    if (check == PermissionCheck::allow) return true;
+    if (check == PermissionCheck::deny) return false;
+
+    {
+      std::lock_guard lock(approval.mutex);
+      approval.pending = true;
+      approval.resolved = false;
+      approval.tool_id = call.id;
+      approval.can_remember = can_remember(call);
+      approval.decision = PermissionDecision::deny;
+    }
+    StreamEvent request{EventKind::approval_required,
+                        permission_description(call), call.name, call.id};
+    request.input = json::object();
+    try {
+      if (!call.arguments.empty()) request.input = json::parse(call.arguments);
+    } catch (...) {
+    }
+    request.can_remember = approval.can_remember;
+    post_ui(std::move(request));
+
+    PermissionDecision decision = PermissionDecision::deny;
+    while (true) {
+      std::unique_lock lock(approval.mutex);
+      if (approval.resolved) {
+        decision = approval.decision;
+        approval.pending = false;
+        break;
+      }
+      if (!ui_alive || cancel->load()) {
+        approval.pending = false;
+        break;
+      }
+      approval.condition.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    try {
+      permissions.remember(call, decision);
+    } catch (const std::exception& e) {
+      post_ui(StreamEvent{EventKind::status,
+                           "Could not save permission grant: " +
+                               std::string(e.what()),
+                           {}, {}});
+    }
+    return decision != PermissionDecision::deny;
+  };
   bind_compaction(agent, session, [&](const std::string& msg) {
     if (msg.empty()) return;
     post_ui(StreamEvent{EventKind::status, msg, {}, {}});
-  });
+  }, extensions);
   agent.take_steering = [&] {
     std::lock_guard<std::mutex> lock(steering_mu);
     auto out = std::move(steering);
     steering.clear();
     return out;
   };
+  agent.take_follow_up = [&] {
+    std::lock_guard<std::mutex> lock(steering_mu);
+    auto out = std::move(follow_up);
+    follow_up.clear();
+    return out;
+  };
 
   auto join_worker = [&] {
     if (worker.joinable()) worker.join();
+  };
+
+  auto restart_extensions = [&](bool end_current = true) {
+    if (extensions && end_current) {
+      auto ended = extensions->dispatch(
+          HookEvent::session_end,
+          session_hook_payload(session.id, cwd));
+      for (const auto& warning : ended.warnings)
+        blocks.push_back(Block{BlockKind::status, warning});
+    }
+    if (extensions) extensions->stop();
+    extensions = ExtensionRuntime::start(cwd, session.id, cancel);
+    install_extension_tools(agent, extensions);
+    bind_extensions(agent, extensions, cwd, [&](const std::string& warning) {
+      post_ui(StreamEvent{EventKind::status, warning, {}, {}});
+    });
+    bind_compaction(agent, session, [&](const std::string& msg) {
+      if (!msg.empty()) post_ui(StreamEvent{EventKind::status, msg, {}, {}});
+    }, extensions);
+    for (const auto& warning : extensions->warnings())
+      blocks.push_back(Block{BlockKind::status, warning});
+    auto started = extensions->dispatch(
+        HookEvent::session_start,
+        session_hook_payload(session.id, cwd));
+    for (const auto& warning : started.warnings)
+      blocks.push_back(Block{BlockKind::status, warning});
+    apply_extension_actions();
   };
 
   auto load_into_ui = [&](const std::string& note) {
@@ -709,9 +880,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       blocks.push_back(Block{
           BlockKind::status,
           "enter send  ·  /help  ·  alt-j newline  ·  esc interrupt/clear  ·  ctrl-c quit"});
+    if (yolo_mode)
+      blocks.push_back(Block{BlockKind::status,
+                             "YOLO mode: all tools auto-approved for this process."});
   };
 
   auto adopt_session = [&](Session next, const std::string& note) {
+    if (extensions) {
+      auto ended = extensions->dispatch(
+          HookEvent::session_end,
+          session_hook_payload(session.id, cwd));
+      for (const auto& warning : ended.warnings)
+        blocks.push_back(Block{BlockKind::status, warning});
+      extensions->stop();
+    }
     session = std::move(next);
     load_history();
     bind_session(agent, session);
@@ -724,6 +906,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     apply_provider(agent, cfg);
     agent.messages = session.openai_messages();
     load_into_ui(note);
+    restart_extensions(false);
   };
 
   bind_session(agent, session);
@@ -737,6 +920,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   load_into_ui(recovered ? "Recovered " + std::to_string(recovered) +
                                " interrupted tool call(s)."
                          : "");
+  if (extensions) {
+    for (const auto& warning : extensions->warnings())
+      blocks.push_back(Block{BlockKind::status, warning});
+    apply_extension_actions();
+  }
 
   auto send_prompt = [&](std::string prompt) {
     prompt = trim_copy(std::move(prompt));
@@ -768,6 +956,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       }
     });
   };
+  deliver_extension_now = [&](std::string prompt) {
+    send_prompt(std::move(prompt));
+  };
+  for (auto& message : idle_extension_messages)
+    deliver_extension_now(std::move(message));
+  idle_extension_messages.clear();
 
   auto start_turn = [&](std::string prompt) {
     prompt = trim_copy(std::move(prompt));
@@ -777,6 +971,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
 
     auto initial_cmd = split_slash(prompt).first;
     bool skill_request = starts_with(initial_cmd, "/skill:");
+    bool extension_request = false;
+    if (extensions) {
+      for (const auto& command : extensions->commands())
+        if (lower_copy("/" + command.name) == initial_cmd) {
+          extension_request = true;
+          break;
+        }
+    }
     if (skill_request) {
       auto name = initial_cmd.substr(7);
       auto skills = discover_skills(cwd);
@@ -789,7 +991,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       }
     }
 
-    if (prompt[0] == '/' && !skill_request) {
+    if (prompt[0] == '/' && !skill_request && !extension_request) {
       auto [cmd, arg] = split_slash(prompt);
       if (!is_builtin_slash(cmd)) {
         if (auto template_prompt = load_prompt(cwd, cmd.substr(1))) {
@@ -839,8 +1041,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           return;
         }
         try {
-          auto result = compact_session(session, agent, arg);
+          auto result = compact_session(session, agent, arg, extensions);
           agent.messages = session.openai_messages();
+          for (const auto& warning : result.warnings)
+            blocks.push_back(Block{BlockKind::status, warning});
           blocks.push_back(Block{BlockKind::status, result.message});
         } catch (const std::exception& e) {
           blocks.push_back(Block{BlockKind::error, e.what()});
@@ -855,6 +1059,134 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       }
       if (cmd == "/help") {
         blocks.push_back(Block{BlockKind::status, kHelp});
+        return;
+      }
+      if (extension_request) {
+        try {
+          json context = {
+              {"mode", "tui"},
+              {"workspace", cwd.string()},
+              {"session_id", session.id},
+              {"provider", agent.provider},
+              {"model", agent.model},
+              {"messages", session.openai_messages()},
+          };
+          auto response = extensions->invoke(cmd.substr(1), arg, context);
+          auto message = response.value("message", std::string());
+          if (!message.empty())
+            blocks.push_back(Block{BlockKind::status, std::move(message)});
+          apply_extension_actions();
+          bool restarted = false;
+          if (auto action = response.find("session");
+              action != response.end() && action->is_object()) {
+            auto kind = action->value("action", std::string());
+            if (kind == "new") {
+              auto next = create_session(default_session_dir(), cwd.string());
+              next.persist = session.persist;
+              if (!next.persist) next.path.clear();
+              adopt_session(std::move(next), "New session");
+              restarted = true;
+            } else if (kind == "switch") {
+              auto id = action->value("id", std::string());
+              auto next = load_session(default_session_dir(), id);
+              next.recover_interrupted_tools();
+              adopt_session(std::move(next), "Resumed " + id);
+              restarted = true;
+            } else if (kind == "compact") {
+              auto compacted = compact_session(
+                  session, agent,
+                  action->value("instruction", std::string()), extensions);
+              agent.messages = session.openai_messages();
+              blocks.push_back(Block{BlockKind::status, compacted.message});
+            }
+            auto editor_text = action->value("editor_text", std::string());
+            if (!editor_text.empty()) {
+              draft = std::move(editor_text);
+              cursor = static_cast<int>(draft.size());
+            }
+          }
+          if (response.value("reload", false) && !restarted)
+            restart_extensions();
+          auto next_prompt = response.value("prompt", std::string());
+          if (!next_prompt.empty()) send_prompt(std::move(next_prompt));
+        } catch (const std::exception& e) {
+          blocks.push_back(Block{BlockKind::error, e.what()});
+        }
+        return;
+      }
+      if (cmd == "/reload") {
+        if (!arg.empty()) {
+          blocks.push_back(Block{BlockKind::error, "/reload takes no arguments"});
+          return;
+        }
+        permissions.reload_project();
+        for (auto& tool : agent.tools)
+          if (tool.name == "skill") tool = skill_tool(cwd);
+        restart_extensions();
+        blocks.push_back(Block{BlockKind::status, "Reloaded project resources."});
+        return;
+      }
+      if (cmd == "/permissions") {
+        if (arg.empty()) {
+          blocks.push_back(Block{BlockKind::status, permissions.describe()});
+        } else if (arg == "clear") {
+          try {
+            permissions.clear_project();
+            blocks.push_back(
+                Block{BlockKind::status, "Cleared project permission grants."});
+          } catch (const std::exception& e) {
+            blocks.push_back(Block{BlockKind::error, e.what()});
+          }
+        } else {
+          blocks.push_back(Block{BlockKind::error,
+                                 "Usage: /permissions [clear]"});
+        }
+        return;
+      }
+      if (cmd == "/trust") {
+        auto resources = project_trust_resources(cwd);
+        if (resources.empty()) {
+          blocks.push_back(Block{
+              BlockKind::status, "No project-local resources require trust."});
+        } else if (arg.empty()) {
+          blocks.push_back(Block{
+              BlockKind::status,
+              std::string("Project-local resources: ") +
+                  (project_resources_trusted(cwd) ? "trusted" : "not trusted")});
+        } else if (arg == "on" || arg == "off") {
+          const bool trusted = arg == "on";
+          set_project_resources_trusted(cwd, trusted);
+          try {
+            save_project_trust(cwd, trusted);
+            permissions.reload_project();
+            for (auto& tool : agent.tools)
+              if (tool.name == "skill") tool = skill_tool(cwd);
+            restart_extensions();
+            blocks.push_back(Block{
+                BlockKind::status,
+                trusted ? "Project-local resources enabled."
+                        : "Project-local resources disabled."});
+          } catch (const std::exception& e) {
+            blocks.push_back(Block{BlockKind::error, e.what()});
+          }
+        } else {
+          blocks.push_back(Block{BlockKind::error, "Usage: /trust [on|off]"});
+        }
+        return;
+      }
+      if (cmd == "/yolo") {
+        if (arg.empty() || arg == "on") {
+          yolo_mode = true;
+          blocks.push_back(Block{
+              BlockKind::status,
+              "YOLO mode: all tools auto-approved for this process."});
+        } else if (arg == "off") {
+          yolo_mode = false;
+          blocks.push_back(Block{BlockKind::status,
+                                 "YOLO mode disabled; tool approvals are on."});
+        } else {
+          blocks.push_back(Block{BlockKind::error, "Usage: /yolo [off]"});
+        }
         return;
       }
       if (cmd == "/provider") {
@@ -1084,6 +1416,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       if (queued > 0)
         activity_line += "  ·  queued " + std::to_string(queued);
     }
+    if (extensions) {
+      for (const auto& status : extensions->status_texts()) {
+        if (!activity_line.empty()) activity_line += "  ·  ";
+        activity_line += status;
+      }
+    }
 
     auto think = thinking_status(agent.provider, agent.model, cfg.thinking);
     if (think.empty())
@@ -1108,6 +1446,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     stack.push_back(separator());
     if (!suggest_rows.empty())
       stack.push_back(vbox(std::move(suggest_rows)));
+    if (extensions) {
+      Elements widget_rows;
+      for (const auto& line : extensions->widget_lines())
+        widget_rows.push_back(text(line) | dim);
+      if (!widget_rows.empty()) stack.push_back(vbox(std::move(widget_rows)));
+    }
     stack.push_back(text(activity_line.empty() ? " " : activity_line) |
                     color(Color::CyanLight));
     stack.push_back(separatorLight() | dim);
@@ -1116,7 +1460,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     stack.push_back(hbox({
         text(usage.empty() ? "↑0  ↓0" : usage) | dim,
         filler(),
-        text(agent.provider + "/" + agent.model) | color(Color::CyanLight),
+        text(agent.provider + "/" + agent.model +
+             (yolo_mode ? " [yolo]" : "")) |
+            color(Color::CyanLight),
         text(think.empty() ? std::string() : (":" + think)) | dim,
     }));
     return vbox(std::move(stack));
@@ -1129,7 +1475,46 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     cursor = pos + static_cast<int>(text.size());
   };
 
+  auto resolve_approval = [&](PermissionDecision decision) {
+    std::lock_guard lock(approval.mutex);
+    if (!approval.pending || approval.resolved) return false;
+    approval.decision = decision;
+    approval.resolved = true;
+    approval.condition.notify_all();
+    return true;
+  };
+
+  auto approval_pending = [&] {
+    std::lock_guard lock(approval.mutex);
+    return approval.pending && !approval.resolved;
+  };
+
   view = CatchEvent(view, [&](Event e) {
+    if (approval_pending()) {
+      if (e == Event::Return || e == Event::Character('1')) {
+        resolve_approval(PermissionDecision::allow_once);
+      } else if (e == Event::Character('s')) {
+        resolve_approval(PermissionDecision::allow_session);
+      } else if (e == Event::Character('p')) {
+        bool allowed = false;
+        {
+          std::lock_guard lock(approval.mutex);
+          allowed = approval.can_remember;
+        }
+        if (!allowed) return true;
+        resolve_approval(PermissionDecision::allow_project);
+      } else if (e == Event::Character('n') || e == Event::Escape) {
+        resolve_approval(PermissionDecision::deny);
+      } else if (e == Event::Character('\x03')) {
+        resolve_approval(PermissionDecision::deny);
+        cancel->store(true);
+        ui_alive = false;
+        screen.Exit();
+      } else {
+        return true;
+      }
+      return true;
+    }
     if (e.input() == "\x1b[200~") {
       pasting = true;
       return true;
@@ -1257,18 +1642,32 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       screen.Post([&screen] { screen.RequestAnimationFrame(); });
     });
   }
+  std::thread extension_thread([&] {
+    while (ui_alive) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      if (!ui_alive) break;
+      screen.Post([apply_extension_actions, &screen] {
+        apply_extension_actions();
+        screen.RequestAnimationFrame();
+      });
+    }
+  });
 
   screen.Post([] { std::cout << "\033[?2004h" << std::flush; });
   screen.Loop(view);
   std::cout << "\033[?2004l" << std::flush;
   ui_alive = false;
   cancel->store(true);
+  resolve_approval(PermissionDecision::deny);
   join_worker();
   if (catalog_thread.joinable()) catalog_thread.join();
+  extension_thread.join();
   agent.on_event = {};
   agent.take_steering = {};
+  agent.take_follow_up = {};
   agent.before_request = {};
   agent.recover_overflow = {};
+  agent.approve_tool = {};
   return 0;
 }
 

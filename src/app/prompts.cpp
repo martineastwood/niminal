@@ -1,5 +1,6 @@
 #include "prompts.hpp"
 #include "config.hpp"
+#include "trust.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -108,10 +109,12 @@ std::vector<fs::path> roots_for(const fs::path& workspace) {
     roots.push_back(global / "prompts");
   } catch (...) {
   }
-  auto root = fs::absolute(workspace).lexically_normal();
-  roots.push_back(root / ".agent" / "prompts");
-  roots.push_back(root / ".agents" / "prompts");
-  roots.push_back(root / ".niminal" / "prompts");
+  if (project_resources_trusted(workspace)) {
+    auto root = fs::absolute(workspace).lexically_normal();
+    roots.push_back(root / ".agent" / "prompts");
+    roots.push_back(root / ".agents" / "prompts");
+    roots.push_back(root / ".niminal" / "prompts");
+  }
   return roots;
 }
 

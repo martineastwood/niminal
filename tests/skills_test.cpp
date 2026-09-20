@@ -1,4 +1,5 @@
 #include "skills.hpp"
+#include "trust.hpp"
 
 #include <niminal/types.hpp>
 
@@ -19,6 +20,9 @@ int main() {
     std::ofstream out(root / ".niminal/skills/review/SKILL.md");
     out << "---\ndescription: Review code carefully\n---\n\nDo the review.\n";
   }
+  niminal::app::set_project_resources_trusted(root, false);
+  if (!niminal::app::discover_skills(root).empty()) return 1;
+  niminal::app::set_project_resources_trusted(root, true);
   auto skills = niminal::app::discover_skills(root);
   if (skills.size() != 1 || skills[0].name != "review" ||
       skills[0].description != "Review code carefully")

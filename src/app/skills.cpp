@@ -1,5 +1,6 @@
 #include "skills.hpp"
 #include "config.hpp"
+#include "trust.hpp"
 
 #include <niminal/types.hpp>
 
@@ -56,7 +57,11 @@ std::vector<Skill> discover_skills(const fs::path& workspace) {
     add_dir(found, config_path().parent_path() / "skills");
   } catch (...) {
   }
-  add_dir(found, workspace / ".niminal" / "skills");
+  if (project_resources_trusted(workspace)) {
+    add_dir(found, workspace / ".agent" / "skills");
+    add_dir(found, workspace / ".agents" / "skills");
+    add_dir(found, workspace / ".niminal" / "skills");
+  }
   std::vector<Skill> out;
   for (auto& [_, skill] : found) out.push_back(std::move(skill));
   return out;

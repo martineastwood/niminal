@@ -1,0 +1,801 @@
+#include "extensions.hpp"
+
+#include "config.hpp"
+#include "trust.hpp"
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
+#include <cctype>
+#include <cstring>
+#include <fcntl.h>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <poll.h>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <sys/wait.h>
+#include <thread>
+#include <unistd.h>
+#include <utility>
+
+namespace niminal::app {
+namespace fs = std::filesystem;
+using json = nlohmann::json;
+
+namespace {
+
+constexpr int kDefaultTimeoutMs = 30'000;
+constexpr size_t kMaxLineBytes = 1'000'000;
+
+std::string string_field(const json& value, const char* key) {
+  auto it = value.find(key);
+  return it != value.end() && it->is_string() ? it->get<std::string>()
+                                               : std::string();
+}
+
+std::string lower_copy(std::string value) {
+  for (char& c : value)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return value;
+}
+
+std::vector<std::string> string_array(const json& value, const char* key) {
+  std::vector<std::string> out;
+  auto it = value.find(key);
+  if (it == value.end() || !it->is_array()) return out;
+  for (const auto& item : *it)
+    if (item.is_string()) out.push_back(item.get<std::string>());
+  return out;
+}
+
+bool builtin_tool(std::string name) {
+  for (char& c : name)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  static const std::set<std::string> names = {
+      "bash", "edit", "glob", "grep", "read", "skill", "write"};
+  return names.contains(name);
+}
+
+std::vector<fs::path> extension_dirs(const fs::path& workspace) {
+  std::vector<fs::path> bases;
+  try {
+    auto global = config_path().parent_path();
+    bases.push_back(global.parent_path() / ".agents" / "extensions");
+    bases.push_back(global / "extensions");
+  } catch (...) {
+  }
+  if (project_resources_trusted(workspace)) {
+    bases.push_back(workspace / ".agents" / "extensions");
+    bases.push_back(workspace / ".niminal" / "extensions");
+  }
+  std::vector<fs::path> result;
+  std::error_code ec;
+  for (const auto& base : bases) {
+    if (!fs::is_directory(base, ec)) continue;
+    std::vector<fs::path> found;
+    for (const auto& entry : fs::directory_iterator(base, ec))
+      if (entry.is_directory(ec) &&
+          fs::is_regular_file(entry.path() / "extension.json", ec))
+        found.push_back(entry.path());
+    std::sort(found.begin(), found.end());
+    result.insert(result.end(), found.begin(), found.end());
+  }
+  return result;
+}
+
+struct Manifest {
+  std::string name;
+  std::vector<std::string> command;
+  int timeout_ms = kDefaultTimeoutMs;
+};
+
+Manifest parse_manifest(const fs::path& path) {
+  std::ifstream in(path);
+  if (!in) throw std::runtime_error("cannot read manifest");
+  json doc;
+  try {
+    in >> doc;
+  } catch (const std::exception& e) {
+    throw std::runtime_error("invalid JSON: " + std::string(e.what()));
+  }
+  if (!doc.is_object()) throw std::runtime_error("manifest must be an object");
+  Manifest out;
+  out.name = string_field(doc, "name");
+  if (out.name.empty()) throw std::runtime_error("missing name");
+  auto command = doc.find("command");
+  if (command == doc.end() || !command->is_array())
+    throw std::runtime_error("command must be an array");
+  for (const auto& item : *command) {
+    if (!item.is_string() || item.get<std::string>().empty())
+      throw std::runtime_error("command entries must be strings");
+    out.command.push_back(item.get<std::string>());
+  }
+  if (out.command.empty()) throw std::runtime_error("command must not be empty");
+  if (auto timeout = doc.find("response_timeout_seconds"); timeout != doc.end()) {
+    if (timeout->is_null()) {
+      out.timeout_ms = -1;
+    } else if (timeout->is_number_integer() && timeout->get<int>() > 0) {
+      out.timeout_ms = timeout->get<int>() * 1000;
+    } else {
+      throw std::runtime_error(
+          "response_timeout_seconds must be a positive integer or null");
+    }
+  }
+  return out;
+}
+
+class Process {
+ public:
+  std::string name;
+  std::set<std::string> events;
+  int timeout_ms = kDefaultTimeoutMs;
+  std::mutex mutex;
+
+  Process(const Manifest& manifest, const fs::path& dir,
+          const fs::path& workspace)
+      : name(manifest.name), timeout_ms(manifest.timeout_ms) {
+    int input_pipe[2];
+    int output_pipe[2];
+    if (pipe(input_pipe) != 0 || pipe(output_pipe) != 0)
+      throw std::runtime_error(std::strerror(errno));
+    pid_ = fork();
+    if (pid_ < 0) throw std::runtime_error(std::strerror(errno));
+    if (pid_ == 0) {
+      setpgid(0, 0);
+      dup2(input_pipe[0], STDIN_FILENO);
+      dup2(output_pipe[1], STDOUT_FILENO);
+      int null_fd = open("/dev/null", O_WRONLY);
+      if (null_fd >= 0) dup2(null_fd, STDERR_FILENO);
+      close(input_pipe[0]);
+      close(input_pipe[1]);
+      close(output_pipe[0]);
+      close(output_pipe[1]);
+      if (null_fd >= 0) close(null_fd);
+      if (chdir(workspace.c_str()) != 0) _exit(127);
+      std::vector<std::string> command = manifest.command;
+      if (!fs::path(command[0]).is_absolute() &&
+          (command[0].find('/') != std::string::npos ||
+           command[0].find('\\') != std::string::npos))
+        command[0] = (dir / command[0]).lexically_normal().string();
+      std::vector<char*> argv;
+      for (auto& value : command) argv.push_back(value.data());
+      argv.push_back(nullptr);
+      execvp(argv[0], argv.data());
+      _exit(127);
+    }
+    close(input_pipe[0]);
+    close(output_pipe[1]);
+    input_ = input_pipe[1];
+    output_ = output_pipe[0];
+    fcntl(output_, F_SETFL, O_NONBLOCK);
+  }
+
+  ~Process() { stop(); }
+
+  void send(const json& message) {
+    auto line = message.dump() + "\n";
+    size_t offset = 0;
+    while (offset < line.size()) {
+      auto n = write(input_, line.data() + offset, line.size() - offset);
+      if (n < 0) {
+        if (errno == EINTR) continue;
+        throw std::runtime_error("extension closed stdin");
+      }
+      offset += static_cast<size_t>(n);
+    }
+  }
+
+  std::string receive(int timeout, std::atomic<bool>* cancel) {
+    auto started = std::chrono::steady_clock::now();
+    while (true) {
+      auto newline = buffer_.find('\n');
+      if (newline != std::string::npos) {
+        auto line = buffer_.substr(0, newline);
+        buffer_.erase(0, newline + 1);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        return line;
+      }
+      if (cancel && cancel->load()) throw std::runtime_error("extension request cancelled");
+      int wait_ms = 50;
+      if (timeout >= 0) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - started)
+                           .count();
+        if (elapsed >= timeout) throw std::runtime_error("extension response timed out");
+        wait_ms = std::min(wait_ms, timeout - static_cast<int>(elapsed));
+      }
+      pollfd pfd{output_, POLLIN | POLLHUP, 0};
+      int ready;
+      do {
+        ready = poll(&pfd, 1, wait_ms);
+      } while (ready < 0 && errno == EINTR);
+      if (ready < 0) throw std::runtime_error(std::strerror(errno));
+      if (ready == 0) continue;
+      char chunk[4096];
+      auto count = read(output_, chunk, sizeof(chunk));
+      if (count > 0) {
+        buffer_.append(chunk, static_cast<size_t>(count));
+        if (buffer_.size() > kMaxLineBytes)
+          throw std::runtime_error("extension response is too large");
+        continue;
+      }
+      if (count == 0 || (pfd.revents & (POLLHUP | POLLERR)))
+        throw std::runtime_error("extension exited before responding");
+      if (errno != EAGAIN && errno != EWOULDBLOCK)
+        throw std::runtime_error(std::strerror(errno));
+    }
+  }
+
+  std::string try_receive() {
+    auto newline = buffer_.find('\n');
+    if (newline == std::string::npos) {
+      pollfd pfd{output_, POLLIN, 0};
+      if (poll(&pfd, 1, 0) <= 0) return {};
+      char chunk[4096];
+      auto count = read(output_, chunk, sizeof(chunk));
+      if (count <= 0) return {};
+      buffer_.append(chunk, static_cast<size_t>(count));
+      newline = buffer_.find('\n');
+      if (newline == std::string::npos) return {};
+    }
+    auto line = buffer_.substr(0, newline);
+    buffer_.erase(0, newline + 1);
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    return line;
+  }
+
+  void stop() {
+    if (pid_ <= 0) return;
+    try {
+      send(json{{"type", "shutdown"}});
+    } catch (...) {
+    }
+    close(input_);
+    input_ = -1;
+    for (int i = 0; i < 10; ++i) {
+      int status = 0;
+      if (waitpid(pid_, &status, WNOHANG) == pid_) {
+        close(output_);
+        output_ = -1;
+        pid_ = -1;
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    kill(-pid_, SIGKILL);
+    kill(pid_, SIGKILL);
+    waitpid(pid_, nullptr, 0);
+    close(output_);
+    output_ = -1;
+    pid_ = -1;
+  }
+
+ private:
+  pid_t pid_ = -1;
+  int input_ = -1;
+  int output_ = -1;
+  std::string buffer_;
+};
+
+struct RegisteredTool {
+  std::string name;
+  std::string description;
+  json schema;
+  size_t extension = 0;
+  bool read_only = false;
+};
+
+}  // namespace
+
+struct ExtensionRuntime::Impl {
+  std::vector<std::unique_ptr<Process>> processes;
+  std::vector<RegisteredTool> tools;
+  mutable std::mutex actions_mutex;
+  std::map<std::string, std::string> statuses;
+  std::map<std::string, std::vector<std::string>> widgets;
+  std::vector<ExtensionNotice> notices;
+  std::vector<ExtensionUserMessage> user_messages;
+  std::vector<ExtensionEntry> entries;
+  std::atomic<int> next_id{0};
+  bool stopped = false;
+};
+
+const char* hook_event_name(HookEvent event) {
+  switch (event) {
+    case HookEvent::tool_call: return "tool_call";
+    case HookEvent::tool_result: return "tool_result";
+    case HookEvent::session_start: return "session_start";
+    case HookEvent::session_end: return "session_end";
+    case HookEvent::session_before_compact: return "session_before_compact";
+    case HookEvent::session_compact: return "session_compact";
+    case HookEvent::turn_start: return "turn_start";
+    case HookEvent::turn_end: return "turn_end";
+    case HookEvent::context: return "context";
+  }
+  return "";
+}
+
+ExtensionRuntime::ExtensionRuntime(fs::path workspace, std::atomic<bool>* cancel)
+    : impl_(std::make_unique<Impl>()), workspace_(std::move(workspace)),
+      cancel_(cancel) {}
+
+ExtensionRuntime::~ExtensionRuntime() { stop(); }
+
+namespace {
+
+void capture_actions(ExtensionRuntime::Impl& impl, const Process& process,
+                     const json& response) {
+  std::lock_guard lock(impl.actions_mutex);
+  if (auto status = response.find("status");
+      status != response.end() && status->is_object()) {
+    auto key = string_field(*status, "key");
+    auto text = string_field(*status, "text");
+    if (!key.empty()) {
+      key = process.name + ":" + key;
+      if (text.empty()) impl.statuses.erase(key);
+      else impl.statuses[key] = std::move(text);
+    }
+  }
+  if (auto notice = response.find("notification");
+      notice != response.end() && notice->is_object()) {
+    auto message = string_field(*notice, "message");
+    if (!message.empty())
+      impl.notices.push_back({string_field(*notice, "level"), message});
+  }
+  if (auto widget = response.find("widget");
+      widget != response.end() && widget->is_object()) {
+    auto key = string_field(*widget, "key");
+    auto lines = string_array(*widget, "lines");
+    if (!key.empty()) {
+      key = process.name + ":" + key;
+      if (lines.empty()) impl.widgets.erase(key);
+      else impl.widgets[key] = std::move(lines);
+    }
+  }
+  if (auto entry = response.find("entry"); entry != response.end())
+    impl.entries.push_back({process.name, *entry});
+  if (auto user = response.find("user_message");
+      user != response.end() && user->is_object()) {
+    auto content = string_field(*user, "content");
+    auto deliver_as = string_field(*user, "deliver_as");
+    if (!content.empty() &&
+        (deliver_as == "now" || deliver_as == "steer" ||
+         deliver_as == "follow_up"))
+      impl.user_messages.push_back({content, deliver_as});
+  }
+}
+
+json request(ExtensionRuntime::Impl& impl, Process& process, json message,
+             std::atomic<bool>* cancel) {
+  std::lock_guard process_lock(process.mutex);
+  auto id = string_field(message, "id");
+  process.send(message);
+  while (true) {
+    std::string line;
+    try {
+      line = process.receive(process.timeout_ms, cancel);
+    } catch (...) {
+      if (cancel && cancel->load()) {
+        try { process.send(json{{"type", "cancel"}, {"id", id}}); } catch (...) {}
+      }
+      throw;
+    }
+    json incoming;
+    try {
+      incoming = json::parse(line);
+    } catch (...) {
+      continue;
+    }
+    auto type = string_field(incoming, "type");
+    if (type == "response" && string_field(incoming, "id") == id) {
+      capture_actions(impl, process, incoming);
+      return incoming;
+    }
+    if (type == "ui_request") {
+      process.send(json{{"type", "ui_response"},
+                        {"id", string_field(incoming, "id")},
+                        {"answer", ""}, {"confirmed", false},
+                        {"cancelled", true}});
+    } else if (type == "host_request") {
+      process.send(json{{"type", "host_response"},
+                        {"id", string_field(incoming, "id")},
+                        {"error", "host request is unavailable"}});
+    } else if (type != "tool_update") {
+      capture_actions(impl, process, incoming);
+    }
+  }
+}
+
+bool read_only_capabilities(const json& tool) {
+  auto it = tool.find("capabilities");
+  if (it == tool.end()) return false;
+  if (!it->is_array()) throw std::runtime_error("capabilities must be an array");
+  bool any = false;
+  for (const auto& item : *it) {
+    if (!item.is_string()) throw std::runtime_error("capabilities must be strings");
+    auto value = item.get<std::string>();
+    if (value != "read" && value != "user") return false;
+    any = true;
+  }
+  return any;
+}
+
+}  // namespace
+
+std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(
+    const fs::path& workspace, const std::string& session_id,
+    std::atomic<bool>* cancel) {
+  auto runtime = std::shared_ptr<ExtensionRuntime>(
+      new ExtensionRuntime(canonical_workspace(workspace), cancel));
+  std::signal(SIGPIPE, SIG_IGN);
+  for (const auto& dir : extension_dirs(runtime->workspace_)) {
+    Manifest manifest;
+    try {
+      manifest = parse_manifest(dir / "extension.json");
+    } catch (const std::exception& e) {
+      runtime->warnings_.push_back("skipping " + dir.string() + ": " + e.what());
+      continue;
+    }
+    std::unique_ptr<Process> process;
+    const auto command_count = runtime->commands_.size();
+    const auto tool_count = runtime->impl_->tools.size();
+    try {
+      process = std::make_unique<Process>(manifest, dir, runtime->workspace_);
+      process->send(json{{"type", "initialize"}, {"version", 1},
+                         {"workspace", runtime->workspace_.string()},
+                         {"session_id", session_id}});
+      auto registration = json::parse(process->receive(manifest.timeout_ms, cancel));
+      if (string_field(registration, "type") != "register")
+        throw std::runtime_error("expected register response");
+      auto commands = registration.find("commands");
+      if (commands == registration.end() || !commands->is_array())
+        throw std::runtime_error("register commands must be an array");
+      auto events = registration.find("events");
+      if (events != registration.end() && !events->is_array())
+        throw std::runtime_error("register events must be an array");
+      if (events != registration.end()) {
+        for (const auto& event : *events) {
+          if (!event.is_string())
+            throw std::runtime_error("register events must be strings");
+          process->events.insert(event.get<std::string>());
+        }
+      }
+      size_t index = runtime->impl_->processes.size();
+      for (const auto& command : *commands) {
+        auto name = string_field(command, "name");
+        if (!name.empty())
+          runtime->commands_.push_back(
+              {name, string_field(command, "description"), index});
+      }
+      auto tools = registration.find("tools");
+      if (tools != registration.end() && !tools->is_null() && !tools->is_array())
+        throw std::runtime_error("register tools must be an array");
+      if (tools != registration.end() && tools->is_array()) {
+        for (const auto& tool : *tools) {
+          auto name = string_field(tool, "name");
+          auto description = string_field(tool, "description");
+          auto schema = tool.find("input_schema");
+          if (name.empty() || description.empty() || schema == tool.end() ||
+              !schema->is_object())
+            throw std::runtime_error(
+                "registered tools require name, description, and input_schema");
+          runtime->impl_->tools.push_back(
+              {name, description, *schema, index, read_only_capabilities(tool)});
+        }
+      }
+      runtime->impl_->processes.push_back(std::move(process));
+    } catch (const std::exception& e) {
+      runtime->commands_.resize(command_count);
+      runtime->impl_->tools.resize(tool_count);
+      if (process) process->stop();
+      runtime->warnings_.push_back("extension '" + manifest.name +
+                                   "' failed to start: " + e.what());
+    }
+  }
+  return runtime;
+}
+
+std::vector<niminal::Tool> ExtensionRuntime::tools() {
+  std::map<std::string, RegisteredTool> chosen;
+  for (const auto& tool : impl_->tools) chosen[tool.name] = tool;
+  std::vector<niminal::Tool> result;
+  auto self = shared_from_this();
+  for (const auto& [name, tool] : chosen) {
+    if (builtin_tool(name)) {
+      warnings_.push_back("extension tool '" + name +
+                          "' collides with a built-in tool");
+      continue;
+    }
+    result.push_back(niminal::Tool{
+        name, tool.description, tool.schema,
+        [self, name](const json& input) {
+          auto response = self->invoke(name, input.dump());
+          auto content = response.find("content");
+          if (content == response.end() || !content->is_array())
+            throw std::runtime_error("extension tool content must be an array");
+          std::vector<std::string> text;
+          for (const auto& part : *content) {
+            if (string_field(part, "type") != "text") continue;
+            text.push_back(string_field(part, "text"));
+          }
+          std::ostringstream output;
+          for (size_t i = 0; i < text.size(); ++i) {
+            if (i) output << '\n';
+            output << text[i];
+          }
+          auto value = output.str();
+          if (response.value("is_error", false))
+            return std::string("tool error: ") + value;
+          return value;
+        },
+        tool.read_only, true});
+  }
+  return result;
+}
+
+json ExtensionRuntime::invoke(const std::string& name,
+                              const std::string& arguments,
+                              const json& context) {
+  for (const auto& command : commands_) {
+    if (lower_copy(command.name) != lower_copy(name)) continue;
+    json message{{"type", "command"}, {"id", std::to_string(++impl_->next_id)},
+                 {"name", command.name}, {"arguments", arguments}};
+    if (!context.is_null() && !context.empty()) message["context"] = context;
+    return request(*impl_, *impl_->processes[command.extension],
+                   std::move(message), cancel_);
+  }
+  for (auto it = impl_->tools.rbegin(); it != impl_->tools.rend(); ++it) {
+    const auto& tool = *it;
+    if (lower_copy(tool.name) != lower_copy(name)) continue;
+    json input = json::object();
+    if (!arguments.empty()) input = json::parse(arguments);
+    return request(*impl_, *impl_->processes[tool.extension],
+                   json{{"type", "tool"},
+                        {"id", std::to_string(++impl_->next_id)},
+                        {"name", tool.name}, {"arguments", input}},
+                   cancel_);
+  }
+  throw std::runtime_error("unknown extension command or tool: " + name);
+}
+
+HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
+  HookOutcome outcome;
+  json payload = original.is_null() ? json::object() : original;
+  for (auto& process : impl_->processes) {
+    if (!process->events.contains(hook_event_name(event))) continue;
+    try {
+      auto response = request(
+          *impl_, *process,
+          json{{"type", "event"}, {"id", std::to_string(++impl_->next_id)},
+               {"event", hook_event_name(event)}, {"payload", payload}},
+          cancel_);
+      if ((event == HookEvent::tool_call ||
+           event == HookEvent::session_before_compact) &&
+          response.contains("allow") && response["allow"].is_boolean() &&
+          !response["allow"].get<bool>()) {
+        outcome.allowed = false;
+        auto reason = string_field(response, "reason");
+        if (!reason.empty()) {
+          if (!outcome.reason.empty()) outcome.reason += "; ";
+          outcome.reason += reason;
+        }
+        continue;
+      }
+      if (event == HookEvent::tool_call) {
+        auto arguments = response.find("arguments");
+        if (arguments != response.end() && arguments->is_object()) {
+          outcome.arguments = *arguments;
+          outcome.has_arguments = true;
+          payload["arguments"] = *arguments;
+        }
+      } else if (event == HookEvent::tool_result) {
+        auto output = response.find("output");
+        if (output != response.end() && output->is_string()) {
+          outcome.output = output->get<std::string>();
+          outcome.has_output = true;
+          payload["output"] = *output;
+        }
+        auto is_error = response.find("is_error");
+        if (is_error != response.end() && is_error->is_boolean()) {
+          outcome.is_error = is_error->get<bool>();
+          outcome.has_is_error = true;
+          payload["is_error"] = *is_error;
+        }
+      } else if (event == HookEvent::context) {
+        auto system = string_array(response, "system");
+        outcome.system.insert(outcome.system.end(), system.begin(), system.end());
+        auto messages = response.find("messages");
+        if (messages != response.end() && messages->is_array())
+          for (const auto& message : *messages) outcome.messages.push_back(message);
+      } else if (event == HookEvent::session_before_compact) {
+        auto instruction = response.find("instruction");
+        if (instruction != response.end() && instruction->is_string())
+          outcome.instruction = instruction->get<std::string>();
+        auto compaction = response.find("compaction");
+        if (compaction != response.end() && compaction->is_object() &&
+            compaction->contains("summary") &&
+            (*compaction)["summary"].is_string() &&
+            compaction->contains("first_kept_index") &&
+            (*compaction)["first_kept_index"].is_number_integer()) {
+          outcome.summary = (*compaction)["summary"].get<std::string>();
+          outcome.first_kept_index = (*compaction)["first_kept_index"].get<int>();
+          outcome.details = compaction->value("details", json());
+          outcome.has_compaction = !outcome.summary.empty();
+        }
+      }
+    } catch (const std::exception& e) {
+      outcome.warnings.push_back("extension '" + process->name + "': " + e.what());
+    }
+  }
+  if (!outcome.allowed && outcome.reason.empty()) outcome.reason = "blocked by extension";
+  return outcome;
+}
+
+void ExtensionRuntime::pump() {
+  for (auto& process : impl_->processes) {
+    std::unique_lock lock(process->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) continue;
+    while (true) {
+      auto line = process->try_receive();
+      if (line.empty()) break;
+      try {
+        auto message = json::parse(line);
+        if (string_field(message, "type") != "response")
+          capture_actions(*impl_, *process, message);
+      } catch (...) {
+      }
+    }
+  }
+}
+
+void ExtensionRuntime::stop() {
+  if (!impl_ || impl_->stopped) return;
+  impl_->stopped = true;
+  for (auto& process : impl_->processes) process->stop();
+  impl_->processes.clear();
+  commands_.clear();
+  impl_->tools.clear();
+}
+
+std::vector<ExtensionNotice> ExtensionRuntime::take_notices() {
+  std::lock_guard lock(impl_->actions_mutex);
+  auto out = std::move(impl_->notices);
+  impl_->notices.clear();
+  return out;
+}
+
+std::vector<ExtensionUserMessage> ExtensionRuntime::take_user_messages() {
+  std::lock_guard lock(impl_->actions_mutex);
+  auto out = std::move(impl_->user_messages);
+  impl_->user_messages.clear();
+  return out;
+}
+
+std::vector<ExtensionEntry> ExtensionRuntime::take_entries() {
+  std::lock_guard lock(impl_->actions_mutex);
+  auto out = std::move(impl_->entries);
+  impl_->entries.clear();
+  return out;
+}
+
+std::vector<std::string> ExtensionRuntime::status_texts() const {
+  std::lock_guard lock(impl_->actions_mutex);
+  std::vector<std::string> out;
+  for (const auto& [_, text] : impl_->statuses) out.push_back(text);
+  return out;
+}
+
+std::vector<std::string> ExtensionRuntime::widget_lines() const {
+  std::lock_guard lock(impl_->actions_mutex);
+  std::vector<std::string> out;
+  for (const auto& [_, lines] : impl_->widgets)
+    out.insert(out.end(), lines.begin(), lines.end());
+  return out;
+}
+
+json session_hook_payload(const std::string& session_id,
+                          const fs::path& workspace) {
+  return json{{"session_id", session_id}, {"workspace", workspace.string()}};
+}
+
+void bind_extensions(niminal::Agent& agent,
+                     const std::shared_ptr<ExtensionRuntime>& runtime,
+                     const fs::path& workspace,
+                     std::function<void(const std::string&)> note) {
+  auto report = [note](const HookOutcome& outcome) {
+    if (!note) return;
+    for (const auto& warning : outcome.warnings) note(warning);
+  };
+  agent.before_tool = [runtime, report](const niminal::ToolCall& call, json& args,
+                                        std::string& reason) {
+    if (!runtime) return true;
+    auto outcome = runtime->dispatch(
+        HookEvent::tool_call, json{{"tool", call.name}, {"arguments", args}});
+    report(outcome);
+    if (outcome.has_arguments) args = std::move(outcome.arguments);
+    reason = outcome.reason;
+    return outcome.allowed;
+  };
+  agent.after_tool = [runtime, report](const niminal::ToolCall& call,
+                                       const json& args, std::string& output,
+                                       bool& is_error) {
+    if (!runtime) return;
+    auto outcome = runtime->dispatch(
+        HookEvent::tool_result,
+        json{{"tool", call.name}, {"arguments", args}, {"output", output},
+             {"is_error", is_error}});
+    report(outcome);
+    if (outcome.has_output) output = std::move(outcome.output);
+    if (outcome.has_is_error) is_error = outcome.is_error;
+  };
+  agent.augment_context = [runtime, report](json& messages) {
+    if (!runtime) return;
+    json system = json::array();
+    json conversation = json::array();
+    for (const auto& message : messages) {
+      if (message.value("role", "") == "system") {
+        auto content = message.find("content");
+        if (content != message.end() && content->is_array())
+          for (const auto& part : *content)
+            if (part.value("type", "") == "text")
+              system.push_back(part.value("text", ""));
+      } else {
+        conversation.push_back(message);
+      }
+    }
+    auto outcome = runtime->dispatch(
+        HookEvent::context, json{{"system", system}, {"messages", conversation}});
+    report(outcome);
+    if (!outcome.system.empty()) {
+      auto system_it = std::find_if(messages.begin(), messages.end(), [](const json& msg) {
+        return msg.value("role", "") == "system";
+      });
+      if (system_it == messages.end()) {
+        json parts = json::array();
+        for (const auto& text : outcome.system)
+          parts.push_back(json{{"type", "text"}, {"text", text}});
+        messages.insert(messages.begin(), json{{"role", "system"}, {"content", parts}});
+      } else {
+        if (!(*system_it)["content"].is_array())
+          (*system_it)["content"] = json::array();
+        for (const auto& text : outcome.system)
+          (*system_it)["content"].push_back(json{{"type", "text"}, {"text", text}});
+      }
+    }
+    for (const auto& message : outcome.messages) messages.push_back(message);
+  };
+  agent.turn_start = [runtime, workspace, &agent, report] {
+    if (!runtime) return;
+    auto outcome = runtime->dispatch(
+        HookEvent::turn_start,
+        session_hook_payload(agent.conversation_id, workspace));
+    report(outcome);
+  };
+  agent.turn_end = [runtime, workspace, &agent, report](bool interrupted) {
+    if (!runtime) return;
+    auto payload = session_hook_payload(agent.conversation_id, workspace);
+    if (interrupted) payload["interrupted"] = true;
+    auto outcome = runtime->dispatch(HookEvent::turn_end, payload);
+    report(outcome);
+  };
+}
+
+void install_extension_tools(
+    niminal::Agent& agent,
+    const std::shared_ptr<ExtensionRuntime>& runtime) {
+  agent.tools.erase(
+      std::remove_if(agent.tools.begin(), agent.tools.end(),
+                     [](const niminal::Tool& tool) { return tool.extension; }),
+      agent.tools.end());
+  if (!runtime) return;
+  auto tools = runtime->tools();
+  agent.tools.insert(agent.tools.end(),
+                     std::make_move_iterator(tools.begin()),
+                     std::make_move_iterator(tools.end()));
+}
+
+}  // namespace niminal::app

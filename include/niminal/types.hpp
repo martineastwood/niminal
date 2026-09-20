@@ -33,6 +33,7 @@ enum class EventKind {
   text_delta,
   thinking_delta,
   tool_call,
+  approval_required,
   tool_output_delta,
   tool_result,
   user,
@@ -60,6 +61,7 @@ struct StreamEvent {
   json input;
   bool is_error = false;
   bool final = false;
+  bool can_remember = false;
   int step = -1;
   int duration_ms = 0;
   std::string run_id;
@@ -81,6 +83,7 @@ struct Tool {
   json parameters;
   std::function<std::string(const json&)> run;
   bool read_only = false;
+  bool extension = false;
 };
 
 inline void add_usage(Usage& a, const Usage& b) {

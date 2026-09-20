@@ -52,17 +52,19 @@ int main() {
   s.add_tool_result("call_1", "exit_code: 1", true);
   s.add_name("fix the parser");
   s.add_selection("anthropic/claude-sonnet-4", "openrouter");
+  s.add_extension("fixture", json{{"count", 1}});
 
   auto loaded = load_session(dir, s.id);
   if (loaded.name != "fix the parser") return fail("name");
   if (loaded.workspace != "/tmp/ws-a") return fail("workspace");
-  if (loaded.events.size() != 5) return fail("event count");
+  if (loaded.events.size() != 6) return fail("event count");
   if (loaded.last_model() != "anthropic/claude-sonnet-4")
     return fail("last_model prefers selection");
   if (loaded.last_provider() != "openrouter")
     return fail("last_provider");
   auto msgs = loaded.openai_messages();
-  if (msgs.size() != 3) return fail("openai_messages should skip name/selection");
+  if (msgs.size() != 3)
+    return fail("openai_messages should skip name/selection/extension");
   if (msgs[0].value("role", "") != "user") return fail("user role");
   if (msgs[1].value("role", "") != "assistant" ||
       !msgs[1].contains("tool_calls"))

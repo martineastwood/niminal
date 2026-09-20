@@ -117,6 +117,13 @@ std::string Agent::run(const std::string& prompt) {
   messages.push_back(json{{"role", "user"}, {"content", prompt}});
   if (persist_user) persist_user(prompt);
   emit(StreamEvent{EventKind::run_start, prompt, {}, {}});
+  if (turn_start) turn_start();
+  bool turn_finished = false;
+  auto finish_turn = [&](bool interrupted) {
+    if (turn_finished) return;
+    turn_finished = true;
+    if (turn_end) turn_end(interrupted);
+  };
 
   const json tools_json = tools_payload(tools);
   auto inject_steering = [&]() -> int {
@@ -154,6 +161,7 @@ std::string Agent::run(const std::string& prompt) {
       ChatRequest req;
       fill_chat(req);
       req.messages = request_messages();
+      if (augment_context) augment_context(req.messages);
       req.tools = tools_json;
       emit(StreamEvent{EventKind::step_start, {}, {}, {}});
       req.on_event = [&, step](const StreamEvent& event) {
@@ -189,6 +197,7 @@ std::string Agent::run(const std::string& prompt) {
         emit(std::move(step_end));
         if (inject_steering() > 0) continue;
         if (inject_follow_up() > 0) continue;
+        finish_turn(false);
         emit(StreamEvent{EventKind::run_end, {}, {}, {}});
         emit(StreamEvent{EventKind::done, {}, {}, {}});
         return result.text;
@@ -217,34 +226,58 @@ std::string Agent::run(const std::string& prompt) {
       if (persist_assistant)
         persist_assistant(result.text, result.tool_calls, model, result.usage);
 
-      auto run_tool = [&](const ToolCall& call) -> std::string {
-        if (cancelled()) return "interrupted";
+      struct ToolExecution {
+        std::string output;
+        bool is_error = false;
+      };
+      auto run_tool = [&](const ToolCall& call) -> ToolExecution {
+        if (cancelled()) return {"interrupted", true};
         try {
           json args = json::object();
           if (!call.arguments.empty()) args = json::parse(call.arguments);
           const Tool* tool = find_tool(tools, call.name);
-          if (!tool) return "unknown tool: " + call.name;
-          return tool->run(args);
+          if (!tool) return {"unknown tool: " + call.name, true};
+          if (approve_tool && !approve_tool(call, *tool))
+            return {"approval_denied: Tool execution was denied.", true};
+          std::string reason;
+          if (before_tool && !before_tool(call, args, reason))
+            return {"approval_denied: " +
+                        (reason.empty() ? std::string("blocked by extension")
+                                        : reason),
+                    true};
+          std::string output;
+          bool is_error = false;
+          try {
+            output = tool->run(args);
+            is_error = output == "interrupted" ||
+                       output.rfind("tool error:", 0) == 0 ||
+                       output.rfind("unknown tool:", 0) == 0 ||
+                       output.rfind("approval_denied:", 0) == 0;
+          } catch (const std::exception& e) {
+            output = std::string("tool error: ") + e.what();
+            is_error = true;
+          }
+          if (after_tool) after_tool(call, args, output, is_error);
+          return {std::move(output), is_error};
         } catch (const std::exception& e) {
-          return std::string("tool error: ") + e.what();
+          return {std::string("tool error: ") + e.what(), true};
         }
       };
 
       auto apply_tool_result = [&](const ToolCall& call,
-                                   const std::string& output) {
-        StreamEvent tool_result{EventKind::tool_result, output, call.name, call.id};
-        tool_result.is_error = cancelled() || output == "interrupted" ||
-                               output.rfind("tool error:", 0) == 0 ||
-                               output.rfind("unknown tool:", 0) == 0;
+                                   const ToolExecution& execution) {
+        StreamEvent tool_result{EventKind::tool_result, execution.output,
+                                call.name, call.id};
+        tool_result.is_error = cancelled() || execution.is_error;
         const bool is_error = tool_result.is_error;
         emit(std::move(tool_result));
         if (persist_tool) {
-          persist_tool(call.id, output, is_error);
+          persist_tool(call.id, execution.output, is_error);
         }
         messages.push_back(json{
             {"role", "tool"},
             {"tool_call_id", call.id},
-            {"content", output},
+            {"content", execution.output},
         });
       };
 
@@ -253,12 +286,13 @@ std::string Agent::run(const std::string& prompt) {
         size_t j = i;
         while (j < pending.size()) {
           const Tool* tool = find_tool(tools, pending[j].name);
-          if (!tool || !tool->read_only) break;
+          if (!tool || !tool->read_only ||
+              (approve_tool && tool->extension)) break;
           ++j;
         }
         const size_t run_len = j - i;
         if (run_len >= 2) {
-          std::vector<std::future<std::string>> futures;
+          std::vector<std::future<ToolExecution>> futures;
           futures.reserve(run_len);
           for (size_t k = i; k < j; ++k)
             futures.push_back(
@@ -275,11 +309,17 @@ std::string Agent::run(const std::string& prompt) {
       step_end.usage = result.usage;
       emit(std::move(step_end));
     }
-    throw Error("max_steps reached (" + std::to_string(max_steps) + ")");
+    throw Error("Maximum tool-loop steps reached (" +
+                std::to_string(max_steps) + "). The session is saved; continue "
+                "the task or rerun with --max-steps N.");
   } catch (const Cancelled&) {
+    finish_turn(true);
     emit(StreamEvent{EventKind::error, "interrupted", {}, {}});
     emit(StreamEvent{EventKind::done, {}, {}, {}});
     return {};
+  } catch (...) {
+    finish_turn(false);
+    throw;
   }
 }
 

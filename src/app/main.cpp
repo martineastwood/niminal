@@ -2,6 +2,7 @@
 
 #include "compaction.hpp"
 #include "config.hpp"
+#include "extensions.hpp"
 #include "instructions.hpp"
 #include "json_mode.hpp"
 #include "provider.hpp"
@@ -10,6 +11,7 @@
 #include "skills.hpp"
 #include "thinking.hpp"
 #include "tools.hpp"
+#include "trust.hpp"
 #include "tui.hpp"
 #include "workspace.hpp"
 
@@ -36,7 +38,10 @@ const char* kUsage =
     "  --mode json        emit versioned JSONL events and exit\n"
     "  --mode rpc         serve JSONL commands until shutdown or EOF\n"
     "  --api-key KEY      use an API key for this process\n"
-    "  --max-steps N      Tool loop cap (default 16)\n"
+    "  --max-steps N      Tool loop cap (default 32)\n"
+    "  --yolo             Auto-approve tools for this process\n"
+    "  --approve          Load project-local niminal resources\n"
+    "  --no-approve       Skip project-local niminal resources\n"
     "  --resume           Resume the latest session for this workspace\n"
     "  --session ID       Resume a specific session\n"
     "  --no-session       Keep the transcript in memory only\n"
@@ -47,7 +52,7 @@ const char* kUsage =
     "inserts a newline. Esc interrupts a running turn or clears the composer.\n"
     "Ctrl-C quits. /compact summarizes older turns. Sessions are saved under\n"
     "~/.niminal/sessions. Set the matching provider key (OPENROUTER_API_KEY by\n"
-    "default). File tools stay in cwd. bash is unprompted.\n";
+    "default). File tools stay in cwd. Shell commands ask in the TUI.\n";
 
 const char* kSystem = R"(You are niminal, a coding agent working with the user in their workspace.
 Help them understand, diagnose, and change code according to their request.
@@ -58,6 +63,9 @@ the returned version token for edits.
 
 Rules:
 - Stay in the workspace. Use relative paths. Do not invent file contents.
+- Tool calls that can run commands or other external actions may require user
+  approval. If a tool call is denied, explain what was needed or choose a safer
+  alternative.
 - For questions and reviews, investigate and explain. For requested changes,
   implement and verify them.
 - Inspect relevant code and project instructions before making assumptions.
@@ -134,6 +142,8 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
         std::cout << "\n[" << ev.tool_name;
         if (!ev.text.empty()) std::cout << " " << ev.text;
         std::cout << "]\n" << std::flush;
+        break;
+      case niminal::EventKind::approval_required:
         break;
       case niminal::EventKind::tool_result:
         std::cout << ev.text;
@@ -238,13 +248,16 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  int max_steps = 16;
+  int max_steps = 32;
   bool model_from_cli = false;
   bool provider_from_cli = false;
   bool resume_latest = false;
   bool no_session = false;
   bool json_mode = false;
   bool rpc_mode = false;
+  bool yolo = false;
+  niminal::app::TrustOverride trust_override =
+      niminal::app::TrustOverride::default_value;
   std::string api_key;
   std::string session_id;
   std::vector<std::string> prompt_parts;
@@ -322,6 +335,18 @@ int main(int argc, char** argv) {
       max_steps = std::atoi(argv[++i]);
       continue;
     }
+    if (a == "--yolo") {
+      yolo = true;
+      continue;
+    }
+    if (a == "--approve") {
+      trust_override = niminal::app::TrustOverride::approve;
+      continue;
+    }
+    if (a == "--no-approve") {
+      trust_override = niminal::app::TrustOverride::deny;
+      continue;
+    }
     if (a == "--resume") {
       resume_latest = true;
       continue;
@@ -371,6 +396,33 @@ int main(int argc, char** argv) {
   }
 
   niminal::app::Workspace ws(std::filesystem::current_path());
+  auto project_trust = niminal::app::resolve_project_trust(ws.root(), trust_override);
+  const bool interactive_tui = !json_mode && !rpc_mode && prompt_parts.empty() &&
+                               isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+  if (project_trust.required && project_trust.prompt && interactive_tui) {
+    std::cout << "This project has optional niminal customizations:\n";
+    for (const auto& resource : project_trust.resources)
+      std::cout << "  " << resource.lexically_relative(ws.root()).generic_string()
+                << '\n';
+    std::cout << "Load these customizations for this workspace? [y/N] "
+              << std::flush;
+    std::string answer;
+    std::getline(std::cin, answer);
+    for (char& c : answer)
+      if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    project_trust.trusted = answer == "y" || answer == "yes";
+    project_trust.prompt = false;
+    try {
+      niminal::app::save_project_trust(project_trust.workspace,
+                                        project_trust.trusted);
+    } catch (const std::exception& e) {
+      std::cerr << "Could not save project trust: " << e.what() << '\n';
+    }
+  }
+  niminal::app::set_project_resources_trusted(project_trust.workspace,
+                                               project_trust.trusted);
+  if (project_trust.required && !project_trust.trusted)
+    std::cerr << "Project-local resources skipped (use --approve or /trust on).\n";
   std::atomic<bool> cancel{false};
   auto agent = make_agent(ws, cfg, max_steps, &cancel);
   if (!api_key.empty()) agent.api_key = api_key;
@@ -414,6 +466,50 @@ int main(int argc, char** argv) {
   }
   niminal::app::apply_provider(agent, cfg);
 
+  auto extensions = niminal::app::ExtensionRuntime::start(
+      ws.root(), session.id, &cancel);
+  niminal::app::install_extension_tools(agent, extensions);
+  niminal::app::bind_extensions(agent, extensions, ws.root(),
+                                [](const std::string& warning) {
+                                  std::cerr << warning << '\n';
+                                });
+  niminal::app::bind_compaction(agent, session,
+                                [](const std::string& msg) {
+                                  if (!msg.empty()) std::cerr << msg << '\n';
+                                },
+                                extensions);
+  for (const auto& warning : extensions->warnings())
+    std::cerr << warning << '\n';
+  auto start_hook = extensions->dispatch(
+      niminal::app::HookEvent::session_start,
+      niminal::app::session_hook_payload(session.id, ws.root()));
+  for (const auto& warning : start_hook.warnings)
+    std::cerr << warning << '\n';
+  auto drain_extension_actions = [&] {
+    if (!extensions) return;
+    extensions->pump();
+    for (const auto& notice : extensions->take_notices())
+      std::cerr << notice.message << '\n';
+    for (const auto& entry : extensions->take_entries())
+      session.add_extension(entry.extension, entry.data);
+    for (const auto& message : extensions->take_user_messages())
+      std::cerr << "Extension message (" << message.deliver_as
+                << "): " << message.content << '\n';
+  };
+  drain_extension_actions();
+  auto stop_extensions = [&] {
+    if (!extensions) return;
+    drain_extension_actions();
+    cancel.store(false);
+    auto outcome = extensions->dispatch(
+        niminal::app::HookEvent::session_end,
+        niminal::app::session_hook_payload(session.id, ws.root()));
+    for (const auto& warning : outcome.warnings)
+      std::cerr << warning << '\n';
+    drain_extension_actions();
+    extensions->stop();
+  };
+
   if (json_mode || rpc_mode) {
     try {
       session.recover_interrupted_tools();
@@ -422,8 +518,10 @@ int main(int argc, char** argv) {
       return 1;
     }
     agent.messages = session.openai_messages();
-    if (rpc_mode) return niminal::app::run_rpc(agent, session, cfg);
-    return run_json(agent, session, prompt);
+    int code = rpc_mode ? niminal::app::run_rpc(agent, session, cfg)
+                        : run_json(agent, session, prompt);
+    stop_extensions();
+    return code;
   }
   if (prompt_parts.empty()) {
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
@@ -431,7 +529,9 @@ int main(int argc, char** argv) {
                    "print mode.\n";
       return 2;
     }
-    return niminal::app::run_tui(agent, ws, cfg, session);
+    int code = niminal::app::run_tui(agent, ws, cfg, session, extensions, yolo);
+    stop_extensions();
+    return code;
   }
   try {
     session.recover_interrupted_tools();
@@ -440,5 +540,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   agent.messages = session.openai_messages();
-  return run_print(agent, prompt);
+  int code = run_print(agent, prompt);
+  stop_extensions();
+  return code;
 }

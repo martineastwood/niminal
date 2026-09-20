@@ -89,8 +89,9 @@ the first message creates an append-only JSONL file under
 - Alt-J or Shift-Enter inserts a newline
 - Esc interrupts a running turn, or clears the composer when idle
 - Ctrl-C quits
-- `/help`, `/provider`, `/model`, `/thinking`, `/models refresh`, `/session`, `/name`, `/resume`,
-  `/new`, `/clear`, `/copy`, `/compact`, `/skill:NAME`, `/NAME`, `/quit`
+- `/help`, `/provider`, `/model`, `/thinking`, `/permissions`, `/trust`, `/yolo`,
+  `/models refresh`, `/session`, `/name`, `/resume`, `/new`, `/clear`, `/copy`,
+  `/compact`, `/reload`, `/skill:NAME`, `/NAME`, `/quit`
 
 - Tab completes a slash command. Up/Down moves through the list. Type `/model `
   to pick from the models.dev catalog for the active provider (filter from two
@@ -98,7 +99,8 @@ the first message creates an append-only JSONL file under
   Type `/resume ` and Tab to pick a session.
 
 Skills are `SKILL.md` files under `~/.niminal/skills/<name>/` or the current
-workspace's `.niminal/skills/<name>/` (workspace skills win on name conflicts).
+workspace's `.agent/skills/<name>/`, `.agents/skills/<name>/`, or
+`.niminal/skills/<name>/` (later workspace roots win on name conflicts).
 The optional frontmatter `description` appears in slash suggestions and tells
 the model when to load the skill itself. Invoke one directly with
 `/skill:NAME optional request`.
@@ -122,6 +124,87 @@ with `$ARGUMENTS` or `$@` replaced by the text after `/review`. The first useful
 body line is used as the suggestion description when frontmatter is omitted.
 Templates are flat, only `*.md` files directly inside those folders are found,
 and files over 100,000 bytes are ignored. Built-in commands keep their names.
+
+## Extensions and hooks
+
+Extensions are persistent programs that register tools, slash commands, and
+lifecycle hooks over JSON lines. Put each extension in one of these folders:
+
+```text
+~/.agents/extensions/NAME/extension.json
+~/.niminal/extensions/NAME/extension.json
+<workspace>/.agents/extensions/NAME/extension.json
+<workspace>/.niminal/extensions/NAME/extension.json
+```
+
+Project extensions load only after you trust the workspace. Global extensions
+always load. Use `/reload` after changing a manifest or extension program.
+
+Create `.niminal/extensions/hello/extension.json`:
+
+```json
+{
+  "name": "hello",
+  "command": ["./extension.py"],
+  "response_timeout_seconds": 30
+}
+```
+
+Then create an executable `extension.py` beside it:
+
+```python
+#!/usr/bin/env python3
+import json, sys
+
+def send(value):
+    print(json.dumps(value), flush=True)
+
+send({
+    "type": "register",
+    "commands": [{"name": "hello", "description": "Say hello"}],
+    "tools": [{
+        "name": "hello_tool",
+        "description": "Return a greeting.",
+        "input_schema": {"type": "object"},
+        "capabilities": ["read"]
+    }],
+    "events": ["tool_call", "tool_result"]
+})
+
+for line in sys.stdin:
+    message = json.loads(line)
+    if message["type"] == "shutdown":
+        break
+    if message["type"] == "command":
+        send({"type": "response", "id": message["id"],
+              "message": "Hello " + message["arguments"]})
+    elif message["type"] == "tool":
+        send({"type": "response", "id": message["id"],
+              "content": [{"type": "text", "text": "Hello"}]})
+    elif message["type"] == "event":
+        send({"type": "response", "id": message["id"]})
+```
+
+The host sends `initialize` first. Your program replies with one `register`
+object, then answers every `command`, `tool`, and `event` request with a
+`response` carrying the same `id`. Stdout is reserved for protocol messages.
+
+Extensions can subscribe to `tool_call`, `tool_result`, `turn_start`,
+`turn_end`, `context`, `session_start`, `session_end`,
+`session_before_compact`, and `session_compact`. A `tool_call` hook can return
+`allow: false` or replacement `arguments`. A `tool_result` hook can replace
+`output` and `is_error`. Context hooks can append `system` strings and
+`messages`. Compaction hooks can block compaction, add an `instruction`, or
+provide a complete `compaction` result.
+
+Responses and unsolicited `update` messages can set footer `status`, display a
+`widget` or `notification`, persist an `entry` in the session, and queue a
+`user_message`. Extension tools use the normal permission prompt. Tools whose
+capabilities contain only `read` and `user` are treated as read-only.
+
+The current C++ host accepts text tool-result parts. UI and host requests are
+answered as unavailable, and image result parts are not added to the model
+context yet.
 
 `/model ID`, `/provider NAME`, and `/thinking LEVEL` are saved to
 `~/.niminal/config.json`. The thinking value is a shared ladder
@@ -200,12 +283,28 @@ Optional environment:
 - `NIMINAL_THINKING` (overrides `thinking` in the config file)
 
 Optional flags: `--model ID`, `--provider NAME`, `--thinking LEVEL`, `--mode json|rpc`,
-`--api-key KEY`, `--max-steps N`, `--resume`, `--session ID`, `--no-session`.
+`--api-key KEY`, `--max-steps N`, `--resume`, `--session ID`, `--no-session`,
+`--yolo`, `--approve`, `--no-approve`.
 
 File tools stay inside the current directory. `grep` and `glob` use git's
 tracked and untracked files and honor `.gitignore`, so `build/` stays out of
-search. `bash` runs unprompted with that directory as cwd. There is no
-permission prompt yet.
+search. In the TUI, `read`, `grep`, `glob`, `edit`, `write`, and `skill` run
+without approval. Shell commands and other tools ask before they run. Press
+Enter for once, `s` for the session, `p` to save a project grant, or `n` to
+deny. Commands such as `rm`, `sudo`, `curl`, `ssh`, and `git reset` are always
+asked again and cannot be remembered.
+
+Project prompts, skills, extensions, and `.niminal/permissions.json` are optional
+local customizations. The first interactive launch in a workspace that contains them
+asks whether to load them. The answer is saved in `~/.niminal/trust.json`.
+Use `/trust on` or `/trust off` to change it later, or use `--approve` and
+`--no-approve` for one process. `/permissions` lists grants and
+`/permissions clear` removes project grants. `/yolo` and `--yolo` skip approval
+prompts for the current process only.
+
+Print, JSON, and RPC modes have no approval UI, so tools run without prompting.
+Use them only with workspaces you trust. Approval is not a sandbox: shell
+commands still run as your user, with your environment.
 
 On each request niminal sends a stable prefix: the built-in system prompt, then
 `AGENTS.md` from `~/.niminal/` and from the git root toward the workspace

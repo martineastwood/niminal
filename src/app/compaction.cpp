@@ -1,4 +1,5 @@
 #include "compaction.hpp"
+#include "extensions.hpp"
 
 #include <niminal/openai.hpp>
 
@@ -153,10 +154,47 @@ std::string build_summary_prompt(const std::string& previous,
 }
 
 CompactResult compact_session(Session& session, niminal::Agent& agent,
-                              const std::string& instruction) {
+                              const std::string& requested_instruction,
+                              const std::shared_ptr<ExtensionRuntime>& extensions) {
   CompactResult result;
   result.message = "Nothing to compact (recent history fits in keep window).";
   int tokens_before = estimate_session_tokens(session);
+  result.tokens_before = tokens_before;
+  std::string instruction = requested_instruction;
+  if (extensions) {
+    auto pre = extensions->dispatch(
+        HookEvent::session_before_compact,
+        json{{"session_id", session.id}, {"workspace", session.workspace},
+             {"instruction", instruction}, {"tokens_before", tokens_before},
+             {"entries", session.events}});
+    result.warnings = pre.warnings;
+    if (!pre.allowed) {
+      result.message = pre.reason;
+      return result;
+    }
+    if (!pre.instruction.empty()) {
+      if (!instruction.empty()) instruction += '\n';
+      instruction += pre.instruction;
+    }
+    if (pre.has_compaction) {
+      session.add_compaction(pre.summary, pre.first_kept_index, tokens_before,
+                             pre.details);
+      result.did = true;
+      result.summary = pre.summary;
+      result.first_kept_index = pre.first_kept_index;
+      result.message = "Compacted by extension; kept from event #" +
+                       std::to_string(pre.first_kept_index) + ".";
+      auto post = extensions->dispatch(
+          HookEvent::session_compact,
+          json{{"session_id", session.id}, {"workspace", session.workspace},
+               {"did_compact", true}, {"summary", result.summary},
+               {"first_kept_index", result.first_kept_index},
+               {"tokens_before", tokens_before}, {"message", result.message}});
+      result.warnings.insert(result.warnings.end(), post.warnings.begin(),
+                             post.warnings.end());
+      return result;
+    }
+  }
   int from = 0;
   std::string previous;
   int compact = session.latest_compaction_index();
@@ -165,10 +203,32 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
     from = session.events[static_cast<size_t>(compact)].value("first_kept_index", 0);
   }
   int cut = find_cut_index(session, kKeepRecentTokens, from);
-  if (cut < 0) return result;
+  if (cut < 0) {
+    if (extensions) {
+      auto post = extensions->dispatch(
+          HookEvent::session_compact,
+          json{{"session_id", session.id}, {"workspace", session.workspace},
+               {"did_compact", false}, {"summary", ""},
+               {"first_kept_index", 0}, {"tokens_before", tokens_before},
+               {"message", result.message}});
+      result.warnings.insert(result.warnings.end(), post.warnings.begin(),
+                             post.warnings.end());
+    }
+    return result;
+  }
   auto conversation = serialize_range(session, from, cut);
   if (conversation.find_first_not_of(" \n\t") == std::string::npos) {
     result.message = "Nothing to compact (empty range).";
+    if (extensions) {
+      auto post = extensions->dispatch(
+          HookEvent::session_compact,
+          json{{"session_id", session.id}, {"workspace", session.workspace},
+               {"did_compact", false}, {"summary", ""},
+               {"first_kept_index", 0}, {"tokens_before", tokens_before},
+               {"message", result.message}});
+      result.warnings.insert(result.warnings.end(), post.warnings.begin(),
+                             post.warnings.end());
+    }
     return result;
   }
 
@@ -199,27 +259,45 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
 
   session.add_compaction(summary, cut, tokens_before);
   result.did = true;
+  result.summary = summary;
+  result.first_kept_index = cut;
   result.message = "Compacted up to event #" + std::to_string(cut) +
                    "; kept recent verbatim (" + std::to_string(tokens_before) +
                    " tokens before).";
+  if (extensions) {
+    auto post = extensions->dispatch(
+        HookEvent::session_compact,
+        json{{"session_id", session.id}, {"workspace", session.workspace},
+             {"did_compact", true}, {"summary", summary},
+             {"first_kept_index", cut}, {"tokens_before", tokens_before},
+             {"message", result.message}});
+    result.warnings.insert(result.warnings.end(), post.warnings.begin(),
+                           post.warnings.end());
+  }
   return result;
 }
 
 void bind_compaction(niminal::Agent& agent, Session& session,
-                     std::function<void(const std::string&)> note) {
-  agent.before_request = [&agent, &session, note] {
+                     std::function<void(const std::string&)> note,
+                     const std::shared_ptr<ExtensionRuntime>& extensions) {
+  agent.before_request = [&agent, &session, note, extensions] {
     if (!should_compact(session)) return;
     if (note) note("Context is large; compacting…");
-    auto result = compact_session(session, agent);
+    auto result = compact_session(session, agent, {}, extensions);
     agent.messages = session.openai_messages();
+    if (note)
+      for (const auto& warning : result.warnings) note(warning);
     if (note) note(result.message);
   };
-  agent.recover_overflow = [&agent, &session, note] {
+  agent.recover_overflow = [&agent, &session, note, extensions] {
     if (note) note("Context overflow — compacting and retrying…");
     try {
       auto result = compact_session(
-          session, agent, "Prioritize recovering from context overflow.");
+          session, agent, "Prioritize recovering from context overflow.",
+          extensions);
       agent.messages = session.openai_messages();
+      if (note)
+        for (const auto& warning : result.warnings) note(warning);
       if (note) note(result.message);
       return result.did;
     } catch (const std::exception& e) {
