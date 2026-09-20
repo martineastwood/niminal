@@ -2,6 +2,7 @@
 #include "compaction.hpp"
 #include "config.hpp"
 #include "markdown.hpp"
+#include "mentions.hpp"
 #include "models_dev.hpp"
 #include "provider.hpp"
 #include "prompts.hpp"
@@ -208,6 +209,7 @@ bool is_builtin_slash(std::string_view command) {
 struct Suggestion {
   std::string fill;
   std::string label;
+  bool file = false;
 };
 
 bool starts_with(std::string_view s, std::string_view p) {
@@ -447,7 +449,8 @@ const char* kHelp = R"(/help              this list
 
 Enter sends. While a turn runs, Enter queues a steering message.
 Alt-J or Shift-Enter inserts a newline.
-Tab accepts a slash suggestion. Up/Down picks one, or walks prompt history.
+Type @ to add a workspace file. Gitignored files and dependency folders are hidden.
+Tab accepts a suggestion. Up/Down picks one, or walks prompt history.
 Page Up/Down and the trackpad scroll the transcript.
 Esc interrupts a running turn, or clears the composer.
 Drag to copy. Ctrl-V pastes into the composer. /copy copies the last reply.
@@ -455,8 +458,9 @@ Ctrl-C quits.)";
 
 }  // namespace
 
-int run_tui(niminal::Agent& agent, const std::filesystem::path& cwd,
+int run_tui(niminal::Agent& agent, Workspace& workspace,
             Config& cfg, Session& session) {
+  const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
   std::atomic<bool> local_cancel{false};
   if (!agent.cancel) agent.cancel = &local_cancel;
@@ -496,9 +500,14 @@ int run_tui(niminal::Agent& agent, const std::filesystem::path& cwd,
     if (auto it = cfg.last_models.find(agent.provider); it != cfg.last_models.end())
       add_unique(recents, it->second);
     add_unique(recents, cfg.model);
-    auto items =
-        slash_suggestions(draft, session_dir, cwd.string(), agent.provider,
-                          agent.model, recents);
+    std::vector<Suggestion> items;
+    if (auto mention = file_mention_at(draft, static_cast<size_t>(cursor))) {
+      for (const auto& path : suggest_mentioned_files(workspace, mention->query))
+        items.push_back({path, "@" + path, true});
+    } else {
+      items = slash_suggestions(draft, session_dir, cwd.string(), agent.provider,
+                                agent.model, recents);
+    }
     std::string sig;
     for (const auto& item : items) {
       sig += item.fill;
@@ -515,8 +524,15 @@ int run_tui(niminal::Agent& agent, const std::filesystem::path& cwd,
   };
 
   auto apply_suggestion = [&](const Suggestion& item) {
-    draft = item.fill;
-    cursor = static_cast<int>(draft.size());
+    if (item.file) {
+      auto mention = file_mention_at(draft, static_cast<size_t>(cursor));
+      draft = apply_file_mention(draft, static_cast<size_t>(cursor), item.fill);
+      cursor = mention ? static_cast<int>(mention->start + item.fill.size() + 2)
+                       : static_cast<int>(draft.size());
+    } else {
+      draft = item.fill;
+      cursor = static_cast<int>(draft.size());
+    }
     history_i = -1;
   };
 
@@ -731,9 +747,9 @@ int run_tui(niminal::Agent& agent, const std::filesystem::path& cwd,
     busy = true;
     activity = "Thinking…";
     worker = std::thread([&agent, &busy, &ui_alive, post_ui,
-                          prompt = std::move(prompt)] {
+                          &workspace, prompt = std::move(prompt)] {
       try {
-        agent.run(prompt);
+        agent.run(expand_file_mentions(workspace, prompt));
       } catch (const std::exception& e) {
         if (ui_alive) {
           post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
@@ -1187,6 +1203,10 @@ int run_tui(niminal::Agent& agent, const std::filesystem::path& cwd,
         return true;
       }
       if (!suggestions.empty()) {
+        if (suggestions[static_cast<size_t>(suggest_i)].file) {
+          apply_suggestion(suggestions[static_cast<size_t>(suggest_i)]);
+          return true;
+        }
         auto prompt = suggestions[static_cast<size_t>(suggest_i)].fill;
         draft.clear();
         cursor = 0;

@@ -72,6 +72,12 @@ bool skip_dir_name(const std::string& name) {
   return false;
 }
 
+bool contains_skipped_dir(const fs::path& path) {
+  for (const auto& part : path)
+    if (skip_dir_name(part.string())) return true;
+  return false;
+}
+
 std::string shell_quote(const std::string& s) {
   std::string out = "'";
   for (char c : s) {
@@ -140,11 +146,13 @@ std::vector<std::string> walk_files(const fs::path& root) {
 }  // namespace
 
 void Workspace::invalidate_listing() {
+  std::lock_guard<std::mutex> lock(files_mu_);
   files_cached_ = false;
   files_.clear();
 }
 
 std::vector<std::string> Workspace::list_files() const {
+  std::lock_guard<std::mutex> lock(files_mu_);
   if (files_cached_) return files_;
   std::vector<std::string> files;
   if (auto git_root = git_root_of(root_)) {
@@ -160,8 +168,7 @@ std::vector<std::string> Workspace::list_files() const {
         rel = file.substr(head.size());
       }
       if (rel.empty()) continue;
-      auto first = rel.substr(0, rel.find('/'));
-      if (skip_dir_name(first)) continue;
+      if (contains_skipped_dir(rel)) continue;
       files.push_back(std::move(rel));
       if (files.size() >= 8000) break;
     }
@@ -175,4 +182,3 @@ std::vector<std::string> Workspace::list_files() const {
 }
 
 }  // namespace niminal::app
-

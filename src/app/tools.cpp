@@ -250,7 +250,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel) {
           out << '\n' << scoped;
         }
         return out.str();
-      }});
+      },
+      true});
 
   tools.push_back(Tool{
       "grep",
@@ -315,7 +316,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel) {
           out << hits[i];
         }
         return out.str();
-      }});
+      },
+      true});
 
   tools.push_back(Tool{
       "glob",
@@ -348,7 +350,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel) {
           out << hits[i];
         }
         return out.str();
-      }});
+      },
+      true});
 
   tools.push_back(Tool{
       "edit",

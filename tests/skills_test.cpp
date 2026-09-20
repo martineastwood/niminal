@@ -1,5 +1,7 @@
 #include "skills.hpp"
 
+#include <niminal/types.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -26,5 +28,6 @@ int main() {
     return 1;
   if (niminal::app::load_skill(root, "missing") != "Skill not found: missing")
     return 1;
+  if (!niminal::app::skill_tool(root).read_only) return 1;
   fs::remove_all(root);
 }

@@ -89,7 +89,8 @@ niminal::Tool skill_tool(const fs::path& workspace) {
                {"required", json::array({"name"})}},
           [workspace](const json& input) {
             return load_skill(workspace, input.at("name").get<std::string>());
-          }};
+          },
+          true};
 }
 
 }  // namespace niminal::app

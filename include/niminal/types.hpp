@@ -48,6 +48,7 @@ struct Tool {
   std::string description;
   json parameters;
   std::function<std::string(const json&)> run;
+  bool read_only = false;
 };
 
 struct Usage {

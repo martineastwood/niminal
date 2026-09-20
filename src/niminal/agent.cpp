@@ -1,6 +1,7 @@
 #include <niminal/agent.hpp>
 #include <niminal/openai.hpp>
 
+#include <future>
 #include <utility>
 
 namespace niminal {
@@ -160,23 +161,21 @@ std::string Agent::run(const std::string& prompt) {
       if (persist_assistant)
         persist_assistant(result.text, result.tool_calls, model, result.usage);
 
-      for (const auto& call : result.tool_calls) {
-        std::string output;
-        if (cancelled()) {
-          output = "interrupted";
-        } else {
-          try {
-            json args = json::object();
-            if (!call.arguments.empty()) args = json::parse(call.arguments);
-            const Tool* tool = find_tool(tools, call.name);
-            if (!tool)
-              output = "unknown tool: " + call.name;
-            else
-              output = tool->run(args);
-          } catch (const std::exception& e) {
-            output = std::string("tool error: ") + e.what();
-          }
+      auto run_tool = [&](const ToolCall& call) -> std::string {
+        if (cancelled()) return "interrupted";
+        try {
+          json args = json::object();
+          if (!call.arguments.empty()) args = json::parse(call.arguments);
+          const Tool* tool = find_tool(tools, call.name);
+          if (!tool) return "unknown tool: " + call.name;
+          return tool->run(args);
+        } catch (const std::exception& e) {
+          return std::string("tool error: ") + e.what();
         }
+      };
+
+      auto apply_tool_result = [&](const ToolCall& call,
+                                   const std::string& output) {
         if (on_event) {
           on_event(
               StreamEvent{EventKind::tool_result, output, call.name, call.id});
@@ -192,6 +191,30 @@ std::string Agent::run(const std::string& prompt) {
             {"tool_call_id", call.id},
             {"content", output},
         });
+      };
+
+      const auto& pending = result.tool_calls;
+      for (size_t i = 0; i < pending.size();) {
+        size_t j = i;
+        while (j < pending.size()) {
+          const Tool* tool = find_tool(tools, pending[j].name);
+          if (!tool || !tool->read_only) break;
+          ++j;
+        }
+        const size_t run_len = j - i;
+        if (run_len >= 2) {
+          std::vector<std::future<std::string>> futures;
+          futures.reserve(run_len);
+          for (size_t k = i; k < j; ++k)
+            futures.push_back(
+                std::async(std::launch::async, run_tool, pending[k]));
+          for (size_t k = 0; k < run_len; ++k)
+            apply_tool_result(pending[i + k], futures[k].get());
+          i = j;
+        } else {
+          apply_tool_result(pending[i], run_tool(pending[i]));
+          ++i;
+        }
       }
     }
     throw Error("max_steps reached (" + std::to_string(max_steps) + ")");

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 
 namespace fs = std::filesystem;
@@ -85,6 +86,15 @@ int main() {
   }
   if (saw_build) {
     std::cerr << "list_files should honor gitignore build/\n";
+    fs::remove_all(tmp);
+    return 1;
+  }
+
+  auto first = listed.list_files();
+  auto parallel = std::async(std::launch::async, [&] { return listed.list_files(); });
+  auto parallel2 = std::async(std::launch::async, [&] { return listed.list_files(); });
+  if (parallel.get() != first || parallel2.get() != first) {
+    std::cerr << "concurrent list_files should return consistent listing\n";
     fs::remove_all(tmp);
     return 1;
   }

@@ -118,6 +118,7 @@ add_executable(niminal_app
   src/app/tools.cpp
   src/app/compaction.cpp
   src/app/markdown.cpp
+  src/app/mentions.cpp
   src/app/models_dev.cpp
   src/app/thinking.cpp
   src/app/prompts.cpp)
@@ -132,6 +133,10 @@ target_compile_options(niminal_app PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(niminal_workspace_test tests/workspace_test.cpp src/app/workspace.cpp)
 target_include_directories(niminal_workspace_test PRIVATE src/app)
 target_compile_options(niminal_workspace_test PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(niminal_mentions_test tests/mentions_test.cpp src/app/mentions.cpp src/app/workspace.cpp)
+target_include_directories(niminal_mentions_test PRIVATE src/app)
+target_compile_options(niminal_mentions_test PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(niminal_tools_test
   tests/tools_test.cpp
@@ -217,6 +222,7 @@ target_compile_options(niminal_thinking_test PRIVATE -Wall -Wextra -Wpedantic)
 
 enable_testing()
 add_test(NAME workspace COMMAND niminal_workspace_test)
+add_test(NAME mentions COMMAND niminal_mentions_test)
 add_test(NAME tools COMMAND niminal_tools_test)
 add_test(NAME instructions COMMAND niminal_instructions_test)
 add_test(NAME skills COMMAND niminal_skills_test)

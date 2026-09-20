@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
                    "print mode.\n";
       return 2;
     }
-    return niminal::app::run_tui(agent, ws.root(), cfg, session);
+    return niminal::app::run_tui(agent, ws, cfg, session);
   }
   try {
     session.recover_interrupted_tools();

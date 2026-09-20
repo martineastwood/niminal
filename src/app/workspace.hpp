@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -25,6 +26,7 @@ class Workspace {
 
  private:
   std::filesystem::path root_;
+  mutable std::mutex files_mu_;
   mutable std::vector<std::string> files_;
   mutable bool files_cached_ = false;
 };
