@@ -19,6 +19,7 @@
 #include <ftxui/component/mouse.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/string.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -97,25 +98,24 @@ Element render_diff_card(const Block& block) {
   Elements lines;
   std::istringstream in(block.text);
   std::string line;
+  bool skip_header = true;
   while (std::getline(in, line)) {
-    auto row = text(line);
+    if (skip_header) { skip_header = false; continue; }  // skip @@ marker
+    Element row = text(line.empty() ? " " : line);
     if (!line.empty() && line.front() == '+')
-      row |= color(Color::GreenLight);
+      row = row | color(Color::GreenLight);
     else if (!line.empty() && line.front() == '-')
-      row |= color(Color::RedLight);
-    else if (!line.empty() && line.front() == '@')
-      row |= color(Color::CyanLight);
+      row = row | color(Color::RedLight);
     else if (!line.empty() && line.front() == '!')
-      row |= color(Color::YellowLight);
+      row = row | color(Color::YellowLight);
     else
-      row |= dim;
+      row = row | dim;
     lines.push_back(std::move(row));
   }
-  auto badge = text(block.created ? "created" : "updated") | bold |
-               color(block.created ? Color::GreenLight : Color::CyanLight);
-  return vbox({hbox({badge, text("  " + block.path) | bold}),
-               separatorLight() | dim, vbox(std::move(lines))}) |
-         border | dim;
+  auto badge_color = block.created ? Color::GreenLight : Color::CyanLight;
+  auto badge = text(block.created ? "created" : "updated") | bold | color(badge_color);
+  return vbox({hbox({badge, text("  " + block.path) | bold | dim}),
+               separatorLight() | dim, vbox(std::move(lines))});
 }
 
 std::string clip_text(std::string text, size_t max_chars, int max_lines) {
@@ -187,7 +187,7 @@ Decorator block_style(BlockKind kind) {
     case BlockKind::tool:
       return color(Color::Yellow);
     case BlockKind::thinking:
-      return color(Color::RGB(148, 103, 189)) | dim;
+      return [](Element e) { return e | dim | italic; };
     case BlockKind::diff:
       return color(Color::GrayLight);
     case BlockKind::error:
@@ -1032,7 +1032,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   configure_extension_ui(extensions);
   bind_extensions(agent, extensions, cwd, [&](const std::string& warning) {
     post_ui(StreamEvent{EventKind::status, warning, {}, {}});
-  }, &session);
+  }, &session, cfg);
   agent.approve_tool = [&](const niminal::ToolCall& call,
                            const niminal::Tool&) {
     if (yolo_mode) return true;
@@ -1118,7 +1118,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     configure_extension_ui(extensions);
     bind_extensions(agent, extensions, cwd, [&](const std::string& warning) {
       post_ui(StreamEvent{EventKind::status, warning, {}, {}});
-    }, &session);
+    }, &session, cfg);
     bind_compaction(agent, session, [&](const std::string& msg) {
       if (!msg.empty()) post_ui(StreamEvent{EventKind::status, msg, {}, {}});
     }, extensions, cfg);
@@ -1744,8 +1744,49 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     return state.element;
   };
   auto input = Input(&draft, "describe a change", input_opt);
+  auto input_transform = input_opt.transform;
+  auto wrapped_input = Renderer(input, [&] {
+    if (draft.empty()) return input->Render();
 
-  auto layout = Container::Vertical({input});
+    const int cursor_pos = std::clamp(cursor, 0, static_cast<int>(draft.size()));
+    const int terminal_width = screen.dimx() > 0 ? screen.dimx()
+                                                 : Terminal::Size().dimx;
+    Elements rows;
+    size_t line_start = 0;
+    while (true) {
+      const auto newline = draft.find('\n', line_start);
+      const size_t line_end = newline == std::string::npos ? draft.size()
+                                                           : newline;
+      const auto line = draft.substr(line_start, line_end - line_start);
+      Elements glyphs;
+      size_t byte = line_start;
+      for (const auto& glyph : Utf8ToGlyphs(line)) {
+        auto cell = text(glyph);
+        if (!glyph.empty() && byte == static_cast<size_t>(cursor_pos))
+          cell = input->Focused() ? focusCursorBarBlinking(std::move(cell))
+                                  : focus(std::move(cell));
+        glyphs.push_back(std::move(cell));
+        byte += glyph.size();
+      }
+      if (line.empty() || byte == static_cast<size_t>(cursor_pos)) {
+        auto cell = text(" ");
+        cell = input->Focused() ? focusCursorBarBlinking(std::move(cell))
+                                : focus(std::move(cell));
+        glyphs.push_back(std::move(cell));
+      }
+      rows.push_back(hflow(std::move(glyphs)));
+      if (line_end == draft.size()) break;
+      line_start = line_end + 1;
+    }
+
+    auto element = vbox(std::move(rows)) |
+                   size(WIDTH, LESS_THAN, std::max(1, terminal_width - 2)) |
+                   frame;
+    return input_transform({std::move(element), false, input->Focused(), false}) |
+           xflex;
+  });
+
+  auto layout = Container::Vertical({wrapped_input});
   auto view = Renderer(layout, [&] {
     Elements entries;
     for (const auto& block : blocks) {
@@ -1838,7 +1879,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
                     color(Color::CyanLight));
     stack.push_back(separatorLight() | dim);
     stack.push_back(hbox({text(busy ? "…" : "› ") | bold,
-                          input->Render() | xflex | size(HEIGHT, LESS_THAN, 8)}));
+                          wrapped_input->Render() | xflex |
+                              size(HEIGHT, LESS_THAN, 8)}));
     stack.push_back(hbox({
         text(usage.empty() ? "↑0  ↓0" : usage) | dim,
         filler(),

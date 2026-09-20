@@ -1274,10 +1274,10 @@ void bind_extensions(niminal::Agent& agent,
                      const std::shared_ptr<ExtensionRuntime>& runtime,
                      const fs::path& workspace,
                      std::function<void(const std::string&)> note,
-                     Session* session) {
+                     Session* session, const Config& cfg) {
   if (runtime) {
     const std::weak_ptr<ExtensionRuntime> weak_runtime = runtime;
-    runtime->set_host_request([&agent, session, weak_runtime](
+    runtime->set_host_request([&agent, session, weak_runtime, cfg](
                                   const std::string& method,
                                   const json& request) {
       if (method == "model.complete") {
@@ -1326,10 +1326,11 @@ void bind_extensions(niminal::Agent& agent,
       if (method == "context.usage") {
         if (!session) throw std::runtime_error("session is unavailable");
         const auto tokens = estimate_session_tokens(*session);
+        const auto limit = cfg.context_window > 0 ? cfg.context_window
+                                                  : kDefaultContextWindow;
         return json{{"tokens", tokens},
-                    {"limit", kDefaultContextWindow},
-                    {"percent",
-                     std::min(100, tokens * 100 / kDefaultContextWindow)}};
+                    {"limit", limit},
+                    {"percent", std::min(100, tokens * 100 / limit)}};
       }
       throw std::runtime_error("unknown host request: " + method);
     });

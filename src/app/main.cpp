@@ -537,7 +537,7 @@ int main(int argc, char** argv) {
                                 [](const std::string& warning) {
                                   std::cerr << warning << '\n';
                                 },
-                                &session);
+                                &session, cfg);
   niminal::app::bind_compaction(agent, session,
                                 [](const std::string& msg) {
                                   if (!msg.empty()) std::cerr << msg << '\n';

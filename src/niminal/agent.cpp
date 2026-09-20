@@ -8,6 +8,16 @@ namespace niminal {
 
 namespace {
 
+constexpr int kMaxEmptyResponses = 1;
+constexpr std::string_view kEmptyResponseFollowup =
+    "Your previous response ended after internal reasoning\n"
+    "without a user-facing answer. Continue now with the answer the user requested.\n"
+    "Do not stop after thinking; provide the plan or explanation in your final response.";
+
+bool blank(std::string_view text) {
+  return text.find_first_not_of(" \t\r\n") == std::string_view::npos;
+}
+
 json tools_payload(const std::vector<Tool>& tools) {
   json out = json::array();
   for (const auto& tool : tools) {
@@ -153,6 +163,8 @@ std::string Agent::run(const std::string& prompt) {
 
   try {
     bool overflow_retried = false;
+    int empty_responses = 0;
+    bool empty_response_followup_pending = false;
     for (step = 0; max_steps <= 0 || step < max_steps; ++step) {
       if (cancelled()) throw Cancelled();
       inject_steering();
@@ -161,6 +173,11 @@ std::string Agent::run(const std::string& prompt) {
       ChatRequest req;
       fill_chat(req);
       req.messages = request_messages();
+      if (empty_response_followup_pending) {
+        req.messages.push_back(
+            json{{"role", "user"}, {"content", kEmptyResponseFollowup}});
+        empty_response_followup_pending = false;
+      }
       if (augment_context) augment_context(req.messages);
       req.tools = tools_json;
       emit(StreamEvent{EventKind::step_start, {}, {}, {}});
@@ -195,6 +212,20 @@ std::string Agent::run(const std::string& prompt) {
         StreamEvent step_end{EventKind::step_end, {}, {}, {}};
         step_end.usage = result.usage;
         emit(std::move(step_end));
+        if (blank(result.text)) {
+          if (empty_responses < kMaxEmptyResponses) {
+            ++empty_responses;
+            emit(StreamEvent{EventKind::status,
+                             "The model returned no user-facing answer; asking it "
+                             "to finish…",
+                             {}, {}});
+            empty_response_followup_pending = true;
+            continue;
+          }
+          emit(StreamEvent{EventKind::error,
+                           "The model stopped without a user-facing answer.",
+                           {}, {}});
+        }
         if (inject_steering() > 0) continue;
         if (inject_follow_up() > 0) continue;
         finish_turn(false);

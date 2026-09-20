@@ -2,6 +2,8 @@
 
 #include <niminal/agent.hpp>
 
+#include "config.hpp"
+
 #include <atomic>
 #include <filesystem>
 #include <functional>
@@ -125,7 +127,8 @@ void bind_extensions(niminal::Agent& agent,
                      const std::shared_ptr<ExtensionRuntime>& runtime,
                      const std::filesystem::path& workspace,
                      std::function<void(const std::string&)> note = {},
-                     Session* session = nullptr);
+                     Session* session = nullptr,
+                     const Config& cfg = {});
 void install_extension_tools(
     niminal::Agent& agent,
     const std::shared_ptr<ExtensionRuntime>& runtime,
