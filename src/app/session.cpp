@@ -48,6 +48,84 @@ json text_block(const std::string& text) {
   return json{{"type", "text"}, {"text", text}};
 }
 
+std::string event_text(const json& event) {
+  std::string text;
+  if (event.contains("content") && event["content"].is_array()) {
+    for (const auto& part : event["content"]) {
+      if (part.is_object() && part.value("type", "") == "text")
+        text += part.value("text", "");
+    }
+  }
+  return text;
+}
+
+std::string lower_copy(std::string s) {
+  for (char& c : s)
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  return s;
+}
+
+bool session_matches(const Session& session, const std::string& query) {
+  auto needle = lower_copy(query);
+  if (needle.empty()) return true;
+  std::string haystack = lower_copy(session.name) + '\n' +
+                         lower_copy(session.workspace) + '\n' + session.id;
+  for (const auto& event : session.events) {
+    if (!event.is_object()) continue;
+    auto type = event.value("type", "");
+    if (type == "user" || type == "assistant")
+      haystack += '\n' + lower_copy(event_text(event));
+    else if (type == "tool_result")
+      haystack += '\n' + lower_copy(event.value("output", ""));
+    else if (type == "compaction")
+      haystack += '\n' + lower_copy(event.value("summary", ""));
+  }
+  return haystack.find(needle) != std::string::npos;
+}
+
+fs::path trash_dir(const fs::path& dir) { return dir / ".trash"; }
+
+std::vector<SessionInfo> collect_sessions(const fs::path& dir,
+                                          const std::string& workspace,
+                                          int limit, const std::string& query,
+                                          bool deleted) {
+  std::vector<SessionInfo> all;
+  std::error_code ec;
+  if (!fs::exists(dir, ec)) return {};
+  for (const auto& entry : fs::directory_iterator(dir, ec)) {
+    if (!entry.is_regular_file()) continue;
+    auto name = entry.path().filename().string();
+    if (name.size() < 6 || !name.ends_with(".jsonl")) continue;
+    auto id = name.substr(0, name.size() - 6);
+    if (!valid_session_id(id)) continue;
+    try {
+      auto s = load_session(dir, id);
+      if (!workspace.empty() && s.workspace != workspace) continue;
+      if (!session_matches(s, query)) continue;
+      SessionInfo info;
+      info.id = id;
+      info.name = s.name;
+      info.workspace = s.workspace;
+      info.mtime = entry.last_write_time();
+      info.deleted = deleted;
+      for (const auto& event : s.events) {
+        auto text = first_user_text(event);
+        if (!text.empty()) {
+          info.preview = clip_line(text);
+          break;
+        }
+      }
+      all.push_back(std::move(info));
+    } catch (...) {
+    }
+  }
+  std::sort(all.begin(), all.end(), [](const SessionInfo& a, const SessionInfo& b) {
+    return a.mtime > b.mtime;
+  });
+  if (static_cast<int>(all.size()) > limit) all.resize(static_cast<size_t>(limit));
+  return all;
+}
+
 }  // namespace
 
 bool valid_session_id(std::string_view id) {
@@ -102,8 +180,11 @@ void Session::append(const json& event) {
   if (!out) throw std::runtime_error("cannot write session " + path);
   if (needs_newline_) out << '\n';
   bool empty = !fs::exists(path) || fs::file_size(path) == 0;
-  if (empty && !workspace.empty())
-    out << json{{"type", "session"}, {"workspace", workspace}}.dump() << '\n';
+  if (empty && !workspace.empty()) {
+    json header = {{"type", "session"}, {"workspace", workspace}};
+    if (!parent.empty()) header["parent"] = parent;
+    out << header.dump() << '\n';
+  }
   out << event.dump() << '\n';
   out.flush();
   out.close();
@@ -205,6 +286,59 @@ int Session::latest_compaction_index() const {
       return i;
   }
   return -1;
+}
+
+Session Session::fork(const fs::path& dir, int upto) const {
+  Session copy;
+  copy.id = new_session_id();
+  copy.workspace = workspace;
+  copy.parent = id;
+  copy.name = name;
+  copy.persist = persist;
+  if (copy.persist) copy.path = (dir / (copy.id + ".jsonl")).string();
+  size_t end = upto < 0 || static_cast<size_t>(upto) > events.size()
+                   ? events.size()
+                   : static_cast<size_t>(upto);
+  for (size_t i = 0; i < end; ++i) copy.append(events[i]);
+  return copy;
+}
+
+std::string Session::export_text(std::string_view format) const {
+  if (format == "json") {
+    json out = {{"id", id}, {"workspace", workspace}, {"name", name}};
+    if (!parent.empty()) out["parent"] = parent;
+    out["events"] = events;
+    return out.dump(2) + "\n";
+  }
+  std::ostringstream out;
+  out << "# " << (name.empty() ? "Session " + id : name) << "\n\n";
+  out << "- id: " << id << '\n';
+  if (!workspace.empty()) out << "- workspace: " << workspace << '\n';
+  if (!parent.empty()) out << "- forked from: " << parent << '\n';
+  out << '\n';
+  for (const auto& event : events) {
+    if (!event.is_object()) continue;
+    auto type = event.value("type", "");
+    if (type == "user") {
+      out << "## User\n\n" << event_text(event) << "\n\n";
+    } else if (type == "assistant") {
+      auto text = event_text(event);
+      if (!text.empty()) out << "## Assistant\n\n" << text << "\n\n";
+      if (event.contains("content") && event["content"].is_array()) {
+        for (const auto& part : event["content"]) {
+          if (!part.is_object() || part.value("type", "") != "tool_use") continue;
+          out << "> **tool call** `" << part.value("name", "") << "` "
+              << part.value("input", json::object()).dump() << "\n\n";
+        }
+      }
+    } else if (type == "tool_result") {
+      out << "### Tool result" << (event.value("is_error", false) ? " (error)" : "")
+          << "\n\n```\n" << event.value("output", "") << "\n```\n\n";
+    } else if (type == "compaction") {
+      out << "## Compaction\n\n" << event.value("summary", "") << "\n\n";
+    }
+  }
+  return out.str();
 }
 
 int Session::recover_interrupted_tools() {
@@ -347,6 +481,7 @@ std::string Session::describe() const {
   out << "Events: " << events.size() << '\n';
   out << "File: " << (path.empty() ? "(memory)" : path) << '\n';
   out << "Workspace: " << workspace << '\n';
+  if (!parent.empty()) out << "Forked from: " << parent << '\n';
   return out.str();
 }
 
@@ -386,6 +521,7 @@ Session load_session(const fs::path& dir, const std::string& id) {
       auto node = json::parse(line);
       if (first && node.value("type", "") == "session") {
         s.workspace = node.value("workspace", "");
+        s.parent = node.value("parent", "");
         first = false;
         prefix += kept;
         continue;
@@ -405,39 +541,38 @@ Session load_session(const fs::path& dir, const std::string& id) {
 
 std::vector<SessionInfo> list_sessions(const fs::path& dir,
                                        const std::string& workspace, int limit) {
-  std::vector<SessionInfo> all;
+  return collect_sessions(dir, workspace, limit, {}, false);
+}
+
+std::vector<SessionInfo> search_sessions(const fs::path& dir,
+                                         const std::string& workspace,
+                                         const std::string& query, int limit) {
+  return collect_sessions(dir, workspace, limit, query, false);
+}
+
+std::vector<SessionInfo> list_deleted_sessions(const fs::path& dir) {
+  return collect_sessions(trash_dir(dir), {}, 20, {}, true);
+}
+
+bool delete_session(const fs::path& dir, const std::string& id) {
+  if (!valid_session_id(id)) return false;
   std::error_code ec;
-  if (!fs::exists(dir, ec)) return {};
-  for (const auto& entry : fs::directory_iterator(dir, ec)) {
-    if (!entry.is_regular_file()) continue;
-    auto name = entry.path().filename().string();
-    if (name.size() < 6 || !name.ends_with(".jsonl")) continue;
-    auto id = name.substr(0, name.size() - 6);
-    if (!valid_session_id(id)) continue;
-    try {
-      auto s = load_session(dir, id);
-      if (!workspace.empty() && s.workspace != workspace) continue;
-      SessionInfo info;
-      info.id = id;
-      info.name = s.name;
-      info.workspace = s.workspace;
-      info.mtime = entry.last_write_time();
-      for (const auto& event : s.events) {
-        auto text = first_user_text(event);
-        if (!text.empty()) {
-          info.preview = clip_line(text);
-          break;
-        }
-      }
-      all.push_back(std::move(info));
-    } catch (...) {
-    }
-  }
-  std::sort(all.begin(), all.end(), [](const SessionInfo& a, const SessionInfo& b) {
-    return a.mtime > b.mtime;
-  });
-  if (static_cast<int>(all.size()) > limit) all.resize(static_cast<size_t>(limit));
-  return all;
+  auto src = dir / (id + ".jsonl");
+  if (!fs::exists(src, ec)) return false;
+  fs::create_directories(trash_dir(dir), ec);
+  fs::rename(src, trash_dir(dir) / (id + ".jsonl"), ec);
+  return !ec;
+}
+
+bool restore_session(const fs::path& dir, const std::string& id) {
+  if (!valid_session_id(id)) return false;
+  std::error_code ec;
+  auto src = trash_dir(dir) / (id + ".jsonl");
+  if (!fs::exists(src, ec)) return false;
+  auto dest = dir / (id + ".jsonl");
+  if (fs::exists(dest, ec)) return false;
+  fs::rename(src, dest, ec);
+  return !ec;
 }
 
 std::string relative_age(fs::file_time_type mtime) {
@@ -456,10 +591,11 @@ std::string relative_age(fs::file_time_type mtime) {
 }
 
 std::string format_session_list(const std::vector<SessionInfo>& infos,
-                                const std::string& current_id) {
-  if (infos.empty()) return "No sessions for this workspace.";
+                                const std::string& current_id,
+                                std::string_view heading) {
+  if (infos.empty()) return "No sessions.";
   std::ostringstream out;
-  out << "Sessions (newest first):\n";
+  out << heading << ":\n";
   for (const auto& info : infos) {
     auto label = !info.name.empty() ? info.name
                                     : (!info.preview.empty() ? info.preview : "(empty)");

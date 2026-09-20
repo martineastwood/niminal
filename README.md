@@ -120,8 +120,9 @@ the first message creates an append-only JSONL file under
 - Esc interrupts a running turn, or clears the composer when idle
 - Ctrl-C quits
 - `/help`, `/provider`, `/model`, `/thinking`, `/permissions`, `/trust`, `/yolo`,
-  `/models refresh`, `/session`, `/name`, `/resume`, `/new`, `/clear`, `/copy`,
-  `/compact`, `/reload`, `/skill:NAME`, `/NAME`, `/quit`
+  `/models refresh`, `/session`, `/name`, `/resume`, `/search`, `/fork`,
+  `/export`, `/delete`, `/restore`, `/new`, `/clear`, `/copy`, `/compact`,
+  `/reload`, `/skill:NAME`, `/NAME`, `/quit`
 
 - Tab completes a slash command. Up/Down moves through the list. Type `/model `
   to pick from the models.dev catalog for the active provider (filter from two
@@ -290,7 +291,13 @@ the current workspace. `/resume ID` loads one, including sessions started
 somewhere else (those show a workspace warning). `/new` starts a fresh file;
 the old one stays on disk. `/clear` does the same. `--no-session` keeps the
 transcript in memory only, and cannot be combined with `--resume` or
-`--session`.
+`--session`. `/search TEXT` matches text across this workspace's sessions.
+
+`/fork [title]` copies the current session into a new file (recorded as its
+parent) and switches to it. `/export [PATH]` writes the session as Markdown, or
+as JSON when the path ends in `.json`; the default is `<id>.md` in the
+workspace. `/delete ID` moves a session to `~/.niminal/sessions/.trash`, and
+`/restore` lists what is there while `/restore ID` brings one back.
 
 Resuming restores the provider and model that session last used. It does not
 change your saved defaults. Interrupted tool calls are recorded as errors on load

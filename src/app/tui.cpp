@@ -53,6 +53,7 @@ enum class BlockKind {
   diff,
   error,
   status,
+  approval,
 };
 
 struct Block {
@@ -110,10 +111,11 @@ Element render_diff_card(const Block& block) {
       row |= dim;
     lines.push_back(std::move(row));
   }
-  return vbox({hbox({text(block.created ? "created " : "updated ") | bold,
-                      text(block.path)}),
-               separatorLight(), vbox(std::move(lines))}) |
-         border | color(Color::GrayLight);
+  auto badge = text(block.created ? "created" : "updated") | bold |
+               color(block.created ? Color::GreenLight : Color::CyanLight);
+  return vbox({hbox({badge, text("  " + block.path) | bold}),
+               separatorLight() | dim, vbox(std::move(lines))}) |
+         border | dim;
 }
 
 std::string clip_text(std::string text, size_t max_chars, int max_lines) {
@@ -181,17 +183,19 @@ std::string tool_summary(const std::string& name, const std::string& args) {
 Decorator block_style(BlockKind kind) {
   switch (kind) {
     case BlockKind::user:
-      return color(Color::Cyan);
+      return color(Color::CyanLight);
     case BlockKind::tool:
-      return color(Color::YellowLight) | dim;
+      return color(Color::Yellow);
     case BlockKind::thinking:
-      return dim;
+      return color(Color::RGB(148, 103, 189)) | dim;
     case BlockKind::diff:
       return color(Color::GrayLight);
     case BlockKind::error:
       return color(Color::Red);
     case BlockKind::status:
-      return dim;
+      return color(Color::GrayLight);
+    case BlockKind::approval:
+      return color(Color::YellowLight);
     case BlockKind::assistant:
       return Decorator([](Element e) { return e; });
   }
@@ -205,14 +209,16 @@ const char* block_label(BlockKind kind) {
     case BlockKind::assistant:
       return "niminal";
     case BlockKind::tool:
-      return "tool";
+      return "";
     case BlockKind::thinking:
-      return "thinking";
+      return "";
     case BlockKind::diff:
       return "";
     case BlockKind::error:
       return "error";
     case BlockKind::status:
+      return "";
+    case BlockKind::approval:
       return "";
   }
   return "";
@@ -285,6 +291,11 @@ constexpr SlashSpec kSlash[] = {
     {"/session", "/session", "show the current session"},
     {"/name", "/name [title]", "show or set the session name"},
     {"/resume", "/resume [ID]", "list or load a session"},
+    {"/search", "/search TEXT", "search sessions for text"},
+    {"/fork", "/fork [title]", "copy this session into a new one"},
+    {"/export", "/export [PATH]", "write this session as Markdown or JSON"},
+    {"/delete", "/delete ID", "move a session to the trash"},
+    {"/restore", "/restore [ID]", "list or restore a deleted session"},
     {"/new", "/new", "start a new session"},
     {"/clear", "/clear", "same as /new"},
     {"/copy", "/copy", "copy the last error or reply"},
@@ -320,6 +331,16 @@ std::string lower_copy(std::string s) {
 bool contains_ci(std::string_view s, std::string_view p) {
   return lower_copy(std::string(s)).find(lower_copy(std::string(p))) !=
          std::string::npos;
+}
+
+std::string session_title(const SessionInfo& info) {
+  return !info.name.empty() ? info.name
+                            : (!info.preview.empty() ? info.preview : "(empty)");
+}
+
+bool session_matches_info(const SessionInfo& info, const std::string& query) {
+  return contains_ci(info.id, query) || contains_ci(info.name, query) ||
+         contains_ci(info.preview, query);
 }
 
 void add_unique(std::vector<std::string>& ids, const std::string& id) {
@@ -403,14 +424,21 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
     std::vector<Suggestion> out;
     try {
       for (const auto& info : list_sessions(dir, workspace)) {
-        if (!arg.empty() && info.id.find(arg) == std::string::npos &&
-            info.name.find(arg) == std::string::npos &&
-            info.preview.find(arg) == std::string::npos)
-          continue;
-        auto title = !info.name.empty()
-                         ? info.name
-                         : (!info.preview.empty() ? info.preview : "(empty)");
-        out.push_back({"/resume " + info.id, info.id + "  " + title});
+        if (!arg.empty() && !session_matches_info(info, arg)) continue;
+        out.push_back({"/resume " + info.id, info.id + "  " + session_title(info)});
+        if (out.size() == 8) break;
+      }
+    } catch (...) {
+    }
+    if (!out.empty()) return out;
+  }
+
+  if (cmd == "/restore" && (trailing || !arg.empty())) {
+    std::vector<Suggestion> out;
+    try {
+      for (const auto& info : list_deleted_sessions(dir)) {
+        if (!arg.empty() && !session_matches_info(info, arg)) continue;
+        out.push_back({"/restore " + info.id, info.id + "  " + session_title(info)});
         if (out.size() == 8) break;
       }
     } catch (...) {
@@ -567,6 +595,12 @@ const char* kHelp = R"(/help              this list
 /name [title]      show or set the session name
 /resume            list recent sessions for this workspace
 /resume ID         load a session
+/search TEXT       search this workspace's sessions for text
+/fork [title]      copy this session into a new session
+/export [PATH]     write this session as Markdown, or JSON with a .json path
+/delete ID         move a session to ~/.niminal/sessions/.trash
+/restore           list deleted sessions
+/restore ID        bring a deleted session back
 /new               start a new session (old file stays)
 /clear             same as /new
 /copy              copy the last error or assistant reply
@@ -878,10 +912,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         break;
       case EventKind::approval_required:
         blocks.push_back(Block{
-            BlockKind::status,
-            "● " + ev.tool_name + "\n│ Allow " + ev.tool_name +
+            BlockKind::approval,
+            ev.tool_name + "\n  Allow " + ev.tool_name +
                 (ev.text.empty() ? std::string() : ": " + ev.text) +
-                "\n│ [enter] once  [s] session" +
+                "\n  [enter] once  [s] session" +
                 (ev.can_remember ? "  [p] project" : "") +
                 "  [n] deny"});
         activity = "Approval needed";
@@ -1595,17 +1629,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       if (cmd == "/resume") {
         auto dir = default_session_dir();
         if (arg.empty() || !valid_session_id(arg)) {
-          auto infos = list_sessions(dir, cwd.string());
-          if (!arg.empty()) {
-            std::vector<SessionInfo> filtered;
-            for (const auto& info : infos) {
-              if (info.id.find(arg) != std::string::npos ||
-                  info.name.find(arg) != std::string::npos ||
-                  info.preview.find(arg) != std::string::npos)
-                filtered.push_back(info);
-            }
-            infos = std::move(filtered);
-          }
+          auto infos = search_sessions(dir, cwd.string(), arg);
           blocks.push_back(
               Block{BlockKind::status, format_session_list(infos, session.id)});
           return;
@@ -1616,6 +1640,77 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           adopt_session(std::move(next), "Resumed " + arg);
         } catch (const std::exception& e) {
           blocks.push_back(Block{BlockKind::error, e.what()});
+        }
+        return;
+      }
+      if (cmd == "/search") {
+        if (arg.empty()) {
+          blocks.push_back(Block{BlockKind::error, "Usage: /search TEXT"});
+          return;
+        }
+        auto infos = search_sessions(default_session_dir(), cwd.string(), arg);
+        blocks.push_back(Block{
+            BlockKind::status,
+            format_session_list(infos, session.id, "Matches for " + arg)});
+        return;
+      }
+      if (cmd == "/fork") {
+        try {
+          auto next = session.fork(default_session_dir());
+          if (!arg.empty()) next.add_name(arg);
+          auto id = next.id;
+          adopt_session(std::move(next), "Forked " + id);
+        } catch (const std::exception& e) {
+          blocks.push_back(Block{BlockKind::error, e.what()});
+        }
+        return;
+      }
+      if (cmd == "/export") {
+        auto path = arg.empty() ? cwd / (session.id + ".md")
+                                : std::filesystem::path(arg);
+        try {
+          if (path.has_parent_path())
+            std::filesystem::create_directories(path.parent_path());
+          std::ofstream out(path, std::ios::binary | std::ios::trunc);
+          if (!out) throw std::runtime_error("cannot write " + path.string());
+          out << session.export_text(path.extension() == ".json" ? "json" : "md");
+          blocks.push_back(Block{
+              BlockKind::status,
+              "Exported " + std::to_string(session.events.size()) + " events to " +
+                  path.string()});
+        } catch (const std::exception& e) {
+          blocks.push_back(Block{BlockKind::error, e.what()});
+        }
+        return;
+      }
+      if (cmd == "/delete") {
+        if (arg.empty()) {
+          blocks.push_back(Block{BlockKind::error,
+                                 "Usage: /delete ID  ·  /restore lists deleted sessions"});
+        } else if (arg == session.id) {
+          blocks.push_back(
+              Block{BlockKind::error, "Cannot delete the current session."});
+        } else if (delete_session(default_session_dir(), arg)) {
+          blocks.push_back(Block{BlockKind::status,
+                                 "Deleted " + arg + "  ·  /restore " + arg +
+                                     " brings it back"});
+        } else {
+          blocks.push_back(Block{BlockKind::error, "No session " + arg});
+        }
+        return;
+      }
+      if (cmd == "/restore") {
+        auto dir = default_session_dir();
+        if (arg.empty() || !valid_session_id(arg)) {
+          auto infos = list_deleted_sessions(dir);
+          blocks.push_back(Block{
+              BlockKind::status,
+              format_session_list(infos, session.id, "Deleted sessions (newest first)")});
+        } else if (restore_session(dir, arg)) {
+          blocks.push_back(Block{BlockKind::status,
+                                 "Restored " + arg + "  ·  /resume " + arg});
+        } else {
+          blocks.push_back(Block{BlockKind::error, "No deleted session " + arg});
         }
         return;
       }

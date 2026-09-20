@@ -7,8 +7,13 @@
 
 namespace fs = std::filesystem;
 using niminal::app::create_session;
+using niminal::app::delete_session;
+using niminal::app::format_session_list;
+using niminal::app::list_deleted_sessions;
 using niminal::app::list_sessions;
 using niminal::app::load_session;
+using niminal::app::restore_session;
+using niminal::app::search_sessions;
 using niminal::app::valid_session_id;
 using json = nlohmann::json;
 
@@ -174,6 +179,48 @@ int main() {
   mem.add_user("ephemeral");
   if (!mem.events.empty() && fs::exists(dir / (mem.id + ".jsonl")))
     return fail("no-session must not write");
+
+  auto forked = s.fork(dir);
+  if (forked.id == s.id || forked.parent != s.id) return fail("fork lineage");
+  if (forked.events.size() != s.events.size()) return fail("fork copies events");
+  if (load_session(dir, forked.id).parent != s.id) return fail("fork parent persists");
+  if (s.fork(dir, 2).events.size() != 2) return fail("fork keeps a prefix");
+
+  auto markdown = forked.export_text("md");
+  if (markdown.find("# fix the parser") == std::string::npos ||
+      markdown.find("why is the parser test failing?") == std::string::npos ||
+      markdown.find("forked from: " + s.id) == std::string::npos)
+    return fail("export markdown");
+  auto exported = json::parse(forked.export_text("json"));
+  if (exported.value("id", "") != forked.id ||
+      exported.value("parent", "") != s.id ||
+      exported["events"].size() != forked.events.size())
+    return fail("export json");
+
+  auto hits = search_sessions(dir, "/tmp/ws-a", "running tests", 20);
+  bool found = false;
+  for (const auto& info : hits)
+    if (info.id == s.id) found = true;
+  if (!found) return fail("search finds assistant text");
+  if (!search_sessions(dir, "/tmp/ws-a", "zzz-no-match", 20).empty())
+    return fail("search misses");
+  if (format_session_list(hits, s.id).find(s.id) == std::string::npos)
+    return fail("format_session_list");
+
+  if (!delete_session(dir, other.id)) return fail("delete");
+  if (fs::exists(dir / (other.id + ".jsonl"))) return fail("delete removes file");
+  if (!fs::exists(dir / ".trash" / (other.id + ".jsonl")))
+    return fail("delete moves to trash");
+  for (const auto& info : list_sessions(dir, "/tmp/ws-b", 20))
+    if (info.id == other.id) return fail("deleted session hidden from list");
+  bool trashed = false;
+  for (const auto& info : list_deleted_sessions(dir))
+    if (info.id == other.id && info.deleted) trashed = true;
+  if (!trashed) return fail("list_deleted_sessions");
+  if (!restore_session(dir, other.id)) return fail("restore");
+  if (!fs::exists(dir / (other.id + ".jsonl"))) return fail("restore returns file");
+  if (restore_session(dir, other.id)) return fail("restore twice fails");
+  if (delete_session(dir, "../evil")) return fail("delete rejects bad id");
 
   fs::remove_all(dir);
   return 0;
