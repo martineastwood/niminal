@@ -252,6 +252,7 @@ target_compile_options(niminal_extensions_test PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(niminal_diff_test tests/diff_test.cpp src/app/diff.cpp)
 target_include_directories(niminal_diff_test PRIVATE src/app)
+target_link_libraries(niminal_diff_test PRIVATE nlohmann_json::nlohmann_json)
 target_compile_options(niminal_diff_test PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(niminal_theme_test tests/theme_test.cpp src/app/theme.cpp)

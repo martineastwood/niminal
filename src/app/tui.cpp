@@ -63,6 +63,8 @@ struct Block {
   std::string text;
   std::string path;
   bool created = false;
+  std::string tool_name;
+  std::string tool_id;
 
   Block() = default;
   Block(BlockKind kind, std::string text)
@@ -72,6 +74,13 @@ struct Block {
         text(std::move(text)),
         path(std::move(path)),
         created(created) {}
+  Block(BlockKind kind, std::string text, std::string path, bool created,
+        std::string tool_name)
+      : kind(kind),
+        text(std::move(text)),
+        path(std::move(path)),
+        created(created),
+        tool_name(std::move(tool_name)) {}
 };
 
 struct PendingFileChange {
@@ -79,6 +88,8 @@ struct PendingFileChange {
   std::string relative;
   bool before_exists = false;
   std::string before;
+  std::string tool_name;
+  json input;
 };
 
 std::optional<std::string> read_text_file(const std::filesystem::path& path) {
@@ -99,24 +110,19 @@ Element render_diff_card(const Block& block, const Theme& theme) {
   Elements lines;
   std::istringstream in(block.text);
   std::string line;
-  bool skip_header = true;
   while (std::getline(in, line)) {
-    if (skip_header) { skip_header = false; continue; }  // skip @@ marker
-    Element row = text(line.empty() ? " " : line);
+    Element row = text("│   " + line);
     if (!line.empty() && line.front() == '+')
       row = row | color(theme.add);
     else if (!line.empty() && line.front() == '-')
       row = row | color(theme.del);
-    else if (!line.empty() && line.front() == '!')
-      row = row | color(theme.meta);
     else
       row = row | dim;
     lines.push_back(std::move(row));
   }
-  auto badge_color = block.created ? theme.add : theme.accent;
-  auto badge = text(block.created ? "created" : "updated") | bold | color(badge_color);
-  return vbox({hbox({badge, text("  " + block.path) | bold | dim}),
-               separatorLight() | dim, vbox(std::move(lines))});
+  auto badge = text("│ ✓ " + block.tool_name) | bold | color(theme.add);
+  return vbox({badge, text("│   " + block.path) | dim,
+               vbox(std::move(lines))});
 }
 
 std::string clip_text(std::string text, size_t max_chars, int max_lines) {
@@ -921,8 +927,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       case EventKind::tool_output_delta:
         break;
       case EventKind::tool_call:
-        blocks.push_back(
-            Block{BlockKind::tool, tool_summary(ev.tool_name, ev.text)});
+        {
+          Block tool{BlockKind::tool, tool_summary(ev.tool_name, ev.text)};
+          tool.tool_name = ev.tool_name;
+          tool.tool_id = ev.tool_id;
+          blocks.push_back(std::move(tool));
+        }
         activity = ev.tool_name.empty() ? "Waiting for model…"
                                         : "Running " + ev.tool_name + "…";
         break;
@@ -953,14 +963,30 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
                 std::filesystem::is_regular_file(pending->path, ec);
             auto after = after_exists ? read_text_file(pending->path)
                                       : std::optional<std::string>{};
-            if (!after_exists || after) {
-              auto diff = make_file_diff(
-                  pending->before_exists, pending->before, after_exists,
-                  after.value_or(std::string()));
-              if (diff.changed)
-                blocks.push_back(Block{BlockKind::diff, std::move(diff.body),
-                                       std::move(pending->relative),
-                                       diff.created});
+            if (after_exists && after) {
+              auto diff = make_tool_diff(
+                  pending->tool_name, pending->input,
+                  !pending->before_exists && after_exists, ev.text);
+              if (diff.changed) {
+                const bool created = diff.created;
+                auto body = std::move(diff.body);
+                auto tool = std::find_if(
+                    blocks.rbegin(), blocks.rend(), [&](const Block& block) {
+                      return block.kind == BlockKind::tool &&
+                             block.tool_id == ev.tool_id;
+                    });
+                if (tool != blocks.rend()) {
+                  tool->kind = BlockKind::diff;
+                  tool->text = std::move(body);
+                  tool->path = std::move(pending->relative);
+                  tool->created = created;
+                  tool->tool_name = std::move(pending->tool_name);
+                } else {
+                  blocks.push_back(Block{BlockKind::diff, std::move(body),
+                                         std::move(pending->relative), created,
+                                         std::move(pending->tool_name)});
+                }
+              }
             }
           }
         }
@@ -1014,7 +1040,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
             std::lock_guard lock(file_changes_mu);
             file_changes[ev.tool_id] = PendingFileChange{
                 std::move(path), std::move(relative), before_exists,
-                before.value_or(std::string())};
+                before.value_or(std::string()), ev.tool_name, ev.input};
           }
         }
       } catch (...) {
