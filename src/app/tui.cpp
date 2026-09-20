@@ -267,6 +267,13 @@ std::vector<Suggestion> suggest_models(const std::string& query,
     out.push_back({"/model " + id, std::move(label)});
   };
   auto q = lower_copy(query);
+  if (static_cast<int>(q.size()) >= kMin) {
+    auto catalog = search_catalog(provider, query, kCap);
+    if (!catalog.empty()) {
+      for (const auto& row : catalog) add(row.id, row.context);
+      return out;
+    }
+  }
   for (const auto& id : recents) {
     if (!q.empty() && !contains_ci(id, q)) continue;
     add(id, 0);

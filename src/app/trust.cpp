@@ -134,6 +134,10 @@ std::vector<fs::path> project_trust_resources(const fs::path& workspace) {
                            std::string(".agents/prompts"),
                            std::string(".niminal/prompts")})
     add_markdown_files(result, root, path);
+  for (const auto& path : {std::string(".agent/tools"),
+                           std::string(".agents/tools"),
+                           std::string(".niminal/tools")})
+    add_manifests(result, root, path, "tool.json");
   add_manifests(result, root, ".agents/extensions", "extension.json");
   add_manifests(result, root, ".niminal/extensions", "extension.json");
   return result;

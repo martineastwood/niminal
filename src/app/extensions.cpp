@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <poll.h>
@@ -30,6 +31,8 @@ namespace {
 
 constexpr int kDefaultTimeoutMs = 30'000;
 constexpr size_t kMaxLineBytes = 1'000'000;
+constexpr int kDefaultExternalTimeoutSeconds = 30;
+constexpr size_t kMaxExternalOutputBytes = 100'000;
 
 std::string string_field(const json& value, const char* key) {
   auto it = value.find(key);
@@ -87,11 +90,110 @@ std::vector<fs::path> extension_dirs(const fs::path& workspace) {
   return result;
 }
 
+std::vector<fs::path> external_tool_dirs(const fs::path& workspace) {
+  std::vector<fs::path> bases;
+  try {
+    bases.push_back(config_path().parent_path() / "tools");
+  } catch (...) {
+  }
+  if (project_resources_trusted(workspace)) {
+    bases.push_back(workspace / ".agent" / "tools");
+    bases.push_back(workspace / ".agents" / "tools");
+    bases.push_back(workspace / ".niminal" / "tools");
+  }
+  std::vector<fs::path> result;
+  std::error_code ec;
+  for (const auto& base : bases) {
+    if (!fs::is_directory(base, ec)) continue;
+    std::vector<fs::path> found;
+    for (const auto& entry : fs::directory_iterator(base, ec))
+      if (entry.is_directory(ec) &&
+          fs::is_regular_file(entry.path() / "tool.json", ec))
+        found.push_back(entry.path());
+    std::sort(found.begin(), found.end());
+    result.insert(result.end(), found.begin(), found.end());
+  }
+  return result;
+}
+
 struct Manifest {
   std::string name;
   std::vector<std::string> command;
   int timeout_ms = kDefaultTimeoutMs;
 };
+
+struct ExternalTool {
+  std::string name;
+  std::string description;
+  std::vector<std::string> command;
+  int timeout_seconds = kDefaultExternalTimeoutSeconds;
+  json schema;
+  fs::path dir;
+  bool read_only = false;
+};
+
+bool external_read_only_capabilities(const json& doc) {
+  auto it = doc.find("capabilities");
+  if (it == doc.end() || it->is_null()) return false;
+  if (!it->is_array()) throw std::runtime_error("capabilities must be an array");
+  bool any = false;
+  bool read_only = true;
+  for (const auto& item : *it) {
+    if (!item.is_string())
+      throw std::runtime_error("capabilities must contain strings");
+    const auto value = lower_copy(item.get<std::string>());
+    if (value != "read" && value != "write" && value != "shell" &&
+        value != "network" && value != "user")
+      throw std::runtime_error("unknown capability: " + value);
+    any = true;
+    read_only = read_only && value == "read";
+  }
+  return any && read_only;
+}
+
+ExternalTool parse_external_manifest(const fs::path& path) {
+  std::ifstream in(path);
+  if (!in) throw std::runtime_error("cannot read manifest");
+  json doc;
+  try {
+    in >> doc;
+  } catch (const std::exception& e) {
+    throw std::runtime_error("invalid JSON: " + std::string(e.what()));
+  }
+  if (!doc.is_object()) throw std::runtime_error("manifest must be an object");
+
+  ExternalTool out;
+  out.name = string_field(doc, "name");
+  out.description = string_field(doc, "description");
+  if (out.name.empty()) throw std::runtime_error("missing name");
+  if (out.description.empty()) throw std::runtime_error("missing description");
+
+  auto command = doc.find("command");
+  if (command == doc.end() || !command->is_array() || command->empty())
+    throw std::runtime_error("command must be a nonempty array");
+  for (const auto& item : *command) {
+    if (!item.is_string() || item.get<std::string>().empty())
+      throw std::runtime_error("command entries must be nonempty strings");
+    out.command.push_back(item.get<std::string>());
+  }
+
+  auto schema = doc.find("input_schema");
+  if (schema == doc.end() || !schema->is_object())
+    throw std::runtime_error("input_schema must be a JSON object");
+  out.schema = *schema;
+
+  if (auto timeout = doc.find("timeout_seconds"); timeout != doc.end()) {
+    if (!timeout->is_number_integer())
+      throw std::runtime_error("timeout_seconds must be an integer");
+    const auto seconds = timeout->get<long long>();
+    if (seconds < 1 || seconds > std::numeric_limits<int>::max())
+      throw std::runtime_error("timeout_seconds must be positive");
+    out.timeout_seconds = static_cast<int>(seconds);
+  }
+  out.read_only = external_read_only_capabilities(doc);
+  out.dir = path.parent_path();
+  return out;
+}
 
 Manifest parse_manifest(const fs::path& path) {
   std::ifstream in(path);
@@ -281,6 +383,161 @@ class Process {
   std::string buffer_;
 };
 
+std::string read_external_output(const fs::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return {};
+  std::ostringstream out;
+  out << in.rdbuf();
+  auto value = out.str();
+  if (value.size() > kMaxExternalOutputBytes) {
+    value.resize(kMaxExternalOutputBytes);
+    value += "\n[truncated]";
+  }
+  return value;
+}
+
+fs::path external_executable(const ExternalTool& tool) {
+  const fs::path command(tool.command.front());
+  return command.is_absolute() ? command : (tool.dir / command).lexically_normal();
+}
+
+std::string external_failure(std::string message, const std::string& stdout_text,
+                             const std::string& stderr_text) {
+  if (stdout_text.empty() && !stderr_text.empty())
+    message += "\n\nstderr:\n" + stderr_text;
+  else if (!stdout_text.empty())
+    message += "\n\n" + stdout_text;
+  return "tool error: " + message;
+}
+
+std::string run_external_tool(const ExternalTool& tool, const json& input,
+                              const fs::path& workspace,
+                              std::atomic<bool>* cancel) {
+  const auto executable = external_executable(tool);
+  std::error_code ec;
+  if (!fs::is_regular_file(executable, ec))
+    return "tool error: extension executable not found: " + executable.string();
+
+  const auto stamp = std::to_string(getpid()) + "-" +
+                     std::to_string(std::chrono::steady_clock::now()
+                                        .time_since_epoch()
+                                        .count());
+  const auto temp = fs::temp_directory_path();
+  const auto input_path = temp / ("niminal-tool-" + stamp + ".in");
+  const auto stdout_path = temp / ("niminal-tool-" + stamp + ".out");
+  const auto stderr_path = temp / ("niminal-tool-" + stamp + ".err");
+  auto cleanup = [&] {
+    fs::remove(input_path, ec);
+    fs::remove(stdout_path, ec);
+    fs::remove(stderr_path, ec);
+  };
+
+  try {
+    std::ofstream input_file(input_path, std::ios::binary | std::ios::trunc);
+    if (!input_file) throw std::runtime_error("cannot create tool input");
+    input_file << (input.is_null() ? json::object() : input).dump();
+    input_file.close();
+    std::ofstream(stdout_path, std::ios::binary | std::ios::trunc).close();
+    std::ofstream(stderr_path, std::ios::binary | std::ios::trunc).close();
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto pid = fork();
+    if (pid < 0) throw std::runtime_error(std::strerror(errno));
+    if (pid == 0) {
+      setpgid(0, 0);
+      const auto input_fd = open(input_path.c_str(), O_RDONLY);
+      const auto stdout_fd = open(stdout_path.c_str(), O_WRONLY | O_TRUNC);
+      const auto stderr_fd = open(stderr_path.c_str(), O_WRONLY | O_TRUNC);
+      if (input_fd < 0 || stdout_fd < 0 || stderr_fd < 0) _exit(126);
+      dup2(input_fd, STDIN_FILENO);
+      dup2(stdout_fd, STDOUT_FILENO);
+      dup2(stderr_fd, STDERR_FILENO);
+      close(input_fd);
+      close(stdout_fd);
+      close(stderr_fd);
+      if (chdir(workspace.c_str()) != 0) _exit(127);
+
+      std::vector<std::string> command = tool.command;
+      command.front() = executable.string();
+      std::vector<char*> argv;
+      for (auto& value : command) argv.push_back(value.data());
+      argv.push_back(nullptr);
+      execv(argv.front(), argv.data());
+      _exit(127);
+    }
+    setpgid(pid, pid);
+
+    int status = 0;
+    bool finished = false;
+    bool timed_out = false;
+    bool interrupted = false;
+    const auto deadline = start + std::chrono::seconds(tool.timeout_seconds);
+    while (!finished) {
+      const auto waited = waitpid(pid, &status, WNOHANG);
+      if (waited == pid) {
+        finished = true;
+        break;
+      }
+      if (waited < 0 && errno != EINTR)
+        throw std::runtime_error(std::strerror(errno));
+      if (cancel && cancel->load()) {
+        interrupted = true;
+      } else if (std::chrono::steady_clock::now() >= deadline) {
+        timed_out = true;
+      }
+      if (interrupted || timed_out) {
+        kill(-pid, SIGKILL);
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        finished = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - start)
+                             .count();
+    const auto stdout_text = read_external_output(stdout_path);
+    const auto stderr_text = read_external_output(stderr_path);
+    cleanup();
+
+    if (timed_out)
+      return external_failure("TIMEOUT after " +
+                                  std::to_string(tool.timeout_seconds) + "s (" +
+                                  std::to_string(elapsed) + "ms)",
+                              stdout_text, stderr_text);
+    if (interrupted)
+      return external_failure("INTERRUPTED (" + std::to_string(elapsed) + "ms)",
+                              stdout_text, stderr_text);
+
+    const int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    bool valid_json = false;
+    if (!stdout_text.empty()) {
+      try {
+        const auto parsed = json::parse(stdout_text);
+        (void)parsed;
+        valid_json = true;
+      } catch (...) {
+      }
+    }
+    if (!valid_json) {
+      auto message = std::string("stdout was not valid JSON");
+      if (!stdout_text.empty()) message += "\n\n" + stdout_text;
+      if (stdout_text.empty() && !stderr_text.empty())
+        message += "\n\nstderr:\n" + stderr_text;
+      return "tool error: " + message;
+    }
+    if (exit_code != 0)
+      return external_failure("exit_code: " + std::to_string(exit_code),
+                              stdout_text, stderr_text);
+    return stdout_text;
+  } catch (...) {
+    cleanup();
+    throw;
+  }
+}
+
 struct RegisteredTool {
   std::string name;
   std::string description;
@@ -294,6 +551,7 @@ struct RegisteredTool {
 struct ExtensionRuntime::Impl {
   std::vector<std::unique_ptr<Process>> processes;
   std::vector<RegisteredTool> tools;
+  std::vector<ExternalTool> external_tools;
   mutable std::mutex actions_mutex;
   std::map<std::string, std::string> statuses;
   std::map<std::string, std::vector<std::string>> widgets;
@@ -496,23 +754,40 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(
                                    "' failed to start: " + e.what());
     }
   }
+  std::map<std::string, ExternalTool> external_tools;
+  for (const auto& dir : external_tool_dirs(runtime->workspace_)) {
+    try {
+      auto tool = parse_external_manifest(dir / "tool.json");
+      if (builtin_tool(tool.name)) {
+        runtime->warnings_.push_back("skipping external tool '" + tool.name +
+                                     "': name collides with a built-in tool");
+        continue;
+      }
+      external_tools[lower_copy(tool.name)] = std::move(tool);
+    } catch (const std::exception& e) {
+      runtime->warnings_.push_back("skipping " + (dir / "tool.json").string() +
+                                   ": " + e.what());
+    }
+  }
+  for (auto& [_, tool] : external_tools)
+    runtime->impl_->external_tools.push_back(std::move(tool));
   return runtime;
 }
 
 std::vector<niminal::Tool> ExtensionRuntime::tools() {
   std::map<std::string, RegisteredTool> chosen;
-  for (const auto& tool : impl_->tools) chosen[tool.name] = tool;
+  for (const auto& tool : impl_->tools) chosen[lower_copy(tool.name)] = tool;
   std::vector<niminal::Tool> result;
   auto self = shared_from_this();
-  for (const auto& [name, tool] : chosen) {
-    if (builtin_tool(name)) {
-      warnings_.push_back("extension tool '" + name +
+  for (const auto& [_, tool] : chosen) {
+    if (builtin_tool(tool.name)) {
+      warnings_.push_back("extension tool '" + tool.name +
                           "' collides with a built-in tool");
       continue;
     }
     result.push_back(niminal::Tool{
-        name, tool.description, tool.schema,
-        [self, name](const json& input) {
+        tool.name, tool.description, tool.schema,
+        [self, name = tool.name](const json& input) {
           auto response = self->invoke(name, input.dump());
           auto content = response.find("content");
           if (content == response.end() || !content->is_array())
@@ -533,6 +808,22 @@ std::vector<niminal::Tool> ExtensionRuntime::tools() {
           return value;
         },
         tool.read_only, true});
+  }
+  for (const auto& tool : impl_->external_tools) {
+    if (chosen.contains(lower_copy(tool.name))) {
+      warnings_.push_back("skipping external tool '" + tool.name +
+                          "': name is already registered");
+      continue;
+    }
+    result.push_back(niminal::Tool{
+        tool.name,
+        tool.description,
+        tool.schema,
+        [self, tool](const json& input) {
+          return run_external_tool(tool, input, self->workspace_, self->cancel_);
+        },
+        tool.read_only,
+        true});
   }
   return result;
 }
@@ -659,6 +950,7 @@ void ExtensionRuntime::stop() {
   impl_->processes.clear();
   commands_.clear();
   impl_->tools.clear();
+  impl_->external_tools.clear();
 }
 
 std::vector<ExtensionNotice> ExtensionRuntime::take_notices() {

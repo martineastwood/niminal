@@ -210,6 +210,42 @@ The current C++ host accepts text tool-result parts. UI and host requests are
 answered as unavailable, and image result parts are not added to the model
 context yet.
 
+### External tools
+
+External tools are short-lived executables described by `tool.json`. niminal
+starts one only when the model calls it, sends the tool arguments as one JSON
+object on stdin, and expects one JSON value on stdout.
+
+Put a tool in `~/.niminal/tools/NAME/`, `.agent/tools/NAME/`,
+`.agents/tools/NAME/`, or `.niminal/tools/NAME/`:
+
+```json
+{
+  "name": "word_count",
+  "description": "Count words in text.",
+  "command": ["./word-count"],
+  "input_schema": {
+    "type": "object",
+    "properties": {"text": {"type": "string"}},
+    "required": ["text"]
+  },
+  "timeout_seconds": 10,
+  "capabilities": ["read"]
+}
+```
+
+`name`, `description`, `command`, and `input_schema` are required.
+`command` must be a non-empty string array. The first item is resolved
+relative to the manifest directory and later items are fixed arguments. The
+process runs in the workspace. `timeout_seconds` defaults to 30 and output is
+capped at 100,000 bytes. The executable must be executable on POSIX systems.
+
+Supported capabilities are `read`, `write`, `shell`, `network`, and `user`.
+Tools that declare only `read` are treated as read-only. Project tools are
+loaded only for trusted workspaces. Use `/reload` after changing a manifest.
+Invalid manifests and names that collide with built-in tools are skipped with a
+warning.
+
 `/model ID`, `/provider NAME`, and `/thinking LEVEL` are saved to
 `~/.niminal/config.json`. The thinking value is a shared ladder
 (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). When you switch

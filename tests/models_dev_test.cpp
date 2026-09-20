@@ -39,7 +39,9 @@ int main() {
       }},
       "openrouter": {"models": {
         "anthropic/claude-sonnet-4": {"limit": {"context": 200000}},
-        "deepseek/deepseek-v4-flash-0731": {"limit": {"context": 128000}}
+        "deepseek/deepseek-v4-flash-0731": {"limit": {"context": 128000}},
+        "z-ai/glm-5": {"limit": {"context": 200000}},
+        "z-ai/glm-4.5": {"limit": {"context": 128000}}
       }}
     })";
   }
@@ -56,6 +58,10 @@ int main() {
   auto orouter = search_catalog("openrouter", "deepseek", 50, {});
   if (orouter.size() != 1 || orouter[0].id != "deepseek/deepseek-v4-flash-0731")
     return fail("openrouter id");
+  auto glm = search_catalog("openrouter", "glm", 50, {});
+  if (glm.size() != 2 || glm[0].id != "z-ai/glm-4.5" ||
+      glm[1].id != "z-ai/glm-5")
+    return fail("provider model query");
   if (search_catalog("anthropic", "deepseek", 50, {}).size() != 0)
     return fail("provider scoped");
   auto caps = lookup_reasoning_caps("anthropic", "claude-sonnet-4-6");

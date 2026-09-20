@@ -15,9 +15,15 @@ int main() {
   auto root = fs::temp_directory_path() / "niminal-extensions-test";
   auto home = root / "home";
   auto dir = root / ".niminal" / "extensions" / "fixture";
+  auto tool_dir = root / ".niminal" / "tools" / "echo_json";
+  auto broken_tool_dir = root / ".niminal" / "tools" / "broken";
+  auto collision_tool_dir = root / ".niminal" / "tools" / "collision";
   fs::remove_all(root);
   fs::create_directories(home);
   fs::create_directories(dir);
+  fs::create_directories(tool_dir);
+  fs::create_directories(broken_tool_dir);
+  fs::create_directories(collision_tool_dir);
   setenv("HOME", home.c_str(), 1);
   niminal::app::set_project_resources_trusted(root, true);
 
@@ -74,20 +80,55 @@ for line in sys.stdin:
   fs::permissions(dir / "extension.py",
                   fs::perms::owner_read | fs::perms::owner_write |
                       fs::perms::owner_exec);
+  {
+    std::ofstream out(tool_dir / "tool.json");
+    out << R"({"name":"echo_json","description":"Echo JSON input","command":["./run"],"input_schema":{"type":"object"},"capabilities":["read"]})";
+  }
+  {
+    std::ofstream out(tool_dir / "run");
+    out << "#!/bin/sh\ninput=$(cat)\nprintf '{\"received\":%s}\\n' \"$input\"\n";
+  }
+  fs::permissions(tool_dir / "run",
+                  fs::perms::owner_read | fs::perms::owner_write |
+                      fs::perms::owner_exec);
+  {
+    std::ofstream out(broken_tool_dir / "tool.json");
+    out << "{not json";
+  }
+  {
+    std::ofstream out(collision_tool_dir / "tool.json");
+    out << R"({"name":"bash","description":"Collision","command":["./run"],"input_schema":{"type":"object"}})";
+  }
 
   std::atomic<bool> cancel{false};
   auto runtime = ExtensionRuntime::start(root, "session", &cancel);
-  if (!runtime->warnings().empty() || runtime->commands().size() != 1) {
+  if (runtime->commands().size() != 1) {
     std::cerr << "extension registration failed\n";
     return 1;
   }
   auto command = runtime->invoke("hello", "world");
   if (command.value("message", "") != "Hello world") return 1;
   auto tools = runtime->tools();
-  if (tools.size() != 1 || tools[0].name != "ext_echo" ||
-      !tools[0].read_only || !tools[0].extension ||
-      tools[0].run(nlohmann::json::object()) != "extension tool result")
+  niminal::Tool* persistent = nullptr;
+  for (auto& tool : tools)
+    if (tool.name == "ext_echo") persistent = &tool;
+  if (!persistent || !persistent->read_only || !persistent->extension ||
+      persistent->run(nlohmann::json::object()) != "extension tool result")
     return 1;
+  niminal::Tool* external = nullptr;
+  for (auto& tool : tools)
+    if (tool.name == "echo_json") external = &tool;
+  if (!external || !external->read_only || !external->extension ||
+      external->run(nlohmann::json{{"value", 1}}).find("\"value\":1") ==
+          std::string::npos)
+    return 1;
+  bool warned_broken = false;
+  bool warned_collision = false;
+  for (const auto& warning : runtime->warnings()) {
+    warned_broken = warned_broken || warning.find("broken") != std::string::npos;
+    warned_collision = warned_collision || warning.find("bash") != std::string::npos;
+  }
+  if (!warned_broken || !warned_collision) return 1;
 
   auto pre = runtime->dispatch(
       HookEvent::tool_call,
@@ -156,7 +197,7 @@ for line in sys.stdin:
 
   niminal::app::set_project_resources_trusted(root, false);
   auto blocked = ExtensionRuntime::start(root, "session", &cancel);
-  if (!blocked->commands().empty()) return 1;
+  if (!blocked->commands().empty() || !blocked->tools().empty()) return 1;
   blocked->stop();
   fs::remove_all(root);
   return 0;
