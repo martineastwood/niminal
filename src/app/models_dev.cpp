@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <mutex>
 #include <system_error>
@@ -55,6 +56,19 @@ std::vector<CatalogModel> parse_catalog(const json& doc) {
       }
       if (model.contains("limit") && model["limit"].is_object()) {
         row.context = model["limit"].value("context", 0);
+      }
+      if (model.contains("cost") && model["cost"].is_object()) {
+        const auto& cost = model["cost"];
+        auto price = [&](const char* key) {
+          auto it = cost.find(key);
+          return it != cost.end() && it->is_number() ? it->get<double>() : 0.0;
+        };
+        row.cost.input = price("input");
+        row.cost.output = price("output");
+        row.cost.cache_read = price("cache_read");
+        row.cost.cache_write = price("cache_write");
+        row.cost.known = row.cost.input > 0 || row.cost.output > 0 || row.cost.cache_read > 0 ||
+                         row.cost.cache_write > 0;
       }
       if (model.contains("reasoning") && model["reasoning"].is_boolean()) {
         row.reasoning = model["reasoning"].get<bool>();
@@ -285,6 +299,39 @@ ReasoningCaps lookup_reasoning_caps(std::string_view provider, std::string_view 
     return caps;
   }
   return caps;
+}
+
+ModelCost lookup_model_cost(std::string_view provider, std::string_view model) {
+  if (provider.empty() || model.empty()) {
+    return {};
+  }
+  auto want_p = catalog_name(provider);
+  auto want_m = niminal::lower_copy(std::string(model));
+  std::lock_guard<std::mutex> lock(g_mu);
+  ensure_locked();
+  for (const auto& row : g_models) {
+    if (row.provider == want_p && niminal::lower_copy(row.id) == want_m) {
+      return row.cost;
+    }
+  }
+  return {};
+}
+
+double usage_cost_usd(const niminal::Usage& usage, const ModelCost& cost) {
+  // OpenAI-style `prompt_tokens` already include cached reads, Anthropic-style `input_tokens`
+  // exclude cache reads and writes. Treat input as inclusive when it can cover the cached reads
+  // (the same heuristic `format_usage_line` uses for its cache percentage).
+  double full_input = usage.input_tokens -
+                      (usage.cache_read_tokens <= usage.input_tokens ? usage.cache_read_tokens : 0);
+  return (full_input * cost.input + usage.cache_read_tokens * cost.cache_read +
+          usage.cache_write_tokens * cost.cache_write + usage.output_tokens * cost.output) /
+         1'000'000.0;
+}
+
+std::string format_cost_usd(double usd) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), usd < 0.01 ? "$%.4f" : "$%.2f", usd);
+  return buf;
 }
 
 } // namespace niminal::app

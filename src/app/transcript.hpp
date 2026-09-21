@@ -43,7 +43,12 @@ struct Block {
 };
 
 bool is_card_block(BlockKind kind);
+// FTXUI reports a one-character selection for a press released on the same
+// cell, so only a pointer that moved between press and release is a selection
+// gesture. Anything else is a click.
+bool is_drag_gesture(int press_x, int press_y, int release_x, int release_y);
 ftxui::Element render_diff_card(const Block& block, const Theme& theme);
+ftxui::Element render_user_message(const Block& block, const Theme& theme);
 ftxui::Element render_transcript_card(const Block& block, const Theme& theme, ftxui::Box& box);
 std::string clip_text(std::string text, size_t max_chars, int max_lines);
 std::string tool_summary(const std::string& name, const std::string& args);

@@ -14,6 +14,7 @@ namespace {
 
 constexpr size_t kToolResultMaxChars = 8000;
 constexpr int kToolResultMaxLines = 120;
+constexpr int kBashPreviewMaxLines = 8;
 
 std::string one_line(std::string s, size_t n) {
   for (char& c : s) {
@@ -28,42 +29,61 @@ std::string one_line(std::string s, size_t n) {
   return s;
 }
 
-std::string tool_detail_line(const std::string& name, const std::string& args) {
-  json j = json::object();
+json parse_tool_args(const std::string& args) {
+  if (args.empty()) {
+    return json::object();
+  }
   try {
-    if (!args.empty()) {
-      j = json::parse(args);
-    }
+    return json::parse(args);
   } catch (...) {
-    return name + (args.empty() ? "" : "  " + one_line(args, 120));
+    return json();
   }
+}
+
+std::string tool_target(const std::string& name, const json& j) {
   if (!j.is_object()) {
-    return name + (args.empty() ? "" : "  " + one_line(args, 120));
+    return {};
   }
-  std::string detail;
-  if (name == "bash") {
-    detail =
-        "$ " + (j.contains("command") && j["command"].is_string() ? j["command"].get<std::string>()
-                                                                  : std::string());
-  } else if (name == "skill") {
-    detail =
-        j.contains("name") && j["name"].is_string() ? j["name"].get<std::string>() : std::string();
-  } else if (j.contains("path") && j["path"].is_string()) {
-    detail = j["path"].get<std::string>();
+  if (name == "skill") {
+    return j.contains("name") && j["name"].is_string() ? j["name"].get<std::string>()
+                                                       : std::string();
+  }
+  if (j.contains("path") && j["path"].is_string()) {
+    std::string detail = j["path"].get<std::string>();
     if (j.contains("pattern") && j["pattern"].is_string()) {
       detail += "  " + j["pattern"].get<std::string>();
     } else if (j.contains("old_text") && j["old_text"].is_string()) {
       detail += "  " + one_line(j["old_text"].get<std::string>(), 60);
     }
-  } else if (j.contains("pattern") && j["pattern"].is_string()) {
-    detail = j["pattern"].get<std::string>();
-  } else if (!j.empty()) {
-    detail = j.dump();
+    return detail;
   }
-  if (detail.empty()) {
+  if (j.contains("pattern") && j["pattern"].is_string()) {
+    return j["pattern"].get<std::string>();
+  }
+  if (!j.empty()) {
+    return one_line(j.dump(), 120);
+  }
+  return {};
+}
+
+std::string bash_command(const std::string& args) {
+  const auto j = parse_tool_args(args);
+  if (j.is_object() && j.contains("command") && j["command"].is_string()) {
+    return j["command"].get<std::string>();
+  }
+  return {};
+}
+
+std::string tool_detail_line(const std::string& name, const std::string& args) {
+  const auto j = parse_tool_args(args);
+  if (!j.is_object()) {
+    return name + (args.empty() ? "" : "  " + one_line(args, 120));
+  }
+  const auto target = tool_target(name, j);
+  if (target.empty()) {
     return name;
   }
-  return name + "  " + one_line(detail, 120);
+  return name + "  " + one_line(target, 120);
 }
 
 std::string pretty_tool_args(const std::string& args) {
@@ -77,10 +97,46 @@ std::string pretty_tool_args(const std::string& args) {
   }
 }
 
+int count_lines(std::string_view text) {
+  int lines = text.empty() ? 0 : 1;
+  for (char c : text) {
+    if (c == '\n') {
+      ++lines;
+    }
+  }
+  return lines;
+}
+
+std::string take_lines(std::string_view text, int max_lines) {
+  if (max_lines <= 0 || text.empty()) {
+    return {};
+  }
+  int kept = 1;
+  std::string out;
+  for (char c : text) {
+    out += c;
+    if (c == '\n' && ++kept > max_lines) {
+      break;
+    }
+  }
+  while (!out.empty() && out.back() == '\n') {
+    out.pop_back();
+  }
+  return out;
+}
+
+bool result_has_more(const std::string& result, int preview_lines) {
+  return count_lines(result) > preview_lines || result.size() > kToolResultMaxChars;
+}
+
 } // namespace
 
 bool is_card_block(BlockKind kind) {
   return kind == BlockKind::thinking || kind == BlockKind::tool || kind == BlockKind::diff;
+}
+
+bool is_drag_gesture(int press_x, int press_y, int release_x, int release_y) {
+  return press_x != release_x || press_y != release_y;
 }
 
 Element render_diff_card(const Block& block, const Theme& theme) {
@@ -103,25 +159,43 @@ Element render_diff_card(const Block& block, const Theme& theme) {
 }
 
 Element render_transcript_card(const Block& block, const Theme& theme, Box& box) {
-  const char* chevron = block.expanded ? "▾ " : "▸ ";
-
   switch (block.kind) {
   case BlockKind::thinking: {
+    const char* prefix = block.expanded ? "- Thought" : "+ Thought";
     if (!block.expanded) {
-      return text(std::string(chevron) + "thinking") | block_style(block.kind, theme) |
-             reflect(box);
+      return text(prefix) | color(theme.thinking) | reflect(box);
     }
-    return vbox({text(std::string(chevron) + "thinking") | block_style(block.kind, theme),
-                 paragraph_preserving_whitespace(block.text) | block_style(block.kind, theme)}) |
+    return vbox({text(prefix) | color(theme.thinking),
+                 paragraph_preserving_whitespace(block.text) | dim | italic}) |
            reflect(box);
   }
   case BlockKind::tool: {
+    if (block.tool_name == "bash") {
+      const std::string command = bash_command(block.text);
+      Elements parts;
+      parts.push_back(text("$ " + command) | color(theme.meta));
+      if (!block.result.empty()) {
+        if (!block.expanded) {
+          parts.push_back(
+              paragraph_preserving_whitespace(take_lines(block.result, kBashPreviewMaxLines)) |
+              dim);
+          if (result_has_more(block.result, kBashPreviewMaxLines)) {
+            parts.push_back(text("… click to expand") | dim);
+          }
+        } else {
+          parts.push_back(paragraph_preserving_whitespace(
+                              clip_text(block.result, kToolResultMaxChars, kToolResultMaxLines)) |
+                          dim);
+        }
+      }
+      return vbox(std::move(parts)) | reflect(box);
+    }
     if (!block.expanded) {
-      return text(std::string(chevron) + tool_detail_line(block.tool_name, block.text)) |
-             color(theme.meta) | reflect(box);
+      return text("→ " + tool_detail_line(block.tool_name, block.text)) | color(theme.meta) |
+             reflect(box);
     }
     Elements parts;
-    parts.push_back(text(std::string(chevron) + block.tool_name) | bold | color(theme.meta));
+    parts.push_back(text("→ " + block.tool_name) | bold | color(theme.meta));
     parts.push_back(text("arguments") | dim);
     parts.push_back(paragraph_preserving_whitespace(pretty_tool_args(block.text)) |
                     color(theme.meta));
@@ -135,15 +209,23 @@ Element render_transcript_card(const Block& block, const Theme& theme, Box& box)
     return vbox(std::move(parts)) | reflect(box);
   }
   case BlockKind::diff: {
+    const auto header = "→ ✓ " + block.tool_name + "  " + block.path;
     if (!block.expanded) {
-      return text(std::string(chevron) + "✓ " + block.tool_name + "  " + block.path) |
-             color(theme.muted) | reflect(box);
+      return text(header) | color(theme.muted) | reflect(box);
     }
-    return vbox({text(chevron) | dim, render_diff_card(block, theme)}) | reflect(box);
+    return vbox({text(header) | color(theme.muted), render_diff_card(block, theme)}) | reflect(box);
   }
   default:
     return text("") | reflect(box);
   }
+}
+
+Element render_user_message(const Block& block, const Theme& theme) {
+  auto body =
+      hbox({text(" "), paragraph_preserving_whitespace(block.text) | color(theme.input_fg) | xflex,
+            text(" ")});
+  return hbox({filler() | bgcolor(theme.accent) | size(WIDTH, EQUAL, 1),
+               vbox({text(" "), body, text(" ")}) | bgcolor(theme.input_bg) | xflex});
 }
 
 std::string clip_text(std::string text, size_t max_chars, int max_lines) {
@@ -174,7 +256,10 @@ std::string clip_text(std::string text, size_t max_chars, int max_lines) {
 }
 
 std::string tool_summary(const std::string& name, const std::string& args) {
-  return "▸ " + tool_detail_line(name, args);
+  if (name == "bash") {
+    return "$ " + bash_command(args);
+  }
+  return "→ " + tool_detail_line(name, args);
 }
 
 Decorator block_style(BlockKind kind, const Theme& theme) {
@@ -202,21 +287,15 @@ Decorator block_style(BlockKind kind, const Theme& theme) {
 const char* block_label(BlockKind kind) {
   switch (kind) {
   case BlockKind::user:
-    return "you";
   case BlockKind::assistant:
-    return "niminal";
   case BlockKind::tool:
-    return "";
   case BlockKind::thinking:
-    return "";
   case BlockKind::diff:
+  case BlockKind::status:
+  case BlockKind::approval:
     return "";
   case BlockKind::error:
     return "error";
-  case BlockKind::status:
-    return "";
-  case BlockKind::approval:
-    return "";
   }
   return "";
 }

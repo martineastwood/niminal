@@ -48,9 +48,9 @@ Explain how this project runs its tests, then suggest the smallest useful fix
 for the failing parser test.
 ```
 
-The interactive footer shows the active provider, model, thinking level, and
-token totals. File reads, searches, and workspace edits are built in. Shell
-commands normally ask for approval the first time.
+The interactive footer shows the active provider, model, thinking level, token
+totals, and the estimated session cost. File reads, searches, and workspace edits
+are built in. Shell commands normally ask for approval the first time.
 
 ## One-shot and piped input
 

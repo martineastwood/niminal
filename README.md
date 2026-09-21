@@ -166,9 +166,10 @@ the first message creates an append-only JSONL file under
 - Up/Down walk the current session's composer history when slash suggestions are
   not open.
 - Trackpad or mouse wheel scrolls the transcript. Page Up / Page Down jump
-  further. New output sticks to the bottom until you scroll up. Click a thinking,
-  tool, or diff card to expand it. Ctrl+O toggles the latest card. Ctrl+Shift+O
-  expands or collapses every card.
+  further. New output sticks to the bottom until you scroll up. Tool calls stay
+  compact (`→ read README.md`); shell commands show a short output preview.
+  Click a thinking, tool, or diff card to expand it. Ctrl+O toggles the latest
+  card. Ctrl+Shift+O expands or collapses every card.
 - Drag to copy selected text. Ctrl-V pastes into the composer. `/copy` copies
   the last assistant reply or error.
 - Ctrl-G opens the current composer draft in your editor. Set `"editor"` in

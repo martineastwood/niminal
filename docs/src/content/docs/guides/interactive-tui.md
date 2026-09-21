@@ -75,13 +75,17 @@ Use `/yolo` or `--yolo` to auto-approve tools for the current process.
 
 ## Footer
 
-The footer shows activity, extension status lines, token totals, the active
-`provider/model`, the mapped thinking level, and `[yolo]` when YOLO mode is on.
+The footer shows activity, extension status lines, token totals, the estimated
+session cost from models.dev pricing, the active `provider/model`, the mapped
+thinking level, and `[yolo]` when YOLO mode is on. Cost and token totals price
+the whole session at the active model's rates.
 
-Thinking, tool, and diff cards start compact in the transcript. Click a card,
-press Ctrl+O to open the most recent one, or press Ctrl+Shift+O to expand or
-collapse every card at once. Set `"show_thinking": true` in
-`~/.niminal/config.json` to start new thinking cards expanded.
+Thinking, tool, and diff cards start compact in the transcript. Tool calls show
+as a single line (`→ read README.md`). Shell commands show the command and a
+short output preview; click to see the full result. Click a card, press Ctrl+O
+to open the most recent one, or press Ctrl+Shift+O to expand or collapse every
+card at once. Set `"show_thinking": true` in `~/.niminal/config.json` to start
+new thinking cards expanded.
 
 ## Theme
 

@@ -10,11 +10,12 @@ namespace niminal::app {
 enum class ThemeMode { automatic, light, dark };
 
 struct Theme {
-  ftxui::Color accent; // user turns, badges, activity, headings
-  ftxui::Color code;   // inline code and fenced blocks
-  ftxui::Color add;    // added diff lines
-  ftxui::Color del;    // removed diff lines
-  ftxui::Color meta;   // tool calls, approvals, diff markers
+  ftxui::Color accent;   // user turns, badges, activity, headings
+  ftxui::Color code;     // inline code and fenced blocks
+  ftxui::Color add;      // added diff lines
+  ftxui::Color del;      // removed diff lines
+  ftxui::Color meta;     // tool calls, approvals, diff markers
+  ftxui::Color thinking; // thinking card headers
   ftxui::Color error;
   ftxui::Color muted;    // status lines, diff context
   ftxui::Color emphasis; // bold spans

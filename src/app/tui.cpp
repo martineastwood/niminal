@@ -222,6 +222,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   bool stick_bottom = true;
   std::vector<Box> card_boxes;
   std::optional<size_t> card_press_index;
+  std::optional<std::pair<int, int>> mouse_press;
   std::atomic<bool> ui_alive{true};
   const auto ui_thread = std::this_thread::get_id();
   std::thread worker;
@@ -1528,19 +1529,23 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       const auto& block = blocks[i];
       if (is_card_block(block.kind)) {
         entries.push_back(render_transcript_card(block, theme, card_boxes[i]));
-        entries.push_back(text(""));
-        continue;
-      }
-      auto label = block_label(block.kind);
-      auto body = block.kind == BlockKind::assistant ? render_markdown(block.text, theme)
-                                                     : paragraph_preserving_whitespace(block.text) |
-                                                           block_style(block.kind, theme);
-      if (label && *label) {
-        entries.push_back(vbox({text(label) | bold | block_style(block.kind, theme), body}));
+      } else if (block.kind == BlockKind::user) {
+        entries.push_back(render_user_message(block, theme));
+      } else if (block.kind == BlockKind::assistant) {
+        entries.push_back(render_markdown(block.text, theme));
       } else {
-        entries.push_back(body);
+        auto label = block_label(block.kind);
+        auto body = paragraph_preserving_whitespace(block.text) | block_style(block.kind, theme);
+        if (label && *label) {
+          entries.push_back(vbox({text(label) | bold | block_style(block.kind, theme), body}));
+        } else {
+          entries.push_back(body);
+        }
       }
-      entries.push_back(text(""));
+      const bool next_is_card = i + 1 < blocks.size() && is_card_block(blocks[i + 1].kind);
+      if (!(is_card_block(block.kind) && next_is_card)) {
+        entries.push_back(text(""));
+      }
     }
 
     std::string activity_line;
@@ -1591,7 +1596,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     std::string usage;
     try {
-      usage = format_usage_line(session.usage_totals());
+      auto totals = session.usage_totals();
+      usage = format_usage_line(totals);
+      if (!usage.empty()) {
+        auto cost = lookup_model_cost(agent.provider, agent.model);
+        if (cost.known) {
+          usage += "  " + format_cost_usd(usage_cost_usd(totals, cost));
+        }
+      }
     } catch (...) {
     }
 
@@ -1715,11 +1727,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (e.is_mouse() && e.mouse().motion == Mouse::Pressed && e.mouse().button == Mouse::Left) {
       card_press_index = card_at(blocks, card_boxes, e.mouse().x, e.mouse().y);
+      mouse_press = {e.mouse().x, e.mouse().y};
       return false;
     }
     if (e.is_mouse() && e.mouse().motion == Mouse::Released && e.mouse().button == Mouse::Left) {
+      const bool dragged = mouse_press && is_drag_gesture(mouse_press->first, mouse_press->second,
+                                                          e.mouse().x, e.mouse().y);
+      mouse_press = std::nullopt;
       auto sel = screen.GetSelection();
-      if (!sel.empty()) {
+      if (dragged && !sel.empty()) {
         copy_to_clipboard(sel);
         flash_footer("Copied to clipboard.");
         card_press_index = std::nullopt;
