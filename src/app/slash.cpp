@@ -190,6 +190,8 @@ Click a thinking, tool, or diff card to expand it. Ctrl+O toggles the latest car
 Ctrl+Shift+O expands or collapses every card.
 Esc interrupts a running turn, or clears the composer.
 Drag to copy. Ctrl-V pastes into the composer. /copy copies the last reply.
+Ctrl-G opens the composer in the configured editor, else $VISUAL or $EDITOR
+(nano if none is set).
 Ctrl-C quits.)";
   return out;
 }

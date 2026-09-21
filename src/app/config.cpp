@@ -84,6 +84,12 @@ Config load_config_file(const fs::path& path) {
     if (doc.contains("theme") && doc["theme"].is_string()) {
       cfg.theme = doc["theme"].get<std::string>();
     }
+    if (doc.contains("editor") && doc["editor"].is_string()) {
+      auto editor = doc["editor"].get<std::string>();
+      if (!editor.empty()) {
+        cfg.editor = std::move(editor);
+      }
+    }
     load_queue_mode(doc, "steering_mode", cfg.steering_mode);
     load_queue_mode(doc, "follow_up_mode", cfg.follow_up_mode);
     if (doc.contains("max_steps") && doc["max_steps"].is_number_integer()) {
@@ -156,6 +162,9 @@ void save_config_file(const fs::path& path, const Config& cfg) {
   }
   if (!cfg.thinking.empty()) {
     doc["thinking"] = cfg.thinking;
+  }
+  if (!cfg.editor.empty()) {
+    doc["editor"] = cfg.editor;
   }
   if (!cfg.last_models.empty()) {
     json providers = json::object();

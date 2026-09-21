@@ -171,6 +171,9 @@ the first message creates an append-only JSONL file under
   expands or collapses every card.
 - Drag to copy selected text. Ctrl-V pastes into the composer. `/copy` copies
   the last assistant reply or error.
+- Ctrl-G opens the current composer draft in your editor. Set `"editor"` in
+  `~/.niminal/config.json` to override `$VISUAL` and `$EDITOR`. If none of those
+  are set, niminal uses `nano`. Save and quit to send the edited text back.
 - Alt-J or Shift-Enter inserts a newline
 - Esc interrupts a running turn, or clears the composer when idle
 - Ctrl-C quits
@@ -345,7 +348,8 @@ The TUI ships one dark and one light palette. `/theme light`, `/theme dark`, and
 argument prints the mode plus the palette auto resolved to. `auto` (the default)
 asks the terminal for its background color with an OSC 11 query at startup, falls
 back to `COLORFGBG`, and assumes dark when neither answers. Set `"theme"` in the
-config file to pick a palette without touching the TUI.
+config file to pick a palette without touching the TUI. Set `"editor"` to the
+command Ctrl-G should launch. That value overrides `$VISUAL` and `$EDITOR`.
 
 On startup, niminal loads the config file, then applies `NIMINAL_MODEL` /
 `NIMINAL_API_URL` / `NIMINAL_THINKING` if they are set, then `--provider`,

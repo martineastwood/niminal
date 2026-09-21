@@ -19,6 +19,7 @@ struct Config {
   std::string thinking;
   bool show_thinking = false;
   std::string theme = "auto";
+  std::string editor;
   std::string steering_mode = "one-at-a-time";
   std::string follow_up_mode = "one-at-a-time";
   int max_steps = 0; // 0 means unlimited.

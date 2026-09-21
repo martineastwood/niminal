@@ -134,6 +134,14 @@ bool is_paste_key(const Event& e) {
   return in == "\x1b[118;2u" || in == "\x1b[118;5u" || in == "\x1b[118;8u" || in == "\x1b[118;9u";
 }
 
+bool is_external_editor_key(const Event& e) {
+  if (e == Event::Character('\x07')) {
+    return true;
+  }
+  auto in = e.input();
+  return in == "\x1b[103;5u" || in == "\x1b[103;5~" || in == "\x1b[27;5;103~";
+}
+
 bool is_toggle_last_card(const Event& e) {
   if (e == Event::Character('\x0f')) {
     return true;
@@ -311,7 +319,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     };
     callbacks.editor = [&](const std::string&, const std::string& text) {
       std::string edited;
-      run_on_ui([&] { screen.WithRestoredIO([&] { edited = edit_text_externally(text); }); });
+      run_on_ui(
+          [&] { screen.WithRestoredIO([&] { edited = edit_text_externally(text, cfg.editor); }); });
       return edited;
     };
     runtime->set_ui_callbacks(std::move(callbacks));
@@ -1678,6 +1687,18 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (is_paste_key(e)) {
       insert_draft(paste_from_clipboard());
+      return true;
+    }
+    if (is_external_editor_key(e)) {
+      try {
+        std::string edited;
+        screen.WithRestoredIO([&] { edited = edit_text_externally(draft, cfg.editor); });
+        draft = std::move(edited);
+        cursor = static_cast<int>(draft.size());
+        history_i = -1;
+      } catch (const std::exception& ex) {
+        flash_footer(ex.what());
+      }
       return true;
     }
     if (e.is_mouse() && e.mouse().motion == Mouse::Pressed && e.mouse().button == Mouse::Left) {

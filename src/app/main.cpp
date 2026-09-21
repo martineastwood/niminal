@@ -53,6 +53,7 @@ const char* kUsage =
     "TUI: Enter sends, or queues a message while a turn is running. Up/Down walk\n"
     "composer history when slash suggestions are closed. Alt-J or Shift-Enter\n"
     "inserts a newline. Esc interrupts a running turn or clears the composer.\n"
+    "Ctrl-G edits the composer in the config editor, $VISUAL, $EDITOR, or nano.\n"
     "Ctrl-C quits. /compact summarizes older turns. Sessions are saved under\n"
     "~/.niminal/sessions. Set the matching provider key (OPENROUTER_API_KEY by\n"
     "default). File tools stay in cwd. Shell commands ask in the TUI.\n";

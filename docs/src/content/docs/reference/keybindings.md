@@ -17,6 +17,7 @@ niminal ships fixed TUI keybindings. They are not rebindable through config toda
 | Esc | Interrupt a running turn, or clear the composer when idle |
 | Ctrl-C | Quit |
 | Ctrl-V, middle/right click | Paste into the composer |
+| Ctrl-G | Edit the composer in the configured `editor`, else `$VISUAL` or `$EDITOR` (`nano` if none is set) |
 
 While a turn is running, Enter queues a steering message.
 

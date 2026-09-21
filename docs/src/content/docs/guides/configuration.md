@@ -34,6 +34,7 @@ environment variable, or pass `--api-key KEY` for one process.
 | `thinking` | unset | Reasoning level: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `show_thinking` | `false` | Start new thinking cards expanded in the TUI |
 | `theme` | `auto` | `light`, `dark`, or `auto` |
+| `editor` | unset | External editor command for Ctrl-G. Overrides `$VISUAL` and `$EDITOR` |
 | `steering_mode` | `one-at-a-time` | RPC queue delivery: `all` or `one-at-a-time` |
 | `follow_up_mode` | `one-at-a-time` | Same for follow-up queue |
 | `max_steps` | `0` (unlimited) | Tool loop cap per user turn |
@@ -45,6 +46,10 @@ environment variable, or pass `--api-key KEY` for one process.
 
 When `thinking` is unset, the provider default applies. `/thinking` with no
 argument prints the mapped level for the current model.
+
+Set `editor` to a shell command such as `hx` or `vim` when you want a niminal
+editor that is not `$VISUAL` or `$EDITOR`. If `editor` is unset, niminal uses
+`$VISUAL`, then `$EDITOR`, then `nano`.
 
 ## Compaction example
 

@@ -769,10 +769,13 @@ std::string shell_quote(const std::string& value) {
 
 } // namespace
 
-std::string edit_text_externally(const std::string& text) {
-  const char* visual = std::getenv("VISUAL");
-  const char* editor = (visual != nullptr) && ((*visual) != 0) ? visual : std::getenv("EDITOR");
-  const std::string command = (editor != nullptr) && ((*editor) != 0) ? editor : "nano";
+std::string edit_text_externally(const std::string& text, const std::string& editor) {
+  auto command = editor;
+  if (command.empty()) {
+    const char* visual = std::getenv("VISUAL");
+    const char* env = (visual != nullptr) && ((*visual) != 0) ? visual : std::getenv("EDITOR");
+    command = (env != nullptr) && ((*env) != 0) ? env : "nano";
+  }
   const auto stamp = std::to_string(getpid()) + "-" +
                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
   const auto path = fs::temp_directory_path() / ("niminal-editor-" + stamp + ".md");

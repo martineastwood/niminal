@@ -75,7 +75,7 @@ struct ExtensionEntry {
   nlohmann::json data;
 };
 
-std::string edit_text_externally(const std::string& text);
+std::string edit_text_externally(const std::string& text, const std::string& editor);
 
 class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
   struct Access {};

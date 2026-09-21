@@ -17,7 +17,8 @@ int main() {
 
   auto missing = load_config_file(path);
   if (missing.model != "openai/gpt-4o-mini" || missing.provider != "openrouter" ||
-      missing.max_steps != 0 || missing.show_thinking || !missing.compaction_enabled ||
+      missing.max_steps != 0 || missing.show_thinking || missing.editor != "" ||
+      !missing.compaction_enabled ||
       missing.reserve_tokens != niminal::app::kDefaultReserveTokens ||
       missing.keep_recent_tokens != niminal::app::kDefaultKeepRecentTokens ||
       missing.context_window != 0) {
@@ -32,6 +33,7 @@ int main() {
   cfg.last_models["openrouter"] = "openai/gpt-4o-mini";
   cfg.thinking = "high";
   cfg.show_thinking = true;
+  cfg.editor = "hx";
   cfg.steering_mode = "all";
   cfg.follow_up_mode = "one-at-a-time";
   cfg.max_steps = 12;
@@ -42,10 +44,10 @@ int main() {
   auto loaded = load_config_file(path);
   if (loaded.model != cfg.model || loaded.api_url != cfg.api_url ||
       loaded.provider != "anthropic" || loaded.thinking != "high" || !loaded.show_thinking ||
-      loaded.steering_mode != "all" || loaded.follow_up_mode != "one-at-a-time" ||
-      loaded.max_steps != 12 || loaded.reserve_tokens != 32768 ||
-      loaded.keep_recent_tokens != 40000 || loaded.context_window != 256000 ||
-      loaded.last_models["openrouter"] != "openai/gpt-4o-mini") {
+      loaded.editor != "hx" || loaded.steering_mode != "all" ||
+      loaded.follow_up_mode != "one-at-a-time" || loaded.max_steps != 12 ||
+      loaded.reserve_tokens != 32768 || loaded.keep_recent_tokens != 40000 ||
+      loaded.context_window != 256000 || loaded.last_models["openrouter"] != "openai/gpt-4o-mini") {
     std::cerr << "roundtrip mismatch\n";
     return 1;
   }

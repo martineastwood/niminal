@@ -16,6 +16,7 @@ file under `~/.niminal/sessions`, and later turns keep writing to it.
 | Alt-J, Shift-Enter | Insert a newline |
 | Esc | Interrupt a running turn, or clear the composer when idle |
 | Ctrl-C | Quit |
+| Ctrl-G | Edit the composer in the configured `editor`, else `$VISUAL` or `$EDITOR` (`nano` if none is set) |
 
 While a turn is running, Enter queues a **steering** message for the next model
 request in that turn. The footer shows `queued N` when messages are waiting.
