@@ -15,6 +15,7 @@
 #include "trust.hpp"
 
 #include <niminal/openai.hpp>
+#include <niminal/text.hpp>
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/mouse.hpp>
@@ -357,15 +358,9 @@ bool starts_with(std::string_view s, std::string_view p) {
   return s.size() >= p.size() && s.substr(0, p.size()) == p;
 }
 
-std::string lower_copy(std::string s) {
-  for (char& c : s)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-  return s;
-}
-
 bool contains_ci(std::string_view s, std::string_view p) {
-  return lower_copy(std::string(s)).find(lower_copy(std::string(p))) !=
-         std::string::npos;
+  return niminal::lower_copy(std::string(s))
+             .find(niminal::lower_copy(std::string(p))) != std::string::npos;
 }
 
 std::string session_title(const SessionInfo& info) {
@@ -387,7 +382,7 @@ void add_unique(std::vector<std::string>& ids, const std::string& id) {
 
 void sort_suggestions(std::vector<Suggestion>& out) {
   std::sort(out.begin(), out.end(), [](const Suggestion& a, const Suggestion& b) {
-    return lower_copy(a.fill) < lower_copy(b.fill);
+    return niminal::lower_copy(a.fill) < niminal::lower_copy(b.fill);
   });
 }
 
@@ -400,7 +395,7 @@ std::vector<Suggestion> suggest_models(const std::string& query,
   std::vector<std::string> used;
   auto add = [&](const std::string& id, int context) {
     if (id.empty()) return;
-    auto key = lower_copy(id);
+    auto key = niminal::lower_copy(id);
     for (const auto& x : used)
       if (x == key) return;
     used.push_back(key);
@@ -409,7 +404,7 @@ std::vector<Suggestion> suggest_models(const std::string& query,
     if (!ctx.empty()) label += "  " + ctx;
     out.push_back({"/model " + id, std::move(label)});
   };
-  auto q = lower_copy(query);
+  auto q = niminal::lower_copy(query);
   if (static_cast<int>(q.size()) >= kMin) {
     auto catalog = search_catalog(provider, query, kCap);
     if (!catalog.empty()) {
@@ -499,7 +494,7 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
     std::vector<Suggestion> out;
     for (auto mode : {ThemeMode::automatic, ThemeMode::light, ThemeMode::dark}) {
       std::string name = theme_mode_name(mode);
-      if (!arg.empty() && !starts_with(name, lower_copy(arg))) continue;
+      if (!arg.empty() && !starts_with(name, niminal::lower_copy(arg))) continue;
       out.push_back({"/theme " + name, name});
     }
     if (!out.empty()) return out;
@@ -532,8 +527,8 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
   }
   for (const auto& prompt : discover_prompts(workspace)) {
     auto slash = "/" + prompt.name;
-    if (is_builtin_slash(lower_copy(slash))) continue;
-    if (!starts_with(lower_copy(slash), cmd)) continue;
+    if (is_builtin_slash(niminal::lower_copy(slash))) continue;
+    if (!starts_with(niminal::lower_copy(slash), cmd)) continue;
     out.push_back({slash + " ", slash +
                                       (prompt.description.empty()
                                            ? std::string()
@@ -541,8 +536,8 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
   }
   for (const auto& command : extension_commands) {
     auto slash = "/" + command.name;
-    if (is_builtin_slash(lower_copy(slash))) continue;
-    if (!starts_with(lower_copy(slash), cmd)) continue;
+    if (is_builtin_slash(niminal::lower_copy(slash))) continue;
+    if (!starts_with(niminal::lower_copy(slash), cmd)) continue;
     out.push_back({slash + " ", slash +
                                     (command.description.empty()
                                          ? std::string()
@@ -1358,7 +1353,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     bool extension_request = false;
     if (extensions) {
       for (const auto& command : extensions->commands())
-        if (lower_copy("/" + command.name) == initial_cmd) {
+        if (niminal::lower_copy("/" + command.name) == initial_cmd) {
           extension_request = true;
           break;
         }
@@ -1583,9 +1578,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
                   "\nurl: " + agent.api_url + "\nkey: " + agent.key_hint});
           return;
         }
-        std::string err;
-        if (!select_provider(cfg, arg, &err)) {
-          blocks.push_back(Block{BlockKind::error, err});
+        if (auto result = select_provider(cfg, arg); !result) {
+          blocks.push_back(
+              Block{BlockKind::error, result.error().what()});
           return;
         }
         apply_provider(agent, cfg);

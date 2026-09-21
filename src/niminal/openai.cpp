@@ -1,4 +1,5 @@
 #include <niminal/openai.hpp>
+#include <niminal/text.hpp>
 #include <niminal/http.hpp>
 
 #include <cstdio>
@@ -85,9 +86,7 @@ bool mark_content_cache(json& msg) {
 }
 
 bool uses_explicit_cache(std::string_view model) {
-  std::string m(model);
-  for (char& c : m)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  const std::string m = lower_copy(std::string(model));
   return m.find("anthropic") != std::string::npos ||
          m.find("claude") != std::string::npos ||
          m.find("gemini") != std::string::npos ||
@@ -744,23 +743,23 @@ ChatResult stream_chat(const ChatRequest& request) {
   AnthropicStream anthropic;
   auto wire = wire_of(req);
 
-  try {
-    http.post_sse(request_url(req), headers, payload.dump(),
-                  [&](std::string_view data) {
-                    if (req.cancel && req.cancel->load()) return;
-                    json chunk = json::parse(data);
-                    if (wire == Wire::Anthropic)
-                      consume_anthropic(req, result, anthropic, chunk);
-                    else if (wire == Wire::Google)
-                      consume_google(req, result, calls, chunk);
-                    else
-                      consume_openai(req, result, calls, chunk);
-                  },
-                  req.cancel);
-  } catch (const Cancelled&) {
-    throw;
-  } catch (const json::exception& e) {
-    throw Error(std::string("stream json: ") + e.what());
+  if (auto streamed = http.post_sse(
+          request_url(req), headers, payload.dump(),
+          [&](std::string_view data) {
+            if (req.cancel && req.cancel->load()) return;
+            json chunk = json::parse(data);
+            if (wire == Wire::Anthropic)
+              consume_anthropic(req, result, anthropic, chunk);
+            else if (wire == Wire::Google)
+              consume_google(req, result, calls, chunk);
+            else
+              consume_openai(req, result, calls, chunk);
+          },
+          req.cancel);
+      !streamed) {
+    if (streamed.error().what() == std::string_view("interrupted"))
+      throw Cancelled();
+    throw streamed.error();
   }
 
   if (wire == Wire::Anthropic) finish_anthropic(result, anthropic);
@@ -783,9 +782,10 @@ std::string complete_chat(const ChatRequest& request) {
     payload["max_tokens"] = 4096;
   HttpClient http;
   auto res = http.post(request_url(req), chat_headers(req), payload.dump());
-  if (res.status >= 400)
-    throw Error("http " + std::to_string(res.status) + ": " + res.body);
-  json body = json::parse(res.body);
+  if (!res) throw res.error();
+  if (res->status >= 400)
+    throw Error("http " + std::to_string(res->status) + ": " + res->body);
+  json body = json::parse(res->body);
   throw_if_error(body);
   switch (wire_of(req)) {
     case Wire::Anthropic:

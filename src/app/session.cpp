@@ -1,5 +1,7 @@
 #include "session.hpp"
 
+#include <niminal/text.hpp>
+
 #include <niminal/agent.hpp>
 
 #include <algorithm>
@@ -59,26 +61,20 @@ std::string event_text(const json& event) {
   return text;
 }
 
-std::string lower_copy(std::string s) {
-  for (char& c : s)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-  return s;
-}
-
 bool session_matches(const Session& session, const std::string& query) {
-  auto needle = lower_copy(query);
+  auto needle = niminal::lower_copy(query);
   if (needle.empty()) return true;
-  std::string haystack = lower_copy(session.name) + '\n' +
-                         lower_copy(session.workspace) + '\n' + session.id;
+  std::string haystack = niminal::lower_copy(session.name) + '\n' +
+                         niminal::lower_copy(session.workspace) + '\n' + session.id;
   for (const auto& event : session.events) {
     if (!event.is_object()) continue;
     auto type = event.value("type", "");
     if (type == "user" || type == "assistant")
-      haystack += '\n' + lower_copy(event_text(event));
+      haystack += '\n' + niminal::lower_copy(event_text(event));
     else if (type == "tool_result")
-      haystack += '\n' + lower_copy(event.value("output", ""));
+      haystack += '\n' + niminal::lower_copy(event.value("output", ""));
     else if (type == "compaction")
-      haystack += '\n' + lower_copy(event.value("summary", ""));
+      haystack += '\n' + niminal::lower_copy(event.value("summary", ""));
   }
   return haystack.find(needle) != std::string::npos;
 }

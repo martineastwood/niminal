@@ -26,6 +26,7 @@ std::string provider_names();
 std::string infer_provider(std::string_view api_url);
 std::string read_api_key(const ProviderSpec& spec);
 void apply_provider(niminal::Agent& agent, const Config& cfg);
-bool select_provider(Config& cfg, std::string_view name, std::string* err);
+void normalize_config(Config& cfg);
+niminal::Result<void> select_provider(Config& cfg, std::string_view name);
 
 }  // namespace niminal::app

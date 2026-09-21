@@ -1,4 +1,6 @@
 #include "models_dev.hpp"
+
+#include <niminal/text.hpp>
 #include "config.hpp"
 
 #include <niminal/http.hpp>
@@ -22,12 +24,6 @@ std::mutex g_mu;
 std::vector<CatalogModel> g_models;
 fs::path g_path;
 bool g_loaded = false;
-
-std::string lower(std::string s) {
-  for (char& c : s)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-  return s;
-}
 
 fs::path default_path() {
   try {
@@ -70,7 +66,7 @@ std::vector<CatalogModel> parse_catalog(const json& doc) {
                    option["values"].is_array()) {
             for (const auto& value : option["values"]) {
               if (!value.is_string()) continue;
-              auto effort = lower(value.get<std::string>());
+              auto effort = niminal::lower_copy(value.get<std::string>());
               if (effort.empty()) continue;
               if (std::find(row.efforts.begin(), row.efforts.end(), effort) ==
                   row.efforts.end())
@@ -126,7 +122,7 @@ void set_catalog_cache_path(const fs::path& path) {
 }
 
 std::string catalog_name(std::string_view provider) {
-  auto p = lower(std::string(provider));
+  auto p = niminal::lower_copy(std::string(provider));
   if (p == "opencode") return "opencode-go";
   if (p == "opencodezen") return "opencode";
   return p;
@@ -152,16 +148,11 @@ bool catalog_stale(int max_age_seconds) {
 
 bool refresh_catalog() {
   niminal::HttpClient http;
-  niminal::HttpResponse res;
-  try {
-    res = http.get(kUrl, 20);
-  } catch (...) {
-    return false;
-  }
-  if (res.status >= 400 || res.body.empty()) return false;
+  auto res = http.get(kUrl, 20);
+  if (!res || res->status >= 400 || res->body.empty()) return false;
   json doc;
   try {
-    doc = json::parse(res.body);
+    doc = json::parse(res->body);
   } catch (...) {
     return false;
   }
@@ -176,7 +167,7 @@ bool refresh_catalog() {
   {
     std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
     if (!out) return false;
-    out << res.body;
+    out << res->body;
   }
   fs::rename(tmp, path, ec);
   if (ec) {
@@ -200,12 +191,12 @@ std::vector<CatalogModel> search_catalog(std::string_view provider,
                                          const std::vector<std::string>& skip) {
   if (cap <= 0) return {};
   auto want = catalog_name(provider);
-  auto q = lower(std::string(query));
+  auto q = niminal::lower_copy(std::string(query));
   std::vector<std::string> skip_l;
   skip_l.reserve(skip.size());
-  for (const auto& s : skip) skip_l.push_back(lower(s));
+  for (const auto& s : skip) skip_l.push_back(niminal::lower_copy(s));
   auto skipped = [&](const std::string& id) {
-    auto l = lower(id);
+    auto l = niminal::lower_copy(id);
     return std::find(skip_l.begin(), skip_l.end(), l) != skip_l.end();
   };
   std::lock_guard<std::mutex> lock(g_mu);
@@ -214,7 +205,7 @@ std::vector<CatalogModel> search_catalog(std::string_view provider,
   for (const auto& row : g_models) {
     if (row.provider != want) continue;
     if (skipped(row.id)) continue;
-    if (!q.empty() && lower(row.id).find(q) == std::string::npos) continue;
+    if (!q.empty() && niminal::lower_copy(row.id).find(q) == std::string::npos) continue;
     out.push_back(row);
   }
   std::sort(out.begin(), out.end(),
@@ -228,11 +219,11 @@ ReasoningCaps lookup_reasoning_caps(std::string_view provider,
   ReasoningCaps caps;
   if (provider.empty() || model.empty()) return caps;
   auto want_p = catalog_name(provider);
-  auto want_m = lower(std::string(model));
+  auto want_m = niminal::lower_copy(std::string(model));
   std::lock_guard<std::mutex> lock(g_mu);
   ensure_locked();
   for (const auto& row : g_models) {
-    if (row.provider != want_p || lower(row.id) != want_m) continue;
+    if (row.provider != want_p || niminal::lower_copy(row.id) != want_m) continue;
     caps.known = true;
     caps.reasoning = row.reasoning;
     caps.toggle = row.toggle;

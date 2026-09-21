@@ -1,5 +1,7 @@
 #include "mentions.hpp"
 
+#include <niminal/text.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -13,13 +15,6 @@ constexpr size_t kAttachmentLimit = 100'000;
 bool mention_char(char c) {
   return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' ||
          c == '/' || c == '-' || c == '+';
-}
-
-std::string lower(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return value;
 }
 
 std::string basename(std::string_view path) {
@@ -45,13 +40,13 @@ std::optional<FileMention> file_mention_at(std::string_view text, size_t cursor)
 std::vector<std::string> suggest_mentioned_files(const Workspace& workspace,
                                                  std::string_view query,
                                                  size_t limit) {
-  auto q = lower(std::string(query));
+  auto q = niminal::lower_copy(std::string(query));
   auto files = workspace.list_files();
   std::vector<std::string> out;
   auto add = [&](bool basename_match) {
     for (const auto& file : files) {
-      auto path = lower(file);
-      auto name = lower(basename(file));
+      auto path = niminal::lower_copy(file);
+      auto name = niminal::lower_copy(basename(file));
       bool match = q.empty() || (basename_match ? name.starts_with(q)
                                                 : path.find(q) != std::string::npos);
       if (!match || std::find(out.begin(), out.end(), file) != out.end()) continue;

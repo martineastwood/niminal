@@ -79,6 +79,8 @@ struct ExtensionEntry {
 std::string edit_text_externally(const std::string& text);
 
 class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
+  struct Access {};
+
  public:
   struct Impl;
   static std::shared_ptr<ExtensionRuntime> start(
@@ -111,9 +113,10 @@ class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
   std::vector<std::string> status_texts() const;
   std::vector<std::string> widget_lines() const;
 
- private:
-  explicit ExtensionRuntime(std::filesystem::path workspace,
+  explicit ExtensionRuntime(Access, std::filesystem::path workspace,
                             std::atomic<bool>* cancel);
+
+ private:
   std::unique_ptr<Impl> impl_;
   std::filesystem::path workspace_;
   std::atomic<bool>* cancel_ = nullptr;

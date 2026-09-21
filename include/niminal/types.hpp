@@ -1,5 +1,6 @@
 #pragma once
 
+#include <expected>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -20,6 +21,9 @@ struct Error : std::runtime_error {
 struct Cancelled : Error {
   Cancelled() : Error("interrupted") {}
 };
+
+template <typename T>
+using Result = std::expected<T, Error>;
 
 struct Usage {
   int input_tokens = 0;

@@ -1,6 +1,8 @@
 #include "thinking.hpp"
 #include "models_dev.hpp"
 
+#include <niminal/text.hpp>
+
 #include <algorithm>
 #include <stdexcept>
 
@@ -8,12 +10,6 @@ namespace niminal::app {
 namespace {
 
 using json = nlohmann::json;
-
-std::string lower(std::string s) {
-  for (char& c : s)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-  return s;
-}
 
 bool starts_family(std::string_view model, std::string_view family) {
   if (model == family) return true;
@@ -28,7 +24,7 @@ int level_index(std::string_view s) {
 }
 
 std::vector<std::string> anthropic_efforts(std::string_view model) {
-  auto m = lower(std::string(model));
+  auto m = niminal::lower_copy(std::string(model));
   for (const char* family : {"claude-sonnet-4-6", "claude-opus-4-6"})
     if (starts_family(m, family)) return {"low", "medium", "high", "max"};
   for (const char* family : {"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
@@ -49,7 +45,7 @@ int budget_tokens(std::string_view level) {
 
 json effort_options(std::string_view provider, std::string_view level) {
   json out = json::object();
-  auto p = lower(std::string(provider));
+  auto p = niminal::lower_copy(std::string(provider));
   auto lv = std::string(level);
   if (p == "openrouter" || p == "openai" || p == "hyper")
     out["reasoning"] = json{{"effort", lv}};
@@ -65,7 +61,7 @@ json effort_options(std::string_view provider, std::string_view level) {
 }
 
 json toggle_options(std::string_view provider) {
-  auto p = lower(std::string(provider));
+  auto p = niminal::lower_copy(std::string(provider));
   if (p == "openrouter") return json{{"reasoning", json{{"enabled", true}}}};
   if (p == "openai" || p == "hyper")
     return json{{"reasoning", json{{"effort", "medium"}}}};
@@ -77,7 +73,7 @@ json toggle_options(std::string_view provider) {
 }
 
 json max_token_options(std::string_view provider, std::string_view level) {
-  auto p = lower(std::string(provider));
+  auto p = niminal::lower_copy(std::string(provider));
   if (p == "openrouter")
     return json{{"reasoning", json{{"max_tokens", budget_tokens(level)}}}};
   return effort_options(p, level);
@@ -103,11 +99,11 @@ Plan resolve(std::string_view provider, std::string_view model,
              std::string_view want) {
   Plan plan;
   if (want.empty()) return plan;
-  auto p = lower(std::string(provider));
+  auto p = niminal::lower_copy(std::string(provider));
   auto m = std::string(model);
   auto efforts = anthropic_efforts(m);
   if (p == "anthropic" && !efforts.empty()) {
-    bool required = want == "none" && starts_family(lower(m), "claude-fable-5");
+    bool required = want == "none" && starts_family(niminal::lower_copy(m), "claude-fable-5");
     auto level = required ? "low" : std::string(want);
     if (level == "none") {
       plan.label = "off";
@@ -173,7 +169,7 @@ std::string thinking_levels_help() {
 }
 
 std::string normalize_thinking(std::string_view value) {
-  auto v = lower(std::string(value));
+  auto v = niminal::lower_copy(std::string(value));
   while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(v.begin());
   while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
   if (v.empty()) return {};
@@ -209,11 +205,11 @@ std::string snap_to_efforts(std::string_view want,
 
 std::vector<std::string> thinking_choices(std::string_view provider,
                                           std::string_view model) {
-  auto p = lower(std::string(provider));
+  auto p = niminal::lower_copy(std::string(provider));
   if (p == "anthropic") {
     auto efforts = anthropic_efforts(model);
     if (!efforts.empty()) {
-      if (starts_family(lower(std::string(model)), "claude-fable-5")) return efforts;
+      if (starts_family(niminal::lower_copy(std::string(model)), "claude-fable-5")) return efforts;
       std::vector<std::string> out{"none"};
       out.insert(out.end(), efforts.begin(), efforts.end());
       return out;

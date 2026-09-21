@@ -264,6 +264,7 @@ int run_json(niminal::Agent& agent, niminal::app::Session& session,
 
 int main(int argc, char** argv) {
   auto cfg = niminal::app::load_config();
+  niminal::app::normalize_config(cfg);
   if (const char* model = std::getenv("NIMINAL_MODEL"); model && *model)
     cfg.model = model;
   if (const char* url = std::getenv("NIMINAL_API_URL"); url && *url)
@@ -312,9 +313,8 @@ int main(int argc, char** argv) {
         std::cerr << kUsage;
         return 2;
       }
-      std::string err;
-      if (!niminal::app::select_provider(cfg, argv[++i], &err)) {
-        std::cerr << err << '\n';
+      if (auto result = niminal::app::select_provider(cfg, argv[++i]); !result) {
+        std::cerr << result.error().what() << '\n';
         return 2;
       }
       provider_from_cli = true;

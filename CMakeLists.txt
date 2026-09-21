@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(niminal VERSION 0.1.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -117,6 +117,7 @@ target_sources(niminal_app PRIVATE src/app/permissions.cpp src/app/trust.cpp)
 target_sources(niminal_app PRIVATE src/app/extensions.cpp)
 target_sources(niminal_app PRIVATE src/app/diff.cpp)
 target_sources(niminal_app PRIVATE src/app/theme.cpp)
+target_sources(niminal_app PRIVATE src/app/rpc_protocol.cpp)
 set_target_properties(niminal_app PROPERTIES OUTPUT_NAME niminal)
 target_include_directories(niminal_app PRIVATE src/app)
 target_link_libraries(niminal_app PRIVATE
@@ -129,7 +130,7 @@ target_include_directories(niminal_workspace_test PRIVATE src/app)
 target_compile_options(niminal_workspace_test PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(niminal_mentions_test tests/mentions_test.cpp src/app/mentions.cpp src/app/workspace.cpp)
-target_include_directories(niminal_mentions_test PRIVATE src/app)
+target_include_directories(niminal_mentions_test PRIVATE src/app include)
 target_compile_options(niminal_mentions_test PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(niminal_json_mode_test tests/json_mode_test.cpp src/app/json_mode.cpp)
@@ -151,7 +152,7 @@ add_executable(niminal_instructions_test
   tests/instructions_test.cpp
   src/app/instructions.cpp
   src/app/config.cpp)
-target_include_directories(niminal_instructions_test PRIVATE src/app)
+target_include_directories(niminal_instructions_test PRIVATE src/app include)
 target_link_libraries(niminal_instructions_test PRIVATE nlohmann_json::nlohmann_json)
 target_compile_options(niminal_instructions_test PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -163,7 +164,7 @@ target_compile_options(niminal_skills_test PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(niminal_prompts_test tests/prompts_test.cpp src/app/prompts.cpp src/app/config.cpp
   src/app/trust.cpp)
-target_include_directories(niminal_prompts_test PRIVATE src/app)
+target_include_directories(niminal_prompts_test PRIVATE src/app include)
 target_link_libraries(niminal_prompts_test PRIVATE nlohmann_json::nlohmann_json)
 target_compile_options(niminal_prompts_test PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -260,6 +261,15 @@ target_include_directories(niminal_theme_test PRIVATE src/app)
 target_link_libraries(niminal_theme_test PRIVATE ftxui::dom)
 target_compile_options(niminal_theme_test PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(niminal_http_test tests/http_test.cpp)
+target_link_libraries(niminal_http_test PRIVATE niminal::niminal)
+target_compile_options(niminal_http_test PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(niminal_rpc_test tests/rpc_test.cpp src/app/rpc_protocol.cpp)
+target_include_directories(niminal_rpc_test PRIVATE src/app include)
+target_link_libraries(niminal_rpc_test PRIVATE nlohmann_json::nlohmann_json)
+target_compile_options(niminal_rpc_test PRIVATE -Wall -Wextra -Wpedantic)
+
 enable_testing()
 add_test(NAME workspace COMMAND niminal_workspace_test)
 add_test(NAME mentions COMMAND niminal_mentions_test)
@@ -281,3 +291,5 @@ add_test(NAME trust COMMAND niminal_trust_test)
 add_test(NAME extensions COMMAND niminal_extensions_test)
 add_test(NAME diff COMMAND niminal_diff_test)
 add_test(NAME theme COMMAND niminal_theme_test)
+add_test(NAME http COMMAND niminal_http_test)
+add_test(NAME rpc COMMAND niminal_rpc_test)

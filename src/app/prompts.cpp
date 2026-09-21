@@ -2,6 +2,8 @@
 #include "config.hpp"
 #include "trust.hpp"
 
+#include <niminal/text.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -15,12 +17,6 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr size_t kMaxPromptBytes = 100'000;
-
-std::string lower_copy(std::string value) {
-  for (char& c : value)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-  return value;
-}
 
 std::string trim_copy(std::string value) {
   auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
@@ -77,7 +73,7 @@ PromptTemplate parse_template(const fs::path& path) {
       }
       auto colon = stripped.find(':');
       if (colon == std::string::npos || colon == 0) continue;
-      if (lower_copy(trim_copy(stripped.substr(0, colon))) == "description")
+      if (niminal::lower_copy(trim_copy(stripped.substr(0, colon))) == "description")
         result.description = unquote(stripped.substr(colon + 1));
     }
     if (!closed) return {};
@@ -124,14 +120,14 @@ void add_dir(std::map<std::string, PromptTemplate>& found, const fs::path& dir) 
   std::vector<fs::path> paths;
   for (const auto& entry : fs::directory_iterator(dir, ec)) {
     if (entry.is_regular_file(ec) &&
-        lower_copy(entry.path().extension().string()) == ".md")
+        niminal::lower_copy(entry.path().extension().string()) == ".md")
       paths.push_back(entry.path());
   }
   std::sort(paths.begin(), paths.end());
   for (const auto& path : paths) {
     auto prompt = parse_template(path);
     if (!prompt.name.empty() && !prompt.body.empty())
-      found[lower_copy(prompt.name)] = std::move(prompt);
+      found[niminal::lower_copy(prompt.name)] = std::move(prompt);
   }
 }
 
@@ -154,8 +150,8 @@ std::vector<PromptTemplate> discover_prompts(const fs::path& workspace) {
   for (auto& [_, prompt] : found) result.push_back(std::move(prompt));
   std::sort(result.begin(), result.end(), [](const PromptTemplate& a,
                                              const PromptTemplate& b) {
-    auto an = lower_copy(a.name);
-    auto bn = lower_copy(b.name);
+    auto an = niminal::lower_copy(a.name);
+    auto bn = niminal::lower_copy(b.name);
     return an == bn ? a.path < b.path : an < bn;
   });
   return result;
@@ -163,9 +159,9 @@ std::vector<PromptTemplate> discover_prompts(const fs::path& workspace) {
 
 std::optional<PromptTemplate> load_prompt(const fs::path& workspace,
                                           const std::string& name) {
-  auto wanted = lower_copy(name);
+  auto wanted = niminal::lower_copy(name);
   for (auto& prompt : discover_prompts(workspace))
-    if (lower_copy(prompt.name) == wanted) return prompt;
+    if (niminal::lower_copy(prompt.name) == wanted) return prompt;
   return std::nullopt;
 }
 

@@ -5,7 +5,17 @@
 
 #include <niminal/agent.hpp>
 
+#include <nlohmann/json.hpp>
+
+#include <string>
+#include <string_view>
+
 namespace niminal::app {
+
+bool valid_rpc_queue_mode(std::string_view mode);
+nlohmann::json rpc_response_event(const std::string& id, bool ok,
+                                  const std::string& state = {},
+                                  const std::string& error = {});
 
 class RpcRuntime {
  public:

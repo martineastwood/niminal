@@ -1,4 +1,5 @@
 #include <niminal/agent.hpp>
+#include <niminal/text.hpp>
 #include <niminal/openai.hpp>
 
 #include <future>
@@ -39,9 +40,7 @@ const Tool* find_tool(const std::vector<Tool>& tools, std::string_view name) {
 }
 
 bool looks_overflow(std::string_view msg) {
-  std::string s(msg);
-  for (char& c : s)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  const std::string s = lower_copy(std::string(msg));
   return s.find("context length") != std::string::npos ||
          s.find("context window") != std::string::npos ||
          s.find("maximum context") != std::string::npos ||

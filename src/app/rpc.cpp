@@ -40,18 +40,6 @@ std::string trim_copy(std::string text) {
   return text.substr(first, last - first + 1);
 }
 
-nlohmann::json response_event(const std::string& id, bool ok,
-                              const std::string& state = {},
-                              const std::string& error = {}) {
-  nlohmann::json out = {{"version", kJsonEventVersion},
-                        {"type", "response"},
-                        {"id", id},
-                        {"ok", ok}};
-  if (!state.empty()) out["state"] = state;
-  if (!error.empty()) out["error"] = error;
-  return out;
-}
-
 bool string_field(const nlohmann::json& object, const char* name,
                   std::string& value) {
   auto it = object.find(name);
@@ -60,11 +48,9 @@ bool string_field(const nlohmann::json& object, const char* name,
   return true;
 }
 
-bool valid_queue_mode(const std::string& mode) {
-  return mode == "all" || mode == "one-at-a-time";
-}
-
 }  // namespace
+
+namespace {
 
 class RpcRuntimeImpl {
  public:
@@ -288,19 +274,19 @@ class RpcRuntimeImpl {
     try {
       handle_command(nlohmann::json::parse(line));
     } catch (const std::exception& error) {
-      send(response_event("", false, {}, "Invalid JSON: " + std::string(error.what())));
+      send(rpc_response_event("", false, {}, "Invalid JSON: " + std::string(error.what())));
     }
   }
 
   void handle_command(const nlohmann::json& command) {
     if (!command.is_object()) {
-      send(response_event("", false, {}, "Command must be a JSON object."));
+      send(rpc_response_event("", false, {}, "Command must be a JSON object."));
       return;
     }
     std::string id;
     std::string type;
     if (!string_field(command, "id", id) || !string_field(command, "type", type)) {
-      send(response_event("", false, {},
+      send(rpc_response_event("", false, {},
                           "Command requires string id and type fields."));
       return;
     }
@@ -308,23 +294,23 @@ class RpcRuntimeImpl {
     if (type == "prompt") {
       std::string message;
       if (!string_field(command, "message", message) || trim_copy(message).empty()) {
-        send(response_event(id, false, {}, "prompt requires message."));
+        send(rpc_response_event(id, false, {}, "prompt requires message."));
       } else if (shutting_down_) {
-        send(response_event(id, false, {}, "RPC is shutting down."));
+        send(rpc_response_event(id, false, {}, "RPC is shutting down."));
       } else if (!busy()) {
-        send(response_event(id, true, "started"));
+        send(rpc_response_event(id, true, "started"));
         start_prompt(id, message);
       } else {
         std::string behavior;
         if (!string_field(command, "streamingBehavior", behavior) ||
             (behavior != "steer" && behavior != "followUp")) {
-          send(response_event(
+          send(rpc_response_event(
               id, false, {},
               "prompt requires streamingBehavior: steer or followUp while busy."));
         } else {
           const std::string mode = behavior == "steer" ? "steer" : "follow_up";
           enqueue({id, message, mode});
-          send(response_event(id, true, "queued"));
+          send(rpc_response_event(id, true, "queued"));
           send(queue_event(session_.id, "enqueue", queue_depth(), message, id, mode));
         }
       }
@@ -334,15 +320,15 @@ class RpcRuntimeImpl {
     if (type == "steer" || type == "follow_up") {
       std::string message;
       if (!string_field(command, "message", message) || trim_copy(message).empty()) {
-        send(response_event(id, false, {}, type + " requires message."));
+        send(rpc_response_event(id, false, {}, type + " requires message."));
       } else if (shutting_down_) {
-        send(response_event(id, false, {}, "RPC is shutting down."));
+        send(rpc_response_event(id, false, {}, "RPC is shutting down."));
       } else if (!busy()) {
-        send(response_event(id, false, {}, "Agent is idle; use prompt."));
+        send(rpc_response_event(id, false, {}, "Agent is idle; use prompt."));
       } else {
         const std::string mode = type == "steer" ? "steer" : "follow_up";
         enqueue({id, message, mode});
-        send(response_event(id, true, "queued"));
+        send(rpc_response_event(id, true, "queued"));
         send(queue_event(session_.id, "enqueue", queue_depth(), message, id, mode));
       }
       return;
@@ -350,12 +336,12 @@ class RpcRuntimeImpl {
 
     if (type == "interrupt") {
       if (busy()) cancel_.store(true);
-      send(response_event(id, true, busy() ? "interrupting" : "idle"));
+      send(rpc_response_event(id, true, busy() ? "interrupting" : "idle"));
       return;
     }
 
     if (type == "get_state") {
-      nlohmann::json response = response_event(id, true);
+      nlohmann::json response = rpc_response_event(id, true);
       response["session_id"] = session_.id;
       response["busy"] = busy();
       response["queued"] = queue_depth() > 0;
@@ -373,7 +359,7 @@ class RpcRuntimeImpl {
 
     if (type == "clear_queue") {
       auto removed = clear_queue();
-      nlohmann::json response = response_event(id, true);
+      nlohmann::json response = rpc_response_event(id, true);
       response["steering"] = std::move(removed.first);
       response["follow_up"] = std::move(removed.second);
       send(response);
@@ -382,8 +368,8 @@ class RpcRuntimeImpl {
 
     if (type == "set_steering_mode" || type == "set_follow_up_mode") {
       std::string mode;
-      if (!string_field(command, "mode", mode) || !valid_queue_mode(mode)) {
-        send(response_event(id, false, {}, "mode must be all or one-at-a-time."));
+      if (!string_field(command, "mode", mode) || !valid_rpc_queue_mode(mode)) {
+        send(rpc_response_event(id, false, {}, "mode must be all or one-at-a-time."));
         return;
       }
       try {
@@ -398,9 +384,9 @@ class RpcRuntimeImpl {
           }
         }
         save_config(config_);
-        send(response_event(id, true));
+        send(rpc_response_event(id, true));
       } catch (const std::exception& error) {
-        send(response_event(id, false, {}, error.what()));
+        send(rpc_response_event(id, false, {}, error.what()));
       }
       return;
     }
@@ -408,11 +394,11 @@ class RpcRuntimeImpl {
     if (type == "shutdown") {
       const bool was_busy = busy();
       request_shutdown();
-      send(response_event(id, true, was_busy ? "stopping" : "stopped"));
+      send(rpc_response_event(id, true, was_busy ? "stopping" : "stopped"));
       return;
     }
 
-    send(response_event(id, false, {}, "Unknown RPC command: " + type));
+    send(rpc_response_event(id, false, {}, "Unknown RPC command: " + type));
   }
 
   int queue_depth() {
@@ -420,6 +406,8 @@ class RpcRuntimeImpl {
     return queue_depth_locked();
   }
 };
+
+}  // namespace
 
 RpcRuntime::RpcRuntime(niminal::Agent& agent, Session& session, Config& config)
     : agent_(agent), session_(session), config_(config) {}

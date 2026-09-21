@@ -8,6 +8,7 @@ using niminal::app::apply_provider;
 using niminal::app::find_provider;
 using niminal::app::infer_provider;
 using niminal::app::provider_names;
+using niminal::app::normalize_config;
 using niminal::app::select_provider;
 
 static int fail(const char* msg) {
@@ -31,20 +32,24 @@ int main() {
     return fail("infer_provider");
 
   Config cfg;
-  std::string err;
-  if (!select_provider(cfg, "anthropic", &err)) return fail(err.c_str());
+  if (auto result = select_provider(cfg, "anthropic"); !result)
+    return fail(result.error().what());
   if (cfg.provider != "anthropic" || cfg.model != "claude-sonnet-4-6")
     return fail("select anthropic default model");
   if (cfg.last_models["openrouter"] != "openai/gpt-4o-mini")
     return fail("remember previous model");
   cfg.model = "claude-opus-4-6";
-  if (!select_provider(cfg, "openai", &err)) return fail(err.c_str());
+  if (auto result = select_provider(cfg, "openai"); !result)
+    return fail(result.error().what());
   if (cfg.model != "gpt-5") return fail("openai default");
-  if (!select_provider(cfg, "anthropic", &err)) return fail(err.c_str());
+  if (auto result = select_provider(cfg, "anthropic"); !result)
+    return fail(result.error().what());
   if (cfg.model != "claude-opus-4-6") return fail("restore last model");
-  if (select_provider(cfg, "codex", &err)) return fail("codex should fail");
-  if (err.find("codex") == std::string::npos) return fail("codex error");
-  if (select_provider(cfg, "nope", &err)) return fail("unknown should fail");
+  auto codex = select_provider(cfg, "codex");
+  if (codex) return fail("codex should fail");
+  if (std::string(codex.error().what()).find("codex") == std::string::npos)
+    return fail("codex error");
+  if (auto bad = select_provider(cfg, "nope"); bad) return fail("unknown should fail");
 
   niminal::Agent agent;
   apply_provider(agent, cfg);
@@ -59,8 +64,9 @@ int main() {
   stale.provider = "anthropic";
   stale.model = "claude-haiku-4-5";
   stale.api_url = "https://api.anthropic.com/v1/chat/completions";
+  normalize_config(stale);
   apply_provider(agent, stale);
   if (agent.api_url.find("/v1/messages") == std::string::npos)
-    return fail("stale chat/completions url should map to messages");
+    return fail("stale api_url should normalize to provider endpoint");
   return 0;
 }

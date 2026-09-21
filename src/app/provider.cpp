@@ -1,6 +1,8 @@
 #include "provider.hpp"
 #include "thinking.hpp"
 
+#include <niminal/text.hpp>
+
 #include <cstdlib>
 #include <map>
 #include <sstream>
@@ -27,12 +29,6 @@ constexpr ProviderSpec kProviders[] = {
      "openai/gpt-4o-mini", true, true, true, true},
 };
 
-std::string lower(std::string s) {
-  for (char& c : s)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-  return s;
-}
-
 std::vector<const char*> env_keys(std::string_view name) {
   if (name == "anthropic") return {"ANTHROPIC_API_KEY"};
   if (name == "google")
@@ -54,7 +50,7 @@ std::map<std::string, std::string> extra_headers(std::string_view name) {
 }  // namespace
 
 const ProviderSpec* find_provider(std::string_view name) {
-  auto n = lower(std::string(name));
+  const auto n = niminal::lower_copy(std::string(name));
   for (const auto& spec : kProviders)
     if (n == spec.name) return &spec;
   return nullptr;
@@ -97,18 +93,17 @@ std::string read_api_key(const ProviderSpec& spec) {
   return {};
 }
 
+void normalize_config(Config& cfg) {
+  const ProviderSpec* spec = find_provider(cfg.provider);
+  if (spec && cfg.api_url != spec->endpoint) cfg.api_url = spec->endpoint;
+}
+
 void apply_provider(niminal::Agent& agent, const Config& cfg) {
   const ProviderSpec* spec = find_provider(cfg.provider);
   if (!spec) spec = find_provider("openrouter");
   agent.provider = spec->name;
   agent.model = cfg.model.empty() ? spec->default_model : cfg.model;
-  bool stale_compat =
-      (spec->name == std::string("anthropic") &&
-       cfg.api_url.find("/chat/completions") != std::string::npos) ||
-      (spec->name == std::string("google") &&
-       cfg.api_url.find("/openai/") != std::string::npos);
-  agent.api_url = (cfg.api_url.empty() || stale_compat) ? spec->endpoint
-                                                       : cfg.api_url;
+  agent.api_url = cfg.api_url.empty() ? spec->endpoint : cfg.api_url;
   agent.api_key = read_api_key(*spec);
   agent.key_hint = env_keys(spec->name).front();
   agent.extra_headers = extra_headers(spec->name);
@@ -119,19 +114,16 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
   agent.extra = thinking_body(spec->name, agent.model, cfg.thinking);
 }
 
-bool select_provider(Config& cfg, std::string_view name, std::string* err) {
-  auto n = lower(std::string(name));
-  if (n == "codex") {
-    if (err)
-      *err = "codex is not wired (it talks to a local Codex app-server)";
-    return false;
-  }
+niminal::Result<void> select_provider(Config& cfg, std::string_view name) {
+  const auto n = niminal::lower_copy(std::string(name));
+  if (n == "codex")
+    return std::unexpected(
+        niminal::Error("codex is not wired (it talks to a local Codex app-server)"));
   const ProviderSpec* spec = find_provider(n);
   if (!spec) {
-    if (err)
-      *err = "unknown provider '" + std::string(name) + "' (use " +
-             provider_names() + ")";
-    return false;
+    return std::unexpected(
+        niminal::Error("unknown provider '" + std::string(name) + "' (use " +
+                       provider_names() + ")"));
   }
   if (!cfg.provider.empty() && !cfg.model.empty())
     cfg.last_models[cfg.provider] = cfg.model;
@@ -141,7 +133,7 @@ bool select_provider(Config& cfg, std::string_view name, std::string* err) {
                   ? it->second
                   : spec->default_model;
   cfg.api_url = spec->endpoint;
-  return true;
+  return {};
 }
 
 }  // namespace niminal::app

@@ -9,7 +9,7 @@ This is the C++ niminal tree: a small AI library plus the coding-agent app
 ## Prerequisites
 
 - CMake 3.22 or later
-- a C++20 compiler
+- a C++23 compiler
 - OpenSSL 3 development libraries (static `.a` files)
 
 On macOS:

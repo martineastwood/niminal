@@ -1,5 +1,7 @@
 #include "extensions.hpp"
 
+#include <niminal/text.hpp>
+
 #include "compaction.hpp"
 #include "config.hpp"
 #include "session.hpp"
@@ -44,12 +46,6 @@ std::string string_field(const json& value, const char* key) {
   auto it = value.find(key);
   return it != value.end() && it->is_string() ? it->get<std::string>()
                                                : std::string();
-}
-
-std::string lower_copy(std::string value) {
-  for (char& c : value)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  return value;
 }
 
 std::vector<std::string> string_array(const json& value, const char* key) {
@@ -153,7 +149,7 @@ bool external_read_only_capabilities(const json& doc) {
   for (const auto& item : *it) {
     if (!item.is_string())
       throw std::runtime_error("capabilities must contain strings");
-    const auto value = lower_copy(item.get<std::string>());
+    const auto value = niminal::lower_copy(item.get<std::string>());
     if (value != "read" && value != "write" && value != "shell" &&
         value != "network" && value != "user")
       throw std::runtime_error("unknown capability: " + value);
@@ -756,7 +752,8 @@ const char* hook_event_name(HookEvent event) {
   return "";
 }
 
-ExtensionRuntime::ExtensionRuntime(fs::path workspace, std::atomic<bool>* cancel)
+ExtensionRuntime::ExtensionRuntime(Access, fs::path workspace,
+                                   std::atomic<bool>* cancel)
     : impl_(std::make_unique<Impl>()), workspace_(std::move(workspace)),
       cancel_(cancel) {}
 
@@ -960,7 +957,7 @@ bool read_only_capabilities(const json& tool) {
   bool read_only = true;
   for (const auto& item : *it) {
     if (!item.is_string()) throw std::runtime_error("capabilities must be strings");
-    auto value = lower_copy(item.get<std::string>());
+    auto value = niminal::lower_copy(item.get<std::string>());
     if (value != "read" && value != "write" && value != "shell" &&
         value != "network" && value != "user")
       throw std::runtime_error("unknown capability: " + value);
@@ -975,8 +972,8 @@ bool read_only_capabilities(const json& tool) {
 std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(
     const fs::path& workspace, const std::string& session_id,
     std::atomic<bool>* cancel) {
-  auto runtime = std::shared_ptr<ExtensionRuntime>(
-      new ExtensionRuntime(canonical_workspace(workspace), cancel));
+  auto runtime = std::make_shared<ExtensionRuntime>(
+      Access{}, canonical_workspace(workspace), cancel);
   std::signal(SIGPIPE, SIG_IGN);
   for (const auto& dir : extension_dirs(runtime->workspace_)) {
     Manifest manifest;
@@ -1057,7 +1054,7 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(
                                      "': name collides with a built-in tool");
         continue;
       }
-      external_tools[lower_copy(tool.name)] = std::move(tool);
+      external_tools[niminal::lower_copy(tool.name)] = std::move(tool);
     } catch (const std::exception& e) {
       runtime->warnings_.push_back("skipping " + (dir / "tool.json").string() +
                                    ": " + e.what());
@@ -1070,7 +1067,8 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(
 
 std::vector<niminal::Tool> ExtensionRuntime::tools() {
   std::map<std::string, RegisteredTool> chosen;
-  for (const auto& tool : impl_->tools) chosen[lower_copy(tool.name)] = tool;
+  for (const auto& tool : impl_->tools)
+    chosen[niminal::lower_copy(tool.name)] = tool;
   std::vector<niminal::Tool> result;
   auto self = shared_from_this();
   for (const auto& [_, tool] : chosen) {
@@ -1104,7 +1102,7 @@ std::vector<niminal::Tool> ExtensionRuntime::tools() {
         tool.read_only, true});
   }
   for (const auto& tool : impl_->external_tools) {
-    if (chosen.contains(lower_copy(tool.name))) {
+    if (chosen.contains(niminal::lower_copy(tool.name))) {
       warnings_.push_back("skipping external tool '" + tool.name +
                           "': name is already registered");
       continue;
@@ -1126,7 +1124,7 @@ json ExtensionRuntime::invoke(const std::string& name,
                               const std::string& arguments,
                               const json& context) {
   for (const auto& command : commands_) {
-    if (lower_copy(command.name) != lower_copy(name)) continue;
+    if (niminal::lower_copy(command.name) != niminal::lower_copy(name)) continue;
     json message{{"type", "command"}, {"id", std::to_string(++impl_->next_id)},
                  {"name", command.name}, {"arguments", arguments}};
     if (!context.is_null() && !context.empty()) message["context"] = context;
@@ -1135,7 +1133,7 @@ json ExtensionRuntime::invoke(const std::string& name,
   }
   for (auto it = impl_->tools.rbegin(); it != impl_->tools.rend(); ++it) {
     const auto& tool = *it;
-    if (lower_copy(tool.name) != lower_copy(name)) continue;
+    if (niminal::lower_copy(tool.name) != niminal::lower_copy(name)) continue;
     json input = json::object();
     if (!arguments.empty()) input = json::parse(arguments);
     return request(*impl_, *impl_->processes[tool.extension],
@@ -1428,7 +1426,7 @@ void install_extension_tools(
   auto tools = runtime->tools();
   if (allowed) {
                 tools.erase(std::remove_if(tools.begin(), tools.end(), [&](const auto& tool) {
-                  auto name = lower_copy(tool.name);
+                  auto name = niminal::lower_copy(tool.name);
                   return std::find(allowed->begin(), allowed->end(), name) ==
                          allowed->end();
                 }),

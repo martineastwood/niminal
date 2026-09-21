@@ -92,8 +92,8 @@ struct HttpClient::Impl {
   }
 };
 
-HttpClient::HttpClient() : impl_(new Impl) {}
-HttpClient::~HttpClient() { delete impl_; }
+HttpClient::HttpClient() : impl_(std::make_unique<Impl>()) {}
+HttpClient::~HttpClient() = default;
 
 namespace {
 
@@ -135,9 +135,9 @@ void apply_post(CURL* easy, const std::string& body) {
 
 }  // namespace
 
-HttpResponse HttpClient::post(std::string_view url,
-                              const std::map<std::string, std::string>& headers,
-                              std::string_view body) {
+Result<HttpResponse> HttpClient::post(std::string_view url,
+                                      const std::map<std::string, std::string>& headers,
+                                      std::string_view body) {
   HttpResponse out;
   WriteBuf buf{&out.body, {}, nullptr, nullptr, {}};
   auto* hdrs = slist_from(headers);
@@ -153,11 +153,12 @@ HttpResponse HttpClient::post(std::string_view url,
   curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &out.status);
   curl_slist_free_all(hdrs);
   if (rc != CURLE_OK)
-    throw Error(std::string("http: ") + curl_easy_strerror(rc));
+    return std::unexpected(
+        Error(std::string("http: ") + curl_easy_strerror(rc)));
   return out;
 }
 
-void HttpClient::post_sse(
+Result<void> HttpClient::post_sse(
     std::string_view url, const std::map<std::string, std::string>& headers,
     std::string_view body,
     const std::function<void(std::string_view json_data)>& on_data,
@@ -185,20 +186,25 @@ void HttpClient::post_sse(
   curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &status);
   curl_slist_free_all(hdrs);
   if (buf.error) {
-    if (cancel && cancel->load()) throw Cancelled();
-    std::rethrow_exception(buf.error);
+    if (cancel && cancel->load()) return std::unexpected(Cancelled());
+    try {
+      std::rethrow_exception(buf.error);
+    } catch (const std::exception& e) {
+      return std::unexpected(Error(e.what()));
+    }
   }
   if (cancel && cancel->load() &&
       (rc == CURLE_ABORTED_BY_CALLBACK || rc == CURLE_WRITE_ERROR))
-    throw Cancelled();
+    return std::unexpected(Cancelled());
   if (rc != CURLE_OK)
-    throw Error(std::string("http: ") + curl_easy_strerror(rc));
-  if (status >= 400) {
-    throw Error("http " + std::to_string(status) + ": " + raw);
-  }
+    return std::unexpected(
+        Error(std::string("http: ") + curl_easy_strerror(rc)));
+  if (status >= 400)
+    return std::unexpected(Error("http " + std::to_string(status) + ": " + raw));
+  return {};
 }
 
-HttpResponse HttpClient::get(std::string_view url, long timeout_seconds) {
+Result<HttpResponse> HttpClient::get(std::string_view url, long timeout_seconds) {
   HttpResponse out;
   WriteBuf buf{&out.body, {}, nullptr, nullptr, {}};
   auto* hdrs = slist_from({});
@@ -214,7 +220,8 @@ HttpResponse HttpClient::get(std::string_view url, long timeout_seconds) {
   curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &out.status);
   curl_slist_free_all(hdrs);
   if (rc != CURLE_OK)
-    throw Error(std::string("http: ") + curl_easy_strerror(rc));
+    return std::unexpected(
+        Error(std::string("http: ") + curl_easy_strerror(rc)));
   return out;
 }
 
