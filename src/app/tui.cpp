@@ -155,6 +155,33 @@ std::string one_line(std::string s, size_t n) {
   return s;
 }
 
+Element paragraph_preserving_whitespace(std::string_view value) {
+  Elements rows;
+  size_t line_start = 0;
+  while (true) {
+    const auto newline = value.find('\n', line_start);
+    const auto line_end = newline == std::string_view::npos ? value.size()
+                                                              : newline;
+    Elements parts;
+    size_t start = line_start;
+    while (start < line_end) {
+      size_t end = start + 1;
+      if (value[start] == ' ') {
+        while (end < line_end && value[end] == ' ') ++end;
+      } else {
+        while (end < line_end && value[end] != ' ') ++end;
+      }
+      parts.push_back(text(value.substr(start, end - start)));
+      start = end;
+    }
+    if (parts.empty()) parts.push_back(text(""));
+    rows.push_back(hflow(std::move(parts)));
+    if (newline == std::string_view::npos) break;
+    line_start = newline + 1;
+  }
+  return vbox(std::move(rows));
+}
+
 std::string tool_summary(const std::string& name, const std::string& args) {
   json j = json::object();
   try {
@@ -674,6 +701,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   std::vector<ExtensionEntry> extension_entries_pending;
   std::atomic<bool> busy{false};
   std::string activity;
+  std::string footer_notice;
+  std::chrono::steady_clock::time_point footer_notice_until;
   float transcript_y = 1.f;
   bool pasting = false;
   bool stick_bottom = true;
@@ -852,6 +881,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       history.erase(history.begin(),
                     history.begin() + static_cast<std::ptrdiff_t>(history.size() - 500));
     history_i = -1;
+  };
+
+  auto flash_footer = [&](std::string message) {
+    footer_notice = std::move(message);
+    footer_notice_until = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(1500);
+    screen.RequestAnimationFrame();
   };
 
   auto history_prev = [&] {
@@ -1378,6 +1414,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           return;
         }
         copy_to_clipboard(text);
+        flash_footer("Copied to clipboard.");
         blocks.push_back(Block{BlockKind::status, "Copied to clipboard."});
         return;
       }
@@ -1867,26 +1904,27 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     for (const auto& block : blocks) {
       if (block.kind == BlockKind::diff) {
         entries.push_back(render_diff_card(block, theme));
-        entries.push_back(separatorEmpty());
+        entries.push_back(text(""));
         continue;
       }
       auto label = block_label(block.kind);
       auto body = block.kind == BlockKind::assistant
                       ? render_markdown(block.text, theme)
-                      : paragraph(block.kind == BlockKind::thinking
-                                     ? (cfg.show_thinking
-                                            ? block.text
-                                            : clip_text(block.text,
-                                                        cfg.thinking_preview_chars,
-                                                        cfg.thinking_preview_lines))
-                                     : block.text) |
+                      : paragraph_preserving_whitespace(
+                            block.kind == BlockKind::thinking
+                                ? (cfg.show_thinking
+                                       ? block.text
+                                       : clip_text(block.text,
+                                                   cfg.thinking_preview_chars,
+                                                   cfg.thinking_preview_lines))
+                                : block.text) |
                             block_style(block.kind, theme);
       if (label && *label)
         entries.push_back(
             vbox({text(label) | bold | block_style(block.kind, theme), body}));
       else
         entries.push_back(body);
-      entries.push_back(separatorEmpty());
+      entries.push_back(text(""));
     }
 
     std::string activity_line;
@@ -1915,6 +1953,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       for (const auto& status : extensions->status_texts()) {
         if (!activity_line.empty()) activity_line += "  ·  ";
         activity_line += status;
+      }
+    }
+    if (!footer_notice.empty()) {
+      if (std::chrono::steady_clock::now() < footer_notice_until) {
+        if (!activity_line.empty()) activity_line += "  ·  ";
+        activity_line += footer_notice;
+        screen.RequestAnimationFrame();
+      } else {
+        footer_notice.clear();
       }
     }
 
@@ -2032,6 +2079,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       auto sel = screen.GetSelection();
       if (!sel.empty()) {
         copy_to_clipboard(sel);
+        flash_footer("Copied to clipboard.");
         return true;
       }
     }

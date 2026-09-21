@@ -466,7 +466,7 @@ Element wrap_spans(const std::vector<Span>& spans, const Theme& theme) {
 Element render_block(const Block& b, const Theme& theme) {
   switch (b.kind) {
     case Block::blank:
-      return separatorEmpty();
+      return text("");
     case Block::hr:
       return separatorLight() | dim;
     case Block::heading: {

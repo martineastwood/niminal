@@ -1,9 +1,14 @@
 #include "markdown.hpp"
 
+#include <ftxui/dom/node.hpp>
+#include <ftxui/dom/selection.hpp>
+#include <ftxui/screen/screen.hpp>
+
 #include <iostream>
 #include <string>
 
 using niminal::app::markdown_outline;
+using niminal::app::render_markdown;
 
 static int fail(const char* msg, const std::string& got) {
   std::cerr << msg << "\n got:\n" << got << '\n';
@@ -56,6 +61,14 @@ int main() {
       under.find("[b]bold[/b]") == std::string::npos ||
       under.find("a_b_c") == std::string::npos)
     return fail("underscore emphasis", under);
+
+  auto rendered = render_markdown("first\n\nsecond", {});
+  ftxui::Screen screen(20, 3);
+  ftxui::Selection selection(0, 0, 19, 2);
+  ftxui::Render(screen, rendered.get(), selection);
+  if (selection.GetParts() != "first\n\nsecond")
+    return fail("markdown selection should preserve blank lines",
+                selection.GetParts());
 
   return 0;
 }
