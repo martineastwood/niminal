@@ -35,6 +35,15 @@ int main() {
     return fail("tool_call JSON mismatch");
   }
 
+  StreamEvent output{EventKind::tool_output_delta, "compiling src/app/tui.cpp", "bash", "t2"};
+  output.step = 0;
+  auto output_json = niminal::app::json_event(output);
+  if (output_json.value("type", "") != "tool_output_delta" ||
+      output_json.value("tool_id", "") != "t2" || output_json.value("tool_name", "") != "bash" ||
+      output_json.value("delta", "") != "compiling src/app/tui.cpp") {
+    return fail("tool_output_delta JSON mismatch");
+  }
+
   StreamEvent end{EventKind::step_end, {}, {}, {}};
   end.step = 0;
   end.model = "test-model";

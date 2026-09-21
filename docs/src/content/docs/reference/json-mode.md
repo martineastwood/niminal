@@ -37,7 +37,7 @@ All records include `"version":1`.
 | `message_delta` | Streamed assistant text (`delta`) |
 | `thinking_delta` | Streamed thinking text (`delta`) |
 | `tool_call` | Model requested a tool (`tool_id`, `tool_name`, optional `input`) |
-| `tool_output_delta` | Streamed tool output |
+| `tool_output_delta` | Streamed bash output so far (`tool_id`, `tool_name`, `delta` is the captured snapshot, not an append-only chunk) |
 | `tool_result` | Tool finished (`output`, `is_error`) |
 | `error` | Failure (`message`) |
 | `queue` | Steering or follow-up queue change (`action`, `depth`, optional `mode`) |

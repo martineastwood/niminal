@@ -325,6 +325,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::vector<ExtensionEntry> extension_entries_pending;
   std::atomic<bool> busy{false};
   std::string activity;
+  std::optional<std::chrono::steady_clock::time_point> activity_started;
   std::string footer_notice;
   std::string retry_prompt;
   bool retry_available = false;
@@ -619,6 +620,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       activity = "Thinking…";
       break;
     case EventKind::tool_output_delta:
+      if (!ev.tool_id.empty()) {
+        auto tool = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
+          return block.kind == BlockKind::tool && block.tool_id == ev.tool_id;
+        });
+        if (tool != blocks.rend()) {
+          tool->result = ev.text;
+        }
+      }
       break;
     case EventKind::tool_call: {
       Block tool{BlockKind::tool, ev.text};
@@ -627,6 +636,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.push_back(std::move(tool));
     }
       activity = ev.tool_name.empty() ? "Waiting for model…" : "Running " + ev.tool_name + "…";
+      activity_started = std::chrono::steady_clock::now();
       break;
     case EventKind::approval_required:
       blocks.push_back(
@@ -679,6 +689,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         }
       }
       activity = "Waiting for model…";
+      activity_started.reset();
       break;
     case EventKind::user:
       blocks.push_back(Block{BlockKind::user, ev.text});
@@ -712,11 +723,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.push_back(Block{BlockKind::error, ev.text});
       busy = false;
       activity.clear();
+      activity_started.reset();
       retry_available = ev.text != "interrupted" && !retry_prompt.empty();
       break;
     case EventKind::done:
       busy = false;
       activity.clear();
+      activity_started.reset();
       retry_available = false;
       if (handle_turn_idle) {
         handle_turn_idle();
@@ -1695,6 +1708,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         activity_line += ' ';
       }
       activity_line += activity.empty() ? (cancel->load() ? "Stopping…" : "Thinking…") : activity;
+      if (activity_started) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                                 std::chrono::steady_clock::now() - *activity_started)
+                                 .count();
+        activity_line += " · " + std::to_string(elapsed) + "s";
+      }
       int queued = 0;
       {
         std::lock_guard<std::mutex> lock(steering_mu);

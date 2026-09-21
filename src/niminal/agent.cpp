@@ -406,7 +406,20 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
           std::string output;
           bool is_error = false;
           try {
-            output = tool->run(args);
+            if (!tool_output) {
+              output = tool->run(args);
+            } else {
+              struct ToolOutputScope {
+                std::function<void(std::string)>& slot;
+                std::function<void(std::string)> previous;
+                ~ToolOutputScope() { slot = std::move(previous); }
+              } output_scope{*tool_output, *tool_output};
+              *tool_output = [&](std::string snapshot) {
+                emit(StreamEvent{EventKind::tool_output_delta, std::move(snapshot), call.name,
+                                 call.id});
+              };
+              output = tool->run(args);
+            }
             is_error = output == "interrupted" || output.rfind("tool error:", 0) == 0 ||
                        output.rfind("unknown tool:", 0) == 0 ||
                        output.rfind("approval_denied:", 0) == 0;

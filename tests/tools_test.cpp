@@ -4,6 +4,8 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 using niminal::app::Workspace;
@@ -51,9 +53,28 @@ int main() {
     std::cerr << "missing bash or grep\n";
     return 1;
   }
-  auto out = bash->run(nlohmann::json{{"command", "echo niminal-ok"}});
-  if (out.find("niminal-ok") == std::string::npos) {
-    std::cerr << out << '\n';
+  auto cr = bash->run(nlohmann::json{{"command", "printf 'hello\\rworld\\n'"}});
+  if (cr.find("world") == std::string::npos || cr.find("hello") != std::string::npos) {
+    std::cerr << "carriage return should overwrite the current line\n" << cr << '\n';
+    return 1;
+  }
+  std::vector<std::string> snapshots;
+  auto streaming = workspace_tools(
+      ws, &cancel, [&](const std::string& snapshot) { snapshots.push_back(snapshot); });
+  niminal::Tool* streaming_bash = nullptr;
+  for (auto& t : streaming) {
+    if (t.name == "bash") {
+      streaming_bash = &t;
+    }
+  }
+  if (streaming_bash == nullptr) {
+    std::cerr << "missing streaming bash\n";
+    return 1;
+  }
+  auto streamed = streaming_bash->run(nlohmann::json{{"command", "printf 'one\\ntwo\\n'"}});
+  if (snapshots.empty() || snapshots.back().find("two") == std::string::npos ||
+      streamed.find("two") == std::string::npos) {
+    std::cerr << "bash should emit output snapshots while running\n";
     return 1;
   }
   auto parallel =

@@ -162,7 +162,12 @@ niminal::Agent make_agent(niminal::app::Workspace& ws, const niminal::app::Confi
   niminal::app::apply_provider(agent, cfg);
   agent.max_steps = max_steps;
   agent.cancel = cancel;
-  agent.tools = niminal::app::workspace_tools(ws, cancel);
+  agent.tools = niminal::app::workspace_tools(
+      ws, cancel, [sink = agent.tool_output](const std::string& snapshot) {
+        if (sink && *sink) {
+          (*sink)(snapshot);
+        }
+      });
   agent.tools.push_back(niminal::app::skill_tool(ws.root()));
   return agent;
 }

@@ -113,7 +113,12 @@ Creates a new file by default. Existing files require `"overwrite": true`.
 
 Runs in the workspace directory. Default timeout is 120 seconds; allowed range is
 1 through 600. Combined stdout and stderr are returned with an exit code line.
-Output is capped at 100,000 bytes.
+Output is capped at 100,000 bytes. Carriage return overwrites the current line,
+so progress bars do not accumulate.
+
+In the TUI, output streams into the bash card as the command runs. Collapsed
+cards show the first 8 lines. Expand the card to follow the full captured
+output.
 
 ## `skill`
 

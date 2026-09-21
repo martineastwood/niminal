@@ -9,9 +9,11 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <functional>
 #include <poll.h>
 #include <regex>
 #include <sstream>
+#include <string_view>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
@@ -157,8 +159,39 @@ std::string unique_replace(std::string text, const std::string& old_text,
   return text;
 }
 
+void append_shell_output(std::string& output, std::string_view chunk, bool& pending_cr) {
+  for (char c : chunk) {
+    if (pending_cr) {
+      pending_cr = false;
+      if (c != '\n') {
+        const auto pos = output.rfind('\n');
+        if (pos == std::string::npos) {
+          output.clear();
+        } else {
+          output.resize(pos + 1);
+        }
+      }
+    }
+    if (c == '\r') {
+      pending_cr = true;
+      continue;
+    }
+    output.push_back(c);
+  }
+}
+
+bool cap_shell_output(std::string& output) {
+  if (output.size() <= 100'000) {
+    return false;
+  }
+  output.resize(100'000);
+  output += "\n[truncated]";
+  return true;
+}
+
 std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
-                     std::atomic<bool>* cancel) {
+                     std::atomic<bool>* cancel,
+                     const std::function<void(const std::string&)>& on_output) {
   int out_pipe[2];
   if (pipe(out_pipe) != 0) {
     throw WorkspaceError(std::strerror(errno));
@@ -185,6 +218,12 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
   fcntl(out_pipe[0], F_SETFL, O_NONBLOCK);
 
   std::string output;
+  bool pending_cr = false;
+  auto emit = [&] {
+    if (on_output) {
+      on_output(output);
+    }
+  };
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_s);
   bool timed_out = false;
   while (true) {
@@ -199,20 +238,24 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
     int pr = poll(&pfd, 1, static_cast<int>(std::min<long>(remain, 200)));
     if (pr > 0 && ((pfd.revents & POLLIN) != 0)) {
       char buf[4096];
+      bool grew = false;
       while (true) {
         auto n = read(out_pipe[0], buf, sizeof(buf));
         if (n > 0) {
-          output.append(buf, static_cast<size_t>(n));
-          if (output.size() > 100'000) {
-            output.resize(100'000);
-            output += "\n[truncated]";
+          append_shell_output(output, std::string_view(buf, static_cast<size_t>(n)), pending_cr);
+          grew = true;
+          if (cap_shell_output(output)) {
             kill(pid, SIGKILL);
             timed_out = false;
+            emit();
             goto wait_child;
           }
         } else {
           break;
         }
+      }
+      if (grew) {
+        emit();
       }
     }
     if (pr > 0 && ((pfd.revents & (POLLHUP | POLLERR)) != 0)) {
@@ -282,7 +325,8 @@ void write_file_text(const fs::path& path, const std::string& content) {
 
 } // namespace
 
-std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel) {
+std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
+                                  std::function<void(const std::string&)> on_bash_output) {
   std::vector<Tool> tools;
 
   tools.push_back(
@@ -501,10 +545,10 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel) {
            {"properties",
             {{"command", {{"type", "string"}}}, {"timeout_seconds", {{"type", "integer"}}}}},
            {"required", json::array({"command"})}},
-      [&ws, cancel](const json& input) {
+      [&ws, cancel, on_bash_output](const json& input) {
         auto command = input.at("command").get<std::string>();
         int timeout = std::clamp(input.value("timeout_seconds", 120), 1, 600);
-        auto out = run_bash(command, ws.root(), timeout, cancel);
+        auto out = run_bash(command, ws.root(), timeout, cancel, on_bash_output);
         ws.invalidate_listing();
         return out;
       }});

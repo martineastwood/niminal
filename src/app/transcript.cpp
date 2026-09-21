@@ -183,9 +183,7 @@ Element render_transcript_card(const Block& block, const Theme& theme, Box& box)
             parts.push_back(text("… click to expand") | dim);
           }
         } else {
-          parts.push_back(paragraph_preserving_whitespace(
-                              clip_text(block.result, kToolResultMaxChars, kToolResultMaxLines)) |
-                          dim);
+          parts.push_back(paragraph_preserving_whitespace(block.result) | dim);
         }
       }
       return vbox(std::move(parts)) | reflect(box);

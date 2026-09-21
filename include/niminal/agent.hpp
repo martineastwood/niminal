@@ -5,6 +5,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,8 @@ struct Agent {
   json messages = json::array();
   json extra = json::object();
   std::function<void(const StreamEvent&)> on_event;
+  std::shared_ptr<std::function<void(std::string)>> tool_output =
+      std::make_shared<std::function<void(std::string)>>();
   std::atomic<bool>* cancel = nullptr;
   std::vector<std::string> system_extra;
   std::function<std::vector<std::string>()> system_extra_loader;

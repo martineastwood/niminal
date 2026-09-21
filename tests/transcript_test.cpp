@@ -71,6 +71,22 @@ int main() {
     return fail("expanded bash", expanded_tool);
   }
 
+  Block long_bash{BlockKind::tool, R"({"command":"yes"})"};
+  long_bash.tool_name = "bash";
+  long_bash.expanded = true;
+  for (int i = 1; i <= 150; ++i) {
+    long_bash.result += "row-" + std::to_string(i) + "\n";
+  }
+  ftxui::Box long_box;
+  auto long_element = render_transcript_card(long_bash, resolve_theme(ThemeMode::dark), long_box);
+  ftxui::Screen long_screen(120, 200);
+  ftxui::Render(long_screen, long_element.get());
+  auto long_rendered = long_screen.ToString();
+  if (long_rendered.find("row-1") == std::string::npos ||
+      long_rendered.find("row-150") == std::string::npos) {
+    return fail("expanded bash keeps full output", long_rendered);
+  }
+
   Block read{BlockKind::tool, R"({"path":"README.md"})"};
   read.tool_name = "read";
   read.expanded = false;
