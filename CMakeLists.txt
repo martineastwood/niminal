@@ -130,6 +130,9 @@ niminal_strict_compile(niminal_ai)
 add_executable(niminal_cli
   src/app/main.cpp
   src/app/tui.cpp
+  src/app/clipboard.cpp
+  src/app/slash.cpp
+  src/app/transcript.cpp
   src/app/session.cpp
   src/app/config.cpp
   src/app/provider.cpp

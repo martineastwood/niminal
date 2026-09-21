@@ -41,6 +41,13 @@ cmake --build build
 The binary is `build/niminal`. Curl and nlohmann/json are fetched during
 configure. OpenSSL is static-linked from the copy CMake found at build time.
 
+## Release binaries
+
+To publish release archives for Linux x86_64, macOS arm64, and macOS x86_64,
+open the `Release binaries` workflow in GitHub Actions, choose `Run workflow`,
+and enter a new tag such as `v0.1.0`. The workflow creates the GitHub release
+and attaches one `.tar.gz` archive and checksum per platform.
+
 ## Dev check
 
 Run the full validation pipeline before landing changes:

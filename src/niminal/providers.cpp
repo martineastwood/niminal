@@ -71,8 +71,7 @@ std::string infer_provider(std::string_view api_url) {
     if (provider.url_match.empty()) {
       continue;
     }
-    if (url.find(provider.url_match) != std::string::npos &&
-        provider.url_match.size() > best_len) {
+    if (url.find(provider.url_match) != std::string::npos && provider.url_match.size() > best_len) {
       best = &provider;
       best_len = provider.url_match.size();
     }

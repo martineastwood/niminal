@@ -1,4 +1,5 @@
 #include "tui.hpp"
+#include "clipboard.hpp"
 #include "compaction.hpp"
 #include "config.hpp"
 #include "diff.hpp"
@@ -10,8 +11,10 @@
 #include "provider.hpp"
 #include "session.hpp"
 #include "skills.hpp"
+#include "slash.hpp"
 #include "theme.hpp"
 #include "thinking.hpp"
+#include "transcript.hpp"
 #include "trust.hpp"
 
 #include <niminal/openai.hpp>
@@ -27,7 +30,6 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -35,7 +37,6 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
-#include <string_view>
 #include <termios.h>
 #include <thread>
 #include <unistd.h>
@@ -47,34 +48,6 @@ namespace niminal::app {
 namespace {
 
 using namespace ftxui;
-
-enum class BlockKind {
-  user,
-  assistant,
-  thinking,
-  tool,
-  diff,
-  error,
-  status,
-  approval,
-};
-
-struct Block {
-  BlockKind kind = BlockKind::assistant;
-  std::string text;
-  std::string path;
-  bool created = false;
-  std::string tool_name;
-  std::string tool_id;
-
-  Block() = default;
-  Block(BlockKind kind, std::string text) : kind(kind), text(std::move(text)) {}
-  Block(BlockKind kind, std::string text, std::string path, bool created)
-      : kind(kind), text(std::move(text)), path(std::move(path)), created(created) {}
-  Block(BlockKind kind, std::string text, std::string path, bool created, std::string tool_name)
-      : kind(kind), text(std::move(text)), path(std::move(path)), created(created),
-        tool_name(std::move(tool_name)) {}
-};
 
 struct PendingFileChange {
   std::filesystem::path path;
@@ -102,181 +75,6 @@ std::optional<std::string> read_text_file(const std::filesystem::path& path) {
     return std::nullopt;
   }
   return text;
-}
-
-Element render_diff_card(const Block& block, const Theme& theme) {
-  Elements lines;
-  std::istringstream in(block.text);
-  std::string line;
-  while (std::getline(in, line)) {
-    Element row = text("│   " + line);
-    if (!line.empty() && line.front() == '+') {
-      row = row | color(theme.add);
-    } else if (!line.empty() && line.front() == '-') {
-      row = row | color(theme.del);
-    } else {
-      row = row | dim;
-    }
-    lines.push_back(std::move(row));
-  }
-  auto badge = text("│ ✓ " + block.tool_name) | bold | color(theme.add);
-  return vbox({badge, text("│   " + block.path) | dim, vbox(std::move(lines))});
-}
-
-std::string clip_text(std::string text, size_t max_chars, int max_lines) {
-  int lines = 1;
-  for (char c : text) {
-    if (c == '\n') {
-      ++lines;
-    }
-  }
-  if (text.size() > max_chars) {
-    text.resize(max_chars);
-    text += "\n[truncated]";
-    return text;
-  }
-  if (lines <= max_lines) {
-    return text;
-  }
-  std::string out;
-  int kept = 0;
-  for (char c : text) {
-    out += c;
-    if (c == '\n' && ++kept >= max_lines) {
-      break;
-    }
-  }
-  out += "[truncated]";
-  return out;
-}
-
-std::string one_line(std::string s, size_t n) {
-  for (char& c : s) {
-    if (c == '\n' || c == '\r' || c == '\t') {
-      c = ' ';
-    }
-  }
-  if (s.size() > n) {
-    s.resize(n);
-    s += "…";
-  }
-  return s;
-}
-
-Element paragraph_preserving_whitespace(std::string_view value) {
-  Elements rows;
-  size_t line_start = 0;
-  while (true) {
-    const auto newline = value.find('\n', line_start);
-    const auto line_end = newline == std::string_view::npos ? value.size() : newline;
-    Elements parts;
-    size_t start = line_start;
-    while (start < line_end) {
-      size_t end = start + 1;
-      if (value[start] == ' ') {
-        while (end < line_end && value[end] == ' ') {
-          ++end;
-        }
-      } else {
-        while (end < line_end && value[end] != ' ') {
-          ++end;
-        }
-      }
-      parts.push_back(text(value.substr(start, end - start)));
-      start = end;
-    }
-    if (parts.empty()) {
-      parts.push_back(text(""));
-    }
-    rows.push_back(hflow(std::move(parts)));
-    if (newline == std::string_view::npos) {
-      break;
-    }
-    line_start = newline + 1;
-  }
-  return vbox(std::move(rows));
-}
-
-std::string tool_summary(const std::string& name, const std::string& args) {
-  json j = json::object();
-  try {
-    if (!args.empty()) {
-      j = json::parse(args);
-    }
-  } catch (...) {
-    return "▸ " + name + "  " + one_line(args, 120);
-  }
-  if (!j.is_object()) {
-    return "▸ " + name + (args.empty() ? "" : "  " + one_line(args, 120));
-  }
-  std::string detail;
-  if (name == "bash") {
-    detail =
-        "$ " + (j.contains("command") && j["command"].is_string() ? j["command"].get<std::string>()
-                                                                  : std::string());
-  } else if (name == "skill") {
-    detail =
-        j.contains("name") && j["name"].is_string() ? j["name"].get<std::string>() : std::string();
-  } else if (j.contains("path") && j["path"].is_string()) {
-    detail = j["path"].get<std::string>();
-    if (j.contains("pattern") && j["pattern"].is_string()) {
-      detail += "  " + j["pattern"].get<std::string>();
-    } else if (j.contains("old_text") && j["old_text"].is_string()) {
-      detail += "  " + one_line(j["old_text"].get<std::string>(), 60);
-    }
-  } else if (j.contains("pattern") && j["pattern"].is_string()) {
-    detail = j["pattern"].get<std::string>();
-  } else if (!j.empty()) {
-    detail = j.dump();
-  }
-  if (detail.empty()) {
-    return "▸ " + name;
-  }
-  return "▸ " + name + "  " + one_line(detail, 120);
-}
-
-Decorator block_style(BlockKind kind, const Theme& theme) {
-  switch (kind) {
-  case BlockKind::user:
-    return color(theme.accent);
-  case BlockKind::tool:
-    return color(theme.meta);
-  case BlockKind::thinking:
-    return [](Element e) { return std::move(e) | dim | italic; };
-  case BlockKind::diff:
-    return color(theme.muted);
-  case BlockKind::error:
-    return color(theme.error);
-  case BlockKind::status:
-    return color(theme.muted);
-  case BlockKind::approval:
-    return color(theme.meta);
-  case BlockKind::assistant:
-    return Decorator([](Element e) { return e; });
-  }
-  return Decorator([](Element e) { return e; });
-}
-
-const char* block_label(BlockKind kind) {
-  switch (kind) {
-  case BlockKind::user:
-    return "you";
-  case BlockKind::assistant:
-    return "niminal";
-  case BlockKind::tool:
-    return "";
-  case BlockKind::thinking:
-    return "";
-  case BlockKind::diff:
-    return "";
-  case BlockKind::error:
-    return "error";
-  case BlockKind::status:
-    return "";
-  case BlockKind::approval:
-    return "";
-  }
-  return "";
 }
 
 bool is_send(const Event& e) {
@@ -316,97 +114,6 @@ bool is_wheel_down(Event e) {
   return e.is_mouse() && e.mouse().button == Mouse::WheelDown;
 }
 
-std::string trim_copy(std::string s) {
-  while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\r')) {
-    s.pop_back();
-  }
-  size_t i = 0;
-  while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r')) {
-    ++i;
-  }
-  return s.substr(i);
-}
-
-std::pair<std::string, std::string> split_slash(const std::string& prompt) {
-  auto space = prompt.find(' ');
-  auto cmd = space == std::string::npos ? prompt : prompt.substr(0, space);
-  auto arg = space == std::string::npos ? std::string() : trim_copy(prompt.substr(space + 1));
-  for (char& c : cmd) {
-    if (c >= 'A' && c <= 'Z') {
-      c = static_cast<char>(c - 'A' + 'a');
-    }
-  }
-  return {cmd, arg};
-}
-
-struct SlashSpec {
-  const char* name;
-  const char* usage;
-  const char* hint;
-};
-
-constexpr SlashSpec kSlash[] = {
-    {"/help", "/help", "this list"},
-    {"/provider", "/provider [name]", "show or set the provider"},
-    {"/model", "/model [ID]", "show or set the model"},
-    {"/thinking", "/thinking [level]", "show or set reasoning"},
-    {"/theme", "/theme [mode]", "show or set light|dark|auto"},
-    {"/permissions", "/permissions [clear]", "show or clear tool grants"},
-    {"/trust", "/trust [on|off]", "show or set project resource trust"},
-    {"/yolo", "/yolo [off]", "auto-approve tools for this process"},
-    {"/models", "/models refresh", "refresh the models.dev catalog"},
-    {"/session", "/session", "show the current session"},
-    {"/name", "/name [title]", "show or set the session name"},
-    {"/resume", "/resume [ID]", "list or load a session"},
-    {"/search", "/search TEXT", "search sessions for text"},
-    {"/fork", "/fork [title]", "copy this session into a new one"},
-    {"/export", "/export [PATH]", "write this session as Markdown or JSON"},
-    {"/delete", "/delete ID", "move a session to the trash"},
-    {"/restore", "/restore [ID]", "list or restore a deleted session"},
-    {"/new", "/new", "start a new session"},
-    {"/clear", "/clear", "same as /new"},
-    {"/copy", "/copy", "copy the last error or reply"},
-    {"/retry", "/retry", "retry the last failed request"},
-    {"/compact", "/compact", "summarize older session history"},
-    {"/reload", "/reload", "reload trusted project resources"},
-    {"/skill:", "/skill:NAME [request]", "load a skill"},
-    {"/quit", "/quit", "exit"},
-    {"/exit", "/exit", "exit"},
-};
-
-bool is_builtin_slash(std::string_view command) {
-  for (const auto& spec : kSlash) {
-    if (command == spec.name) {
-      return true;
-    }
-  }
-  return false;
-}
-
-struct Suggestion {
-  std::string fill;
-  std::string label;
-  bool file = false;
-};
-
-bool starts_with(std::string_view s, std::string_view p) {
-  return s.size() >= p.size() && s.substr(0, p.size()) == p;
-}
-
-bool contains_ci(std::string_view s, std::string_view p) {
-  return niminal::lower_copy(std::string(s)).find(niminal::lower_copy(std::string(p))) !=
-         std::string::npos;
-}
-
-std::string session_title(const SessionInfo& info) {
-  return !info.name.empty() ? info.name : (!info.preview.empty() ? info.preview : "(empty)");
-}
-
-bool session_matches_info(const SessionInfo& info, const std::string& query) {
-  return contains_ci(info.id, query) || contains_ci(info.name, query) ||
-         contains_ci(info.preview, query);
-}
-
 void add_unique(std::vector<std::string>& ids, const std::string& id) {
   if (id.empty()) {
     return;
@@ -419,306 +126,6 @@ void add_unique(std::vector<std::string>& ids, const std::string& id) {
   ids.push_back(id);
 }
 
-void sort_suggestions(std::vector<Suggestion>& out) {
-  std::sort(out.begin(), out.end(), [](const Suggestion& a, const Suggestion& b) {
-    return niminal::lower_copy(a.fill) < niminal::lower_copy(b.fill);
-  });
-}
-
-std::vector<Suggestion> suggest_models(const std::string& query, std::string_view provider,
-                                       const std::vector<std::string>& recents) {
-  constexpr int kMin = 2;
-  constexpr int kCap = 50;
-  std::vector<Suggestion> out;
-  std::vector<std::string> used;
-  auto add = [&](const std::string& id, int context) {
-    if (id.empty()) {
-      return;
-    }
-    auto key = niminal::lower_copy(id);
-    for (const auto& x : used) {
-      if (x == key) {
-        return;
-      }
-    }
-    used.push_back(key);
-    auto label = id;
-    auto ctx = format_context_k(context);
-    if (!ctx.empty()) {
-      label += "  " + ctx;
-    }
-    out.push_back({"/model " + id, std::move(label)});
-  };
-  auto q = niminal::lower_copy(query);
-  if (static_cast<int>(q.size()) >= kMin) {
-    auto catalog = search_catalog(provider, query, kCap);
-    if (!catalog.empty()) {
-      for (const auto& row : catalog) {
-        add(row.id, row.context);
-      }
-      return out;
-    }
-  }
-  for (const auto& id : recents) {
-    if (!q.empty() && !contains_ci(id, q)) {
-      continue;
-    }
-    add(id, 0);
-  }
-  if (static_cast<int>(q.size()) < kMin && !q.empty()) {
-    return out;
-  }
-  int remain = kCap - static_cast<int>(out.size());
-  if (remain <= 0) {
-    return out;
-  }
-  for (const auto& row : search_catalog(provider, query, remain, recents)) {
-    add(row.id, row.context);
-  }
-  return out;
-}
-
-std::vector<Suggestion> slash_suggestions(const std::string& draft,
-                                          const std::filesystem::path& dir,
-                                          const std::string& workspace, std::string_view provider,
-                                          std::string_view model,
-                                          const std::vector<std::string>& recents,
-                                          const std::vector<ExtensionCommand>& extension_commands) {
-  if (draft.empty() || draft[0] != '/' || draft.find('\n') != std::string::npos) {
-    return {};
-  }
-  auto [cmd, arg] = split_slash(draft);
-  bool trailing = !draft.empty() && (draft.back() == ' ' || draft.back() == '\t');
-
-  if (starts_with(cmd, "/skill:")) {
-    std::vector<Suggestion> out;
-    auto query = cmd.substr(7);
-    for (const auto& skill : discover_skills(workspace)) {
-      if (!contains_ci(skill.name, query)) {
-        continue;
-      }
-      out.push_back(
-          {"/skill:" + skill.name + " ",
-           "/skill:" + skill.name + (skill.description.empty() ? "" : "  " + skill.description)});
-    }
-    sort_suggestions(out);
-    return out;
-  }
-
-  if (cmd == "/resume" && (trailing || !arg.empty())) {
-    std::vector<Suggestion> out;
-    try {
-      for (const auto& info : list_sessions(dir, workspace)) {
-        if (!arg.empty() && !session_matches_info(info, arg)) {
-          continue;
-        }
-        out.push_back({"/resume " + info.id, info.id + "  " + session_title(info)});
-        if (out.size() == 8) {
-          break;
-        }
-      }
-    } catch (...) {
-    }
-    if (!out.empty()) {
-      return out;
-    }
-  }
-
-  if (cmd == "/restore" && (trailing || !arg.empty())) {
-    std::vector<Suggestion> out;
-    try {
-      for (const auto& info : list_deleted_sessions(dir)) {
-        if (!arg.empty() && !session_matches_info(info, arg)) {
-          continue;
-        }
-        out.push_back({"/restore " + info.id, info.id + "  " + session_title(info)});
-        if (out.size() == 8) {
-          break;
-        }
-      }
-    } catch (...) {
-    }
-    if (!out.empty()) {
-      return out;
-    }
-  }
-
-  if (cmd == "/model" && (trailing || !arg.empty())) {
-    auto models = suggest_models(arg, provider, recents);
-    if (!models.empty()) {
-      return models;
-    }
-  }
-
-  if (cmd == "/thinking" && (trailing || !arg.empty())) {
-    std::vector<Suggestion> out;
-    for (const auto& level : thinking_choices(provider, model)) {
-      if (!arg.empty() && !starts_with(level, arg)) {
-        continue;
-      }
-      out.push_back({"/thinking " + level, level});
-    }
-    if (!out.empty()) {
-      return out;
-    }
-  }
-
-  if (cmd == "/theme" && (trailing || !arg.empty())) {
-    std::vector<Suggestion> out;
-    for (auto mode : {ThemeMode::automatic, ThemeMode::light, ThemeMode::dark}) {
-      std::string name = theme_mode_name(mode);
-      if (!arg.empty() && !starts_with(name, niminal::lower_copy(arg))) {
-        continue;
-      }
-      out.push_back({"/theme " + name, name});
-    }
-    if (!out.empty()) {
-      return out;
-    }
-  }
-
-  if (cmd == "/models" && (trailing || !arg.empty())) {
-    if (arg.empty() || starts_with("refresh", arg)) {
-      return {{"/models refresh", "/models refresh  fetch models.dev"}};
-    }
-  }
-
-  if (cmd == "/provider" && (trailing || !arg.empty())) {
-    std::vector<Suggestion> out;
-    for (const auto& spec : niminal::all_providers()) {
-      if (!arg.empty() && !starts_with(spec.name, arg)) {
-        continue;
-      }
-      out.push_back({"/provider " + std::string(spec.name),
-                     std::string(spec.name) + "  " + std::string(spec.default_model)});
-    }
-    sort_suggestions(out);
-    if (!out.empty()) {
-      return out;
-    }
-  }
-
-  if (!arg.empty()) {
-    return {};
-  }
-
-  std::vector<Suggestion> out;
-  for (const auto& spec : kSlash) {
-    if (!starts_with(spec.name, cmd)) {
-      continue;
-    }
-    std::string fill = spec.name;
-    if (std::string(spec.usage) != spec.name && fill.back() != ':') {
-      fill += ' ';
-    }
-    out.push_back({fill, std::string(spec.usage) + "  " + spec.hint});
-  }
-  for (const auto& prompt : discover_prompts(workspace)) {
-    auto slash = "/" + prompt.name;
-    if (is_builtin_slash(niminal::lower_copy(slash))) {
-      continue;
-    }
-    if (!starts_with(niminal::lower_copy(slash), cmd)) {
-      continue;
-    }
-    out.push_back({slash + " ", slash + (prompt.description.empty() ? std::string()
-                                                                    : "  " + prompt.description)});
-  }
-  for (const auto& command : extension_commands) {
-    auto slash = "/" + command.name;
-    if (is_builtin_slash(niminal::lower_copy(slash))) {
-      continue;
-    }
-    if (!starts_with(niminal::lower_copy(slash), cmd)) {
-      continue;
-    }
-    out.push_back(
-        {slash + " ",
-         slash + (command.description.empty() ? std::string() : "  " + command.description)});
-  }
-  sort_suggestions(out);
-  return out;
-}
-
-std::string base64_encode(std::string_view in) {
-  static constexpr char kTbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::string out;
-  int val = 0;
-  int valb = -6;
-  for (char ch : in) {
-    const unsigned char c = static_cast<unsigned char>(ch);
-    val = (val << 8) + c;
-    valb += 8;
-    while (valb >= 0) {
-      out.push_back(kTbl[(val >> valb) & 0x3F]);
-      valb -= 6;
-    }
-  }
-  if (valb > -6) {
-    out.push_back(kTbl[((val << 8) >> (valb + 8)) & 0x3F]);
-  }
-  while ((out.size() % 4) != 0U) {
-    out.push_back('=');
-  }
-  return out;
-}
-
-bool pipe_copy(const char* cmd, const std::string& text) {
-  FILE* pipe = popen(cmd, "w");
-  if (pipe == nullptr) {
-    return false;
-  }
-  if (!text.empty()) {
-    fwrite(text.data(), 1, text.size(), pipe);
-  }
-  return pclose(pipe) == 0;
-}
-
-void copy_to_clipboard(const std::string& text) {
-#if defined(__APPLE__)
-  pipe_copy("pbcopy", text);
-#elif defined(__linux__)
-  if (!pipe_copy("wl-copy", text))
-    pipe_copy("xclip -selection clipboard", text);
-#endif
-  std::cout << "\033]52;c;" << base64_encode(text) << "\a" << std::flush;
-}
-
-std::string pipe_read(const char* cmd) {
-  FILE* pipe = popen(cmd, "r");
-  if (pipe == nullptr) {
-    return {};
-  }
-  std::string out;
-  char buf[4096];
-  while (true) {
-    auto n = fread(buf, 1, sizeof(buf), pipe);
-    if (n == 0) {
-      break;
-    }
-    out.append(buf, n);
-  }
-  pclose(pipe);
-  return out;
-}
-
-std::string paste_from_clipboard() {
-  std::string text;
-#if defined(__APPLE__)
-  text = pipe_read("pbpaste");
-#elif defined(__linux__)
-  text = pipe_read("wl-paste -n 2>/dev/null");
-  if (text.empty())
-    text = pipe_read("xclip -selection clipboard -o 2>/dev/null");
-#endif
-  for (auto& c : text) {
-    if (c == '\r') {
-      c = '\n';
-    }
-  }
-  return text;
-}
-
 bool is_paste_key(const Event& e) {
   if (e == Event::CtrlV) {
     return true;
@@ -726,51 +133,6 @@ bool is_paste_key(const Event& e) {
   auto in = e.input();
   return in == "\x1b[118;2u" || in == "\x1b[118;5u" || in == "\x1b[118;8u" || in == "\x1b[118;9u";
 }
-
-const char* kHelp = R"(/help              this list
-/provider          show the current provider
-/provider NAME     set the provider and restore its last model
-/model             show the current model
-/model ID          set the model and save ~/.niminal/config.json
-/thinking          show the current reasoning level
-/thinking LEVEL    set none|minimal|low|medium|high|xhigh|max
-/theme             show the current theme
-/theme MODE        set light|dark|auto (auto follows the terminal background)
-/permissions       show remembered tool grants
-/permissions clear clear project tool grants
-/trust             show project resource trust
-/trust on|off      enable or disable project resources
-/yolo              auto-approve tools for this process
-/yolo off          return to normal approval prompts
-/models refresh    download the models.dev catalog for /model suggestions
-/session           show the current session
-/name [title]      show or set the session name
-/resume            list recent sessions for this workspace
-/resume ID         load a session
-/search TEXT       search this workspace's sessions for text
-/fork [title]      copy this session into a new session
-/export [PATH]     write this session as Markdown, or JSON with a .json path
-/delete ID         move a session to ~/.niminal/sessions/.trash
-/restore           list deleted sessions
-/restore ID        bring a deleted session back
-/new               start a new session (old file stays)
-/clear             same as /new
-/copy              copy the last error or assistant reply
-/retry             retry the last failed request
-/compact           summarize older history; keep recent turns
-/reload            reload trusted project resources
-/skill:NAME [text] load a skill and optionally give it a request
-/NAME [text]       expand a Markdown prompt template
-/quit              exit
-
-Enter sends. While a turn runs, Enter queues a steering message.
-Alt-J or Shift-Enter inserts a newline.
-Type @ to add a workspace file. Gitignored files and dependency folders are hidden.
-Tab accepts a suggestion. Up/Down picks one, or walks prompt history.
-Page Up/Down and the trackpad scroll the transcript.
-Esc interrupts a running turn, or clears the composer.
-Drag to copy. Ctrl-V pastes into the composer. /copy copies the last reply.
-Ctrl-C quits.)";
 
 } // namespace
 
@@ -1538,7 +900,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     transcript_y = 1.F;
 
     auto initial_cmd = split_slash(prompt).first;
-    bool skill_request = starts_with(initial_cmd, "/skill:");
+    bool skill_request = initial_cmd.starts_with("/skill:");
     bool extension_request = false;
     if (extensions) {
       for (const auto& command : extensions->commands()) {
@@ -1650,7 +1012,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return;
       }
       if (cmd == "/help") {
-        blocks.push_back(Block{BlockKind::status, kHelp});
+        blocks.push_back(Block{BlockKind::status, slash_help()});
         return;
       }
       if (extension_request) {
