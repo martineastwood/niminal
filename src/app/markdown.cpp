@@ -31,7 +31,9 @@ std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
   std::vector<Span> out;
   std::string acc;
   auto flush = [&] {
-    if (acc.empty()) return;
+    if (acc.empty()) {
+      return;
+    }
     Span span = base;
     span.text = std::move(acc);
     out.push_back(std::move(span));
@@ -40,34 +42,52 @@ std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
   size_t i = 0;
   while (i < s.size()) {
     auto try_mark = [&](std::string_view marker, auto apply) -> bool {
-      if (!starts_at(s, i, marker)) return false;
+      if (!starts_at(s, i, marker)) {
+        return false;
+      }
       auto close = s.find(marker, i + marker.size());
-      if (close == std::string_view::npos) return false;
+      if (close == std::string_view::npos) {
+        return false;
+      }
       flush();
       Span inner = base;
       apply(inner);
-      auto kids = parse_inline(s.substr(i + marker.size(),
-                                        close - (i + marker.size())),
-                               inner);
+      auto kids = parse_inline(s.substr(i + marker.size(), close - (i + marker.size())), inner);
       out.insert(out.end(), kids.begin(), kids.end());
       i = close + marker.size();
       return true;
     };
-    if (try_mark("***", [](Span& sp) { sp.bold = sp.italic = true; })) continue;
-    if (try_mark("**", [](Span& sp) { sp.bold = true; })) continue;
-    if (try_mark("~~", [](Span& sp) { sp.strike = true; })) continue;
+    if (try_mark("***", [](Span& sp) { sp.bold = sp.italic = true; })) {
+      continue;
+    }
+    if (try_mark("**", [](Span& sp) { sp.bold = true; })) {
+      continue;
+    }
+    if (try_mark("~~", [](Span& sp) { sp.strike = true; })) {
+      continue;
+    }
     auto try_underscore = [&](std::string_view marker, auto apply) -> bool {
-      if (!starts_at(s, i, marker)) return false;
-      if (i > 0 && std::isalnum(static_cast<unsigned char>(s[i - 1]))) return false;
+      if (!starts_at(s, i, marker)) {
+        return false;
+      }
+      if (i > 0 && std::isalnum(static_cast<unsigned char>(s[i - 1]))) {
+        return false;
+      }
       auto inner_start = i + marker.size();
-      if (inner_start >= s.size() || s[inner_start] == ' ' || s[inner_start] == '\t')
+      if (inner_start >= s.size() || s[inner_start] == ' ' || s[inner_start] == '\t') {
         return false;
+      }
       auto close = s.find(marker, inner_start);
-      if (close == std::string_view::npos || close == inner_start) return false;
-      if (s[close - 1] == ' ' || s[close - 1] == '\t') return false;
-      if (close + marker.size() < s.size() &&
-          std::isalnum(static_cast<unsigned char>(s[close + marker.size()])))
+      if (close == std::string_view::npos || close == inner_start) {
         return false;
+      }
+      if (s[close - 1] == ' ' || s[close - 1] == '\t') {
+        return false;
+      }
+      if (close + marker.size() < s.size() &&
+          std::isalnum(static_cast<unsigned char>(s[close + marker.size()]))) {
+        return false;
+      }
       flush();
       Span inner = base;
       apply(inner);
@@ -76,9 +96,12 @@ std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
       i = close + marker.size();
       return true;
     };
-    if (try_underscore("___", [](Span& sp) { sp.bold = sp.italic = true; }))
+    if (try_underscore("___", [](Span& sp) { sp.bold = sp.italic = true; })) {
       continue;
-    if (try_underscore("__", [](Span& sp) { sp.bold = true; })) continue;
+    }
+    if (try_underscore("__", [](Span& sp) { sp.bold = true; })) {
+      continue;
+    }
     if (starts_at(s, i, "`")) {
       auto close = s.find('`', i + 1);
       if (close != std::string_view::npos) {
@@ -91,14 +114,17 @@ std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
         continue;
       }
     }
-    if (try_mark("*", [](Span& sp) { sp.italic = true; })) continue;
-    if (try_underscore("_", [](Span& sp) { sp.italic = true; })) continue;
+    if (try_mark("*", [](Span& sp) { sp.italic = true; })) {
+      continue;
+    }
+    if (try_underscore("_", [](Span& sp) { sp.italic = true; })) {
+      continue;
+    }
     bool image = s[i] == '!' && i + 1 < s.size() && s[i + 1] == '[';
     if (s[i] == '[' || image) {
       auto bracket = image ? i + 1 : i;
       auto close = s.find(']', bracket + 1);
-      if (close != std::string_view::npos && close + 1 < s.size() &&
-          s[close + 1] == '(') {
+      if (close != std::string_view::npos && close + 1 < s.size() && s[close + 1] == '(') {
         auto finish = s.find(')', close + 2);
         if (finish != std::string_view::npos) {
           flush();
@@ -139,15 +165,21 @@ std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
 
 std::string trim(std::string_view s) {
   size_t a = 0;
-  while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) ++a;
+  while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) {
+    ++a;
+  }
   size_t b = s.size();
-  while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r')) --b;
+  while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r')) {
+    --b;
+  }
   return std::string(s.substr(a, b - a));
 }
 
 int leading_spaces(std::string_view s) {
   int n = 0;
-  while (n < static_cast<int>(s.size()) && s[static_cast<size_t>(n)] == ' ') ++n;
+  while (n < static_cast<int>(s.size()) && s[static_cast<size_t>(n)] == ' ') {
+    ++n;
+  }
   return n;
 }
 
@@ -163,17 +195,24 @@ bool is_fence(std::string_view line) {
 
 bool is_md_fence_lang(std::string_view lang) {
   size_t i = 0;
-  while (i < lang.size() && !std::isspace(static_cast<unsigned char>(lang[i]))) ++i;
+  while (i < lang.size() && (std::isspace(static_cast<unsigned char>(lang[i])) == 0)) {
+    ++i;
+  }
   std::string word(lang.substr(0, i));
-  for (char& c : word)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  for (char& c : word) {
+    if (c >= 'A' && c <= 'Z') {
+      c = static_cast<char>(c - 'A' + 'a');
+    }
+  }
   return word == "markdown" || word == "md";
 }
 
 std::string join_lines(const std::vector<std::string>& lines) {
   std::string out;
   for (size_t i = 0; i < lines.size(); ++i) {
-    if (i) out += '\n';
+    if (i != 0U) {
+      out += '\n';
+    }
     out += lines[i];
   }
   return out;
@@ -182,7 +221,9 @@ std::string join_lines(const std::vector<std::string>& lines) {
 bool is_ul(std::string_view line, std::string* item) {
   auto t = trim(line);
   if (t.size() >= 2 && (t[0] == '-' || t[0] == '*' || t[0] == '+') && t[1] == ' ') {
-    if (item) *item = t.substr(2);
+    if (item != nullptr) {
+      *item = t.substr(2);
+    }
     return true;
   }
   return false;
@@ -191,32 +232,48 @@ bool is_ul(std::string_view line, std::string* item) {
 bool is_ol(std::string_view line, std::string* item, std::string* num) {
   auto t = trim(line);
   size_t i = 0;
-  while (i < t.size() && std::isdigit(static_cast<unsigned char>(t[i]))) ++i;
-  if (i == 0 || i + 1 >= t.size() || t[i] != '.' || t[i + 1] != ' ') return false;
-  if (num) *num = std::string(t.substr(0, i + 1));
-  if (item) *item = std::string(t.substr(i + 2));
+  while (i < t.size() && (std::isdigit(static_cast<unsigned char>(t[i])) != 0)) {
+    ++i;
+  }
+  if (i == 0 || i + 1 >= t.size() || t[i] != '.' || t[i + 1] != ' ') {
+    return false;
+  }
+  if (num != nullptr) {
+    *num = std::string(t.substr(0, i + 1));
+  }
+  if (item != nullptr) {
+    *item = std::string(t.substr(i + 2));
+  }
   return true;
 }
 
 int heading_level(std::string_view line, std::string* title) {
   auto t = trim(line);
   int n = 0;
-  while (n < static_cast<int>(t.size()) && t[static_cast<size_t>(n)] == '#') ++n;
-  if (n == 0 || n > 6 || n >= static_cast<int>(t.size()) ||
-      t[static_cast<size_t>(n)] != ' ')
+  while (n < static_cast<int>(t.size()) && t[static_cast<size_t>(n)] == '#') {
+    ++n;
+  }
+  if (n == 0 || n > 6 || n >= static_cast<int>(t.size()) || t[static_cast<size_t>(n)] != ' ') {
     return 0;
-  if (title) *title = trim(t.substr(static_cast<size_t>(n) + 1));
+  }
+  if (title != nullptr) {
+    *title = trim(t.substr(static_cast<size_t>(n) + 1));
+  }
   return n;
 }
 
 bool is_quote(std::string_view line, std::string* body) {
   auto t = trim(line);
   if (t.size() >= 2 && t[0] == '>' && t[1] == ' ') {
-    if (body) *body = t.substr(2);
+    if (body != nullptr) {
+      *body = t.substr(2);
+    }
     return true;
   }
   if (t == ">") {
-    if (body) *body = {};
+    if (body != nullptr) {
+      *body = {};
+    }
     return true;
   }
   return false;
@@ -224,8 +281,12 @@ bool is_quote(std::string_view line, std::string* body) {
 
 std::vector<std::string> table_cells(std::string_view line) {
   auto t = trim(line);
-  if (!t.empty() && t.front() == '|') t.erase(t.begin());
-  if (!t.empty() && t.back() == '|') t.pop_back();
+  if (!t.empty() && t.front() == '|') {
+    t.erase(t.begin());
+  }
+  if (!t.empty() && t.back() == '|') {
+    t.pop_back();
+  }
   std::vector<std::string> cells;
   std::string cur;
   for (char c : t) {
@@ -241,11 +302,18 @@ std::vector<std::string> table_cells(std::string_view line) {
 }
 
 bool is_table_sep(std::string_view line) {
-  if (line.find('|') == std::string_view::npos) return false;
+  if (line.find('|') == std::string_view::npos) {
+    return false;
+  }
   for (const auto& cell : table_cells(line)) {
-    if (cell.empty()) return false;
-    for (char c : cell)
-      if (c != '-' && c != ':' && c != ' ') return false;
+    if (cell.empty()) {
+      return false;
+    }
+    for (char c : cell) {
+      if (c != '-' && c != ':' && c != ' ') {
+        return false;
+      }
+    }
   }
   return true;
 }
@@ -266,14 +334,18 @@ std::vector<std::string> split_lines(std::string_view text) {
   std::string cur;
   for (char c : text) {
     if (c == '\n') {
-      if (!cur.empty() && cur.back() == '\r') cur.pop_back();
+      if (!cur.empty() && cur.back() == '\r') {
+        cur.pop_back();
+      }
       lines.push_back(std::move(cur));
       cur.clear();
     } else {
       cur += c;
     }
   }
-  if (!cur.empty() && cur.back() == '\r') cur.pop_back();
+  if (!cur.empty() && cur.back() == '\r') {
+    cur.pop_back();
+  }
   lines.push_back(std::move(cur));
   return lines;
 }
@@ -306,8 +378,9 @@ std::vector<Block> parse_blocks(std::string_view text) {
     }
     if (state == in_table) {
       if (line.find('|') != std::string::npos) {
-        if (!(table.rows.size() == 1 && is_table_sep(line)))
+        if (table.rows.size() != 1 || !is_table_sep(line)) {
           table.rows.push_back(table_cells(line));
+        }
         continue;
       }
       out.push_back(std::move(table));
@@ -318,12 +391,13 @@ std::vector<Block> parse_blocks(std::string_view text) {
       code = {};
       code.kind = Block::code;
       auto t = trim(line);
-      if (t.size() > 3) code.lang = trim(t.substr(3));
+      if (t.size() > 3) {
+        code.lang = trim(t.substr(3));
+      }
       state = in_code;
       continue;
     }
-    if (line.find('|') != std::string::npos && i + 1 < lines.size() &&
-        is_table_sep(lines[i + 1])) {
+    if (line.find('|') != std::string::npos && i + 1 < lines.size() && is_table_sep(lines[i + 1])) {
       table = {};
       table.kind = Block::table;
       table.rows.push_back(table_cells(line));
@@ -383,25 +457,43 @@ std::vector<Block> parse_blocks(std::string_view text) {
     b.spans = parse_inline(line);
     out.push_back(std::move(b));
   }
-  if (state == in_code) flush_code();
-  if (state == in_table) out.push_back(std::move(table));
+  if (state == in_code) {
+    flush_code();
+  }
+  if (state == in_table) {
+    out.push_back(std::move(table));
+  }
   return out;
 }
 
 std::string span_outline(const Span& s) {
   std::string t = s.text;
-  if (s.code) t = "[c]" + t + "[/c]";
-  if (s.bold) t = "[b]" + t + "[/b]";
-  if (s.italic) t = "[i]" + t + "[/i]";
-  if (s.strike) t = "[s]" + t + "[/s]";
-  if (s.underline) t = "[u]" + t + "[/u]";
-  if (s.dim) t = "[d]" + t + "[/d]";
+  if (s.code) {
+    t = "[c]" + t + "[/c]";
+  }
+  if (s.bold) {
+    t = "[b]" + t + "[/b]";
+  }
+  if (s.italic) {
+    t = "[i]" + t + "[/i]";
+  }
+  if (s.strike) {
+    t = "[s]" + t + "[/s]";
+  }
+  if (s.underline) {
+    t = "[u]" + t + "[/u]";
+  }
+  if (s.dim) {
+    t = "[d]" + t + "[/d]";
+  }
   return t;
 }
 
 std::string spans_outline(const std::vector<Span>& spans) {
   std::string out;
-  for (const auto& s : spans) out += span_outline(s);
+  for (const auto& s : spans) {
+    out += span_outline(s);
+  }
   return out;
 }
 
@@ -416,10 +508,18 @@ Element style_span(const Span& s, const Theme& theme) {
   } else if (s.italic) {
     e = e | italic | color(theme.italic);
   }
-  if (s.bold && !s.code) e = e | bold;
-  if (s.italic && !s.code) e = e | italic;
-  if (s.strike) e = e | strikethrough;
-  if (s.dim && !s.bold && !s.italic && !s.underline && !s.code) e = e | dim;
+  if (s.bold && !s.code) {
+    e = e | bold;
+  }
+  if (s.italic && !s.code) {
+    e = e | italic;
+  }
+  if (s.strike) {
+    e = e | strikethrough;
+  }
+  if (s.dim && !s.bold && !s.italic && !s.underline && !s.code) {
+    e = e | dim;
+  }
   return e;
 }
 
@@ -427,13 +527,19 @@ Elements flow_spans(const std::vector<Span>& spans, const Theme& theme) {
   Elements flow;
   bool first_token = true;
   auto push = [&](Span sp) {
-    if (sp.text.empty()) return;
-    if (!first_token && sp.text.front() != ' ') sp.text = " " + sp.text;
+    if (sp.text.empty()) {
+      return;
+    }
+    if (!first_token && sp.text.front() != ' ') {
+      sp.text = " " + sp.text;
+    }
     flow.push_back(style_span(sp, theme));
     first_token = false;
   };
   for (const auto& span : spans) {
-    if (span.text.empty()) continue;
+    if (span.text.empty()) {
+      continue;
+    }
     if (span.code) {
       push(span);
       continue;
@@ -441,11 +547,15 @@ Elements flow_spans(const std::vector<Span>& spans, const Theme& theme) {
     size_t i = 0;
     while (i < span.text.size()) {
       if (span.text[i] == ' ') {
-        while (i < span.text.size() && span.text[i] == ' ') ++i;
+        while (i < span.text.size() && span.text[i] == ' ') {
+          ++i;
+        }
         continue;
       }
       size_t j = i;
-      while (j < span.text.size() && span.text[j] != ' ') ++j;
+      while (j < span.text.size() && span.text[j] != ' ') {
+        ++j;
+      }
       Span sp = span;
       sp.text = span.text.substr(i, j - i);
       push(std::move(sp));
@@ -457,7 +567,9 @@ Elements flow_spans(const std::vector<Span>& spans, const Theme& theme) {
 
 Element wrap_spans(const std::vector<Span>& spans, const Theme& theme) {
   auto flow = flow_spans(spans, theme);
-  if (flow.empty()) return emptyElement();
+  if (flow.empty()) {
+    return emptyElement();
+  }
   FlexboxConfig cfg;
   cfg.wrap = FlexboxConfig::Wrap::Wrap;
   return flexbox(std::move(flow), cfg);
@@ -465,58 +577,71 @@ Element wrap_spans(const std::vector<Span>& spans, const Theme& theme) {
 
 Element render_block(const Block& b, const Theme& theme) {
   switch (b.kind) {
-    case Block::blank:
-      return text("");
-    case Block::hr:
-      return separatorLight() | dim;
-    case Block::heading: {
-      auto title = wrap_spans(b.spans, theme) | bold;
-      if (b.level == 1)
-        return vbox({title | color(theme.accent), separatorLight() | dim});
-      if (b.level == 2) return title | color(theme.accent);
-      if (b.level == 3) return title | color(theme.quote);
-      return title | color(theme.quote) | dim;
+  case Block::blank:
+    return text("");
+  case Block::hr:
+    return separatorLight() | dim;
+  case Block::heading: {
+    auto title = wrap_spans(b.spans, theme) | bold;
+    if (b.level == 1) {
+      return vbox({title | color(theme.accent), separatorLight() | dim});
     }
-    case Block::list: {
-      std::string pad(static_cast<size_t>(b.level * 2), ' ');
-      return hbox({text(pad + b.prefix), wrap_spans(b.spans, theme) | xflex});
+    if (b.level == 2) {
+      return title | color(theme.accent);
     }
-    case Block::quote:
-      return hbox({text("│ ") | color(theme.quote) | dim,
-                   wrap_spans(b.spans, theme) | xflex}) |
-             color(theme.quote);
-    case Block::code: {
-      Elements rows;
-      if (!b.lang.empty()) rows.push_back(text(b.lang) | dim);
-      for (const auto& line : b.code_lines)
-        rows.push_back(text(line.empty() ? " " : line) | color(theme.code));
-      if (rows.empty()) rows.push_back(text(" ") | color(theme.code));
-      return hbox({text("│ ") | dim, vbox(std::move(rows)) | xflex});
+    if (b.level == 3) {
+      return title | color(theme.quote);
     }
-    case Block::table: {
-      std::vector<std::vector<Element>> cells;
-      for (size_t r = 0; r < b.rows.size(); ++r) {
-        std::vector<Element> row;
-        for (const auto& cell : b.rows[r]) {
-          auto e = wrap_spans(parse_inline(cell), theme);
-          if (r == 0) e = e | bold;
-          row.push_back(std::move(e));
+    return title | color(theme.quote) | dim;
+  }
+  case Block::list: {
+    std::string pad(static_cast<size_t>(b.level * 2), ' ');
+    return hbox({text(pad + b.prefix), wrap_spans(b.spans, theme) | xflex});
+  }
+  case Block::quote:
+    return hbox({text("│ ") | color(theme.quote) | dim, wrap_spans(b.spans, theme) | xflex}) |
+           color(theme.quote);
+  case Block::code: {
+    Elements rows;
+    if (!b.lang.empty()) {
+      rows.push_back(text(b.lang) | dim);
+    }
+    for (const auto& line : b.code_lines) {
+      rows.push_back(text(line.empty() ? " " : line) | color(theme.code));
+    }
+    if (rows.empty()) {
+      rows.push_back(text(" ") | color(theme.code));
+    }
+    return hbox({text("│ ") | dim, vbox(std::move(rows)) | xflex});
+  }
+  case Block::table: {
+    std::vector<std::vector<Element>> cells;
+    for (size_t r = 0; r < b.rows.size(); ++r) {
+      std::vector<Element> row;
+      for (const auto& cell : b.rows[r]) {
+        auto e = wrap_spans(parse_inline(cell), theme);
+        if (r == 0) {
+          e = e | bold;
         }
-        cells.push_back(std::move(row));
+        row.push_back(std::move(e));
       }
-      Table table(std::move(cells));
-      table.SelectAll().Border(LIGHT);
-      table.SelectAll().Separator(LIGHT);
-      if (!b.rows.empty()) table.SelectRow(0).Decorate(bold);
-      return table.Render() | dim;
+      cells.push_back(std::move(row));
     }
-    case Block::para:
-      return wrap_spans(b.spans, theme);
+    Table table(std::move(cells));
+    table.SelectAll().Border(LIGHT);
+    table.SelectAll().Separator(LIGHT);
+    if (!b.rows.empty()) {
+      table.SelectRow(0).Decorate(bold);
+    }
+    return table.Render() | dim;
+  }
+  case Block::para:
+    return wrap_spans(b.spans, theme);
   }
   return emptyElement();
 }
 
-}  // namespace
+} // namespace
 
 Element render_markdown(std::string_view source, const Theme& theme) {
   Elements rows;
@@ -528,15 +653,16 @@ Element render_markdown(std::string_view source, const Theme& theme) {
         lines.push_back(wrap_spans(blocks[i].spans, theme));
         ++i;
       }
-      rows.push_back(hbox({text("│ ") | color(theme.quote) | dim,
-                           vbox(std::move(lines)) | xflex}) |
+      rows.push_back(hbox({text("│ ") | color(theme.quote) | dim, vbox(std::move(lines)) | xflex}) |
                      color(theme.quote));
       continue;
     }
     rows.push_back(render_block(blocks[i], theme));
     ++i;
   }
-  if (rows.empty()) return emptyElement();
+  if (rows.empty()) {
+    return emptyElement();
+  }
   return vbox(std::move(rows));
 }
 
@@ -544,34 +670,36 @@ std::string markdown_outline(std::string_view text) {
   std::ostringstream out;
   for (const auto& b : parse_blocks(text)) {
     switch (b.kind) {
-      case Block::blank:
-        out << "BLANK\n";
-        break;
-      case Block::hr:
-        out << "HR\n";
-        break;
-      case Block::heading:
-        out << "H" << b.level << " " << spans_outline(b.spans) << '\n';
-        break;
-      case Block::list:
-        out << "LI " << b.prefix << spans_outline(b.spans) << '\n';
-        break;
-      case Block::quote:
-        out << "Q " << spans_outline(b.spans) << '\n';
-        break;
-      case Block::code:
-        out << "CODE " << b.lang << '\n';
-        for (const auto& line : b.code_lines) out << "  " << line << '\n';
-        break;
-      case Block::table:
-        out << "TABLE " << b.rows.size() << '\n';
-        break;
-      case Block::para:
-        out << "P " << spans_outline(b.spans) << '\n';
-        break;
+    case Block::blank:
+      out << "BLANK\n";
+      break;
+    case Block::hr:
+      out << "HR\n";
+      break;
+    case Block::heading:
+      out << "H" << b.level << " " << spans_outline(b.spans) << '\n';
+      break;
+    case Block::list:
+      out << "LI " << b.prefix << spans_outline(b.spans) << '\n';
+      break;
+    case Block::quote:
+      out << "Q " << spans_outline(b.spans) << '\n';
+      break;
+    case Block::code:
+      out << "CODE " << b.lang << '\n';
+      for (const auto& line : b.code_lines) {
+        out << "  " << line << '\n';
+      }
+      break;
+    case Block::table:
+      out << "TABLE " << b.rows.size() << '\n';
+      break;
+    case Block::para:
+      out << "P " << spans_outline(b.spans) << '\n';
+      break;
     }
   }
   return out.str();
 }
 
-}  // namespace niminal::app
+} // namespace niminal::app

@@ -29,4 +29,4 @@ void apply_provider(niminal::Agent& agent, const Config& cfg);
 void normalize_config(Config& cfg);
 niminal::Result<void> select_provider(Config& cfg, std::string_view name);
 
-}  // namespace niminal::app
+} // namespace niminal::app

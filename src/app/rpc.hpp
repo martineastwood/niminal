@@ -13,16 +13,15 @@
 namespace niminal::app {
 
 bool valid_rpc_queue_mode(std::string_view mode);
-nlohmann::json rpc_response_event(const std::string& id, bool ok,
-                                  const std::string& state = {},
+nlohmann::json rpc_response_event(const std::string& id, bool ok, const std::string& state = {},
                                   const std::string& error = {});
 
 class RpcRuntime {
- public:
+public:
   RpcRuntime(niminal::Agent& agent, Session& session, Config& config);
   int run();
 
- private:
+private:
   niminal::Agent& agent_;
   Session& session_;
   Config& config_;
@@ -30,4 +29,4 @@ class RpcRuntime {
 
 int run_rpc(niminal::Agent& agent, Session& session, Config& config);
 
-}  // namespace niminal::app
+} // namespace niminal::app

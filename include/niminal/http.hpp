@@ -17,7 +17,7 @@ struct HttpResponse {
 };
 
 class HttpClient {
- public:
+public:
   HttpClient();
   ~HttpClient();
   HttpClient(const HttpClient&) = delete;
@@ -25,19 +25,17 @@ class HttpClient {
 
   Result<HttpResponse> get(std::string_view url, long timeout_seconds = 20);
 
-  Result<HttpResponse> post(std::string_view url,
-                            const std::map<std::string, std::string>& headers,
+  Result<HttpResponse> post(std::string_view url, const std::map<std::string, std::string>& headers,
                             std::string_view body);
 
-  Result<void> post_sse(
-      std::string_view url, const std::map<std::string, std::string>& headers,
-      std::string_view body,
-      const std::function<void(std::string_view json_data)>& on_data,
-      std::atomic<bool>* cancel = nullptr);
+  Result<void> post_sse(std::string_view url, const std::map<std::string, std::string>& headers,
+                        std::string_view body,
+                        const std::function<void(std::string_view json_data)>& on_data,
+                        std::atomic<bool>* cancel = nullptr);
 
- private:
+private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace niminal
+} // namespace niminal

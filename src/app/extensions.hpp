@@ -16,8 +16,7 @@ namespace niminal::app {
 class Session;
 
 struct ExtensionUiCallbacks {
-  std::function<std::string(const std::string&, const std::vector<std::string>&)>
-      question;
+  std::function<std::string(const std::string&, const std::vector<std::string>&)> question;
   std::function<std::string(const std::string&, bool)> input;
   std::function<std::string(const std::string&, const std::string&)> editor;
 };
@@ -81,11 +80,11 @@ std::string edit_text_externally(const std::string& text);
 class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
   struct Access {};
 
- public:
+public:
   struct Impl;
-  static std::shared_ptr<ExtensionRuntime> start(
-      const std::filesystem::path& workspace, const std::string& session_id,
-      std::atomic<bool>* cancel = nullptr);
+  static std::shared_ptr<ExtensionRuntime> start(const std::filesystem::path& workspace,
+                                                 const std::string& session_id,
+                                                 std::atomic<bool>* cancel = nullptr);
   ~ExtensionRuntime();
 
   ExtensionRuntime(const ExtensionRuntime&) = delete;
@@ -98,11 +97,9 @@ class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
                         const nlohmann::json& context = {});
   void set_ui_callbacks(ExtensionUiCallbacks callbacks);
   std::string edit_text(const std::string& title, const std::string& text);
-  void set_tool_update(
-      std::function<void(const std::string&, const std::string&)> callback);
+  void set_tool_update(std::function<void(const std::string&, const std::string&)> callback);
   void set_host_request(
-      std::function<nlohmann::json(const std::string&, const nlohmann::json&)>
-          callback);
+      std::function<nlohmann::json(const std::string&, const nlohmann::json&)> callback);
   HookOutcome dispatch(HookEvent event, const nlohmann::json& payload);
   bool pump();
   void stop();
@@ -113,10 +110,9 @@ class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
   std::vector<std::string> status_texts() const;
   std::vector<std::string> widget_lines() const;
 
-  explicit ExtensionRuntime(Access, std::filesystem::path workspace,
-                            std::atomic<bool>* cancel);
+  explicit ExtensionRuntime(Access, std::filesystem::path workspace, std::atomic<bool>* cancel);
 
- private:
+private:
   std::unique_ptr<Impl> impl_;
   std::filesystem::path workspace_;
   std::atomic<bool>* cancel_ = nullptr;
@@ -126,15 +122,12 @@ class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
 
 nlohmann::json session_hook_payload(const std::string& session_id,
                                     const std::filesystem::path& workspace);
-void bind_extensions(niminal::Agent& agent,
-                     const std::shared_ptr<ExtensionRuntime>& runtime,
+void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRuntime>& runtime,
                      const std::filesystem::path& workspace,
-                     std::function<void(const std::string&)> note = {},
-                     Session* session = nullptr,
-                     const Config& cfg = {});
-void install_extension_tools(
-    niminal::Agent& agent,
-    const std::shared_ptr<ExtensionRuntime>& runtime,
-    const std::vector<std::string>* allowed = nullptr);
+                     const std::function<void(const std::string&)>& note = {},
+                     Session* session = nullptr, const Config& cfg = {});
+void install_extension_tools(niminal::Agent& agent,
+                             const std::shared_ptr<ExtensionRuntime>& runtime,
+                             const std::vector<std::string>* allowed = nullptr);
 
-}  // namespace niminal::app
+} // namespace niminal::app

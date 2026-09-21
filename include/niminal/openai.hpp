@@ -39,4 +39,4 @@ Usage parse_chat_usage(const json& usage);
 std::string format_tokens(int count);
 std::string format_usage_line(const Usage& usage);
 
-}  // namespace niminal
+} // namespace niminal

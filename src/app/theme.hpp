@@ -10,14 +10,14 @@ namespace niminal::app {
 enum class ThemeMode { automatic, light, dark };
 
 struct Theme {
-  ftxui::Color accent;    // user turns, badges, activity, headings
-  ftxui::Color code;      // inline code and fenced blocks
-  ftxui::Color add;       // added diff lines
-  ftxui::Color del;       // removed diff lines
-  ftxui::Color meta;      // tool calls, approvals, diff markers
+  ftxui::Color accent; // user turns, badges, activity, headings
+  ftxui::Color code;   // inline code and fenced blocks
+  ftxui::Color add;    // added diff lines
+  ftxui::Color del;    // removed diff lines
+  ftxui::Color meta;   // tool calls, approvals, diff markers
   ftxui::Color error;
-  ftxui::Color muted;     // status lines, diff context
-  ftxui::Color emphasis;  // bold spans
+  ftxui::Color muted;    // status lines, diff context
+  ftxui::Color emphasis; // bold spans
   ftxui::Color italic;
   ftxui::Color quote;
   ftxui::Color input_fg;
@@ -39,4 +39,4 @@ ThemeMode detect_terminal_theme();
 
 Theme resolve_theme(ThemeMode mode);
 
-}  // namespace niminal::app
+} // namespace niminal::app

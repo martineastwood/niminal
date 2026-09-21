@@ -14,8 +14,8 @@ struct WorkspaceError : std::runtime_error {
 };
 
 class Workspace {
- public:
-  explicit Workspace(std::filesystem::path root);
+public:
+  explicit Workspace(const std::filesystem::path& root);
 
   const std::filesystem::path& root() const { return root_; }
   std::filesystem::path resolve(std::string_view path) const;
@@ -24,11 +24,11 @@ class Workspace {
   std::vector<std::string> list_files() const;
   void invalidate_listing();
 
- private:
+private:
   std::filesystem::path root_;
   mutable std::mutex files_mu_;
   mutable std::vector<std::string> files_;
   mutable bool files_cached_ = false;
 };
 
-}  // namespace niminal::app
+} // namespace niminal::app

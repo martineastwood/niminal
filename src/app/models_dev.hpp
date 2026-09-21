@@ -32,10 +32,8 @@ bool load_catalog();
 bool catalog_stale(int max_age_seconds = 24 * 60 * 60);
 bool refresh_catalog();
 std::string format_context_k(int tokens);
-std::vector<CatalogModel> search_catalog(std::string_view provider,
-                                         std::string_view query, int cap,
+std::vector<CatalogModel> search_catalog(std::string_view provider, std::string_view query, int cap,
                                          const std::vector<std::string>& skip = {});
-ReasoningCaps lookup_reasoning_caps(std::string_view provider,
-                                    std::string_view model);
+ReasoningCaps lookup_reasoning_caps(std::string_view provider, std::string_view model);
 
-}  // namespace niminal::app
+} // namespace niminal::app

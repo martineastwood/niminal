@@ -16,8 +16,7 @@ class ExtensionRuntime;
 
 int estimate_tokens(std::string_view text);
 int estimate_session_tokens(const Session& session);
-int find_cut_index(const Session& session, int keep_recent_tokens,
-                   int from_index = 0);
+int find_cut_index(const Session& session, int keep_recent_tokens, int from_index = 0);
 bool should_compact(const Session& session, int context_window = kDefaultContextWindow,
                     int reserve_tokens = kDefaultReserveTokens);
 
@@ -35,8 +34,8 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
                               const std::shared_ptr<ExtensionRuntime>& extensions = {},
                               const Config& cfg = {});
 void bind_compaction(niminal::Agent& agent, Session& session,
-                     std::function<void(const std::string&)> note = {},
+                     const std::function<void(const std::string&)>& note = {},
                      const std::shared_ptr<ExtensionRuntime>& extensions = {},
                      const Config& cfg = {});
 
-}  // namespace niminal::app
+} // namespace niminal::app

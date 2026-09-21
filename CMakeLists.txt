@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(NIMINAL_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
 add_library(niminal_strict_warnings INTERFACE)
 target_compile_options(niminal_strict_warnings INTERFACE
   -Wall
@@ -18,8 +20,21 @@ target_compile_options(niminal_strict_warnings INTERFACE
   -Wold-style-cast
   -Werror)
 
+add_library(niminal_sanitizers INTERFACE)
+if(NIMINAL_SANITIZERS)
+  target_compile_options(niminal_sanitizers INTERFACE
+    -fsanitize=address,undefined
+    -fno-omit-frame-pointer
+    -g)
+  target_link_options(niminal_sanitizers INTERFACE
+    -fsanitize=address,undefined)
+endif()
+
 function(niminal_strict_compile target)
   target_link_libraries(${target} PRIVATE niminal_strict_warnings)
+  if(NIMINAL_SANITIZERS)
+    target_link_libraries(${target} PRIVATE niminal_sanitizers)
+  endif()
 endfunction()
 
 if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)

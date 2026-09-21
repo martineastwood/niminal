@@ -35,20 +35,29 @@ int main() {
   }
 
   niminal::app::set_project_resources_trusted(root / "workspace", false);
-  if (niminal::app::discover_prompts(root / "workspace").size() != 2) return 1;
+  if (niminal::app::discover_prompts(root / "workspace").size() != 2) {
+    return 1;
+  }
   niminal::app::set_project_resources_trusted(root / "workspace", true);
   auto prompts = niminal::app::discover_prompts(root / "workspace");
-  if (prompts.size() != 3) return 1;
+  if (prompts.size() != 3) {
+    return 1;
+  }
   auto review = niminal::app::load_prompt(root / "workspace", "REVIEW");
-  if (!review || review->description != "Review the target.") return 1;
+  if (!review || review->description != "Review the target.") {
+    return 1;
+  }
   if (niminal::app::expand_prompt(root / "workspace", "review", "src/foo.cpp") !=
-      "Review src/foo.cpp carefully.")
+      "Review src/foo.cpp carefully.") {
     return 1;
-  if (niminal::app::expand_prompt(root / "workspace", "shared", "request") !=
-      "Project request.")
+  }
+  if (niminal::app::expand_prompt(root / "workspace", "shared", "request") != "Project request.") {
     return 1;
+  }
   auto fallback = niminal::app::load_prompt(root / "workspace", "fallback");
-  if (!fallback || fallback->description != "First useful line") return 1;
+  if (!fallback || fallback->description != "First useful line") {
+    return 1;
+  }
 
   fs::create_directories(root / "workspace/.niminal/prompts/nested");
   {

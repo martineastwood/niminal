@@ -24,11 +24,11 @@ struct Config {
   std::string theme = "auto";
   std::string steering_mode = "one-at-a-time";
   std::string follow_up_mode = "one-at-a-time";
-  int max_steps = 0;  // 0 means unlimited.
+  int max_steps = 0; // 0 means unlimited.
   bool compaction_enabled = true;
   int reserve_tokens = kDefaultReserveTokens;
   int keep_recent_tokens = kDefaultKeepRecentTokens;
-  int context_window = 0;  // 0 means use the built-in default.
+  int context_window = 0; // 0 means use the built-in default.
   std::map<std::string, std::string> last_models;
 };
 
@@ -38,4 +38,4 @@ Config load_config_file(const std::filesystem::path& path);
 void save_config(const Config& cfg);
 void save_config_file(const std::filesystem::path& path, const Config& cfg);
 
-}  // namespace niminal::app
+} // namespace niminal::app

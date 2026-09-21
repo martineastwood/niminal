@@ -1,7 +1,7 @@
 #include "models_dev.hpp"
 
-#include <niminal/text.hpp>
 #include "config.hpp"
+#include <niminal/text.hpp>
 
 #include <niminal/http.hpp>
 #include <nlohmann/json.hpp>
@@ -35,13 +35,17 @@ fs::path default_path() {
 
 std::vector<CatalogModel> parse_catalog(const json& doc) {
   std::vector<CatalogModel> out;
-  if (!doc.is_object()) return out;
+  if (!doc.is_object()) {
+    return out;
+  }
   for (auto& [provider, block] : doc.items()) {
-    if (!block.is_object() || !block.contains("models") ||
-        !block["models"].is_object())
+    if (!block.is_object() || !block.contains("models") || !block["models"].is_object()) {
       continue;
+    }
     for (auto& [id, model] : block["models"].items()) {
-      if (id.empty()) continue;
+      if (id.empty()) {
+        continue;
+      }
       CatalogModel row;
       row.provider = provider;
       row.id = id;
@@ -49,34 +53,41 @@ std::vector<CatalogModel> parse_catalog(const json& doc) {
         out.push_back(std::move(row));
         continue;
       }
-      if (model.contains("limit") && model["limit"].is_object())
+      if (model.contains("limit") && model["limit"].is_object()) {
         row.context = model["limit"].value("context", 0);
-      if (model.contains("reasoning") && model["reasoning"].is_boolean())
+      }
+      if (model.contains("reasoning") && model["reasoning"].is_boolean()) {
         row.reasoning = model["reasoning"].get<bool>();
-      if (model.contains("reasoning_options") &&
-          model["reasoning_options"].is_array()) {
+      }
+      if (model.contains("reasoning_options") && model["reasoning_options"].is_array()) {
         for (const auto& option : model["reasoning_options"]) {
-          if (!option.is_object()) continue;
+          if (!option.is_object()) {
+            continue;
+          }
           auto type = option.value("type", "");
-          if (type == "toggle")
+          if (type == "toggle") {
             row.toggle = true;
-          else if (type == "budget_tokens")
+          } else if (type == "budget_tokens") {
             row.budget_tokens = true;
-          else if (type == "effort" && option.contains("values") &&
-                   option["values"].is_array()) {
+          } else if (type == "effort" && option.contains("values") && option["values"].is_array()) {
             for (const auto& value : option["values"]) {
-              if (!value.is_string()) continue;
+              if (!value.is_string()) {
+                continue;
+              }
               auto effort = niminal::lower_copy(value.get<std::string>());
-              if (effort.empty()) continue;
-              if (std::find(row.efforts.begin(), row.efforts.end(), effort) ==
-                  row.efforts.end())
+              if (effort.empty()) {
+                continue;
+              }
+              if (std::find(row.efforts.begin(), row.efforts.end(), effort) == row.efforts.end()) {
                 row.efforts.push_back(effort);
+              }
             }
           }
         }
       }
-      if (row.toggle || row.budget_tokens || !row.efforts.empty())
+      if (row.toggle || row.budget_tokens || !row.efforts.empty()) {
         row.reasoning = true;
+      }
       out.push_back(std::move(row));
     }
   }
@@ -85,9 +96,13 @@ std::vector<CatalogModel> parse_catalog(const json& doc) {
 
 bool read_file(const fs::path& path, std::vector<CatalogModel>& out) {
   std::error_code ec;
-  if (path.empty() || !fs::exists(path, ec)) return false;
+  if (path.empty() || !fs::exists(path, ec)) {
+    return false;
+  }
   std::ifstream in(path);
-  if (!in) return false;
+  if (!in) {
+    return false;
+  }
   try {
     json doc = json::parse(in);
     out = parse_catalog(doc);
@@ -97,17 +112,21 @@ bool read_file(const fs::path& path, std::vector<CatalogModel>& out) {
   }
 }
 
-fs::path path_locked() { return g_path.empty() ? default_path() : g_path; }
+fs::path path_locked() {
+  return g_path.empty() ? default_path() : g_path;
+}
 
 void ensure_locked() {
-  if (g_loaded) return;
+  if (g_loaded) {
+    return;
+  }
   std::vector<CatalogModel> models;
   read_file(path_locked(), models);
   g_models = std::move(models);
   g_loaded = true;
 }
 
-}  // namespace
+} // namespace
 
 std::filesystem::path catalog_cache_path() {
   std::lock_guard<std::mutex> lock(g_mu);
@@ -123,8 +142,12 @@ void set_catalog_cache_path(const fs::path& path) {
 
 std::string catalog_name(std::string_view provider) {
   auto p = niminal::lower_copy(std::string(provider));
-  if (p == "opencode") return "opencode-go";
-  if (p == "opencodezen") return "opencode";
+  if (p == "opencode") {
+    return "opencode-go";
+  }
+  if (p == "opencodezen") {
+    return "opencode";
+  }
   return p;
 }
 
@@ -138,9 +161,13 @@ bool load_catalog() {
 bool catalog_stale(int max_age_seconds) {
   auto path = catalog_cache_path();
   std::error_code ec;
-  if (path.empty() || !fs::exists(path, ec)) return true;
+  if (path.empty() || !fs::exists(path, ec)) {
+    return true;
+  }
   auto mtime = fs::last_write_time(path, ec);
-  if (ec) return true;
+  if (ec) {
+    return true;
+  }
   auto now = fs::file_time_type::clock::now();
   auto age = std::chrono::duration_cast<std::chrono::seconds>(now - mtime);
   return age.count() >= max_age_seconds;
@@ -149,7 +176,9 @@ bool catalog_stale(int max_age_seconds) {
 bool refresh_catalog() {
   niminal::HttpClient http;
   auto res = http.get(kUrl, 20);
-  if (!res || res->status >= 400 || res->body.empty()) return false;
+  if (!res || res->status >= 400 || res->body.empty()) {
+    return false;
+  }
   json doc;
   try {
     doc = json::parse(res->body);
@@ -157,16 +186,22 @@ bool refresh_catalog() {
     return false;
   }
   auto models = parse_catalog(doc);
-  if (models.empty()) return false;
+  if (models.empty()) {
+    return false;
+  }
   auto path = catalog_cache_path();
-  if (path.empty()) return false;
+  if (path.empty()) {
+    return false;
+  }
   std::error_code ec;
   fs::create_directories(path.parent_path(), ec);
   auto tmp = path;
   tmp += ".tmp";
   {
     std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-    if (!out) return false;
+    if (!out) {
+      return false;
+    }
     out << res->body;
   }
   fs::rename(tmp, path, ec);
@@ -181,20 +216,27 @@ bool refresh_catalog() {
 }
 
 std::string format_context_k(int tokens) {
-  if (tokens <= 0) return {};
-  if (tokens >= 1000) return std::to_string(tokens / 1000) + "k";
+  if (tokens <= 0) {
+    return {};
+  }
+  if (tokens >= 1000) {
+    return std::to_string(tokens / 1000) + "k";
+  }
   return std::to_string(tokens);
 }
 
-std::vector<CatalogModel> search_catalog(std::string_view provider,
-                                         std::string_view query, int cap,
+std::vector<CatalogModel> search_catalog(std::string_view provider, std::string_view query, int cap,
                                          const std::vector<std::string>& skip) {
-  if (cap <= 0) return {};
+  if (cap <= 0) {
+    return {};
+  }
   auto want = catalog_name(provider);
   auto q = niminal::lower_copy(std::string(query));
   std::vector<std::string> skip_l;
   skip_l.reserve(skip.size());
-  for (const auto& s : skip) skip_l.push_back(niminal::lower_copy(s));
+  for (const auto& s : skip) {
+    skip_l.push_back(niminal::lower_copy(s));
+  }
   auto skipped = [&](const std::string& id) {
     auto l = niminal::lower_copy(id);
     return std::find(skip_l.begin(), skip_l.end(), l) != skip_l.end();
@@ -203,27 +245,38 @@ std::vector<CatalogModel> search_catalog(std::string_view provider,
   ensure_locked();
   std::vector<CatalogModel> out;
   for (const auto& row : g_models) {
-    if (row.provider != want) continue;
-    if (skipped(row.id)) continue;
-    if (!q.empty() && niminal::lower_copy(row.id).find(q) == std::string::npos) continue;
+    if (row.provider != want) {
+      continue;
+    }
+    if (skipped(row.id)) {
+      continue;
+    }
+    if (!q.empty() && niminal::lower_copy(row.id).find(q) == std::string::npos) {
+      continue;
+    }
     out.push_back(row);
   }
   std::sort(out.begin(), out.end(),
             [](const CatalogModel& a, const CatalogModel& b) { return a.id < b.id; });
-  if (static_cast<int>(out.size()) > cap) out.resize(static_cast<size_t>(cap));
+  if (static_cast<int>(out.size()) > cap) {
+    out.resize(static_cast<size_t>(cap));
+  }
   return out;
 }
 
-ReasoningCaps lookup_reasoning_caps(std::string_view provider,
-                                    std::string_view model) {
+ReasoningCaps lookup_reasoning_caps(std::string_view provider, std::string_view model) {
   ReasoningCaps caps;
-  if (provider.empty() || model.empty()) return caps;
+  if (provider.empty() || model.empty()) {
+    return caps;
+  }
   auto want_p = catalog_name(provider);
   auto want_m = niminal::lower_copy(std::string(model));
   std::lock_guard<std::mutex> lock(g_mu);
   ensure_locked();
   for (const auto& row : g_models) {
-    if (row.provider != want_p || niminal::lower_copy(row.id) != want_m) continue;
+    if (row.provider != want_p || niminal::lower_copy(row.id) != want_m) {
+      continue;
+    }
     caps.known = true;
     caps.reasoning = row.reasoning;
     caps.toggle = row.toggle;
@@ -234,4 +287,4 @@ ReasoningCaps lookup_reasoning_caps(std::string_view provider,
   return caps;
 }
 
-}  // namespace niminal::app
+} // namespace niminal::app

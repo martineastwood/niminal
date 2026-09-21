@@ -3,12 +3,12 @@
 #include <iostream>
 #include <string>
 
-using niminal::app::Config;
 using niminal::app::apply_provider;
+using niminal::app::Config;
 using niminal::app::find_provider;
 using niminal::app::infer_provider;
-using niminal::app::provider_names;
 using niminal::app::normalize_config;
+using niminal::app::provider_names;
 using niminal::app::select_provider;
 
 static int fail(const char* msg) {
@@ -17,48 +17,61 @@ static int fail(const char* msg) {
 }
 
 int main() {
-  if (!find_provider("anthropic") || !find_provider("GOOGLE") ||
-      find_provider("codex") || find_provider("gemini"))
+  if ((find_provider("anthropic") == nullptr) || (find_provider("GOOGLE") == nullptr) ||
+      (find_provider("codex") != nullptr) || (find_provider("gemini") != nullptr)) {
     return fail("find_provider");
+  }
   auto names = provider_names();
-  if (names.find("openrouter") == std::string::npos ||
-      names.find("mistral") == std::string::npos)
+  if (names.find("openrouter") == std::string::npos || names.find("mistral") == std::string::npos) {
     return fail("provider_names");
+  }
   if (infer_provider("https://api.anthropic.com/v1/messages") != "anthropic" ||
-      infer_provider("https://generativelanguage.googleapis.com/v1beta") !=
-          "google" ||
-      infer_provider("https://opencode.ai/zen/go/v1/chat/completions") !=
-          "opencode")
+      infer_provider("https://generativelanguage.googleapis.com/v1beta") != "google" ||
+      infer_provider("https://opencode.ai/zen/go/v1/chat/completions") != "opencode") {
     return fail("infer_provider");
+  }
 
   Config cfg;
-  if (auto result = select_provider(cfg, "anthropic"); !result)
+  if (auto result = select_provider(cfg, "anthropic"); !result) {
     return fail(result.error().what());
-  if (cfg.provider != "anthropic" || cfg.model != "claude-sonnet-4-6")
+  }
+  if (cfg.provider != "anthropic" || cfg.model != "claude-sonnet-4-6") {
     return fail("select anthropic default model");
-  if (cfg.last_models["openrouter"] != "openai/gpt-4o-mini")
+  }
+  if (cfg.last_models["openrouter"] != "openai/gpt-4o-mini") {
     return fail("remember previous model");
+  }
   cfg.model = "claude-opus-4-6";
-  if (auto result = select_provider(cfg, "openai"); !result)
+  if (auto result = select_provider(cfg, "openai"); !result) {
     return fail(result.error().what());
-  if (cfg.model != "gpt-5") return fail("openai default");
-  if (auto result = select_provider(cfg, "anthropic"); !result)
+  }
+  if (cfg.model != "gpt-5") {
+    return fail("openai default");
+  }
+  if (auto result = select_provider(cfg, "anthropic"); !result) {
     return fail(result.error().what());
-  if (cfg.model != "claude-opus-4-6") return fail("restore last model");
+  }
+  if (cfg.model != "claude-opus-4-6") {
+    return fail("restore last model");
+  }
   auto codex = select_provider(cfg, "codex");
-  if (codex) return fail("codex should fail");
-  if (std::string(codex.error().what()).find("codex") == std::string::npos)
+  if (codex) {
+    return fail("codex should fail");
+  }
+  if (std::string(codex.error().what()).find("codex") == std::string::npos) {
     return fail("codex error");
-  if (auto bad = select_provider(cfg, "nope"); bad) return fail("unknown should fail");
+  }
+  if (auto bad = select_provider(cfg, "nope"); bad) {
+    return fail("unknown should fail");
+  }
 
   niminal::Agent agent;
   apply_provider(agent, cfg);
-  if (agent.provider != "anthropic" ||
-      agent.api_url.find("/v1/messages") == std::string::npos ||
-      agent.extra_headers["anthropic-version"] != "2023-06-01" ||
-      !agent.apply_cache || agent.session_routing || agent.stream_usage ||
-      agent.key_hint != "ANTHROPIC_API_KEY")
+  if (agent.provider != "anthropic" || agent.api_url.find("/v1/messages") == std::string::npos ||
+      agent.extra_headers["anthropic-version"] != "2023-06-01" || !agent.apply_cache ||
+      agent.session_routing || agent.stream_usage || agent.key_hint != "ANTHROPIC_API_KEY") {
     return fail("apply_provider anthropic");
+  }
 
   Config stale;
   stale.provider = "anthropic";
@@ -66,7 +79,8 @@ int main() {
   stale.api_url = "https://api.anthropic.com/v1/chat/completions";
   normalize_config(stale);
   apply_provider(agent, stale);
-  if (agent.api_url.find("/v1/messages") == std::string::npos)
+  if (agent.api_url.find("/v1/messages") == std::string::npos) {
     return fail("stale api_url should normalize to provider endpoint");
+  }
   return 0;
 }

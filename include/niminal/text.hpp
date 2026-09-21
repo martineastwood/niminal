@@ -11,4 +11,4 @@ inline std::string lower_copy(std::string value) {
   return value;
 }
 
-}  // namespace niminal
+} // namespace niminal

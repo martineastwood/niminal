@@ -62,10 +62,8 @@ int main() {
     std::ofstream out(tmp / "build" / "junk.cpp");
     out << "ignored\n";
   }
-  if (std::system(("git -C " + tmp.string() +
-                   " init -q && git -C " + tmp.string() +
-                   " config user.email t@t && git -C " + tmp.string() +
-                   " config user.name t")
+  if (std::system(("git -C " + tmp.string() + " init -q && git -C " + tmp.string() +
+                   " config user.email t@t && git -C " + tmp.string() + " config user.name t")
                       .c_str()) != 0) {
     std::cerr << "git init failed\n";
     fs::remove_all(tmp);
@@ -76,8 +74,12 @@ int main() {
   bool saw_src = false;
   bool saw_build = false;
   for (const auto& f : files) {
-    if (f == "src/keep.cpp") saw_src = true;
-    if (f.find("build/") != std::string::npos) saw_build = true;
+    if (f == "src/keep.cpp") {
+      saw_src = true;
+    }
+    if (f.find("build/") != std::string::npos) {
+      saw_build = true;
+    }
   }
   if (!saw_src) {
     std::cerr << "list_files should include untracked src file\n";

@@ -6,10 +6,8 @@
 int main() {
   niminal::Agent agent;
   agent.system = "you are niminal";
-  agent.system_extra = {
-      "Project instructions.\n<file path=\"AGENTS.md\">\nbe brief\n</file>\n"};
-  agent.messages = nlohmann::json::array(
-      {nlohmann::json{{"role", "user"}, {"content", "hello"}}});
+  agent.system_extra = {"Project instructions.\n<file path=\"AGENTS.md\">\nbe brief\n</file>\n"};
+  agent.messages = nlohmann::json::array({nlohmann::json{{"role", "user"}, {"content", "hello"}}});
   auto msgs = agent.request_messages();
   if (!msgs.is_array() || msgs.size() != 2) {
     std::cerr << "expected system + user\n";
@@ -24,8 +22,7 @@ int main() {
     std::cerr << "base system first\n";
     return 1;
   }
-  if (msgs[0]["content"][1].value("text", "").find("AGENTS.md") ==
-      std::string::npos) {
+  if (msgs[0]["content"][1].value("text", "").find("AGENTS.md") == std::string::npos) {
     std::cerr << "instructions after base system\n";
     return 1;
   }
@@ -40,9 +37,7 @@ int main() {
   req.tools = nlohmann::json::array({nlohmann::json{
       {"type", "function"},
       {"function",
-       {{"name", "read"},
-        {"description", "d"},
-        {"parameters", nlohmann::json::object()}}},
+       {{"name", "read"}, {"description", "d"}, {"parameters", nlohmann::json::object()}}},
   }});
   auto body = niminal::chat_body(req);
   if (body["tools"][0].contains("cache_control")) {
@@ -72,8 +67,7 @@ int main() {
     std::cerr << "last message should carry cache_control\n";
     return 1;
   }
-  if (!body.contains("stream_options") ||
-      !body["stream_options"].value("include_usage", false)) {
+  if (!body.contains("stream_options") || !body["stream_options"].value("include_usage", false)) {
     std::cerr << "stream should request usage\n";
     return 1;
   }
@@ -137,8 +131,7 @@ int main() {
   req.model = "gemini-3.5-flash";
   req.extra = nlohmann::json{{"reasoning_effort", "high"}};
   auto gthink = niminal::chat_body(req);
-  if (gthink["generationConfig"]["thinkingConfig"].value("thinkingLevel", "") !=
-      "HIGH") {
+  if (gthink["generationConfig"]["thinkingConfig"].value("thinkingLevel", "") != "HIGH") {
     std::cerr << "google thinkingLevel\n";
     return 1;
   }
@@ -148,21 +141,19 @@ int main() {
       {"completion_tokens", 20},
       {"prompt_tokens_details", {{"cached_tokens", 80}}},
   });
-  if (usage.input_tokens != 100 || usage.output_tokens != 20 ||
-      usage.cache_read_tokens != 80 || !usage.cache_reported) {
+  if (usage.input_tokens != 100 || usage.output_tokens != 20 || usage.cache_read_tokens != 80 ||
+      !usage.cache_reported) {
     std::cerr << "parse_chat_usage\n";
     return 1;
   }
   auto line = niminal::format_usage_line(usage);
-  if (line.find("↑100") == std::string::npos ||
-      line.find("↓20") == std::string::npos ||
+  if (line.find("↑100") == std::string::npos || line.find("↓20") == std::string::npos ||
       line.find("CH80.0%") == std::string::npos) {
     std::cerr << "format_usage_line: " << line << '\n';
     return 1;
   }
   auto wrote = niminal::format_usage_line(niminal::Usage{100, 5, 0, 80, true});
-  if (wrote.find("W80") == std::string::npos ||
-      wrote.find("CH") != std::string::npos) {
+  if (wrote.find("W80") == std::string::npos || wrote.find("CH") != std::string::npos) {
     std::cerr << "format write: " << wrote << '\n';
     return 1;
   }
@@ -181,8 +172,8 @@ int main() {
       {"completion_tokens", nullptr},
       {"cache_read_input_tokens", nullptr},
   });
-  if (null_usage.input_tokens || null_usage.output_tokens ||
-      null_usage.cache_read_tokens) {
+  if ((null_usage.input_tokens != 0) || (null_usage.output_tokens != 0) ||
+      (null_usage.cache_read_tokens != 0)) {
     std::cerr << "null usage\n";
     return 1;
   }

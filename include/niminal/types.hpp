@@ -22,8 +22,7 @@ struct Cancelled : Error {
   Cancelled() : Error("interrupted") {}
 };
 
-template <typename T>
-using Result = std::expected<T, Error>;
+template <typename T> using Result = std::expected<T, Error>;
 
 struct Usage {
   int input_tokens = 0;
@@ -53,8 +52,7 @@ enum class EventKind {
 
 struct StreamEvent {
   StreamEvent() = default;
-  StreamEvent(EventKind kind, std::string text, std::string tool_name,
-              std::string tool_id)
+  StreamEvent(EventKind kind, std::string text, std::string tool_name, std::string tool_id)
       : kind(kind), text(std::move(text)), tool_name(std::move(tool_name)),
         tool_id(std::move(tool_id)) {}
 
@@ -105,4 +103,4 @@ struct ChatResult {
   Usage usage;
 };
 
-}  // namespace niminal
+} // namespace niminal

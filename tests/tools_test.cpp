@@ -10,8 +10,11 @@ using niminal::app::Workspace;
 using niminal::app::workspace_tools;
 
 bool read_only(const std::vector<niminal::Tool>& tools, const char* name) {
-  for (const auto& t : tools)
-    if (t.name == name) return t.read_only;
+  for (const auto& t : tools) {
+    if (t.name == name) {
+      return t.read_only;
+    }
+  }
   return false;
 }
 
@@ -26,23 +29,25 @@ int main() {
   Workspace ws(tmp);
   std::atomic<bool> cancel{false};
   auto tools = workspace_tools(ws, &cancel);
-  if (!read_only(tools, "read") || !read_only(tools, "grep") ||
-      !read_only(tools, "glob")) {
+  if (!read_only(tools, "read") || !read_only(tools, "grep") || !read_only(tools, "glob")) {
     std::cerr << "read/grep/glob should be read_only\n";
     return 1;
   }
-  if (read_only(tools, "edit") || read_only(tools, "write") ||
-      read_only(tools, "bash")) {
+  if (read_only(tools, "edit") || read_only(tools, "write") || read_only(tools, "bash")) {
     std::cerr << "edit/write/bash should not be read_only\n";
     return 1;
   }
   niminal::Tool* bash = nullptr;
   niminal::Tool* grep = nullptr;
   for (auto& t : tools) {
-    if (t.name == "bash") bash = &t;
-    if (t.name == "grep") grep = &t;
+    if (t.name == "bash") {
+      bash = &t;
+    }
+    if (t.name == "grep") {
+      grep = &t;
+    }
   }
-  if (!bash || !grep) {
+  if ((bash == nullptr) || (grep == nullptr)) {
     std::cerr << "missing bash or grep\n";
     return 1;
   }
@@ -51,12 +56,10 @@ int main() {
     std::cerr << out << '\n';
     return 1;
   }
-  auto parallel = std::async(std::launch::async, [&] {
-    return grep->run(nlohmann::json{{"pattern", "hi"}});
-  });
-  auto parallel2 = std::async(std::launch::async, [&] {
-    return grep->run(nlohmann::json{{"pattern", "missing-xyz"}});
-  });
+  auto parallel =
+      std::async(std::launch::async, [&] { return grep->run(nlohmann::json{{"pattern", "hi"}}); });
+  auto parallel2 = std::async(
+      std::launch::async, [&] { return grep->run(nlohmann::json{{"pattern", "missing-xyz"}}); });
   if (parallel.get().find("a.txt") == std::string::npos) {
     std::cerr << "grep should find a.txt\n";
     return 1;

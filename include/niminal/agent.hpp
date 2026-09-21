@@ -24,7 +24,7 @@ struct Agent {
   bool stream_usage = true;
   bool apply_cache = true;
   bool prompt_cache_key = true;
-  int max_steps = 0;  // 0 means unlimited.
+  int max_steps = 0; // 0 means unlimited.
   std::vector<Tool> tools;
   json messages = json::array();
   json extra = json::object();
@@ -37,13 +37,10 @@ struct Agent {
   std::function<void(const std::string& text, const std::vector<ToolCall>& calls,
                      const std::string& model, const Usage& usage)>
       persist_assistant;
-  std::function<void(const std::string& id, const std::string& output, bool error)>
-      persist_tool;
+  std::function<void(const std::string& id, const std::string& output, bool error)> persist_tool;
   std::function<bool(const ToolCall&, const Tool&)> approve_tool;
-  std::function<bool(const ToolCall&, json& arguments, std::string& reason)>
-      before_tool;
-  std::function<void(const ToolCall&, const json& arguments, std::string& output,
-                     bool& is_error)>
+  std::function<bool(const ToolCall&, json& arguments, std::string& reason)> before_tool;
+  std::function<void(const ToolCall&, const json& arguments, std::string& output, bool& is_error)>
       after_tool;
   std::function<void(json& request_messages)> augment_context;
   std::function<void()> turn_start;
@@ -60,4 +57,4 @@ struct Agent {
   std::string run(const std::string& prompt);
 };
 
-}  // namespace niminal
+} // namespace niminal

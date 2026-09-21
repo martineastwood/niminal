@@ -6,8 +6,8 @@
 #include "mentions.hpp"
 #include "models_dev.hpp"
 #include "permissions.hpp"
-#include "provider.hpp"
 #include "prompts.hpp"
+#include "provider.hpp"
 #include "session.hpp"
 #include "skills.hpp"
 #include "theme.hpp"
@@ -36,8 +36,8 @@
 #include <optional>
 #include <sstream>
 #include <string_view>
-#include <thread>
 #include <termios.h>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <utility>
@@ -68,19 +68,11 @@ struct Block {
   std::string tool_id;
 
   Block() = default;
-  Block(BlockKind kind, std::string text)
-      : kind(kind), text(std::move(text)) {}
+  Block(BlockKind kind, std::string text) : kind(kind), text(std::move(text)) {}
   Block(BlockKind kind, std::string text, std::string path, bool created)
-      : kind(kind),
-        text(std::move(text)),
-        path(std::move(path)),
-        created(created) {}
-  Block(BlockKind kind, std::string text, std::string path, bool created,
-        std::string tool_name)
-      : kind(kind),
-        text(std::move(text)),
-        path(std::move(path)),
-        created(created),
+      : kind(kind), text(std::move(text)), path(std::move(path)), created(created) {}
+  Block(BlockKind kind, std::string text, std::string path, bool created, std::string tool_name)
+      : kind(kind), text(std::move(text)), path(std::move(path)), created(created),
         tool_name(std::move(tool_name)) {}
 };
 
@@ -96,14 +88,19 @@ struct PendingFileChange {
 std::optional<std::string> read_text_file(const std::filesystem::path& path) {
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec) ||
-      std::filesystem::file_size(path, ec) > 200'000)
+      std::filesystem::file_size(path, ec) > 200'000) {
     return std::nullopt;
+  }
   std::ifstream in(path, std::ios::binary);
-  if (!in) return std::nullopt;
+  if (!in) {
+    return std::nullopt;
+  }
   std::ostringstream out;
   out << in.rdbuf();
   auto text = out.str();
-  if (text.find('\0') != std::string::npos) return std::nullopt;
+  if (text.find('\0') != std::string::npos) {
+    return std::nullopt;
+  }
   return text;
 }
 
@@ -113,42 +110,52 @@ Element render_diff_card(const Block& block, const Theme& theme) {
   std::string line;
   while (std::getline(in, line)) {
     Element row = text("│   " + line);
-    if (!line.empty() && line.front() == '+')
+    if (!line.empty() && line.front() == '+') {
       row = row | color(theme.add);
-    else if (!line.empty() && line.front() == '-')
+    } else if (!line.empty() && line.front() == '-') {
       row = row | color(theme.del);
-    else
+    } else {
       row = row | dim;
+    }
     lines.push_back(std::move(row));
   }
   auto badge = text("│ ✓ " + block.tool_name) | bold | color(theme.add);
-  return vbox({badge, text("│   " + block.path) | dim,
-               vbox(std::move(lines))});
+  return vbox({badge, text("│   " + block.path) | dim, vbox(std::move(lines))});
 }
 
 std::string clip_text(std::string text, size_t max_chars, int max_lines) {
   int lines = 1;
-  for (char c : text)
-    if (c == '\n') ++lines;
+  for (char c : text) {
+    if (c == '\n') {
+      ++lines;
+    }
+  }
   if (text.size() > max_chars) {
     text.resize(max_chars);
     text += "\n[truncated]";
     return text;
   }
-  if (lines <= max_lines) return text;
+  if (lines <= max_lines) {
+    return text;
+  }
   std::string out;
   int kept = 0;
   for (char c : text) {
     out += c;
-    if (c == '\n' && ++kept >= max_lines) break;
+    if (c == '\n' && ++kept >= max_lines) {
+      break;
+    }
   }
   out += "[truncated]";
   return out;
 }
 
 std::string one_line(std::string s, size_t n) {
-  for (char& c : s)
-    if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+  for (char& c : s) {
+    if (c == '\n' || c == '\r' || c == '\t') {
+      c = ' ';
+    }
+  }
   if (s.size() > n) {
     s.resize(n);
     s += "…";
@@ -161,23 +168,30 @@ Element paragraph_preserving_whitespace(std::string_view value) {
   size_t line_start = 0;
   while (true) {
     const auto newline = value.find('\n', line_start);
-    const auto line_end = newline == std::string_view::npos ? value.size()
-                                                              : newline;
+    const auto line_end = newline == std::string_view::npos ? value.size() : newline;
     Elements parts;
     size_t start = line_start;
     while (start < line_end) {
       size_t end = start + 1;
       if (value[start] == ' ') {
-        while (end < line_end && value[end] == ' ') ++end;
+        while (end < line_end && value[end] == ' ') {
+          ++end;
+        }
       } else {
-        while (end < line_end && value[end] != ' ') ++end;
+        while (end < line_end && value[end] != ' ') {
+          ++end;
+        }
       }
       parts.push_back(text(value.substr(start, end - start)));
       start = end;
     }
-    if (parts.empty()) parts.push_back(text(""));
+    if (parts.empty()) {
+      parts.push_back(text(""));
+    }
     rows.push_back(hflow(std::move(parts)));
-    if (newline == std::string_view::npos) break;
+    if (newline == std::string_view::npos) {
+      break;
+    }
     line_start = newline + 1;
   }
   return vbox(std::move(rows));
@@ -186,98 +200,110 @@ Element paragraph_preserving_whitespace(std::string_view value) {
 std::string tool_summary(const std::string& name, const std::string& args) {
   json j = json::object();
   try {
-    if (!args.empty()) j = json::parse(args);
+    if (!args.empty()) {
+      j = json::parse(args);
+    }
   } catch (...) {
     return "▸ " + name + "  " + one_line(args, 120);
   }
-  if (!j.is_object())
+  if (!j.is_object()) {
     return "▸ " + name + (args.empty() ? "" : "  " + one_line(args, 120));
+  }
   std::string detail;
-  if (name == "bash")
-    detail = "$ " + (j.contains("command") && j["command"].is_string()
-                         ? j["command"].get<std::string>()
-                         : std::string());
-  else if (name == "skill")
-    detail = j.contains("name") && j["name"].is_string()
-                 ? j["name"].get<std::string>()
-                 : std::string();
-  else if (j.contains("path") && j["path"].is_string()) {
+  if (name == "bash") {
+    detail =
+        "$ " + (j.contains("command") && j["command"].is_string() ? j["command"].get<std::string>()
+                                                                  : std::string());
+  } else if (name == "skill") {
+    detail =
+        j.contains("name") && j["name"].is_string() ? j["name"].get<std::string>() : std::string();
+  } else if (j.contains("path") && j["path"].is_string()) {
     detail = j["path"].get<std::string>();
-    if (j.contains("pattern") && j["pattern"].is_string())
+    if (j.contains("pattern") && j["pattern"].is_string()) {
       detail += "  " + j["pattern"].get<std::string>();
-    else if (j.contains("old_text") && j["old_text"].is_string())
+    } else if (j.contains("old_text") && j["old_text"].is_string()) {
       detail += "  " + one_line(j["old_text"].get<std::string>(), 60);
-  } else if (j.contains("pattern") && j["pattern"].is_string())
+    }
+  } else if (j.contains("pattern") && j["pattern"].is_string()) {
     detail = j["pattern"].get<std::string>();
-  else if (!j.empty())
+  } else if (!j.empty()) {
     detail = j.dump();
-  if (detail.empty()) return "▸ " + name;
+  }
+  if (detail.empty()) {
+    return "▸ " + name;
+  }
   return "▸ " + name + "  " + one_line(detail, 120);
 }
 
 Decorator block_style(BlockKind kind, const Theme& theme) {
   switch (kind) {
-    case BlockKind::user:
-      return color(theme.accent);
-    case BlockKind::tool:
-      return color(theme.meta);
-    case BlockKind::thinking:
-      return [](Element e) { return e | dim | italic; };
-    case BlockKind::diff:
-      return color(theme.muted);
-    case BlockKind::error:
-      return color(theme.error);
-    case BlockKind::status:
-      return color(theme.muted);
-    case BlockKind::approval:
-      return color(theme.meta);
-    case BlockKind::assistant:
-      return Decorator([](Element e) { return e; });
+  case BlockKind::user:
+    return color(theme.accent);
+  case BlockKind::tool:
+    return color(theme.meta);
+  case BlockKind::thinking:
+    return [](Element e) { return std::move(e) | dim | italic; };
+  case BlockKind::diff:
+    return color(theme.muted);
+  case BlockKind::error:
+    return color(theme.error);
+  case BlockKind::status:
+    return color(theme.muted);
+  case BlockKind::approval:
+    return color(theme.meta);
+  case BlockKind::assistant:
+    return Decorator([](Element e) { return e; });
   }
   return Decorator([](Element e) { return e; });
 }
 
 const char* block_label(BlockKind kind) {
   switch (kind) {
-    case BlockKind::user:
-      return "you";
-    case BlockKind::assistant:
-      return "niminal";
-    case BlockKind::tool:
-      return "";
-    case BlockKind::thinking:
-      return "";
-    case BlockKind::diff:
-      return "";
-    case BlockKind::error:
-      return "error";
-    case BlockKind::status:
-      return "";
-    case BlockKind::approval:
-      return "";
+  case BlockKind::user:
+    return "you";
+  case BlockKind::assistant:
+    return "niminal";
+  case BlockKind::tool:
+    return "";
+  case BlockKind::thinking:
+    return "";
+  case BlockKind::diff:
+    return "";
+  case BlockKind::error:
+    return "error";
+  case BlockKind::status:
+    return "";
+  case BlockKind::approval:
+    return "";
   }
   return "";
 }
 
 bool is_send(const Event& e) {
-  if (e == Event::Return) return true;
-  if (e == Event::Character('\x04') || e == Event::Character('\x13'))
+  if (e == Event::Return) {
     return true;
+  }
+  if (e == Event::Character('\x04') || e == Event::Character('\x13')) {
+    return true;
+  }
   auto in = e.input();
   return in == "\x1b[13;5u" || in == "\x1b[13;5~";
 }
 
 bool is_newline_key(const Event& e) {
   auto in = e.input();
-  if (in == "\x1b[13;2u" || in == "\x1b[13;2~" || in == "\x1b[27;2;13~" ||
-      in == "\x1b\r" || in == "\x1b\n")
+  if (in == "\x1b[13;2u" || in == "\x1b[13;2~" || in == "\x1b[27;2;13~" || in == "\x1b\r" ||
+      in == "\x1b\n") {
     return true;
-  if (in == "\x1bj" || in == "\x1bJ" || in == "\x1b[106;3u" ||
-      in == "\x1b[74;3u")
+  }
+  if (in == "\x1bj" || in == "\x1bJ" || in == "\x1b[106;3u" || in == "\x1b[74;3u") {
     return true;
+  }
   if (e.is_character()) {
     auto ch = e.character();
-    if (ch == "∆") return true;
+    if (ch == "∆") {
+      return true;
+    }
   }
   return false;
 }
@@ -291,20 +317,25 @@ bool is_wheel_down(Event e) {
 }
 
 std::string trim_copy(std::string s) {
-  while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\r'))
+  while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\r')) {
     s.pop_back();
+  }
   size_t i = 0;
-  while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r')) ++i;
+  while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r')) {
+    ++i;
+  }
   return s.substr(i);
 }
 
 std::pair<std::string, std::string> split_slash(const std::string& prompt) {
   auto space = prompt.find(' ');
   auto cmd = space == std::string::npos ? prompt : prompt.substr(0, space);
-  auto arg = space == std::string::npos ? std::string()
-                                        : trim_copy(prompt.substr(space + 1));
-  for (char& c : cmd)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  auto arg = space == std::string::npos ? std::string() : trim_copy(prompt.substr(space + 1));
+  for (char& c : cmd) {
+    if (c >= 'A' && c <= 'Z') {
+      c = static_cast<char>(c - 'A' + 'a');
+    }
+  }
   return {cmd, arg};
 }
 
@@ -343,8 +374,11 @@ constexpr SlashSpec kSlash[] = {
 };
 
 bool is_builtin_slash(std::string_view command) {
-  for (const auto& spec : kSlash)
-    if (command == spec.name) return true;
+  for (const auto& spec : kSlash) {
+    if (command == spec.name) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -359,13 +393,12 @@ bool starts_with(std::string_view s, std::string_view p) {
 }
 
 bool contains_ci(std::string_view s, std::string_view p) {
-  return niminal::lower_copy(std::string(s))
-             .find(niminal::lower_copy(std::string(p))) != std::string::npos;
+  return niminal::lower_copy(std::string(s)).find(niminal::lower_copy(std::string(p))) !=
+         std::string::npos;
 }
 
 std::string session_title(const SessionInfo& info) {
-  return !info.name.empty() ? info.name
-                            : (!info.preview.empty() ? info.preview : "(empty)");
+  return !info.name.empty() ? info.name : (!info.preview.empty() ? info.preview : "(empty)");
 }
 
 bool session_matches_info(const SessionInfo& info, const std::string& query) {
@@ -374,9 +407,14 @@ bool session_matches_info(const SessionInfo& info, const std::string& query) {
 }
 
 void add_unique(std::vector<std::string>& ids, const std::string& id) {
-  if (id.empty()) return;
-  for (const auto& x : ids)
-    if (x == id) return;
+  if (id.empty()) {
+    return;
+  }
+  for (const auto& x : ids) {
+    if (x == id) {
+      return;
+    }
+  }
   ids.push_back(id);
 }
 
@@ -386,54 +424,68 @@ void sort_suggestions(std::vector<Suggestion>& out) {
   });
 }
 
-std::vector<Suggestion> suggest_models(const std::string& query,
-                                       std::string_view provider,
+std::vector<Suggestion> suggest_models(const std::string& query, std::string_view provider,
                                        const std::vector<std::string>& recents) {
   constexpr int kMin = 2;
   constexpr int kCap = 50;
   std::vector<Suggestion> out;
   std::vector<std::string> used;
   auto add = [&](const std::string& id, int context) {
-    if (id.empty()) return;
+    if (id.empty()) {
+      return;
+    }
     auto key = niminal::lower_copy(id);
-    for (const auto& x : used)
-      if (x == key) return;
+    for (const auto& x : used) {
+      if (x == key) {
+        return;
+      }
+    }
     used.push_back(key);
     auto label = id;
     auto ctx = format_context_k(context);
-    if (!ctx.empty()) label += "  " + ctx;
+    if (!ctx.empty()) {
+      label += "  " + ctx;
+    }
     out.push_back({"/model " + id, std::move(label)});
   };
   auto q = niminal::lower_copy(query);
   if (static_cast<int>(q.size()) >= kMin) {
     auto catalog = search_catalog(provider, query, kCap);
     if (!catalog.empty()) {
-      for (const auto& row : catalog) add(row.id, row.context);
+      for (const auto& row : catalog) {
+        add(row.id, row.context);
+      }
       return out;
     }
   }
   for (const auto& id : recents) {
-    if (!q.empty() && !contains_ci(id, q)) continue;
+    if (!q.empty() && !contains_ci(id, q)) {
+      continue;
+    }
     add(id, 0);
   }
-  if (static_cast<int>(q.size()) < kMin && !q.empty()) return out;
+  if (static_cast<int>(q.size()) < kMin && !q.empty()) {
+    return out;
+  }
   int remain = kCap - static_cast<int>(out.size());
-  if (remain <= 0) return out;
-  for (const auto& row : search_catalog(provider, query, remain, recents))
+  if (remain <= 0) {
+    return out;
+  }
+  for (const auto& row : search_catalog(provider, query, remain, recents)) {
     add(row.id, row.context);
+  }
   return out;
 }
 
 std::vector<Suggestion> slash_suggestions(const std::string& draft,
                                           const std::filesystem::path& dir,
-                                          const std::string& workspace,
-                                          std::string_view provider,
+                                          const std::string& workspace, std::string_view provider,
                                           std::string_view model,
                                           const std::vector<std::string>& recents,
-                                          const std::vector<ExtensionCommand>&
-                                              extension_commands) {
-  if (draft.empty() || draft[0] != '/' || draft.find('\n') != std::string::npos)
+                                          const std::vector<ExtensionCommand>& extension_commands) {
+  if (draft.empty() || draft[0] != '/' || draft.find('\n') != std::string::npos) {
     return {};
+  }
   auto [cmd, arg] = split_slash(draft);
   bool trailing = !draft.empty() && (draft.back() == ' ' || draft.back() == '\t');
 
@@ -441,10 +493,12 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
     std::vector<Suggestion> out;
     auto query = cmd.substr(7);
     for (const auto& skill : discover_skills(workspace)) {
-      if (!contains_ci(skill.name, query)) continue;
-      out.push_back({"/skill:" + skill.name + " ",
-                     "/skill:" + skill.name +
-                         (skill.description.empty() ? "" : "  " + skill.description)});
+      if (!contains_ci(skill.name, query)) {
+        continue;
+      }
+      out.push_back(
+          {"/skill:" + skill.name + " ",
+           "/skill:" + skill.name + (skill.description.empty() ? "" : "  " + skill.description)});
     }
     sort_suggestions(out);
     return out;
@@ -454,102 +508,139 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
     std::vector<Suggestion> out;
     try {
       for (const auto& info : list_sessions(dir, workspace)) {
-        if (!arg.empty() && !session_matches_info(info, arg)) continue;
+        if (!arg.empty() && !session_matches_info(info, arg)) {
+          continue;
+        }
         out.push_back({"/resume " + info.id, info.id + "  " + session_title(info)});
-        if (out.size() == 8) break;
+        if (out.size() == 8) {
+          break;
+        }
       }
     } catch (...) {
     }
-    if (!out.empty()) return out;
+    if (!out.empty()) {
+      return out;
+    }
   }
 
   if (cmd == "/restore" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
     try {
       for (const auto& info : list_deleted_sessions(dir)) {
-        if (!arg.empty() && !session_matches_info(info, arg)) continue;
+        if (!arg.empty() && !session_matches_info(info, arg)) {
+          continue;
+        }
         out.push_back({"/restore " + info.id, info.id + "  " + session_title(info)});
-        if (out.size() == 8) break;
+        if (out.size() == 8) {
+          break;
+        }
       }
     } catch (...) {
     }
-    if (!out.empty()) return out;
+    if (!out.empty()) {
+      return out;
+    }
   }
 
   if (cmd == "/model" && (trailing || !arg.empty())) {
     auto models = suggest_models(arg, provider, recents);
-    if (!models.empty()) return models;
+    if (!models.empty()) {
+      return models;
+    }
   }
 
   if (cmd == "/thinking" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
     for (const auto& level : thinking_choices(provider, model)) {
-      if (!arg.empty() && !starts_with(level, arg)) continue;
+      if (!arg.empty() && !starts_with(level, arg)) {
+        continue;
+      }
       out.push_back({"/thinking " + level, level});
     }
-    if (!out.empty()) return out;
+    if (!out.empty()) {
+      return out;
+    }
   }
 
   if (cmd == "/theme" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
     for (auto mode : {ThemeMode::automatic, ThemeMode::light, ThemeMode::dark}) {
       std::string name = theme_mode_name(mode);
-      if (!arg.empty() && !starts_with(name, niminal::lower_copy(arg))) continue;
+      if (!arg.empty() && !starts_with(name, niminal::lower_copy(arg))) {
+        continue;
+      }
       out.push_back({"/theme " + name, name});
     }
-    if (!out.empty()) return out;
+    if (!out.empty()) {
+      return out;
+    }
   }
 
   if (cmd == "/models" && (trailing || !arg.empty())) {
-    if (arg.empty() || starts_with("refresh", arg))
+    if (arg.empty() || starts_with("refresh", arg)) {
       return {{"/models refresh", "/models refresh  fetch models.dev"}};
+    }
   }
 
   if (cmd == "/provider" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
     for (auto* spec : all_providers()) {
-      if (!arg.empty() && !starts_with(spec->name, arg)) continue;
+      if (!arg.empty() && !starts_with(spec->name, arg)) {
+        continue;
+      }
       out.push_back({"/provider " + std::string(spec->name),
                      std::string(spec->name) + "  " + spec->default_model});
     }
     sort_suggestions(out);
-    if (!out.empty()) return out;
+    if (!out.empty()) {
+      return out;
+    }
   }
 
-  if (!arg.empty()) return {};
+  if (!arg.empty()) {
+    return {};
+  }
 
   std::vector<Suggestion> out;
   for (const auto& spec : kSlash) {
-    if (!starts_with(spec.name, cmd)) continue;
+    if (!starts_with(spec.name, cmd)) {
+      continue;
+    }
     std::string fill = spec.name;
-    if (std::string(spec.usage) != spec.name && fill.back() != ':') fill += ' ';
+    if (std::string(spec.usage) != spec.name && fill.back() != ':') {
+      fill += ' ';
+    }
     out.push_back({fill, std::string(spec.usage) + "  " + spec.hint});
   }
   for (const auto& prompt : discover_prompts(workspace)) {
     auto slash = "/" + prompt.name;
-    if (is_builtin_slash(niminal::lower_copy(slash))) continue;
-    if (!starts_with(niminal::lower_copy(slash), cmd)) continue;
-    out.push_back({slash + " ", slash +
-                                      (prompt.description.empty()
-                                           ? std::string()
-                                           : "  " + prompt.description)});
+    if (is_builtin_slash(niminal::lower_copy(slash))) {
+      continue;
+    }
+    if (!starts_with(niminal::lower_copy(slash), cmd)) {
+      continue;
+    }
+    out.push_back({slash + " ", slash + (prompt.description.empty() ? std::string()
+                                                                    : "  " + prompt.description)});
   }
   for (const auto& command : extension_commands) {
     auto slash = "/" + command.name;
-    if (is_builtin_slash(niminal::lower_copy(slash))) continue;
-    if (!starts_with(niminal::lower_copy(slash), cmd)) continue;
-    out.push_back({slash + " ", slash +
-                                    (command.description.empty()
-                                         ? std::string()
-                                         : "  " + command.description)});
+    if (is_builtin_slash(niminal::lower_copy(slash))) {
+      continue;
+    }
+    if (!starts_with(niminal::lower_copy(slash), cmd)) {
+      continue;
+    }
+    out.push_back(
+        {slash + " ",
+         slash + (command.description.empty() ? std::string() : "  " + command.description)});
   }
   sort_suggestions(out);
   return out;
 }
 
 std::string base64_encode(std::string_view in) {
-  static constexpr char kTbl[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  static constexpr char kTbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   std::string out;
   int val = 0;
   int valb = -6;
@@ -562,15 +653,23 @@ std::string base64_encode(std::string_view in) {
       valb -= 6;
     }
   }
-  if (valb > -6) out.push_back(kTbl[((val << 8) >> (valb + 8)) & 0x3F]);
-  while (out.size() % 4) out.push_back('=');
+  if (valb > -6) {
+    out.push_back(kTbl[((val << 8) >> (valb + 8)) & 0x3F]);
+  }
+  while ((out.size() % 4) != 0U) {
+    out.push_back('=');
+  }
   return out;
 }
 
 bool pipe_copy(const char* cmd, const std::string& text) {
   FILE* pipe = popen(cmd, "w");
-  if (!pipe) return false;
-  if (!text.empty()) fwrite(text.data(), 1, text.size(), pipe);
+  if (pipe == nullptr) {
+    return false;
+  }
+  if (!text.empty()) {
+    fwrite(text.data(), 1, text.size(), pipe);
+  }
   return pclose(pipe) == 0;
 }
 
@@ -586,12 +685,16 @@ void copy_to_clipboard(const std::string& text) {
 
 std::string pipe_read(const char* cmd) {
   FILE* pipe = popen(cmd, "r");
-  if (!pipe) return {};
+  if (pipe == nullptr) {
+    return {};
+  }
   std::string out;
   char buf[4096];
   while (true) {
     auto n = fread(buf, 1, sizeof(buf), pipe);
-    if (n == 0) break;
+    if (n == 0) {
+      break;
+    }
     out.append(buf, n);
   }
   pclose(pipe);
@@ -604,18 +707,23 @@ std::string paste_from_clipboard() {
   text = pipe_read("pbpaste");
 #elif defined(__linux__)
   text = pipe_read("wl-paste -n 2>/dev/null");
-  if (text.empty()) text = pipe_read("xclip -selection clipboard -o 2>/dev/null");
+  if (text.empty())
+    text = pipe_read("xclip -selection clipboard -o 2>/dev/null");
 #endif
-  for (auto& c : text)
-    if (c == '\r') c = '\n';
+  for (auto& c : text) {
+    if (c == '\r') {
+      c = '\n';
+    }
+  }
   return text;
 }
 
 bool is_paste_key(const Event& e) {
-  if (e == Event::CtrlV) return true;
+  if (e == Event::CtrlV) {
+    return true;
+  }
   auto in = e.input();
-  return in == "\x1b[118;2u" || in == "\x1b[118;5u" || in == "\x1b[118;8u" ||
-         in == "\x1b[118;9u";
+  return in == "\x1b[118;2u" || in == "\x1b[118;5u" || in == "\x1b[118;8u" || in == "\x1b[118;9u";
 }
 
 const char* kHelp = R"(/help              this list
@@ -662,10 +770,9 @@ Esc interrupts a running turn, or clears the composer.
 Drag to copy. Ctrl-V pastes into the composer. /copy copies the last reply.
 Ctrl-C quits.)";
 
-}  // namespace
+} // namespace
 
-int run_tui(niminal::Agent& agent, Workspace& workspace,
-            Config& cfg, Session& session,
+int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& session,
             std::shared_ptr<ExtensionRuntime>& extensions, bool yolo,
             const std::vector<std::string>* allowed_tools) {
   const auto& cwd = workspace.root();
@@ -673,7 +780,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   ThemeMode theme_mode = parse_theme_mode(cfg.theme).value_or(ThemeMode::automatic);
   Theme theme = resolve_theme(theme_mode);
   std::atomic<bool> local_cancel{false};
-  if (!agent.cancel) agent.cancel = &local_cancel;
+  if (agent.cancel == nullptr) {
+    agent.cancel = &local_cancel;
+  }
   auto* cancel = agent.cancel;
 
   std::vector<Block> blocks;
@@ -699,7 +808,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   std::string activity;
   std::string footer_notice;
   std::chrono::steady_clock::time_point footer_notice_until;
-  float transcript_y = 1.f;
+  float transcript_y = 1.F;
   bool pasting = false;
   bool stick_bottom = true;
   std::atomic<bool> ui_alive{true};
@@ -743,30 +852,36 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     });
     std::unique_lock lock(call->mutex);
     call->condition.wait(lock, [&] { return call->done || !ui_alive; });
-    if (!call->done) throw std::runtime_error("interactive UI is unavailable");
-    if (call->error) std::rethrow_exception(call->error);
+    if (!call->done) {
+      throw std::runtime_error("interactive UI is unavailable");
+    }
+    if (call->error) {
+      std::rethrow_exception(call->error);
+    }
   };
 
   auto configure_extension_ui = [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
-    if (!runtime) return;
+    if (!runtime) {
+      return;
+    }
     ExtensionUiCallbacks callbacks;
-    callbacks.question = [&](const std::string& prompt,
-                             const std::vector<std::string>& options) {
+    callbacks.question = [&](const std::string& prompt, const std::vector<std::string>& options) {
       std::string answer;
       run_on_ui([&] {
         screen.WithRestoredIO([&] {
           std::cout << "\n" << prompt;
           if (!options.empty()) {
             std::cout << "\n";
-            for (size_t i = 0; i < options.size(); ++i)
+            for (size_t i = 0; i < options.size(); ++i) {
               std::cout << "  [" << (i + 1) << "] " << options[i] << "\n";
+            }
           }
           std::cout << "> " << std::flush;
           std::getline(std::cin, answer);
-          if (!options.empty() && answer.size() == 1 &&
-              answer[0] >= '1' &&
-              answer[0] <= static_cast<char>('0' + options.size()))
+          if (!options.empty() && answer.size() == 1 && answer[0] >= '1' &&
+              answer[0] <= static_cast<char>('0' + options.size())) {
             answer = options[static_cast<size_t>(answer[0] - '1')];
+          }
         });
       });
       return answer;
@@ -794,9 +909,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     };
     callbacks.editor = [&](const std::string&, const std::string& text) {
       std::string edited;
-      run_on_ui([&] {
-        screen.WithRestoredIO([&] { edited = edit_text_externally(text); });
-      });
+      run_on_ui([&] { screen.WithRestoredIO([&] { edited = edit_text_externally(text); }); });
       return edited;
     };
     runtime->set_ui_callbacks(std::move(callbacks));
@@ -812,18 +925,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   auto current_suggestions = [&] {
     std::vector<std::string> recents;
     add_unique(recents, agent.model);
-    if (auto it = cfg.last_models.find(agent.provider); it != cfg.last_models.end())
+    if (auto it = cfg.last_models.find(agent.provider); it != cfg.last_models.end()) {
       add_unique(recents, it->second);
+    }
     add_unique(recents, cfg.model);
     std::vector<Suggestion> items;
     if (auto mention = file_mention_at(draft, static_cast<size_t>(cursor))) {
-      for (const auto& path : suggest_mentioned_files(workspace, mention->query))
+      for (const auto& path : suggest_mentioned_files(workspace, mention->query)) {
         items.push_back({path, "@" + path, true});
+      }
     } else {
       static const std::vector<ExtensionCommand> no_commands;
       const auto& commands = extensions ? extensions->commands() : no_commands;
-      items = slash_suggestions(draft, session_dir, cwd.string(), agent.provider,
-                                agent.model, recents, commands);
+      items = slash_suggestions(draft, session_dir, cwd.string(), agent.provider, agent.model,
+                                recents, commands);
     }
     std::string sig;
     for (const auto& item : items) {
@@ -834,9 +949,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       suggest_sig = std::move(sig);
       suggest_i = 0;
     }
-    if (!items.empty())
-      suggest_i =
-          std::clamp(suggest_i, 0, static_cast<int>(items.size()) - 1);
+    if (!items.empty()) {
+      suggest_i = std::clamp(suggest_i, 0, static_cast<int>(items.size()) - 1);
+    }
     return items;
   };
 
@@ -856,38 +971,51 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   auto load_history = [&] {
     history.clear();
     for (const auto& event : session.events) {
-      if (!event.is_object() || event.value("type", "") != "user") continue;
+      if (!event.is_object() || event.value("type", "") != "user") {
+        continue;
+      }
       std::string text;
-      for (const auto& part : event.value("content", json::array()))
-        if (part.is_object() && part.value("type", "") == "text")
+      for (const auto& part : event.value("content", json::array())) {
+        if (part.is_object() && part.value("type", "") == "text") {
           text += part.value("text", "");
-      if (!text.empty()) history.push_back(std::move(text));
+        }
+      }
+      if (!text.empty()) {
+        history.push_back(std::move(text));
+      }
     }
-    if (history.size() > 500)
+    if (history.size() > 500) {
       history.erase(history.begin(), history.end() - 500);
+    }
     history_i = -1;
     live_draft.clear();
   };
   load_history();
 
   auto remember_input = [&](const std::string& text) {
-    if (text.empty() || text[0] == '/') return;
-    if (history.empty() || history.back() != text) history.push_back(text);
-    if (history.size() > 500)
+    if (text.empty() || text[0] == '/') {
+      return;
+    }
+    if (history.empty() || history.back() != text) {
+      history.push_back(text);
+    }
+    if (history.size() > 500) {
       history.erase(history.begin(),
                     history.begin() + static_cast<std::ptrdiff_t>(history.size() - 500));
+    }
     history_i = -1;
   };
 
   auto flash_footer = [&](std::string message) {
     footer_notice = std::move(message);
-    footer_notice_until = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(1500);
+    footer_notice_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
     screen.RequestAnimationFrame();
   };
 
   auto history_prev = [&] {
-    if (history.empty()) return;
+    if (history.empty()) {
+      return;
+    }
     if (history_i < 0) {
       live_draft = draft;
       history_i = static_cast<int>(history.size()) - 1;
@@ -899,7 +1027,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   };
 
   auto history_next = [&] {
-    if (history_i < 0) return;
+    if (history_i < 0) {
+      return;
+    }
     if (history_i + 1 < static_cast<int>(history.size())) {
       ++history_i;
       draft = history[static_cast<size_t>(history_i)];
@@ -911,19 +1041,22 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   };
 
   auto apply_extension_actions = [&] {
-    if (!extensions) return;
+    if (!extensions) {
+      return;
+    }
     extensions->pump();
-    for (auto& notice : extensions->take_notices())
-      blocks.push_back(Block{
-          notice.level == "error" ? BlockKind::error : BlockKind::status,
-          std::move(notice.message)});
+    for (auto& notice : extensions->take_notices()) {
+      blocks.push_back(Block{notice.level == "error" ? BlockKind::error : BlockKind::status,
+                             std::move(notice.message)});
+    }
     auto entries = extensions->take_entries();
     extension_entries_pending.insert(extension_entries_pending.end(),
                                      std::make_move_iterator(entries.begin()),
                                      std::make_move_iterator(entries.end()));
     if (!busy) {
-      for (const auto& entry : extension_entries_pending)
+      for (const auto& entry : extension_entries_pending) {
         session.add_extension(entry.extension, entry.data);
+      }
       extension_entries_pending.clear();
     }
     for (auto& message : extensions->take_user_messages()) {
@@ -933,152 +1066,150 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         idle_extension_messages.push_back(std::move(message.content));
       } else {
         std::lock_guard lock(steering_mu);
-        if (message.deliver_as == "steer") steering.push_back(message.content);
-        else follow_up.push_back(message.content);
-        blocks.push_back(Block{BlockKind::status,
-                               "Extension queued (" + message.deliver_as +
-                                   "): " + message.content});
+        if (message.deliver_as == "steer") {
+          steering.push_back(message.content);
+        } else {
+          follow_up.push_back(message.content);
+        }
+        blocks.push_back(Block{BlockKind::status, "Extension queued (" + message.deliver_as +
+                                                      "): " + message.content});
       }
     }
   };
 
   auto apply_event = [&](StreamEvent ev) {
     switch (ev.kind) {
-      case EventKind::text_delta:
-        if (blocks.empty() || blocks.back().kind != BlockKind::assistant)
-          blocks.push_back(Block{BlockKind::assistant, {}});
-        blocks.back().text += ev.text;
-        activity = "Responding…";
-        break;
-      case EventKind::thinking_delta:
-        if (blocks.empty() || blocks.back().kind != BlockKind::thinking)
-          blocks.push_back(Block{BlockKind::thinking, {}});
-        blocks.back().text += ev.text;
-        activity = "Thinking…";
-        break;
-      case EventKind::tool_output_delta:
-        break;
-      case EventKind::tool_call:
+    case EventKind::text_delta:
+      if (blocks.empty() || blocks.back().kind != BlockKind::assistant) {
+        blocks.push_back(Block{BlockKind::assistant, {}});
+      }
+      blocks.back().text += ev.text;
+      activity = "Responding…";
+      break;
+    case EventKind::thinking_delta:
+      if (blocks.empty() || blocks.back().kind != BlockKind::thinking) {
+        blocks.push_back(Block{BlockKind::thinking, {}});
+      }
+      blocks.back().text += ev.text;
+      activity = "Thinking…";
+      break;
+    case EventKind::tool_output_delta:
+      break;
+    case EventKind::tool_call: {
+      Block tool{BlockKind::tool, tool_summary(ev.tool_name, ev.text)};
+      tool.tool_name = ev.tool_name;
+      tool.tool_id = ev.tool_id;
+      blocks.push_back(std::move(tool));
+    }
+      activity = ev.tool_name.empty() ? "Waiting for model…" : "Running " + ev.tool_name + "…";
+      break;
+    case EventKind::approval_required:
+      blocks.push_back(
+          Block{BlockKind::approval, ev.tool_name + "\n  Allow " + ev.tool_name +
+                                         (ev.text.empty() ? std::string() : ": " + ev.text) +
+                                         "\n  [enter] once  [s] session" +
+                                         (ev.can_remember ? "  [p] project" : "") + "  [n] deny"});
+      activity = "Approval needed";
+      break;
+    case EventKind::tool_result:
+      if (!ev.tool_id.empty()) {
+        std::optional<PendingFileChange> pending;
         {
-          Block tool{BlockKind::tool, tool_summary(ev.tool_name, ev.text)};
-          tool.tool_name = ev.tool_name;
-          tool.tool_id = ev.tool_id;
-          blocks.push_back(std::move(tool));
-        }
-        activity = ev.tool_name.empty() ? "Waiting for model…"
-                                        : "Running " + ev.tool_name + "…";
-        break;
-      case EventKind::approval_required:
-        blocks.push_back(Block{
-            BlockKind::approval,
-            ev.tool_name + "\n  Allow " + ev.tool_name +
-                (ev.text.empty() ? std::string() : ": " + ev.text) +
-                "\n  [enter] once  [s] session" +
-                (ev.can_remember ? "  [p] project" : "") +
-                "  [n] deny"});
-        activity = "Approval needed";
-        break;
-      case EventKind::tool_result:
-        if (!ev.tool_id.empty()) {
-          std::optional<PendingFileChange> pending;
-          {
-            std::lock_guard lock(file_changes_mu);
-            auto it = file_changes.find(ev.tool_id);
-            if (it != file_changes.end()) {
-              pending = std::move(it->second);
-              file_changes.erase(it);
-            }
+          std::lock_guard lock(file_changes_mu);
+          auto it = file_changes.find(ev.tool_id);
+          if (it != file_changes.end()) {
+            pending = std::move(it->second);
+            file_changes.erase(it);
           }
-          if (pending && !ev.is_error) {
-            std::error_code ec;
-            const bool after_exists =
-                std::filesystem::is_regular_file(pending->path, ec);
-            auto after = after_exists ? read_text_file(pending->path)
-                                      : std::optional<std::string>{};
-            if (after_exists && after) {
-              auto diff = make_tool_diff(
-                  pending->tool_name, pending->input,
-                  !pending->before_exists && after_exists, ev.text);
-              if (diff.changed) {
-                const bool created = diff.created;
-                auto body = std::move(diff.body);
-                auto tool = std::find_if(
-                    blocks.rbegin(), blocks.rend(), [&](const Block& block) {
-                      return block.kind == BlockKind::tool &&
-                             block.tool_id == ev.tool_id;
-                    });
-                if (tool != blocks.rend()) {
-                  tool->kind = BlockKind::diff;
-                  tool->text = std::move(body);
-                  tool->path = std::move(pending->relative);
-                  tool->created = created;
-                  tool->tool_name = std::move(pending->tool_name);
-                } else {
-                  blocks.push_back(Block{BlockKind::diff, std::move(body),
-                                         std::move(pending->relative), created,
-                                         std::move(pending->tool_name)});
-                }
+        }
+        if (pending && !ev.is_error) {
+          std::error_code ec;
+          const bool after_exists = std::filesystem::is_regular_file(pending->path, ec);
+          auto after = after_exists ? read_text_file(pending->path) : std::optional<std::string>{};
+          if (after_exists && after) {
+            auto diff = make_tool_diff(pending->tool_name, pending->input,
+                                       !pending->before_exists && after_exists, ev.text);
+            if (diff.changed) {
+              const bool created = diff.created;
+              auto body = std::move(diff.body);
+              auto tool = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
+                return block.kind == BlockKind::tool && block.tool_id == ev.tool_id;
+              });
+              if (tool != blocks.rend()) {
+                tool->kind = BlockKind::diff;
+                tool->text = std::move(body);
+                tool->path = std::move(pending->relative);
+                tool->created = created;
+                tool->tool_name = std::move(pending->tool_name);
+              } else {
+                blocks.push_back(Block{BlockKind::diff, std::move(body),
+                                       std::move(pending->relative), created,
+                                       std::move(pending->tool_name)});
               }
             }
           }
         }
-        activity = "Waiting for model…";
-        break;
-      case EventKind::user:
-        blocks.push_back(Block{BlockKind::user, ev.text});
-        break;
-      case EventKind::status:
-        if (!ev.text.empty())
-          blocks.push_back(Block{BlockKind::status, ev.text});
-        break;
-      case EventKind::error:
-        blocks.push_back(Block{BlockKind::error, ev.text});
-        busy = false;
-        activity.clear();
-        break;
-      case EventKind::done:
-        busy = false;
-        activity.clear();
-        break;
-      case EventKind::run_start:
-      case EventKind::step_start:
-      case EventKind::step_end:
-      case EventKind::run_end:
-      case EventKind::assistant_message:
-        break;
+      }
+      activity = "Waiting for model…";
+      break;
+    case EventKind::user:
+      blocks.push_back(Block{BlockKind::user, ev.text});
+      break;
+    case EventKind::status:
+      if (!ev.text.empty()) {
+        blocks.push_back(Block{BlockKind::status, ev.text});
+      }
+      break;
+    case EventKind::error:
+      blocks.push_back(Block{BlockKind::error, ev.text});
+      busy = false;
+      activity.clear();
+      break;
+    case EventKind::done:
+      busy = false;
+      activity.clear();
+      break;
+    case EventKind::run_start:
+    case EventKind::step_start:
+    case EventKind::step_end:
+    case EventKind::run_end:
+    case EventKind::assistant_message:
+      break;
     }
-    if (stick_bottom) transcript_y = 1.f;
-    if (blocks.size() > 80)
+    if (stick_bottom) {
+      transcript_y = 1.F;
+    }
+    if (blocks.size() > 80) {
       blocks.erase(blocks.begin(),
                    blocks.begin() + static_cast<std::ptrdiff_t>(blocks.size() - 80));
+    }
   };
 
-  auto post_ui = [&](StreamEvent ev) {
-    if (ev.kind == EventKind::tool_call &&
-        (ev.tool_name == "edit" || ev.tool_name == "write")) {
+  auto post_ui = [&](const StreamEvent& ev) {
+    if (ev.kind == EventKind::tool_call && (ev.tool_name == "edit" || ev.tool_name == "write")) {
       try {
-        auto path_arg = ev.input.is_object()
-                            ? ev.input.value("path", std::string())
-                            : std::string();
+        auto path_arg =
+            ev.input.is_object() ? ev.input.value("path", std::string()) : std::string();
         if (!path_arg.empty()) {
           auto path = workspace.resolve(path_arg);
           auto relative = workspace.relative(path);
           std::error_code ec;
-          const bool before_exists =
-              std::filesystem::is_regular_file(path, ec);
-          auto before = before_exists ? read_text_file(path)
-                                      : std::optional<std::string>{};
+          const bool before_exists = std::filesystem::is_regular_file(path, ec);
+          auto before = before_exists ? read_text_file(path) : std::optional<std::string>{};
           if (!before_exists || before) {
             std::lock_guard lock(file_changes_mu);
-            file_changes[ev.tool_id] = PendingFileChange{
-                std::move(path), std::move(relative), before_exists,
-                before.value_or(std::string()), ev.tool_name, ev.input};
+            file_changes[ev.tool_id] =
+                PendingFileChange{std::move(path), std::move(relative),
+                                  before_exists,   before.value_or(std::string()),
+                                  ev.tool_name,    ev.input};
           }
         }
       } catch (...) {
       }
     }
-    if (!ui_alive) return;
+    if (!ui_alive) {
+      return;
+    }
     screen.Post([apply_event, apply_extension_actions, ev, &screen] {
       try {
         apply_event(ev);
@@ -1094,25 +1225,31 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   };
 
   agent.on_event = [&](const StreamEvent& ev) { post_ui(ev); };
-  auto configure_extension_updates =
-      [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
-        if (!runtime) return;
-        runtime->set_tool_update([&post_ui](const std::string&,
-                                            const std::string& content) {
-          post_ui(StreamEvent{EventKind::status, content, {}, {}});
-        });
-      };
+  auto configure_extension_updates = [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
+    if (!runtime) {
+      return;
+    }
+    runtime->set_tool_update([&post_ui](const std::string&, const std::string& content) {
+      post_ui(StreamEvent{EventKind::status, content, {}, {}});
+    });
+  };
   configure_extension_updates(extensions);
   configure_extension_ui(extensions);
-  bind_extensions(agent, extensions, cwd, [&](const std::string& warning) {
-    post_ui(StreamEvent{EventKind::status, warning, {}, {}});
-  }, &session, cfg);
-  agent.approve_tool = [&](const niminal::ToolCall& call,
-                           const niminal::Tool&) {
-    if (yolo_mode) return true;
+  bind_extensions(
+      agent, extensions, cwd,
+      [&](const std::string& warning) { post_ui(StreamEvent{EventKind::status, warning, {}, {}}); },
+      &session, cfg);
+  agent.approve_tool = [&](const niminal::ToolCall& call, const niminal::Tool&) {
+    if (yolo_mode) {
+      return true;
+    }
     auto check = permissions.check(call);
-    if (check == PermissionCheck::allow) return true;
-    if (check == PermissionCheck::deny) return false;
+    if (check == PermissionCheck::allow) {
+      return true;
+    }
+    if (check == PermissionCheck::deny) {
+      return false;
+    }
 
     {
       std::lock_guard lock(approval.mutex);
@@ -1122,11 +1259,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       approval.can_remember = can_remember(call);
       approval.decision = PermissionDecision::deny;
     }
-    StreamEvent request{EventKind::approval_required,
-                        permission_description(call), call.name, call.id};
+    StreamEvent request{EventKind::approval_required, permission_description(call), call.name,
+                        call.id};
     request.input = json::object();
     try {
-      if (!call.arguments.empty()) request.input = json::parse(call.arguments);
+      if (!call.arguments.empty()) {
+        request.input = json::parse(call.arguments);
+      }
     } catch (...) {
     }
     request.can_remember = approval.can_remember;
@@ -1149,17 +1288,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     try {
       permissions.remember(call, decision);
     } catch (const std::exception& e) {
-      post_ui(StreamEvent{EventKind::status,
-                           "Could not save permission grant: " +
-                               std::string(e.what()),
-                           {}, {}});
+      post_ui(StreamEvent{
+          EventKind::status, "Could not save permission grant: " + std::string(e.what()), {}, {}});
     }
     return decision != PermissionDecision::deny;
   };
-  bind_compaction(agent, session, [&](const std::string& msg) {
-    if (msg.empty()) return;
-    post_ui(StreamEvent{EventKind::status, msg, {}, {}});
-  }, extensions, cfg);
+  bind_compaction(
+      agent, session,
+      [&](const std::string& msg) {
+        if (msg.empty()) {
+          return;
+        }
+        post_ui(StreamEvent{EventKind::status, msg, {}, {}});
+      },
+      extensions, cfg);
   agent.take_steering = [&] {
     std::lock_guard<std::mutex> lock(steering_mu);
     auto out = std::move(steering);
@@ -1174,66 +1316,88 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   };
 
   auto join_worker = [&] {
-    if (worker.joinable()) worker.join();
+    if (worker.joinable()) {
+      worker.join();
+    }
   };
 
   auto restart_extensions = [&](bool end_current = true) {
     if (extensions && end_current) {
-      auto ended = extensions->dispatch(
-          HookEvent::session_end,
-          session_hook_payload(session.id, cwd));
-      for (const auto& warning : ended.warnings)
+      auto ended =
+          extensions->dispatch(HookEvent::session_end, session_hook_payload(session.id, cwd));
+      for (const auto& warning : ended.warnings) {
         blocks.push_back(Block{BlockKind::status, warning});
+      }
     }
-    if (extensions) extensions->stop();
+    if (extensions) {
+      extensions->stop();
+    }
     extensions = ExtensionRuntime::start(cwd, session.id, cancel);
     install_extension_tools(agent, extensions, allowed_tools);
     configure_extension_updates(extensions);
     configure_extension_ui(extensions);
-    bind_extensions(agent, extensions, cwd, [&](const std::string& warning) {
-      post_ui(StreamEvent{EventKind::status, warning, {}, {}});
-    }, &session, cfg);
-    bind_compaction(agent, session, [&](const std::string& msg) {
-      if (!msg.empty()) post_ui(StreamEvent{EventKind::status, msg, {}, {}});
-    }, extensions, cfg);
-    for (const auto& warning : extensions->warnings())
+    bind_extensions(
+        agent, extensions, cwd,
+        [&](const std::string& warning) {
+          post_ui(StreamEvent{EventKind::status, warning, {}, {}});
+        },
+        &session, cfg);
+    bind_compaction(
+        agent, session,
+        [&](const std::string& msg) {
+          if (!msg.empty()) {
+            post_ui(StreamEvent{EventKind::status, msg, {}, {}});
+          }
+        },
+        extensions, cfg);
+    for (const auto& warning : extensions->warnings()) {
       blocks.push_back(Block{BlockKind::status, warning});
-    auto started = extensions->dispatch(
-        HookEvent::session_start,
-        session_hook_payload(session.id, cwd));
-    for (const auto& warning : started.warnings)
+    }
+    auto started =
+        extensions->dispatch(HookEvent::session_start, session_hook_payload(session.id, cwd));
+    for (const auto& warning : started.warnings) {
       blocks.push_back(Block{BlockKind::status, warning});
+    }
     apply_extension_actions();
   };
 
   auto load_into_ui = [&](const std::string& note) {
     blocks.clear();
-    if (!note.empty())
+    if (!note.empty()) {
       blocks.push_back(Block{BlockKind::status, note});
-    if (!session.workspace.empty() &&
-        session.workspace != cwd.string()) {
-      blocks.push_back(Block{
-          BlockKind::status,
-          "This session was started in " + session.workspace});
+    }
+    if (!session.workspace.empty() && session.workspace != cwd.string()) {
+      blocks.push_back(
+          Block{BlockKind::status, "This session was started in " + session.workspace});
     }
     for (const auto& event : session.events) {
-      if (!event.is_object()) continue;
+      if (!event.is_object()) {
+        continue;
+      }
       auto type = event.value("type", "");
       if (type == "user") {
         std::string text;
-        if (event.contains("content") && event["content"].is_array())
-          for (const auto& part : event["content"])
-            if (part.is_object() && part.value("type", "") == "text")
+        if (event.contains("content") && event["content"].is_array()) {
+          for (const auto& part : event["content"]) {
+            if (part.is_object() && part.value("type", "") == "text") {
               text += part.value("text", "");
-        if (!text.empty())
+            }
+          }
+        }
+        if (!text.empty()) {
           blocks.push_back(Block{BlockKind::user, std::move(text)});
+        }
       } else if (type == "assistant") {
         std::string text;
         if (event.contains("content") && event["content"].is_array()) {
           for (const auto& part : event["content"]) {
-            if (!part.is_object()) continue;
+            if (!part.is_object()) {
+              continue;
+            }
             auto ptype = part.value("type", "");
-            if (ptype == "text") text += part.value("text", "");
+            if (ptype == "text") {
+              text += part.value("text", "");
+            }
             if (ptype == "tool_use") {
               if (!text.empty()) {
                 blocks.push_back(Block{BlockKind::assistant, text});
@@ -1241,37 +1405,38 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
               }
               json input = part.value("input", json::object());
               blocks.push_back(Block{
-                  BlockKind::tool,
-                  tool_summary(part.value("name", ""),
-                               input.is_object() ? input.dump() : std::string())});
+                  BlockKind::tool, tool_summary(part.value("name", ""),
+                                                input.is_object() ? input.dump() : std::string())});
             }
           }
         }
-        if (!text.empty())
+        if (!text.empty()) {
           blocks.push_back(Block{BlockKind::assistant, std::move(text)});
+        }
       } else if (type == "compaction") {
         auto summary = event.value("summary", "");
-        blocks.push_back(Block{
-            BlockKind::status,
-            "Compacted earlier turns.\n" + clip_text(summary, 1200, 12)});
+        blocks.push_back(
+            Block{BlockKind::status, "Compacted earlier turns.\n" + clip_text(summary, 1200, 12)});
       }
     }
-    if (blocks.empty())
-      blocks.push_back(Block{
-          BlockKind::status,
-          "enter send  ·  /help  ·  alt-j newline  ·  esc interrupt/clear  ·  ctrl-c quit"});
-    if (yolo_mode)
-      blocks.push_back(Block{BlockKind::status,
-                             "YOLO mode: all tools auto-approved for this process."});
+    if (blocks.empty()) {
+      blocks.push_back(
+          Block{BlockKind::status,
+                "enter send  ·  /help  ·  alt-j newline  ·  esc interrupt/clear  ·  ctrl-c quit"});
+    }
+    if (yolo_mode) {
+      blocks.push_back(
+          Block{BlockKind::status, "YOLO mode: all tools auto-approved for this process."});
+    }
   };
 
   auto adopt_session = [&](Session next, const std::string& note) {
     if (extensions) {
-      auto ended = extensions->dispatch(
-          HookEvent::session_end,
-          session_hook_payload(session.id, cwd));
-      for (const auto& warning : ended.warnings)
+      auto ended =
+          extensions->dispatch(HookEvent::session_end, session_hook_payload(session.id, cwd));
+      for (const auto& warning : ended.warnings) {
         blocks.push_back(Block{BlockKind::status, warning});
+      }
       extensions->stop();
     }
     session = std::move(next);
@@ -1281,8 +1446,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       cfg.provider = p;
       cfg.api_url = find_provider(p)->endpoint;
     }
-    if (auto model = session.last_model(); !model.empty())
+    if (auto model = session.last_model(); !model.empty()) {
       cfg.model = model;
+    }
     apply_provider(agent, cfg);
     agent.messages = session.openai_messages();
     load_into_ui(note);
@@ -1297,18 +1463,21 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     blocks.push_back(Block{BlockKind::error, e.what()});
   }
   agent.messages = session.openai_messages();
-  load_into_ui(recovered ? "Recovered " + std::to_string(recovered) +
-                               " interrupted tool call(s)."
-                         : "");
+  load_into_ui((recovered != 0)
+                   ? "Recovered " + std::to_string(recovered) + " interrupted tool call(s)."
+                   : "");
   if (extensions) {
-    for (const auto& warning : extensions->warnings())
+    for (const auto& warning : extensions->warnings()) {
       blocks.push_back(Block{BlockKind::status, warning});
+    }
     apply_extension_actions();
   }
 
   auto send_prompt = [&](std::string prompt) {
     prompt = trim_copy(std::move(prompt));
-    if (prompt.empty()) return;
+    if (prompt.empty()) {
+      return;
+    }
     remember_input(prompt);
     if (busy) {
       {
@@ -1323,49 +1492,49 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     blocks.push_back(Block{BlockKind::user, prompt});
     busy = true;
     activity = "Thinking…";
-    worker = std::thread([&agent, &busy, &ui_alive, post_ui,
-                          &workspace, prompt = std::move(prompt)] {
-      try {
-        agent.run(expand_file_mentions(workspace, prompt));
-      } catch (const std::exception& e) {
-        if (ui_alive) {
-          post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
-        } else {
-          busy = false;
-        }
-      }
-    });
+    worker =
+        std::thread([&agent, &busy, &ui_alive, post_ui, &workspace, prompt = std::move(prompt)] {
+          try {
+            agent.run(expand_file_mentions(workspace, prompt));
+          } catch (const std::exception& e) {
+            if (ui_alive) {
+              post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
+            } else {
+              busy = false;
+            }
+          }
+        });
   };
-  deliver_extension_now = [&](std::string prompt) {
-    send_prompt(std::move(prompt));
-  };
-  for (auto& message : idle_extension_messages)
+  deliver_extension_now = [&](std::string prompt) { send_prompt(std::move(prompt)); };
+  for (auto& message : idle_extension_messages) {
     deliver_extension_now(std::move(message));
+  }
   idle_extension_messages.clear();
 
   auto start_turn = [&](std::string prompt) {
     prompt = trim_copy(std::move(prompt));
-    if (prompt.empty()) return;
+    if (prompt.empty()) {
+      return;
+    }
     stick_bottom = true;
-    transcript_y = 1.f;
+    transcript_y = 1.F;
 
     auto initial_cmd = split_slash(prompt).first;
     bool skill_request = starts_with(initial_cmd, "/skill:");
     bool extension_request = false;
     if (extensions) {
-      for (const auto& command : extensions->commands())
+      for (const auto& command : extensions->commands()) {
         if (niminal::lower_copy("/" + command.name) == initial_cmd) {
           extension_request = true;
           break;
         }
+      }
     }
     if (skill_request) {
       auto name = initial_cmd.substr(7);
       auto skills = discover_skills(cwd);
       if (name.empty() || std::none_of(skills.begin(), skills.end(),
-                                      [&](const Skill& skill) {
-                                        return skill.name == name;
-                                      })) {
+                                       [&](const Skill& skill) { return skill.name == name; })) {
         blocks.push_back(Block{BlockKind::error, "unknown skill " + name});
         return;
       }
@@ -1403,10 +1572,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
             break;
           }
         }
-        if (text.empty()) text = session.last_assistant_text();
         if (text.empty()) {
-          blocks.push_back(
-              Block{BlockKind::status, "Nothing to copy yet."});
+          text = session.last_assistant_text();
+        }
+        if (text.empty()) {
+          blocks.push_back(Block{BlockKind::status, "Nothing to copy yet."});
           return;
         }
         copy_to_clipboard(text);
@@ -1417,13 +1587,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       if (cmd == "/yolo") {
         if (arg.empty() || arg == "on") {
           yolo_mode = true;
-          blocks.push_back(Block{
-              BlockKind::status,
-              "YOLO mode: all tools auto-approved for this process."});
+          blocks.push_back(
+              Block{BlockKind::status, "YOLO mode: all tools auto-approved for this process."});
         } else if (arg == "off") {
           yolo_mode = false;
-          blocks.push_back(Block{BlockKind::status,
-                                 "YOLO mode disabled; tool approvals are on."});
+          blocks.push_back(Block{BlockKind::status, "YOLO mode disabled; tool approvals are on."});
         } else {
           blocks.push_back(Block{BlockKind::error, "Usage: /yolo [off]"});
         }
@@ -1431,17 +1599,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       }
       if (cmd == "/compact") {
         if (busy) {
-          blocks.push_back(Block{
-              BlockKind::status,
-              "wait for the turn to finish, or Esc to interrupt"});
+          blocks.push_back(
+              Block{BlockKind::status, "wait for the turn to finish, or Esc to interrupt"});
           return;
         }
         try {
-          auto result =
-              compact_session(session, agent, arg, extensions, cfg);
+          auto result = compact_session(session, agent, arg, extensions, cfg);
           agent.messages = session.openai_messages();
-          for (const auto& warning : result.warnings)
+          for (const auto& warning : result.warnings) {
             blocks.push_back(Block{BlockKind::status, warning});
+          }
           blocks.push_back(Block{BlockKind::status, result.message});
         } catch (const std::exception& e) {
           blocks.push_back(Block{BlockKind::error, e.what()});
@@ -1449,9 +1616,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         return;
       }
       if (busy) {
-        blocks.push_back(Block{
-            BlockKind::status,
-            "wait for the turn to finish, or Esc to interrupt"});
+        blocks.push_back(
+            Block{BlockKind::status, "wait for the turn to finish, or Esc to interrupt"});
         return;
       }
       if (cmd == "/help") {
@@ -1470,8 +1636,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           };
           auto response = extensions->invoke(cmd.substr(1), arg, context);
           auto message = response.value("message", std::string());
-          if (!message.empty())
+          if (!message.empty()) {
             blocks.push_back(Block{BlockKind::status, std::move(message)});
+          }
           apply_extension_actions();
           bool restarted = false;
           if (auto action = response.find("session");
@@ -1480,7 +1647,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
             if (kind == "new") {
               auto next = create_session(default_session_dir(), cwd.string());
               next.persist = session.persist;
-              if (!next.persist) next.path.clear();
+              if (!next.persist) {
+                next.path.clear();
+              }
               adopt_session(std::move(next), "New session");
               restarted = true;
             } else if (kind == "switch") {
@@ -1491,8 +1660,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
               restarted = true;
             } else if (kind == "compact") {
               auto compacted = compact_session(
-                  session, agent,
-                  action->value("instruction", std::string()), extensions, cfg);
+                  session, agent, action->value("instruction", std::string()), extensions, cfg);
               agent.messages = session.openai_messages();
               blocks.push_back(Block{BlockKind::status, compacted.message});
             }
@@ -1502,10 +1670,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
               cursor = static_cast<int>(draft.size());
             }
           }
-          if (response.value("reload", false) && !restarted)
+          if (response.value("reload", false) && !restarted) {
             restart_extensions();
+          }
           auto next_prompt = response.value("prompt", std::string());
-          if (!next_prompt.empty()) send_prompt(std::move(next_prompt));
+          if (!next_prompt.empty()) {
+            send_prompt(std::move(next_prompt));
+          }
         } catch (const std::exception& e) {
           blocks.push_back(Block{BlockKind::error, e.what()});
         }
@@ -1517,8 +1688,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           return;
         }
         permissions.reload_project();
-        for (auto& tool : agent.tools)
-          if (tool.name == "skill") tool = skill_tool(cwd);
+        for (auto& tool : agent.tools) {
+          if (tool.name == "skill") {
+            tool = skill_tool(cwd);
+          }
+        }
         restart_extensions();
         blocks.push_back(Block{BlockKind::status, "Reloaded project resources."});
         return;
@@ -1529,40 +1703,38 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         } else if (arg == "clear") {
           try {
             permissions.clear_project();
-            blocks.push_back(
-                Block{BlockKind::status, "Cleared project permission grants."});
+            blocks.push_back(Block{BlockKind::status, "Cleared project permission grants."});
           } catch (const std::exception& e) {
             blocks.push_back(Block{BlockKind::error, e.what()});
           }
         } else {
-          blocks.push_back(Block{BlockKind::error,
-                                 "Usage: /permissions [clear]"});
+          blocks.push_back(Block{BlockKind::error, "Usage: /permissions [clear]"});
         }
         return;
       }
       if (cmd == "/trust") {
         auto resources = project_trust_resources(cwd);
         if (resources.empty()) {
-          blocks.push_back(Block{
-              BlockKind::status, "No project-local resources require trust."});
+          blocks.push_back(Block{BlockKind::status, "No project-local resources require trust."});
         } else if (arg.empty()) {
-          blocks.push_back(Block{
-              BlockKind::status,
-              std::string("Project-local resources: ") +
-                  (project_resources_trusted(cwd) ? "trusted" : "not trusted")});
+          blocks.push_back(Block{BlockKind::status,
+                                 std::string("Project-local resources: ") +
+                                     (project_resources_trusted(cwd) ? "trusted" : "not trusted")});
         } else if (arg == "on" || arg == "off") {
           const bool trusted = arg == "on";
           set_project_resources_trusted(cwd, trusted);
           try {
             save_project_trust(cwd, trusted);
             permissions.reload_project();
-            for (auto& tool : agent.tools)
-              if (tool.name == "skill") tool = skill_tool(cwd);
+            for (auto& tool : agent.tools) {
+              if (tool.name == "skill") {
+                tool = skill_tool(cwd);
+              }
+            }
             restart_extensions();
-            blocks.push_back(Block{
-                BlockKind::status,
-                trusted ? "Project-local resources enabled."
-                        : "Project-local resources disabled."});
+            blocks.push_back(Block{BlockKind::status, trusted
+                                                          ? "Project-local resources enabled."
+                                                          : "Project-local resources disabled."});
           } catch (const std::exception& e) {
             blocks.push_back(Block{BlockKind::error, e.what()});
           }
@@ -1573,43 +1745,37 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       }
       if (cmd == "/provider") {
         if (arg.empty()) {
-          blocks.push_back(Block{
-              BlockKind::status,
-              "provider: " + agent.provider + "\nmodel: " + agent.model +
-                  "\nurl: " + agent.api_url + "\nkey: " + agent.key_hint});
+          blocks.push_back(
+              Block{BlockKind::status, "provider: " + agent.provider + "\nmodel: " + agent.model +
+                                           "\nurl: " + agent.api_url + "\nkey: " + agent.key_hint});
           return;
         }
         if (auto result = select_provider(cfg, arg); !result) {
-          blocks.push_back(
-              Block{BlockKind::error, result.error().what()});
+          blocks.push_back(Block{BlockKind::error, result.error().what()});
           return;
         }
         apply_provider(agent, cfg);
         try {
           save_config(cfg);
           session.add_selection(agent.model, agent.provider);
-          blocks.push_back(Block{
-              BlockKind::status,
-              "provider set to " + agent.provider + "\nmodel: " + agent.model +
-                  "\nsaved " + config_path().string()});
+          blocks.push_back(Block{BlockKind::status, "provider set to " + agent.provider +
+                                                        "\nmodel: " + agent.model + "\nsaved " +
+                                                        config_path().string()});
         } catch (const std::exception& e) {
-          blocks.push_back(Block{
-              BlockKind::error,
-              "provider set for this session, save failed: " +
-                  std::string(e.what())});
+          blocks.push_back(Block{BlockKind::error, "provider set for this session, save failed: " +
+                                                       std::string(e.what())});
         }
         return;
       }
       if (cmd == "/model") {
         if (arg == "refresh") {
-          blocks.push_back(Block{
-              BlockKind::error,
-              "Unknown /model option 'refresh'; did you mean /models refresh?"});
+          blocks.push_back(Block{BlockKind::error,
+                                 "Unknown /model option 'refresh'; did you mean /models refresh?"});
           return;
         }
         if (arg.empty()) {
-          blocks.push_back(Block{BlockKind::status, "model: " + agent.model +
-                                                        "\nurl: " + agent.api_url});
+          blocks.push_back(
+              Block{BlockKind::status, "model: " + agent.model + "\nurl: " + agent.api_url});
           return;
         }
         agent.model = arg;
@@ -1619,13 +1785,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         try {
           save_config(cfg);
           session.add_selection(agent.model, agent.provider);
-          blocks.push_back(Block{BlockKind::status, "model set to " + agent.model +
-                                                        "\nsaved " +
+          blocks.push_back(Block{BlockKind::status, "model set to " + agent.model + "\nsaved " +
                                                         config_path().string()});
         } catch (const std::exception& e) {
-          blocks.push_back(Block{
-              BlockKind::error,
-              "model set for this session, save failed: " + std::string(e.what())});
+          blocks.push_back(Block{BlockKind::error, "model set for this session, save failed: " +
+                                                       std::string(e.what())});
         }
         return;
       }
@@ -1634,14 +1798,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           auto status = thinking_status(agent.provider, agent.model, cfg.thinking);
           auto choices = thinking_choices(agent.provider, agent.model);
           std::string msg = "thinking: ";
-          if (cfg.thinking.empty())
+          if (cfg.thinking.empty()) {
             msg += status.empty() ? "(provider default)" : status;
-          else
+          } else {
             msg += status.empty() ? cfg.thinking : status;
+          }
           if (!choices.empty()) {
             msg += "\nlevels: ";
             for (size_t i = 0; i < choices.size(); ++i) {
-              if (i) msg += '|';
+              if (i) {
+                msg += '|';
+              }
               msg += choices[i];
             }
           }
@@ -1658,33 +1825,28 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         auto status = thinking_status(agent.provider, agent.model, cfg.thinking);
         try {
           save_config(cfg);
-          blocks.push_back(Block{
-              BlockKind::status,
-              "thinking set to " + (status.empty() ? cfg.thinking : status) +
-                  "\nsaved " + config_path().string()});
+          blocks.push_back(Block{BlockKind::status, "thinking set to " +
+                                                        (status.empty() ? cfg.thinking : status) +
+                                                        "\nsaved " + config_path().string()});
         } catch (const std::exception& e) {
-          blocks.push_back(Block{
-              BlockKind::error,
-              "thinking set for this session, save failed: " +
-                  std::string(e.what())});
+          blocks.push_back(Block{BlockKind::error, "thinking set for this session, save failed: " +
+                                                       std::string(e.what())});
         }
         return;
       }
       if (cmd == "/theme") {
         if (arg.empty()) {
-          blocks.push_back(Block{
-              BlockKind::status,
-              std::string("theme: ") + theme_mode_name(theme_mode) +
-                  (theme_mode == ThemeMode::automatic
-                       ? std::string(" (") + theme_mode_name(detect_terminal_theme()) +
-                             ")"
-                       : std::string())});
+          blocks.push_back(
+              Block{BlockKind::status,
+                    std::string("theme: ") + theme_mode_name(theme_mode) +
+                        (theme_mode == ThemeMode::automatic
+                             ? std::string(" (") + theme_mode_name(detect_terminal_theme()) + ")"
+                             : std::string())});
           return;
         }
         auto mode = parse_theme_mode(arg);
         if (!mode) {
-          blocks.push_back(
-              Block{BlockKind::error, "Usage: /theme [light|dark|auto]"});
+          blocks.push_back(Block{BlockKind::error, "Usage: /theme [light|dark|auto]"});
           return;
         }
         theme_mode = *mode;
@@ -1692,14 +1854,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         cfg.theme = theme_mode_name(theme_mode);
         try {
           save_config(cfg);
-          blocks.push_back(Block{BlockKind::status,
-                                 std::string("theme set to ") +
-                                     theme_mode_name(theme_mode) + "\nsaved " +
-                                     config_path().string()});
+          blocks.push_back(Block{BlockKind::status, std::string("theme set to ") +
+                                                        theme_mode_name(theme_mode) + "\nsaved " +
+                                                        config_path().string()});
         } catch (const std::exception& e) {
-          blocks.push_back(Block{
-              BlockKind::error,
-              std::string("theme set for this session, save failed: ") + e.what()});
+          blocks.push_back(
+              Block{BlockKind::error,
+                    std::string("theme set for this session, save failed: ") + e.what()});
         }
         return;
       }
@@ -1709,13 +1870,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           return;
         }
         if (refresh_catalog()) {
-          blocks.push_back(Block{
-              BlockKind::status,
-              "Updated model catalog  ·  " + catalog_cache_path().string()});
+          blocks.push_back(Block{BlockKind::status,
+                                 "Updated model catalog  ·  " + catalog_cache_path().string()});
         } else {
-          blocks.push_back(Block{
-              BlockKind::error,
-              "Could not refresh model metadata; using existing cache."});
+          blocks.push_back(
+              Block{BlockKind::error, "Could not refresh model metadata; using existing cache."});
         }
         return;
       }
@@ -1725,9 +1884,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       }
       if (cmd == "/name") {
         if (arg.empty()) {
-          blocks.push_back(Block{
-              BlockKind::status,
-              session.name.empty() ? "Name: (none)" : "Name: " + session.name});
+          blocks.push_back(Block{BlockKind::status,
+                                 session.name.empty() ? "Name: (none)" : "Name: " + session.name});
           return;
         }
         session.add_name(arg);
@@ -1738,8 +1896,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         auto dir = default_session_dir();
         if (arg.empty() || !valid_session_id(arg)) {
           auto infos = search_sessions(dir, cwd.string(), arg);
-          blocks.push_back(
-              Block{BlockKind::status, format_session_list(infos, session.id)});
+          blocks.push_back(Block{BlockKind::status, format_session_list(infos, session.id)});
           return;
         }
         try {
@@ -1757,15 +1914,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           return;
         }
         auto infos = search_sessions(default_session_dir(), cwd.string(), arg);
-        blocks.push_back(Block{
-            BlockKind::status,
-            format_session_list(infos, session.id, "Matches for " + arg)});
+        blocks.push_back(
+            Block{BlockKind::status, format_session_list(infos, session.id, "Matches for " + arg)});
         return;
       }
       if (cmd == "/fork") {
         try {
           auto next = session.fork(default_session_dir());
-          if (!arg.empty()) next.add_name(arg);
+          if (!arg.empty()) {
+            next.add_name(arg);
+          }
           auto id = next.id;
           adopt_session(std::move(next), "Forked " + id);
         } catch (const std::exception& e) {
@@ -1774,18 +1932,19 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         return;
       }
       if (cmd == "/export") {
-        auto path = arg.empty() ? cwd / (session.id + ".md")
-                                : std::filesystem::path(arg);
+        auto path = arg.empty() ? cwd / (session.id + ".md") : std::filesystem::path(arg);
         try {
-          if (path.has_parent_path())
+          if (path.has_parent_path()) {
             std::filesystem::create_directories(path.parent_path());
+          }
           std::ofstream out(path, std::ios::binary | std::ios::trunc);
-          if (!out) throw std::runtime_error("cannot write " + path.string());
+          if (!out) {
+            throw std::runtime_error("cannot write " + path.string());
+          }
           out << session.export_text(path.extension() == ".json" ? "json" : "md");
-          blocks.push_back(Block{
-              BlockKind::status,
-              "Exported " + std::to_string(session.events.size()) + " events to " +
-                  path.string()});
+          blocks.push_back(Block{BlockKind::status, "Exported " +
+                                                        std::to_string(session.events.size()) +
+                                                        " events to " + path.string()});
         } catch (const std::exception& e) {
           blocks.push_back(Block{BlockKind::error, e.what()});
         }
@@ -1793,15 +1952,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       }
       if (cmd == "/delete") {
         if (arg.empty()) {
-          blocks.push_back(Block{BlockKind::error,
-                                 "Usage: /delete ID  ·  /restore lists deleted sessions"});
-        } else if (arg == session.id) {
           blocks.push_back(
-              Block{BlockKind::error, "Cannot delete the current session."});
+              Block{BlockKind::error, "Usage: /delete ID  ·  /restore lists deleted sessions"});
+        } else if (arg == session.id) {
+          blocks.push_back(Block{BlockKind::error, "Cannot delete the current session."});
         } else if (delete_session(default_session_dir(), arg)) {
           blocks.push_back(Block{BlockKind::status,
-                                 "Deleted " + arg + "  ·  /restore " + arg +
-                                     " brings it back"});
+                                 "Deleted " + arg + "  ·  /restore " + arg + " brings it back"});
         } else {
           blocks.push_back(Block{BlockKind::error, "No session " + arg});
         }
@@ -1811,12 +1968,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
         auto dir = default_session_dir();
         if (arg.empty() || !valid_session_id(arg)) {
           auto infos = list_deleted_sessions(dir);
-          blocks.push_back(Block{
-              BlockKind::status,
-              format_session_list(infos, session.id, "Deleted sessions (newest first)")});
+          blocks.push_back(
+              Block{BlockKind::status,
+                    format_session_list(infos, session.id, "Deleted sessions (newest first)")});
         } else if (restore_session(dir, arg)) {
-          blocks.push_back(Block{BlockKind::status,
-                                 "Restored " + arg + "  ·  /resume " + arg});
+          blocks.push_back(Block{BlockKind::status, "Restored " + arg + "  ·  /resume " + arg});
         } else {
           blocks.push_back(Block{BlockKind::error, "No deleted session " + arg});
         }
@@ -1825,14 +1981,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       if (cmd == "/clear" || cmd == "/new") {
         auto next = create_session(default_session_dir(), cwd.string());
         next.persist = session.persist;
-        if (!next.persist) next.path.clear();
+        if (!next.persist) {
+          next.path.clear();
+        }
         auto id = next.id;
         adopt_session(std::move(next), "New session " + id);
         apply_provider(agent, cfg);
         return;
       }
-      blocks.push_back(
-          Block{BlockKind::error, "unknown command " + cmd + "  ·  /help"});
+      blocks.push_back(Block{BlockKind::error, "unknown command " + cmd + "  ·  /help"});
       return;
     }
 
@@ -1844,54 +2001,57 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   input_opt.cursor_position = &cursor;
   input_opt.transform = [&theme](InputState state) {
     state.element |= color(theme.input_fg);
-    if (state.is_placeholder) state.element |= dim;
-    if (state.focused)
+    if (state.is_placeholder) {
+      state.element |= dim;
+    }
+    if (state.focused) {
       state.element |= bgcolor(theme.input_bg);
-    else if (state.hovered)
+    } else if (state.hovered) {
       state.element |= bgcolor(theme.hover_bg);
+    }
     return state.element;
   };
   auto input = Input(&draft, "describe a change", input_opt);
   auto input_transform = input_opt.transform;
   auto wrapped_input = Renderer(input, [&] {
-    if (draft.empty()) return input->Render();
+    if (draft.empty()) {
+      return input->Render();
+    }
 
     const int cursor_pos = std::clamp(cursor, 0, static_cast<int>(draft.size()));
-    const int terminal_width = screen.dimx() > 0 ? screen.dimx()
-                                                 : Terminal::Size().dimx;
+    const int terminal_width = screen.dimx() > 0 ? screen.dimx() : Terminal::Size().dimx;
     Elements rows;
     size_t line_start = 0;
     while (true) {
       const auto newline = draft.find('\n', line_start);
-      const size_t line_end = newline == std::string::npos ? draft.size()
-                                                           : newline;
+      const size_t line_end = newline == std::string::npos ? draft.size() : newline;
       const auto line = draft.substr(line_start, line_end - line_start);
       Elements glyphs;
       size_t byte = line_start;
       for (const auto& glyph : Utf8ToGlyphs(line)) {
         auto cell = text(glyph);
-        if (!glyph.empty() && byte == static_cast<size_t>(cursor_pos))
-          cell = input->Focused() ? focusCursorBarBlinking(std::move(cell))
-                                  : focus(std::move(cell));
+        if (!glyph.empty() && byte == static_cast<size_t>(cursor_pos)) {
+          cell =
+              input->Focused() ? focusCursorBarBlinking(std::move(cell)) : focus(std::move(cell));
+        }
         glyphs.push_back(std::move(cell));
         byte += glyph.size();
       }
       if (line.empty() || byte == static_cast<size_t>(cursor_pos)) {
         auto cell = text(" ");
-        cell = input->Focused() ? focusCursorBarBlinking(std::move(cell))
-                                : focus(std::move(cell));
+        cell = input->Focused() ? focusCursorBarBlinking(std::move(cell)) : focus(std::move(cell));
         glyphs.push_back(std::move(cell));
       }
       rows.push_back(hflow(std::move(glyphs)));
-      if (line_end == draft.size()) break;
+      if (line_end == draft.size()) {
+        break;
+      }
       line_start = line_end + 1;
     }
 
-    auto element = vbox(std::move(rows)) |
-                   size(WIDTH, LESS_THAN, std::max(1, terminal_width - 2)) |
-                   frame;
-    return input_transform({std::move(element), false, input->Focused(), false}) |
-           xflex;
+    auto element =
+        vbox(std::move(rows)) | size(WIDTH, LESS_THAN, std::max(1, terminal_width - 2)) | frame;
+    return input_transform({std::move(element), false, input->Focused(), false}) | xflex;
   });
 
   auto layout = Container::Vertical({wrapped_input});
@@ -1910,52 +2070,52 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
                             block.kind == BlockKind::thinking
                                 ? (cfg.show_thinking
                                        ? block.text
-                                       : clip_text(
-                                             block.text,
-                                             static_cast<size_t>(
-                                                 cfg.thinking_preview_chars),
-                                             cfg.thinking_preview_lines))
+                                       : clip_text(block.text,
+                                                   static_cast<size_t>(cfg.thinking_preview_chars),
+                                                   cfg.thinking_preview_lines))
                                 : block.text) |
                             block_style(block.kind, theme);
-      if (label && *label)
-        entries.push_back(
-            vbox({text(label) | bold | block_style(block.kind, theme), body}));
-      else
+      if (label && *label) {
+        entries.push_back(vbox({text(label) | bold | block_style(block.kind, theme), body}));
+      } else {
         entries.push_back(body);
+      }
       entries.push_back(text(""));
     }
 
     std::string activity_line;
     if (busy || !activity.empty()) {
       if (busy) {
-        static const char* kSpin[] = {"⠋", "⠙", "⠹", "⠸", "⠼",
-                                      "⠴", "⠦", "⠧", "⠇", "⠏"};
+        static const char* kSpin[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count();
         activity_line = kSpin[(ms / 200) % 10];
         activity_line += ' ';
       }
-      activity_line += activity.empty()
-                           ? (cancel->load() ? "Stopping…" : "Thinking…")
-                           : activity;
+      activity_line += activity.empty() ? (cancel->load() ? "Stopping…" : "Thinking…") : activity;
       int queued = 0;
       {
         std::lock_guard<std::mutex> lock(steering_mu);
         queued = static_cast<int>(steering.size());
       }
-      if (queued > 0)
+      if (queued > 0) {
         activity_line += "  ·  queued " + std::to_string(queued);
+      }
     }
     if (extensions) {
       for (const auto& status : extensions->status_texts()) {
-        if (!activity_line.empty()) activity_line += "  ·  ";
+        if (!activity_line.empty()) {
+          activity_line += "  ·  ";
+        }
         activity_line += status;
       }
     }
     if (!footer_notice.empty()) {
       if (std::chrono::steady_clock::now() < footer_notice_until) {
-        if (!activity_line.empty()) activity_line += "  ·  ";
+        if (!activity_line.empty()) {
+          activity_line += "  ·  ";
+        }
         activity_line += footer_notice;
         screen.RequestAnimationFrame();
       } else {
@@ -1964,10 +2124,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     }
 
     auto think = thinking_status(agent.provider, agent.model, cfg.thinking);
-    if (think.empty())
+    if (think.empty()) {
       think = thinking_choices(agent.provider, agent.model).empty()
                   ? std::string()
                   : (cfg.thinking.empty() ? "default" : "off");
+    }
     std::string usage;
     try {
       usage = format_usage_line(session.usage_totals());
@@ -1978,43 +2139,47 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     Elements suggest_rows;
     for (int i = 0; i < static_cast<int>(suggestions.size()); ++i) {
       auto line = text(suggestions[static_cast<size_t>(i)].label) | dim;
-      if (i == suggest_i) line = line | inverted;
+      if (i == suggest_i) {
+        line = line | inverted;
+      }
       suggest_rows.push_back(std::move(line));
     }
 
     Elements stack;
     stack.push_back(vbox(std::move(entries)) |
-                    focusPositionRelative(0.f, stick_bottom ? 1.f
-                                                            : transcript_y) |
-                    yframe | vscroll_indicator | yflex);
+                    focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) | yframe |
+                    vscroll_indicator | yflex);
     stack.push_back(separator());
-    if (!suggest_rows.empty())
+    if (!suggest_rows.empty()) {
       stack.push_back(vbox(std::move(suggest_rows)));
+    }
     if (extensions) {
       Elements widget_rows;
-      for (const auto& line : extensions->widget_lines())
+      for (const auto& line : extensions->widget_lines()) {
         widget_rows.push_back(text(line) | dim);
-      if (!widget_rows.empty()) stack.push_back(vbox(std::move(widget_rows)));
+      }
+      if (!widget_rows.empty()) {
+        stack.push_back(vbox(std::move(widget_rows)));
+      }
     }
-    stack.push_back(text(activity_line.empty() ? " " : activity_line) |
-                    color(theme.accent));
+    stack.push_back(text(activity_line.empty() ? " " : activity_line) | color(theme.accent));
     stack.push_back(separatorLight() | dim);
     stack.push_back(hbox({text(busy ? "…" : "› ") | bold,
-                          wrapped_input->Render() | xflex |
-                              size(HEIGHT, LESS_THAN, 8)}));
+                          wrapped_input->Render() | xflex | size(HEIGHT, LESS_THAN, 8)}));
     stack.push_back(hbox({
         text(usage.empty() ? "↑0  ↓0" : usage) | dim,
         filler(),
-        text(agent.provider + "/" + agent.model +
-             (yolo_mode ? " [yolo]" : "")) |
+        text(agent.provider + "/" + agent.model + (yolo_mode ? " [yolo]" : "")) |
             color(theme.accent),
         text(think.empty() ? std::string() : (":" + think)) | dim,
     }));
     return vbox(std::move(stack));
   });
 
-  auto insert_draft = [&](std::string text) {
-    if (text.empty()) return;
+  auto insert_draft = [&](const std::string& text) {
+    if (text.empty()) {
+      return;
+    }
     int pos = std::clamp(cursor, 0, static_cast<int>(draft.size()));
     draft.insert(static_cast<size_t>(pos), text);
     cursor = pos + static_cast<int>(text.size());
@@ -2022,7 +2187,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
 
   auto resolve_approval = [&](PermissionDecision decision) {
     std::lock_guard lock(approval.mutex);
-    if (!approval.pending || approval.resolved) return false;
+    if (!approval.pending || approval.resolved) {
+      return false;
+    }
     approval.decision = decision;
     approval.resolved = true;
     approval.condition.notify_all();
@@ -2046,7 +2213,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
           std::lock_guard lock(approval.mutex);
           allowed = approval.can_remember;
         }
-        if (!allowed) return true;
+        if (!allowed) {
+          return true;
+        }
         resolve_approval(PermissionDecision::allow_project);
       } else if (e == Event::Character('n') || e == Event::Escape) {
         resolve_approval(PermissionDecision::deny);
@@ -2072,8 +2241,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
       insert_draft(paste_from_clipboard());
       return true;
     }
-    if (e.is_mouse() && e.mouse().motion == Mouse::Released &&
-        e.mouse().button == Mouse::Left) {
+    if (e.is_mouse() && e.mouse().motion == Mouse::Released && e.mouse().button == Mouse::Left) {
       auto sel = screen.GetSelection();
       if (!sel.empty()) {
         copy_to_clipboard(sel);
@@ -2088,14 +2256,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
     }
     if (is_wheel_up(e) || e == Event::PageUp) {
       stick_bottom = false;
-      transcript_y = std::max(0.f, transcript_y - (e == Event::PageUp ? 0.35f : 0.07f));
+      transcript_y = std::max(0.F, transcript_y - (e == Event::PageUp ? 0.35F : 0.07F));
       return true;
     }
     if (is_wheel_down(e) || e == Event::PageDown) {
-      transcript_y =
-          std::min(1.f, transcript_y + (e == Event::PageDown ? 0.35f : 0.07f));
-      if (transcript_y >= 0.99f) {
-        transcript_y = 1.f;
+      transcript_y = std::min(1.F, transcript_y + (e == Event::PageDown ? 0.35F : 0.07F));
+      if (transcript_y >= 0.99F) {
+        transcript_y = 1.F;
         stick_bottom = true;
       }
       return true;
@@ -2184,16 +2351,22 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   if (catalog_stale()) {
     catalog_thread = std::thread([&] {
       refresh_catalog();
-      if (!ui_alive) return;
+      if (!ui_alive) {
+        return;
+      }
       screen.Post([&screen] { screen.RequestAnimationFrame(); });
     });
   }
   std::thread extension_thread([&] {
     while (ui_alive) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
-      if (!ui_alive) break;
+      if (!ui_alive) {
+        break;
+      }
       const bool extension_changed = extensions && extensions->pump();
-      if (!busy && !extension_changed) continue;
+      if (!busy && !extension_changed) {
+        continue;
+      }
       screen.Post([apply_extension_actions, &screen] {
         try {
           apply_extension_actions();
@@ -2211,7 +2384,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   cancel->store(true);
   resolve_approval(PermissionDecision::deny);
   join_worker();
-  if (catalog_thread.joinable()) catalog_thread.join();
+  if (catalog_thread.joinable()) {
+    catalog_thread.join();
+  }
   extension_thread.join();
   if (extensions) {
     extensions->set_tool_update({});
@@ -2226,4 +2401,4 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
   return 0;
 }
 
-}  // namespace niminal::app
+} // namespace niminal::app

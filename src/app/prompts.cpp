@@ -20,26 +20,30 @@ constexpr size_t kMaxPromptBytes = 100'000;
 
 std::string trim_copy(std::string value) {
   auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
-  while (!value.empty() && is_space(static_cast<unsigned char>(value.back())))
+  while (!value.empty() && is_space(static_cast<unsigned char>(value.back()))) {
     value.pop_back();
+  }
   size_t first = 0;
-  while (first < value.size() && is_space(static_cast<unsigned char>(value[first])))
+  while (first < value.size() && is_space(static_cast<unsigned char>(value[first]))) {
     ++first;
+  }
   return value.substr(first);
 }
 
 std::string unquote(std::string value) {
   value = trim_copy(std::move(value));
-  if (value.size() >= 2 &&
-      ((value.front() == '"' && value.back() == '"') ||
-       (value.front() == '\'' && value.back() == '\'')))
+  if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
+                            (value.front() == '\'' && value.back() == '\''))) {
     return value.substr(1, value.size() - 2);
+  }
   return value;
 }
 
 std::string read_file(const fs::path& path) {
   std::ifstream in(path, std::ios::binary);
-  if (!in) return {};
+  if (!in) {
+    return {};
+  }
   std::ostringstream out;
   out << in.rdbuf();
   return out.str();
@@ -50,13 +54,17 @@ PromptTemplate parse_template(const fs::path& path) {
   result.name = path.stem().string();
   result.path = path;
   auto text = read_file(path);
-  if (text.empty() || text.size() > kMaxPromptBytes) return {};
+  if (text.empty() || text.size() > kMaxPromptBytes) {
+    return {};
+  }
 
   std::istringstream input(text);
   std::vector<std::string> lines;
   std::string line;
   while (std::getline(input, line)) {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
     lines.push_back(std::move(line));
   }
 
@@ -72,15 +80,22 @@ PromptTemplate parse_template(const fs::path& path) {
         break;
       }
       auto colon = stripped.find(':');
-      if (colon == std::string::npos || colon == 0) continue;
-      if (niminal::lower_copy(trim_copy(stripped.substr(0, colon))) == "description")
+      if (colon == std::string::npos || colon == 0) {
+        continue;
+      }
+      if (niminal::lower_copy(trim_copy(stripped.substr(0, colon))) == "description") {
         result.description = unquote(stripped.substr(colon + 1));
+      }
     }
-    if (!closed) return {};
+    if (!closed) {
+      return {};
+    }
   }
 
   for (size_t i = body_at; i < lines.size(); ++i) {
-    if (i != body_at) result.body.push_back('\n');
+    if (i != body_at) {
+      result.body.push_back('\n');
+    }
     result.body += lines[i];
   }
   result.body = trim_copy(std::move(result.body));
@@ -93,7 +108,9 @@ PromptTemplate parse_template(const fs::path& path) {
       }
     }
   }
-  if (result.body.empty()) return {};
+  if (result.body.empty()) {
+    return {};
+  }
   return result;
 }
 
@@ -116,23 +133,26 @@ std::vector<fs::path> roots_for(const fs::path& workspace) {
 
 void add_dir(std::map<std::string, PromptTemplate>& found, const fs::path& dir) {
   std::error_code ec;
-  if (!fs::is_directory(dir, ec)) return;
+  if (!fs::is_directory(dir, ec)) {
+    return;
+  }
   std::vector<fs::path> paths;
   for (const auto& entry : fs::directory_iterator(dir, ec)) {
     if (entry.is_regular_file(ec) &&
-        niminal::lower_copy(entry.path().extension().string()) == ".md")
+        niminal::lower_copy(entry.path().extension().string()) == ".md") {
       paths.push_back(entry.path());
+    }
   }
   std::sort(paths.begin(), paths.end());
   for (const auto& path : paths) {
     auto prompt = parse_template(path);
-    if (!prompt.name.empty() && !prompt.body.empty())
+    if (!prompt.name.empty() && !prompt.body.empty()) {
       found[niminal::lower_copy(prompt.name)] = std::move(prompt);
+    }
   }
 }
 
-std::string replace_all(std::string text, const std::string& from,
-                        const std::string& to) {
+std::string replace_all(std::string text, const std::string& from, const std::string& to) {
   size_t pos = 0;
   while ((pos = text.find(from, pos)) != std::string::npos) {
     text.replace(pos, from.size(), to);
@@ -141,15 +161,18 @@ std::string replace_all(std::string text, const std::string& from,
   return text;
 }
 
-}  // namespace
+} // namespace
 
 std::vector<PromptTemplate> discover_prompts(const fs::path& workspace) {
   std::map<std::string, PromptTemplate> found;
-  for (const auto& root : roots_for(workspace)) add_dir(found, root);
+  for (const auto& root : roots_for(workspace)) {
+    add_dir(found, root);
+  }
   std::vector<PromptTemplate> result;
-  for (auto& [_, prompt] : found) result.push_back(std::move(prompt));
-  std::sort(result.begin(), result.end(), [](const PromptTemplate& a,
-                                             const PromptTemplate& b) {
+  for (auto& [_, prompt] : found) {
+    result.push_back(std::move(prompt));
+  }
+  std::sort(result.begin(), result.end(), [](const PromptTemplate& a, const PromptTemplate& b) {
     auto an = niminal::lower_copy(a.name);
     auto bn = niminal::lower_copy(b.name);
     return an == bn ? a.path < b.path : an < bn;
@@ -157,20 +180,23 @@ std::vector<PromptTemplate> discover_prompts(const fs::path& workspace) {
   return result;
 }
 
-std::optional<PromptTemplate> load_prompt(const fs::path& workspace,
-                                          const std::string& name) {
+std::optional<PromptTemplate> load_prompt(const fs::path& workspace, const std::string& name) {
   auto wanted = niminal::lower_copy(name);
-  for (auto& prompt : discover_prompts(workspace))
-    if (niminal::lower_copy(prompt.name) == wanted) return prompt;
+  for (auto& prompt : discover_prompts(workspace)) {
+    if (niminal::lower_copy(prompt.name) == wanted) {
+      return prompt;
+    }
+  }
   return std::nullopt;
 }
 
 std::string expand_prompt(const fs::path& workspace, const std::string& name,
                           const std::string& arguments) {
   auto prompt = load_prompt(workspace, name);
-  if (!prompt) return {};
-  return replace_all(replace_all(prompt->body, "$ARGUMENTS", arguments), "$@",
-                     arguments);
+  if (!prompt) {
+    return {};
+  }
+  return replace_all(replace_all(prompt->body, "$ARGUMENTS", arguments), "$@", arguments);
 }
 
-}  // namespace niminal::app
+} // namespace niminal::app

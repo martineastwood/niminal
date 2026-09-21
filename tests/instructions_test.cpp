@@ -25,16 +25,20 @@ int main() {
   }
 
   auto text = niminal::app::load_project_instructions(dir);
-  if (text.find("from-root") == std::string::npos)
+  if (text.find("from-root") == std::string::npos) {
     return fail("project instructions should include root AGENTS.md");
-  if (text.find("from-src") != std::string::npos)
+  }
+  if (text.find("from-src") != std::string::npos) {
     return fail("system prefix should not include nested AGENTS.md");
+  }
 
   auto scoped = niminal::app::load_scoped_instructions(dir, dir / "src" / "a.cpp");
-  if (scoped.find("from-src") == std::string::npos)
+  if (scoped.find("from-src") == std::string::npos) {
     return fail("read-scoped instructions should include src/AGENTS.md");
-  if (scoped.find("from-root") != std::string::npos)
+  }
+  if (scoped.find("from-root") != std::string::npos) {
     return fail("scoped instructions should skip files already in the prefix");
+  }
 
   fs::remove_all(dir);
   return 0;

@@ -15,8 +15,10 @@ This is the C++ niminal tree: a small AI library plus the coding-agent app
 On macOS:
 
 ```sh
-brew install cmake openssl@3
+brew install cmake llvm openssl@3
 ```
+
+`llvm` provides `clang-tidy` for `./dev check`.
 
 On Debian or Ubuntu:
 
@@ -33,6 +35,31 @@ cmake --build build
 
 The binary is `build/niminal`. Curl and nlohmann/json are fetched during
 configure. OpenSSL is static-linked from the copy CMake found at build time.
+
+## Dev check
+
+Run the full validation pipeline before landing changes:
+
+```sh
+./dev check
+```
+
+This runs, in order:
+
+1. `clang-format` check
+2. CMake configure (`build/`)
+3. Release build with warnings as errors
+4. `clang-tidy` on `src/` and `include/`
+5. Unit tests (`ctest`)
+6. ASan/UBSan configure, build, and test (`build-asan/`)
+
+Other commands:
+
+```sh
+./dev format --fix   # rewrite formatting
+./dev tidy --fix     # apply clang-tidy fixes
+./dev sanitizer      # ASan/UBSan build and test only
+```
 
 ## Run
 

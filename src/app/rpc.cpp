@@ -23,7 +23,9 @@ namespace {
 
 volatile std::sig_atomic_t rpc_sigint = 0;
 
-void handle_rpc_sigint(int) { rpc_sigint = 1; }
+void handle_rpc_sigint(int) {
+  rpc_sigint = 1;
+}
 
 struct QueuedPrompt {
   std::string id;
@@ -31,30 +33,32 @@ struct QueuedPrompt {
   std::string mode;
 };
 
-std::string trim_copy(std::string text) {
+std::string trim_copy(const std::string& text) {
   const auto first = text.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) return {};
+  if (first == std::string::npos) {
+    return {};
+  }
   const auto last = text.find_last_not_of(" \t\r\n");
   return text.substr(first, last - first + 1);
 }
 
-bool string_field(const nlohmann::json& object, const char* name,
-                  std::string& value) {
+bool string_field(const nlohmann::json& object, const char* name, std::string& value) {
   auto it = object.find(name);
-  if (it == object.end() || !it->is_string()) return false;
+  if (it == object.end() || !it->is_string()) {
+    return false;
+  }
   value = it->get<std::string>();
   return true;
 }
 
-}  // namespace
+} // namespace
 
 namespace {
 
 class RpcRuntimeImpl {
- public:
+public:
   RpcRuntimeImpl(niminal::Agent& agent, Session& session, Config& config)
-      : agent_(agent), session_(session), config_(config),
-        steering_mode_(config.steering_mode),
+      : agent_(agent), session_(session), config_(config), steering_mode_(config.steering_mode),
         follow_up_mode_(config.follow_up_mode) {}
 
   int run() {
@@ -66,8 +70,12 @@ class RpcRuntimeImpl {
     bool eof = false;
     while (true) {
       poll_active();
-      if (rpc_sigint != 0 && !shutting_down_) request_shutdown();
-      if (shutting_down_ && !active_) break;
+      if (rpc_sigint != 0 && !shutting_down_) {
+        request_shutdown();
+      }
+      if (shutting_down_ && !active_) {
+        break;
+      }
 
       if (!eof) {
         pollfd ready{STDIN_FILENO, POLLIN | POLLHUP, 0};
@@ -79,7 +87,7 @@ class RpcRuntimeImpl {
           request_shutdown();
           continue;
         }
-        if (result > 0 && (ready.revents & (POLLIN | POLLHUP))) {
+        if (result > 0 && ((ready.revents & (POLLIN | POLLHUP)) != 0)) {
           char buffer[4096];
           const auto count = ::read(STDIN_FILENO, buffer, sizeof(buffer));
           if (count <= 0) {
@@ -95,24 +103,30 @@ class RpcRuntimeImpl {
         auto line = input.substr(0, newline);
         input.erase(0, newline + 1);
         line = trim_copy(std::move(line));
-        if (!line.empty()) handle_line(line);
+        if (!line.empty()) {
+          handle_line(line);
+        }
       }
       if (eof) {
         auto line = trim_copy(std::move(input));
         input.clear();
-        if (!line.empty()) handle_line(line);
+        if (!line.empty()) {
+          handle_line(line);
+        }
         request_shutdown();
       }
     }
 
-    if (worker_.joinable()) worker_.join();
+    if (worker_.joinable()) {
+      worker_.join();
+    }
     send(session_event("session_end", session_.id, !had_failure_));
     rpc_sigint = 0;
     std::signal(SIGINT, previous_sigint);
     return had_failure_ ? 1 : 0;
   }
 
- private:
+private:
   niminal::Agent& agent_;
   Session& session_;
   Config& config_;
@@ -137,19 +151,25 @@ class RpcRuntimeImpl {
     agent_.on_event = [this](const niminal::StreamEvent& event) {
       if (event.kind == niminal::EventKind::error) {
         saw_error_event_ = true;
-        if (event.text != "interrupted" && event.text != "Interrupted")
+        if (event.text != "interrupted" && event.text != "Interrupted") {
           had_failure_ = true;
+        }
       }
-      if (event.kind == niminal::EventKind::step_start) active_step_ = event.step;
-      if (event.kind == niminal::EventKind::run_start)
+      if (event.kind == niminal::EventKind::step_start) {
+        active_step_ = event.step;
+      }
+      if (event.kind == niminal::EventKind::run_start) {
         send(message_event(event.session_id, event.turn_id, "user", event.text));
+      }
       send(json_event(event));
     };
     agent_.cancel = &cancel_;
   }
 
   void send(const nlohmann::json& event) {
-    if (event.is_null()) return;
+    if (event.is_null()) {
+      return;
+    }
     std::lock_guard lock(output_mutex_);
     std::cout << event.dump() << '\n' << std::flush;
   }
@@ -170,15 +190,15 @@ class RpcRuntimeImpl {
         queue.pop_front();
       }
       for (size_t i = 0; i < taken.size(); ++i) {
-        const int depth = queue_depth_locked() +
-                          static_cast<int>(taken.size() - i - 1);
-        send(queue_event(session_.id, "dequeue", depth, {}, taken[i].id,
-                         taken[i].mode));
+        const int depth = queue_depth_locked() + static_cast<int>(taken.size() - i - 1);
+        send(queue_event(session_.id, "dequeue", depth, {}, taken[i].id, taken[i].mode));
       }
     }
     std::vector<std::string> prompts;
     prompts.reserve(taken.size());
-    for (auto& item : taken) prompts.push_back(std::move(item.prompt));
+    for (auto& item : taken) {
+      prompts.push_back(std::move(item.prompt));
+    }
     return prompts;
   }
 
@@ -193,12 +213,17 @@ class RpcRuntimeImpl {
     std::vector<std::string> follow_up;
     {
       std::lock_guard lock(queue_mutex_);
-      for (const auto& item : steering_queue_) steering.push_back(item.prompt);
-      for (const auto& item : follow_up_queue_) follow_up.push_back(item.prompt);
+      for (const auto& item : steering_queue_) {
+        steering.push_back(item.prompt);
+      }
+      for (const auto& item : follow_up_queue_) {
+        follow_up.push_back(item.prompt);
+      }
       steering_queue_.clear();
       follow_up_queue_.clear();
-      if (!steering.empty() || !follow_up.empty())
+      if (!steering.empty() || !follow_up.empty()) {
         send(queue_event(session_.id, "clear", 0));
+      }
     }
     return {std::move(steering), std::move(follow_up)};
   }
@@ -207,7 +232,9 @@ class RpcRuntimeImpl {
 
   void start_prompt(const std::string& id, const std::string& prompt) {
     (void)id;
-    if (worker_.joinable()) worker_.join();
+    if (worker_.joinable()) {
+      worker_.join();
+    }
     cancel_.store(false);
     worker_done_.store(false);
     active_step_ = -1;
@@ -247,25 +274,32 @@ class RpcRuntimeImpl {
       } else {
         return;
       }
-      send(queue_event(session_.id, "dequeue", queue_depth_locked(), {}, item.id,
-                       item.mode));
+      send(queue_event(session_.id, "dequeue", queue_depth_locked(), {}, item.id, item.mode));
     }
     start_prompt(item.id, item.prompt);
   }
 
   void poll_active() {
-    if (!active_ || !worker_done_.load()) return;
+    if (!active_ || !worker_done_.load()) {
+      return;
+    }
     worker_.join();
     active_ = false;
     cancel_.store(false);
-    if (!shutting_down_) start_queued_prompt();
+    if (!shutting_down_) {
+      start_queued_prompt();
+    }
   }
 
   void request_shutdown() {
-    if (shutting_down_) return;
+    if (shutting_down_) {
+      return;
+    }
     shutting_down_ = true;
     clear_queue();
-    if (active_) cancel_.store(true);
+    if (active_) {
+      cancel_.store(true);
+    }
   }
 
   void handle_line(const std::string& line) {
@@ -284,8 +318,7 @@ class RpcRuntimeImpl {
     std::string id;
     std::string type;
     if (!string_field(command, "id", id) || !string_field(command, "type", type)) {
-      send(rpc_response_event("", false, {},
-                          "Command requires string id and type fields."));
+      send(rpc_response_event("", false, {}, "Command requires string id and type fields."));
       return;
     }
 
@@ -303,8 +336,7 @@ class RpcRuntimeImpl {
         if (!string_field(command, "streamingBehavior", behavior) ||
             (behavior != "steer" && behavior != "followUp")) {
           send(rpc_response_event(
-              id, false, {},
-              "prompt requires streamingBehavior: steer or followUp while busy."));
+              id, false, {}, "prompt requires streamingBehavior: steer or followUp while busy."));
         } else {
           const std::string mode = behavior == "steer" ? "steer" : "follow_up";
           enqueue({id, message, mode});
@@ -333,7 +365,9 @@ class RpcRuntimeImpl {
     }
 
     if (type == "interrupt") {
-      if (busy()) cancel_.store(true);
+      if (busy()) {
+        cancel_.store(true);
+      }
       send(rpc_response_event(id, true, busy() ? "interrupting" : "idle"));
       return;
     }
@@ -405,7 +439,7 @@ class RpcRuntimeImpl {
   }
 };
 
-}  // namespace
+} // namespace
 
 RpcRuntime::RpcRuntime(niminal::Agent& agent, Session& session, Config& config)
     : agent_(agent), session_(session), config_(config) {}
@@ -418,4 +452,4 @@ int run_rpc(niminal::Agent& agent, Session& session, Config& config) {
   return RpcRuntime(agent, session, config).run();
 }
 
-}  // namespace niminal::app
+} // namespace niminal::app

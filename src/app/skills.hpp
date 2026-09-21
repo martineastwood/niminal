@@ -17,8 +17,7 @@ struct Skill {
 };
 
 std::vector<Skill> discover_skills(const std::filesystem::path& workspace);
-std::string load_skill(const std::filesystem::path& workspace,
-                       const std::string& name);
+std::string load_skill(const std::filesystem::path& workspace, const std::string& name);
 niminal::Tool skill_tool(const std::filesystem::path& workspace);
 
-}  // namespace niminal::app
+} // namespace niminal::app

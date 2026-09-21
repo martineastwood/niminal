@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+BUILD_DIR="${BUILD_DIR:-build}"
+ASAN_DIR="${ASAN_DIR:-build-asan}"
+CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
+JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+
+log() { printf '==> %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+find_tool() {
+  local name="$1"
+  shift
+  if command -v "$name" >/dev/null 2>&1; then
+    command -v "$name"
+    return 0
+  fi
+  for candidate in "$@"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+CLANG_FORMAT="$(
+  find_tool clang-format \
+    "$(xcrun --find clang-format 2>/dev/null || true)" \
+    /opt/homebrew/opt/llvm/bin/clang-format \
+    /usr/local/opt/llvm/bin/clang-format
+)" || die "clang-format not found"
+
+CLANG_TIDY="$(
+  find_tool clang-tidy \
+    /opt/homebrew/opt/llvm/bin/clang-tidy \
+    /usr/local/opt/llvm/bin/clang-tidy
+)" || die "clang-tidy not found (install with: brew install llvm)"
+
+source_files() {
+  find include src tests -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) | sort
+}
+
+tidy_files() {
+  find src include -type f -name '*.cpp' | sort
+}
+
+cmd_format() {
+  local fix=false
+  if [[ "${1:-}" == "--fix" ]]; then
+    fix=true
+  fi
+  log "format"
+  local files=()
+  while IFS= read -r file; do
+    files+=("$file")
+  done < <(source_files)
+  if ((${#files[@]} == 0)); then
+    die "no source files found"
+  fi
+  if $fix; then
+    "$CLANG_FORMAT" -i "${files[@]}"
+  else
+    "$CLANG_FORMAT" --dry-run --Werror "${files[@]}"
+  fi
+}
+
+cmd_configure() {
+  local dir="$1"
+  shift
+  log "configure ($dir)"
+  cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
+}
+
+cmd_build() {
+  local dir="$1"
+  log "build ($dir)"
+  cmake --build "$dir" -j "$JOBS"
+}
+
+cmd_tidy() {
+  local fix=false
+  if [[ "${1:-}" == "--fix" ]]; then
+    fix=true
+  fi
+  log "clang-tidy"
+  [[ -f "$BUILD_DIR/compile_commands.json" ]] ||
+    die "missing $BUILD_DIR/compile_commands.json; run ./dev configure first"
+  local args=()
+  if $fix; then
+    args+=(--fix)
+  fi
+  local sdkroot
+  sdkroot="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+  if [[ -n "$sdkroot" ]]; then
+    args+=(--extra-arg=-isysroot --extra-arg="$sdkroot")
+  fi
+  local failed=0
+  while IFS= read -r file; do
+    [[ "$file" == *.cpp ]] || continue
+    if ! "$CLANG_TIDY" -p "$BUILD_DIR" "${args[@]}" "$file"; then
+      failed=1
+    fi
+  done < <(tidy_files)
+  [[ $failed -eq 0 ]] || die "clang-tidy failed"
+}
+
+cmd_test() {
+  local dir="$1"
+  log "test ($dir)"
+  ctest --test-dir "$dir" --output-on-failure
+}
+
+cmd_check() {
+  cmd_format
+  cmd_configure "$BUILD_DIR"
+  cmd_build "$BUILD_DIR"
+  cmd_tidy
+  cmd_test "$BUILD_DIR"
+  cmd_configure "$ASAN_DIR" -DNIMINAL_SANITIZERS=ON
+  cmd_build "$ASAN_DIR"
+  cmd_test "$ASAN_DIR"
+}
+
+usage() {
+  cat <<EOF
+Usage: ./dev <command>
+
+Commands:
+  check       format, configure, build, clang-tidy, test, sanitizer test
+  format      check formatting (--fix to rewrite)
+  configure   cmake configure (default: $BUILD_DIR)
+  build       compile (default: $BUILD_DIR)
+  tidy        run clang-tidy (default: $BUILD_DIR, --fix to apply)
+  test        run ctest (default: $BUILD_DIR)
+  sanitizer   configure, build, and test with ASan/UBSan ($ASAN_DIR)
+EOF
+}
+
+case "${1:-}" in
+  check) cmd_check ;;
+  format) cmd_format "${2:-}" ;;
+  configure) cmd_configure "${2:-$BUILD_DIR}" ;;
+  build) cmd_build "${2:-$BUILD_DIR}" ;;
+  tidy) cmd_tidy "${2:-}" ;;
+  test) cmd_test "${2:-$BUILD_DIR}" ;;
+  sanitizer)
+    cmd_configure "$ASAN_DIR" -DNIMINAL_SANITIZERS=ON
+    cmd_build "$ASAN_DIR"
+    cmd_test "$ASAN_DIR"
+    ;;
+  ""|-h|--help|help) usage ;;
+  *) die "unknown command: $1 (run ./dev help)" ;;
+esac

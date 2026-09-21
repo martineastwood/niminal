@@ -12,4 +12,4 @@ namespace niminal::app {
 ftxui::Element render_markdown(std::string_view text, const Theme& theme);
 std::string markdown_outline(std::string_view text);
 
-}  // namespace niminal::app
+} // namespace niminal::app

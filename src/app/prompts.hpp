@@ -17,7 +17,7 @@ struct PromptTemplate {
 std::vector<PromptTemplate> discover_prompts(const std::filesystem::path& workspace);
 std::optional<PromptTemplate> load_prompt(const std::filesystem::path& workspace,
                                           const std::string& name);
-std::string expand_prompt(const std::filesystem::path& workspace,
-                          const std::string& name, const std::string& arguments);
+std::string expand_prompt(const std::filesystem::path& workspace, const std::string& name,
+                          const std::string& arguments);
 
-}  // namespace niminal::app
+} // namespace niminal::app

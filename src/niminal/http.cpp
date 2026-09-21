@@ -19,8 +19,9 @@ std::once_flag curl_once;
 
 void ensure_curl() {
   std::call_once(curl_once, [] {
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0)
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
       throw Error("curl_global_init failed");
+    }
   });
 }
 
@@ -39,28 +40,44 @@ size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
 }
 
 void flush_sse_line(WriteBuf& buf, std::string_view line) {
-  if (line.ends_with('\r')) line.remove_suffix(1);
-  if (!line.starts_with("data:")) return;
+  if (line.ends_with('\r')) {
+    line.remove_suffix(1);
+  }
+  if (!line.starts_with("data:")) {
+    return;
+  }
   auto data = line.substr(5);
-  while (!data.empty() && (data.front() == ' ' || data.front() == '\t'))
+  while (!data.empty() && (data.front() == ' ' || data.front() == '\t')) {
     data.remove_prefix(1);
-  if (data.empty() || data == "[DONE]") return;
-  if (buf.on_data) (*buf.on_data)(data);
+  }
+  if (data.empty() || data == "[DONE]") {
+    return;
+  }
+  if (buf.on_data != nullptr) {
+    (*buf.on_data)(data);
+  }
 }
 
 size_t write_sse(char* ptr, size_t size, size_t nmemb, void* userdata) {
   auto* buf = static_cast<WriteBuf*>(userdata);
-  if (buf->error) return 0;
-  if (buf->cancel && buf->cancel->load()) return 0;
+  if (buf->error) {
+    return 0;
+  }
+  if ((buf->cancel != nullptr) && buf->cancel->load()) {
+    return 0;
+  }
   try {
     buf->pending.append(ptr, size * nmemb);
-    if (buf->body) buf->body->append(ptr, size * nmemb);
+    if (buf->body != nullptr) {
+      buf->body->append(ptr, size * nmemb);
+    }
     size_t start = 0;
     while (start < buf->pending.size()) {
       auto nl = buf->pending.find('\n', start);
-      if (nl == std::string::npos) break;
-      flush_sse_line(*buf,
-                     std::string_view(buf->pending).substr(start, nl - start));
+      if (nl == std::string::npos) {
+        break;
+      }
+      flush_sse_line(*buf, std::string_view(buf->pending).substr(start, nl - start));
       start = nl + 1;
     }
     buf->pending.erase(0, start);
@@ -73,22 +90,27 @@ size_t write_sse(char* ptr, size_t size, size_t nmemb, void* userdata) {
 
 curl_slist* slist_from(const std::map<std::string, std::string>& headers) {
   curl_slist* list = nullptr;
-  for (const auto& [k, v] : headers)
+  for (const auto& [k, v] : headers) {
     list = curl_slist_append(list, (k + ": " + v).c_str());
+  }
   return list;
 }
 
-}  // namespace
+} // namespace
 
 struct HttpClient::Impl {
   CURL* easy = nullptr;
   Impl() {
     ensure_curl();
     easy = curl_easy_init();
-    if (!easy) throw Error("curl_easy_init failed");
+    if (easy == nullptr) {
+      throw Error("curl_easy_init failed");
+    }
   }
   ~Impl() {
-    if (easy) curl_easy_cleanup(easy);
+    if (easy != nullptr) {
+      curl_easy_cleanup(easy);
+    }
   }
 };
 
@@ -98,7 +120,9 @@ HttpClient::~HttpClient() = default;
 namespace {
 
 std::string default_ca_file() {
-  if (const char* env = std::getenv("SSL_CERT_FILE"); env && *env) return env;
+  if (const char* env = std::getenv("SSL_CERT_FILE"); (env != nullptr) && ((*env) != 0)) {
+    return env;
+  }
   const char* candidates[] = {
       "/opt/homebrew/etc/openssl@3/cert.pem",
       "/usr/local/etc/openssl@3/cert.pem",
@@ -106,25 +130,29 @@ std::string default_ca_file() {
       "/etc/ssl/certs/ca-certificates.crt",
   };
   for (auto path : candidates) {
-    if (access(path, R_OK) == 0) return path;
+    if (access(path, R_OK) == 0) {
+      return path;
+    }
   }
   return {};
 }
 
-int xfer_progress(void* clientp,
-                  curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+int xfer_progress(void* clientp, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
   auto* cancel = static_cast<std::atomic<bool>*>(clientp);
-  if (cancel && cancel->load()) return 1;
+  if ((cancel != nullptr) && cancel->load()) {
+    return 1;
+  }
   return 0;
 }
 
-void apply_common(CURL* easy, const std::string& url, curl_slist* hdrs,
-                  const std::string& ca) {
+void apply_common(CURL* easy, const std::string& url, curl_slist* hdrs, const std::string& ca) {
   curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
   curl_easy_setopt(easy, CURLOPT_HTTPHEADER, hdrs);
   curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(easy, CURLOPT_USERAGENT, "niminal/0.1");
-  if (!ca.empty()) curl_easy_setopt(easy, CURLOPT_CAINFO, ca.c_str());
+  if (!ca.empty()) {
+    curl_easy_setopt(easy, CURLOPT_CAINFO, ca.c_str());
+  }
 }
 
 void apply_post(CURL* easy, const std::string& body) {
@@ -133,7 +161,7 @@ void apply_post(CURL* easy, const std::string& body) {
   curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
 }
 
-}  // namespace
+} // namespace
 
 Result<HttpResponse> HttpClient::post(std::string_view url,
                                       const std::map<std::string, std::string>& headers,
@@ -152,17 +180,17 @@ Result<HttpResponse> HttpClient::post(std::string_view url,
   const auto rc = curl_easy_perform(impl_->easy);
   curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &out.status);
   curl_slist_free_all(hdrs);
-  if (rc != CURLE_OK)
-    return std::unexpected(
-        Error(std::string("http: ") + curl_easy_strerror(rc)));
+  if (rc != CURLE_OK) {
+    return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
+  }
   return out;
 }
 
-Result<void> HttpClient::post_sse(
-    std::string_view url, const std::map<std::string, std::string>& headers,
-    std::string_view body,
-    const std::function<void(std::string_view json_data)>& on_data,
-    std::atomic<bool>* cancel) {
+Result<void> HttpClient::post_sse(std::string_view url,
+                                  const std::map<std::string, std::string>& headers,
+                                  std::string_view body,
+                                  const std::function<void(std::string_view json_data)>& on_data,
+                                  std::atomic<bool>* cancel) {
   auto on_data_mut = on_data;
   std::string raw;
   WriteBuf buf{&raw, {}, &on_data_mut, cancel, {}};
@@ -186,21 +214,25 @@ Result<void> HttpClient::post_sse(
   curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &status);
   curl_slist_free_all(hdrs);
   if (buf.error) {
-    if (cancel && cancel->load()) return std::unexpected(Cancelled());
+    if ((cancel != nullptr) && cancel->load()) {
+      return std::unexpected(Cancelled());
+    }
     try {
       std::rethrow_exception(buf.error);
     } catch (const std::exception& e) {
       return std::unexpected(Error(e.what()));
     }
   }
-  if (cancel && cancel->load() &&
-      (rc == CURLE_ABORTED_BY_CALLBACK || rc == CURLE_WRITE_ERROR))
+  if ((cancel != nullptr) && cancel->load() &&
+      (rc == CURLE_ABORTED_BY_CALLBACK || rc == CURLE_WRITE_ERROR)) {
     return std::unexpected(Cancelled());
-  if (rc != CURLE_OK)
-    return std::unexpected(
-        Error(std::string("http: ") + curl_easy_strerror(rc)));
-  if (status >= 400)
+  }
+  if (rc != CURLE_OK) {
+    return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
+  }
+  if (status >= 400) {
     return std::unexpected(Error("http " + std::to_string(status) + ": " + raw));
+  }
   return {};
 }
 
@@ -219,10 +251,10 @@ Result<HttpResponse> HttpClient::get(std::string_view url, long timeout_seconds)
   const auto rc = curl_easy_perform(impl_->easy);
   curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &out.status);
   curl_slist_free_all(hdrs);
-  if (rc != CURLE_OK)
-    return std::unexpected(
-        Error(std::string("http: ") + curl_easy_strerror(rc)));
+  if (rc != CURLE_OK) {
+    return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
+  }
   return out;
 }
 
-}  // namespace niminal
+} // namespace niminal

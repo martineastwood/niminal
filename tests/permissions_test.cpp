@@ -1,10 +1,10 @@
 #include "permissions.hpp"
 #include "trust.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <cstdlib>
 
 namespace fs = std::filesystem;
 using niminal::ToolCall;
@@ -31,15 +31,13 @@ int main() {
     std::cerr << "bash permission key mismatch\n";
     return 1;
   }
-  if (!niminal::app::dangerous_command("echo rm") ||
-      niminal::app::can_remember(dangerous)) {
+  if (!niminal::app::dangerous_command("echo rm") || niminal::app::can_remember(dangerous)) {
     std::cerr << "dangerous command policy mismatch\n";
     return 1;
   }
 
   PermissionPolicy policy(root);
-  if (policy.check(read) != PermissionCheck::allow ||
-      policy.check(bash) != PermissionCheck::ask ||
+  if (policy.check(read) != PermissionCheck::allow || policy.check(bash) != PermissionCheck::ask ||
       policy.check(git) != PermissionCheck::ask) {
     std::cerr << "default permission checks mismatch\n";
     return 1;

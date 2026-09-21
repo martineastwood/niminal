@@ -24,8 +24,8 @@ bool dangerous_command(const std::string& command);
 bool can_remember(const niminal::ToolCall& call);
 
 class PermissionPolicy {
- public:
-  explicit PermissionPolicy(std::filesystem::path workspace);
+public:
+  explicit PermissionPolicy(const std::filesystem::path& workspace);
 
   PermissionCheck check(const niminal::ToolCall& call) const;
   void remember(const niminal::ToolCall& call, PermissionDecision decision);
@@ -36,7 +36,7 @@ class PermissionPolicy {
   const std::filesystem::path& workspace() const { return workspace_; }
   const std::filesystem::path& project_path() const { return project_path_; }
 
- private:
+private:
   std::filesystem::path workspace_;
   std::filesystem::path project_path_;
   std::set<std::string> session_allows_;
@@ -45,4 +45,4 @@ class PermissionPolicy {
   void persist_project() const;
 };
 
-}  // namespace niminal::app
+} // namespace niminal::app

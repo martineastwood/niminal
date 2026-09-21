@@ -96,7 +96,8 @@ Rules:
   progress. Finish with the result, relevant checks, and unresolved issues.
 )";
 
-const char* kActMode = R"(Current mode: ACT (authoritative). Implement requested changes and verify them.
+const char* kActMode =
+    R"(Current mode: ACT (authoritative). Implement requested changes and verify them.
 Reuse the most recent plan and tool results in this session; do not repeat broad
 repository exploration unless new evidence or a changed assumption requires it.
 For multi-step work, follow the agreed plan when one exists; otherwise use a short
@@ -106,7 +107,9 @@ Skip checklists for simple requests.)";
 std::string join(const std::vector<std::string>& parts) {
   std::ostringstream out;
   for (size_t i = 0; i < parts.size(); ++i) {
-    if (i) out << ' ';
+    if (i != 0U) {
+      out << ' ';
+    }
     out << parts[i];
   }
   return out.str();
@@ -114,26 +117,26 @@ std::string join(const std::vector<std::string>& parts) {
 
 std::string normalize_tool_name(std::string name) {
   const auto first = name.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) return {};
+  if (first == std::string::npos) {
+    return {};
+  }
   const auto last = name.find_last_not_of(" \t\r\n");
   name = name.substr(first, last - first + 1);
-  for (char& c : name)
+  for (char& c : name) {
     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
   return name;
 }
 
-bool tool_allowed(const std::vector<std::string>& allowed,
-                  const std::string& name) {
+bool tool_allowed(const std::vector<std::string>& allowed, const std::string& name) {
   const auto normalized = normalize_tool_name(name);
   return std::find(allowed.begin(), allowed.end(), normalized) != allowed.end();
 }
 
-void restrict_tools(niminal::Agent& agent,
-                    const std::vector<std::string>& allowed) {
+void restrict_tools(niminal::Agent& agent, const std::vector<std::string>& allowed) {
   agent.tools.erase(
-      std::remove_if(agent.tools.begin(), agent.tools.end(), [&](const auto& tool) {
-        return !tool_allowed(allowed, tool.name);
-      }),
+      std::remove_if(agent.tools.begin(), agent.tools.end(),
+                     [&](const auto& tool) { return !tool_allowed(allowed, tool.name); }),
       agent.tools.end());
 }
 
@@ -144,7 +147,9 @@ niminal::Agent make_agent(niminal::app::Workspace& ws, const niminal::app::Confi
   agent.system_extra_loader = [root = ws.root()] {
     std::vector<std::string> extra;
     auto text = niminal::app::load_project_instructions(root);
-    if (!text.empty()) extra.push_back(std::move(text));
+    if (!text.empty()) {
+      extra.push_back(std::move(text));
+    }
     extra.emplace_back(kActMode);
     return extra;
   };
@@ -160,46 +165,53 @@ niminal::Agent make_agent(niminal::app::Workspace& ws, const niminal::app::Confi
 int run_print(niminal::Agent& agent, const std::string& prompt) {
   agent.on_event = [](const niminal::StreamEvent& ev) {
     switch (ev.kind) {
-      case niminal::EventKind::text_delta:
-        std::cout << ev.text << std::flush;
-        break;
-      case niminal::EventKind::thinking_delta:
-      case niminal::EventKind::tool_output_delta:
-        break;
-      case niminal::EventKind::tool_call:
-        std::cout << "\n[" << ev.tool_name;
-        if (!ev.text.empty()) std::cout << " " << ev.text;
-        std::cout << "]\n" << std::flush;
-        break;
-      case niminal::EventKind::approval_required:
-        break;
-      case niminal::EventKind::tool_result:
-        std::cout << ev.text;
-        if (ev.text.empty() || ev.text.back() != '\n') std::cout << '\n';
-        std::cout << std::flush;
-        break;
-      case niminal::EventKind::user:
-        std::cout << "\n[queued] " << ev.text << '\n' << std::flush;
-        break;
-      case niminal::EventKind::status:
-        if (!ev.text.empty())
-          std::cerr << ev.text << '\n';
-        break;
-      case niminal::EventKind::error:
+    case niminal::EventKind::text_delta:
+      std::cout << ev.text << std::flush;
+      break;
+    case niminal::EventKind::thinking_delta:
+    case niminal::EventKind::tool_output_delta:
+      break;
+    case niminal::EventKind::tool_call:
+      std::cout << "\n[" << ev.tool_name;
+      if (!ev.text.empty()) {
+        std::cout << " " << ev.text;
+      }
+      std::cout << "]\n" << std::flush;
+      break;
+    case niminal::EventKind::approval_required:
+      break;
+    case niminal::EventKind::tool_result:
+      std::cout << ev.text;
+      if (ev.text.empty() || ev.text.back() != '\n') {
+        std::cout << '\n';
+      }
+      std::cout << std::flush;
+      break;
+    case niminal::EventKind::user:
+      std::cout << "\n[queued] " << ev.text << '\n' << std::flush;
+      break;
+    case niminal::EventKind::status:
+      if (!ev.text.empty()) {
         std::cerr << ev.text << '\n';
-        break;
-      case niminal::EventKind::done:
-      case niminal::EventKind::run_start:
-      case niminal::EventKind::step_start:
-      case niminal::EventKind::step_end:
-      case niminal::EventKind::run_end:
-      case niminal::EventKind::assistant_message:
-        break;
+      }
+      break;
+    case niminal::EventKind::error:
+      std::cerr << ev.text << '\n';
+      break;
+    case niminal::EventKind::done:
+    case niminal::EventKind::run_start:
+    case niminal::EventKind::step_start:
+    case niminal::EventKind::step_end:
+    case niminal::EventKind::run_end:
+    case niminal::EventKind::assistant_message:
+      break;
     }
   };
   try {
     auto text = agent.run(prompt);
-    if (!text.empty() && text.back() != '\n') std::cout << '\n';
+    if (!text.empty() && text.back() != '\n') {
+      std::cout << '\n';
+    }
     return 0;
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
@@ -207,28 +219,35 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
   }
 }
 
-std::string trim_copy(std::string text) {
+std::string trim_copy(const std::string& text) {
   const auto first = text.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) return {};
+  if (first == std::string::npos) {
+    return {};
+  }
   const auto last = text.find_last_not_of(" \t\r\n");
   return text.substr(first, last - first + 1);
 }
 
 std::string merge_piped_prompt(const std::string& prompt, std::string piped) {
   piped = trim_copy(std::move(piped));
-  if (piped.empty()) return prompt;
-  if (prompt.empty()) return piped;
+  if (piped.empty()) {
+    return prompt;
+  }
+  if (prompt.empty()) {
+    return piped;
+  }
   return piped + "\n\n" + prompt;
 }
 
-int run_json(niminal::Agent& agent, niminal::app::Session& session,
-             const std::string& prompt) {
+int run_json(niminal::Agent& agent, niminal::app::Session& session, const std::string& prompt) {
   bool failed = false;
   bool saw_error_event = false;
   int active_step = -1;
   agent.run_id = session.id + ":turn:" + std::to_string(session.events.size());
   auto send = [](const nlohmann::json& event) {
-    if (event.is_null()) return;
+    if (event.is_null()) {
+      return;
+    }
     std::cout << event.dump() << '\n' << std::flush;
   };
   send(niminal::app::session_event("session_start", session.id));
@@ -237,10 +256,12 @@ int run_json(niminal::Agent& agent, niminal::app::Session& session,
       failed = true;
       saw_error_event = true;
     }
-    if (event.kind == niminal::EventKind::step_start) active_step = event.step;
-    if (event.kind == niminal::EventKind::run_start)
-      send(niminal::app::message_event(event.session_id, event.turn_id, "user",
-                                       event.text));
+    if (event.kind == niminal::EventKind::step_start) {
+      active_step = event.step;
+    }
+    if (event.kind == niminal::EventKind::run_start) {
+      send(niminal::app::message_event(event.session_id, event.turn_id, "user", event.text));
+    }
     send(niminal::app::json_event(event));
   };
   try {
@@ -260,16 +281,19 @@ int run_json(niminal::Agent& agent, niminal::app::Session& session,
   return failed ? 1 : 0;
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv) {
   auto cfg = niminal::app::load_config();
   niminal::app::normalize_config(cfg);
-  if (const char* model = std::getenv("NIMINAL_MODEL"); model && *model)
+  if (const char* model = std::getenv("NIMINAL_MODEL"); (model != nullptr) && ((*model) != 0)) {
     cfg.model = model;
-  if (const char* url = std::getenv("NIMINAL_API_URL"); url && *url)
+  }
+  if (const char* url = std::getenv("NIMINAL_API_URL"); (url != nullptr) && ((*url) != 0)) {
     cfg.api_url = url;
-  if (const char* thinking = std::getenv("NIMINAL_THINKING"); thinking && *thinking) {
+  }
+  if (const char* thinking = std::getenv("NIMINAL_THINKING");
+      (thinking != nullptr) && ((*thinking) != 0)) {
     try {
       cfg.thinking = niminal::app::normalize_thinking(thinking);
     } catch (const std::exception& e) {
@@ -285,8 +309,7 @@ int main(int argc, char** argv) {
   bool json_mode = false;
   bool rpc_mode = false;
   bool yolo = false;
-  niminal::app::TrustOverride trust_override =
-      niminal::app::TrustOverride::default_value;
+  niminal::app::TrustOverride trust_override = niminal::app::TrustOverride::default_value;
   std::string api_key;
   std::string session_id;
   std::vector<std::string> prompt_parts;
@@ -339,8 +362,11 @@ int main(int argc, char** argv) {
         return 2;
       }
       std::string mode = argv[++i];
-      for (char& c : mode)
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+      for (char& c : mode) {
+        if (c >= 'A' && c <= 'Z') {
+          c = static_cast<char>(c - 'A' + 'a');
+        }
+      }
       if (mode != "json" && mode != "rpc") {
         std::cerr << "Unknown mode: " << mode << " (use json|rpc)\n";
         return 2;
@@ -375,7 +401,9 @@ int main(int argc, char** argv) {
             std::cerr << "Tool names must not be empty\n";
             return 2;
           }
-          if (!tool_allowed(allowed_tools, name)) allowed_tools.push_back(name);
+          if (!tool_allowed(allowed_tools, name)) {
+            allowed_tools.push_back(name);
+          }
         }
       }
       continue;
@@ -426,7 +454,9 @@ int main(int argc, char** argv) {
       continue;
     }
     if (a == "--") {
-      for (++i; i < argc; ++i) prompt_parts.emplace_back(argv[i]);
+      for (++i; i < argc; ++i) {
+        prompt_parts.emplace_back(argv[i]);
+      }
       break;
     }
     if (a.starts_with('-')) {
@@ -447,7 +477,7 @@ int main(int argc, char** argv) {
   }
 
   std::string prompt = join(prompt_parts);
-  if (json_mode && !isatty(STDIN_FILENO)) {
+  if (json_mode && (isatty(STDIN_FILENO) == 0)) {
     std::ostringstream piped;
     piped << std::cin.rdbuf();
     prompt = merge_piped_prompt(prompt, piped.str());
@@ -460,35 +490,40 @@ int main(int argc, char** argv) {
   niminal::app::Workspace ws(std::filesystem::current_path());
   auto project_trust = niminal::app::resolve_project_trust(ws.root(), trust_override);
   const bool interactive_tui = !json_mode && !rpc_mode && prompt_parts.empty() &&
-                               isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+                               (isatty(STDIN_FILENO) != 0) && (isatty(STDOUT_FILENO) != 0);
   if (project_trust.required && project_trust.prompt && interactive_tui) {
     std::cout << "This project has optional niminal customizations:\n";
-    for (const auto& resource : project_trust.resources)
-      std::cout << "  " << resource.lexically_relative(ws.root()).generic_string()
-                << '\n';
-    std::cout << "Load these customizations for this workspace? [y/N] "
-              << std::flush;
+    for (const auto& resource : project_trust.resources) {
+      std::cout << "  " << resource.lexically_relative(ws.root()).generic_string() << '\n';
+    }
+    std::cout << "Load these customizations for this workspace? [y/N] " << std::flush;
     std::string answer;
     std::getline(std::cin, answer);
-    for (char& c : answer)
-      if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    for (char& c : answer) {
+      if (c >= 'A' && c <= 'Z') {
+        c = static_cast<char>(c - 'A' + 'a');
+      }
+    }
     project_trust.trusted = answer == "y" || answer == "yes";
     project_trust.prompt = false;
     try {
-      niminal::app::save_project_trust(project_trust.workspace,
-                                        project_trust.trusted);
+      niminal::app::save_project_trust(project_trust.workspace, project_trust.trusted);
     } catch (const std::exception& e) {
       std::cerr << "Could not save project trust: " << e.what() << '\n';
     }
   }
-  niminal::app::set_project_resources_trusted(project_trust.workspace,
-                                               project_trust.trusted);
-  if (project_trust.required && !project_trust.trusted)
+  niminal::app::set_project_resources_trusted(project_trust.workspace, project_trust.trusted);
+  if (project_trust.required && !project_trust.trusted) {
     std::cerr << "Project-local resources skipped (use --approve or /trust on).\n";
+  }
   std::atomic<bool> cancel{false};
   auto agent = make_agent(ws, cfg, max_steps, &cancel);
-  if (tools_specified) restrict_tools(agent, allowed_tools);
-  if (!api_key.empty()) agent.api_key = api_key;
+  if (tools_specified) {
+    restrict_tools(agent, allowed_tools);
+  }
+  if (!api_key.empty()) {
+    agent.api_key = api_key;
+  }
 
   niminal::app::Session session;
   try {
@@ -501,10 +536,11 @@ int main(int argc, char** argv) {
       session = niminal::app::load_session(dir, session_id);
     } else if (resume_latest) {
       auto infos = niminal::app::list_sessions(dir, ws.root().string(), 1);
-      if (!infos.empty())
+      if (!infos.empty()) {
         session = niminal::app::load_session(dir, infos[0].id);
-      else
+      } else {
         session = niminal::app::create_session(dir, ws.root().string());
+      }
     } else {
       session = niminal::app::create_session(dir, ws.root().string());
     }
@@ -514,63 +550,77 @@ int main(int argc, char** argv) {
   }
 
   niminal::app::bind_session(agent, session);
-  niminal::app::bind_compaction(agent, session, [](const std::string& msg) {
-    if (!msg.empty()) std::cerr << msg << '\n';
-  }, {}, cfg);
+  niminal::app::bind_compaction(
+      agent, session,
+      [](const std::string& msg) {
+        if (!msg.empty()) {
+          std::cerr << msg << '\n';
+        }
+      },
+      {}, cfg);
   if (!provider_from_cli) {
     if (auto p = session.last_provider();
-        !p.empty() && niminal::app::find_provider(p)) {
+        !p.empty() && (niminal::app::find_provider(p) != nullptr)) {
       cfg.provider = p;
       cfg.api_url = niminal::app::find_provider(p)->endpoint;
     }
   }
   if (!model_from_cli) {
-    if (auto model = session.last_model(); !model.empty()) cfg.model = model;
+    if (auto model = session.last_model(); !model.empty()) {
+      cfg.model = model;
+    }
   }
   niminal::app::apply_provider(agent, cfg);
 
-  auto extensions = niminal::app::ExtensionRuntime::start(
-      ws.root(), session.id, &cancel);
-  niminal::app::install_extension_tools(
-      agent, extensions, tools_specified ? &allowed_tools : nullptr);
-  niminal::app::bind_extensions(agent, extensions, ws.root(),
-                                [](const std::string& warning) {
-                                  std::cerr << warning << '\n';
-                                },
-                                &session, cfg);
-  niminal::app::bind_compaction(agent, session,
-                                [](const std::string& msg) {
-                                  if (!msg.empty()) std::cerr << msg << '\n';
-                                },
-                                extensions, cfg);
-  for (const auto& warning : extensions->warnings())
+  auto extensions = niminal::app::ExtensionRuntime::start(ws.root(), session.id, &cancel);
+  niminal::app::install_extension_tools(agent, extensions,
+                                        tools_specified ? &allowed_tools : nullptr);
+  niminal::app::bind_extensions(
+      agent, extensions, ws.root(),
+      [](const std::string& warning) { std::cerr << warning << '\n'; }, &session, cfg);
+  niminal::app::bind_compaction(
+      agent, session,
+      [](const std::string& msg) {
+        if (!msg.empty()) {
+          std::cerr << msg << '\n';
+        }
+      },
+      extensions, cfg);
+  for (const auto& warning : extensions->warnings()) {
     std::cerr << warning << '\n';
-  auto start_hook = extensions->dispatch(
-      niminal::app::HookEvent::session_start,
-      niminal::app::session_hook_payload(session.id, ws.root()));
-  for (const auto& warning : start_hook.warnings)
+  }
+  auto start_hook = extensions->dispatch(niminal::app::HookEvent::session_start,
+                                         niminal::app::session_hook_payload(session.id, ws.root()));
+  for (const auto& warning : start_hook.warnings) {
     std::cerr << warning << '\n';
+  }
   auto drain_extension_actions = [&] {
-    if (!extensions) return;
+    if (!extensions) {
+      return;
+    }
     extensions->pump();
-    for (const auto& notice : extensions->take_notices())
+    for (const auto& notice : extensions->take_notices()) {
       std::cerr << notice.message << '\n';
-    for (const auto& entry : extensions->take_entries())
+    }
+    for (const auto& entry : extensions->take_entries()) {
       session.add_extension(entry.extension, entry.data);
-    for (const auto& message : extensions->take_user_messages())
-      std::cerr << "Extension message (" << message.deliver_as
-                << "): " << message.content << '\n';
+    }
+    for (const auto& message : extensions->take_user_messages()) {
+      std::cerr << "Extension message (" << message.deliver_as << "): " << message.content << '\n';
+    }
   };
   drain_extension_actions();
   auto stop_extensions = [&] {
-    if (!extensions) return;
+    if (!extensions) {
+      return;
+    }
     drain_extension_actions();
     cancel.store(false);
-    auto outcome = extensions->dispatch(
-        niminal::app::HookEvent::session_end,
-        niminal::app::session_hook_payload(session.id, ws.root()));
-    for (const auto& warning : outcome.warnings)
+    auto outcome = extensions->dispatch(niminal::app::HookEvent::session_end,
+                                        niminal::app::session_hook_payload(session.id, ws.root()));
+    for (const auto& warning : outcome.warnings) {
       std::cerr << warning << '\n';
+    }
     drain_extension_actions();
     extensions->stop();
   };
@@ -583,20 +633,19 @@ int main(int argc, char** argv) {
       return 1;
     }
     agent.messages = session.openai_messages();
-    int code = rpc_mode ? niminal::app::run_rpc(agent, session, cfg)
-                        : run_json(agent, session, prompt);
+    int code =
+        rpc_mode ? niminal::app::run_rpc(agent, session, cfg) : run_json(agent, session, prompt);
     stop_extensions();
     return code;
   }
   if (prompt_parts.empty()) {
-    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
+    if ((isatty(STDIN_FILENO) == 0) || (isatty(STDOUT_FILENO) == 0)) {
       std::cerr << "niminal needs a terminal for the TUI, or pass a prompt for "
                    "print mode.\n";
       return 2;
     }
-    int code = niminal::app::run_tui(
-        agent, ws, cfg, session, extensions, yolo,
-        tools_specified ? &allowed_tools : nullptr);
+    int code = niminal::app::run_tui(agent, ws, cfg, session, extensions, yolo,
+                                     tools_specified ? &allowed_tools : nullptr);
     stop_extensions();
     return code;
   }
