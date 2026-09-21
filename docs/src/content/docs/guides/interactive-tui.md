@@ -14,12 +14,25 @@ file under `~/.niminal/sessions`, and later turns keep writing to it.
 | Enter | Send, or accept a slash/file suggestion |
 | Ctrl-D, Ctrl-S, Shift-Enter (several escape variants) | Also send |
 | Alt-J, Shift-Enter | Insert a newline |
-| Esc | Interrupt a running turn, or clear the composer when idle |
+| Alt-Left / Alt-Right | Move the composer cursor by word |
+| Ctrl-Left / Ctrl-Right, Ctrl-A / Ctrl-E | Jump the composer cursor to the start or end of the draft |
+| Esc | Interrupt a running turn, send queued messages now if any are waiting, or clear the composer when idle |
+| Alt-Up, Shift-Left | Pop the last queued steering message back into the composer |
 | Ctrl-C | Quit |
 | Ctrl-G | Edit the composer in the configured `editor`, else `$VISUAL` or `$EDITOR` (`nano` if none is set) |
 
+macOS Mission Control claims Ctrl-Left and Ctrl-Right before the terminal sees
+them. Uncheck "Move left a space" and "Move right a space" in
+System Settings → Keyboard → Keyboard Shortcuts → Mission Control, or use
+Ctrl-A and Ctrl-E instead.
+
 While a turn is running, Enter queues a **steering** message for the next model
-request in that turn. The footer shows `queued N` when messages are waiting.
+request in that turn. Queued messages appear above the composer, and the footer
+shows `queued N` when messages are waiting.
+
+Press Esc while queued messages are waiting to interrupt the current turn and
+send them immediately. Press Alt-Up or Shift-Left to move the last queued
+message back into the composer for editing.
 
 Follow-up queues exist in RPC mode and through extensions. The TUI itself only
 queues steering messages while busy.

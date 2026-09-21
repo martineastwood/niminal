@@ -156,6 +156,115 @@ bool is_toggle_all_cards(const Event& e) {
   return in == "\x1b[79;6u" || in == "\x1b[79;6~";
 }
 
+bool is_edit_queued_key(const Event& e) {
+  auto in = e.input();
+  if (in == "\x1b[1;2D" || in == "\x1b[D;2u" || in == "\x1b[27;2;68~") {
+    return true;
+  }
+  return in == "\x1b[1;3A" || in == "\x1b[A;3u" || in == "\x1b\x1b[A" || in == "\x1b[27;3;65~";
+}
+
+// macOS terminals send ESC-b / ESC-f for Option-Left / Option-Right.
+bool is_word_left_key(const Event& e) {
+  auto in = e.input();
+  return in == "\x1b[1;3D" || in == "\x1b[27;3;68~" || in == "\033b";
+}
+
+bool is_word_right_key(const Event& e) {
+  auto in = e.input();
+  return in == "\x1b[1;3C" || in == "\x1b[27;3;67~" || in == "\033f";
+}
+
+// macOS Mission Control claims Ctrl-Left and Ctrl-Right before the terminal
+// sees them, so Ctrl-A and Ctrl-E spell the same jump portably.
+bool is_text_start_key(const Event& e) {
+  return e == Event::ArrowLeftCtrl || e.input() == "\x1b[27;5;68~" || e.input() == "\x01";
+}
+
+bool is_text_end_key(const Event& e) {
+  return e == Event::ArrowRightCtrl || e.input() == "\x1b[27;5;67~" || e.input() == "\x05";
+}
+
+bool is_word_byte(char c) {
+  const auto b = static_cast<unsigned char>(c);
+  return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_';
+}
+
+// The cursor only ever lands on glyph boundaries: bytes >= 0x80 are never word
+// bytes, so both walks skip whole multi-byte characters.
+int cursor_word_left(const std::string& text, int pos) {
+  size_t i = std::min(static_cast<size_t>(std::max(0, pos)), text.size());
+  while (i > 0 && !is_word_byte(text[i - 1])) {
+    --i;
+  }
+  while (i > 0 && is_word_byte(text[i - 1])) {
+    --i;
+  }
+  return static_cast<int>(i);
+}
+
+int cursor_word_right(const std::string& text, int pos) {
+  size_t i = std::min(static_cast<size_t>(std::max(0, pos)), text.size());
+  while (i < text.size() && !is_word_byte(text[i])) {
+    ++i;
+  }
+  while (i < text.size() && is_word_byte(text[i])) {
+    ++i;
+  }
+  return static_cast<int>(i);
+}
+
+constexpr size_t kQueuePreviewLineLimit = 3;
+
+std::vector<std::string> preview_message_lines(const std::string& message) {
+  std::vector<std::string> lines;
+  size_t start = 0;
+  while (start < message.size() && lines.size() < kQueuePreviewLineLimit) {
+    const auto end = message.find('\n', start);
+    if (end == std::string::npos) {
+      lines.push_back(message.substr(start));
+      break;
+    }
+    lines.push_back(message.substr(start, end - start));
+    start = end + 1;
+  }
+  if (start < message.size() && !lines.empty()) {
+    lines.back() += " …";
+  }
+  return lines;
+}
+
+Elements render_queue_preview(const std::vector<std::string>& steering,
+                              const std::vector<std::string>& follow_up) {
+  if (steering.empty() && follow_up.empty()) {
+    return {};
+  }
+  Elements rows;
+  if (!steering.empty()) {
+    rows.push_back(text("After next model step (Esc to send now)") | dim);
+    for (const auto& message : steering) {
+      for (const auto& line : preview_message_lines(message)) {
+        rows.push_back(text(" ↳ " + line) | dim);
+      }
+    }
+  }
+  if (!follow_up.empty()) {
+    if (!steering.empty()) {
+      rows.push_back(text(""));
+    }
+    rows.push_back(text("After this turn") | dim);
+    for (const auto& message : follow_up) {
+      for (const auto& line : preview_message_lines(message)) {
+        rows.push_back(text(" ↳ " + line) | dim);
+      }
+    }
+  }
+  if (!steering.empty()) {
+    rows.push_back(text("Alt-Up / Shift-Left edit last") | dim);
+  }
+  return rows;
+}
+
 ssize_t last_card_index(const std::vector<Block>& blocks) {
   for (ssize_t i = static_cast<ssize_t>(blocks.size()) - 1; i >= 0; --i) {
     if (is_card_block(blocks[static_cast<size_t>(i)].kind)) {
@@ -210,6 +319,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::vector<std::string> follow_up;
   std::vector<std::string> idle_extension_messages;
   std::function<void(std::string)> deliver_extension_now;
+  std::function<void()> handle_turn_idle;
+  bool send_queue_after_stop = false;
+  bool plain_interrupt_pending = false;
   std::vector<ExtensionEntry> extension_entries_pending;
   std::atomic<bool> busy{false};
   std::string activity;
@@ -484,8 +596,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         } else {
           follow_up.push_back(message.content);
         }
-        blocks.push_back(Block{BlockKind::status, "Extension queued (" + message.deliver_as +
-                                                      "): " + message.content});
       }
     }
   };
@@ -608,6 +718,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       busy = false;
       activity.clear();
       retry_available = false;
+      if (handle_turn_idle) {
+        handle_turn_idle();
+      }
       break;
     case EventKind::run_start:
       break;
@@ -922,7 +1035,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         std::lock_guard<std::mutex> lock(steering_mu);
         steering.push_back(prompt);
       }
-      blocks.push_back(Block{BlockKind::status, "Queued: " + prompt});
       return;
     }
     if (!retry) {
@@ -951,6 +1063,30 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         });
   };
   deliver_extension_now = [&](std::string prompt) { send_prompt(std::move(prompt)); };
+  handle_turn_idle = [&] {
+    if (send_queue_after_stop) {
+      send_queue_after_stop = false;
+      plain_interrupt_pending = false;
+      std::string prompt;
+      {
+        std::lock_guard<std::mutex> lock(steering_mu);
+        if (!steering.empty()) {
+          prompt = std::move(steering.front());
+          steering.erase(steering.begin());
+        }
+      }
+      if (!prompt.empty()) {
+        send_prompt(std::move(prompt));
+      }
+      return;
+    }
+    if (plain_interrupt_pending) {
+      plain_interrupt_pending = false;
+      std::lock_guard<std::mutex> lock(steering_mu);
+      steering.clear();
+      follow_up.clear();
+    }
+  };
   for (auto& message : idle_extension_messages) {
     deliver_extension_now(std::move(message));
   }
@@ -1562,7 +1698,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       int queued = 0;
       {
         std::lock_guard<std::mutex> lock(steering_mu);
-        queued = static_cast<int>(steering.size());
+        queued = static_cast<int>(steering.size() + follow_up.size());
       }
       if (queued > 0) {
         activity_line += "  ·  queued " + std::to_string(queued);
@@ -1635,6 +1771,19 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
     }
     stack.push_back(text(activity_line.empty() ? " " : activity_line) | color(theme.accent));
+    {
+      std::vector<std::string> steering_preview;
+      std::vector<std::string> follow_up_preview;
+      {
+        std::lock_guard<std::mutex> lock(steering_mu);
+        steering_preview = steering;
+        follow_up_preview = follow_up;
+      }
+      auto queue_preview = render_queue_preview(steering_preview, follow_up_preview);
+      if (!queue_preview.empty()) {
+        stack.push_back(vbox(std::move(queue_preview)));
+      }
+    }
     stack.push_back(separatorLight() | dim);
     stack.push_back(hbox({text(busy ? "…" : "› ") | bold,
                           wrapped_input->Render() | xflex | size(HEIGHT, LESS_THAN, 8)}));
@@ -1655,6 +1804,26 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     int pos = std::clamp(cursor, 0, static_cast<int>(draft.size()));
     draft.insert(static_cast<size_t>(pos), text);
     cursor = pos + static_cast<int>(text.size());
+  };
+
+  auto pop_last_steering_to_composer = [&]() -> bool {
+    std::string message;
+    {
+      std::lock_guard<std::mutex> lock(steering_mu);
+      if (steering.empty()) {
+        return false;
+      }
+      message = std::move(steering.back());
+      steering.pop_back();
+    }
+    if (!draft.empty()) {
+      draft = std::move(message) + "\n\n" + draft;
+    } else {
+      draft = std::move(message);
+    }
+    cursor = static_cast<int>(draft.size());
+    history_i = -1;
+    return true;
   };
 
   auto resolve_approval = [&](PermissionDecision decision) {
@@ -1823,6 +1992,27 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return true;
       }
     }
+    if (is_word_left_key(e)) {
+      cursor = cursor_word_left(draft, cursor);
+      return true;
+    }
+    if (is_word_right_key(e)) {
+      cursor = cursor_word_right(draft, cursor);
+      return true;
+    }
+    if (is_text_start_key(e)) {
+      cursor = 0;
+      return true;
+    }
+    if (is_text_end_key(e)) {
+      cursor = static_cast<int>(draft.size());
+      return true;
+    }
+    if (is_edit_queued_key(e)) {
+      if (pop_last_steering_to_composer()) {
+        return true;
+      }
+    }
     if (is_newline_key(e)) {
       int pos = std::clamp(cursor, 0, static_cast<int>(draft.size()));
       draft.insert(static_cast<size_t>(pos), "\n");
@@ -1853,8 +2043,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (e == Event::Escape) {
       if (busy) {
+        bool has_steering = false;
+        {
+          std::lock_guard<std::mutex> lock(steering_mu);
+          has_steering = !steering.empty();
+        }
         cancel->store(true);
         activity = "Stopping…";
+        if (has_steering) {
+          send_queue_after_stop = true;
+          plain_interrupt_pending = false;
+        } else {
+          plain_interrupt_pending = true;
+          send_queue_after_stop = false;
+        }
         return true;
       }
       draft.clear();

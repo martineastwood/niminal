@@ -162,7 +162,9 @@ the first message creates an append-only JSONL file under
 `~/.niminal/sessions`, and later turns keep writing to it.
 
 - Enter sends. If a turn is already running, Enter queues a steering message
-  for the next model request in that turn.
+  for the next model request in that turn. Queued messages appear above the
+  composer. Esc interrupts and sends them now. Alt-Up or Shift-Left pops the
+  last queued message back into the composer.
 - Up/Down walk the current session's composer history when slash suggestions are
   not open.
 - Trackpad or mouse wheel scrolls the transcript. Page Up / Page Down jump
@@ -175,8 +177,15 @@ the first message creates an append-only JSONL file under
 - Ctrl-G opens the current composer draft in your editor. Set `"editor"` in
   `~/.niminal/config.json` to override `$VISUAL` and `$EDITOR`. If none of those
   are set, niminal uses `nano`. Save and quit to send the edited text back.
+- Alt-Left / Alt-Right move the composer cursor by word. Ctrl-Left / Ctrl-Right
+  or Ctrl-A / Ctrl-E jump to the start or end of the draft. macOS Mission
+  Control claims Ctrl-Left and Ctrl-Right before the terminal sees them, so
+  uncheck "Move left a space" and "Move right a space" in
+  System Settings → Keyboard → Keyboard Shortcuts → Mission Control to use the
+  arrows.
 - Alt-J or Shift-Enter inserts a newline
-- Esc interrupts a running turn, or clears the composer when idle
+- Esc interrupts a running turn, sends queued messages now if any are waiting,
+  or clears the composer when idle
 - Ctrl-C quits
 - `/help`, `/version`, `/provider`, `/model`, `/thinking`, `/theme`, `/permissions`, `/trust`,
   `/yolo`, `/models refresh`, `/session`, `/name`, `/resume`, `/search`, `/fork`,
