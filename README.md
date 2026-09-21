@@ -53,13 +53,26 @@ This runs, in order:
 5. Unit tests (`ctest`)
 6. ASan/UBSan configure, build, and test (`build-asan/`)
 
+For local iteration, use the fast path:
+
+```sh
+./dev check --fast
+```
+
+This skips the sanitizer rebuild and only runs `clang-tidy` on changed `src/`
+and `include/` `.cpp` files. Full `./dev check` still runs everything.
+
 Other commands:
 
 ```sh
-./dev format --fix   # rewrite formatting
-./dev tidy --fix     # apply clang-tidy fixes
-./dev sanitizer      # ASan/UBSan build and test only
+./dev format --fix      # rewrite formatting
+./dev tidy --fix        # apply clang-tidy fixes
+./dev tidy --changed    # tidy only changed source files
+./dev check --no-sanitizer
+./dev sanitizer         # ASan/UBSan build and test only
 ```
+
+Set `JOBS=8` to control parallel build and `clang-tidy` workers.
 
 ## Run
 

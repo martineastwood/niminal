@@ -8,6 +8,9 @@ BUILD_DIR="${BUILD_DIR:-build}"
 ASAN_DIR="${ASAN_DIR:-build-asan}"
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+CHECK_FAST=false
+CHECK_SANITIZER=true
+CHECK_TIDY_ALL=true
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -41,12 +44,47 @@ CLANG_TIDY="$(
     /usr/local/opt/llvm/bin/clang-tidy
 )" || die "clang-tidy not found (install with: brew install llvm)"
 
+RUN_CLANG_TIDY="$(
+  find_tool run-clang-tidy \
+    /opt/homebrew/opt/llvm/bin/run-clang-tidy \
+    /usr/local/opt/llvm/bin/run-clang-tidy
+)" || die "run-clang-tidy not found (install with: brew install llvm)"
+
 source_files() {
   find include src tests -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) | sort
 }
 
 tidy_files() {
   find src include -type f -name '*.cpp' | sort
+}
+
+changed_tidy_files() {
+  if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    tidy_files
+    return
+  fi
+  {
+    git -C "$ROOT" diff --name-only HEAD
+    git -C "$ROOT" diff --name-only --cached
+    git -C "$ROOT" ls-files --others --exclude-standard
+  } | rg '^src/.*\.cpp$|^include/.*\.cpp$' | sort -u
+}
+
+parse_check_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --fast)
+        CHECK_FAST=true
+        CHECK_SANITIZER=false
+        CHECK_TIDY_ALL=false
+        ;;
+      --no-sanitizer) CHECK_SANITIZER=false ;;
+      --all-tidy) CHECK_TIDY_ALL=true ;;
+      --changed-tidy) CHECK_TIDY_ALL=false ;;
+      *) die "unknown check option: $1" ;;
+    esac
+    shift
+  done
 }
 
 cmd_format() {
@@ -84,29 +122,58 @@ cmd_build() {
 
 cmd_tidy() {
   local fix=false
-  if [[ "${1:-}" == "--fix" ]]; then
-    fix=true
-  fi
+  local all=true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --fix) fix=true ;;
+      --all) all=true ;;
+      --changed) all=false ;;
+      *) die "unknown tidy option: $1" ;;
+    esac
+    shift
+  done
+
   log "clang-tidy"
   [[ -f "$BUILD_DIR/compile_commands.json" ]] ||
     die "missing $BUILD_DIR/compile_commands.json; run ./dev configure first"
-  local args=()
+
+  local args=(
+    -p "$BUILD_DIR"
+    -j "$JOBS"
+    -quiet
+    -clang-tidy-binary "$CLANG_TIDY"
+  )
   if $fix; then
-    args+=(--fix)
+    args+=(-fix)
   fi
   local sdkroot
   sdkroot="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
   if [[ -n "$sdkroot" ]]; then
-    args+=(--extra-arg=-isysroot --extra-arg="$sdkroot")
+    args+=(-extra-arg=-isysroot -extra-arg="$sdkroot")
   fi
-  local failed=0
-  while IFS= read -r file; do
-    [[ "$file" == *.cpp ]] || continue
-    if ! "$CLANG_TIDY" -p "$BUILD_DIR" "${args[@]}" "$file"; then
-      failed=1
+
+  local files=()
+  if $all; then
+    while IFS= read -r file; do
+      files+=("$file")
+    done < <(tidy_files)
+    if ((${#files[@]} == 0)); then
+      die "no source files found for clang-tidy"
     fi
-  done < <(tidy_files)
-  [[ $failed -eq 0 ]] || die "clang-tidy failed"
+    log "clang-tidy: ${#files[@]} files (parallel)"
+    "$RUN_CLANG_TIDY" "${args[@]}" "${files[@]}"
+    return
+  fi
+
+  while IFS= read -r file; do
+    [[ -n "$file" ]] && files+=("$file")
+  done < <(changed_tidy_files)
+  if ((${#files[@]} == 0)); then
+    log "clang-tidy: no changed source files, skipping"
+    return
+  fi
+  log "clang-tidy: ${#files[@]} changed file(s) (parallel)"
+  "$RUN_CLANG_TIDY" "${args[@]}" "${files[@]}"
 }
 
 cmd_test() {
@@ -116,37 +183,64 @@ cmd_test() {
 }
 
 cmd_check() {
+  parse_check_args "$@"
+  if $CHECK_FAST; then
+    log "fast check (changed tidy only, no sanitizer)"
+  fi
   cmd_format
   cmd_configure "$BUILD_DIR"
   cmd_build "$BUILD_DIR"
-  cmd_tidy
+  if $CHECK_TIDY_ALL; then
+    cmd_tidy --all
+  else
+    cmd_tidy --changed
+  fi
   cmd_test "$BUILD_DIR"
-  cmd_configure "$ASAN_DIR" -DNIMINAL_SANITIZERS=ON
-  cmd_build "$ASAN_DIR"
-  cmd_test "$ASAN_DIR"
+  if $CHECK_SANITIZER; then
+    cmd_configure "$ASAN_DIR" -DNIMINAL_SANITIZERS=ON
+    cmd_build "$ASAN_DIR"
+    cmd_test "$ASAN_DIR"
+  fi
 }
 
 usage() {
   cat <<EOF
-Usage: ./dev <command>
+Usage: ./dev <command> [options]
 
 Commands:
   check       format, configure, build, clang-tidy, test, sanitizer test
   format      check formatting (--fix to rewrite)
   configure   cmake configure (default: $BUILD_DIR)
   build       compile (default: $BUILD_DIR)
-  tidy        run clang-tidy (default: $BUILD_DIR, --fix to apply)
+  tidy        run clang-tidy (default: $BUILD_DIR)
   test        run ctest (default: $BUILD_DIR)
   sanitizer   configure, build, and test with ASan/UBSan ($ASAN_DIR)
+
+Check options:
+  --fast          skip sanitizer; tidy only changed src/include .cpp files
+  --no-sanitizer  skip the ASan/UBSan build and tests
+  --changed-tidy  tidy only changed src/include .cpp files
+  --all-tidy      tidy all src/include .cpp files (default)
+
+Tidy options:
+  --fix           apply clang-tidy fixes
+  --all           tidy all src/include .cpp files (default)
+  --changed       tidy only changed src/include .cpp files
+
+Environment:
+  JOBS            parallel build/tidy jobs (default: $JOBS)
 EOF
 }
 
 case "${1:-}" in
-  check) cmd_check ;;
+  check) shift; cmd_check "$@" ;;
   format) cmd_format "${2:-}" ;;
-  configure) cmd_configure "${2:-$BUILD_DIR}" ;;
+  configure) cmd_configure "${2:-$BUILD_DIR}" "${@:3}" ;;
   build) cmd_build "${2:-$BUILD_DIR}" ;;
-  tidy) cmd_tidy "${2:-}" ;;
+  tidy)
+    shift
+    cmd_tidy "$@"
+    ;;
   test) cmd_test "${2:-$BUILD_DIR}" ;;
   sanitizer)
     cmd_configure "$ASAN_DIR" -DNIMINAL_SANITIZERS=ON
