@@ -7,9 +7,10 @@
 #include <stdexcept>
 
 namespace niminal::app {
-namespace {
 
 using json = nlohmann::json;
+
+namespace {
 
 bool starts_family(std::string_view model, std::string_view family) {
   if (model == family) return true;
@@ -156,8 +157,6 @@ Plan resolve(std::string_view provider, std::string_view model,
 }
 
 }  // namespace
-
-using json = nlohmann::json;
 
 std::string thinking_levels_help() {
   std::string out;

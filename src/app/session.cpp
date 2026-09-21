@@ -242,10 +242,10 @@ niminal::Usage Session::usage_totals() const {
   return total;
 }
 
-void Session::add_tool_result(const std::string& id, const std::string& output,
-                              bool is_error) {
+void Session::add_tool_result(const std::string& tool_id,
+                              const std::string& output, bool is_error) {
   append(json{{"type", "tool_result"},
-              {"id", id},
+              {"id", tool_id},
               {"output", output},
               {"is_error", is_error}});
 }
@@ -350,8 +350,8 @@ int Session::recover_interrupted_tools() {
         }
       }
     } else if (type == "tool_result") {
-      auto id = event.value("id", "");
-      pending.erase(std::remove(pending.begin(), pending.end(), id),
+      auto tool_id = event.value("id", "");
+      pending.erase(std::remove(pending.begin(), pending.end(), tool_id),
                     pending.end());
     }
   }
@@ -359,8 +359,8 @@ int Session::recover_interrupted_tools() {
       "Interrupted before a tool result was saved. Execution outcome is unknown; "
       "inspect current state before retrying any action.";
   int n = 0;
-  for (const auto& id : pending) {
-    add_tool_result(id, msg, true);
+  for (const auto& tool_id : pending) {
+    add_tool_result(tool_id, msg, true);
     ++n;
   }
   return n;

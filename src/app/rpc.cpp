@@ -21,8 +21,6 @@
 namespace niminal::app {
 namespace {
 
-constexpr int kJsonEventVersion = 1;
-
 volatile std::sig_atomic_t rpc_sigint = 0;
 
 void handle_rpc_sigint(int) { rpc_sigint = 1; }

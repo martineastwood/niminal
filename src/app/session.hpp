@@ -39,7 +39,7 @@ class Session {
                      const std::string& model,
                      const niminal::Usage& usage = {});
   niminal::Usage usage_totals() const;
-  void add_tool_result(const std::string& id, const std::string& output,
+  void add_tool_result(const std::string& tool_id, const std::string& output,
                        bool is_error);
   void add_name(const std::string& title);
   void add_selection(const std::string& model, const std::string& provider = {});

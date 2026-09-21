@@ -553,7 +553,8 @@ std::string base64_encode(std::string_view in) {
   std::string out;
   int val = 0;
   int valb = -6;
-  for (unsigned char c : in) {
+  for (char ch : in) {
+    const unsigned char c = static_cast<unsigned char>(ch);
     val = (val << 8) + c;
     valb += 8;
     while (valb >= 0) {
@@ -1909,9 +1910,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace,
                             block.kind == BlockKind::thinking
                                 ? (cfg.show_thinking
                                        ? block.text
-                                       : clip_text(block.text,
-                                                   cfg.thinking_preview_chars,
-                                                   cfg.thinking_preview_lines))
+                                       : clip_text(
+                                             block.text,
+                                             static_cast<size_t>(
+                                                 cfg.thinking_preview_chars),
+                                             cfg.thinking_preview_lines))
                                 : block.text) |
                             block_style(block.kind, theme);
       if (label && *label)

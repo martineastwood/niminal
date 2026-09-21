@@ -73,7 +73,7 @@ json Agent::request_messages() const {
     parts.push_back(std::move(part));
   };
   add_part(system);
-  for (const auto& extra : system_extra) add_part(extra);
+  for (const auto& block : system_extra) add_part(block);
   if (!parts.empty()) {
     json sys = json::object();
     sys["role"] = "system";
