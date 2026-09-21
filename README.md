@@ -139,10 +139,10 @@ Compaction tuning also lives in that file:
   while older turns are summarized.
 - The summary generation itself is capped at 4096 output tokens.
 
-Thinking traces appear as a compact preview in the TUI by default, capped at
-`thinking_preview_chars` characters (default `360`) and `thinking_preview_lines`
-lines (default `4`). Set `"show_thinking": true` in `~/.niminal/config.json` to
-show the full streamed trace in the transcript instead.
+Thinking, tool, and diff cards start compact in the TUI. Click a card, press
+Ctrl+O to open the most recent one, or press Ctrl+Shift+O to expand or collapse
+every card at once. Set `"show_thinking": true` in `~/.niminal/config.json` to
+start new thinking cards expanded.
 
 The agent always speaks one request shape: OpenAI-style messages and tools.
 niminal translates that to the provider's native API before it goes on the
@@ -166,7 +166,9 @@ the first message creates an append-only JSONL file under
 - Up/Down walk the current session's composer history when slash suggestions are
   not open.
 - Trackpad or mouse wheel scrolls the transcript. Page Up / Page Down jump
-  further. New output sticks to the bottom until you scroll up.
+  further. New output sticks to the bottom until you scroll up. Click a thinking,
+  tool, or diff card to expand it. Ctrl+O toggles the latest card. Ctrl+Shift+O
+  expands or collapses every card.
 - Drag to copy selected text. Ctrl-V pastes into the composer. `/copy` copies
   the last assistant reply or error.
 - Alt-J or Shift-Enter inserts a newline

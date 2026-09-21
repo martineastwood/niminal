@@ -134,6 +134,43 @@ bool is_paste_key(const Event& e) {
   return in == "\x1b[118;2u" || in == "\x1b[118;5u" || in == "\x1b[118;8u" || in == "\x1b[118;9u";
 }
 
+bool is_toggle_last_card(const Event& e) {
+  if (e == Event::Character('\x0f')) {
+    return true;
+  }
+  auto in = e.input();
+  return in == "\x1b[79;5u" || in == "\x1b[79;5~";
+}
+
+bool is_toggle_all_cards(const Event& e) {
+  auto in = e.input();
+  return in == "\x1b[79;6u" || in == "\x1b[79;6~";
+}
+
+ssize_t last_card_index(const std::vector<Block>& blocks) {
+  for (ssize_t i = static_cast<ssize_t>(blocks.size()) - 1; i >= 0; --i) {
+    if (is_card_block(blocks[static_cast<size_t>(i)].kind)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+std::optional<size_t> card_at(const std::vector<Block>& blocks, const std::vector<Box>& boxes,
+                              int x, int y) {
+  const auto count = std::min(blocks.size(), boxes.size());
+  for (size_t i = 0; i < count; ++i) {
+    if (!is_card_block(blocks[i].kind)) {
+      continue;
+    }
+    const auto& box = boxes[i];
+    if (box.x_min <= x && x <= box.x_max && box.y_min <= y && y <= box.y_max) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& session,
@@ -174,6 +211,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   float transcript_y = 1.F;
   bool pasting = false;
   bool stick_bottom = true;
+  std::vector<Box> card_boxes;
+  std::optional<size_t> card_press_index;
   std::atomic<bool> ui_alive{true};
   const auto ui_thread = std::this_thread::get_id();
   std::thread worker;
@@ -451,7 +490,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       break;
     case EventKind::thinking_delta:
       if (blocks.empty() || blocks.back().kind != BlockKind::thinking) {
-        blocks.push_back(Block{BlockKind::thinking, {}});
+        Block thinking{BlockKind::thinking, {}};
+        thinking.expanded = cfg.show_thinking;
+        blocks.push_back(std::move(thinking));
       }
       blocks.back().text += ev.text;
       activity = "Thinking…";
@@ -459,7 +500,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     case EventKind::tool_output_delta:
       break;
     case EventKind::tool_call: {
-      Block tool{BlockKind::tool, tool_summary(ev.tool_name, ev.text)};
+      Block tool{BlockKind::tool, ev.text};
       tool.tool_name = ev.tool_name;
       tool.tool_id = ev.tool_id;
       blocks.push_back(std::move(tool));
@@ -476,6 +517,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       break;
     case EventKind::tool_result:
       if (!ev.tool_id.empty()) {
+        auto tool = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
+          return block.kind == BlockKind::tool && block.tool_id == ev.tool_id;
+        });
+        if (tool != blocks.rend()) {
+          tool->result = ev.text;
+        }
         std::optional<PendingFileChange> pending;
         {
           std::lock_guard lock(file_changes_mu);
@@ -495,9 +542,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
             if (diff.changed) {
               const bool created = diff.created;
               auto body = std::move(diff.body);
-              auto tool = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
-                return block.kind == BlockKind::tool && block.tool_id == ev.tool_id;
-              });
               if (tool != blocks.rend()) {
                 tool->kind = BlockKind::diff;
                 tool->text = std::move(body);
@@ -792,14 +836,24 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                 text.clear();
               }
               json input = part.value("input", json::object());
-              blocks.push_back(Block{
-                  BlockKind::tool, tool_summary(part.value("name", ""),
-                                                input.is_object() ? input.dump() : std::string())});
+              Block tool{BlockKind::tool, input.is_object() ? input.dump() : std::string()};
+              tool.tool_name = part.value("name", "");
+              tool.tool_id = part.value("id", "");
+              blocks.push_back(std::move(tool));
             }
           }
         }
         if (!text.empty()) {
           blocks.push_back(Block{BlockKind::assistant, std::move(text)});
+        }
+      } else if (type == "tool_result") {
+        const auto id = event.value("id", "");
+        const auto output = event.value("output", "");
+        auto it = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
+          return block.kind == BlockKind::tool && block.tool_id == id;
+        });
+        if (it != blocks.rend()) {
+          it->result = output;
         }
       } else if (type == "compaction") {
         auto summary = event.value("summary", "");
@@ -1447,25 +1501,19 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
   auto layout = Container::Vertical({wrapped_input});
   auto view = Renderer(layout, [&] {
+    card_boxes.assign(blocks.size(), Box{});
     Elements entries;
-    for (const auto& block : blocks) {
-      if (block.kind == BlockKind::diff) {
-        entries.push_back(render_diff_card(block, theme));
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      const auto& block = blocks[i];
+      if (is_card_block(block.kind)) {
+        entries.push_back(render_transcript_card(block, theme, card_boxes[i]));
         entries.push_back(text(""));
         continue;
       }
       auto label = block_label(block.kind);
-      auto body = block.kind == BlockKind::assistant
-                      ? render_markdown(block.text, theme)
-                      : paragraph_preserving_whitespace(
-                            block.kind == BlockKind::thinking
-                                ? (cfg.show_thinking
-                                       ? block.text
-                                       : clip_text(block.text,
-                                                   static_cast<size_t>(cfg.thinking_preview_chars),
-                                                   cfg.thinking_preview_lines))
-                                : block.text) |
-                            block_style(block.kind, theme);
+      auto body = block.kind == BlockKind::assistant ? render_markdown(block.text, theme)
+                                                     : paragraph_preserving_whitespace(block.text) |
+                                                           block_style(block.kind, theme);
       if (label && *label) {
         entries.push_back(vbox({text(label) | bold | block_style(block.kind, theme), body}));
       } else {
@@ -1632,17 +1680,54 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       insert_draft(paste_from_clipboard());
       return true;
     }
+    if (e.is_mouse() && e.mouse().motion == Mouse::Pressed && e.mouse().button == Mouse::Left) {
+      card_press_index = card_at(blocks, card_boxes, e.mouse().x, e.mouse().y);
+      return false;
+    }
     if (e.is_mouse() && e.mouse().motion == Mouse::Released && e.mouse().button == Mouse::Left) {
       auto sel = screen.GetSelection();
       if (!sel.empty()) {
         copy_to_clipboard(sel);
         flash_footer("Copied to clipboard.");
+        card_press_index = std::nullopt;
         return true;
       }
+      if (card_press_index) {
+        auto release = card_at(blocks, card_boxes, e.mouse().x, e.mouse().y);
+        if (release && *release == *card_press_index && *release < blocks.size() &&
+            is_card_block(blocks[*release].kind)) {
+          blocks[*release].expanded = !blocks[*release].expanded;
+          card_press_index = std::nullopt;
+          return true;
+        }
+      }
+      card_press_index = std::nullopt;
     }
     if (e.is_mouse() && e.mouse().motion == Mouse::Pressed &&
         (e.mouse().button == Mouse::Middle || e.mouse().button == Mouse::Right)) {
       insert_draft(paste_from_clipboard());
+      return true;
+    }
+    if (is_toggle_last_card(e)) {
+      const auto index = last_card_index(blocks);
+      if (index >= 0) {
+        blocks[static_cast<size_t>(index)].expanded = !blocks[static_cast<size_t>(index)].expanded;
+      }
+      return true;
+    }
+    if (is_toggle_all_cards(e)) {
+      bool any_collapsed = false;
+      for (const auto& block : blocks) {
+        if (is_card_block(block.kind) && !block.expanded) {
+          any_collapsed = true;
+          break;
+        }
+      }
+      for (auto& block : blocks) {
+        if (is_card_block(block.kind)) {
+          block.expanded = any_collapsed;
+        }
+      }
       return true;
     }
     if (is_wheel_up(e) || e == Event::PageUp) {

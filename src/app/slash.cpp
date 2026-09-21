@@ -186,6 +186,8 @@ Alt-J or Shift-Enter inserts a newline.
 Type @ to add a workspace file. Gitignored files and dependency folders are hidden.
 Tab accepts a suggestion. Up/Down picks one, or walks prompt history.
 Page Up/Down and the trackpad scroll the transcript.
+Click a thinking, tool, or diff card to expand it. Ctrl+O toggles the latest card.
+Ctrl+Shift+O expands or collapses every card.
 Esc interrupts a running turn, or clears the composer.
 Drag to copy. Ctrl-V pastes into the composer. /copy copies the last reply.
 Ctrl-C quits.)";

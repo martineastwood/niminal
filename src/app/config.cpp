@@ -81,16 +81,6 @@ Config load_config_file(const fs::path& path) {
     if (doc.contains("show_thinking") && doc["show_thinking"].is_boolean()) {
       cfg.show_thinking = doc["show_thinking"].get<bool>();
     }
-    if (doc.contains("thinking_preview_chars") &&
-        doc["thinking_preview_chars"].is_number_integer() &&
-        doc["thinking_preview_chars"].get<int>() > 0) {
-      cfg.thinking_preview_chars = doc["thinking_preview_chars"].get<int>();
-    }
-    if (doc.contains("thinking_preview_lines") &&
-        doc["thinking_preview_lines"].is_number_integer() &&
-        doc["thinking_preview_lines"].get<int>() > 0) {
-      cfg.thinking_preview_lines = doc["thinking_preview_lines"].get<int>();
-    }
     if (doc.contains("theme") && doc["theme"].is_string()) {
       cfg.theme = doc["theme"].get<std::string>();
     }
@@ -160,12 +150,6 @@ void save_config_file(const fs::path& path, const Config& cfg) {
   }
   if (cfg.context_window > 0) {
     doc["context_window"] = cfg.context_window;
-  }
-  if (cfg.thinking_preview_chars != kDefaultThinkingPreviewChars) {
-    doc["thinking_preview_chars"] = cfg.thinking_preview_chars;
-  }
-  if (cfg.thinking_preview_lines != kDefaultThinkingPreviewLines) {
-    doc["thinking_preview_lines"] = cfg.thinking_preview_lines;
   }
   if (!cfg.api_url.empty()) {
     doc["api_url"] = cfg.api_url;

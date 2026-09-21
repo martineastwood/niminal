@@ -3,6 +3,7 @@
 #include "theme.hpp"
 
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/box.hpp>
 
 #include <cstddef>
 #include <string>
@@ -25,8 +26,10 @@ enum class BlockKind {
 struct Block {
   BlockKind kind = BlockKind::assistant;
   std::string text;
+  std::string result;
   std::string path;
   bool created = false;
+  bool expanded = false;
   std::string tool_name;
   std::string tool_id;
 
@@ -39,7 +42,9 @@ struct Block {
         tool_name(std::move(tool_name)) {}
 };
 
+bool is_card_block(BlockKind kind);
 ftxui::Element render_diff_card(const Block& block, const Theme& theme);
+ftxui::Element render_transcript_card(const Block& block, const Theme& theme, ftxui::Box& box);
 std::string clip_text(std::string text, size_t max_chars, int max_lines);
 std::string tool_summary(const std::string& name, const std::string& args);
 ftxui::Decorator block_style(BlockKind kind, const Theme& theme);

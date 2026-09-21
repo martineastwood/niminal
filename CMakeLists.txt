@@ -102,6 +102,36 @@ FetchContent_Declare(
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(ftxui)
 
+# Some terminals render FTXUI's cursor-shape query instead of treating it as
+# a control sequence, briefly exposing "$q" during startup.
+set(_ftxui_app "${ftxui_SOURCE_DIR}/src/ftxui/component/app.cpp")
+if(EXISTS "${_ftxui_app}")
+  file(READ "${_ftxui_app}" _ftxui_app_src)
+  string(REPLACE "    TerminalSend(DECRQSS_DECSCUSR);\n" ""
+         _ftxui_app_patched "${_ftxui_app_src}")
+  if(NOT _ftxui_app_patched STREQUAL _ftxui_app_src)
+    file(WRITE "${_ftxui_app}" "${_ftxui_app_patched}")
+  endif()
+  if(_ftxui_app_patched MATCHES "TerminalSend\\(DECRQSS_DECSCUSR\\)")
+    message(FATAL_ERROR "FTXUI cursor-shape query patch was not applied")
+  endif()
+
+  # FTXUI drops a selection as soon as a component reports the mouse press as
+  # handled. The composer's Input claims every press to place the caret, so its
+  # text could not be dragged. Ignore `handled` for mouse events; presses still
+  # reach the component, and a press without dragging leaves no selection.
+  string(REPLACE
+    "bool App::Internal::HandleSelection(bool handled, Event event) {\n  if (handled) {"
+    "bool App::Internal::HandleSelection(bool handled, Event event) {\n  if (handled && !event.is_mouse()) {"
+    _ftxui_app_selection "${_ftxui_app_patched}")
+  if(NOT _ftxui_app_selection STREQUAL _ftxui_app_patched)
+    file(WRITE "${_ftxui_app}" "${_ftxui_app_selection}")
+  endif()
+  if(NOT _ftxui_app_selection MATCHES "handled && !event\\.is_mouse\\(\\)")
+    message(FATAL_ERROR "FTXUI composer-selection patch was not applied")
+  endif()
+endif()
+
 add_library(niminal_ai
   src/niminal/http.cpp
   src/niminal/openai.cpp
@@ -301,6 +331,12 @@ target_include_directories(niminal_theme_test PRIVATE src/app)
 target_link_libraries(niminal_theme_test PRIVATE ftxui::dom)
 niminal_strict_compile(niminal_theme_test)
 
+add_executable(niminal_transcript_test tests/transcript_test.cpp src/app/transcript.cpp
+  src/app/theme.cpp)
+target_include_directories(niminal_transcript_test PRIVATE src/app)
+target_link_libraries(niminal_transcript_test PRIVATE ftxui::dom nlohmann_json::nlohmann_json)
+niminal_strict_compile(niminal_transcript_test)
+
 add_executable(niminal_http_test tests/http_test.cpp)
 target_link_libraries(niminal_http_test PRIVATE niminal::ai)
 niminal_strict_compile(niminal_http_test)
@@ -332,5 +368,6 @@ add_test(NAME trust COMMAND niminal_trust_test)
 add_test(NAME extensions COMMAND niminal_extensions_test)
 add_test(NAME diff COMMAND niminal_diff_test)
 add_test(NAME theme COMMAND niminal_theme_test)
+add_test(NAME transcript COMMAND niminal_transcript_test)
 add_test(NAME http COMMAND niminal_http_test)
 add_test(NAME rpc COMMAND niminal_rpc_test)

@@ -1,0 +1,103 @@
+---
+title: Configuration
+description: Global settings, provider defaults, compaction, and environment overrides.
+---
+
+niminal reads one optional configuration file:
+
+| File | Applies to |
+| --- | --- |
+| `~/.niminal/config.json` | Everything you run |
+
+There is no config command to run first: a missing file is normal, and every
+setting has a default. Many people never write more than a provider and a model.
+
+Credentials are not stored in the config file. Export the matching provider
+environment variable, or pass `--api-key KEY` for one process.
+
+## A minimal config
+
+```json title="~/.niminal/config.json"
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6"
+}
+```
+
+## Settings
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `provider` | `openrouter` | Active provider name |
+| `model` | provider default | Active model id |
+| `api_url` | provider endpoint | Override the API base URL |
+| `thinking` | unset | Reasoning level: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
+| `show_thinking` | `false` | Start new thinking cards expanded in the TUI |
+| `theme` | `auto` | `light`, `dark`, or `auto` |
+| `steering_mode` | `one-at-a-time` | RPC queue delivery: `all` or `one-at-a-time` |
+| `follow_up_mode` | `one-at-a-time` | Same for follow-up queue |
+| `max_steps` | `0` (unlimited) | Tool loop cap per user turn |
+| `compaction_enabled` | `true` | Automatic compaction before large requests |
+| `reserve_tokens` | `16384` | Headroom kept when deciding whether to compact |
+| `keep_recent_tokens` | `20000` | Recent history kept verbatim when compacting |
+| `context_window` | `128000` (implicit) | Token budget compaction measures against |
+| `providers.<name>.last_model` | per provider | Restored when you switch back to that provider |
+
+When `thinking` is unset, the provider default applies. `/thinking` with no
+argument prints the mapped level for the current model.
+
+## Compaction example
+
+```json title="~/.niminal/config.json"
+{
+  "compaction_enabled": false,
+  "context_window": 200000,
+  "reserve_tokens": 32768,
+  "keep_recent_tokens": 40000
+}
+```
+
+- `compaction_enabled: false` turns automatic compaction off. `/compact` and
+  overflow recovery still work when you ask for them.
+- `context_window` is the token budget compaction measures against.
+- `reserve_tokens` is headroom kept for the answer. Compaction triggers when
+  the estimated context exceeds `context_window - reserve_tokens`.
+- `keep_recent_tokens` is the recent history kept verbatim while older turns
+  are summarized.
+
+## Startup overrides
+
+Startup flags and environment variables override the config for one process only
+and are never written back:
+
+| Source | Effect |
+| --- | --- |
+| `NIMINAL_MODEL` | Overrides `model` |
+| `NIMINAL_API_URL` | Overrides `api_url` |
+| `NIMINAL_THINKING` | Overrides `thinking` |
+| `--provider`, `--model`, `--thinking`, `--api-key`, `--tools`, `--max-steps` | Same as their names suggest |
+| `--approve`, `--no-approve` | Choose whether project-local resources load |
+
+Load order: config file, then environment, then CLI flags.
+
+## What niminal writes
+
+These commands save settings to `~/.niminal/config.json` immediately:
+
+| Command | Keys written |
+| --- | --- |
+| `/provider` | `provider`, `model`, and `providers.<name>.last_model` |
+| `/model` | `model`, and `providers.<active>.last_model` |
+| `/thinking` | `thinking` (removed when cleared) |
+| `/theme` | `theme` |
+| RPC `set_steering_mode` | `steering_mode` |
+| RPC `set_follow_up_mode` | `follow_up_mode` |
+
+## Where to go next
+
+- [Models and providers](/guides/models-and-providers/) for switching, thinking
+  levels, and the models.dev catalog
+- [Context and compaction](/guides/context-and-compaction/) for automatic summarization
+- [Files and directories](/reference/files-and-directories/) for every file niminal
+  reads and writes
+- [Security](/guides/security/) for how trust gates project resources
