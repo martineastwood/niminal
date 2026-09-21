@@ -1459,13 +1459,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     session = std::move(next);
     load_history();
     bind_session(agent, session);
-    if (auto p = session.last_provider(); niminal::find_provider(p)) {
-      cfg.provider = p;
-      cfg.api_url = niminal::find_provider(p)->endpoint;
-    }
-    if (auto model = session.last_model(); !model.empty()) {
-      cfg.model = model;
-    }
+    restore_config_from_session(cfg, session);
     apply_provider(agent, cfg);
     agent.messages = session.openai_messages();
     load_into_ui(note);

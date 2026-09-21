@@ -1,9 +1,9 @@
 #include "json_mode.hpp"
 
+#include "json_events.hpp"
+
 namespace niminal::app {
 namespace {
-
-constexpr int kJsonEventVersion = 1;
 
 void add_identity(nlohmann::json& out, const niminal::StreamEvent& event) {
   if (!event.session_id.empty()) {
@@ -184,13 +184,6 @@ nlohmann::json queue_event(const std::string& session_id, const std::string& act
     out["mode"] = mode;
   }
   return out;
-}
-
-nlohmann::json diagnostic_event(const std::string& level, const std::string& message) {
-  return {{"version", kJsonEventVersion},
-          {"type", "diagnostic"},
-          {"level", level},
-          {"message", message}};
 }
 
 } // namespace niminal::app

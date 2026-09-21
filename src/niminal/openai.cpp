@@ -1026,7 +1026,7 @@ Usage parse_chat_usage(const json& usage) {
   return out;
 }
 
-std::string format_tokens(int count) {
+static std::string format_tokens(int count) {
   count = std::max(count, 0);
   struct Scale {
     const char* suffix;

@@ -26,13 +26,12 @@ int main() {
   ToolCall dangerous{"3", "bash", R"({"command":"npm test && rm -rf build"})"};
   ToolCall git{"4", "git", R"({"status":true})"};
 
-  if (niminal::app::permission_key(bash) != "bash:npm test" ||
-      niminal::app::permission_description(bash) != "npm test") {
-    std::cerr << "bash permission key mismatch\n";
+  if (niminal::app::permission_description(bash) != "npm test") {
+    std::cerr << "bash permission description mismatch\n";
     return 1;
   }
-  if (!niminal::app::dangerous_command("echo rm") || niminal::app::can_remember(dangerous)) {
-    std::cerr << "dangerous command policy mismatch\n";
+  if (niminal::app::can_remember(dangerous)) {
+    std::cerr << "dangerous command should not be rememberable\n";
     return 1;
   }
 

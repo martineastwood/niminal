@@ -36,7 +36,6 @@ ChatResult stream_chat(const ChatRequest& request);
 json chat_body(const ChatRequest& request);
 std::string complete_chat(const ChatRequest& request);
 Usage parse_chat_usage(const json& usage);
-std::string format_tokens(int count);
 std::string format_usage_line(const Usage& usage);
 
 } // namespace niminal

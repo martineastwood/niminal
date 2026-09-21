@@ -58,10 +58,5 @@ int main() {
       queue.value("request_id", "") != "request" || queue.value("mode", "") != "steer") {
     return fail("queue JSON mismatch");
   }
-
-  auto diagnostic = niminal::app::diagnostic_event("warning", "careful");
-  if (diagnostic.value("type", "") != "diagnostic" || diagnostic.value("level", "") != "warning") {
-    return fail("diagnostic JSON mismatch");
-  }
   return 0;
 }

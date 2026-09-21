@@ -1,6 +1,7 @@
 #include "rpc.hpp"
 
 #include "json_mode.hpp"
+#include "queue_mode.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -400,7 +401,7 @@ private:
 
     if (type == "set_steering_mode" || type == "set_follow_up_mode") {
       std::string mode;
-      if (!string_field(command, "mode", mode) || !valid_rpc_queue_mode(mode)) {
+      if (!string_field(command, "mode", mode) || !valid_queue_mode(mode)) {
         send(rpc_response_event(id, false, {}, "mode must be all or one-at-a-time."));
         return;
       }
@@ -441,15 +442,8 @@ private:
 
 } // namespace
 
-RpcRuntime::RpcRuntime(niminal::Agent& agent, Session& session, Config& config)
-    : agent_(agent), session_(session), config_(config) {}
-
-int RpcRuntime::run() {
-  return RpcRuntimeImpl(agent_, session_, config_).run();
-}
-
 int run_rpc(niminal::Agent& agent, Session& session, Config& config) {
-  return RpcRuntime(agent, session, config).run();
+  return RpcRuntimeImpl(agent, session, config).run();
 }
 
 } // namespace niminal::app

@@ -208,6 +208,7 @@ niminal_strict_compile(niminal_config_test)
 add_executable(niminal_provider_test
   tests/provider_test.cpp
   src/app/provider.cpp
+  src/app/session.cpp
   src/app/config.cpp
   src/app/thinking.cpp
   src/app/models_dev.cpp)

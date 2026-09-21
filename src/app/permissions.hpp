@@ -17,10 +17,7 @@ enum class PermissionDecision {
 
 enum class PermissionCheck { allow, ask, deny };
 
-std::string normalized_command(const std::string& command);
-std::string permission_key(const niminal::ToolCall& call);
 std::string permission_description(const niminal::ToolCall& call);
-bool dangerous_command(const std::string& command);
 bool can_remember(const niminal::ToolCall& call);
 
 class PermissionPolicy {

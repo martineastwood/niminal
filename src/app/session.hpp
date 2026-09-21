@@ -63,7 +63,6 @@ private:
 
 bool valid_session_id(std::string_view id);
 std::filesystem::path default_session_dir();
-std::string new_session_id();
 Session create_session(const std::filesystem::path& dir, const std::string& workspace);
 Session load_session(const std::filesystem::path& dir, const std::string& id);
 std::vector<SessionInfo> list_sessions(const std::filesystem::path& dir,
@@ -74,7 +73,6 @@ std::vector<SessionInfo> search_sessions(const std::filesystem::path& dir,
 std::vector<SessionInfo> list_deleted_sessions(const std::filesystem::path& dir);
 bool delete_session(const std::filesystem::path& dir, const std::string& id);
 bool restore_session(const std::filesystem::path& dir, const std::string& id);
-std::string relative_age(std::filesystem::file_time_type mtime);
 std::string format_session_list(const std::vector<SessionInfo>& infos,
                                 const std::string& current_id,
                                 std::string_view heading = "Sessions (newest first)");

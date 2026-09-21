@@ -14,9 +14,11 @@ constexpr int kDefaultThinkingPreviewChars = 360;
 constexpr int kDefaultThinkingPreviewLines = 4;
 
 struct Config {
-  std::string provider = "openrouter";
-  std::string model = "openai/gpt-4o-mini";
-  std::string api_url = "https://openrouter.ai/api/v1/chat/completions";
+  Config();
+
+  std::string provider;
+  std::string model;
+  std::string api_url;
   std::string thinking;
   bool show_thinking = false;
   int thinking_preview_chars = kDefaultThinkingPreviewChars;

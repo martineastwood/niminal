@@ -20,13 +20,30 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
   agent.model = cfg.model.empty() ? spec->default_model : cfg.model;
   agent.api_url = cfg.api_url.empty() ? spec->endpoint : cfg.api_url;
   agent.api_key = niminal::read_api_key(*spec);
-  agent.key_hint = spec->key_hint;
+  agent.key_hint = std::string(niminal::key_hint(*spec));
   agent.extra_headers = niminal::provider_headers(*spec);
   agent.session_routing = spec->session_routing;
   agent.stream_usage = spec->stream_usage;
   agent.apply_cache = spec->apply_cache;
   agent.prompt_cache_key = spec->prompt_cache_key;
   agent.extra = thinking_body(spec->name, agent.model, cfg.thinking);
+}
+
+void restore_config_from_session(Config& cfg, const Session& session, bool restore_provider,
+                                 bool restore_model) {
+  if (restore_provider) {
+    if (auto p = session.last_provider(); !p.empty()) {
+      if (const auto* spec = niminal::find_provider(p)) {
+        cfg.provider = p;
+        cfg.api_url = spec->endpoint;
+      }
+    }
+  }
+  if (restore_model) {
+    if (auto model = session.last_model(); !model.empty()) {
+      cfg.model = model;
+    }
+  }
 }
 
 niminal::Result<void> select_provider(Config& cfg, std::string_view name) {

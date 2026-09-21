@@ -1,3 +1,4 @@
+#include "queue_mode.hpp"
 #include "rpc.hpp"
 
 #include <iostream>
@@ -13,13 +14,13 @@ int fail(const char* message) {
 } // namespace
 
 int main() {
-  if (!niminal::app::valid_rpc_queue_mode("all")) {
+  if (!niminal::app::valid_queue_mode("all")) {
     return fail("all is valid");
   }
-  if (!niminal::app::valid_rpc_queue_mode("one-at-a-time")) {
+  if (!niminal::app::valid_queue_mode("one-at-a-time")) {
     return fail("one-at-a-time is valid");
   }
-  if (niminal::app::valid_rpc_queue_mode("parallel")) {
+  if (niminal::app::valid_queue_mode("parallel")) {
     return fail("parallel is invalid");
   }
 

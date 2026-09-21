@@ -193,8 +193,6 @@ Plan resolve(std::string_view provider, std::string_view model, std::string_view
   return plan;
 }
 
-} // namespace
-
 std::string thinking_levels_help() {
   std::string out;
   for (int i = 0; i < 7; ++i) {
@@ -205,6 +203,8 @@ std::string thinking_levels_help() {
   }
   return out;
 }
+
+} // namespace
 
 std::string normalize_thinking(std::string_view value) {
   auto v = niminal::lower_copy(std::string(value));

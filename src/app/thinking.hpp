@@ -11,7 +11,6 @@ namespace niminal::app {
 constexpr const char* kThinkingLevels[] = {"none", "minimal", "low", "medium",
                                            "high", "xhigh",   "max"};
 
-std::string thinking_levels_help();
 std::string normalize_thinking(std::string_view value);
 std::string snap_to_efforts(std::string_view want, const std::vector<std::string>& efforts);
 std::vector<std::string> thinking_choices(std::string_view provider, std::string_view model);

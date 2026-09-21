@@ -5,7 +5,6 @@
 
 #include <niminal/agent.hpp>
 
-#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>

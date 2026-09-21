@@ -11,12 +11,17 @@ struct ProviderSpec {
   std::string_view name;
   std::string_view endpoint;
   std::string_view default_model;
-  std::string_view key_hint;
+  std::span<const std::string_view> env_keys;
+  std::string_view url_match;
   bool session_routing = false;
   bool stream_usage = false;
   bool apply_cache = false;
   bool prompt_cache_key = false;
 };
+
+inline std::string_view key_hint(const ProviderSpec& provider) {
+  return provider.env_keys.empty() ? std::string_view{} : provider.env_keys.front();
+}
 
 std::span<const ProviderSpec> all_providers();
 const ProviderSpec* find_provider(std::string_view name);

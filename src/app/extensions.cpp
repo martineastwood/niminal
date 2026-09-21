@@ -751,6 +751,10 @@ struct RegisteredTool {
   bool read_only = false;
 };
 
+} // namespace
+
+namespace {
+
 std::string shell_quote(const std::string& value) {
   std::string out = "'";
   for (char c : value) {
@@ -763,7 +767,9 @@ std::string shell_quote(const std::string& value) {
   return out + "'";
 }
 
-std::string edit_text_externally_impl(const std::string& text) {
+} // namespace
+
+std::string edit_text_externally(const std::string& text) {
   const char* visual = std::getenv("VISUAL");
   const char* editor = (visual != nullptr) && ((*visual) != 0) ? visual : std::getenv("EDITOR");
   const std::string command = (editor != nullptr) && ((*editor) != 0) ? editor : "nano";
@@ -807,15 +813,6 @@ std::string edit_text_externally_impl(const std::string& text) {
     fs::remove(path, ec);
     throw;
   }
-  std::error_code ec;
-  fs::remove(path, ec);
-  return {};
-}
-
-} // namespace
-
-std::string edit_text_externally(const std::string& text) {
-  return edit_text_externally_impl(text);
 }
 
 struct ExtensionRuntime::Impl {

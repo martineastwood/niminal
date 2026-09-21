@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include "queue_mode.hpp"
 
 #include <niminal/providers.hpp>
 
@@ -16,10 +17,6 @@ using json = nlohmann::json;
 
 namespace {
 
-bool valid_queue_mode(const std::string& mode) {
-  return mode == "all" || mode == "one-at-a-time";
-}
-
 void load_queue_mode(const json& doc, const char* key, std::string& target) {
   if (doc.contains(key) && doc[key].is_string() && valid_queue_mode(doc[key].get<std::string>())) {
     target = doc[key].get<std::string>();
@@ -27,6 +24,14 @@ void load_queue_mode(const json& doc, const char* key, std::string& target) {
 }
 
 } // namespace
+
+Config::Config() {
+  if (const auto* spec = niminal::find_provider("openrouter")) {
+    provider = std::string(spec->name);
+    model = std::string(spec->default_model);
+    api_url = std::string(spec->endpoint);
+  }
+}
 
 std::filesystem::path config_path() {
   const char* home = std::getenv("HOME");

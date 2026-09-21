@@ -550,25 +550,7 @@ int main(int argc, char** argv) {
   }
 
   niminal::app::bind_session(agent, session);
-  niminal::app::bind_compaction(
-      agent, session,
-      [](const std::string& msg) {
-        if (!msg.empty()) {
-          std::cerr << msg << '\n';
-        }
-      },
-      {}, cfg);
-  if (!provider_from_cli) {
-    if (auto p = session.last_provider(); !p.empty() && (niminal::find_provider(p) != nullptr)) {
-      cfg.provider = p;
-      cfg.api_url = niminal::find_provider(p)->endpoint;
-    }
-  }
-  if (!model_from_cli) {
-    if (auto model = session.last_model(); !model.empty()) {
-      cfg.model = model;
-    }
-  }
+  niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
   niminal::app::apply_provider(agent, cfg);
 
   auto extensions = niminal::app::ExtensionRuntime::start(ws.root(), session.id, &cancel);
