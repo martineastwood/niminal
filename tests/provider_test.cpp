@@ -5,10 +5,7 @@
 
 using niminal::app::apply_provider;
 using niminal::app::Config;
-using niminal::app::find_provider;
-using niminal::app::infer_provider;
 using niminal::app::normalize_config;
-using niminal::app::provider_names;
 using niminal::app::select_provider;
 
 static int fail(const char* msg) {
@@ -17,17 +14,19 @@ static int fail(const char* msg) {
 }
 
 int main() {
-  if ((find_provider("anthropic") == nullptr) || (find_provider("GOOGLE") == nullptr) ||
-      (find_provider("codex") != nullptr) || (find_provider("gemini") != nullptr)) {
+  if ((niminal::find_provider("anthropic") == nullptr) ||
+      (niminal::find_provider("GOOGLE") == nullptr) ||
+      (niminal::find_provider("codex") != nullptr) ||
+      (niminal::find_provider("gemini") != nullptr)) {
     return fail("find_provider");
   }
-  auto names = provider_names();
+  auto names = niminal::provider_names();
   if (names.find("openrouter") == std::string::npos || names.find("mistral") == std::string::npos) {
     return fail("provider_names");
   }
-  if (infer_provider("https://api.anthropic.com/v1/messages") != "anthropic" ||
-      infer_provider("https://generativelanguage.googleapis.com/v1beta") != "google" ||
-      infer_provider("https://opencode.ai/zen/go/v1/chat/completions") != "opencode") {
+  if (niminal::infer_provider("https://api.anthropic.com/v1/messages") != "anthropic" ||
+      niminal::infer_provider("https://generativelanguage.googleapis.com/v1beta") != "google" ||
+      niminal::infer_provider("https://opencode.ai/zen/go/v1/chat/completions") != "opencode") {
     return fail("infer_provider");
   }
 

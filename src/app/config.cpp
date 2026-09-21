@@ -1,5 +1,7 @@
 #include "config.hpp"
 
+#include <niminal/providers.hpp>
+
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
@@ -66,22 +68,7 @@ Config load_config_file(const fs::path& path) {
         cfg.provider = std::move(provider);
       }
     } else if (!cfg.api_url.empty()) {
-      const auto& url = cfg.api_url;
-      if (url.find("api.anthropic.com") != std::string::npos) {
-        cfg.provider = "anthropic";
-      } else if (url.find("generativelanguage.googleapis.com") != std::string::npos) {
-        cfg.provider = "google";
-      } else if (url.find("hyper.charm.land") != std::string::npos) {
-        cfg.provider = "hyper";
-      } else if (url.find("api.mistral.ai") != std::string::npos) {
-        cfg.provider = "mistral";
-      } else if (url.find("api.openai.com") != std::string::npos) {
-        cfg.provider = "openai";
-      } else if (url.find("opencode.ai/zen/go") != std::string::npos) {
-        cfg.provider = "opencode";
-      } else if (url.find("opencode.ai") != std::string::npos) {
-        cfg.provider = "opencodezen";
-      }
+      cfg.provider = niminal::infer_provider(cfg.api_url);
     }
     if (doc.contains("thinking") && doc["thinking"].is_string()) {
       cfg.thinking = doc["thinking"].get<std::string>();

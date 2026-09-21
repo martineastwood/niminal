@@ -1,10 +1,15 @@
 # niminal
 
-A local coding agent as a single native binary. You describe a change, niminal
-reads and edits the workspace, and streams the turn in your terminal.
+niminal has two parts:
 
-This is the C++ niminal tree: a small AI library plus the coding-agent app
-(print mode and a TUI).
+- `niminal::ai`, a C++23 library for streaming model calls, tools, and agent
+  loops. It is the foundation for a C++ equivalent of the Vercel AI SDK.
+- `niminal`, a native coding-agent application built on that library. It reads
+  and edits a workspace, then streams the turn in your terminal.
+
+The library and application share the repository, but the application-specific
+code stays out of the public SDK. Workspace tools, sessions, permissions,
+extensions, and the TUI live in the application.
 
 ## Prerequisites
 
@@ -163,7 +168,10 @@ the first message creates an append-only JSONL file under
 - `/help`, `/provider`, `/model`, `/thinking`, `/theme`, `/permissions`, `/trust`,
   `/yolo`, `/models refresh`, `/session`, `/name`, `/resume`, `/search`, `/fork`,
   `/export`, `/delete`, `/restore`, `/new`, `/clear`, `/copy`, `/compact`,
-  `/reload`, `/skill:NAME`, `/NAME`, `/quit`
+  `/retry`, `/reload`, `/skill:NAME`, `/NAME`, `/quit`
+
+Transient model connection failures retry automatically up to three times. Use
+`/retry` to retry the last failed request after those attempts are exhausted.
 
 - Tab completes a slash command. Up/Down moves through the list. Type `/model `
   to pick from the models.dev catalog for the active provider (filter from two
@@ -440,6 +448,21 @@ plus magenta, links are cyan. Drag-copy and `/copy` use the original text.
 
 ## Library
 
-Other programs can link `niminal` and include `<niminal/agent.hpp>` for an
-OpenAI-compatible streaming agent loop. Workspace tools live in the app, not
-the library.
+Other programs can link the `niminal::ai` CMake target and include
+`<niminal/ai.hpp>` for the public SDK entry point:
+
+```cpp
+#include <niminal/ai.hpp>
+
+niminal::Agent agent;
+agent.model = "openai/gpt-4o-mini";
+agent.system = "You are a helpful assistant.";
+```
+
+The library owns provider-neutral types, streaming HTTP, provider wire
+adapters, provider metadata, and the tool-capable agent loop. Workspace tools,
+sessions, permissions, extensions, and the TUI are application code and are
+not part of `niminal::ai`.
+
+Link with `niminal::ai`; the executable target is named `niminal_cli` and
+still produces the `niminal` binary.

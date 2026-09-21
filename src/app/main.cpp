@@ -559,10 +559,9 @@ int main(int argc, char** argv) {
       },
       {}, cfg);
   if (!provider_from_cli) {
-    if (auto p = session.last_provider();
-        !p.empty() && (niminal::app::find_provider(p) != nullptr)) {
+    if (auto p = session.last_provider(); !p.empty() && (niminal::find_provider(p) != nullptr)) {
       cfg.provider = p;
-      cfg.api_url = niminal::app::find_provider(p)->endpoint;
+      cfg.api_url = niminal::find_provider(p)->endpoint;
     }
   }
   if (!model_from_cli) {

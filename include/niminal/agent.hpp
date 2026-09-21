@@ -49,12 +49,13 @@ struct Agent {
   std::function<std::vector<std::string>()> take_follow_up;
   std::function<void()> before_request;
   std::function<bool()> recover_overflow;
+  std::function<ChatResult(const ChatRequest&)> stream_chat_fn;
   std::string run_id;
 
   json request_messages() const;
   void fill_chat(ChatRequest& req) const;
   bool cancelled() const { return cancel && cancel->load(); }
-  std::string run(const std::string& prompt);
+  std::string run(const std::string& prompt, bool append_user = true);
 };
 
 } // namespace niminal

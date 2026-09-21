@@ -64,6 +64,7 @@ struct StreamEvent {
   bool is_error = false;
   bool final = false;
   bool can_remember = false;
+  bool retry = false;
   int step = -1;
   int duration_ms = 0;
   std::string run_id;

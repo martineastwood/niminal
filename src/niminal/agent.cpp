@@ -2,7 +2,9 @@
 #include <niminal/openai.hpp>
 #include <niminal/text.hpp>
 
+#include <chrono>
 #include <future>
+#include <thread>
 #include <utility>
 
 namespace niminal {
@@ -48,6 +50,32 @@ bool looks_overflow(std::string_view msg) {
          s.find("too many tokens") != std::string::npos ||
          s.find("prompt is too long") != std::string::npos ||
          (s.find("context") != std::string::npos && s.find("overflow") != std::string::npos);
+}
+
+bool looks_transient(std::string_view msg) {
+  const auto text = lower_copy(std::string(msg));
+  return text.rfind("http 5", 0) == 0 || text.find("http 429:") != std::string::npos ||
+         text.find("failure when receiving") != std::string::npos ||
+         text.find("failed sending") != std::string::npos ||
+         text.find("couldn't connect") != std::string::npos ||
+         text.find("could not connect") != std::string::npos ||
+         text.find("connection refused") != std::string::npos ||
+         text.find("connection reset") != std::string::npos ||
+         text.find("timed out") != std::string::npos ||
+         text.find("timeout was reached") != std::string::npos ||
+         text.find("server returned nothing") != std::string::npos ||
+         text.find("transferred a partial file") != std::string::npos;
+}
+
+bool wait_for_retry(std::atomic<bool>* cancel, std::chrono::milliseconds delay) {
+  const auto deadline = std::chrono::steady_clock::now() + delay;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (cancel != nullptr && cancel->load()) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  return cancel == nullptr || !cancel->load();
 }
 
 json parse_tool_input(const std::string& arguments) {
@@ -114,7 +142,7 @@ void Agent::fill_chat(ChatRequest& req) const {
   req.cancel = cancel;
 }
 
-std::string Agent::run(const std::string& prompt) {
+std::string Agent::run(const std::string& prompt, bool append_user) {
   if (system_extra_loader) {
     system_extra = system_extra_loader();
   }
@@ -146,9 +174,14 @@ std::string Agent::run(const std::string& prompt) {
       on_event(std::move(event));
     }
   };
-  messages.push_back(json{{"role", "user"}, {"content", prompt}});
-  if (persist_user) {
-    persist_user(prompt);
+  if (append_user) {
+    messages.push_back(json{{"role", "user"}, {"content", prompt}});
+    if (persist_user) {
+      persist_user(prompt);
+    }
+  } else if (messages.empty() || (messages.back().value("role", "") != "user" &&
+                                  messages.back().value("role", "") != "tool")) {
+    throw Error("nothing to retry");
   }
   emit(StreamEvent{EventKind::run_start, prompt, {}, {}});
   if (turn_start) {
@@ -235,16 +268,48 @@ std::string Agent::run(const std::string& prompt) {
         emit(std::move(tagged));
       };
       ChatResult result;
-      try {
-        result = stream_chat(req);
-      } catch (const Error& e) {
-        if (!overflow_retried && looks_overflow(e.what()) && recover_overflow &&
-            recover_overflow()) {
-          overflow_retried = true;
-          --step;
-          continue;
+      constexpr int kMaxRetries = 3;
+      int retries = 0;
+      bool restart_step = false;
+      while (true) {
+        try {
+          result = stream_chat_fn ? stream_chat_fn(req) : niminal::stream_chat(req);
+          break;
+        } catch (const Error& e) {
+          if (!overflow_retried && looks_overflow(e.what()) && recover_overflow &&
+              recover_overflow()) {
+            overflow_retried = true;
+            --step;
+            restart_step = true;
+            break;
+          }
+          if (!looks_transient(e.what()) || retries == kMaxRetries) {
+            if (retries == kMaxRetries && looks_transient(e.what())) {
+              StreamEvent retry{EventKind::status,
+                                "Connection failed after " + std::to_string(kMaxRetries) +
+                                    " retries.",
+                                {},
+                                {}};
+              retry.retry = true;
+              emit(std::move(retry));
+            }
+            throw;
+          }
+          ++retries;
+          StreamEvent retry{EventKind::status,
+                            "Connection lost; retrying " + std::to_string(retries) + "/" +
+                                std::to_string(kMaxRetries) + "…",
+                            {},
+                            {}};
+          retry.retry = true;
+          emit(std::move(retry));
+          if (!wait_for_retry(cancel, std::chrono::seconds(1 << (retries - 1)))) {
+            throw Cancelled();
+          }
         }
-        throw;
+      }
+      if (restart_step) {
+        continue;
       }
       overflow_retried = false;
 

@@ -366,6 +366,7 @@ constexpr SlashSpec kSlash[] = {
     {"/new", "/new", "start a new session"},
     {"/clear", "/clear", "same as /new"},
     {"/copy", "/copy", "copy the last error or reply"},
+    {"/retry", "/retry", "retry the last failed request"},
     {"/compact", "/compact", "summarize older session history"},
     {"/reload", "/reload", "reload trusted project resources"},
     {"/skill:", "/skill:NAME [request]", "load a skill"},
@@ -584,12 +585,12 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
 
   if (cmd == "/provider" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
-    for (auto* spec : all_providers()) {
-      if (!arg.empty() && !starts_with(spec->name, arg)) {
+    for (const auto& spec : niminal::all_providers()) {
+      if (!arg.empty() && !starts_with(spec.name, arg)) {
         continue;
       }
-      out.push_back({"/provider " + std::string(spec->name),
-                     std::string(spec->name) + "  " + spec->default_model});
+      out.push_back({"/provider " + std::string(spec.name),
+                     std::string(spec.name) + "  " + std::string(spec.default_model)});
     }
     sort_suggestions(out);
     if (!out.empty()) {
@@ -755,6 +756,7 @@ const char* kHelp = R"(/help              this list
 /new               start a new session (old file stays)
 /clear             same as /new
 /copy              copy the last error or assistant reply
+/retry             retry the last failed request
 /compact           summarize older history; keep recent turns
 /reload            reload trusted project resources
 /skill:NAME [text] load a skill and optionally give it a request
@@ -788,10 +790,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::vector<Block> blocks;
   std::mutex file_changes_mu;
   std::unordered_map<std::string, PendingFileChange> file_changes;
-  blocks.push_back(Block{
-      BlockKind::status,
-      "enter send  ·  /help  ·  alt-j newline  ·  esc interrupt/clear  ·  ctrl-c quit",
-  });
+  size_t step_block_start = 0;
 
   std::string draft;
   int cursor = 0;
@@ -807,6 +806,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::atomic<bool> busy{false};
   std::string activity;
   std::string footer_notice;
+  std::string retry_prompt;
+  bool retry_available = false;
   std::chrono::steady_clock::time_point footer_notice_until;
   float transcript_y = 1.F;
   bool pasting = false;
@@ -1156,6 +1157,26 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.push_back(Block{BlockKind::user, ev.text});
       break;
     case EventKind::status:
+      if (ev.retry) {
+        const auto start = std::min(step_block_start, blocks.size());
+        {
+          std::lock_guard lock(file_changes_mu);
+          for (size_t i = start; i < blocks.size();) {
+            const auto kind = blocks[i].kind;
+            if (kind == BlockKind::assistant || kind == BlockKind::thinking ||
+                kind == BlockKind::tool || kind == BlockKind::diff) {
+              if (!blocks[i].tool_id.empty()) {
+                file_changes.erase(blocks[i].tool_id);
+              }
+              blocks.erase(blocks.begin() + static_cast<std::ptrdiff_t>(i));
+            } else {
+              ++i;
+            }
+          }
+        }
+        activity = ev.text;
+        break;
+      }
       if (!ev.text.empty()) {
         blocks.push_back(Block{BlockKind::status, ev.text});
       }
@@ -1164,13 +1185,18 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.push_back(Block{BlockKind::error, ev.text});
       busy = false;
       activity.clear();
+      retry_available = ev.text != "interrupted" && !retry_prompt.empty();
       break;
     case EventKind::done:
       busy = false;
       activity.clear();
+      retry_available = false;
       break;
     case EventKind::run_start:
+      break;
     case EventKind::step_start:
+      step_block_start = blocks.size();
+      break;
     case EventKind::step_end:
     case EventKind::run_end:
     case EventKind::assistant_message:
@@ -1419,15 +1445,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
             Block{BlockKind::status, "Compacted earlier turns.\n" + clip_text(summary, 1200, 12)});
       }
     }
-    if (blocks.empty()) {
-      blocks.push_back(
-          Block{BlockKind::status,
-                "enter send  ·  /help  ·  alt-j newline  ·  esc interrupt/clear  ·  ctrl-c quit"});
-    }
-    if (yolo_mode) {
-      blocks.push_back(
-          Block{BlockKind::status, "YOLO mode: all tools auto-approved for this process."});
-    }
   };
 
   auto adopt_session = [&](Session next, const std::string& note) {
@@ -1442,9 +1459,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     session = std::move(next);
     load_history();
     bind_session(agent, session);
-    if (auto p = session.last_provider(); find_provider(p)) {
+    if (auto p = session.last_provider(); niminal::find_provider(p)) {
       cfg.provider = p;
-      cfg.api_url = find_provider(p)->endpoint;
+      cfg.api_url = niminal::find_provider(p)->endpoint;
     }
     if (auto model = session.last_model(); !model.empty()) {
       cfg.model = model;
@@ -1473,13 +1490,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     apply_extension_actions();
   }
 
-  auto send_prompt = [&](std::string prompt) {
+  auto send_prompt = [&](std::string prompt, bool retry = false) {
     prompt = trim_copy(std::move(prompt));
     if (prompt.empty()) {
       return;
     }
-    remember_input(prompt);
     if (busy) {
+      remember_input(prompt);
       {
         std::lock_guard<std::mutex> lock(steering_mu);
         steering.push_back(prompt);
@@ -1487,15 +1504,22 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.push_back(Block{BlockKind::status, "Queued: " + prompt});
       return;
     }
+    if (!retry) {
+      remember_input(prompt);
+      retry_prompt = prompt;
+      retry_available = false;
+    }
     join_worker();
     cancel->store(false);
-    blocks.push_back(Block{BlockKind::user, prompt});
+    if (!retry) {
+      blocks.push_back(Block{BlockKind::user, prompt});
+    }
     busy = true;
     activity = "Thinking…";
-    worker =
-        std::thread([&agent, &busy, &ui_alive, post_ui, &workspace, prompt = std::move(prompt)] {
+    worker = std::thread(
+        [&agent, &busy, &ui_alive, post_ui, &workspace, prompt = std::move(prompt), retry] {
           try {
-            agent.run(expand_file_mentions(workspace, prompt));
+            agent.run(expand_file_mentions(workspace, prompt), !retry);
           } catch (const std::exception& e) {
             if (ui_alive) {
               post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
@@ -1587,13 +1611,24 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (cmd == "/yolo") {
         if (arg.empty() || arg == "on") {
           yolo_mode = true;
-          blocks.push_back(
-              Block{BlockKind::status, "YOLO mode: all tools auto-approved for this process."});
         } else if (arg == "off") {
           yolo_mode = false;
-          blocks.push_back(Block{BlockKind::status, "YOLO mode disabled; tool approvals are on."});
         } else {
           blocks.push_back(Block{BlockKind::error, "Usage: /yolo [off]"});
+        }
+        return;
+      }
+      if (cmd == "/retry") {
+        if (!arg.empty()) {
+          blocks.push_back(Block{BlockKind::error, "/retry takes no arguments"});
+        } else if (busy) {
+          blocks.push_back(
+              Block{BlockKind::status, "wait for the turn to finish, or Esc to interrupt"});
+        } else if (!retry_available) {
+          blocks.push_back(Block{BlockKind::status, "Nothing to retry."});
+        } else {
+          retry_available = false;
+          send_prompt(retry_prompt, true);
         }
         return;
       }

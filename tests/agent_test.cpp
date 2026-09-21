@@ -1,5 +1,4 @@
-#include <niminal/agent.hpp>
-#include <niminal/openai.hpp>
+#include <niminal/ai.hpp>
 
 #include <iostream>
 
