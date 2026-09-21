@@ -12,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <unistd.h>
+#include <vector>
 
 namespace niminal::app {
 namespace fs = std::filesystem;
@@ -150,6 +151,239 @@ std::vector<SessionInfo> collect_sessions(const fs::path& dir, const std::string
     all.resize(static_cast<size_t>(limit));
   }
   return all;
+}
+
+std::string html_escape(std::string_view s) {
+  std::ostringstream out;
+  for (char c : s) {
+    switch (c) {
+    case '&':
+      out << "&amp;";
+      break;
+    case '<':
+      out << "&lt;";
+      break;
+    case '>':
+      out << "&gt;";
+      break;
+    case '"':
+      out << "&quot;";
+      break;
+    case '\'':
+      out << "&#39;";
+      break;
+    default:
+      out << c;
+      break;
+    }
+  }
+  return out.str();
+}
+
+std::string render_inline_markdown(std::string_view s) {
+  std::ostringstream out;
+  size_t i = 0;
+  while (i < s.size()) {
+    if (s[i] == '[') {
+      auto close_bracket = s.find(']', i + 1);
+      if (close_bracket != std::string_view::npos && close_bracket + 1 < s.size() &&
+          s[close_bracket + 1] == '(') {
+        auto close_paren = s.find(')', close_bracket + 2);
+        if (close_paren != std::string_view::npos) {
+          out << "<a href=\""
+              << html_escape(s.substr(close_bracket + 2, close_paren - close_bracket - 2)) << "\">"
+              << render_inline_markdown(s.substr(i + 1, close_bracket - i - 1)) << "</a>";
+          i = close_paren + 1;
+          continue;
+        }
+      }
+    }
+    if (s[i] == '`') {
+      auto close = s.find('`', i + 1);
+      if (close != std::string_view::npos) {
+        out << "<code>" << html_escape(s.substr(i + 1, close - i - 1)) << "</code>";
+        i = close + 1;
+        continue;
+      }
+    }
+    if (i + 1 < s.size() && s[i] == '*' && s[i + 1] == '*') {
+      auto close = s.find("**", i + 2);
+      if (close != std::string_view::npos) {
+        out << "<strong>" << render_inline_markdown(s.substr(i + 2, close - i - 2)) << "</strong>";
+        i = close + 2;
+        continue;
+      }
+    }
+    if (s[i] == '*') {
+      auto close = s.find('*', i + 1);
+      if (close != std::string_view::npos) {
+        out << "<em>" << render_inline_markdown(s.substr(i + 1, close - i - 1)) << "</em>";
+        i = close + 1;
+        continue;
+      }
+    }
+    size_t next = i + 1;
+    while (next < s.size() && s[next] != '[' && s[next] != '`' && s[next] != '*') {
+      ++next;
+    }
+    out << html_escape(s.substr(i, next - i));
+    i = next;
+  }
+  return out.str();
+}
+
+std::string markdown_to_html(std::string_view md) {
+  std::vector<std::string> lines;
+  {
+    std::istringstream in{std::string(md)};
+    std::string line;
+    while (std::getline(in, line)) {
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      lines.push_back(std::move(line));
+    }
+  }
+  std::ostringstream out;
+  size_t line = 0;
+  while (line < lines.size()) {
+    const auto& current = lines[line];
+    if (current.rfind("```", 0) == 0) {
+      ++line;
+      std::ostringstream code;
+      while (line < lines.size() && lines[line].rfind("```", 0) != 0) {
+        code << lines[line] << '\n';
+        ++line;
+      }
+      if (line < lines.size()) {
+        ++line;
+      }
+      out << "<pre><code>" << html_escape(code.str()) << "</code></pre>\n";
+      continue;
+    }
+    if (current.empty()) {
+      ++line;
+      continue;
+    }
+    if (!current.empty() && current[0] == '#') {
+      int level = 0;
+      while (level < static_cast<int>(current.size()) &&
+             current[static_cast<size_t>(level)] == '#') {
+        ++level;
+      }
+      if (level >= 1 && level <= 6 && static_cast<size_t>(level) < current.size() &&
+          current[static_cast<size_t>(level)] == ' ') {
+        out << "<h" << level << ">"
+            << render_inline_markdown(current.substr(static_cast<size_t>(level) + 1)) << "</h"
+            << level << ">\n";
+        ++line;
+        continue;
+      }
+    }
+    std::ostringstream para;
+    while (line < lines.size()) {
+      const auto& part = lines[line];
+      if (part.empty() || part.rfind("```", 0) == 0 ||
+          (!part.empty() && part[0] == '#' && part.find(' ') != std::string::npos)) {
+        break;
+      }
+      if (!para.str().empty()) {
+        para << ' ';
+      }
+      para << part;
+      ++line;
+    }
+    out << "<p>" << render_inline_markdown(para.str()) << "</p>\n";
+  }
+  return out.str();
+}
+
+constexpr const char* kHtmlStyles = R"(
+:root{color-scheme:light dark;--bg:#fafafa;--fg:#1a1a1a;--muted:#666;--accent:#0066cc;--user-bg:#e8f4fc;--assistant-bg:#f0f0f0;--code:#0a7a0a;--error:#c00;--meta:#8040a0;--border:#ddd;--compaction-bg:#f5f0e8}
+@media(prefers-color-scheme:dark){:root{--bg:#1a1a1a;--fg:#e8e8e8;--muted:#999;--accent:#5bc0de;--user-bg:#1e3a4a;--assistant-bg:#2a2a2a;--code:#7cfc7c;--error:#f66;--meta:#c9a0dc;--border:#444;--compaction-bg:#2a2520}}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;line-height:1.5;margin:0;padding:1.5rem;background:var(--bg);color:var(--fg)}
+header{border-bottom:1px solid var(--border);margin-bottom:1.5rem;padding-bottom:1rem}
+header h1{margin:0 0 .5rem;font-size:1.5rem;color:var(--accent)}
+header dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:.25rem 1rem;font-size:.9rem}
+header dt{color:var(--muted);font-weight:600}
+header dd{margin:0}
+main{display:flex;flex-direction:column;gap:1rem}
+.message{border:1px solid var(--border);border-radius:.5rem;padding:1rem}
+.message .label{font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}
+.message.user{background:var(--user-bg)}
+.message.user .label{color:var(--accent)}
+.message.assistant{background:var(--assistant-bg)}
+.message.assistant .label{color:var(--muted)}
+.message p:first-child{margin-top:0}
+.message p:last-child{margin-bottom:0}
+.message h1,.message h2,.message h3{margin:.75rem 0 .25rem;font-size:1rem}
+.message pre{background:rgba(0,0,0,.06);border-radius:.25rem;padding:.75rem;overflow-x:auto;margin:.5rem 0}
+@media(prefers-color-scheme:dark){.message pre{background:rgba(255,255,255,.06)}}
+.message code{font-family:ui-monospace,monospace;font-size:.9em;color:var(--code)}
+.tool-call{border:1px solid var(--border);border-radius:.5rem;padding:.5rem 1rem}
+.tool-call summary{cursor:pointer;font-weight:600;color:var(--meta)}
+.tool-call pre{margin:.5rem 0 0;font-size:.85rem;overflow-x:auto}
+.tool-result{margin:0;padding:1rem;border-radius:.5rem;background:rgba(0,0,0,.04);overflow-x:auto;font-family:ui-monospace,monospace;font-size:.85rem;white-space:pre-wrap;word-break:break-word}
+@media(prefers-color-scheme:dark){.tool-result{background:rgba(255,255,255,.04)}}
+.tool-result.error{border:1px solid var(--error);color:var(--error)}
+.compaction{border-left:3px solid var(--muted);background:var(--compaction-bg);padding:.75rem 1rem;border-radius:0 .5rem .5rem 0;font-size:.9rem;color:var(--muted)}
+.compaction strong{display:block;margin-bottom:.25rem;color:var(--fg)}
+)";
+
+std::string export_html(const Session& session) {
+  auto title = session.name.empty() ? "Session " + session.id : session.name;
+  std::ostringstream out;
+  out << "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+      << "<meta charset=\"utf-8\">\n"
+      << "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+      << "<title>" << html_escape(title) << "</title>\n"
+      << "<style>" << kHtmlStyles << "</style>\n"
+      << "</head>\n<body>\n<header>\n<h1>" << html_escape(title) << "</h1>\n<dl>\n"
+      << "<dt>id</dt><dd>" << html_escape(session.id) << "</dd>\n";
+  if (!session.workspace.empty()) {
+    out << "<dt>workspace</dt><dd>" << html_escape(session.workspace) << "</dd>\n";
+  }
+  if (!session.parent.empty()) {
+    out << "<dt>forked from</dt><dd>" << html_escape(session.parent) << "</dd>\n";
+  }
+  out << "</dl>\n</header>\n<main>\n";
+  for (const auto& event : session.events) {
+    if (!event.is_object()) {
+      continue;
+    }
+    auto type = event.value("type", "");
+    if (type == "user") {
+      out << "<article class=\"message user\"><div class=\"label\">You</div>\n"
+          << "<div class=\"content\">" << html_escape(event_text(event)) << "</div></article>\n";
+    } else if (type == "assistant") {
+      auto text = event_text(event);
+      if (!text.empty()) {
+        out << "<article class=\"message assistant\"><div class=\"label\">Niminal</div>\n"
+            << "<div class=\"content\">" << markdown_to_html(text) << "</div></article>\n";
+      }
+      if (event.contains("content") && event["content"].is_array()) {
+        for (const auto& part : event["content"]) {
+          if (!part.is_object() || part.value("type", "") != "tool_use") {
+            continue;
+          }
+          auto name = part.value("name", "");
+          auto input = part.value("input", json::object()).dump(2);
+          out << "<details class=\"tool-call\"><summary>Tool: " << html_escape(name)
+              << "</summary>\n<pre>" << html_escape(input) << "</pre></details>\n";
+        }
+      }
+    } else if (type == "tool_result") {
+      auto error = event.value("is_error", false);
+      out << "<pre class=\"tool-result" << (error ? " error" : "") << "\">"
+          << html_escape(event.value("output", "")) << "</pre>\n";
+    } else if (type == "compaction") {
+      out << "<aside class=\"compaction\"><strong>Compaction</strong>\n"
+          << html_escape(event.value("summary", "")) << "</aside>\n";
+    }
+  }
+  out << "</main>\n</body>\n</html>\n";
+  return out.str();
 }
 
 } // namespace
@@ -362,6 +596,9 @@ std::string Session::export_text(std::string_view format) const {
     }
     out["events"] = events;
     return out.dump(2) + "\n";
+  }
+  if (format == "html") {
+    return export_html(*this);
   }
   std::ostringstream out;
   out << "# " << (name.empty() ? "Session " + id : name) << "\n\n";

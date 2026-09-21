@@ -15,6 +15,7 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | Command | Description |
 | --- | --- |
 | `/help` | Show command list and keybinding help |
+| `/version` | Show the version |
 | `/provider [name]` | Show or set the provider |
 | `/model [ID]` | Show or set the model |
 | `/thinking [level]` | Show or set reasoning |
@@ -28,7 +29,7 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/resume [ID]` | List or load a session |
 | `/search TEXT` | Search sessions for text |
 | `/fork [title]` | Copy this session into a new one |
-| `/export [PATH]` | Write this session as Markdown or JSON |
+| `/export [PATH]` | Write this session as Markdown, HTML, or JSON |
 | `/delete ID` | Move a session to the trash |
 | `/restore [ID]` | List or restore a deleted session |
 | `/new` | Start a new session |
@@ -61,6 +62,7 @@ Gitignored and hidden files are excluded from suggestions.
 | Flag | Purpose |
 | --- | --- |
 | `--help`, `-h` | Show usage |
+| `--version`, `-v` | Print the version and exit |
 | `--model ID` | Model for this run |
 | `--provider NAME` | Provider for this run |
 | `--thinking LEVEL` | Thinking level for this run |

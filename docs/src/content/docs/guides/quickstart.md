@@ -98,6 +98,7 @@ These flags apply to one process only and are never written to your config:
 | `--no-approve` | Skip project customizations |
 | `--mode json` | Emit versioned JSONL events and exit |
 | `--mode rpc` | Serve JSONL commands until shutdown or EOF |
+| `--version` | Print the version and exit |
 
 Print, JSON, and RPC modes have no approval UI, so tools run without prompting.
 Narrow the tool list when you can:

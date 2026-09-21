@@ -26,6 +26,7 @@ struct SlashSpec {
 
 constexpr SlashSpec kSlash[] = {
     {"/help", "/help", "this list"},
+    {"/version", "/version", "show the version"},
     {"/provider", "/provider [name]", "show or set the provider"},
     {"/model", "/model [ID]", "show or set the model"},
     {"/thinking", "/thinking [level]", "show or set reasoning"},
@@ -39,7 +40,7 @@ constexpr SlashSpec kSlash[] = {
     {"/resume", "/resume [ID]", "list or load a session"},
     {"/search", "/search TEXT", "search sessions for text"},
     {"/fork", "/fork [title]", "copy this session into a new one"},
-    {"/export", "/export [PATH]", "write this session as Markdown or JSON"},
+    {"/export", "/export [PATH]", "write this session as Markdown, HTML, or JSON"},
     {"/delete", "/delete ID", "move a session to the trash"},
     {"/restore", "/restore [ID]", "list or restore a deleted session"},
     {"/new", "/new", "start a new session"},

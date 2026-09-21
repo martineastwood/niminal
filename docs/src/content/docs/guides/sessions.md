@@ -37,7 +37,7 @@ change your saved defaults in `~/.niminal/config.json`.
 | Command | Purpose |
 | --- | --- |
 | `/fork [title]` | Copy the current session into a new file and switch to it |
-| `/export [PATH]` | Export as Markdown, or JSON when the path ends in `.json` |
+| `/export [PATH]` | Export as Markdown, HTML (`.html`), or JSON (`.json`) |
 | `/delete ID` | Move a session to the trash |
 | `/restore` | List deleted sessions |
 | `/restore ID` | Restore one from the trash |

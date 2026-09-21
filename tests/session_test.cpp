@@ -250,6 +250,29 @@ int main() {
     return fail("export json");
   }
 
+  auto html = forked.export_text("html");
+  if (html.find("<!DOCTYPE html>") == std::string::npos ||
+      html.find("fix the parser") == std::string::npos ||
+      html.find("why is the parser test failing?") == std::string::npos ||
+      html.find("running tests") == std::string::npos || html.find("bash") == std::string::npos ||
+      html.find("exit_code: 1") == std::string::npos ||
+      html.find("forked from") == std::string::npos) {
+    return fail("export html content");
+  }
+  auto danger = create_session(dir, "/tmp/ws-a");
+  danger.add_user("<script>alert(1)</script>");
+  auto danger_html = danger.export_text("html");
+  if (danger_html.find("<script>alert") != std::string::npos) {
+    return fail("export html escapes user input");
+  }
+  if (danger_html.find("&lt;script&gt;") == std::string::npos) {
+    return fail("export html has escaped tags");
+  }
+  auto compact_html = compact.export_text("html");
+  if (compact_html.find("Earlier work: old question.") == std::string::npos) {
+    return fail("export html compaction");
+  }
+
   auto hits = search_sessions(dir, "/tmp/ws-a", "running tests", 20);
   bool found = false;
   for (const auto& info : hits) {

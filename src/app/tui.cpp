@@ -19,6 +19,7 @@
 
 #include <niminal/openai.hpp>
 #include <niminal/text.hpp>
+#include <niminal/version.hpp>
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/mouse.hpp>
@@ -1002,6 +1003,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         screen.Exit();
         return;
       }
+      if (cmd == "/version") {
+        blocks.push_back(Block{BlockKind::status, niminal::version_string()});
+        return;
+      }
       if (cmd == "/copy") {
         if (!arg.empty()) {
           blocks.push_back(Block{BlockKind::error, "/copy takes no arguments"});
@@ -1395,7 +1400,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           if (!out) {
             throw std::runtime_error("cannot write " + path.string());
           }
-          out << session.export_text(path.extension() == ".json" ? "json" : "md");
+          auto ext = path.extension().string();
+          std::string format = "md";
+          if (ext == ".json") {
+            format = "json";
+          } else if (ext == ".html" || ext == ".htm") {
+            format = "html";
+          }
+          out << session.export_text(format);
           blocks.push_back(Block{BlockKind::status, "Exported " +
                                                         std::to_string(session.events.size()) +
                                                         " events to " + path.string()});

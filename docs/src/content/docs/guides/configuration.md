@@ -82,6 +82,7 @@ and are never written back:
 | `NIMINAL_THINKING` | Overrides `thinking` |
 | `--provider`, `--model`, `--thinking`, `--api-key`, `--tools`, `--max-steps` | Same as their names suggest |
 | `--approve`, `--no-approve` | Choose whether project-local resources load |
+| `--version`, `--help` | Print the version or usage and exit |
 
 Load order: config file, then environment, then CLI flags.
 

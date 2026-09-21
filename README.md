@@ -177,7 +177,7 @@ the first message creates an append-only JSONL file under
 - Alt-J or Shift-Enter inserts a newline
 - Esc interrupts a running turn, or clears the composer when idle
 - Ctrl-C quits
-- `/help`, `/provider`, `/model`, `/thinking`, `/theme`, `/permissions`, `/trust`,
+- `/help`, `/version`, `/provider`, `/model`, `/thinking`, `/theme`, `/permissions`, `/trust`,
   `/yolo`, `/models refresh`, `/session`, `/name`, `/resume`, `/search`, `/fork`,
   `/export`, `/delete`, `/restore`, `/new`, `/clear`, `/copy`, `/compact`,
   `/retry`, `/reload`, `/skill:NAME`, `/NAME`, `/quit`
@@ -364,9 +364,8 @@ transcript in memory only, and cannot be combined with `--resume` or
 `--session`. `/search TEXT` matches text across this workspace's sessions.
 
 `/fork [title]` copies the current session into a new file (recorded as its
-parent) and switches to it. `/export [PATH]` writes the session as Markdown, or
-as JSON when the path ends in `.json`; the default is `<id>.md` in the
-workspace. `/delete ID` moves a session to `~/.niminal/sessions/.trash`, and
+parent) and switches to it. `/export [PATH]` writes the session as Markdown, HTML (`.html`), or
+JSON (`.json`); the default is `<id>.md` in the workspace. `/delete ID` moves a session to `~/.niminal/sessions/.trash`, and
 `/restore` lists what is there while `/restore ID` brings one back.
 
 Resuming restores the provider and model that session last used. It does not
@@ -427,7 +426,7 @@ Optional environment:
 
 Optional flags: `--model ID`, `--provider NAME`, `--thinking LEVEL`, `--mode json|rpc`,
 `--api-key KEY`, `--max-steps N`, `--resume`, `--session ID`, `--no-session`, `--yolo`,
-`--approve`, `--no-approve`.
+`--approve`, `--no-approve`, `--version`, `--help`.
 
 File tools stay inside the current directory. `grep` and `glob` use git's
 tracked and untracked files and honor `.gitignore`, so `build/` stays out of

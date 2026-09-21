@@ -1,4 +1,5 @@
 #include <niminal/agent.hpp>
+#include <niminal/version.hpp>
 
 #include "compaction.hpp"
 #include "config.hpp"
@@ -48,6 +49,7 @@ const char* kUsage =
     "  --resume           Resume the latest session for this workspace\n"
     "  --session ID       Resume a specific session\n"
     "  --no-session       Keep the transcript in memory only\n"
+    "  --version          Show the version\n"
     "  --help             Show this help\n"
     "\n"
     "TUI: Enter sends, or queues a message while a turn is running. Up/Down walk\n"
@@ -321,6 +323,10 @@ int main(int argc, char** argv) {
     std::string a = argv[i];
     if (a == "--help" || a == "-h") {
       std::cout << kUsage;
+      return 0;
+    }
+    if (a == "--version" || a == "-v") {
+      std::cout << niminal::version_string() << '\n';
       return 0;
     }
     if (a == "--model") {
