@@ -32,7 +32,7 @@ without trust. Only the gated resources above require approval.
 
 ## Workspace boundary
 
-File tools (`read`, `grep`, `glob`, `edit`, `write`) stay inside the current
+File tools (`read`, `grep`, `glob`, `ls`, `edit`, `write`) stay inside the current
 working directory. Symlink escapes outside the workspace are rejected.
 
 `grep` and `glob` use git-tracked and untracked files and honor `.gitignore`.

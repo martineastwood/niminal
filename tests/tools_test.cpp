@@ -1,5 +1,6 @@
 #include "tools.hpp"
 
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -20,37 +21,88 @@ bool read_only(const std::vector<niminal::Tool>& tools, const char* name) {
   return false;
 }
 
+niminal::Tool* find(std::vector<niminal::Tool>& tools, const char* name) {
+  for (auto& t : tools) {
+    if (t.name == name) {
+      return &t;
+    }
+  }
+  return nullptr;
+}
+
 int main() {
   auto tmp = fs::temp_directory_path() / "niminal-tools-test";
   fs::remove_all(tmp);
-  fs::create_directories(tmp);
+  fs::create_directories(tmp / "sub");
+  fs::create_directories(tmp / "build");
   {
     std::ofstream out(tmp / "a.txt");
     out << "hi\n";
   }
+  {
+    std::ofstream out(tmp / "build" / "generated.o");
+    out << "binary-ish\n";
+  }
   Workspace ws(tmp);
   std::atomic<bool> cancel{false};
   auto tools = workspace_tools(ws, &cancel);
-  if (!read_only(tools, "read") || !read_only(tools, "grep") || !read_only(tools, "glob")) {
-    std::cerr << "read/grep/glob should be read_only\n";
+  if (!read_only(tools, "read") || !read_only(tools, "grep") || !read_only(tools, "glob") ||
+      !read_only(tools, "ls")) {
+    std::cerr << "read/grep/glob/ls should be read_only\n";
     return 1;
   }
   if (read_only(tools, "edit") || read_only(tools, "write") || read_only(tools, "bash")) {
     std::cerr << "edit/write/bash should not be read_only\n";
     return 1;
   }
-  niminal::Tool* bash = nullptr;
-  niminal::Tool* grep = nullptr;
-  for (auto& t : tools) {
-    if (t.name == "bash") {
-      bash = &t;
-    }
-    if (t.name == "grep") {
-      grep = &t;
-    }
+  niminal::Tool* bash = find(tools, "bash");
+  niminal::Tool* grep = find(tools, "grep");
+  niminal::Tool* ls = find(tools, "ls");
+  niminal::Tool* glob = find(tools, "glob");
+  if ((bash == nullptr) || (grep == nullptr) || (ls == nullptr) || (glob == nullptr)) {
+    std::cerr << "missing bash, grep, glob, or ls\n";
+    return 1;
   }
-  if ((bash == nullptr) || (grep == nullptr)) {
-    std::cerr << "missing bash or grep\n";
+  auto listed = ls->run(nlohmann::json{{"path", "."}});
+  if (listed.find("sub/") == std::string::npos || listed.find("a.txt") == std::string::npos) {
+    std::cerr << "ls should list files and directories\n" << listed << '\n';
+    return 1;
+  }
+  // ls reads the directory itself, so it stays the way to discover entries the
+  // file index hides (skip dirs such as build/, plus empty directories).
+  if (listed.find("build/") == std::string::npos) {
+    std::cerr << "ls should show entries the file index skips\n" << listed << '\n';
+    return 1;
+  }
+  if (glob->run(nlohmann::json{{"pattern", "**/*"}}).find("build/") != std::string::npos) {
+    std::cerr << "glob should keep honoring the workspace file index\n";
+    return 1;
+  }
+  if (ls->run(nlohmann::json{{"path", "a.txt"}}).find("Not a directory") == std::string::npos) {
+    std::cerr << "ls on a file should report Not a directory\n";
+    return 1;
+  }
+  auto defaulted = ls->run(nlohmann::json::object());
+  if (defaulted.find("a.txt") == std::string::npos) {
+    std::cerr << "ls should default to the workspace root\n" << defaulted << '\n';
+    return 1;
+  }
+  auto many = tmp / "many";
+  fs::create_directories(many);
+  for (int i = 0; i < 205; ++i) {
+    char name[16];
+    std::snprintf(name, sizeof(name), "f-%03d.txt", i);
+    std::ofstream out(many / name);
+    out << "x\n";
+  }
+  auto capped = ls->run(nlohmann::json{{"path", "many"}});
+  if (capped.find("[truncated]") == std::string::npos) {
+    std::cerr << "ls should mark directories with more than 200 entries\n" << capped << '\n';
+    return 1;
+  }
+  if (capped.find("f-000.txt") == std::string::npos || capped.find("f-199.txt") == std::string::npos ||
+      capped.find("f-200.txt") != std::string::npos) {
+    std::cerr << "ls should keep the first 200 entries after sorting\n" << capped << '\n';
     return 1;
   }
   auto cr = bash->run(nlohmann::json{{"command", "printf 'hello\\rworld\\n'"}});
@@ -61,12 +113,7 @@ int main() {
   std::vector<std::string> snapshots;
   auto streaming = workspace_tools(
       ws, &cancel, [&](const std::string& snapshot) { snapshots.push_back(snapshot); });
-  niminal::Tool* streaming_bash = nullptr;
-  for (auto& t : streaming) {
-    if (t.name == "bash") {
-      streaming_bash = &t;
-    }
-  }
+  niminal::Tool* streaming_bash = find(streaming, "bash");
   if (streaming_bash == nullptr) {
     std::cerr << "missing streaming bash\n";
     return 1;

@@ -111,7 +111,7 @@ read-only (`read` and optional `user` only).
 The current host accepts text tool-result parts. UI and host requests are answered
 as unavailable, and image result parts are not added to the model context yet.
 
-Built-in tool names (`read`, `grep`, `glob`, `edit`, `write`, `bash`, `skill`)
+Built-in tool names (`read`, `grep`, `glob`, `ls`, `edit`, `write`, `bash`, `skill`)
 cannot be registered by extensions.
 
 Extension errors fail open: a broken extension is skipped rather than stopping the

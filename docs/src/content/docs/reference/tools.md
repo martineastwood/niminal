@@ -13,6 +13,7 @@ workspace. The tool definitions are sent with each request.
 | `read` | Read a text file with numbered lines and a version token | Auto |
 | `grep` | Search file contents with a regex or plain text | Auto |
 | `glob` | List workspace files matching a glob | Auto |
+| `ls` | List one directory | Auto |
 | `edit` | Replace exact text in one file | Auto |
 | `write` | Create or replace a complete file | Auto |
 | `bash` | Run a shell command in the workspace | Ask |
@@ -24,7 +25,7 @@ workspace. The tool definitions are sent with each request.
 Path-taking tools accept workspace-relative paths only. Symlink escapes outside
 the workspace are rejected.
 
-Independent read-only built-in calls (`read`, `grep`, `glob`, `skill`) in the
+Independent read-only built-in calls (`read`, `grep`, `glob`, `ls`, `skill`) in the
 same model response can run in parallel. Other tools run one at a time in request
 order.
 
@@ -75,6 +76,23 @@ than 1 MiB are skipped. No matches returns `No matches.`
 
 `pattern` is required. Results are capped at 200 files. Listing respects
 `.gitignore` through the workspace file index.
+
+## `ls`
+
+```json
+{"path":"src/app"}
+```
+
+`path` is optional and defaults to the workspace root. One level is listed, not a
+recursive walk: directories are suffixed with `/`. Results are capped at 200
+entries, then `[truncated]` is appended. Use `glob` to match files by pattern
+anywhere in the workspace.
+
+`ls` reads the directory itself rather than the workspace file index, so it shows
+what is really on disk: ignored entries such as `build/`, `.git/`, and
+`node_modules/`, and directories that are still empty. `glob` and `grep` instead
+use the index and honor `.gitignore`, so `ls` is how to discover those entries
+before reading them directly.
 
 ## `edit`
 

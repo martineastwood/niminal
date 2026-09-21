@@ -33,8 +33,8 @@ std::string command_from(const niminal::ToolCall& call) {
 }
 
 bool workspace_tool(const std::string& name) {
-  return name == "read" || name == "grep" || name == "glob" || name == "edit" || name == "write" ||
-         name == "skill";
+  return name == "read" || name == "grep" || name == "glob" || name == "ls" || name == "edit" ||
+         name == "write" || name == "skill";
 }
 
 } // namespace

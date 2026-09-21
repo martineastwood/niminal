@@ -326,7 +326,7 @@ void write_file_text(const fs::path& path, const std::string& content) {
 } // namespace
 
 std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
-                                  std::function<void(const std::string&)> on_bash_output) {
+                                  const std::function<void(const std::string&)>& on_bash_output) {
   std::vector<Tool> tools;
 
   tools.push_back(
@@ -486,6 +486,45 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
             out << '\n';
           }
           out << hits[i];
+        }
+        return out.str();
+      },
+      true});
+
+  tools.push_back(Tool{
+      "ls", "List one directory, including entries glob and grep skip. Directories end with /.",
+      json{{"type", "object"},
+           {"properties", {{"path", {{"type", "string"}}}}},
+           {"required", json::array()}},
+      [&ws](const json& input) {
+        auto rel = input.value("path", std::string("."));
+        auto dir = ws.resolve(rel);
+        std::error_code ec;
+        if (!fs::is_directory(dir, ec)) {
+          return "Not a directory: " + rel;
+        }
+        std::vector<std::string> entries;
+        for (const auto& entry : fs::directory_iterator(dir, ec)) {
+          entries.push_back(entry.is_directory(ec) ? entry.path().filename().string() + "/"
+                                                   : entry.path().filename().string());
+        }
+        if (entries.empty()) {
+          return std::string("Empty directory.");
+        }
+        std::sort(entries.begin(), entries.end());
+        bool truncated = entries.size() > 200;
+        if (truncated) {
+          entries.resize(200);
+        }
+        std::ostringstream out;
+        for (size_t i = 0; i < entries.size(); ++i) {
+          if (i) {
+            out << '\n';
+          }
+          out << entries[i];
+        }
+        if (truncated) {
+          out << "\n[truncated]";
         }
         return out.str();
       },

@@ -79,7 +79,7 @@ When a tool needs approval, the TUI shows a prompt over the composer:
 | `p` | Save a project grant (when allowed) |
 | `n` or Esc | Deny |
 
-`read`, `grep`, `glob`, `edit`, `write`, and `skill` run without prompting.
+`read`, `grep`, `glob`, `ls`, `edit`, `write`, and `skill` run without prompting.
 `bash` and extension tools normally ask first. Dangerous shell commands such as
 `rm`, `sudo`, `curl`, and `git reset` are always re-prompted and cannot be
 remembered.
