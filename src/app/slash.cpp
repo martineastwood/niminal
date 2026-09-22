@@ -410,4 +410,43 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
   return out;
 }
 
+std::optional<std::string> skill_slash_error(const std::filesystem::path& cwd,
+                                             std::string_view cmd) {
+  if (!cmd.starts_with("/skill:")) {
+    return std::nullopt;
+  }
+  const auto name = cmd.substr(7);
+  const auto skills = discover_skills(cwd);
+  if (name.empty() || std::none_of(skills.begin(), skills.end(),
+                                   [&](const Skill& skill) { return skill.name == name; })) {
+    return "unknown skill " + std::string(name);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> resolve_prompt_template(const std::filesystem::path& cwd,
+                                                   const std::string& prompt, std::string_view cmd,
+                                                   std::string_view arg) {
+  if (is_builtin_slash(cmd)) {
+    return std::nullopt;
+  }
+  if (auto template_prompt = load_prompt(cwd, std::string(cmd).substr(1))) {
+    auto expanded = expand_prompt(cwd, template_prompt->name, std::string(arg));
+    return expanded.empty() ? prompt : expanded;
+  }
+  return std::nullopt;
+}
+
+bool is_extension_slash(const std::shared_ptr<ExtensionRuntime>& extensions, std::string_view cmd) {
+  if (!extensions) {
+    return false;
+  }
+  for (const auto& command : extensions->commands()) {
+    if (niminal::lower_copy("/" + command.name) == cmd) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace niminal::app

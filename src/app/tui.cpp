@@ -14,6 +14,7 @@
 #include "settings.hpp"
 #include "skills.hpp"
 #include "slash.hpp"
+#include "slash_execute.hpp"
 #include "theme.hpp"
 #include "thinking.hpp"
 #include "tools.hpp"
@@ -1117,542 +1118,65 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return;
     }
 
-    auto initial_cmd = split_slash(prompt).first;
-    bool skill_request = initial_cmd.starts_with("/skill:");
-    bool extension_request = false;
-    if (extensions) {
-      for (const auto& command : extensions->commands()) {
-        if (niminal::lower_copy("/" + command.name) == initial_cmd) {
-          extension_request = true;
-          break;
-        }
-      }
-    }
-    if (skill_request) {
-      auto name = initial_cmd.substr(7);
-      auto skills = discover_skills(cwd);
-      if (name.empty() || std::none_of(skills.begin(), skills.end(),
-                                       [&](const Skill& skill) { return skill.name == name; })) {
-        blocks.push_back(Block{BlockKind::error, "unknown skill " + name});
-        return;
-      }
+    const auto initial_cmd = split_slash(prompt).first;
+    const bool skill_request = initial_cmd.starts_with("/skill:");
+    const bool extension_request = is_extension_slash(extensions, initial_cmd);
+    if (auto skill_error = skill_slash_error(cwd, initial_cmd)) {
+      blocks.push_back(Block{BlockKind::error, *skill_error});
+      return;
     }
 
     if (prompt[0] == '/' && !skill_request && !extension_request) {
-      auto [cmd, arg] = split_slash(prompt);
-      if (!is_builtin_slash(cmd)) {
-        if (auto template_prompt = load_prompt(cwd, cmd.substr(1))) {
-          auto expanded = expand_prompt(cwd, template_prompt->name, arg);
-          send_prompt(expanded.empty() ? prompt : std::move(expanded));
-          return;
-        }
+      const auto [cmd, arg] = split_slash(prompt);
+      if (auto resolved = resolve_prompt_template(cwd, prompt, cmd, arg)) {
+        send_prompt(niminal::UserInput{std::move(*resolved)});
+        return;
       }
     }
 
     if (prompt[0] == '/' && !skill_request) {
-      auto [cmd, arg] = split_slash(prompt);
-      if (cmd == "/quit" || cmd == "/exit") {
-        cancel->store(true);
-        ui_alive = false;
-        screen.Exit();
+      const auto [cmd, arg] = split_slash(prompt);
+      SlashHost slash{
+          agent,
+          session,
+          cfg,
+          theme,
+          permissions,
+          cwd,
+          keybindings,
+          extensions,
+          busy,
+          yolo_mode,
+          retry_available,
+          retry_prompt,
+          settings_open,
+          settings_i,
+          settings_edit,
+          settings_error,
+          blocks,
+          [&](const std::string& message) { flash_footer(message); },
+          [&](const std::string& reason, const std::string& target) {
+            return allow_session_switch(reason, target);
+          },
+          [&](Session next, const std::string& note, const std::string& reason) {
+            adopt_session(std::move(next), note, reason);
+          },
+          [&] { restart_extensions(); },
+          [&] { apply_extension_actions(); },
+          [&](niminal::UserInput input, bool retry) { send_prompt(std::move(input), retry); },
+          [&] {
+            cancel->store(true);
+            ui_alive = false;
+            screen.Exit();
+          },
+          [&](std::string text) {
+            draft = std::move(text);
+            cursor = static_cast<int>(draft.size());
+          },
+      };
+      if (execute_slash(slash, cmd, arg, extension_request)) {
         return;
       }
-      if (cmd == "/version") {
-        blocks.push_back(Block{BlockKind::status, niminal::version_string()});
-        return;
-      }
-      if (cmd == "/copy") {
-        if (!arg.empty()) {
-          blocks.push_back(Block{BlockKind::error, "/copy takes no arguments"});
-          return;
-        }
-        std::string text;
-        for (auto it = blocks.rbegin(); it != blocks.rend(); ++it) {
-          if ((it->kind == BlockKind::error || it->kind == BlockKind::assistant) &&
-              !it->text.empty()) {
-            text = it->text;
-            break;
-          }
-        }
-        if (text.empty()) {
-          text = session.last_assistant_text();
-        }
-        if (text.empty()) {
-          blocks.push_back(Block{BlockKind::status, "Nothing to copy yet."});
-          return;
-        }
-        copy_to_clipboard(text);
-        flash_footer("Copied to clipboard.");
-        blocks.push_back(Block{BlockKind::status, "Copied to clipboard."});
-        return;
-      }
-      if (cmd == "/yolo") {
-        if (arg.empty() || arg == "on") {
-          yolo_mode = true;
-        } else if (arg == "off") {
-          yolo_mode = false;
-        } else {
-          blocks.push_back(Block{BlockKind::error, "Usage: /yolo [off]"});
-        }
-        return;
-      }
-      if (cmd == "/retry") {
-        if (!arg.empty()) {
-          blocks.push_back(Block{BlockKind::error, "/retry takes no arguments"});
-        } else if (busy) {
-          blocks.push_back(Block{BlockKind::status, busy_wait_message(keybindings)});
-        } else if (!retry_available) {
-          blocks.push_back(Block{BlockKind::status, "Nothing to retry."});
-        } else {
-          retry_available = false;
-          send_prompt(retry_prompt, true);
-        }
-        return;
-      }
-      if (cmd == "/compact") {
-        if (busy) {
-          blocks.push_back(Block{BlockKind::status, busy_wait_message(keybindings)});
-          return;
-        }
-        try {
-          auto result = compact_session(session, agent, arg, extensions, cfg);
-          agent.messages = session.openai_messages();
-          for (const auto& warning : result.warnings) {
-            blocks.push_back(Block{BlockKind::status, warning});
-          }
-          blocks.push_back(Block{BlockKind::status, result.message});
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, e.what()});
-        }
-        return;
-      }
-      if (busy) {
-        blocks.push_back(Block{BlockKind::status, busy_wait_message(keybindings)});
-        return;
-      }
-      if (cmd == "/help") {
-        blocks.push_back(Block{BlockKind::status, slash_help(keybindings)});
-        return;
-      }
-      if (extension_request) {
-        try {
-          json context = {
-              {"mode", "tui"},
-              {"workspace", cwd.string()},
-              {"session_id", session.id},
-              {"provider", agent.provider},
-              {"model", agent.model},
-              {"messages", session.openai_messages()},
-          };
-          auto response = extensions->invoke(cmd.substr(1), arg, context);
-          auto message = response.value("message", std::string());
-          if (!message.empty()) {
-            blocks.push_back(Block{BlockKind::status, std::move(message)});
-          }
-          apply_extension_actions();
-          bool restarted = false;
-          if (auto action = response.find("session");
-              action != response.end() && action->is_object()) {
-            auto kind = action->value("action", std::string());
-            if (kind == "new") {
-              if (!allow_session_switch("new", "")) {
-                return;
-              }
-              auto next = create_session(default_session_dir(), cwd.string());
-              next.persist = session.persist;
-              if (!next.persist) {
-                next.path.clear();
-              }
-              adopt_session(std::move(next), "New session", "new");
-              restarted = true;
-            } else if (kind == "switch") {
-              auto id = action->value("id", std::string());
-              if (!allow_session_switch("resume", id)) {
-                return;
-              }
-              auto next = load_session(default_session_dir(), id);
-              next.recover_interrupted_tools();
-              adopt_session(std::move(next), "Resumed " + id, "resume");
-              restarted = true;
-            } else if (kind == "compact") {
-              auto compacted = compact_session(
-                  session, agent, action->value("instruction", std::string()), extensions, cfg);
-              agent.messages = session.openai_messages();
-              blocks.push_back(Block{BlockKind::status, compacted.message});
-            }
-            auto editor_text = action->value("editor_text", std::string());
-            if (!editor_text.empty()) {
-              draft = std::move(editor_text);
-              cursor = static_cast<int>(draft.size());
-            }
-          }
-          if (response.value("reload", false) && !restarted) {
-            restart_extensions();
-          }
-          auto next_prompt = response.value("prompt", std::string());
-          if (!next_prompt.empty()) {
-            send_prompt(std::move(next_prompt));
-          }
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, e.what()});
-        }
-        return;
-      }
-      if (cmd == "/reload") {
-        if (!arg.empty()) {
-          blocks.push_back(Block{BlockKind::error, "/reload takes no arguments"});
-          return;
-        }
-        permissions.reload_project();
-        refresh_skill_tool(agent, cwd);
-        restart_extensions();
-        blocks.push_back(Block{BlockKind::status, "Reloaded project resources."});
-        return;
-      }
-      if (cmd == "/permissions") {
-        if (arg.empty()) {
-          blocks.push_back(Block{BlockKind::status, permissions.describe()});
-        } else if (arg == "clear") {
-          try {
-            permissions.clear_project();
-            blocks.push_back(Block{BlockKind::status, "Cleared project permission grants."});
-          } catch (const std::exception& e) {
-            blocks.push_back(Block{BlockKind::error, e.what()});
-          }
-        } else {
-          blocks.push_back(Block{BlockKind::error, "Usage: /permissions [clear]"});
-        }
-        return;
-      }
-      if (cmd == "/trust") {
-        auto resources = project_trust_resources(cwd);
-        if (resources.empty()) {
-          blocks.push_back(Block{BlockKind::status, "No project-local resources require trust."});
-        } else if (arg.empty()) {
-          blocks.push_back(Block{BlockKind::status,
-                                 std::string("Project-local resources: ") +
-                                     (project_resources_trusted(cwd) ? "trusted" : "not trusted")});
-        } else if (arg == "on" || arg == "off") {
-          const bool trusted = arg == "on";
-          set_project_resources_trusted(cwd, trusted);
-          try {
-            save_project_trust(cwd, trusted);
-            permissions.reload_project();
-            refresh_skill_tool(agent, cwd);
-            restart_extensions();
-            blocks.push_back(Block{BlockKind::status, trusted
-                                                          ? "Project-local resources enabled."
-                                                          : "Project-local resources disabled."});
-          } catch (const std::exception& e) {
-            blocks.push_back(Block{BlockKind::error, e.what()});
-          }
-        } else {
-          blocks.push_back(Block{BlockKind::error, "Usage: /trust [on|off]"});
-        }
-        return;
-      }
-      if (cmd == "/provider") {
-        if (arg.empty()) {
-          blocks.push_back(
-              Block{BlockKind::status, "provider: " + agent.provider + "\nmodel: " + agent.model +
-                                           "\nurl: " + agent.api_url + "\nkey: " + agent.key_hint});
-          return;
-        }
-        if (auto result = select_provider(cfg, arg); !result) {
-          blocks.push_back(Block{BlockKind::error, result.error().what()});
-          return;
-        }
-        apply_provider(agent, cfg);
-        try {
-          save_config(cfg);
-          session.add_selection(agent.model, agent.provider);
-          blocks.push_back(Block{BlockKind::status, "provider set to " + agent.provider +
-                                                        "\nmodel: " + agent.model + "\nsaved " +
-                                                        config_path().string()});
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, "provider set for this session, save failed: " +
-                                                       std::string(e.what())});
-        }
-        return;
-      }
-      if (cmd == "/model") {
-        if (arg == "refresh") {
-          blocks.push_back(Block{BlockKind::error,
-                                 "Unknown /model option 'refresh'; did you mean /models refresh?"});
-          return;
-        }
-        if (arg.empty()) {
-          blocks.push_back(
-              Block{BlockKind::status, "model: " + agent.model + "\nurl: " + agent.api_url});
-          return;
-        }
-        agent.model = arg;
-        cfg.model = arg;
-        cfg.last_models[cfg.provider] = arg;
-        apply_provider(agent, cfg);
-        try {
-          save_config(cfg);
-          session.add_selection(agent.model, agent.provider);
-          blocks.push_back(Block{BlockKind::status, "model set to " + agent.model + "\nsaved " +
-                                                        config_path().string()});
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, "model set for this session, save failed: " +
-                                                       std::string(e.what())});
-        }
-        return;
-      }
-      if (cmd == "/thinking") {
-        if (arg.empty()) {
-          auto status = thinking_status(agent.provider, agent.model, cfg.thinking);
-          auto choices = thinking_choices(agent.provider, agent.model);
-          std::string msg = "thinking: ";
-          if (cfg.thinking.empty()) {
-            msg += status.empty() ? "(provider default)" : status;
-          } else {
-            msg += status.empty() ? cfg.thinking : status;
-          }
-          if (!choices.empty()) {
-            msg += "\nlevels: ";
-            for (size_t i = 0; i < choices.size(); ++i) {
-              if (i) {
-                msg += '|';
-              }
-              msg += choices[i];
-            }
-          }
-          blocks.push_back(Block{BlockKind::status, msg});
-          return;
-        }
-        try {
-          cfg.thinking = normalize_thinking(arg);
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, e.what()});
-          return;
-        }
-        apply_provider(agent, cfg);
-        auto status = thinking_status(agent.provider, agent.model, cfg.thinking);
-        try {
-          save_config(cfg);
-          blocks.push_back(Block{BlockKind::status, "thinking set to " +
-                                                        (status.empty() ? cfg.thinking : status) +
-                                                        "\nsaved " + config_path().string()});
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, "thinking set for this session, save failed: " +
-                                                       std::string(e.what())});
-        }
-        return;
-      }
-      if (cmd == "/theme") {
-        if (arg.empty()) {
-          blocks.push_back(
-              Block{BlockKind::status,
-                    std::string("theme: ") + cfg.theme +
-                        (cfg.theme == "auto"
-                             ? std::string(" (") + theme_mode_name(detect_terminal_theme()) + ")"
-                             : std::string())});
-          return;
-        }
-        auto selected = load_theme(arg);
-        if (!selected) {
-          blocks.push_back(Block{BlockKind::error, selected.error()});
-          return;
-        }
-        theme = *selected;
-        cfg.theme = arg;
-        try {
-          save_config(cfg);
-          blocks.push_back(Block{BlockKind::status, std::string("theme set to ") + cfg.theme +
-                                                        "\nsaved " + config_path().string()});
-        } catch (const std::exception& e) {
-          blocks.push_back(
-              Block{BlockKind::error,
-                    std::string("theme set for this session, save failed: ") + e.what()});
-        }
-        return;
-      }
-      if (cmd == "/settings") {
-        if (!arg.empty()) {
-          blocks.push_back(Block{BlockKind::error, "Usage: /settings"});
-          return;
-        }
-        settings_open = true;
-        settings_i = 0;
-        settings_edit = std::nullopt;
-        settings_error.clear();
-        return;
-      }
-      if (cmd == "/models") {
-        if (arg != "refresh") {
-          blocks.push_back(Block{BlockKind::error, "Usage: /models refresh"});
-          return;
-        }
-        if (refresh_catalog()) {
-          blocks.push_back(Block{BlockKind::status,
-                                 "Updated model catalog  ·  " + catalog_cache_path().string()});
-        } else {
-          blocks.push_back(
-              Block{BlockKind::error, "Could not refresh model metadata; using existing cache."});
-        }
-        return;
-      }
-      if (cmd == "/session") {
-        blocks.push_back(Block{BlockKind::status, session.describe()});
-        return;
-      }
-      if (cmd == "/name") {
-        if (arg.empty()) {
-          blocks.push_back(Block{BlockKind::status,
-                                 session.name.empty() ? "Name: (none)" : "Name: " + session.name});
-          return;
-        }
-        session.add_name(arg);
-        blocks.push_back(Block{BlockKind::status, "Name: " + session.name});
-        return;
-      }
-      if (cmd == "/resume") {
-        auto dir = default_session_dir();
-        if (arg.empty() || !valid_session_id(arg)) {
-          auto infos = search_sessions(dir, cwd.string(), arg);
-          blocks.push_back(Block{BlockKind::status, format_session_list(infos, session.id)});
-          return;
-        }
-        try {
-          if (!allow_session_switch("resume", arg)) {
-            return;
-          }
-          auto next = load_session(dir, arg);
-          next.recover_interrupted_tools();
-          adopt_session(std::move(next), "Resumed " + arg, "resume");
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, e.what()});
-        }
-        return;
-      }
-      if (cmd == "/search") {
-        if (arg.empty()) {
-          blocks.push_back(Block{BlockKind::error, "Usage: /search TEXT"});
-          return;
-        }
-        auto infos = search_sessions(default_session_dir(), cwd.string(), arg);
-        blocks.push_back(
-            Block{BlockKind::status, format_session_list(infos, session.id, "Matches for " + arg)});
-        return;
-      }
-      if (cmd == "/fork") {
-        try {
-          int upto = -1;
-          int turn = 0;
-          std::string title;
-          if (!arg.empty()) {
-            auto space = arg.find(' ');
-            std::string first =
-                niminal::trim_copy(space == std::string::npos ? arg : arg.substr(0, space));
-            bool numeric =
-                !first.empty() && std::all_of(first.begin(), first.end(),
-                                              [](unsigned char c) { return std::isdigit(c) != 0; });
-            if (numeric) {
-              turn = std::stoi(first);
-              if (space != std::string::npos) {
-                title = niminal::trim_copy(arg.substr(space + 1));
-              }
-              upto = session.end_after_user_turn(turn);
-              if (upto < 0) {
-                blocks.push_back(Block{BlockKind::error, "No user turn " + std::to_string(turn)});
-                return;
-              }
-            } else {
-              title = arg;
-            }
-          }
-          if (!allow_session_switch("fork", session.id)) {
-            return;
-          }
-          auto next = upto < 0 ? session.fork(default_session_dir())
-                               : session.fork(default_session_dir(), upto);
-          if (!title.empty()) {
-            next.add_name(title);
-          }
-          auto id = next.id;
-          std::string note = "Forked " + id;
-          if (turn > 0) {
-            note += " from turn " + std::to_string(turn);
-          }
-          adopt_session(std::move(next), note, "fork");
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, e.what()});
-        }
-        return;
-      }
-      if (cmd == "/export") {
-        auto path = arg.empty() ? cwd / (session.id + ".md") : std::filesystem::path(arg);
-        try {
-          if (path.has_parent_path()) {
-            std::filesystem::create_directories(path.parent_path());
-          }
-          std::ofstream out(path, std::ios::binary | std::ios::trunc);
-          if (!out) {
-            throw std::runtime_error("cannot write " + path.string());
-          }
-          auto ext = path.extension().string();
-          std::string format = "md";
-          if (ext == ".json") {
-            format = "json";
-          } else if (ext == ".html" || ext == ".htm") {
-            format = "html";
-          }
-          out << session.export_text(format);
-          blocks.push_back(Block{BlockKind::status, "Exported " +
-                                                        std::to_string(session.events.size()) +
-                                                        " events to " + path.string()});
-        } catch (const std::exception& e) {
-          blocks.push_back(Block{BlockKind::error, e.what()});
-        }
-        return;
-      }
-      if (cmd == "/delete") {
-        if (arg.empty()) {
-          blocks.push_back(
-              Block{BlockKind::error, "Usage: /delete ID  ·  /restore lists deleted sessions"});
-        } else if (arg == session.id) {
-          blocks.push_back(Block{BlockKind::error, "Cannot delete the current session."});
-        } else if (delete_session(default_session_dir(), arg)) {
-          blocks.push_back(Block{BlockKind::status,
-                                 "Deleted " + arg + "  ·  /restore " + arg + " brings it back"});
-        } else {
-          blocks.push_back(Block{BlockKind::error, "No session " + arg});
-        }
-        return;
-      }
-      if (cmd == "/restore") {
-        auto dir = default_session_dir();
-        if (arg.empty() || !valid_session_id(arg)) {
-          auto infos = list_deleted_sessions(dir);
-          blocks.push_back(
-              Block{BlockKind::status,
-                    format_session_list(infos, session.id, "Deleted sessions (newest first)")});
-        } else if (restore_session(dir, arg)) {
-          blocks.push_back(Block{BlockKind::status, "Restored " + arg + "  ·  /resume " + arg});
-        } else {
-          blocks.push_back(Block{BlockKind::error, "No deleted session " + arg});
-        }
-        return;
-      }
-      if (cmd == "/clear" || cmd == "/new") {
-        if (!allow_session_switch("new", "")) {
-          return;
-        }
-        auto next = create_session(default_session_dir(), cwd.string());
-        next.persist = session.persist;
-        if (!next.persist) {
-          next.path.clear();
-        }
-        auto id = next.id;
-        adopt_session(std::move(next), "New session " + id, "new");
-        apply_provider(agent, cfg);
-        return;
-      }
-      blocks.push_back(Block{BlockKind::error, "unknown command " + cmd + "  ·  /help"});
-      return;
     }
 
     send_prompt(niminal::UserInput{std::move(prompt), std::exchange(draft_images, json::array())});

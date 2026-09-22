@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -10,6 +11,7 @@
 namespace niminal::app {
 
 struct ExtensionCommand;
+class ExtensionRuntime;
 class Session;
 class Keybindings;
 
@@ -33,5 +35,12 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
                   const std::string& workspace, std::string_view provider, std::string_view model,
                   const std::vector<std::string>& recents,
                   const std::vector<ExtensionCommand>& extension_commands, const Session& session);
+
+std::optional<std::string> skill_slash_error(const std::filesystem::path& cwd,
+                                             std::string_view cmd);
+std::optional<std::string> resolve_prompt_template(const std::filesystem::path& cwd,
+                                                   const std::string& prompt, std::string_view cmd,
+                                                   std::string_view arg);
+bool is_extension_slash(const std::shared_ptr<ExtensionRuntime>& extensions, std::string_view cmd);
 
 } // namespace niminal::app

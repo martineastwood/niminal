@@ -162,6 +162,7 @@ add_executable(niminal_cli
   src/app/tui.cpp
   src/app/clipboard.cpp
   src/app/slash.cpp
+  src/app/slash_execute.cpp
   src/app/transcript.cpp
   src/app/session.cpp
   src/app/config.cpp

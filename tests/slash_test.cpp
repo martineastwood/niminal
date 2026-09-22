@@ -38,5 +38,17 @@ int main() {
     return fail("!! echo hi");
   }
 
+  using niminal::app::is_extension_slash;
+  using niminal::app::skill_slash_error;
+  if (skill_slash_error("/tmp", "/help")) {
+    return fail("non-skill slash");
+  }
+  if (!skill_slash_error("/tmp", "/skill:missing")) {
+    return fail("unknown skill");
+  }
+  if (is_extension_slash(nullptr, "/custom")) {
+    return fail("null extensions");
+  }
+
   return 0;
 }
