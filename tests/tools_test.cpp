@@ -105,6 +105,11 @@ int main() {
     std::cerr << "ls should keep the first 200 entries after sorting\n" << capped << '\n';
     return 1;
   }
+  auto sed_read = bash->run(nlohmann::json{{"command", "cd .; sed -n 1,1p a.txt"}});
+  if (sed_read.find("hi") == std::string::npos) {
+    std::cerr << "bash should allow sed file reads\n" << sed_read << '\n';
+    return 1;
+  }
   auto cr = bash->run(nlohmann::json{{"command", "printf 'hello\\rworld\\n'"}});
   if (cr.find("world") == std::string::npos || cr.find("hello") != std::string::npos) {
     std::cerr << "carriage return should overwrite the current line\n" << cr << '\n';

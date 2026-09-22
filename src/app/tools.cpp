@@ -330,12 +330,16 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
   std::vector<Tool> tools;
 
   tools.push_back(
-      Tool{"read", "Read a file. Returns numbered lines and a version token.",
+      Tool{"read",
+           "Read a workspace file or one-based inclusive line range. Returns numbered lines "
+           "and a version token for edit. Use start_line and end_line for focused inspection.",
            json{{"type", "object"},
                 {"properties",
                  {{"path", {{"type", "string"}, {"description", "Path relative to workspace."}}},
-                  {"start_line", {{"type", "integer"}}},
-                  {"end_line", {{"type", "integer"}}}}},
+                  {"start_line", {{"type", "integer"},
+                                   {"description", "One-based first line, inclusive."}}},
+                  {"end_line", {{"type", "integer"},
+                                 {"description", "One-based last line, inclusive."}}}}},
                 {"required", json::array({"path"})}},
            [&ws](const json& input) {
              auto path = ws.resolve(input.at("path").get<std::string>());
@@ -358,7 +362,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
 
   tools.push_back(
       Tool{"grep",
-           "Search file contents. Plain text or ECMAScript regex. Optional glob and subdirectory.",
+           "Search workspace file contents with plain text or ECMAScript regex. Use glob to "
+           "filter files and path to limit the search to a subdirectory.",
            json{{"type", "object"},
                 {"properties",
                  {{"pattern", {{"type", "string"}}},
@@ -449,7 +454,7 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
            true});
 
   tools.push_back(Tool{
-      "glob", "List workspace files matching a glob (e.g. **/*.cpp, src/*).",
+      "glob", "Find workspace files matching a glob (e.g. **/*.cpp, src/*). Results honor .gitignore.",
       json{{"type", "object"},
            {"properties", {{"pattern", {{"type", "string"}}}, {"path", {{"type", "string"}}}}},
            {"required", json::array({"pattern"})}},
@@ -492,7 +497,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
       true});
 
   tools.push_back(Tool{
-      "ls", "List one directory, including entries glob and grep skip. Directories end with /.",
+      "ls", "List one actual directory, including ignored entries and empty directories that glob and "
+           "grep skip. Directories end with /.",
       json{{"type", "object"},
            {"properties", {{"path", {{"type", "string"}}}}},
            {"required", json::array()}},
@@ -531,13 +537,15 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
       true});
 
   tools.push_back(Tool{
-      "edit", "Replace unique old_text with new_text in a file. Supply expected_version from read.",
+      "edit", "Replace unique old_text with new_text in a file. Read the file first and pass its "
+           "version as expected_version when available; use this for targeted changes.",
       json{{"type", "object"},
            {"properties",
             {{"path", {{"type", "string"}}},
              {"old_text", {{"type", "string"}}},
              {"new_text", {{"type", "string"}}},
-             {"expected_version", {{"type", "string"}}}}},
+             {"expected_version", {{"type", "string"},
+                                     {"description", "Version returned by the latest read."}}}}},
            {"required", json::array({"path", "old_text", "new_text"})}},
       [&ws](const json& input) {
         auto path = ws.resolve(input.at("path").get<std::string>());
@@ -559,7 +567,7 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
       }});
 
   tools.push_back(Tool{
-      "write", "Create a new file or overwrite an existing file. Use edit for targeted changes.",
+      "write", "Create a new file or replace a file's complete contents. Use edit for targeted changes.",
       json{{"type", "object"},
            {"properties",
             {{"path", {{"type", "string"}}},
@@ -579,11 +587,15 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
       }});
 
   tools.push_back(Tool{
-      "bash", "Run a shell command in the workspace. Returns combined stdout/stderr and exit code.",
+      "bash",
+      "Run a shell command in the workspace. Returns combined stdout/stderr and exit code. "
+      "Use it for tests, builds, formatters, git, and other shell workflows; shell utilities "
+      "may also inspect or transform files when useful. Prefer the structured workspace tools "
+      "when their focused behavior is more convenient.",
       json{{"type", "object"},
            {"properties",
             {{"command", {{"type", "string"}}}, {"timeout_seconds", {{"type", "integer"}}}}},
-           {"required", json::array({"command"})}},
+      {"required", json::array({"command"})}},
       [&ws, cancel, on_bash_output](const json& input) {
         auto command = input.at("command").get<std::string>();
         int timeout = std::clamp(input.value("timeout_seconds", 120), 1, 600);
