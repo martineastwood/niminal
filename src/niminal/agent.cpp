@@ -468,7 +468,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
           ToolResult output;
           bool is_error = false;
           try {
-            if (!tool_output) {
+            if (!tool_output || tool->read_only) {
               output = tool->run(args);
             } else {
               struct ToolOutputScope {

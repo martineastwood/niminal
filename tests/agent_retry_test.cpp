@@ -1,6 +1,8 @@
 #include <niminal/agent.hpp>
 #include <niminal/openai.hpp>
 
+#include <atomic>
+#include <barrier>
 #include <iostream>
 
 int main() {
@@ -69,6 +71,37 @@ int main() {
   };
   if (reasoning_agent.run("find it") != "done" || steps != 2) {
     std::cerr << "tool continuation should preserve assistant reasoning\n";
+    return 1;
+  }
+
+  niminal::Agent parallel_agent;
+  parallel_agent.api_key = "test";
+  parallel_agent.model = "test-model";
+  std::atomic<int> output_calls{0};
+  auto output = parallel_agent.tool_output;
+  *output = [&](std::string) { ++output_calls; };
+  std::barrier ready(2);
+  for (const auto* name : {"left", "right"}) {
+    parallel_agent.tools.push_back(niminal::Tool{name, name, niminal::json::object(),
+                                                 [output, &ready](const niminal::json&) {
+                                                   ready.arrive_and_wait();
+                                                   (*output)("snapshot");
+                                                   return "done";
+                                                 },
+                                                 true});
+  }
+  int parallel_steps = 0;
+  parallel_agent.stream_chat_fn = [&](const niminal::ChatRequest&) {
+    niminal::ChatResult result;
+    if (parallel_steps++ == 0) {
+      result.tool_calls = {{"left_call", "left", "{}"}, {"right_call", "right", "{}"}};
+    } else {
+      result.text = "done";
+    }
+    return result;
+  };
+  if (parallel_agent.run("parallel") != "done" || output_calls != 2) {
+    std::cerr << "parallel read-only tools should not replace the shared output callback\n";
     return 1;
   }
   return 0;
