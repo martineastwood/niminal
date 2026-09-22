@@ -14,13 +14,16 @@ The same agent core runs in four modes:
 
 | Mode | When |
 | --- | --- |
-| Interactive TUI | No CLI prompt and a TTY |
-| Print mode | CLI prompt or piped stdin, one turn, then exit |
+| Interactive TUI | No CLI prompt and both stdin and stdout are TTYs |
+| Print mode | CLI prompt, one turn, then exit |
 | JSON mode | `--mode json`, versioned JSONL on stdout |
 | RPC mode | `--mode rpc`, JSON commands on stdin |
 
-Headless modes have no approval UI. The TUI prompts before shell commands and
-non-read-only extension tools unless YOLO mode is on.
+Headless modes have no approval UI. The TUI prompts before shell commands,
+extension tools, and external tools unless YOLO mode is on.
+
+Print mode reads only the CLI prompt. JSON mode merges piped stdin with a CLI
+prompt when stdin is not a TTY.
 
 ## Sessions
 
@@ -31,8 +34,10 @@ session, not from global defaults.
 
 ## Workspace tools
 
-Built-in tools stay inside the workspace directory. `grep` and `glob` build their
-file list from git-tracked and untracked paths and honor `.gitignore`.
+Built-in tools stay inside the workspace directory. In a git repository, `grep`
+and `glob` build their file list from the workspace index and honor `.gitignore`.
+Outside git, the index comes from a directory walk without `.gitignore`
+filtering.
 
 External tools and extensions add capabilities through manifests in well-known
 folders. Project copies load only after trust.

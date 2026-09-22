@@ -37,7 +37,8 @@ send them immediately. Press Alt-Up or Shift-Left to move the last queued
 message back into the composer for editing.
 
 Follow-up queues exist in RPC mode and through extensions. The TUI itself only
-queues steering messages while busy.
+queues steering messages while busy, but the footer `queued N` count can include
+extension follow-ups waiting after the current turn.
 
 ## Run a terminal command
 
@@ -52,7 +53,8 @@ Use `!!` when you want to run a command without sending its output to the model.
 The command still appears in the transcript.
 
 Output streams into a bash card as the command runs. Press Esc to interrupt.
-Composer commands do not ask for approval: you typed the command yourself.
+Composer commands do not ask for approval: you typed the command yourself. They
+are blocked while a model turn or another user-bash command is running.
 
 ## History and suggestions
 
@@ -69,12 +71,14 @@ to pick a supported level. Type `/theme ` to pick `light`, `dark`, or `auto`.
 Type `/resume ` and Tab to pick a session. Type `/fork ` and Tab to pick a user
 message to fork from.
 
-Type `@` for file mention suggestions. Gitignored and hidden files are excluded.
-Accepted mentions expand into attached file content in the outgoing message (up
-to 100,000 bytes per attachment).
+Type `@` for file mention suggestions. In a git repository, gitignored files are
+excluded. Outside git, suggestions come from a directory walk that skips common
+vendor and build directories but may still include dotfiles. Accepted mentions
+expand into attached file content in the outgoing message (up to 100,000 bytes
+per attachment).
 
 You can attach a PNG, JPEG, or WebP screenshot with Ctrl-V when your terminal
-sends that shortcut to niminal. You can also type `@screenshot.png` or drop an
+sends that shortcut to niminal. You can also `@mention` an image path or drop an
 image file into the terminal. A drop pastes its file path, which niminal attaches
 when you send the message. The composer shows attached filenames. Backspace with
 an empty text draft removes the last attachment. You can send an image without
@@ -83,8 +87,8 @@ typing text.
 Each image can be up to 10 MiB. Images are saved in the session, so a later turn
 can still use them after the original file changes. A model must support image
 input to inspect them. If Ctrl-V pastes text instead, your terminal may have
-handled the shortcut before niminal received it. Use `@screenshot.png` or drop
-the file in that case.
+handled the shortcut before niminal received it. Use an `@` mention or drop the
+file in that case.
 
 ## Scrolling and copy
 
@@ -111,12 +115,12 @@ When a tool needs approval, the TUI shows a prompt over the composer:
 | `p` | Save a project grant (when allowed) |
 | `n` or Esc | Deny |
 
-`read`, `grep`, `glob`, `ls`, `edit`, `write`, and `skill` run without prompting.
-`bash` and extension tools normally ask first. Dangerous shell commands such as
-`rm`, `sudo`, `curl`, and `git reset` are always re-prompted and cannot be
-remembered.
+`read`, `grep`, `glob`, `ls`, `edit`, `write`, `skill`, and `ask_user` run
+without prompting. `bash` and non-read-only extension or external tools normally
+ask first. Dangerous shell commands such as `rm`, `sudo`, `curl`, and `git reset`
+are always re-prompted and cannot be remembered.
 
-Use `/yolo` or `--yolo` to auto-approve tools for the current process.
+Use `/yolo` or `--yolo` to auto-approve tools in the interactive TUI.
 
 ## Answer a model question
 
@@ -142,7 +146,9 @@ overlay replaces the composer while it is open.
 | Esc | Close the overlay |
 
 Changes save immediately. Provider, model, thinking, and theme updates apply
-to the current session right away.
+to the current session right away. `steering_mode` and `follow_up_mode` are saved
+too, but they affect RPC queue delivery only, not how the TUI drains steering
+messages while busy.
 
 ## Footer
 

@@ -35,7 +35,8 @@ Every stream starts and ends with session events:
 
 ## Event types
 
-All records include `"version":1`.
+All records include `"version":1`. Many stream events also include `step`,
+`model`, and `duration_ms` when applicable.
 
 | Type | When |
 | --- | --- |
@@ -50,7 +51,11 @@ All records include `"version":1`.
 | `tool_output_delta` | Streamed bash output so far (`tool_id`, `tool_name`, `delta` is the captured snapshot, not an append-only chunk) |
 | `tool_result` | Tool finished (`output`, `is_error`) |
 | `error` | Failure (`message`) |
-| `queue` | Steering or follow-up queue change (`action`, `depth`, optional `mode`) |
+
+`queue` events are emitted in [RPC mode](/reference/rpc-mode/), not in
+`--mode json` runs.
+
+`status` and `done` events are not written to stdout in JSON mode.
 
 `approval_required` exists in the schema but is not emitted in headless modes
 because tools run without prompting there.
@@ -69,8 +74,11 @@ Optional identity fields on many events: `session_id`, `turn_id`, `run_id`.
 }
 ```
 
-Assistant `message` events include `"final": true` on the closing message for a
-step.
+Assistant `message` events include a `final` boolean. Intermediate tool-step
+messages use `final: false`; the closing message for a step uses `final: true`.
+
+At turn start, JSON mode emits both `run_start` (with `prompt`) and a separate
+user `message` event with the same content.
 
 ## Next steps
 

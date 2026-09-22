@@ -282,7 +282,7 @@ void bind_compaction(niminal::Agent& agent, Session& session,
     if (note) {
       note("Context is large; compacting…");
     }
-    auto result = compact_session(session, agent, {}, extensions);
+    auto result = compact_session(session, agent, {}, extensions, cfg);
     agent.messages = session.openai_messages();
     if (note) {
       for (const auto& warning : result.warnings) {

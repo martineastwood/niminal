@@ -37,6 +37,8 @@ with `$ARGUMENTS` or `$@` replaced by the text after `/review`.
 - Only `*.md` files directly inside those folders are discovered (no subfolders)
 - Files over 100,000 bytes are ignored
 - Built-in slash commands keep their names; templates cannot override them
+- Templates are checked before built-in slash commands, but after `/skill:NAME`
+  validation
 - Optional frontmatter `description` feeds Tab completion; without it, the first
   useful body line is used
 

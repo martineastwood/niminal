@@ -12,6 +12,7 @@ Global extensions (always loaded; all matching extensions start):
 
 ```text
 ~/.agents/extensions/NAME/extension.json
+~/.nimlet/extensions/NAME/extension.json
 ~/.niminal/extensions/NAME/extension.json
 ```
 
@@ -19,6 +20,7 @@ Project extensions (trusted workspace only):
 
 ```text
 <workspace>/.agents/extensions/NAME/extension.json
+<workspace>/.nimlet/extensions/NAME/extension.json
 <workspace>/.niminal/extensions/NAME/extension.json
 ```
 
@@ -148,8 +150,8 @@ read-only (`read` and optional `user` only).
 The current host accepts text tool-result parts. UI and host requests are answered
 as unavailable, and image result parts are not added to the model context yet.
 
-Built-in tool names (`read`, `grep`, `glob`, `ls`, `edit`, `write`, `bash`, `skill`)
-cannot be registered by extensions.
+Built-in tool names (`read`, `grep`, `glob`, `ls`, `edit`, `write`, `bash`,
+`skill`, `ask_user`) cannot be registered by extensions.
 
 Extension errors fail open: a broken extension is skipped rather than stopping the
 agent.

@@ -874,8 +874,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       agent, extensions, cwd,
       [&](const std::string& warning) { post_ui(StreamEvent{EventKind::status, warning, {}, {}}); },
       &session, cfg);
-  agent.approve_tool = [&](const niminal::ToolCall& call, const niminal::Tool&) {
+  agent.approve_tool = [&](const niminal::ToolCall& call, const niminal::Tool& tool) {
     if (yolo_mode) {
+      return true;
+    }
+    if (tool.read_only) {
       return true;
     }
     auto check = permissions.check(call);

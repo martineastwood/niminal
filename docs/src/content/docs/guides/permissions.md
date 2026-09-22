@@ -13,9 +13,11 @@ These built-in tools run without a prompt:
 - `read`
 - `grep`
 - `glob`
+- `ls`
 - `edit`
 - `write`
 - `skill`
+- `ask_user`
 
 ## Prompted tools
 
@@ -60,8 +62,10 @@ Matching looks for the word surrounded by spaces inside the full command string.
 
 ## YOLO mode
 
-`/yolo` and `--yolo` skip all approval prompts for the current process. Use
-`/yolo off` to turn it off again in the TUI.
+`/yolo` and `--yolo` skip all approval prompts in the interactive TUI for the
+current process. Use `/yolo off` to turn it off again. The flag applies only
+when launching the TUI; print, JSON, and RPC modes already run tools without
+prompting.
 
 ## Headless modes
 

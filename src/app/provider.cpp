@@ -7,7 +7,21 @@
 namespace niminal::app {
 void normalize_config(Config& cfg) {
   const niminal::ProviderSpec* spec = niminal::find_provider(cfg.provider);
-  if ((spec != nullptr) && cfg.api_url != spec->endpoint) {
+  if (spec == nullptr) {
+    return;
+  }
+  if (cfg.api_url.empty()) {
+    cfg.api_url = spec->endpoint;
+    return;
+  }
+  for (const auto& other : niminal::all_providers()) {
+    if (&other != spec && cfg.api_url == other.endpoint) {
+      cfg.api_url = spec->endpoint;
+      return;
+    }
+  }
+  if (cfg.provider == "anthropic" &&
+      cfg.api_url == "https://api.anthropic.com/v1/chat/completions") {
     cfg.api_url = spec->endpoint;
   }
 }

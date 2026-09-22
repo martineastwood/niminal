@@ -38,7 +38,7 @@ workspace.
 
 Supported values: `read`, `write`, `shell`, `network`, and `user`.
 
-Tools that declare only `read` (and optionally `user`) are treated as read-only
+Tools that declare only `read` and optionally `user` are treated as read-only
 and auto-approved in the TUI like built-in read tools.
 
 ## Discovery paths
@@ -46,8 +46,9 @@ and auto-approved in the TUI like built-in read tools.
 Global tools (always loaded; later paths win on name conflicts):
 
 ```text
-~/.niminal/tools/NAME/tool.json
 ~/.agents/tools/NAME/tool.json
+~/.nimlet/tools/NAME/tool.json
+~/.niminal/tools/NAME/tool.json
 ```
 
 Project tools (trusted workspace only):
@@ -55,6 +56,7 @@ Project tools (trusted workspace only):
 ```text
 <workspace>/.agent/tools/NAME/tool.json
 <workspace>/.agents/tools/NAME/tool.json
+<workspace>/.nimlet/tools/NAME/tool.json
 <workspace>/.niminal/tools/NAME/tool.json
 ```
 

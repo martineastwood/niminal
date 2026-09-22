@@ -13,13 +13,13 @@ description: Every path niminal reads and writes on your machine.
 | `~/.niminal/themes/*.json` | Custom TUI themes |
 | `~/.niminal/sessions/` | Append-only session JSONL files |
 | `~/.niminal/sessions/.trash/` | Deleted sessions |
-| `~/.niminal/trust.json` | Per-workspace trust decisions |
+| `~/.niminal/trust.json` | Per-workspace trust decisions (parent paths can match) |
 | `~/.niminal/models-dev.json` | Cached models.dev catalog |
 | `~/.niminal/skills/<name>/SKILL.md` | Global skills |
 | `~/.niminal/prompts/*.md` | Global prompt templates |
 | `~/.niminal/tools/<name>/tool.json` | Global external tools |
 | `~/.niminal/extensions/<name>/extension.json` | Global extensions |
-| `~/.niminal/AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md` | Global instructions |
+| `~/.niminal/AGENTS.md`, `AGENTS.override.md`, or `CLAUDE.md` | Global instructions (first match only) |
 | `~/.niminal/SYSTEM.md` | Global system prompt replacement |
 | `~/.niminal/APPEND_SYSTEM.md` | Global system prompt append |
 
@@ -31,6 +31,8 @@ Portable global roots shared with other agents:
 | `~/.agents/prompts/` | Global prompt templates |
 | `~/.agents/tools/` | Global external tools |
 | `~/.agents/extensions/` | Global extensions |
+| `~/.nimlet/tools/` | Alternate global external tools root |
+| `~/.nimlet/extensions/` | Alternate global extensions root |
 
 Later discovery roots win on name conflicts for skills, prompts, and external tools.
 Extensions do not override by name; every matching extension starts.
@@ -44,8 +46,9 @@ Extensions do not override by name; every matching extension starts.
 | `<workspace>/.niminal/prompts/` | Project prompt templates |
 | `<workspace>/.niminal/tools/` | Project external tools |
 | `<workspace>/.niminal/extensions/` | Project extensions |
-| `<workspace>/.agent/`, `.agents/` | Alternate project roots for skills, prompts, tools |
-| `<workspace>/AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md` | Project instructions |
+| `<workspace>/.agent/`, `.agents/` | Alternate project roots for skills, prompts, and tools |
+| `<workspace>/.nimlet/` | Alternate project root for tools and extensions |
+| `<workspace>/AGENTS.md`, `AGENTS.override.md`, or `CLAUDE.md` | Project instructions (first match per directory) |
 | `<workspace>/.niminal/SYSTEM.md` | Project system prompt replacement |
 | `<workspace>/.niminal/APPEND_SYSTEM.md` | Project system prompt append |
 

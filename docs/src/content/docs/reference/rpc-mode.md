@@ -17,9 +17,10 @@ Every response is a versioned JSON line:
 {"version":1,"type":"response","id":"1","ok":true,...}
 ```
 
-Turn progress uses the same JSONL event types as [JSON mode](/reference/json-mode/).
-EOF or Ctrl+C requests shutdown. Pass `--no-session` to keep the transcript in
-memory only.
+Turn progress uses the same JSONL event types as [JSON mode](/reference/json-mode/),
+plus `queue` events when steering or follow-up queues change. EOF or Ctrl+C
+requests shutdown. Pass `--no-session` to keep the transcript in memory only.
+RPC mode does not accept a CLI prompt; send commands on stdin instead.
 
 ## Commands
 
@@ -29,7 +30,7 @@ memory only.
 | `steer` | Queue a steering message while busy |
 | `follow_up` | Queue a follow-up message while busy |
 | `get_state` | Session id, busy flag, queue depths, queue modes, `"mode": "act"` |
-| `clear_queue` | Drain steering and follow-up queues |
+| `clear_queue` | Drain steering and follow-up queues (response includes the removed messages) |
 | `set_steering_mode` | `"mode": "all"` or `"one-at-a-time"` (saved to config) |
 | `set_follow_up_mode` | Same values as steering |
 | `interrupt` | Cancel the running turn |
@@ -83,6 +84,11 @@ change them write to `~/.niminal/config.json`.
 There is no plan mode toggle. niminal always reports `"mode": "act"`.
 
 Headless RPC has no approval UI, so tools run without prompting.
+
+Successful command responses use `"state": "started"` or `"queued"`. Other
+states include `interrupting`, `idle`, `stopped`, and `stopping`. Queue events
+use `"mode": "steer"` or `"follow_up"` with actions `enqueue`, `dequeue`, or
+`clear`.
 
 ## Next steps
 

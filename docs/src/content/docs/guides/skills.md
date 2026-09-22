@@ -13,7 +13,7 @@ Global skills (always loaded):
 
 ```text
 ~/.agents/skills/<path>/<name>/SKILL.md
-~/.niminal/skills/<name>/SKILL.md
+~/.niminal/skills/<path>/<name>/SKILL.md
 ```
 
 Project skills (trusted workspace only; later roots win on name conflicts):

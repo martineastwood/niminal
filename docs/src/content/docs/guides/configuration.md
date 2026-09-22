@@ -60,8 +60,8 @@ chmod 600 ~/.niminal/auth.json
 | `show_thinking` | `false` | Start new thinking cards expanded in the TUI |
 | `theme` | `auto` | `light`, `dark`, `auto`, or a name from `~/.niminal/themes/` |
 | `editor` | unset | External editor command for Ctrl-G. Overrides `$VISUAL` and `$EDITOR` |
-| `steering_mode` | `one-at-a-time` | RPC queue delivery: `all` or `one-at-a-time` |
-| `follow_up_mode` | `one-at-a-time` | Same for follow-up queue |
+| `steering_mode` | `one-at-a-time` | RPC queue delivery: `all` or `one-at-a-time` (does not change TUI steering) |
+| `follow_up_mode` | `one-at-a-time` | Same for follow-up queue in RPC mode |
 | `max_steps` | `0` (unlimited) | Tool loop cap per user turn |
 | `compaction_enabled` | `true` | Automatic compaction before large requests |
 | `reserve_tokens` | `16384` | Headroom kept when deciding whether to compact |
@@ -124,7 +124,7 @@ These commands save settings to `~/.niminal/config.json` immediately:
 | `/settings` | Any key you change in the overlay |
 | `/provider` | `provider`, `model`, and `providers.<name>.last_model` |
 | `/model` | `model`, and `providers.<active>.last_model` |
-| `/thinking` | `thinking` (removed when cleared) |
+| `/thinking` | `thinking` (use `/settings` to clear it) |
 | `/theme` | `theme` |
 | RPC `set_steering_mode` | `steering_mode` |
 | RPC `set_follow_up_mode` | `follow_up_mode` |

@@ -23,7 +23,7 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/settings` | Edit config in an overlay |
 | `/permissions [clear]` | Show or clear tool grants |
 | `/trust [on\|off]` | Show or set project resource trust |
-| `/yolo [off]` | Auto-approve tools for this process |
+| `/yolo [on\|off]` | Auto-approve tools in the TUI |
 | `/models refresh` | Refresh the models.dev catalog |
 | `/session` | Show the current session |
 | `/name [title]` | Show or set the session name |
@@ -46,17 +46,23 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 
 Dispatch order:
 
-1. Built-in commands
-2. Extension-registered commands
+1. `!` and `!!` shell commands (TUI only)
+2. `/skill:NAME [request]` after validation (becomes a model message)
 3. Prompt templates (`/NAME [args]`)
-4. `/skill:NAME [request]`
+4. Built-in slash commands
+5. Extension-registered slash commands (these override most built-ins with the
+   same name)
 
-Built-in names cannot be overridden by templates.
+Built-in names cannot be overridden by templates. `/quit`, `/exit`, `/version`,
+`/copy`, `/yolo`, `/retry`, and `/compact` still run while a turn is busy; most
+other slash commands wait until the turn finishes.
 
 ## `@` mentions
 
-Type `@` in the composer to attach workspace files to the outgoing message.
-Gitignored and hidden files are excluded from suggestions.
+Type `@` in the composer to attach workspace files to the outgoing message. In a
+git repository, gitignored files are excluded from suggestions. Outside git,
+suggestions come from a directory walk that skips common vendor and build
+directories but may still include dotfiles.
 
 ## `!` shell commands
 
@@ -67,8 +73,8 @@ Gitignored and hidden files are excluded from suggestions.
 
 Examples: `!git status`, `!!npm test`
 
-These run in the TUI only. They do not start a model turn and do not show an
-approval prompt.
+These run in the TUI only. They do not start a model turn, do not show an
+approval prompt, and are blocked while a turn or user-bash command is running.
 
 ## CLI flags {#cli-flags}
 
@@ -84,7 +90,7 @@ approval prompt.
 | `--api-key KEY` | API key for this process |
 | `--tools LIST` | Comma-separated tool names, or `none` |
 | `--max-steps N` | Tool loop cap (`0` means unlimited) |
-| `--yolo` | Auto-approve tools for this process |
+| `--yolo` | Auto-approve tools in the interactive TUI |
 | `--approve` | Load project-local resources without trust prompt |
 | `--no-approve` | Skip project-local resources |
 | `--resume` | Resume latest session for this workspace |
@@ -104,7 +110,9 @@ approval prompt.
 | `niminal --mode json …` | JSONL on stdout, then exit |
 | `niminal --mode rpc` | JSON commands on stdin until `shutdown` or EOF |
 
-Piped stdin is merged with a CLI prompt when stdin is not a TTY.
+In print mode, only the CLI prompt is used. In JSON mode, piped stdin is merged
+with a CLI prompt when stdin is not a TTY. RPC mode accepts commands on stdin,
+not a CLI prompt.
 
 `--no-session` cannot be combined with `--resume` or `--session`.
 

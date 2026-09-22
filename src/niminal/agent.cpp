@@ -519,7 +519,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
         size_t j = i;
         while (j < pending.size()) {
           const Tool* tool = find_tool(tools, pending[j].name);
-          if ((tool == nullptr) || !tool->read_only || (approve_tool && tool->extension)) {
+          if ((tool == nullptr) || !tool->read_only) {
             break;
           }
           ++j;

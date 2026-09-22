@@ -153,7 +153,6 @@ bool read_only_capabilities(const json& doc) {
     throw std::runtime_error("capabilities must be an array");
   }
   bool any = false;
-  bool read_only = true;
   for (const auto& item : *it) {
     if (!item.is_string()) {
       throw std::runtime_error("capabilities must contain strings");
@@ -164,9 +163,11 @@ bool read_only_capabilities(const json& doc) {
       throw std::runtime_error("unknown capability: " + value);
     }
     any = true;
-    read_only = read_only && value == "read";
+    if (value != "read" && value != "user") {
+      return false;
+    }
   }
-  return any && read_only;
+  return any;
 }
 
 ExternalTool parse_external_manifest(const fs::path& path) {

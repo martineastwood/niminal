@@ -80,7 +80,8 @@ to text files only.
 
 `pattern` is required. It is an ECMAScript regular expression; plain text works
 too. Use `glob` to filter file names and `path` to limit the search to a workspace
-subdirectory.
+subdirectory. In a git repository, search uses the same workspace file index as
+`glob` and honors `.gitignore`.
 
 The default match limit is 80 and the maximum is 200. Binary files and files larger
 than 1 MiB are skipped. No matches returns `No matches.`
@@ -91,8 +92,10 @@ than 1 MiB are skipped. No matches returns `No matches.`
 {"pattern":"src/**/*.cpp","path":"."}
 ```
 
-`pattern` is required. Results are capped at 200 files. Listing respects
-`.gitignore` through the workspace file index.
+`pattern` is required. Results are capped at 200 files. In a git repository,
+results come from the workspace file index and honor `.gitignore`. The index
+also skips common build and vendor directories such as `node_modules/` and
+`build/`.
 
 ## `ls`
 
@@ -107,9 +110,9 @@ anywhere in the workspace.
 
 `ls` reads the directory itself rather than the workspace file index, so it shows
 what is really on disk: ignored entries such as `build/`, `.git/`, and
-`node_modules/`, and directories that are still empty. `glob` and `grep` instead
-use the index and honor `.gitignore`, so `ls` is how to discover those entries
-before reading them directly.
+`node_modules/`, and directories that are still empty. `glob` and `grep` instead use the index and honor `.gitignore` in git
+repositories, so `ls` is how to discover ignored entries before reading them
+directly.
 
 ## `edit`
 

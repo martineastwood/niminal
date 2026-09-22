@@ -157,7 +157,7 @@ send({
     </div>
     <div class="landing-links">
       <a href="/guides/interactive-tui/" class="landing-link"><span>TUI</span><small>Work in the terminal with queues, mentions, and shortcuts.</small><span aria-hidden="true">↗</span></a>
-      <a href="/guides/quickstart/" class="landing-link"><span>Print mode</span><small>Run one turn and keep stdout to the final answer, including from a pipe.</small><span aria-hidden="true">↗</span></a>
+      <a href="/guides/quickstart/" class="landing-link"><span>Print mode</span><small>Run one turn and keep stdout to the final answer.</small><span aria-hidden="true">↗</span></a>
       <a href="/reference/json-mode/" class="landing-link"><span>JSON mode</span><small>Emit versioned JSONL events for a single run.</small><span aria-hidden="true">↗</span></a>
       <a href="/reference/rpc-mode/" class="landing-link"><span>RPC mode</span><small>Drive a long-running process with prompts, steering, follow-ups, and interrupts.</small><span aria-hidden="true">↗</span></a>
     </div>

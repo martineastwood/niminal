@@ -79,10 +79,11 @@ Pass a prompt after the flags for a turn that exits when it finishes:
 niminal fix the failing parser test
 ```
 
-Pipe input into the same turn:
+Print mode uses only the CLI prompt. To pipe file content into a one-shot run,
+use JSON mode:
 
 ```sh
-cat README.md | niminal summarize this
+cat README.md | niminal --mode json summarize this
 ```
 
 Diagnostics go to stderr. Use `--no-session` for a run that is not written to
@@ -97,7 +98,8 @@ niminal --resume                      # latest session for this workspace
 niminal --session 1789233281025102    # one specific session
 ```
 
-Inside the TUI, `/resume` opens a picker and `/new` starts fresh. See
+Inside the TUI, `/resume` lists recent sessions for this workspace and `/resume
+ID` loads one. Tab completes session ids. `/new` starts fresh. See
 [Sessions](/guides/sessions/) for naming, forking, export, and recovery.
 
 ## Flags for scripts and CI
@@ -112,7 +114,7 @@ These flags apply to one process only and are never written to your config:
 | `--api-key KEY` | In-memory API key override |
 | `--tools LIST` | Restrict tools (`read,grep,glob` or `none`) |
 | `--max-steps N` | Tool loop cap (`0` means unlimited) |
-| `--yolo` | Auto-approve all tools |
+| `--yolo` | Auto-approve all tools in the interactive TUI |
 | `--approve` | Load project customizations without the trust prompt |
 | `--no-approve` | Skip project customizations |
 | `--system-prompt TEXT` | Replace the built-in system prompt for this run |

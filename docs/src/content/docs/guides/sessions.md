@@ -24,7 +24,7 @@ Inside the TUI:
 | --- | --- |
 | `/session` | Show the current session id and metadata |
 | `/resume` | List the newest 20 sessions for this workspace |
-| `/resume ID` | Load a session (warns if the workspace differs) |
+| `/resume ID` | Load a session (shows a status note when the workspace differs) |
 | `/search TEXT` | Search session text in this workspace |
 | `/new` or `/clear` | Start a fresh session file |
 | `/name [title]` | Show or set the session title |
@@ -39,7 +39,7 @@ change your saved defaults in `~/.niminal/config.json`.
 | `/fork [N] [title]` | Copy the current session, or from user turn N, and switch to it |
 | `/export [PATH]` | Export as Markdown, HTML (`.html`), or JSON (`.json`) |
 | `/delete ID` | Move a session to the trash |
-| `/restore` | List deleted sessions |
+| `/restore` | List up to 20 deleted sessions |
 | `/restore ID` | Restore one from the trash |
 
 `/fork` with no number copies the whole session. `/fork 3` copies through user

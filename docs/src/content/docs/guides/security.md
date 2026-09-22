@@ -22,10 +22,15 @@ always load. Project copies require trust.
 
 The first interactive launch in a workspace that contains trusted resources asks
 `[y/N]`. The answer is saved in `~/.niminal/trust.json` under
-`projects.<canonical-workspace-path>`.
+`projects.<canonical-workspace-path>`. A saved decision on a parent directory
+also applies to subdirectories.
 
 Use `/trust on` or `/trust off` to change it later. For one process, use
 `--approve` or `--no-approve`.
+
+In print, JSON, and RPC mode, niminal does not show the trust prompt. Project
+resources are skipped unless you pass `--approve` or a matching entry already
+exists in `trust.json`.
 
 Project `AGENTS.md` and other instruction files in the git-root chain load
 without trust. Project `SYSTEM.md` and `APPEND_SYSTEM.md` require trust, like
@@ -36,7 +41,10 @@ the gated resources above.
 File tools (`read`, `grep`, `glob`, `ls`, `edit`, `write`) stay inside the current
 working directory. Symlink escapes outside the workspace are rejected.
 
-`grep` and `glob` use git-tracked and untracked files and honor `.gitignore`.
+`grep` and `glob` build their file list from the workspace index. In a git
+repository that index includes tracked and untracked files and honors
+`.gitignore`. Outside git, the index comes from a directory walk without
+`.gitignore` filtering.
 
 `bash` is not confined to the workspace. It runs as your user with your
 environment. Treat shell approval as authorization, not isolation.

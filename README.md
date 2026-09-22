@@ -54,7 +54,7 @@ Pass a prompt for a turn that exits when it finishes:
 
 ```sh
 niminal fix the failing parser test
-cat README.md | niminal summarize this
+cat README.md | niminal --mode json summarize this
 ```
 
 Resume a saved session:
@@ -164,8 +164,8 @@ See [JSON mode](https://niminal.dev/reference/json-mode/) and
 
 Approval is not a sandbox. Shell commands run as your user, with your
 environment. Reads, searches, and workspace edits run freely in the TUI; shell
-commands and extension tools ask before they run unless you use `/yolo` or
-`--yolo`.
+commands and extension tools ask before they run unless you use `/yolo` in the
+TUI or pass `--yolo` when launching the TUI.
 
 See [Security](https://niminal.dev/guides/security/) and
 [Permissions](https://niminal.dev/guides/permissions/).
