@@ -79,6 +79,16 @@ std::string event_text(const json& event) {
   return text;
 }
 
+std::string bash_user_message(const std::string& command, const std::string& output) {
+  std::string text = "Ran `" + command + "`\n";
+  if (output.empty()) {
+    text += "(no output)";
+  } else {
+    text += "```\n" + output + "\n```";
+  }
+  return text;
+}
+
 bool session_matches(const Session& session, const std::string& query) {
   auto needle = niminal::lower_copy(query);
   if (needle.empty()) {
@@ -93,6 +103,9 @@ bool session_matches(const Session& session, const std::string& query) {
     auto type = event.value("type", "");
     if (type == "user" || type == "assistant") {
       haystack += '\n' + niminal::lower_copy(event_text(event));
+    } else if (type == "bash") {
+      haystack += '\n' + niminal::lower_copy(event.value("command", ""));
+      haystack += '\n' + niminal::lower_copy(event.value("output", ""));
     } else if (type == "tool_result") {
       haystack += '\n' + niminal::lower_copy(event.value("output", ""));
     } else if (type == "compaction") {
@@ -399,6 +412,9 @@ std::string export_html(const Session& session) {
               << "</summary>\n<pre>" << html_escape(input) << "</pre></details>\n";
         }
       }
+    } else if (type == "bash") {
+      out << "<pre class=\"tool-result\">$ " << html_escape(event.value("command", "")) << "\n\n"
+          << html_escape(event.value("output", "")) << "</pre>\n";
     } else if (type == "tool_result") {
       auto error = event.value("is_error", false);
       out << "<pre class=\"tool-result" << (error ? " error" : "") << "\">"
@@ -501,6 +517,14 @@ void Session::add_user(const niminal::UserInput& input) {
     content.push_back(image);
   }
   append(json{{"type", "user"}, {"role", "user"}, {"content", std::move(content)}});
+}
+
+void Session::add_bash(const std::string& command, const std::string& output,
+                       bool exclude_from_context) {
+  append(json{{"type", "bash"},
+              {"command", command},
+              {"output", output},
+              {"exclude_from_context", exclude_from_context}});
 }
 
 void Session::add_assistant(const std::string& text, const json& tool_calls,
@@ -711,6 +735,9 @@ std::string Session::export_text(std::string_view format) const {
               << part.value("input", json::object()).dump() << "\n\n";
         }
       }
+    } else if (type == "bash") {
+      out << "## Shell\n\n$ " << event.value("command", "") << "\n\n```\n"
+          << event.value("output", "") << "\n```\n\n";
     } else if (type == "tool_result") {
       out << "### Tool result" << (event.value("is_error", false) ? " (error)" : "") << "\n\n```\n"
           << event.value("output", "") << "\n```\n\n";
@@ -815,6 +842,12 @@ json Session::openai_messages() const {
         }
       }
       out.push_back(std::move(msg));
+    } else if (type == "bash") {
+      if (!event.value("exclude_from_context", false)) {
+        out.push_back({{"role", "user"},
+                       {"content",
+                        bash_user_message(event.value("command", ""), event.value("output", ""))}});
+      }
     } else if (type == "tool_result") {
       out.push_back({{"role", "tool"},
                      {"tool_call_id", event.value("id", "")},

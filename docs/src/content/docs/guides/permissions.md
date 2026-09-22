@@ -21,12 +21,15 @@ These built-in tools run without a prompt:
 
 These normally ask before they run:
 
-- `bash`
+- `bash` (model-initiated tool calls)
 - Extension tools that are not read-only
 - External tools that declare write, shell, or network capabilities
 
 When prompted, press Enter for once, `s` for the session, `p` to save a project
 grant, or `n` to deny.
+
+Composer `!command` and `!!command` run without a prompt. You typed the
+command yourself.
 
 ## Project grants
 

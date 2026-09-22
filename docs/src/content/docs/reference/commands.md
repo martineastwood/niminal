@@ -57,6 +57,18 @@ Built-in names cannot be overridden by templates.
 Type `@` in the composer to attach workspace files to the outgoing message.
 Gitignored and hidden files are excluded from suggestions.
 
+## `!` shell commands
+
+| Prefix | Behavior |
+| --- | --- |
+| `!command` | Run in the workspace and include output in the next model turn |
+| `!!command` | Run in the workspace without sending output to the model |
+
+Examples: `!git status`, `!!npm test`
+
+These run in the TUI only. They do not start a model turn and do not show an
+approval prompt.
+
 ## CLI flags {#cli-flags}
 
 | Flag | Purpose |

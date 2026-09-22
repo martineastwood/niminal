@@ -384,6 +384,39 @@ int main() {
     return fail("fork preserves images");
   }
 
+  auto bash_session = create_session(dir, "/tmp/ws-a");
+  bash_session.add_bash("echo hi", "hi\nexit: 0", false);
+  bash_session.add_bash("echo secret", "secret\nexit: 0", true);
+  if (bash_session.user_turn_previews().size() != 0) {
+    return fail("bash is not a user turn");
+  }
+  bash_session.add_user("after bash");
+  if (bash_session.user_turn_previews().size() != 1) {
+    return fail("user turn after bash");
+  }
+  auto bash_messages = bash_session.openai_messages();
+  if (bash_messages.size() != 2) {
+    return fail("bash openai message count");
+  }
+  if (bash_messages[0]["content"].get<std::string>().find("echo hi") == std::string::npos) {
+    return fail("bash included in model context");
+  }
+  if (bash_messages[1]["content"].get<std::string>() != "after bash") {
+    return fail("user message after bash");
+  }
+  auto bash_md = bash_session.export_text("md");
+  if (bash_md.find("echo secret") == std::string::npos ||
+      bash_md.find("secret") == std::string::npos) {
+    return fail("bash markdown export");
+  }
+  auto bash_html = bash_session.export_text("html");
+  if (bash_html.find("echo secret") == std::string::npos) {
+    return fail("bash html export");
+  }
+  if (search_sessions(dir, "/tmp/ws-a", "secret", 10).empty()) {
+    return fail("bash searchable");
+  }
+
   fs::remove_all(dir);
   return 0;
 }

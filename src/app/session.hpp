@@ -34,6 +34,7 @@ public:
   bool persist = true;
 
   void add_user(const niminal::UserInput& input);
+  void add_bash(const std::string& command, const std::string& output, bool exclude_from_context);
   void add_assistant(const std::string& text, const nlohmann::json& tool_calls,
                      const std::string& model, const niminal::Usage& usage = {},
                      const std::string& reasoning_content = {},

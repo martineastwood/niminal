@@ -105,6 +105,8 @@ saved under `~/.niminal/sessions`.
 - Ctrl-V attaches a PNG, JPEG, or WebP screenshot. You can also `@mention` an
   image or drop its path into the composer.
 - Tab completes slash commands. Type `/help` for the full list.
+- `!command` runs a shell command and includes its output in the next model turn.
+  `!!command` runs without sending output to the model.
 - `/resume`, `/new`, `/fork`, and `/export` manage sessions.
 - `/trust on` loads project skills, prompts, extensions, and permissions after
   the first trust prompt.

@@ -15,6 +15,7 @@
 #include "slash.hpp"
 #include "theme.hpp"
 #include "thinking.hpp"
+#include "tools.hpp"
 #include "transcript.hpp"
 #include "trust.hpp"
 
@@ -254,6 +255,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   bool plain_interrupt_pending = false;
   std::vector<ExtensionEntry> extension_entries_pending;
   std::atomic<bool> busy{false};
+  std::atomic<bool> user_bash_running{false};
   std::string activity;
   std::optional<std::chrono::steady_clock::time_point> activity_started;
   std::string footer_notice;
@@ -937,6 +939,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         if (!text.empty()) {
           blocks.push_back(Block{BlockKind::assistant, std::move(text)});
         }
+      } else if (type == "bash") {
+        Block tool{BlockKind::tool, json{{"command", event.value("command", "")}}.dump()};
+        tool.tool_name = "bash";
+        tool.result = event.value("output", "");
+        blocks.push_back(std::move(tool));
       } else if (type == "tool_result") {
         const auto id = event.value("id", "");
         const auto output = event.value("output", "");
@@ -1062,6 +1069,63 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   }
   idle_extension_messages.clear();
 
+  auto shell_env = [&] {
+    ShellEnv env;
+    env["NIMINAL_SESSION_ID"] = session.id;
+    if (!session.path.empty()) {
+      env["NIMINAL_SESSION_FILE"] = session.path;
+    }
+    env["NIMINAL_PROVIDER"] = agent.provider;
+    env["NIMINAL_MODEL"] = agent.model;
+    if (!cfg.thinking.empty()) {
+      env["NIMINAL_REASONING_LEVEL"] = cfg.thinking;
+    }
+    return env;
+  };
+
+  int user_bash_seq = 0;
+  auto run_user_bash = [&](std::string command, bool exclude_from_context,
+                           std::string history_line) {
+    remember_input(niminal::UserInput{std::move(history_line)});
+    if (busy || user_bash_running) {
+      blocks.push_back(Block{BlockKind::status, "wait for the turn to finish, or " +
+                                                    keybindings.label(KeyAction::cancel) +
+                                                    " to interrupt"});
+      return;
+    }
+    join_worker();
+    cancel->store(false);
+    stick_bottom = true;
+    transcript_y = 1.F;
+    const std::string tool_id = "ubash-" + std::to_string(++user_bash_seq);
+    post_ui(StreamEvent{EventKind::tool_call, json{{"command", command}}.dump(), "bash", tool_id});
+    user_bash_running = true;
+    activity = "Running bash…";
+    worker = std::thread([&, command = std::move(command), exclude_from_context, tool_id] {
+      try {
+        const auto env = shell_env();
+        auto output = run_bash(
+            command, cwd, 120, cancel,
+            [&](const std::string& snapshot) {
+              post_ui(StreamEvent{EventKind::tool_output_delta, snapshot, "bash", tool_id});
+            },
+            env);
+        run_on_ui([&] {
+          session.add_bash(command, output, exclude_from_context);
+          agent.messages = session.openai_messages();
+          workspace.invalidate_listing();
+        });
+        post_ui(StreamEvent{EventKind::tool_result, output, "bash", tool_id});
+      } catch (const std::exception& e) {
+        StreamEvent result{EventKind::tool_result, e.what(), "bash", tool_id};
+        result.is_error = true;
+        post_ui(result);
+      }
+      user_bash_running = false;
+      activity.clear();
+    });
+  };
+
   auto start_turn = [&](std::string prompt) {
     prompt = trim_copy(std::move(prompt));
     if (prompt.empty()) {
@@ -1069,6 +1133,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     stick_bottom = true;
     transcript_y = 1.F;
+
+    if (auto bash = parse_user_bash(prompt)) {
+      run_user_bash(std::move(bash->command), bash->exclude_from_context, std::move(prompt));
+      return;
+    }
 
     auto initial_cmd = split_slash(prompt).first;
     bool skill_request = initial_cmd.starts_with("/skill:");
@@ -2096,6 +2165,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (pressed(KeyAction::cancel)) {
+      if (user_bash_running) {
+        cancel->store(true);
+        activity = "Stopping…";
+        return true;
+      }
       if (busy) {
         bool has_steering = false;
         {

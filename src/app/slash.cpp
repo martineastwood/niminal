@@ -142,6 +142,23 @@ std::string trim_copy(std::string s) {
   return s.substr(i);
 }
 
+std::optional<UserBashRequest> parse_user_bash(std::string_view prompt) {
+  if (prompt.empty() || prompt.front() != '!') {
+    return std::nullopt;
+  }
+  UserBashRequest req;
+  size_t start = 1;
+  if (prompt.size() >= 2 && prompt[1] == '!') {
+    req.exclude_from_context = true;
+    start = 2;
+  }
+  req.command = trim_copy(std::string(prompt.substr(start)));
+  if (req.command.empty()) {
+    return std::nullopt;
+  }
+  return req;
+}
+
 std::pair<std::string, std::string> split_slash(const std::string& prompt) {
   auto space = prompt.find(' ');
   auto cmd = space == std::string::npos ? prompt : prompt.substr(0, space);
@@ -211,6 +228,8 @@ std::string slash_help(const Keybindings& keybindings) {
   binding(KeyAction::allow_session, "allow for this session");
   binding(KeyAction::allow_project, "save a project grant when available");
   binding(KeyAction::deny, "deny");
+  out += "\n!command  run a shell command and include its output in the next model turn\n";
+  out += "!!command run a shell command without sending its output to the model\n";
   out += "\nType @ to add a workspace file. Drag to copy. /copy copies the last reply.\n";
   return out;
 }

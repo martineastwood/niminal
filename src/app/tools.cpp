@@ -194,10 +194,10 @@ bool cap_shell_output(std::string& output) {
   return true;
 }
 
-std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
-                     std::atomic<bool>* cancel,
-                     const std::function<void(const std::string&)>& on_output,
-                     const ShellEnv& env) {
+std::string execute_bash(const std::string& command, const fs::path& cwd, int timeout_s,
+                         std::atomic<bool>* cancel,
+                         const std::function<void(const std::string&)>& on_output,
+                         const ShellEnv& env) {
   int out_pipe[2];
   if (pipe(out_pipe) != 0) {
     throw WorkspaceError(std::strerror(errno));
@@ -322,6 +322,17 @@ wait_child:
   }
   return msg.str();
 }
+
+} // namespace
+
+std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
+                     std::atomic<bool>* cancel,
+                     const std::function<void(const std::string&)>& on_output,
+                     const ShellEnv& env) {
+  return execute_bash(command, cwd, timeout_s, cancel, on_output, env);
+}
+
+namespace {
 
 std::string read_file_text(const fs::path& path) {
   std::ifstream in(path);
@@ -639,7 +650,7 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
              auto command = input.at("command").get<std::string>();
              int timeout = std::clamp(input.value("timeout_seconds", 120), 1, 600);
              ShellEnv env = shell_env != nullptr ? (*shell_env)() : ShellEnv{};
-             auto out = run_bash(command, ws.root(), timeout, cancel, on_bash_output, env);
+             auto out = execute_bash(command, ws.root(), timeout, cancel, on_bash_output, env);
              ws.invalidate_listing();
              return out;
            }});

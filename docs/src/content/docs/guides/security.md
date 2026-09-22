@@ -41,6 +41,9 @@ working directory. Symlink escapes outside the workspace are rejected.
 `bash` is not confined to the workspace. It runs as your user with your
 environment. Treat shell approval as authorization, not isolation.
 
+Composer `!command` and `!!command` also run as your user with no approval
+prompt. Use them only for commands you intend to run.
+
 ## Credentials
 
 API keys come from `--api-key`, `~/.niminal/auth.json`, or provider environment

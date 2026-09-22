@@ -39,6 +39,21 @@ message back into the composer for editing.
 Follow-up queues exist in RPC mode and through extensions. The TUI itself only
 queues steering messages while busy.
 
+## Run a terminal command
+
+Prefix a command with `!` to run it in the workspace and include its output in
+the next model turn:
+
+```text
+!git status
+```
+
+Use `!!` when you want to run a command without sending its output to the model.
+The command still appears in the transcript.
+
+Output streams into a bash card as the command runs. Press Esc to interrupt.
+Composer commands do not ask for approval: you typed the command yourself.
+
 ## History and suggestions
 
 | Input | Action |

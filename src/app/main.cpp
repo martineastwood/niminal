@@ -65,10 +65,12 @@ const char* kUsage =
     "Up/Down walk composer history when slash suggestions are closed. Alt-J or\n"
     "Shift-Enter inserts a newline. Esc also clears the composer when idle.\n"
     "Ctrl-G edits the composer in the config editor, $VISUAL, $EDITOR, or nano.\n"
-    "Ctrl-C quits. /compact summarizes older turns. Sessions are saved under\n"
-    "~/.niminal/sessions. Set --api-key, ~/.niminal/auth.json, or the matching\n"
-    "provider key (OPENROUTER_API_KEY by default). File tools stay in cwd.\n"
-    "Shell commands ask in the TUI. Customize shortcuts in\n"
+    "Ctrl-C quits. /compact summarizes older turns. !command runs a shell command\n"
+    "and includes its output in the next model turn; !!command runs without\n"
+    "sending output to the model. Sessions are saved under ~/.niminal/sessions.\n"
+    "Set --api-key, ~/.niminal/auth.json, or the matching provider key\n"
+    "(OPENROUTER_API_KEY by default). File tools stay in cwd. Model bash tools\n"
+    "ask in the TUI. Customize shortcuts in\n"
     "~/.niminal/keybindings.json, then restart the TUI.\n";
 
 const char* kSystem = R"(You are niminal, a coding agent working with the user in their workspace.

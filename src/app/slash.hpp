@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,6 +20,13 @@ struct Suggestion {
 };
 
 std::string trim_copy(std::string s);
+
+struct UserBashRequest {
+  std::string command;
+  bool exclude_from_context = false;
+};
+
+std::optional<UserBashRequest> parse_user_bash(std::string_view prompt);
 std::pair<std::string, std::string> split_slash(const std::string& prompt);
 bool is_builtin_slash(std::string_view command);
 std::string slash_help(const Keybindings& keybindings);
