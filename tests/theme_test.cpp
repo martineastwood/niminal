@@ -1,5 +1,8 @@
 #include "theme.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 
 using niminal::app::parse_theme_mode;
@@ -64,6 +67,26 @@ int main() {
   if (resolve_theme(ThemeMode::dark).input_fg == resolve_theme(ThemeMode::light).input_fg) {
     return 1;
   }
+
+  const auto root = std::filesystem::temp_directory_path() / "niminal-theme-test";
+  std::filesystem::create_directories(root / ".niminal" / "themes");
+  setenv("HOME", root.c_str(), 1);
+  {
+    std::ofstream out(root / ".niminal" / "themes" / "ocean.json");
+    out << R"({"base":"light","colors":{"accent":"#123456","input_bg":"#abcdef"}})";
+  }
+  const auto custom = niminal::app::load_theme("ocean");
+  if (!custom || custom->accent != ftxui::Color::RGB(0x12, 0x34, 0x56) ||
+      custom->code != resolve_theme(ThemeMode::light).code ||
+      niminal::app::theme_names().back() != "ocean")
+    return 1;
+  {
+    std::ofstream out(root / ".niminal" / "themes" / "broken.json");
+    out << R"({"colors":{"accent":"red"}})";
+  }
+  if (niminal::app::load_theme("broken") || niminal::app::load_theme("missing"))
+    return 1;
+  std::filesystem::remove_all(root);
 
   std::cout << "theme ok\n";
   return 0;

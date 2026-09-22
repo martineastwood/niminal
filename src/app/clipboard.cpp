@@ -56,8 +56,7 @@ std::string pipe_read_first(std::initializer_list<const char*> commands) {
 std::string linux_clipboard_image_bytes() {
   for (const char* type : {"image/png", "image/jpeg", "image/webp"}) {
     const std::string wl = "wl-paste -n --type " + std::string(type) + " 2>/dev/null";
-    const std::string xc =
-        "xclip -selection clipboard -t " + std::string(type) + " -o 2>/dev/null";
+    const std::string xc = "xclip -selection clipboard -t " + std::string(type) + " -o 2>/dev/null";
     auto bytes = pipe_read(wl.c_str());
     if (bytes.empty()) {
       bytes = pipe_read(xc.c_str());

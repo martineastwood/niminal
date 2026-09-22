@@ -290,7 +290,7 @@ add_executable(niminal_settings_test
   src/app/theme.cpp
   src/app/auth.cpp)
 target_include_directories(niminal_settings_test PRIVATE src/app include)
-target_link_libraries(niminal_settings_test PRIVATE niminal::ai ftxui::dom)
+target_link_libraries(niminal_settings_test PRIVATE niminal::ai ftxui::dom nlohmann_json::nlohmann_json)
 niminal_strict_compile(niminal_settings_test)
 
 add_executable(niminal_provider_test
@@ -389,7 +389,7 @@ niminal_strict_compile(niminal_diff_test)
 
 add_executable(niminal_theme_test tests/theme_test.cpp src/app/theme.cpp)
 target_include_directories(niminal_theme_test PRIVATE src/app)
-target_link_libraries(niminal_theme_test PRIVATE ftxui::dom)
+target_link_libraries(niminal_theme_test PRIVATE ftxui::dom nlohmann_json::nlohmann_json)
 niminal_strict_compile(niminal_theme_test)
 
 add_executable(niminal_transcript_test tests/transcript_test.cpp src/app/transcript.cpp

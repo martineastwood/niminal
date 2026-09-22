@@ -13,8 +13,8 @@ inline std::string lower_copy(std::string value) {
 }
 
 inline std::string trim_copy(std::string value) {
-  while (!value.empty() &&
-         (value.back() == ' ' || value.back() == '\n' || value.back() == '\r' || value.back() == '\t')) {
+  while (!value.empty() && (value.back() == ' ' || value.back() == '\n' || value.back() == '\r' ||
+                            value.back() == '\t')) {
     value.pop_back();
   }
   size_t i = 0;

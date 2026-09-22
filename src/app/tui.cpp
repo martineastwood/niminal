@@ -225,8 +225,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
             const std::vector<std::string>* allowed_tools) {
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
-  ThemeMode theme_mode = parse_theme_mode(cfg.theme).value_or(ThemeMode::automatic);
-  Theme theme = resolve_theme(theme_mode);
+  Theme theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
   std::atomic<bool> local_cancel{false};
   if (agent.cancel == nullptr) {
     agent.cancel = &local_cancel;
@@ -497,8 +496,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     settings_error.clear();
     try {
       if (result.theme_changed) {
-        theme_mode = parse_theme_mode(cfg.theme).value_or(ThemeMode::automatic);
-        theme = resolve_theme(theme_mode);
+        theme = load_theme(cfg.theme).value();
       }
       if (result.agent_changed) {
         apply_provider(agent, cfg);
@@ -1540,25 +1538,23 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         if (arg.empty()) {
           blocks.push_back(
               Block{BlockKind::status,
-                    std::string("theme: ") + theme_mode_name(theme_mode) +
-                        (theme_mode == ThemeMode::automatic
+                    std::string("theme: ") + cfg.theme +
+                        (cfg.theme == "auto"
                              ? std::string(" (") + theme_mode_name(detect_terminal_theme()) + ")"
                              : std::string())});
           return;
         }
-        auto mode = parse_theme_mode(arg);
-        if (!mode) {
-          blocks.push_back(Block{BlockKind::error, "Usage: /theme [light|dark|auto]"});
+        auto selected = load_theme(arg);
+        if (!selected) {
+          blocks.push_back(Block{BlockKind::error, selected.error()});
           return;
         }
-        theme_mode = *mode;
-        theme = resolve_theme(theme_mode);
-        cfg.theme = theme_mode_name(theme_mode);
+        theme = *selected;
+        cfg.theme = arg;
         try {
           save_config(cfg);
-          blocks.push_back(Block{BlockKind::status, std::string("theme set to ") +
-                                                        theme_mode_name(theme_mode) + "\nsaved " +
-                                                        config_path().string()});
+          blocks.push_back(Block{BlockKind::status, std::string("theme set to ") + cfg.theme +
+                                                        "\nsaved " + config_path().string()});
         } catch (const std::exception& e) {
           blocks.push_back(
               Block{BlockKind::error,

@@ -32,7 +32,7 @@ constexpr SlashSpec kSlash[] = {
     {"/provider", "/provider [name]", "show or set the provider"},
     {"/model", "/model [ID]", "show or set the model"},
     {"/thinking", "/thinking [level]", "show or set reasoning"},
-    {"/theme", "/theme [mode]", "show or set light|dark|auto"},
+    {"/theme", "/theme [name]", "show or select a theme"},
     {"/settings", "/settings", "edit config in an overlay"},
     {"/permissions", "/permissions [clear]", "show or clear tool grants"},
     {"/trust", "/trust [on|off]", "show or set project resource trust"},
@@ -336,8 +336,7 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
 
   if (cmd == "/theme" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
-    for (auto mode : {ThemeMode::automatic, ThemeMode::light, ThemeMode::dark}) {
-      std::string name = theme_mode_name(mode);
+    for (const auto& name : theme_names()) {
       if (!arg.empty() && !name.starts_with(niminal::lower_copy(arg))) {
         continue;
       }

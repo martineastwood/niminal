@@ -157,6 +157,28 @@ and `/theme auto` save the choice to your config. `auto` asks the terminal for
 its background color at startup and falls back to dark when the query does not
 answer.
 
+You can add a theme by saving a JSON file in `~/.niminal/themes/`. The filename
+is the theme name. For example, create `~/.niminal/themes/ocean.json`:
+
+```json
+{
+  "base": "dark",
+  "colors": {
+    "accent": "#68c4d4",
+    "code": "#9ed88f",
+    "input_bg": "#1d3540"
+  }
+}
+```
+
+Run `/theme ocean` to apply it immediately and save your choice. Type `/theme `
+to see available names, or select one in `/settings`. `base` is `light` or
+`dark`; omitted colors use that palette. Colors must be `#RRGGBB`. Available
+color names are `accent`, `code`, `add`, `del`, `meta`, `thinking`, `error`,
+`muted`, `emphasis`, `italic`, `quote`, `input_fg`, `input_bg`, and `hover_bg`.
+Edit the file and run `/theme ocean` again to reload it. If a theme file is
+missing or invalid at startup, the TUI uses `auto` until you choose a theme.
+
 Assistant replies render as Markdown: headings, lists, quotes, tables, inline
 emphasis, and fenced code.
 

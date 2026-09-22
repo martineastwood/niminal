@@ -58,7 +58,7 @@ chmod 600 ~/.niminal/auth.json
 | `api_url` | provider endpoint | Override the API base URL |
 | `thinking` | unset | Reasoning level: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `show_thinking` | `false` | Start new thinking cards expanded in the TUI |
-| `theme` | `auto` | `light`, `dark`, or `auto` |
+| `theme` | `auto` | `light`, `dark`, `auto`, or a name from `~/.niminal/themes/` |
 | `editor` | unset | External editor command for Ctrl-G. Overrides `$VISUAL` and `$EDITOR` |
 | `steering_mode` | `one-at-a-time` | RPC queue delivery: `all` or `one-at-a-time` |
 | `follow_up_mode` | `one-at-a-time` | Same for follow-up queue |

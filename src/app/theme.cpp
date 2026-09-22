@@ -4,9 +4,15 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <utility>
 
 namespace niminal::app {
 namespace {
@@ -218,6 +224,94 @@ Theme resolve_theme(ThemeMode mode) {
       .input_bg = Color::RGB(234, 234, 234),
       .hover_bg = Color::GrayLight,
   };
+}
+
+std::vector<std::string> theme_names() {
+  std::vector<std::string> names{"auto", "light", "dark"};
+  const char* home = std::getenv("HOME");
+  if (!home || !*home) {
+    return names;
+  }
+  std::error_code ec;
+  const auto directory = std::filesystem::path(home) / ".niminal" / "themes";
+  for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end;
+       it.increment(ec)) {
+    if (it->is_regular_file(ec) && it->path().extension() == ".json") {
+      const auto name = it->path().stem().string();
+      if (!parse_theme_mode(name)) {
+        names.push_back(name);
+      }
+    }
+  }
+  std::sort(names.begin() + 3, names.end());
+  return names;
+}
+
+std::expected<Theme, std::string> load_theme(std::string_view name) {
+  if (auto mode = parse_theme_mode(name)) {
+    return resolve_theme(*mode);
+  }
+  const char* home = std::getenv("HOME");
+  if (!home || !*home) {
+    return std::unexpected("HOME is not set");
+  }
+  const auto names = theme_names();
+  if (std::find(names.begin(), names.end(), name) == names.end()) {
+    return std::unexpected("theme not found: " + std::string(name));
+  }
+  const auto path =
+      std::filesystem::path(home) / ".niminal" / "themes" / (std::string(name) + ".json");
+  try {
+    std::ifstream input(path);
+    if (!input) {
+      return std::unexpected("cannot read " + path.string());
+    }
+    const auto doc = nlohmann::json::parse(input);
+    if (!doc.is_object()) {
+      return std::unexpected("theme must be a JSON object");
+    }
+    const auto base = doc.value("base", std::string("dark"));
+    const auto mode = parse_theme_mode(base);
+    if (!mode || *mode == ThemeMode::automatic) {
+      return std::unexpected("theme base must be light or dark");
+    }
+    auto theme = resolve_theme(*mode);
+    if (!doc.contains("colors") || !doc["colors"].is_object()) {
+      return std::unexpected("theme colors must be an object");
+    }
+    auto colors = doc["colors"];
+    constexpr std::pair<std::string_view, Color Theme::*> fields[] = {
+        {"accent", &Theme::accent},     {"code", &Theme::code},
+        {"add", &Theme::add},           {"del", &Theme::del},
+        {"meta", &Theme::meta},         {"thinking", &Theme::thinking},
+        {"error", &Theme::error},       {"muted", &Theme::muted},
+        {"emphasis", &Theme::emphasis}, {"italic", &Theme::italic},
+        {"quote", &Theme::quote},       {"input_fg", &Theme::input_fg},
+        {"input_bg", &Theme::input_bg}, {"hover_bg", &Theme::hover_bg},
+    };
+    for (const auto& [key, value] : colors.items()) {
+      if (!value.is_string()) {
+        return std::unexpected("invalid color for " + key);
+      }
+      const auto hex = value.get<std::string>();
+      if (hex.size() != 7 || hex[0] != '#' || !std::all_of(hex.begin() + 1, hex.end(), is_hex)) {
+        return std::unexpected("color " + key + " must be #RRGGBB");
+      }
+      auto channel = [&](size_t offset) {
+        return static_cast<uint8_t>(*hex_channel(std::string_view(hex).substr(offset, 2)));
+      };
+      const auto color = Color::RGB(channel(1), channel(3), channel(5));
+      const auto field = std::find_if(std::begin(fields), std::end(fields),
+                                      [&](const auto& item) { return item.first == key; });
+      if (field == std::end(fields)) {
+        return std::unexpected("unknown theme color: " + key);
+      }
+      theme.*(field->second) = color;
+    }
+    return theme;
+  } catch (const std::exception& error) {
+    return std::unexpected("invalid theme " + std::string(name) + ": " + error.what());
+  }
 }
 
 } // namespace niminal::app

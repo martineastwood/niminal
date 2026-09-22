@@ -56,8 +56,7 @@ std::vector<std::string> thinking_options(std::string_view provider, std::string
 }
 
 std::vector<std::string> theme_options() {
-  return {theme_mode_name(ThemeMode::automatic), theme_mode_name(ThemeMode::light),
-          theme_mode_name(ThemeMode::dark)};
+  return theme_names();
 }
 
 std::vector<std::string> queue_mode_options() {
@@ -233,11 +232,10 @@ SettingApplyResult cycle_setting(Config& cfg, SettingField field, int direction,
   }
   case SettingField::theme: {
     const auto next = cycle_option(theme_options(), cfg.theme, direction);
-    const auto mode = parse_theme_mode(next);
-    if (!mode) {
-      return fail("invalid theme");
+    if (auto theme = load_theme(next); !theme) {
+      return fail(theme.error());
     }
-    cfg.theme = theme_mode_name(*mode);
+    cfg.theme = next;
     return ok(false, true);
   }
   case SettingField::steering_mode: {

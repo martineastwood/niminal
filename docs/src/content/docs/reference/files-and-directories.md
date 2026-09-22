@@ -10,6 +10,7 @@ description: Every path niminal reads and writes on your machine.
 | `~/.niminal/config.json` | User settings |
 | `~/.niminal/auth.json` | Provider credentials |
 | `~/.niminal/keybindings.json` | Interactive TUI shortcuts |
+| `~/.niminal/themes/*.json` | Custom TUI themes |
 | `~/.niminal/sessions/` | Append-only session JSONL files |
 | `~/.niminal/sessions/.trash/` | Deleted sessions |
 | `~/.niminal/trust.json` | Per-workspace trust decisions |

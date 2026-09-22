@@ -2,8 +2,11 @@
 
 #include <ftxui/dom/elements.hpp>
 
+#include <expected>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace niminal::app {
 
@@ -39,5 +42,7 @@ std::optional<ThemeMode> theme_from_colorfgbg(std::string_view value);
 ThemeMode detect_terminal_theme();
 
 Theme resolve_theme(ThemeMode mode);
+std::vector<std::string> theme_names();
+std::expected<Theme, std::string> load_theme(std::string_view name);
 
 } // namespace niminal::app

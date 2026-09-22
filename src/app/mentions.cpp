@@ -68,11 +68,9 @@ struct PathMention {
   std::string_view relative;
 };
 
-template <typename Fn>
-void for_each_path_mention(std::string_view text, Fn&& fn) {
+template <typename Fn> void for_each_path_mention(std::string_view text, Fn&& fn) {
   for (size_t i = 0; i < text.size();) {
-    if (text[i] != '@' ||
-        (i > 0 && (std::isspace(static_cast<unsigned char>(text[i - 1])) == 0))) {
+    if (text[i] != '@' || (i > 0 && (std::isspace(static_cast<unsigned char>(text[i - 1])) == 0))) {
       ++i;
       continue;
     }
