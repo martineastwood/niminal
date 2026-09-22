@@ -65,5 +65,6 @@ struct KeybindingsLoad {
 std::filesystem::path keybindings_path();
 KeybindingsLoad load_keybindings_file(const std::filesystem::path& path);
 KeybindingsLoad load_keybindings();
+std::string busy_wait_message(const Keybindings& keybindings);
 
 } // namespace niminal::app

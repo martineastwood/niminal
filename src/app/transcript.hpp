@@ -4,11 +4,13 @@
 
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/box.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace niminal::app {
 
@@ -50,6 +52,7 @@ bool is_drag_gesture(int press_x, int press_y, int release_x, int release_y);
 ftxui::Element render_diff_card(const Block& block, const Theme& theme);
 ftxui::Element render_user_message(const Block& block, const Theme& theme);
 ftxui::Element render_transcript_card(const Block& block, const Theme& theme, ftxui::Box& box);
+std::vector<Block> blocks_from_events(const std::vector<nlohmann::json>& events);
 std::string clip_text(std::string text, size_t max_chars, int max_lines);
 std::string tool_summary(const std::string& name, const std::string& args);
 ftxui::Decorator block_style(BlockKind kind, const Theme& theme);

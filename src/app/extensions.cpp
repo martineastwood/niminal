@@ -73,10 +73,30 @@ bool builtin_tool(std::string name) {
   return names.contains(name);
 }
 
+std::vector<fs::path> scan_manifest_dirs(const std::vector<fs::path>& bases,
+                                         const char* manifest_name) {
+  std::vector<fs::path> result;
+  std::error_code ec;
+  for (const auto& base : bases) {
+    if (!fs::is_directory(base, ec)) {
+      continue;
+    }
+    std::vector<fs::path> found;
+    for (const auto& entry : fs::directory_iterator(base, ec)) {
+      if (entry.is_directory(ec) && fs::is_regular_file(entry.path() / manifest_name, ec)) {
+        found.push_back(entry.path());
+      }
+    }
+    std::sort(found.begin(), found.end());
+    result.insert(result.end(), found.begin(), found.end());
+  }
+  return result;
+}
+
 std::vector<fs::path> extension_dirs(const fs::path& workspace) {
   std::vector<fs::path> bases;
   try {
-    auto global = config_path().parent_path();
+    const auto global = config_path().parent_path();
     bases.push_back(global.parent_path() / ".agents" / "extensions");
     bases.push_back(global.parent_path() / ".nimlet" / "extensions");
     bases.push_back(global / "extensions");
@@ -87,31 +107,16 @@ std::vector<fs::path> extension_dirs(const fs::path& workspace) {
     bases.push_back(workspace / ".nimlet" / "extensions");
     bases.push_back(workspace / ".niminal" / "extensions");
   }
-  std::vector<fs::path> result;
-  std::error_code ec;
-  for (const auto& base : bases) {
-    if (!fs::is_directory(base, ec)) {
-      continue;
-    }
-    std::vector<fs::path> found;
-    for (const auto& entry : fs::directory_iterator(base, ec)) {
-      if (entry.is_directory(ec) && fs::is_regular_file(entry.path() / "extension.json", ec)) {
-        found.push_back(entry.path());
-      }
-    }
-    std::sort(found.begin(), found.end());
-    result.insert(result.end(), found.begin(), found.end());
-  }
-  return result;
+  return scan_manifest_dirs(bases, "extension.json");
 }
 
 std::vector<fs::path> external_tool_dirs(const fs::path& workspace) {
   std::vector<fs::path> bases;
   try {
-    auto global = config_path().parent_path();
+    const auto global = config_path().parent_path();
     bases.push_back(global.parent_path() / ".agents" / "tools");
     bases.push_back(global.parent_path() / ".nimlet" / "tools");
-    bases.push_back(config_path().parent_path() / "tools");
+    bases.push_back(global / "tools");
   } catch (...) {
   }
   if (project_resources_trusted(workspace)) {
@@ -120,22 +125,7 @@ std::vector<fs::path> external_tool_dirs(const fs::path& workspace) {
     bases.push_back(workspace / ".nimlet" / "tools");
     bases.push_back(workspace / ".niminal" / "tools");
   }
-  std::vector<fs::path> result;
-  std::error_code ec;
-  for (const auto& base : bases) {
-    if (!fs::is_directory(base, ec)) {
-      continue;
-    }
-    std::vector<fs::path> found;
-    for (const auto& entry : fs::directory_iterator(base, ec)) {
-      if (entry.is_directory(ec) && fs::is_regular_file(entry.path() / "tool.json", ec)) {
-        found.push_back(entry.path());
-      }
-    }
-    std::sort(found.begin(), found.end());
-    result.insert(result.end(), found.begin(), found.end());
-  }
-  return result;
+  return scan_manifest_dirs(bases, "tool.json");
 }
 
 struct Manifest {
@@ -154,7 +144,7 @@ struct ExternalTool {
   bool read_only = false;
 };
 
-bool external_read_only_capabilities(const json& doc) {
+bool read_only_capabilities(const json& doc) {
   auto it = doc.find("capabilities");
   if (it == doc.end() || it->is_null()) {
     return false;
@@ -231,7 +221,7 @@ ExternalTool parse_external_manifest(const fs::path& path) {
     }
     out.timeout_seconds = static_cast<int>(seconds);
   }
-  out.read_only = external_read_only_capabilities(doc);
+  out.read_only = read_only_capabilities(doc);
   out.dir = path.parent_path();
   return out;
 }
@@ -1119,31 +1109,6 @@ json request(ExtensionRuntime::Impl& impl, Process& process, const json& message
     }
     throw;
   }
-}
-
-bool read_only_capabilities(const json& tool) {
-  auto it = tool.find("capabilities");
-  if (it == tool.end()) {
-    return false;
-  }
-  if (!it->is_array()) {
-    throw std::runtime_error("capabilities must be an array");
-  }
-  bool any = false;
-  bool read_only = true;
-  for (const auto& item : *it) {
-    if (!item.is_string()) {
-      throw std::runtime_error("capabilities must be strings");
-    }
-    auto value = niminal::lower_copy(item.get<std::string>());
-    if (value != "read" && value != "write" && value != "shell" && value != "network" &&
-        value != "user") {
-      throw std::runtime_error("unknown capability: " + value);
-    }
-    any = true;
-    read_only = read_only && value == "read";
-  }
-  return any && read_only;
 }
 
 } // namespace

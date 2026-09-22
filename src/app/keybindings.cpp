@@ -354,4 +354,9 @@ KeybindingsLoad load_keybindings() {
   }
 }
 
+std::string busy_wait_message(const Keybindings& keybindings) {
+  return "wait for the turn to finish, or " + keybindings.label(KeyAction::cancel) +
+         " to interrupt";
+}
+
 } // namespace niminal::app

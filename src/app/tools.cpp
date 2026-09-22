@@ -658,4 +658,18 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
   return tools;
 }
 
+ShellEnv make_shell_env(const Session& session, const niminal::Agent& agent, const Config& cfg) {
+  ShellEnv env;
+  env["NIMINAL_SESSION_ID"] = session.id;
+  if (!session.path.empty()) {
+    env["NIMINAL_SESSION_FILE"] = session.path;
+  }
+  env["NIMINAL_PROVIDER"] = agent.provider;
+  env["NIMINAL_MODEL"] = agent.model;
+  if (!cfg.thinking.empty()) {
+    env["NIMINAL_REASONING_LEVEL"] = cfg.thinking;
+  }
+  return env;
+}
+
 } // namespace niminal::app

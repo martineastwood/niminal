@@ -628,18 +628,8 @@ int main(int argc, char** argv) {
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
   niminal::app::apply_provider(agent, cfg);
 
-  shell_env = [&session, &agent, &cfg] -> niminal::app::ShellEnv {
-    niminal::app::ShellEnv env;
-    env["NIMINAL_SESSION_ID"] = session.id;
-    if (!session.path.empty()) {
-      env["NIMINAL_SESSION_FILE"] = session.path;
-    }
-    env["NIMINAL_PROVIDER"] = agent.provider;
-    env["NIMINAL_MODEL"] = agent.model;
-    if (!cfg.thinking.empty()) {
-      env["NIMINAL_REASONING_LEVEL"] = cfg.thinking;
-    }
-    return env;
+  shell_env = [&session, &agent, &cfg] {
+    return niminal::app::make_shell_env(session, agent, cfg);
   };
 
   auto extensions =

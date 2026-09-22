@@ -16,40 +16,6 @@ int estimate_tokens(std::string_view text) {
   return static_cast<int>((text.size() + 3) / 4);
 }
 
-int estimate_event_tokens(const json& event) {
-  auto type = event.value("type", "");
-  if (type == "user" || type == "assistant") {
-    int n = 0;
-    if (event.contains("content") && event["content"].is_array()) {
-      for (const auto& part : event["content"]) {
-        if (!part.is_object()) {
-          continue;
-        }
-        n += estimate_tokens(part.value("text", ""));
-        n += estimate_tokens(part.value("name", ""));
-        if (part.value("type", "") == "image") {
-          n += 1000;
-        }
-        if (part.contains("input")) {
-          n += estimate_tokens(part["input"].dump());
-        }
-      }
-    }
-    return n;
-  }
-  if (type == "tool_result") {
-    int n = estimate_tokens(event.value("output", ""));
-    if (event.contains("images") && event["images"].is_array()) {
-      n += 1000 * static_cast<int>(event["images"].size());
-    }
-    return n;
-  }
-  if (type == "compaction") {
-    return estimate_tokens(event.value("summary", ""));
-  }
-  return 0;
-}
-
 int estimate_session_tokens(const Session& session) {
   int n = 0;
   const int compact = session.latest_compaction_index();
@@ -62,7 +28,7 @@ int estimate_session_tokens(const Session& session) {
           : static_cast<size_t>(std::max(
                 0, session.events[static_cast<size_t>(compact)].value("first_kept_index", 0)));
   for (size_t i = start; i < session.events.size(); ++i) {
-    n += estimate_event_tokens(session.events[i]);
+    n += estimate_session_event_tokens(session.events[i]);
   }
   return n;
 }
@@ -85,7 +51,7 @@ int find_cut_index(const Session& session, int keep_recent_tokens, int from_inde
   int tokens = 0;
   int i = static_cast<int>(session.events.size()) - 1;
   while (i >= from_index) {
-    tokens += estimate_event_tokens(session.events[static_cast<size_t>(i)]);
+    tokens += estimate_session_event_tokens(session.events[static_cast<size_t>(i)]);
     if (tokens >= std::max(1, keep_recent_tokens)) {
       int cut = i;
       while (cut > from_index &&
@@ -105,64 +71,11 @@ int find_cut_index(const Session& session, int keep_recent_tokens, int from_inde
   return -1;
 }
 
-std::string serialize_event(const json& event) {
-  auto type = event.value("type", "");
-  if (type == "user") {
-    std::string text = "user:\n";
-    if (event.contains("content") && event["content"].is_array()) {
-      for (const auto& part : event["content"]) {
-        if (part.is_object() && part.value("type", "") == "text") {
-          text += part.value("text", "") + "\n";
-        } else if (part.is_object() && part.value("type", "") == "image") {
-          text += "[image: " + part.value("name", "image") + "]\n";
-        }
-      }
-    }
-    return text;
-  }
-  if (type == "assistant") {
-    std::string text = "assistant:\n";
-    if (event.contains("content") && event["content"].is_array()) {
-      for (const auto& part : event["content"]) {
-        if (!part.is_object()) {
-          continue;
-        }
-        auto ptype = part.value("type", "");
-        if (ptype == "text") {
-          text += part.value("text", "") + "\n";
-        }
-        if (ptype == "tool_use") {
-          text += "tool_call " + part.value("name", "") + " " +
-                  part.value("input", json::object()).dump() + "\n";
-        }
-      }
-    }
-    return text;
-  }
-  if (type == "tool_result") {
-    auto outp = event.value("output", "");
-    if (outp.size() > 8000) {
-      outp.resize(8000);
-      outp += "\n…(truncated)…";
-    }
-    std::string text = "tool_result";
-    if (event.value("is_error", false)) {
-      text += " ERROR";
-    }
-    text += ":\n" + outp + "\n";
-    for (const auto& image : event.value("images", json::array())) {
-      text += "[image: " + image.value("name", "image") + "]\n";
-    }
-    return text;
-  }
-  return {};
-}
-
 std::string serialize_range(const Session& session, int start, int end) {
   std::ostringstream out;
   int hi = std::min(end, static_cast<int>(session.events.size()));
   for (int i = std::max(0, start); i < hi; ++i) {
-    auto chunk = serialize_event(session.events[static_cast<size_t>(i)]);
+    auto chunk = serialize_session_event(session.events[static_cast<size_t>(i)]);
     if (!chunk.empty()) {
       out << chunk << '\n';
     }

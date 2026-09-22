@@ -2,6 +2,7 @@
 #include "config.hpp"
 #include "trust.hpp"
 
+#include <niminal/agent.hpp>
 #include <niminal/types.hpp>
 
 #include <algorithm>
@@ -111,6 +112,15 @@ niminal::Tool skill_tool(const fs::path& workspace) {
             return load_skill(workspace, input.at("name").get<std::string>());
           },
           true};
+}
+
+void refresh_skill_tool(niminal::Agent& agent, const std::filesystem::path& workspace) {
+  for (auto& tool : agent.tools) {
+    if (tool.name == "skill") {
+      tool = skill_tool(workspace);
+      return;
+    }
+  }
 }
 
 } // namespace niminal::app

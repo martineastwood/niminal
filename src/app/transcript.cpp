@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <sstream>
 #include <utility>
 
@@ -296,6 +297,78 @@ const char* block_label(BlockKind kind) {
     return "error";
   }
   return "";
+}
+
+std::vector<Block> blocks_from_events(const std::vector<json>& events) {
+  std::vector<Block> blocks;
+  for (const auto& event : events) {
+    if (!event.is_object()) {
+      continue;
+    }
+    const auto type = event.value("type", "");
+    if (type == "user") {
+      std::string text;
+      if (event.contains("content") && event["content"].is_array()) {
+        for (const auto& part : event["content"]) {
+          if (part.is_object() && part.value("type", "") == "text") {
+            text += part.value("text", "");
+          } else if (part.is_object() && part.value("type", "") == "image") {
+            text += (text.empty() ? "" : "\n") + std::string("[image: ") +
+                    part.value("name", "image") + "]";
+          }
+        }
+      }
+      if (!text.empty()) {
+        blocks.push_back(Block{BlockKind::user, std::move(text)});
+      }
+    } else if (type == "assistant") {
+      std::string text;
+      if (event.contains("content") && event["content"].is_array()) {
+        for (const auto& part : event["content"]) {
+          if (!part.is_object()) {
+            continue;
+          }
+          const auto ptype = part.value("type", "");
+          if (ptype == "text") {
+            text += part.value("text", "");
+          }
+          if (ptype == "tool_use") {
+            if (!text.empty()) {
+              blocks.push_back(Block{BlockKind::assistant, text});
+              text.clear();
+            }
+            json input = part.value("input", json::object());
+            Block tool{BlockKind::tool, input.is_object() ? input.dump() : std::string()};
+            tool.tool_name = part.value("name", "");
+            tool.tool_id = part.value("id", "");
+            blocks.push_back(std::move(tool));
+          }
+        }
+      }
+      if (!text.empty()) {
+        blocks.push_back(Block{BlockKind::assistant, std::move(text)});
+      }
+    } else if (type == "bash") {
+      Block tool{BlockKind::tool, json{{"command", event.value("command", "")}}.dump()};
+      tool.tool_name = "bash";
+      tool.result = event.value("output", "");
+      blocks.push_back(std::move(tool));
+    } else if (type == "tool_result") {
+      const auto id = event.value("id", "");
+      const auto output = event.value("output", "");
+      auto it = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
+        return block.kind == BlockKind::tool && block.tool_id == id;
+      });
+      if (it != blocks.rend()) {
+        it->result = output;
+      }
+    } else if (type == "compaction") {
+      const auto summary = event.value("summary", "");
+      blocks.push_back(
+          Block{BlockKind::status, "Compacted earlier turns.\n" + clip_text(summary, 1200, 12)});
+    }
+  }
+  return blocks;
 }
 
 Element paragraph_preserving_whitespace(std::string_view value) {

@@ -3,12 +3,14 @@
 
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <nlohmann/json.hpp>
 
 #include <iostream>
 #include <string>
 
 using niminal::app::Block;
 using niminal::app::BlockKind;
+using niminal::app::blocks_from_events;
 using niminal::app::is_drag_gesture;
 using niminal::app::render_transcript_card;
 using niminal::app::resolve_theme;
@@ -161,6 +163,24 @@ int main() {
   }
   if (!is_drag_gesture(4, 7, 5, 7) || !is_drag_gesture(4, 7, 4, 8)) {
     return fail("moved pointer is a drag", "reported as click");
+  }
+
+  using json = nlohmann::json;
+  const std::vector<json> events = {
+      json{{"type", "user"}, {"content", json::array({{{"type", "text"}, {"text", "hello"}}})}},
+      json{{"type", "assistant"},
+           {"content", json::array({{{"type", "text"}, {"text", "hi"}},
+                                    {{"type", "tool_use"},
+                                     {"id", "t1"},
+                                     {"name", "read"},
+                                     {"input", json{{"path", "README.md"}}}}})}},
+      json{{"type", "tool_result"}, {"id", "t1"}, {"output", "done"}}};
+  auto blocks = blocks_from_events(events);
+  if (blocks.size() != 3 || blocks[0].kind != BlockKind::user || blocks[0].text != "hello" ||
+      blocks[1].kind != BlockKind::assistant || blocks[1].text != "hi" ||
+      blocks[2].kind != BlockKind::tool || blocks[2].tool_name != "read" ||
+      blocks[2].result != "done") {
+    return fail("blocks_from_events projects session events", std::to_string(blocks.size()));
   }
 
   return 0;

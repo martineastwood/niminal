@@ -1079,6 +1079,99 @@ std::string format_session_list(const std::vector<SessionInfo>& infos,
   return out.str();
 }
 
+std::string session_event_text(const json& event) {
+  return event_text(event);
+}
+
+std::string serialize_session_event(const json& event) {
+  const auto type = event.value("type", "");
+  if (type == "user") {
+    std::string text = "user:\n";
+    if (event.contains("content") && event["content"].is_array()) {
+      for (const auto& part : event["content"]) {
+        if (part.is_object() && part.value("type", "") == "text") {
+          text += part.value("text", "") + "\n";
+        } else if (part.is_object() && part.value("type", "") == "image") {
+          text += "[image: " + part.value("name", "image") + "]\n";
+        }
+      }
+    }
+    return text;
+  }
+  if (type == "assistant") {
+    std::string text = "assistant:\n";
+    if (event.contains("content") && event["content"].is_array()) {
+      for (const auto& part : event["content"]) {
+        if (!part.is_object()) {
+          continue;
+        }
+        const auto ptype = part.value("type", "");
+        if (ptype == "text") {
+          text += part.value("text", "") + "\n";
+        }
+        if (ptype == "tool_use") {
+          text += "tool_call " + part.value("name", "") + " " +
+                  part.value("input", json::object()).dump() + "\n";
+        }
+      }
+    }
+    return text;
+  }
+  if (type == "tool_result") {
+    auto output = event.value("output", "");
+    if (output.size() > 8000) {
+      output.resize(8000);
+      output += "\n…(truncated)…";
+    }
+    std::string text = "tool_result";
+    if (event.value("is_error", false)) {
+      text += " ERROR";
+    }
+    text += ":\n" + output + "\n";
+    for (const auto& image : event.value("images", json::array())) {
+      text += "[image: " + image.value("name", "image") + "]\n";
+    }
+    return text;
+  }
+  return {};
+}
+
+int estimate_session_event_tokens(const json& event) {
+  const auto type = event.value("type", "");
+  if (type == "user" || type == "assistant") {
+    int tokens = 0;
+    if (event.contains("content") && event["content"].is_array()) {
+      for (const auto& part : event["content"]) {
+        if (!part.is_object()) {
+          continue;
+        }
+        tokens += static_cast<int>((part.value("text", "").size() + 3) / 4);
+        tokens += static_cast<int>((part.value("name", "").size() + 3) / 4);
+        if (part.value("type", "") == "image") {
+          tokens += 1000;
+        }
+        if (part.contains("input")) {
+          tokens += static_cast<int>((part["input"].dump().size() + 3) / 4);
+        }
+      }
+    }
+    return tokens;
+  }
+  if (type == "tool_result") {
+    const auto output = event.value("output", "");
+    int tokens = output.empty() ? 1 : static_cast<int>((output.size() + 3) / 4);
+    if (event.contains("images") && event["images"].is_array()) {
+      tokens += 1000 * static_cast<int>(event["images"].size());
+    }
+    return tokens;
+  }
+  if (type == "compaction") {
+    const auto summary = event.value("summary", "");
+    return summary.empty() ? 1 : static_cast<int>((summary.size() + 3) / 4);
+  }
+  return 0;
+}
+
 void bind_session(niminal::Agent& agent, Session& session) {
   agent.persist_user = [&session](const niminal::UserInput& input) { session.add_user(input); };
   agent.persist_extension_message = [&session](const nlohmann::json& message) {

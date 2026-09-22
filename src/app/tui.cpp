@@ -923,73 +923,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.push_back(
           Block{BlockKind::status, "This session was started in " + session.workspace});
     }
-    for (const auto& event : session.events) {
-      if (!event.is_object()) {
-        continue;
-      }
-      auto type = event.value("type", "");
-      if (type == "user") {
-        std::string text;
-        if (event.contains("content") && event["content"].is_array()) {
-          for (const auto& part : event["content"]) {
-            if (part.is_object() && part.value("type", "") == "text") {
-              text += part.value("text", "");
-            } else if (part.is_object() && part.value("type", "") == "image") {
-              text += (text.empty() ? "" : "\n") + std::string("[image: ") +
-                      part.value("name", "image") + "]";
-            }
-          }
-        }
-        if (!text.empty()) {
-          blocks.push_back(Block{BlockKind::user, std::move(text)});
-        }
-      } else if (type == "assistant") {
-        std::string text;
-        if (event.contains("content") && event["content"].is_array()) {
-          for (const auto& part : event["content"]) {
-            if (!part.is_object()) {
-              continue;
-            }
-            auto ptype = part.value("type", "");
-            if (ptype == "text") {
-              text += part.value("text", "");
-            }
-            if (ptype == "tool_use") {
-              if (!text.empty()) {
-                blocks.push_back(Block{BlockKind::assistant, text});
-                text.clear();
-              }
-              json input = part.value("input", json::object());
-              Block tool{BlockKind::tool, input.is_object() ? input.dump() : std::string()};
-              tool.tool_name = part.value("name", "");
-              tool.tool_id = part.value("id", "");
-              blocks.push_back(std::move(tool));
-            }
-          }
-        }
-        if (!text.empty()) {
-          blocks.push_back(Block{BlockKind::assistant, std::move(text)});
-        }
-      } else if (type == "bash") {
-        Block tool{BlockKind::tool, json{{"command", event.value("command", "")}}.dump()};
-        tool.tool_name = "bash";
-        tool.result = event.value("output", "");
-        blocks.push_back(std::move(tool));
-      } else if (type == "tool_result") {
-        const auto id = event.value("id", "");
-        const auto output = event.value("output", "");
-        auto it = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
-          return block.kind == BlockKind::tool && block.tool_id == id;
-        });
-        if (it != blocks.rend()) {
-          it->result = output;
-        }
-      } else if (type == "compaction") {
-        auto summary = event.value("summary", "");
-        blocks.push_back(
-            Block{BlockKind::status, "Compacted earlier turns.\n" + clip_text(summary, 1200, 12)});
-      }
-    }
+    auto event_blocks = blocks_from_events(session.events);
+    blocks.insert(blocks.end(), std::make_move_iterator(event_blocks.begin()),
+                  std::make_move_iterator(event_blocks.end()));
   };
 
   auto adopt_session = [&](Session next, const std::string& note, const std::string& reason) {
@@ -1125,28 +1061,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   }
   idle_extension_messages.clear();
 
-  auto shell_env = [&] {
-    ShellEnv env;
-    env["NIMINAL_SESSION_ID"] = session.id;
-    if (!session.path.empty()) {
-      env["NIMINAL_SESSION_FILE"] = session.path;
-    }
-    env["NIMINAL_PROVIDER"] = agent.provider;
-    env["NIMINAL_MODEL"] = agent.model;
-    if (!cfg.thinking.empty()) {
-      env["NIMINAL_REASONING_LEVEL"] = cfg.thinking;
-    }
-    return env;
-  };
+  auto shell_env = [&] { return make_shell_env(session, agent, cfg); };
 
   int user_bash_seq = 0;
   auto run_user_bash = [&](std::string command, bool exclude_from_context,
                            std::string history_line) {
     remember_input(niminal::UserInput{std::move(history_line)});
     if (busy || user_bash_running) {
-      blocks.push_back(Block{BlockKind::status, "wait for the turn to finish, or " +
-                                                    keybindings.label(KeyAction::cancel) +
-                                                    " to interrupt"});
+      blocks.push_back(Block{BlockKind::status, busy_wait_message(keybindings)});
       return;
     }
     join_worker();
@@ -1278,9 +1200,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         if (!arg.empty()) {
           blocks.push_back(Block{BlockKind::error, "/retry takes no arguments"});
         } else if (busy) {
-          blocks.push_back(Block{BlockKind::status, "wait for the turn to finish, or " +
-                                                        keybindings.label(KeyAction::cancel) +
-                                                        " to interrupt"});
+          blocks.push_back(Block{BlockKind::status, busy_wait_message(keybindings)});
         } else if (!retry_available) {
           blocks.push_back(Block{BlockKind::status, "Nothing to retry."});
         } else {
@@ -1291,9 +1211,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       if (cmd == "/compact") {
         if (busy) {
-          blocks.push_back(Block{BlockKind::status, "wait for the turn to finish, or " +
-                                                        keybindings.label(KeyAction::cancel) +
-                                                        " to interrupt"});
+          blocks.push_back(Block{BlockKind::status, busy_wait_message(keybindings)});
           return;
         }
         try {
@@ -1309,9 +1227,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return;
       }
       if (busy) {
-        blocks.push_back(Block{BlockKind::status, "wait for the turn to finish, or " +
-                                                      keybindings.label(KeyAction::cancel) +
-                                                      " to interrupt"});
+        blocks.push_back(Block{BlockKind::status, busy_wait_message(keybindings)});
         return;
       }
       if (cmd == "/help") {
@@ -1388,11 +1304,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           return;
         }
         permissions.reload_project();
-        for (auto& tool : agent.tools) {
-          if (tool.name == "skill") {
-            tool = skill_tool(cwd);
-          }
-        }
+        refresh_skill_tool(agent, cwd);
         restart_extensions();
         blocks.push_back(Block{BlockKind::status, "Reloaded project resources."});
         return;
@@ -1426,11 +1338,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           try {
             save_project_trust(cwd, trusted);
             permissions.reload_project();
-            for (auto& tool : agent.tools) {
-              if (tool.name == "skill") {
-                tool = skill_tool(cwd);
-              }
-            }
+            refresh_skill_tool(agent, cwd);
             restart_extensions();
             blocks.push_back(Block{BlockKind::status, trusted
                                                           ? "Project-local resources enabled."

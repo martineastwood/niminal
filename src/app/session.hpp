@@ -85,4 +85,8 @@ std::string format_session_list(const std::vector<SessionInfo>& infos,
                                 std::string_view heading = "Sessions (newest first)");
 void bind_session(niminal::Agent& agent, Session& session);
 
+std::string session_event_text(const nlohmann::json& event);
+std::string serialize_session_event(const nlohmann::json& event);
+int estimate_session_event_tokens(const nlohmann::json& event);
+
 } // namespace niminal::app

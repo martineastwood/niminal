@@ -417,6 +417,26 @@ int main() {
     return fail("bash searchable");
   }
 
+  using niminal::app::estimate_session_event_tokens;
+  using niminal::app::serialize_session_event;
+  using niminal::app::session_event_text;
+  const json assistant_event = {
+      {"type", "assistant"},
+      {"content", json::array({{{"type", "text"}, {"text", "hello"}},
+                               {{"type", "tool_use"},
+                                {"id", "t1"},
+                                {"name", "read"},
+                                {"input", json{{"path", "README.md"}}}}})}};
+  if (session_event_text(assistant_event) != "hello") {
+    return fail("session_event_text reads assistant text");
+  }
+  if (serialize_session_event(assistant_event).find("tool_call read") == std::string::npos) {
+    return fail("serialize_session_event includes tool calls");
+  }
+  if (estimate_session_event_tokens(assistant_event) < 2) {
+    return fail("estimate_session_event_tokens counts assistant content");
+  }
+
   fs::remove_all(dir);
   return 0;
 }
