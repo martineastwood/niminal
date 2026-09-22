@@ -18,6 +18,7 @@ workspace. The tool definitions are sent with each request.
 | `write` | Create or replace a complete file | Auto |
 | `bash` | Run a shell command in the workspace | Ask |
 | `skill` | Load a discovered skill by name | Auto |
+| `ask_user` | Ask a multiple-choice question in the TUI | Auto |
 
 `--tools` can restrict the set, for example `--tools read,grep,glob` or
 `--tools none`. The restriction applies to extension tools as well as built-ins.
@@ -28,6 +29,21 @@ the workspace are rejected.
 Independent read-only built-in calls (`read`, `grep`, `glob`, `ls`, `skill`) in the
 same model response can run in parallel. Other tools run one at a time in request
 order.
+
+`ask_user` is available in interactive TUI sessions. It shows the question and
+choices below the transcript, with an `Other` choice for a free-text answer. The
+transcript stays visible and scrollable while you answer. Press Esc to cancel the
+question and let the model continue.
+
+```json
+{
+  "question": "Which implementation should I use?",
+  "options": ["A small dependency", "A standard-library solution"]
+}
+```
+
+The TUI adds `Other` automatically, so do not include it in `options`.
+Provide between 2 and 8 choices.
 
 ## `read`
 

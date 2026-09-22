@@ -68,8 +68,8 @@ bool builtin_tool(std::string name) {
   for (char& c : name) {
     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   }
-  static const std::set<std::string> names = {"bash", "edit", "glob",  "grep",
-                                              "ls",   "read", "skill", "write"};
+  static const std::set<std::string> names = {"ask_user", "bash", "edit", "glob", "grep",
+                                              "ls",       "read", "skill", "write"};
   return names.contains(name);
 }
 

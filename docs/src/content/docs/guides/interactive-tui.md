@@ -118,6 +118,14 @@ remembered.
 
 Use `/yolo` or `--yolo` to auto-approve tools for the current process.
 
+## Answer a model question
+
+When the model needs your preference or clarification, it can open a multiple-
+choice question below the transcript. Use Up and Down to choose an answer and
+Enter to submit it. Choose `Other` to type a free-text answer. The transcript
+remains visible and scrollable while the question is open. Press Esc to cancel
+the question and return control to the model.
+
 ## Settings overlay
 
 Run `/settings` to edit `~/.niminal/config.json` without leaving the TUI. The

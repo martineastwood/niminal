@@ -39,6 +39,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -128,6 +129,28 @@ int cursor_word_right(const std::string& text, int pos) {
   }
   while (i < text.size() && is_word_byte(text[i])) {
     ++i;
+  }
+  return static_cast<int>(i);
+}
+
+int cursor_glyph_left(const std::string& text, int pos) {
+  size_t i = std::min(static_cast<size_t>(std::max(0, pos)), text.size());
+  if (i > 0) {
+    --i;
+    while (i > 0 && (static_cast<unsigned char>(text[i]) & 0xC0) == 0x80) {
+      --i;
+    }
+  }
+  return static_cast<int>(i);
+}
+
+int cursor_glyph_right(const std::string& text, int pos) {
+  size_t i = std::min(static_cast<size_t>(std::max(0, pos)), text.size());
+  if (i < text.size()) {
+    ++i;
+    while (i < text.size() && (static_cast<unsigned char>(text[i]) & 0xC0) == 0x80) {
+      ++i;
+    }
   }
   return static_cast<int>(i);
 }
@@ -265,6 +288,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   bool retry_available = false;
   std::chrono::steady_clock::time_point footer_notice_until;
   float transcript_y = 1.F;
+  bool ask_user_open = false;
+  std::string ask_user_question;
+  std::vector<std::string> ask_user_options;
+  int ask_user_i = 0;
+  bool ask_user_editing_other = false;
+  std::string ask_user_answer;
+  int ask_user_cursor = 0;
+  std::function<void(niminal::ToolResult)> ask_user_complete;
   bool pasting = false;
   bool stick_bottom = true;
   std::vector<Box> card_boxes;
@@ -325,6 +356,62 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   auto with_restored_io = [&](const std::function<void()>& body) {
     run_on_ui([&] { screen.WithRestoredIO(body)(); });
   };
+
+  auto finish_ask_user = [&](niminal::ToolResult result) {
+    if (!ask_user_open || !ask_user_complete) {
+      return;
+    }
+    ask_user_open = false;
+    ask_user_editing_other = false;
+    auto complete = std::move(ask_user_complete);
+    complete(std::move(result));
+  };
+
+  const bool ask_user_allowed =
+      allowed_tools == nullptr ||
+      std::find(allowed_tools->begin(), allowed_tools->end(), "ask_user") != allowed_tools->end();
+  const bool ask_user_installed = ask_user_allowed;
+  if (ask_user_installed) {
+    agent.tools.push_back(niminal::Tool{
+        "ask_user",
+        "Ask the user a multiple-choice question in the TUI with 2 to 8 concise choices. The "
+        "widget adds an Other choice for a free-text answer.",
+        json{{"type", "object"},
+             {"properties",
+              {{"question", {{"type", "string"}, {"description", "Question to ask the user."}}},
+               {"options", {{"type", "array"},
+                            {"items", {{"type", "string"}}},
+                            {"description",
+                             "2 to 8 concise choices; Other is added automatically."},
+                            {"minItems", 2},
+                            {"maxItems", 8}}}}},
+             {"required", json::array({"question", "options"})},
+             {"additionalProperties", false}},
+        [&](const json& input) {
+          const auto question = input.at("question").get<std::string>();
+          const auto options = input.at("options").get<std::vector<std::string>>();
+          if (question.empty() || options.size() < 2 || options.size() > 8) {
+            return niminal::ToolResult{"tool error: ask_user needs a question and 2 to 8 choices"};
+          }
+          auto answer = std::make_shared<std::promise<niminal::ToolResult>>();
+          auto result = answer->get_future();
+          run_on_ui([&, question, options, answer] {
+            ask_user_question = question;
+            ask_user_options = options;
+            ask_user_i = 0;
+            ask_user_editing_other = false;
+            ask_user_answer.clear();
+            ask_user_cursor = 0;
+            ask_user_complete = [answer](niminal::ToolResult value) {
+              answer->set_value(std::move(value));
+            };
+            ask_user_open = true;
+            screen.RequestAnimationFrame();
+          });
+          return result.get();
+        },
+        false});
+  }
 
   auto configure_extension_ui = [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
     if (!runtime) {
@@ -1384,6 +1471,41 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       setting_rows.push_back(text(help) | dim);
       stack.push_back(vbox(std::move(setting_rows)));
+    } else if (ask_user_open) {
+      Elements question_rows;
+      question_rows.push_back(paragraph(ask_user_question) | bold | color(theme.accent));
+      for (size_t i = 0; i <= ask_user_options.size(); ++i) {
+        const bool is_other = i == ask_user_options.size();
+        const bool selected = static_cast<int>(i) == ask_user_i;
+        const auto choice = is_other ? std::string("Other") : ask_user_options[i];
+        auto row = paragraph(std::string(selected ? "› " : "  ") + choice);
+        if (selected) {
+          row = row | inverted;
+        }
+        question_rows.push_back(std::move(row));
+      }
+      if (ask_user_editing_other) {
+        Elements answer_glyphs{text("Other: ")};
+        size_t byte = 0;
+        for (const auto& glyph : Utf8ToGlyphs(ask_user_answer)) {
+          if (byte == static_cast<size_t>(ask_user_cursor)) {
+            answer_glyphs.push_back(focusCursorBarBlinking(text(glyph)));
+          } else {
+            answer_glyphs.push_back(text(glyph));
+          }
+          byte += glyph.size();
+        }
+        if (byte == static_cast<size_t>(ask_user_cursor)) {
+          answer_glyphs.push_back(focusCursorBarBlinking(text(" ")));
+        }
+        question_rows.push_back(hflow(std::move(answer_glyphs)));
+      }
+      question_rows.push_back(
+          text(ask_user_editing_other
+                   ? "Enter submit  Esc cancel  Page Up/Down scroll transcript"
+                   : "↑/↓ choose  Enter select  Esc cancel  Page Up/Down scroll transcript") |
+              dim);
+      stack.push_back(vbox(std::move(question_rows)));
     } else {
       if (!suggest_rows.empty()) {
         stack.push_back(vbox(std::move(suggest_rows)));
@@ -1501,6 +1623,101 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
   view = CatchEvent(view, [&](Event e) {
     auto pressed = [&](KeyAction action) { return keybindings.matches(action, e); };
+    if (ask_user_open) {
+      if (is_wheel_up(e) || pressed(KeyAction::scroll_up)) {
+        stick_bottom = false;
+        transcript_y =
+            std::max(0.F, transcript_y - (pressed(KeyAction::scroll_up) ? 0.35F : 0.07F));
+        return true;
+      }
+      if (is_wheel_down(e) || pressed(KeyAction::scroll_down)) {
+        transcript_y =
+            std::min(1.F, transcript_y + (pressed(KeyAction::scroll_down) ? 0.35F : 0.07F));
+        if (transcript_y >= 0.99F) {
+          transcript_y = 1.F;
+          stick_bottom = true;
+        }
+        return true;
+      }
+      if (pressed(KeyAction::cancel)) {
+        finish_ask_user(niminal::ToolResult{"User cancelled the question."});
+        return true;
+      }
+      if (pressed(KeyAction::quit)) {
+        finish_ask_user(niminal::ToolResult{"interrupted"});
+        cancel->store(true);
+        ui_alive = false;
+        screen.Exit();
+        return true;
+      }
+      if (ask_user_editing_other) {
+        if (pressed(KeyAction::submit)) {
+          if (!ask_user_answer.empty()) {
+            finish_ask_user(niminal::ToolResult{ask_user_answer});
+          }
+          return true;
+        }
+        if (e == Event::Backspace && ask_user_cursor > 0) {
+          const int previous = cursor_glyph_left(ask_user_answer, ask_user_cursor);
+          ask_user_answer.erase(static_cast<size_t>(previous),
+                                static_cast<size_t>(ask_user_cursor - previous));
+          ask_user_cursor = previous;
+          return true;
+        }
+        if (e == Event::ArrowLeft) {
+          ask_user_cursor = cursor_glyph_left(ask_user_answer, ask_user_cursor);
+          return true;
+        }
+        if (e == Event::ArrowRight) {
+          ask_user_cursor = cursor_glyph_right(ask_user_answer, ask_user_cursor);
+          return true;
+        }
+        if (pressed(KeyAction::word_left)) {
+          ask_user_cursor = cursor_word_left(ask_user_answer, ask_user_cursor);
+          return true;
+        }
+        if (pressed(KeyAction::word_right)) {
+          ask_user_cursor = cursor_word_right(ask_user_answer, ask_user_cursor);
+          return true;
+        }
+        if (pressed(KeyAction::draft_start)) {
+          ask_user_cursor = 0;
+          return true;
+        }
+        if (pressed(KeyAction::draft_end)) {
+          ask_user_cursor = static_cast<int>(ask_user_answer.size());
+          return true;
+        }
+        if (e.is_character()) {
+          const auto character = e.character();
+          ask_user_answer.insert(static_cast<size_t>(ask_user_cursor), character);
+          ask_user_cursor += static_cast<int>(character.size());
+          return true;
+        }
+        return true;
+      }
+      if (pressed(KeyAction::previous)) {
+        ask_user_i = (ask_user_i + static_cast<int>(ask_user_options.size())) %
+                     static_cast<int>(ask_user_options.size() + 1);
+        return true;
+      }
+      if (pressed(KeyAction::next)) {
+        ask_user_i = (ask_user_i + 1) % static_cast<int>(ask_user_options.size() + 1);
+        return true;
+      }
+      if (pressed(KeyAction::submit)) {
+        if (ask_user_i == static_cast<int>(ask_user_options.size())) {
+          ask_user_editing_other = true;
+          ask_user_answer.clear();
+          ask_user_cursor = 0;
+        } else {
+          finish_ask_user(niminal::ToolResult{
+              ask_user_options[static_cast<size_t>(ask_user_i)]});
+        }
+        return true;
+      }
+      return true;
+    }
     if (approval_pending()) {
       if (pressed(KeyAction::allow_once)) {
         resolve_approval(PermissionDecision::allow_once);
@@ -1868,6 +2085,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::cout << "\033[?2004l" << std::flush;
   ui_alive = false;
   cancel->store(true);
+  finish_ask_user(niminal::ToolResult{"interrupted"});
   resolve_approval(PermissionDecision::deny);
   join_worker();
   if (catalog_thread.joinable()) {
@@ -1884,6 +2102,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   agent.before_request = {};
   agent.recover_overflow = {};
   agent.approve_tool = {};
+  if (ask_user_installed) {
+    agent.tools.erase(std::remove_if(agent.tools.begin(), agent.tools.end(),
+                                     [](const niminal::Tool& tool) {
+                                       return tool.name == "ask_user";
+                                     }),
+                      agent.tools.end());
+  }
   return 0;
 }
 

@@ -34,7 +34,7 @@ std::string command_from(const niminal::ToolCall& call) {
 
 bool workspace_tool(const std::string& name) {
   return name == "read" || name == "grep" || name == "glob" || name == "ls" || name == "edit" ||
-         name == "write" || name == "skill";
+         name == "write" || name == "skill" || name == "ask_user";
 }
 
 } // namespace

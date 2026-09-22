@@ -88,6 +88,8 @@ Use the narrowest workspace tool that fits the task:
 - `bash` runs shell commands for tests, builds, formatters, git, and other workflows.
   Shell utilities can also inspect or transform files when that is the most practical
   approach. For normal code tasks, prefer: find/search -> read -> edit/write -> verify.
+- When available, use `ask_user` for the user's preference or clarification. It opens
+  a multiple-choice prompt in the interactive TUI with a free-text option.
 
 Rules:
 - Stay in the workspace. Use relative paths. Do not invent file contents.
