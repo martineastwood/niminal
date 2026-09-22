@@ -336,10 +336,10 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
            json{{"type", "object"},
                 {"properties",
                  {{"path", {{"type", "string"}, {"description", "Path relative to workspace."}}},
-                  {"start_line", {{"type", "integer"},
-                                   {"description", "One-based first line, inclusive."}}},
-                  {"end_line", {{"type", "integer"},
-                                 {"description", "One-based last line, inclusive."}}}}},
+                  {"start_line",
+                   {{"type", "integer"}, {"description", "One-based first line, inclusive."}}},
+                  {"end_line",
+                   {{"type", "integer"}, {"description", "One-based last line, inclusive."}}}}},
                 {"required", json::array({"path"})}},
            [&ws](const json& input) {
              auto path = ws.resolve(input.at("path").get<std::string>());
@@ -454,8 +454,9 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
            true});
 
   tools.push_back(Tool{
-      "glob", "Find workspace files matching a glob (e.g. **/*.cpp, src/*). Results honor "
-           ".gitignore.",
+      "glob",
+      "Find workspace files matching a glob (e.g. **/*.cpp, src/*). Results honor "
+      ".gitignore.",
       json{{"type", "object"},
            {"properties", {{"pattern", {{"type", "string"}}}, {"path", {{"type", "string"}}}}},
            {"required", json::array({"pattern"})}},
@@ -497,45 +498,46 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
       },
       true});
 
-  tools.push_back(Tool{
-      "ls", "List one actual directory, including ignored entries and empty directories that "
+  tools.push_back(
+      Tool{"ls",
+           "List one actual directory, including ignored entries and empty directories that "
            "glob and grep skip. Directories end with /.",
-      json{{"type", "object"},
-           {"properties", {{"path", {{"type", "string"}}}}},
-           {"required", json::array()}},
-      [&ws](const json& input) {
-        auto rel = input.value("path", std::string("."));
-        auto dir = ws.resolve(rel);
-        std::error_code ec;
-        if (!fs::is_directory(dir, ec)) {
-          return "Not a directory: " + rel;
-        }
-        std::vector<std::string> entries;
-        for (const auto& entry : fs::directory_iterator(dir, ec)) {
-          entries.push_back(entry.is_directory(ec) ? entry.path().filename().string() + "/"
-                                                   : entry.path().filename().string());
-        }
-        if (entries.empty()) {
-          return std::string("Empty directory.");
-        }
-        std::sort(entries.begin(), entries.end());
-        bool truncated = entries.size() > 200;
-        if (truncated) {
-          entries.resize(200);
-        }
-        std::ostringstream out;
-        for (size_t i = 0; i < entries.size(); ++i) {
-          if (i) {
-            out << '\n';
-          }
-          out << entries[i];
-        }
-        if (truncated) {
-          out << "\n[truncated]";
-        }
-        return out.str();
-      },
-      true});
+           json{{"type", "object"},
+                {"properties", {{"path", {{"type", "string"}}}}},
+                {"required", json::array()}},
+           [&ws](const json& input) {
+             auto rel = input.value("path", std::string("."));
+             auto dir = ws.resolve(rel);
+             std::error_code ec;
+             if (!fs::is_directory(dir, ec)) {
+               return "Not a directory: " + rel;
+             }
+             std::vector<std::string> entries;
+             for (const auto& entry : fs::directory_iterator(dir, ec)) {
+               entries.push_back(entry.is_directory(ec) ? entry.path().filename().string() + "/"
+                                                        : entry.path().filename().string());
+             }
+             if (entries.empty()) {
+               return std::string("Empty directory.");
+             }
+             std::sort(entries.begin(), entries.end());
+             bool truncated = entries.size() > 200;
+             if (truncated) {
+               entries.resize(200);
+             }
+             std::ostringstream out;
+             for (size_t i = 0; i < entries.size(); ++i) {
+               if (i) {
+                 out << '\n';
+               }
+               out << entries[i];
+             }
+             if (truncated) {
+               out << "\n[truncated]";
+             }
+             return out.str();
+           },
+           true});
 
   tools.push_back(Tool{
       "edit",
@@ -546,8 +548,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
             {{"path", {{"type", "string"}}},
              {"old_text", {{"type", "string"}}},
              {"new_text", {{"type", "string"}}},
-             {"expected_version", {{"type", "string"},
-                                     {"description", "Version returned by the latest read."}}}}},
+             {"expected_version",
+              {{"type", "string"}, {"description", "Version returned by the latest read."}}}}},
            {"required", json::array({"path", "old_text", "new_text"})}},
       [&ws](const json& input) {
         auto path = ws.resolve(input.at("path").get<std::string>());
@@ -568,44 +570,45 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
         return "OK — edited " + ws.relative(path) + "\nversion: " + ws.file_version(path);
       }});
 
-  tools.push_back(Tool{
-      "write", "Create a new file or replace a file's complete contents. Use edit for targeted "
-               "changes.",
-      json{{"type", "object"},
-           {"properties",
-            {{"path", {{"type", "string"}}},
-             {"content", {{"type", "string"}}},
-             {"overwrite", {{"type", "boolean"}}}}},
-           {"required", json::array({"path", "content"})}},
-      [&ws](const json& input) {
-        auto path = ws.resolve(input.at("path").get<std::string>());
-        bool overwrite = input.value("overwrite", false);
-        if (fs::exists(path) && !overwrite) {
-          return "File already exists: " + ws.relative(path) +
-                 "\nSet overwrite: true to replace it.";
-        }
-        write_file_text(path, input.at("content").get<std::string>());
-        ws.invalidate_listing();
-        return "OK — wrote " + ws.relative(path) + "\nversion: " + ws.file_version(path);
-      }});
+  tools.push_back(
+      Tool{"write",
+           "Create a new file or replace a file's complete contents. Use edit for targeted "
+           "changes.",
+           json{{"type", "object"},
+                {"properties",
+                 {{"path", {{"type", "string"}}},
+                  {"content", {{"type", "string"}}},
+                  {"overwrite", {{"type", "boolean"}}}}},
+                {"required", json::array({"path", "content"})}},
+           [&ws](const json& input) {
+             auto path = ws.resolve(input.at("path").get<std::string>());
+             bool overwrite = input.value("overwrite", false);
+             if (fs::exists(path) && !overwrite) {
+               return "File already exists: " + ws.relative(path) +
+                      "\nSet overwrite: true to replace it.";
+             }
+             write_file_text(path, input.at("content").get<std::string>());
+             ws.invalidate_listing();
+             return "OK — wrote " + ws.relative(path) + "\nversion: " + ws.file_version(path);
+           }});
 
-  tools.push_back(Tool{
-      "bash",
-      "Run a shell command in the workspace. Returns combined stdout/stderr and exit code. "
-      "Use it for tests, builds, formatters, git, and other shell workflows; shell utilities "
-      "may also inspect or transform files when useful. Prefer the structured workspace tools "
-      "when their focused behavior is more convenient.",
-      json{{"type", "object"},
-           {"properties",
-            {{"command", {{"type", "string"}}}, {"timeout_seconds", {{"type", "integer"}}}}},
-      {"required", json::array({"command"})}},
-      [&ws, cancel, on_bash_output](const json& input) {
-        auto command = input.at("command").get<std::string>();
-        int timeout = std::clamp(input.value("timeout_seconds", 120), 1, 600);
-        auto out = run_bash(command, ws.root(), timeout, cancel, on_bash_output);
-        ws.invalidate_listing();
-        return out;
-      }});
+  tools.push_back(
+      Tool{"bash",
+           "Run a shell command in the workspace. Returns combined stdout/stderr and exit code. "
+           "Use it for tests, builds, formatters, git, and other shell workflows; shell utilities "
+           "may also inspect or transform files when useful. Prefer the structured workspace tools "
+           "when their focused behavior is more convenient.",
+           json{{"type", "object"},
+                {"properties",
+                 {{"command", {{"type", "string"}}}, {"timeout_seconds", {{"type", "integer"}}}}},
+                {"required", json::array({"command"})}},
+           [&ws, cancel, on_bash_output](const json& input) {
+             auto command = input.at("command").get<std::string>();
+             int timeout = std::clamp(input.value("timeout_seconds", 120), 1, 600);
+             auto out = run_bash(command, ws.root(), timeout, cancel, on_bash_output);
+             ws.invalidate_listing();
+             return out;
+           }});
 
   return tools;
 }

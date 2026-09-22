@@ -100,7 +100,8 @@ int main() {
     std::cerr << "ls should mark directories with more than 200 entries\n" << capped << '\n';
     return 1;
   }
-  if (capped.find("f-000.txt") == std::string::npos || capped.find("f-199.txt") == std::string::npos ||
+  if (capped.find("f-000.txt") == std::string::npos ||
+      capped.find("f-199.txt") == std::string::npos ||
       capped.find("f-200.txt") != std::string::npos) {
     std::cerr << "ls should keep the first 200 entries after sorting\n" << capped << '\n';
     return 1;
