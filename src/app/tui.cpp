@@ -327,6 +327,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::string activity;
   std::optional<std::chrono::steady_clock::time_point> activity_started;
   std::string footer_notice;
+  std::atomic<bool> footer_notice_active{false};
   std::string retry_prompt;
   bool retry_available = false;
   std::chrono::steady_clock::time_point footer_notice_until;
@@ -535,6 +536,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   auto flash_footer = [&](std::string message) {
     footer_notice = std::move(message);
     footer_notice_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+    footer_notice_active = true;
     screen.RequestAnimationFrame();
   };
 
@@ -1737,9 +1739,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           activity_line += "  ·  ";
         }
         activity_line += footer_notice;
-        screen.RequestAnimationFrame();
       } else {
         footer_notice.clear();
+        footer_notice_active = false;
       }
     }
 
@@ -2110,7 +2112,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         break;
       }
       const bool extension_changed = extensions && extensions->pump();
-      if (!busy && !extension_changed) {
+      if (!busy && !extension_changed && !footer_notice_active) {
         continue;
       }
       screen.Post([apply_extension_actions, &screen] {
