@@ -13,7 +13,8 @@ niminal reads one optional configuration file:
 
 There is no config command to run first: a missing file is normal, and every
 setting has a default. Many people never write more than a provider and a model.
-You can [change TUI shortcuts](/reference/keybindings/) separately in
+In the interactive TUI, run `/settings` to edit these values in an overlay
+without opening the file by hand. You can [change TUI shortcuts](/reference/keybindings/) separately in
 `keybindings.json`; changes take effect when you next start niminal.
 
 Credentials are not stored in `config.json`. Export the matching provider
@@ -120,6 +121,7 @@ These commands save settings to `~/.niminal/config.json` immediately:
 
 | Command | Keys written |
 | --- | --- |
+| `/settings` | Any key you change in the overlay |
 | `/provider` | `provider`, `model`, and `providers.<name>.last_model` |
 | `/model` | `model`, and `providers.<active>.last_model` |
 | `/thinking` | `thinking` (removed when cleared) |

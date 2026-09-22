@@ -20,6 +20,7 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/model [ID]` | Show or set the model |
 | `/thinking [level]` | Show or set reasoning |
 | `/theme [light\|dark\|auto]` | Show or set theme |
+| `/settings` | Edit config in an overlay |
 | `/permissions [clear]` | Show or clear tool grants |
 | `/trust [on\|off]` | Show or set project resource trust |
 | `/yolo [off]` | Auto-approve tools for this process |

@@ -33,6 +33,7 @@ constexpr SlashSpec kSlash[] = {
     {"/model", "/model [ID]", "show or set the model"},
     {"/thinking", "/thinking [level]", "show or set reasoning"},
     {"/theme", "/theme [mode]", "show or set light|dark|auto"},
+    {"/settings", "/settings", "edit config in an overlay"},
     {"/permissions", "/permissions [clear]", "show or clear tool grants"},
     {"/trust", "/trust [on|off]", "show or set project resource trust"},
     {"/yolo", "/yolo [off]", "auto-approve tools for this process"},

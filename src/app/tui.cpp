@@ -11,6 +11,7 @@
 #include "prompts.hpp"
 #include "provider.hpp"
 #include "session.hpp"
+#include "settings.hpp"
 #include "skills.hpp"
 #include "slash.hpp"
 #include "theme.hpp"
@@ -376,6 +377,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     runtime->set_ui_callbacks(std::move(callbacks));
   };
   int suggest_i = 0;
+  bool settings_open = false;
+  int settings_i = 0;
+  std::optional<std::string> settings_edit;
+  std::string settings_error;
   std::string suggest_sig;
   std::filesystem::path session_dir;
   try {
@@ -482,6 +487,28 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     footer_notice_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
     footer_notice_active = true;
     screen.RequestAnimationFrame();
+  };
+
+  auto persist_settings = [&](SettingApplyResult result) {
+    if (!result.error.empty()) {
+      settings_error = result.error;
+      return;
+    }
+    settings_error.clear();
+    try {
+      if (result.theme_changed) {
+        theme_mode = parse_theme_mode(cfg.theme).value_or(ThemeMode::automatic);
+        theme = resolve_theme(theme_mode);
+      }
+      if (result.agent_changed) {
+        apply_provider(agent, cfg);
+        session.add_selection(agent.model, agent.provider);
+      }
+      save_config(cfg);
+      flash_footer("Saved " + config_path().string());
+    } catch (const std::exception& e) {
+      settings_error = e.what();
+    }
   };
 
   auto history_prev = [&] {
@@ -1502,6 +1529,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         }
         return;
       }
+      if (cmd == "/settings") {
+        if (!arg.empty()) {
+          blocks.push_back(Block{BlockKind::error, "Usage: /settings"});
+          return;
+        }
+        settings_open = true;
+        settings_i = 0;
+        settings_edit = std::nullopt;
+        settings_error.clear();
+        return;
+      }
       if (cmd == "/models") {
         if (arg != "refresh") {
           blocks.push_back(Block{BlockKind::error, "Usage: /models refresh"});
@@ -1834,49 +1872,86 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                     focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
                     vscroll_indicator | yframe | yflex);
     stack.push_back(separator());
-    if (!suggest_rows.empty()) {
-      stack.push_back(vbox(std::move(suggest_rows)));
-    }
-    if (extensions) {
-      Elements widget_rows;
-      for (const auto& line : extensions->widget_lines()) {
-        widget_rows.push_back(text(line) | dim);
+    if (settings_open) {
+      Elements setting_rows;
+      setting_rows.push_back(text("Settings  " + config_path().string()) | bold | color(theme.accent));
+      for (size_t i = 0; i < setting_count(); ++i) {
+        const auto* spec = setting_at(i);
+        if (spec == nullptr) {
+          continue;
+        }
+        std::string line = std::string(spec->label) + ": ";
+        if (settings_edit && static_cast<int>(i) == settings_i) {
+          line += *settings_edit + "▌";
+        } else {
+          line += format_setting_value(cfg, spec->field, agent.provider, agent.model);
+        }
+        auto row = text(line);
+        if (static_cast<int>(i) == settings_i) {
+          row = row | inverted;
+        }
+        setting_rows.push_back(std::move(row));
       }
-      if (!widget_rows.empty()) {
-        stack.push_back(vbox(std::move(widget_rows)));
+      if (!settings_error.empty()) {
+        setting_rows.push_back(text(settings_error) | color(theme.error));
       }
-    }
-    stack.push_back(text(activity_line.empty() ? " " : activity_line) | color(theme.accent));
-    {
-      std::vector<std::string> steering_preview;
-      std::vector<std::string> follow_up_preview;
+      const auto* selected = setting_at(static_cast<size_t>(settings_i));
+      std::string help = settings_edit ? "Enter save  Esc cancel edit"
+                                       : "↑/↓ select  Enter edit/toggle/cycle  ←/→ cycle  Esc close";
+      if (!settings_edit && selected != nullptr) {
+        if (selected->kind == SettingKind::toggle) {
+          help += "  Space toggles";
+        } else if (selected->kind == SettingKind::text || selected->kind == SettingKind::integer) {
+          help += "  type to edit";
+        }
+      }
+      setting_rows.push_back(text(help) | dim);
+      stack.push_back(vbox(std::move(setting_rows)));
+    } else {
+      if (!suggest_rows.empty()) {
+        stack.push_back(vbox(std::move(suggest_rows)));
+      }
+      if (extensions) {
+        Elements widget_rows;
+        for (const auto& line : extensions->widget_lines()) {
+          widget_rows.push_back(text(line) | dim);
+        }
+        if (!widget_rows.empty()) {
+          stack.push_back(vbox(std::move(widget_rows)));
+        }
+      }
+      stack.push_back(text(activity_line.empty() ? " " : activity_line) | color(theme.accent));
       {
-        std::lock_guard<std::mutex> lock(steering_mu);
-        for (const auto& input : steering) {
-          steering_preview.push_back(compose_input_preview(input));
+        std::vector<std::string> steering_preview;
+        std::vector<std::string> follow_up_preview;
+        {
+          std::lock_guard<std::mutex> lock(steering_mu);
+          for (const auto& input : steering) {
+            steering_preview.push_back(compose_input_preview(input));
+          }
+          for (const auto& input : follow_up) {
+            follow_up_preview.push_back(compose_input_preview(input));
+          }
         }
-        for (const auto& input : follow_up) {
-          follow_up_preview.push_back(compose_input_preview(input));
+        auto queue_preview = render_queue_preview(steering_preview, follow_up_preview, keybindings);
+        if (!queue_preview.empty()) {
+          stack.push_back(vbox(std::move(queue_preview)));
         }
       }
-      auto queue_preview = render_queue_preview(steering_preview, follow_up_preview, keybindings);
-      if (!queue_preview.empty()) {
-        stack.push_back(vbox(std::move(queue_preview)));
+      stack.push_back(separatorLight() | dim);
+      if (!draft_images.empty()) {
+        std::string names = "Images: ";
+        for (const auto& image : draft_images) {
+          if (names != "Images: ") {
+            names += ", ";
+          }
+          names += image.value("name", "image");
+        }
+        stack.push_back(text(names + "  (Backspace with empty text removes last)") | dim);
       }
+      stack.push_back(hbox({text(busy ? "…" : "› ") | bold,
+                            wrapped_input->Render() | xflex | size(HEIGHT, LESS_THAN, 8)}));
     }
-    stack.push_back(separatorLight() | dim);
-    if (!draft_images.empty()) {
-      std::string names = "Images: ";
-      for (const auto& image : draft_images) {
-        if (names != "Images: ") {
-          names += ", ";
-        }
-        names += image.value("name", "image");
-      }
-      stack.push_back(text(names + "  (Backspace with empty text removes last)") | dim);
-    }
-    stack.push_back(hbox({text(busy ? "…" : "› ") | bold,
-                          wrapped_input->Render() | xflex | size(HEIGHT, LESS_THAN, 8)}));
     stack.push_back(hbox({
         text(usage.empty() ? "↑0  ↓0" : usage) | dim,
         filler(),
@@ -1961,6 +2036,84 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         screen.Exit();
       } else {
         return true;
+      }
+      return true;
+    }
+    if (settings_open) {
+      const int count = static_cast<int>(setting_count());
+      settings_i = std::clamp(settings_i, 0, std::max(0, count - 1));
+      const auto* spec = setting_at(static_cast<size_t>(settings_i));
+      if (settings_edit) {
+        if (pressed(KeyAction::submit)) {
+          if (spec != nullptr) {
+            persist_settings(apply_setting_value(cfg, spec->field, *settings_edit, agent.provider,
+                                                 agent.model));
+            if (settings_error.empty()) {
+              settings_edit = std::nullopt;
+            }
+          }
+          return true;
+        }
+        if (pressed(KeyAction::cancel)) {
+          settings_edit = std::nullopt;
+          settings_error.clear();
+          return true;
+        }
+        if (e == Event::Backspace) {
+          if (!settings_edit->empty()) {
+            settings_edit->pop_back();
+          }
+          return true;
+        }
+        if (e.is_character()) {
+          settings_edit->append(e.character());
+          return true;
+        }
+        return true;
+      }
+      if (pressed(KeyAction::cancel)) {
+        settings_open = false;
+        settings_error.clear();
+        return true;
+      }
+      if (pressed(KeyAction::quit)) {
+        cancel->store(true);
+        ui_alive = false;
+        screen.Exit();
+        return true;
+      }
+      if (pressed(KeyAction::previous)) {
+        settings_i = (settings_i + count - 1) % std::max(1, count);
+        return true;
+      }
+      if (pressed(KeyAction::next)) {
+        settings_i = (settings_i + 1) % std::max(1, count);
+        return true;
+      }
+      if (spec != nullptr) {
+        if (e == Event::ArrowLeft && spec->kind == SettingKind::cycle) {
+          persist_settings(cycle_setting(cfg, spec->field, -1, agent.provider, agent.model));
+          return true;
+        }
+        if (e == Event::ArrowRight && spec->kind == SettingKind::cycle) {
+          persist_settings(cycle_setting(cfg, spec->field, 1, agent.provider, agent.model));
+          return true;
+        }
+        if (e == Event::Character(' ') && spec->kind == SettingKind::toggle) {
+          persist_settings(toggle_setting(cfg, spec->field));
+          return true;
+        }
+        if (pressed(KeyAction::submit)) {
+          if (spec->kind == SettingKind::toggle) {
+            persist_settings(toggle_setting(cfg, spec->field));
+          } else if (spec->kind == SettingKind::cycle) {
+            persist_settings(cycle_setting(cfg, spec->field, 1, agent.provider, agent.model));
+          } else if (spec->kind == SettingKind::text || spec->kind == SettingKind::integer) {
+            settings_edit = edit_initial_value(cfg, spec->field);
+            settings_error.clear();
+          }
+          return true;
+        }
       }
       return true;
     }

@@ -62,7 +62,8 @@ Composer commands do not ask for approval: you typed the command yourself.
 | Up / Down | Move through suggestions when the list is open |
 | Tab / Shift-Tab | Accept or cycle a suggestion |
 
-Type `/` for slash command completion. Type `/model ` to pick from the models.dev
+Type `/` for slash command completion. Type `/settings` to open the config
+overlay. Type `/model ` to pick from the models.dev
 catalog for the active provider (filter from two characters). Type `/thinking `
 to pick a supported level. Type `/theme ` to pick `light`, `dark`, or `auto`.
 Type `/resume ` and Tab to pick a session. Type `/fork ` and Tab to pick a user
@@ -116,6 +117,24 @@ When a tool needs approval, the TUI shows a prompt over the composer:
 remembered.
 
 Use `/yolo` or `--yolo` to auto-approve tools for the current process.
+
+## Settings overlay
+
+Run `/settings` to edit `~/.niminal/config.json` without leaving the TUI. The
+overlay replaces the composer while it is open.
+
+| Input | Action |
+| --- | --- |
+| Up / Down | Select a setting |
+| Enter | Toggle a boolean, cycle an enum, or start editing text or numbers |
+| Space | Toggle a boolean |
+| Left / Right | Cycle enum settings |
+| Enter while editing | Save the typed value |
+| Esc while editing | Cancel the edit |
+| Esc | Close the overlay |
+
+Changes save immediately. Provider, model, thinking, and theme updates apply
+to the current session right away.
 
 ## Footer
 
