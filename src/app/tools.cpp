@@ -454,7 +454,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
            true});
 
   tools.push_back(Tool{
-      "glob", "Find workspace files matching a glob (e.g. **/*.cpp, src/*). Results honor .gitignore.",
+      "glob", "Find workspace files matching a glob (e.g. **/*.cpp, src/*). Results honor "
+           ".gitignore.",
       json{{"type", "object"},
            {"properties", {{"pattern", {{"type", "string"}}}, {"path", {{"type", "string"}}}}},
            {"required", json::array({"pattern"})}},
@@ -497,8 +498,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
       true});
 
   tools.push_back(Tool{
-      "ls", "List one actual directory, including ignored entries and empty directories that glob and "
-           "grep skip. Directories end with /.",
+      "ls", "List one actual directory, including ignored entries and empty directories that "
+           "glob and grep skip. Directories end with /.",
       json{{"type", "object"},
            {"properties", {{"path", {{"type", "string"}}}}},
            {"required", json::array()}},
@@ -537,8 +538,9 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
       true});
 
   tools.push_back(Tool{
-      "edit", "Replace unique old_text with new_text in a file. Read the file first and pass its "
-           "version as expected_version when available; use this for targeted changes.",
+      "edit",
+      "Replace unique old_text with new_text in a file. Read the file first and pass its version "
+      "as expected_version when available; use this for targeted changes.",
       json{{"type", "object"},
            {"properties",
             {{"path", {{"type", "string"}}},
@@ -567,7 +569,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
       }});
 
   tools.push_back(Tool{
-      "write", "Create a new file or replace a file's complete contents. Use edit for targeted changes.",
+      "write", "Create a new file or replace a file's complete contents. Use edit for targeted "
+               "changes.",
       json{{"type", "object"},
            {"properties",
             {{"path", {{"type", "string"}}},

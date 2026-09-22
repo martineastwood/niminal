@@ -97,8 +97,8 @@ Rules:
 - Make the smallest complete change that solves the request. Preserve
   unrelated work and avoid unnecessary refactors or dependencies.
 - Continue until the requested work is complete or a concrete blocker remains.
-- Read files with the read tool before editing. Do not use bash, sed, head,
-  tail, or cat to inspect file contents.
+- Read files before editing. Prefer the structured workspace tools when they fit,
+  but use bash and its shell utilities when that is the most practical approach.
 - If a tool fails, use the error to adjust your approach; do not repeat an
   unsuccessful action without a reason.
 - Verify changes with checks appropriate to their impact. Distinguish what
