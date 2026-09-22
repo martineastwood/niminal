@@ -9,9 +9,12 @@ niminal reads one optional configuration file:
 | --- | --- |
 | `~/.niminal/config.json` | Everything you run |
 | `~/.niminal/auth.json` | Provider credentials |
+| `~/.niminal/keybindings.json` | Interactive TUI shortcuts |
 
 There is no config command to run first: a missing file is normal, and every
 setting has a default. Many people never write more than a provider and a model.
+You can [change TUI shortcuts](/reference/keybindings/) separately in
+`keybindings.json`; changes take effect when you next start niminal.
 
 Credentials are not stored in `config.json`. Export the matching provider
 environment variable, add a credential to `auth.json`, or pass `--api-key KEY`

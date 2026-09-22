@@ -52,7 +52,7 @@ const char* kUsage =
     "  --version          Show the version\n"
     "  --help             Show this help\n"
     "\n"
-    "TUI: Enter sends, or queues a message while a turn is running. Queued\n"
+    "Default TUI keys: Enter sends, or queues while a turn is running. Queued\n"
     "messages appear above the composer. Esc interrupts and sends them now.\n"
     "Alt-Up or Shift-Left pops the last queued message back into the composer.\n"
     "Up/Down walk composer history when slash suggestions are closed. Alt-J or\n"
@@ -61,7 +61,8 @@ const char* kUsage =
     "Ctrl-C quits. /compact summarizes older turns. Sessions are saved under\n"
     "~/.niminal/sessions. Set --api-key, ~/.niminal/auth.json, or the matching\n"
     "provider key (OPENROUTER_API_KEY by default). File tools stay in cwd.\n"
-    "Shell commands ask in the TUI.\n";
+    "Shell commands ask in the TUI. Customize shortcuts in\n"
+    "~/.niminal/keybindings.json, then restart the TUI.\n";
 
 const char* kSystem = R"(You are niminal, a coding agent working with the user in their workspace.
 Help them understand, diagnose, and change code according to their request.

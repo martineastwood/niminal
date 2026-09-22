@@ -165,6 +165,7 @@ add_executable(niminal_cli
   src/app/transcript.cpp
   src/app/session.cpp
   src/app/config.cpp
+  src/app/keybindings.cpp
   src/app/auth.cpp
   src/app/provider.cpp
   src/app/instructions.cpp
@@ -238,6 +239,13 @@ add_executable(niminal_config_test tests/config_test.cpp src/app/config.cpp)
 target_include_directories(niminal_config_test PRIVATE src/app)
 target_link_libraries(niminal_config_test PRIVATE niminal::ai nlohmann_json::nlohmann_json)
 niminal_strict_compile(niminal_config_test)
+
+add_executable(niminal_keybindings_test tests/keybindings_test.cpp src/app/keybindings.cpp
+  src/app/config.cpp)
+target_include_directories(niminal_keybindings_test PRIVATE src/app)
+target_link_libraries(niminal_keybindings_test PRIVATE niminal::ai ftxui::component
+  nlohmann_json::nlohmann_json)
+niminal_strict_compile(niminal_keybindings_test)
 
 add_executable(niminal_provider_test
   tests/provider_test.cpp
@@ -366,6 +374,7 @@ add_test(NAME instructions COMMAND niminal_instructions_test)
 add_test(NAME skills COMMAND niminal_skills_test)
 add_test(NAME prompts COMMAND niminal_prompts_test)
 add_test(NAME config COMMAND niminal_config_test)
+add_test(NAME keybindings COMMAND niminal_keybindings_test)
 add_test(NAME provider COMMAND niminal_provider_test)
 add_test(NAME auth COMMAND niminal_auth_test)
 add_test(NAME session COMMAND niminal_session_test)

@@ -1,6 +1,7 @@
 #include "slash.hpp"
 
 #include "extensions.hpp"
+#include "keybindings.hpp"
 #include "models_dev.hpp"
 #include "prompts.hpp"
 #include "session.hpp"
@@ -162,7 +163,7 @@ bool is_builtin_slash(std::string_view command) {
   return false;
 }
 
-std::string slash_help() {
+std::string slash_help(const Keybindings& keybindings) {
   size_t width = std::string_view("/NAME [text]").size();
   for (const auto& spec : kSlash) {
     width = std::max(width, std::string_view(spec.usage).size());
@@ -182,32 +183,43 @@ std::string slash_help() {
     line(spec.usage, spec.hint);
   }
   line("/NAME [text]", "expand a Markdown prompt template");
-  out += R"(
-Enter sends. While a turn runs, Enter queues a steering message.
-Queued messages appear above the composer. Esc interrupts and sends them now.
-Alt-Up or Shift-Left pops the last queued message back into the composer.
-Alt-J or Shift-Enter inserts a newline.
-Type @ to add a workspace file. Gitignored files and dependency folders are hidden.
-Tab accepts a suggestion. Up/Down picks one, or walks prompt history.
-Page Up/Down and the trackpad scroll the transcript.
-Click a thinking, tool, or diff card to expand it. Ctrl+O toggles the latest card.
-Ctrl+Shift+O expands or collapses every card.
-Esc interrupts a running turn, sends queued messages now if any are waiting,
-or clears the composer.
-Drag to copy. Ctrl-V pastes into the composer. /copy copies the last reply.
-Ctrl-G opens the composer in the configured editor, else $VISUAL or $EDITOR
-(nano if none is set).
-Ctrl-C quits.)";
+  auto binding = [&](KeyAction action, std::string_view description) {
+    out += keybindings.label(action) + "  " + std::string(description) + '\n';
+  };
+  out += "\nKeyboard shortcuts (customize in ~/.niminal/keybindings.json):\n";
+  binding(KeyAction::submit, "send or queue a message; accept a suggestion");
+  binding(KeyAction::newline, "insert a newline");
+  binding(KeyAction::word_left, "move left by word");
+  binding(KeyAction::word_right, "move right by word");
+  binding(KeyAction::draft_start, "jump to draft start");
+  binding(KeyAction::draft_end, "jump to draft end");
+  binding(KeyAction::previous, "previous suggestion or history entry");
+  binding(KeyAction::next, "next suggestion or history entry");
+  binding(KeyAction::complete, "accept a suggestion");
+  binding(KeyAction::complete_previous, "cycle back and accept a suggestion");
+  binding(KeyAction::cancel, "interrupt, send queued messages, or clear the composer");
+  binding(KeyAction::edit_queued, "edit the last queued message");
+  binding(KeyAction::paste, "paste into the composer");
+  binding(KeyAction::external_editor, "open the configured editor");
+  binding(KeyAction::scroll_up, "scroll the transcript up");
+  binding(KeyAction::scroll_down, "scroll the transcript down");
+  binding(KeyAction::toggle_last, "toggle the latest transcript card");
+  binding(KeyAction::toggle_all, "expand or collapse every transcript card");
+  binding(KeyAction::quit, "quit");
+  out += "\nApproval prompt:\n";
+  binding(KeyAction::allow_once, "allow once");
+  binding(KeyAction::allow_session, "allow for this session");
+  binding(KeyAction::allow_project, "save a project grant when available");
+  binding(KeyAction::deny, "deny");
+  out += "\nType @ to add a workspace file. Drag to copy. /copy copies the last reply.\n";
   return out;
 }
 
-std::vector<Suggestion> slash_suggestions(const std::string& draft,
-                                          const std::filesystem::path& dir,
-                                          const std::string& workspace, std::string_view provider,
-                                          std::string_view model,
-                                          const std::vector<std::string>& recents,
-                                          const std::vector<ExtensionCommand>& extension_commands,
-                                          const Session& session) {
+std::vector<Suggestion>
+slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
+                  const std::string& workspace, std::string_view provider, std::string_view model,
+                  const std::vector<std::string>& recents,
+                  const std::vector<ExtensionCommand>& extension_commands, const Session& session) {
   if (draft.empty() || draft[0] != '/' || draft.find('\n') != std::string::npos) {
     return {};
   }
@@ -271,8 +283,8 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
     auto space = arg.find(' ');
     if (space != std::string::npos) {
       auto first = arg.substr(0, space);
-      if (!first.empty() &&
-          std::all_of(first.begin(), first.end(), [](unsigned char c) { return std::isdigit(c) != 0; })) {
+      if (!first.empty() && std::all_of(first.begin(), first.end(),
+                                        [](unsigned char c) { return std::isdigit(c) != 0; })) {
         return {};
       }
     }
@@ -282,8 +294,7 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
       if (!arg.empty() && !contains_ci(num, arg) && !contains_ci(preview, arg)) {
         continue;
       }
-      out.push_back({"/fork " + num,
-                     num + "  " + (preview.empty() ? "(empty)" : preview)});
+      out.push_back({"/fork " + num, num + "  " + (preview.empty() ? "(empty)" : preview)});
       if (out.size() == 8) {
         break;
       }

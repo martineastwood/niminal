@@ -7,12 +7,15 @@ With no prompt and a TTY on stdin and stdout, niminal opens a fullscreen termina
 UI. Each conversation is a session: the first message creates an append-only JSONL
 file under `~/.niminal/sessions`, and later turns keep writing to it.
 
+The keys below are defaults. You can [change TUI shortcuts](/reference/keybindings/)
+in `~/.niminal/keybindings.json`.
+
 ## Sending messages
 
 | Input | Action |
 | --- | --- |
 | Enter | Send, or accept a slash/file suggestion |
-| Ctrl-D, Ctrl-S, Shift-Enter (several escape variants) | Also send |
+| Ctrl-D, Ctrl-S, Ctrl-Enter | Also send |
 | Alt-J, Shift-Enter | Insert a newline |
 | Alt-Left / Alt-Right | Move the composer cursor by word |
 | Ctrl-Left / Ctrl-Right, Ctrl-A / Ctrl-E | Jump the composer cursor to the start or end of the draft |
@@ -22,9 +25,8 @@ file under `~/.niminal/sessions`, and later turns keep writing to it.
 | Ctrl-G | Edit the composer in the configured `editor`, else `$VISUAL` or `$EDITOR` (`nano` if none is set) |
 
 macOS Mission Control claims Ctrl-Left and Ctrl-Right before the terminal sees
-them. Uncheck "Move left a space" and "Move right a space" in
-System Settings → Keyboard → Keyboard Shortcuts → Mission Control, or use
-Ctrl-A and Ctrl-E instead.
+them. Use Ctrl-A and Ctrl-E, or [bind the draft-jump actions](/reference/keybindings/)
+to keys your terminal receives.
 
 While a turn is running, Enter queues a **steering** message for the next model
 request in that turn. Queued messages appear above the composer, and the footer

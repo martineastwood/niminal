@@ -3,6 +3,7 @@
 #include "compaction.hpp"
 #include "config.hpp"
 #include "diff.hpp"
+#include "keybindings.hpp"
 #include "markdown.hpp"
 #include "mentions.hpp"
 #include "models_dev.hpp"
@@ -28,8 +29,8 @@
 #include <ftxui/screen/string.hpp>
 
 #include <algorithm>
-#include <cctype>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <exception>
@@ -79,35 +80,6 @@ std::optional<std::string> read_text_file(const std::filesystem::path& path) {
   return text;
 }
 
-bool is_send(const Event& e) {
-  if (e == Event::Return) {
-    return true;
-  }
-  if (e == Event::Character('\x04') || e == Event::Character('\x13')) {
-    return true;
-  }
-  auto in = e.input();
-  return in == "\x1b[13;5u" || in == "\x1b[13;5~";
-}
-
-bool is_newline_key(const Event& e) {
-  auto in = e.input();
-  if (in == "\x1b[13;2u" || in == "\x1b[13;2~" || in == "\x1b[27;2;13~" || in == "\x1b\r" ||
-      in == "\x1b\n") {
-    return true;
-  }
-  if (in == "\x1bj" || in == "\x1bJ" || in == "\x1b[106;3u" || in == "\x1b[74;3u") {
-    return true;
-  }
-  if (e.is_character()) {
-    auto ch = e.character();
-    if (ch == "∆") {
-      return true;
-    }
-  }
-  return false;
-}
-
 bool is_wheel_up(Event e) {
   return e.is_mouse() && e.mouse().button == Mouse::WheelUp;
 }
@@ -126,64 +98,6 @@ void add_unique(std::vector<std::string>& ids, const std::string& id) {
     }
   }
   ids.push_back(id);
-}
-
-bool is_paste_key(const Event& e) {
-  if (e == Event::CtrlV) {
-    return true;
-  }
-  auto in = e.input();
-  return in == "\x1b[118;2u" || in == "\x1b[118;5u" || in == "\x1b[118;8u" || in == "\x1b[118;9u";
-}
-
-bool is_external_editor_key(const Event& e) {
-  if (e == Event::Character('\x07')) {
-    return true;
-  }
-  auto in = e.input();
-  return in == "\x1b[103;5u" || in == "\x1b[103;5~" || in == "\x1b[27;5;103~";
-}
-
-bool is_toggle_last_card(const Event& e) {
-  if (e == Event::Character('\x0f')) {
-    return true;
-  }
-  auto in = e.input();
-  return in == "\x1b[79;5u" || in == "\x1b[79;5~";
-}
-
-bool is_toggle_all_cards(const Event& e) {
-  auto in = e.input();
-  return in == "\x1b[79;6u" || in == "\x1b[79;6~";
-}
-
-bool is_edit_queued_key(const Event& e) {
-  auto in = e.input();
-  if (in == "\x1b[1;2D" || in == "\x1b[D;2u" || in == "\x1b[27;2;68~") {
-    return true;
-  }
-  return in == "\x1b[1;3A" || in == "\x1b[A;3u" || in == "\x1b\x1b[A" || in == "\x1b[27;3;65~";
-}
-
-// macOS terminals send ESC-b / ESC-f for Option-Left / Option-Right.
-bool is_word_left_key(const Event& e) {
-  auto in = e.input();
-  return in == "\x1b[1;3D" || in == "\x1b[27;3;68~" || in == "\033b";
-}
-
-bool is_word_right_key(const Event& e) {
-  auto in = e.input();
-  return in == "\x1b[1;3C" || in == "\x1b[27;3;67~" || in == "\033f";
-}
-
-// macOS Mission Control claims Ctrl-Left and Ctrl-Right before the terminal
-// sees them, so Ctrl-A and Ctrl-E spell the same jump portably.
-bool is_text_start_key(const Event& e) {
-  return e == Event::ArrowLeftCtrl || e.input() == "\x1b[27;5;68~" || e.input() == "\x01";
-}
-
-bool is_text_end_key(const Event& e) {
-  return e == Event::ArrowRightCtrl || e.input() == "\x1b[27;5;67~" || e.input() == "\x05";
 }
 
 bool is_word_byte(char c) {
@@ -236,13 +150,16 @@ std::vector<std::string> preview_message_lines(const std::string& message) {
 }
 
 Elements render_queue_preview(const std::vector<std::string>& steering,
-                              const std::vector<std::string>& follow_up) {
+                              const std::vector<std::string>& follow_up,
+                              const Keybindings& keybindings) {
   if (steering.empty() && follow_up.empty()) {
     return {};
   }
   Elements rows;
   if (!steering.empty()) {
-    rows.push_back(text("After next model step (Esc to send now)") | dim);
+    rows.push_back(
+        text("After next model step (" + keybindings.label(KeyAction::cancel) + " to send now)") |
+        dim);
     for (const auto& message : steering) {
       for (const auto& line : preview_message_lines(message)) {
         rows.push_back(text(" ↳ " + line) | dim);
@@ -261,7 +178,7 @@ Elements render_queue_preview(const std::vector<std::string>& steering,
     }
   }
   if (!steering.empty()) {
-    rows.push_back(text("Alt-Up / Shift-Left edit last") | dim);
+    rows.push_back(text(keybindings.label(KeyAction::edit_queued) + " edit last") | dim);
   }
   return rows;
 }
@@ -305,6 +222,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   }
   auto* cancel = agent.cancel;
 
+  auto loaded_keybindings = load_keybindings();
+  const auto& keybindings = loaded_keybindings.bindings;
   std::vector<Block> blocks;
   std::mutex file_changes_mu;
   std::unordered_map<std::string, PendingFileChange> file_changes;
@@ -1038,6 +957,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   load_into_ui((recovered != 0)
                    ? "Recovered " + std::to_string(recovered) + " interrupted tool call(s)."
                    : "");
+  if (!loaded_keybindings.error.empty()) {
+    blocks.push_back(Block{BlockKind::error, loaded_keybindings.error +
+                                                 "\nUsing default keybindings for this launch."});
+  }
   if (extensions) {
     for (const auto& warning : extensions->warnings()) {
       blocks.push_back(Block{BlockKind::status, warning});
@@ -1204,8 +1127,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         if (!arg.empty()) {
           blocks.push_back(Block{BlockKind::error, "/retry takes no arguments"});
         } else if (busy) {
-          blocks.push_back(
-              Block{BlockKind::status, "wait for the turn to finish, or Esc to interrupt"});
+          blocks.push_back(Block{BlockKind::status, "wait for the turn to finish, or " +
+                                                        keybindings.label(KeyAction::cancel) +
+                                                        " to interrupt"});
         } else if (!retry_available) {
           blocks.push_back(Block{BlockKind::status, "Nothing to retry."});
         } else {
@@ -1216,8 +1140,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       if (cmd == "/compact") {
         if (busy) {
-          blocks.push_back(
-              Block{BlockKind::status, "wait for the turn to finish, or Esc to interrupt"});
+          blocks.push_back(Block{BlockKind::status, "wait for the turn to finish, or " +
+                                                        keybindings.label(KeyAction::cancel) +
+                                                        " to interrupt"});
           return;
         }
         try {
@@ -1233,12 +1158,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return;
       }
       if (busy) {
-        blocks.push_back(
-            Block{BlockKind::status, "wait for the turn to finish, or Esc to interrupt"});
+        blocks.push_back(Block{BlockKind::status, "wait for the turn to finish, or " +
+                                                      keybindings.label(KeyAction::cancel) +
+                                                      " to interrupt"});
         return;
       }
       if (cmd == "/help") {
-        blocks.push_back(Block{BlockKind::status, slash_help()});
+        blocks.push_back(Block{BlockKind::status, slash_help(keybindings)});
         return;
       }
       if (extension_request) {
@@ -1543,9 +1469,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           if (!arg.empty()) {
             auto space = arg.find(' ');
             std::string first = trim_copy(space == std::string::npos ? arg : arg.substr(0, space));
-            bool numeric = !first.empty() &&
-                           std::all_of(first.begin(), first.end(),
-                                       [](unsigned char c) { return std::isdigit(c) != 0; });
+            bool numeric =
+                !first.empty() && std::all_of(first.begin(), first.end(),
+                                              [](unsigned char c) { return std::isdigit(c) != 0; });
             if (numeric) {
               turn = std::stoi(first);
               if (space != std::string::npos) {
@@ -1553,8 +1479,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
               }
               upto = session.end_after_user_turn(turn);
               if (upto < 0) {
-                blocks.push_back(
-                    Block{BlockKind::error, "No user turn " + std::to_string(turn)});
+                blocks.push_back(Block{BlockKind::error, "No user turn " + std::to_string(turn)});
                 return;
               }
             } else {
@@ -1835,7 +1760,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         steering_preview = steering;
         follow_up_preview = follow_up;
       }
-      auto queue_preview = render_queue_preview(steering_preview, follow_up_preview);
+      auto queue_preview = render_queue_preview(steering_preview, follow_up_preview, keybindings);
       if (!queue_preview.empty()) {
         stack.push_back(vbox(std::move(queue_preview)));
       }
@@ -1899,12 +1824,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   };
 
   view = CatchEvent(view, [&](Event e) {
+    auto pressed = [&](KeyAction action) { return keybindings.matches(action, e); };
     if (approval_pending()) {
-      if (e == Event::Return || e == Event::Character('1')) {
+      if (pressed(KeyAction::allow_once)) {
         resolve_approval(PermissionDecision::allow_once);
-      } else if (e == Event::Character('s')) {
+      } else if (pressed(KeyAction::allow_session)) {
         resolve_approval(PermissionDecision::allow_session);
-      } else if (e == Event::Character('p')) {
+      } else if (pressed(KeyAction::allow_project)) {
         bool allowed = false;
         {
           std::lock_guard lock(approval.mutex);
@@ -1914,9 +1840,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           return true;
         }
         resolve_approval(PermissionDecision::allow_project);
-      } else if (e == Event::Character('n') || e == Event::Escape) {
+      } else if (pressed(KeyAction::deny)) {
         resolve_approval(PermissionDecision::deny);
-      } else if (e == Event::Character('\x03')) {
+      } else if (pressed(KeyAction::quit)) {
         resolve_approval(PermissionDecision::deny);
         cancel->store(true);
         ui_alive = false;
@@ -1934,11 +1860,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       pasting = false;
       return true;
     }
-    if (is_paste_key(e)) {
+    if (pasting && (e.is_character() || e == Event::Return || e == Event::Tab)) {
+      insert_draft(e.input());
+      return true;
+    }
+    if (pressed(KeyAction::paste)) {
       insert_draft(paste_from_clipboard());
       return true;
     }
-    if (is_external_editor_key(e)) {
+    if (pressed(KeyAction::external_editor)) {
       try {
         std::string edited;
         with_restored_io([&] { edited = edit_text_externally(draft, cfg.editor); });
@@ -1982,14 +1912,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       insert_draft(paste_from_clipboard());
       return true;
     }
-    if (is_toggle_last_card(e)) {
+    if (pressed(KeyAction::toggle_last)) {
       const auto index = last_card_index(blocks);
       if (index >= 0) {
         blocks[static_cast<size_t>(index)].expanded = !blocks[static_cast<size_t>(index)].expanded;
       }
       return true;
     }
-    if (is_toggle_all_cards(e)) {
+    if (pressed(KeyAction::toggle_all)) {
       bool any_collapsed = false;
       for (const auto& block : blocks) {
         if (is_card_block(block.kind) && !block.expanded) {
@@ -2004,13 +1934,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       return true;
     }
-    if (is_wheel_up(e) || e == Event::PageUp) {
+    if (is_wheel_up(e) || pressed(KeyAction::scroll_up)) {
       stick_bottom = false;
-      transcript_y = std::max(0.F, transcript_y - (e == Event::PageUp ? 0.35F : 0.07F));
+      transcript_y = std::max(0.F, transcript_y - (pressed(KeyAction::scroll_up) ? 0.35F : 0.07F));
       return true;
     }
-    if (is_wheel_down(e) || e == Event::PageDown) {
-      transcript_y = std::min(1.F, transcript_y + (e == Event::PageDown ? 0.35F : 0.07F));
+    if (is_wheel_down(e) || pressed(KeyAction::scroll_down)) {
+      transcript_y =
+          std::min(1.F, transcript_y + (pressed(KeyAction::scroll_down) ? 0.35F : 0.07F));
       if (transcript_y >= 0.99F) {
         transcript_y = 1.F;
         stick_bottom = true;
@@ -2019,63 +1950,63 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     auto suggestions = current_suggestions();
     if (!suggestions.empty()) {
-      if (e == Event::ArrowDown) {
+      if (pressed(KeyAction::next)) {
         suggest_i = (suggest_i + 1) % static_cast<int>(suggestions.size());
         return true;
       }
-      if (e == Event::ArrowUp) {
+      if (pressed(KeyAction::previous)) {
         suggest_i = (suggest_i + static_cast<int>(suggestions.size()) - 1) %
                     static_cast<int>(suggestions.size());
         return true;
       }
-      if (e == Event::Tab || e == Event::Character('\t')) {
+      if (pressed(KeyAction::complete)) {
         apply_suggestion(suggestions[static_cast<size_t>(suggest_i)]);
         return true;
       }
-      if (e == Event::TabReverse) {
+      if (pressed(KeyAction::complete_previous)) {
         suggest_i = (suggest_i + static_cast<int>(suggestions.size()) - 1) %
                     static_cast<int>(suggestions.size());
         apply_suggestion(suggestions[static_cast<size_t>(suggest_i)]);
         return true;
       }
     } else {
-      if (e == Event::ArrowUp) {
+      if (pressed(KeyAction::previous)) {
         history_prev();
         return true;
       }
-      if (e == Event::ArrowDown) {
+      if (pressed(KeyAction::next)) {
         history_next();
         return true;
       }
     }
-    if (is_word_left_key(e)) {
+    if (pressed(KeyAction::word_left)) {
       cursor = cursor_word_left(draft, cursor);
       return true;
     }
-    if (is_word_right_key(e)) {
+    if (pressed(KeyAction::word_right)) {
       cursor = cursor_word_right(draft, cursor);
       return true;
     }
-    if (is_text_start_key(e)) {
+    if (pressed(KeyAction::draft_start)) {
       cursor = 0;
       return true;
     }
-    if (is_text_end_key(e)) {
+    if (pressed(KeyAction::draft_end)) {
       cursor = static_cast<int>(draft.size());
       return true;
     }
-    if (is_edit_queued_key(e)) {
+    if (pressed(KeyAction::edit_queued)) {
       if (pop_last_steering_to_composer()) {
         return true;
       }
     }
-    if (is_newline_key(e)) {
+    if (pressed(KeyAction::newline)) {
       int pos = std::clamp(cursor, 0, static_cast<int>(draft.size()));
       draft.insert(static_cast<size_t>(pos), "\n");
       cursor = pos + 1;
       return true;
     }
-    if (is_send(e)) {
+    if (pressed(KeyAction::submit)) {
       if (pasting) {
         insert_draft("\n");
         return true;
@@ -2097,7 +2028,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       start_turn(std::move(prompt));
       return true;
     }
-    if (e == Event::Escape) {
+    if (pressed(KeyAction::cancel)) {
       if (busy) {
         bool has_steering = false;
         {
@@ -2120,10 +2051,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       history_i = -1;
       return true;
     }
-    if (e == Event::Character('\x03')) {
+    if (pressed(KeyAction::quit)) {
       cancel->store(true);
       ui_alive = false;
       screen.Exit();
+      return true;
+    }
+    // FTXUI otherwise gives retired Ctrl-Left/Right draft-jump keys word movement.
+    if (e == Event::ArrowLeftCtrl || e == Event::ArrowRightCtrl) {
       return true;
     }
     return false;

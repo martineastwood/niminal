@@ -1,59 +1,86 @@
 ---
 title: Keyboard shortcuts
-description: Default TUI keybindings.
+description: Default TUI keybindings and how to change them.
 ---
 
-niminal ships fixed TUI keybindings. They are not rebindable through config today.
+You can change niminal's TUI shortcuts in `~/.niminal/keybindings.json`. Each
+action accepts one key or a list of keys. For example, to use Ctrl-B and Ctrl-F
+to jump to the start and end of your draft:
+
+```json title="~/.niminal/keybindings.json"
+{
+  "composer.draftStart": "ctrl+b",
+  "composer.draftEnd": "ctrl+f"
+}
+```
+
+Create the file if it does not exist, then restart niminal. You only need to
+list actions you want to change. Each entry replaces that action's default
+keys. `/help` shows the keys active in the current TUI.
+
+Use lowercase key names. Join modifiers with `+`, as in `alt+left` or
+`ctrl+shift+o`. Supported modifiers are `ctrl`, `alt`, and `shift`. You can use
+letters, digits, `enter`, `escape`, `tab`, `up`, `down`, `left`, `right`, `home`,
+`end`, `pageup`, `pagedown`, `backspace`, and `delete`. A key combination only
+works when your terminal sends it to niminal as a distinguishable key event.
+Ctrl-I, Ctrl-J, and Ctrl-M cannot be bound separately from Tab or Enter and are
+rejected in this file.
+
+If the file contains an unsupported key, unknown action, or two shortcuts that
+conflict in the same TUI context, niminal shows the error at startup and uses
+the default keybindings for that launch. Every action needs at least one key.
+Mouse actions and ordinary composer editing keys are fixed. A custom shortcut
+using a key such as Backspace or Left takes precedence over its editing action.
 
 ## Composer
 
-| Key | Action |
-| --- | --- |
-| Enter | Send, or accept a slash/file suggestion |
-| Ctrl-D, Ctrl-S, Shift-Enter (several escape variants) | Also send |
-| Alt-J, Shift-Enter | Insert a newline |
-| Alt-Left / Alt-Right | Move the composer cursor by word |
-| Ctrl-Left / Ctrl-Right, Ctrl-A / Ctrl-E | Jump the composer cursor to the start or end of the draft |
-| Up / Down | Composer history when suggestions are closed |
+| Action | Default keys | What it does |
+| --- | --- | --- |
+| `composer.submit` | Enter, Ctrl-D, Ctrl-S, Ctrl-Enter | Send, queue while a turn runs, or accept a slash/file suggestion |
+| `composer.newline` | Alt-J, Shift-Enter | Insert a newline |
+| `composer.wordLeft` / `composer.wordRight` | Alt-Left / Alt-Right | Move the cursor by word |
+| `composer.draftStart` / `composer.draftEnd` | Ctrl-Left or Ctrl-A / Ctrl-Right or Ctrl-E | Jump to the start or end of the draft |
+| `composer.previous` / `composer.next` | Up / Down | Move through suggestions, or through history when suggestions are closed |
+| `composer.complete` / `composer.completePrevious` | Tab / Shift-Tab | Accept a suggestion, or cycle back and accept it |
+| `composer.cancel` | Esc | Interrupt a turn, send queued messages now, or clear an idle composer |
+| `composer.editQueued` | Alt-Up, Shift-Left | Pop the last queued steering message back into the composer |
+| `composer.paste` | Ctrl-V | Paste into the composer |
+| `composer.externalEditor` | Ctrl-G | Edit the composer in the configured `editor`, else `$VISUAL` or `$EDITOR` (`nano` if none is set) |
+| `app.quit` | Ctrl-C | Quit |
 
 macOS Mission Control claims Ctrl-Left and Ctrl-Right before the terminal sees
-them. Uncheck "Move left a space" and "Move right a space" in
-System Settings → Keyboard → Keyboard Shortcuts → Mission Control, or use
-Ctrl-A and Ctrl-E.
-| Tab / Shift-Tab | Accept or cycle a suggestion |
-| Esc | Interrupt a running turn, send queued messages now if any are waiting, or clear the composer when idle |
-| Alt-Up, Shift-Left | Pop the last queued steering message back into the composer |
-| Ctrl-C | Quit |
-| Ctrl-V, middle/right click | Paste into the composer |
-| Ctrl-G | Edit the composer in the configured `editor`, else `$VISUAL` or `$EDITOR` (`nano` if none is set) |
+them. You can use the default Ctrl-A and Ctrl-E keys, or bind `composer.draftStart`
+and `composer.draftEnd` to keys your terminal receives.
 
-While a turn is running, Enter queues a steering message. Queued messages appear
-above the composer. Esc sends them immediately. Alt-Up or Shift-Left pops the
-last one back into the composer.
+While a turn is running, submitting queues a steering message. Queued messages
+appear above the composer. `composer.cancel` sends them immediately, and
+`composer.editQueued` returns the last one to the composer.
 
 ## Transcript
 
-| Key | Action |
-| --- | --- |
-| Page Up / Page Down | Scroll the transcript |
-| Mouse wheel | Scroll the transcript |
-| Click a thinking, tool, or diff card | Expand or collapse it |
-| Ctrl+O | Toggle the most recent thinking, tool, or diff card |
-| Ctrl+Shift+O | Expand every card, or collapse all if they are already open |
-| Drag select + release | Copy selection to clipboard |
+| Action | Default keys | What it does |
+| --- | --- | --- |
+| `transcript.scrollUp` / `transcript.scrollDown` | Page Up / Page Down | Scroll the transcript |
+| `transcript.toggleLast` | Ctrl-O | Toggle the most recent thinking, tool, or diff card |
+| `transcript.toggleAll` | Ctrl-Shift-O | Expand every card, or collapse all if already open |
 
-New output sticks to the bottom until you scroll up.
+The mouse wheel also scrolls. Click a card to expand or collapse it, or drag
+select and release to copy text. New output sticks to the bottom until you
+scroll up.
 
-## Approval overlay
+## Approval prompt
 
-| Key | Action |
-| --- | --- |
-| Enter or `1` | Allow once |
-| `s` | Allow for this session |
-| `p` | Save a project grant (when allowed) |
-| `n` or Esc | Deny |
+| Action | Default keys | What it does |
+| --- | --- | --- |
+| `approval.allowOnce` | Enter, `1` | Allow once |
+| `approval.allowSession` | `s` | Allow for this session |
+| `approval.allowProject` | `p` | Save a project grant when allowed |
+| `approval.deny` | `n`, Esc | Deny |
+
+Approval keys only act while an approval prompt is open. For example, Enter
+can submit a message in the composer and allow once in the approval prompt.
 
 ## Next steps
 
 - [Interactive TUI](/guides/interactive-tui/) for queues, mentions, and the footer
-- [Commands and shortcuts](/reference/commands/) for slash commands
+- [Configuration](/guides/configuration/) for other global settings
