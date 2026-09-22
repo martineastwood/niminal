@@ -19,8 +19,6 @@ struct Suggestion {
   bool file = false;
 };
 
-std::string trim_copy(std::string s);
-
 struct UserBashRequest {
   std::string command;
   bool exclude_from_context = false;

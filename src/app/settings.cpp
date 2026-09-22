@@ -9,7 +9,6 @@
 #include <niminal/text.hpp>
 
 #include <algorithm>
-#include <cctype>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -34,19 +33,6 @@ constexpr SettingSpec kSettings[] = {
     {SettingField::keep_recent_tokens, "keep_recent_tokens", SettingKind::integer},
     {SettingField::context_window, "context_window", SettingKind::integer},
 };
-
-std::string trim_copy(std::string_view value) {
-  std::string s(value);
-  while (!s.empty() &&
-         (s.back() == ' ' || s.back() == '\n' || s.back() == '\r' || s.back() == '\t')) {
-    s.pop_back();
-  }
-  size_t i = 0;
-  while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t')) {
-    ++i;
-  }
-  return s.substr(i);
-}
 
 std::vector<std::string> provider_options() {
   std::vector<std::string> out;
@@ -107,7 +93,7 @@ SettingApplyResult fail(std::string message) {
 }
 
 std::optional<int> parse_non_negative_int(std::string_view value) {
-  const auto trimmed = trim_copy(value);
+  const auto trimmed = niminal::trim_copy(std::string(value));
   if (trimmed.empty()) {
     return 0;
   }
@@ -123,9 +109,18 @@ std::optional<int> parse_non_negative_int(std::string_view value) {
   }
 }
 
+SettingApplyResult apply_int_field(int& field, std::string_view value, const char* label) {
+  const auto parsed = parse_non_negative_int(value);
+  if (!parsed) {
+    return fail(std::string(label) + " must be a non-negative integer");
+  }
+  field = *parsed;
+  return ok();
+}
+
 SettingApplyResult apply_thinking(Config& cfg, std::string_view value,
                                   std::string_view agent_provider, std::string_view agent_model) {
-  const auto trimmed = trim_copy(value);
+  const auto trimmed = niminal::trim_copy(std::string(value));
   if (trimmed.empty()) {
     cfg.thinking.clear();
     return ok(true);
@@ -284,7 +279,7 @@ SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::str
                                        std::string_view /*agent_model*/) {
   switch (field) {
   case SettingField::model: {
-    const auto trimmed = trim_copy(value);
+    const auto trimmed = niminal::trim_copy(std::string(value));
     if (trimmed.empty()) {
       return fail("model cannot be empty");
     }
@@ -293,7 +288,7 @@ SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::str
     return ok(true);
   }
   case SettingField::api_url: {
-    const auto trimmed = trim_copy(value);
+    const auto trimmed = niminal::trim_copy(std::string(value));
     if (trimmed.empty()) {
       return fail("api_url cannot be empty");
     }
@@ -301,40 +296,16 @@ SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::str
     return ok(true);
   }
   case SettingField::editor:
-    cfg.editor = trim_copy(value);
+    cfg.editor = niminal::trim_copy(std::string(value));
     return ok();
-  case SettingField::max_steps: {
-    const auto parsed = parse_non_negative_int(value);
-    if (!parsed) {
-      return fail("max_steps must be a non-negative integer");
-    }
-    cfg.max_steps = *parsed;
-    return ok();
-  }
-  case SettingField::reserve_tokens: {
-    const auto parsed = parse_non_negative_int(value);
-    if (!parsed) {
-      return fail("reserve_tokens must be a non-negative integer");
-    }
-    cfg.reserve_tokens = *parsed;
-    return ok();
-  }
-  case SettingField::keep_recent_tokens: {
-    const auto parsed = parse_non_negative_int(value);
-    if (!parsed) {
-      return fail("keep_recent_tokens must be a non-negative integer");
-    }
-    cfg.keep_recent_tokens = *parsed;
-    return ok();
-  }
-  case SettingField::context_window: {
-    const auto parsed = parse_non_negative_int(value);
-    if (!parsed) {
-      return fail("context_window must be a non-negative integer");
-    }
-    cfg.context_window = *parsed;
-    return ok();
-  }
+  case SettingField::max_steps:
+    return apply_int_field(cfg.max_steps, value, "max_steps");
+  case SettingField::reserve_tokens:
+    return apply_int_field(cfg.reserve_tokens, value, "reserve_tokens");
+  case SettingField::keep_recent_tokens:
+    return apply_int_field(cfg.keep_recent_tokens, value, "keep_recent_tokens");
+  case SettingField::context_window:
+    return apply_int_field(cfg.context_window, value, "context_window");
   default:
     return fail("field is not editable");
   }

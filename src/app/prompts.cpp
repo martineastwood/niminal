@@ -18,20 +18,8 @@ namespace {
 
 constexpr size_t kMaxPromptBytes = 100'000;
 
-std::string trim_copy(std::string value) {
-  auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
-  while (!value.empty() && is_space(static_cast<unsigned char>(value.back()))) {
-    value.pop_back();
-  }
-  size_t first = 0;
-  while (first < value.size() && is_space(static_cast<unsigned char>(value[first]))) {
-    ++first;
-  }
-  return value.substr(first);
-}
-
 std::string unquote(std::string value) {
-  value = trim_copy(std::move(value));
+  value = niminal::trim_copy(std::move(value));
   if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
                             (value.front() == '\'' && value.back() == '\''))) {
     return value.substr(1, value.size() - 2);
@@ -69,11 +57,11 @@ PromptTemplate parse_template(const fs::path& path) {
   }
 
   size_t body_at = 0;
-  if (!lines.empty() && trim_copy(lines[0]) == "---") {
+  if (!lines.empty() && niminal::trim_copy(lines[0]) == "---") {
     body_at = 1;
     bool closed = false;
     for (; body_at < lines.size(); ++body_at) {
-      auto stripped = trim_copy(lines[body_at]);
+      auto stripped = niminal::trim_copy(lines[body_at]);
       if (stripped == "---") {
         ++body_at;
         closed = true;
@@ -83,7 +71,7 @@ PromptTemplate parse_template(const fs::path& path) {
       if (colon == std::string::npos || colon == 0) {
         continue;
       }
-      if (niminal::lower_copy(trim_copy(stripped.substr(0, colon))) == "description") {
+      if (niminal::lower_copy(niminal::trim_copy(stripped.substr(0, colon))) == "description") {
         result.description = unquote(stripped.substr(colon + 1));
       }
     }
@@ -98,10 +86,10 @@ PromptTemplate parse_template(const fs::path& path) {
     }
     result.body += lines[i];
   }
-  result.body = trim_copy(std::move(result.body));
+  result.body = niminal::trim_copy(std::move(result.body));
   if (result.description.empty()) {
     for (size_t i = body_at; i < lines.size(); ++i) {
-      auto candidate = trim_copy(lines[i]);
+      auto candidate = niminal::trim_copy(lines[i]);
       if (!candidate.empty()) {
         result.description = std::move(candidate);
         break;

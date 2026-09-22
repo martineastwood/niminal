@@ -3,6 +3,8 @@
 #include "json_mode.hpp"
 #include "queue_mode.hpp"
 
+#include <niminal/text.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -33,15 +35,6 @@ struct QueuedPrompt {
   std::string prompt;
   std::string mode;
 };
-
-std::string trim_copy(const std::string& text) {
-  const auto first = text.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) {
-    return {};
-  }
-  const auto last = text.find_last_not_of(" \t\r\n");
-  return text.substr(first, last - first + 1);
-}
 
 bool string_field(const nlohmann::json& object, const char* name, std::string& value) {
   auto it = object.find(name);
@@ -103,13 +96,13 @@ public:
       while ((newline = input.find('\n')) != std::string::npos) {
         auto line = input.substr(0, newline);
         input.erase(0, newline + 1);
-        line = trim_copy(std::move(line));
+        line = niminal::trim_copy(std::move(line));
         if (!line.empty()) {
           handle_line(line);
         }
       }
       if (eof) {
-        auto line = trim_copy(std::move(input));
+        auto line = niminal::trim_copy(std::move(input));
         input.clear();
         if (!line.empty()) {
           handle_line(line);
@@ -325,7 +318,7 @@ private:
 
     if (type == "prompt") {
       std::string message;
-      if (!string_field(command, "message", message) || trim_copy(message).empty()) {
+      if (!string_field(command, "message", message) || niminal::trim_copy(message).empty()) {
         send(rpc_response_event(id, false, {}, "prompt requires message."));
       } else if (shutting_down_) {
         send(rpc_response_event(id, false, {}, "RPC is shutting down."));
@@ -350,7 +343,7 @@ private:
 
     if (type == "steer" || type == "follow_up") {
       std::string message;
-      if (!string_field(command, "message", message) || trim_copy(message).empty()) {
+      if (!string_field(command, "message", message) || niminal::trim_copy(message).empty()) {
         send(rpc_response_event(id, false, {}, type + " requires message."));
       } else if (shutting_down_) {
         send(rpc_response_event(id, false, {}, "RPC is shutting down."));

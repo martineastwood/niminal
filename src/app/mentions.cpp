@@ -62,6 +62,34 @@ std::string normalize_dropped_path(std::string path) {
   return percent_decode(path);
 }
 
+struct PathMention {
+  size_t start;
+  size_t end;
+  std::string_view relative;
+};
+
+template <typename Fn>
+void for_each_path_mention(std::string_view text, Fn&& fn) {
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] != '@' ||
+        (i > 0 && (std::isspace(static_cast<unsigned char>(text[i - 1])) == 0))) {
+      ++i;
+      continue;
+    }
+    const size_t start = i;
+    size_t end = i + 1;
+    while (end < text.size() && mention_char(text[end])) {
+      ++end;
+    }
+    if (end == start + 1) {
+      ++i;
+      continue;
+    }
+    fn(PathMention{start, end, text.substr(start + 1, end - start - 1)});
+    i = end;
+  }
+}
+
 } // namespace
 
 std::optional<FileMention> file_mention_at(std::string_view text, size_t cursor) {
@@ -122,38 +150,22 @@ std::string apply_file_mention(std::string_view text, size_t cursor, std::string
 
 std::string expand_file_mentions(const Workspace& workspace, std::string_view prompt) {
   std::string attachments;
-  for (size_t i = 0; i < prompt.size();) {
-    if (prompt[i] != '@' ||
-        (i > 0 && (std::isspace(static_cast<unsigned char>(prompt[i - 1])) == 0))) {
-      ++i;
-      continue;
-    }
-    size_t end = i + 1;
-    while (end < prompt.size() && mention_char(prompt[end])) {
-      ++end;
-    }
-    if (end == i + 1) {
-      ++i;
-      continue;
-    }
-    auto relative = std::string(prompt.substr(i + 1, end - i - 1));
+  for_each_path_mention(prompt, [&](const PathMention& mention) {
+    const auto relative = std::string(mention.relative);
     if (image_path(relative)) {
-      i = end;
-      continue;
+      return;
     }
     try {
       auto path = workspace.resolve(relative);
       if (!std::filesystem::is_regular_file(path)) {
-        i = end;
-        continue;
+        return;
       }
       std::ifstream in(path, std::ios::binary);
       std::string body((std::istreambuf_iterator<char>(in)), {});
       if (body.substr(0, std::min<size_t>(body.size(), 4096)).find('\0') != std::string::npos) {
-        i = end;
-        continue;
+        return;
       }
-      bool truncated = body.size() > kAttachmentLimit;
+      const bool truncated = body.size() > kAttachmentLimit;
       body.resize(std::min(body.size(), kAttachmentLimit));
       attachments += "\n<file path=\"" + workspace.relative(path) + "\">\n" + body;
       if (body.empty() || body.back() != '\n') {
@@ -165,43 +177,27 @@ std::string expand_file_mentions(const Workspace& workspace, std::string_view pr
       attachments += "</file>\n";
     } catch (const std::exception&) {
     }
-    i = end;
-  }
+  });
   return std::string(prompt) + attachments;
 }
 
 niminal::UserInput prepare_user_input(const Workspace& workspace, niminal::UserInput input) {
-  for (size_t i = 0; i < input.text.size();) {
-    if (input.text[i] != '@' ||
-        (i > 0 && std::isspace(static_cast<unsigned char>(input.text[i - 1])) == 0)) {
-      ++i;
-      continue;
+  for_each_path_mention(input.text, [&](const PathMention& mention) {
+    if (!image_path(mention.relative)) {
+      return;
     }
-    size_t end = i + 1;
-    while (end < input.text.size() && mention_char(input.text[end])) {
-      ++end;
+    const auto filename = std::filesystem::path(mention.relative).filename().string();
+    for (const auto& image : input.images) {
+      if (image.value("name", "") == filename) {
+        return;
+      }
     }
-    auto relative = input.text.substr(i + 1, end - i - 1);
-    if (!relative.empty() && image_path(relative)) {
-      bool attached = false;
-      for (const auto& image : input.images) {
-        if (image.value("name", "") == std::filesystem::path(relative).filename().string()) {
-          attached = true;
-          break;
-        }
-      }
-      if (attached) {
-        i = end;
-        continue;
-      }
-      auto path = workspace.resolve(relative);
-      if (!std::filesystem::is_regular_file(path)) {
-        throw niminal::Error("image not found: " + relative);
-      }
-      input.images.push_back(read_image(path));
+    auto path = workspace.resolve(mention.relative);
+    if (!std::filesystem::is_regular_file(path)) {
+      throw niminal::Error("image not found: " + std::string(mention.relative));
     }
-    i = end;
-  }
+    input.images.push_back(read_image(path));
+  });
   input.text = expand_file_mentions(workspace, input.text);
   if (!input.images.empty()) {
     return input;

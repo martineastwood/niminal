@@ -132,17 +132,6 @@ std::vector<Suggestion> suggest_models(const std::string& query, std::string_vie
 
 } // namespace
 
-std::string trim_copy(std::string s) {
-  while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\r')) {
-    s.pop_back();
-  }
-  size_t i = 0;
-  while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r')) {
-    ++i;
-  }
-  return s.substr(i);
-}
-
 std::optional<UserBashRequest> parse_user_bash(std::string_view prompt) {
   if (prompt.empty() || prompt.front() != '!') {
     return std::nullopt;
@@ -153,7 +142,7 @@ std::optional<UserBashRequest> parse_user_bash(std::string_view prompt) {
     req.exclude_from_context = true;
     start = 2;
   }
-  req.command = trim_copy(std::string(prompt.substr(start)));
+  req.command = niminal::trim_copy(std::string(prompt.substr(start)));
   if (req.command.empty()) {
     return std::nullopt;
   }
@@ -163,7 +152,8 @@ std::optional<UserBashRequest> parse_user_bash(std::string_view prompt) {
 std::pair<std::string, std::string> split_slash(const std::string& prompt) {
   auto space = prompt.find(' ');
   auto cmd = space == std::string::npos ? prompt : prompt.substr(0, space);
-  auto arg = space == std::string::npos ? std::string() : trim_copy(prompt.substr(space + 1));
+  auto arg =
+      space == std::string::npos ? std::string() : niminal::trim_copy(prompt.substr(space + 1));
   for (char& c : cmd) {
     if (c >= 'A' && c <= 'Z') {
       c = static_cast<char>(c - 'A' + 'a');

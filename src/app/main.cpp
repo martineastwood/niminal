@@ -1,4 +1,5 @@
 #include <niminal/agent.hpp>
+#include <niminal/text.hpp>
 #include <niminal/version.hpp>
 
 #include "compaction.hpp"
@@ -273,17 +274,8 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
   }
 }
 
-std::string trim_copy(const std::string& text) {
-  const auto first = text.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) {
-    return {};
-  }
-  const auto last = text.find_last_not_of(" \t\r\n");
-  return text.substr(first, last - first + 1);
-}
-
 std::string merge_piped_prompt(const std::string& prompt, std::string piped) {
-  piped = trim_copy(std::move(piped));
+  piped = niminal::trim_copy(std::move(piped));
   if (piped.empty()) {
     return prompt;
   }

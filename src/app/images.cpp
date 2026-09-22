@@ -1,5 +1,7 @@
 #include "images.hpp"
 
+#include <niminal/text.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -10,27 +12,6 @@ namespace niminal::app {
 namespace {
 
 constexpr size_t kMaxImageBytes = 10 * 1024 * 1024;
-
-std::string base64(std::string_view bytes) {
-  constexpr std::string_view alphabet =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::string out;
-  out.reserve(((bytes.size() + 2) / 3) * 4);
-  for (size_t i = 0; i < bytes.size(); i += 3) {
-    const auto a = static_cast<unsigned int>(static_cast<unsigned char>(bytes[i]));
-    const auto b = i + 1 < bytes.size()
-                       ? static_cast<unsigned int>(static_cast<unsigned char>(bytes[i + 1]))
-                       : 0U;
-    const auto c = i + 2 < bytes.size()
-                       ? static_cast<unsigned int>(static_cast<unsigned char>(bytes[i + 2]))
-                       : 0U;
-    out.push_back(alphabet[a >> 2]);
-    out.push_back(alphabet[((a & 3U) << 4U) | (b >> 4U)]);
-    out.push_back(i + 1 < bytes.size() ? alphabet[((b & 15U) << 2U) | (c >> 6U)] : '=');
-    out.push_back(i + 2 < bytes.size() ? alphabet[c & 63U] : '=');
-  }
-  return out;
-}
 
 std::string mime_type(std::string_view bytes) {
   if (bytes.size() >= 8 && bytes.substr(0, 8) == "\x89PNG\r\n\x1a\n") {
@@ -45,6 +26,16 @@ std::string mime_type(std::string_view bytes) {
     return "image/webp";
   }
   return {};
+}
+
+std::string image_filename(std::string_view stem, std::string_view mime) {
+  if (mime == "image/jpeg") {
+    return std::string(stem) + ".jpg";
+  }
+  if (mime == "image/webp") {
+    return std::string(stem) + ".webp";
+  }
+  return std::string(stem) + ".png";
 }
 
 } // namespace
@@ -68,8 +59,18 @@ niminal::json image_part(std::string_view bytes, std::string_view name) {
   if (mime.empty()) {
     throw niminal::Error("unsupported or invalid image: " + std::string(name));
   }
-  return niminal::json{
-      {"type", "image"}, {"name", name}, {"mime_type", mime}, {"data", base64(bytes)}};
+  return niminal::json{{"type", "image"},
+                       {"name", name},
+                       {"mime_type", mime},
+                       {"data", niminal::base64_encode(bytes)}};
+}
+
+niminal::json clipboard_image_part(std::string_view bytes) {
+  const auto mime = mime_type(bytes);
+  if (mime.empty()) {
+    throw niminal::Error("unsupported or invalid clipboard image");
+  }
+  return image_part(bytes, image_filename("clipboard", mime));
 }
 
 niminal::json read_image(const std::filesystem::path& path) {

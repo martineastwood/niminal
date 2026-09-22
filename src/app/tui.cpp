@@ -1061,7 +1061,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   }
 
   auto send_prompt = [&](niminal::UserInput prompt, bool retry = false) {
-    prompt.text = trim_copy(std::move(prompt.text));
+    prompt.text = niminal::trim_copy(std::move(prompt.text));
     if (prompt.text.empty() && prompt.images.empty()) {
       return;
     }
@@ -1185,7 +1185,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   };
 
   auto start_turn = [&](std::string prompt) {
-    prompt = trim_copy(std::move(prompt));
+    prompt = niminal::trim_copy(std::move(prompt));
     if (prompt.empty()) {
       return;
     }
@@ -1641,14 +1641,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           std::string title;
           if (!arg.empty()) {
             auto space = arg.find(' ');
-            std::string first = trim_copy(space == std::string::npos ? arg : arg.substr(0, space));
+            std::string first =
+                niminal::trim_copy(space == std::string::npos ? arg : arg.substr(0, space));
             bool numeric =
                 !first.empty() && std::all_of(first.begin(), first.end(),
                                               [](unsigned char c) { return std::isdigit(c) != 0; });
             if (numeric) {
               turn = std::stoi(first);
               if (space != std::string::npos) {
-                title = trim_copy(arg.substr(space + 1));
+                title = niminal::trim_copy(arg.substr(space + 1));
               }
               upto = session.end_after_user_turn(turn);
               if (upto < 0) {
@@ -2019,6 +2020,18 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     cursor = pos + static_cast<int>(text.size());
   };
 
+  auto paste_clipboard_into_draft = [&] {
+    try {
+      if (auto image = paste_image_from_clipboard()) {
+        draft_images.push_back(std::move(*image));
+      } else {
+        insert_draft(paste_from_clipboard());
+      }
+    } catch (const std::exception& ex) {
+      flash_footer(ex.what());
+    }
+  };
+
   auto pop_last_steering_to_composer = [&]() -> bool {
     niminal::UserInput message;
     {
@@ -2178,15 +2191,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (pressed(KeyAction::paste)) {
-      try {
-        if (auto image = paste_image_from_clipboard()) {
-          draft_images.push_back(std::move(*image));
-        } else {
-          insert_draft(paste_from_clipboard());
-        }
-      } catch (const std::exception& ex) {
-        flash_footer(ex.what());
-      }
+      paste_clipboard_into_draft();
       return true;
     }
     if (pressed(KeyAction::external_editor)) {
@@ -2230,15 +2235,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (e.is_mouse() && e.mouse().motion == Mouse::Pressed &&
         (e.mouse().button == Mouse::Middle || e.mouse().button == Mouse::Right)) {
-      try {
-        if (auto image = paste_image_from_clipboard()) {
-          draft_images.push_back(std::move(*image));
-        } else {
-          insert_draft(paste_from_clipboard());
-        }
-      } catch (const std::exception& ex) {
-        flash_footer(ex.what());
-      }
+      paste_clipboard_into_draft();
       return true;
     }
     if (e == Event::Backspace && draft.empty() && !draft_images.empty()) {
