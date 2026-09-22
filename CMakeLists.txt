@@ -381,6 +381,8 @@ add_executable(niminal_extensions_test
   src/app/trust.cpp)
 target_include_directories(niminal_extensions_test PRIVATE src/app include)
 target_link_libraries(niminal_extensions_test PRIVATE niminal::ai)
+target_compile_definitions(niminal_extensions_test
+  PRIVATE NIMINAL_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 niminal_strict_compile(niminal_extensions_test)
 
 add_executable(niminal_diff_test tests/diff_test.cpp src/app/diff.cpp)
