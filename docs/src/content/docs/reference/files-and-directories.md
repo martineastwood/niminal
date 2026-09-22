@@ -8,6 +8,7 @@ description: Every path niminal reads and writes on your machine.
 | Path | Purpose |
 | --- | --- |
 | `~/.niminal/config.json` | User settings |
+| `~/.niminal/auth.json` | Provider credentials |
 | `~/.niminal/sessions/` | Append-only session JSONL files |
 | `~/.niminal/sessions/.trash/` | Deleted sessions |
 | `~/.niminal/trust.json` | Per-workspace trust decisions |

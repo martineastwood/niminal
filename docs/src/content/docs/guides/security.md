@@ -42,8 +42,13 @@ environment. Treat shell approval as authorization, not isolation.
 
 ## Credentials
 
-API keys come from environment variables or `--api-key`. niminal does not write
-provider keys into the config file or session files.
+API keys come from `--api-key`, `~/.niminal/auth.json`, or provider environment
+variables. niminal does not write provider keys into the config file or session
+files. If `auth.json` contains literal keys, make it readable only by your user:
+
+```sh
+chmod 600 ~/.niminal/auth.json
+```
 
 ## Sessions
 

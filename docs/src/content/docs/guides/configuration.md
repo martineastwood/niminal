@@ -8,12 +8,33 @@ niminal reads one optional configuration file:
 | File | Applies to |
 | --- | --- |
 | `~/.niminal/config.json` | Everything you run |
+| `~/.niminal/auth.json` | Provider credentials |
 
 There is no config command to run first: a missing file is normal, and every
 setting has a default. Many people never write more than a provider and a model.
 
-Credentials are not stored in the config file. Export the matching provider
-environment variable, or pass `--api-key KEY` for one process.
+Credentials are not stored in `config.json`. Export the matching provider
+environment variable, add a credential to `auth.json`, or pass `--api-key KEY`
+for one process. Keys are resolved in that order from highest to lowest
+priority: `--api-key`, `auth.json`, then the provider's standard environment
+variable.
+
+An auth entry can contain a literal key or an environment-variable reference:
+
+```json title="~/.niminal/auth.json"
+{
+  "openai": {"key": "$MY_OPENAI_KEY"},
+  "anthropic": {"key": "sk-ant-your-key"}
+}
+```
+
+Both `$MY_OPENAI_KEY` and `${MY_OPENAI_KEY}` are supported. The auth file is
+not created by niminal, so set its permissions to user-only when it contains
+literal keys:
+
+```sh
+chmod 600 ~/.niminal/auth.json
+```
 
 ## A minimal config
 
@@ -84,7 +105,9 @@ and are never written back:
 | `--approve`, `--no-approve` | Choose whether project-local resources load |
 | `--version`, `--help` | Print the version or usage and exit |
 
-Load order: config file, then environment, then CLI flags.
+Load order: config file, then environment, then CLI flags. Provider credentials
+are resolved separately as `--api-key`, `auth.json`, then the provider
+environment variable.
 
 ## What niminal writes
 

@@ -59,8 +59,9 @@ const char* kUsage =
     "Shift-Enter inserts a newline. Esc also clears the composer when idle.\n"
     "Ctrl-G edits the composer in the config editor, $VISUAL, $EDITOR, or nano.\n"
     "Ctrl-C quits. /compact summarizes older turns. Sessions are saved under\n"
-    "~/.niminal/sessions. Set the matching provider key (OPENROUTER_API_KEY by\n"
-    "default). File tools stay in cwd. Shell commands ask in the TUI.\n";
+    "~/.niminal/sessions. Set --api-key, ~/.niminal/auth.json, or the matching\n"
+    "provider key (OPENROUTER_API_KEY by default). File tools stay in cwd.\n"
+    "Shell commands ask in the TUI.\n";
 
 const char* kSystem = R"(You are niminal, a coding agent working with the user in their workspace.
 Help them understand, diagnose, and change code according to their request.

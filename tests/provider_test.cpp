@@ -1,5 +1,8 @@
 #include "provider.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -80,6 +83,47 @@ int main() {
   apply_provider(agent, stale);
   if (agent.api_url.find("/v1/messages") == std::string::npos) {
     return fail("stale api_url should normalize to provider endpoint");
+  }
+
+  const auto auth_root = std::filesystem::temp_directory_path() / "niminal-provider-auth-test";
+  std::filesystem::remove_all(auth_root);
+  std::filesystem::create_directories(auth_root / ".niminal");
+  std::ofstream(auth_root / ".niminal" / "auth.json")
+      << R"({"openai":{"key":"auth-openai-key"}})";
+  const char* old_home = std::getenv("HOME");
+  const char* old_openai_key = std::getenv("OPENAI_API_KEY");
+  const std::string saved_home = old_home == nullptr ? "" : old_home;
+  const std::string saved_openai_key = old_openai_key == nullptr ? "" : old_openai_key;
+  const bool had_home = old_home != nullptr;
+  const bool had_openai_key = old_openai_key != nullptr;
+  setenv("HOME", auth_root.c_str(), 1);
+  setenv("OPENAI_API_KEY", "environment-openai-key", 1);
+  Config auth_cfg;
+  bool auth_ok = false;
+  std::string auth_error;
+  if (auto result = select_provider(auth_cfg, "openai"); !result) {
+    auth_error = result.error().what();
+  } else {
+    niminal::Agent auth_agent;
+    apply_provider(auth_agent, auth_cfg);
+    auth_ok = auth_agent.api_key == "auth-openai-key";
+  }
+  if (had_home) {
+    setenv("HOME", saved_home.c_str(), 1);
+  } else {
+    unsetenv("HOME");
+  }
+  if (had_openai_key) {
+    setenv("OPENAI_API_KEY", saved_openai_key.c_str(), 1);
+  } else {
+    unsetenv("OPENAI_API_KEY");
+  }
+  std::filesystem::remove_all(auth_root);
+  if (!auth_error.empty()) {
+    return fail(auth_error.c_str());
+  }
+  if (!auth_ok) {
+    return fail("auth file should override environment key");
   }
   return 0;
 }

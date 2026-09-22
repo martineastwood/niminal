@@ -165,6 +165,7 @@ add_executable(niminal_cli
   src/app/transcript.cpp
   src/app/session.cpp
   src/app/config.cpp
+  src/app/auth.cpp
   src/app/provider.cpp
   src/app/instructions.cpp
   src/app/workspace.cpp
@@ -240,6 +241,7 @@ niminal_strict_compile(niminal_config_test)
 
 add_executable(niminal_provider_test
   tests/provider_test.cpp
+  src/app/auth.cpp
   src/app/provider.cpp
   src/app/session.cpp
   src/app/config.cpp
@@ -248,6 +250,11 @@ add_executable(niminal_provider_test
 target_include_directories(niminal_provider_test PRIVATE src/app include)
 target_link_libraries(niminal_provider_test PRIVATE niminal::ai)
 niminal_strict_compile(niminal_provider_test)
+
+add_executable(niminal_auth_test tests/auth_test.cpp src/app/auth.cpp)
+target_include_directories(niminal_auth_test PRIVATE src/app)
+target_link_libraries(niminal_auth_test PRIVATE nlohmann_json::nlohmann_json)
+niminal_strict_compile(niminal_auth_test)
 
 add_executable(niminal_session_test tests/session_test.cpp src/app/session.cpp)
 target_include_directories(niminal_session_test PRIVATE src/app include)
@@ -360,6 +367,7 @@ add_test(NAME skills COMMAND niminal_skills_test)
 add_test(NAME prompts COMMAND niminal_prompts_test)
 add_test(NAME config COMMAND niminal_config_test)
 add_test(NAME provider COMMAND niminal_provider_test)
+add_test(NAME auth COMMAND niminal_auth_test)
 add_test(NAME session COMMAND niminal_session_test)
 add_test(NAME compaction COMMAND niminal_compaction_test)
 add_test(NAME agent COMMAND niminal_agent_test)

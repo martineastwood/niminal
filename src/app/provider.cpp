@@ -1,4 +1,5 @@
 #include "provider.hpp"
+#include "auth.hpp"
 #include "thinking.hpp"
 
 #include <niminal/text.hpp>
@@ -19,7 +20,10 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
   agent.provider = spec->name;
   agent.model = cfg.model.empty() ? spec->default_model : cfg.model;
   agent.api_url = cfg.api_url.empty() ? spec->endpoint : cfg.api_url;
-  agent.api_key = niminal::read_api_key(*spec);
+  agent.api_key = read_auth_key(spec->name);
+  if (agent.api_key.empty()) {
+    agent.api_key = niminal::read_api_key(*spec);
+  }
   agent.key_hint = std::string(niminal::key_hint(*spec));
   agent.extra_headers = niminal::provider_headers(*spec);
   agent.session_routing = spec->session_routing;

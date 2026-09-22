@@ -26,8 +26,9 @@ Switch providers with `/provider NAME` or `--provider NAME`. Each provider
 remembers its last model in `providers.<name>.last_model` inside
 `~/.niminal/config.json`.
 
-`/provider` alone prints the active name, model, endpoint, and which environment
-variable supplies the key.
+`/provider` alone prints the active name, model, endpoint, and the provider's
+standard environment variable. Credentials can also come from
+`~/.niminal/auth.json` or `--api-key`.
 
 ## Model selection
 

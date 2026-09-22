@@ -27,8 +27,27 @@ exporting its key, then selecting it with `--provider` or `/provider`:
 | OpenCode Go or Zen | `OPENCODE_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
+For a custom environment variable, add a provider entry to
+`~/.niminal/auth.json`:
+
+```json title="~/.niminal/auth.json"
+{
+  "openai": {
+    "key": "$MY_OPENAI_KEY"
+  }
+}
+```
+
+The `key` can also be a literal API key. Keep this file private:
+
+```sh
+chmod 600 ~/.niminal/auth.json
+```
+
 You can pass `--api-key KEY` for a one-process override instead of exporting a
-variable. See [Configuration](/guides/configuration/) for the full config file.
+variable. Key resolution is `--api-key`, then `auth.json`, then the provider's
+standard environment variable. See [Configuration](/guides/configuration/) for
+the full config file.
 
 Codex App Server is not wired in niminal today.
 

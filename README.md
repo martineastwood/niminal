@@ -78,6 +78,15 @@ matching key:
 | Hyper | `HYPER_API_KEY` |
 | OpenCode Go or Zen | `OPENCODE_API_KEY` |
 
+For a custom environment variable, use `~/.niminal/auth.json`:
+
+```json
+{"openai": {"key": "$MY_OPENAI_KEY"}}
+```
+
+Keys resolve in this order: `--api-key`, `auth.json`, then the standard
+provider environment variable. Keep `auth.json` private with `chmod 600`.
+
 Use `/model`, `/thinking`, and `/theme` in the TUI, or pass `--model`,
 `--thinking`, and related flags for one run. Defaults and overrides live in
 `~/.niminal/config.json`. See

@@ -54,7 +54,7 @@ hero:
       <article class="landing-card">
         <span class="landing-card-index">03</span>
         <h3>Your provider, your keys</h3>
-        <p>Requests go straight to the API you pick. Credentials stay in your environment or in a one-process <code>--api-key</code> override.</p>
+        <p>Requests go straight to the API you pick. Credentials stay in your environment, your local auth file, or a one-process <code>--api-key</code> override.</p>
       </article>
       <article class="landing-card">
         <span class="landing-card-index">04</span>
