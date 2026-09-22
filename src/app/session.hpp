@@ -35,7 +35,9 @@ public:
 
   void add_user(const std::string& text);
   void add_assistant(const std::string& text, const nlohmann::json& tool_calls,
-                     const std::string& model, const niminal::Usage& usage = {});
+                     const std::string& model, const niminal::Usage& usage = {},
+                     const std::string& reasoning_content = {},
+                     const nlohmann::json& reasoning_details = nlohmann::json::array());
   niminal::Usage usage_totals() const;
   void add_tool_result(const std::string& tool_id, const std::string& output, bool is_error);
   void add_name(const std::string& title);
@@ -50,6 +52,8 @@ public:
   std::string last_assistant_text() const;
   std::string describe() const;
   int latest_compaction_index() const;
+  int end_after_user_turn(int turn) const;
+  std::vector<std::pair<int, std::string>> user_turn_previews() const;
   Session fork(const std::filesystem::path& dir, int upto = -1) const;
   std::string export_text(std::string_view format) const;
 

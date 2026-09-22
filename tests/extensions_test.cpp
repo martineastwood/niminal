@@ -392,8 +392,7 @@ for line in sys.stdin:
     std::ofstream out(script);
     out << "#!/bin/sh\nprintf 'edited draft' > \"$1\"\n";
   }
-  fs::permissions(script,
-                  fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
                   fs::perm_options::add);
   auto edited = niminal::app::edit_text_externally("original draft", script.string());
   if (edited != "edited draft") {

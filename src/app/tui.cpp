@@ -28,6 +28,7 @@
 #include <ftxui/screen/string.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -467,7 +468,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       static const std::vector<ExtensionCommand> no_commands;
       const auto& commands = extensions ? extensions->commands() : no_commands;
       items = slash_suggestions(draft, session_dir, cwd.string(), agent.provider, agent.model,
-                                recents, commands);
+                                recents, commands, session);
     }
     std::string sig;
     for (const auto& item : items) {
@@ -793,7 +794,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         } catch (...) {
         }
       }
-      screen.RequestAnimationFrame();
+      if (ev.kind != EventKind::text_delta && ev.kind != EventKind::thinking_delta &&
+          ev.kind != EventKind::tool_output_delta) {
+        screen.RequestAnimationFrame();
+      }
     });
   };
 
@@ -1533,12 +1537,41 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       if (cmd == "/fork") {
         try {
-          auto next = session.fork(default_session_dir());
+          int upto = -1;
+          int turn = 0;
+          std::string title;
           if (!arg.empty()) {
-            next.add_name(arg);
+            auto space = arg.find(' ');
+            std::string first = trim_copy(space == std::string::npos ? arg : arg.substr(0, space));
+            bool numeric = !first.empty() &&
+                           std::all_of(first.begin(), first.end(),
+                                       [](unsigned char c) { return std::isdigit(c) != 0; });
+            if (numeric) {
+              turn = std::stoi(first);
+              if (space != std::string::npos) {
+                title = trim_copy(arg.substr(space + 1));
+              }
+              upto = session.end_after_user_turn(turn);
+              if (upto < 0) {
+                blocks.push_back(
+                    Block{BlockKind::error, "No user turn " + std::to_string(turn)});
+                return;
+              }
+            } else {
+              title = arg;
+            }
+          }
+          auto next = upto < 0 ? session.fork(default_session_dir())
+                               : session.fork(default_session_dir(), upto);
+          if (!title.empty()) {
+            next.add_name(title);
           }
           auto id = next.id;
-          adopt_session(std::move(next), "Forked " + id);
+          std::string note = "Forked " + id;
+          if (turn > 0) {
+            note += " from turn " + std::to_string(turn);
+          }
+          adopt_session(std::move(next), note);
         } catch (const std::exception& e) {
           blocks.push_back(Block{BlockKind::error, e.what()});
         }

@@ -28,7 +28,7 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/name [title]` | Show or set the session name |
 | `/resume [ID]` | List or load a session |
 | `/search TEXT` | Search sessions for text |
-| `/fork [title]` | Copy this session into a new one |
+| `/fork [N] [title]` | Copy this session, or from user turn N |
 | `/export [PATH]` | Write this session as Markdown, HTML, or JSON |
 | `/delete ID` | Move a session to the trash |
 | `/restore [ID]` | List or restore a deleted session |

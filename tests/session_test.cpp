@@ -60,7 +60,8 @@ int main() {
       {"type", "function"},
       {"function", {{"name", "bash"}, {"arguments", "{\"command\":\"npm test\"}"}}},
   }});
-  s.add_assistant("running tests", calls, "openai/gpt-4o-mini");
+  json reasoning_details = json::array({{{"type", "reasoning.text"}, {"text", "check"}}});
+  s.add_assistant("running tests", calls, "openai/gpt-4o-mini", {}, "check", reasoning_details);
   s.add_tool_result("call_1", "exit_code: 1", true);
   s.add_name("fix the parser");
   s.add_selection("anthropic/claude-sonnet-4", "openrouter");
@@ -91,6 +92,10 @@ int main() {
   }
   if (msgs[1].value("role", "") != "assistant" || !msgs[1].contains("tool_calls")) {
     return fail("assistant tool_calls");
+  }
+  if (msgs[1].value("reasoning_content", "") != "check" ||
+      msgs[1].value("reasoning_details", json::array()) != reasoning_details) {
+    return fail("assistant reasoning survives session reload");
   }
   if (msgs[2].value("role", "") != "tool") {
     return fail("tool role");
@@ -236,6 +241,34 @@ int main() {
   }
   if (s.fork(dir, 2).events.size() != 2) {
     return fail("fork keeps a prefix");
+  }
+
+  auto turns = create_session(dir, "/tmp/ws-a");
+  turns.add_user("first question");
+  turns.add_assistant("first answer", json::array(), "openai/gpt-4o-mini");
+  turns.add_tool_result("call_t", "tool output", false);
+  turns.add_user("second question");
+  turns.add_assistant("second answer", json::array(), "openai/gpt-4o-mini");
+  if (turns.end_after_user_turn(0) != -1 || turns.end_after_user_turn(99) != -1) {
+    return fail("end_after_user_turn invalid");
+  }
+  if (turns.end_after_user_turn(1) != 3) {
+    return fail("end_after_user_turn first");
+  }
+  if (turns.end_after_user_turn(2) != 5) {
+    return fail("end_after_user_turn second");
+  }
+  if (turns.fork(dir, turns.end_after_user_turn(1)).events.size() != 3) {
+    return fail("fork through user turn 1");
+  }
+  if (turns.fork(dir, turns.end_after_user_turn(2)).events.size() != 5) {
+    return fail("fork through user turn 2");
+  }
+  auto previews = turns.user_turn_previews();
+  if (previews.size() != 2 || previews[0].first != 1 || previews[1].first != 2 ||
+      previews[0].second.find("first question") == std::string::npos ||
+      previews[1].second.find("second question") == std::string::npos) {
+    return fail("user_turn_previews");
   }
 
   auto markdown = forked.export_text("md");

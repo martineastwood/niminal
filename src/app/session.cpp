@@ -470,7 +470,8 @@ void Session::add_user(const std::string& text) {
 }
 
 void Session::add_assistant(const std::string& text, const json& tool_calls,
-                            const std::string& model, const niminal::Usage& usage) {
+                            const std::string& model, const niminal::Usage& usage,
+                            const std::string& reasoning_content, const json& reasoning_details) {
   json content = json::array();
   if (!text.empty()) {
     content.push_back(text_block(text));
@@ -494,6 +495,12 @@ void Session::add_assistant(const std::string& text, const json& tool_calls,
     }
   }
   json event = {{"type", "assistant"}, {"role", "assistant"}, {"content", content}};
+  if (!reasoning_content.empty()) {
+    event["reasoning_content"] = reasoning_content;
+  }
+  if (!reasoning_details.empty()) {
+    event["reasoning_details"] = reasoning_details;
+  }
   if (!model.empty()) {
     event["model"] = model;
   }
@@ -568,6 +575,42 @@ int Session::latest_compaction_index() const {
     }
   }
   return -1;
+}
+
+int Session::end_after_user_turn(int turn) const {
+  if (turn < 1) {
+    return -1;
+  }
+  int seen = 0;
+  bool found = false;
+  for (size_t i = 0; i < events.size(); ++i) {
+    if (events[i].value("type", "") != "user") {
+      continue;
+    }
+    ++seen;
+    if (seen == turn) {
+      found = true;
+    } else if (seen == turn + 1) {
+      return static_cast<int>(i);
+    }
+  }
+  if (!found) {
+    return -1;
+  }
+  return static_cast<int>(events.size());
+}
+
+std::vector<std::pair<int, std::string>> Session::user_turn_previews() const {
+  std::vector<std::pair<int, std::string>> out;
+  int turn = 0;
+  for (const auto& event : events) {
+    if (event.value("type", "") != "user") {
+      continue;
+    }
+    ++turn;
+    out.push_back({turn, clip_line(first_user_text(event))});
+  }
+  return out;
 }
 
 Session Session::fork(const fs::path& dir, int upto) const {
@@ -726,6 +769,11 @@ json Session::openai_messages() const {
       }
       if (!calls.empty()) {
         msg["tool_calls"] = calls;
+      }
+      for (const auto* key : {"reasoning_content", "reasoning_details"}) {
+        if (event.contains(key)) {
+          msg[key] = event[key];
+        }
       }
       out.push_back(std::move(msg));
     } else if (type == "tool_result") {
@@ -954,17 +1002,18 @@ std::string format_session_list(const std::vector<SessionInfo>& infos,
 
 void bind_session(niminal::Agent& agent, Session& session) {
   agent.persist_user = [&session](const std::string& text) { session.add_user(text); };
-  agent.persist_assistant = [&session](const std::string& text,
-                                       const std::vector<niminal::ToolCall>& calls,
-                                       const std::string& model, const niminal::Usage& usage) {
-    nlohmann::json arr = nlohmann::json::array();
-    for (const auto& call : calls) {
-      arr.push_back({{"id", call.id},
-                     {"type", "function"},
-                     {"function", {{"name", call.name}, {"arguments", call.arguments}}}});
-    }
-    session.add_assistant(text, arr, model, usage);
-  };
+  agent.persist_assistant =
+      [&session](const std::string& text, const std::vector<niminal::ToolCall>& calls,
+                 const std::string& model, const niminal::Usage& usage,
+                 const std::string& reasoning_content, const nlohmann::json& reasoning_details) {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& call : calls) {
+          arr.push_back({{"id", call.id},
+                         {"type", "function"},
+                         {"function", {{"name", call.name}, {"arguments", call.arguments}}}});
+        }
+        session.add_assistant(text, arr, model, usage, reasoning_content, reasoning_details);
+      };
   agent.persist_tool = [&session](const std::string& id, const std::string& output, bool error) {
     session.add_tool_result(id, output, error);
   };

@@ -319,7 +319,8 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
 
       if (result.tool_calls.empty()) {
         if (persist_assistant) {
-          persist_assistant(result.text, result.tool_calls, model, result.usage);
+          persist_assistant(result.text, result.tool_calls, model, result.usage,
+                            result.reasoning_content, result.reasoning_details);
         }
         StreamEvent assistant{EventKind::assistant_message, result.text, {}, {}};
         assistant.final = true;
@@ -355,6 +356,12 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
 
       empty_responses = 0;
       json assistant = {{"role", "assistant"}, {"content", result.text}};
+      if (!result.reasoning_content.empty()) {
+        assistant["reasoning_content"] = result.reasoning_content;
+      }
+      if (!result.reasoning_details.empty()) {
+        assistant["reasoning_details"] = result.reasoning_details;
+      }
       json calls = json::array();
       if (!result.text.empty()) {
         StreamEvent message{EventKind::assistant_message, result.text, {}, {}};
@@ -374,7 +381,8 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
       assistant["tool_calls"] = std::move(calls);
       messages.push_back(std::move(assistant));
       if (persist_assistant) {
-        persist_assistant(result.text, result.tool_calls, model, result.usage);
+        persist_assistant(result.text, result.tool_calls, model, result.usage,
+                          result.reasoning_content, result.reasoning_details);
       }
 
       struct ToolExecution {

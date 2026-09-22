@@ -9,6 +9,7 @@
 namespace niminal::app {
 
 struct ExtensionCommand;
+class Session;
 
 struct Suggestion {
   std::string fill;
@@ -25,6 +26,7 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
                                           const std::string& workspace, std::string_view provider,
                                           std::string_view model,
                                           const std::vector<std::string>& recents,
-                                          const std::vector<ExtensionCommand>& extension_commands);
+                                          const std::vector<ExtensionCommand>& extension_commands,
+                                          const Session& session);
 
 } // namespace niminal::app

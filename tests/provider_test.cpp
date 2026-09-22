@@ -88,8 +88,7 @@ int main() {
   const auto auth_root = std::filesystem::temp_directory_path() / "niminal-provider-auth-test";
   std::filesystem::remove_all(auth_root);
   std::filesystem::create_directories(auth_root / ".niminal");
-  std::ofstream(auth_root / ".niminal" / "auth.json")
-      << R"({"openai":{"key":"auth-openai-key"}})";
+  std::ofstream(auth_root / ".niminal" / "auth.json") << R"({"openai":{"key":"auth-openai-key"}})";
   const char* old_home = std::getenv("HOME");
   const char* old_openai_key = std::getenv("OPENAI_API_KEY");
   const std::string saved_home = old_home == nullptr ? "" : old_home;

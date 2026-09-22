@@ -36,11 +36,17 @@ change your saved defaults in `~/.niminal/config.json`.
 
 | Command | Purpose |
 | --- | --- |
-| `/fork [title]` | Copy the current session into a new file and switch to it |
+| `/fork [N] [title]` | Copy the current session, or from user turn N, and switch to it |
 | `/export [PATH]` | Export as Markdown, HTML (`.html`), or JSON (`.json`) |
 | `/delete ID` | Move a session to the trash |
 | `/restore` | List deleted sessions |
 | `/restore ID` | Restore one from the trash |
+
+`/fork` with no number copies the whole session. `/fork 3` copies through user
+turn 3, including that message and the assistant and tool replies that follow
+it. The new session opens ready for your next message. Add an optional title
+after the turn number, for example `/fork 3 retry parser`. In the TUI, type
+`/fork ` and Tab to pick a user message from the list.
 
 The default export path is `<session-id>.md` in the workspace. Deleted sessions
 live under `~/.niminal/sessions/.trash/`.

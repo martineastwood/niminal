@@ -99,6 +99,8 @@ inline void add_usage(Usage& a, const Usage& b) {
 
 struct ChatResult {
   std::string text;
+  std::string reasoning_content;
+  json reasoning_details = json::array();
   std::vector<ToolCall> tool_calls;
   std::string finish_reason;
   Usage usage;

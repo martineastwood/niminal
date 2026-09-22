@@ -742,6 +742,14 @@ void consume_openai(const ChatRequest& request, ChatResult& result, std::map<int
       emit_thinking_value(request, delta[key]);
     }
   }
+  if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
+    result.reasoning_content += delta["reasoning_content"].get<std::string>();
+  }
+  if (delta.contains("reasoning_details") && delta["reasoning_details"].is_array()) {
+    for (const auto& detail : delta["reasoning_details"]) {
+      result.reasoning_details.push_back(detail);
+    }
+  }
   if (delta.contains("content")) {
     std::string piece;
     const auto& content = delta["content"];

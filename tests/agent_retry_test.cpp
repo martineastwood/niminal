@@ -42,5 +42,34 @@ int main() {
     std::cerr << "manual retry should reuse the persisted user message\n";
     return 1;
   }
+
+  niminal::Agent reasoning_agent;
+  reasoning_agent.api_key = "test";
+  reasoning_agent.model = "thinking-model";
+  reasoning_agent.tools.push_back(niminal::Tool{"lookup", "lookup", niminal::json::object(),
+                                                [](const niminal::json&) { return "found"; }});
+  int steps = 0;
+  reasoning_agent.stream_chat_fn = [&](const niminal::ChatRequest& request) {
+    niminal::ChatResult result;
+    if (steps++ == 0) {
+      result.reasoning_content = "need lookup";
+      result.reasoning_details =
+          niminal::json::array({{{"type", "reasoning.text"}, {"text", "need lookup"}}});
+      result.tool_calls.push_back({"call_1", "lookup", "{}"});
+    } else {
+      const auto& assistant = request.messages[1];
+      if (assistant.value("reasoning_content", "") != "need lookup" ||
+          assistant.value("reasoning_details", niminal::json::array()) !=
+              niminal::json::array({{{"type", "reasoning.text"}, {"text", "need lookup"}}})) {
+        throw niminal::Error("reasoning missing from tool continuation");
+      }
+      result.text = "done";
+    }
+    return result;
+  };
+  if (reasoning_agent.run("find it") != "done" || steps != 2) {
+    std::cerr << "tool continuation should preserve assistant reasoning\n";
+    return 1;
+  }
   return 0;
 }

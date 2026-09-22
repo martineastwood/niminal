@@ -48,7 +48,8 @@ queues steering messages while busy.
 Type `/` for slash command completion. Type `/model ` to pick from the models.dev
 catalog for the active provider (filter from two characters). Type `/thinking `
 to pick a supported level. Type `/theme ` to pick `light`, `dark`, or `auto`.
-Type `/resume ` and Tab to pick a session.
+Type `/resume ` and Tab to pick a session. Type `/fork ` and Tab to pick a user
+message to fork from.
 
 Type `@` for file mention suggestions. Gitignored and hidden files are excluded.
 Accepted mentions expand into attached file content in the outgoing message (up

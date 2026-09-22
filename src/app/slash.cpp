@@ -12,6 +12,7 @@
 #include <niminal/text.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <string_view>
 #include <utility>
 
@@ -39,7 +40,7 @@ constexpr SlashSpec kSlash[] = {
     {"/name", "/name [title]", "show or set the session name"},
     {"/resume", "/resume [ID]", "list or load a session"},
     {"/search", "/search TEXT", "search sessions for text"},
-    {"/fork", "/fork [title]", "copy this session into a new one"},
+    {"/fork", "/fork [N] [title]", "copy this session, or from user turn N"},
     {"/export", "/export [PATH]", "write this session as Markdown, HTML, or JSON"},
     {"/delete", "/delete ID", "move a session to the trash"},
     {"/restore", "/restore [ID]", "list or restore a deleted session"},
@@ -205,7 +206,8 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
                                           const std::string& workspace, std::string_view provider,
                                           std::string_view model,
                                           const std::vector<std::string>& recents,
-                                          const std::vector<ExtensionCommand>& extension_commands) {
+                                          const std::vector<ExtensionCommand>& extension_commands,
+                                          const Session& session) {
   if (draft.empty() || draft[0] != '/' || draft.find('\n') != std::string::npos) {
     return {};
   }
@@ -259,6 +261,32 @@ std::vector<Suggestion> slash_suggestions(const std::string& draft,
         }
       }
     } catch (...) {
+    }
+    if (!out.empty()) {
+      return out;
+    }
+  }
+
+  if (cmd == "/fork" && (trailing || !arg.empty())) {
+    auto space = arg.find(' ');
+    if (space != std::string::npos) {
+      auto first = arg.substr(0, space);
+      if (!first.empty() &&
+          std::all_of(first.begin(), first.end(), [](unsigned char c) { return std::isdigit(c) != 0; })) {
+        return {};
+      }
+    }
+    std::vector<Suggestion> out;
+    for (const auto& [turn, preview] : session.user_turn_previews()) {
+      auto num = std::to_string(turn);
+      if (!arg.empty() && !contains_ci(num, arg) && !contains_ci(preview, arg)) {
+        continue;
+      }
+      out.push_back({"/fork " + num,
+                     num + "  " + (preview.empty() ? "(empty)" : preview)});
+      if (out.size() == 8) {
+        break;
+      }
     }
     if (!out.empty()) {
       return out;

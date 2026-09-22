@@ -38,7 +38,8 @@ struct Agent {
   std::string conversation_id;
   std::function<void(const std::string&)> persist_user;
   std::function<void(const std::string& text, const std::vector<ToolCall>& calls,
-                     const std::string& model, const Usage& usage)>
+                     const std::string& model, const Usage& usage,
+                     const std::string& reasoning_content, const json& reasoning_details)>
       persist_assistant;
   std::function<void(const std::string& id, const std::string& output, bool error)> persist_tool;
   std::function<bool(const ToolCall&, const Tool&)> approve_tool;
