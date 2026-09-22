@@ -386,6 +386,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   };
 
+  // Run `body` with the terminal restored, on the UI thread. FTXUI's
+  // WithRestoredIO returns a closure rather than calling it, so dropping the
+  // returned value silently skips the body; keep the call in one place.
+  auto with_restored_io = [&](const std::function<void()>& body) {
+    run_on_ui([&] { screen.WithRestoredIO(body)(); });
+  };
+
   auto configure_extension_ui = [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
     if (!runtime) {
       return;
@@ -393,50 +400,45 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     ExtensionUiCallbacks callbacks;
     callbacks.question = [&](const std::string& prompt, const std::vector<std::string>& options) {
       std::string answer;
-      run_on_ui([&] {
-        screen.WithRestoredIO([&] {
-          std::cout << "\n" << prompt;
-          if (!options.empty()) {
-            std::cout << "\n";
-            for (size_t i = 0; i < options.size(); ++i) {
-              std::cout << "  [" << (i + 1) << "] " << options[i] << "\n";
-            }
+      with_restored_io([&] {
+        std::cout << "\n" << prompt;
+        if (!options.empty()) {
+          std::cout << "\n";
+          for (size_t i = 0; i < options.size(); ++i) {
+            std::cout << "  [" << (i + 1) << "] " << options[i] << "\n";
           }
-          std::cout << "> " << std::flush;
-          std::getline(std::cin, answer);
-          if (!options.empty() && answer.size() == 1 && answer[0] >= '1' &&
-              answer[0] <= static_cast<char>('0' + options.size())) {
-            answer = options[static_cast<size_t>(answer[0] - '1')];
-          }
-        });
+        }
+        std::cout << "> " << std::flush;
+        std::getline(std::cin, answer);
+        if (!options.empty() && answer.size() == 1 && answer[0] >= '1' &&
+            answer[0] <= static_cast<char>('0' + options.size())) {
+          answer = options[static_cast<size_t>(answer[0] - '1')];
+        }
       });
       return answer;
     };
     callbacks.input = [&](const std::string& prompt, bool secret) {
       std::string answer;
-      run_on_ui([&] {
-        screen.WithRestoredIO([&] {
-          std::cout << "\n" << prompt << ": " << std::flush;
-          termios old_termios{};
-          const bool hidden = secret && tcgetattr(STDIN_FILENO, &old_termios) == 0;
-          if (hidden) {
-            auto hidden_termios = old_termios;
-            hidden_termios.c_lflag &= static_cast<unsigned long>(~ECHO);
-            tcsetattr(STDIN_FILENO, TCSANOW, &hidden_termios);
-          }
-          std::getline(std::cin, answer);
-          if (hidden) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &old_termios);
-            std::cout << "\n";
-          }
-        });
+      with_restored_io([&] {
+        std::cout << "\n" << prompt << ": " << std::flush;
+        termios old_termios{};
+        const bool hidden = secret && tcgetattr(STDIN_FILENO, &old_termios) == 0;
+        if (hidden) {
+          auto hidden_termios = old_termios;
+          hidden_termios.c_lflag &= static_cast<unsigned long>(~ECHO);
+          tcsetattr(STDIN_FILENO, TCSANOW, &hidden_termios);
+        }
+        std::getline(std::cin, answer);
+        if (hidden) {
+          tcsetattr(STDIN_FILENO, TCSANOW, &old_termios);
+          std::cout << "\n";
+        }
       });
       return answer;
     };
     callbacks.editor = [&](const std::string&, const std::string& text) {
       std::string edited;
-      run_on_ui(
-          [&] { screen.WithRestoredIO([&] { edited = edit_text_externally(text, cfg.editor); }); });
+      with_restored_io([&] { edited = edit_text_externally(text, cfg.editor); });
       return edited;
     };
     runtime->set_ui_callbacks(std::move(callbacks));
@@ -1906,7 +1908,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (is_external_editor_key(e)) {
       try {
         std::string edited;
-        screen.WithRestoredIO([&] { edited = edit_text_externally(draft, cfg.editor); });
+        with_restored_io([&] { edited = edit_text_externally(draft, cfg.editor); });
         draft = std::move(edited);
         cursor = static_cast<int>(draft.size());
         history_i = -1;

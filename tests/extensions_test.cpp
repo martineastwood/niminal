@@ -385,6 +385,32 @@ for line in sys.stdin:
     return 1;
   }
   blocked->stop();
+
+  // The external editor must actually run and its buffer must round-trip.
+  auto script = root / "editor.sh";
+  {
+    std::ofstream out(script);
+    out << "#!/bin/sh\nprintf 'edited draft' > \"$1\"\n";
+  }
+  fs::permissions(script,
+                  fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+  auto edited = niminal::app::edit_text_externally("original draft", script.string());
+  if (edited != "edited draft") {
+    std::cerr << "external editor did not return the edited buffer: " << edited << "\n";
+    return 1;
+  }
+  {
+    std::ofstream out(script, std::ios::trunc);
+    out << "#!/bin/sh\nexit 3\n";
+  }
+  try {
+    niminal::app::edit_text_externally("original draft", script.string());
+    std::cerr << "external editor failure should throw\n";
+    return 1;
+  } catch (const std::exception&) {
+  }
+
   fs::remove_all(root);
   return 0;
 }
