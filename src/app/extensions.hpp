@@ -32,6 +32,16 @@ enum class HookEvent {
   turn_start,
   turn_end,
   context,
+  before_agent_start,
+  input,
+  session_shutdown,
+  session_before_switch,
+  before_provider_headers,
+  before_provider_request,
+  after_provider_response,
+  agent_settled,
+  message_end,
+  session_compact_failed,
 };
 
 const char* hook_event_name(HookEvent event);
@@ -53,6 +63,14 @@ struct HookOutcome {
   std::string summary;
   int first_kept_index = 0;
   nlohmann::json details;
+  std::string text;
+  bool has_text = false;
+  std::string system_prompt;
+  bool has_system_prompt = false;
+  nlohmann::json headers;
+  bool has_headers = false;
+  nlohmann::json payload;
+  bool has_payload = false;
 };
 
 struct ExtensionCommand {

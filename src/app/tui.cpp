@@ -489,7 +489,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     screen.RequestAnimationFrame();
   };
 
-  auto persist_settings = [&](SettingApplyResult result) {
+  auto persist_settings = [&](const SettingApplyResult& result) {
     if (!result.error.empty()) {
       settings_error = result.error;
       return;
@@ -872,6 +872,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
   auto restart_extensions = [&](bool end_current = true) {
     if (extensions && end_current) {
+      auto shutdown = extensions->dispatch(
+          HookEvent::session_shutdown,
+          json{{"session_id", session.id}, {"workspace", cwd.string()}, {"reason", "reload"}});
+      for (const auto& warning : shutdown.warnings) {
+        blocks.push_back(Block{BlockKind::status, warning});
+      }
       auto ended =
           extensions->dispatch(HookEvent::session_end, session_hook_payload(session.id, cwd));
       for (const auto& warning : ended.warnings) {
@@ -988,8 +994,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   };
 
-  auto adopt_session = [&](Session next, const std::string& note) {
+  auto adopt_session = [&](Session next, const std::string& note, const std::string& reason) {
     if (extensions) {
+      auto shutdown =
+          extensions->dispatch(HookEvent::session_shutdown, json{{"session_id", session.id},
+                                                                 {"workspace", cwd.string()},
+                                                                 {"reason", reason},
+                                                                 {"target_session_id", next.id}});
+      for (const auto& warning : shutdown.warnings) {
+        blocks.push_back(Block{BlockKind::status, warning});
+      }
       auto ended =
           extensions->dispatch(HookEvent::session_end, session_hook_payload(session.id, cwd));
       for (const auto& warning : ended.warnings) {
@@ -1005,6 +1019,23 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     agent.messages = session.openai_messages();
     load_into_ui(note);
     restart_extensions(false);
+  };
+  auto allow_session_switch = [&](const std::string& reason, const std::string& target) {
+    if (!extensions) {
+      return true;
+    }
+    auto outcome =
+        extensions->dispatch(HookEvent::session_before_switch, json{{"session_id", session.id},
+                                                                    {"workspace", cwd.string()},
+                                                                    {"reason", reason},
+                                                                    {"target_session_id", target}});
+    for (const auto& warning : outcome.warnings) {
+      blocks.push_back(Block{BlockKind::status, warning});
+    }
+    if (!outcome.allowed) {
+      blocks.push_back(Block{BlockKind::status, outcome.reason});
+    }
+    return outcome.allowed;
   };
 
   bind_session(agent, session);
@@ -1310,18 +1341,24 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
               action != response.end() && action->is_object()) {
             auto kind = action->value("action", std::string());
             if (kind == "new") {
+              if (!allow_session_switch("new", "")) {
+                return;
+              }
               auto next = create_session(default_session_dir(), cwd.string());
               next.persist = session.persist;
               if (!next.persist) {
                 next.path.clear();
               }
-              adopt_session(std::move(next), "New session");
+              adopt_session(std::move(next), "New session", "new");
               restarted = true;
             } else if (kind == "switch") {
               auto id = action->value("id", std::string());
+              if (!allow_session_switch("resume", id)) {
+                return;
+              }
               auto next = load_session(default_session_dir(), id);
               next.recover_interrupted_tools();
-              adopt_session(std::move(next), "Resumed " + id);
+              adopt_session(std::move(next), "Resumed " + id, "resume");
               restarted = true;
             } else if (kind == "compact") {
               auto compacted = compact_session(
@@ -1576,9 +1613,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           return;
         }
         try {
+          if (!allow_session_switch("resume", arg)) {
+            return;
+          }
           auto next = load_session(dir, arg);
           next.recover_interrupted_tools();
-          adopt_session(std::move(next), "Resumed " + arg);
+          adopt_session(std::move(next), "Resumed " + arg, "resume");
         } catch (const std::exception& e) {
           blocks.push_back(Block{BlockKind::error, e.what()});
         }
@@ -1619,6 +1659,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
               title = arg;
             }
           }
+          if (!allow_session_switch("fork", session.id)) {
+            return;
+          }
           auto next = upto < 0 ? session.fork(default_session_dir())
                                : session.fork(default_session_dir(), upto);
           if (!title.empty()) {
@@ -1629,7 +1672,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           if (turn > 0) {
             note += " from turn " + std::to_string(turn);
           }
-          adopt_session(std::move(next), note);
+          adopt_session(std::move(next), note, "fork");
         } catch (const std::exception& e) {
           blocks.push_back(Block{BlockKind::error, e.what()});
         }
@@ -1690,13 +1733,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return;
       }
       if (cmd == "/clear" || cmd == "/new") {
+        if (!allow_session_switch("new", "")) {
+          return;
+        }
         auto next = create_session(default_session_dir(), cwd.string());
         next.persist = session.persist;
         if (!next.persist) {
           next.path.clear();
         }
         auto id = next.id;
-        adopt_session(std::move(next), "New session " + id);
+        adopt_session(std::move(next), "New session " + id, "new");
         apply_provider(agent, cfg);
         return;
       }
@@ -1874,7 +1920,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     stack.push_back(separator());
     if (settings_open) {
       Elements setting_rows;
-      setting_rows.push_back(text("Settings  " + config_path().string()) | bold | color(theme.accent));
+      setting_rows.push_back(text("Settings  " + config_path().string()) | bold |
+                             color(theme.accent));
       for (size_t i = 0; i < setting_count(); ++i) {
         const auto* spec = setting_at(i);
         if (spec == nullptr) {
@@ -1896,8 +1943,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         setting_rows.push_back(text(settings_error) | color(theme.error));
       }
       const auto* selected = setting_at(static_cast<size_t>(settings_i));
-      std::string help = settings_edit ? "Enter save  Esc cancel edit"
-                                       : "↑/↓ select  Enter edit/toggle/cycle  ←/→ cycle  Esc close";
+      std::string help = settings_edit
+                             ? "Enter save  Esc cancel edit"
+                             : "↑/↓ select  Enter edit/toggle/cycle  ←/→ cycle  Esc close";
       if (!settings_edit && selected != nullptr) {
         if (selected->kind == SettingKind::toggle) {
           help += "  Space toggles";
@@ -2046,8 +2094,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (settings_edit) {
         if (pressed(KeyAction::submit)) {
           if (spec != nullptr) {
-            persist_settings(apply_setting_value(cfg, spec->field, *settings_edit, agent.provider,
-                                                 agent.model));
+            persist_settings(
+                apply_setting_value(cfg, spec->field, *settings_edit, agent.provider, agent.model));
             if (settings_error.empty()) {
               settings_edit = std::nullopt;
             }

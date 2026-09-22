@@ -16,14 +16,14 @@ int fail(const char* msg) {
 } // namespace
 
 int main() {
-  using niminal::app::Config;
-  using niminal::app::SettingField;
-  using niminal::app::SettingKind;
   using niminal::app::all_settings;
   using niminal::app::apply_setting_value;
+  using niminal::app::Config;
   using niminal::app::cycle_setting;
   using niminal::app::edit_initial_value;
   using niminal::app::format_setting_value;
+  using niminal::app::SettingField;
+  using niminal::app::SettingKind;
   using niminal::app::toggle_setting;
 
   if (all_settings().size() != 14) {
@@ -65,8 +65,8 @@ int main() {
   }
 
   cfg.show_thinking = false;
-  if (auto result = toggle_setting(cfg, SettingField::show_thinking); !result.error.empty() ||
-                                                                       !cfg.show_thinking) {
+  if (auto result = toggle_setting(cfg, SettingField::show_thinking);
+      !result.error.empty() || !cfg.show_thinking) {
     return fail("toggle show_thinking");
   }
 

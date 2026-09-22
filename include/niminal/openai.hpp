@@ -11,6 +11,8 @@
 
 namespace niminal {
 
+struct HttpResponse;
+
 struct ChatRequest {
   std::string api_url;
   std::string api_key;
@@ -30,6 +32,9 @@ struct ChatRequest {
   bool prompt_cache_key = false;
   std::function<void(const StreamEvent&)> on_event;
   std::atomic<bool>* cancel = nullptr;
+  std::function<void(std::map<std::string, std::string>&)> before_provider_headers;
+  std::function<void(json&)> before_provider_request;
+  std::function<void(const HttpResponse&)> after_provider_response;
 };
 
 ChatResult stream_chat(const ChatRequest& request);

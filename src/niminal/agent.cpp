@@ -92,7 +92,7 @@ json parse_tool_input(const std::string& arguments) {
 
 } // namespace
 
-json Agent::request_messages() const {
+json Agent::request_messages(const std::string& effective_system) const {
   json out = json::array();
   json parts = json::array();
   auto add_part = [&](const std::string& text) {
@@ -104,7 +104,7 @@ json Agent::request_messages() const {
     part["text"] = text;
     parts.push_back(std::move(part));
   };
-  add_part(system);
+  add_part(effective_system);
   for (const auto& block : system_extra) {
     add_part(block);
   }
@@ -138,11 +138,17 @@ void Agent::fill_chat(ChatRequest& req) const {
   req.apply_cache = apply_cache;
   req.prompt_cache_key = prompt_cache_key;
   req.extra = extra;
+  req.before_provider_headers = before_provider_headers;
+  req.before_provider_request = before_provider_request;
+  req.after_provider_response = after_provider_response;
   req.on_event = on_event;
   req.cancel = cancel;
 }
 
 std::string Agent::run(UserInput prompt, bool append_user) {
+  if (append_user && input_hook) {
+    input_hook(prompt);
+  }
   if (append_user && prepare_user) {
     prompt = prepare_user(std::move(prompt));
   }
@@ -190,6 +196,11 @@ std::string Agent::run(UserInput prompt, bool append_user) {
     }
     return parts;
   };
+  std::string run_system = system;
+  json extension_message = json::array();
+  if (append_user && before_agent_start) {
+    before_agent_start(prompt, run_system, extension_message);
+  }
   if (append_user) {
     messages.push_back(json{{"role", "user"}, {"content", user_content(prompt)}});
     if (persist_user) {
@@ -198,6 +209,15 @@ std::string Agent::run(UserInput prompt, bool append_user) {
   } else if (messages.empty() || (messages.back().value("role", "") != "user" &&
                                   messages.back().value("role", "") != "tool")) {
     throw Error("nothing to retry");
+  }
+  for (const auto& injected : extension_message) {
+    if (injected.is_object() && injected.value("role", "") == "user" &&
+        injected.contains("content") && injected["content"].is_string()) {
+      messages.push_back(injected);
+      if (persist_extension_message) {
+        persist_extension_message(injected);
+      }
+    }
   }
   emit(StreamEvent{EventKind::run_start, prompt.text, {}, {}});
   if (turn_start) {
@@ -273,7 +293,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
 
       ChatRequest req;
       fill_chat(req);
-      req.messages = request_messages();
+      req.messages = request_messages(run_system);
       if (empty_response_followup_pending) {
         req.messages.push_back(json{{"role", "user"}, {"content", kEmptyResponseFollowup}});
         empty_response_followup_pending = false;
@@ -335,6 +355,15 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       }
       overflow_retried = false;
 
+      if (message_end) {
+        json message{{"role", "assistant"}, {"content", result.text}};
+        message_end(message);
+        if (message.is_object() && message.value("role", "") == "assistant" &&
+            message.contains("content") && message["content"].is_string()) {
+          result.text = message["content"].get<std::string>();
+        }
+      }
+
       if (cancelled()) {
         throw Cancelled();
       }
@@ -372,6 +401,9 @@ std::string Agent::run(UserInput prompt, bool append_user) {
         }
         finish_turn(false);
         emit(StreamEvent{EventKind::run_end, {}, {}, {}});
+        if (agent_settled) {
+          agent_settled();
+        }
         emit(StreamEvent{EventKind::done, {}, {}, {}});
         return result.text;
       }
@@ -518,10 +550,16 @@ std::string Agent::run(UserInput prompt, bool append_user) {
   } catch (const Cancelled&) {
     finish_turn(true);
     emit(StreamEvent{EventKind::error, "interrupted", {}, {}});
+    if (agent_settled) {
+      agent_settled();
+    }
     emit(StreamEvent{EventKind::done, {}, {}, {}});
     return {};
   } catch (...) {
     finish_turn(false);
+    if (agent_settled) {
+      agent_settled();
+    }
     throw;
   }
 }

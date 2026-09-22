@@ -2,6 +2,9 @@
 #include "session.hpp"
 #include "trust.hpp"
 
+#include <niminal/http.hpp>
+#include <niminal/openai.hpp>
+
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
@@ -50,7 +53,11 @@ send({"type":"register",
                 "input_schema":{"type":"object"},
                 "capabilities":["read"]}],
       "events":["tool_call","tool_result","context","session_start",
-                "session_before_compact","session_compact","turn_start","turn_end"]})
+                "session_before_compact","session_compact","turn_start","turn_end",
+                "input","before_agent_start","session_shutdown","session_before_switch",
+                "before_provider_headers","before_provider_request",
+                "after_provider_response","agent_settled","message_end",
+                "session_compact_failed"]})
 for line in sys.stdin:
     message = json.loads(line)
     kind = message.get("type")
@@ -79,6 +86,20 @@ for line in sys.stdin:
     elif kind == "event" and message.get("event") == "context":
         reply["system"] = ["Injected system"]
         reply["messages"] = [{"role":"user","content":"Injected context"}]
+    elif kind == "event" and message.get("event") == "input":
+        reply["text"] = message["payload"]["text"] + " transformed"
+    elif kind == "event" and message.get("event") == "before_agent_start":
+        reply["system_prompt"] = "Task system"
+        reply["message"] = {"content":"Persistent extension context"}
+    elif kind == "event" and message.get("event") == "session_before_switch":
+        reply["allow"] = False
+        reply["reason"] = "unsaved work"
+    elif kind == "event" and message.get("event") == "before_provider_headers":
+        reply["headers"] = {"Authorization":None,"x-test":"yes"}
+    elif kind == "event" and message.get("event") == "before_provider_request":
+        reply["payload"] = {"model":"replacement"}
+    elif kind == "event" and message.get("event") == "message_end":
+        reply["text"] = "rewritten answer"
     elif kind == "event" and message.get("event") == "session_before_compact":
         reply["compaction"] = {"summary":"extension summary",
                                "first_kept_index":1,
@@ -325,6 +346,22 @@ for line in sys.stdin:
       compact.first_kept_index != 1 || compact.details.value("source", "") != "fixture") {
     return 1;
   }
+  auto blocked_switch =
+      runtime->dispatch(HookEvent::session_before_switch, nlohmann::json{{"reason", "new"}});
+  if (blocked_switch.allowed || blocked_switch.reason != "unsaved work") {
+    return 1;
+  }
+  auto headers = runtime->dispatch(HookEvent::before_provider_headers,
+                                   nlohmann::json{{"headers", {{"Authorization", "Bearer test"}}}});
+  if (!headers.has_headers || headers.headers.contains("Authorization") ||
+      headers.headers.value("x-test", "") != "yes") {
+    return 1;
+  }
+  auto payload = runtime->dispatch(HookEvent::before_provider_request,
+                                   nlohmann::json{{"payload", {{"model", "original"}}}});
+  if (!payload.has_payload || payload.payload.value("model", "") != "replacement") {
+    return 1;
+  }
 
   niminal::Agent agent;
   agent.conversation_id = "session";
@@ -334,6 +371,8 @@ for line in sys.stdin:
   session.workspace = root.string();
   session.persist = false;
   session.add_user("existing context");
+  niminal::app::bind_session(agent, session);
+  agent.messages = session.openai_messages();
   niminal::app::bind_extensions(agent, runtime, root, {}, &session);
   niminal::app::ExtensionUiCallbacks ui;
   ui.editor = [](const std::string& title, const std::string& text) {
@@ -410,6 +449,44 @@ for line in sys.stdin:
   }
   agent.turn_start();
   agent.turn_end(false);
+  niminal::ChatRequest captured;
+  agent.system = "Original system";
+  agent.stream_chat_fn = [&](const niminal::ChatRequest& request) {
+    captured = request;
+    niminal::ChatResult result;
+    result.text = "original answer";
+    return result;
+  };
+  if (agent.run("question") != "rewritten answer" ||
+      captured.messages[0]["content"][0].value("text", "") != "Task system" ||
+      captured.messages[2].value("content", "") != "question transformed" ||
+      captured.messages[3].value("content", "") != "Persistent extension context" ||
+      session.events.back().value("type", "") != "assistant" ||
+      session.events[session.events.size() - 2].value("type", "") != "extension_message" ||
+      session.openai_messages()[2].value("content", "") != "Persistent extension context") {
+    std::cerr << "agent hook integration failed: " << captured.messages.dump() << "\n"
+              << session.openai_messages().dump() << "\n";
+    return 1;
+  }
+  if (!captured.before_provider_request || !captured.before_provider_headers ||
+      !captured.after_provider_response) {
+    return 1;
+  }
+  nlohmann::json provider_payload{{"model", "original"}};
+  captured.before_provider_request(provider_payload);
+  std::map<std::string, std::string> provider_headers{{"Authorization", "Bearer test"}};
+  captured.before_provider_headers(provider_headers);
+  niminal::HttpResponse denied;
+  denied.status = 403;
+  denied.body = "denied";
+  captured.after_provider_response(denied);
+  if (provider_payload.value("model", "") != "replacement" ||
+      provider_headers.contains("Authorization") || provider_headers["x-test"] != "yes") {
+    std::cerr << "provider hook integration failed\n";
+    return 1;
+  }
+  runtime->dispatch(HookEvent::session_shutdown, nlohmann::json{{"reason", "quit"}});
+  runtime->dispatch(HookEvent::session_compact_failed, nlohmann::json{{"error", "test"}});
   runtime->stop();
 
   niminal::app::set_project_resources_trusted(root, false);

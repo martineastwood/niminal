@@ -306,12 +306,32 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
   req.messages = json::array({std::move(sys), std::move(user)});
   req.max_tokens = kSummaryMaxTokens;
 
-  auto summary = niminal::complete_chat(req);
+  std::string summary;
+  try {
+    summary = niminal::complete_chat(req);
+  } catch (const std::exception& e) {
+    if (extensions) {
+      auto failed = extensions->dispatch(HookEvent::session_compact_failed,
+                                         json{{"session_id", session.id},
+                                              {"workspace", session.workspace},
+                                              {"error", e.what()},
+                                              {"tokens_before", tokens_before}});
+      result.warnings.insert(result.warnings.end(), failed.warnings.begin(), failed.warnings.end());
+    }
+    throw;
+  }
   while (!summary.empty() &&
          (summary.back() == ' ' || summary.back() == '\n' || summary.back() == '\r')) {
     summary.pop_back();
   }
   if (summary.empty()) {
+    if (extensions) {
+      extensions->dispatch(HookEvent::session_compact_failed,
+                           json{{"session_id", session.id},
+                                {"workspace", session.workspace},
+                                {"error", "compaction produced an empty summary"},
+                                {"tokens_before", tokens_before}});
+    }
     throw niminal::Error("compaction produced an empty summary");
   }
 

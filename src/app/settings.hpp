@@ -38,8 +38,7 @@ size_t setting_count();
 const SettingSpec* setting_at(size_t index);
 
 std::string format_setting_value(const Config& cfg, SettingField field,
-                                 std::string_view agent_provider,
-                                 std::string_view agent_model);
+                                 std::string_view agent_provider, std::string_view agent_model);
 std::string edit_initial_value(const Config& cfg, SettingField field);
 
 struct SettingApplyResult {
@@ -49,8 +48,7 @@ struct SettingApplyResult {
 };
 
 SettingApplyResult cycle_setting(Config& cfg, SettingField field, int direction,
-                                 std::string_view agent_provider,
-                                 std::string_view agent_model);
+                                 std::string_view agent_provider, std::string_view agent_model);
 SettingApplyResult toggle_setting(Config& cfg, SettingField field);
 SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::string_view value,
                                        std::string_view agent_provider,

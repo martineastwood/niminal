@@ -7,6 +7,7 @@
 #include "session.hpp"
 #include "trust.hpp"
 
+#include <niminal/http.hpp>
 #include <niminal/openai.hpp>
 
 #include <algorithm>
@@ -898,6 +899,26 @@ const char* hook_event_name(HookEvent event) {
     return "turn_end";
   case HookEvent::context:
     return "context";
+  case HookEvent::before_agent_start:
+    return "before_agent_start";
+  case HookEvent::input:
+    return "input";
+  case HookEvent::session_shutdown:
+    return "session_shutdown";
+  case HookEvent::session_before_switch:
+    return "session_before_switch";
+  case HookEvent::before_provider_headers:
+    return "before_provider_headers";
+  case HookEvent::before_provider_request:
+    return "before_provider_request";
+  case HookEvent::after_provider_response:
+    return "after_provider_response";
+  case HookEvent::agent_settled:
+    return "agent_settled";
+  case HookEvent::message_end:
+    return "message_end";
+  case HookEvent::session_compact_failed:
+    return "session_compact_failed";
   }
   return "";
 }
@@ -1344,7 +1365,8 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
                                    {"event", hook_event_name(event)},
                                    {"payload", payload}},
                               cancel_);
-      if ((event == HookEvent::tool_call || event == HookEvent::session_before_compact) &&
+      if ((event == HookEvent::tool_call || event == HookEvent::session_before_compact ||
+           event == HookEvent::session_before_switch || event == HookEvent::input) &&
           response.contains("allow") && response["allow"].is_boolean() &&
           !response["allow"].get<bool>()) {
         outcome.allowed = false;
@@ -1385,6 +1407,53 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
           for (const auto& message : *messages) {
             outcome.messages.push_back(message);
           }
+        }
+      } else if (event == HookEvent::input || event == HookEvent::message_end) {
+        auto text = response.find("text");
+        if (text != response.end() && text->is_string()) {
+          outcome.text = text->get<std::string>();
+          outcome.has_text = true;
+          payload["text"] = *text;
+        }
+      } else if (event == HookEvent::before_agent_start) {
+        auto system_prompt = response.find("system_prompt");
+        if (system_prompt != response.end() && system_prompt->is_string()) {
+          outcome.system_prompt = system_prompt->get<std::string>();
+          outcome.has_system_prompt = true;
+          payload["system_prompt"] = *system_prompt;
+        }
+        auto message = response.find("message");
+        if (message != response.end() && message->is_object() && message->contains("content") &&
+            (*message)["content"].is_string()) {
+          outcome.messages.push_back(*message);
+        }
+      } else if (event == HookEvent::before_provider_headers) {
+        auto headers = response.find("headers");
+        if (headers != response.end() && headers->is_object()) {
+          if (!outcome.has_headers) {
+            outcome.headers = payload.value("headers", json::object());
+          }
+          for (auto& [key, value] : headers->items()) {
+            for (auto existing = outcome.headers.begin(); existing != outcome.headers.end();) {
+              if (niminal::lower_copy(existing.key()) == niminal::lower_copy(key)) {
+                existing = outcome.headers.erase(existing);
+              } else {
+                ++existing;
+              }
+            }
+            if (value.is_string()) {
+              outcome.headers[key] = value;
+            }
+          }
+          outcome.has_headers = true;
+          payload["headers"] = outcome.headers;
+        }
+      } else if (event == HookEvent::before_provider_request) {
+        auto next = response.find("payload");
+        if (next != response.end() && next->is_object()) {
+          outcome.payload = *next;
+          outcome.has_payload = true;
+          payload["payload"] = *next;
         }
       } else if (event == HookEvent::session_before_compact) {
         auto instruction = response.find("instruction");
@@ -1642,6 +1711,113 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
     }
     auto outcome = runtime->dispatch(HookEvent::turn_end, payload);
     report(outcome);
+  };
+  agent.input_hook = [runtime, workspace, &agent, report](niminal::UserInput& input) {
+    if (!runtime) {
+      return;
+    }
+    auto outcome = runtime->dispatch(HookEvent::input, json{{"session_id", agent.conversation_id},
+                                                            {"workspace", workspace.string()},
+                                                            {"text", input.text},
+                                                            {"images", input.images}});
+    report(outcome);
+    if (!outcome.allowed) {
+      throw niminal::Error(outcome.reason);
+    }
+    if (outcome.has_text) {
+      input.text = std::move(outcome.text);
+    }
+  };
+  agent.before_agent_start = [runtime, workspace, &agent, report](const niminal::UserInput& input,
+                                                                  std::string& system_prompt,
+                                                                  json& message) {
+    if (!runtime) {
+      return;
+    }
+    auto outcome =
+        runtime->dispatch(HookEvent::before_agent_start, json{{"session_id", agent.conversation_id},
+                                                              {"workspace", workspace.string()},
+                                                              {"prompt", input.text},
+                                                              {"images", input.images},
+                                                              {"system_prompt", system_prompt}});
+    report(outcome);
+    if (outcome.has_system_prompt) {
+      system_prompt = std::move(outcome.system_prompt);
+    }
+    for (const auto& injected : outcome.messages) {
+      message.push_back(json{{"role", "user"}, {"content", injected["content"]}});
+    }
+  };
+  agent.message_end = [runtime, workspace, &agent, report](json& message) {
+    if (!runtime) {
+      return;
+    }
+    auto outcome =
+        runtime->dispatch(HookEvent::message_end, json{{"session_id", agent.conversation_id},
+                                                       {"workspace", workspace.string()},
+                                                       {"role", "assistant"},
+                                                       {"text", message.value("content", "")}});
+    report(outcome);
+    if (outcome.has_text) {
+      message["content"] = std::move(outcome.text);
+    }
+  };
+  agent.agent_settled = [runtime, workspace, &agent, report] {
+    if (runtime) {
+      report(runtime->dispatch(HookEvent::agent_settled,
+                               session_hook_payload(agent.conversation_id, workspace)));
+    }
+  };
+  agent.before_provider_headers = [runtime, workspace, &agent,
+                                   report](std::map<std::string, std::string>& headers) {
+    if (!runtime) {
+      return;
+    }
+    auto outcome = runtime->dispatch(HookEvent::before_provider_headers,
+                                     json{{"session_id", agent.conversation_id},
+                                          {"workspace", workspace.string()},
+                                          {"provider", agent.provider},
+                                          {"model", agent.model},
+                                          {"headers", headers}});
+    report(outcome);
+    if (outcome.has_headers) {
+      headers.clear();
+      for (auto& [key, value] : outcome.headers.items()) {
+        if (value.is_string()) {
+          headers[key] = value.get<std::string>();
+        }
+      }
+    }
+  };
+  agent.before_provider_request = [runtime, workspace, &agent, report](json& payload) {
+    if (!runtime) {
+      return;
+    }
+    auto outcome = runtime->dispatch(HookEvent::before_provider_request,
+                                     json{{"session_id", agent.conversation_id},
+                                          {"workspace", workspace.string()},
+                                          {"provider", agent.provider},
+                                          {"model", agent.model},
+                                          {"payload", payload}});
+    report(outcome);
+    if (outcome.has_payload) {
+      payload = std::move(outcome.payload);
+    }
+  };
+  agent.after_provider_response = [runtime, workspace, &agent,
+                                   report](const niminal::HttpResponse& response) {
+    if (runtime) {
+      report(runtime->dispatch(
+          HookEvent::after_provider_response,
+          json{{"session_id", agent.conversation_id},
+               {"workspace", workspace.string()},
+               {"provider", agent.provider},
+               {"model", agent.model},
+               {"status", response.status},
+               {"headers", response.headers},
+               {"duration_ms", response.duration_ms},
+               {"error_body", response.status >= 400 ? response.body : std::string()}}));
+    }
   };
 }
 

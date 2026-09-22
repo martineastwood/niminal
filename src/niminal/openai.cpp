@@ -985,9 +985,15 @@ ChatResult stream_chat(const ChatRequest& request) {
   ChatRequest req = request;
   req.stream = true;
   json payload = chat_body(req);
+  if (req.before_provider_request) {
+    req.before_provider_request(payload);
+  }
   HttpClient http;
   auto headers = chat_headers(req);
   headers["Accept"] = "text/event-stream";
+  if (req.before_provider_headers) {
+    req.before_provider_headers(headers);
+  }
 
   ChatResult result;
   std::map<int, ToolCall> calls;
@@ -1009,7 +1015,7 @@ ChatResult stream_chat(const ChatRequest& request) {
               consume_openai(req, result, calls, chunk);
             }
           },
-          req.cancel);
+          req.cancel, req.after_provider_response);
       !streamed) {
     if (streamed.error().what() == std::string_view("interrupted")) {
       throw Cancelled();
@@ -1043,10 +1049,20 @@ std::string complete_chat(const ChatRequest& request) {
   if (wire_of(req) == Wire::Chat && !payload.contains("max_tokens")) {
     payload["max_tokens"] = 4096;
   }
+  if (req.before_provider_request) {
+    req.before_provider_request(payload);
+  }
   HttpClient http;
-  auto res = http.post(request_url(req), chat_headers(req), payload.dump());
+  auto headers = chat_headers(req);
+  if (req.before_provider_headers) {
+    req.before_provider_headers(headers);
+  }
+  auto res = http.post(request_url(req), headers, payload.dump());
   if (!res) {
     throw res.error();
+  }
+  if (req.after_provider_response) {
+    req.after_provider_response(*res);
   }
   if (res->status >= 400) {
     throw Error("http " + std::to_string(res->status) + ": " + res->body);

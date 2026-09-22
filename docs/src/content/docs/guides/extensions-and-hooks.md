@@ -93,6 +93,43 @@ Extensions can subscribe to:
 | `session_end` | Session closed |
 | `session_before_compact` | Block compaction or add an instruction |
 | `session_compact` | Supply a custom compaction result |
+| `input` | Replace submitted text or return `allow: false` before it is saved |
+| `before_agent_start` | Set `system_prompt` for this run or add a persistent `message` |
+| `message_end` | Replace the completed assistant text before it is saved |
+| `agent_settled` | Observe when the run has finished, including queued follow-ups |
+| `session_before_switch` | Return `allow: false` to cancel a TUI session change |
+| `session_shutdown` | Clean up before quitting, reloading, or changing sessions |
+| `before_provider_request` | Replace the provider JSON `payload` before sending it |
+| `before_provider_headers` | Add, replace, or remove HTTP `headers` |
+| `after_provider_response` | Observe HTTP `status`, `headers`, `duration_ms`, and `error_body` |
+| `session_compact_failed` | Observe a model error or empty compaction summary |
+
+For example, you can tailor one run without changing the user's saved prompt.
+Register `before_agent_start` in your extension's `events` list, then reply:
+
+```python
+elif message["type"] == "event" and message["event"] == "before_agent_start":
+    prompt = message["payload"]["prompt"]
+    send({"type": "response", "id": message["id"],
+          "system_prompt": "Answer briefly and verify changes.",
+          "message": {"content": f"Task: {prompt}"}})
+```
+
+`system_prompt` replaces the base system text for this run. Project instructions
+and other appended system text still apply. The `message` is saved in the session
+and sent as a user message to the model. Omit either field if you do not need it.
+
+`input` receives `text` and `images`; return `text` to replace the submitted
+text, or `{"allow": false, "reason": "..."}` to stop the turn. Provider hooks
+receive the selected `provider`, `model`, and session ID. For
+`before_provider_headers`, return a `headers` object with string values to set
+headers and `null` to remove them. For `before_provider_request`, return a
+complete `payload` object to replace the outgoing JSON body.
+
+`session_before_switch` runs for new, resumed, and forked sessions in the TUI.
+`session_shutdown` includes `reason`: `quit`, `reload`, `new`, `resume`, or
+`fork`. `after_provider_response` sends an empty `error_body` on successful
+responses. On HTTP errors, it contains the response body.
 
 ## Side effects
 

@@ -45,6 +45,7 @@ public:
   void add_name(const std::string& title);
   void add_selection(const std::string& model, const std::string& provider = {});
   void add_extension(const std::string& extension, const nlohmann::json& data);
+  void add_extension_message(const nlohmann::json& message);
   void add_compaction(const std::string& summary, int first_kept_index, int tokens_before,
                       const nlohmann::json& details = {});
   int recover_interrupted_tools();

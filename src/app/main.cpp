@@ -695,6 +695,13 @@ int main(int argc, char** argv) {
     }
     drain_extension_actions();
     cancel.store(false);
+    auto shutdown = extensions->dispatch(niminal::app::HookEvent::session_shutdown,
+                                         nlohmann::json{{"session_id", session.id},
+                                                        {"workspace", ws.root().string()},
+                                                        {"reason", "quit"}});
+    for (const auto& warning : shutdown.warnings) {
+      std::cerr << warning << '\n';
+    }
     auto outcome = extensions->dispatch(niminal::app::HookEvent::session_end,
                                         niminal::app::session_hook_payload(session.id, ws.root()));
     for (const auto& warning : outcome.warnings) {

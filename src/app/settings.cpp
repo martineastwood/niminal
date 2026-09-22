@@ -37,7 +37,8 @@ constexpr SettingSpec kSettings[] = {
 
 std::string trim_copy(std::string_view value) {
   std::string s(value);
-  while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\r' || s.back() == '\t')) {
+  while (!s.empty() &&
+         (s.back() == ' ' || s.back() == '\n' || s.back() == '\r' || s.back() == '\t')) {
     s.pop_back();
   }
   size_t i = 0;
@@ -123,8 +124,7 @@ std::optional<int> parse_non_negative_int(std::string_view value) {
 }
 
 SettingApplyResult apply_thinking(Config& cfg, std::string_view value,
-                                  std::string_view agent_provider,
-                                  std::string_view agent_model) {
+                                  std::string_view agent_provider, std::string_view agent_model) {
   const auto trimmed = trim_copy(value);
   if (trimmed.empty()) {
     cfg.thinking.clear();
@@ -222,8 +222,7 @@ std::string edit_initial_value(const Config& cfg, SettingField field) {
 }
 
 SettingApplyResult cycle_setting(Config& cfg, SettingField field, int direction,
-                                 std::string_view agent_provider,
-                                 std::string_view agent_model) {
+                                 std::string_view agent_provider, std::string_view agent_model) {
   switch (field) {
   case SettingField::provider: {
     const auto next = cycle_option(provider_options(), cfg.provider, direction);
@@ -233,8 +232,8 @@ SettingApplyResult cycle_setting(Config& cfg, SettingField field, int direction,
     return ok(true);
   }
   case SettingField::thinking: {
-    const auto next = cycle_option(thinking_options(agent_provider, agent_model), cfg.thinking,
-                                   direction);
+    const auto next =
+        cycle_option(thinking_options(agent_provider, agent_model), cfg.thinking, direction);
     return apply_thinking(cfg, next, agent_provider, agent_model);
   }
   case SettingField::theme: {

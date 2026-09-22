@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 
 #include <atomic>
+#include <cctype>
 #include <cstdlib>
 #include <exception>
 #include <functional>
@@ -37,6 +38,31 @@ size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
   auto* buf = static_cast<WriteBuf*>(userdata);
   buf->body->append(ptr, size * nmemb);
   return size * nmemb;
+}
+
+size_t read_header(char* ptr, size_t size, size_t nmemb, void* userdata) {
+  auto& headers = *static_cast<std::map<std::string, std::string>*>(userdata);
+  std::string_view line(ptr, size * nmemb);
+  if (line.starts_with("HTTP/")) {
+    headers.clear();
+  } else if (const auto colon = line.find(':'); colon != std::string_view::npos) {
+    auto value = line.substr(colon + 1);
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
+      value.remove_prefix(1);
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
+      value.remove_suffix(1);
+    }
+    headers[std::string(line.substr(0, colon))] = std::string(value);
+  }
+  return size * nmemb;
+}
+
+void response_metadata(CURL* easy, HttpResponse& response) {
+  curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response.status);
+  curl_off_t duration_us = 0;
+  curl_easy_getinfo(easy, CURLINFO_TOTAL_TIME_T, &duration_us);
+  response.duration_ms = static_cast<int>(duration_us / 1000);
 }
 
 void flush_sse_line(WriteBuf& buf, std::string_view line) {
@@ -175,10 +201,12 @@ Result<HttpResponse> HttpClient::post(std::string_view url,
   curl_easy_reset(impl_->easy);
   apply_common(impl_->easy, url_owned, hdrs, ca);
   apply_post(impl_->easy, body_owned);
+  curl_easy_setopt(impl_->easy, CURLOPT_HEADERFUNCTION, read_header);
+  curl_easy_setopt(impl_->easy, CURLOPT_HEADERDATA, &out.headers);
   curl_easy_setopt(impl_->easy, CURLOPT_WRITEFUNCTION, write_body);
   curl_easy_setopt(impl_->easy, CURLOPT_WRITEDATA, &buf);
   const auto rc = curl_easy_perform(impl_->easy);
-  curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &out.status);
+  response_metadata(impl_->easy, out);
   curl_slist_free_all(hdrs);
   if (rc != CURLE_OK) {
     return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
@@ -190,7 +218,8 @@ Result<void> HttpClient::post_sse(std::string_view url,
                                   const std::map<std::string, std::string>& headers,
                                   std::string_view body,
                                   const std::function<void(std::string_view json_data)>& on_data,
-                                  std::atomic<bool>* cancel) {
+                                  std::atomic<bool>* cancel,
+                                  const std::function<void(const HttpResponse&)>& on_response) {
   auto on_data_mut = on_data;
   std::string raw;
   WriteBuf buf{&raw, {}, &on_data_mut, cancel, {}};
@@ -201,6 +230,9 @@ Result<void> HttpClient::post_sse(std::string_view url,
   curl_easy_reset(impl_->easy);
   apply_common(impl_->easy, url_owned, hdrs, ca);
   apply_post(impl_->easy, body_owned);
+  HttpResponse response;
+  curl_easy_setopt(impl_->easy, CURLOPT_HEADERFUNCTION, read_header);
+  curl_easy_setopt(impl_->easy, CURLOPT_HEADERDATA, &response.headers);
   curl_easy_setopt(impl_->easy, CURLOPT_WRITEFUNCTION, write_sse);
   curl_easy_setopt(impl_->easy, CURLOPT_WRITEDATA, &buf);
   curl_easy_setopt(impl_->easy, CURLOPT_TCP_NODELAY, 1L);
@@ -210,9 +242,14 @@ Result<void> HttpClient::post_sse(std::string_view url,
   curl_easy_setopt(impl_->easy, CURLOPT_XFERINFOFUNCTION, xfer_progress);
   curl_easy_setopt(impl_->easy, CURLOPT_XFERINFODATA, cancel);
   const auto rc = curl_easy_perform(impl_->easy);
-  long status = 0;
-  curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &status);
+  response_metadata(impl_->easy, response);
   curl_slist_free_all(hdrs);
+  if (on_response) {
+    if (response.status >= 400) {
+      response.body = raw;
+    }
+    on_response(response);
+  }
   if (buf.error) {
     if ((cancel != nullptr) && cancel->load()) {
       return std::unexpected(Cancelled());
@@ -230,8 +267,8 @@ Result<void> HttpClient::post_sse(std::string_view url,
   if (rc != CURLE_OK) {
     return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
   }
-  if (status >= 400) {
-    return std::unexpected(Error("http " + std::to_string(status) + ": " + raw));
+  if (response.status >= 400) {
+    return std::unexpected(Error("http " + std::to_string(response.status) + ": " + raw));
   }
   return {};
 }

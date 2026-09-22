@@ -616,6 +616,10 @@ void Session::add_extension(const std::string& extension, const json& data) {
   append(json{{"type", "extension"}, {"extension", extension}, {"data", data}});
 }
 
+void Session::add_extension_message(const json& message) {
+  append(json{{"type", "extension_message"}, {"message", message}});
+}
+
 void Session::add_compaction(const std::string& summary, int first_kept_index, int tokens_before,
                              const json& details) {
   json event = json::object();
@@ -811,6 +815,8 @@ json Session::openai_messages() const {
         }
       }
       out.push_back({{"role", "user"}, {"content", has_image ? content : json(text)}});
+    } else if (type == "extension_message") {
+      out.push_back(event.at("message"));
     } else if (type == "assistant") {
       json msg = {{"role", "assistant"}, {"content", ""}};
       json calls = json::array();
@@ -1075,6 +1081,9 @@ std::string format_session_list(const std::vector<SessionInfo>& infos,
 
 void bind_session(niminal::Agent& agent, Session& session) {
   agent.persist_user = [&session](const niminal::UserInput& input) { session.add_user(input); };
+  agent.persist_extension_message = [&session](const nlohmann::json& message) {
+    session.add_extension_message(message);
+  };
   agent.persist_assistant =
       [&session](const std::string& text, const std::vector<niminal::ToolCall>& calls,
                  const std::string& model, const niminal::Usage& usage,

@@ -12,6 +12,7 @@
 namespace niminal {
 
 struct ChatRequest;
+struct HttpResponse;
 
 struct Agent {
   std::string system;
@@ -49,6 +50,14 @@ struct Agent {
   std::function<void(json& request_messages)> augment_context;
   std::function<void()> turn_start;
   std::function<void(bool interrupted)> turn_end;
+  std::function<void(UserInput&)> input_hook;
+  std::function<void(const UserInput&, std::string&, json&)> before_agent_start;
+  std::function<void(const json&)> persist_extension_message;
+  std::function<void(json&)> message_end;
+  std::function<void()> agent_settled;
+  std::function<void(std::map<std::string, std::string>&)> before_provider_headers;
+  std::function<void(json&)> before_provider_request;
+  std::function<void(const HttpResponse&)> after_provider_response;
   std::function<std::vector<UserInput>()> take_steering;
   std::function<std::vector<UserInput>()> take_follow_up;
   std::function<UserInput(UserInput)> prepare_user;
@@ -57,7 +66,8 @@ struct Agent {
   std::function<ChatResult(const ChatRequest&)> stream_chat_fn;
   std::string run_id;
 
-  json request_messages() const;
+  json request_messages(const std::string& effective_system) const;
+  json request_messages() const { return request_messages(system); }
   void fill_chat(ChatRequest& req) const;
   bool cancelled() const { return cancel && cancel->load(); }
   std::string run(UserInput prompt, bool append_user = true);
