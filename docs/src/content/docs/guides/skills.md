@@ -3,24 +3,25 @@ title: Skills
 description: Load Markdown procedures with the skill tool or /skill:NAME.
 ---
 
-Skills are directories that contain a `SKILL.md` file. niminal discovers them at
-startup and exposes them to the model through the `skill` tool and `/skill:NAME`
-slash commands.
+Skills are directories that contain a `SKILL.md` file. niminal discovers them
+recursively and exposes them to the model through the `skill` tool and
+`/skill:NAME` slash commands. Supporting files can live beside `SKILL.md`.
 
 ## Where skills live
 
 Global skills (always loaded):
 
 ```text
+~/.agents/skills/<path>/<name>/SKILL.md
 ~/.niminal/skills/<name>/SKILL.md
 ```
 
 Project skills (trusted workspace only; later roots win on name conflicts):
 
 ```text
-<workspace>/.agent/skills/<name>/SKILL.md
-<workspace>/.agents/skills/<name>/SKILL.md
-<workspace>/.niminal/skills/<name>/SKILL.md
+<workspace>/.agent/skills/<path>/<name>/SKILL.md
+<workspace>/.agents/skills/<path>/<name>/SKILL.md
+<workspace>/.niminal/skills/<path>/<name>/SKILL.md
 ```
 
 ## Frontmatter
@@ -35,7 +36,18 @@ description: Review pull requests for correctness and style.
 Follow these steps when reviewing a PR...
 ```
 
+Use `name` when the directory name is not the command name:
+
+```markdown
+---
+name: review
+description: Review pull requests for correctness and style.
+---
+```
+
 The description appears in slash suggestions and in the `skill` tool listing.
+When niminal loads a skill, it includes the skill directory so the model can
+resolve relative paths such as `scripts/check.sh` and `references/rules.md`.
 
 ## Invoke a skill
 

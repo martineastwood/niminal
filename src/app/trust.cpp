@@ -34,10 +34,10 @@ void add_skill_manifests(std::vector<fs::path>& result, const fs::path& root,
     return;
   }
   std::vector<fs::path> paths;
-  for (const auto& entry : fs::directory_iterator(base, ec)) {
-    auto manifest = entry.path() / "SKILL.md";
-    if (entry.is_directory(ec) && fs::is_regular_file(manifest, ec)) {
-      paths.push_back(manifest);
+  for (const auto& entry :
+       fs::recursive_directory_iterator(base, fs::directory_options::skip_permission_denied, ec)) {
+    if (entry.is_regular_file(ec) && entry.path().filename() == "SKILL.md") {
+      paths.push_back(entry.path());
     }
   }
   std::sort(paths.begin(), paths.end());

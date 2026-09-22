@@ -145,7 +145,8 @@ output.
 {"name": "review"}
 ```
 
-Loads `SKILL.md` for the named skill and returns its body to the model.
+Loads `SKILL.md` for the named skill and returns its body plus the skill
+directory, so the model can resolve supporting scripts and reference files.
 
 ## Next steps
 

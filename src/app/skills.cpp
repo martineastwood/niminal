@@ -24,26 +24,58 @@ std::string read_file(const fs::path& path) {
   return out.str();
 }
 
-std::string description_of(const fs::path& path) {
+std::string unquote(std::string value) {
+  while (!value.empty() && value.front() == ' ') {
+    value.erase(value.begin());
+  }
+  if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
+                            (value.front() == '\'' && value.back() == '\''))) {
+    return value.substr(1, value.size() - 2);
+  }
+  return value;
+}
+
+struct SkillMetadata {
+  std::string name;
+  std::string description;
+};
+
+SkillMetadata metadata_of(const fs::path& path) {
+  SkillMetadata metadata;
   std::istringstream in(read_file(path));
   std::string line;
-  if (!std::getline(in, line) || line != "---") {
-    return {};
+  if (!std::getline(in, line)) {
+    return metadata;
   }
-  while (std::getline(in, line) && line != "---") {
-    if (!line.starts_with("description:")) {
+  if (!line.empty() && line.back() == '\r') {
+    line.pop_back();
+  }
+  if (line != "---") {
+    return metadata;
+  }
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (line == "---") {
+      break;
+    }
+    const auto colon = line.find(':');
+    if (colon == std::string::npos) {
       continue;
     }
-    auto value = line.substr(12);
-    while (!value.empty() && value.front() == ' ') {
-      value.erase(value.begin());
+    auto key = line.substr(0, colon);
+    while (!key.empty() && key.back() == ' ') {
+      key.pop_back();
     }
-    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-      value = value.substr(1, value.size() - 2);
+    auto value = unquote(line.substr(colon + 1));
+    if (key == "name") {
+      metadata.name = std::move(value);
+    } else if (key == "description") {
+      metadata.description = std::move(value);
     }
-    return value;
   }
-  return {};
+  return metadata;
 }
 
 void add_dir(std::map<std::string, Skill>& skills, const fs::path& dir) {
@@ -51,13 +83,23 @@ void add_dir(std::map<std::string, Skill>& skills, const fs::path& dir) {
   if (!fs::is_directory(dir, ec)) {
     return;
   }
-  for (const auto& entry : fs::directory_iterator(dir, ec)) {
-    auto path = entry.path() / "SKILL.md";
-    if (!entry.is_directory(ec) || !fs::is_regular_file(path, ec)) {
+  std::vector<fs::path> manifests;
+  for (const auto& entry :
+       fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec)) {
+    if (!entry.is_regular_file(ec) || entry.path().filename() != "SKILL.md") {
       continue;
     }
-    auto name = entry.path().filename().string();
-    skills[name] = {name, description_of(path), path};
+    manifests.push_back(entry.path());
+  }
+  std::sort(manifests.begin(), manifests.end());
+  for (const auto& path : manifests) {
+    auto metadata = metadata_of(path);
+    auto name =
+        metadata.name.empty() ? path.parent_path().filename().string() : std::move(metadata.name);
+    if (!name.empty()) {
+      const auto key = name;
+      skills[key] = {std::move(name), std::move(metadata.description), path};
+    }
   }
 }
 
@@ -66,7 +108,9 @@ void add_dir(std::map<std::string, Skill>& skills, const fs::path& dir) {
 std::vector<Skill> discover_skills(const fs::path& workspace) {
   std::map<std::string, Skill> found;
   try {
-    add_dir(found, config_path().parent_path() / "skills");
+    const auto global = config_path().parent_path();
+    add_dir(found, global.parent_path() / ".agents" / "skills");
+    add_dir(found, global / "skills");
   } catch (...) {
   }
   if (project_resources_trusted(workspace)) {
@@ -89,7 +133,10 @@ std::string load_skill(const fs::path& workspace, const std::string& name) {
     return "Skill not found: " + name;
   }
   auto text = read_file(it->path);
-  return text.empty() ? "Skill is empty: " + name : text;
+  if (text.empty()) {
+    return "Skill is empty: " + name;
+  }
+  return "Skill directory: " + it->path.parent_path().string() + "\n\n" + text;
 }
 
 niminal::Tool skill_tool(const fs::path& workspace) {

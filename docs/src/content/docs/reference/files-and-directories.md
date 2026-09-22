@@ -27,6 +27,7 @@ Portable global roots shared with other agents:
 
 | Path | Purpose |
 | --- | --- |
+| `~/.agents/skills/` | Portable global skills |
 | `~/.agents/prompts/` | Global prompt templates |
 | `~/.agents/tools/` | Global external tools |
 | `~/.agents/extensions/` | Global extensions |
