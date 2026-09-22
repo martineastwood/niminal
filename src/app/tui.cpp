@@ -1774,8 +1774,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
     Elements stack;
     stack.push_back(vbox(std::move(entries)) |
-                    focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) | yframe |
-                    vscroll_indicator | yflex);
+                    focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
+                    vscroll_indicator | yframe | yflex);
     stack.push_back(separator());
     if (!suggest_rows.empty()) {
       stack.push_back(vbox(std::move(suggest_rows)));

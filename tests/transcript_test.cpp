@@ -87,6 +87,23 @@ int main() {
     return fail("expanded bash keeps full output", long_rendered);
   }
 
+  // Regression: a long transcript must expose the viewport scrollbar.
+  {
+    ftxui::Elements rows;
+    for (int i = 0; i < 20; ++i) {
+      rows.push_back(ftxui::text("row-" + std::to_string(i)));
+    }
+    auto element = ftxui::vbox(std::move(rows)) | ftxui::focusPositionRelative(0.F, 1.F) |
+                   ftxui::vscroll_indicator | ftxui::yframe | ftxui::yflex;
+    ftxui::Screen screen(30, 8);
+    ftxui::Render(screen, element);
+    const auto rendered = screen.ToString();
+    if (rendered.find("┃") == std::string::npos && rendered.find("╻") == std::string::npos &&
+        rendered.find("╹") == std::string::npos) {
+      return fail("long transcript shows scrollbar", rendered);
+    }
+  }
+
   Block read{BlockKind::tool, R"({"path":"README.md"})"};
   read.tool_name = "read";
   read.expanded = false;
