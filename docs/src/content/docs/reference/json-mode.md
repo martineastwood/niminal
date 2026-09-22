@@ -11,6 +11,16 @@ niminal --mode json "Explain what this repo does."
 cat README.md | niminal --mode json "Summarize this"
 ```
 
+To attach a workspace image, include an `@` reference in the prompt:
+
+```sh
+niminal --mode json "Review @screenshots/home.png"
+```
+
+PNG, JPEG, and WebP images up to 10 MiB are supported. You can also send an
+explicit image file path as the whole prompt. The selected model must support
+image input.
+
 Diagnostics and startup errors go to stderr. The process exits `0` on success and
 `1` when the turn failed.
 

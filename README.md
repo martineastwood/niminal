@@ -102,6 +102,8 @@ saved under `~/.niminal/sessions`.
   model request.
 - Esc interrupts a running turn, sends queued messages now, or clears the
   composer when idle.
+- Ctrl-V attaches a PNG, JPEG, or WebP screenshot. You can also `@mention` an
+  image or drop its path into the composer.
 - Tab completes slash commands. Type `/help` for the full list.
 - `/resume`, `/new`, `/fork`, and `/export` manage sessions.
 - `/trust on` loads project skills, prompts, extensions, and permissions after

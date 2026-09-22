@@ -22,7 +22,8 @@ Defaults:
 | `reserve_tokens` | `16384` |
 | `keep_recent_tokens` | `20000` |
 
-Token estimates use roughly four characters per token. The summary generation
+Token estimates use roughly four characters per token. Attached images count as
+1,000 tokens each, not the size of their base64 payload. The summary generation
 itself is capped at 4096 output tokens.
 
 If a provider request fails with a context overflow error, niminal compacts and

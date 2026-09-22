@@ -106,6 +106,8 @@ and are never written back:
 | `NIMINAL_THINKING` | Overrides `thinking` |
 | `--provider`, `--model`, `--thinking`, `--api-key`, `--tools`, `--max-steps` | Same as their names suggest |
 | `--approve`, `--no-approve` | Choose whether project-local resources load |
+| `--system-prompt`, `--append-system-prompt` | Replace or extend the system prompt |
+| `--no-context-files`, `-nc` | Skip `AGENTS.md` and `CLAUDE.md` discovery |
 | `--version`, `--help` | Print the version or usage and exit |
 
 Load order: config file, then environment, then CLI flags. Provider credentials

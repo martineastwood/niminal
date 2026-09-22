@@ -174,6 +174,7 @@ add_executable(niminal_cli
   src/app/compaction.cpp
   src/app/markdown.cpp
   src/app/mentions.cpp
+  src/app/images.cpp
   src/app/models_dev.cpp
   src/app/thinking.cpp
   src/app/prompts.cpp
@@ -185,6 +186,12 @@ target_sources(niminal_cli PRIVATE src/app/extensions.cpp)
 target_sources(niminal_cli PRIVATE src/app/diff.cpp)
 target_sources(niminal_cli PRIVATE src/app/theme.cpp)
 target_sources(niminal_cli PRIVATE src/app/rpc_protocol.cpp)
+if(APPLE)
+  enable_language(OBJCXX)
+  target_sources(niminal_cli PRIVATE src/app/clipboard_macos.mm)
+  set_source_files_properties(src/app/clipboard_macos.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+  target_link_libraries(niminal_cli PRIVATE "-framework AppKit")
+endif()
 set_target_properties(niminal_cli PROPERTIES OUTPUT_NAME niminal)
 target_include_directories(niminal_cli PRIVATE src/app)
 target_link_libraries(niminal_cli PRIVATE
@@ -196,8 +203,9 @@ add_executable(niminal_workspace_test tests/workspace_test.cpp src/app/workspace
 target_include_directories(niminal_workspace_test PRIVATE src/app)
 niminal_strict_compile(niminal_workspace_test)
 
-add_executable(niminal_mentions_test tests/mentions_test.cpp src/app/mentions.cpp src/app/workspace.cpp)
+add_executable(niminal_mentions_test tests/mentions_test.cpp src/app/mentions.cpp src/app/images.cpp src/app/workspace.cpp)
 target_include_directories(niminal_mentions_test PRIVATE src/app include)
+target_link_libraries(niminal_mentions_test PRIVATE nlohmann_json::nlohmann_json)
 niminal_strict_compile(niminal_mentions_test)
 
 add_executable(niminal_json_mode_test tests/json_mode_test.cpp src/app/json_mode.cpp)
@@ -208,9 +216,11 @@ niminal_strict_compile(niminal_json_mode_test)
 add_executable(niminal_tools_test
   tests/tools_test.cpp
   src/app/tools.cpp
+  src/app/images.cpp
   src/app/workspace.cpp
   src/app/instructions.cpp
-  src/app/config.cpp)
+  src/app/config.cpp
+  src/app/trust.cpp)
 target_include_directories(niminal_tools_test PRIVATE src/app include)
 target_link_libraries(niminal_tools_test PRIVATE niminal::ai nlohmann_json::nlohmann_json)
 niminal_strict_compile(niminal_tools_test)
@@ -218,7 +228,8 @@ niminal_strict_compile(niminal_tools_test)
 add_executable(niminal_instructions_test
   tests/instructions_test.cpp
   src/app/instructions.cpp
-  src/app/config.cpp)
+  src/app/config.cpp
+  src/app/trust.cpp)
 target_include_directories(niminal_instructions_test PRIVATE src/app include)
 target_link_libraries(niminal_instructions_test PRIVATE niminal::ai nlohmann_json::nlohmann_json)
 niminal_strict_compile(niminal_instructions_test)

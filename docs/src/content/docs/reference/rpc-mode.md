@@ -45,6 +45,16 @@ printf '%s\n' \
   | niminal --mode rpc
 ```
 
+To attach a workspace image, include an `@` reference in the message:
+
+```json
+{"id":"4","type":"prompt","message":"Review @screenshots/home.png"}
+```
+
+PNG, JPEG, and WebP images up to 10 MiB are supported. You can also send an
+explicit image file path as the whole message, including an absolute path outside
+the workspace. The selected model must support image input.
+
 ## Queue modes
 
 `steering_mode` and `follow_up_mode` control whether queued messages are delivered

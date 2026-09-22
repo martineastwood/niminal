@@ -196,6 +196,39 @@ json text_parts(const json& content) {
   return parts;
 }
 
+json openai_image(const json& image) {
+  return json{
+      {"type", "image_url"},
+      {"image_url",
+       {{"url", "data:" + image.value("mime_type", "") + ";base64," + image.value("data", "")}}}};
+}
+
+json anthropic_image(const json& image) {
+  return json{{"type", "image"},
+              {"source",
+               {{"type", "base64"},
+                {"media_type", image.value("mime_type", "")},
+                {"data", image.value("data", "")}}}};
+}
+
+json google_image(const json& image) {
+  return json{{"inlineData",
+               {{"mimeType", image.value("mime_type", "")}, {"data", image.value("data", "")}}}};
+}
+
+json image_parts(const json& content, json (*convert)(const json&)) {
+  json out = json::array();
+  if (!content.is_array()) {
+    return out;
+  }
+  for (const auto& part : content) {
+    if (part.is_object() && part.value("type", "") == "image") {
+      out.push_back(convert(part));
+    }
+  }
+  return out;
+}
+
 json parse_tool_input(const std::string& args) {
   if (args.empty()) {
     return json::object();
@@ -226,7 +259,40 @@ json openai_chat_body(const ChatRequest& request) {
   if (request.stream && request.stream_usage) {
     payload["stream_options"] = json{{"include_usage", true}};
   }
-  payload["messages"] = request.messages;
+  payload["messages"] = json::array();
+  json pending_images = json::array();
+  auto flush_images = [&] {
+    if (!pending_images.empty()) {
+      payload["messages"].push_back(json{{"role", "user"}, {"content", pending_images}});
+      pending_images = json::array();
+    }
+  };
+  for (const auto& source : request.messages) {
+    if (!source.is_object()) {
+      continue;
+    }
+    const auto role = source.value("role", "");
+    if (role != "tool") {
+      flush_images();
+    }
+    json msg = source;
+    msg.erase("images");
+    if (role == "user" && msg.contains("content") && msg["content"].is_array()) {
+      json parts = json::array();
+      for (const auto& part : msg["content"]) {
+        parts.push_back(part.is_object() && part.value("type", "") == "image" ? openai_image(part)
+                                                                              : part);
+      }
+      msg["content"] = std::move(parts);
+    }
+    payload["messages"].push_back(std::move(msg));
+    if (role == "tool" && source.contains("images")) {
+      for (const auto& part : image_parts(source["images"], openai_image)) {
+        pending_images.push_back(part);
+      }
+    }
+  }
+  flush_images();
   if (request.max_tokens > 0) {
     payload["max_tokens"] = request.max_tokens;
   }
@@ -305,12 +371,24 @@ json anthropic_body(const ChatRequest& request) {
         json block = json::object();
         block["type"] = "tool_result";
         block["tool_use_id"] = msg.value("tool_call_id", "");
-        block["content"] = join_text(msg.value("content", json("")));
+        json content = text_parts(msg.value("content", json("")));
+        if (msg.contains("images")) {
+          for (const auto& image : image_parts(msg["images"], anthropic_image)) {
+            content.push_back(image);
+          }
+        }
+        block["content"] = std::move(content);
         pending_tools.push_back(std::move(block));
         continue;
       }
       flush_tools();
       json content = text_parts(msg.value("content", json("")));
+      if (role == "user") {
+        for (const auto& image :
+             image_parts(msg.value("content", json::array()), anthropic_image)) {
+          content.push_back(image);
+        }
+      }
       if (role == "assistant" && msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
         for (const auto& call : msg["tool_calls"]) {
           json fn = call.value("function", json::object());
@@ -399,6 +477,11 @@ json google_body(const ChatRequest& request) {
         fr["response"] = json{{"output", join_text(msg.value("content", json("")))}};
         resp["functionResponse"] = std::move(fr);
         pending.push_back(std::move(resp));
+        if (msg.contains("images")) {
+          for (const auto& image : image_parts(msg["images"], google_image)) {
+            pending.push_back(image);
+          }
+        }
         continue;
       }
       flush_user();
@@ -408,6 +491,11 @@ json google_body(const ChatRequest& request) {
         json p = json::object();
         p["text"] = text;
         parts.push_back(std::move(p));
+      }
+      if (role == "user") {
+        for (const auto& image : image_parts(msg.value("content", json::array()), google_image)) {
+          parts.push_back(image);
+        }
       }
       if (role == "assistant" && msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
         for (const auto& call : msg["tool_calls"]) {

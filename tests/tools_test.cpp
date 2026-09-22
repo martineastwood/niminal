@@ -56,14 +56,26 @@ int main() {
     return 1;
   }
   niminal::Tool* bash = find(tools, "bash");
+  niminal::Tool* read = find(tools, "read");
   niminal::Tool* grep = find(tools, "grep");
   niminal::Tool* ls = find(tools, "ls");
   niminal::Tool* glob = find(tools, "glob");
-  if ((bash == nullptr) || (grep == nullptr) || (ls == nullptr) || (glob == nullptr)) {
+  if ((bash == nullptr) || (read == nullptr) || (grep == nullptr) || (ls == nullptr) ||
+      (glob == nullptr)) {
     std::cerr << "missing bash, grep, glob, or ls\n";
     return 1;
   }
-  auto listed = ls->run(nlohmann::json{{"path", "."}});
+  auto listed = ls->run(nlohmann::json{{"path", "."}}).text;
+  {
+    std::ofstream image(tmp / "screen.png", std::ios::binary);
+    image.write("\x89PNG\r\n\x1a\n", 8);
+  }
+  auto image_read = read->run(nlohmann::json{{"path", "screen.png"}});
+  if (image_read.images.size() != 1 || image_read.images[0].value("data", "") != "iVBORw0KGgo=" ||
+      image_read.text.find("screen.png") == std::string::npos) {
+    std::cerr << "read should return image content\n";
+    return 1;
+  }
   if (listed.find("sub/") == std::string::npos || listed.find("a.txt") == std::string::npos) {
     std::cerr << "ls should list files and directories\n" << listed << '\n';
     return 1;
@@ -74,15 +86,16 @@ int main() {
     std::cerr << "ls should show entries the file index skips\n" << listed << '\n';
     return 1;
   }
-  if (glob->run(nlohmann::json{{"pattern", "**/*"}}).find("build/") != std::string::npos) {
+  if (glob->run(nlohmann::json{{"pattern", "**/*"}}).text.find("build/") != std::string::npos) {
     std::cerr << "glob should keep honoring the workspace file index\n";
     return 1;
   }
-  if (ls->run(nlohmann::json{{"path", "a.txt"}}).find("Not a directory") == std::string::npos) {
+  if (ls->run(nlohmann::json{{"path", "a.txt"}}).text.find("Not a directory") ==
+      std::string::npos) {
     std::cerr << "ls on a file should report Not a directory\n";
     return 1;
   }
-  auto defaulted = ls->run(nlohmann::json::object());
+  auto defaulted = ls->run(nlohmann::json::object()).text;
   if (defaulted.find("a.txt") == std::string::npos) {
     std::cerr << "ls should default to the workspace root\n" << defaulted << '\n';
     return 1;
@@ -95,7 +108,7 @@ int main() {
     std::ofstream out(many / name);
     out << "x\n";
   }
-  auto capped = ls->run(nlohmann::json{{"path", "many"}});
+  auto capped = ls->run(nlohmann::json{{"path", "many"}}).text;
   if (capped.find("[truncated]") == std::string::npos) {
     std::cerr << "ls should mark directories with more than 200 entries\n" << capped << '\n';
     return 1;
@@ -106,12 +119,12 @@ int main() {
     std::cerr << "ls should keep the first 200 entries after sorting\n" << capped << '\n';
     return 1;
   }
-  auto sed_read = bash->run(nlohmann::json{{"command", "cd .; sed -n 1,1p a.txt"}});
+  auto sed_read = bash->run(nlohmann::json{{"command", "cd .; sed -n 1,1p a.txt"}}).text;
   if (sed_read.find("hi") == std::string::npos) {
     std::cerr << "bash should allow sed file reads\n" << sed_read << '\n';
     return 1;
   }
-  auto cr = bash->run(nlohmann::json{{"command", "printf 'hello\\rworld\\n'"}});
+  auto cr = bash->run(nlohmann::json{{"command", "printf 'hello\\rworld\\n'"}}).text;
   if (cr.find("world") == std::string::npos || cr.find("hello") != std::string::npos) {
     std::cerr << "carriage return should overwrite the current line\n" << cr << '\n';
     return 1;
@@ -124,21 +137,60 @@ int main() {
     std::cerr << "missing streaming bash\n";
     return 1;
   }
-  auto streamed = streaming_bash->run(nlohmann::json{{"command", "printf 'one\\ntwo\\n'"}});
+  auto streamed = streaming_bash->run(nlohmann::json{{"command", "printf 'one\\ntwo\\n'"}}).text;
   if (snapshots.empty() || snapshots.back().find("two") == std::string::npos ||
       streamed.find("two") == std::string::npos) {
     std::cerr << "bash should emit output snapshots while running\n";
+    return 1;
+  }
+  if (bash->run(nlohmann::json{{"command", "printenv NIMINAL_SESSION_ID || echo unset"}})
+          .text.find("unset") == std::string::npos) {
+    std::cerr << "bash should export nothing without a shell env provider\n";
+    return 1;
+  }
+  std::string session_id = "sess-1";
+  niminal::app::ShellEnvFn env_fn = [&] {
+    return niminal::app::ShellEnv{{"NIMINAL_SESSION_ID", session_id},
+                                  {"NIMINAL_SESSION_FILE", "s.jsonl"},
+                                  {"NIMINAL_PROVIDER", "openrouter"},
+                                  {"NIMINAL_MODEL", "test/model"},
+                                  {"NIMINAL_REASONING_LEVEL", "high"}};
+  };
+  auto env_tools = workspace_tools(ws, &cancel, {}, &env_fn);
+  niminal::Tool* env_bash = find(env_tools, "bash");
+  if (env_bash == nullptr) {
+    std::cerr << "missing env bash\n";
+    return 1;
+  }
+  auto exported =
+      env_bash
+          ->run(nlohmann::json{{"command",
+                                "echo \"$NIMINAL_SESSION_ID|$NIMINAL_SESSION_FILE|"
+                                "$NIMINAL_PROVIDER|$NIMINAL_MODEL|$NIMINAL_REASONING_LEVEL\""}})
+          .text;
+  if (exported.find("sess-1") == std::string::npos ||
+      exported.find("s.jsonl") == std::string::npos ||
+      exported.find("openrouter") == std::string::npos ||
+      exported.find("test/model") == std::string::npos ||
+      exported.find("high") == std::string::npos) {
+    std::cerr << "bash should export the session env block\n" << exported << '\n';
+    return 1;
+  }
+  session_id = "sess-2";
+  auto refreshed = env_bash->run(nlohmann::json{{"command", "printenv NIMINAL_SESSION_ID"}}).text;
+  if (refreshed.find("sess-2") == std::string::npos) {
+    std::cerr << "bash should re-evaluate the shell env per invocation\n" << refreshed << '\n';
     return 1;
   }
   auto parallel =
       std::async(std::launch::async, [&] { return grep->run(nlohmann::json{{"pattern", "hi"}}); });
   auto parallel2 = std::async(
       std::launch::async, [&] { return grep->run(nlohmann::json{{"pattern", "missing-xyz"}}); });
-  if (parallel.get().find("a.txt") == std::string::npos) {
+  if (parallel.get().text.find("a.txt") == std::string::npos) {
     std::cerr << "grep should find a.txt\n";
     return 1;
   }
-  if (parallel2.get().find("No matches") == std::string::npos) {
+  if (parallel2.get().text.find("No matches") == std::string::npos) {
     std::cerr << "grep should report no matches\n";
     return 1;
   }

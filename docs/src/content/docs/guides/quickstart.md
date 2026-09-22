@@ -115,6 +115,9 @@ These flags apply to one process only and are never written to your config:
 | `--yolo` | Auto-approve all tools |
 | `--approve` | Load project customizations without the trust prompt |
 | `--no-approve` | Skip project customizations |
+| `--system-prompt TEXT` | Replace the built-in system prompt for this run |
+| `--append-system-prompt TEXT` | Append to the system prompt for this run |
+| `--no-context-files`, `-nc` | Skip `AGENTS.md` and `CLAUDE.md` discovery |
 | `--mode json` | Emit versioned JSONL events and exit |
 | `--mode rpc` | Serve JSONL commands until shutdown or EOF |
 | `--version` | Print the version and exit |

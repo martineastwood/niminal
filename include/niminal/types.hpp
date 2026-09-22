@@ -80,11 +80,31 @@ struct ToolCall {
   std::string arguments;
 };
 
+struct UserInput {
+  std::string text;
+  json images = json::array();
+
+  UserInput() = default;
+  UserInput(std::string value) : text(std::move(value)) {}
+  UserInput(const char* value) : text(value) {}
+  UserInput(std::string value, json attachments)
+      : text(std::move(value)), images(std::move(attachments)) {}
+};
+
+struct ToolResult {
+  std::string text;
+  json images = json::array();
+
+  ToolResult() = default;
+  ToolResult(std::string value) : text(std::move(value)) {}
+  ToolResult(const char* value) : text(value) {}
+};
+
 struct Tool {
   std::string name;
   std::string description;
   json parameters;
-  std::function<std::string(const json&)> run;
+  std::function<ToolResult(const json&)> run;
   bool read_only = false;
   bool extension = false;
 };

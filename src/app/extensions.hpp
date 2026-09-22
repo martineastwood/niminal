@@ -3,6 +3,7 @@
 #include <niminal/agent.hpp>
 
 #include "config.hpp"
+#include "tools.hpp"
 
 #include <atomic>
 #include <filesystem>
@@ -84,7 +85,8 @@ public:
   struct Impl;
   static std::shared_ptr<ExtensionRuntime> start(const std::filesystem::path& workspace,
                                                  const std::string& session_id,
-                                                 std::atomic<bool>* cancel = nullptr);
+                                                 std::atomic<bool>* cancel = nullptr,
+                                                 const ShellEnvFn* shell_env = nullptr);
   ~ExtensionRuntime();
 
   ExtensionRuntime(const ExtensionRuntime&) = delete;

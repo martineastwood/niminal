@@ -11,7 +11,7 @@ int main() {
   int calls = 0;
   int persisted_users = 0;
   int retries = 0;
-  agent.persist_user = [&](const std::string&) { ++persisted_users; };
+  agent.persist_user = [&](const niminal::UserInput&) { ++persisted_users; };
   agent.on_event = [&](const niminal::StreamEvent& event) {
     if (event.retry) {
       ++retries;

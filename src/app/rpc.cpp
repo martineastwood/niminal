@@ -179,7 +179,7 @@ private:
     return static_cast<int>(steering_queue_.size() + follow_up_queue_.size());
   }
 
-  std::vector<std::string> take_queue(bool steering) {
+  std::vector<niminal::UserInput> take_queue(bool steering) {
     std::vector<QueuedPrompt> taken;
     {
       std::lock_guard lock(queue_mutex_);
@@ -195,7 +195,7 @@ private:
         send(queue_event(session_.id, "dequeue", depth, {}, taken[i].id, taken[i].mode));
       }
     }
-    std::vector<std::string> prompts;
+    std::vector<niminal::UserInput> prompts;
     prompts.reserve(taken.size());
     for (auto& item : taken) {
       prompts.push_back(std::move(item.prompt));

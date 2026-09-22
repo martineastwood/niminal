@@ -57,6 +57,52 @@ int main() {
     return 7;
   }
 
+  {
+    std::ofstream image(root / "screen shot.png", std::ios::binary);
+    image.write("\x89PNG\r\n\x1a\n", 8);
+  }
+  auto mentioned = prepare_user_input(workspace, "inspect @screen shot.png");
+  if (!mentioned.images.empty()) {
+    return 8; // Paths with spaces need quoting or a drop.
+  }
+  mentioned = prepare_user_input(workspace, "inspect @README.md");
+  if (mentioned.text.find("hello") == std::string::npos || !mentioned.images.empty()) {
+    return 9;
+  }
+  fs::rename(root / "screen shot.png", root / "screen.png");
+  mentioned = prepare_user_input(workspace, "inspect @screen.png");
+  if (mentioned.images.size() != 1 || mentioned.images[0].value("mime_type", "") != "image/png") {
+    return 10;
+  }
+  auto dropped = prepare_user_input(workspace, "screen.png");
+  if (!dropped.text.empty() || dropped.images.size() != 1) {
+    return 11;
+  }
+  dropped = prepare_user_input(workspace, std::string("file://") + (root / "screen.png").string());
+  if (!dropped.text.empty() || dropped.images.size() != 1) {
+    return 13;
+  }
+  {
+    std::ofstream jpeg(root / "photo.jpg", std::ios::binary);
+    jpeg.write("\xff\xd8\xff", 3);
+    std::ofstream webp(root / "shot.webp", std::ios::binary);
+    webp.write("RIFF\0\0\0\0WEBP", 12);
+  }
+  dropped = prepare_user_input(workspace, "photo.jpg shot.webp");
+  if (dropped.images.size() != 2 || dropped.images[0].value("mime_type", "") != "image/jpeg" ||
+      dropped.images[1].value("mime_type", "") != "image/webp") {
+    return 14;
+  }
+  {
+    std::ofstream image(root / "bad.png", std::ios::binary);
+    image << "not an image";
+  }
+  try {
+    (void)prepare_user_input(workspace, "@bad.png");
+    return 12;
+  } catch (const niminal::Error&) {
+  }
+
   fs::remove_all(root);
   return 0;
 }

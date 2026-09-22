@@ -135,6 +135,44 @@ int main() {
     return 1;
   }
 
+  const nlohmann::json image = {
+      {"type", "image"}, {"name", "screen.png"}, {"mime_type", "image/png"}, {"data", "aGVsbG8="}};
+  req.messages = nlohmann::json::array(
+      {{{"role", "user"},
+        {"content", nlohmann::json::array({{{"type", "text"}, {"text", "inspect"}}, image})}},
+       {{"role", "assistant"},
+        {"content", ""},
+        {"tool_calls",
+         nlohmann::json::array({{{"id", "t1"},
+                                 {"type", "function"},
+                                 {"function", {{"name", "read"}, {"arguments", "{}"}}}}})}},
+       {{"role", "tool"},
+        {"tool_call_id", "t1"},
+        {"content", "screen.png"},
+        {"images", nlohmann::json::array({image})}}});
+  req.extra = nlohmann::json::object();
+  req.provider = "openai";
+  auto vision = niminal::chat_body(req);
+  if (vision["messages"][0]["content"][1]["image_url"]["url"] != "data:image/png;base64,aGVsbG8=" ||
+      vision["messages"].back()["content"][0]["type"] != "image_url") {
+    std::cerr << "OpenAI image content\n";
+    return 1;
+  }
+  req.provider = "anthropic";
+  vision = niminal::chat_body(req);
+  if (vision["messages"][0]["content"][1]["source"]["data"] != "aGVsbG8=" ||
+      vision["messages"].back()["content"][0]["content"][1]["source"]["data"] != "aGVsbG8=") {
+    std::cerr << "Anthropic image content\n";
+    return 1;
+  }
+  req.provider = "google";
+  vision = niminal::chat_body(req);
+  if (vision["contents"][0]["parts"][1]["inlineData"]["data"] != "aGVsbG8=" ||
+      vision["contents"].back()["parts"][1]["inlineData"]["data"] != "aGVsbG8=") {
+    std::cerr << "Google image content\n";
+    return 1;
+  }
+
   auto usage = niminal::parse_chat_usage(nlohmann::json{
       {"prompt_tokens", 100},
       {"completion_tokens", 20},

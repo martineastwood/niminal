@@ -1,10 +1,14 @@
 #include "clipboard.hpp"
+#include "images.hpp"
 
 #include <cstdio>
 #include <iostream>
 #include <string_view>
 
 namespace niminal::app {
+#if defined(__APPLE__)
+std::string macos_clipboard_image();
+#endif
 namespace {
 
 std::string base64_encode(std::string_view in) {
@@ -88,6 +92,41 @@ std::string paste_from_clipboard() {
     }
   }
   return text;
+}
+
+std::optional<niminal::json> paste_image_from_clipboard() {
+  std::string bytes;
+#if defined(__APPLE__)
+  bytes = macos_clipboard_image();
+#elif defined(__linux__)
+  bytes = pipe_read("wl-paste -n --type image/png 2>/dev/null");
+  if (bytes.empty()) {
+    bytes = pipe_read("xclip -selection clipboard -t image/png -o 2>/dev/null");
+  }
+  if (bytes.empty()) {
+    bytes = pipe_read("wl-paste -n --type image/jpeg 2>/dev/null");
+  }
+  if (bytes.empty()) {
+    bytes = pipe_read("xclip -selection clipboard -t image/jpeg -o 2>/dev/null");
+  }
+  if (bytes.empty()) {
+    bytes = pipe_read("wl-paste -n --type image/webp 2>/dev/null");
+  }
+  if (bytes.empty()) {
+    bytes = pipe_read("xclip -selection clipboard -t image/webp -o 2>/dev/null");
+  }
+#endif
+  if (bytes.empty()) {
+    return std::nullopt;
+  }
+  auto part = image_part(bytes, "clipboard.png");
+  const auto mime = part.value("mime_type", "");
+  if (mime == "image/jpeg") {
+    part["name"] = "clipboard.jpg";
+  } else if (mime == "image/webp") {
+    part["name"] = "clipboard.webp";
+  }
+  return part;
 }
 
 } // namespace niminal::app

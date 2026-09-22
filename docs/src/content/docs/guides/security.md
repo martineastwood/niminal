@@ -28,7 +28,8 @@ Use `/trust on` or `/trust off` to change it later. For one process, use
 `--approve` or `--no-approve`.
 
 Project `AGENTS.md` and other instruction files in the git-root chain load
-without trust. Only the gated resources above require approval.
+without trust. Project `SYSTEM.md` and `APPEND_SYSTEM.md` require trust, like
+the gated resources above.
 
 ## Workspace boundary
 

@@ -142,7 +142,10 @@ void Agent::fill_chat(ChatRequest& req) const {
   req.cancel = cancel;
 }
 
-std::string Agent::run(const std::string& prompt, bool append_user) {
+std::string Agent::run(UserInput prompt, bool append_user) {
+  if (append_user && prepare_user) {
+    prompt = prepare_user(std::move(prompt));
+  }
   if (system_extra_loader) {
     system_extra = system_extra_loader();
   }
@@ -174,8 +177,21 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
       on_event(std::move(event));
     }
   };
+  auto user_content = [](const UserInput& input) {
+    if (input.images.empty()) {
+      return json(input.text);
+    }
+    json parts = json::array();
+    if (!input.text.empty()) {
+      parts.push_back(json{{"type", "text"}, {"text", input.text}});
+    }
+    for (const auto& image : input.images) {
+      parts.push_back(image);
+    }
+    return parts;
+  };
   if (append_user) {
-    messages.push_back(json{{"role", "user"}, {"content", prompt}});
+    messages.push_back(json{{"role", "user"}, {"content", user_content(prompt)}});
     if (persist_user) {
       persist_user(prompt);
     }
@@ -183,7 +199,7 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
                                   messages.back().value("role", "") != "tool")) {
     throw Error("nothing to retry");
   }
-  emit(StreamEvent{EventKind::run_start, prompt, {}, {}});
+  emit(StreamEvent{EventKind::run_start, prompt.text, {}, {}});
   if (turn_start) {
     turn_start();
   }
@@ -204,15 +220,18 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
       return 0;
     }
     int n = 0;
-    for (auto& text : take_steering()) {
-      if (text.empty()) {
+    for (auto input : take_steering()) {
+      if (prepare_user) {
+        input = prepare_user(std::move(input));
+      }
+      if (input.text.empty() && input.images.empty()) {
         continue;
       }
-      messages.push_back(json{{"role", "user"}, {"content", text}});
+      messages.push_back(json{{"role", "user"}, {"content", user_content(input)}});
       if (persist_user) {
-        persist_user(text);
+        persist_user(input);
       }
-      emit(StreamEvent{EventKind::user, text, {}, {}});
+      emit(StreamEvent{EventKind::user, input.text, {}, {}});
       ++n;
     }
     return n;
@@ -222,15 +241,18 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
       return 0;
     }
     int n = 0;
-    for (auto& text : take_follow_up()) {
-      if (text.empty()) {
+    for (auto input : take_follow_up()) {
+      if (prepare_user) {
+        input = prepare_user(std::move(input));
+      }
+      if (input.text.empty() && input.images.empty()) {
         continue;
       }
-      messages.push_back(json{{"role", "user"}, {"content", text}});
+      messages.push_back(json{{"role", "user"}, {"content", user_content(input)}});
       if (persist_user) {
-        persist_user(text);
+        persist_user(input);
       }
-      emit(StreamEvent{EventKind::user, text, {}, {}});
+      emit(StreamEvent{EventKind::user, input.text, {}, {}});
       ++n;
     }
     return n;
@@ -386,7 +408,7 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
       }
 
       struct ToolExecution {
-        std::string output;
+        ToolResult output;
         bool is_error = false;
       };
       auto run_tool = [&](const ToolCall& call) -> ToolExecution {
@@ -411,7 +433,7 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
                         (reason.empty() ? std::string("blocked by extension") : reason),
                     true};
           }
-          std::string output;
+          ToolResult output;
           bool is_error = false;
           try {
             if (!tool_output) {
@@ -428,15 +450,15 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
               };
               output = tool->run(args);
             }
-            is_error = output == "interrupted" || output.rfind("tool error:", 0) == 0 ||
-                       output.rfind("unknown tool:", 0) == 0 ||
-                       output.rfind("approval_denied:", 0) == 0;
+            is_error = output.text == "interrupted" || output.text.rfind("tool error:", 0) == 0 ||
+                       output.text.rfind("unknown tool:", 0) == 0 ||
+                       output.text.rfind("approval_denied:", 0) == 0;
           } catch (const std::exception& e) {
             output = std::string("tool error: ") + e.what();
             is_error = true;
           }
           if (after_tool) {
-            after_tool(call, args, output, is_error);
+            after_tool(call, args, output.text, is_error);
           }
           return {std::move(output), is_error};
         } catch (const std::exception& e) {
@@ -445,7 +467,7 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
       };
 
       auto apply_tool_result = [&](const ToolCall& call, const ToolExecution& execution) {
-        StreamEvent tool_result{EventKind::tool_result, execution.output, call.name, call.id};
+        StreamEvent tool_result{EventKind::tool_result, execution.output.text, call.name, call.id};
         tool_result.is_error = cancelled() || execution.is_error;
         const bool is_error = tool_result.is_error;
         emit(std::move(tool_result));
@@ -455,7 +477,8 @@ std::string Agent::run(const std::string& prompt, bool append_user) {
         messages.push_back(json{
             {"role", "tool"},
             {"tool_call_id", call.id},
-            {"content", execution.output},
+            {"content", execution.output.text},
+            {"images", execution.output.images},
         });
       };
 

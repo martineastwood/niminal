@@ -31,6 +31,8 @@
 #include <unistd.h>
 #include <utility>
 
+extern char** environ;
+
 namespace niminal::app {
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -277,6 +279,53 @@ Manifest parse_manifest(const fs::path& path) {
   return out;
 }
 
+// Composes the inherited environment with the shell env block and execs the
+// command, searching PATH when the program is not path-qualified. Runs in the
+// freshly forked child only.
+void exec_with_env(const std::string& file, std::vector<std::string> command,
+                   const ShellEnv& extra) {
+  command.front() = file;
+  std::vector<char*> argv;
+  for (auto& value : command) {
+    argv.push_back(value.data());
+  }
+  argv.push_back(nullptr);
+  std::vector<std::string> entries;
+  entries.reserve(extra.size());
+  for (const auto& [key, value] : extra) {
+    entries.push_back(key + "=" + value);
+  }
+  std::vector<char*> envp;
+  for (char** e = environ; *e != nullptr; ++e) {
+    envp.push_back(*e);
+  }
+  for (auto& entry : entries) {
+    envp.push_back(entry.data());
+  }
+  envp.push_back(nullptr);
+  if (file.find('/') != std::string::npos) {
+    execve(file.c_str(), argv.data(), envp.data());
+    _exit(127);
+  }
+  std::string path;
+  if (const char* env_path = std::getenv("PATH")) {
+    path = env_path;
+  }
+  size_t start = 0;
+  while (true) {
+    const auto end = path.find(':', start);
+    const auto dir = path.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    if (!dir.empty()) {
+      execve((dir + "/" + file).c_str(), argv.data(), envp.data());
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  _exit(127);
+}
+
 class Process {
 public:
   std::string name;
@@ -284,7 +333,8 @@ public:
   int timeout_ms = kDefaultTimeoutMs;
   std::mutex mutex;
 
-  Process(const Manifest& manifest, const fs::path& dir, const fs::path& workspace)
+  Process(const Manifest& manifest, const fs::path& dir, const fs::path& workspace,
+          const ShellEnv& env)
       : name(manifest.name), timeout_ms(manifest.timeout_ms) {
     int input_pipe[2];
     int output_pipe[2];
@@ -318,13 +368,7 @@ public:
                                                   command[0].find('\\') != std::string::npos)) {
         command[0] = (dir / command[0]).lexically_normal().string();
       }
-      std::vector<char*> argv;
-      for (auto& value : command) {
-        argv.push_back(value.data());
-      }
-      argv.push_back(nullptr);
-      execvp(argv[0], argv.data());
-      _exit(127);
+      exec_with_env(command[0], command, env);
     }
     close(input_pipe[0]);
     close(output_pipe[1]);
@@ -375,8 +419,9 @@ public:
         throw std::runtime_error("extension request cancelled");
       }
       if (reader_exited_) {
-        throw std::runtime_error(reader_error_.empty() ? "extension exited before responding"
-                                                       : reader_error_);
+        throw std::runtime_error(reader_error_.empty()
+                                     ? "extension '" + name + "' exited before responding"
+                                     : reader_error_);
       }
       if (timeout_ms >= 0) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -448,7 +493,7 @@ public:
         continue;
       }
       if (count == 0 || ((pfd.revents & (POLLHUP | POLLERR)) != 0)) {
-        throw std::runtime_error("extension exited before responding");
+        throw std::runtime_error("extension '" + name + "' exited before responding");
       }
       if (errno != EAGAIN && errno != EWOULDBLOCK) {
         throw std::runtime_error(std::strerror(errno));
@@ -532,7 +577,7 @@ private:
       char chunk[4096];
       const auto count = read(output_, chunk, sizeof(chunk));
       if (count == 0) {
-        error = "extension exited before responding";
+        error = "extension '" + name + "' exited before responding";
         break;
       }
       if (count < 0) {
@@ -603,7 +648,8 @@ std::string external_failure(std::string message, const std::string& stdout_text
 }
 
 std::string run_external_tool(const ExternalTool& tool, const json& input,
-                              const fs::path& workspace, std::atomic<bool>* cancel) {
+                              const fs::path& workspace, std::atomic<bool>* cancel,
+                              const ShellEnv& env) {
   const auto executable = external_executable(tool);
   std::error_code ec;
   if (!fs::is_regular_file(executable, ec)) {
@@ -657,13 +703,7 @@ std::string run_external_tool(const ExternalTool& tool, const json& input,
 
       std::vector<std::string> command = tool.command;
       command.front() = executable.string();
-      std::vector<char*> argv;
-      for (auto& value : command) {
-        argv.push_back(value.data());
-      }
-      argv.push_back(nullptr);
-      execv(argv.front(), argv.data());
-      _exit(127);
+      exec_with_env(executable.string(), command, env);
     }
     setpgid(pid, pid);
 
@@ -822,6 +862,7 @@ struct ExtensionRuntime::Impl {
   std::vector<std::unique_ptr<Process>> processes;
   std::vector<RegisteredTool> tools;
   std::vector<ExternalTool> external_tools;
+  ShellEnvFn shell_env;
   mutable std::mutex actions_mutex;
   std::map<std::string, std::string> statuses;
   std::map<std::string, std::vector<std::string>> widgets;
@@ -1088,9 +1129,13 @@ bool read_only_capabilities(const json& tool) {
 
 std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& workspace,
                                                           const std::string& session_id,
-                                                          std::atomic<bool>* cancel) {
+                                                          std::atomic<bool>* cancel,
+                                                          const ShellEnvFn* shell_env) {
   auto runtime =
       std::make_shared<ExtensionRuntime>(Access{}, canonical_workspace(workspace), cancel);
+  if (shell_env != nullptr) {
+    runtime->impl_->shell_env = *shell_env;
+  }
   std::signal(SIGPIPE, SIG_IGN);
   for (const auto& dir : extension_dirs(runtime->workspace_)) {
     Manifest manifest;
@@ -1104,7 +1149,9 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
     const auto command_count = runtime->commands_.size();
     const auto tool_count = runtime->impl_->tools.size();
     try {
-      process = std::make_unique<Process>(manifest, dir, runtime->workspace_);
+      process = std::make_unique<Process>(manifest, dir, runtime->workspace_,
+                                          runtime->impl_->shell_env ? runtime->impl_->shell_env()
+                                                                    : ShellEnv{});
       process->send(json{{"type", "initialize"},
                          {"version", 1},
                          {"workspace", runtime->workspace_.string()},
@@ -1238,12 +1285,13 @@ std::vector<niminal::Tool> ExtensionRuntime::tools() {
       warnings_.push_back("skipping external tool '" + tool.name + "': name is already registered");
       continue;
     }
-    result.push_back(niminal::Tool{tool.name, tool.description, tool.schema,
-                                   [self, tool](const json& input) {
-                                     return run_external_tool(tool, input, self->workspace_,
-                                                              self->cancel_);
-                                   },
-                                   tool.read_only, true});
+    result.push_back(niminal::Tool{
+        tool.name, tool.description, tool.schema,
+        [self, tool](const json& input) {
+          ShellEnv env = self->impl_->shell_env ? self->impl_->shell_env() : ShellEnv{};
+          return run_external_tool(tool, input, self->workspace_, self->cancel_, env);
+        },
+        tool.read_only, true});
   }
   return result;
 }

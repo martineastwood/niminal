@@ -57,6 +57,19 @@ Type `@` for file mention suggestions. Gitignored and hidden files are excluded.
 Accepted mentions expand into attached file content in the outgoing message (up
 to 100,000 bytes per attachment).
 
+You can attach a PNG, JPEG, or WebP screenshot with Ctrl-V when your terminal
+sends that shortcut to niminal. You can also type `@screenshot.png` or drop an
+image file into the terminal. A drop pastes its file path, which niminal attaches
+when you send the message. The composer shows attached filenames. Backspace with
+an empty text draft removes the last attachment. You can send an image without
+typing text.
+
+Each image can be up to 10 MiB. Images are saved in the session, so a later turn
+can still use them after the original file changes. A model must support image
+input to inspect them. If Ctrl-V pastes text instead, your terminal may have
+handled the shortcut before niminal received it. Use `@screenshot.png` or drop
+the file in that case.
+
 ## Scrolling and copy
 
 | Input | Action |
@@ -66,7 +79,7 @@ to 100,000 bytes per attachment).
 | Ctrl+O | Toggle the most recent thinking, tool, or diff card |
 | Ctrl+Shift+O | Expand every card, or collapse all if they are already open |
 | Drag select + release | Copy selection to clipboard |
-| Ctrl-V, middle/right click | Paste into the composer |
+| Ctrl-V, middle/right click | Attach a clipboard image, or paste text |
 | `/copy` | Copy the last assistant reply or error |
 
 New output sticks to the bottom until you scroll up.

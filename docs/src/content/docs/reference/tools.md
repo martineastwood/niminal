@@ -10,7 +10,7 @@ workspace. The tool definitions are sent with each request.
 
 | Tool | What it does | Approval in TUI |
 | --- | --- | --- |
-| `read` | Read a text file with numbered lines and a version token | Auto |
+| `read` | Read a text file with numbered lines, or inspect an image | Auto |
 | `grep` | Search file contents with a regex or plain text | Auto |
 | `glob` | List workspace files matching a glob | Auto |
 | `ls` | List one directory | Auto |
@@ -46,8 +46,9 @@ workspace-relative path, and a `version` token for `edit.expected_version`.
 Text output is limited to 200,000 bytes. Scoped `AGENTS.md` instructions for the
 directory are appended when present.
 
-niminal returns text only from `read`; image attachments are not supported by
-this tool today.
+For a PNG, JPEG, or WebP file, `read` sends the image to the model with its
+filename. Images can be up to 10 MiB. Line ranges and edit version tokens apply
+to text files only.
 
 ## `grep`
 

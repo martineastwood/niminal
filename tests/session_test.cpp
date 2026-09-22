@@ -359,6 +359,31 @@ int main() {
     return fail("delete rejects bad id");
   }
 
+  auto vision = create_session(dir, "/tmp/ws-a");
+  const json image = {
+      {"type", "image"}, {"name", "screen.png"}, {"mime_type", "image/png"}, {"data", "aGVsbG8="}};
+  vision.add_user(niminal::UserInput{"inspect", json::array({image})});
+  niminal::ToolResult tool_image{"screen.png"};
+  tool_image.images.push_back(image);
+  vision.add_tool_result("image-call", tool_image, false);
+  auto reloaded_vision = load_session(dir, vision.id);
+  auto vision_messages = reloaded_vision.openai_messages();
+  if (vision_messages[0]["content"][1] != image || vision_messages[1]["images"][0] != image) {
+    return fail("image session round trip");
+  }
+  if (reloaded_vision.export_text("html").find("data:image/png;base64,aGVsbG8=") ==
+      std::string::npos) {
+    return fail("HTML image export");
+  }
+  if (reloaded_vision.export_text("md").find("aGVsbG8=") != std::string::npos ||
+      reloaded_vision.export_text("json").find("aGVsbG8=") == std::string::npos) {
+    return fail("image export formats");
+  }
+  auto forked_vision = reloaded_vision.fork(dir);
+  if (forked_vision.openai_messages()[0]["content"][1] != image) {
+    return fail("fork preserves images");
+  }
+
   fs::remove_all(dir);
   return 0;
 }

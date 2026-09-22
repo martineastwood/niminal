@@ -6,6 +6,7 @@
 #include "extensions.hpp"
 #include "instructions.hpp"
 #include "json_mode.hpp"
+#include "mentions.hpp"
 #include "provider.hpp"
 #include "rpc.hpp"
 #include "session.hpp"
@@ -49,6 +50,12 @@ const char* kUsage =
     "  --resume           Resume the latest session for this workspace\n"
     "  --session ID       Resume a specific session\n"
     "  --no-session       Keep the transcript in memory only\n"
+    "  --system-prompt TEXT\n"
+    "                     Replace the built-in system prompt for this process\n"
+    "  --append-system-prompt TEXT\n"
+    "                     Append to the system prompt for this process\n"
+    "  --no-context-files, -nc\n"
+    "                     Skip AGENTS.md and CLAUDE.md discovery\n"
     "  --version          Show the version\n"
     "  --help             Show this help\n"
     "\n"
@@ -157,12 +164,33 @@ void restrict_tools(niminal::Agent& agent, const std::vector<std::string>& allow
       agent.tools.end());
 }
 
+struct SystemPromptOptions {
+  std::string replace;
+  std::string append;
+};
+
 niminal::Agent make_agent(niminal::app::Workspace& ws, const niminal::app::Config& cfg,
-                          int max_steps, std::atomic<bool>* cancel) {
+                          int max_steps, std::atomic<bool>* cancel,
+                          const SystemPromptOptions& system_prompt = {},
+                          const niminal::app::ShellEnvFn* shell_env = nullptr) {
   niminal::Agent agent;
-  agent.system = kSystem;
-  agent.system_extra_loader = [root = ws.root()] {
+  const auto root = ws.root();
+  if (!system_prompt.replace.empty()) {
+    agent.system = system_prompt.replace;
+  } else {
+    auto file = niminal::app::load_system_prompt(root);
+    agent.system = file.empty() ? std::string(kSystem) : std::move(file);
+  }
+  agent.system_extra_loader = [root, append = system_prompt.append] {
     std::vector<std::string> extra;
+    if (!append.empty()) {
+      extra.push_back(append);
+    } else {
+      auto appended = niminal::app::load_append_system_prompt(root);
+      if (!appended.empty()) {
+        extra.push_back(std::move(appended));
+      }
+    }
     auto text = niminal::app::load_project_instructions(root);
     if (!text.empty()) {
       extra.push_back(std::move(text));
@@ -175,11 +203,13 @@ niminal::Agent make_agent(niminal::app::Workspace& ws, const niminal::app::Confi
   agent.max_steps = max_steps;
   agent.cancel = cancel;
   agent.tools = niminal::app::workspace_tools(
-      ws, cancel, [sink = agent.tool_output](const std::string& snapshot) {
+      ws, cancel,
+      [sink = agent.tool_output](const std::string& snapshot) {
         if (sink && *sink) {
           (*sink)(snapshot);
         }
-      });
+      },
+      shell_env);
   agent.tools.push_back(niminal::app::skill_tool(ws.root()));
   return agent;
 }
@@ -337,6 +367,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> prompt_parts;
   std::vector<std::string> allowed_tools;
   bool tools_specified = false;
+  SystemPromptOptions system_prompt;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -479,6 +510,26 @@ int main(int argc, char** argv) {
       session_id = argv[++i];
       continue;
     }
+    if (a == "--system-prompt") {
+      if (i + 1 >= argc) {
+        std::cerr << kUsage;
+        return 2;
+      }
+      system_prompt.replace = argv[++i];
+      continue;
+    }
+    if (a == "--append-system-prompt") {
+      if (i + 1 >= argc) {
+        std::cerr << kUsage;
+        return 2;
+      }
+      system_prompt.append = argv[++i];
+      continue;
+    }
+    if (a == "--no-context-files" || a == "-nc") {
+      niminal::app::set_context_files_enabled(false);
+      continue;
+    }
     if (a == "--") {
       for (++i; i < argc; ++i) {
         prompt_parts.emplace_back(argv[i]);
@@ -543,7 +594,8 @@ int main(int argc, char** argv) {
     std::cerr << "Project-local resources skipped (use --approve or /trust on).\n";
   }
   std::atomic<bool> cancel{false};
-  auto agent = make_agent(ws, cfg, max_steps, &cancel);
+  niminal::app::ShellEnvFn shell_env;
+  auto agent = make_agent(ws, cfg, max_steps, &cancel, system_prompt, &shell_env);
   if (tools_specified) {
     restrict_tools(agent, allowed_tools);
   }
@@ -576,10 +628,28 @@ int main(int argc, char** argv) {
   }
 
   niminal::app::bind_session(agent, session);
+  agent.prepare_user = [&ws](niminal::UserInput input) {
+    return niminal::app::prepare_user_input(ws, std::move(input));
+  };
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
   niminal::app::apply_provider(agent, cfg);
 
-  auto extensions = niminal::app::ExtensionRuntime::start(ws.root(), session.id, &cancel);
+  shell_env = [&session, &agent, &cfg] -> niminal::app::ShellEnv {
+    niminal::app::ShellEnv env;
+    env["NIMINAL_SESSION_ID"] = session.id;
+    if (!session.path.empty()) {
+      env["NIMINAL_SESSION_FILE"] = session.path;
+    }
+    env["NIMINAL_PROVIDER"] = agent.provider;
+    env["NIMINAL_MODEL"] = agent.model;
+    if (!cfg.thinking.empty()) {
+      env["NIMINAL_REASONING_LEVEL"] = cfg.thinking;
+    }
+    return env;
+  };
+
+  auto extensions =
+      niminal::app::ExtensionRuntime::start(ws.root(), session.id, &cancel, &shell_env);
   niminal::app::install_extension_tools(agent, extensions,
                                         tools_specified ? &allowed_tools : nullptr);
   niminal::app::bind_extensions(

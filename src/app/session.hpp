@@ -33,13 +33,14 @@ public:
   std::vector<nlohmann::json> events;
   bool persist = true;
 
-  void add_user(const std::string& text);
+  void add_user(const niminal::UserInput& input);
   void add_assistant(const std::string& text, const nlohmann::json& tool_calls,
                      const std::string& model, const niminal::Usage& usage = {},
                      const std::string& reasoning_content = {},
                      const nlohmann::json& reasoning_details = nlohmann::json::array());
   niminal::Usage usage_totals() const;
-  void add_tool_result(const std::string& tool_id, const std::string& output, bool is_error);
+  void add_tool_result(const std::string& tool_id, const niminal::ToolResult& output,
+                       bool is_error);
   void add_name(const std::string& title);
   void add_selection(const std::string& model, const std::string& provider = {});
   void add_extension(const std::string& extension, const nlohmann::json& data);

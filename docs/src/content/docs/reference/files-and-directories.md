@@ -19,6 +19,8 @@ description: Every path niminal reads and writes on your machine.
 | `~/.niminal/tools/<name>/tool.json` | Global external tools |
 | `~/.niminal/extensions/<name>/extension.json` | Global extensions |
 | `~/.niminal/AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md` | Global instructions |
+| `~/.niminal/SYSTEM.md` | Global system prompt replacement |
+| `~/.niminal/APPEND_SYSTEM.md` | Global system prompt append |
 
 Portable global roots shared with other agents:
 
@@ -42,9 +44,12 @@ Extensions do not override by name; every matching extension starts.
 | `<workspace>/.niminal/extensions/` | Project extensions |
 | `<workspace>/.agent/`, `.agents/` | Alternate project roots for skills, prompts, tools |
 | `<workspace>/AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md` | Project instructions |
+| `<workspace>/.niminal/SYSTEM.md` | Project system prompt replacement |
+| `<workspace>/.niminal/APPEND_SYSTEM.md` | Project system prompt append |
 
-Project instructions load without trust. Permissions, skills, prompts, tools,
-and extensions require trust (or `--approve` for one process).
+Project instructions load without trust. `SYSTEM.md`, `APPEND_SYSTEM.md`,
+permissions, skills, prompts, tools, and extensions require trust (or
+`--approve` for one process).
 
 ## Session files
 

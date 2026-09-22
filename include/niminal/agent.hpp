@@ -36,12 +36,12 @@ struct Agent {
   std::vector<std::string> system_extra;
   std::function<std::vector<std::string>()> system_extra_loader;
   std::string conversation_id;
-  std::function<void(const std::string&)> persist_user;
+  std::function<void(const UserInput&)> persist_user;
   std::function<void(const std::string& text, const std::vector<ToolCall>& calls,
                      const std::string& model, const Usage& usage,
                      const std::string& reasoning_content, const json& reasoning_details)>
       persist_assistant;
-  std::function<void(const std::string& id, const std::string& output, bool error)> persist_tool;
+  std::function<void(const std::string& id, const ToolResult& output, bool error)> persist_tool;
   std::function<bool(const ToolCall&, const Tool&)> approve_tool;
   std::function<bool(const ToolCall&, json& arguments, std::string& reason)> before_tool;
   std::function<void(const ToolCall&, const json& arguments, std::string& output, bool& is_error)>
@@ -49,8 +49,9 @@ struct Agent {
   std::function<void(json& request_messages)> augment_context;
   std::function<void()> turn_start;
   std::function<void(bool interrupted)> turn_end;
-  std::function<std::vector<std::string>()> take_steering;
-  std::function<std::vector<std::string>()> take_follow_up;
+  std::function<std::vector<UserInput>()> take_steering;
+  std::function<std::vector<UserInput>()> take_follow_up;
+  std::function<UserInput(UserInput)> prepare_user;
   std::function<void()> before_request;
   std::function<bool()> recover_overflow;
   std::function<ChatResult(const ChatRequest&)> stream_chat_fn;
@@ -59,7 +60,7 @@ struct Agent {
   json request_messages() const;
   void fill_chat(ChatRequest& req) const;
   bool cancelled() const { return cancel && cancel->load(); }
-  std::string run(const std::string& prompt, bool append_user = true);
+  std::string run(UserInput prompt, bool append_user = true);
 };
 
 } // namespace niminal

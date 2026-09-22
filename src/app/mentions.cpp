@@ -1,4 +1,5 @@
 #include "mentions.hpp"
+#include "images.hpp"
 
 #include <niminal/text.hpp>
 
@@ -20,6 +21,45 @@ bool mention_char(char c) {
 std::string basename(std::string_view path) {
   auto slash = path.find_last_of('/');
   return std::string(path.substr(slash == std::string_view::npos ? 0 : slash + 1));
+}
+
+int hex_value(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return c - 'a' + 10;
+  }
+  if (c >= 'A' && c <= 'F') {
+    return c - 'A' + 10;
+  }
+  return -1;
+}
+
+std::string percent_decode(std::string_view in) {
+  std::string out;
+  out.reserve(in.size());
+  for (size_t i = 0; i < in.size();) {
+    if (in[i] == '%' && i + 2 < in.size()) {
+      const int hi = hex_value(in[i + 1]);
+      const int lo = hex_value(in[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        out.push_back(static_cast<char>((hi << 4) | lo));
+        i += 3;
+        continue;
+      }
+    }
+    out.push_back(in[i]);
+    ++i;
+  }
+  return out;
+}
+
+std::string normalize_dropped_path(std::string path) {
+  if (path.rfind("file://", 0) == 0) {
+    path.erase(0, 7);
+  }
+  return percent_decode(path);
 }
 
 } // namespace
@@ -97,6 +137,10 @@ std::string expand_file_mentions(const Workspace& workspace, std::string_view pr
       continue;
     }
     auto relative = std::string(prompt.substr(i + 1, end - i - 1));
+    if (image_path(relative)) {
+      i = end;
+      continue;
+    }
     try {
       auto path = workspace.resolve(relative);
       if (!std::filesystem::is_regular_file(path)) {
@@ -124,6 +168,84 @@ std::string expand_file_mentions(const Workspace& workspace, std::string_view pr
     i = end;
   }
   return std::string(prompt) + attachments;
+}
+
+niminal::UserInput prepare_user_input(const Workspace& workspace, niminal::UserInput input) {
+  for (size_t i = 0; i < input.text.size();) {
+    if (input.text[i] != '@' ||
+        (i > 0 && std::isspace(static_cast<unsigned char>(input.text[i - 1])) == 0)) {
+      ++i;
+      continue;
+    }
+    size_t end = i + 1;
+    while (end < input.text.size() && mention_char(input.text[end])) {
+      ++end;
+    }
+    auto relative = input.text.substr(i + 1, end - i - 1);
+    if (!relative.empty() && image_path(relative)) {
+      bool attached = false;
+      for (const auto& image : input.images) {
+        if (image.value("name", "") == std::filesystem::path(relative).filename().string()) {
+          attached = true;
+          break;
+        }
+      }
+      if (attached) {
+        i = end;
+        continue;
+      }
+      auto path = workspace.resolve(relative);
+      if (!std::filesystem::is_regular_file(path)) {
+        throw niminal::Error("image not found: " + relative);
+      }
+      input.images.push_back(read_image(path));
+    }
+    i = end;
+  }
+  input.text = expand_file_mentions(workspace, input.text);
+  if (!input.images.empty()) {
+    return input;
+  }
+  std::string candidate;
+  char quote = 0;
+  std::vector<std::string> paths;
+  auto finish = [&] {
+    if (!candidate.empty()) {
+      paths.push_back(std::move(candidate));
+      candidate.clear();
+    }
+  };
+  for (size_t i = 0; i < input.text.size(); ++i) {
+    const char c = input.text[i];
+    if (c == '\\' && i + 1 < input.text.size()) {
+      candidate += input.text[++i];
+    } else if (quote != 0 && c == quote) {
+      quote = 0;
+    } else if (quote == 0 && (c == '\'' || c == '"')) {
+      quote = c;
+    } else if (quote == 0 && std::isspace(static_cast<unsigned char>(c)) != 0) {
+      finish();
+    } else {
+      candidate += c;
+    }
+  }
+  finish();
+  if (quote != 0 || paths.empty()) {
+    return input;
+  }
+  niminal::json images = niminal::json::array();
+  for (const auto& raw : paths) {
+    auto path = normalize_dropped_path(raw);
+    const auto file = std::filesystem::path(path).is_absolute() ? std::filesystem::path(path)
+                                                                : workspace.root() / path;
+    if (!image_path(path) || !std::filesystem::is_regular_file(file)) {
+      return input;
+    }
+    images.push_back(read_image(file));
+  }
+  input.text.clear();
+  input.images = std::move(images);
+  return input;
 }
 
 } // namespace niminal::app

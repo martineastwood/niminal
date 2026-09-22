@@ -145,6 +145,8 @@ std::vector<fs::path> project_trust_resources(const fs::path& workspace) {
   const auto root = canonical_workspace(workspace);
   std::vector<fs::path> result;
   add_file(result, root, ".niminal/permissions.json");
+  add_file(result, root, ".niminal/SYSTEM.md");
+  add_file(result, root, ".niminal/APPEND_SYSTEM.md");
   for (const auto& path : {std::string(".agent/skills"), std::string(".agents/skills"),
                            std::string(".niminal/skills")}) {
     add_skill_manifests(result, root, path);

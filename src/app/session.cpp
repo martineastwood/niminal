@@ -54,6 +54,9 @@ std::string first_user_text(const json& event) {
     if (part.value("type", "") == "text") {
       return part.value("text", "");
     }
+    if (part.value("type", "") == "image") {
+      return "[image: " + part.value("name", "image") + "]";
+    }
   }
   return {};
 }
@@ -68,6 +71,8 @@ std::string event_text(const json& event) {
     for (const auto& part : event["content"]) {
       if (part.is_object() && part.value("type", "") == "text") {
         text += part.value("text", "");
+      } else if (part.is_object() && part.value("type", "") == "image") {
+        text += "[image: " + part.value("name", "image") + "]";
       }
     }
   }
@@ -176,6 +181,26 @@ std::string html_escape(std::string_view s) {
       out << c;
       break;
     }
+  }
+  return out.str();
+}
+
+std::string html_images(const json& images) {
+  if (!images.is_array()) {
+    return {};
+  }
+  std::ostringstream out;
+  for (const auto& image : images) {
+    if (!image.is_object() || image.value("type", "") != "image") {
+      continue;
+    }
+    const auto mime = image.value("mime_type", "");
+    if (mime != "image/png" && mime != "image/jpeg" && mime != "image/webp") {
+      continue;
+    }
+    out << "<figure><img style=\"max-width:100%;max-height:40rem\" src=\"data:" << mime
+        << ";base64," << html_escape(image.value("data", "")) << "\" alt=\""
+        << html_escape(image.value("name", "image")) << "\"></figure>\n";
   }
   return out.str();
 }
@@ -355,7 +380,8 @@ std::string export_html(const Session& session) {
     auto type = event.value("type", "");
     if (type == "user") {
       out << "<article class=\"message user\"><div class=\"label\">You</div>\n"
-          << "<div class=\"content\">" << html_escape(event_text(event)) << "</div></article>\n";
+          << "<div class=\"content\">" << html_escape(event_text(event)) << "</div>"
+          << html_images(event.value("content", json::array())) << "</article>\n";
     } else if (type == "assistant") {
       auto text = event_text(event);
       if (!text.empty()) {
@@ -377,6 +403,7 @@ std::string export_html(const Session& session) {
       auto error = event.value("is_error", false);
       out << "<pre class=\"tool-result" << (error ? " error" : "") << "\">"
           << html_escape(event.value("output", "")) << "</pre>\n";
+      out << html_images(event.value("images", json::array()));
     } else if (type == "compaction") {
       out << "<aside class=\"compaction\"><strong>Compaction</strong>\n"
           << html_escape(event.value("summary", "")) << "</aside>\n";
@@ -465,8 +492,15 @@ void Session::append(const json& event) {
   needs_newline_ = false;
 }
 
-void Session::add_user(const std::string& text) {
-  append(json{{"type", "user"}, {"role", "user"}, {"content", json::array({text_block(text)})}});
+void Session::add_user(const niminal::UserInput& input) {
+  json content = json::array();
+  if (!input.text.empty()) {
+    content.push_back(text_block(input.text));
+  }
+  for (const auto& image : input.images) {
+    content.push_back(image);
+  }
+  append(json{{"type", "user"}, {"role", "user"}, {"content", std::move(content)}});
 }
 
 void Session::add_assistant(const std::string& text, const json& tool_calls,
@@ -532,10 +566,13 @@ niminal::Usage Session::usage_totals() const {
   return total;
 }
 
-void Session::add_tool_result(const std::string& tool_id, const std::string& output,
+void Session::add_tool_result(const std::string& tool_id, const niminal::ToolResult& output,
                               bool is_error) {
-  append(
-      json{{"type", "tool_result"}, {"id", tool_id}, {"output", output}, {"is_error", is_error}});
+  append(json{{"type", "tool_result"},
+              {"id", tool_id},
+              {"output", output.text},
+              {"images", output.images},
+              {"is_error", is_error}});
 }
 
 void Session::add_name(const std::string& title) {
@@ -736,15 +773,17 @@ json Session::openai_messages() const {
     const auto& event = events[i];
     auto type = event.value("type", "");
     if (type == "user") {
+      json content = event.value("content", json::array());
+      bool has_image = false;
       std::string text;
-      if (event.contains("content") && event["content"].is_array()) {
-        for (const auto& part : event["content"]) {
-          if (part.value("type", "") == "text") {
-            text += part.value("text", "");
-          }
+      for (const auto& part : content) {
+        if (part.value("type", "") == "image") {
+          has_image = true;
+        } else if (part.value("type", "") == "text") {
+          text += part.value("text", "");
         }
       }
-      out.push_back({{"role", "user"}, {"content", text}});
+      out.push_back({{"role", "user"}, {"content", has_image ? content : json(text)}});
     } else if (type == "assistant") {
       json msg = {{"role", "assistant"}, {"content", ""}};
       json calls = json::array();
@@ -779,7 +818,8 @@ json Session::openai_messages() const {
     } else if (type == "tool_result") {
       out.push_back({{"role", "tool"},
                      {"tool_call_id", event.value("id", "")},
-                     {"content", event.value("output", "")}});
+                     {"content", event.value("output", "")},
+                     {"images", event.value("images", json::array())}});
     }
   }
   return out;
@@ -1001,7 +1041,7 @@ std::string format_session_list(const std::vector<SessionInfo>& infos,
 }
 
 void bind_session(niminal::Agent& agent, Session& session) {
-  agent.persist_user = [&session](const std::string& text) { session.add_user(text); };
+  agent.persist_user = [&session](const niminal::UserInput& input) { session.add_user(input); };
   agent.persist_assistant =
       [&session](const std::string& text, const std::vector<niminal::ToolCall>& calls,
                  const std::string& model, const niminal::Usage& usage,
@@ -1014,9 +1054,8 @@ void bind_session(niminal::Agent& agent, Session& session) {
         }
         session.add_assistant(text, arr, model, usage, reasoning_content, reasoning_details);
       };
-  agent.persist_tool = [&session](const std::string& id, const std::string& output, bool error) {
-    session.add_tool_result(id, output, error);
-  };
+  agent.persist_tool = [&session](const std::string& id, const niminal::ToolResult& output,
+                                  bool error) { session.add_tool_result(id, output, error); };
   agent.conversation_id = session.id;
 }
 

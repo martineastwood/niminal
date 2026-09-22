@@ -1,5 +1,6 @@
 #include "instructions.hpp"
 #include "config.hpp"
+#include "trust.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -23,6 +24,23 @@ struct CacheEntry {
 
 std::mutex cache_mu;
 std::vector<CacheEntry> cache;
+bool context_files_enabled = true;
+
+fs::path global_system_path() {
+  return config_path().parent_path() / "SYSTEM.md";
+}
+
+fs::path global_append_system_path() {
+  return config_path().parent_path() / "APPEND_SYSTEM.md";
+}
+
+fs::path project_system_path(const fs::path& workspace) {
+  return workspace / ".niminal" / "SYSTEM.md";
+}
+
+fs::path project_append_system_path(const fs::path& workspace) {
+  return workspace / ".niminal" / "APPEND_SYSTEM.md";
+}
 
 fs::path context_file(const fs::path& dir) {
   std::error_code ec;
@@ -115,7 +133,39 @@ std::string load_cached(const fs::path& workspace, const fs::path& global,
   return text;
 }
 
+std::string load_prompt_file(const fs::path& path) {
+  std::error_code ec;
+  if (!fs::is_regular_file(path, ec)) {
+    return {};
+  }
+  return read_bounded(path);
+}
+
 } // namespace
+
+void set_context_files_enabled(bool enabled) {
+  context_files_enabled = enabled;
+}
+
+std::string load_system_prompt(const fs::path& workspace) {
+  if (project_resources_trusted(workspace)) {
+    auto project = load_prompt_file(project_system_path(workspace));
+    if (!project.empty()) {
+      return project;
+    }
+  }
+  return load_prompt_file(global_system_path());
+}
+
+std::string load_append_system_prompt(const fs::path& workspace) {
+  if (project_resources_trusted(workspace)) {
+    auto project = load_prompt_file(project_append_system_path(workspace));
+    if (!project.empty()) {
+      return project;
+    }
+  }
+  return load_prompt_file(global_append_system_path());
+}
 
 fs::path global_agents_path() {
   return context_file(config_path().parent_path());
@@ -170,11 +220,17 @@ std::vector<fs::path> instruction_paths(const fs::path& workspace) {
 }
 
 std::string load_project_instructions(const fs::path& workspace) {
+  if (!context_files_enabled) {
+    return {};
+  }
   auto paths = instruction_paths(workspace);
   return load_cached(workspace, global_agents_path(), paths);
 }
 
 std::string load_scoped_instructions(const fs::path& workspace, const fs::path& target) {
+  if (!context_files_enabled) {
+    return {};
+  }
   auto skip = instruction_paths(workspace);
   std::error_code ec;
   auto root = fs::weakly_canonical(fs::absolute(workspace), ec);

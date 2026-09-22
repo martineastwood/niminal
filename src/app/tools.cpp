@@ -1,4 +1,5 @@
 #include "tools.hpp"
+#include "images.hpp"
 #include "instructions.hpp"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <poll.h>
 #include <regex>
 #include <sstream>
@@ -18,8 +20,11 @@
 #include <unistd.h>
 #include <vector>
 
+extern char** environ;
+
 namespace niminal::app {
 namespace fs = std::filesystem;
+
 using niminal::json;
 using niminal::Tool;
 
@@ -191,7 +196,8 @@ bool cap_shell_output(std::string& output) {
 
 std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
                      std::atomic<bool>* cancel,
-                     const std::function<void(const std::string&)>& on_output) {
+                     const std::function<void(const std::string&)>& on_output,
+                     const ShellEnv& env) {
   int out_pipe[2];
   if (pipe(out_pipe) != 0) {
     throw WorkspaceError(std::strerror(errno));
@@ -211,7 +217,25 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
     if (chdir(cwd.c_str()) != 0) {
       _exit(127);
     }
-    execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
+    // Export the composed environment via execve; setenv after fork in a
+    // multi-threaded parent is unsafe, so the environment is built here.
+    std::vector<std::string> env_store;
+    env_store.reserve(env.size());
+    for (const auto& [key, value] : env) {
+      env_store.push_back(key + "=" + value);
+    }
+    std::vector<char*> argv{const_cast<char*>("sh"), const_cast<char*>("-c"),
+                            const_cast<char*>(command.c_str()), nullptr};
+    std::vector<char*> envp;
+    envp.reserve(env_store.size() + 1);
+    for (char** e = environ; *e != nullptr; ++e) {
+      envp.push_back(*e);
+    }
+    for (auto& entry : env_store) {
+      envp.push_back(entry.data());
+    }
+    envp.push_back(nullptr);
+    execve("/bin/sh", argv.data(), envp.data());
     _exit(127);
   }
   close(out_pipe[1]);
@@ -326,13 +350,14 @@ void write_file_text(const fs::path& path, const std::string& content) {
 } // namespace
 
 std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
-                                  const std::function<void(const std::string&)>& on_bash_output) {
+                                  const std::function<void(const std::string&)>& on_bash_output,
+                                  const ShellEnvFn* shell_env) {
   std::vector<Tool> tools;
 
   tools.push_back(
       Tool{"read",
-           "Read a workspace file or one-based inclusive line range. Returns numbered lines "
-           "and a version token for edit. Use start_line and end_line for focused inspection.",
+           "Read a workspace text file or image. Text returns numbered lines and a version "
+           "token for edit. Use start_line and end_line for focused text inspection.",
            json{{"type", "object"},
                 {"properties",
                  {{"path", {{"type", "string"}, {"description", "Path relative to workspace."}}},
@@ -344,7 +369,13 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
            [&ws](const json& input) {
              auto path = ws.resolve(input.at("path").get<std::string>());
              if (!fs::is_regular_file(path)) {
-               return std::string("File not found: ") + ws.relative(path);
+               return ToolResult{std::string("File not found: ") + ws.relative(path)};
+             }
+             if (image_path(path.string())) {
+               ToolResult result{"path: " + ws.relative(path) +
+                                 "\n[image: " + path.filename().string() + "]\n"};
+               result.images.push_back(read_image(path));
+               return result;
              }
              int start = input.value("start_line", 1);
              int end = input.value("end_line", 1'000'000'000);
@@ -356,7 +387,7 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
              if (!scoped.empty()) {
                out << '\n' << scoped;
              }
-             return out.str();
+             return ToolResult{out.str()};
            },
            true});
 
@@ -595,17 +626,20 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
   tools.push_back(
       Tool{"bash",
            "Run a shell command in the workspace. Returns combined stdout/stderr and exit code. "
-           "Use it for tests, builds, formatters, git, and other shell workflows; shell utilities "
-           "may also inspect or transform files when useful. Prefer the structured workspace tools "
-           "when their focused behavior is more convenient.",
+           "Exports the session env (NIMINAL_SESSION_ID, NIMINAL_SESSION_FILE, NIMINAL_PROVIDER, "
+           "NIMINAL_MODEL, NIMINAL_REASONING_LEVEL) so hooks and scripts can introspect the "
+           "session. Use it for tests, builds, formatters, git, and other shell workflows; shell "
+           "utilities may also inspect or transform files when useful. Prefer the structured "
+           "workspace tools when their focused behavior is more convenient.",
            json{{"type", "object"},
                 {"properties",
                  {{"command", {{"type", "string"}}}, {"timeout_seconds", {{"type", "integer"}}}}},
                 {"required", json::array({"command"})}},
-           [&ws, cancel, on_bash_output](const json& input) {
+           [&ws, cancel, on_bash_output, shell_env](const json& input) {
              auto command = input.at("command").get<std::string>();
              int timeout = std::clamp(input.value("timeout_seconds", 120), 1, 600);
-             auto out = run_bash(command, ws.root(), timeout, cancel, on_bash_output);
+             ShellEnv env = shell_env != nullptr ? (*shell_env)() : ShellEnv{};
+             auto out = run_bash(command, ws.root(), timeout, cancel, on_bash_output, env);
              ws.invalidate_listing();
              return out;
            }});

@@ -44,7 +44,7 @@ using a key such as Backspace or Left takes precedence over its editing action.
 | `composer.complete` / `composer.completePrevious` | Tab / Shift-Tab | Accept a suggestion, or cycle back and accept it |
 | `composer.cancel` | Esc | Interrupt a turn, send queued messages now, or clear an idle composer |
 | `composer.editQueued` | Alt-Up, Shift-Left | Pop the last queued steering message back into the composer |
-| `composer.paste` | Ctrl-V | Paste into the composer |
+| `composer.paste` | Ctrl-V | Attach a clipboard image, or paste text |
 | `composer.externalEditor` | Ctrl-G | Edit the composer in the configured `editor`, else `$VISUAL` or `$EDITOR` (`nano` if none is set) |
 | `app.quit` | Ctrl-C | Quit |
 

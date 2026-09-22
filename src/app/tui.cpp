@@ -149,6 +149,15 @@ std::vector<std::string> preview_message_lines(const std::string& message) {
   return lines;
 }
 
+std::string compose_input_preview(const niminal::UserInput& input) {
+  std::string text = input.text;
+  for (const auto& image : input.images) {
+    text +=
+        (text.empty() ? "" : "\n") + std::string("[image: ") + image.value("name", "image") + "]";
+  }
+  return text;
+}
+
 Elements render_queue_preview(const std::vector<std::string>& steering,
                               const std::vector<std::string>& follow_up,
                               const Keybindings& keybindings) {
@@ -230,13 +239,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   size_t step_block_start = 0;
 
   std::string draft;
+  json draft_images = json::array();
   int cursor = 0;
-  std::vector<std::string> history;
+  std::vector<niminal::UserInput> history;
   int history_i = -1;
-  std::string live_draft;
+  niminal::UserInput live_draft;
   std::mutex steering_mu;
-  std::vector<std::string> steering;
-  std::vector<std::string> follow_up;
+  std::vector<niminal::UserInput> steering;
+  std::vector<niminal::UserInput> follow_up;
   std::vector<std::string> idle_extension_messages;
   std::function<void(std::string)> deliver_extension_now;
   std::function<void()> handle_turn_idle;
@@ -248,7 +258,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::optional<std::chrono::steady_clock::time_point> activity_started;
   std::string footer_notice;
   std::atomic<bool> footer_notice_active{false};
-  std::string retry_prompt;
+  niminal::UserInput retry_prompt;
   bool retry_available = false;
   std::chrono::steady_clock::time_point footer_notice_until;
   float transcript_y = 1.F;
@@ -429,24 +439,34 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           text += part.value("text", "");
         }
       }
-      if (!text.empty()) {
-        history.push_back(std::move(text));
+      auto images = json::array();
+      for (const auto& part : event.value("content", json::array())) {
+        if (part.is_object() && part.value("type", "") == "image") {
+          images.push_back(part);
+        }
+      }
+      if (!text.empty() || !images.empty()) {
+        history.emplace_back(std::move(text), std::move(images));
       }
     }
     if (history.size() > 500) {
       history.erase(history.begin(), history.end() - 500);
     }
     history_i = -1;
-    live_draft.clear();
+    live_draft = {};
   };
   load_history();
 
-  auto remember_input = [&](const std::string& text) {
-    if (text.empty() || text[0] == '/') {
+  auto remember_input = [&](const niminal::UserInput& input) {
+    if (input.text.empty() && input.images.empty()) {
       return;
     }
-    if (history.empty() || history.back() != text) {
-      history.push_back(text);
+    if (!input.text.empty() && input.text[0] == '/') {
+      return;
+    }
+    if (history.empty() || history.back().text != input.text ||
+        history.back().images != input.images) {
+      history.push_back(input);
     }
     if (history.size() > 500) {
       history.erase(history.begin(),
@@ -467,12 +487,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return;
     }
     if (history_i < 0) {
-      live_draft = draft;
+      live_draft = niminal::UserInput{draft, draft_images};
       history_i = static_cast<int>(history.size()) - 1;
     } else if (history_i > 0) {
       --history_i;
     }
-    draft = history[static_cast<size_t>(history_i)];
+    draft = history[static_cast<size_t>(history_i)].text;
+    draft_images = history[static_cast<size_t>(history_i)].images;
     cursor = static_cast<int>(draft.size());
   };
 
@@ -482,10 +503,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (history_i + 1 < static_cast<int>(history.size())) {
       ++history_i;
-      draft = history[static_cast<size_t>(history_i)];
+      draft = history[static_cast<size_t>(history_i)].text;
+      draft_images = history[static_cast<size_t>(history_i)].images;
     } else {
       history_i = -1;
-      draft = live_draft;
+      draft = live_draft.text;
+      draft_images = live_draft.images;
     }
     cursor = static_cast<int>(draft.size());
   };
@@ -648,7 +671,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       busy = false;
       activity.clear();
       activity_started.reset();
-      retry_available = ev.text != "interrupted" && !retry_prompt.empty();
+      retry_available =
+          ev.text != "interrupted" && (!retry_prompt.text.empty() || !retry_prompt.images.empty());
       break;
     case EventKind::done:
       busy = false;
@@ -877,6 +901,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           for (const auto& part : event["content"]) {
             if (part.is_object() && part.value("type", "") == "text") {
               text += part.value("text", "");
+            } else if (part.is_object() && part.value("type", "") == "image") {
+              text += (text.empty() ? "" : "\n") + std::string("[image: ") +
+                      part.value("name", "image") + "]";
             }
           }
         }
@@ -968,9 +995,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     apply_extension_actions();
   }
 
-  auto send_prompt = [&](std::string prompt, bool retry = false) {
-    prompt = trim_copy(std::move(prompt));
-    if (prompt.empty()) {
+  auto send_prompt = [&](niminal::UserInput prompt, bool retry = false) {
+    prompt.text = trim_copy(std::move(prompt.text));
+    if (prompt.text.empty() && prompt.images.empty()) {
       return;
     }
     if (busy) {
@@ -989,29 +1016,28 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     join_worker();
     cancel->store(false);
     if (!retry) {
-      blocks.push_back(Block{BlockKind::user, prompt});
+      blocks.push_back(Block{BlockKind::user, compose_input_preview(prompt)});
     }
     busy = true;
     activity = "Thinking…";
-    worker = std::thread(
-        [&agent, &busy, &ui_alive, post_ui, &workspace, prompt = std::move(prompt), retry] {
-          try {
-            agent.run(expand_file_mentions(workspace, prompt), !retry);
-          } catch (const std::exception& e) {
-            if (ui_alive) {
-              post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
-            } else {
-              busy = false;
-            }
-          }
-        });
+    worker = std::thread([&agent, &busy, &ui_alive, post_ui, prompt = std::move(prompt), retry] {
+      try {
+        agent.run(prompt, !retry);
+      } catch (const std::exception& e) {
+        if (ui_alive) {
+          post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
+        } else {
+          busy = false;
+        }
+      }
+    });
   };
   deliver_extension_now = [&](std::string prompt) { send_prompt(std::move(prompt)); };
   handle_turn_idle = [&] {
     if (send_queue_after_stop) {
       send_queue_after_stop = false;
       plain_interrupt_pending = false;
-      std::string prompt;
+      niminal::UserInput prompt;
       {
         std::lock_guard<std::mutex> lock(steering_mu);
         if (!steering.empty()) {
@@ -1019,7 +1045,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           steering.erase(steering.begin());
         }
       }
-      if (!prompt.empty()) {
+      if (!prompt.text.empty() || !prompt.images.empty()) {
         send_prompt(std::move(prompt));
       }
       return;
@@ -1571,7 +1597,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return;
     }
 
-    send_prompt(std::move(prompt));
+    send_prompt(niminal::UserInput{std::move(prompt), std::exchange(draft_images, json::array())});
   };
 
   InputOption input_opt;
@@ -1757,8 +1783,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       std::vector<std::string> follow_up_preview;
       {
         std::lock_guard<std::mutex> lock(steering_mu);
-        steering_preview = steering;
-        follow_up_preview = follow_up;
+        for (const auto& input : steering) {
+          steering_preview.push_back(compose_input_preview(input));
+        }
+        for (const auto& input : follow_up) {
+          follow_up_preview.push_back(compose_input_preview(input));
+        }
       }
       auto queue_preview = render_queue_preview(steering_preview, follow_up_preview, keybindings);
       if (!queue_preview.empty()) {
@@ -1766,6 +1796,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
     }
     stack.push_back(separatorLight() | dim);
+    if (!draft_images.empty()) {
+      std::string names = "Images: ";
+      for (const auto& image : draft_images) {
+        if (names != "Images: ") {
+          names += ", ";
+        }
+        names += image.value("name", "image");
+      }
+      stack.push_back(text(names + "  (Backspace with empty text removes last)") | dim);
+    }
     stack.push_back(hbox({text(busy ? "…" : "› ") | bold,
                           wrapped_input->Render() | xflex | size(HEIGHT, LESS_THAN, 8)}));
     stack.push_back(hbox({
@@ -1788,7 +1828,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   };
 
   auto pop_last_steering_to_composer = [&]() -> bool {
-    std::string message;
+    niminal::UserInput message;
     {
       std::lock_guard<std::mutex> lock(steering_mu);
       if (steering.empty()) {
@@ -1798,9 +1838,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       steering.pop_back();
     }
     if (!draft.empty()) {
-      draft = std::move(message) + "\n\n" + draft;
+      draft = std::move(message.text) + "\n\n" + draft;
     } else {
-      draft = std::move(message);
+      draft = std::move(message.text);
+    }
+    for (auto& image : message.images) {
+      draft_images.push_back(std::move(image));
     }
     cursor = static_cast<int>(draft.size());
     history_i = -1;
@@ -1865,7 +1908,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (pressed(KeyAction::paste)) {
-      insert_draft(paste_from_clipboard());
+      try {
+        if (auto image = paste_image_from_clipboard()) {
+          draft_images.push_back(std::move(*image));
+        } else {
+          insert_draft(paste_from_clipboard());
+        }
+      } catch (const std::exception& ex) {
+        flash_footer(ex.what());
+      }
       return true;
     }
     if (pressed(KeyAction::external_editor)) {
@@ -1909,7 +1960,19 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (e.is_mouse() && e.mouse().motion == Mouse::Pressed &&
         (e.mouse().button == Mouse::Middle || e.mouse().button == Mouse::Right)) {
-      insert_draft(paste_from_clipboard());
+      try {
+        if (auto image = paste_image_from_clipboard()) {
+          draft_images.push_back(std::move(*image));
+        } else {
+          insert_draft(paste_from_clipboard());
+        }
+      } catch (const std::exception& ex) {
+        flash_footer(ex.what());
+      }
+      return true;
+    }
+    if (e == Event::Backspace && draft.empty() && !draft_images.empty()) {
+      draft_images.erase(draft_images.end() - 1);
       return true;
     }
     if (pressed(KeyAction::toggle_last)) {
@@ -2025,7 +2088,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       auto prompt = draft;
       draft.clear();
       cursor = 0;
-      start_turn(std::move(prompt));
+      if (prompt.empty() && !draft_images.empty()) {
+        send_prompt(niminal::UserInput{"", std::exchange(draft_images, json::array())});
+      } else {
+        start_turn(std::move(prompt));
+      }
       return true;
     }
     if (pressed(KeyAction::cancel)) {
@@ -2047,6 +2114,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return true;
       }
       draft.clear();
+      draft_images = json::array();
       cursor = 0;
       history_i = -1;
       return true;

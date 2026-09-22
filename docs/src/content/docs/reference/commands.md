@@ -77,6 +77,9 @@ Gitignored and hidden files are excluded from suggestions.
 | `--resume` | Resume latest session for this workspace |
 | `--session ID` | Resume a specific session |
 | `--no-session` | Keep transcript in memory only |
+| `--system-prompt TEXT` | Replace the built-in system prompt for this run |
+| `--append-system-prompt TEXT` | Append to the system prompt for this run |
+| `--no-context-files`, `-nc` | Skip `AGENTS.md` and `CLAUDE.md` discovery |
 | `--` | End of flags; remainder is prompt |
 
 ## Invocation modes

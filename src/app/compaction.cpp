@@ -27,6 +27,9 @@ int estimate_event_tokens(const json& event) {
         }
         n += estimate_tokens(part.value("text", ""));
         n += estimate_tokens(part.value("name", ""));
+        if (part.value("type", "") == "image") {
+          n += 1000;
+        }
         if (part.contains("input")) {
           n += estimate_tokens(part["input"].dump());
         }
@@ -35,7 +38,11 @@ int estimate_event_tokens(const json& event) {
     return n;
   }
   if (type == "tool_result") {
-    return estimate_tokens(event.value("output", ""));
+    int n = estimate_tokens(event.value("output", ""));
+    if (event.contains("images") && event["images"].is_array()) {
+      n += 1000 * static_cast<int>(event["images"].size());
+    }
+    return n;
   }
   if (type == "compaction") {
     return estimate_tokens(event.value("summary", ""));
@@ -45,8 +52,17 @@ int estimate_event_tokens(const json& event) {
 
 int estimate_session_tokens(const Session& session) {
   int n = 0;
-  for (const auto& msg : session.openai_messages()) {
-    n += estimate_tokens(msg.dump());
+  const int compact = session.latest_compaction_index();
+  if (compact >= 0) {
+    n += estimate_tokens(session.events[static_cast<size_t>(compact)].value("summary", ""));
+  }
+  const size_t start =
+      compact < 0
+          ? 0
+          : static_cast<size_t>(std::max(
+                0, session.events[static_cast<size_t>(compact)].value("first_kept_index", 0)));
+  for (size_t i = start; i < session.events.size(); ++i) {
+    n += estimate_event_tokens(session.events[i]);
   }
   return n;
 }
@@ -97,6 +113,8 @@ std::string serialize_event(const json& event) {
       for (const auto& part : event["content"]) {
         if (part.is_object() && part.value("type", "") == "text") {
           text += part.value("text", "") + "\n";
+        } else if (part.is_object() && part.value("type", "") == "image") {
+          text += "[image: " + part.value("name", "image") + "]\n";
         }
       }
     }
@@ -132,6 +150,9 @@ std::string serialize_event(const json& event) {
       text += " ERROR";
     }
     text += ":\n" + outp + "\n";
+    for (const auto& image : event.value("images", json::array())) {
+      text += "[image: " + image.value("name", "image") + "]\n";
+    }
     return text;
   }
   return {};

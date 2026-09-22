@@ -41,7 +41,7 @@ int main() {
   {
     std::ofstream out(dir / "extension.py");
     out << R"PY(#!/usr/bin/env python3
-import json, sys
+import json, os, sys
 def send(value):
     print(json.dumps(value), flush=True)
 send({"type":"register",
@@ -60,7 +60,8 @@ for line in sys.stdin:
         continue
     reply = {"type":"response", "id":message.get("id", "")}
     if kind == "command":
-        reply["message"] = "Hello " + message.get("arguments", "")
+        reply["message"] = "Hello " + message.get("arguments", "") + \
+            " env=" + os.environ.get("NIMINAL_SESSION_ID", "none")
         reply["notification"] = {"level":"info", "message":"command ran"}
         reply["status"] = {"key":"state", "text":"ready"}
         reply["widget"] = {"key":"work", "lines":["extension widget"]}
@@ -173,6 +174,18 @@ for line in sys.stdin:
   }
   fs::permissions(tool_dir / "run",
                   fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec);
+  auto env_dir = root / ".niminal" / "tools" / "env_dump";
+  fs::create_directories(env_dir);
+  {
+    std::ofstream out(env_dir / "tool.json");
+    out << R"({"name":"env_dump","description":"Dump session env","command":["./dump"],"input_schema":{"type":"object"},"capabilities":["read"]})";
+  }
+  {
+    std::ofstream out(env_dir / "dump");
+    out << "#!/bin/sh\necho \"$NIMINAL_SESSION_ID|$NIMINAL_MODEL\"\n";
+  }
+  fs::permissions(env_dir / "dump",
+                  fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec);
   {
     std::ofstream out(broken_tool_dir / "tool.json");
     out << "{not json";
@@ -183,13 +196,22 @@ for line in sys.stdin:
   }
 
   std::atomic<bool> cancel{false};
-  auto runtime = ExtensionRuntime::start(root, "session", &cancel);
+  niminal::app::ShellEnvFn env_fn = [] {
+    return niminal::app::ShellEnv{{"NIMINAL_SESSION_ID", "sess-7"},
+                                  {"NIMINAL_SESSION_FILE", "s.jsonl"},
+                                  {"NIMINAL_PROVIDER", "test"},
+                                  {"NIMINAL_MODEL", "test/model"},
+                                  {"NIMINAL_REASONING_LEVEL", "high"}};
+  };
+  auto runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
   if (runtime->commands().size() != 3) {
     std::cerr << "extension registration failed\n";
     return 1;
   }
   auto command = runtime->invoke("hello", "world");
-  if (command.value("message", "") != "Hello world") {
+  if (command.value("message", "") != "Hello world env=sess-7") {
+    std::cerr << "extension process should receive the session env: "
+              << command.value("message", "") << '\n';
     return 1;
   }
   runtime->set_host_request([](const std::string& method, const nlohmann::json& request) {
@@ -224,7 +246,7 @@ for line in sys.stdin:
   }
   std::string persistent_output;
   if (persistent != nullptr) {
-    persistent_output = persistent->run(nlohmann::json::object());
+    persistent_output = persistent->run(nlohmann::json::object()).text;
   }
   if ((persistent == nullptr) || !persistent->read_only || !persistent->extension ||
       persistent_output != "extension tool result") {
@@ -240,7 +262,18 @@ for line in sys.stdin:
     }
   }
   if ((external == nullptr) || !external->read_only || !external->extension ||
-      external->run(nlohmann::json{{"value", 1}}).find("\"value\":1") == std::string::npos) {
+      external->run(nlohmann::json{{"value", 1}}).text.find("\"value\":1") == std::string::npos) {
+    return 1;
+  }
+  niminal::Tool* env_dump = nullptr;
+  for (auto& tool : tools) {
+    if (tool.name == "env_dump") {
+      env_dump = &tool;
+    }
+  }
+  if (env_dump == nullptr ||
+      env_dump->run(nlohmann::json::object()).text.find("sess-7|test/model") == std::string::npos) {
+    std::cerr << "external tool should receive the session env\n";
     return 1;
   }
   bool warned_broken = false;

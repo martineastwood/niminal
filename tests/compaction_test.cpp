@@ -52,6 +52,17 @@ int main() {
     return fail("should_compact when under limit");
   }
 
+  auto image_session = create_session(dir, "/tmp/ws");
+  image_session.persist = false;
+  image_session.add_user(
+      niminal::UserInput{"look", json::array({{{"type", "image"},
+                                               {"name", "screen.png"},
+                                               {"mime_type", "image/png"},
+                                               {"data", std::string(10000, 'x')}}})});
+  if (!should_compact(image_session, 900, 0) || should_compact(image_session, 1200, 0)) {
+    return fail("image token estimate should not count base64 bytes");
+  }
+
   s.add_compaction("summary of early turns", cut, 99);
   auto msgs = s.openai_messages();
   if (msgs.empty() ||
