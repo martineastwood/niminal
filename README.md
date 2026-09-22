@@ -1,5 +1,9 @@
 # niminal
 
+> [!WARNING]
+> This project is in alpha. Expect breaking changes, instability, and
+> incomplete features. Use at your own risk.
+
 A native coding agent for your repository. Point it at a project, describe the
 change you want, and niminal inspects the workspace, edits files, runs commands
 you approve, and keeps the session so you can come back later.
