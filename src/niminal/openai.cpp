@@ -66,7 +66,7 @@ void require_request(const ChatRequest& request) {
     throw Error("missing model");
   }
   if (wire_of(request) == Wire::Responses && request.api_url.empty()) {
-    throw Error("missing API URL (set providers.foundry.api_url)");
+    throw Error("missing Foundry API URL (configure the model in ~/.niminal/models.json)");
   }
 }
 

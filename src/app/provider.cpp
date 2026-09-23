@@ -21,16 +21,13 @@ void normalize_config(Config& cfg) {
 
 void apply_provider(niminal::Agent& agent, const Config& cfg) {
   if (cfg.provider == "local") {
-    const auto models = load_local_models();
-    const auto selected = std::find_if(models.begin(), models.end(), [&](const LocalModel& model) {
-      return model.name == cfg.model;
-    });
+    const auto models = models_for("local");
+    const auto selected =
+        std::find_if(models.begin(), models.end(),
+                     [&](const ConfiguredModel& model) { return model.name == cfg.model; });
     if (selected == models.end()) {
-      throw niminal::Error("local model '" + cfg.model + "' is not in " +
-                           local_models_path().string());
-    }
-    if (!supported_local_runtime(selected->runtime)) {
-      throw niminal::Error("unsupported local runtime '" + selected->runtime + "'");
+      throw niminal::Error(cfg.provider + " model '" + cfg.model + "' is not in " +
+                           models_path().string());
     }
     agent.provider = "local";
     agent.model_runtime = selected->runtime;
@@ -54,6 +51,17 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
   agent.model_runtime.clear();
   agent.model = cfg.model.empty() ? spec->default_model : cfg.model;
   agent.api_url = cfg.api_url.empty() ? spec->endpoint : cfg.api_url;
+  if (cfg.provider == "foundry") {
+    const auto models = models_for("foundry");
+    const auto selected =
+        std::find_if(models.begin(), models.end(),
+                     [&](const ConfiguredModel& model) { return model.name == cfg.model; });
+    if (selected == models.end()) {
+      throw niminal::Error("foundry model '" + cfg.model + "' is not in " + models_path().string());
+    }
+    agent.model = selected->model;
+    agent.api_url = selected->api_url;
+  }
   if (agent.api_url.empty()) {
     throw niminal::Error("missing API URL (set providers." + std::string(spec->name) +
                          ".api_url in ~/.niminal/config.json)");
@@ -87,11 +95,11 @@ void restore_config_from_session(Config& cfg, const Session& session, bool resto
       cfg.model = model;
     }
   }
-  if (cfg.provider == "local") {
-    const auto models = load_local_models();
-    const auto selected = std::find_if(models.begin(), models.end(), [&](const LocalModel& model) {
-      return model.name == cfg.model;
-    });
+  if (cfg.provider == "local" || cfg.provider == "foundry") {
+    const auto models = models_for(cfg.provider);
+    const auto selected =
+        std::find_if(models.begin(), models.end(),
+                     [&](const ConfiguredModel& model) { return model.name == cfg.model; });
     if (selected != models.end()) {
       cfg.api_url = selected->api_url;
     }
@@ -109,30 +117,24 @@ niminal::Result<void> select_provider(Config& cfg, std::string_view name) {
     return std::unexpected(niminal::Error("unknown provider '" + std::string(name) + "' (use " +
                                           niminal::provider_names() + ")"));
   }
-  if (n != "local" && spec->endpoint.empty() && !cfg.provider_api_urls.contains(n)) {
-    return std::unexpected(
-        niminal::Error("configure providers." + n + ".api_url in ~/.niminal/config.json first"));
-  }
   if (!cfg.provider.empty() && !cfg.model.empty()) {
     cfg.last_models[cfg.provider] = cfg.model;
   }
-  if (n == "local") {
+  if (n == "local" || n == "foundry") {
     try {
-      const auto models = load_local_models();
+      const auto models = models_for(n);
       if (models.empty()) {
-        return std::unexpected(niminal::Error(local_models_path().string() + " has no models"));
+        return std::unexpected(niminal::Error(models_path().string() + " has no " + n + " models"));
       }
-      const auto last = cfg.last_models.find("local");
+      const auto last = cfg.last_models.find(n);
       const auto selected =
           last == cfg.last_models.end()
               ? models.begin()
-              : std::find_if(models.begin(), models.end(),
-                             [&](const LocalModel& model) { return model.name == last->second; });
+              : std::find_if(models.begin(), models.end(), [&](const ConfiguredModel& model) {
+                  return model.name == last->second;
+                });
       const auto& model = selected == models.end() ? models.front() : *selected;
-      if (!supported_local_runtime(model.runtime)) {
-        return std::unexpected(niminal::Error("unsupported local runtime '" + model.runtime + "'"));
-      }
-      cfg.provider = "local";
+      cfg.provider = n;
       cfg.model = model.name;
       cfg.api_url = model.api_url;
       return {};

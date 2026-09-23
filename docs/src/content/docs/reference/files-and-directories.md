@@ -9,7 +9,7 @@ description: Every path niminal reads and writes on your machine.
 | --- | --- |
 | `~/.niminal/config.json` | User settings |
 | `~/.niminal/auth.json` | Provider credentials |
-| `~/.niminal/models.json` | Local model choices and server endpoints |
+| `~/.niminal/models.json` | Local model choices and Foundry deployments with their endpoints |
 | `~/.niminal/keybindings.json` | Interactive TUI shortcuts |
 | `~/.niminal/themes/*.json` | Custom TUI themes |
 | `~/.niminal/sessions/` | Append-only session JSONL files |

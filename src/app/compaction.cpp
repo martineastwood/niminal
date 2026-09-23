@@ -11,12 +11,14 @@ using json = nlohmann::json;
 
 namespace {
 Config active_compaction_config(const niminal::Agent& agent, Config cfg) {
-  if (agent.provider == "local") {
-    for (const auto& model : load_local_models()) {
+  if (agent.provider == "local" || agent.provider == "foundry") {
+    for (const auto& model : models_for(agent.provider)) {
       if (model.model == agent.model && model.api_url == agent.api_url) {
-        cfg.context_window = model.context_window;
-        cfg.reserve_tokens = std::min(cfg.reserve_tokens, model.context_window / 4);
-        cfg.keep_recent_tokens = std::min(cfg.keep_recent_tokens, model.context_window / 2);
+        if (model.context_window > 0) {
+          cfg.context_window = model.context_window;
+          cfg.reserve_tokens = std::min(cfg.reserve_tokens, model.context_window / 4);
+          cfg.keep_recent_tokens = std::min(cfg.keep_recent_tokens, model.context_window / 2);
+        }
         break;
       }
     }

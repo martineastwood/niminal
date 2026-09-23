@@ -122,6 +122,7 @@ int main() {
   Config custom;
   custom.provider = "openrouter";
   custom.api_url = "https://proxy.example.com/v1/chat/completions";
+  custom.provider_api_urls["openrouter"] = custom.api_url;
   normalize_config(custom);
   apply_provider(agent, custom);
   if (custom.api_url != "https://proxy.example.com/v1/chat/completions" ||
@@ -141,6 +142,11 @@ int main() {
   std::filesystem::remove_all(auth_root);
   std::filesystem::create_directories(auth_root / ".niminal");
   std::ofstream(auth_root / ".niminal" / "auth.json") << R"({"openai":{"key":"auth-openai-key"}})";
+  std::ofstream(auth_root / ".niminal" / "models.json") << R"({"models":[
+    {"provider":"local","name":"coding","runtime":"llamacpp","model":"local-coding","api_url":"http://localhost:8080/v1/chat/completions","context_window":32768},
+    {"provider":"foundry","name":"coding","model":"deployment-a","api_url":"https://example.test/openai/responses?api-version=1"},
+    {"provider":"foundry","name":"fast","model":"deployment-b","api_url":"https://other.test/openai/responses?api-version=2","context_window":64000}
+  ]})";
   const char* old_home = std::getenv("HOME");
   const char* old_openai_key = std::getenv("OPENAI_API_KEY");
   const std::string saved_home = old_home == nullptr ? "" : old_home;
@@ -158,6 +164,38 @@ int main() {
     niminal::Agent auth_agent;
     apply_provider(auth_agent, auth_cfg);
     auth_ok = auth_agent.api_key == "auth-openai-key";
+  }
+  Config configured;
+  if (auto result = select_provider(configured, "foundry"); !result) {
+    return fail(result.error().what());
+  }
+  if (configured.model != "coding") {
+    return fail("foundry should select first configured model");
+  }
+  apply_provider(agent, configured);
+  if (agent.model != "deployment-a" ||
+      agent.api_url != "https://example.test/openai/responses?api-version=1") {
+    return fail("foundry model should resolve deployment and URL");
+  }
+  configured.model = "fast";
+  apply_provider(agent, configured);
+  if (agent.model != "deployment-b" ||
+      agent.api_url != "https://other.test/openai/responses?api-version=2") {
+    return fail("switching foundry model should switch URL");
+  }
+  configured.model = "missing";
+  try {
+    apply_provider(agent, configured);
+    return fail("unknown foundry model should fail");
+  } catch (const niminal::Error&) {
+  }
+  if (auto result = select_provider(configured, "local"); !result) {
+    return fail(result.error().what());
+  }
+  apply_provider(agent, configured);
+  if (configured.model != "coding" || agent.model != "local-coding" ||
+      agent.api_url != "http://localhost:8080/v1/chat/completions") {
+    return fail("local and foundry should allow the same configured name");
   }
   if (had_home) {
     setenv("HOME", saved_home.c_str(), 1);

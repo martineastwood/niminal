@@ -37,7 +37,7 @@ constexpr SlashSpec kSlash[] = {
     {"/permissions", "/permissions [clear]", "show or clear tool grants"},
     {"/trust", "/trust [on|off]", "show or set project resource trust"},
     {"/yolo", "/yolo [off]", "auto-approve tools for this process"},
-    {"/models", "/models [refresh]", "list local models or refresh the catalog"},
+    {"/models", "/models [refresh]", "list configured models or refresh the catalog"},
     {"/session", "/session", "show the current session"},
     {"/name", "/name [title]", "show or set the session name"},
     {"/resume", "/resume [ID]", "list or load a session"},
@@ -314,15 +314,21 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
     }
   }
 
-  if (cmd == "/model" && provider == "local" && (trailing || !arg.empty())) {
+  if (cmd == "/model" && (provider == "local" || provider == "foundry") &&
+      (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
     try {
-      for (const auto& entry : load_local_models()) {
+      for (const auto& entry : models_for(provider)) {
         if (!arg.empty() && !contains_ci(entry.name, arg)) {
           continue;
         }
-        out.push_back({"/model " + entry.name, entry.name + "  " + entry.runtime + "  " +
-                                                   format_context_k(entry.context_window)});
+        auto label = entry.name;
+        if (provider == "local") {
+          label += "  " + entry.runtime + "  " + format_context_k(entry.context_window);
+        } else {
+          label += "  " + entry.model;
+        }
+        out.push_back({"/model " + entry.name, std::move(label)});
       }
     } catch (...) {
     }

@@ -42,12 +42,12 @@ std::filesystem::path config_path() {
   return fs::path(home) / ".niminal" / "config.json";
 }
 
-std::filesystem::path local_models_path() {
+std::filesystem::path models_path() {
   return config_path().parent_path() / "models.json";
 }
 
-std::vector<LocalModel> load_local_models() {
-  const auto path = local_models_path();
+std::vector<ConfiguredModel> load_models() {
+  const auto path = models_path();
   std::ifstream in(path);
   if (!in) {
     throw std::runtime_error("cannot read " + path.string());
@@ -61,7 +61,7 @@ std::vector<LocalModel> load_local_models() {
   if (!doc.is_object() || !doc.contains("models") || !doc["models"].is_array()) {
     throw std::runtime_error(path.string() + " must contain a models array");
   }
-  std::vector<LocalModel> models;
+  std::vector<ConfiguredModel> models;
   for (const auto& entry : doc["models"]) {
     if (!entry.is_object()) {
       throw std::runtime_error("each model in " + path.string() + " must be an object");
@@ -73,20 +73,48 @@ std::vector<LocalModel> load_local_models() {
       }
       return entry[key].get<std::string>();
     };
-    LocalModel model{required("name"), required("runtime"), required("model"), required("api_url"),
-                     0};
-    if (!entry.contains("context_window") || !entry["context_window"].is_number_integer() ||
-        entry["context_window"].get<int>() <= 0) {
+    ConfiguredModel model;
+    model.provider = required("provider");
+    if (model.provider != "local" && model.provider != "foundry") {
+      throw std::runtime_error("unsupported model provider '" + model.provider + "'");
+    }
+    model.name = required("name");
+    model.model = required("model");
+    model.api_url = required("api_url");
+    if (model.provider == "local") {
+      model.runtime = required("runtime");
+      if (!supported_local_runtime(model.runtime)) {
+        throw std::runtime_error("unsupported local runtime '" + model.runtime + "'");
+      }
+    } else if (entry.contains("runtime")) {
+      throw std::runtime_error("runtime is only valid for local models in " + path.string());
+    }
+    if (entry.contains("context_window")) {
+      if (!entry["context_window"].is_number_integer() || entry["context_window"].get<int>() <= 0) {
+        throw std::runtime_error("model context_window must be positive in " + path.string());
+      }
+      model.context_window = entry["context_window"].get<int>();
+    } else if (model.provider == "local") {
       throw std::runtime_error("model context_window must be positive in " + path.string());
     }
-    model.context_window = entry["context_window"].get<int>();
-    if (std::any_of(models.begin(), models.end(),
-                    [&](const LocalModel& other) { return other.name == model.name; })) {
-      throw std::runtime_error("duplicate local model name '" + model.name + "'");
+    if (std::any_of(models.begin(), models.end(), [&](const ConfiguredModel& other) {
+          return other.provider == model.provider && other.name == model.name;
+        })) {
+      throw std::runtime_error("duplicate " + model.provider + " model name '" + model.name + "'");
     }
     models.push_back(std::move(model));
   }
   return models;
+}
+
+std::vector<ConfiguredModel> models_for(std::string_view provider) {
+  std::vector<ConfiguredModel> selected;
+  for (auto& model : load_models()) {
+    if (model.provider == provider) {
+      selected.push_back(std::move(model));
+    }
+  }
+  return selected;
 }
 
 Config load_config_file(const fs::path& path) {
@@ -162,7 +190,7 @@ Config load_config_file(const fs::path& path) {
               cfg.last_models[name] = std::move(model);
             }
           }
-          if (block.contains("api_url") && block["api_url"].is_string()) {
+          if (name != "foundry" && block.contains("api_url") && block["api_url"].is_string()) {
             auto url = block["api_url"].get<std::string>();
             if (!url.empty()) {
               cfg.provider_api_urls[name] = std::move(url);
@@ -219,7 +247,9 @@ void save_config_file(const fs::path& path, const Config& cfg) {
   if (!cfg.last_models.empty() || !cfg.provider_api_urls.empty()) {
     json providers = json::object();
     for (const auto& [name, url] : cfg.provider_api_urls) {
-      providers[name]["api_url"] = url;
+      if (name != "foundry") {
+        providers[name]["api_url"] = url;
+      }
     }
     for (const auto& [name, model] : cfg.last_models) {
       providers[name]["last_model"] = model;

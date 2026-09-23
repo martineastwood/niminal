@@ -286,14 +286,15 @@ SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::str
     return ok(true);
   }
   case SettingField::api_url: {
+    if (cfg.provider == "local" || cfg.provider == "foundry") {
+      return fail("edit this provider's API URL in ~/.niminal/models.json");
+    }
     const auto trimmed = niminal::trim_copy(std::string(value));
     if (trimmed.empty()) {
       return fail("api_url cannot be empty");
     }
     cfg.api_url = trimmed;
-    if (cfg.provider != "local") {
-      cfg.provider_api_urls[cfg.provider] = cfg.api_url;
-    }
+    cfg.provider_api_urls[cfg.provider] = cfg.api_url;
     return ok(true);
   }
   case SettingField::editor:

@@ -280,17 +280,15 @@ bool handle_model(SlashHost& host, const std::string& arg) {
     push_status(host, "model: " + host.cfg.model + "\nurl: " + host.agent.api_url);
     return true;
   }
-  if (host.cfg.provider == "local") {
+  if (host.cfg.provider == "local" || host.cfg.provider == "foundry") {
     try {
-      const auto models = load_local_models();
-      const auto selected = std::find_if(
-          models.begin(), models.end(), [&](const LocalModel& model) { return model.name == arg; });
+      const auto models = models_for(host.cfg.provider);
+      const auto selected =
+          std::find_if(models.begin(), models.end(),
+                       [&](const ConfiguredModel& model) { return model.name == arg; });
       if (selected == models.end()) {
-        push_error(host, "Unknown local model '" + arg + "' in " + local_models_path().string());
-        return true;
-      }
-      if (!supported_local_runtime(selected->runtime)) {
-        push_error(host, "Unsupported local runtime '" + selected->runtime + "'");
+        push_error(host, "Unknown " + host.cfg.provider + " model '" + arg + "' in " +
+                             models_path().string());
         return true;
       }
       host.cfg.api_url = selected->api_url;
@@ -395,13 +393,16 @@ bool handle_settings(SlashHost& host, const std::string& arg) {
 }
 
 bool handle_models(SlashHost& host, const std::string& arg) {
-  if (host.cfg.provider == "local" && arg.empty()) {
+  if ((host.cfg.provider == "local" || host.cfg.provider == "foundry") && arg.empty()) {
     try {
-      const auto models = load_local_models();
-      std::string list = "Local models (" + local_models_path().string() + "):";
+      const auto models = models_for(host.cfg.provider);
+      std::string list = host.cfg.provider + " models (" + models_path().string() + "):";
       for (const auto& model : models) {
-        list += "\n" + model.name + "  " + model.runtime + "  " +
-                format_context_k(model.context_window);
+        list +=
+            "\n" + model.name + "  " + (host.cfg.provider == "local" ? model.runtime : model.model);
+        if (model.context_window > 0) {
+          list += "  " + format_context_k(model.context_window);
+        }
         if (model.name == host.cfg.model) {
           list += "  (active)";
         }
@@ -413,8 +414,9 @@ bool handle_models(SlashHost& host, const std::string& arg) {
     return true;
   }
   if (arg != "refresh") {
-    push_error(host, host.cfg.provider == "local" ? "Use /model NAME to select a local model"
-                                                   : "Usage: /models refresh");
+    push_error(host, host.cfg.provider == "local" || host.cfg.provider == "foundry"
+                         ? "Use /model NAME to select a configured model"
+                         : "Usage: /models refresh");
     return true;
   }
   if (refresh_catalog()) {

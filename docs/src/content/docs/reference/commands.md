@@ -24,7 +24,7 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/permissions [clear]` | Show or clear tool grants |
 | `/trust [on\|off]` | Show or set project resource trust |
 | `/yolo [on\|off]` | Auto-approve tools in the TUI |
-| `/models` | List configured local models when using the local provider |
+| `/models` | List configured local or Foundry models when using either provider |
 | `/models refresh` | Refresh the models.dev catalog |
 | `/session` | Show the current session |
 | `/name [title]` | Show or set the session name |

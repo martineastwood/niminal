@@ -30,6 +30,7 @@ int main() {
   cfg.provider = "anthropic";
   cfg.model = "claude-sonnet-4-6";
   cfg.api_url = "https://api.anthropic.com/v1/chat/completions";
+  cfg.provider_api_urls["anthropic"] = cfg.api_url;
   cfg.last_models["openrouter"] = "openai/gpt-4o-mini";
   cfg.thinking = "high";
   cfg.show_thinking = true;
@@ -79,8 +80,8 @@ int main() {
     out << R"({"model":"x","api_url":"https://api.mistral.ai/v1/chat/completions"})";
   }
   auto inferred = load_config_file(path);
-  if (inferred.provider != "mistral") {
-    std::cerr << "infer provider from api_url\n";
+  if (inferred.provider != "openrouter") {
+    std::cerr << "top-level api_url should not change provider\n";
     return 1;
   }
 

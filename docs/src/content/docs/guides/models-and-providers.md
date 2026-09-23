@@ -13,9 +13,9 @@ that to each provider's native API before it goes on the wire.
 | `openrouter` | `openai/gpt-4o-mini` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1/chat/completions` |
 | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` |
 | `google` | `gemini-3.5-flash-lite` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` |
-| `foundry` | `gpt-5.4` | `AZURE_FOUNDRY_API_KEY` | Configure the Responses endpoint |
+| `foundry` | first Foundry entry in `models.json` | `AZURE_FOUNDRY_API_KEY` | configured per model |
 | `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1/chat/completions` |
-| `local` | first entry in `models.json` | optional `auth.json` key | configured per model |
+| `local` | first local entry in `models.json` | optional `auth.json` key | configured per model |
 | `ollama` | `gemma4:31b` | `OLLAMA_API_KEY` | `https://ollama.com/v1/chat/completions` |
 | `hyper` | `deepseek-v4-flash` | `HYPER_API_KEY` | `https://hyper.charm.land/v1/chat/completions` |
 | `mistral` | `mistral-vibe-cli-with-tools` | `MISTRAL_API_KEY` | `https://api.mistral.ai/v1/chat/completions` |
@@ -35,27 +35,30 @@ standard environment variable. Credentials can also come from
 
 ## Use Microsoft Foundry
 
-Foundry endpoints vary by workspace and API version. Set the Responses URL for
-your workspace in `~/.niminal/config.json` and export its key:
+Add your Foundry deployments to `~/.niminal/models.json` and export your key:
 
 ```sh
 export AZURE_FOUNDRY_API_KEY=your-key
 ```
 
-```json title="~/.niminal/config.json"
+```json title="~/.niminal/models.json"
 {
-  "provider": "foundry",
-  "model": "gpt-5.4",
-  "providers": {
-    "foundry": {
+  "models": [
+    {
+      "provider": "foundry",
+      "name": "coding",
+      "model": "my-coding-deployment",
       "api_url": "https://<resource>.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview"
     }
-  }
+  ]
 }
 ```
 
-Use the Responses endpoint URL and API version shown for your Foundry model.
-The model value must match the deployment name available in your workspace.
+Run `niminal --provider foundry`, then use `/model coding`. Add one entry per
+deployment you want to select. `name` is the choice shown by niminal; `model`
+must match your Foundry deployment name. Use the Responses endpoint URL and API
+version shown for that deployment. You can optionally set `context_window` for
+compaction.
 You can also store the key as `"foundry": {"key": "$AZURE_FOUNDRY_API_KEY"}`
 in `~/.niminal/auth.json`.
 
@@ -79,6 +82,7 @@ Create `~/.niminal/models.json` with the same model alias and context size:
 {
   "models": [
     {
+      "provider": "local",
       "name": "coding",
       "runtime": "llamacpp",
       "model": "coding",
@@ -112,18 +116,20 @@ for example `local/ollama/qwen3-1.7b`.
 
 The `context_window` should match `--ctx-size`; niminal uses it to decide when
 to compact the session. Tool calls also need a model with a suitable chat
-template. The `runtime` field accepts `llamacpp` and `ollama`.
+template. The `runtime` field accepts `llamacpp` and `ollama`. Local and Foundry
+entries share the same `models` array. A name can be used once per provider.
 
 ## Model selection
 
 - `/model` alone prints the current model
 - `/model ID` switches for later turns and saves the choice
-- With the local provider, `ID` is a name from `models.json`. With a hosted
-  provider, `ID` is sent to that provider.
-- `/model ` plus Tab suggests configured local models or hosted catalog matches
+- With the local or Foundry provider, `ID` is a name from `models.json`. With
+  other hosted providers, `ID` is sent to that provider.
+- `/model ` plus Tab suggests configured local or Foundry models, or hosted
+  catalog matches for other providers
 
-Use `/models` to list entries from `models.json` when the local provider is
-active.
+Use `/models` to list entries from `models.json` when the local or Foundry
+provider is active.
 
 The catalog comes from [models.dev](https://models.dev/api.json), cached at
 `~/.niminal/models-dev.json`. Use `/models refresh` to fetch a fresh copy.

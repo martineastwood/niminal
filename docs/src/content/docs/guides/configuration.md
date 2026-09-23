@@ -9,7 +9,7 @@ niminal reads one optional configuration file:
 | --- | --- |
 | `~/.niminal/config.json` | Everything you run |
 | `~/.niminal/auth.json` | Provider credentials |
-| `~/.niminal/models.json` | Local models served by llama.cpp or Ollama |
+| `~/.niminal/models.json` | Local models and Microsoft Foundry deployments |
 | `~/.niminal/keybindings.json` | Interactive TUI shortcuts |
 
 There is no config command to run first: a missing file is normal, and every
@@ -54,7 +54,7 @@ chmod 600 ~/.niminal/auth.json
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `provider` | `openrouter` | Active provider name; use `local` for models in `models.json` |
+| `provider` | `openrouter` | Active provider name; local and Foundry model choices come from `models.json` |
 | `model` | provider default | Active model id |
 | `thinking` | unset | Reasoning level: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `show_thinking` | `false` | Start new thinking cards expanded in the TUI |
@@ -68,16 +68,15 @@ chmod 600 ~/.niminal/auth.json
 | `keep_recent_tokens` | `20000` | Recent history kept verbatim when compacting |
 | `context_window` | `128000` (implicit) | Token budget compaction measures against |
 | `providers.<name>.last_model` | per provider | Restored when you switch back to that provider |
-| `providers.<name>.api_url` | provider endpoint | Custom endpoint for that provider, including query parameters |
-| `/settings` `api_url` | active provider endpoint | Saves as `providers.<active>.api_url` |
-| `/settings` `api_url` | active provider endpoint | Updates `providers.<active>.api_url` |
+| `providers.<name>.api_url` | provider endpoint | Custom endpoint for providers other than local and Foundry |
+| `/settings` `api_url` | active provider endpoint | Saves as `providers.<active>.api_url` for providers other than local and Foundry |
 
 When `thinking` is unset, the provider default applies. `/thinking` with no
 argument prints the mapped level for the current model.
 
 For the `local` provider, each entry in `models.json` supplies its own
-`context_window` and endpoint. The global `context_window` applies to hosted
-providers.
+`context_window` and endpoint. Foundry entries supply an endpoint and can set
+`context_window`; otherwise, the global value applies.
 
 Set `editor` to a shell command such as `hx` or `vim` when you want a niminal
 editor that is not `$VISUAL` or `$EDITOR`. If `editor` is unset, niminal uses
@@ -110,7 +109,7 @@ and are never written back:
 | Source | Effect |
 | --- | --- |
 | `NIMINAL_MODEL` | Overrides `model` |
-| `NIMINAL_API_URL` | Overrides the active hosted provider endpoint for this process; local models use `models.json` |
+| `NIMINAL_API_URL` | Overrides the active hosted provider endpoint for this process, except Foundry; local and Foundry models use `models.json` |
 | `NIMINAL_THINKING` | Overrides `thinking` |
 | `--provider`, `--model`, `--thinking`, `--api-key`, `--tools`, `--max-steps` | Same as their names suggest |
 | `--approve`, `--no-approve` | Choose whether project-local resources load |

@@ -33,7 +33,8 @@ struct Config {
   std::map<std::string, std::string> provider_api_urls;
 };
 
-struct LocalModel {
+struct ConfiguredModel {
+  std::string provider;
   std::string name;
   std::string runtime;
   std::string model;
@@ -46,8 +47,9 @@ inline bool supported_local_runtime(std::string_view runtime) {
 }
 
 std::filesystem::path config_path();
-std::filesystem::path local_models_path();
-std::vector<LocalModel> load_local_models();
+std::filesystem::path models_path();
+std::vector<ConfiguredModel> load_models();
+std::vector<ConfiguredModel> models_for(std::string_view provider);
 Config load_config();
 Config load_config_file(const std::filesystem::path& path);
 void save_config(const Config& cfg);
