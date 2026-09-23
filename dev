@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-BUILD_DIR="${BUILD_DIR:-build}"
-ASAN_DIR="${ASAN_DIR:-build-asan}"
+BUILD_DIR="${BUILD_DIR:-build/dev}"
+ASAN_DIR="${ASAN_DIR:-build/asan}"
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 CHECK_FAST=false
@@ -108,16 +108,35 @@ cmd_format() {
 }
 
 cmd_configure() {
-  local dir="$1"
-  shift
+  local dir="$BUILD_DIR"
+  if [[ $# -gt 0 && "$1" != -* ]]; then
+    dir="$1"
+    shift
+  fi
   log "configure ($dir)"
-  cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
+  if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
+    cmake --preset dev -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
+  elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
+    cmake --preset asan -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
+  else
+    cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
+  fi
 }
 
 cmd_build() {
-  local dir="$1"
+  local dir="$BUILD_DIR"
+  if [[ $# -gt 0 && "$1" != -* ]]; then
+    dir="$1"
+    shift
+  fi
   log "build ($dir)"
-  cmake --build "$dir" -j "$JOBS"
+  if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
+    cmake --build --preset dev --parallel "$JOBS" "$@"
+  elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
+    cmake --build --preset asan --parallel "$JOBS" "$@"
+  else
+    cmake --build "$dir" --parallel "$JOBS" "$@"
+  fi
 }
 
 cmd_tidy() {
@@ -177,9 +196,19 @@ cmd_tidy() {
 }
 
 cmd_test() {
-  local dir="$1"
+  local dir="$BUILD_DIR"
+  if [[ $# -gt 0 && "$1" != -* ]]; then
+    dir="$1"
+    shift
+  fi
   log "test ($dir)"
-  ctest --test-dir "$dir" --output-on-failure
+  if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
+    ctest --preset dev --output-on-failure "$@"
+  elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
+    ctest --preset asan --output-on-failure "$@"
+  else
+    ctest --test-dir "$dir" --output-on-failure "$@"
+  fi
 }
 
 cmd_check() {
@@ -210,11 +239,17 @@ Usage: ./dev <command> [options]
 Commands:
   check       format, configure, build, clang-tidy, test, sanitizer test
   format      check formatting (--fix to rewrite)
-  configure   cmake configure (default: $BUILD_DIR)
-  build       compile (default: $BUILD_DIR)
+  configure   configure the build (default: $BUILD_DIR)
+  build       compile; pass --target to build one target (default: $BUILD_DIR)
   tidy        run clang-tidy (default: $BUILD_DIR)
-  test        run ctest (default: $BUILD_DIR)
+  test        run ctest; pass -R to select suites (default: $BUILD_DIR)
   sanitizer   configure, build, and test with ASan/UBSan ($ASAN_DIR)
+
+Focused feedback loop:
+  ./dev configure
+  ./dev build --target niminal_agent_test
+  ./dev test -R '^agent$'
+  ./dev check              # full validation before completing a change
 
 Check options:
   --fast          skip sanitizer; tidy only changed src/include .cpp files
@@ -235,13 +270,22 @@ EOF
 case "${1:-}" in
   check) shift; cmd_check "$@" ;;
   format) cmd_format "${2:-}" ;;
-  configure) cmd_configure "${2:-$BUILD_DIR}" "${@:3}" ;;
-  build) cmd_build "${2:-$BUILD_DIR}" ;;
+  configure)
+    shift
+    cmd_configure "$@"
+    ;;
+  build)
+    shift
+    cmd_build "$@"
+    ;;
   tidy)
     shift
     cmd_tidy "$@"
     ;;
-  test) cmd_test "${2:-$BUILD_DIR}" ;;
+  test)
+    shift
+    cmd_test "$@"
+    ;;
   sanitizer)
     cmd_configure "$ASAN_DIR" -DNIMINAL_SANITIZERS=ON
     cmd_build "$ASAN_DIR"

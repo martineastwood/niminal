@@ -32,27 +32,52 @@ Linux arm64 binaries are not published yet.
 
 ## Build from source
 
-To build from a source checkout instead, you need CMake 3.22 or later, a C++23
-compiler, and OpenSSL 3 development libraries:
+To build from a source checkout, you need CMake 3.22 or later, Ninja, a C++23
+compiler, OpenSSL 3 development libraries, and zlib development libraries:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake --preset dev
+cmake --build --preset dev
 ```
 
-The binary is `build/niminal`.
+The binary is `build/dev/niminal`.
 
-On macOS you may need `brew install cmake llvm openssl@3`. On Debian or Ubuntu:
+On macOS, install the build tools and libraries with Homebrew:
 
 ```sh
-sudo apt install cmake g++ libssl-dev zlib1g-dev
+brew install cmake ninja llvm openssl@3
 ```
 
-Run the full validation pipeline before landing changes:
+On Debian or Ubuntu:
+
+```sh
+sudo apt install cmake ninja-build g++ libssl-dev zlib1g-dev
+```
+
+To run `./dev check`, also install `clang-format`, `clang-tidy`, and
+`run-clang-tidy`. On macOS, `llvm` provides these tools. On Debian or Ubuntu:
+
+```sh
+sudo apt install clang-format clang-tidy
+```
+
+For quick feedback, build and test only the affected suite. This example builds
+and runs the agent tests:
+
+```sh
+./dev configure
+./dev build --target niminal_agent_test
+./dev test -R '^agent$'
+```
+
+Run the full validation pipeline before completing a change:
 
 ```sh
 ./dev check
 ```
+
+It checks formatting, builds the project, runs clang-tidy and all unit tests,
+then builds and tests with ASan/UBSan.
 
 ## Next steps
 

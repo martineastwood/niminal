@@ -187,10 +187,21 @@ Full guides and reference material live at [niminal.dev](https://niminal.dev):
 For contributors and packagers:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake --preset dev
+cmake --build --preset dev
 ```
 
-The binary is `build/niminal`. Run `./dev check` before landing changes. The
+The binary is `build/dev/niminal`. For development, configure once and build
+only the affected test target while iterating:
+
+```sh
+./dev configure
+./dev build --target niminal_agent_test
+./dev test -R '^agent$'
+```
+
+Run `./dev check` before completing a change. It runs formatting, the full
+clang-tidy pass, all unit tests, and ASan/UBSan tests. See the [Install
+guide](https://niminal.dev/guides/install/) for build prerequisites. The
 `niminal::ai` library target is documented in
 [Architecture](https://niminal.dev/reference/architecture/).
