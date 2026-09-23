@@ -43,7 +43,7 @@ question and let the model continue.
 ```
 
 The TUI adds `Other` automatically, so do not include it in `options`.
-Provide between 2 and 8 choices.
+Provide between 2 and 4 choices.
 
 ## `read`
 

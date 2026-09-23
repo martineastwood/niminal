@@ -374,7 +374,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   if (ask_user_installed) {
     agent.tools.push_back(niminal::Tool{
         "ask_user",
-        "Ask the user a multiple-choice question in the TUI with 2 to 8 concise choices. The "
+        "Ask the user a multiple-choice question in the TUI with 2 to 4 concise choices. The "
         "widget adds an Other choice for a free-text answer.",
         json{{"type", "object"},
              {"properties",
@@ -382,16 +382,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                {"options", {{"type", "array"},
                             {"items", {{"type", "string"}}},
                             {"description",
-                             "2 to 8 concise choices; Other is added automatically."},
+                             "2 to 4 concise choices; Other is added automatically."},
                             {"minItems", 2},
-                            {"maxItems", 8}}}}},
+                            {"maxItems", 4}}}}},
              {"required", json::array({"question", "options"})},
              {"additionalProperties", false}},
         [&](const json& input) {
           const auto question = input.at("question").get<std::string>();
           const auto options = input.at("options").get<std::vector<std::string>>();
-          if (question.empty() || options.size() < 2 || options.size() > 8) {
-            return niminal::ToolResult{"tool error: ask_user needs a question and 2 to 8 choices"};
+          if (question.empty() || options.size() < 2 || options.size() > 4) {
+            return niminal::ToolResult{"tool error: ask_user needs a question and 2 to 4 choices"};
           }
           auto answer = std::make_shared<std::promise<niminal::ToolResult>>();
           auto result = answer->get_future();
@@ -1476,19 +1476,24 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       stack.push_back(vbox(std::move(setting_rows)));
     } else if (ask_user_open) {
       Elements question_rows;
-      question_rows.push_back(paragraph(ask_user_question) | bold | color(theme.accent));
+      question_rows.push_back(paragraph(ask_user_question) | bold | color(theme.emphasis));
+      question_rows.push_back(text(""));
       for (size_t i = 0; i <= ask_user_options.size(); ++i) {
         const bool is_other = i == ask_user_options.size();
         const bool selected = static_cast<int>(i) == ask_user_i;
-        const auto choice = is_other ? std::string("Other") : ask_user_options[i];
-        auto row = paragraph(std::string(selected ? "› " : "  ") + choice);
+        auto marker = text(selected ? " › " : "   ") | bold | color(theme.accent);
+        auto number = text(std::to_string(i + 1) + ". ") | color(theme.muted);
+        auto label = is_other ? text("Other…") | italic : paragraph(ask_user_options[i]);
+        label = selected ? label | bold | color(theme.accent) : label;
+        auto row = hbox({marker, number, label | flex});
         if (selected) {
-          row = row | inverted;
+          row = row | bgcolor(theme.hover_bg);
         }
         question_rows.push_back(std::move(row));
       }
       if (ask_user_editing_other) {
-        Elements answer_glyphs{text("Other: ")};
+        question_rows.push_back(text(""));
+        Elements answer_glyphs{text(" › ") | bold | color(theme.accent)};
         size_t byte = 0;
         for (const auto& glyph : Utf8ToGlyphs(ask_user_answer)) {
           if (byte == static_cast<size_t>(ask_user_cursor)) {
@@ -1501,14 +1506,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         if (byte == static_cast<size_t>(ask_user_cursor)) {
           answer_glyphs.push_back(focusCursorBarBlinking(text(" ")));
         }
-        question_rows.push_back(hflow(std::move(answer_glyphs)));
+        question_rows.push_back(hflow(std::move(answer_glyphs)) | bgcolor(theme.input_bg) |
+                                color(theme.input_fg));
       }
+      question_rows.push_back(text(""));
       question_rows.push_back(
           text(ask_user_editing_other
-                   ? "Enter submit  Esc cancel  Page Up/Down scroll transcript"
-                   : "↑/↓ choose  Enter select  Esc cancel  Page Up/Down scroll transcript") |
-              dim);
-      stack.push_back(vbox(std::move(question_rows)));
+                   ? "enter submit · esc cancel · pgup/pgdn scroll"
+                   : "↑/↓ choose · enter select · esc cancel · pgup/pgdn scroll") |
+          color(theme.muted));
+      stack.push_back(window(text(" Question ") | bold | color(theme.accent),
+                             vbox(std::move(question_rows)), ROUNDED));
     } else {
       if (!suggest_rows.empty()) {
         stack.push_back(vbox(std::move(suggest_rows)));
