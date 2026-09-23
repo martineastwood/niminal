@@ -30,6 +30,10 @@ using niminal::Tool;
 
 namespace {
 
+constexpr size_t kGrepMaxOutputBytes = 32 * 1024;
+constexpr size_t kGrepMaxLineBytes = 2 * 1024;
+constexpr size_t kGrepNoticeReserveBytes = 160;
+
 bool looks_binary(const fs::path& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
@@ -398,7 +402,8 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
   tools.push_back(
       Tool{"grep",
            "Search workspace file contents with plain text or ECMAScript regex. Use glob to "
-           "filter files and path to limit the search to a subdirectory.",
+           "filter files and path to limit the search to a subdirectory. Results are limited "
+           "to 32 KB, with long lines truncated.",
            json{{"type", "object"},
                 {"properties",
                  {{"pattern", {{"type", "string"}}},
@@ -422,6 +427,9 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
              }
              std::regex rx(pattern, flags);
              std::vector<std::string> hits;
+             size_t output_bytes = 0;
+             bool output_truncated = false;
+             bool match_limit_reached = false;
              auto grep_file = [&](const fs::path& path, const std::string& rel) {
                std::error_code ec;
                auto size = fs::file_size(path, ec);
@@ -439,8 +447,22 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
                  if (!std::regex_search(line, rx)) {
                    continue;
                  }
-                 hits.push_back(rel + ":" + std::to_string(n) + ":" + line);
+                 auto hit = rel + ":" + std::to_string(n) + ":" + line;
+                 if (hit.size() > kGrepMaxLineBytes) {
+                   hit.resize(kGrepMaxLineBytes - std::string_view("...[line truncated]").size());
+                   hit += "...[line truncated]";
+                   output_truncated = true;
+                 }
+                 const size_t separator_bytes = hits.empty() ? 0 : 1;
+                 if (hit.size() + separator_bytes >
+                     kGrepMaxOutputBytes - output_bytes - kGrepNoticeReserveBytes) {
+                   output_truncated = true;
+                   return true;
+                 }
+                 output_bytes += hit.size() + separator_bytes;
+                 hits.push_back(std::move(hit));
                  if (static_cast<int>(hits.size()) >= max_hits) {
+                   match_limit_reached = true;
                    return true;
                  }
                }
@@ -483,6 +505,12 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
                  out << '\n';
                }
                out << hits[i];
+             }
+             if (output_truncated) {
+               out << "\n[grep output truncated; narrow the pattern or path for more results]";
+             }
+             if (match_limit_reached) {
+               out << "\n[grep stopped at " << max_hits << " matches; results may be incomplete]";
              }
              return out.str();
            },

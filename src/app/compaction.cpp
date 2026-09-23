@@ -297,6 +297,12 @@ void bind_compaction(niminal::Agent& agent, Session& session,
     if (!should_compact(session, window, effective.reserve_tokens)) {
       return;
     }
+    const int compact = session.latest_compaction_index();
+    const int from =
+        compact < 0 ? 0 : session.events[static_cast<size_t>(compact)].value("first_kept_index", 0);
+    if (find_cut_index(session, effective.keep_recent_tokens, from) < 0) {
+      return;
+    }
     if (note) {
       note("Context is large; compacting…");
     }

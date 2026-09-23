@@ -857,7 +857,7 @@ json Session::openai_messages() const {
     } else if (type == "tool_result") {
       out.push_back({{"role", "tool"},
                      {"tool_call_id", event.value("id", "")},
-                     {"content", event.value("output", "")},
+                     {"content", niminal::tool_context_text(event.value("output", ""))},
                      {"images", event.value("images", json::array())}});
     }
   }
@@ -1159,7 +1159,8 @@ int estimate_session_event_tokens(const json& event) {
   }
   if (type == "tool_result") {
     const auto output = event.value("output", "");
-    int tokens = output.empty() ? 1 : static_cast<int>((output.size() + 3) / 4);
+    const auto context_bytes = std::min(output.size(), niminal::kMaxToolContextBytes);
+    int tokens = output.empty() ? 1 : static_cast<int>((context_bytes + 3) / 4);
     if (event.contains("images") && event["images"].is_array()) {
       tokens += 1000 * static_cast<int>(event["images"].size());
     }

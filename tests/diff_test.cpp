@@ -9,14 +9,14 @@ int main() {
       make_tool_diff("edit", nlohmann::json{{"old_text", "one\ntwo"}, {"new_text", "one\nchanged"}},
                      false, "OK — edited file.cpp");
   if (!edit.changed || edit.created || edit.body != "- one\n- two\n+ one\n+ changed\n") {
-    std::cerr << "edit hunk was not rendered like nimlet\n";
+    std::cerr << "edit hunk was not rendered like niminal\n";
     return 1;
   }
 
   auto create = make_tool_diff("write", nlohmann::json{{"content", "new file\n"}}, true,
                                "OK — wrote new.txt");
   if (!create.changed || !create.created || create.body != "+ 1 | new file\n") {
-    std::cerr << "write hunk was not rendered like nimlet\n";
+    std::cerr << "write hunk was not rendered like niminal\n";
     return 1;
   }
 

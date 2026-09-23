@@ -161,9 +161,28 @@ std::vector<std::string> walk_files(const fs::path& root) {
       ec.clear();
       continue;
     }
-    if (it->is_directory(ec) && skip_dir_name(it->path().filename().string())) {
-      it.disable_recursion_pending();
-      continue;
+    if (it->is_directory(ec)) {
+      if (skip_dir_name(it->path().filename().string())) {
+        it.disable_recursion_pending();
+        continue;
+      }
+      std::error_code nested_error;
+      if (it->path() != root && fs::exists(it->path() / ".git", nested_error)) {
+        for (const auto& file : git_ls_files(it->path())) {
+          auto rel = (it->path() / file).lexically_relative(root).generic_string();
+          if (!contains_skipped_dir(rel)) {
+            files.push_back(std::move(rel));
+            if (files.size() >= 8000) {
+              break;
+            }
+          }
+        }
+        it.disable_recursion_pending();
+        if (files.size() >= 8000) {
+          break;
+        }
+        continue;
+      }
     }
     if (!it->is_regular_file(ec)) {
       continue;

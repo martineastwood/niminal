@@ -32,8 +32,6 @@ Portable global roots shared with other agents:
 | `~/.agents/prompts/` | Global prompt templates |
 | `~/.agents/tools/` | Global external tools |
 | `~/.agents/extensions/` | Global extensions |
-| `~/.nimlet/tools/` | Alternate global external tools root |
-| `~/.nimlet/extensions/` | Alternate global extensions root |
 
 Later discovery roots win on name conflicts for skills, prompts, and external tools.
 Extensions do not override by name; every matching extension starts.
@@ -48,7 +46,6 @@ Extensions do not override by name; every matching extension starts.
 | `<workspace>/.niminal/tools/` | Project external tools |
 | `<workspace>/.niminal/extensions/` | Project extensions |
 | `<workspace>/.agent/`, `.agents/` | Alternate project roots for skills, prompts, and tools |
-| `<workspace>/.nimlet/` | Alternate project root for tools and extensions |
 | `<workspace>/AGENTS.md`, `AGENTS.override.md`, or `CLAUDE.md` | Project instructions (first match per directory) |
 | `<workspace>/.niminal/SYSTEM.md` | Project system prompt replacement |
 | `<workspace>/.niminal/APPEND_SYSTEM.md` | Project system prompt append |

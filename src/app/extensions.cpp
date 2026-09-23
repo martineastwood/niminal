@@ -98,13 +98,11 @@ std::vector<fs::path> extension_dirs(const fs::path& workspace) {
   try {
     const auto global = config_path().parent_path();
     bases.push_back(global.parent_path() / ".agents" / "extensions");
-    bases.push_back(global.parent_path() / ".nimlet" / "extensions");
     bases.push_back(global / "extensions");
   } catch (...) {
   }
   if (project_resources_trusted(workspace)) {
     bases.push_back(workspace / ".agents" / "extensions");
-    bases.push_back(workspace / ".nimlet" / "extensions");
     bases.push_back(workspace / ".niminal" / "extensions");
   }
   return scan_manifest_dirs(bases, "extension.json");
@@ -115,14 +113,12 @@ std::vector<fs::path> external_tool_dirs(const fs::path& workspace) {
   try {
     const auto global = config_path().parent_path();
     bases.push_back(global.parent_path() / ".agents" / "tools");
-    bases.push_back(global.parent_path() / ".nimlet" / "tools");
     bases.push_back(global / "tools");
   } catch (...) {
   }
   if (project_resources_trusted(workspace)) {
     bases.push_back(workspace / ".agent" / "tools");
     bases.push_back(workspace / ".agents" / "tools");
-    bases.push_back(workspace / ".nimlet" / "tools");
     bases.push_back(workspace / ".niminal" / "tools");
   }
   return scan_manifest_dirs(bases, "tool.json");

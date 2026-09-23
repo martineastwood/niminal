@@ -101,6 +101,44 @@ int main() {
     return 1;
   }
 
+  auto outer = fs::temp_directory_path() / "niminal-ws-nested-test";
+  fs::remove_all(outer);
+  auto nested_repo = outer / "project";
+  fs::create_directories(nested_repo / "src");
+  fs::create_directories(nested_repo / ".astro");
+  {
+    std::ofstream out(nested_repo / ".gitignore");
+    out << ".astro/\n";
+  }
+  {
+    std::ofstream out(nested_repo / "src" / "main.cpp");
+    out << "int main() {}\n";
+  }
+  {
+    std::ofstream out(nested_repo / ".astro" / "data-store.json");
+    out << "ignored\n";
+  }
+  if (std::system(("git -C " + nested_repo.string() + " init -q").c_str()) != 0) {
+    std::cerr << "nested git init failed\n";
+    fs::remove_all(tmp);
+    return 1;
+  }
+  Workspace parent_workspace(outer);
+  const auto parent_files = parent_workspace.list_files();
+  bool saw_nested_source = false;
+  bool saw_nested_ignored = false;
+  for (const auto& file : parent_files) {
+    saw_nested_source |= file == "project/src/main.cpp";
+    saw_nested_ignored |= file == "project/.astro/data-store.json";
+  }
+  if (!saw_nested_source || saw_nested_ignored) {
+    std::cerr << "workspace above a nested git repo should honor its gitignore\n";
+    fs::remove_all(outer);
+    fs::remove_all(tmp);
+    return 1;
+  }
+
+  fs::remove_all(outer);
   fs::remove_all(tmp);
   return 0;
 }

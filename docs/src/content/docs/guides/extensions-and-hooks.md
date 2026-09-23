@@ -12,7 +12,6 @@ Global extensions (always loaded; all matching extensions start):
 
 ```text
 ~/.agents/extensions/NAME/extension.json
-~/.nimlet/extensions/NAME/extension.json
 ~/.niminal/extensions/NAME/extension.json
 ```
 
@@ -20,7 +19,6 @@ Project extensions (trusted workspace only):
 
 ```text
 <workspace>/.agents/extensions/NAME/extension.json
-<workspace>/.nimlet/extensions/NAME/extension.json
 <workspace>/.niminal/extensions/NAME/extension.json
 ```
 

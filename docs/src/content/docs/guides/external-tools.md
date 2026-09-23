@@ -47,7 +47,6 @@ Global tools (always loaded; later paths win on name conflicts):
 
 ```text
 ~/.agents/tools/NAME/tool.json
-~/.nimlet/tools/NAME/tool.json
 ~/.niminal/tools/NAME/tool.json
 ```
 
@@ -56,7 +55,6 @@ Project tools (trusted workspace only):
 ```text
 <workspace>/.agent/tools/NAME/tool.json
 <workspace>/.agents/tools/NAME/tool.json
-<workspace>/.nimlet/tools/NAME/tool.json
 <workspace>/.niminal/tools/NAME/tool.json
 ```
 

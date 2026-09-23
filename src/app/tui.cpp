@@ -46,6 +46,7 @@
 #include <sstream>
 #include <termios.h>
 #include <thread>
+#include <tuple>
 #include <unistd.h>
 #include <unordered_map>
 #include <utility>
@@ -475,7 +476,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   } catch (...) {
   }
 
-  auto current_suggestions = [&] {
+  std::vector<Suggestion> suggestions_cache;
+  std::optional<std::tuple<std::string, int, std::string, std::string>> suggestions_input;
+  auto current_suggestions = [&]() -> const std::vector<Suggestion>& {
+    const auto input_key = std::tuple{draft, cursor, agent.provider, agent.model};
+    if (suggestions_input == input_key) {
+      return suggestions_cache;
+    }
+
     std::vector<std::string> recents;
     add_unique(recents, agent.model);
     if (auto it = cfg.last_models.find(agent.provider); it != cfg.last_models.end()) {
@@ -505,7 +513,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (!items.empty()) {
       suggest_i = std::clamp(suggest_i, 0, static_cast<int>(items.size()) - 1);
     }
-    return items;
+    suggestions_input = input_key;
+    suggestions_cache = std::move(items);
+    return suggestions_cache;
   };
 
   auto apply_suggestion = [&](const Suggestion& item) {
@@ -582,6 +592,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return;
     }
     settings_error.clear();
+    suggestions_input.reset();
     try {
       if (result.theme_changed) {
         theme = load_theme(cfg.theme).value();
@@ -663,7 +674,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   };
 
+  auto usage_totals = session.usage_totals();
+  size_t footer_revision = 0;
   auto apply_event = [&](StreamEvent ev) {
+    if (ev.kind == EventKind::tool_result) {
+      suggestions_input.reset();
+    }
     switch (ev.kind) {
     case EventKind::text_delta:
       if (blocks.empty() || blocks.back().kind != BlockKind::assistant) {
@@ -842,7 +858,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (!ui_alive) {
       return;
     }
-    screen.Post([apply_event, apply_extension_actions, ev, &screen] {
+    std::optional<niminal::Usage> updated_usage;
+    if (ev.kind == EventKind::step_end || ev.kind == EventKind::done ||
+        ev.kind == EventKind::error) {
+      updated_usage = session.usage_totals();
+    }
+    screen.Post([&, apply_event, apply_extension_actions, ev, updated_usage] {
+      if (updated_usage) {
+        usage_totals = *updated_usage;
+        ++footer_revision;
+        suggestions_input.reset();
+      }
       try {
         apply_event(ev);
         apply_extension_actions();
@@ -960,6 +986,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   };
 
   auto restart_extensions = [&](bool end_current = true) {
+    suggestions_input.reset();
     if (extensions && end_current) {
       auto shutdown = extensions->dispatch(
           HookEvent::session_shutdown,
@@ -1037,6 +1064,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       extensions->stop();
     }
     session = std::move(next);
+    usage_totals = session.usage_totals();
+    ++footer_revision;
     load_history();
     bind_session(agent, session);
     restore_config_from_session(cfg, session);
@@ -1331,6 +1360,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   });
 
   auto layout = Container::Vertical({wrapped_input});
+  std::optional<std::tuple<std::string, std::string, std::string, size_t>> footer_key;
+  std::string think;
+  std::string usage;
   auto view = Renderer(layout, [&] {
     card_boxes.assign(blocks.size(), Box{});
     Elements entries;
@@ -1403,26 +1435,26 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
     }
 
-    auto think = thinking_status(agent.provider, agent.model, cfg.thinking);
-    if (think.empty()) {
-      think = thinking_choices(agent.provider, agent.model).empty()
-                  ? std::string()
-                  : (cfg.thinking.empty() ? "default" : "off");
-    }
-    std::string usage;
-    try {
-      auto totals = session.usage_totals();
-      usage = format_usage_line(totals);
+    const auto next_footer_key =
+        std::tuple{agent.provider, agent.model, cfg.thinking, footer_revision};
+    if (footer_key != next_footer_key) {
+      think = thinking_status(agent.provider, agent.model, cfg.thinking);
+      if (think.empty()) {
+        think = thinking_choices(agent.provider, agent.model).empty()
+                    ? std::string()
+                    : (cfg.thinking.empty() ? "default" : "off");
+      }
+      usage = format_usage_line(usage_totals);
       if (!usage.empty()) {
         auto cost = lookup_model_cost(agent.provider, agent.model);
         if (cost.known) {
-          usage += "  " + format_cost_usd(usage_cost_usd(totals, cost));
+          usage += "  " + format_cost_usd(usage_cost_usd(usage_totals, cost));
         }
       }
-    } catch (...) {
+      footer_key = next_footer_key;
     }
 
-    auto suggestions = current_suggestions();
+    const auto& suggestions = current_suggestions();
     Elements suggest_rows;
     for (int i = 0; i < static_cast<int>(suggestions.size()); ++i) {
       auto line = text(suggestions[static_cast<size_t>(i)].label) | dim;
@@ -1934,7 +1966,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       return true;
     }
-    auto suggestions = current_suggestions();
+    const auto& suggestions = current_suggestions();
     if (!suggestions.empty()) {
       if (pressed(KeyAction::next)) {
         suggest_i = (suggest_i + 1) % static_cast<int>(suggestions.size());
@@ -2068,7 +2100,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (!ui_alive) {
         return;
       }
-      screen.Post([&screen] { screen.RequestAnimationFrame(); });
+      screen.Post([&] {
+        ++footer_revision;
+        suggestions_input.reset();
+        screen.RequestAnimationFrame();
+      });
     });
   }
   std::thread extension_thread([&] {

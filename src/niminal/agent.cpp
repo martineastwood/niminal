@@ -509,7 +509,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
         messages.push_back(json{
             {"role", "tool"},
             {"tool_call_id", call.id},
-            {"content", execution.output.text},
+            {"content", tool_context_text(execution.output.text)},
             {"images", execution.output.images},
         });
       };

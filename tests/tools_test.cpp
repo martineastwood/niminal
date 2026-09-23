@@ -42,6 +42,8 @@ int main() {
   fs::remove_all(tmp);
   fs::create_directories(tmp / "sub");
   fs::create_directories(tmp / "build");
+  fs::create_directories(tmp / ".astro");
+  fs::create_directories(tmp / "many-grep");
   {
     std::ofstream out(tmp / "a.txt");
     out << "hi\n";
@@ -49,6 +51,14 @@ int main() {
   {
     std::ofstream out(tmp / "build" / "generated.o");
     out << "binary-ish\n";
+  }
+  {
+    std::ofstream out(tmp / ".astro" / "data-store.json");
+    out << R"({"status":"reload","padding":")" << std::string(400'000, 'x') << "\"}";
+  }
+  for (int i = 0; i < 20; ++i) {
+    std::ofstream out(tmp / "many-grep" / (std::to_string(i) + ".txt"));
+    out << "reload " << std::string(3'000, 'x') << '\n';
   }
   Workspace ws(tmp);
   std::atomic<bool> cancel{false};
@@ -201,6 +211,18 @@ int main() {
   }
   if (parallel2.get().text.find("No matches") == std::string::npos) {
     std::cerr << "grep should report no matches\n";
+    return 1;
+  }
+  const auto minified = grep->run(nlohmann::json{{"pattern", "reload"}, {"path", ".astro"}}).text;
+  if (minified.size() > 2'300 || minified.find("[line truncated]") == std::string::npos) {
+    std::cerr << "grep should truncate a match on a minified line\n";
+    return 1;
+  }
+  const auto many_matches =
+      grep->run(nlohmann::json{{"pattern", "reload"}, {"path", "many-grep"}}).text;
+  if (many_matches.size() > 32 * 1024 ||
+      many_matches.find("[grep output truncated") == std::string::npos) {
+    std::cerr << "grep should cap total output size\n";
     return 1;
   }
   fs::remove_all(tmp);

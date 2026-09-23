@@ -689,8 +689,6 @@ void consume_anthropic(const ChatRequest& request, ChatResult& result, Anthropic
     auto dtype = delta.value("type", "");
     if (dtype == "text_delta") {
       auto piece = delta.value("text", "");
-      acc.content[static_cast<size_t>(i)]["text"] =
-          acc.content[static_cast<size_t>(i)].value("text", "") + piece;
       if (!piece.empty()) {
         result.text += piece;
         emit(request, StreamEvent{EventKind::text_delta, piece, {}, {}});

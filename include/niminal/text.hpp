@@ -6,6 +6,15 @@
 
 namespace niminal {
 
+inline constexpr size_t kMaxToolContextBytes = 8'000;
+
+inline std::string tool_context_text(std::string_view output) {
+  if (output.size() <= kMaxToolContextBytes) {
+    return std::string(output);
+  }
+  return std::string(output.substr(0, kMaxToolContextBytes)) + "\n[truncated]";
+}
+
 inline std::string lower_copy(std::string value) {
   for (char& c : value)
     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

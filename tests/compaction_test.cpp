@@ -63,6 +63,33 @@ int main() {
     return fail("image token estimate should not count base64 bytes");
   }
 
+  auto large_result = create_session(dir, "/tmp/ws");
+  large_result.persist = false;
+  large_result.add_user("search the workspace");
+  large_result.add_tool_result("grep-1", std::string(424'000, 'x'), false);
+  if (should_compact(large_result, 128'000, 16'384) ||
+      find_cut_index(large_result, 20'000, 0) != -1) {
+    return fail("one large tool result should not trigger impossible compaction");
+  }
+  auto bounded = large_result.openai_messages();
+  const auto context = bounded.back().value("content", std::string{});
+  if (context.size() > 8'100 || context.find("[truncated]") == std::string::npos ||
+      large_result.events.back().value("output", std::string{}).size() != 424'000) {
+    return fail("tool context should be bounded while session keeps full result");
+  }
+  niminal::Agent one_turn_agent;
+  niminal::app::Config small_context;
+  small_context.context_window = 100;
+  small_context.reserve_tokens = 0;
+  small_context.keep_recent_tokens = 40;
+  int notices = 0;
+  niminal::app::bind_compaction(
+      one_turn_agent, large_result, [&](const std::string&) { ++notices; }, {}, small_context);
+  one_turn_agent.before_request();
+  if (notices != 0) {
+    return fail("no compaction notice when no older turn can be removed");
+  }
+
   s.add_compaction("summary of early turns", cut, 99);
   auto msgs = s.openai_messages();
   if (msgs.empty() ||
