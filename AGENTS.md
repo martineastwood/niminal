@@ -6,22 +6,23 @@ Do not shim or maintain legacy behavior, this is greenfield so we can make break
 
 Language: C++23.
 
+Toolchain: clang-format 20 and clang-tidy 20, matching CI. Other versions drift on formatting and can reject the C++23 standard library headers.
+
 We are aiming for: C++23 + RAII + explicit ownership + clang-tidy + sanitizers + warnings-as-errors + deterministic build/test commands
 
 ## Validation
 
-Configure once with `./dev configure`. For each change, build and run the
-smallest affected test suite. For example:
+Use focused checks while iterating. Configure once per build directory, then
+build the affected target and run its test suite:
 
 ```sh
+./dev configure
 ./dev build --target niminal_agent_test
 ./dev test -R '^agent$'
 ```
 
-Run `./dev check` before completing a change. It runs formatting, the Release
-build, clang-tidy across project sources, all unit tests, and ASan/UBSan tests.
-Use focused build and test commands while iterating instead of running the full
-pipeline after every edit.
+For documentation-only changes, skip the C++ build and tests. When a test suite
+name is unclear, list them with `./dev test -N`.
 
 ## Ownership
 
@@ -51,19 +52,22 @@ and dedicated tests.
 
 ## Checks
 
-Do not complete a change until `./dev check` succeeds.
+Run `./dev check` for release readiness, major build or toolchain changes, or
+when a focused check cannot cover the change. It runs formatting, a Release
+build, clang-tidy across project sources, all unit tests, and ASan/UBSan tests.
+This full pipeline is intentionally not part of the routine edit loop.
 
-Do not suppress diagnostics unless you can explain why the diagnostic
-does not represent a real defect.
+Do not suppress diagnostics unless you can explain why the diagnostic does not
+represent a real defect.
 
 ## Tests
 
 Bug fixes require regression tests.
 New public behavior requires tests.
 
-## Dev check
+## Full validation
 
-`./dev check` runs, in order:
+`./dev check` runs the full validation pipeline, in order:
 
 1. `clang-format` check
 2. CMake configure (`build/dev/`)
@@ -71,6 +75,9 @@ New public behavior requires tests.
 4. `clang-tidy` on `src/` and `include/`
 5. Unit tests (`ctest`)
 6. ASan/UBSan configure, build, and test (`build/asan/`)
+
+The `--fast` option still builds the project and runs the complete regular test
+suite. Use the focused build and test commands above for quick iteration.
 
 Other commands:
 

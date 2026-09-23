@@ -249,7 +249,7 @@ Focused feedback loop:
   ./dev configure
   ./dev build --target niminal_agent_test
   ./dev test -R '^agent$'
-  ./dev check              # full validation before completing a change
+  ./dev check              # full validation before release or major build changes
 
 Check options:
   --fast          skip sanitizer; tidy only changed src/include .cpp files

@@ -191,8 +191,8 @@ cmake --preset dev
 cmake --build --preset dev
 ```
 
-The binary is `build/dev/niminal`. For development, configure once and build
-only the affected test target while iterating:
+The binary is `build/dev/niminal`. Configure once, then build the affected test
+target and run its suite while iterating:
 
 ```sh
 ./dev configure
@@ -200,8 +200,8 @@ only the affected test target while iterating:
 ./dev test -R '^agent$'
 ```
 
-Run `./dev check` before completing a change. It runs formatting, the full
-clang-tidy pass, all unit tests, and ASan/UBSan tests. See the [Install
-guide](https://niminal.dev/guides/install/) for build prerequisites. The
-`niminal::ai` library target is documented in
+Reserve `./dev check` for release readiness and major build or toolchain
+changes. It runs formatting, a full clang-tidy pass, all unit tests, and
+ASan/UBSan tests. See the [Install guide](https://niminal.dev/guides/install/)
+for build prerequisites. The `niminal::ai` library target is documented in
 [Architecture](https://niminal.dev/reference/architecture/).

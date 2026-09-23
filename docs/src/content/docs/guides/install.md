@@ -45,7 +45,8 @@ The binary is `build/dev/niminal`.
 On macOS, install the build tools and libraries with Homebrew:
 
 ```sh
-brew install cmake ninja llvm openssl@3
+brew install cmake ninja llvm@20 openssl@3
+export PATH="/opt/homebrew/opt/llvm@20/bin:$PATH"
 ```
 
 On Debian or Ubuntu:
@@ -54,14 +55,24 @@ On Debian or Ubuntu:
 sudo apt install cmake ninja-build g++ libssl-dev zlib1g-dev
 ```
 
-To run `./dev check`, also install `clang-format`, `clang-tidy`, and
-`run-clang-tidy`. On macOS, `llvm` provides these tools. On Debian or Ubuntu:
+For full release validation with `./dev check`, also install `clang-format`,
+`clang-tidy`, and `run-clang-tidy`. Use clang 20, which is the version CI
+pins, and link the unversioned names that `./dev` looks up:
 
 ```sh
-sudo apt install clang-format clang-tidy
+sudo apt install clang-format-20 clang-tidy-20
+sudo ln -s /usr/bin/clang-format-20 /usr/local/bin/clang-format
+sudo ln -s /usr/bin/clang-tidy-20 /usr/local/bin/clang-tidy
+sudo ln -s /usr/bin/run-clang-tidy-20 /usr/local/bin/run-clang-tidy
 ```
 
-For quick feedback, build and test only the affected suite. This example builds
+Keep the version aligned with CI. `clang-format` output changes between
+releases, so a different version can fail the formatting check, and clang 18
+cannot see `std::expected` in the C++23 standard library headers: with clang 18,
+`./dev check` stops at the clang-tidy step with `no template named 'expected' in
+namespace 'std'` for every source file.
+
+During development, build and test only the affected suite. This example builds
 and runs the agent tests:
 
 ```sh
@@ -70,14 +81,16 @@ and runs the agent tests:
 ./dev test -R '^agent$'
 ```
 
-Run the full validation pipeline before completing a change:
+Run the full validation pipeline before a release or after major build and
+toolchain changes:
 
 ```sh
 ./dev check
 ```
 
 It checks formatting, builds the project, runs clang-tidy and all unit tests,
-then builds and tests with ASan/UBSan.
+then builds and tests with ASan/UBSan. This full pipeline is more expensive than
+the focused build and test loop above.
 
 ## Next steps
 

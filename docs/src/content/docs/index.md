@@ -29,10 +29,10 @@ hero:
       <span id="landing-terminal-title">your-project</span>
     </div>
     <pre class="not-content"><code><span class="landing-prompt">$</span> niminal
-<span class="landing-input">› Fix the failing parser test and run the focused test.</span>
-<span class="landing-muted">read</span>   src/parser.cpp, tests/parser_test.cpp
+<span class="landing-input">› Fix the failing agent test and run that test suite.</span>
+<span class="landing-muted">read</span>   src/niminal/agent.cpp, tests/agent_test.cpp
 <span class="landing-muted">edit</span>   Apply the smallest safe change
-<span class="landing-muted">bash</span>   ./dev check --fast
+<span class="landing-muted">bash</span>   ./dev test -R '^agent$'
 <span class="landing-success">done   The focused test passes.</span></code></pre>
   </section>
 
