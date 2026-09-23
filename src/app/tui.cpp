@@ -1565,7 +1565,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     stack.push_back(hbox({
         text(usage.empty() ? "↑0  ↓0" : usage) | dim,
         filler(),
-        text(agent.provider + "/" + agent.model + (yolo_mode ? " [yolo]" : "")) |
+        text(agent.provider + (agent.model_runtime.empty() ? "" : "/" + agent.model_runtime) + "/" +
+             agent.model + (yolo_mode ? " [yolo]" : "")) |
             color(theme.accent),
         text(think.empty() ? std::string() : (":" + think)) | dim,
     }));

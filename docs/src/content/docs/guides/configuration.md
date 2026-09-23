@@ -9,7 +9,7 @@ niminal reads one optional configuration file:
 | --- | --- |
 | `~/.niminal/config.json` | Everything you run |
 | `~/.niminal/auth.json` | Provider credentials |
-| `~/.niminal/models.json` | Local models served by llama.cpp |
+| `~/.niminal/models.json` | Local models served by llama.cpp or Ollama |
 | `~/.niminal/keybindings.json` | Interactive TUI shortcuts |
 
 There is no config command to run first: a missing file is normal, and every

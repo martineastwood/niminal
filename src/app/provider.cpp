@@ -38,10 +38,11 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
       throw niminal::Error("local model '" + cfg.model + "' is not in " +
                            local_models_path().string());
     }
-    if (selected->runtime != "llamacpp") {
+    if (!supported_local_runtime(selected->runtime)) {
       throw niminal::Error("unsupported local runtime '" + selected->runtime + "'");
     }
     agent.provider = "local";
+    agent.model_runtime = selected->runtime;
     agent.model = selected->model;
     agent.api_url = selected->api_url;
     agent.api_key = read_auth_key("local");
@@ -59,6 +60,7 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
     spec = niminal::find_provider("openrouter");
   }
   agent.provider = spec->name;
+  agent.model_runtime.clear();
   agent.model = cfg.model.empty() ? spec->default_model : cfg.model;
   agent.api_url = cfg.api_url.empty() ? spec->endpoint : cfg.api_url;
   agent.api_key = read_auth_key(spec->name);
@@ -127,7 +129,7 @@ niminal::Result<void> select_provider(Config& cfg, std::string_view name) {
               : std::find_if(models.begin(), models.end(),
                              [&](const LocalModel& model) { return model.name == last->second; });
       const auto& model = selected == models.end() ? models.front() : *selected;
-      if (model.runtime != "llamacpp") {
+      if (!supported_local_runtime(model.runtime)) {
         return std::unexpected(niminal::Error("unsupported local runtime '" + model.runtime + "'"));
       }
       cfg.provider = "local";

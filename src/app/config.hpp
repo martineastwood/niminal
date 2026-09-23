@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace niminal::app {
@@ -38,6 +39,10 @@ struct LocalModel {
   std::string api_url;
   int context_window = 0;
 };
+
+inline bool supported_local_runtime(std::string_view runtime) {
+  return runtime == "llamacpp" || runtime == "ollama";
+}
 
 std::filesystem::path config_path();
 std::filesystem::path local_models_path();

@@ -153,7 +153,8 @@ messages while busy.
 ## Footer
 
 The footer shows activity, extension status lines, token totals, the estimated
-session cost from models.dev pricing, the active `provider/model`, the mapped
+session cost from models.dev pricing, the active `provider/model` (or
+`local/runtime/model` for local models), the mapped
 thinking level, and `[yolo]` when YOLO mode is on. Cost and token totals price
 the whole session at the active model's rates.
 

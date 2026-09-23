@@ -38,8 +38,9 @@ chat API. You can choose another available Ollama Cloud model with
 
 ## Use a local model
 
-You can connect niminal to a model served by llama.cpp. Start `llama-server`
-with a GGUF model and a chat template that supports tool calls:
+You can connect niminal to models served by llama.cpp or Ollama. For llama.cpp,
+start `llama-server` with a GGUF model and a chat template that supports tool
+calls:
 
 ```sh
 llama-server -m /path/to/model.gguf --alias coding --ctx-size 32768 --jinja
@@ -63,14 +64,28 @@ Create `~/.niminal/models.json` with the same model alias and context size:
 
 Run `niminal --provider local`, or use `/provider local` in the TUI. Type
 `/models` to see your local entries and `/models coding` to select one. The
-`name` is the choice shown in niminal; `model` is sent to llama.cpp. Each entry
-can point to a different running server. Local llama.cpp servers do not require
-an API key. If you protect yours with a key, set `local` in
+`name` is the choice shown in niminal; `model` is sent to the server. Each entry
+can point to a different running server. Local servers do not require an API
+key by default. If you protect yours with a key, set `local` in
 `~/.niminal/auth.json`.
+
+To use Ollama, run a model and copy its name from `ollama list`:
+
+```sh
+ollama run hf.co/Qwen/Qwen3-1.7B-GGUF:Q8_0
+ollama list
+```
+
+Add another entry to the `models` array with `"runtime": "ollama"`, the name
+reported by `ollama list` as `model`, and
+`"api_url": "http://127.0.0.1:11434/v1/chat/completions"`. Set
+`context_window` to the context size you configured in Ollama. Then use
+`/models` to select it. The TUI footer shows the provider, runtime, and model,
+for example `local/ollama/qwen3-1.7b`.
 
 The `context_window` should match `--ctx-size`; niminal uses it to decide when
 to compact the session. Tool calls also need a model with a suitable chat
-template. The `runtime` field currently accepts `llamacpp`.
+template. The `runtime` field accepts `llamacpp` and `ollama`.
 
 ## Model selection
 

@@ -398,7 +398,7 @@ bool handle_models(SlashHost& host, const std::string& arg) {
         push_error(host, "Unknown local model '" + arg + "' in " + local_models_path().string());
         return true;
       }
-      if (selected->runtime != "llamacpp") {
+      if (!supported_local_runtime(selected->runtime)) {
         push_error(host, "Unsupported local runtime '" + selected->runtime + "'");
         return true;
       }
