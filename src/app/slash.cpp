@@ -37,7 +37,7 @@ constexpr SlashSpec kSlash[] = {
     {"/permissions", "/permissions [clear]", "show or clear tool grants"},
     {"/trust", "/trust [on|off]", "show or set project resource trust"},
     {"/yolo", "/yolo [off]", "auto-approve tools for this process"},
-    {"/models", "/models refresh", "refresh the models.dev catalog"},
+    {"/models", "/models [name|refresh]", "choose a local model or refresh the catalog"},
     {"/session", "/session", "show the current session"},
     {"/name", "/name [title]", "show or set the session name"},
     {"/resume", "/resume [ID]", "list or load a session"},
@@ -314,7 +314,7 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
     }
   }
 
-  if (cmd == "/model" && (trailing || !arg.empty())) {
+  if (cmd == "/model" && provider != "local" && (trailing || !arg.empty())) {
     auto models = suggest_models(arg, provider, recents);
     if (!models.empty()) {
       return models;
@@ -347,6 +347,20 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
     }
   }
 
+  if (cmd == "/models" && provider == "local") {
+    std::vector<Suggestion> out;
+    try {
+      for (const auto& entry : load_local_models()) {
+        if (!arg.empty() && !contains_ci(entry.name, arg)) {
+          continue;
+        }
+        out.push_back({"/models " + entry.name, entry.name + "  " + entry.runtime + "  " +
+                                                    format_context_k(entry.context_window)});
+      }
+    } catch (...) {
+    }
+    return out;
+  }
   if (cmd == "/models" && (trailing || !arg.empty())) {
     if (arg.empty() || std::string_view("refresh").starts_with(arg)) {
       return {{"/models refresh", "/models refresh  fetch models.dev"}};

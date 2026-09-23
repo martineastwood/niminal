@@ -9,6 +9,7 @@ description: Every path niminal reads and writes on your machine.
 | --- | --- |
 | `~/.niminal/config.json` | User settings |
 | `~/.niminal/auth.json` | Provider credentials |
+| `~/.niminal/models.json` | Local model choices and server endpoints |
 | `~/.niminal/keybindings.json` | Interactive TUI shortcuts |
 | `~/.niminal/themes/*.json` | Custom TUI themes |
 | `~/.niminal/sessions/` | Append-only session JSONL files |
@@ -64,7 +65,7 @@ The first record identifies the workspace. Recovery backups use the suffix
 
 ## Config writes
 
-`/provider`, `/model`, `/thinking`, and `/theme` always write
+`/provider`, `/model`, `/models NAME`, `/thinking`, and `/theme` write
 `~/.niminal/config.json`. RPC `set_steering_mode` and `set_follow_up_mode` write
 there too.
 

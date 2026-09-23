@@ -9,6 +9,22 @@
 namespace niminal::app {
 using json = nlohmann::json;
 
+namespace {
+Config active_compaction_config(const niminal::Agent& agent, Config cfg) {
+  if (agent.provider == "local") {
+    for (const auto& model : load_local_models()) {
+      if (model.model == agent.model && model.api_url == agent.api_url) {
+        cfg.context_window = model.context_window;
+        cfg.reserve_tokens = std::min(cfg.reserve_tokens, model.context_window / 4);
+        cfg.keep_recent_tokens = std::min(cfg.keep_recent_tokens, model.context_window / 2);
+        break;
+      }
+    }
+  }
+  return cfg;
+}
+} // namespace
+
 int estimate_tokens(std::string_view text) {
   if (text.empty()) {
     return 1;
@@ -120,6 +136,7 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
                               const std::string& requested_instruction,
                               const std::shared_ptr<ExtensionRuntime>& extensions,
                               const Config& cfg) {
+  const Config effective = active_compaction_config(agent, cfg);
   CompactResult result;
   result.message = "Nothing to compact (recent history fits in keep window).";
   int tokens_before = estimate_session_tokens(session);
@@ -169,7 +186,7 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
     previous = session.events[static_cast<size_t>(compact)].value("summary", "");
     from = session.events[static_cast<size_t>(compact)].value("first_kept_index", 0);
   }
-  int cut = find_cut_index(session, cfg.keep_recent_tokens, from);
+  int cut = find_cut_index(session, effective.keep_recent_tokens, from);
   if (cut < 0) {
     if (extensions) {
       auto post =
@@ -275,8 +292,9 @@ void bind_compaction(niminal::Agent& agent, Session& session,
     if (!cfg.compaction_enabled) {
       return;
     }
-    int window = cfg.context_window > 0 ? cfg.context_window : kDefaultContextWindow;
-    if (!should_compact(session, window, cfg.reserve_tokens)) {
+    const Config effective = active_compaction_config(agent, cfg);
+    int window = effective.context_window > 0 ? effective.context_window : kDefaultContextWindow;
+    if (!should_compact(session, window, effective.reserve_tokens)) {
       return;
     }
     if (note) {

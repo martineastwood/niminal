@@ -23,6 +23,7 @@ exporting its key, then selecting it with `--provider` or `/provider`:
 | Google Gemini API | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY` |
 | Hyper | `HYPER_API_KEY` |
 | Mistral | `MISTRAL_API_KEY` |
+| Ollama Cloud | `OLLAMA_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | OpenCode Go or Zen | `OPENCODE_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
@@ -42,6 +43,14 @@ The `key` can also be a literal API key. Keep this file private:
 
 ```sh
 chmod 600 ~/.niminal/auth.json
+```
+
+Ollama Cloud uses the OpenAI-compatible API. For example, run a one-shot turn
+with its default model:
+
+```sh
+export OLLAMA_API_KEY=your-key
+niminal --provider ollama "Say hello in one sentence."
 ```
 
 You can pass `--api-key KEY` for a one-process override instead of exporting a

@@ -588,7 +588,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       if (result.agent_changed) {
         apply_provider(agent, cfg);
-        session.add_selection(agent.model, agent.provider);
+        session.add_selection(cfg.model, agent.provider);
       }
       save_config(cfg);
       flash_footer("Saved " + config_path().string());

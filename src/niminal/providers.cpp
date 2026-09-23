@@ -16,6 +16,7 @@ constexpr std::array<std::string_view, 1> kMistralKeys = {"MISTRAL_API_KEY"};
 constexpr std::array<std::string_view, 1> kOpenaiKeys = {"OPENAI_API_KEY"};
 constexpr std::array<std::string_view, 1> kOpencodeKeys = {"OPENCODE_API_KEY"};
 constexpr std::array<std::string_view, 1> kOpenrouterKeys = {"OPENROUTER_API_KEY"};
+constexpr std::array<std::string_view, 1> kOllamaKeys = {"OLLAMA_API_KEY"};
 
 constexpr ProviderSpec kProviders[] = {
     {"anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-6", kAnthropicKeys,
@@ -24,10 +25,13 @@ constexpr ProviderSpec kProviders[] = {
      kGoogleKeys, "generativelanguage.googleapis.com", false, false, false, false},
     {"hyper", "https://hyper.charm.land/v1/chat/completions", "deepseek-v4-flash", kHyperKeys,
      "hyper.charm.land", false, false, false, false},
+    {"local", "", "", {}, "", false, false, false, false},
     {"mistral", "https://api.mistral.ai/v1/chat/completions", "mistral-vibe-cli-with-tools",
      kMistralKeys, "api.mistral.ai", false, false, false, true},
     {"openai", "https://api.openai.com/v1/chat/completions", "gpt-5", kOpenaiKeys, "api.openai.com",
      false, true, false, true},
+    {"ollama", "https://ollama.com/v1/chat/completions", "gemma4:31b", kOllamaKeys, "ollama.com",
+     false, true, false, false},
     {"opencode", "https://opencode.ai/zen/go/v1/chat/completions", "deepseek-v4.1-flash",
      kOpencodeKeys, "opencode.ai/zen/go", false, false, false, false},
     {"opencodezen", "https://opencode.ai/zen/v1/chat/completions", "deepseek-v4-flash",

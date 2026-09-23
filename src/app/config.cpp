@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -39,6 +40,53 @@ std::filesystem::path config_path() {
     throw std::runtime_error("HOME is not set; cannot load ~/.niminal/config.json");
   }
   return fs::path(home) / ".niminal" / "config.json";
+}
+
+std::filesystem::path local_models_path() {
+  return config_path().parent_path() / "models.json";
+}
+
+std::vector<LocalModel> load_local_models() {
+  const auto path = local_models_path();
+  std::ifstream in(path);
+  if (!in) {
+    throw std::runtime_error("cannot read " + path.string());
+  }
+  json doc;
+  try {
+    doc = json::parse(in);
+  } catch (const json::exception& e) {
+    throw std::runtime_error("invalid " + path.string() + ": " + e.what());
+  }
+  if (!doc.is_object() || !doc.contains("models") || !doc["models"].is_array()) {
+    throw std::runtime_error(path.string() + " must contain a models array");
+  }
+  std::vector<LocalModel> models;
+  for (const auto& entry : doc["models"]) {
+    if (!entry.is_object()) {
+      throw std::runtime_error("each model in " + path.string() + " must be an object");
+    }
+    auto required = [&](const char* key) -> std::string {
+      if (!entry.contains(key) || !entry[key].is_string() ||
+          entry[key].get<std::string>().empty()) {
+        throw std::runtime_error(std::string("model ") + key + " is required in " + path.string());
+      }
+      return entry[key].get<std::string>();
+    };
+    LocalModel model{required("name"), required("runtime"), required("model"), required("api_url"),
+                     0};
+    if (!entry.contains("context_window") || !entry["context_window"].is_number_integer() ||
+        entry["context_window"].get<int>() <= 0) {
+      throw std::runtime_error("model context_window must be positive in " + path.string());
+    }
+    model.context_window = entry["context_window"].get<int>();
+    if (std::any_of(models.begin(), models.end(),
+                    [&](const LocalModel& other) { return other.name == model.name; })) {
+      throw std::runtime_error("duplicate local model name '" + model.name + "'");
+    }
+    models.push_back(std::move(model));
+  }
+  return models;
 }
 
 Config load_config_file(const fs::path& path) {

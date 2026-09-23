@@ -263,7 +263,7 @@ bool handle_provider(SlashHost& host, const std::string& arg) {
   apply_provider(host.agent, host.cfg);
   try {
     save_config(host.cfg);
-    host.session.add_selection(host.agent.model, host.agent.provider);
+    host.session.add_selection(host.cfg.model, host.agent.provider);
     push_status(host, "provider set to " + host.agent.provider + "\nmodel: " + host.agent.model +
                           "\nsaved " + config_path().string());
   } catch (const std::exception& e) {
@@ -273,6 +273,10 @@ bool handle_provider(SlashHost& host, const std::string& arg) {
 }
 
 bool handle_model(SlashHost& host, const std::string& arg) {
+  if (host.cfg.provider == "local") {
+    push_error(host, "Use /models to choose a local model");
+    return true;
+  }
   if (arg == "refresh") {
     push_error(host, "Unknown /model option 'refresh'; did you mean /models refresh?");
     return true;
@@ -287,7 +291,7 @@ bool handle_model(SlashHost& host, const std::string& arg) {
   apply_provider(host.agent, host.cfg);
   try {
     save_config(host.cfg);
-    host.session.add_selection(host.agent.model, host.agent.provider);
+    host.session.add_selection(host.cfg.model, host.agent.provider);
     push_status(host, "model set to " + host.agent.model + "\nsaved " + config_path().string());
   } catch (const std::exception& e) {
     push_error(host, "model set for this session, save failed: " + std::string(e.what()));
@@ -373,6 +377,44 @@ bool handle_settings(SlashHost& host, const std::string& arg) {
 }
 
 bool handle_models(SlashHost& host, const std::string& arg) {
+  if (host.cfg.provider == "local") {
+    try {
+      const auto models = load_local_models();
+      if (arg.empty()) {
+        std::string list = "Local models (" + local_models_path().string() + "):";
+        for (const auto& model : models) {
+          list += "\n" + model.name + "  " + model.runtime + "  " +
+                  format_context_k(model.context_window);
+          if (model.name == host.cfg.model) {
+            list += "  (active)";
+          }
+        }
+        push_status(host, std::move(list));
+        return true;
+      }
+      const auto selected = std::find_if(
+          models.begin(), models.end(), [&](const LocalModel& model) { return model.name == arg; });
+      if (selected == models.end()) {
+        push_error(host, "Unknown local model '" + arg + "' in " + local_models_path().string());
+        return true;
+      }
+      if (selected->runtime != "llamacpp") {
+        push_error(host, "Unsupported local runtime '" + selected->runtime + "'");
+        return true;
+      }
+      host.cfg.model = selected->name;
+      host.cfg.api_url = selected->api_url;
+      host.cfg.last_models["local"] = selected->name;
+      apply_provider(host.agent, host.cfg);
+      save_config(host.cfg);
+      host.session.add_selection(host.cfg.model, host.agent.provider);
+      push_status(host,
+                  "local model set to " + selected->name + "\nsaved " + config_path().string());
+    } catch (const std::exception& e) {
+      push_error(host, e.what());
+    }
+    return true;
+  }
   if (arg != "refresh") {
     push_error(host, "Usage: /models refresh");
     return true;

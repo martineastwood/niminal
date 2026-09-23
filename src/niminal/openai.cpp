@@ -54,7 +54,7 @@ void emit_thinking_value(const ChatRequest& request, const json& value) {
 }
 
 void require_request(const ChatRequest& request) {
-  if (request.api_key.empty()) {
+  if (request.api_key.empty() && request.provider != "local") {
     throw Error("missing API key (set " +
                 (request.key_hint.empty() ? std::string("OPENROUTER_API_KEY") : request.key_hint) +
                 ")");
@@ -964,7 +964,7 @@ std::map<std::string, std::string> chat_headers(const ChatRequest& request) {
   const auto wire = wire_of(request);
   if (wire == Wire::Google) {
     headers["x-goog-api-key"] = request.api_key;
-  } else {
+  } else if (!request.api_key.empty()) {
     headers["Authorization"] = "Bearer " + request.api_key;
   }
   if (wire == Wire::Anthropic) {

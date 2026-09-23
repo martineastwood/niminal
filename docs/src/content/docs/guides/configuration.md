@@ -9,6 +9,7 @@ niminal reads one optional configuration file:
 | --- | --- |
 | `~/.niminal/config.json` | Everything you run |
 | `~/.niminal/auth.json` | Provider credentials |
+| `~/.niminal/models.json` | Local models served by llama.cpp |
 | `~/.niminal/keybindings.json` | Interactive TUI shortcuts |
 
 There is no config command to run first: a missing file is normal, and every
@@ -53,7 +54,7 @@ chmod 600 ~/.niminal/auth.json
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `provider` | `openrouter` | Active provider name |
+| `provider` | `openrouter` | Active provider name; use `local` for models in `models.json` |
 | `model` | provider default | Active model id |
 | `api_url` | provider endpoint | Override the API base URL |
 | `thinking` | unset | Reasoning level: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
@@ -71,6 +72,10 @@ chmod 600 ~/.niminal/auth.json
 
 When `thinking` is unset, the provider default applies. `/thinking` with no
 argument prints the mapped level for the current model.
+
+For the `local` provider, each entry in `models.json` supplies its own
+`context_window` and endpoint. The global `context_window` applies to hosted
+providers.
 
 Set `editor` to a shell command such as `hx` or `vim` when you want a niminal
 editor that is not `$VISUAL` or `$EDITOR`. If `editor` is unset, niminal uses
@@ -103,7 +108,7 @@ and are never written back:
 | Source | Effect |
 | --- | --- |
 | `NIMINAL_MODEL` | Overrides `model` |
-| `NIMINAL_API_URL` | Overrides `api_url` |
+| `NIMINAL_API_URL` | Overrides `api_url` for hosted providers; local models use `models.json` |
 | `NIMINAL_THINKING` | Overrides `thinking` |
 | `--provider`, `--model`, `--thinking`, `--api-key`, `--tools`, `--max-steps` | Same as their names suggest |
 | `--approve`, `--no-approve` | Choose whether project-local resources load |

@@ -78,6 +78,8 @@ matching key:
 | Anthropic | `ANTHROPIC_API_KEY` |
 | Google Gemini | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
+| Ollama Cloud | `OLLAMA_API_KEY` |
+| Local llama.cpp | No key required; see [Models and providers](https://niminal.dev/guides/models-and-providers/) |
 | Mistral | `MISTRAL_API_KEY` |
 | Hyper | `HYPER_API_KEY` |
 | OpenCode Go or Zen | `OPENCODE_API_KEY` |

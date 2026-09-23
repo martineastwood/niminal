@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace niminal::app {
 
@@ -30,7 +31,17 @@ struct Config {
   std::map<std::string, std::string> last_models;
 };
 
+struct LocalModel {
+  std::string name;
+  std::string runtime;
+  std::string model;
+  std::string api_url;
+  int context_window = 0;
+};
+
 std::filesystem::path config_path();
+std::filesystem::path local_models_path();
+std::vector<LocalModel> load_local_models();
 Config load_config();
 Config load_config_file(const std::filesystem::path& path);
 void save_config(const Config& cfg);

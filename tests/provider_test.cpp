@@ -18,17 +18,20 @@ static int fail(const char* msg) {
 
 int main() {
   if ((niminal::find_provider("anthropic") == nullptr) ||
+      (niminal::find_provider("ollama") == nullptr) ||
       (niminal::find_provider("GOOGLE") == nullptr) ||
       (niminal::find_provider("codex") != nullptr) ||
       (niminal::find_provider("gemini") != nullptr)) {
     return fail("find_provider");
   }
   auto names = niminal::provider_names();
-  if (names.find("openrouter") == std::string::npos || names.find("mistral") == std::string::npos) {
+  if (names.find("openrouter") == std::string::npos || names.find("mistral") == std::string::npos ||
+      names.find("ollama") == std::string::npos) {
     return fail("provider_names");
   }
   if (niminal::infer_provider("https://api.anthropic.com/v1/messages") != "anthropic" ||
       niminal::infer_provider("https://generativelanguage.googleapis.com/v1beta") != "google" ||
+      niminal::infer_provider("https://ollama.com/v1/chat/completions") != "ollama" ||
       niminal::infer_provider("https://opencode.ai/zen/go/v1/chat/completions") != "opencode") {
     return fail("infer_provider");
   }
@@ -55,6 +58,14 @@ int main() {
   }
   if (cfg.model != "claude-opus-4-6") {
     return fail("restore last model");
+  }
+  Config ollama_cfg;
+  if (auto result = select_provider(ollama_cfg, "ollama"); !result) {
+    return fail(result.error().what());
+  }
+  if (ollama_cfg.provider != "ollama" || ollama_cfg.model != "gemma4:31b" ||
+      ollama_cfg.api_url != "https://ollama.com/v1/chat/completions") {
+    return fail("select ollama default model");
   }
   auto codex = select_provider(cfg, "codex");
   if (codex) {
@@ -83,6 +94,29 @@ int main() {
   apply_provider(agent, stale);
   if (agent.api_url.find("/v1/messages") == std::string::npos) {
     return fail("stale api_url should normalize to provider endpoint");
+  }
+
+  apply_provider(agent, ollama_cfg);
+  if (agent.provider != "ollama" || agent.model != "gemma4:31b" ||
+      agent.api_url != "https://ollama.com/v1/chat/completions" ||
+      agent.key_hint != "OLLAMA_API_KEY" || agent.session_routing || !agent.stream_usage ||
+      agent.apply_cache || agent.prompt_cache_key) {
+    return fail("apply_provider ollama");
+  }
+
+  const char* old_ollama_key = std::getenv("OLLAMA_API_KEY");
+  const std::string saved_ollama_key = old_ollama_key == nullptr ? "" : old_ollama_key;
+  const bool had_ollama_key = old_ollama_key != nullptr;
+  setenv("OLLAMA_API_KEY", "ollama-test-key", 1);
+  const bool ollama_key_ok =
+      niminal::read_api_key(*niminal::find_provider("ollama")) == "ollama-test-key";
+  if (had_ollama_key) {
+    setenv("OLLAMA_API_KEY", saved_ollama_key.c_str(), 1);
+  } else {
+    unsetenv("OLLAMA_API_KEY");
+  }
+  if (!ollama_key_ok) {
+    return fail("read ollama API key");
   }
 
   Config custom;

@@ -38,7 +38,8 @@ const char* kUsage =
     "  no prompt          Interactive TUI\n"
     "  prompt…            One print-mode turn, then exit\n"
     "  --model ID         Model (config, NIMINAL_MODEL, or the provider default)\n"
-    "  --provider NAME    anthropic|google|hyper|mistral|openai|opencode|opencodezen|openrouter\n"
+    "  --provider NAME    "
+    "anthropic|google|hyper|local|mistral|ollama|openai|opencode|opencodezen|openrouter\n"
     "  --thinking LEVEL   none|minimal|low|medium|high|xhigh|max\n"
     "  --mode json        emit versioned JSONL events and exit\n"
     "  --mode rpc         serve JSONL commands until shutdown or EOF\n"
@@ -331,7 +332,7 @@ int run_json(niminal::Agent& agent, niminal::app::Session& session, const std::s
 
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
   auto cfg = niminal::app::load_config();
   niminal::app::normalize_config(cfg);
   if (const char* model = std::getenv("NIMINAL_MODEL"); (model != nullptr) && ((*model) != 0)) {
@@ -595,10 +596,6 @@ int main(int argc, char** argv) {
   if (tools_specified) {
     restrict_tools(agent, allowed_tools);
   }
-  if (!api_key.empty()) {
-    agent.api_key = api_key;
-  }
-
   niminal::app::Session session;
   try {
     auto dir = niminal::app::default_session_dir();
@@ -629,6 +626,9 @@ int main(int argc, char** argv) {
   };
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
   niminal::app::apply_provider(agent, cfg);
+  if (!api_key.empty()) {
+    agent.api_key = api_key;
+  }
 
   shell_env = [&session, &agent, &cfg] {
     return niminal::app::make_shell_env(session, agent, cfg);
@@ -729,4 +729,7 @@ int main(int argc, char** argv) {
   int code = run_print(agent, prompt);
   stop_extensions();
   return code;
+} catch (const std::exception& e) {
+  std::cerr << e.what() << '\n';
+  return 1;
 }

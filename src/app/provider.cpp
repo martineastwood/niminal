@@ -4,6 +4,8 @@
 
 #include <niminal/text.hpp>
 
+#include <algorithm>
+
 namespace niminal::app {
 void normalize_config(Config& cfg) {
   const niminal::ProviderSpec* spec = niminal::find_provider(cfg.provider);
@@ -27,6 +29,31 @@ void normalize_config(Config& cfg) {
 }
 
 void apply_provider(niminal::Agent& agent, const Config& cfg) {
+  if (cfg.provider == "local") {
+    const auto models = load_local_models();
+    const auto selected = std::find_if(models.begin(), models.end(), [&](const LocalModel& model) {
+      return model.name == cfg.model;
+    });
+    if (selected == models.end()) {
+      throw niminal::Error("local model '" + cfg.model + "' is not in " +
+                           local_models_path().string());
+    }
+    if (selected->runtime != "llamacpp") {
+      throw niminal::Error("unsupported local runtime '" + selected->runtime + "'");
+    }
+    agent.provider = "local";
+    agent.model = selected->model;
+    agent.api_url = selected->api_url;
+    agent.api_key = read_auth_key("local");
+    agent.key_hint.clear();
+    agent.extra_headers.clear();
+    agent.session_routing = false;
+    agent.stream_usage = false;
+    agent.apply_cache = false;
+    agent.prompt_cache_key = false;
+    agent.extra = nlohmann::json::object();
+    return;
+  }
   const niminal::ProviderSpec* spec = niminal::find_provider(cfg.provider);
   if (spec == nullptr) {
     spec = niminal::find_provider("openrouter");
@@ -62,6 +89,15 @@ void restore_config_from_session(Config& cfg, const Session& session, bool resto
       cfg.model = model;
     }
   }
+  if (cfg.provider == "local") {
+    const auto models = load_local_models();
+    const auto selected = std::find_if(models.begin(), models.end(), [&](const LocalModel& model) {
+      return model.name == cfg.model;
+    });
+    if (selected != models.end()) {
+      cfg.api_url = selected->api_url;
+    }
+  }
 }
 
 niminal::Result<void> select_provider(Config& cfg, std::string_view name) {
@@ -77,6 +113,30 @@ niminal::Result<void> select_provider(Config& cfg, std::string_view name) {
   }
   if (!cfg.provider.empty() && !cfg.model.empty()) {
     cfg.last_models[cfg.provider] = cfg.model;
+  }
+  if (n == "local") {
+    try {
+      const auto models = load_local_models();
+      if (models.empty()) {
+        return std::unexpected(niminal::Error(local_models_path().string() + " has no models"));
+      }
+      const auto last = cfg.last_models.find("local");
+      const auto selected =
+          last == cfg.last_models.end()
+              ? models.begin()
+              : std::find_if(models.begin(), models.end(),
+                             [&](const LocalModel& model) { return model.name == last->second; });
+      const auto& model = selected == models.end() ? models.front() : *selected;
+      if (model.runtime != "llamacpp") {
+        return std::unexpected(niminal::Error("unsupported local runtime '" + model.runtime + "'"));
+      }
+      cfg.provider = "local";
+      cfg.model = model.name;
+      cfg.api_url = model.api_url;
+      return {};
+    } catch (const std::exception& e) {
+      return std::unexpected(niminal::Error(e.what()));
+    }
   }
   cfg.provider = spec->name;
   auto it = cfg.last_models.find(std::string(spec->name));
