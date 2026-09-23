@@ -1,0 +1,6 @@
+.git
+.cache
+build
+build-asan
+docs/node_modules
+.DS_Store

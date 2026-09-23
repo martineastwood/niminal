@@ -1181,8 +1181,8 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
       auto* active = runtime->impl_->processes.back().get();
       const std::weak_ptr<ExtensionRuntime> weak_runtime = runtime;
       active->start_reader([weak_runtime, active](const std::string& line) {
-        if (auto runtime = weak_runtime.lock()) {
-          handle_incoming(*runtime->impl_, *active, line);
+        if (auto locked = weak_runtime.lock()) {
+          handle_incoming(*locked->impl_, *active, line);
         }
       });
     } catch (const std::exception& e) {
@@ -1527,12 +1527,12 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
         return json{{"text", text}, {"model", agent.model}, {"finish_reason", "stop"}};
       }
       if (method == "ui.editor") {
-        auto runtime = weak_runtime.lock();
-        if (!runtime) {
+        auto locked = weak_runtime.lock();
+        if (!locked) {
           throw std::runtime_error("extension host is unavailable");
         }
-        return json{{"text", runtime->edit_text(request.value("title", std::string()),
-                                                request.value("text", std::string()))}};
+        return json{{"text", locked->edit_text(request.value("title", std::string()),
+                                               request.value("text", std::string()))}};
       }
       if (method == "session.info") {
         if (!session) {

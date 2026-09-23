@@ -36,12 +36,15 @@ struct Block {
   std::string tool_id;
 
   Block() = default;
-  Block(BlockKind kind, std::string text) : kind(kind), text(std::move(text)) {}
-  Block(BlockKind kind, std::string text, std::string path, bool created)
-      : kind(kind), text(std::move(text)), path(std::move(path)), created(created) {}
-  Block(BlockKind kind, std::string text, std::string path, bool created, std::string tool_name)
-      : kind(kind), text(std::move(text)), path(std::move(path)), created(created),
-        tool_name(std::move(tool_name)) {}
+  Block(BlockKind block_kind, std::string block_text)
+      : kind(block_kind), text(std::move(block_text)) {}
+  Block(BlockKind block_kind, std::string block_text, std::string block_path, bool block_created)
+      : kind(block_kind), text(std::move(block_text)), path(std::move(block_path)),
+        created(block_created) {}
+  Block(BlockKind block_kind, std::string block_text, std::string block_path, bool block_created,
+        std::string block_tool_name)
+      : kind(block_kind), text(std::move(block_text)), path(std::move(block_path)),
+        created(block_created), tool_name(std::move(block_tool_name)) {}
 };
 
 bool is_card_block(BlockKind kind);

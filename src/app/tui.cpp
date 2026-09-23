@@ -447,7 +447,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         const bool hidden = secret && tcgetattr(STDIN_FILENO, &old_termios) == 0;
         if (hidden) {
           auto hidden_termios = old_termios;
-          hidden_termios.c_lflag &= static_cast<unsigned long>(~ECHO);
+          hidden_termios.c_lflag &= ~static_cast<tcflag_t>(ECHO);
           tcsetattr(STDIN_FILENO, TCSANOW, &hidden_termios);
         }
         std::getline(std::cin, answer);
@@ -1582,11 +1582,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         std::vector<std::string> follow_up_preview;
         {
           std::lock_guard<std::mutex> lock(steering_mu);
-          for (const auto& input : steering) {
-            steering_preview.push_back(compose_input_preview(input));
+          for (const auto& queued : steering) {
+            steering_preview.push_back(compose_input_preview(queued));
           }
-          for (const auto& input : follow_up) {
-            follow_up_preview.push_back(compose_input_preview(input));
+          for (const auto& queued : follow_up) {
+            follow_up_preview.push_back(compose_input_preview(queued));
           }
         }
         auto queue_preview = render_queue_preview(steering_preview, follow_up_preview, keybindings);

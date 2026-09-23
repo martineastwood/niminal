@@ -52,9 +52,10 @@ enum class EventKind {
 
 struct StreamEvent {
   StreamEvent() = default;
-  StreamEvent(EventKind kind, std::string text, std::string tool_name, std::string tool_id)
-      : kind(kind), text(std::move(text)), tool_name(std::move(tool_name)),
-        tool_id(std::move(tool_id)) {}
+  StreamEvent(EventKind event_kind, std::string event_text, std::string event_tool_name,
+              std::string event_tool_id)
+      : kind(event_kind), text(std::move(event_text)), tool_name(std::move(event_tool_name)),
+        tool_id(std::move(event_tool_id)) {}
 
   EventKind kind = EventKind::text_delta;
   std::string text;

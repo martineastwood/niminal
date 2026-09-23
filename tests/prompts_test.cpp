@@ -59,13 +59,12 @@ int main() {
     return 1;
   }
 
+  // A nested directory, a non-.md file, and an empty .md file are all skipped.
   fs::create_directories(root / "workspace/.niminal/prompts/nested");
-  {
-    std::ofstream out(root / "workspace/.niminal/prompts/ignored.txt");
-    out << "ignored";
-  }
-  {
-    std::ofstream out(root / "workspace/.niminal/prompts/empty.md");
+  std::ofstream(root / "workspace/.niminal/prompts/ignored.txt") << "ignored";
+  std::ofstream(root / "workspace/.niminal/prompts/empty.md");
+  if (niminal::app::discover_prompts(root / "workspace").size() != 3) {
+    return 1;
   }
   fs::remove_all(root);
 }
