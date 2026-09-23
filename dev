@@ -10,6 +10,7 @@ CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 CHECK_FAST=false
 CHECK_SANITIZER=true
+CHECK_TIDY=true
 CHECK_TIDY_ALL=true
 
 log() { printf '==> %s\n' "$*"; }
@@ -79,6 +80,7 @@ parse_check_args() {
         CHECK_TIDY_ALL=false
         ;;
       --no-sanitizer) CHECK_SANITIZER=false ;;
+      --no-tidy) CHECK_TIDY=false ;;
       --all-tidy) CHECK_TIDY_ALL=true ;;
       --changed-tidy) CHECK_TIDY_ALL=false ;;
       *) die "unknown check option: $1" ;;
@@ -117,7 +119,9 @@ cmd_configure() {
   if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
     cmake --preset dev -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
   elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
-    cmake --preset asan -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
+    # The asan preset pins Debug: sanitizers do not need optimized code, and
+    # unoptimized builds compile several times faster.
+    cmake --preset asan "$@"
   else
     cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
   fi
@@ -219,10 +223,12 @@ cmd_check() {
   cmd_format
   cmd_configure "$BUILD_DIR"
   cmd_build "$BUILD_DIR"
-  if $CHECK_TIDY_ALL; then
-    cmd_tidy --all
-  else
-    cmd_tidy --changed
+  if $CHECK_TIDY; then
+    if $CHECK_TIDY_ALL; then
+      cmd_tidy --all
+    else
+      cmd_tidy --changed
+    fi
   fi
   cmd_test "$BUILD_DIR"
   if $CHECK_SANITIZER; then
@@ -254,6 +260,7 @@ Focused feedback loop:
 Check options:
   --fast          skip sanitizer; tidy only changed src/include .cpp files
   --no-sanitizer  skip the ASan/UBSan build and tests
+  --no-tidy       skip clang-tidy (CI runs it as a separate job)
   --changed-tidy  tidy only changed src/include .cpp files
   --all-tidy      tidy all src/include .cpp files (default)
 

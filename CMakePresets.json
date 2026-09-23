@@ -22,6 +22,7 @@
       "inherits": "dev",
       "binaryDir": "${sourceDir}/build/asan",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
         "NIMINAL_SANITIZERS": true
       }
     }

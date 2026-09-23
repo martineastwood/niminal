@@ -32,5 +32,30 @@ jobs:
             sudo ln -sf "/usr/bin/${tool}-20" "/usr/local/bin/${tool}"
           done
 
+      # clang-tidy runs as its own job, so a tidy failure does not hide the
+      # build, unit test, and sanitizer results.
       - name: Run full validation
-        run: ./dev check
+        run: ./dev check --no-tidy
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build and analysis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev zlib1g-dev clang-format-20 clang-tidy-20
+          for tool in clang-format clang-tidy run-clang-tidy; do
+            sudo ln -sf "/usr/bin/${tool}-20" "/usr/local/bin/${tool}"
+          done
+
+      # clang-tidy only needs the compile commands, not a built binary.
+      - name: Configure
+        run: ./dev configure
+
+      - name: Run clang-tidy
+        run: ./dev tidy --all
