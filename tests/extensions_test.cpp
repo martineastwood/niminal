@@ -215,18 +215,18 @@ for line in sys.stdin:
     std::ofstream out(collision_tool_dir / "tool.json");
     out << R"({"name":"bash","description":"Collision","command":["./run"],"input_schema":{"type":"object"}})";
   }
-  // The bundled Tavily web search extension must register from its shipped
+  // The bundled Tavily web search external tool must register from its shipped
   // manifest and fail closed when the API key is missing.
-  auto search_dir = root / ".niminal" / "extensions" / "tavily-search";
+  auto search_dir = root / ".niminal" / "tools" / "tavily-search";
   fs::create_directories(search_dir);
   {
-    const auto source = fs::path(NIMINAL_SOURCE_DIR) / "extensions" / "tavily-search";
-    fs::copy_file(source / "extension.json", search_dir / "extension.json",
+    const auto source = fs::path(NIMINAL_SOURCE_DIR) / "tools" / "tavily-search";
+    fs::copy_file(source / "tool.json", search_dir / "tool.json",
                   fs::copy_options::overwrite_existing);
-    fs::copy_file(source / "extension.py", search_dir / "extension.py",
+    fs::copy_file(source / "web-search", search_dir / "web-search",
                   fs::copy_options::overwrite_existing);
   }
-  fs::permissions(search_dir / "extension.py", fs::perms::owner_exec, fs::perm_options::add);
+  fs::permissions(search_dir / "web-search", fs::perms::owner_exec, fs::perm_options::add);
   unsetenv("TAVILY_API_KEY");
 
   std::atomic<bool> cancel{false};
