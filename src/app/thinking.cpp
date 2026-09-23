@@ -70,7 +70,7 @@ json effort_options(std::string_view provider, std::string_view level) {
   json out = json::object();
   auto p = niminal::lower_copy(std::string(provider));
   auto lv = std::string(level);
-  if (p == "openrouter" || p == "openai" || p == "hyper") {
+  if (p == "openrouter" || p == "openai" || p == "foundry" || p == "hyper") {
     out["reasoning"] = json{{"effort", lv}};
   } else if (p == "mistral" || p == "opencode" || p == "opencodezen" || p == "google") {
     out["reasoning_effort"] = lv;
@@ -88,7 +88,7 @@ json toggle_options(std::string_view provider) {
   if (p == "openrouter") {
     return json{{"reasoning", json{{"enabled", true}}}};
   }
-  if (p == "openai" || p == "hyper") {
+  if (p == "openai" || p == "foundry" || p == "hyper") {
     return json{{"reasoning", json{{"effort", "medium"}}}};
   }
   if (p == "mistral" || p == "opencode" || p == "opencodezen") {

@@ -13,9 +13,12 @@ namespace niminal {
 
 namespace {
 
-enum class Wire { Chat, Anthropic, Google };
+enum class Wire { Chat, Responses, Anthropic, Google };
 
 Wire wire_of(const ChatRequest& request) {
+  if (request.provider == "foundry") {
+    return Wire::Responses;
+  }
   if (request.provider == "anthropic") {
     return Wire::Anthropic;
   }
@@ -61,6 +64,9 @@ void require_request(const ChatRequest& request) {
   }
   if (request.model.empty()) {
     throw Error("missing model");
+  }
+  if (wire_of(request) == Wire::Responses && request.api_url.empty()) {
+    throw Error("missing API URL (set providers.foundry.api_url)");
   }
 }
 
@@ -313,6 +319,119 @@ json openai_chat_body(const ChatRequest& request) {
   }
   if (cache) {
     apply_cache_breakpoints(payload);
+  }
+  return payload;
+}
+
+json responses_image(const json& image) {
+  return json{
+      {"type", "input_image"},
+      {"image_url", "data:" + image.value("mime_type", "") + ";base64," + image.value("data", "")}};
+}
+
+json responses_message(const json& source) {
+  json message = json::object();
+  const auto role = source.value("role", "user");
+  message["role"] = role;
+  const auto content = source.value("content", json(""));
+  bool has_image = false;
+  json parts = json::array();
+  if (content.is_array()) {
+    for (const auto& part : content) {
+      if (part.is_object() && part.value("type", "") == "image") {
+        parts.push_back(responses_image(part));
+        has_image = true;
+      } else {
+        const auto text = part.is_string()   ? part.get<std::string>()
+                          : part.is_object() ? part.value("text", "")
+                                             : "";
+        if (!text.empty()) {
+          parts.push_back(json{{"type", "input_text"}, {"text", text}});
+        }
+      }
+    }
+  }
+  message["content"] = has_image ? std::move(parts) : json(join_text(content));
+  return message;
+}
+
+json responses_tools(const json& tools) {
+  json out = json::array();
+  if (!tools.is_array()) {
+    return out;
+  }
+  for (const auto& tool : tools) {
+    if (!tool.is_object()) {
+      continue;
+    }
+    const auto fn =
+        tool.contains("function") && tool["function"].is_object() ? tool["function"] : tool;
+    json item = json::object();
+    item["type"] = "function";
+    item["name"] = fn.value("name", tool.value("name", ""));
+    item["description"] = fn.value("description", "");
+    item["parameters"] = fn.value("parameters", json::object());
+    if (fn.contains("strict")) {
+      item["strict"] = fn["strict"];
+    }
+    out.push_back(std::move(item));
+  }
+  return out;
+}
+
+json responses_body(const ChatRequest& request) {
+  json payload = json::object();
+  payload["model"] = request.model;
+  payload["stream"] = request.stream;
+  payload["input"] = json::array();
+  if (request.messages.is_array()) {
+    for (const auto& source : request.messages) {
+      if (!source.is_object()) {
+        continue;
+      }
+      const auto role = source.value("role", "user");
+      if (role == "tool") {
+        payload["input"].push_back(json{{"type", "function_call_output"},
+                                        {"call_id", source.value("tool_call_id", "")},
+                                        {"output", join_text(source.value("content", json("")))}});
+        if (source.contains("images")) {
+          json content = image_parts(source["images"], responses_image);
+          if (!content.empty()) {
+            payload["input"].push_back(json{{"role", "user"}, {"content", std::move(content)}});
+          }
+        }
+        continue;
+      }
+      const auto text = join_text(source.value("content", json("")));
+      if (role != "assistant" || !source.contains("tool_calls") ||
+          !source["tool_calls"].is_array()) {
+        payload["input"].push_back(responses_message(source));
+        continue;
+      }
+      if (!text.empty()) {
+        payload["input"].push_back(responses_message(source));
+      }
+      for (const auto& call : source["tool_calls"]) {
+        if (!call.is_object()) {
+          continue;
+        }
+        const auto fn = call.value("function", json::object());
+        payload["input"].push_back(json{{"type", "function_call"},
+                                        {"call_id", call.value("id", "")},
+                                        {"name", fn.value("name", "")},
+                                        {"arguments", fn.value("arguments", "{}")}});
+      }
+    }
+  }
+  if (request.max_tokens > 0) {
+    payload["max_output_tokens"] = request.max_tokens;
+  }
+  auto tools = responses_tools(request.tools);
+  if (!tools.empty()) {
+    payload["tools"] = std::move(tools);
+  }
+  if ((request.prompt_cache_key || request.session_routing) && !request.conversation_id.empty()) {
+    payload["prompt_cache_key"] = request.conversation_id;
   }
   return payload;
 }
@@ -887,6 +1006,101 @@ void consume_openai(const ChatRequest& request, ChatResult& result, std::map<int
   }
 }
 
+void collect_response_call(std::map<int, ToolCall>& calls, int index, const json& item) {
+  if (!item.is_object() || item.value("type", "") != "function_call") {
+    return;
+  }
+  auto& call = calls[index];
+  call.id = item.value("call_id", "");
+  call.name = item.value("name", "");
+  if (item.contains("arguments") && item["arguments"].is_string()) {
+    call.arguments = item["arguments"].get<std::string>();
+  }
+}
+
+void consume_responses(const ChatRequest& request, ChatResult& result,
+                       std::map<int, ToolCall>& calls, const json& event) {
+  throw_if_error(event);
+  if (!event.is_object()) {
+    return;
+  }
+  const auto type = event.value("type", "");
+  if (type == "error" || type == "response.failed") {
+    const auto& response = event.value("response", json::object());
+    const auto error = response.value("error", event.value("error", json::object()));
+    const auto message = event.value("message", "");
+    throw Error(error.is_object() ? error.value("message", message.empty() ? error.dump() : message)
+                : error.is_string() ? error.get<std::string>()
+                : message.empty()   ? event.dump()
+                                    : message);
+  }
+  if (type == "response.output_text.delta" || type == "response.refusal.delta") {
+    const auto piece = event.value("delta", "");
+    if (!piece.empty()) {
+      result.text += piece;
+      emit(request, StreamEvent{EventKind::text_delta, piece, {}, {}});
+    }
+  } else if (type == "response.reasoning_summary_text.delta" ||
+             type == "response.reasoning_text.delta") {
+    const auto piece = event.value("delta", "");
+    result.reasoning_content += piece;
+    emit_thinking(request, piece);
+  } else if (type == "response.function_call_arguments.delta" ||
+             type == "response.function_call_arguments.done") {
+    auto& call = calls[event.value("output_index", 0)];
+    if (type == "response.function_call_arguments.delta") {
+      call.arguments += event.value("delta", "");
+    } else {
+      call.arguments = event.value("arguments", call.arguments);
+    }
+  } else if (type == "response.output_item.added" || type == "response.output_item.done") {
+    collect_response_call(calls, event.value("output_index", 0),
+                          event.value("item", json::object()));
+  } else if (type == "response.incomplete") {
+    result.finish_reason = "length";
+    const auto response = event.value("response", json::object());
+    if (response.contains("usage")) {
+      merge_usage(result.usage, parse_chat_usage(response["usage"]));
+    }
+  } else if (type == "response.completed") {
+    const auto response = event.value("response", json::object());
+    if (response.contains("usage")) {
+      merge_usage(result.usage, parse_chat_usage(response["usage"]));
+    }
+    if (response.value("status", "") == "incomplete") {
+      result.finish_reason = "length";
+    }
+    if (response.contains("output") && response["output"].is_array()) {
+      for (size_t i = 0; i < response["output"].size(); ++i) {
+        collect_response_call(calls, static_cast<int>(i), response["output"][i]);
+      }
+    }
+  }
+}
+
+std::string responses_text(const json& body) {
+  if (body.contains("output_text") && body["output_text"].is_string()) {
+    return body["output_text"].get<std::string>();
+  }
+  if (!body.contains("output") || !body["output"].is_array()) {
+    return {};
+  }
+  std::string text;
+  for (const auto& item : body["output"]) {
+    if (!item.is_object() || item.value("type", "") != "message" || !item.contains("content") ||
+        !item["content"].is_array()) {
+      continue;
+    }
+    for (const auto& part : item["content"]) {
+      if (part.is_object() &&
+          (part.value("type", "") == "output_text" || part.value("type", "") == "refusal")) {
+        text += part.value("text", "");
+      }
+    }
+  }
+  return text;
+}
+
 std::string openai_text(const json& body) {
   if (!body.contains("choices") || !body["choices"].is_array() || body["choices"].empty() ||
       !body["choices"][0].is_object()) {
@@ -941,6 +1155,9 @@ std::string google_text(const json& body) {
 json chat_body(const ChatRequest& request) {
   json payload;
   switch (wire_of(request)) {
+  case Wire::Responses:
+    payload = responses_body(request);
+    break;
   case Wire::Anthropic:
     payload = anthropic_body(request);
     break;
@@ -1005,7 +1222,9 @@ ChatResult stream_chat(const ChatRequest& request) {
               return;
             }
             json chunk = json::parse(data);
-            if (wire == Wire::Anthropic) {
+            if (wire == Wire::Responses) {
+              consume_responses(req, result, calls, chunk);
+            } else if (wire == Wire::Anthropic) {
               consume_anthropic(req, result, anthropic, chunk);
             } else if (wire == Wire::Google) {
               consume_google(req, result, calls, chunk);
@@ -1068,6 +1287,13 @@ std::string complete_chat(const ChatRequest& request) {
   json body = json::parse(res->body);
   throw_if_error(body);
   switch (wire_of(req)) {
+  case Wire::Responses: {
+    auto text = responses_text(body);
+    if (text.empty() && !body.contains("output")) {
+      throw Error("compaction: empty model response");
+    }
+    return text;
+  }
   case Wire::Anthropic:
     return anthropic_text(body);
   case Wire::Google:

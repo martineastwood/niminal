@@ -17,15 +17,15 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/help` | Show command list and keybinding help |
 | `/version` | Show the version |
 | `/provider [name]` | Show or set the provider |
-| `/model [ID]` | Show or set the model |
+| `/model [ID]` | Show or set the active model for any provider |
 | `/thinking [level]` | Show or set reasoning |
 | `/theme [name]` | Show or select a built-in or custom theme |
 | `/settings` | Edit config in an overlay |
 | `/permissions [clear]` | Show or clear tool grants |
 | `/trust [on\|off]` | Show or set project resource trust |
 | `/yolo [on\|off]` | Auto-approve tools in the TUI |
-| `/models [name]` | List or select configured models when using the local provider |
-| `/models refresh` | Refresh the models.dev catalog for hosted providers |
+| `/models` | List configured local models when using the local provider |
+| `/models refresh` | Refresh the models.dev catalog |
 | `/session` | Show the current session |
 | `/name [title]` | Show or set the session name |
 | `/resume [ID]` | List or load a session |
@@ -39,7 +39,7 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/copy` | Copy the last error or reply |
 | `/retry` | Retry the last failed request |
 | `/compact [instruction]` | Summarize older session history |
-| `/reload` | Reload trusted project resources |
+| `/reload` | Reload trusted project resources, keybindings, and the theme |
 | `/skill:NAME [request]` | Load a skill |
 | `/quit`, `/exit` | Exit |
 

@@ -16,7 +16,7 @@ There is no config command to run first: a missing file is normal, and every
 setting has a default. Many people never write more than a provider and a model.
 In the interactive TUI, run `/settings` to edit these values in an overlay
 without opening the file by hand. You can [change TUI shortcuts](/reference/keybindings/) separately in
-`keybindings.json`; changes take effect when you next start niminal.
+`keybindings.json`; run `/reload` to apply them without restarting.
 
 Credentials are not stored in `config.json`. Export the matching provider
 environment variable, add a credential to `auth.json`, or pass `--api-key KEY`
@@ -56,7 +56,6 @@ chmod 600 ~/.niminal/auth.json
 | --- | --- | --- |
 | `provider` | `openrouter` | Active provider name; use `local` for models in `models.json` |
 | `model` | provider default | Active model id |
-| `api_url` | provider endpoint | Override the API base URL |
 | `thinking` | unset | Reasoning level: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `show_thinking` | `false` | Start new thinking cards expanded in the TUI |
 | `theme` | `auto` | `light`, `dark`, `auto`, or a name from `~/.niminal/themes/` |
@@ -69,6 +68,9 @@ chmod 600 ~/.niminal/auth.json
 | `keep_recent_tokens` | `20000` | Recent history kept verbatim when compacting |
 | `context_window` | `128000` (implicit) | Token budget compaction measures against |
 | `providers.<name>.last_model` | per provider | Restored when you switch back to that provider |
+| `providers.<name>.api_url` | provider endpoint | Custom endpoint for that provider, including query parameters |
+| `/settings` `api_url` | active provider endpoint | Saves as `providers.<active>.api_url` |
+| `/settings` `api_url` | active provider endpoint | Updates `providers.<active>.api_url` |
 
 When `thinking` is unset, the provider default applies. `/thinking` with no
 argument prints the mapped level for the current model.
@@ -108,7 +110,7 @@ and are never written back:
 | Source | Effect |
 | --- | --- |
 | `NIMINAL_MODEL` | Overrides `model` |
-| `NIMINAL_API_URL` | Overrides `api_url` for hosted providers; local models use `models.json` |
+| `NIMINAL_API_URL` | Overrides the active hosted provider endpoint for this process; local models use `models.json` |
 | `NIMINAL_THINKING` | Overrides `thinking` |
 | `--provider`, `--model`, `--thinking`, `--api-key`, `--tools`, `--max-steps` | Same as their names suggest |
 | `--approve`, `--no-approve` | Choose whether project-local resources load |

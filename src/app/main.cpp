@@ -73,7 +73,7 @@ const char* kUsage =
     "Set --api-key, ~/.niminal/auth.json, or the matching provider key\n"
     "(OPENROUTER_API_KEY by default). File tools stay in cwd. Model bash tools\n"
     "ask in the TUI. Customize shortcuts in\n"
-    "~/.niminal/keybindings.json, then restart the TUI.\n";
+    "~/.niminal/keybindings.json, then run /reload.\n";
 
 const char* kSystem = R"(You are niminal, a coding agent working with the user in their workspace.
 Help them understand, diagnose, and change code according to their request.
@@ -714,8 +714,16 @@ int main(int argc, char** argv) try {
                    "print mode.\n";
       return 2;
     }
-    int code = niminal::app::run_tui(agent, ws, cfg, session, extensions, yolo,
-                                     tools_specified ? &allowed_tools : nullptr);
+    auto reload_system_prompt = [&] {
+      if (!system_prompt.replace.empty()) {
+        return;
+      }
+      auto file = niminal::app::load_system_prompt(ws.root());
+      agent.system = file.empty() ? std::string(kSystem) : std::move(file);
+    };
+    int code =
+        niminal::app::run_tui(agent, ws, cfg, session, extensions, yolo,
+                              tools_specified ? &allowed_tools : nullptr, reload_system_prompt);
     stop_extensions();
     return code;
   }

@@ -109,19 +109,11 @@ Config load_config_file(const fs::path& path) {
         cfg.model = std::move(model);
       }
     }
-    if (doc.contains("api_url") && doc["api_url"].is_string()) {
-      auto url = doc["api_url"].get<std::string>();
-      if (!url.empty()) {
-        cfg.api_url = std::move(url);
-      }
-    }
     if (doc.contains("provider") && doc["provider"].is_string()) {
       auto provider = doc["provider"].get<std::string>();
       if (!provider.empty()) {
         cfg.provider = std::move(provider);
       }
-    } else if (!cfg.api_url.empty()) {
-      cfg.provider = niminal::infer_provider(cfg.api_url);
     }
     if (doc.contains("thinking") && doc["thinking"].is_string()) {
       cfg.thinking = doc["thinking"].get<std::string>();
@@ -163,13 +155,26 @@ Config load_config_file(const fs::path& path) {
     }
     if (doc.contains("providers") && doc["providers"].is_object()) {
       for (auto& [name, block] : doc["providers"].items()) {
-        if (block.is_object() && block.contains("last_model") && block["last_model"].is_string()) {
-          auto model = block["last_model"].get<std::string>();
-          if (!model.empty()) {
-            cfg.last_models[name] = std::move(model);
+        if (block.is_object()) {
+          if (block.contains("last_model") && block["last_model"].is_string()) {
+            auto model = block["last_model"].get<std::string>();
+            if (!model.empty()) {
+              cfg.last_models[name] = std::move(model);
+            }
+          }
+          if (block.contains("api_url") && block["api_url"].is_string()) {
+            auto url = block["api_url"].get<std::string>();
+            if (!url.empty()) {
+              cfg.provider_api_urls[name] = std::move(url);
+            }
           }
         }
       }
+    }
+    if (auto it = cfg.provider_api_urls.find(cfg.provider); it != cfg.provider_api_urls.end()) {
+      cfg.api_url = it->second;
+    } else if (const auto* spec = niminal::find_provider(cfg.provider)) {
+      cfg.api_url = spec->endpoint;
     }
   } catch (...) {
     return Config{};
@@ -205,19 +210,19 @@ void save_config_file(const fs::path& path, const Config& cfg) {
   if (cfg.context_window > 0) {
     doc["context_window"] = cfg.context_window;
   }
-  if (!cfg.api_url.empty()) {
-    doc["api_url"] = cfg.api_url;
-  }
   if (!cfg.thinking.empty()) {
     doc["thinking"] = cfg.thinking;
   }
   if (!cfg.editor.empty()) {
     doc["editor"] = cfg.editor;
   }
-  if (!cfg.last_models.empty()) {
+  if (!cfg.last_models.empty() || !cfg.provider_api_urls.empty()) {
     json providers = json::object();
+    for (const auto& [name, url] : cfg.provider_api_urls) {
+      providers[name]["api_url"] = url;
+    }
     for (const auto& [name, model] : cfg.last_models) {
-      providers[name] = json{{"last_model", model}};
+      providers[name]["last_model"] = model;
     }
     doc["providers"] = std::move(providers);
   }

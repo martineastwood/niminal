@@ -49,6 +49,7 @@ struct SlashHost {
   std::function<void(Session next, const std::string& note, const std::string& reason)>
       adopt_session;
   std::function<void()> restart_extensions;
+  std::function<void()> reload_local;
   std::function<void()> apply_extension_actions;
   std::function<void(niminal::UserInput prompt, bool retry)> send_prompt;
   std::function<void()> exit_ui;

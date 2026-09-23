@@ -191,8 +191,9 @@ to see available names, or select one in `/settings`. `base` is `light` or
 `dark`; omitted colors use that palette. Colors must be `#RRGGBB`. Available
 color names are `accent`, `code`, `add`, `del`, `meta`, `thinking`, `error`,
 `muted`, `emphasis`, `italic`, `quote`, `input_fg`, `input_bg`, and `hover_bg`.
-Edit the file and run `/theme ocean` again to reload it. If a theme file is
-missing or invalid at startup, the TUI uses `auto` until you choose a theme.
+Edit the file and run `/theme ocean` again, or `/reload`, to reload it. If a
+theme file is missing or invalid at startup, the TUI uses `auto` until you
+choose a theme.
 
 Assistant replies render as Markdown: headings, lists, quotes, tables, inline
 emphasis, and fenced code.

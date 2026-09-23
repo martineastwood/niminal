@@ -247,7 +247,8 @@ std::optional<size_t> card_at(const std::vector<Block>& blocks, const std::vecto
 
 int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& session,
             std::shared_ptr<ExtensionRuntime>& extensions, bool yolo,
-            const std::vector<std::string>* allowed_tools) {
+            const std::vector<std::string>* allowed_tools,
+            std::function<void()> reload_system_prompt) {
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
   Theme theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
@@ -1032,6 +1033,18 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     apply_extension_actions();
   };
 
+  auto reload_local = [&] {
+    loaded_keybindings = load_keybindings();
+    if (!loaded_keybindings.error.empty()) {
+      blocks.push_back(Block{BlockKind::error, loaded_keybindings.error +
+                                                   "\nUsing default keybindings for this launch."});
+    }
+    theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
+    if (reload_system_prompt) {
+      reload_system_prompt();
+    }
+  };
+
   auto load_into_ui = [&](const std::string& note) {
     blocks.clear();
     if (!note.empty()) {
@@ -1281,6 +1294,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
             adopt_session(std::move(next), note, reason);
           },
           [&] { restart_extensions(); },
+          [&] { reload_local(); },
           [&] { apply_extension_actions(); },
           [&](niminal::UserInput input, bool retry) { send_prompt(std::move(input), retry); },
           [&] {

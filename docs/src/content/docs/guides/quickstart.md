@@ -20,6 +20,7 @@ exporting its key, then selecting it with `--provider` or `/provider`:
 | Provider | Credential environment variable |
 | --- | --- |
 | Anthropic | `ANTHROPIC_API_KEY` |
+| Microsoft Foundry | `AZURE_FOUNDRY_API_KEY` |
 | Google Gemini API | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY` |
 | Hyper | `HYPER_API_KEY` |
 | Mistral | `MISTRAL_API_KEY` |
@@ -44,6 +45,10 @@ The `key` can also be a literal API key. Keep this file private:
 ```sh
 chmod 600 ~/.niminal/auth.json
 ```
+
+Foundry also needs its workspace Responses URL, including `api-version`. See
+[Models and providers](/guides/models-and-providers/#use-microsoft-foundry) for
+the config example.
 
 Ollama Cloud uses the OpenAI-compatible API. For example, run a one-shot turn
 with its default model:

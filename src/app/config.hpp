@@ -30,6 +30,7 @@ struct Config {
   int keep_recent_tokens = kDefaultKeepRecentTokens;
   int context_window = 0; // 0 means use the built-in default.
   std::map<std::string, std::string> last_models;
+  std::map<std::string, std::string> provider_api_urls;
 };
 
 struct LocalModel {

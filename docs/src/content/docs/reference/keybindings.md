@@ -14,9 +14,9 @@ to jump to the start and end of your draft:
 }
 ```
 
-Create the file if it does not exist, then restart niminal. You only need to
-list actions you want to change. Each entry replaces that action's default
-keys. `/help` shows the keys active in the current TUI.
+Create the file if it does not exist, then run `/reload` to apply your changes.
+You only need to list actions you want to change. Each entry replaces that
+action's default keys. `/help` shows the keys active in the current TUI.
 
 Use lowercase key names. Join modifiers with `+`, as in `alt+left` or
 `ctrl+shift+o`. Supported modifiers are `ctrl`, `alt`, and `shift`. You can use
@@ -27,8 +27,9 @@ Ctrl-I, Ctrl-J, and Ctrl-M cannot be bound separately from Tab or Enter and are
 rejected in this file.
 
 If the file contains an unsupported key, unknown action, or two shortcuts that
-conflict in the same TUI context, niminal shows the error at startup and uses
-the default keybindings for that launch. Every action needs at least one key.
+conflict in the same TUI context, niminal shows the error at startup or on
+`/reload` and uses the default keybindings. Every action needs at least one
+key.
 Mouse actions and ordinary composer editing keys are fixed. A custom shortcut
 using a key such as Backspace or Left takes precedence over its editing action.
 

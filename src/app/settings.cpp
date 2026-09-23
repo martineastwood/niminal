@@ -291,6 +291,9 @@ SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::str
       return fail("api_url cannot be empty");
     }
     cfg.api_url = trimmed;
+    if (cfg.provider != "local") {
+      cfg.provider_api_urls[cfg.provider] = cfg.api_url;
+    }
     return ok(true);
   }
   case SettingField::editor:

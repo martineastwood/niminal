@@ -62,7 +62,7 @@ The first record identifies the workspace. Recovery backups use the suffix
 
 ## Config writes
 
-`/provider`, `/model`, `/models NAME`, `/thinking`, and `/theme` write
+`/provider`, `/model`, `/thinking`, and `/theme` write
 `~/.niminal/config.json`. RPC `set_steering_mode` and `set_follow_up_mode` write
 there too.
 

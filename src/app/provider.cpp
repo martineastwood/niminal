@@ -12,20 +12,11 @@ void normalize_config(Config& cfg) {
   if (spec == nullptr) {
     return;
   }
-  if (cfg.api_url.empty()) {
-    cfg.api_url = spec->endpoint;
+  if (auto it = cfg.provider_api_urls.find(cfg.provider); it != cfg.provider_api_urls.end()) {
+    cfg.api_url = it->second;
     return;
   }
-  for (const auto& other : niminal::all_providers()) {
-    if (&other != spec && cfg.api_url == other.endpoint) {
-      cfg.api_url = spec->endpoint;
-      return;
-    }
-  }
-  if (cfg.provider == "anthropic" &&
-      cfg.api_url == "https://api.anthropic.com/v1/chat/completions") {
-    cfg.api_url = spec->endpoint;
-  }
+  cfg.api_url = spec->endpoint;
 }
 
 void apply_provider(niminal::Agent& agent, const Config& cfg) {
@@ -63,6 +54,10 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
   agent.model_runtime.clear();
   agent.model = cfg.model.empty() ? spec->default_model : cfg.model;
   agent.api_url = cfg.api_url.empty() ? spec->endpoint : cfg.api_url;
+  if (agent.api_url.empty()) {
+    throw niminal::Error("missing API URL (set providers." + std::string(spec->name) +
+                         ".api_url in ~/.niminal/config.json)");
+  }
   agent.api_key = read_auth_key(spec->name);
   if (agent.api_key.empty()) {
     agent.api_key = niminal::read_api_key(*spec);
@@ -82,7 +77,8 @@ void restore_config_from_session(Config& cfg, const Session& session, bool resto
     if (auto p = session.last_provider(); !p.empty()) {
       if (const auto* spec = niminal::find_provider(p)) {
         cfg.provider = p;
-        cfg.api_url = spec->endpoint;
+        auto it = cfg.provider_api_urls.find(p);
+        cfg.api_url = it != cfg.provider_api_urls.end() ? it->second : std::string(spec->endpoint);
       }
     }
   }
@@ -112,6 +108,10 @@ niminal::Result<void> select_provider(Config& cfg, std::string_view name) {
   if (spec == nullptr) {
     return std::unexpected(niminal::Error("unknown provider '" + std::string(name) + "' (use " +
                                           niminal::provider_names() + ")"));
+  }
+  if (n != "local" && spec->endpoint.empty() && !cfg.provider_api_urls.contains(n)) {
+    return std::unexpected(
+        niminal::Error("configure providers." + n + ".api_url in ~/.niminal/config.json first"));
   }
   if (!cfg.provider.empty() && !cfg.model.empty()) {
     cfg.last_models[cfg.provider] = cfg.model;
@@ -143,7 +143,8 @@ niminal::Result<void> select_provider(Config& cfg, std::string_view name) {
   cfg.provider = spec->name;
   auto it = cfg.last_models.find(std::string(spec->name));
   cfg.model = it != cfg.last_models.end() && !it->second.empty() ? it->second : spec->default_model;
-  cfg.api_url = spec->endpoint;
+  auto url = cfg.provider_api_urls.find(std::string(spec->name));
+  cfg.api_url = url != cfg.provider_api_urls.end() ? url->second : std::string(spec->endpoint);
   return {};
 }
 
