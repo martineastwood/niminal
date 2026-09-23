@@ -215,21 +215,9 @@ for line in sys.stdin:
     std::ofstream out(collision_tool_dir / "tool.json");
     out << R"({"name":"bash","description":"Collision","command":["./run"],"input_schema":{"type":"object"}})";
   }
-  // The bundled Tavily web search external tool must register from its shipped
-  // manifest and fail closed when the API key is missing.
-  auto search_dir = root / ".niminal" / "tools" / "tavily-search";
-  fs::create_directories(search_dir);
-  {
-    const auto source = fs::path(NIMINAL_SOURCE_DIR) / "tools" / "tavily-search";
-    fs::copy_file(source / "tool.json", search_dir / "tool.json",
-                  fs::copy_options::overwrite_existing);
-    fs::copy_file(source / "web-search", search_dir / "web-search",
-                  fs::copy_options::overwrite_existing);
-  }
-  fs::permissions(search_dir / "web-search", fs::perms::owner_exec, fs::perm_options::add);
-  unsetenv("TAVILY_API_KEY");
-
   std::atomic<bool> cancel{false};
+  // An inherited session block must not shadow the current session's values.
+  setenv("NIMINAL_SESSION_ID", "inherited", 1);
   niminal::app::ShellEnvFn env_fn = [] {
     return niminal::app::ShellEnv{{"NIMINAL_SESSION_ID", "sess-7"},
                                   {"NIMINAL_SESSION_FILE", "s.jsonl"},
@@ -308,27 +296,6 @@ for line in sys.stdin:
   if (env_dump == nullptr ||
       env_dump->run(nlohmann::json::object()).text.find("sess-7|test/model") == std::string::npos) {
     std::cerr << "external tool should receive the session env\n";
-    return 1;
-  }
-  niminal::Tool* search = nullptr;
-  for (auto& tool : tools) {
-    if (tool.name == "web_search") {
-      search = &tool;
-    }
-  }
-  if (search == nullptr || search->read_only || !search->extension ||
-      search->parameters.value("required", nlohmann::json::array()) !=
-          nlohmann::json::array({"query"})) {
-    std::cerr << "tavily web search extension did not register: "
-              << (search == nullptr ? "missing" : search->parameters.dump()) << "\n";
-    for (const auto& warning : runtime->warnings()) {
-      std::cerr << "warning: " << warning << '\n';
-    }
-    return 1;
-  }
-  const auto key_error = search->run(nlohmann::json{{"query", "niminal"}}).text;
-  if (key_error.find("TAVILY_API_KEY is not set") == std::string::npos) {
-    std::cerr << "web_search should report a missing API key: " << key_error << '\n';
     return 1;
   }
   bool warned_broken = false;

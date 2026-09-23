@@ -68,7 +68,7 @@ bool builtin_tool(std::string name) {
   for (char& c : name) {
     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   }
-  static const std::set<std::string> names = {"ask_user", "bash", "edit", "glob", "grep",
+  static const std::set<std::string> names = {"ask_user", "bash", "edit",  "glob", "grep",
                                               "ls",       "read", "skill", "write"};
   return names.contains(name);
 }
@@ -282,15 +282,9 @@ void exec_with_env(const std::string& file, std::vector<std::string> command,
     argv.push_back(value.data());
   }
   argv.push_back(nullptr);
-  std::vector<std::string> entries;
-  entries.reserve(extra.size());
-  for (const auto& [key, value] : extra) {
-    entries.push_back(key + "=" + value);
-  }
+  auto entries = child_environment(extra, environ);
   std::vector<char*> envp;
-  for (char** e = environ; *e != nullptr; ++e) {
-    envp.push_back(*e);
-  }
+  envp.reserve(entries.size() + 1);
   for (auto& entry : entries) {
     envp.push_back(entry.data());
   }

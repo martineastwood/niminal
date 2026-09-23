@@ -219,18 +219,11 @@ std::string execute_bash(const std::string& command, const fs::path& cwd, int ti
     }
     // Export the composed environment via execve; setenv after fork in a
     // multi-threaded parent is unsafe, so the environment is built here.
-    std::vector<std::string> env_store;
-    env_store.reserve(env.size());
-    for (const auto& [key, value] : env) {
-      env_store.push_back(key + "=" + value);
-    }
+    auto env_store = child_environment(env, environ);
     std::vector<char*> argv{const_cast<char*>("sh"), const_cast<char*>("-c"),
                             const_cast<char*>(command.c_str()), nullptr};
     std::vector<char*> envp;
     envp.reserve(env_store.size() + 1);
-    for (char** e = environ; *e != nullptr; ++e) {
-      envp.push_back(*e);
-    }
     for (auto& entry : env_store) {
       envp.push_back(entry.data());
     }

@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace niminal::app {
@@ -19,6 +20,26 @@ using ShellEnv = std::map<std::string, std::string>;
 using ShellEnvFn = std::function<ShellEnv()>;
 
 ShellEnv make_shell_env(const Session& session, const niminal::Agent& agent, const Config& cfg);
+
+// The environment for a child process: the session block plus the inherited
+// environment, with any inherited entry whose name is in the block dropped so
+// the session values always win.
+inline std::vector<std::string> child_environment(const ShellEnv& env, char** inherited) {
+  std::vector<std::string> entries;
+  entries.reserve(env.size());
+  for (const auto& [key, value] : env) {
+    entries.push_back(key + "=" + value);
+  }
+  for (char** e = inherited; e != nullptr && *e != nullptr; ++e) {
+    const std::string_view entry(*e);
+    const auto eq = entry.find('=');
+    if (eq != std::string_view::npos && env.contains(std::string(entry.substr(0, eq)))) {
+      continue;
+    }
+    entries.emplace_back(entry);
+  }
+  return entries;
+}
 
 std::string run_bash(const std::string& command, const std::filesystem::path& cwd, int timeout_s,
                      std::atomic<bool>* cancel,

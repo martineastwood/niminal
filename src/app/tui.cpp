@@ -379,12 +379,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         json{{"type", "object"},
              {"properties",
               {{"question", {{"type", "string"}, {"description", "Question to ask the user."}}},
-               {"options", {{"type", "array"},
-                            {"items", {{"type", "string"}}},
-                            {"description",
-                             "2 to 4 concise choices; Other is added automatically."},
-                            {"minItems", 2},
-                            {"maxItems", 4}}}}},
+               {"options",
+                {{"type", "array"},
+                 {"items", {{"type", "string"}}},
+                 {"description", "2 to 4 concise choices; Other is added automatically."},
+                 {"minItems", 2},
+                 {"maxItems", 4}}}}},
              {"required", json::array({"question", "options"})},
              {"additionalProperties", false}},
         [&](const json& input) {
@@ -1722,8 +1722,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           ask_user_answer.clear();
           ask_user_cursor = 0;
         } else {
-          finish_ask_user(niminal::ToolResult{
-              ask_user_options[static_cast<size_t>(ask_user_i)]});
+          finish_ask_user(niminal::ToolResult{ask_user_options[static_cast<size_t>(ask_user_i)]});
         }
         return true;
       }
@@ -2114,11 +2113,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   agent.recover_overflow = {};
   agent.approve_tool = {};
   if (ask_user_installed) {
-    agent.tools.erase(std::remove_if(agent.tools.begin(), agent.tools.end(),
-                                     [](const niminal::Tool& tool) {
-                                       return tool.name == "ask_user";
-                                     }),
-                      agent.tools.end());
+    agent.tools.erase(
+        std::remove_if(agent.tools.begin(), agent.tools.end(),
+                       [](const niminal::Tool& tool) { return tool.name == "ask_user"; }),
+        agent.tools.end());
   }
   return 0;
 }

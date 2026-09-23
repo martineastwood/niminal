@@ -1,6 +1,7 @@
 #include "tools.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -31,6 +32,12 @@ niminal::Tool* find(std::vector<niminal::Tool>& tools, const char* name) {
 }
 
 int main() {
+  // Bash inherits the ambient environment, so clear any session block a parent
+  // niminal exported before asserting that bash adds nothing on its own.
+  for (const char* name : {"NIMINAL_SESSION_ID", "NIMINAL_SESSION_FILE", "NIMINAL_PROVIDER",
+                           "NIMINAL_MODEL", "NIMINAL_REASONING_LEVEL"}) {
+    unsetenv(name);
+  }
   auto tmp = fs::temp_directory_path() / "niminal-tools-test";
   fs::remove_all(tmp);
   fs::create_directories(tmp / "sub");
@@ -149,6 +156,8 @@ int main() {
     return 1;
   }
   std::string session_id = "sess-1";
+  // An inherited session block must not shadow the shell env provider.
+  setenv("NIMINAL_SESSION_ID", "inherited", 1);
   niminal::app::ShellEnvFn env_fn = [&] {
     return niminal::app::ShellEnv{{"NIMINAL_SESSION_ID", session_id},
                                   {"NIMINAL_SESSION_FILE", "s.jsonl"},
