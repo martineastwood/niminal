@@ -1526,8 +1526,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     transcript->ComputeRequirement();
     transcript_rows = std::max(1, transcript->requirement().min_y);
     Elements stack;
-    stack.push_back(transcript |
-                    focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
+    stack.push_back(transcript | focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
                     vscroll_indicator | yframe | yflex);
     stack.push_back(separator());
     if (settings_open) {
