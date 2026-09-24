@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(niminal VERSION 0.1.0 LANGUAGES C CXX)
+project(niminal VERSION 0.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,6 +7,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(NIMINAL_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/include/niminal")
+configure_file(
+  include/niminal/version.hpp.in
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/include/niminal/version.hpp"
+  @ONLY)
 
 add_library(niminal_strict_warnings INTERFACE)
 target_compile_options(niminal_strict_warnings INTERFACE
@@ -77,6 +83,8 @@ set(CURL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
 set(HTTP_ONLY ON CACHE BOOL "" FORCE)
 set(CURL_USE_OPENSSL ON CACHE BOOL "" FORCE)
 set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+# The app only uses HTTP; avoid a Homebrew libssh2 runtime dependency.
+set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
 set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
 set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
 set(USE_APPLE_IDN OFF CACHE BOOL "" FORCE)
@@ -140,6 +148,7 @@ add_library(niminal_ai
 add_library(niminal::ai ALIAS niminal_ai)
 
 target_include_directories(niminal_ai PUBLIC
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/include"
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(niminal_ai PUBLIC

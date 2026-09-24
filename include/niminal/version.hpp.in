@@ -6,7 +6,7 @@
 namespace niminal {
 
 inline constexpr std::string_view kName = "niminal";
-inline constexpr std::string_view kVersion = "0.1.0";
+inline constexpr std::string_view kVersion = "@PROJECT_VERSION@";
 
 // Line printed by --version and shown by /version in the TUI.
 inline std::string version_string() {

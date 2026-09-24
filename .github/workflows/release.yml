@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: New release tag, for example v0.1.0
+        description: New release tag, for example v0.1.1
         required: true
         type: string
 
@@ -22,6 +22,9 @@ jobs:
           - os: ubuntu-22.04
             platform: linux
             arch: x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
           - os: macos-15
             platform: macos
             arch: arm64
@@ -37,7 +40,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends cmake g++ libssl-dev zlib1g-dev
+          sudo apt-get install --no-install-recommends cmake gcc-12 g++-12 libssl-dev ninja-build zlib1g-dev
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
@@ -45,7 +48,13 @@ jobs:
 
       - name: Configure Linux
         if: runner.os == 'Linux'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        # GCC 12 provides std::expected on Ubuntu 22.04; bundle its C++ runtime.
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc-12
+          -DCMAKE_CXX_COMPILER=g++-12
+          -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 
       - name: Configure macOS
         if: runner.os == 'macOS'
@@ -53,7 +62,7 @@ jobs:
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
 
       - name: Build binary
         run: cmake --build build --target niminal_cli --parallel
@@ -63,6 +72,7 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
         run: |
+          ./build/niminal --version
           bundle="niminal-${PLATFORM}-${ARCH}"
           mkdir -p "dist/${bundle}"
           cp build/niminal "dist/${bundle}/niminal"

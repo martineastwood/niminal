@@ -14,7 +14,8 @@ Fast startup, low memory, and no idle CPU until you ask.
 
 ## Install
 
-macOS and Linux (x86_64; macOS also supports arm64):
+macOS 15+ and Linux, with x86_64 and arm64 binaries. Linux arm64 requires
+glibc 2.38 or newer:
 
 ```sh
 curl -fsSL https://niminal.dev/install.sh | sh
@@ -26,7 +27,7 @@ to your `PATH` if it is not already there.
 Install a specific release with:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.0 sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.1 sh
 ```
 
 Set `NIMINAL_INSTALL_DIR` before `sh` to choose another location. See

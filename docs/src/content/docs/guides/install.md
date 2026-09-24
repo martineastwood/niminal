@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Install the niminal release binary on macOS or Linux, or build from source.
+description: Install the niminal release binary on macOS 15+ or Linux, or build from source.
 ---
 
 You can install niminal with a one-line script that downloads the latest release
@@ -9,7 +9,7 @@ tarball for your platform. No compiler or source checkout is required.
 After install, continue with the [Quickstart](/guides/quickstart/) to set a
 provider key and run your first turn.
 
-## macOS and Linux
+## macOS 15+ and Linux
 
 ```sh
 curl -fsSL https://niminal.dev/install.sh | sh
@@ -21,14 +21,14 @@ to your `PATH` if it is not already there.
 To install a specific release, set `NIMINAL_VERSION` for the installer shell:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.0 sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.1 sh
 ```
 
 Set `NIMINAL_INSTALL_DIR` before `sh` in the pipeline to choose a different
 install location:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.0 NIMINAL_INSTALL_DIR="$HOME/bin" sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.1 NIMINAL_INSTALL_DIR="$HOME/bin" sh
 ```
 
 Published platforms today:
@@ -36,9 +36,10 @@ Published platforms today:
 | Platform | Architecture |
 | --- | --- |
 | Linux | x86_64 |
-| macOS | arm64, x86_64 |
+| Linux (glibc 2.38+) | arm64 |
+| macOS 15+ | arm64, x86_64 |
 
-Linux arm64 binaries are not published yet.
+The Linux ARM64 binary is built on Ubuntu 24.04.
 
 ## Build from source
 

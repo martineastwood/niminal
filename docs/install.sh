@@ -31,10 +31,7 @@ main() {
 
   case "$(uname -m)" in
     x86_64|amd64) arch=x86_64 ;;
-    arm64|aarch64)
-      [ "$os" = macos ] || fail "Linux arm64 binaries are not published yet"
-      arch=arm64
-      ;;
+    arm64|aarch64) arch=arm64 ;;
     *) fail "unsupported architecture: $(uname -m)" ;;
   esac
 

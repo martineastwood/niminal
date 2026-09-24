@@ -179,8 +179,12 @@ std::vector<std::string> preview_message_lines(const std::string& message) {
 std::string compose_input_preview(const niminal::UserInput& input) {
   std::string text = input.text;
   for (const auto& image : input.images) {
-    text +=
-        (text.empty() ? "" : "\n") + std::string("[image: ") + image.value("name", "image") + "]";
+    if (!text.empty()) {
+      text.push_back('\n');
+    }
+    text += "[image: ";
+    text += image.value("name", "image");
+    text.push_back(']');
   }
   return text;
 }
@@ -2204,7 +2208,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (pressed(KeyAction::newline)) {
       int pos = std::clamp(cursor, 0, static_cast<int>(draft.size()));
-      draft.insert(static_cast<size_t>(pos), "\n");
+      draft.insert(static_cast<size_t>(pos), 1, '\n');
       cursor = pos + 1;
       return true;
     }
