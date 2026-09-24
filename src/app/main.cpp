@@ -38,8 +38,7 @@ const char* kUsage =
     "  no prompt          Interactive TUI\n"
     "  prompt…            One print-mode turn, then exit\n"
     "  --model ID         Model (config, NIMINAL_MODEL, or the provider default)\n"
-    "  --provider NAME    "
-    "anthropic|google|hyper|local|mistral|ollama|openai|opencode|opencodezen|openrouter\n"
+    "  --provider NAME    Built-in provider or one registered by an extension\n"
     "  --thinking LEVEL   none|minimal|low|medium|high|xhigh|max\n"
     "  --mode json        emit versioned JSONL events and exit\n"
     "  --mode rpc         serve JSONL commands until shutdown or EOF\n"
@@ -338,8 +337,10 @@ int main(int argc, char** argv) try {
   if (const char* model = std::getenv("NIMINAL_MODEL"); (model != nullptr) && ((*model) != 0)) {
     cfg.model = model;
   }
+  std::string api_url_override;
   if (const char* url = std::getenv("NIMINAL_API_URL"); (url != nullptr) && ((*url) != 0)) {
-    cfg.api_url = url;
+    api_url_override = url;
+    cfg.api_url = api_url_override;
   }
   if (const char* thinking = std::getenv("NIMINAL_THINKING");
       (thinking != nullptr) && ((*thinking) != 0)) {
@@ -353,6 +354,8 @@ int main(int argc, char** argv) try {
   int max_steps = cfg.max_steps;
   bool model_from_cli = false;
   bool provider_from_cli = false;
+  std::string model_override;
+  std::string provider_override;
   bool resume_latest = false;
   bool no_session = false;
   bool json_mode = false;
@@ -382,6 +385,7 @@ int main(int argc, char** argv) try {
         return 2;
       }
       cfg.model = argv[++i];
+      model_override = cfg.model;
       model_from_cli = true;
       continue;
     }
@@ -390,10 +394,7 @@ int main(int argc, char** argv) try {
         std::cerr << kUsage;
         return 2;
       }
-      if (auto result = niminal::app::select_provider(cfg, argv[++i]); !result) {
-        std::cerr << result.error().what() << '\n';
-        return 2;
-      }
+      provider_override = argv[++i];
       provider_from_cli = true;
       continue;
     }
@@ -591,11 +592,6 @@ int main(int argc, char** argv) try {
     std::cerr << "Project-local resources skipped (use --approve or /trust on).\n";
   }
   std::atomic<bool> cancel{false};
-  niminal::app::ShellEnvFn shell_env;
-  auto agent = make_agent(ws, cfg, max_steps, &cancel, system_prompt, &shell_env);
-  if (tools_specified) {
-    restrict_tools(agent, allowed_tools);
-  }
   niminal::app::Session session;
   try {
     auto dir = niminal::app::default_session_dir();
@@ -620,22 +616,41 @@ int main(int argc, char** argv) try {
     return 1;
   }
 
+  niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
+  niminal::Agent agent;
+  agent.provider = provider_from_cli ? provider_override : cfg.provider;
+  agent.model = model_from_cli ? model_override : cfg.model;
+  niminal::app::ShellEnvFn shell_env = [&session, &agent, &cfg] {
+    return niminal::app::make_shell_env(session, agent, cfg);
+  };
+  auto extensions =
+      niminal::app::ExtensionRuntime::start(ws.root(), session.id, &cancel, &shell_env);
+  niminal::app::normalize_config(cfg);
+  if (!api_url_override.empty()) {
+    cfg.api_url = api_url_override;
+  }
+  if (provider_from_cli) {
+    if (auto result = niminal::app::select_provider(cfg, provider_override); !result) {
+      std::cerr << result.error().what() << '\n';
+      return 2;
+    }
+    if (model_from_cli) {
+      cfg.model = model_override;
+    }
+  }
+  niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
+  agent = make_agent(ws, cfg, max_steps, &cancel, system_prompt, &shell_env);
+  if (tools_specified) {
+    restrict_tools(agent, allowed_tools);
+  }
   niminal::app::bind_session(agent, session);
   agent.prepare_user = [&ws](niminal::UserInput input) {
     return niminal::app::prepare_user_input(ws, std::move(input));
   };
-  niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
-  niminal::app::apply_provider(agent, cfg);
   if (!api_key.empty()) {
     agent.api_key = api_key;
   }
 
-  shell_env = [&session, &agent, &cfg] {
-    return niminal::app::make_shell_env(session, agent, cfg);
-  };
-
-  auto extensions =
-      niminal::app::ExtensionRuntime::start(ws.root(), session.id, &cancel, &shell_env);
   niminal::app::install_extension_tools(agent, extensions,
                                         tools_specified ? &allowed_tools : nullptr);
   niminal::app::bind_extensions(

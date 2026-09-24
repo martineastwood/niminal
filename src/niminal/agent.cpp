@@ -131,6 +131,7 @@ void Agent::fill_chat(ChatRequest& req) const {
   req.model = model;
   req.provider = provider;
   req.key_hint = key_hint;
+  req.requires_api_key = requires_api_key;
   req.conversation_id = conversation_id;
   req.extra_headers = extra_headers;
   req.session_routing = session_routing;

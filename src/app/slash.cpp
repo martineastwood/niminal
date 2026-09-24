@@ -102,6 +102,15 @@ std::vector<Suggestion> suggest_models(const std::string& query, std::string_vie
     out.push_back({"/model " + id, std::move(label)});
   };
   auto q = niminal::lower_copy(query);
+  if (const auto* registered = niminal::find_provider(provider);
+      registered != nullptr && !registered->models.empty()) {
+    for (const auto& id : registered->models) {
+      if (q.empty() || contains_ci(id, q)) {
+        add(id, 0);
+      }
+    }
+    return out;
+  }
   if (static_cast<int>(q.size()) >= kMin) {
     auto catalog = search_catalog(provider, query, kCap);
     if (!catalog.empty()) {

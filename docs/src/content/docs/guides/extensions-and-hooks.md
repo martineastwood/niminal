@@ -78,6 +78,38 @@ object, then answers every `command`, `tool`, and `event` request with a
 
 Use `/reload` after changing a manifest or extension program.
 
+## Add an OpenAI-compatible provider
+
+An extension can add a provider that uses the OpenAI Chat Completions API. Register
+its endpoint, default model, optional model suggestions, and API key environment
+variables:
+
+```python
+send({
+    "type": "register",
+    "commands": [],
+    "providers": [{
+        "api": "openai-chat-completions",
+        "name": "litellm",
+        "api_url": "http://localhost:4000/v1/chat/completions",
+        "default_model": "openai/gpt-4o-mini",
+        "models": ["openai/gpt-4o-mini", "anthropic/claude-sonnet"],
+        "api_key_env": ["LITELLM_API_KEY"]
+    }]
+})
+```
+
+After restarting Niminal or running `/reload`, select it with `/provider litellm`
+or `--provider litellm`. Use `/model` to choose one of the registered models.
+When your proxy does not require authentication, set `"requires_api_key": false`.
+You can also register `url_match` and the `session_routing`, `stream_usage`,
+`apply_cache`, and `prompt_cache_key` flags. Provider hooks can further change
+request headers and JSON payloads.
+
+This registration format currently supports OpenAI Chat Completions endpoints.
+It does not add a new streaming protocol such as Anthropic Messages or Google
+Generative AI.
+
 ## Lifecycle hooks
 
 Extensions can subscribe to:
@@ -143,10 +175,14 @@ Responses and unsolicited `update` messages can:
 Extension tools use the normal permission prompt unless their capabilities are
 read-only (`read` and optional `user` only).
 
+Extensions can also ask Niminal to show a question, confirmation, input, password,
+or external editor. Host requests support one-shot model completion, session
+information and naming, and context usage.
+
 ## Limitations
 
-The current host accepts text tool-result parts. UI and host requests are answered
-as unavailable, and image result parts are not added to the model context yet.
+Tool results currently add text parts to model context. Image tool-result parts
+are ignored.
 
 Built-in tool names (`read`, `grep`, `glob`, `ls`, `edit`, `write`, `bash`,
 `skill`, `ask_user`) cannot be registered by extensions.

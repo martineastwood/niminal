@@ -66,6 +66,7 @@ struct Agent {
   std::function<bool()> recover_overflow;
   std::function<ChatResult(const ChatRequest&)> stream_chat_fn;
   std::string run_id;
+  bool requires_api_key = true;
 
   json request_messages(const std::string& effective_system) const;
   json request_messages() const { return request_messages(system); }

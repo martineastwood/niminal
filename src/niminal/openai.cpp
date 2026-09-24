@@ -57,7 +57,7 @@ void emit_thinking_value(const ChatRequest& request, const json& value) {
 }
 
 void require_request(const ChatRequest& request) {
-  if (request.api_key.empty() && request.provider != "local") {
+  if (request.api_key.empty() && request.requires_api_key && request.provider != "local") {
     throw Error("missing API key (set " +
                 (request.key_hint.empty() ? std::string("OPENROUTER_API_KEY") : request.key_hint) +
                 ")");

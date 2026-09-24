@@ -34,6 +34,7 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
     agent.model = selected->model;
     agent.api_url = selected->api_url;
     agent.api_key = read_auth_key("local");
+    agent.requires_api_key = false;
     agent.key_hint.clear();
     agent.extra_headers.clear();
     agent.session_routing = false;
@@ -70,6 +71,7 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
   if (agent.api_key.empty()) {
     agent.api_key = niminal::read_api_key(*spec);
   }
+  agent.requires_api_key = spec->requires_api_key;
   agent.key_hint = std::string(niminal::key_hint(*spec));
   agent.extra_headers = niminal::provider_headers(*spec);
   agent.session_routing = spec->session_routing;

@@ -35,6 +35,7 @@ struct ChatRequest {
   std::function<void(std::map<std::string, std::string>&)> before_provider_headers;
   std::function<void(json&)> before_provider_request;
   std::function<void(const HttpResponse&)> after_provider_response;
+  bool requires_api_key = true;
 };
 
 ChatResult stream_chat(const ChatRequest& request);

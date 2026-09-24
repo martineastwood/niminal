@@ -1,5 +1,6 @@
 #include "extensions.hpp"
 
+#include <niminal/providers.hpp>
 #include <niminal/text.hpp>
 
 #include "compaction.hpp"
@@ -842,6 +843,7 @@ std::string edit_text_externally(const std::string& text, const std::string& edi
 
 struct ExtensionRuntime::Impl {
   std::vector<std::unique_ptr<Process>> processes;
+  std::vector<std::string> provider_names;
   std::vector<RegisteredTool> tools;
   std::vector<ExternalTool> external_tools;
   ShellEnvFn shell_env;
@@ -1177,6 +1179,38 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
               {name, description, *schema, index, read_only_capabilities(tool)});
         }
       }
+      std::vector<niminal::ProviderSpec> providers;
+      if (auto registered = registration.find("providers"); registered != registration.end()) {
+        if (!registered->is_array()) {
+          throw std::runtime_error("register providers must be an array");
+        }
+        for (const auto& provider : *registered) {
+          if (!provider.is_object() || string_field(provider, "api") != "openai-chat-completions") {
+            throw std::runtime_error("extension providers must use openai-chat-completions");
+          }
+          niminal::ProviderSpec spec;
+          spec.name = string_field(provider, "name");
+          spec.endpoint = string_field(provider, "api_url");
+          spec.default_model = string_field(provider, "default_model");
+          spec.url_match = string_field(provider, "url_match");
+          spec.models = string_array(provider, "models");
+          for (const auto& key : string_array(provider, "api_key_env")) {
+            spec.env_keys.push_back(key);
+          }
+          spec.session_routing = provider.value("session_routing", false);
+          spec.stream_usage = provider.value("stream_usage", false);
+          spec.apply_cache = provider.value("apply_cache", false);
+          spec.prompt_cache_key = provider.value("prompt_cache_key", false);
+          spec.requires_api_key = provider.value("requires_api_key", true);
+          if (spec.name.empty() || spec.endpoint.empty() || spec.default_model.empty() ||
+              (spec.requires_api_key && spec.env_keys.empty())) {
+            throw std::runtime_error(
+                "extension providers require name, api_url, default_model, and api_key_env "
+                "when authentication is required");
+          }
+          providers.push_back(std::move(spec));
+        }
+      }
       runtime->impl_->processes.push_back(std::move(process));
       auto* active = runtime->impl_->processes.back().get();
       const std::weak_ptr<ExtensionRuntime> weak_runtime = runtime;
@@ -1185,6 +1219,15 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
           handle_incoming(*locked->impl_, *active, line);
         }
       });
+      for (auto& provider : providers) {
+        const auto name = provider.name;
+        if (!niminal::register_provider(std::move(provider))) {
+          runtime->warnings_.push_back("extension '" + manifest.name +
+                                       "' could not register provider '" + name + "'");
+        } else {
+          runtime->impl_->provider_names.push_back(name);
+        }
+      }
     } catch (const std::exception& e) {
       runtime->commands_.resize(command_count);
       runtime->impl_->tools.resize(tool_count);
@@ -1449,6 +1492,10 @@ void ExtensionRuntime::stop() {
   for (auto& process : impl_->processes) {
     process->stop();
   }
+  for (const auto& name : impl_->provider_names) {
+    niminal::unregister_provider(name);
+  }
+  impl_->provider_names.clear();
   impl_->processes.clear();
   commands_.clear();
   impl_->tools.clear();
