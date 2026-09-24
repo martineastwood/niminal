@@ -2412,8 +2412,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::atomic<bool> watchdog_stop{false};
   std::thread watchdog([&screen, &watchdog_stop] {
     while (!watchdog_stop.load()) {
-      pollfd input{STDIN_FILENO, POLLIN, 0};
-      const bool gone = (::poll(&input, 1, 0) > 0) && ((input.revents & (POLLHUP | POLLERR)) != 0);
+      pollfd poll_input{STDIN_FILENO, POLLIN, 0};
+      const bool gone =
+          (::poll(&poll_input, 1, 0) > 0) && ((poll_input.revents & (POLLHUP | POLLERR)) != 0);
       if (gone) {
         screen.Exit();
         return;
