@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
-#include <sstream>
 #include <stdexcept>
 #include <system_error>
 
@@ -127,10 +126,8 @@ Config load_config_file(const fs::path& path) {
   if (!in) {
     return cfg;
   }
-  std::ostringstream ss;
-  ss << in.rdbuf();
   try {
-    auto doc = json::parse(ss.str());
+    auto doc = json::parse(in);
     if (doc.contains("model") && doc["model"].is_string()) {
       auto model = doc["model"].get<std::string>();
       if (!model.empty()) {

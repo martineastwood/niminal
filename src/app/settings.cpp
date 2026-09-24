@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -55,10 +54,6 @@ std::vector<std::string> thinking_options(std::string_view provider, std::string
   return out;
 }
 
-std::vector<std::string> theme_options() {
-  return theme_names();
-}
-
 std::vector<std::string> queue_mode_options() {
   return {"one-at-a-time", "all"};
 }
@@ -74,9 +69,6 @@ int find_option_index(const std::vector<std::string>& options, std::string_view 
 
 std::string cycle_option(const std::vector<std::string>& options, std::string_view current,
                          int direction) {
-  if (options.empty()) {
-    return std::string(current);
-  }
   const int index = find_option_index(options, current);
   const int next = (index + direction) % static_cast<int>(options.size());
   const int wrapped = next < 0 ? next + static_cast<int>(options.size()) : next;
@@ -117,26 +109,6 @@ SettingApplyResult apply_int_field(int& field, std::string_view value, const cha
   return ok();
 }
 
-SettingApplyResult apply_thinking(Config& cfg, std::string_view value,
-                                  std::string_view agent_provider, std::string_view agent_model) {
-  const auto trimmed = niminal::trim_copy(std::string(value));
-  if (trimmed.empty()) {
-    cfg.thinking.clear();
-    return ok(true);
-  }
-  try {
-    cfg.thinking = normalize_thinking(trimmed);
-  } catch (const std::exception& e) {
-    return fail(e.what());
-  }
-  const auto options = thinking_options(agent_provider, agent_model);
-  if (std::find(options.begin(), options.end(), cfg.thinking) == options.end() &&
-      !(cfg.thinking.empty() && std::find(options.begin(), options.end(), "") != options.end())) {
-    return fail("thinking level not supported for the current model");
-  }
-  return ok(true);
-}
-
 } // namespace
 
 std::span<const SettingSpec> all_settings() {
@@ -154,9 +126,7 @@ const SettingSpec* setting_at(size_t index) {
   return &kSettings[index];
 }
 
-std::string format_setting_value(const Config& cfg, SettingField field,
-                                 std::string_view /*agent_provider*/,
-                                 std::string_view /*agent_model*/) {
+std::string format_setting_value(const Config& cfg, SettingField field) {
   switch (field) {
   case SettingField::provider:
     return cfg.provider;
@@ -228,10 +198,11 @@ SettingApplyResult cycle_setting(Config& cfg, SettingField field, int direction,
   case SettingField::thinking: {
     const auto next =
         cycle_option(thinking_options(agent_provider, agent_model), cfg.thinking, direction);
-    return apply_thinking(cfg, next, agent_provider, agent_model);
+    cfg.thinking = next;
+    return ok(true);
   }
   case SettingField::theme: {
-    const auto next = cycle_option(theme_options(), cfg.theme, direction);
+    const auto next = cycle_option(theme_names(), cfg.theme, direction);
     if (auto theme = load_theme(next); !theme) {
       return fail(theme.error());
     }
@@ -272,9 +243,7 @@ SettingApplyResult toggle_setting(Config& cfg, SettingField field) {
   }
 }
 
-SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::string_view value,
-                                       std::string_view /*agent_provider*/,
-                                       std::string_view /*agent_model*/) {
+SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::string_view value) {
   switch (field) {
   case SettingField::model: {
     const auto trimmed = niminal::trim_copy(std::string(value));

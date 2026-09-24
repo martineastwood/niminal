@@ -651,6 +651,32 @@ for line in sys.stdin:
   }
   runtime->stop();
 
+  // Cancelling a turn must not report the aborted extension requests as failures.
+  runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
+  cancel = true;
+  const auto cancelled =
+      runtime->dispatch(HookEvent::turn_end, nlohmann::json{{"interrupted", true}});
+  if (!cancelled.warnings.empty()) {
+    std::cerr << "cancelled turn reported extension warning: " << cancelled.warnings.front()
+              << '\n';
+    return 1;
+  }
+  bool cancelled_request = false;
+  try {
+    runtime->invoke("hello", "world");
+  } catch (const niminal::Cancelled&) {
+    cancelled_request = true;
+  } catch (const std::exception& e) {
+    std::cerr << "cancelled request threw: " << e.what() << '\n';
+    return 1;
+  }
+  cancel = false;
+  if (!cancelled_request) {
+    std::cerr << "cancelled request did not report cancellation\n";
+    return 1;
+  }
+  runtime->stop();
+
   niminal::app::set_project_resources_trusted(root, false);
   auto blocked = ExtensionRuntime::start(root, "session", &cancel);
   if (!blocked->commands().empty() || !blocked->tools().empty()) {

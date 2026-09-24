@@ -1,3 +1,5 @@
+#include "tool_input.hpp"
+
 #include <niminal/agent.hpp>
 #include <niminal/openai.hpp>
 #include <niminal/text.hpp>
@@ -76,18 +78,6 @@ bool wait_for_retry(std::atomic<bool>* cancel, std::chrono::milliseconds delay) 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   return cancel == nullptr || !cancel->load();
-}
-
-json parse_tool_input(const std::string& arguments) {
-  if (arguments.empty()) {
-    return json::object();
-  }
-  try {
-    auto input = json::parse(arguments);
-    return input.is_object() ? input : json::object();
-  } catch (...) {
-    return json::object();
-  }
 }
 
 } // namespace
@@ -236,12 +226,12 @@ std::string Agent::run(UserInput prompt, bool append_user) {
   };
 
   const json tools_json = tools_payload(tools);
-  auto inject_steering = [&]() -> int {
-    if (!take_steering) {
+  auto inject_inputs = [&](const auto& take_inputs) -> int {
+    if (!take_inputs) {
       return 0;
     }
-    int n = 0;
-    for (auto input : take_steering()) {
+    int count = 0;
+    for (auto input : take_inputs()) {
       if (prepare_user) {
         input = prepare_user(std::move(input));
       }
@@ -253,30 +243,9 @@ std::string Agent::run(UserInput prompt, bool append_user) {
         persist_user(input);
       }
       emit(StreamEvent{EventKind::user, input.text, {}, {}});
-      ++n;
+      ++count;
     }
-    return n;
-  };
-  auto inject_follow_up = [&]() -> int {
-    if (!take_follow_up) {
-      return 0;
-    }
-    int n = 0;
-    for (auto input : take_follow_up()) {
-      if (prepare_user) {
-        input = prepare_user(std::move(input));
-      }
-      if (input.text.empty() && input.images.empty()) {
-        continue;
-      }
-      messages.push_back(json{{"role", "user"}, {"content", user_content(input)}});
-      if (persist_user) {
-        persist_user(input);
-      }
-      emit(StreamEvent{EventKind::user, input.text, {}, {}});
-      ++n;
-    }
-    return n;
+    return count;
   };
 
   try {
@@ -287,7 +256,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       if (cancelled()) {
         throw Cancelled();
       }
-      inject_steering();
+      inject_inputs(take_steering);
       if (before_request) {
         before_request();
       }
@@ -394,10 +363,10 @@ std::string Agent::run(UserInput prompt, bool append_user) {
           emit(StreamEvent{
               EventKind::error, "The model stopped without a user-facing answer.", {}, {}});
         }
-        if (inject_steering() > 0) {
+        if (inject_inputs(take_steering) > 0) {
           continue;
         }
-        if (inject_follow_up() > 0) {
+        if (inject_inputs(take_follow_up) > 0) {
           continue;
         }
         finish_turn(false);
@@ -430,7 +399,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
             {"function", {{"name", call.name}, {"arguments", call.arguments}}},
         });
         StreamEvent tool_call{EventKind::tool_call, call.arguments, call.name, call.id};
-        tool_call.input = parse_tool_input(call.arguments);
+        tool_call.input = detail::parse_tool_input(call.arguments);
         emit(std::move(tool_call));
       }
       assistant["tool_calls"] = std::move(calls);
@@ -486,6 +455,9 @@ std::string Agent::run(UserInput prompt, bool append_user) {
             is_error = output.text == "interrupted" || output.text.rfind("tool error:", 0) == 0 ||
                        output.text.rfind("unknown tool:", 0) == 0 ||
                        output.text.rfind("approval_denied:", 0) == 0;
+          } catch (const Cancelled&) {
+            output = "interrupted";
+            is_error = true;
           } catch (const std::exception& e) {
             output = std::string("tool error: ") + e.what();
             is_error = true;

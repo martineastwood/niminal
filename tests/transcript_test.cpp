@@ -15,7 +15,6 @@ using niminal::app::is_drag_gesture;
 using niminal::app::render_transcript_card;
 using niminal::app::resolve_theme;
 using niminal::app::ThemeMode;
-using niminal::app::tool_summary;
 
 static int fail(const char* msg, const std::string& got) {
   std::cerr << msg << "\n got:\n" << got << '\n';
@@ -114,7 +113,7 @@ int main() {
     return fail("compact read tool", compact_read);
   }
 
-  Block diff{BlockKind::diff, "+added\n-removed", "src/main.cpp", false, "edit"};
+  Block diff{BlockKind::diff, "+added\n-removed", "src/main.cpp", "edit"};
   diff.expanded = false;
   auto compact_diff = render_card(diff);
   if (compact_diff.find("→ ✓ edit  src/main.cpp") == std::string::npos ||
@@ -146,13 +145,6 @@ int main() {
     if (header_color(tool) != theme.meta) {
       return fail("tool header uses the meta color", "wrong color");
     }
-  }
-
-  if (tool_summary("bash", R"({"command":"pwd"})") != "$ pwd") {
-    return fail("bash tool summary", tool_summary("bash", R"({"command":"pwd"})"));
-  }
-  if (tool_summary("read", R"({"path":"README.md"})") != "→ read  README.md") {
-    return fail("read tool summary", tool_summary("read", R"({"path":"README.md"})"));
   }
 
   // Regression: a click on a card must open the card, not copy a character.

@@ -1,3 +1,5 @@
+#include "tool_input.hpp"
+
 #include <algorithm>
 #include <niminal/http.hpp>
 #include <niminal/openai.hpp>
@@ -95,16 +97,6 @@ bool mark_content_cache(json& msg) {
     return false;
   }
   auto& c = msg["content"];
-  if (c.is_string()) {
-    json part = json::object();
-    part["type"] = "text";
-    part["text"] = c.get<std::string>();
-    part["cache_control"] = ephemeral_cache();
-    json arr = json::array();
-    arr.push_back(std::move(part));
-    msg["content"] = std::move(arr);
-    return true;
-  }
   if (c.is_array() && !c.empty() && c.back().is_object()) {
     c.back()["cache_control"] = ephemeral_cache();
     return true;
@@ -233,18 +225,6 @@ json image_parts(const json& content, json (*convert)(const json&)) {
     }
   }
   return out;
-}
-
-json parse_tool_input(const std::string& args) {
-  if (args.empty()) {
-    return json::object();
-  }
-  try {
-    auto parsed = json::parse(args);
-    return parsed.is_object() ? parsed : json::object();
-  } catch (...) {
-    return json::object();
-  }
 }
 
 std::string join_text(const json& content) {
@@ -515,7 +495,7 @@ json anthropic_body(const ChatRequest& request) {
           use["type"] = "tool_use";
           use["id"] = call.value("id", "");
           use["name"] = fn.value("name", "");
-          use["input"] = parse_tool_input(fn.value("arguments", ""));
+          use["input"] = detail::parse_tool_input(fn.value("arguments", ""));
           content.push_back(std::move(use));
         }
       }
@@ -626,7 +606,7 @@ json google_body(const ChatRequest& request) {
           }
           json fc = json::object();
           fc["name"] = name;
-          fc["args"] = parse_tool_input(fn.value("arguments", ""));
+          fc["args"] = detail::parse_tool_input(fn.value("arguments", ""));
           json part = json::object();
           part["functionCall"] = std::move(fc);
           parts.push_back(std::move(part));
@@ -824,7 +804,7 @@ void consume_anthropic(const ChatRequest& request, ChatResult& result, Anthropic
     if (i >= 0 && i < static_cast<int>(acc.args.size()) &&
         !acc.args[static_cast<size_t>(i)].empty()) {
       acc.content[static_cast<size_t>(i)]["input"] =
-          parse_tool_input(acc.args[static_cast<size_t>(i)]);
+          detail::parse_tool_input(acc.args[static_cast<size_t>(i)]);
     }
     return;
   }

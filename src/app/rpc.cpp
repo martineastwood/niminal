@@ -224,8 +224,7 @@ private:
 
   bool busy() const { return active_; }
 
-  void start_prompt(const std::string& id, const std::string& prompt) {
-    (void)id;
+  void start_prompt(const std::string& prompt) {
     if (worker_.joinable()) {
       worker_.join();
     }
@@ -270,7 +269,7 @@ private:
       }
       send(queue_event(session_.id, "dequeue", queue_depth_locked(), {}, item.id, item.mode));
     }
-    start_prompt(item.id, item.prompt);
+    start_prompt(item.prompt);
   }
 
   void poll_active() {
@@ -324,7 +323,7 @@ private:
         send(rpc_response_event(id, false, {}, "RPC is shutting down."));
       } else if (!busy()) {
         send(rpc_response_event(id, true, "started"));
-        start_prompt(id, message);
+        start_prompt(message);
       } else {
         std::string behavior;
         if (!string_field(command, "streamingBehavior", behavior) ||

@@ -549,14 +549,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         continue;
       }
       std::string text;
+      auto images = json::array();
       for (const auto& part : event.value("content", json::array())) {
         if (part.is_object() && part.value("type", "") == "text") {
           text += part.value("text", "");
-        }
-      }
-      auto images = json::array();
-      for (const auto& part : event.value("content", json::array())) {
-        if (part.is_object() && part.value("type", "") == "image") {
+        } else if (part.is_object() && part.value("type", "") == "image") {
           images.push_back(part);
         }
       }
@@ -761,17 +758,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
             auto diff = make_tool_diff(pending->tool_name, pending->input,
                                        !pending->before_exists && after_exists, ev.text);
             if (diff.changed) {
-              const bool created = diff.created;
               auto body = std::move(diff.body);
               if (tool != blocks.rend()) {
                 tool->kind = BlockKind::diff;
                 tool->text = std::move(body);
                 tool->path = std::move(pending->relative);
-                tool->created = created;
                 tool->tool_name = std::move(pending->tool_name);
               } else {
                 blocks.push_back(Block{BlockKind::diff, std::move(body),
-                                       std::move(pending->relative), created,
+                                       std::move(pending->relative),
                                        std::move(pending->tool_name)});
               }
             }
@@ -1321,16 +1316,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return;
     }
 
-    const auto initial_cmd = split_slash(prompt).first;
-    const bool skill_request = initial_cmd.starts_with("/skill:");
-    const bool extension_request = is_extension_slash(extensions, initial_cmd);
-    if (auto skill_error = skill_slash_error(cwd, initial_cmd)) {
+    const auto [cmd, arg] = split_slash(prompt);
+    const bool skill_request = cmd.starts_with("/skill:");
+    const bool extension_request = is_extension_slash(extensions, cmd);
+    if (auto skill_error = skill_slash_error(cwd, cmd)) {
       blocks.push_back(Block{BlockKind::error, *skill_error});
       return;
     }
 
     if (prompt[0] == '/' && !skill_request && !extension_request) {
-      const auto [cmd, arg] = split_slash(prompt);
       if (auto resolved = resolve_prompt_template(cwd, prompt, cmd, arg)) {
         send_prompt(niminal::UserInput{std::move(*resolved)});
         return;
@@ -1338,7 +1332,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
 
     if (prompt[0] == '/' && !skill_request) {
-      const auto [cmd, arg] = split_slash(prompt);
       if (run_slash(cmd, arg, extension_request)) {
         return;
       }
@@ -1546,7 +1539,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         if (settings_edit && static_cast<int>(i) == settings_i) {
           line += *settings_edit + "▌";
         } else {
-          line += format_setting_value(cfg, spec->field, agent.provider, agent.model);
+          line += format_setting_value(cfg, spec->field);
         }
         auto row = text(line);
         if (static_cast<int>(i) == settings_i) {
@@ -1943,8 +1936,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (settings_edit) {
         if (pressed(KeyAction::submit)) {
           if (spec != nullptr) {
-            persist_settings(
-                apply_setting_value(cfg, spec->field, *settings_edit, agent.provider, agent.model));
+            persist_settings(apply_setting_value(cfg, spec->field, *settings_edit));
             if (settings_error.empty()) {
               settings_edit = std::nullopt;
             }

@@ -27,7 +27,7 @@ void ensure_curl() {
 }
 
 struct WriteBuf {
-  std::string* body = nullptr;
+  std::string& body;
   std::string pending;
   std::function<void(std::string_view)>* on_data = nullptr;
   std::atomic<bool>* cancel = nullptr;
@@ -36,7 +36,7 @@ struct WriteBuf {
 
 size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
   auto* buf = static_cast<WriteBuf*>(userdata);
-  buf->body->append(ptr, size * nmemb);
+  buf->body.append(ptr, size * nmemb);
   return size * nmemb;
 }
 
@@ -94,9 +94,7 @@ size_t write_sse(char* ptr, size_t size, size_t nmemb, void* userdata) {
   }
   try {
     buf->pending.append(ptr, size * nmemb);
-    if (buf->body != nullptr) {
-      buf->body->append(ptr, size * nmemb);
-    }
+    buf->body.append(ptr, size * nmemb);
     size_t start = 0;
     while (start < buf->pending.size()) {
       auto nl = buf->pending.find('\n', start);
@@ -193,7 +191,7 @@ Result<HttpResponse> HttpClient::post(std::string_view url,
                                       const std::map<std::string, std::string>& headers,
                                       std::string_view body) {
   HttpResponse out;
-  WriteBuf buf{&out.body, {}, nullptr, nullptr, {}};
+  WriteBuf buf{out.body, {}, nullptr, nullptr, {}};
   auto* hdrs = slist_from(headers);
   std::string url_owned(url);
   std::string body_owned(body);
@@ -222,7 +220,7 @@ Result<void> HttpClient::post_sse(std::string_view url,
                                   const std::function<void(const HttpResponse&)>& on_response) {
   auto on_data_mut = on_data;
   std::string raw;
-  WriteBuf buf{&raw, {}, &on_data_mut, cancel, {}};
+  WriteBuf buf{raw, {}, &on_data_mut, cancel, {}};
   auto* hdrs = slist_from(headers);
   std::string url_owned(url);
   std::string body_owned(body);
@@ -275,7 +273,7 @@ Result<void> HttpClient::post_sse(std::string_view url,
 
 Result<HttpResponse> HttpClient::get(std::string_view url, long timeout_seconds) {
   HttpResponse out;
-  WriteBuf buf{&out.body, {}, nullptr, nullptr, {}};
+  WriteBuf buf{out.body, {}, nullptr, nullptr, {}};
   auto* hdrs = slist_from({});
   std::string url_owned(url);
   std::string ca = default_ca_file();

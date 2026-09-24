@@ -30,7 +30,6 @@ struct Block {
   std::string text;
   std::string result;
   std::string path;
-  bool created = false;
   bool expanded = false;
   std::string tool_name;
   std::string tool_id;
@@ -38,13 +37,10 @@ struct Block {
   Block() = default;
   Block(BlockKind block_kind, std::string block_text)
       : kind(block_kind), text(std::move(block_text)) {}
-  Block(BlockKind block_kind, std::string block_text, std::string block_path, bool block_created)
-      : kind(block_kind), text(std::move(block_text)), path(std::move(block_path)),
-        created(block_created) {}
-  Block(BlockKind block_kind, std::string block_text, std::string block_path, bool block_created,
+  Block(BlockKind block_kind, std::string block_text, std::string block_path,
         std::string block_tool_name)
       : kind(block_kind), text(std::move(block_text)), path(std::move(block_path)),
-        created(block_created), tool_name(std::move(block_tool_name)) {}
+        tool_name(std::move(block_tool_name)) {}
 };
 
 bool is_card_block(BlockKind kind);
@@ -57,7 +53,6 @@ ftxui::Element render_user_message(const Block& block, const Theme& theme);
 ftxui::Element render_transcript_card(const Block& block, const Theme& theme, ftxui::Box& box);
 std::vector<Block> blocks_from_events(const std::vector<nlohmann::json>& events);
 std::string clip_text(std::string text, size_t max_chars, int max_lines);
-std::string tool_summary(const std::string& name, const std::string& args);
 ftxui::Decorator block_style(BlockKind kind, const Theme& theme);
 const char* block_label(BlockKind kind);
 ftxui::Element paragraph_preserving_whitespace(std::string_view value);

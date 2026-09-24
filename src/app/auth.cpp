@@ -4,7 +4,6 @@
 
 #include <cstdlib>
 #include <fstream>
-#include <sstream>
 #include <stdexcept>
 
 namespace niminal::app {
@@ -61,10 +60,8 @@ std::string read_auth_key(std::string_view provider, const fs::path& path) {
     return {};
   }
 
-  std::ostringstream text;
-  text << in.rdbuf();
   try {
-    const auto doc = json::parse(text.str());
+    const auto doc = json::parse(in);
     if (!doc.is_object()) {
       return {};
     }

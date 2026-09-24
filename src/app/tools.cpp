@@ -198,10 +198,12 @@ bool cap_shell_output(std::string& output) {
   return true;
 }
 
-std::string execute_bash(const std::string& command, const fs::path& cwd, int timeout_s,
-                         std::atomic<bool>* cancel,
-                         const std::function<void(const std::string&)>& on_output,
-                         const ShellEnv& env) {
+} // namespace
+
+std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
+                     std::atomic<bool>* cancel,
+                     const std::function<void(const std::string&)>& on_output,
+                     const ShellEnv& env) {
   int out_pipe[2];
   if (pipe(out_pipe) != 0) {
     throw WorkspaceError(std::strerror(errno));
@@ -318,15 +320,6 @@ wait_child:
     msg << "exit: " << code;
   }
   return msg.str();
-}
-
-} // namespace
-
-std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
-                     std::atomic<bool>* cancel,
-                     const std::function<void(const std::string&)>& on_output,
-                     const ShellEnv& env) {
-  return execute_bash(command, cwd, timeout_s, cancel, on_output, env);
 }
 
 namespace {
@@ -468,27 +461,20 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
                }
                return false;
              };
+             std::string prefix;
+             bool direct_file = false;
              if (!sub.empty()) {
                auto start = ws.resolve(sub);
                if (fs::is_regular_file(start)) {
                  grep_file(start, ws.relative(start));
+                 direct_file = true;
                } else {
-                 auto prefix = ws.relative(start);
-                 for (const auto& rel : ws.list_files()) {
-                   if (!path_under(rel, prefix)) {
-                     continue;
-                   }
-                   if (!glob.empty() && !glob_match_str(glob, rel)) {
-                     continue;
-                   }
-                   if (grep_file(ws.resolve(rel), rel)) {
-                     break;
-                   }
-                 }
+                 prefix = ws.relative(start);
                }
-             } else {
+             }
+             if (!direct_file) {
                for (const auto& rel : ws.list_files()) {
-                 if (!glob.empty() && !glob_match_str(glob, rel)) {
+                 if (!path_under(rel, prefix) || (!glob.empty() && !glob_match_str(glob, rel))) {
                    continue;
                  }
                  if (grep_file(ws.resolve(rel), rel)) {
@@ -671,7 +657,7 @@ std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
              auto command = input.at("command").get<std::string>();
              int timeout = std::clamp(input.value("timeout_seconds", 120), 1, 600);
              ShellEnv env = shell_env != nullptr ? (*shell_env)() : ShellEnv{};
-             auto out = execute_bash(command, ws.root(), timeout, cancel, on_bash_output, env);
+             auto out = run_bash(command, ws.root(), timeout, cancel, on_bash_output, env);
              ws.invalidate_listing();
              return out;
            }});

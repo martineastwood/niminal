@@ -1079,10 +1079,6 @@ std::string format_session_list(const std::vector<SessionInfo>& infos,
   return out.str();
 }
 
-std::string session_event_text(const json& event) {
-  return event_text(event);
-}
-
 std::string serialize_session_event(const json& event) {
   const auto type = event.value("type", "");
   if (type == "user") {

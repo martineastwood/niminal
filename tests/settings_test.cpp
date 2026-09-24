@@ -35,16 +35,13 @@ int main() {
   }
 
   Config cfg;
-  if (format_setting_value(cfg, SettingField::max_steps, "openrouter", "openai/gpt-4o-mini") !=
-      "unlimited") {
+  if (format_setting_value(cfg, SettingField::max_steps) != "unlimited") {
     return fail("max_steps display");
   }
-  if (format_setting_value(cfg, SettingField::context_window, "openrouter", "openai/gpt-4o-mini")
-          .find("128000") == std::string::npos) {
+  if (format_setting_value(cfg, SettingField::context_window).find("128000") == std::string::npos) {
     return fail("context_window display");
   }
-  if (format_setting_value(cfg, SettingField::thinking, "openrouter", "openai/gpt-4o-mini") !=
-      "(provider default)") {
+  if (format_setting_value(cfg, SettingField::thinking) != "(provider default)") {
     return fail("thinking display");
   }
 
@@ -53,13 +50,10 @@ int main() {
     return fail("edit initial max_steps");
   }
 
-  if (auto result = apply_setting_value(cfg, SettingField::max_steps, "-1", "openrouter",
-                                        "openai/gpt-4o-mini");
-      result.error.empty()) {
+  if (auto result = apply_setting_value(cfg, SettingField::max_steps, "-1"); result.error.empty()) {
     return fail("reject negative max_steps");
   }
-  if (auto result = apply_setting_value(cfg, SettingField::max_steps, "12", "openrouter",
-                                        "openai/gpt-4o-mini");
+  if (auto result = apply_setting_value(cfg, SettingField::max_steps, "12");
       !result.error.empty() || cfg.max_steps != 12) {
     return fail("apply max_steps");
   }
@@ -113,8 +107,7 @@ int main() {
     return fail("cycle steering_mode");
   }
 
-  if (auto result = apply_setting_value(cfg, SettingField::model, "anthropic/claude-sonnet-4-6",
-                                        cfg.provider, cfg.model);
+  if (auto result = apply_setting_value(cfg, SettingField::model, "anthropic/claude-sonnet-4-6");
       !result.error.empty() || !result.agent_changed ||
       cfg.last_models[cfg.provider] != "anthropic/claude-sonnet-4-6") {
     return fail("apply model");

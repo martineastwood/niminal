@@ -31,7 +31,8 @@ inline std::string trim_copy(std::string value) {
          (value[i] == ' ' || value[i] == '\n' || value[i] == '\r' || value[i] == '\t')) {
     ++i;
   }
-  return value.substr(i);
+  value.erase(0, i);
+  return value;
 }
 
 inline std::string base64_encode(std::string_view bytes) {

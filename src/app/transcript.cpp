@@ -254,13 +254,6 @@ std::string clip_text(std::string text, size_t max_chars, int max_lines) {
   return out;
 }
 
-std::string tool_summary(const std::string& name, const std::string& args) {
-  if (name == "bash") {
-    return "$ " + bash_command(args);
-  }
-  return "→ " + tool_detail_line(name, args);
-}
-
 Decorator block_style(BlockKind kind, const Theme& theme) {
   switch (kind) {
   case BlockKind::user:

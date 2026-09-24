@@ -398,13 +398,13 @@ public:
         responses_.erase(it);
         return;
       }
-      if ((cancel != nullptr) && cancel->load()) {
-        throw std::runtime_error("extension request cancelled");
-      }
       if (reader_exited_) {
         throw std::runtime_error(reader_error_.empty()
                                      ? "extension '" + name + "' exited before responding"
                                      : reader_error_);
+      }
+      if ((cancel != nullptr) && cancel->load()) {
+        throw Cancelled();
       }
       if (timeout_ms >= 0) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -443,7 +443,7 @@ public:
         return line;
       }
       if ((cancel != nullptr) && cancel->load()) {
-        throw std::runtime_error("extension request cancelled");
+        throw Cancelled();
       }
       int wait_ms = 50;
       if (timeout >= 0) {
@@ -747,14 +747,7 @@ std::string run_external_tool(const ExternalTool& tool, const json& input,
       }
     }
     if (!valid_json) {
-      auto message = std::string("stdout was not valid JSON");
-      if (!stdout_text.empty()) {
-        message += "\n\n" + stdout_text;
-      }
-      if (stdout_text.empty() && !stderr_text.empty()) {
-        message += "\n\nstderr:\n" + stderr_text;
-      }
-      return "tool error: " + message;
+      return external_failure("stdout was not valid JSON", stdout_text, stderr_text);
     }
     if (exit_code != 0) {
       return external_failure("exit_code: " + std::to_string(exit_code), stdout_text, stderr_text);
@@ -1570,6 +1563,8 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
           outcome.has_compaction = !outcome.summary.empty();
         }
       }
+    } catch (const Cancelled&) {
+      continue; // pressing escape is not an extension failure
     } catch (const std::exception& e) {
       outcome.warnings.push_back("extension '" + process->name + "': " + e.what());
     }
