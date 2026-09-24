@@ -163,6 +163,39 @@ complete `payload` object to replace the outgoing JSON body.
 `fork`. `after_provider_response` sends an empty `error_body` on successful
 responses. On HTTP errors, it contains the response body.
 
+## Shutting down
+
+Niminal sends `{"type": "shutdown"}` when it quits, reloads your extension, or
+switches sessions, and closes your stdin at the same time. Treat both as the same
+signal: stop what you started and exit. Niminal waits three seconds for your
+process to exit, then kills the process group it started you in, so anything you
+leave running is orphaned. Keep the children you start in that group and stop
+them yourself in the same pass:
+
+```python
+import json, subprocess, sys
+
+child = subprocess.Popen(["npm", "run", "dev"])
+
+def stop_child():
+    child.terminate()
+    try:
+        child.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+
+for line in sys.stdin:            # ends at EOF when Niminal closes stdin
+    message = json.loads(line)
+    if message["type"] == "shutdown":
+        break
+stop_child()
+```
+
+A child in its own session, started with `setsid` or Node's `detached: true`, is
+outside that group: only your extension can stop it, so kill its process group
+before you exit.
+
 ## Side effects
 
 Responses and unsolicited `update` messages can:

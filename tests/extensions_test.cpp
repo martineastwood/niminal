@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -37,7 +39,8 @@ int main() {
   const fs::path fixtures = fs::path(NIMINAL_EXTENSIONS_FIXTURES_DIR);
   fs::create_directories(root / ".niminal" / "extensions");
   for (const auto* name :
-       {"fixture", "host", "parallel", "status_demo", "todo_demo", "widget_demo"}) {
+       {"fixture", "host", "orphan_guard", "parallel", "status_demo", "stdin_watcher",
+        "todo_demo", "widget_demo"}) {
     fs::copy(fixtures / name, root / ".niminal" / "extensions" / name, fs::copy_options::recursive);
   }
   setenv("HOME", home.c_str(), 1);
@@ -532,6 +535,38 @@ int main() {
     return 1;
   }
   runtime->stop();
+
+  // Closing stdin tells an extension that niminal is gone. A sibling that
+  // inherited the pipe would hide that and leave the extension running.
+  auto eof_marker = root / "eof.marker";
+  fs::remove(eof_marker);
+  setenv("NIMINAL_EOF_MARKER", eof_marker.c_str(), 1);
+  auto watcher = ExtensionRuntime::start(root, "session", &cancel);
+  watcher->stop();
+  unsetenv("NIMINAL_EOF_MARKER");
+  if (!fs::exists(eof_marker)) {
+    std::cerr << "extension did not see stdin close while siblings were running\n";
+    return 1;
+  }
+
+  // An extension that stops its own process tree needs the stop grace: killing
+  // the extension first orphans a child it put in its own session.
+  auto guard_pid_file = root / "orphan.pid";
+  fs::remove(guard_pid_file);
+  setenv("NIMINAL_ORPHAN_PID_FILE", guard_pid_file.c_str(), 1);
+  auto guard = ExtensionRuntime::start(root, "session", &cancel);
+  int guard_pid = 0;
+  for (int attempt = 0; attempt < 60 && guard_pid == 0; ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::ifstream in(guard_pid_file);
+    in >> guard_pid;
+  }
+  guard->stop();
+  unsetenv("NIMINAL_ORPHAN_PID_FILE");
+  if (guard_pid == 0 || kill(guard_pid, 0) == 0 || errno != ESRCH) {
+    std::cerr << "extension child outlived the stop grace: " << guard_pid << '\n';
+    return 1;
+  }
 
   niminal::app::set_project_resources_trusted(root, false);
   auto blocked = ExtensionRuntime::start(root, "session", &cancel);

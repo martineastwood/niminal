@@ -208,6 +208,8 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
   if (pipe(out_pipe) != 0) {
     throw WorkspaceError(std::strerror(errno));
   }
+  close_on_exec(out_pipe[0]);
+  close_on_exec(out_pipe[1]);
 
   pid_t pid = fork();
   if (pid < 0) {

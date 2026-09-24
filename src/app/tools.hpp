@@ -8,6 +8,7 @@
 #include <niminal/types.hpp>
 
 #include <atomic>
+#include <fcntl.h>
 #include <functional>
 #include <map>
 #include <string>
@@ -20,6 +21,13 @@ using ShellEnv = std::map<std::string, std::string>;
 using ShellEnvFn = std::function<ShellEnv()>;
 
 ShellEnv make_shell_env(const Session& session, const niminal::Agent& agent, const Config& cfg);
+
+// Keeps a pipe end out of processes that only exist to run a command: without
+// this, every extension inherits its siblings' pipes and never sees stdin close
+// when niminal exits, so it cannot clean up the children it started.
+inline void close_on_exec(int fd) {
+  fcntl(fd, F_SETFD, FD_CLOEXEC);
+}
 
 // The environment for a child process: the session block plus the inherited
 // environment, with any inherited entry whose name is in the block dropped so

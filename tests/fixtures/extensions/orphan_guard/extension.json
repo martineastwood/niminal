@@ -1,0 +1,5 @@
+{
+  "name": "orphan_guard",
+  "command": ["./extension.py"],
+  "response_timeout_seconds": null
+}

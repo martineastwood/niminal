@@ -1,0 +1,5 @@
+{
+  "name": "stdin_watcher",
+  "command": ["./extension.py"],
+  "response_timeout_seconds": null
+}

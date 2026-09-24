@@ -45,6 +45,12 @@ constexpr int kDefaultTimeoutMs = 30'000;
 constexpr size_t kMaxLineBytes = 1'000'000;
 constexpr int kDefaultExternalTimeoutSeconds = 30;
 constexpr size_t kMaxExternalOutputBytes = 100'000;
+// How long an extension gets to finish stopping what it started before its
+// process group is killed. Extensions stop their own children (a subagent, a
+// helper process), and the escalation they use has to fit inside this window:
+// killing the extension first orphans the grandchildren it was stopping.
+// spawn_agent gives a subagent 1.5s to exit before it SIGKILLs it.
+constexpr auto kStopGrace = std::chrono::seconds(3);
 
 std::string string_field(const json& value, const char* key) {
   auto it = value.find(key);
@@ -317,6 +323,9 @@ public:
     if (pipe(input_pipe) != 0 || pipe(output_pipe) != 0) {
       throw std::runtime_error(std::strerror(errno));
     }
+    for (int fd : {input_pipe[0], input_pipe[1], output_pipe[0], output_pipe[1]}) {
+      close_on_exec(fd);
+    }
     pid_ = fork();
     if (pid_ < 0) {
       throw std::runtime_error(std::strerror(errno));
@@ -493,7 +502,7 @@ public:
     }
     // An extension may still be stopping something it started (a subagent, a
     // child process), so give it a moment before killing it.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    const auto deadline = std::chrono::steady_clock::now() + kStopGrace;
     while (std::chrono::steady_clock::now() < deadline) {
       int status = 0;
       if (waitpid(pid_, &status, WNOHANG) == pid_) {
