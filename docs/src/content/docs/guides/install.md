@@ -18,8 +18,18 @@ curl -fsSL https://niminal.dev/install.sh | sh
 The installer puts the `niminal` binary in `~/.local/bin`. Add that directory
 to your `PATH` if it is not already there.
 
-Pin a release with `NIMINAL_VERSION=v0.1.0` before the curl command, or override
-the install location with `NIMINAL_INSTALL_DIR`.
+To install a specific release, set `NIMINAL_VERSION` for the installer shell:
+
+```sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.0 sh
+```
+
+Set `NIMINAL_INSTALL_DIR` before `sh` in the pipeline to choose a different
+install location:
+
+```sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.0 NIMINAL_INSTALL_DIR="$HOME/bin" sh
+```
 
 Published platforms today:
 
