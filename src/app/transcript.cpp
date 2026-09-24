@@ -4,6 +4,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <ftxui/dom/node.hpp>
+#include <ftxui/screen/screen.hpp>
+
 #include <algorithm>
 #include <sstream>
 #include <utility>
@@ -119,6 +122,66 @@ bool result_has_more(const std::string& result, int preview_lines) {
   return count_lines(result) > preview_lines || result.size() > kToolResultMaxChars;
 }
 
+class VirtualTranscript : public Node {
+public:
+  VirtualTranscript(Elements entries, const std::vector<int>& heights)
+      : entries_(std::move(entries)) {
+    offsets_.reserve(heights.size() + 1);
+    offsets_.push_back(0);
+    for (int height : heights) {
+      offsets_.push_back(offsets_.back() + std::max(1, height));
+    }
+  }
+
+  void ComputeRequirement() override {
+    requirement_ = Requirement{};
+    requirement_.min_y = offsets_.back();
+  }
+
+  void Check(Status* status) override { status->need_iteration |= status->iteration == 0; }
+
+  void Select(Selection& selection) override {
+    prepare(selection.GetBox());
+    Node::Select(selection);
+  }
+
+  void Render(Screen& screen) override {
+    prepare(screen.stencil);
+    Node::Render(screen);
+  }
+
+private:
+  void prepare(Box area) {
+    children_.clear();
+    const auto visible = Box::Intersection(box_, area);
+    if (visible.IsEmpty()) {
+      return;
+    }
+    const int first_row = visible.y_min - box_.y_min;
+    const int last_row = visible.y_max - box_.y_min;
+    const auto first = static_cast<size_t>(
+        std::upper_bound(offsets_.begin(), offsets_.end(), first_row) - offsets_.begin() - 1);
+    for (size_t i = first; i < entries_.size() && offsets_[i] <= last_row; ++i) {
+      auto& entry = entries_[i];
+      const Box entry_box{box_.x_min, box_.x_max, box_.y_min + offsets_[i],
+                          box_.y_min + offsets_[i + 1] - 1};
+      Status status;
+      entry->Check(&status);
+      while (status.need_iteration && status.iteration < 20) {
+        entry->ComputeRequirement();
+        entry->SetBox(entry_box);
+        status.need_iteration = false;
+        ++status.iteration;
+        entry->Check(&status);
+      }
+      children_.push_back(entry);
+    }
+  }
+
+  Elements entries_;
+  std::vector<int> offsets_;
+};
+
 } // namespace
 
 bool is_card_block(BlockKind kind) {
@@ -127,6 +190,16 @@ bool is_card_block(BlockKind kind) {
 
 bool is_drag_gesture(int press_x, int press_y, int release_x, int release_y) {
   return press_x != release_x || press_y != release_y;
+}
+
+int measure_transcript_height(Element element, int width) {
+  Screen screen(std::max(1, width), 1);
+  Render(screen, element);
+  return std::max(1, element->requirement().min_y);
+}
+
+Element virtual_transcript(Elements entries, const std::vector<int>& heights) {
+  return std::make_shared<VirtualTranscript>(std::move(entries), heights);
 }
 
 Element render_diff_card(const Block& block, const Theme& theme) {

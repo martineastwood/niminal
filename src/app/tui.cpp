@@ -248,6 +248,11 @@ std::optional<size_t> card_at(const std::vector<Block>& blocks, const std::vecto
   return std::nullopt;
 }
 
+bool same_block_content(const Block& a, const Block& b) {
+  return a.kind == b.kind && a.text == b.text && a.result == b.result && a.path == b.path &&
+         a.expanded == b.expanded && a.tool_name == b.tool_name && a.tool_id == b.tool_id;
+}
+
 } // namespace
 
 int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& session,
@@ -263,6 +268,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     Element element;
   };
   std::vector<CachedMessage> message_cache;
+  int cached_message_width = 0;
+  struct CachedHeight {
+    Block block;
+    int width = 0;
+    int height = 0;
+  };
+  std::vector<CachedHeight> height_cache;
+  Element cached_transcript;
+  size_t cached_transcript_revision = static_cast<size_t>(-1);
+  size_t cached_transcript_block_count = static_cast<size_t>(-1);
+  int cached_transcript_width = 0;
   std::atomic<bool> local_cancel{false};
   if (agent.cancel == nullptr) {
     agent.cancel = &local_cancel;
@@ -272,6 +288,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   auto loaded_keybindings = load_keybindings();
   const auto& keybindings = loaded_keybindings.bindings;
   std::vector<Block> blocks;
+  size_t transcript_revision = 0;
   std::mutex file_changes_mu;
   std::unordered_map<std::string, PendingFileChange> file_changes;
   size_t step_block_start = 0;
@@ -610,6 +627,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (result.theme_changed) {
         theme = load_theme(cfg.theme).value();
         message_cache.clear();
+        ++transcript_revision;
       }
       if (result.agent_changed) {
         apply_provider(agent, cfg);
@@ -657,6 +675,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (!extensions) {
       return;
     }
+    const auto block_count = blocks.size();
     extensions->pump();
     for (auto& notice : extensions->take_notices()) {
       blocks.push_back(Block{notice.level == "error" ? BlockKind::error : BlockKind::status,
@@ -685,6 +704,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           follow_up.push_back(message.content);
         }
       }
+    }
+    if (blocks.size() != block_count) {
+      ++transcript_revision;
     }
   };
 
@@ -849,6 +871,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.erase(blocks.begin(),
                    blocks.begin() + static_cast<std::ptrdiff_t>(blocks.size() - 80));
     }
+    ++transcript_revision;
   };
 
   std::mutex delta_mu;
@@ -1072,6 +1095,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.push_back(Block{BlockKind::status, warning});
     }
     apply_extension_actions();
+    ++transcript_revision;
   };
 
   auto reload_local = [&] {
@@ -1082,6 +1106,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
     message_cache.clear();
+    ++transcript_revision;
     if (reload_system_prompt) {
       reload_system_prompt();
     }
@@ -1100,6 +1125,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     auto event_blocks = blocks_from_events(session.events);
     blocks.insert(blocks.end(), std::make_move_iterator(event_blocks.begin()),
                   std::make_move_iterator(event_blocks.end()));
+    ++transcript_revision;
   };
 
   auto adopt_session = [&](Session next, const std::string& note, const std::string& reason) {
@@ -1134,6 +1160,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (!extensions) {
       return true;
     }
+    const auto block_count = blocks.size();
     auto outcome =
         extensions->dispatch(HookEvent::session_before_switch, json{{"session_id", session.id},
                                                                     {"workspace", cwd.string()},
@@ -1144,6 +1171,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (!outcome.allowed) {
       blocks.push_back(Block{BlockKind::status, outcome.reason});
+    }
+    if (blocks.size() != block_count) {
+      ++transcript_revision;
     }
     return outcome.allowed;
   };
@@ -1192,6 +1222,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     cancel->store(false);
     if (!retry) {
       blocks.push_back(Block{BlockKind::user, compose_input_preview(prompt)});
+      ++transcript_revision;
     }
     busy = true;
     turn_failed = false;
@@ -1297,6 +1328,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     remember_input(niminal::UserInput{std::move(history_line)});
     if (busy || user_bash_running) {
       blocks.push_back(Block{BlockKind::status, busy_wait_message(keybindings)});
+      ++transcript_revision;
       return;
     }
     join_worker();
@@ -1350,6 +1382,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     const bool extension_request = is_extension_slash(extensions, cmd);
     if (auto skill_error = skill_slash_error(cwd, cmd)) {
       blocks.push_back(Block{BlockKind::error, *skill_error});
+      ++transcript_revision;
       return;
     }
 
@@ -1362,6 +1395,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
     if (prompt[0] == '/' && !skill_request) {
       if (run_slash(cmd, arg, extension_request)) {
+        ++transcript_revision;
         return;
       }
     }
@@ -1432,34 +1466,60 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::string think;
   std::string usage;
   auto view = Renderer(layout, [&] {
-    card_boxes.assign(blocks.size(), Box{});
-    message_cache.resize(blocks.size());
-    Elements entries;
-    for (size_t i = 0; i < blocks.size(); ++i) {
-      const auto& block = blocks[i];
-      if (is_card_block(block.kind)) {
-        entries.push_back(render_transcript_card(block, theme, card_boxes[i]));
-      } else if (block.kind == BlockKind::user || block.kind == BlockKind::assistant) {
-        auto& cached = message_cache[i];
-        if (!cached.element || cached.kind != block.kind || cached.text != block.text) {
-          cached = {block.kind, block.text,
-                    block.kind == BlockKind::user ? render_user_message(block, theme)
-                                                  : render_markdown(block.text, theme)};
-        }
-        entries.push_back(cached.element);
-      } else {
-        auto label = block_label(block.kind);
-        auto body = paragraph_preserving_whitespace(block.text) | block_style(block.kind, theme);
-        if (label && *label) {
-          entries.push_back(vbox({text(label) | bold | block_style(block.kind, theme), body}));
+    card_boxes.assign(blocks.size(), Box{-1, -1, -1, -1});
+    const int transcript_width = std::max(1, screen.dimx() - 1);
+    if (cached_message_width != transcript_width) {
+      message_cache.clear();
+      cached_message_width = transcript_width;
+    }
+    if (cached_transcript_revision != transcript_revision ||
+        cached_transcript_block_count != blocks.size() ||
+        cached_transcript_width != transcript_width) {
+      message_cache.resize(blocks.size());
+      height_cache.resize(blocks.size());
+      Elements entries;
+      std::vector<int> heights;
+      entries.reserve(blocks.size());
+      heights.reserve(blocks.size());
+      for (size_t i = 0; i < blocks.size(); ++i) {
+        const auto& block = blocks[i];
+        Element entry;
+        if (is_card_block(block.kind)) {
+          entry = render_transcript_card(block, theme, card_boxes[i]);
+        } else if (block.kind == BlockKind::user || block.kind == BlockKind::assistant) {
+          auto& cached = message_cache[i];
+          if (!cached.element || cached.kind != block.kind || cached.text != block.text) {
+            cached = {block.kind, block.text,
+                      block.kind == BlockKind::user ? render_user_message(block, theme)
+                                                    : render_markdown(block.text, theme)};
+          }
+          entry = cached.element;
         } else {
-          entries.push_back(body);
+          auto label = block_label(block.kind);
+          auto body = paragraph_preserving_whitespace(block.text) | block_style(block.kind, theme);
+          if (label && *label) {
+            entry = vbox({text(label) | bold | block_style(block.kind, theme), body});
+          } else {
+            entry = body;
+          }
         }
+        const bool next_is_card = i + 1 < blocks.size() && is_card_block(blocks[i + 1].kind);
+        if (!(is_card_block(block.kind) && next_is_card)) {
+          entry = vbox({std::move(entry), text("")});
+        }
+        auto& cached_height = height_cache[i];
+        if (cached_height.height == 0 || cached_height.width != transcript_width ||
+            !same_block_content(cached_height.block, block)) {
+          cached_height = {block, transcript_width,
+                           measure_transcript_height(entry, transcript_width)};
+        }
+        heights.push_back(cached_height.height);
+        entries.push_back(std::move(entry));
       }
-      const bool next_is_card = i + 1 < blocks.size() && is_card_block(blocks[i + 1].kind);
-      if (!(is_card_block(block.kind) && next_is_card)) {
-        entries.push_back(text(""));
-      }
+      cached_transcript = virtual_transcript(std::move(entries), heights);
+      cached_transcript_revision = transcript_revision;
+      cached_transcript_block_count = blocks.size();
+      cached_transcript_width = transcript_width;
     }
 
     const auto extension_statuses =
@@ -1548,7 +1608,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       suggest_rows.push_back(std::move(line));
     }
 
-    auto transcript = vbox(std::move(entries));
+    auto transcript = cached_transcript;
     transcript_element = transcript;
     Elements stack;
     stack.push_back(transcript | focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
@@ -2130,6 +2190,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         if (release && *release == *card_press_index && *release < blocks.size() &&
             is_card_block(blocks[*release].kind)) {
           blocks[*release].expanded = !blocks[*release].expanded;
+          ++transcript_revision;
           card_press_index = std::nullopt;
           return true;
         }
@@ -2149,6 +2210,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       const auto index = last_card_index(blocks);
       if (index >= 0) {
         blocks[static_cast<size_t>(index)].expanded = !blocks[static_cast<size_t>(index)].expanded;
+        ++transcript_revision;
       }
       return true;
     }
@@ -2165,6 +2227,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           block.expanded = any_collapsed;
         }
       }
+      ++transcript_revision;
       return true;
     }
     if (is_wheel_up(e) || pressed(KeyAction::scroll_up)) {

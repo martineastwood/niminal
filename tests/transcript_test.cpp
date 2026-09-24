@@ -12,9 +12,11 @@ using niminal::app::Block;
 using niminal::app::BlockKind;
 using niminal::app::blocks_from_events;
 using niminal::app::is_drag_gesture;
+using niminal::app::measure_transcript_height;
 using niminal::app::render_transcript_card;
 using niminal::app::render_user_message;
 using niminal::app::resolve_theme;
+using niminal::app::virtual_transcript;
 using niminal::app::ThemeMode;
 
 static int fail(const char* msg, const std::string& got) {
@@ -92,12 +94,14 @@ int main() {
   // Regression: a long transcript must expose the viewport scrollbar.
   {
     ftxui::Elements rows;
+    std::vector<int> heights;
     for (int i = 0; i < 20; ++i) {
       rows.push_back(ftxui::text("row-" + std::to_string(i)));
+      heights.push_back(1);
     }
-    auto transcript = ftxui::vbox(std::move(rows));
-    auto element = transcript | ftxui::focusPositionRelative(0.F, 1.F) |
-                   ftxui::vscroll_indicator | ftxui::yframe | ftxui::yflex;
+    auto transcript = virtual_transcript(std::move(rows), heights);
+    auto element = transcript | ftxui::focusPositionRelative(0.F, 1.F) | ftxui::vscroll_indicator |
+                   ftxui::yframe | ftxui::yflex;
     ftxui::Screen screen(30, 8);
     ftxui::Render(screen, element);
     if (transcript->requirement().min_y != 20) {
@@ -107,6 +111,99 @@ int main() {
     if (rendered.find("┃") == std::string::npos && rendered.find("╻") == std::string::npos &&
         rendered.find("╹") == std::string::npos) {
       return fail("long transcript shows scrollbar", rendered);
+    }
+    if (rendered.find("row-19") == std::string::npos ||
+        rendered.find("row-0") != std::string::npos) {
+      return fail("virtual transcript draws bottom viewport", rendered);
+    }
+  }
+
+  {
+    ftxui::Elements full_rows;
+    ftxui::Elements cached_rows;
+    std::vector<int> heights;
+    for (int i = 0; i < 20; ++i) {
+      const auto row = "row-" + std::to_string(i);
+      full_rows.push_back(ftxui::text(row));
+      cached_rows.push_back(ftxui::text(row));
+      heights.push_back(1);
+    }
+    auto cached = virtual_transcript(std::move(cached_rows), heights);
+    for (float position : {0.F, 0.5F, 1.F}) {
+      auto full = ftxui::vbox(full_rows) | ftxui::focusPositionRelative(0.F, position) |
+                  ftxui::vscroll_indicator | ftxui::yframe | ftxui::yflex;
+      auto visible = cached | ftxui::focusPositionRelative(0.F, position) |
+                     ftxui::vscroll_indicator | ftxui::yframe | ftxui::yflex;
+      ftxui::Screen full_screen(30, 8);
+      ftxui::Screen cached_screen(30, 8);
+      ftxui::Render(full_screen, full);
+      ftxui::Render(cached_screen, visible);
+      if (full_screen.ToString() != cached_screen.ToString()) {
+        return fail("cached virtual transcript updates across scroll positions",
+                    cached_screen.ToString());
+      }
+    }
+  }
+
+  {
+    auto paragraph = ftxui::paragraph("one two three four five six seven eight nine ten");
+    const int measured = measure_transcript_height(paragraph, 12);
+    auto comparison = ftxui::paragraph("one two three four five six seven eight nine ten");
+    ftxui::Screen full(12, 20);
+    ftxui::Render(full, comparison);
+    if (measured <= 1 || measured != comparison->requirement().min_y) {
+      return fail("virtual transcript measures wrapped height", std::to_string(measured));
+    }
+  }
+
+  for (int width : {40, 65}) {
+    for (float position : {0.F, 0.5F, 1.F}) {
+      Block user{BlockKind::user,
+                 "A long user question with enough words to wrap across several terminal lines"};
+      Block thought{BlockKind::thinking, "First thought line\nSecond thought line"};
+      thought.expanded = true;
+      ftxui::Box full_box;
+      ftxui::Box virtual_box;
+      auto theme = resolve_theme(ThemeMode::dark);
+      ftxui::Elements full_entries{
+          ftxui::vbox({render_user_message(user, theme), ftxui::text("")}),
+          ftxui::vbox({ftxui::paragraph("Assistant text wraps here and keeps going for a while."),
+                       ftxui::text("")}),
+          ftxui::vbox({render_transcript_card(thought, theme, full_box), ftxui::text("")})};
+      ftxui::Elements visible_entries{
+          ftxui::vbox({render_user_message(user, theme), ftxui::text("")}),
+          ftxui::vbox({ftxui::paragraph("Assistant text wraps here and keeps going for a while."),
+                       ftxui::text("")}),
+          ftxui::vbox({render_transcript_card(thought, theme, virtual_box), ftxui::text("")})};
+      std::vector<int> heights;
+      for (const auto& entry : visible_entries) {
+        heights.push_back(measure_transcript_height(entry, width - 1));
+      }
+      virtual_box = {};
+      auto full = ftxui::vbox(std::move(full_entries)) |
+                  ftxui::focusPositionRelative(0.F, position) | ftxui::vscroll_indicator |
+                  ftxui::yframe | ftxui::yflex;
+      auto visible = virtual_transcript(std::move(visible_entries), heights) |
+                     ftxui::focusPositionRelative(0.F, position) | ftxui::vscroll_indicator |
+                     ftxui::yframe | ftxui::yflex;
+      ftxui::Screen full_screen(width, 8);
+      ftxui::Screen visible_screen(width, 8);
+      ftxui::Render(full_screen, full);
+      ftxui::Render(visible_screen, visible);
+      if (full_screen.ToString() != visible_screen.ToString()) {
+        return fail("virtual transcript matches full rendering", visible_screen.ToString());
+      }
+      ftxui::Selection full_selection(0, 0, width - 2, 7);
+      ftxui::Selection visible_selection(0, 0, width - 2, 7);
+      const auto full_text = ftxui::GetNodeSelectedContent(full_screen, full.get(), full_selection);
+      const auto visible_text =
+          ftxui::GetNodeSelectedContent(visible_screen, visible.get(), visible_selection);
+      if (full_text != visible_text) {
+        return fail("virtual transcript preserves selection", visible_text);
+      }
+      if (full_screen.ToString().find("Thought") != std::string::npos && full_box != virtual_box) {
+        return fail("virtual transcript preserves card hit box", visible_screen.ToString());
+      }
     }
   }
 
