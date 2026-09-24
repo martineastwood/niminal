@@ -260,33 +260,15 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
     return out;
   }
 
-  if (cmd == "/resume" && (trailing || !arg.empty())) {
+  if ((cmd == "/resume" || cmd == "/restore") && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
     try {
-      for (const auto& info : list_sessions(dir, workspace)) {
+      for (const auto& info :
+           cmd == "/resume" ? list_sessions(dir, workspace) : list_deleted_sessions(dir)) {
         if (!arg.empty() && !session_matches_info(info, arg)) {
           continue;
         }
-        out.push_back({"/resume " + info.id, info.id + "  " + session_title(info)});
-        if (out.size() == 8) {
-          break;
-        }
-      }
-    } catch (...) {
-    }
-    if (!out.empty()) {
-      return out;
-    }
-  }
-
-  if (cmd == "/restore" && (trailing || !arg.empty())) {
-    std::vector<Suggestion> out;
-    try {
-      for (const auto& info : list_deleted_sessions(dir)) {
-        if (!arg.empty() && !session_matches_info(info, arg)) {
-          continue;
-        }
-        out.push_back({"/restore " + info.id, info.id + "  " + session_title(info)});
+        out.push_back({cmd + " " + info.id, info.id + "  " + session_title(info)});
         if (out.size() == 8) {
           break;
         }

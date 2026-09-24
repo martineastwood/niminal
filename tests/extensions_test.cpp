@@ -26,18 +26,19 @@ int main() {
   auto home = root / "home";
   auto tool_dir = root / ".niminal" / "tools" / "echo_json";
   auto broken_tool_dir = root / ".niminal" / "tools" / "broken";
+  auto invalid_capability_dir = root / ".niminal" / "tools" / "invalid_capability";
   auto collision_tool_dir = root / ".niminal" / "tools" / "collision";
   fs::remove_all(root);
   fs::create_directories(home);
   fs::create_directories(tool_dir);
   fs::create_directories(broken_tool_dir);
+  fs::create_directories(invalid_capability_dir);
   fs::create_directories(collision_tool_dir);
   const fs::path fixtures = fs::path(NIMINAL_EXTENSIONS_FIXTURES_DIR);
   fs::create_directories(root / ".niminal" / "extensions");
   for (const auto* name :
        {"fixture", "host", "parallel", "status_demo", "todo_demo", "widget_demo"}) {
-    fs::copy(fixtures / name, root / ".niminal" / "extensions" / name,
-             fs::copy_options::recursive);
+    fs::copy(fixtures / name, root / ".niminal" / "extensions" / name, fs::copy_options::recursive);
   }
   setenv("HOME", home.c_str(), 1);
   niminal::app::set_project_resources_trusted(root, true);
@@ -66,6 +67,10 @@ int main() {
   {
     std::ofstream out(broken_tool_dir / "tool.json");
     out << "{not json";
+  }
+  {
+    std::ofstream out(invalid_capability_dir / "tool.json");
+    out << R"({"name":"invalid_capability","description":"Invalid capability","command":["./run"],"input_schema":{"type":"object"},"capabilities":["write","unknown"]})";
   }
   {
     std::ofstream out(collision_tool_dir / "tool.json");
@@ -267,12 +272,17 @@ int main() {
     return 1;
   }
   bool warned_broken = false;
+  bool warned_capability = false;
   bool warned_collision = false;
   for (const auto& warning : runtime->warnings()) {
     warned_broken = warned_broken || warning.find("broken") != std::string::npos;
+    warned_capability =
+        warned_capability || warning.find("unknown capability: unknown") != std::string::npos;
     warned_collision = warned_collision || warning.find("bash") != std::string::npos;
   }
-  if (!warned_broken || !warned_collision) {
+  if (!warned_broken || !warned_capability || !warned_collision ||
+      std::any_of(tools.begin(), tools.end(),
+                  [](const auto& tool) { return tool.name == "invalid_capability"; })) {
     return 1;
   }
 

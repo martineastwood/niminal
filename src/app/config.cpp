@@ -23,6 +23,15 @@ void load_queue_mode(const json& doc, const char* key, std::string& target) {
   }
 }
 
+void load_non_negative_int(const json& doc, const char* key, int& target) {
+  if (auto it = doc.find(key); it != doc.end() && it->is_number_integer()) {
+    const int value = it->get<int>();
+    if (value >= 0) {
+      target = value;
+    }
+  }
+}
+
 } // namespace
 
 Config::Config() {
@@ -157,27 +166,13 @@ Config load_config_file(const fs::path& path) {
     }
     load_queue_mode(doc, "steering_mode", cfg.steering_mode);
     load_queue_mode(doc, "follow_up_mode", cfg.follow_up_mode);
-    if (doc.contains("max_steps") && doc["max_steps"].is_number_integer()) {
-      const int max_steps = doc["max_steps"].get<int>();
-      if (max_steps >= 0) {
-        cfg.max_steps = max_steps;
-      }
-    }
+    load_non_negative_int(doc, "max_steps", cfg.max_steps);
     if (doc.contains("compaction_enabled") && doc["compaction_enabled"].is_boolean()) {
       cfg.compaction_enabled = doc["compaction_enabled"].get<bool>();
     }
-    if (doc.contains("reserve_tokens") && doc["reserve_tokens"].is_number_integer() &&
-        doc["reserve_tokens"].get<int>() >= 0) {
-      cfg.reserve_tokens = doc["reserve_tokens"].get<int>();
-    }
-    if (doc.contains("keep_recent_tokens") && doc["keep_recent_tokens"].is_number_integer() &&
-        doc["keep_recent_tokens"].get<int>() >= 0) {
-      cfg.keep_recent_tokens = doc["keep_recent_tokens"].get<int>();
-    }
-    if (doc.contains("context_window") && doc["context_window"].is_number_integer() &&
-        doc["context_window"].get<int>() >= 0) {
-      cfg.context_window = doc["context_window"].get<int>();
-    }
+    load_non_negative_int(doc, "reserve_tokens", cfg.reserve_tokens);
+    load_non_negative_int(doc, "keep_recent_tokens", cfg.keep_recent_tokens);
+    load_non_negative_int(doc, "context_window", cfg.context_window);
     if (doc.contains("providers") && doc["providers"].is_object()) {
       for (auto& [name, block] : doc["providers"].items()) {
         if (block.is_object()) {

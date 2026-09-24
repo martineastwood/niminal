@@ -150,6 +150,7 @@ bool read_only_capabilities(const json& doc) {
     throw std::runtime_error("capabilities must be an array");
   }
   bool any = false;
+  bool writable = false;
   for (const auto& item : *it) {
     if (!item.is_string()) {
       throw std::runtime_error("capabilities must contain strings");
@@ -161,13 +162,13 @@ bool read_only_capabilities(const json& doc) {
     }
     any = true;
     if (value != "read" && value != "user") {
-      return false;
+      writable = true;
     }
   }
-  return any;
+  return any && !writable;
 }
 
-ExternalTool parse_external_manifest(const fs::path& path) {
+json read_manifest_json(const fs::path& path) {
   std::ifstream in(path);
   if (!in) {
     throw std::runtime_error("cannot read manifest");
@@ -181,7 +182,11 @@ ExternalTool parse_external_manifest(const fs::path& path) {
   if (!doc.is_object()) {
     throw std::runtime_error("manifest must be an object");
   }
+  return doc;
+}
 
+ExternalTool parse_external_manifest(const fs::path& path) {
+  const auto doc = read_manifest_json(path);
   ExternalTool out;
   out.name = string_field(doc, "name");
   out.description = string_field(doc, "description");
@@ -225,19 +230,7 @@ ExternalTool parse_external_manifest(const fs::path& path) {
 }
 
 Manifest parse_manifest(const fs::path& path) {
-  std::ifstream in(path);
-  if (!in) {
-    throw std::runtime_error("cannot read manifest");
-  }
-  json doc;
-  try {
-    in >> doc;
-  } catch (const std::exception& e) {
-    throw std::runtime_error("invalid JSON: " + std::string(e.what()));
-  }
-  if (!doc.is_object()) {
-    throw std::runtime_error("manifest must be an object");
-  }
+  const auto doc = read_manifest_json(path);
   Manifest out;
   out.name = string_field(doc, "name");
   if (out.name.empty()) {
