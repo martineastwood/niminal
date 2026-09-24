@@ -55,8 +55,11 @@ Dispatch order:
    same name)
 
 Built-in names cannot be overridden by templates. `/quit`, `/exit`, `/version`,
-`/copy`, `/yolo`, `/retry`, and `/compact` still run while a turn is busy; most
-other slash commands wait until the turn finishes.
+`/copy`, `/yolo`, `/help`, `/theme`, and `/search` work during a model turn.
+`/provider`, `/model`, and `/thinking` show the current choice during a turn;
+changes you enter take effect after the turn finishes, before the next queued
+prompt. `/models` lists configured local or Foundry models during a turn.
+Other commands are blocked until the turn finishes.
 
 ## `@` mentions
 

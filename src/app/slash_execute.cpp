@@ -608,12 +608,36 @@ bool execute_slash(SlashHost& host, const std::string& cmd, const std::string& a
   if (cmd == "/compact") {
     return handle_compact(host, arg);
   }
-  if (host.busy) {
-    reject_busy(host);
-    return true;
-  }
   if (cmd == "/help") {
     return handle_help(host, arg);
+  }
+  if (!extension_request && cmd == "/theme") {
+    return handle_theme(host, arg);
+  }
+  if (!extension_request && cmd == "/models" && arg.empty()) {
+    return handle_models(host, arg);
+  }
+  if (!extension_request && cmd == "/provider" && arg.empty()) {
+    return handle_provider(host, arg);
+  }
+  if (!extension_request && cmd == "/model" && arg.empty()) {
+    return handle_model(host, arg);
+  }
+  if (!extension_request && cmd == "/thinking" && arg.empty()) {
+    return handle_thinking(host, arg);
+  }
+  if (!extension_request && cmd == "/search") {
+    return handle_search(host, arg);
+  }
+  if (host.busy) {
+    if (!extension_request && !arg.empty() &&
+        (cmd == "/provider" || cmd == "/model" || cmd == "/thinking")) {
+      host.pending_changes.emplace_back(cmd, arg);
+      push_status(host, cmd + " " + arg + " will apply after this turn.");
+      return true;
+    }
+    reject_busy(host);
+    return true;
   }
   if (extension_request) {
     return handle_extension(host, cmd, arg);

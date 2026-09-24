@@ -94,6 +94,31 @@ struct ExtensionEntry {
   nlohmann::json data;
 };
 
+struct ExtensionStatusSegment {
+  std::string text;
+  std::string style;
+};
+
+struct ExtensionStatus {
+  std::string extension;
+  std::string key;
+  std::vector<ExtensionStatusSegment> segments;
+};
+
+struct ExtensionUiAction {
+  std::string id;
+  std::string label;
+};
+
+struct ExtensionWidget {
+  std::string extension;
+  std::string key;
+  std::string position;
+  std::string title;
+  nlohmann::json content = nlohmann::json::array();
+  std::vector<ExtensionUiAction> actions;
+};
+
 std::string edit_text_externally(const std::string& text, const std::string& editor);
 
 class ExtensionRuntime : public std::enable_shared_from_this<ExtensionRuntime> {
@@ -127,8 +152,10 @@ public:
   std::vector<ExtensionNotice> take_notices();
   std::vector<ExtensionUserMessage> take_user_messages();
   std::vector<ExtensionEntry> take_entries();
-  std::vector<std::string> status_texts() const;
-  std::vector<std::string> widget_lines() const;
+  std::vector<ExtensionStatus> statuses() const;
+  std::vector<ExtensionWidget> widgets() const;
+  bool activate_widget_action(const std::string& extension, const std::string& key,
+                              const std::string& action);
 
   explicit ExtensionRuntime(Access, std::filesystem::path workspace, std::atomic<bool>* cancel);
 

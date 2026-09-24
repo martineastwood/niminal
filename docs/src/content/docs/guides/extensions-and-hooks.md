@@ -175,6 +175,56 @@ Responses and unsolicited `update` messages can:
 Extension tools use the normal permission prompt unless their capabilities are
 read-only (`read` and optional `user` only).
 
+## Status and widgets
+
+You can add styled segments to the footer or show a small widget above the
+composer. Return either from a command, hook, or unsolicited `update` message:
+
+```python
+send({"type": "update",
+      "status": {"key": "build", "segments": [
+          {"text": "build ", "style": "muted"},
+          {"text": "passing", "style": "success"}]},
+      "widget": {"key": "tasks", "title": "Tasks", "content": [
+          {"type": "list", "items": [
+              {"text": "Implement the feature", "state": "active"},
+              {"text": "Run the tests", "state": "pending"}]},
+          {"type": "progress", "label": "Complete", "value": 1, "max": 2}],
+        "actions": [{"id": "complete_next", "label": "Complete next"}]}})
+```
+
+Status styles are `normal`, `muted`, `accent`, `success`, `warning`, `error`,
+and `emphasis`. Send an empty `segments` array with the same key to clear that
+status.
+
+Widgets support `text`, `list`, and `progress` content. List items can use the
+`pending`, `active`, or `done` state. Widgets appear above the composer. To run
+an action, focus the empty composer and press Tab, move through actions with
+the up and down keys, then press Enter. Escape closes the action selector. The
+extension receives `{"type":"ui_action","widget":"tasks","action":"complete_next"}`
+and can refresh the widget by sending another `update`. To remove a widget,
+send its key with an empty title, content array, and actions array.
+
+The repository includes runnable examples in
+`examples/extensions/powerline_footer`, `examples/extensions/todo_widget`, and
+`examples/extensions/subagent_panel`. Copy an example directory under
+`.niminal/extensions/` in a trusted workspace, then restart Niminal to load it.
+The commands are `/footer_demo`, `/todos`, and `/subagents_demo`.
+
+The todo example also registers a `todo` tool the agent can use to create,
+update, list, inspect, delete, or clear tasks. For example, ask the agent to
+"implement the settings screen and track the work in todos." It can mark a task
+in progress as it starts and complete it when its work and checks are done.
+Run `/todos` to review the current list. Tasks are saved under
+`~/.niminal/todos/`, separately for each workspace and session, so they remain
+available after an extension reload or context compaction. When every visible
+task is complete, choose **Clear todos** in the widget to remove the list and
+hide the widget. Because the tool changes saved tasks, Niminal asks for
+permission before the agent uses it.
+
+The subagent panel is a UI demo with simulated work items; it does not start
+child agents.
+
 Extensions can also ask Niminal to show a question, confirmation, input, password,
 or external editor. Host requests support one-shot model completion, session
 information and naming, and context usage.

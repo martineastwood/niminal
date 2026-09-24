@@ -1,0 +1,4 @@
+{
+  "name": "subagent_panel",
+  "command": ["./extension.py"]
+}

@@ -848,8 +848,8 @@ struct ExtensionRuntime::Impl {
   std::vector<ExternalTool> external_tools;
   ShellEnvFn shell_env;
   mutable std::mutex actions_mutex;
-  std::map<std::string, std::string> statuses;
-  std::map<std::string, std::vector<std::string>> widgets;
+  std::map<std::string, ExtensionStatus> statuses;
+  std::map<std::string, ExtensionWidget> widgets;
   std::vector<ExtensionNotice> notices;
   std::vector<ExtensionUserMessage> user_messages;
   std::vector<ExtensionEntry> entries;
@@ -948,13 +948,34 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
   std::lock_guard lock(impl.actions_mutex);
   if (auto status = response.find("status"); status != response.end() && status->is_object()) {
     auto key = string_field(*status, "key");
-    auto text = string_field(*status, "text");
-    if (!key.empty()) {
+    ExtensionStatus item{process.name, key, {}};
+    bool valid = true;
+    auto segments = status->find("segments");
+    if (segments == status->end() || !segments->is_array()) {
+      valid = false;
+    } else {
+      static const std::set<std::string> styles = {"normal",  "muted", "accent",  "success",
+                                                   "warning", "error", "emphasis"};
+      for (const auto& segment : *segments) {
+        if (!segment.is_object()) {
+          valid = false;
+          break;
+        }
+        const auto style = string_field(segment, "style");
+        if (!segment.contains("text") || !segment["text"].is_string() ||
+            (!style.empty() && !styles.contains(style))) {
+          valid = false;
+          break;
+        }
+        item.segments.push_back({segment["text"].get<std::string>(), style});
+      }
+    }
+    if (valid && !key.empty()) {
       key = process.name + ":" + key;
-      if (text.empty()) {
+      if (item.segments.empty()) {
         impl.statuses.erase(key);
       } else {
-        impl.statuses[key] = std::move(text);
+        impl.statuses[key] = std::move(item);
       }
     }
   }
@@ -967,13 +988,92 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
   }
   if (auto widget = response.find("widget"); widget != response.end() && widget->is_object()) {
     auto key = string_field(*widget, "key");
-    auto lines = string_array(*widget, "lines");
-    if (!key.empty()) {
+    ExtensionWidget item;
+    item.extension = process.name;
+    item.key = key;
+    item.position = string_field(*widget, "position");
+    if (item.position.empty()) {
+      item.position = "above_composer";
+    }
+    item.title = string_field(*widget, "title");
+    bool valid = item.position == "above_composer";
+    if (auto content = widget->find("content"); content != widget->end() && content->is_array()) {
+      item.content = *content;
+    } else {
+      valid = false;
+    }
+    if (auto actions = widget->find("actions"); actions != widget->end()) {
+      if (!actions->is_array() || actions->size() > 8) {
+        valid = false;
+      } else {
+        for (const auto& action : *actions) {
+          if (!action.is_object()) {
+            valid = false;
+            break;
+          }
+          const auto id = string_field(action, "id");
+          const auto label = string_field(action, "label");
+          if (id.empty() || label.empty() ||
+              std::any_of(item.actions.begin(), item.actions.end(),
+                          [&](const auto& existing) { return existing.id == id; })) {
+            valid = false;
+            break;
+          }
+          item.actions.push_back({id, label});
+        }
+      }
+    }
+    if (item.content.size() > 24) {
+      valid = false;
+    }
+    for (const auto& element : item.content) {
+      if (!element.is_object()) {
+        valid = false;
+        break;
+      }
+      const auto type = string_field(element, "type");
+      if (type == "text") {
+        if (!element.contains("text") || !element["text"].is_string()) {
+          valid = false;
+          break;
+        }
+      } else if (type == "list") {
+        if (!element.contains("items") || !element["items"].is_array() ||
+            element["items"].size() > 32) {
+          valid = false;
+          break;
+        }
+        for (const auto& entry : element["items"]) {
+          if (!entry.is_object()) {
+            valid = false;
+            break;
+          }
+          const auto state = string_field(entry, "state");
+          if (!entry.contains("text") || !entry["text"].is_string() ||
+              (!state.empty() && state != "pending" && state != "active" && state != "done")) {
+            valid = false;
+            break;
+          }
+        }
+      } else if (type == "progress") {
+        if (!element.contains("value") || !element["value"].is_number() ||
+            !element.contains("max") || !element["max"].is_number() ||
+            element["max"].get<double>() <= 0 ||
+            (element.contains("label") && !element["label"].is_string())) {
+          valid = false;
+          break;
+        }
+      } else {
+        valid = false;
+        break;
+      }
+    }
+    if (valid && !key.empty()) {
       key = process.name + ":" + key;
-      if (lines.empty()) {
+      if (item.content.empty() && item.title.empty() && item.actions.empty()) {
         impl.widgets.erase(key);
       } else {
-        impl.widgets[key] = std::move(lines);
+        impl.widgets[key] = std::move(item);
       }
     }
   }
@@ -1523,22 +1623,49 @@ std::vector<ExtensionEntry> ExtensionRuntime::take_entries() {
   return out;
 }
 
-std::vector<std::string> ExtensionRuntime::status_texts() const {
+std::vector<ExtensionStatus> ExtensionRuntime::statuses() const {
   std::lock_guard lock(impl_->actions_mutex);
-  std::vector<std::string> out;
-  for (const auto& [_, text] : impl_->statuses) {
-    out.push_back(text);
+  std::vector<ExtensionStatus> out;
+  out.reserve(impl_->statuses.size());
+  for (const auto& [_, status] : impl_->statuses) {
+    out.push_back(status);
   }
   return out;
 }
 
-std::vector<std::string> ExtensionRuntime::widget_lines() const {
+std::vector<ExtensionWidget> ExtensionRuntime::widgets() const {
   std::lock_guard lock(impl_->actions_mutex);
-  std::vector<std::string> out;
-  for (const auto& [_, lines] : impl_->widgets) {
-    out.insert(out.end(), lines.begin(), lines.end());
+  std::vector<ExtensionWidget> out;
+  out.reserve(impl_->widgets.size());
+  for (const auto& [_, widget] : impl_->widgets) {
+    out.push_back(widget);
   }
   return out;
+}
+
+bool ExtensionRuntime::activate_widget_action(const std::string& extension, const std::string& key,
+                                              const std::string& action) {
+  {
+    std::lock_guard lock(impl_->actions_mutex);
+    const auto widget = impl_->widgets.find(extension + ":" + key);
+    if (widget == impl_->widgets.end() ||
+        std::none_of(widget->second.actions.begin(), widget->second.actions.end(),
+                     [&](const auto& registered) { return registered.id == action; })) {
+      return false;
+    }
+  }
+  const auto process =
+      std::find_if(impl_->processes.begin(), impl_->processes.end(),
+                   [&](const auto& candidate) { return candidate->name == extension; });
+  if (process == impl_->processes.end()) {
+    return false;
+  }
+  try {
+    (*process)->send(json{{"type", "ui_action"}, {"widget", key}, {"action", action}});
+    return true;
+  } catch (...) {
+    return false;
+  }
 }
 
 json session_hook_payload(const std::string& session_id, const fs::path& workspace) {

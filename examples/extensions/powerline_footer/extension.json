@@ -1,0 +1,4 @@
+{
+  "name": "powerline_footer",
+  "command": ["./extension.py"]
+}

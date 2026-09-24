@@ -274,9 +274,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::mutex steering_mu;
   std::vector<niminal::UserInput> steering;
   std::vector<niminal::UserInput> follow_up;
+  std::vector<std::pair<std::string, std::string>> pending_changes;
   std::vector<std::string> idle_extension_messages;
   std::function<void(std::string)> deliver_extension_now;
   std::function<void()> handle_turn_idle;
+  std::function<void()> apply_pending_changes;
   bool send_queue_after_stop = false;
   bool plain_interrupt_pending = false;
   std::vector<ExtensionEntry> extension_entries_pending;
@@ -288,7 +290,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::atomic<bool> footer_notice_active{false};
   niminal::UserInput retry_prompt;
   bool retry_available = false;
+  bool turn_failed = false;
   std::chrono::steady_clock::time_point footer_notice_until;
+  std::optional<size_t> extension_action_focus;
   float transcript_y = 1.F;
   bool ask_user_open = false;
   std::string ask_user_question;
@@ -800,7 +804,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       break;
     case EventKind::error:
       blocks.push_back(Block{BlockKind::error, ev.text});
-      busy = false;
+      turn_failed = true;
       activity.clear();
       activity_started.reset();
       retry_available =
@@ -810,7 +814,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       busy = false;
       activity.clear();
       activity_started.reset();
-      retry_available = false;
+      if (!turn_failed) {
+        retry_available = false;
+      }
+      turn_failed = false;
+      if (apply_pending_changes) {
+        apply_pending_changes();
+      }
       if (handle_turn_idle) {
         handle_turn_idle();
       }
@@ -1151,6 +1161,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       blocks.push_back(Block{BlockKind::user, compose_input_preview(prompt)});
     }
     busy = true;
+    turn_failed = false;
     activity = "Thinking…";
     worker = std::thread([&agent, &busy, &ui_alive, post_ui, prompt = std::move(prompt), retry] {
       try {
@@ -1158,6 +1169,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       } catch (const std::exception& e) {
         if (ui_alive) {
           post_ui(StreamEvent{EventKind::error, e.what(), {}, {}});
+          post_ui(StreamEvent{EventKind::done, {}, {}, {}});
         } else {
           busy = false;
         }
@@ -1165,6 +1177,56 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     });
   };
   deliver_extension_now = [&](std::string prompt) { send_prompt(std::move(prompt)); };
+  auto run_slash = [&](const std::string& cmd, const std::string& arg, bool extension_request) {
+    SlashHost slash{
+        agent,
+        session,
+        cfg,
+        theme,
+        permissions,
+        cwd,
+        keybindings,
+        extensions,
+        busy,
+        yolo_mode,
+        retry_available,
+        retry_prompt,
+        settings_open,
+        settings_i,
+        settings_edit,
+        settings_error,
+        blocks,
+        pending_changes,
+        [&](const std::string& message) { flash_footer(message); },
+        [&](const std::string& reason, const std::string& target) {
+          return allow_session_switch(reason, target);
+        },
+        [&](Session next, const std::string& note, const std::string& reason) {
+          adopt_session(std::move(next), note, reason);
+        },
+        [&] { restart_extensions(); },
+        [&] { reload_local(); },
+        [&] { apply_extension_actions(); },
+        [&](niminal::UserInput input, bool retry) { send_prompt(std::move(input), retry); },
+        [&] {
+          cancel->store(true);
+          ui_alive = false;
+          screen.Exit();
+        },
+        [&](std::string text) {
+          draft = std::move(text);
+          cursor = static_cast<int>(draft.size());
+        },
+    };
+    return execute_slash(slash, cmd, arg, extension_request);
+  };
+  apply_pending_changes = [&] {
+    join_worker();
+    auto changes = std::exchange(pending_changes, {});
+    for (const auto& [cmd, arg] : changes) {
+      run_slash(cmd, arg, false);
+    }
+  };
   handle_turn_idle = [&] {
     if (send_queue_after_stop) {
       send_queue_after_stop = false;
@@ -1268,46 +1330,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
     if (prompt[0] == '/' && !skill_request) {
       const auto [cmd, arg] = split_slash(prompt);
-      SlashHost slash{
-          agent,
-          session,
-          cfg,
-          theme,
-          permissions,
-          cwd,
-          keybindings,
-          extensions,
-          busy,
-          yolo_mode,
-          retry_available,
-          retry_prompt,
-          settings_open,
-          settings_i,
-          settings_edit,
-          settings_error,
-          blocks,
-          [&](const std::string& message) { flash_footer(message); },
-          [&](const std::string& reason, const std::string& target) {
-            return allow_session_switch(reason, target);
-          },
-          [&](Session next, const std::string& note, const std::string& reason) {
-            adopt_session(std::move(next), note, reason);
-          },
-          [&] { restart_extensions(); },
-          [&] { reload_local(); },
-          [&] { apply_extension_actions(); },
-          [&](niminal::UserInput input, bool retry) { send_prompt(std::move(input), retry); },
-          [&] {
-            cancel->store(true);
-            ui_alive = false;
-            screen.Exit();
-          },
-          [&](std::string text) {
-            draft = std::move(text);
-            cursor = static_cast<int>(draft.size());
-          },
-      };
-      if (execute_slash(slash, cmd, arg, extension_request)) {
+      if (run_slash(cmd, arg, extension_request)) {
         return;
       }
     }
@@ -1403,6 +1426,25 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
     }
 
+    const auto extension_statuses =
+        extensions ? extensions->statuses() : std::vector<ExtensionStatus>{};
+    const auto extension_widgets =
+        extensions ? extensions->widgets() : std::vector<ExtensionWidget>{};
+    std::vector<std::pair<size_t, size_t>> extension_action_slots;
+    for (size_t widget_index = 0; widget_index < extension_widgets.size(); ++widget_index) {
+      for (size_t action_index = 0; action_index < extension_widgets[widget_index].actions.size();
+           ++action_index) {
+        extension_action_slots.emplace_back(widget_index, action_index);
+      }
+    }
+    if (extension_action_focus) {
+      if (extension_action_slots.empty()) {
+        extension_action_focus.reset();
+      } else {
+        *extension_action_focus %= extension_action_slots.size();
+      }
+    }
+
     std::string activity_line;
     if (busy || !activity.empty()) {
       if (busy) {
@@ -1427,14 +1469,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       if (queued > 0) {
         activity_line += "  ·  queued " + std::to_string(queued);
-      }
-    }
-    if (extensions) {
-      for (const auto& status : extensions->status_texts()) {
-        if (!activity_line.empty()) {
-          activity_line += "  ·  ";
-        }
-        activity_line += status;
       }
     }
     if (!footer_notice.empty()) {
@@ -1567,16 +1601,102 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (!suggest_rows.empty()) {
         stack.push_back(vbox(std::move(suggest_rows)));
       }
-      if (extensions) {
+      if (!extension_widgets.empty()) {
         Elements widget_rows;
-        for (const auto& line : extensions->widget_lines()) {
-          widget_rows.push_back(text(line) | dim);
+        size_t action_offset = 0;
+        for (size_t widget_index = 0; widget_index < extension_widgets.size(); ++widget_index) {
+          const auto& widget = extension_widgets[widget_index];
+          Elements rows;
+          for (const auto& item : widget.content) {
+            const auto type = item.value("type", std::string());
+            if (type == "text") {
+              auto line = text(item.value("text", std::string()));
+              const auto style = item.value("style", std::string("muted"));
+              if (style == "accent") {
+                line = line | color(theme.accent);
+              } else if (style == "success") {
+                line = line | color(theme.add);
+              } else if (style == "warning") {
+                line = line | color(theme.emphasis);
+              } else if (style == "error") {
+                line = line | color(theme.error);
+              } else {
+                line = line | color(theme.muted);
+              }
+              rows.push_back(std::move(line));
+            } else if (type == "list") {
+              for (const auto& entry : item["items"]) {
+                const auto state = entry.value("state", std::string("pending"));
+                const bool done = state == "done";
+                auto marker = text(done ? "✓ " : (state == "active" ? "› " : "· "));
+                marker = marker |
+                         color(done ? theme.add : (state == "active" ? theme.accent : theme.muted));
+                auto label = paragraph(entry.value("text", std::string()));
+                if (done) {
+                  label = label | dim;
+                }
+                rows.push_back(hbox({text("  "), marker, label}));
+              }
+            } else if (type == "progress") {
+              const double maximum = item["max"].get<double>();
+              const double value = std::clamp(item["value"].get<double>(), 0.0, maximum);
+              const auto label = item.value("label", std::string());
+              auto meter = gauge(static_cast<float>(value / maximum)) | size(WIDTH, EQUAL, 16) |
+                           color(theme.add);
+              rows.push_back(label.empty() ? std::move(meter)
+                                           : hbox({text(label + " "), std::move(meter)}));
+            }
+          }
+          for (size_t action_index = 0; action_index < widget.actions.size(); ++action_index) {
+            const size_t slot = action_offset + action_index;
+            const bool selected = extension_action_focus && *extension_action_focus == slot;
+            auto row =
+                text(std::string(selected ? " › " : "   ") + "[" +
+                     std::to_string(action_index + 1) + "] " + widget.actions[action_index].label);
+            row = selected ? row | bold | color(theme.accent) | bgcolor(theme.hover_bg)
+                           : row | color(theme.muted);
+            rows.push_back(std::move(row));
+          }
+          action_offset += widget.actions.size();
+          if (!widget.actions.empty()) {
+            rows.push_back(text(keybindings.label(KeyAction::complete) +
+                                " focus · ↑/↓ choose · enter run · esc close") |
+                           dim);
+          }
+          const auto title =
+              widget.title.empty() ? widget.extension + " · " + widget.key : widget.title;
+          widget_rows.push_back(window(text(" " + title + " ") | bold | color(theme.accent),
+                                       vbox(std::move(rows)), ROUNDED));
         }
-        if (!widget_rows.empty()) {
-          stack.push_back(vbox(std::move(widget_rows)));
+        stack.push_back(vbox(std::move(widget_rows)));
+      }
+      Elements footer_elements;
+      if (!activity_line.empty()) {
+        footer_elements.push_back(text(activity_line) | color(theme.accent));
+      }
+      for (const auto& status : extension_statuses) {
+        if (!footer_elements.empty()) {
+          footer_elements.push_back(text("  ·  ") | color(theme.muted));
+        }
+        for (const auto& segment : status.segments) {
+          auto part = text(segment.text);
+          if (segment.style == "muted") {
+            part = part | color(theme.muted);
+          } else if (segment.style == "success") {
+            part = part | color(theme.add);
+          } else if (segment.style == "warning") {
+            part = part | color(theme.emphasis);
+          } else if (segment.style == "error") {
+            part = part | color(theme.error);
+          } else if (segment.style == "emphasis") {
+            part = part | bold | color(theme.emphasis);
+          } else {
+            part = part | color(theme.accent);
+          }
+          footer_elements.push_back(std::move(part));
         }
       }
-      stack.push_back(text(activity_line.empty() ? " " : activity_line) | color(theme.accent));
+      stack.push_back(footer_elements.empty() ? text(" ") : hbox(std::move(footer_elements)));
       {
         std::vector<std::string> steering_preview;
         std::vector<std::string> follow_up_preview;
@@ -1878,6 +1998,52 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           return true;
         }
       }
+      return true;
+    }
+    std::vector<std::tuple<std::string, std::string, std::string>> extension_actions;
+    if (extensions) {
+      for (const auto& widget : extensions->widgets()) {
+        for (const auto& action : widget.actions) {
+          extension_actions.emplace_back(widget.extension, widget.key, action.id);
+        }
+      }
+    }
+    if (extension_action_focus && extension_actions.empty()) {
+      extension_action_focus.reset();
+    }
+    if (extension_action_focus) {
+      *extension_action_focus %= extension_actions.size();
+      if (pressed(KeyAction::cancel)) {
+        extension_action_focus.reset();
+        return true;
+      }
+      if (pressed(KeyAction::quit)) {
+        cancel->store(true);
+        ui_alive = false;
+        screen.Exit();
+        return true;
+      }
+      if (pressed(KeyAction::submit)) {
+        const auto& [extension, widget, action] = extension_actions[*extension_action_focus];
+        if (!extensions->activate_widget_action(extension, widget, action)) {
+          flash_footer("Extension action is no longer available.");
+        }
+        extension_action_focus.reset();
+        return true;
+      }
+      if (pressed(KeyAction::complete) || pressed(KeyAction::next)) {
+        *extension_action_focus = (*extension_action_focus + 1) % extension_actions.size();
+        return true;
+      }
+      if (pressed(KeyAction::previous)) {
+        *extension_action_focus =
+            (*extension_action_focus + extension_actions.size() - 1) % extension_actions.size();
+        return true;
+      }
+      extension_action_focus.reset();
+    } else if (pressed(KeyAction::complete) && draft.empty() && current_suggestions().empty() &&
+               !extension_actions.empty()) {
+      extension_action_focus = 0;
       return true;
     }
     if (e.input() == "\x1b[200~") {

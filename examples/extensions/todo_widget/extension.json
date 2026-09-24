@@ -1,0 +1,4 @@
+{
+  "name": "todo_widget",
+  "command": ["./extension.py"]
+}

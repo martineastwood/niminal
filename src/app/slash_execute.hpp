@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace niminal {
@@ -43,6 +44,7 @@ struct SlashHost {
   std::optional<std::string>& settings_edit;
   std::string& settings_error;
   std::vector<Block>& blocks;
+  std::vector<std::pair<std::string, std::string>>& pending_changes;
 
   std::function<void(const std::string&)> flash_footer;
   std::function<bool(const std::string& reason, const std::string& target)> allow_session_switch;

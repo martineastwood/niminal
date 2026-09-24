@@ -293,6 +293,7 @@ niminal_strict_compile(niminal_trust_test)
 
 add_executable(niminal_extensions_test tests/extensions_test.cpp)
 target_link_libraries(niminal_extensions_test PRIVATE niminal_app)
+target_compile_definitions(niminal_extensions_test PRIVATE NIMINAL_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 niminal_strict_compile(niminal_extensions_test)
 
 add_executable(niminal_diff_test tests/diff_test.cpp)

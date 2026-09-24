@@ -5,13 +5,17 @@
 #include <niminal/http.hpp>
 #include <niminal/openai.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
+#include <thread>
 
 namespace fs = std::filesystem;
 using niminal::app::ExtensionRuntime;
@@ -34,6 +38,10 @@ int main() {
   fs::create_directories(tool_dir);
   fs::create_directories(broken_tool_dir);
   fs::create_directories(collision_tool_dir);
+  const fs::path examples = fs::path(NIMINAL_SOURCE_DIR) / "examples" / "extensions";
+  for (const auto* name : {"powerline_footer", "todo_widget", "subagent_panel"}) {
+    fs::copy(examples / name, root / ".niminal" / "extensions" / name, fs::copy_options::recursive);
+  }
   setenv("HOME", home.c_str(), 1);
   niminal::app::set_project_resources_trusted(root, true);
 
@@ -70,8 +78,10 @@ for line in sys.stdin:
         reply["message"] = "Hello " + message.get("arguments", "") + \
             " env=" + os.environ.get("NIMINAL_SESSION_ID", "none")
         reply["notification"] = {"level":"info", "message":"command ran"}
-        reply["status"] = {"key":"state", "text":"ready"}
-        reply["widget"] = {"key":"work", "lines":["extension widget"]}
+        reply["status"] = {"key":"state", "segments":[
+            {"text":"ready", "style":"success"}]}
+        reply["widget"] = {"key":"work", "content":[
+            {"type":"text", "text":"extension widget", "style":"muted"}]}
         reply["entry"] = {"count":1}
         reply["user_message"] = {"content":"background done", "deliver_as":"follow_up"}
     elif kind == "tool":
@@ -226,8 +236,12 @@ for line in sys.stdin:
                                   {"NIMINAL_REASONING_LEVEL", "high"}};
   };
   auto runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
-  if (runtime->commands().size() != 3) {
-    std::cerr << "extension registration failed\n";
+  if (runtime->commands().size() != 6) {
+    std::cerr << "extension registration failed, got " << runtime->commands().size()
+              << " commands\n";
+    for (const auto& warning : runtime->warnings()) {
+      std::cerr << warning << '\n';
+    }
     return 1;
   }
   auto command = runtime->invoke("hello", "world");
@@ -256,7 +270,115 @@ for line in sys.stdin:
       second_result.value("message", "") != "second") {
     return 1;
   }
+  auto footer_demo = runtime->invoke("footer_demo", "");
+  auto empty_todos = runtime->invoke("todos", "");
+  auto subagents_demo = runtime->invoke("subagents_demo", "");
+  auto find_widget = [&](const std::string& extension, const std::string& key) {
+    auto widgets = runtime->widgets();
+    const auto found = std::find_if(widgets.begin(), widgets.end(), [&](const auto& widget) {
+      return widget.extension == extension && widget.key == key;
+    });
+    return found == widgets.end() ? std::optional<niminal::app::ExtensionWidget>() : *found;
+  };
+  auto find_status = [&](const std::string& extension, const std::string& key) {
+    auto statuses = runtime->statuses();
+    const auto found = std::find_if(statuses.begin(), statuses.end(), [&](const auto& status) {
+      return status.extension == extension && status.key == key;
+    });
+    return found == statuses.end() ? std::optional<niminal::app::ExtensionStatus>() : *found;
+  };
+  const auto footer_status = find_status("powerline_footer", "model");
+  const auto subagent_widget = find_widget("subagent_panel", "workers");
+  if (footer_demo.value("message", "") != "Footer status updated." || !footer_status ||
+      footer_status->segments.size() != 4 || footer_status->segments[0].style != "emphasis" ||
+      empty_todos.value("message", "").find("No todos yet.") == std::string::npos ||
+      subagents_demo.value("message", "") != "Showing simulated subagent activity." ||
+      !subagent_widget || subagent_widget->actions.size() != 2) {
+    std::cerr << "extension UI examples did not register their status and widgets\n";
+    return 1;
+  }
   auto tools = runtime->tools();
+  niminal::Tool* todo_tool = nullptr;
+  for (auto& tool : tools) {
+    if (tool.name == "todo") {
+      todo_tool = &tool;
+    }
+  }
+  if (todo_tool == nullptr || todo_tool->read_only || !todo_tool->extension ||
+      todo_tool->parameters["properties"]["action"]["enum"].size() != 6) {
+    std::cerr << "todo tool was not registered for the agent\n";
+    return 1;
+  }
+  const auto created_first = todo_tool->run(
+      nlohmann::json{{"action", "create"}, {"subject", "Review the existing behavior"}});
+  const auto created_second =
+      todo_tool->run(nlohmann::json{{"action", "create"},
+                                    {"subject", "Add the implementation"},
+                                    {"description", "Include a regression test."}});
+  const auto started_first =
+      todo_tool->run(nlohmann::json{{"action", "update"},
+                                    {"id", 1},
+                                    {"status", "in_progress"},
+                                    {"activeForm", "reviewing existing behavior"}});
+  const auto todo_widget = find_widget("todo_widget", "tasks");
+  const auto todo_list = runtime->invoke("todos", "");
+  if (created_first.text.find("Created [pending] #1") == std::string::npos ||
+      created_second.text.find("Created [pending] #2") == std::string::npos ||
+      created_second.text.find("Current todo list:\nPending:") == std::string::npos ||
+      started_first.text.find("in_progress") == std::string::npos || !todo_widget ||
+      todo_widget->content.size() != 2 || todo_widget->content[0]["items"].size() != 2 ||
+      todo_widget->content[0]["items"][0]["state"] != "active" ||
+      todo_widget->actions.size() != 2 ||
+      todo_list.value("message", "").find("Review the existing behavior") == std::string::npos) {
+    std::cerr << "todo tool did not create an agent-visible task list\n";
+    return 1;
+  }
+  if (!runtime->activate_widget_action("todo_widget", "tasks", "complete:1") ||
+      runtime->activate_widget_action("todo_widget", "tasks", "missing")) {
+    std::cerr << "todo widget action dispatch validation failed\n";
+    return 1;
+  }
+  const auto todo_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  bool todo_updated = false;
+  while (std::chrono::steady_clock::now() < todo_deadline) {
+    runtime->pump();
+    const auto updated = find_widget("todo_widget", "tasks");
+    if (updated && std::any_of(updated->content[0]["items"].begin(),
+                               updated->content[0]["items"].end(), [](const auto& item) {
+                                 return item.value("text", "").starts_with("#1 ") &&
+                                        item.value("state", "") == "done";
+                               })) {
+      todo_updated = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (!todo_updated || !runtime->activate_widget_action("subagent_panel", "workers", "stop")) {
+    std::cerr << "widget action did not update the extension view\n";
+    return 1;
+  }
+  const auto subagent_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  bool subagent_stopped = false;
+  while (std::chrono::steady_clock::now() < subagent_deadline) {
+    runtime->pump();
+    const auto updated = find_widget("subagent_panel", "workers");
+    if (updated && updated->content[0]["items"][1]["state"] == "done" &&
+        updated->content[0]["items"][1]["text"] == "Review extension protocol · stopped") {
+      subagent_stopped = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (!subagent_stopped) {
+    std::cerr << "subagent demo action did not update its widget\n";
+    return 1;
+  }
+  auto clear_footer = runtime->invoke("footer_demo", "clear");
+  if (clear_footer.value("message", "") != "Footer status updated." ||
+      find_status("powerline_footer", "model")) {
+    std::cerr << "empty status segments should clear the footer entry\n";
+    return 1;
+  }
   std::vector<std::string> updates;
   runtime->set_tool_update(
       [&updates](const std::string&, const std::string& text) { updates.push_back(text); });
@@ -332,8 +454,12 @@ for line in sys.stdin:
   if (notices.size() != 1 || notices[0].message != "command ran") {
     return 1;
   }
-  if (runtime->status_texts() != std::vector<std::string>{"ready"} ||
-      runtime->widget_lines() != std::vector<std::string>{"extension widget"}) {
+  const auto fixture_status = find_status("fixture", "state");
+  const auto fixture_widget = find_widget("fixture", "work");
+  if (!fixture_status || fixture_status->segments.size() != 1 ||
+      fixture_status->segments[0].text != "ready" || !fixture_widget ||
+      fixture_widget->content.size() != 1 ||
+      fixture_widget->content[0].value("text", "") != "extension widget") {
     return 1;
   }
   auto entries = runtime->take_entries();
@@ -488,6 +614,41 @@ for line in sys.stdin:
   }
   runtime->dispatch(HookEvent::session_shutdown, nlohmann::json{{"reason", "quit"}});
   runtime->dispatch(HookEvent::session_compact_failed, nlohmann::json{{"error", "test"}});
+  runtime->stop();
+
+  runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
+  runtime->dispatch(HookEvent::session_start, niminal::app::session_hook_payload("session", root));
+  const auto restored_todos = find_widget("todo_widget", "tasks");
+  auto restored_tools = runtime->tools();
+  niminal::Tool* restored_todo_tool = nullptr;
+  for (auto& tool : restored_tools) {
+    if (tool.name == "todo") {
+      restored_todo_tool = &tool;
+    }
+  }
+  const bool has_restored_items = restored_todos && !restored_todos->content.empty() &&
+                                  restored_todos->content[0].contains("items") &&
+                                  restored_todos->content[0]["items"].is_array();
+  const bool first_task_completed =
+      has_restored_items &&
+      std::any_of(restored_todos->content[0]["items"].begin(),
+                  restored_todos->content[0]["items"].end(), [](const auto& item) {
+                    return item.value("text", "").starts_with("#1 ") &&
+                           item.value("state", "") == "done";
+                  });
+  if (!has_restored_items || restored_todos->content[0]["items"].size() != 2 ||
+      !first_task_completed || restored_todo_tool == nullptr ||
+      restored_todo_tool->run(nlohmann::json{{"action", "list"}})
+              .text.find("Add the implementation") == std::string::npos) {
+    std::cerr << "todo tasks did not survive an extension restart\n";
+    return 1;
+  }
+  const auto cleared = restored_todo_tool->run(nlohmann::json{{"action", "clear"}});
+  if (!cleared.text.starts_with("Cleared 2 tasks.") ||
+      runtime->invoke("todos", "").value("message", "") != "No todos yet. Ask me to add tasks.") {
+    std::cerr << "todo clear did not remove the saved task list\n";
+    return 1;
+  }
   runtime->stop();
 
   niminal::app::set_project_resources_trusted(root, false);
