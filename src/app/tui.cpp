@@ -252,6 +252,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
   Theme theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
+  std::vector<std::pair<std::string, Element>> markdown_cache;
   std::atomic<bool> local_cancel{false};
   if (agent.cancel == nullptr) {
     agent.cancel = &local_cancel;
@@ -294,6 +295,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::chrono::steady_clock::time_point footer_notice_until;
   std::optional<size_t> extension_action_focus;
   float transcript_y = 1.F;
+  int transcript_rows = 1;
   bool ask_user_open = false;
   std::string ask_user_question;
   std::vector<std::string> ask_user_options;
@@ -601,6 +603,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     try {
       if (result.theme_changed) {
         theme = load_theme(cfg.theme).value();
+        markdown_cache.clear();
       }
       if (result.agent_changed) {
         apply_provider(agent, cfg);
@@ -1050,6 +1053,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                                                    "\nUsing default keybindings for this launch."});
     }
     theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
+    markdown_cache.clear();
     if (reload_system_prompt) {
       reload_system_prompt();
     }
@@ -1057,6 +1061,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
   auto load_into_ui = [&](const std::string& note) {
     blocks.clear();
+    markdown_cache.clear();
     if (!note.empty()) {
       blocks.push_back(Block{BlockKind::status, note});
     }
@@ -1402,6 +1407,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::string usage;
   auto view = Renderer(layout, [&] {
     card_boxes.assign(blocks.size(), Box{});
+    markdown_cache.resize(blocks.size());
     Elements entries;
     for (size_t i = 0; i < blocks.size(); ++i) {
       const auto& block = blocks[i];
@@ -1410,7 +1416,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       } else if (block.kind == BlockKind::user) {
         entries.push_back(render_user_message(block, theme));
       } else if (block.kind == BlockKind::assistant) {
-        entries.push_back(render_markdown(block.text, theme));
+        auto& cached = markdown_cache[i];
+        if (!cached.second || cached.first != block.text) {
+          cached = {block.text, render_markdown(block.text, theme)};
+        }
+        entries.push_back(cached.second);
       } else {
         auto label = block_label(block.kind);
         auto body = paragraph_preserving_whitespace(block.text) | block_style(block.kind, theme);
@@ -1512,8 +1522,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       suggest_rows.push_back(std::move(line));
     }
 
+    auto transcript = vbox(std::move(entries));
+    transcript->ComputeRequirement();
+    transcript_rows = std::max(1, transcript->requirement().min_y);
     Elements stack;
-    stack.push_back(vbox(std::move(entries)) |
+    stack.push_back(transcript |
                     focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
                     vscroll_indicator | yframe | yflex);
     stack.push_back(separator());
@@ -1801,20 +1814,18 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
   view = CatchEvent(view, [&](Event e) {
     auto pressed = [&](KeyAction action) { return keybindings.matches(action, e); };
+    auto scroll_transcript = [&](bool up, bool page) {
+      const float step = page ? 0.35F : 1.F / static_cast<float>(transcript_rows);
+      transcript_y = std::clamp(transcript_y + (up ? -step : step), 0.F, 1.F);
+      stick_bottom = !up && transcript_y == 1.F;
+    };
     if (ask_user_open) {
       if (is_wheel_up(e) || pressed(KeyAction::scroll_up)) {
-        stick_bottom = false;
-        transcript_y =
-            std::max(0.F, transcript_y - (pressed(KeyAction::scroll_up) ? 0.35F : 0.07F));
+        scroll_transcript(true, pressed(KeyAction::scroll_up));
         return true;
       }
       if (is_wheel_down(e) || pressed(KeyAction::scroll_down)) {
-        transcript_y =
-            std::min(1.F, transcript_y + (pressed(KeyAction::scroll_down) ? 0.35F : 0.07F));
-        if (transcript_y >= 0.99F) {
-          transcript_y = 1.F;
-          stick_bottom = true;
-        }
+        scroll_transcript(false, pressed(KeyAction::scroll_down));
         return true;
       }
       if (pressed(KeyAction::cancel)) {
@@ -2133,17 +2144,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (is_wheel_up(e) || pressed(KeyAction::scroll_up)) {
-      stick_bottom = false;
-      transcript_y = std::max(0.F, transcript_y - (pressed(KeyAction::scroll_up) ? 0.35F : 0.07F));
+      scroll_transcript(true, pressed(KeyAction::scroll_up));
       return true;
     }
     if (is_wheel_down(e) || pressed(KeyAction::scroll_down)) {
-      transcript_y =
-          std::min(1.F, transcript_y + (pressed(KeyAction::scroll_down) ? 0.35F : 0.07F));
-      if (transcript_y >= 0.99F) {
-        transcript_y = 1.F;
-        stick_bottom = true;
-      }
+      scroll_transcript(false, pressed(KeyAction::scroll_down));
       return true;
     }
     const auto& suggestions = current_suggestions();
