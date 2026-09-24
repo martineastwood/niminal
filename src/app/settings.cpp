@@ -1,7 +1,6 @@
 #include "settings.hpp"
 
 #include "provider.hpp"
-#include "queue_mode.hpp"
 #include "theme.hpp"
 #include "thinking.hpp"
 
@@ -209,20 +208,10 @@ SettingApplyResult cycle_setting(Config& cfg, SettingField field, int direction,
     cfg.theme = next;
     return ok(false, true);
   }
-  case SettingField::steering_mode: {
-    const auto next = cycle_option(queue_mode_options(), cfg.steering_mode, direction);
-    if (!valid_queue_mode(next)) {
-      return fail("invalid steering_mode");
-    }
-    cfg.steering_mode = next;
-    return ok();
-  }
+  case SettingField::steering_mode:
   case SettingField::follow_up_mode: {
-    const auto next = cycle_option(queue_mode_options(), cfg.follow_up_mode, direction);
-    if (!valid_queue_mode(next)) {
-      return fail("invalid follow_up_mode");
-    }
-    cfg.follow_up_mode = next;
+    auto& mode = field == SettingField::steering_mode ? cfg.steering_mode : cfg.follow_up_mode;
+    mode = cycle_option(queue_mode_options(), mode, direction);
     return ok();
   }
   default:

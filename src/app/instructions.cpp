@@ -6,6 +6,7 @@
 #include <fstream>
 #include <mutex>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -79,6 +80,15 @@ std::string read_bounded(const fs::path& path) {
   return text;
 }
 
+void append_instruction_file(std::ostringstream& out, std::string_view label,
+                             std::string_view content) {
+  out << "\n<file path=\"" << label << "\">\n" << content;
+  if (content.back() != '\n') {
+    out << '\n';
+  }
+  out << "</file>\n";
+}
+
 std::vector<fs::file_time_type> mtimes_of(const std::vector<fs::path>& paths) {
   std::vector<fs::file_time_type> out;
   out.reserve(paths.size());
@@ -101,17 +111,13 @@ std::string format_instructions(const fs::path& workspace, const fs::path& globa
     if (content.empty()) {
       continue;
     }
-    any = true;
     std::string label =
         (path == global) ? "global" : path.lexically_relative(workspace).generic_string();
     if (label.empty() || label.starts_with("..")) {
       label = path.filename().string();
     }
-    out << "\n<file path=\"" << label << "\">\n" << content;
-    if (content.back() != '\n') {
-      out << '\n';
-    }
-    out << "</file>\n";
+    any = true;
+    append_instruction_file(out, label, content);
   }
   return any ? out.str() : std::string();
 }
@@ -277,12 +283,7 @@ std::string load_scoped_instructions(const fs::path& workspace, const fs::path& 
       continue;
     }
     any = true;
-    auto label = path.lexically_relative(root).generic_string();
-    out << "\n<file path=\"" << label << "\">\n" << content;
-    if (content.back() != '\n') {
-      out << '\n';
-    }
-    out << "</file>\n";
+    append_instruction_file(out, path.lexically_relative(root).generic_string(), content);
   }
   return any ? out.str() : std::string();
 }

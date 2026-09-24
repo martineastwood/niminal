@@ -1286,7 +1286,7 @@ std::string complete_chat(const ChatRequest& request) {
     return text;
   }
   }
-  return {};
+  std::unreachable();
 }
 
 Usage parse_chat_usage(const json& usage) {
@@ -1318,12 +1318,9 @@ Usage parse_chat_usage(const json& usage) {
   } else if (usage.contains("input_tokens_details") && usage["input_tokens_details"].is_object()) {
     details = usage["input_tokens_details"];
   }
-  if (details.is_object()) {
-    out.cache_read_tokens = count(details, "cached_tokens");
-    out.cache_write_tokens = count(details, "cache_write_tokens");
-    out.cache_reported =
-        details.contains("cached_tokens") || details.contains("cache_write_tokens");
-  }
+  out.cache_read_tokens = count(details, "cached_tokens");
+  out.cache_write_tokens = count(details, "cache_write_tokens");
+  out.cache_reported = details.contains("cached_tokens") || details.contains("cache_write_tokens");
   if (usage.contains("cache_read_input_tokens")) {
     out.cache_read_tokens = count(usage, "cache_read_input_tokens");
     out.cache_reported = true;

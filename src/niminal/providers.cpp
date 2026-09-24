@@ -147,9 +147,9 @@ bool register_provider(ProviderSpec provider) {
     provider.models.push_back(provider.default_model);
   }
   auto& providers = provider_registry();
-  const auto normalized = lower_copy(provider.name);
+  const auto normalized = provider.name;
   const auto found = std::find_if(providers.begin(), providers.end(), [&](const auto& candidate) {
-    return lower_copy(candidate.name) == normalized;
+    return candidate.name == normalized;
   });
   if (found != providers.end()) {
     if (*found != provider) {
