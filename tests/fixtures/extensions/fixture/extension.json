@@ -1,4 +1,4 @@
 {
-  "name": "subagent_panel",
+  "name": "fixture",
   "command": ["./extension.py"]
 }

@@ -1,7 +1,5 @@
 #include "json_mode.hpp"
 
-#include "json_events.hpp"
-
 namespace niminal::app {
 namespace {
 
@@ -182,6 +180,19 @@ nlohmann::json queue_event(const std::string& session_id, const std::string& act
   }
   if (!mode.empty()) {
     out["mode"] = mode;
+  }
+  return out;
+}
+
+nlohmann::json rpc_response_event(const std::string& id, bool ok, const std::string& state,
+                                  const std::string& error) {
+  nlohmann::json out = {
+      {"version", kJsonEventVersion}, {"type", "response"}, {"id", id}, {"ok", ok}};
+  if (!state.empty()) {
+    out["state"] = state;
+  }
+  if (!error.empty()) {
+    out["error"] = error;
   }
   return out;
 }

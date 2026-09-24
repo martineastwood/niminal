@@ -195,8 +195,7 @@ add_library(niminal_app
   src/app/trust.cpp
   src/app/extensions.cpp
   src/app/diff.cpp
-  src/app/theme.cpp
-  src/app/rpc_protocol.cpp)
+  src/app/theme.cpp)
 target_include_directories(niminal_app PUBLIC src/app)
 target_link_libraries(niminal_app PUBLIC niminal::ai ftxui::component)
 niminal_strict_compile(niminal_app)
@@ -244,7 +243,8 @@ niminal_add_test(thinking niminal_app)
 niminal_add_test(permissions niminal_app)
 niminal_add_test(trust niminal_app)
 niminal_add_test(extensions niminal_app)
-target_compile_definitions(niminal_extensions_test PRIVATE NIMINAL_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(niminal_extensions_test PRIVATE
+  NIMINAL_EXTENSIONS_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/extensions")
 niminal_add_test(diff niminal_app)
 niminal_add_test(theme niminal_app)
 niminal_add_test(transcript niminal_app)

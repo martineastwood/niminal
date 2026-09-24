@@ -21,6 +21,19 @@ inline std::string lower_copy(std::string value) {
   return value;
 }
 
+inline std::string clip_line(std::string s, size_t max_len = 60) {
+  for (char& c : s) {
+    if (c == '\n' || c == '\r' || c == '\t') {
+      c = ' ';
+    }
+  }
+  if (s.size() > max_len) {
+    s.resize(max_len);
+    s += "…";
+  }
+  return s;
+}
+
 inline std::string trim_copy(std::string value) {
   while (!value.empty() && (value.back() == ' ' || value.back() == '\n' || value.back() == '\r' ||
                             value.back() == '\t')) {

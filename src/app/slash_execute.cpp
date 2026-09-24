@@ -678,9 +678,6 @@ bool execute_slash(SlashHost& host, const std::string& cmd, const std::string& a
   if (cmd == "/resume") {
     return handle_resume(host, arg);
   }
-  if (cmd == "/search") {
-    return handle_search(host, arg);
-  }
   if (cmd == "/fork") {
     return handle_fork(host, arg);
   }

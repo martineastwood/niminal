@@ -1,5 +1,7 @@
 #include "transcript.hpp"
 
+#include <niminal/text.hpp>
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -16,19 +18,6 @@ namespace {
 constexpr size_t kToolResultMaxChars = 8000;
 constexpr int kToolResultMaxLines = 120;
 constexpr int kBashPreviewMaxLines = 8;
-
-std::string one_line(std::string s, size_t n) {
-  for (char& c : s) {
-    if (c == '\n' || c == '\r' || c == '\t') {
-      c = ' ';
-    }
-  }
-  if (s.size() > n) {
-    s.resize(n);
-    s += "…";
-  }
-  return s;
-}
 
 json parse_tool_args(const std::string& args) {
   if (args.empty()) {
@@ -54,7 +43,7 @@ std::string tool_target(const std::string& name, const json& j) {
     if (j.contains("pattern") && j["pattern"].is_string()) {
       detail += "  " + j["pattern"].get<std::string>();
     } else if (j.contains("old_text") && j["old_text"].is_string()) {
-      detail += "  " + one_line(j["old_text"].get<std::string>(), 60);
+      detail += "  " + niminal::clip_line(j["old_text"].get<std::string>());
     }
     return detail;
   }
@@ -62,7 +51,7 @@ std::string tool_target(const std::string& name, const json& j) {
     return j["pattern"].get<std::string>();
   }
   if (!j.empty()) {
-    return one_line(j.dump(), 120);
+    return niminal::clip_line(j.dump(), 120);
   }
   return {};
 }
@@ -78,13 +67,13 @@ std::string bash_command(const std::string& args) {
 std::string tool_detail_line(const std::string& name, const std::string& args) {
   const auto j = parse_tool_args(args);
   if (!j.is_object()) {
-    return name + (args.empty() ? "" : "  " + one_line(args, 120));
+    return name + (args.empty() ? "" : "  " + niminal::clip_line(args, 120));
   }
   const auto target = tool_target(name, j);
   if (target.empty()) {
     return name;
   }
-  return name + "  " + one_line(target, 120);
+  return name + "  " + niminal::clip_line(target, 120);
 }
 
 std::string pretty_tool_args(const std::string& args) {

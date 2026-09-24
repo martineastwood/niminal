@@ -382,8 +382,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   const bool ask_user_allowed =
       allowed_tools == nullptr ||
       std::find(allowed_tools->begin(), allowed_tools->end(), "ask_user") != allowed_tools->end();
-  const bool ask_user_installed = ask_user_allowed;
-  if (ask_user_installed) {
+  if (ask_user_allowed) {
     agent.tools.push_back(niminal::Tool{
         "ask_user",
         "Ask the user a multiple-choice question in the TUI with 2 to 4 concise choices. The "
@@ -2329,7 +2328,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   agent.before_request = {};
   agent.recover_overflow = {};
   agent.approve_tool = {};
-  if (ask_user_installed) {
+  if (ask_user_allowed) {
     agent.tools.erase(
         std::remove_if(agent.tools.begin(), agent.tools.end(),
                        [](const niminal::Tool& tool) { return tool.name == "ask_user"; }),

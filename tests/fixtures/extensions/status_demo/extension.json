@@ -1,0 +1,4 @@
+{
+  "name": "status_demo",
+  "command": ["./extension.py"]
+}

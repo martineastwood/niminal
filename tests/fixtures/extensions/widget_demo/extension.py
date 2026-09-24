@@ -2,11 +2,9 @@
 import json
 import sys
 
-
 jobs = [
-    {"text": "Find relevant files", "state": "done"},
-    {"text": "Review extension protocol", "state": "active"},
-    {"text": "Check test coverage", "state": "pending"},
+    {"text": "First task", "state": "done"},
+    {"text": "Second task", "state": "active"},
 ]
 
 
@@ -15,7 +13,7 @@ def send(value):
 
 
 def widget():
-    return {"key": "workers", "title": "Subagents · simulated demo",
+    return {"key": "workers", "title": "Widget demo",
             "content": [{"type": "list", "items": jobs}],
             "actions": [
                 {"id": "steer", "label": "Steer active task"},
@@ -24,7 +22,7 @@ def widget():
 
 
 send({"type": "register", "commands": [
-    {"name": "subagents_demo", "description": "Show a simulated subagent panel"}
+    {"name": "subagents_demo", "description": "Show a widget action demo"}
 ]})
 
 for line in sys.stdin:
@@ -38,10 +36,7 @@ for line in sys.stdin:
         send({"type": "response", "id": message["id"], "widget": widget(),
               "message": "Showing simulated subagent activity."})
     elif kind == "ui_action" and message.get("widget") == "workers":
-        action = message.get("action")
-        if action == "steer":
-            jobs[1]["text"] = "Review extension protocol · checking edge cases"
-        elif action == "stop":
-            jobs[1]["text"] = "Review extension protocol · stopped"
+        if message.get("action") == "stop":
+            jobs[1]["text"] = "Second task · stopped"
             jobs[1]["state"] = "done"
         send({"type": "update", "widget": widget()})

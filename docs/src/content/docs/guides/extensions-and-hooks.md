@@ -205,9 +205,10 @@ extension receives `{"type":"ui_action","widget":"tasks","action":"complete_next
 and can refresh the widget by sending another `update`. To remove a widget,
 send its key with an empty title, content array, and actions array.
 
-The repository includes runnable examples in
-`examples/extensions/powerline_footer`, `examples/extensions/todo_widget`, and
-`examples/extensions/subagent_panel`. Copy an example directory under
+The [extensions_and_tools](https://github.com/martineastwood/extensions_and_tools)
+repository includes runnable examples in `extensions/powerline_footer`,
+`extensions/todo_widget`, and `extensions/subagent_panel`. Copy an example
+directory under
 `.niminal/extensions/` in a trusted workspace, then restart Niminal to load it.
 The commands are `/footer_demo`, `/todos`, and `/subagents_demo`.
 

@@ -24,177 +24,23 @@ using niminal::app::HookEvent;
 int main() {
   auto root = fs::temp_directory_path() / "niminal-extensions-test";
   auto home = root / "home";
-  auto dir = root / ".niminal" / "extensions" / "fixture";
-  auto host_dir = root / ".niminal" / "extensions" / "host";
-  auto parallel_dir = root / ".niminal" / "extensions" / "parallel";
   auto tool_dir = root / ".niminal" / "tools" / "echo_json";
   auto broken_tool_dir = root / ".niminal" / "tools" / "broken";
   auto collision_tool_dir = root / ".niminal" / "tools" / "collision";
   fs::remove_all(root);
   fs::create_directories(home);
-  fs::create_directories(dir);
-  fs::create_directories(host_dir);
-  fs::create_directories(parallel_dir);
   fs::create_directories(tool_dir);
   fs::create_directories(broken_tool_dir);
   fs::create_directories(collision_tool_dir);
-  const fs::path examples = fs::path(NIMINAL_SOURCE_DIR) / "examples" / "extensions";
-  for (const auto* name : {"powerline_footer", "todo_widget", "subagent_panel"}) {
-    fs::copy(examples / name, root / ".niminal" / "extensions" / name, fs::copy_options::recursive);
+  const fs::path fixtures = fs::path(NIMINAL_EXTENSIONS_FIXTURES_DIR);
+  fs::create_directories(root / ".niminal" / "extensions");
+  for (const auto* name :
+       {"fixture", "host", "parallel", "status_demo", "todo_demo", "widget_demo"}) {
+    fs::copy(fixtures / name, root / ".niminal" / "extensions" / name,
+             fs::copy_options::recursive);
   }
   setenv("HOME", home.c_str(), 1);
   niminal::app::set_project_resources_trusted(root, true);
-
-  {
-    std::ofstream out(dir / "extension.json");
-    out << R"({"name":"fixture","command":["./extension.py"]})";
-  }
-  {
-    std::ofstream out(dir / "extension.py");
-    out << R"PY(#!/usr/bin/env python3
-import json, os, sys
-def send(value):
-    print(json.dumps(value), flush=True)
-send({"type":"register",
-      "commands":[{"name":"hello","description":"Say hello"}],
-      "tools":[{"name":"ext_echo","description":"Echo text",
-                "input_schema":{"type":"object"},
-                "capabilities":["read"]}],
-      "events":["tool_call","tool_result","context","session_start",
-                "session_before_compact","session_compact","turn_start","turn_end",
-                "input","before_agent_start","session_shutdown","session_before_switch",
-                "before_provider_headers","before_provider_request",
-                "after_provider_response","agent_settled","message_end",
-                "session_compact_failed"]})
-for line in sys.stdin:
-    message = json.loads(line)
-    kind = message.get("type")
-    if kind == "shutdown":
-        break
-    if kind == "initialize":
-        continue
-    reply = {"type":"response", "id":message.get("id", "")}
-    if kind == "command":
-        reply["message"] = "Hello " + message.get("arguments", "") + \
-            " env=" + os.environ.get("NIMINAL_SESSION_ID", "none")
-        reply["notification"] = {"level":"info", "message":"command ran"}
-        reply["status"] = {"key":"state", "segments":[
-            {"text":"ready", "style":"success"}]}
-        reply["widget"] = {"key":"work", "content":[
-            {"type":"text", "text":"extension widget", "style":"muted"}]}
-        reply["entry"] = {"count":1}
-        reply["user_message"] = {"content":"background done", "deliver_as":"follow_up"}
-    elif kind == "tool":
-        send({"type":"tool_update", "id":message.get("id"), "content":"halfway"})
-        reply["content"] = [{"type":"text","text":"extension tool result"}]
-        reply["is_error"] = False
-    elif kind == "event" and message.get("event") == "tool_call":
-        reply["arguments"] = {"command":"changed"}
-    elif kind == "event" and message.get("event") == "tool_result":
-        reply["output"] = "rewritten"
-        reply["is_error"] = True
-    elif kind == "event" and message.get("event") == "context":
-        reply["system"] = ["Injected system"]
-        reply["messages"] = [{"role":"user","content":"Injected context"}]
-    elif kind == "event" and message.get("event") == "input":
-        reply["text"] = message["payload"]["text"] + " transformed"
-    elif kind == "event" and message.get("event") == "before_agent_start":
-        reply["system_prompt"] = "Task system"
-        reply["message"] = {"content":"Persistent extension context"}
-    elif kind == "event" and message.get("event") == "session_before_switch":
-        reply["allow"] = False
-        reply["reason"] = "unsaved work"
-    elif kind == "event" and message.get("event") == "before_provider_headers":
-        reply["headers"] = {"Authorization":None,"x-test":"yes"}
-    elif kind == "event" and message.get("event") == "before_provider_request":
-        reply["payload"] = {"model":"replacement"}
-    elif kind == "event" and message.get("event") == "message_end":
-        reply["text"] = "rewritten answer"
-    elif kind == "event" and message.get("event") == "session_before_compact":
-        reply["compaction"] = {"summary":"extension summary",
-                               "first_kept_index":1,
-                               "details":{"source":"fixture"}}
-    send(reply)
-)PY";
-  }
-  fs::permissions(dir / "extension.py",
-                  fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec);
-  {
-    std::ofstream out(host_dir / "extension.json");
-    out << R"({"name":"host","command":["./extension.py"]})";
-  }
-  {
-    std::ofstream out(host_dir / "extension.py");
-    out << R"PY(#!/usr/bin/env python3
-import json, sys
-def send(value):
-    print(json.dumps(value), flush=True)
-def host(method, **fields):
-    send({"type":"host_request", "id":method, "method":method, **fields})
-    for line in sys.stdin:
-        response = json.loads(line)
-        if response.get("type") == "host_response" and response.get("id") == method:
-            return response
-    return {"cancelled":True}
-def ui(method, **fields):
-    send({"type":"ui_request", "id":method, "method":method, **fields})
-    for line in sys.stdin:
-        response = json.loads(line)
-        if response.get("type") == "ui_response" and response.get("id") == method:
-            return response
-    return {"cancelled":True}
-send({"type":"register", "commands":[{"name":"host","description":"Host requests"}]})
-for line in sys.stdin:
-    message = json.loads(line)
-    if message.get("type") == "shutdown":
-        break
-    if message.get("type") != "command":
-        continue
-    payload = {}
-    if message.get("arguments") == "model":
-        payload["model"] = host("model.complete", system_prompt="Summarize",
-                                 prompt="history", max_tokens=123)
-    elif message.get("arguments") == "ui":
-        payload["question"] = ui("question", prompt="Pick one",
-                                  options=["Red", "Blue"])
-        payload["confirm"] = ui("confirm", prompt="Continue?")
-        payload["input"] = ui("input", prompt="Branch?")
-        payload["password"] = ui("password", prompt="Token?")
-    else:
-        payload["info"] = host("session.info")
-        payload["name"] = host("session.name", name="handoff source")
-        payload["usage"] = host("context.usage")
-        payload["editor"] = host("ui.editor", title="Edit handoff", text="draft")
-    send({"type":"response", "id":message.get("id"), "payload":payload})
-)PY";
-  }
-  fs::permissions(host_dir / "extension.py",
-                  fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec);
-  {
-    std::ofstream out(parallel_dir / "extension.json");
-    out << R"({"name":"parallel","command":["./extension.py"]})";
-  }
-  {
-    std::ofstream out(parallel_dir / "extension.py");
-    out << R"PY(#!/usr/bin/env python3
-import json, sys
-def send(value):
-    print(json.dumps(value), flush=True)
-json.loads(sys.stdin.readline())
-send({"type":"register", "commands":[{"name":"parallel","description":"Parallel"}]})
-first = json.loads(sys.stdin.readline())
-second = json.loads(sys.stdin.readline())
-def result(message):
-    return "first" if message.get("arguments") == "one" else "second"
-send({"type":"response", "id":second.get("id"), "message":result(second)})
-send({"type":"response", "id":first.get("id"), "message":result(first)})
-for line in sys.stdin:
-    if json.loads(line).get("type") == "shutdown":
-        break
-)PY";
-  }
-  fs::permissions(parallel_dir / "extension.py",
-                  fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec);
   {
     std::ofstream out(tool_dir / "tool.json");
     out << R"({"name":"echo_json","description":"Echo JSON input","command":["./run"],"input_schema":{"type":"object"},"capabilities":["read"]})";
@@ -287,8 +133,8 @@ for line in sys.stdin:
     });
     return found == statuses.end() ? std::optional<niminal::app::ExtensionStatus>() : *found;
   };
-  const auto footer_status = find_status("powerline_footer", "model");
-  const auto subagent_widget = find_widget("subagent_panel", "workers");
+  const auto footer_status = find_status("status_demo", "model");
+  const auto subagent_widget = find_widget("widget_demo", "workers");
   if (footer_demo.value("message", "") != "Footer status updated." || !footer_status ||
       footer_status->segments.size() != 4 || footer_status->segments[0].style != "emphasis" ||
       empty_todos.value("message", "").find("No todos yet.") == std::string::npos ||
@@ -320,7 +166,7 @@ for line in sys.stdin:
                                     {"id", 1},
                                     {"status", "in_progress"},
                                     {"activeForm", "reviewing existing behavior"}});
-  const auto todo_widget = find_widget("todo_widget", "tasks");
+  const auto todo_widget = find_widget("todo_demo", "tasks");
   const auto todo_list = runtime->invoke("todos", "");
   if (created_first.text.find("Created [pending] #1") == std::string::npos ||
       created_second.text.find("Created [pending] #2") == std::string::npos ||
@@ -333,8 +179,8 @@ for line in sys.stdin:
     std::cerr << "todo tool did not create an agent-visible task list\n";
     return 1;
   }
-  if (!runtime->activate_widget_action("todo_widget", "tasks", "complete:1") ||
-      runtime->activate_widget_action("todo_widget", "tasks", "missing")) {
+  if (!runtime->activate_widget_action("todo_demo", "tasks", "complete:1") ||
+      runtime->activate_widget_action("todo_demo", "tasks", "missing")) {
     std::cerr << "todo widget action dispatch validation failed\n";
     return 1;
   }
@@ -342,7 +188,7 @@ for line in sys.stdin:
   bool todo_updated = false;
   while (std::chrono::steady_clock::now() < todo_deadline) {
     runtime->pump();
-    const auto updated = find_widget("todo_widget", "tasks");
+    const auto updated = find_widget("todo_demo", "tasks");
     if (updated && std::any_of(updated->content[0]["items"].begin(),
                                updated->content[0]["items"].end(), [](const auto& item) {
                                  return item.value("text", "").starts_with("#1 ") &&
@@ -353,7 +199,7 @@ for line in sys.stdin:
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  if (!todo_updated || !runtime->activate_widget_action("subagent_panel", "workers", "stop")) {
+  if (!todo_updated || !runtime->activate_widget_action("widget_demo", "workers", "stop")) {
     std::cerr << "widget action did not update the extension view\n";
     return 1;
   }
@@ -361,9 +207,9 @@ for line in sys.stdin:
   bool subagent_stopped = false;
   while (std::chrono::steady_clock::now() < subagent_deadline) {
     runtime->pump();
-    const auto updated = find_widget("subagent_panel", "workers");
+    const auto updated = find_widget("widget_demo", "workers");
     if (updated && updated->content[0]["items"][1]["state"] == "done" &&
-        updated->content[0]["items"][1]["text"] == "Review extension protocol · stopped") {
+        updated->content[0]["items"][1]["text"] == "Second task · stopped") {
       subagent_stopped = true;
       break;
     }
@@ -375,7 +221,7 @@ for line in sys.stdin:
   }
   auto clear_footer = runtime->invoke("footer_demo", "clear");
   if (clear_footer.value("message", "") != "Footer status updated." ||
-      find_status("powerline_footer", "model")) {
+      find_status("status_demo", "model")) {
     std::cerr << "empty status segments should clear the footer entry\n";
     return 1;
   }
@@ -618,7 +464,7 @@ for line in sys.stdin:
 
   runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
   runtime->dispatch(HookEvent::session_start, niminal::app::session_hook_payload("session", root));
-  const auto restored_todos = find_widget("todo_widget", "tasks");
+  const auto restored_todos = find_widget("todo_demo", "tasks");
   auto restored_tools = runtime->tools();
   niminal::Tool* restored_todo_tool = nullptr;
   for (auto& tool : restored_tools) {
@@ -645,7 +491,7 @@ for line in sys.stdin:
   }
   const auto cleared = restored_todo_tool->run(nlohmann::json{{"action", "clear"}});
   if (!cleared.text.starts_with("Cleared 2 tasks.") ||
-      runtime->invoke("todos", "").value("message", "") != "No todos yet. Ask me to add tasks.") {
+      runtime->invoke("todos", "").value("message", "") != "No todos yet.") {
     std::cerr << "todo clear did not remove the saved task list\n";
     return 1;
   }

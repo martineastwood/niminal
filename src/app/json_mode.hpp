@@ -6,6 +6,8 @@
 
 namespace niminal::app {
 
+constexpr int kJsonEventVersion = 1;
+
 nlohmann::json json_event(const niminal::StreamEvent& event);
 nlohmann::json session_event(const std::string& type, const std::string& session_id,
                              bool success = true);

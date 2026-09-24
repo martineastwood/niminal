@@ -30,19 +30,6 @@ void fsync_file(const fs::path& path) {
   std::fclose(f);
 }
 
-std::string clip_line(std::string s, size_t n = 60) {
-  for (char& c : s) {
-    if (c == '\n' || c == '\r' || c == '\t') {
-      c = ' ';
-    }
-  }
-  if (s.size() > n) {
-    s.resize(n);
-    s += "…";
-  }
-  return s;
-}
-
 std::string first_user_text(const json& event) {
   if (event.value("type", "") != "user") {
     return {};
@@ -155,7 +142,7 @@ std::vector<SessionInfo> collect_sessions(const fs::path& dir, const std::string
       for (const auto& event : s.events) {
         auto text = first_user_text(event);
         if (!text.empty()) {
-          info.preview = clip_line(text);
+          info.preview = niminal::clip_line(text);
           break;
         }
       }
@@ -673,7 +660,7 @@ std::vector<std::pair<int, std::string>> Session::user_turn_previews() const {
       continue;
     }
     ++turn;
-    out.push_back({turn, clip_line(first_user_text(event))});
+    out.push_back({turn, niminal::clip_line(first_user_text(event))});
   }
   return out;
 }

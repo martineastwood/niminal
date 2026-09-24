@@ -1,4 +1,4 @@
 {
-  "name": "powerline_footer",
+  "name": "parallel",
   "command": ["./extension.py"]
 }
