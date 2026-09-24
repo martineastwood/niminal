@@ -1,5 +1,7 @@
 #include "tools.hpp"
 
+#include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -7,6 +9,8 @@
 #include <future>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -223,6 +227,34 @@ int main() {
   if (many_matches.size() > 32 * 1024 ||
       many_matches.find("[grep output truncated") == std::string::npos) {
     std::cerr << "grep should cap total output size\n";
+    return 1;
+  }
+  // A timed-out command must not leave its own children behind. Killing the
+  // shell alone orphans them, so the tool kills the whole process group.
+  const auto timed_out =
+      bash->run(nlohmann::json{{"command", "sh -c 'sleep 30' & echo $! > child.pid; wait"},
+                               {"timeout_seconds", 1}})
+          .text;
+  if (timed_out.find("timeout after 1s") == std::string::npos) {
+    std::cerr << "bash should report a timeout\n" << timed_out << '\n';
+    return 1;
+  }
+  int child = 0;
+  {
+    std::ifstream pid_file(tmp / "child.pid");
+    pid_file >> child;
+  }
+  bool child_alive = false;
+  for (int i = 0; i < 50; ++i) {
+    child_alive = (child > 0) && (::kill(child, 0) == 0);
+    if (!child_alive) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  if (child_alive) {
+    ::kill(child, SIGKILL);
+    std::cerr << "a timed-out command should not outlive the tool call (pid " << child << ")\n";
     return 1;
   }
   fs::remove_all(tmp);

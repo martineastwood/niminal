@@ -32,6 +32,7 @@ struct WriteBuf {
   std::function<void(std::string_view)>* on_data = nullptr;
   std::atomic<bool>* cancel = nullptr;
   std::exception_ptr error;
+  CURL* easy = nullptr;
 };
 
 size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -94,7 +95,11 @@ size_t write_sse(char* ptr, size_t size, size_t nmemb, void* userdata) {
   }
   try {
     buf->pending.append(ptr, size * nmemb);
-    buf->body.append(ptr, size * nmemb);
+    long status = 0;
+    curl_easy_getinfo(buf->easy, CURLINFO_RESPONSE_CODE, &status);
+    if (status >= 400) {
+      buf->body.append(ptr, size * nmemb);
+    }
     size_t start = 0;
     while (start < buf->pending.size()) {
       auto nl = buf->pending.find('\n', start);
@@ -226,6 +231,7 @@ Result<void> HttpClient::post_sse(std::string_view url,
   std::string body_owned(body);
   std::string ca = default_ca_file();
   curl_easy_reset(impl_->easy);
+  buf.easy = impl_->easy;
   apply_common(impl_->easy, url_owned, hdrs, ca);
   apply_post(impl_->easy, body_owned);
   HttpResponse response;

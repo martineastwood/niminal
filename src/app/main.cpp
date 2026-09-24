@@ -11,6 +11,7 @@
 #include "provider.hpp"
 #include "rpc.hpp"
 #include "session.hpp"
+#include "shutdown.hpp"
 #include "skills.hpp"
 #include "thinking.hpp"
 #include "tools.hpp"
@@ -592,6 +593,7 @@ int main(int argc, char** argv) try {
     std::cerr << "Project-local resources skipped (use --approve or /trust on).\n";
   }
   std::atomic<bool> cancel{false};
+  niminal::app::install_shutdown_handlers(&cancel);
   niminal::app::Session session;
   try {
     auto dir = niminal::app::default_session_dir();

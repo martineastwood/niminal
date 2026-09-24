@@ -42,6 +42,7 @@ public:
   niminal::Usage usage_totals() const;
   void add_tool_result(const std::string& tool_id, const niminal::ToolResult& output,
                        bool is_error);
+  void sync() const;
   void add_name(const std::string& title);
   void add_selection(const std::string& model, const std::string& provider = {});
   void add_extension(const std::string& extension, const nlohmann::json& data);
@@ -64,7 +65,7 @@ private:
   std::string damaged_;
   std::string valid_prefix_;
   bool needs_newline_ = false;
-  void append(const nlohmann::json& event);
+  void append(const nlohmann::json& event, bool sync = true);
   friend Session load_session(const std::filesystem::path& dir, const std::string& id);
 };
 

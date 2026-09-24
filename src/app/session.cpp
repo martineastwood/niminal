@@ -447,7 +447,7 @@ std::string new_session_id() {
   return std::to_string(us);
 }
 
-void Session::append(const json& event) {
+void Session::append(const json& event, bool sync) {
   events.push_back(event);
   if (!persist || path.empty()) {
     return;
@@ -491,8 +491,16 @@ void Session::append(const json& event) {
   out << event.dump() << '\n';
   out.flush();
   out.close();
-  fsync_file(path);
+  if (sync) {
+    fsync_file(path);
+  }
   needs_newline_ = false;
+}
+
+void Session::sync() const {
+  if (persist && !path.empty()) {
+    fsync_file(path);
+  }
 }
 
 void Session::add_user(const niminal::UserInput& input) {
@@ -556,7 +564,7 @@ void Session::add_assistant(const std::string& text, const json& tool_calls,
     event["cache_write_tokens"] = usage.cache_write_tokens;
     event["cache_reported"] = usage.cache_reported;
   }
-  append(event);
+  append(event, tool_calls.empty());
 }
 
 niminal::Usage Session::usage_totals() const {
@@ -583,7 +591,7 @@ void Session::add_tool_result(const std::string& tool_id, const niminal::ToolRes
               {"id", tool_id},
               {"output", output.text},
               {"images", output.images},
-              {"is_error", is_error}});
+              {"is_error", is_error}}, false);
 }
 
 void Session::add_name(const std::string& title) {
@@ -1175,6 +1183,7 @@ void bind_session(niminal::Agent& agent, Session& session) {
       };
   agent.persist_tool = [&session](const std::string& id, const niminal::ToolResult& output,
                                   bool error) { session.add_tool_result(id, output, error); };
+  agent.persist_step = [&session] { session.sync(); };
   agent.conversation_id = session.id;
 }
 

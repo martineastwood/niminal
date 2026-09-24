@@ -38,6 +38,7 @@ struct ChatRequest {
   bool requires_api_key = true;
 };
 
+ChatResult stream_chat(ChatRequest&& request);
 ChatResult stream_chat(const ChatRequest& request);
 json chat_body(const ChatRequest& request);
 std::string complete_chat(const ChatRequest& request);

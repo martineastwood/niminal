@@ -194,6 +194,7 @@ add_library(niminal_app
   src/app/permissions.cpp
   src/app/trust.cpp
   src/app/extensions.cpp
+  src/app/shutdown.cpp
   src/app/diff.cpp
   src/app/theme.cpp)
 target_include_directories(niminal_app PUBLIC src/app)

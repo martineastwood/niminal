@@ -491,7 +491,10 @@ public:
     if (reader_.joinable()) {
       reader_.join();
     }
-    for (int i = 0; i < 10; ++i) {
+    // An extension may still be stopping something it started (a subagent, a
+    // child process), so give it a moment before killing it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
       int status = 0;
       if (waitpid(pid_, &status, WNOHANG) == pid_) {
         close(output_);

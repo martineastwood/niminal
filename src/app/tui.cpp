@@ -43,6 +43,7 @@
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <poll.h>
 #include <sstream>
 #include <termios.h>
 #include <thread>
@@ -845,6 +846,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   };
 
+  std::mutex delta_mu;
+  std::vector<StreamEvent> pending_deltas;
   auto post_ui = [&](const StreamEvent& ev) {
     if (ev.kind == EventKind::tool_call && (ev.tool_name == "edit" || ev.tool_name == "write")) {
       try {
@@ -870,18 +873,40 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (!ui_alive) {
       return;
     }
+    if (ev.kind == EventKind::text_delta || ev.kind == EventKind::thinking_delta ||
+        ev.kind == EventKind::tool_output_delta) {
+      std::lock_guard lock(delta_mu);
+      if (!pending_deltas.empty() && pending_deltas.back().kind == ev.kind &&
+          pending_deltas.back().tool_id == ev.tool_id) {
+        if (ev.kind == EventKind::tool_output_delta) {
+          pending_deltas.back().text = ev.text;
+        } else {
+          pending_deltas.back().text += ev.text;
+        }
+      } else {
+        pending_deltas.push_back(ev);
+      }
+      return;
+    }
+    std::lock_guard delta_lock(delta_mu);
+    auto batch = std::move(pending_deltas);
+    pending_deltas.clear();
     std::optional<niminal::Usage> updated_usage;
     if (ev.kind == EventKind::step_end || ev.kind == EventKind::done ||
         ev.kind == EventKind::error) {
       updated_usage = session.usage_totals();
     }
-    screen.Post([&, apply_event, apply_extension_actions, ev, updated_usage] {
+    screen.Post([&, apply_event, apply_extension_actions, ev, batch = std::move(batch),
+                 updated_usage] {
       if (updated_usage) {
         usage_totals = *updated_usage;
         ++footer_revision;
         suggestions_input.reset();
       }
       try {
+        for (const auto& delta : batch) {
+          apply_event(delta);
+        }
         apply_event(ev);
         apply_extension_actions();
       } catch (const std::exception& e) {
@@ -2293,11 +2318,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         break;
       }
       const bool extension_changed = extensions && extensions->pump();
-      if (!busy && !extension_changed && !footer_notice_active) {
+      std::lock_guard delta_lock(delta_mu);
+      auto batch = std::move(pending_deltas);
+      pending_deltas.clear();
+      if (!busy && !extension_changed && !footer_notice_active && batch.empty()) {
         continue;
       }
-      screen.Post([apply_extension_actions, &screen] {
+      screen.Post([apply_event, apply_extension_actions, batch = std::move(batch), &screen] {
         try {
+          for (const auto& delta : batch) {
+            apply_event(delta);
+          }
           apply_extension_actions();
         } catch (...) {
         }
@@ -2306,8 +2337,27 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   });
 
+  // A terminal that goes away delivers no input and no signal, so an abandoned
+  // TUI would keep drawing into a dead pty forever. Watch for the hangup and exit
+  // through the normal path. Signals stay the screen's business: FTXUI installs
+  // its own SIGTERM/SIGHUP handlers while the loop is running.
+  std::atomic<bool> watchdog_stop{false};
+  std::thread watchdog([&screen, &watchdog_stop] {
+    while (!watchdog_stop.load()) {
+      pollfd input{STDIN_FILENO, POLLIN, 0};
+      const bool gone =
+          (::poll(&input, 1, 0) > 0) && ((input.revents & (POLLHUP | POLLERR)) != 0);
+      if (gone) {
+        screen.Exit();
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  });
   screen.Post([] { std::cout << "\033[?2004h" << std::flush; });
   screen.Loop(view);
+  watchdog_stop.store(true);
+  watchdog.join();
   std::cout << "\033[?2004l" << std::flush;
   ui_alive = false;
   cancel->store(true);

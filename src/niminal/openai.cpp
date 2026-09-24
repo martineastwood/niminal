@@ -1175,9 +1175,8 @@ std::map<std::string, std::string> chat_headers(const ChatRequest& request) {
   return headers;
 }
 
-ChatResult stream_chat(const ChatRequest& request) {
-  require_request(request);
-  ChatRequest req = request;
+ChatResult stream_chat(ChatRequest&& req) {
+  require_request(req);
   req.stream = true;
   json payload = chat_body(req);
   if (req.before_provider_request) {
@@ -1236,6 +1235,11 @@ ChatResult stream_chat(const ChatRequest& request) {
     result.finish_reason = result.tool_calls.empty() ? "stop" : "tool_calls";
   }
   return result;
+}
+
+ChatResult stream_chat(const ChatRequest& request) {
+  ChatRequest copy = request;
+  return stream_chat(std::move(copy));
 }
 
 std::string complete_chat(const ChatRequest& request) {

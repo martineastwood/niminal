@@ -216,6 +216,8 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
     throw WorkspaceError(std::strerror(errno));
   }
   if (pid == 0) {
+    // Its own process group, so the whole tool tree can be killed at once.
+    setpgid(0, 0);
     close(out_pipe[0]);
     dup2(out_pipe[1], STDOUT_FILENO);
     dup2(out_pipe[1], STDERR_FILENO);
@@ -239,6 +241,13 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
   }
   close(out_pipe[1]);
   fcntl(out_pipe[0], F_SETFL, O_NONBLOCK);
+  setpgid(pid, pid);
+  // Killing the shell alone orphans whatever it started: an `npm run dev` or
+  // `python app.py` outlives the SIGKILL and reparents to init. Kill the tree.
+  auto kill_tree = [&] {
+    kill(-pid, SIGKILL);
+    kill(pid, SIGKILL);
+  };
 
   std::string output;
   bool pending_cr = false;
@@ -253,7 +262,7 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
     auto now = std::chrono::steady_clock::now();
     if (now >= deadline || ((cancel != nullptr) && cancel->load())) {
       timed_out = (cancel == nullptr) || !cancel->load();
-      kill(pid, SIGKILL);
+      kill_tree();
       break;
     }
     auto remain = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
@@ -268,7 +277,7 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
           append_shell_output(output, std::string_view(buf, static_cast<size_t>(n)), pending_cr);
           grew = true;
           if (cap_shell_output(output)) {
-            kill(pid, SIGKILL);
+            kill_tree();
             timed_out = false;
             emit();
             goto wait_child;

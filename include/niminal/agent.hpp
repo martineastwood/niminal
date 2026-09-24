@@ -44,6 +44,7 @@ struct Agent {
                      const std::string& reasoning_content, const json& reasoning_details)>
       persist_assistant;
   std::function<void(const std::string& id, const ToolResult& output, bool error)> persist_tool;
+  std::function<void()> persist_step;
   std::function<bool(const ToolCall&, const Tool&)> approve_tool;
   std::function<bool(const ToolCall&, json& arguments, std::string& reason)> before_tool;
   std::function<void(const ToolCall&, const json& arguments, std::string& output, bool& is_error)>

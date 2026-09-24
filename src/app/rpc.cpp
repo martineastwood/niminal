@@ -2,6 +2,7 @@
 
 #include "json_mode.hpp"
 #include "queue_mode.hpp"
+#include "shutdown.hpp"
 
 #include <niminal/text.hpp>
 
@@ -64,7 +65,7 @@ public:
     bool eof = false;
     while (true) {
       poll_active();
-      if (rpc_sigint != 0 && !shutting_down_) {
+      if ((rpc_sigint != 0 || shutdown_requested()) && !shutting_down_) {
         request_shutdown();
       }
       if (shutting_down_ && !active_) {

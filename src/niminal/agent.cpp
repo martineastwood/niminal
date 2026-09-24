@@ -285,7 +285,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       bool restart_step = false;
       while (true) {
         try {
-          result = stream_chat_fn ? stream_chat_fn(req) : niminal::stream_chat(req);
+          result = stream_chat_fn ? stream_chat_fn(req) : niminal::stream_chat(std::move(req));
           break;
         } catch (const Error& e) {
           if (!overflow_retried && looks_overflow(e.what()) && recover_overflow &&
@@ -515,12 +515,18 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       }
       StreamEvent step_end{EventKind::step_end, {}, {}, {}};
       step_end.usage = result.usage;
+      if (persist_step) {
+        persist_step();
+      }
       emit(std::move(step_end));
     }
     throw Error("Maximum tool-loop steps reached (" + std::to_string(max_steps) +
                 "). The session is saved; continue "
                 "the task or rerun with --max-steps N.");
   } catch (const Cancelled&) {
+    if (persist_step) {
+      persist_step();
+    }
     finish_turn(true);
     emit(StreamEvent{EventKind::error, "interrupted", {}, {}});
     if (agent_settled) {
@@ -529,6 +535,9 @@ std::string Agent::run(UserInput prompt, bool append_user) {
     emit(StreamEvent{EventKind::done, {}, {}, {}});
     return {};
   } catch (...) {
+    if (persist_step) {
+      persist_step();
+    }
     finish_turn(false);
     if (agent_settled) {
       agent_settled();
