@@ -28,6 +28,10 @@ bool starts_at(std::string_view s, size_t i, std::string_view p) {
 }
 
 std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
+  if (s.find_first_of("*_~`[!") == std::string_view::npos) {
+    base.text = s;
+    return {std::move(base)};
+  }
   std::vector<Span> out;
   std::string acc;
   auto flush = [&] {
@@ -556,8 +560,8 @@ Elements flow_spans(const std::vector<Span>& spans, const Theme& theme) {
       while (j < span.text.size() && span.text[j] != ' ') {
         ++j;
       }
-      Span sp = span;
-      sp.text = span.text.substr(i, j - i);
+      Span sp{span.text.substr(i, j - i), span.bold, span.italic, span.code,
+              span.strike, span.underline, span.dim};
       push(std::move(sp));
       i = j;
     }

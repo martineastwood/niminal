@@ -257,7 +257,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
   Theme theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
-  std::vector<std::pair<std::string, Element>> markdown_cache;
+  struct CachedMessage {
+    BlockKind kind = BlockKind::assistant;
+    std::string text;
+    Element element;
+  };
+  std::vector<CachedMessage> message_cache;
   std::atomic<bool> local_cancel{false};
   if (agent.cancel == nullptr) {
     agent.cancel = &local_cancel;
@@ -300,7 +305,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::chrono::steady_clock::time_point footer_notice_until;
   std::optional<size_t> extension_action_focus;
   float transcript_y = 1.F;
-  int transcript_rows = 1;
+  Element transcript_element;
   bool ask_user_open = false;
   std::string ask_user_question;
   std::vector<std::string> ask_user_options;
@@ -604,7 +609,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     try {
       if (result.theme_changed) {
         theme = load_theme(cfg.theme).value();
-        markdown_cache.clear();
+        message_cache.clear();
       }
       if (result.agent_changed) {
         apply_provider(agent, cfg);
@@ -1076,7 +1081,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                                                    "\nUsing default keybindings for this launch."});
     }
     theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
-    markdown_cache.clear();
+    message_cache.clear();
     if (reload_system_prompt) {
       reload_system_prompt();
     }
@@ -1084,7 +1089,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
   auto load_into_ui = [&](const std::string& note) {
     blocks.clear();
-    markdown_cache.clear();
+    message_cache.clear();
     if (!note.empty()) {
       blocks.push_back(Block{BlockKind::status, note});
     }
@@ -1428,20 +1433,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::string usage;
   auto view = Renderer(layout, [&] {
     card_boxes.assign(blocks.size(), Box{});
-    markdown_cache.resize(blocks.size());
+    message_cache.resize(blocks.size());
     Elements entries;
     for (size_t i = 0; i < blocks.size(); ++i) {
       const auto& block = blocks[i];
       if (is_card_block(block.kind)) {
         entries.push_back(render_transcript_card(block, theme, card_boxes[i]));
-      } else if (block.kind == BlockKind::user) {
-        entries.push_back(render_user_message(block, theme));
-      } else if (block.kind == BlockKind::assistant) {
-        auto& cached = markdown_cache[i];
-        if (!cached.second || cached.first != block.text) {
-          cached = {block.text, render_markdown(block.text, theme)};
+      } else if (block.kind == BlockKind::user || block.kind == BlockKind::assistant) {
+        auto& cached = message_cache[i];
+        if (!cached.element || cached.kind != block.kind || cached.text != block.text) {
+          cached = {block.kind, block.text,
+                    block.kind == BlockKind::user ? render_user_message(block, theme)
+                                                  : render_markdown(block.text, theme)};
         }
-        entries.push_back(cached.second);
+        entries.push_back(cached.element);
       } else {
         auto label = block_label(block.kind);
         auto body = paragraph_preserving_whitespace(block.text) | block_style(block.kind, theme);
@@ -1544,8 +1549,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
 
     auto transcript = vbox(std::move(entries));
-    transcript->ComputeRequirement();
-    transcript_rows = std::max(1, transcript->requirement().min_y);
+    transcript_element = transcript;
     Elements stack;
     stack.push_back(transcript | focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
                     vscroll_indicator | yframe | yflex);
@@ -1835,7 +1839,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   view = CatchEvent(view, [&](Event e) {
     auto pressed = [&](KeyAction action) { return keybindings.matches(action, e); };
     auto scroll_transcript = [&](bool up, bool page) {
-      const float step = page ? 0.35F : 1.F / static_cast<float>(transcript_rows);
+      const int rows = transcript_element ? transcript_element->requirement().min_y : 1;
+      const float step = page ? 0.35F : 1.F / static_cast<float>(std::max(1, rows));
       transcript_y = std::clamp(transcript_y + (up ? -step : step), 0.F, 1.F);
       stick_bottom = !up && transcript_y == 1.F;
     };

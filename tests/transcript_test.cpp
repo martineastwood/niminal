@@ -13,6 +13,7 @@ using niminal::app::BlockKind;
 using niminal::app::blocks_from_events;
 using niminal::app::is_drag_gesture;
 using niminal::app::render_transcript_card;
+using niminal::app::render_user_message;
 using niminal::app::resolve_theme;
 using niminal::app::ThemeMode;
 
@@ -94,14 +95,31 @@ int main() {
     for (int i = 0; i < 20; ++i) {
       rows.push_back(ftxui::text("row-" + std::to_string(i)));
     }
-    auto element = ftxui::vbox(std::move(rows)) | ftxui::focusPositionRelative(0.F, 1.F) |
+    auto transcript = ftxui::vbox(std::move(rows));
+    auto element = transcript | ftxui::focusPositionRelative(0.F, 1.F) |
                    ftxui::vscroll_indicator | ftxui::yframe | ftxui::yflex;
     ftxui::Screen screen(30, 8);
     ftxui::Render(screen, element);
+    if (transcript->requirement().min_y != 20) {
+      return fail("rendered transcript reports its scroll height", screen.ToString());
+    }
     const auto rendered = screen.ToString();
     if (rendered.find("┃") == std::string::npos && rendered.find("╻") == std::string::npos &&
         rendered.find("╹") == std::string::npos) {
       return fail("long transcript shows scrollbar", rendered);
+    }
+  }
+
+  {
+    Block user{BlockKind::user, "A reusable user message"};
+    auto element = render_user_message(user, resolve_theme(ThemeMode::dark));
+    ftxui::Screen first(40, 4);
+    ftxui::Render(first, element);
+    ftxui::Screen second(30, 4);
+    ftxui::Render(second, element);
+    if (first.ToString().find(user.text) == std::string::npos ||
+        second.ToString().find(user.text) == std::string::npos) {
+      return fail("cached user message renders at different widths", second.ToString());
     }
   }
 

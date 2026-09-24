@@ -82,5 +82,14 @@ int main() {
     return fail("markdown selection should preserve blank lines", selection.GetParts());
   }
 
+  auto streaming = render_markdown("**Answer** A sentence with several words that keeps growing", {});
+  ftxui::Screen streaming_screen(80, 2);
+  ftxui::Selection streaming_selection(0, 0, 79, 0);
+  ftxui::Render(streaming_screen, streaming.get(), streaming_selection);
+  if (streaming_selection.GetParts().find("Answer A sentence with several words that keeps growing") ==
+      std::string::npos) {
+    return fail("styled streaming paragraph keeps every word", streaming_selection.GetParts());
+  }
+
   return 0;
 }
