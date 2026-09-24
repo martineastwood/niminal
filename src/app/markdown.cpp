@@ -560,8 +560,13 @@ Elements flow_spans(const std::vector<Span>& spans, const Theme& theme) {
       while (j < span.text.size() && span.text[j] != ' ') {
         ++j;
       }
-      Span sp{span.text.substr(i, j - i), span.bold, span.italic, span.code,
-              span.strike, span.underline, span.dim};
+      Span sp{span.text.substr(i, j - i),
+              span.bold,
+              span.italic,
+              span.code,
+              span.strike,
+              span.underline,
+              span.dim};
       push(std::move(sp));
       i = j;
     }

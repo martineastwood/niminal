@@ -192,7 +192,7 @@ bool is_drag_gesture(int press_x, int press_y, int release_x, int release_y) {
   return press_x != release_x || press_y != release_y;
 }
 
-int measure_transcript_height(Element element, int width) {
+int measure_transcript_height(const Element& element, int width) {
   Screen screen(std::max(1, width), 1);
   Render(screen, element);
   return std::max(1, element->requirement().min_y);

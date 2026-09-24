@@ -924,30 +924,30 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         ev.kind == EventKind::error) {
       updated_usage = session.usage_totals();
     }
-    screen.Post([&, apply_event, apply_extension_actions, ev, batch = std::move(batch),
-                 updated_usage] {
-      if (updated_usage) {
-        usage_totals = *updated_usage;
-        ++footer_revision;
-        suggestions_input.reset();
-      }
-      try {
-        for (const auto& delta : batch) {
-          apply_event(delta);
-        }
-        apply_event(ev);
-        apply_extension_actions();
-      } catch (const std::exception& e) {
-        try {
-          apply_event(StreamEvent{EventKind::error, e.what(), {}, {}});
-        } catch (...) {
-        }
-      }
-      if (ev.kind != EventKind::text_delta && ev.kind != EventKind::thinking_delta &&
-          ev.kind != EventKind::tool_output_delta) {
-        screen.RequestAnimationFrame();
-      }
-    });
+    screen.Post(
+        [&, apply_event, apply_extension_actions, ev, batch = std::move(batch), updated_usage] {
+          if (updated_usage) {
+            usage_totals = *updated_usage;
+            ++footer_revision;
+            suggestions_input.reset();
+          }
+          try {
+            for (const auto& delta : batch) {
+              apply_event(delta);
+            }
+            apply_event(ev);
+            apply_extension_actions();
+          } catch (const std::exception& e) {
+            try {
+              apply_event(StreamEvent{EventKind::error, e.what(), {}, {}});
+            } catch (...) {
+            }
+          }
+          if (ev.kind != EventKind::text_delta && ev.kind != EventKind::thinking_delta &&
+              ev.kind != EventKind::tool_output_delta) {
+            screen.RequestAnimationFrame();
+          }
+        });
   };
 
   agent.on_event = [&](const StreamEvent& ev) { post_ui(ev); };
@@ -2413,8 +2413,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::thread watchdog([&screen, &watchdog_stop] {
     while (!watchdog_stop.load()) {
       pollfd input{STDIN_FILENO, POLLIN, 0};
-      const bool gone =
-          (::poll(&input, 1, 0) > 0) && ((input.revents & (POLLHUP | POLLERR)) != 0);
+      const bool gone = (::poll(&input, 1, 0) > 0) && ((input.revents & (POLLHUP | POLLERR)) != 0);
       if (gone) {
         screen.Exit();
         return;

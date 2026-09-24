@@ -38,9 +38,8 @@ int main() {
   fs::create_directories(collision_tool_dir);
   const fs::path fixtures = fs::path(NIMINAL_EXTENSIONS_FIXTURES_DIR);
   fs::create_directories(root / ".niminal" / "extensions");
-  for (const auto* name :
-       {"fixture", "host", "orphan_guard", "parallel", "status_demo", "stdin_watcher",
-        "todo_demo", "widget_demo"}) {
+  for (const auto* name : {"fixture", "host", "orphan_guard", "parallel", "status_demo",
+                           "stdin_watcher", "todo_demo", "widget_demo"}) {
     fs::copy(fixtures / name, root / ".niminal" / "extensions" / name, fs::copy_options::recursive);
   }
   setenv("HOME", home.c_str(), 1);

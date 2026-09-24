@@ -591,7 +591,8 @@ void Session::add_tool_result(const std::string& tool_id, const niminal::ToolRes
               {"id", tool_id},
               {"output", output.text},
               {"images", output.images},
-              {"is_error", is_error}}, false);
+              {"is_error", is_error}},
+         false);
 }
 
 void Session::add_name(const std::string& title) {

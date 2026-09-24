@@ -16,8 +16,8 @@ using niminal::app::measure_transcript_height;
 using niminal::app::render_transcript_card;
 using niminal::app::render_user_message;
 using niminal::app::resolve_theme;
-using niminal::app::virtual_transcript;
 using niminal::app::ThemeMode;
+using niminal::app::virtual_transcript;
 
 static int fail(const char* msg, const std::string& got) {
   std::cerr << msg << "\n got:\n" << got << '\n';
