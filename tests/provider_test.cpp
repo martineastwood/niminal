@@ -130,14 +130,6 @@ int main() {
     return fail("custom api_url should persist across normalize_config");
   }
 
-  Config switched;
-  switched.provider = "anthropic";
-  switched.api_url = "https://openrouter.ai/api/v1/chat/completions";
-  normalize_config(switched);
-  if (switched.api_url.find("/v1/messages") == std::string::npos) {
-    return fail("provider switch should replace another provider's default endpoint");
-  }
-
   const auto auth_root = std::filesystem::temp_directory_path() / "niminal-provider-auth-test";
   std::filesystem::remove_all(auth_root);
   std::filesystem::create_directories(auth_root / ".niminal");

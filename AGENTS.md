@@ -17,8 +17,7 @@ build the affected target and run its test suite:
 
 ```sh
 ./dev configure
-./dev build --target niminal_agent_test
-./dev test -R '^agent$'
+./dev test --suite agent
 ```
 
 For documentation-only changes, skip the C++ build and tests. When a test suite
@@ -70,25 +69,22 @@ New public behavior requires tests.
 `./dev check` runs the full validation pipeline, in order:
 
 1. `clang-format` check
-2. CMake configure (`build/dev/`)
+2. CMake configure (`build/release/`)
 3. Release build with warnings as errors
 4. `clang-tidy` on `src/` and `include/`
 5. Unit tests (`ctest`)
 6. ASan/UBSan configure, build, and test (`build/asan/`)
 
-The `--fast` option still builds the project and runs the complete regular test
-suite. Use the focused build and test commands above for quick iteration.
+Use the focused suite command above for quick iteration.
 
 Other commands:
 
 ```sh
 ./dev configure          # configure the development build
-./dev build --target niminal_agent_test
-./dev test -R '^agent$'  # run one CTest suite by name
+./dev test --suite agent  # build and run one CTest suite by name
 ./dev format --fix   # rewrite formatting
 ./dev tidy --fix     # apply clang-tidy fixes
 ./dev sanitizer      # ASan/UBSan build and test only
 ```
 
-The focused test name is a CTest regular expression. Run `./dev test -N` to
-list the available suites.
+Run `./dev test -N` to list the available suites.

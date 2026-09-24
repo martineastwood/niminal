@@ -196,8 +196,7 @@ target and run its suite while iterating:
 
 ```sh
 ./dev configure
-./dev build --target niminal_agent_test
-./dev test -R '^agent$'
+./dev test --suite agent
 ```
 
 Reserve `./dev check` for release readiness and major build or toolchain

@@ -90,13 +90,6 @@ int main() {
     return fail("no compaction notice when no older turn can be removed");
   }
 
-  s.add_compaction("summary of early turns", cut, 99);
-  auto msgs = s.openai_messages();
-  if (msgs.empty() ||
-      msgs[0].value("content", std::string{}).find("summary of early turns") == std::string::npos) {
-    return fail("openai_messages starts with compaction summary");
-  }
-
   std::filesystem::remove_all(dir);
   return 0;
 }

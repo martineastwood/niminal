@@ -157,8 +157,7 @@ endif()
 
 niminal_strict_compile(niminal_ai)
 
-add_executable(niminal_cli
-  src/app/main.cpp
+add_library(niminal_app
   src/app/tui.cpp
   src/app/clipboard.cpp
   src/app/slash.cpp
@@ -181,13 +180,19 @@ add_executable(niminal_cli
   src/app/thinking.cpp
   src/app/prompts.cpp
   src/app/json_mode.cpp
-  src/app/rpc.cpp)
-target_sources(niminal_cli PRIVATE src/app/skills.cpp)
-target_sources(niminal_cli PRIVATE src/app/permissions.cpp src/app/trust.cpp)
-target_sources(niminal_cli PRIVATE src/app/extensions.cpp)
-target_sources(niminal_cli PRIVATE src/app/diff.cpp)
-target_sources(niminal_cli PRIVATE src/app/theme.cpp)
-target_sources(niminal_cli PRIVATE src/app/rpc_protocol.cpp)
+  src/app/rpc.cpp
+  src/app/skills.cpp
+  src/app/permissions.cpp
+  src/app/trust.cpp
+  src/app/extensions.cpp
+  src/app/diff.cpp
+  src/app/theme.cpp
+  src/app/rpc_protocol.cpp)
+target_include_directories(niminal_app PUBLIC src/app)
+target_link_libraries(niminal_app PUBLIC niminal::ai ftxui::component)
+niminal_strict_compile(niminal_app)
+
+add_executable(niminal_cli src/app/main.cpp)
 if(APPLE)
   enable_language(OBJCXX)
   target_sources(niminal_cli PRIVATE src/app/clipboard_macos.mm)
@@ -195,136 +200,67 @@ if(APPLE)
   target_link_libraries(niminal_cli PRIVATE "-framework AppKit")
 endif()
 set_target_properties(niminal_cli PROPERTIES OUTPUT_NAME niminal)
-target_include_directories(niminal_cli PRIVATE src/app)
-target_link_libraries(niminal_cli PRIVATE
-  niminal::ai
-  ftxui::component)
+target_link_libraries(niminal_cli PRIVATE niminal_app)
 niminal_strict_compile(niminal_cli)
 
-add_executable(niminal_workspace_test tests/workspace_test.cpp src/app/workspace.cpp)
-target_include_directories(niminal_workspace_test PRIVATE src/app)
+add_executable(niminal_workspace_test tests/workspace_test.cpp)
+target_link_libraries(niminal_workspace_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_workspace_test)
 
-add_executable(niminal_mentions_test tests/mentions_test.cpp src/app/mentions.cpp src/app/images.cpp src/app/workspace.cpp)
-target_include_directories(niminal_mentions_test PRIVATE src/app include)
-target_link_libraries(niminal_mentions_test PRIVATE nlohmann_json::nlohmann_json)
+add_executable(niminal_mentions_test tests/mentions_test.cpp)
+target_link_libraries(niminal_mentions_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_mentions_test)
 
-add_executable(niminal_json_mode_test tests/json_mode_test.cpp src/app/json_mode.cpp)
-target_include_directories(niminal_json_mode_test PRIVATE src/app include)
-target_link_libraries(niminal_json_mode_test PRIVATE nlohmann_json::nlohmann_json)
+add_executable(niminal_json_mode_test tests/json_mode_test.cpp)
+target_link_libraries(niminal_json_mode_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_json_mode_test)
 
-add_executable(niminal_tools_test
-  tests/tools_test.cpp
-  src/app/tools.cpp
-  src/app/images.cpp
-  src/app/workspace.cpp
-  src/app/instructions.cpp
-  src/app/config.cpp
-  src/app/trust.cpp)
-target_include_directories(niminal_tools_test PRIVATE src/app include)
-target_link_libraries(niminal_tools_test PRIVATE niminal::ai nlohmann_json::nlohmann_json)
+add_executable(niminal_tools_test tests/tools_test.cpp)
+target_link_libraries(niminal_tools_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_tools_test)
 
-add_executable(niminal_instructions_test
-  tests/instructions_test.cpp
-  src/app/instructions.cpp
-  src/app/config.cpp
-  src/app/trust.cpp)
-target_include_directories(niminal_instructions_test PRIVATE src/app include)
-target_link_libraries(niminal_instructions_test PRIVATE niminal::ai nlohmann_json::nlohmann_json)
+add_executable(niminal_instructions_test tests/instructions_test.cpp)
+target_link_libraries(niminal_instructions_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_instructions_test)
 
-add_executable(niminal_skills_test tests/skills_test.cpp src/app/skills.cpp src/app/config.cpp
-  src/app/trust.cpp)
-target_include_directories(niminal_skills_test PRIVATE src/app include)
-target_link_libraries(niminal_skills_test PRIVATE niminal::ai nlohmann_json::nlohmann_json)
+add_executable(niminal_skills_test tests/skills_test.cpp)
+target_link_libraries(niminal_skills_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_skills_test)
 
-add_executable(niminal_prompts_test tests/prompts_test.cpp src/app/prompts.cpp src/app/config.cpp
-  src/app/trust.cpp)
-target_include_directories(niminal_prompts_test PRIVATE src/app include)
-target_link_libraries(niminal_prompts_test PRIVATE niminal::ai nlohmann_json::nlohmann_json)
+add_executable(niminal_prompts_test tests/prompts_test.cpp)
+target_link_libraries(niminal_prompts_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_prompts_test)
 
-add_executable(niminal_config_test tests/config_test.cpp src/app/config.cpp)
-target_include_directories(niminal_config_test PRIVATE src/app)
-target_link_libraries(niminal_config_test PRIVATE niminal::ai nlohmann_json::nlohmann_json)
+add_executable(niminal_config_test tests/config_test.cpp)
+target_link_libraries(niminal_config_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_config_test)
 
-add_executable(niminal_keybindings_test tests/keybindings_test.cpp src/app/keybindings.cpp
-  src/app/config.cpp)
-target_include_directories(niminal_keybindings_test PRIVATE src/app)
-target_link_libraries(niminal_keybindings_test PRIVATE niminal::ai ftxui::component
-  nlohmann_json::nlohmann_json)
+add_executable(niminal_keybindings_test tests/keybindings_test.cpp)
+target_link_libraries(niminal_keybindings_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_keybindings_test)
 
-add_executable(niminal_slash_test
-  tests/slash_test.cpp
-  src/app/slash.cpp
-  src/app/keybindings.cpp
-  src/app/config.cpp
-  src/app/models_dev.cpp
-  src/app/thinking.cpp
-  src/app/prompts.cpp
-  src/app/skills.cpp
-  src/app/session.cpp
-  src/app/instructions.cpp
-  src/app/trust.cpp
-  src/app/workspace.cpp
-  src/app/markdown.cpp
-  src/app/theme.cpp)
-target_include_directories(niminal_slash_test PRIVATE src/app include)
-target_link_libraries(niminal_slash_test PRIVATE niminal::ai ftxui::component
-  nlohmann_json::nlohmann_json)
+add_executable(niminal_slash_test tests/slash_test.cpp)
+target_link_libraries(niminal_slash_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_slash_test)
 
-add_executable(niminal_settings_test
-  tests/settings_test.cpp
-  src/app/settings.cpp
-  src/app/provider.cpp
-  src/app/session.cpp
-  src/app/config.cpp
-  src/app/thinking.cpp
-  src/app/models_dev.cpp
-  src/app/theme.cpp
-  src/app/auth.cpp)
-target_include_directories(niminal_settings_test PRIVATE src/app include)
-target_link_libraries(niminal_settings_test PRIVATE niminal::ai ftxui::dom nlohmann_json::nlohmann_json)
+add_executable(niminal_settings_test tests/settings_test.cpp)
+target_link_libraries(niminal_settings_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_settings_test)
 
-add_executable(niminal_provider_test
-  tests/provider_test.cpp
-  src/app/auth.cpp
-  src/app/provider.cpp
-  src/app/session.cpp
-  src/app/config.cpp
-  src/app/thinking.cpp
-  src/app/models_dev.cpp)
-target_include_directories(niminal_provider_test PRIVATE src/app include)
-target_link_libraries(niminal_provider_test PRIVATE niminal::ai)
+add_executable(niminal_provider_test tests/provider_test.cpp)
+target_link_libraries(niminal_provider_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_provider_test)
 
-add_executable(niminal_auth_test tests/auth_test.cpp src/app/auth.cpp)
-target_include_directories(niminal_auth_test PRIVATE src/app)
-target_link_libraries(niminal_auth_test PRIVATE nlohmann_json::nlohmann_json)
+add_executable(niminal_auth_test tests/auth_test.cpp)
+target_link_libraries(niminal_auth_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_auth_test)
 
-add_executable(niminal_session_test tests/session_test.cpp src/app/session.cpp)
-target_include_directories(niminal_session_test PRIVATE src/app include)
-target_link_libraries(niminal_session_test PRIVATE nlohmann_json::nlohmann_json)
+add_executable(niminal_session_test tests/session_test.cpp)
+target_link_libraries(niminal_session_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_session_test)
 
-add_executable(niminal_compaction_test
-  tests/compaction_test.cpp
-  src/app/session.cpp
-  src/app/compaction.cpp
-  src/app/extensions.cpp
-  src/app/config.cpp
-  src/app/trust.cpp)
-target_include_directories(niminal_compaction_test PRIVATE src/app include)
-target_link_libraries(niminal_compaction_test PRIVATE niminal::ai)
+add_executable(niminal_compaction_test tests/compaction_test.cpp)
+target_link_libraries(niminal_compaction_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_compaction_test)
 
 add_executable(niminal_agent_test tests/agent_test.cpp)
@@ -335,81 +271,53 @@ add_executable(niminal_agent_retry_test tests/agent_retry_test.cpp)
 target_link_libraries(niminal_agent_retry_test PRIVATE niminal::ai)
 niminal_strict_compile(niminal_agent_retry_test)
 
-add_executable(niminal_markdown_test tests/markdown_test.cpp src/app/markdown.cpp)
-target_include_directories(niminal_markdown_test PRIVATE src/app)
-target_link_libraries(niminal_markdown_test PRIVATE ftxui::dom)
+add_executable(niminal_markdown_test tests/markdown_test.cpp)
+target_link_libraries(niminal_markdown_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_markdown_test)
 
-add_executable(niminal_models_dev_test
-  tests/models_dev_test.cpp
-  src/app/models_dev.cpp
-  src/app/config.cpp)
-target_include_directories(niminal_models_dev_test PRIVATE src/app include)
-target_link_libraries(niminal_models_dev_test PRIVATE niminal::ai)
+add_executable(niminal_models_dev_test tests/models_dev_test.cpp)
+target_link_libraries(niminal_models_dev_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_models_dev_test)
 
-add_executable(niminal_thinking_test
-  tests/thinking_test.cpp
-  src/app/thinking.cpp
-  src/app/models_dev.cpp
-  src/app/config.cpp)
-target_include_directories(niminal_thinking_test PRIVATE src/app include)
-target_link_libraries(niminal_thinking_test PRIVATE niminal::ai)
+add_executable(niminal_thinking_test tests/thinking_test.cpp)
+target_link_libraries(niminal_thinking_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_thinking_test)
 
-add_executable(niminal_permissions_test
-  tests/permissions_test.cpp
-  src/app/permissions.cpp
-  src/app/trust.cpp)
-target_include_directories(niminal_permissions_test PRIVATE src/app include)
-target_link_libraries(niminal_permissions_test PRIVATE nlohmann_json::nlohmann_json)
+add_executable(niminal_permissions_test tests/permissions_test.cpp)
+target_link_libraries(niminal_permissions_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_permissions_test)
 
-add_executable(niminal_trust_test
-  tests/trust_test.cpp
-  src/app/trust.cpp)
-target_include_directories(niminal_trust_test PRIVATE src/app)
-target_link_libraries(niminal_trust_test PRIVATE nlohmann_json::nlohmann_json)
+add_executable(niminal_trust_test tests/trust_test.cpp)
+target_link_libraries(niminal_trust_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_trust_test)
 
-add_executable(niminal_extensions_test
-  tests/extensions_test.cpp
-  src/app/extensions.cpp
-  src/app/session.cpp
-  src/app/compaction.cpp
-  src/app/config.cpp
-  src/app/trust.cpp)
-target_include_directories(niminal_extensions_test PRIVATE src/app include)
-target_link_libraries(niminal_extensions_test PRIVATE niminal::ai)
+add_executable(niminal_extensions_test tests/extensions_test.cpp)
+target_link_libraries(niminal_extensions_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_extensions_test)
 
-add_executable(niminal_diff_test tests/diff_test.cpp src/app/diff.cpp)
-target_include_directories(niminal_diff_test PRIVATE src/app)
-target_link_libraries(niminal_diff_test PRIVATE nlohmann_json::nlohmann_json)
+add_executable(niminal_diff_test tests/diff_test.cpp)
+target_link_libraries(niminal_diff_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_diff_test)
 
-add_executable(niminal_theme_test tests/theme_test.cpp src/app/theme.cpp)
-target_include_directories(niminal_theme_test PRIVATE src/app)
-target_link_libraries(niminal_theme_test PRIVATE ftxui::dom nlohmann_json::nlohmann_json)
+add_executable(niminal_theme_test tests/theme_test.cpp)
+target_link_libraries(niminal_theme_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_theme_test)
 
-add_executable(niminal_transcript_test tests/transcript_test.cpp src/app/transcript.cpp
-  src/app/theme.cpp)
-target_include_directories(niminal_transcript_test PRIVATE src/app)
-target_link_libraries(niminal_transcript_test PRIVATE ftxui::dom nlohmann_json::nlohmann_json)
+add_executable(niminal_transcript_test tests/transcript_test.cpp)
+target_link_libraries(niminal_transcript_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_transcript_test)
 
 add_executable(niminal_http_test tests/http_test.cpp)
 target_link_libraries(niminal_http_test PRIVATE niminal::ai)
 niminal_strict_compile(niminal_http_test)
 
-add_executable(niminal_rpc_test tests/rpc_test.cpp src/app/rpc_protocol.cpp)
-target_include_directories(niminal_rpc_test PRIVATE src/app include)
-target_link_libraries(niminal_rpc_test PRIVATE nlohmann_json::nlohmann_json)
+add_executable(niminal_rpc_test tests/rpc_test.cpp)
+target_link_libraries(niminal_rpc_test PRIVATE niminal_app)
 niminal_strict_compile(niminal_rpc_test)
 
 add_executable(niminal_version_test tests/version_test.cpp)
 target_link_libraries(niminal_version_test PRIVATE niminal::ai)
+add_dependencies(niminal_version_test niminal_cli)
 niminal_strict_compile(niminal_version_test)
 
 enable_testing()

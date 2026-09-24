@@ -72,13 +72,12 @@ cannot see `std::expected` in the C++23 standard library headers: with clang 18,
 `./dev check` stops at the clang-tidy step with `no template named 'expected' in
 namespace 'std'` for every source file.
 
-During development, build and test only the affected suite. This example builds
-and runs the agent tests:
+During development, configure once, then build and run the affected suite.
+This example runs the agent tests:
 
 ```sh
 ./dev configure
-./dev build --target niminal_agent_test
-./dev test -R '^agent$'
+./dev test --suite agent
 ```
 
 Run the full validation pipeline before a release or after major build and

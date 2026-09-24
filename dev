@@ -6,9 +6,7 @@ cd "$ROOT"
 
 BUILD_DIR="${BUILD_DIR:-build/dev}"
 ASAN_DIR="${ASAN_DIR:-build/asan}"
-CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
-CHECK_FAST=false
 CHECK_SANITIZER=true
 CHECK_TIDY=true
 CHECK_TIDY_ALL=true
@@ -31,25 +29,6 @@ find_tool() {
   done
   return 1
 }
-
-CLANG_FORMAT="$(
-  find_tool clang-format \
-    "$(xcrun --find clang-format 2>/dev/null || true)" \
-    /opt/homebrew/opt/llvm/bin/clang-format \
-    /usr/local/opt/llvm/bin/clang-format
-)" || die "clang-format not found"
-
-CLANG_TIDY="$(
-  find_tool clang-tidy \
-    /opt/homebrew/opt/llvm/bin/clang-tidy \
-    /usr/local/opt/llvm/bin/clang-tidy
-)" || die "clang-tidy not found (install with: brew install llvm)"
-
-RUN_CLANG_TIDY="$(
-  find_tool run-clang-tidy \
-    /opt/homebrew/opt/llvm/bin/run-clang-tidy \
-    /usr/local/opt/llvm/bin/run-clang-tidy
-)" || die "run-clang-tidy not found (install with: brew install llvm)"
 
 source_files() {
   find include src tests -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) | sort
@@ -74,11 +53,6 @@ changed_tidy_files() {
 parse_check_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --fast)
-        CHECK_FAST=true
-        CHECK_SANITIZER=false
-        CHECK_TIDY_ALL=false
-        ;;
       --no-sanitizer) CHECK_SANITIZER=false ;;
       --no-tidy) CHECK_TIDY=false ;;
       --all-tidy) CHECK_TIDY_ALL=true ;;
@@ -90,6 +64,8 @@ parse_check_args() {
 }
 
 cmd_format() {
+  local CLANG_FORMAT
+  CLANG_FORMAT="$(find_tool clang-format /opt/homebrew/opt/llvm@20/bin/clang-format /opt/homebrew/opt/llvm/bin/clang-format /usr/local/opt/llvm/bin/clang-format)" || die "clang-format not found"
   local fix=false
   if [[ "${1:-}" == "--fix" ]]; then
     fix=true
@@ -117,13 +93,15 @@ cmd_configure() {
   fi
   log "configure ($dir)"
   if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
-    cmake --preset dev -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
+    cmake --preset dev "$@"
+  elif [[ "$dir" == "build/release" ]]; then
+    cmake --preset release "$@"
   elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
     # The asan preset pins Debug: sanitizers do not need optimized code, and
     # unoptimized builds compile several times faster.
     cmake --preset asan "$@"
   else
-    cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" "$@"
+    cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Debug}" "$@"
   fi
 }
 
@@ -136,6 +114,8 @@ cmd_build() {
   log "build ($dir)"
   if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
     cmake --build --preset dev --parallel "$JOBS" "$@"
+  elif [[ "$dir" == "build/release" ]]; then
+    cmake --build --preset release --parallel "$JOBS" "$@"
   elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
     cmake --build --preset asan --parallel "$JOBS" "$@"
   else
@@ -144,6 +124,9 @@ cmd_build() {
 }
 
 cmd_tidy() {
+  local CLANG_TIDY RUN_CLANG_TIDY
+  CLANG_TIDY="$(find_tool clang-tidy /opt/homebrew/opt/llvm@20/bin/clang-tidy /opt/homebrew/opt/llvm/bin/clang-tidy /usr/local/opt/llvm/bin/clang-tidy)" || die "clang-tidy not found"
+  RUN_CLANG_TIDY="$(find_tool run-clang-tidy /opt/homebrew/opt/llvm@20/bin/run-clang-tidy /opt/homebrew/opt/llvm/bin/run-clang-tidy /usr/local/opt/llvm/bin/run-clang-tidy)" || die "run-clang-tidy not found"
   local fix=false
   local all=true
   while [[ $# -gt 0 ]]; do
@@ -200,6 +183,14 @@ cmd_tidy() {
 }
 
 cmd_test() {
+  if [[ "${1:-}" == "--suite" ]]; then
+    local suite="${2:-}"
+    [[ "$suite" =~ ^[a-z][a-z0-9_]*$ ]] || die "expected a CTest suite name after --suite"
+    cmd_build "$BUILD_DIR" --target "niminal_${suite}_test"
+    shift 2
+    cmd_test "$BUILD_DIR" -R "^${suite}$" "$@"
+    return
+  fi
   local dir="$BUILD_DIR"
   if [[ $# -gt 0 && "$1" != -* ]]; then
     dir="$1"
@@ -208,6 +199,8 @@ cmd_test() {
   log "test ($dir)"
   if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
     ctest --preset dev --output-on-failure "$@"
+  elif [[ "$dir" == "build/release" ]]; then
+    ctest --preset release --output-on-failure "$@"
   elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
     ctest --preset asan --output-on-failure "$@"
   else
@@ -217,9 +210,7 @@ cmd_test() {
 
 cmd_check() {
   parse_check_args "$@"
-  if $CHECK_FAST; then
-    log "fast check (changed tidy only, no sanitizer)"
-  fi
+  local BUILD_DIR="build/release"
   cmd_format
   cmd_configure "$BUILD_DIR"
   cmd_build "$BUILD_DIR"
@@ -248,17 +239,15 @@ Commands:
   configure   configure the build (default: $BUILD_DIR)
   build       compile; pass --target to build one target (default: $BUILD_DIR)
   tidy        run clang-tidy (default: $BUILD_DIR)
-  test        run ctest; pass -R to select suites (default: $BUILD_DIR)
+  test        run ctest; pass --suite NAME to build and run one suite
   sanitizer   configure, build, and test with ASan/UBSan ($ASAN_DIR)
 
 Focused feedback loop:
   ./dev configure
-  ./dev build --target niminal_agent_test
-  ./dev test -R '^agent$'
+  ./dev test --suite agent
   ./dev check              # full validation before release or major build changes
 
 Check options:
-  --fast          skip sanitizer; tidy only changed src/include .cpp files
   --no-sanitizer  skip the ASan/UBSan build and tests
   --no-tidy       skip clang-tidy (CI runs it as a separate job)
   --changed-tidy  tidy only changed src/include .cpp files
