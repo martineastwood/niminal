@@ -13,6 +13,7 @@ using niminal::app::BlockKind;
 using niminal::app::blocks_from_events;
 using niminal::app::is_drag_gesture;
 using niminal::app::measure_transcript_height;
+using niminal::app::render_approval_block;
 using niminal::app::render_transcript_card;
 using niminal::app::render_user_message;
 using niminal::app::resolve_theme;
@@ -52,6 +53,34 @@ int main() {
       expanded_thinking.find("line one") == std::string::npos ||
       expanded_thinking.find("line two") == std::string::npos) {
     return fail("expanded thinking shows body", expanded_thinking);
+  }
+
+  {
+    Block approval{BlockKind::approval, "bash: rm -rf build"};
+    auto theme = resolve_theme(ThemeMode::dark);
+    auto render = [&](const Block& block) {
+      ftxui::Screen screen(120, 4);
+      ftxui::Render(screen, render_approval_block(block, theme).get());
+      return screen.ToString();
+    };
+    auto pending = render(approval);
+    if (pending.find("approval needed") == std::string::npos ||
+        pending.find("bash: rm -rf build") == std::string::npos ||
+        pending.find("[enter]") != std::string::npos) {
+      return fail("pending approval shows target without instructions", pending);
+    }
+    approval.result = "allowed";
+    auto allowed = render(approval);
+    if (allowed.find("✓ allowed") == std::string::npos ||
+        allowed.find("bash: rm -rf build") == std::string::npos) {
+      return fail("allowed approval flips to status marker", allowed);
+    }
+    approval.result = "denied";
+    auto denied = render(approval);
+    if (denied.find("✗ denied") == std::string::npos ||
+        denied.find("bash: rm -rf build") == std::string::npos) {
+      return fail("denied approval flips to status marker", denied);
+    }
   }
 
   Block tool{BlockKind::tool, R"({"command":"ls -la"})"};

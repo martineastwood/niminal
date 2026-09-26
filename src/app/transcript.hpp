@@ -53,6 +53,7 @@ bool is_drag_gesture(int press_x, int press_y, int release_x, int release_y);
 int measure_transcript_height(const ftxui::Element& element, int width);
 ftxui::Element virtual_transcript(ftxui::Elements entries, const std::vector<int>& heights);
 ftxui::Element render_diff_card(const Block& block, const Theme& theme);
+ftxui::Element render_approval_block(const Block& block, const Theme& theme);
 ftxui::Element render_user_message(const Block& block, const Theme& theme);
 ftxui::Element render_transcript_card(const Block& block, const Theme& theme, ftxui::Box& box);
 std::vector<Block> blocks_from_events(const std::vector<nlohmann::json>& events);

@@ -297,6 +297,16 @@ Element render_transcript_card(const Block& block, const Theme& theme, Box& box)
   }
 }
 
+Element render_approval_block(const Block& block, const Theme& theme) {
+  if (block.result == "allowed") {
+    return text("✓ allowed  " + block.text) | color(theme.add);
+  }
+  if (block.result == "denied") {
+    return text("✗ denied  " + block.text) | color(theme.del);
+  }
+  return text("→ approval needed  " + block.text) | color(theme.meta);
+}
+
 Element render_user_message(const Block& block, const Theme& theme) {
   auto body =
       hbox({text(" "), paragraph_preserving_whitespace(block.text) | color(theme.input_fg) | xflex,

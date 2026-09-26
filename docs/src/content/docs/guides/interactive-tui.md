@@ -106,14 +106,20 @@ New output sticks to the bottom until you scroll up.
 
 ## Approval overlay
 
-When a tool needs approval, the TUI shows a prompt over the composer:
+When a tool needs approval, the TUI shows a prompt over the composer with the
+tool and what it wants to do. Use Up and Down to move between the options and
+Enter to pick the highlighted one, or press a shortcut directly.
 
 | Input | Action |
 | --- | --- |
-| Enter or `1` | Allow once |
+| Up / Down | Move the highlight between the options |
+| Enter | Pick the highlighted option (Allow once by default) |
+| `1` | Allow once |
 | `s` | Allow for this session |
 | `p` | Save a project grant (when allowed) |
 | `n` or Esc | Deny |
+
+The transcript records the outcome as `✓ allowed` or `✗ denied` once you decide.
 
 `read`, `grep`, `glob`, `ls`, `edit`, `write`, `skill`, and `ask_user` run
 without prompting. `bash` and non-read-only extension or external tools normally

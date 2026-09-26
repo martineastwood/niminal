@@ -272,6 +272,38 @@ void append_warnings(std::vector<Block>& blocks, const Warnings& warnings) {
   }
 }
 
+struct ApprovalOption {
+  PermissionDecision decision;
+  const char* label;
+  KeyAction key;
+};
+
+struct ApprovalSnapshot {
+  bool open = false;
+  std::string tool_name;
+  std::string description;
+  bool can_remember = false;
+};
+
+std::vector<ApprovalOption> approval_options(bool can_remember) {
+  std::vector<ApprovalOption> options{
+      {PermissionDecision::allow_once, "Allow once", KeyAction::allow_once},
+      {PermissionDecision::allow_session, "Allow for this session", KeyAction::allow_session}};
+  if (can_remember) {
+    options.push_back({PermissionDecision::allow_project, "Always allow in this project",
+                       KeyAction::allow_project});
+  }
+  options.push_back({PermissionDecision::deny, "Deny", KeyAction::deny});
+  return options;
+}
+
+std::string approval_headline(const std::string& tool_name, const std::string& description) {
+  if (description.empty() || description == tool_name) {
+    return tool_name;
+  }
+  return tool_name + ": " + description;
+}
+
 Element extension_text(const std::string& value, std::string_view style, const Theme& theme,
                        bool accent_default) {
   auto line = text(value);
@@ -387,9 +419,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     bool pending = false;
     bool resolved = false;
     std::string tool_id;
+    std::string tool_name;
+    std::string description;
     bool can_remember = false;
     PermissionDecision decision = PermissionDecision::deny;
   } approval;
+  auto approval_snapshot = [&] {
+    std::lock_guard lock(approval.mutex);
+    return ApprovalSnapshot{approval.pending && !approval.resolved, approval.tool_name,
+                            approval.description, approval.can_remember};
+  };
+  int approval_i = 0;
 
   struct UiCall {
     std::mutex mutex;
@@ -831,14 +871,21 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       activity = ev.tool_name.empty() ? "Waiting for model…" : "Running " + ev.tool_name + "…";
       activity_started = std::chrono::steady_clock::now();
       break;
-    case EventKind::approval_required:
-      blocks.push_back(
-          Block{BlockKind::approval, ev.tool_name + "\n  Allow " + ev.tool_name +
-                                         (ev.text.empty() ? std::string() : ": " + ev.text) +
-                                         "\n  [enter] once  [s] session" +
-                                         (ev.can_remember ? "  [p] project" : "") + "  [n] deny"});
+    case EventKind::approval_required: {
+      Block block{BlockKind::approval, approval_headline(ev.tool_name, ev.text)};
+      block.tool_name = ev.tool_name;
+      block.tool_id = ev.tool_id;
+      {
+        std::lock_guard lock(approval.mutex);
+        if (approval.resolved && approval.tool_id == ev.tool_id) {
+          block.result = approval.decision == PermissionDecision::deny ? "denied" : "allowed";
+        }
+      }
+      blocks.push_back(std::move(block));
+      approval_i = 0;
       activity = "Approval needed";
       break;
+    }
     case EventKind::tool_result:
       if (!ev.tool_id.empty()) {
         auto tool = update_tool();
@@ -1065,11 +1112,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       approval.pending = true;
       approval.resolved = false;
       approval.tool_id = call.id;
+      approval.tool_name = call.name;
+      approval.description = permission_description(call);
       approval.can_remember = can_remember(call);
       approval.decision = PermissionDecision::deny;
     }
-    StreamEvent request{EventKind::approval_required, permission_description(call), call.name,
-                        call.id};
+    StreamEvent request{EventKind::approval_required, approval.description, call.name, call.id};
     request.input = json::object();
     try {
       if (!call.arguments.empty()) {
@@ -1554,6 +1602,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                                                     : render_markdown(content, theme)};
           }
           entry = cached.element;
+        } else if (block.kind == BlockKind::approval) {
+          entry = render_approval_block(block, theme);
         } else {
           auto label = block_label(block.kind);
           auto body = paragraph_preserving_whitespace(block.text) | block_style(block.kind, theme);
@@ -1685,11 +1735,37 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
     auto transcript = cached_transcript;
     transcript_element = transcript;
+    const auto approval_state = approval_snapshot();
     Elements stack;
     stack.push_back(transcript | focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
                     vscroll_indicator | yframe | yflex);
     stack.push_back(separator());
-    if (settings_open) {
+    if (approval_state.open) {
+      Elements approval_rows;
+      approval_rows.push_back(
+          paragraph(approval_headline(approval_state.tool_name, approval_state.description)) |
+          bold | color(theme.emphasis));
+      approval_rows.push_back(text(""));
+      const auto options = approval_options(approval_state.can_remember);
+      approval_i = std::clamp(approval_i, 0, static_cast<int>(options.size()) - 1);
+      for (size_t i = 0; i < options.size(); ++i) {
+        const bool selected = static_cast<int>(i) == approval_i;
+        auto marker = text(selected ? " › " : "   ") | bold | color(theme.accent);
+        auto label = text(options[i].label);
+        label = selected ? label | bold | color(theme.accent) : label;
+        auto key = text(keybindings.label(options[i].key)) | color(theme.muted);
+        auto row = hbox({marker, label | flex, key});
+        if (selected) {
+          row = row | bgcolor(theme.hover_bg);
+        }
+        approval_rows.push_back(std::move(row));
+      }
+      approval_rows.push_back(text(""));
+      approval_rows.push_back(text("↑/↓ choose · enter select · esc deny · pgup/pgdn scroll") |
+                              color(theme.muted));
+      stack.push_back(window(text(" Approval ") | bold | color(theme.accent),
+                             vbox(std::move(approval_rows)), ROUNDED));
+    } else if (settings_open) {
       Elements setting_rows;
       setting_rows.push_back(text("Settings  " + config_path().string()) | bold |
                              color(theme.accent));
@@ -1934,13 +2010,25 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   };
 
   auto resolve_approval = [&](PermissionDecision decision) {
-    std::lock_guard lock(approval.mutex);
-    if (!approval.pending || approval.resolved) {
-      return false;
+    std::string tool_id;
+    {
+      std::lock_guard lock(approval.mutex);
+      if (!approval.pending || approval.resolved) {
+        return false;
+      }
+      approval.decision = decision;
+      approval.resolved = true;
+      tool_id = approval.tool_id;
+      approval.condition.notify_all();
     }
-    approval.decision = decision;
-    approval.resolved = true;
-    approval.condition.notify_all();
+    auto block = std::find_if(blocks.begin(), blocks.end(), [&](const Block& candidate) {
+      return candidate.kind == BlockKind::approval && !candidate.tool_id.empty() &&
+             candidate.tool_id == tool_id;
+    });
+    if (block != blocks.end() && block->result.empty()) {
+      block->result = decision == PermissionDecision::deny ? "denied" : "allowed";
+      ++transcript_revision;
+    }
     return true;
   };
 
@@ -2049,27 +2137,32 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (approval_pending()) {
-      if (pressed(KeyAction::allow_once)) {
-        resolve_approval(PermissionDecision::allow_once);
+      const auto state = approval_snapshot();
+      const auto options = approval_options(state.can_remember);
+      const int count = static_cast<int>(options.size());
+      approval_i = std::clamp(approval_i, 0, count - 1);
+      if (scroll_event()) {
+        return true;
+      }
+      if (pressed(KeyAction::previous)) {
+        approval_i = (approval_i + count - 1) % count;
+      } else if (pressed(KeyAction::next)) {
+        approval_i = (approval_i + 1) % count;
       } else if (pressed(KeyAction::allow_session)) {
         resolve_approval(PermissionDecision::allow_session);
       } else if (pressed(KeyAction::allow_project)) {
-        bool allowed = false;
-        {
-          std::lock_guard lock(approval.mutex);
-          allowed = approval.can_remember;
+        if (state.can_remember) {
+          resolve_approval(PermissionDecision::allow_project);
         }
-        if (!allowed) {
-          return true;
-        }
-        resolve_approval(PermissionDecision::allow_project);
       } else if (pressed(KeyAction::deny)) {
         resolve_approval(PermissionDecision::deny);
       } else if (pressed(KeyAction::quit)) {
         resolve_approval(PermissionDecision::deny);
         quit_ui();
-      } else {
-        return true;
+      } else if (pressed(KeyAction::submit)) {
+        resolve_approval(options[static_cast<size_t>(approval_i)].decision);
+      } else if (pressed(KeyAction::allow_once)) {
+        resolve_approval(PermissionDecision::allow_once);
       }
       return true;
     }
