@@ -164,19 +164,6 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       on_event(std::move(event));
     }
   };
-  auto user_content = [](const UserInput& input) {
-    if (input.images.empty()) {
-      return json(input.text);
-    }
-    json parts = json::array();
-    if (!input.text.empty()) {
-      parts.push_back(json{{"type", "text"}, {"text", input.text}});
-    }
-    for (const auto& image : input.images) {
-      parts.push_back(image);
-    }
-    return parts;
-  };
   std::string run_system = system;
   json extension_message = json::array();
   if (append_user && before_agent_start) {
@@ -213,6 +200,19 @@ std::string Agent::run(UserInput prompt, bool append_user) {
     if (turn_end) {
       turn_end(interrupted);
     }
+  };
+  auto settle = [&](bool interrupted, bool run_end, bool emit_error = false) {
+    finish_turn(interrupted);
+    if (run_end) {
+      emit(StreamEvent{EventKind::run_end, {}, {}, {}});
+    }
+    if (emit_error) {
+      emit(StreamEvent{EventKind::error, "interrupted", {}, {}});
+    }
+    if (agent_settled) {
+      agent_settled();
+    }
+    emit(StreamEvent{EventKind::done, {}, {}, {}});
   };
 
   const json tools_json = tools_payload(tools);
@@ -359,12 +359,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
         if (inject_inputs(take_follow_up) > 0) {
           continue;
         }
-        finish_turn(false);
-        emit(StreamEvent{EventKind::run_end, {}, {}, {}});
-        if (agent_settled) {
-          agent_settled();
-        }
-        emit(StreamEvent{EventKind::done, {}, {}, {}});
+        settle(false, true);
         return result.text;
       }
 
@@ -517,12 +512,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
     if (persist_step) {
       persist_step();
     }
-    finish_turn(true);
-    emit(StreamEvent{EventKind::error, "interrupted", {}, {}});
-    if (agent_settled) {
-      agent_settled();
-    }
-    emit(StreamEvent{EventKind::done, {}, {}, {}});
+    settle(true, false, true);
     return {};
   } catch (...) {
     if (persist_step) {

@@ -78,6 +78,9 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
   if (model.empty()) {
     throw Error("missing model");
   }
+  const auto endpoint = [&](std::string_view fallback) {
+    return config.api_url.empty() ? std::string(fallback) : config.api_url;
+  };
   if (config.provider == "foundry") {
     if (config.api_url.empty()) {
       throw Error("missing Foundry API URL (configure the model in ~/.niminal/models.json)");
@@ -90,7 +93,7 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
   if (config.provider == "anthropic") {
     return cail::create_anthropic(cail::AnthropicSettings{
         .api_key = key,
-        .base_url = config.api_url.empty() ? cail::AnthropicSettings{}.base_url : config.api_url,
+        .base_url = endpoint(cail::AnthropicSettings{}.base_url),
         .max_tokens = 16384,
     })(model);
   }
@@ -125,39 +128,38 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
   if (config.provider == "hyper") {
     return cail::create_hyper(cail::HyperSettings{
         .api_key = key,
-        .endpoint = config.api_url.empty() ? cail::HyperSettings{}.endpoint : config.api_url,
+        .endpoint = endpoint(cail::HyperSettings{}.endpoint),
     })(model);
   }
   if (config.provider == "ollama") {
     return cail::create_ollama_cloud(cail::OllamaCloudSettings{
         .api_key = key,
-        .endpoint = config.api_url.empty() ? cail::OllamaCloudSettings{}.endpoint : config.api_url,
+        .endpoint = endpoint(cail::OllamaCloudSettings{}.endpoint),
     })(model);
   }
   if (config.provider == "local") {
     return cail::create_local(cail::LocalSettings{
         .api_key = key,
-        .endpoint = config.api_url.empty() ? cail::LocalSettings{}.endpoint : config.api_url,
+        .endpoint = endpoint(cail::LocalSettings{}.endpoint),
     })(model);
   }
   if (config.provider == "openai") {
     return cail::create_openai(cail::OpenAIProviderSettings{
         .api_key = key,
-        .base_url =
-            config.api_url.empty() ? cail::OpenAIProviderSettings{}.base_url : config.api_url,
+        .base_url = endpoint(cail::OpenAIProviderSettings{}.base_url),
     })(model);
   }
   if (config.provider == "mistral") {
     return cail::create_mistral(cail::MistralSettings{
         .api_key = key,
-        .endpoint = config.api_url.empty() ? cail::MistralSettings{}.endpoint : config.api_url,
+        .endpoint = endpoint(cail::MistralSettings{}.endpoint),
     })(model);
   }
   if (config.provider == "openrouter") {
     return cail::create_openrouter(cail::OpenRouterSettings{
         .api_key = key,
         .headers = {{"HTTP-Referer", "https://niminal.dev"}, {"X-Title", "niminal"}},
-        .endpoint = config.api_url.empty() ? cail::OpenRouterSettings{}.endpoint : config.api_url,
+        .endpoint = endpoint(cail::OpenRouterSettings{}.endpoint),
     })(model);
   }
   const auto& custom = custom_providers.at(config.provider).spec;

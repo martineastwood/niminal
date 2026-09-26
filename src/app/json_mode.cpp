@@ -28,6 +28,18 @@ void add_usage(nlohmann::json& out, const niminal::Usage& usage) {
   };
 }
 
+void add_model(nlohmann::json& out, const std::string& model) {
+  if (!model.empty()) {
+    out["model"] = model;
+  }
+}
+
+void add_tool_identity(nlohmann::json& out, const niminal::StreamEvent& event) {
+  out["step"] = event.step;
+  out["tool_id"] = event.tool_id;
+  out["tool_name"] = event.tool_name;
+}
+
 } // namespace
 
 nlohmann::json json_event(const niminal::StreamEvent& event) {
@@ -43,40 +55,25 @@ nlohmann::json json_event(const niminal::StreamEvent& event) {
   case niminal::EventKind::step_start:
     out["type"] = "step_start";
     out["step"] = event.step;
-    if (!event.model.empty()) {
-      out["model"] = event.model;
-    }
+    add_model(out, event.model);
     break;
   case niminal::EventKind::text_delta:
-    out["type"] = "message_delta";
-    out["step"] = event.step;
-    out["delta"] = event.text;
-    if (!event.model.empty()) {
-      out["model"] = event.model;
-    }
-    break;
   case niminal::EventKind::thinking_delta:
-    out["type"] = "thinking_delta";
+    out["type"] = event.kind == niminal::EventKind::text_delta ? "message_delta" : "thinking_delta";
     out["step"] = event.step;
     out["delta"] = event.text;
-    if (!event.model.empty()) {
-      out["model"] = event.model;
-    }
+    add_model(out, event.model);
     break;
   case niminal::EventKind::tool_call:
     out["type"] = "tool_call";
-    out["step"] = event.step;
-    out["tool_id"] = event.tool_id;
-    out["tool_name"] = event.tool_name;
+    add_tool_identity(out, event);
     if (!event.input.is_null()) {
       out["input"] = event.input;
     }
     break;
   case niminal::EventKind::approval_required:
     out["type"] = "approval_required";
-    out["step"] = event.step;
-    out["tool_id"] = event.tool_id;
-    out["tool_name"] = event.tool_name;
+    add_tool_identity(out, event);
     out["description"] = event.text;
     out["can_remember"] = event.can_remember;
     if (!event.input.is_null()) {
@@ -85,32 +82,24 @@ nlohmann::json json_event(const niminal::StreamEvent& event) {
     break;
   case niminal::EventKind::tool_output_delta:
     out["type"] = "tool_output_delta";
-    out["step"] = event.step;
-    out["tool_id"] = event.tool_id;
-    out["tool_name"] = event.tool_name;
+    add_tool_identity(out, event);
     out["delta"] = event.text;
     break;
   case niminal::EventKind::tool_result:
     out["type"] = "tool_result";
-    out["step"] = event.step;
-    out["tool_id"] = event.tool_id;
-    out["tool_name"] = event.tool_name;
+    add_tool_identity(out, event);
     out["output"] = event.text;
     out["is_error"] = event.is_error;
     break;
   case niminal::EventKind::step_end:
     out["type"] = "step_end";
     out["step"] = event.step;
-    if (!event.model.empty()) {
-      out["model"] = event.model;
-    }
+    add_model(out, event.model);
     add_usage(out, event.usage);
     break;
   case niminal::EventKind::run_end:
     out["type"] = "run_end";
-    if (!event.model.empty()) {
-      out["model"] = event.model;
-    }
+    add_model(out, event.model);
     break;
   case niminal::EventKind::assistant_message:
     return message_event(event.session_id, event.turn_id, "assistant", event.text, event.model,

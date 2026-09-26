@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 
 namespace niminal::app {
 
@@ -48,20 +49,13 @@ std::vector<std::string> anthropic_efforts(std::string_view model) {
 }
 
 int budget_tokens(std::string_view level) {
-  if (level == "minimal") {
-    return 1024;
-  }
-  if (level == "low") {
-    return 2048;
-  }
-  if (level == "medium") {
-    return 8000;
-  }
-  if (level == "high") {
-    return 16000;
-  }
-  if (level == "xhigh" || level == "max") {
-    return 32000;
+  constexpr std::pair<std::string_view, int> budgets[] = {{"minimal", 1024}, {"low", 2048},
+                                                          {"medium", 8000},  {"high", 16000},
+                                                          {"xhigh", 32000},  {"max", 32000}};
+  for (const auto& [name, tokens] : budgets) {
+    if (level == name) {
+      return tokens;
+    }
   }
   return 0;
 }
@@ -94,10 +88,7 @@ json toggle_options(std::string_view provider) {
   if (p == "mistral" || p == "opencode" || p == "opencodezen") {
     return json{{"reasoning_effort", "medium"}};
   }
-  if (p == "google") {
-    return effort_options(p, "high");
-  }
-  if (p == "anthropic") {
+  if (p == "google" || p == "anthropic") {
     return effort_options(p, "high");
   }
   return json::object();
@@ -129,9 +120,8 @@ struct Plan {
 };
 
 Plan resolve(std::string_view provider, std::string_view model, std::string_view want) {
-  Plan plan;
   if (want.empty()) {
-    return plan;
+    return {};
   }
   auto p = niminal::lower_copy(std::string(provider));
   auto m = std::string(model);
@@ -140,68 +130,56 @@ Plan resolve(std::string_view provider, std::string_view model, std::string_view
     bool required = want == "none" && starts_family(niminal::lower_copy(m), "claude-fable-5");
     auto level = required ? "low" : std::string(want);
     if (level == "none") {
-      plan.label = "off";
-      plan.options = json{{"thinking", json{{"type", "disabled"}}}};
-      return plan;
+      return {"off", json{{"thinking", json{{"type", "disabled"}}}}};
     }
-    plan.options = anthropic_adaptive(m, level);
-    plan.label = required ? "low (thinking required)"
-                          : plan.options["output_config"]["effort"].get<std::string>();
-    return plan;
+    auto options = anthropic_adaptive(m, level);
+    auto label = required ? "low (thinking required)"
+                          : options["output_config"]["effort"].get<std::string>();
+    return {label, std::move(options)};
   }
   auto caps = lookup_reasoning_caps(provider, model);
   if (caps.known && !caps.reasoning) {
-    return plan;
+    return {};
   }
-  if (caps.known && !caps.efforts.empty()) {
+  if (!caps.known) {
+    if (want == "none") {
+      return {"off"};
+    }
+    return {std::string(want), effort_options(p, want)};
+  }
+  if (!caps.efforts.empty()) {
     auto snapped = snap_to_efforts(want, caps.efforts);
     if (snapped.empty() || snapped == "none") {
-      plan.label = "off";
-      return plan;
+      return {"off"};
     }
-    plan.label = snapped;
-    plan.options = effort_options(p, snapped);
-    return plan;
-  }
-  if (caps.known && caps.toggle) {
-    if (want == "none") {
-      plan.label = "off";
-      return plan;
-    }
-    plan.label = "on";
-    plan.options = toggle_options(p);
-    return plan;
-  }
-  if (caps.known && caps.budget_tokens) {
-    if (want == "none") {
-      plan.label = "off";
-      return plan;
-    }
-    plan.label = std::string(want);
-    plan.options = max_token_options(p, want);
-    return plan;
-  }
-  if (caps.known) {
-    return plan;
+    return {snapped, effort_options(p, snapped)};
   }
   if (want == "none") {
-    plan.label = "off";
-    return plan;
+    return {"off"};
   }
-  plan.label = std::string(want);
-  plan.options = effort_options(p, want);
-  return plan;
+  if (caps.toggle) {
+    return {"on", toggle_options(p)};
+  }
+  if (caps.budget_tokens) {
+    return {std::string(want), max_token_options(p, want)};
+  }
+  return {};
 }
 
 std::string thinking_levels_help() {
-  std::string out;
-  for (int i = 0; i < 7; ++i) {
-    if (i != 0) {
-      out += '|';
-    }
-    out += kThinkingLevels[i];
+  std::string out = kThinkingLevels[0];
+  for (int i = 1; i < 7; ++i) {
+    out += '|' + std::string(kThinkingLevels[i]);
   }
   return out;
+}
+
+std::string normalized_or_empty(std::string_view value) {
+  try {
+    return value.empty() ? std::string() : normalize_thinking(value);
+  } catch (...) {
+    return {};
+  }
 }
 
 } // namespace
@@ -312,23 +290,11 @@ std::vector<std::string> thinking_choices(std::string_view provider, std::string
 
 std::string thinking_status(std::string_view provider, std::string_view model,
                             std::string_view want) {
-  std::string level;
-  try {
-    level = want.empty() ? "" : normalize_thinking(want);
-  } catch (...) {
-    return {};
-  }
-  return resolve(provider, model, level).label;
+  return resolve(provider, model, normalized_or_empty(want)).label;
 }
 
 json thinking_body(std::string_view provider, std::string_view model, std::string_view want) {
-  std::string level;
-  try {
-    level = want.empty() ? "" : normalize_thinking(want);
-  } catch (...) {
-    return json::object();
-  }
-  return resolve(provider, model, level).options;
+  return resolve(provider, model, normalized_or_empty(want)).options;
 }
 
 } // namespace niminal::app

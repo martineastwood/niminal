@@ -32,6 +32,19 @@ void load_non_negative_int(const json& doc, const char* key, int& target) {
   }
 }
 
+void load_string(const json& doc, const char* key, std::string& target, bool allow_empty = false) {
+  if (auto it = doc.find(key);
+      it != doc.end() && it->is_string() && (allow_empty || !it->get<std::string>().empty())) {
+    target = it->get<std::string>();
+  }
+}
+
+void load_bool(const json& doc, const char* key, bool& target) {
+  if (auto it = doc.find(key); it != doc.end() && it->is_boolean()) {
+    target = it->get<bool>();
+  }
+}
+
 } // namespace
 
 Config::Config() {
@@ -134,39 +147,16 @@ Config load_config_file(const fs::path& path) {
   }
   try {
     auto doc = json::parse(in);
-    if (doc.contains("model") && doc["model"].is_string()) {
-      auto model = doc["model"].get<std::string>();
-      if (!model.empty()) {
-        cfg.model = std::move(model);
-      }
-    }
-    if (doc.contains("provider") && doc["provider"].is_string()) {
-      auto provider = doc["provider"].get<std::string>();
-      if (!provider.empty()) {
-        cfg.provider = std::move(provider);
-      }
-    }
-    if (doc.contains("thinking") && doc["thinking"].is_string()) {
-      cfg.thinking = doc["thinking"].get<std::string>();
-    }
-    if (doc.contains("show_thinking") && doc["show_thinking"].is_boolean()) {
-      cfg.show_thinking = doc["show_thinking"].get<bool>();
-    }
-    if (doc.contains("theme") && doc["theme"].is_string()) {
-      cfg.theme = doc["theme"].get<std::string>();
-    }
-    if (doc.contains("editor") && doc["editor"].is_string()) {
-      auto editor = doc["editor"].get<std::string>();
-      if (!editor.empty()) {
-        cfg.editor = std::move(editor);
-      }
-    }
+    load_string(doc, "model", cfg.model);
+    load_string(doc, "provider", cfg.provider);
+    load_string(doc, "thinking", cfg.thinking, true);
+    load_bool(doc, "show_thinking", cfg.show_thinking);
+    load_string(doc, "theme", cfg.theme, true);
+    load_string(doc, "editor", cfg.editor);
     load_queue_mode(doc, "steering_mode", cfg.steering_mode);
     load_queue_mode(doc, "follow_up_mode", cfg.follow_up_mode);
     load_non_negative_int(doc, "max_steps", cfg.max_steps);
-    if (doc.contains("compaction_enabled") && doc["compaction_enabled"].is_boolean()) {
-      cfg.compaction_enabled = doc["compaction_enabled"].get<bool>();
-    }
+    load_bool(doc, "compaction_enabled", cfg.compaction_enabled);
     load_non_negative_int(doc, "reserve_tokens", cfg.reserve_tokens);
     load_non_negative_int(doc, "keep_recent_tokens", cfg.keep_recent_tokens);
     load_non_negative_int(doc, "context_window", cfg.context_window);

@@ -45,51 +45,24 @@ std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
   };
   size_t i = 0;
   while (i < s.size()) {
-    auto try_mark = [&](std::string_view marker, auto apply) -> bool {
+    auto try_delimited = [&](std::string_view marker, auto apply, bool word_boundary = false) {
       if (!starts_at(s, i, marker)) {
         return false;
       }
-      auto close = s.find(marker, i + marker.size());
-      if (close == std::string_view::npos) {
+      if (word_boundary && i > 0 && std::isalnum(static_cast<unsigned char>(s[i - 1]))) {
         return false;
       }
-      flush();
-      Span inner = base;
-      apply(inner);
-      auto kids = parse_inline(s.substr(i + marker.size(), close - (i + marker.size())), inner);
-      out.insert(out.end(), kids.begin(), kids.end());
-      i = close + marker.size();
-      return true;
-    };
-    if (try_mark("***", [](Span& sp) { sp.bold = sp.italic = true; })) {
-      continue;
-    }
-    if (try_mark("**", [](Span& sp) { sp.bold = true; })) {
-      continue;
-    }
-    if (try_mark("~~", [](Span& sp) { sp.strike = true; })) {
-      continue;
-    }
-    auto try_underscore = [&](std::string_view marker, auto apply) -> bool {
-      if (!starts_at(s, i, marker)) {
+      const auto inner_start = i + marker.size();
+      if (word_boundary &&
+          (inner_start >= s.size() || s[inner_start] == ' ' || s[inner_start] == '\t')) {
         return false;
       }
-      if (i > 0 && std::isalnum(static_cast<unsigned char>(s[i - 1]))) {
-        return false;
-      }
-      auto inner_start = i + marker.size();
-      if (inner_start >= s.size() || s[inner_start] == ' ' || s[inner_start] == '\t') {
-        return false;
-      }
-      auto close = s.find(marker, inner_start);
-      if (close == std::string_view::npos || close == inner_start) {
-        return false;
-      }
-      if (s[close - 1] == ' ' || s[close - 1] == '\t') {
-        return false;
-      }
-      if (close + marker.size() < s.size() &&
-          std::isalnum(static_cast<unsigned char>(s[close + marker.size()]))) {
+      const auto close = s.find(marker, inner_start);
+      if (close == std::string_view::npos ||
+          (word_boundary &&
+           (close == inner_start || s[close - 1] == ' ' || s[close - 1] == '\t' ||
+            (close + marker.size() < s.size() &&
+             std::isalnum(static_cast<unsigned char>(s[close + marker.size()])))))) {
         return false;
       }
       flush();
@@ -100,10 +73,19 @@ std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
       i = close + marker.size();
       return true;
     };
-    if (try_underscore("___", [](Span& sp) { sp.bold = sp.italic = true; })) {
+    if (try_delimited("***", [](Span& sp) { sp.bold = sp.italic = true; })) {
       continue;
     }
-    if (try_underscore("__", [](Span& sp) { sp.bold = true; })) {
+    if (try_delimited("**", [](Span& sp) { sp.bold = true; })) {
+      continue;
+    }
+    if (try_delimited("~~", [](Span& sp) { sp.strike = true; })) {
+      continue;
+    }
+    if (try_delimited("___", [](Span& sp) { sp.bold = sp.italic = true; }, true)) {
+      continue;
+    }
+    if (try_delimited("__", [](Span& sp) { sp.bold = true; }, true)) {
       continue;
     }
     if (starts_at(s, i, "`")) {
@@ -118,10 +100,10 @@ std::vector<Span> parse_inline(std::string_view s, Span base = {}) {
         continue;
       }
     }
-    if (try_mark("*", [](Span& sp) { sp.italic = true; })) {
+    if (try_delimited("*", [](Span& sp) { sp.italic = true; })) {
       continue;
     }
-    if (try_underscore("_", [](Span& sp) { sp.italic = true; })) {
+    if (try_delimited("_", [](Span& sp) { sp.italic = true; }, true)) {
       continue;
     }
     bool image = s[i] == '!' && i + 1 < s.size() && s[i + 1] == '[';
@@ -336,21 +318,21 @@ struct Block {
 std::vector<std::string> split_lines(std::string_view text) {
   std::vector<std::string> lines;
   std::string cur;
+  auto finish = [&] {
+    if (!cur.empty() && cur.back() == '\r') {
+      cur.pop_back();
+    }
+    lines.push_back(std::move(cur));
+    cur.clear();
+  };
   for (char c : text) {
     if (c == '\n') {
-      if (!cur.empty() && cur.back() == '\r') {
-        cur.pop_back();
-      }
-      lines.push_back(std::move(cur));
-      cur.clear();
+      finish();
     } else {
       cur += c;
     }
   }
-  if (!cur.empty() && cur.back() == '\r') {
-    cur.pop_back();
-  }
-  lines.push_back(std::move(cur));
+  finish();
   return lines;
 }
 
@@ -511,12 +493,6 @@ Element style_span(const Span& s, const Theme& theme) {
     e = e | bold | color(theme.emphasis);
   } else if (s.italic) {
     e = e | italic | color(theme.italic);
-  }
-  if (s.bold && !s.code) {
-    e = e | bold;
-  }
-  if (s.italic && !s.code) {
-    e = e | italic;
   }
   if (s.strike) {
     e = e | strikethrough;

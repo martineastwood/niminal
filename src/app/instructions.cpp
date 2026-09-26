@@ -65,6 +65,13 @@ bool is_git_root(const fs::path& dir) {
   return fs::exists(dir / ".git", ec);
 }
 
+fs::path canonical_path(const fs::path& path) {
+  const auto absolute = fs::absolute(path);
+  std::error_code ec;
+  auto canonical = fs::weakly_canonical(absolute, ec);
+  return ec ? absolute : canonical;
+}
+
 std::string read_bounded(const fs::path& path) {
   std::ifstream in(path);
   if (!in) {
@@ -147,6 +154,17 @@ std::string load_prompt_file(const fs::path& path) {
   return read_bounded(path);
 }
 
+std::string load_preferred_prompt(const fs::path& workspace, const fs::path& project,
+                                  const fs::path& global) {
+  if (project_resources_trusted(workspace)) {
+    auto text = load_prompt_file(project);
+    if (!text.empty()) {
+      return text;
+    }
+  }
+  return load_prompt_file(global);
+}
+
 } // namespace
 
 void set_context_files_enabled(bool enabled) {
@@ -154,23 +172,12 @@ void set_context_files_enabled(bool enabled) {
 }
 
 std::string load_system_prompt(const fs::path& workspace) {
-  if (project_resources_trusted(workspace)) {
-    auto project = load_prompt_file(project_system_path(workspace));
-    if (!project.empty()) {
-      return project;
-    }
-  }
-  return load_prompt_file(global_system_path());
+  return load_preferred_prompt(workspace, project_system_path(workspace), global_system_path());
 }
 
 std::string load_append_system_prompt(const fs::path& workspace) {
-  if (project_resources_trusted(workspace)) {
-    auto project = load_prompt_file(project_append_system_path(workspace));
-    if (!project.empty()) {
-      return project;
-    }
-  }
-  return load_prompt_file(global_append_system_path());
+  return load_preferred_prompt(workspace, project_append_system_path(workspace),
+                               global_append_system_path());
 }
 
 fs::path global_agents_path() {
@@ -184,11 +191,7 @@ std::vector<fs::path> instruction_paths(const fs::path& workspace) {
     paths.push_back(global);
   }
 
-  std::error_code ec;
-  auto current = fs::weakly_canonical(fs::absolute(workspace), ec);
-  if (ec) {
-    current = fs::absolute(workspace);
-  }
+  auto current = canonical_path(workspace);
   auto stop = current;
   {
     auto probe = current;
@@ -238,15 +241,9 @@ std::string load_scoped_instructions(const fs::path& workspace, const fs::path& 
     return {};
   }
   auto skip = instruction_paths(workspace);
+  auto root = canonical_path(workspace);
+  auto current = canonical_path(target);
   std::error_code ec;
-  auto root = fs::weakly_canonical(fs::absolute(workspace), ec);
-  if (ec) {
-    root = fs::absolute(workspace);
-  }
-  auto current = fs::weakly_canonical(fs::absolute(target), ec);
-  if (ec) {
-    current = fs::absolute(target);
-  }
   if (fs::is_regular_file(current, ec)) {
     current = current.parent_path();
   }

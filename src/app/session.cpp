@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <initializer_list>
 #include <sstream>
 #include <stdexcept>
 #include <unistd.h>
@@ -30,40 +31,71 @@ void fsync_file(const fs::path& path) {
   std::fclose(f);
 }
 
+const json* content_array(const json& event) {
+  const auto content = event.find("content");
+  return content != event.end() && content->is_array() ? &*content : nullptr;
+}
+
+template <typename Fn> void for_each_content_part(const json& event, Fn&& fn) {
+  if (const auto* content = content_array(event)) {
+    for (const auto& part : *content) {
+      if (part.is_object()) {
+        fn(part);
+      }
+    }
+  }
+}
+
+template <typename Fn> void for_each_tool_use(const json& event, Fn&& fn) {
+  for_each_content_part(event, [&](const json& part) {
+    if (part.value("type", "") == "tool_use") {
+      fn(part);
+    }
+  });
+}
+
 std::string first_user_text(const json& event) {
   if (event.value("type", "") != "user") {
     return {};
   }
-  if (!event.contains("content") || !event["content"].is_array()) {
-    return {};
-  }
-  for (const auto& part : event["content"]) {
+  std::string text;
+  bool found = false;
+  for_each_content_part(event, [&](const json& part) {
+    if (found) {
+      return;
+    }
     if (part.value("type", "") == "text") {
-      return part.value("text", "");
+      text = part.value("text", "");
+      found = true;
+    } else if (part.value("type", "") == "image") {
+      text = "[image: " + part.value("name", "image") + "]";
+      found = true;
     }
-    if (part.value("type", "") == "image") {
-      return "[image: " + part.value("name", "image") + "]";
-    }
-  }
-  return {};
+  });
+  return text;
 }
 
 json text_block(const std::string& text) {
   return json{{"type", "text"}, {"text", text}};
 }
 
-std::string event_text(const json& event) {
+std::string content_text(const json& event, bool include_images) {
   std::string text;
-  if (event.contains("content") && event["content"].is_array()) {
-    for (const auto& part : event["content"]) {
-      if (part.is_object() && part.value("type", "") == "text") {
-        text += part.value("text", "");
-      } else if (part.is_object() && part.value("type", "") == "image") {
-        text += "[image: " + part.value("name", "image") + "]";
-      }
+  for_each_content_part(event, [&](const json& part) {
+    if (part.value("type", "") == "text") {
+      text += part.value("text", "");
+    } else if (include_images && part.value("type", "") == "image") {
+      text += "[image: " + part.value("name", "image") + "]";
     }
-  }
+  });
   return text;
+}
+
+std::string event_text(const json& event) {
+  return content_text(event, true);
+}
+std::string text_content(const json& event) {
+  return content_text(event, false);
 }
 
 std::string bash_user_message(const std::string& command, const std::string& output) {
@@ -74,6 +106,20 @@ std::string bash_user_message(const std::string& command, const std::string& out
     text += "```\n" + output + "\n```";
   }
   return text;
+}
+
+std::string last_event_value(const Session& session, const char* key,
+                             std::initializer_list<const char*> types) {
+  for (auto it = session.events.rbegin(); it != session.events.rend(); ++it) {
+    if (std::find(types.begin(), types.end(), it->value("type", "")) == types.end()) {
+      continue;
+    }
+    auto value = it->value(key, "");
+    if (!value.empty()) {
+      return value;
+    }
+  }
+  return {};
 }
 
 bool session_matches(const Session& session, const std::string& query) {
@@ -388,17 +434,12 @@ std::string export_html(const Session& session) {
         out << "<article class=\"message assistant\"><div class=\"label\">Niminal</div>\n"
             << "<div class=\"content\">" << markdown_to_html(text) << "</div></article>\n";
       }
-      if (event.contains("content") && event["content"].is_array()) {
-        for (const auto& part : event["content"]) {
-          if (!part.is_object() || part.value("type", "") != "tool_use") {
-            continue;
-          }
-          auto name = part.value("name", "");
-          auto input = part.value("input", json::object()).dump(2);
-          out << "<details class=\"tool-call\"><summary>Tool: " << html_escape(name)
-              << "</summary>\n<pre>" << html_escape(input) << "</pre></details>\n";
-        }
-      }
+      for_each_tool_use(event, [&](const json& part) {
+        auto name = part.value("name", "");
+        auto input = part.value("input", json::object()).dump(2);
+        out << "<details class=\"tool-call\"><summary>Tool: " << html_escape(name)
+            << "</summary>\n<pre>" << html_escape(input) << "</pre></details>\n";
+      });
     } else if (type == "bash") {
       out << "<pre class=\"tool-result\">$ " << html_escape(event.value("command", "")) << "\n\n"
           << html_escape(event.value("output", "")) << "</pre>\n";
@@ -728,15 +769,10 @@ std::string Session::export_text(std::string_view format) const {
       if (!text.empty()) {
         out << "## Assistant\n\n" << text << "\n\n";
       }
-      if (event.contains("content") && event["content"].is_array()) {
-        for (const auto& part : event["content"]) {
-          if (!part.is_object() || part.value("type", "") != "tool_use") {
-            continue;
-          }
-          out << "> **tool call** `" << part.value("name", "") << "` "
-              << part.value("input", json::object()).dump() << "\n\n";
-        }
-      }
+      for_each_tool_use(event, [&](const json& part) {
+        out << "> **tool call** `" << part.value("name", "") << "` "
+            << part.value("input", json::object()).dump() << "\n\n";
+      });
     } else if (type == "bash") {
       out << "## Shell\n\n$ " << event.value("command", "") << "\n\n```\n"
           << event.value("output", "") << "\n```\n\n";
@@ -756,13 +792,7 @@ int Session::recover_interrupted_tools() {
     auto type = event.value("type", "");
     if (type == "assistant") {
       pending.clear();
-      if (event.contains("content") && event["content"].is_array()) {
-        for (const auto& part : event["content"]) {
-          if (part.value("type", "") == "tool_use") {
-            pending.push_back(part.value("id", ""));
-          }
-        }
-      }
+      for_each_tool_use(event, [&](const json& part) { pending.push_back(part.value("id", "")); });
     } else if (type == "tool_result") {
       auto tool_id = event.value("id", "");
       pending.erase(std::remove(pending.begin(), pending.end(), tool_id), pending.end());
@@ -818,29 +848,20 @@ json Session::openai_messages() const {
     } else if (type == "assistant") {
       json msg = {{"role", "assistant"}, {"content", ""}};
       json calls = json::array();
-      if (event.contains("content") && event["content"].is_array()) {
-        std::string text;
-        for (const auto& part : event["content"]) {
-          auto ptype = part.value("type", "");
-          if (ptype == "text") {
-            text += part.value("text", "");
-          }
-          if (ptype == "tool_use") {
-            json call = {
-                {"id", part.value("id", "")},
-                {"type", "function"},
-                {"function",
-                 {{"name", part.value("name", "")},
-                  {"arguments", part.value("input", json::object()).dump()}}},
-            };
-            if (part.contains("provider_options")) {
-              call["provider_options"] = part["provider_options"];
-            }
-            calls.push_back(std::move(call));
-          }
+      msg["content"] = text_content(event);
+      for_each_tool_use(event, [&](const json& part) {
+        json call = {
+            {"id", part.value("id", "")},
+            {"type", "function"},
+            {"function",
+             {{"name", part.value("name", "")},
+              {"arguments", part.value("input", json::object()).dump()}}},
+        };
+        if (part.contains("provider_options")) {
+          call["provider_options"] = part["provider_options"];
         }
-        msg["content"] = text;
-      }
+        calls.push_back(std::move(call));
+      });
       if (!calls.empty()) {
         msg["tool_calls"] = calls;
       }
@@ -865,37 +886,11 @@ json Session::openai_messages() const {
 }
 
 std::string Session::last_model() const {
-  for (int i = static_cast<int>(events.size()) - 1; i >= 0; --i) {
-    const auto& event = events[static_cast<size_t>(i)];
-    auto type = event.value("type", "");
-    if (type == "selection") {
-      auto model = event.value("model", "");
-      if (!model.empty()) {
-        return model;
-      }
-    }
-    if (type == "assistant") {
-      auto model = event.value("model", "");
-      if (!model.empty()) {
-        return model;
-      }
-    }
-  }
-  return {};
+  return last_event_value(*this, "model", {"selection", "assistant"});
 }
 
 std::string Session::last_provider() const {
-  for (int i = static_cast<int>(events.size()) - 1; i >= 0; --i) {
-    const auto& event = events[static_cast<size_t>(i)];
-    if (event.value("type", "") != "selection") {
-      continue;
-    }
-    auto provider = event.value("provider", "");
-    if (!provider.empty()) {
-      return provider;
-    }
-  }
-  return {};
+  return last_event_value(*this, "provider", {"selection"});
 }
 
 std::string Session::last_assistant_text() const {
@@ -904,14 +899,7 @@ std::string Session::last_assistant_text() const {
     if (event.value("type", "") != "assistant") {
       continue;
     }
-    std::string text;
-    if (event.contains("content") && event["content"].is_array()) {
-      for (const auto& part : event["content"]) {
-        if (part.is_object() && part.value("type", "") == "text") {
-          text += part.value("text", "");
-        }
-      }
-    }
+    const auto text = text_content(event);
     if (!text.empty()) {
       return text;
     }
@@ -1006,35 +994,32 @@ std::vector<SessionInfo> list_deleted_sessions(const fs::path& dir) {
   return collect_sessions(trash_dir(dir), {}, 20, {}, true);
 }
 
-bool delete_session(const fs::path& dir, const std::string& id) {
+bool move_session_file(const fs::path& dir, const std::string& id, bool restore) {
   if (!valid_session_id(id)) {
     return false;
   }
   std::error_code ec;
-  auto src = dir / (id + ".jsonl");
+  const auto src = (restore ? trash_dir(dir) : dir) / (id + ".jsonl");
   if (!fs::exists(src, ec)) {
     return false;
   }
-  fs::create_directories(trash_dir(dir), ec);
-  fs::rename(src, trash_dir(dir) / (id + ".jsonl"), ec);
-  return !ec;
-}
-
-bool restore_session(const fs::path& dir, const std::string& id) {
-  if (!valid_session_id(id)) {
+  const auto dest = (restore ? dir : trash_dir(dir)) / (id + ".jsonl");
+  if (restore && fs::exists(dest, ec)) {
     return false;
   }
-  std::error_code ec;
-  auto src = trash_dir(dir) / (id + ".jsonl");
-  if (!fs::exists(src, ec)) {
-    return false;
-  }
-  auto dest = dir / (id + ".jsonl");
-  if (fs::exists(dest, ec)) {
-    return false;
+  if (!restore) {
+    fs::create_directories(dest.parent_path(), ec);
   }
   fs::rename(src, dest, ec);
   return !ec;
+}
+
+bool delete_session(const fs::path& dir, const std::string& id) {
+  return move_session_file(dir, id, false);
+}
+
+bool restore_session(const fs::path& dir, const std::string& id) {
+  return move_session_file(dir, id, true);
 }
 
 std::string relative_age(fs::file_time_type mtime) {
@@ -1083,34 +1068,26 @@ std::string serialize_session_event(const json& event) {
   const auto type = event.value("type", "");
   if (type == "user") {
     std::string text = "user:\n";
-    if (event.contains("content") && event["content"].is_array()) {
-      for (const auto& part : event["content"]) {
-        if (part.is_object() && part.value("type", "") == "text") {
-          text += part.value("text", "") + "\n";
-        } else if (part.is_object() && part.value("type", "") == "image") {
-          text += "[image: " + part.value("name", "image") + "]\n";
-        }
+    for_each_content_part(event, [&](const json& part) {
+      if (part.value("type", "") == "text") {
+        text += part.value("text", "") + "\n";
+      } else if (part.value("type", "") == "image") {
+        text += "[image: " + part.value("name", "image") + "]\n";
       }
-    }
+    });
     return text;
   }
   if (type == "assistant") {
     std::string text = "assistant:\n";
-    if (event.contains("content") && event["content"].is_array()) {
-      for (const auto& part : event["content"]) {
-        if (!part.is_object()) {
-          continue;
-        }
-        const auto ptype = part.value("type", "");
-        if (ptype == "text") {
-          text += part.value("text", "") + "\n";
-        }
-        if (ptype == "tool_use") {
-          text += "tool_call " + part.value("name", "") + " " +
-                  part.value("input", json::object()).dump() + "\n";
-        }
+    for_each_content_part(event, [&](const json& part) {
+      const auto ptype = part.value("type", "");
+      if (ptype == "text") {
+        text += part.value("text", "") + "\n";
+      } else if (ptype == "tool_use") {
+        text += "tool_call " + part.value("name", "") + " " +
+                part.value("input", json::object()).dump() + "\n";
       }
-    }
+    });
     return text;
   }
   if (type == "tool_result") {
@@ -1136,21 +1113,16 @@ int estimate_session_event_tokens(const json& event) {
   const auto type = event.value("type", "");
   if (type == "user" || type == "assistant") {
     int tokens = 0;
-    if (event.contains("content") && event["content"].is_array()) {
-      for (const auto& part : event["content"]) {
-        if (!part.is_object()) {
-          continue;
-        }
-        tokens += static_cast<int>((part.value("text", "").size() + 3) / 4);
-        tokens += static_cast<int>((part.value("name", "").size() + 3) / 4);
-        if (part.value("type", "") == "image") {
-          tokens += 1000;
-        }
-        if (part.contains("input")) {
-          tokens += static_cast<int>((part["input"].dump().size() + 3) / 4);
-        }
+    for_each_content_part(event, [&](const json& part) {
+      tokens += static_cast<int>((part.value("text", "").size() + 3) / 4);
+      tokens += static_cast<int>((part.value("name", "").size() + 3) / 4);
+      if (part.value("type", "") == "image") {
+        tokens += 1000;
       }
-    }
+      if (part.contains("input")) {
+        tokens += static_cast<int>((part["input"].dump().size() + 3) / 4);
+      }
+    });
     return tokens;
   }
   if (type == "tool_result") {

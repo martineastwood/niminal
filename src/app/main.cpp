@@ -227,9 +227,6 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
     case niminal::EventKind::text_delta:
       std::cout << ev.text << std::flush;
       break;
-    case niminal::EventKind::thinking_delta:
-    case niminal::EventKind::tool_output_delta:
-      break;
     case niminal::EventKind::tool_call:
       std::cout << "\n[" << ev.tool_name;
       if (!ev.text.empty()) {
@@ -257,12 +254,7 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
     case niminal::EventKind::error:
       std::cerr << ev.text << '\n';
       break;
-    case niminal::EventKind::done:
-    case niminal::EventKind::run_start:
-    case niminal::EventKind::step_start:
-    case niminal::EventKind::step_end:
-    case niminal::EventKind::run_end:
-    case niminal::EventKind::assistant_message:
+    default:
       break;
     }
   };
@@ -370,8 +362,28 @@ int main(int argc, char** argv) try {
   std::vector<std::string> allowed_tools;
   bool tools_specified = false;
   SystemPromptOptions system_prompt;
+  int i = 0;
+  auto next_arg = [&]() -> const char* {
+    if (i + 1 >= argc) {
+      std::cerr << kUsage;
+      return nullptr;
+    }
+    return argv[++i];
+  };
+  const struct {
+    const char* name;
+    std::string* value;
+  } string_options[] = {{"--api-key", &api_key},
+                        {"--session", &session_id},
+                        {"--system-prompt", &system_prompt.replace},
+                        {"--append-system-prompt", &system_prompt.append}};
+  const struct {
+    const char* name;
+    bool* value;
+  } bool_options[] = {
+      {"--yolo", &yolo}, {"--resume", &resume_latest}, {"--no-session", &no_session}};
 
-  for (int i = 1; i < argc; ++i) {
+  for (i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--help" || a == "-h") {
       std::cout << kUsage;
@@ -381,32 +393,54 @@ int main(int argc, char** argv) try {
       std::cout << niminal::version_string() << '\n';
       return 0;
     }
-    if (a == "--model") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
-        return 2;
+    bool string_option = false;
+    for (const auto& option : string_options) {
+      if (a == option.name) {
+        const auto* value = next_arg();
+        if (value == nullptr) {
+          return 2;
+        }
+        *option.value = value;
+        string_option = true;
+        break;
       }
-      cfg.model = argv[++i];
-      model_override = cfg.model;
-      model_from_cli = true;
+    }
+    if (string_option) {
       continue;
     }
-    if (a == "--provider") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
+    bool bool_option = false;
+    for (const auto& option : bool_options) {
+      if (a == option.name) {
+        *option.value = true;
+        bool_option = true;
+        break;
+      }
+    }
+    if (bool_option) {
+      continue;
+    }
+    if (a == "--model" || a == "--provider") {
+      const auto* value = next_arg();
+      if (value == nullptr) {
         return 2;
       }
-      provider_override = argv[++i];
-      provider_from_cli = true;
+      if (a == "--model") {
+        cfg.model = value;
+        model_override = cfg.model;
+        model_from_cli = true;
+      } else {
+        provider_override = value;
+        provider_from_cli = true;
+      }
       continue;
     }
     if (a == "--thinking") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
+      const auto* value = next_arg();
+      if (value == nullptr) {
         return 2;
       }
       try {
-        cfg.thinking = niminal::app::normalize_thinking(argv[++i]);
+        cfg.thinking = niminal::app::normalize_thinking(value);
       } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 2;
@@ -432,25 +466,17 @@ int main(int argc, char** argv) try {
       rpc_mode = mode == "rpc";
       continue;
     }
-    if (a == "--api-key") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
-        return 2;
-      }
-      api_key = argv[++i];
-      continue;
-    }
     if (a == "--tools") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
+      const auto* value = next_arg();
+      if (value == nullptr) {
         return 2;
       }
       tools_specified = true;
-      const std::string value = argv[++i];
-      if (normalize_tool_name(value) == "none") {
+      const std::string tools = value;
+      if (normalize_tool_name(tools) == "none") {
         allowed_tools.clear();
       } else {
-        std::stringstream names(value);
+        std::stringstream names(tools);
         std::string name;
         while (std::getline(names, name, ',')) {
           name = normalize_tool_name(std::move(name));
@@ -466,12 +492,12 @@ int main(int argc, char** argv) try {
       continue;
     }
     if (a == "--max-steps") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
+      const auto* value = next_arg();
+      if (value == nullptr) {
         return 2;
       }
       try {
-        max_steps = std::stoi(argv[++i]);
+        max_steps = std::stoi(value);
       } catch (...) {
         std::cerr << "--max-steps must be a non-negative integer (0 means unlimited).\n";
         return 2;
@@ -482,48 +508,12 @@ int main(int argc, char** argv) try {
       }
       continue;
     }
-    if (a == "--yolo") {
-      yolo = true;
-      continue;
-    }
     if (a == "--approve") {
       trust_override = niminal::app::TrustOverride::approve;
       continue;
     }
     if (a == "--no-approve") {
       trust_override = niminal::app::TrustOverride::deny;
-      continue;
-    }
-    if (a == "--resume") {
-      resume_latest = true;
-      continue;
-    }
-    if (a == "--no-session") {
-      no_session = true;
-      continue;
-    }
-    if (a == "--session") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
-        return 2;
-      }
-      session_id = argv[++i];
-      continue;
-    }
-    if (a == "--system-prompt") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
-        return 2;
-      }
-      system_prompt.replace = argv[++i];
-      continue;
-    }
-    if (a == "--append-system-prompt") {
-      if (i + 1 >= argc) {
-        std::cerr << kUsage;
-        return 2;
-      }
-      system_prompt.append = argv[++i];
       continue;
     }
     if (a == "--no-context-files" || a == "-nc") {
@@ -666,14 +656,15 @@ int main(int argc, char** argv) try {
         }
       },
       extensions);
-  for (const auto& warning : extensions->warnings()) {
-    std::cerr << warning << '\n';
-  }
+  auto print_warnings = [](const auto& warnings) {
+    for (const auto& warning : warnings) {
+      std::cerr << warning << '\n';
+    }
+  };
+  print_warnings(extensions->warnings());
   auto start_hook = extensions->dispatch(niminal::app::HookEvent::session_start,
                                          niminal::app::session_hook_payload(session.id, ws.root()));
-  for (const auto& warning : start_hook.warnings) {
-    std::cerr << warning << '\n';
-  }
+  print_warnings(start_hook.warnings);
   auto drain_extension_actions = [&] {
     if (!extensions) {
       return;
@@ -700,26 +691,28 @@ int main(int argc, char** argv) try {
                                          nlohmann::json{{"session_id", session.id},
                                                         {"workspace", ws.root().string()},
                                                         {"reason", "quit"}});
-    for (const auto& warning : shutdown.warnings) {
-      std::cerr << warning << '\n';
-    }
+    print_warnings(shutdown.warnings);
     auto outcome = extensions->dispatch(niminal::app::HookEvent::session_end,
                                         niminal::app::session_hook_payload(session.id, ws.root()));
-    for (const auto& warning : outcome.warnings) {
-      std::cerr << warning << '\n';
-    }
+    print_warnings(outcome.warnings);
     drain_extension_actions();
     extensions->stop();
   };
-
-  if (json_mode || rpc_mode) {
+  auto prepare_session = [&] {
     try {
       session.recover_interrupted_tools();
     } catch (const std::exception& e) {
       std::cerr << e.what() << '\n';
-      return 1;
+      return false;
     }
     agent.messages = session.openai_messages();
+    return true;
+  };
+
+  if (json_mode || rpc_mode) {
+    if (!prepare_session()) {
+      return 1;
+    }
     int code =
         rpc_mode ? niminal::app::run_rpc(agent, session, cfg) : run_json(agent, session, prompt);
     stop_extensions();
@@ -744,13 +737,9 @@ int main(int argc, char** argv) try {
     stop_extensions();
     return code;
   }
-  try {
-    session.recover_interrupted_tools();
-  } catch (const std::exception& e) {
-    std::cerr << e.what() << '\n';
+  if (!prepare_session()) {
     return 1;
   }
-  agent.messages = session.openai_messages();
   int code = run_print(agent, prompt);
   stop_extensions();
   return code;

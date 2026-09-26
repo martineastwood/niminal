@@ -43,6 +43,15 @@ void reject_busy(SlashHost& host) {
   push_status(host, busy_wait_message(host.keybindings));
 }
 
+Session new_session_for(const SlashHost& host) {
+  auto next = create_session(default_session_dir(), host.cwd.string());
+  next.persist = host.session.persist;
+  if (!next.persist) {
+    next.path.clear();
+  }
+  return next;
+}
+
 bool handle_quit(SlashHost& host, const std::string&) {
   host.exit_ui();
   return true;
@@ -155,11 +164,7 @@ bool handle_extension(SlashHost& host, const std::string& cmd, const std::string
         if (!host.allow_session_switch("new", "")) {
           return true;
         }
-        auto next = create_session(default_session_dir(), host.cwd.string());
-        next.persist = host.session.persist;
-        if (!next.persist) {
-          next.path.clear();
-        }
+        auto next = new_session_for(host);
         host.adopt_session(std::move(next), "New session", "new");
         restarted = true;
       } else if (kind == "switch") {
@@ -577,14 +582,9 @@ bool handle_new(SlashHost& host, const std::string&) {
   if (!host.allow_session_switch("new", "")) {
     return true;
   }
-  auto next = create_session(default_session_dir(), host.cwd.string());
-  next.persist = host.session.persist;
-  if (!next.persist) {
-    next.path.clear();
-  }
+  auto next = new_session_for(host);
   const auto id = next.id;
   host.adopt_session(std::move(next), "New session " + id, "new");
-  apply_provider(host.agent, host.cfg);
   return true;
 }
 
@@ -592,44 +592,48 @@ bool handle_new(SlashHost& host, const std::string&) {
 
 bool execute_slash(SlashHost& host, const std::string& cmd, const std::string& arg,
                    bool extension_request) {
-  if (cmd == "/quit" || cmd == "/exit") {
-    return handle_quit(host, arg);
-  }
-  if (cmd == "/version") {
-    return handle_version(host, arg);
-  }
-  if (cmd == "/copy") {
-    return handle_copy(host, arg);
-  }
-  if (cmd == "/yolo") {
-    return handle_yolo(host, arg);
-  }
-  if (cmd == "/retry") {
-    return handle_retry(host, arg);
-  }
-  if (cmd == "/compact") {
-    return handle_compact(host, arg);
-  }
-  if (cmd == "/help") {
-    return handle_help(host, arg);
-  }
-  if (!extension_request && cmd == "/theme") {
-    return handle_theme(host, arg);
-  }
-  if (!extension_request && cmd == "/models" && arg.empty()) {
-    return handle_models(host, arg);
-  }
-  if (!extension_request && cmd == "/provider" && arg.empty()) {
-    return handle_provider(host, arg);
-  }
-  if (!extension_request && cmd == "/model" && arg.empty()) {
-    return handle_model(host, arg);
-  }
-  if (!extension_request && cmd == "/thinking" && arg.empty()) {
-    return handle_thinking(host, arg);
-  }
-  if (!extension_request && cmd == "/search") {
-    return handle_search(host, arg);
+  using Handler = bool (*)(SlashHost&, const std::string&);
+  struct HandlerSpec {
+    const char* name;
+    Handler handler;
+    bool early;
+    bool no_extension;
+    bool empty_only;
+  };
+  const HandlerSpec handlers[] = {
+      {"/quit", handle_quit, true, false, false},
+      {"/exit", handle_quit, true, false, false},
+      {"/version", handle_version, true, false, false},
+      {"/copy", handle_copy, true, false, false},
+      {"/yolo", handle_yolo, true, false, false},
+      {"/retry", handle_retry, true, false, false},
+      {"/compact", handle_compact, true, false, false},
+      {"/help", handle_help, true, false, false},
+      {"/theme", handle_theme, true, true, false},
+      {"/models", handle_models, true, true, true},
+      {"/provider", handle_provider, true, true, true},
+      {"/model", handle_model, true, true, true},
+      {"/thinking", handle_thinking, true, true, true},
+      {"/search", handle_search, true, true, false},
+      {"/reload", handle_reload, false, false, false},
+      {"/permissions", handle_permissions, false, false, false},
+      {"/trust", handle_trust, false, false, false},
+      {"/settings", handle_settings, false, false, false},
+      {"/session", handle_session, false, false, false},
+      {"/name", handle_name, false, false, false},
+      {"/resume", handle_resume, false, false, false},
+      {"/fork", handle_fork, false, false, false},
+      {"/export", handle_export, false, false, false},
+      {"/delete", handle_delete, false, false, false},
+      {"/restore", handle_restore, false, false, false},
+      {"/clear", handle_new, false, false, false},
+      {"/new", handle_new, false, false, false},
+  };
+  for (const auto& entry : handlers) {
+    if (cmd == entry.name && entry.early && (!entry.no_extension || !extension_request) &&
+        (!entry.empty_only || arg.empty())) {
+      return entry.handler(host, arg);
+    }
   }
   if (host.busy) {
     if (!extension_request && !arg.empty() &&
@@ -644,56 +648,10 @@ bool execute_slash(SlashHost& host, const std::string& cmd, const std::string& a
   if (extension_request) {
     return handle_extension(host, cmd, arg);
   }
-  if (cmd == "/reload") {
-    return handle_reload(host, arg);
-  }
-  if (cmd == "/permissions") {
-    return handle_permissions(host, arg);
-  }
-  if (cmd == "/trust") {
-    return handle_trust(host, arg);
-  }
-  if (cmd == "/provider") {
-    return handle_provider(host, arg);
-  }
-  if (cmd == "/model") {
-    return handle_model(host, arg);
-  }
-  if (cmd == "/thinking") {
-    return handle_thinking(host, arg);
-  }
-  if (cmd == "/theme") {
-    return handle_theme(host, arg);
-  }
-  if (cmd == "/settings") {
-    return handle_settings(host, arg);
-  }
-  if (cmd == "/models") {
-    return handle_models(host, arg);
-  }
-  if (cmd == "/session") {
-    return handle_session(host, arg);
-  }
-  if (cmd == "/name") {
-    return handle_name(host, arg);
-  }
-  if (cmd == "/resume") {
-    return handle_resume(host, arg);
-  }
-  if (cmd == "/fork") {
-    return handle_fork(host, arg);
-  }
-  if (cmd == "/export") {
-    return handle_export(host, arg);
-  }
-  if (cmd == "/delete") {
-    return handle_delete(host, arg);
-  }
-  if (cmd == "/restore") {
-    return handle_restore(host, arg);
-  }
-  if (cmd == "/clear" || cmd == "/new") {
-    return handle_new(host, arg);
+  for (const auto& entry : handlers) {
+    if (cmd == entry.name) {
+      return entry.handler(host, arg);
+    }
   }
   push_error(host, "unknown command " + cmd + "  ·  /help");
   return true;

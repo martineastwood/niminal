@@ -20,9 +20,11 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <poll.h>
 #include <set>
 #include <sstream>
@@ -99,35 +101,32 @@ std::vector<fs::path> scan_manifest_dirs(const std::vector<fs::path>& bases,
   return result;
 }
 
-std::vector<fs::path> extension_dirs(const fs::path& workspace) {
+std::vector<fs::path> resource_dirs(const fs::path& workspace, const char* global_name,
+                                    std::initializer_list<const char*> local_names,
+                                    const char* manifest_name) {
   std::vector<fs::path> bases;
   try {
     const auto global = config_path().parent_path();
-    bases.push_back(global.parent_path() / ".agents" / "extensions");
-    bases.push_back(global / "extensions");
+    bases.push_back(global.parent_path() / ".agents" / global_name);
+    bases.push_back(global / global_name);
   } catch (...) {
   }
   if (project_resources_trusted(workspace)) {
-    bases.push_back(workspace / ".agents" / "extensions");
-    bases.push_back(workspace / ".niminal" / "extensions");
+    for (const auto* name : local_names) {
+      bases.push_back(workspace / name);
+    }
   }
-  return scan_manifest_dirs(bases, "extension.json");
+  return scan_manifest_dirs(bases, manifest_name);
+}
+
+std::vector<fs::path> extension_dirs(const fs::path& workspace) {
+  return resource_dirs(workspace, "extensions", {".agents/extensions", ".niminal/extensions"},
+                       "extension.json");
 }
 
 std::vector<fs::path> external_tool_dirs(const fs::path& workspace) {
-  std::vector<fs::path> bases;
-  try {
-    const auto global = config_path().parent_path();
-    bases.push_back(global.parent_path() / ".agents" / "tools");
-    bases.push_back(global / "tools");
-  } catch (...) {
-  }
-  if (project_resources_trusted(workspace)) {
-    bases.push_back(workspace / ".agent" / "tools");
-    bases.push_back(workspace / ".agents" / "tools");
-    bases.push_back(workspace / ".niminal" / "tools");
-  }
-  return scan_manifest_dirs(bases, "tool.json");
+  return resource_dirs(workspace, "tools", {".agent/tools", ".agents/tools", ".niminal/tools"},
+                       "tool.json");
 }
 
 struct Manifest {
@@ -190,6 +189,27 @@ json read_manifest_json(const fs::path& path) {
   return doc;
 }
 
+std::vector<std::string> read_command(const json& doc, bool require_nonempty_array,
+                                      const char* array_error, const char* entry_error,
+                                      const char* empty_error = nullptr) {
+  const auto command = doc.find("command");
+  if (command == doc.end() || !command->is_array() ||
+      (require_nonempty_array && command->empty())) {
+    throw std::runtime_error(array_error);
+  }
+  std::vector<std::string> result;
+  for (const auto& item : *command) {
+    if (!item.is_string() || (require_nonempty_array && item.get<std::string>().empty())) {
+      throw std::runtime_error(entry_error);
+    }
+    result.push_back(item.get<std::string>());
+  }
+  if (result.empty() && empty_error != nullptr) {
+    throw std::runtime_error(empty_error);
+  }
+  return result;
+}
+
 ExternalTool parse_external_manifest(const fs::path& path) {
   const auto doc = read_manifest_json(path);
   ExternalTool out;
@@ -202,16 +222,8 @@ ExternalTool parse_external_manifest(const fs::path& path) {
     throw std::runtime_error("missing description");
   }
 
-  auto command = doc.find("command");
-  if (command == doc.end() || !command->is_array() || command->empty()) {
-    throw std::runtime_error("command must be a nonempty array");
-  }
-  for (const auto& item : *command) {
-    if (!item.is_string() || item.get<std::string>().empty()) {
-      throw std::runtime_error("command entries must be nonempty strings");
-    }
-    out.command.push_back(item.get<std::string>());
-  }
+  out.command = read_command(doc, true, "command must be a nonempty array",
+                             "command entries must be nonempty strings");
 
   auto schema = doc.find("input_schema");
   if (schema == doc.end() || !schema->is_object()) {
@@ -241,19 +253,8 @@ Manifest parse_manifest(const fs::path& path) {
   if (out.name.empty()) {
     throw std::runtime_error("missing name");
   }
-  auto command = doc.find("command");
-  if (command == doc.end() || !command->is_array()) {
-    throw std::runtime_error("command must be an array");
-  }
-  for (const auto& item : *command) {
-    if (!item.is_string() || item.get<std::string>().empty()) {
-      throw std::runtime_error("command entries must be strings");
-    }
-    out.command.push_back(item.get<std::string>());
-  }
-  if (out.command.empty()) {
-    throw std::runtime_error("command must not be empty");
-  }
+  out.command = read_command(doc, false, "command must be an array",
+                             "command entries must be strings", "command must not be empty");
   if (auto timeout = doc.find("response_timeout_seconds"); timeout != doc.end()) {
     if (timeout->is_null()) {
       out.timeout_ms = -1;
@@ -434,14 +435,8 @@ public:
   std::string receive(int timeout, niminal::Cancellation* cancel) {
     auto started = std::chrono::steady_clock::now();
     while (true) {
-      auto newline = buffer_.find('\n');
-      if (newline != std::string::npos) {
-        auto line = buffer_.substr(0, newline);
-        buffer_.erase(0, newline + 1);
-        if (!line.empty() && line.back() == '\r') {
-          line.pop_back();
-        }
-        return line;
+      if (auto line = take_line()) {
+        return std::move(*line);
       }
       if ((cancel != nullptr) && cancel->requested()) {
         throw Cancelled();
@@ -456,31 +451,9 @@ public:
         }
         wait_ms = std::min(wait_ms, timeout - static_cast<int>(elapsed));
       }
-      pollfd pfd{output_, POLLIN | POLLHUP, 0};
-      int ready;
-      do {
-        ready = poll(&pfd, 1, wait_ms);
-      } while (ready < 0 && errno == EINTR);
-      if (ready < 0) {
-        throw std::runtime_error(std::strerror(errno));
-      }
-      if (ready == 0) {
-        continue;
-      }
-      char chunk[4096];
-      auto count = read(output_, chunk, sizeof(chunk));
-      if (count > 0) {
-        buffer_.append(chunk, static_cast<size_t>(count));
-        if (buffer_.size() > kMaxLineBytes) {
-          throw std::runtime_error("extension response is too large");
-        }
-        continue;
-      }
-      if (count == 0 || ((pfd.revents & (POLLHUP | POLLERR)) != 0)) {
-        throw std::runtime_error("extension '" + name + "' exited before responding");
-      }
-      if (errno != EAGAIN && errno != EWOULDBLOCK) {
-        throw std::runtime_error(std::strerror(errno));
+      std::string error;
+      if (!read_chunk(wait_ms, error, true) && !error.empty()) {
+        throw std::runtime_error(error);
       }
     }
   }
@@ -521,24 +494,69 @@ public:
   }
 
 private:
+  bool read_chunk(int wait_ms, std::string& error, bool report_poll_error) {
+    pollfd pfd{output_, POLLIN | POLLHUP, 0};
+    int ready;
+    do {
+      ready = poll(&pfd, 1, wait_ms);
+    } while (ready < 0 && errno == EINTR);
+    if (ready < 0) {
+      if (!report_poll_error) {
+        return false;
+      }
+      error = std::strerror(errno);
+      return false;
+    }
+    if (ready == 0) {
+      return false;
+    }
+    char chunk[4096];
+    const auto count = read(output_, chunk, sizeof(chunk));
+    if (count > 0) {
+      buffer_.append(chunk, static_cast<size_t>(count));
+      if (buffer_.size() > kMaxLineBytes) {
+        error = "extension response is too large";
+        return false;
+      }
+      return true;
+    }
+    if (count == 0 || ((pfd.revents & (POLLHUP | POLLERR)) != 0)) {
+      error = "extension '" + name + "' exited before responding";
+      return false;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+      return false;
+    }
+    error = std::strerror(errno);
+    return false;
+  }
+
+  std::optional<std::string> take_line() {
+    const auto newline = buffer_.find('\n');
+    if (newline == std::string::npos) {
+      return std::nullopt;
+    }
+    auto line = buffer_.substr(0, newline);
+    buffer_.erase(0, newline + 1);
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    return line;
+  }
+
   void read_loop() {
     std::string error;
     while (!reader_stopping_.load()) {
       bool had_line = false;
       while (true) {
-        const auto newline = buffer_.find('\n');
-        if (newline == std::string::npos) {
+        auto line = take_line();
+        if (!line) {
           break;
-        }
-        auto line = buffer_.substr(0, newline);
-        buffer_.erase(0, newline + 1);
-        if (!line.empty() && line.back() == '\r') {
-          line.pop_back();
         }
         mark_activity();
         if (on_line_) {
           try {
-            on_line_(line);
+            on_line_(*line);
           } catch (const std::exception& e) {
             error = e.what();
             reader_stopping_.store(true);
@@ -553,30 +571,12 @@ private:
       if (had_line) {
         continue;
       }
-      pollfd pfd{output_, POLLIN | POLLHUP, 0};
-      int ready;
-      do {
-        ready = poll(&pfd, 1, 50);
-      } while (ready < 0 && errno == EINTR);
-      if (ready <= 0) {
+      std::string read_error;
+      if (read_chunk(50, read_error, false) || read_error.empty()) {
         continue;
       }
-      char chunk[4096];
-      const auto count = read(output_, chunk, sizeof(chunk));
-      if (count == 0) {
-        error = "extension '" + name + "' exited before responding";
-        break;
-      }
-      if (count < 0) {
-        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-          continue;
-        }
-        error = std::strerror(errno);
-        break;
-      }
-      buffer_.append(chunk, static_cast<size_t>(count));
-      if (buffer_.size() > kMaxLineBytes) {
-        error = "extension response is too large";
+      if (!read_error.empty()) {
+        error = std::move(read_error);
         break;
       }
     }
@@ -859,48 +859,44 @@ struct ExtensionRuntime::Impl {
   bool stopped = false;
 };
 
-const char* hook_event_name(HookEvent event) {
-  switch (event) {
-  case HookEvent::tool_call:
-    return "tool_call";
-  case HookEvent::tool_result:
-    return "tool_result";
-  case HookEvent::session_start:
-    return "session_start";
-  case HookEvent::session_end:
-    return "session_end";
-  case HookEvent::session_before_compact:
-    return "session_before_compact";
-  case HookEvent::session_compact:
-    return "session_compact";
-  case HookEvent::turn_start:
-    return "turn_start";
-  case HookEvent::turn_end:
-    return "turn_end";
-  case HookEvent::context:
-    return "context";
-  case HookEvent::before_agent_start:
-    return "before_agent_start";
-  case HookEvent::input:
-    return "input";
-  case HookEvent::session_shutdown:
-    return "session_shutdown";
-  case HookEvent::session_before_switch:
-    return "session_before_switch";
-  case HookEvent::before_provider_headers:
-    return "before_provider_headers";
-  case HookEvent::before_provider_request:
-    return "before_provider_request";
-  case HookEvent::after_provider_response:
-    return "after_provider_response";
-  case HookEvent::agent_settled:
-    return "agent_settled";
-  case HookEvent::message_end:
-    return "message_end";
-  case HookEvent::session_compact_failed:
-    return "session_compact_failed";
+template <typename T> std::vector<T> take_values(std::mutex& mutex, std::vector<T>& values) {
+  std::lock_guard lock(mutex);
+  auto out = std::move(values);
+  values.clear();
+  return out;
+}
+
+template <typename Map> auto copy_values(const Map& values) {
+  std::vector<typename Map::mapped_type> out;
+  out.reserve(values.size());
+  for (const auto& [_, value] : values) {
+    out.push_back(value);
   }
-  return "";
+  return out;
+}
+
+const char* hook_event_name(HookEvent event) {
+  static constexpr const char* names[] = {"tool_call",
+                                          "tool_result",
+                                          "session_start",
+                                          "session_end",
+                                          "session_before_compact",
+                                          "session_compact",
+                                          "turn_start",
+                                          "turn_end",
+                                          "context",
+                                          "before_agent_start",
+                                          "input",
+                                          "session_shutdown",
+                                          "session_before_switch",
+                                          "before_provider_headers",
+                                          "before_provider_request",
+                                          "after_provider_response",
+                                          "agent_settled",
+                                          "message_end",
+                                          "session_compact_failed"};
+  const auto index = static_cast<size_t>(event);
+  return index < sizeof(names) / sizeof(*names) ? names[index] : "";
 }
 
 ExtensionRuntime::ExtensionRuntime(Access, fs::path workspace, niminal::Cancellation* cancel)
@@ -1374,21 +1370,18 @@ std::vector<niminal::Tool> ExtensionRuntime::tools() {
                                        throw std::runtime_error(
                                            "extension tool content must be an array");
                                      }
-                                     std::vector<std::string> text;
+                                     std::string value;
+                                     bool first = true;
                                      for (const auto& part : *content) {
                                        if (string_field(part, "type") != "text") {
                                          continue;
                                        }
-                                       text.push_back(string_field(part, "text"));
-                                     }
-                                     std::ostringstream output;
-                                     for (size_t i = 0; i < text.size(); ++i) {
-                                       if (i) {
-                                         output << '\n';
+                                       if (!first) {
+                                         value += '\n';
                                        }
-                                       output << text[i];
+                                       value += string_field(part, "text");
+                                       first = false;
                                      }
-                                     auto value = output.str();
                                      if (response.value("is_error", false)) {
                                        return std::string("tool error: ") + value;
                                      }
@@ -1449,6 +1442,28 @@ json ExtensionRuntime::invoke(const std::string& name, const std::string& argume
 HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
   HookOutcome outcome;
   json payload = original.is_null() ? json::object() : original;
+  auto copy_string = [&](const json& response, const char* key, std::string& target,
+                         bool& present) {
+    if (auto value = response.find(key); value != response.end() && value->is_string()) {
+      target = value->get<std::string>();
+      present = true;
+      payload[key] = *value;
+    }
+  };
+  auto copy_bool = [&](const json& response, const char* key, bool& target, bool& present) {
+    if (auto value = response.find(key); value != response.end() && value->is_boolean()) {
+      target = value->get<bool>();
+      present = true;
+      payload[key] = *value;
+    }
+  };
+  auto copy_object = [&](const json& response, const char* key, json& target, bool& present) {
+    if (auto value = response.find(key); value != response.end() && value->is_object()) {
+      target = *value;
+      present = true;
+      payload[key] = *value;
+    }
+  };
   for (auto& process : impl_->processes) {
     if (!process->events.contains(hook_event_name(event))) {
       continue;
@@ -1475,48 +1490,21 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
         continue;
       }
       if (event == HookEvent::tool_call) {
-        auto arguments = response.find("arguments");
-        if (arguments != response.end() && arguments->is_object()) {
-          outcome.arguments = *arguments;
-          outcome.has_arguments = true;
-          payload["arguments"] = *arguments;
-        }
+        copy_object(response, "arguments", outcome.arguments, outcome.has_arguments);
       } else if (event == HookEvent::tool_result) {
-        auto output = response.find("output");
-        if (output != response.end() && output->is_string()) {
-          outcome.output = output->get<std::string>();
-          outcome.has_output = true;
-          payload["output"] = *output;
-        }
-        auto is_error = response.find("is_error");
-        if (is_error != response.end() && is_error->is_boolean()) {
-          outcome.is_error = is_error->get<bool>();
-          outcome.has_is_error = true;
-          payload["is_error"] = *is_error;
-        }
+        copy_string(response, "output", outcome.output, outcome.has_output);
+        copy_bool(response, "is_error", outcome.is_error, outcome.has_is_error);
       } else if (event == HookEvent::context) {
         auto system = string_array(response, "system");
         outcome.system.insert(outcome.system.end(), system.begin(), system.end());
         auto messages = response.find("messages");
         if (messages != response.end() && messages->is_array()) {
-          for (const auto& message : *messages) {
-            outcome.messages.push_back(message);
-          }
+          outcome.messages.insert(outcome.messages.end(), messages->begin(), messages->end());
         }
       } else if (event == HookEvent::input || event == HookEvent::message_end) {
-        auto text = response.find("text");
-        if (text != response.end() && text->is_string()) {
-          outcome.text = text->get<std::string>();
-          outcome.has_text = true;
-          payload["text"] = *text;
-        }
+        copy_string(response, "text", outcome.text, outcome.has_text);
       } else if (event == HookEvent::before_agent_start) {
-        auto system_prompt = response.find("system_prompt");
-        if (system_prompt != response.end() && system_prompt->is_string()) {
-          outcome.system_prompt = system_prompt->get<std::string>();
-          outcome.has_system_prompt = true;
-          payload["system_prompt"] = *system_prompt;
-        }
+        copy_string(response, "system_prompt", outcome.system_prompt, outcome.has_system_prompt);
         auto message = response.find("message");
         if (message != response.end() && message->is_object() && message->contains("content") &&
             (*message)["content"].is_string()) {
@@ -1544,15 +1532,10 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
           payload["headers"] = outcome.headers;
         }
       } else if (event == HookEvent::before_provider_request) {
-        auto next = response.find("payload");
-        if (next != response.end() && next->is_object()) {
-          outcome.payload = *next;
-          outcome.has_payload = true;
-          payload["payload"] = *next;
-        }
+        copy_object(response, "payload", outcome.payload, outcome.has_payload);
       } else if (event == HookEvent::session_before_compact) {
-        auto instruction = response.find("instruction");
-        if (instruction != response.end() && instruction->is_string()) {
+        if (auto instruction = response.find("instruction");
+            instruction != response.end() && instruction->is_string()) {
           outcome.instruction = instruction->get<std::string>();
         }
         auto compaction = response.find("compaction");
@@ -1601,44 +1584,25 @@ void ExtensionRuntime::stop() {
 }
 
 std::vector<ExtensionNotice> ExtensionRuntime::take_notices() {
-  std::lock_guard lock(impl_->actions_mutex);
-  auto out = std::move(impl_->notices);
-  impl_->notices.clear();
-  return out;
+  return take_values(impl_->actions_mutex, impl_->notices);
 }
 
 std::vector<ExtensionUserMessage> ExtensionRuntime::take_user_messages() {
-  std::lock_guard lock(impl_->actions_mutex);
-  auto out = std::move(impl_->user_messages);
-  impl_->user_messages.clear();
-  return out;
+  return take_values(impl_->actions_mutex, impl_->user_messages);
 }
 
 std::vector<ExtensionEntry> ExtensionRuntime::take_entries() {
-  std::lock_guard lock(impl_->actions_mutex);
-  auto out = std::move(impl_->entries);
-  impl_->entries.clear();
-  return out;
+  return take_values(impl_->actions_mutex, impl_->entries);
 }
 
 std::vector<ExtensionStatus> ExtensionRuntime::statuses() const {
   std::lock_guard lock(impl_->actions_mutex);
-  std::vector<ExtensionStatus> out;
-  out.reserve(impl_->statuses.size());
-  for (const auto& [_, status] : impl_->statuses) {
-    out.push_back(status);
-  }
-  return out;
+  return copy_values(impl_->statuses);
 }
 
 std::vector<ExtensionWidget> ExtensionRuntime::widgets() const {
   std::lock_guard lock(impl_->actions_mutex);
-  std::vector<ExtensionWidget> out;
-  out.reserve(impl_->widgets.size());
-  for (const auto& [_, widget] : impl_->widgets) {
-    out.push_back(widget);
-  }
-  return out;
+  return copy_values(impl_->widgets);
 }
 
 bool ExtensionRuntime::activate_widget_action(const std::string& extension, const std::string& key,
@@ -1668,6 +1632,14 @@ bool ExtensionRuntime::activate_widget_action(const std::string& extension, cons
 
 json session_hook_payload(const std::string& session_id, const fs::path& workspace) {
   return json{{"session_id", session_id}, {"workspace", workspace.string()}};
+}
+
+json provider_hook_payload(const niminal::Agent& agent, const fs::path& workspace,
+                           const Config& cfg) {
+  auto payload = session_hook_payload(agent.conversation_id, workspace);
+  payload["provider"] = cfg.provider;
+  payload["model"] = agent.model;
+  return payload;
 }
 
 void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRuntime>& runtime,
@@ -1745,29 +1717,27 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       note(warning);
     }
   };
-  agent.before_tool = [runtime, report](const niminal::ToolCall& call, json& args,
-                                        std::string& reason) {
+  auto dispatch = [runtime, report](HookEvent event, json&& payload) {
     if (!runtime) {
-      return true;
+      return HookOutcome{};
     }
-    auto outcome =
-        runtime->dispatch(HookEvent::tool_call, json{{"tool", call.name}, {"arguments", args}});
+    auto outcome = runtime->dispatch(event, std::move(payload));
     report(outcome);
+    return outcome;
+  };
+  agent.before_tool = [dispatch](const niminal::ToolCall& call, json& args, std::string& reason) {
+    auto outcome = dispatch(HookEvent::tool_call, json{{"tool", call.name}, {"arguments", args}});
     if (outcome.has_arguments) {
       args = std::move(outcome.arguments);
     }
     reason = outcome.reason;
     return outcome.allowed;
   };
-  agent.after_tool = [runtime, report](const niminal::ToolCall& call, const json& args,
-                                       std::string& output, bool& is_error) {
-    if (!runtime) {
-      return;
-    }
-    auto outcome = runtime->dispatch(
+  agent.after_tool = [dispatch](const niminal::ToolCall& call, const json& args,
+                                std::string& output, bool& is_error) {
+    auto outcome = dispatch(
         HookEvent::tool_result,
         json{{"tool", call.name}, {"arguments", args}, {"output", output}, {"is_error", is_error}});
-    report(outcome);
     if (outcome.has_output) {
       output = std::move(outcome.output);
     }
@@ -1775,10 +1745,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       is_error = outcome.is_error;
     }
   };
-  agent.augment_context = [runtime, report](json& messages) {
-    if (!runtime) {
-      return;
-    }
+  agent.augment_context = [dispatch](json& messages) {
     json system = json::array();
     json conversation = json::array();
     for (const auto& message : messages) {
@@ -1796,8 +1763,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       }
     }
     auto outcome =
-        runtime->dispatch(HookEvent::context, json{{"system", system}, {"messages", conversation}});
-    report(outcome);
+        dispatch(HookEvent::context, json{{"system", system}, {"messages", conversation}});
     if (!outcome.system.empty()) {
       auto system_it = std::find_if(messages.begin(), messages.end(), [](const json& msg) {
         return msg.value("role", "") == "system";
@@ -1821,34 +1787,21 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       messages.push_back(message);
     }
   };
-  agent.turn_start = [runtime, workspace, &agent, report] {
-    if (!runtime) {
-      return;
-    }
-    auto outcome = runtime->dispatch(HookEvent::turn_start,
-                                     session_hook_payload(agent.conversation_id, workspace));
-    report(outcome);
+  agent.turn_start = [dispatch, workspace, &agent] {
+    dispatch(HookEvent::turn_start, session_hook_payload(agent.conversation_id, workspace));
   };
-  agent.turn_end = [runtime, workspace, &agent, report](bool interrupted) {
-    if (!runtime) {
-      return;
-    }
+  agent.turn_end = [dispatch, workspace, &agent](bool interrupted) {
     auto payload = session_hook_payload(agent.conversation_id, workspace);
     if (interrupted) {
       payload["interrupted"] = true;
     }
-    auto outcome = runtime->dispatch(HookEvent::turn_end, payload);
-    report(outcome);
+    dispatch(HookEvent::turn_end, std::move(payload));
   };
-  agent.input_hook = [runtime, workspace, &agent, report](niminal::UserInput& input) {
-    if (!runtime) {
-      return;
-    }
-    auto outcome = runtime->dispatch(HookEvent::input, json{{"session_id", agent.conversation_id},
-                                                            {"workspace", workspace.string()},
-                                                            {"text", input.text},
-                                                            {"images", input.images}});
-    report(outcome);
+  agent.input_hook = [dispatch, workspace, &agent](niminal::UserInput& input) {
+    auto payload = session_hook_payload(agent.conversation_id, workspace);
+    payload["text"] = input.text;
+    payload["images"] = input.images;
+    auto outcome = dispatch(HookEvent::input, std::move(payload));
     if (!outcome.allowed) {
       throw niminal::Error(outcome.reason);
     }
@@ -1856,19 +1809,14 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       input.text = std::move(outcome.text);
     }
   };
-  agent.before_agent_start = [runtime, workspace, &agent, report](const niminal::UserInput& input,
-                                                                  std::string& system_prompt,
-                                                                  json& message) {
-    if (!runtime) {
-      return;
-    }
-    auto outcome =
-        runtime->dispatch(HookEvent::before_agent_start, json{{"session_id", agent.conversation_id},
-                                                              {"workspace", workspace.string()},
-                                                              {"prompt", input.text},
-                                                              {"images", input.images},
-                                                              {"system_prompt", system_prompt}});
-    report(outcome);
+  agent.before_agent_start = [dispatch, workspace, &agent](const niminal::UserInput& input,
+                                                           std::string& system_prompt,
+                                                           json& message) {
+    auto payload = session_hook_payload(agent.conversation_id, workspace);
+    payload["prompt"] = input.text;
+    payload["images"] = input.images;
+    payload["system_prompt"] = system_prompt;
+    auto outcome = dispatch(HookEvent::before_agent_start, std::move(payload));
     if (outcome.has_system_prompt) {
       system_prompt = std::move(outcome.system_prompt);
     }
@@ -1876,38 +1824,23 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       message.push_back(json{{"role", "user"}, {"content", injected["content"]}});
     }
   };
-  agent.message_end = [runtime, workspace, &agent, report](json& message) {
-    if (!runtime) {
-      return;
-    }
-    auto outcome =
-        runtime->dispatch(HookEvent::message_end, json{{"session_id", agent.conversation_id},
-                                                       {"workspace", workspace.string()},
-                                                       {"role", "assistant"},
-                                                       {"text", message.value("content", "")}});
-    report(outcome);
+  agent.message_end = [dispatch, workspace, &agent](json& message) {
+    auto payload = session_hook_payload(agent.conversation_id, workspace);
+    payload["role"] = "assistant";
+    payload["text"] = message.value("content", "");
+    auto outcome = dispatch(HookEvent::message_end, std::move(payload));
     if (outcome.has_text) {
       message["content"] = std::move(outcome.text);
     }
   };
-  agent.agent_settled = [runtime, workspace, &agent, report] {
-    if (runtime) {
-      report(runtime->dispatch(HookEvent::agent_settled,
-                               session_hook_payload(agent.conversation_id, workspace)));
-    }
+  agent.agent_settled = [dispatch, workspace, &agent] {
+    dispatch(HookEvent::agent_settled, session_hook_payload(agent.conversation_id, workspace));
   };
-  agent.before_provider_headers = [runtime, workspace, &agent, &cfg,
-                                   report](std::map<std::string, std::string>& headers) {
-    if (!runtime) {
-      return;
-    }
-    auto outcome = runtime->dispatch(HookEvent::before_provider_headers,
-                                     json{{"session_id", agent.conversation_id},
-                                          {"workspace", workspace.string()},
-                                          {"provider", cfg.provider},
-                                          {"model", agent.model},
-                                          {"headers", headers}});
-    report(outcome);
+  agent.before_provider_headers = [dispatch, workspace, &agent,
+                                   &cfg](std::map<std::string, std::string>& headers) {
+    auto payload = provider_hook_payload(agent, workspace, cfg);
+    payload["headers"] = headers;
+    auto outcome = dispatch(HookEvent::before_provider_headers, std::move(payload));
     if (outcome.has_headers) {
       headers.clear();
       for (auto& [key, value] : outcome.headers.items()) {
@@ -1917,35 +1850,22 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       }
     }
   };
-  agent.before_provider_request = [runtime, workspace, &agent, &cfg, report](json& payload) {
-    if (!runtime) {
-      return;
-    }
-    auto outcome = runtime->dispatch(HookEvent::before_provider_request,
-                                     json{{"session_id", agent.conversation_id},
-                                          {"workspace", workspace.string()},
-                                          {"provider", cfg.provider},
-                                          {"model", agent.model},
-                                          {"payload", payload}});
-    report(outcome);
+  agent.before_provider_request = [dispatch, workspace, &agent, &cfg](json& payload) {
+    auto request = provider_hook_payload(agent, workspace, cfg);
+    request["payload"] = payload;
+    auto outcome = dispatch(HookEvent::before_provider_request, std::move(request));
     if (outcome.has_payload) {
       payload = std::move(outcome.payload);
     }
   };
-  agent.after_provider_response = [runtime, workspace, &agent, &cfg,
-                                   report](const niminal::ProviderResponse& response) {
-    if (runtime) {
-      report(runtime->dispatch(
-          HookEvent::after_provider_response,
-          json{{"session_id", agent.conversation_id},
-               {"workspace", workspace.string()},
-               {"provider", cfg.provider},
-               {"model", agent.model},
-               {"status", response.status},
-               {"headers", response.headers},
-               {"duration_ms", response.duration_ms},
-               {"error_body", response.status >= 400 ? response.body : std::string()}}));
-    }
+  agent.after_provider_response = [dispatch, workspace, &agent,
+                                   &cfg](const niminal::ProviderResponse& response) {
+    auto payload = provider_hook_payload(agent, workspace, cfg);
+    payload["status"] = response.status;
+    payload["headers"] = response.headers;
+    payload["duration_ms"] = response.duration_ms;
+    payload["error_body"] = response.status >= 400 ? response.body : std::string();
+    dispatch(HookEvent::after_provider_response, std::move(payload));
   };
 }
 

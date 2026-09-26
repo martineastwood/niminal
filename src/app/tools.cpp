@@ -198,6 +198,17 @@ bool cap_shell_output(std::string& output) {
   return true;
 }
 
+std::string join_lines(const std::vector<std::string>& lines) {
+  std::string out;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (i != 0) {
+      out += '\n';
+    }
+    out += lines[i];
+  }
+  return out;
+}
+
 } // namespace
 
 std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
@@ -258,6 +269,15 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
       on_output(output);
     }
   };
+  auto finish = [&](const std::string& suffix) {
+    std::ostringstream msg;
+    msg << output;
+    if (!output.empty() && output.back() != '\n') {
+      msg << '\n';
+    }
+    msg << suffix;
+    return msg.str();
+  };
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_s);
   bool timed_out = false;
   while (true) {
@@ -300,13 +320,7 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
     if (got == pid) {
       close(out_pipe[0]);
       int code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-      std::ostringstream msg;
-      msg << output;
-      if (!output.empty() && output.back() != '\n') {
-        msg << '\n';
-      }
-      msg << "exit: " << code;
-      return msg.str();
+      return finish("exit: " + std::to_string(code));
     }
   }
 wait_child:
@@ -318,19 +332,9 @@ wait_child:
   }
   close(out_pipe[0]);
   int code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-  std::ostringstream msg;
-  msg << output;
-  if (!output.empty() && output.back() != '\n') {
-    msg << '\n';
-  }
-  if (timed_out) {
-    msg << "exit: timeout after " << timeout_s << "s";
-  } else if ((cancel != nullptr) && cancel->requested()) {
-    msg << "exit: interrupted";
-  } else {
-    msg << "exit: " << code;
-  }
-  return msg.str();
+  return finish(timed_out ? "exit: timeout after " + std::to_string(timeout_s) + "s"
+                : (cancel != nullptr) && cancel->requested() ? "exit: interrupted"
+                                                             : "exit: " + std::to_string(code));
 }
 
 namespace {
@@ -496,20 +500,15 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
              if (hits.empty()) {
                return std::string("No matches.");
              }
-             std::ostringstream out;
-             for (size_t i = 0; i < hits.size(); ++i) {
-               if (i) {
-                 out << '\n';
-               }
-               out << hits[i];
-             }
+             auto out = join_lines(hits);
              if (output_truncated) {
-               out << "\n[grep output truncated; narrow the pattern or path for more results]";
+               out += "\n[grep output truncated; narrow the pattern or path for more results]";
              }
              if (match_limit_reached) {
-               out << "\n[grep stopped at " << max_hits << " matches; results may be incomplete]";
+               out += "\n[grep stopped at " + std::to_string(max_hits) +
+                      " matches; results may be incomplete]";
              }
-             return out.str();
+             return out;
            },
            true});
 
@@ -547,14 +546,7 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
         if (hits.empty()) {
           return std::string("No files.");
         }
-        std::ostringstream out;
-        for (size_t i = 0; i < hits.size(); ++i) {
-          if (i) {
-            out << '\n';
-          }
-          out << hits[i];
-        }
-        return out.str();
+        return join_lines(hits);
       },
       true});
 
@@ -585,17 +577,11 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
              if (truncated) {
                entries.resize(200);
              }
-             std::ostringstream out;
-             for (size_t i = 0; i < entries.size(); ++i) {
-               if (i) {
-                 out << '\n';
-               }
-               out << entries[i];
-             }
+             auto out = join_lines(entries);
              if (truncated) {
-               out << "\n[truncated]";
+               out += "\n[truncated]";
              }
-             return out.str();
+             return out;
            },
            true});
 

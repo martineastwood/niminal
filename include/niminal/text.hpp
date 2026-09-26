@@ -11,9 +11,8 @@ namespace niminal {
 inline constexpr size_t kMaxToolContextBytes = 8'000;
 
 inline std::string tool_context_text(std::string_view output) {
-  if (output.size() <= kMaxToolContextBytes) {
+  if (output.size() <= kMaxToolContextBytes)
     return std::string(output);
-  }
   return std::string(output.substr(0, kMaxToolContextBytes)) + "\n[truncated]";
 }
 
@@ -74,9 +73,8 @@ inline std::string base64_encode(std::string_view bytes) {
 inline std::optional<std::string> base64_decode(std::string_view encoded) {
   constexpr std::string_view alphabet =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  if (encoded.size() % 4 != 0) {
+  if (encoded.size() % 4 != 0)
     return std::nullopt;
-  }
   std::string bytes;
   bytes.reserve((encoded.size() / 4) * 3);
   for (size_t i = 0; i < encoded.size(); i += 4) {
@@ -89,13 +87,11 @@ inline std::optional<std::string> base64_decode(std::string_view encoded) {
         value <<= 6U;
         continue;
       }
-      if (padding != 0) {
+      if (padding != 0)
         return std::nullopt;
-      }
       const auto index = alphabet.find(character);
-      if (index == std::string_view::npos) {
+      if (index == std::string_view::npos)
         return std::nullopt;
-      }
       value = (value << 6U) | static_cast<std::uint32_t>(index);
     }
     bytes.push_back(static_cast<char>((value >> 16U) & 0xffU));

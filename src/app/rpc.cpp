@@ -304,6 +304,50 @@ private:
     }
   }
 
+  void queue_prompt(const std::string& id, const std::string& message, const std::string& mode) {
+    enqueue({id, message, mode});
+    send(rpc_response_event(id, true, "queued"));
+    send(queue_event(session_.id, "enqueue", queue_depth(), message, id, mode));
+  }
+
+  void handle_prompt(const std::string& id, const std::string& type,
+                     const nlohmann::json& command) {
+    const bool prompt = type == "prompt";
+    std::string message;
+    if (!string_field(command, "message", message) || niminal::trim_copy(message).empty()) {
+      send(rpc_response_event(id, false, {},
+                              prompt ? "prompt requires message." : type + " requires message."));
+      return;
+    }
+    if (shutting_down_) {
+      send(rpc_response_event(id, false, {}, "RPC is shutting down."));
+      return;
+    }
+    if (!busy()) {
+      if (prompt) {
+        send(rpc_response_event(id, true, "started"));
+        start_prompt(message);
+      } else {
+        send(rpc_response_event(id, false, {}, "Agent is idle; use prompt."));
+      }
+      return;
+    }
+    std::string mode;
+    if (prompt) {
+      std::string behavior;
+      if (!string_field(command, "streamingBehavior", behavior) ||
+          (behavior != "steer" && behavior != "followUp")) {
+        send(rpc_response_event(
+            id, false, {}, "prompt requires streamingBehavior: steer or followUp while busy."));
+        return;
+      }
+      mode = behavior == "steer" ? "steer" : "follow_up";
+    } else {
+      mode = type == "steer" ? "steer" : "follow_up";
+    }
+    queue_prompt(id, message, mode);
+  }
+
   void handle_command(const nlohmann::json& command) {
     if (!command.is_object()) {
       send(rpc_response_event("", false, {}, "Command must be a JSON object."));
@@ -316,45 +360,8 @@ private:
       return;
     }
 
-    if (type == "prompt") {
-      std::string message;
-      if (!string_field(command, "message", message) || niminal::trim_copy(message).empty()) {
-        send(rpc_response_event(id, false, {}, "prompt requires message."));
-      } else if (shutting_down_) {
-        send(rpc_response_event(id, false, {}, "RPC is shutting down."));
-      } else if (!busy()) {
-        send(rpc_response_event(id, true, "started"));
-        start_prompt(message);
-      } else {
-        std::string behavior;
-        if (!string_field(command, "streamingBehavior", behavior) ||
-            (behavior != "steer" && behavior != "followUp")) {
-          send(rpc_response_event(
-              id, false, {}, "prompt requires streamingBehavior: steer or followUp while busy."));
-        } else {
-          const std::string mode = behavior == "steer" ? "steer" : "follow_up";
-          enqueue({id, message, mode});
-          send(rpc_response_event(id, true, "queued"));
-          send(queue_event(session_.id, "enqueue", queue_depth(), message, id, mode));
-        }
-      }
-      return;
-    }
-
-    if (type == "steer" || type == "follow_up") {
-      std::string message;
-      if (!string_field(command, "message", message) || niminal::trim_copy(message).empty()) {
-        send(rpc_response_event(id, false, {}, type + " requires message."));
-      } else if (shutting_down_) {
-        send(rpc_response_event(id, false, {}, "RPC is shutting down."));
-      } else if (!busy()) {
-        send(rpc_response_event(id, false, {}, "Agent is idle; use prompt."));
-      } else {
-        const std::string mode = type == "steer" ? "steer" : "follow_up";
-        enqueue({id, message, mode});
-        send(rpc_response_event(id, true, "queued"));
-        send(queue_event(session_.id, "enqueue", queue_depth(), message, id, mode));
-      }
+    if (type == "prompt" || type == "steer" || type == "follow_up") {
+      handle_prompt(id, type, command);
       return;
     }
 

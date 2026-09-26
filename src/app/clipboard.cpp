@@ -46,9 +46,8 @@ std::string pipe_read(const char* cmd) {
 std::string pipe_read_first(std::initializer_list<const char*> commands) {
   for (const char* cmd : commands) {
     const auto out = pipe_read(cmd);
-    if (!out.empty()) {
+    if (!out.empty())
       return out;
-    }
   }
   return {};
 }
@@ -61,9 +60,8 @@ std::string linux_clipboard_image_bytes() {
     if (bytes.empty()) {
       bytes = pipe_read(xc.c_str());
     }
-    if (!bytes.empty()) {
+    if (!bytes.empty())
       return bytes;
-    }
   }
   return {};
 }

@@ -4,6 +4,7 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <niminal/text.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -92,23 +93,9 @@ const char* const kModeNames[] = {"auto", "light", "dark"};
 } // namespace
 
 std::optional<ThemeMode> parse_theme_mode(std::string_view value) {
+  const auto normalized = niminal::lower_copy(std::string(value));
   for (int i = 0; i < 3; ++i) {
-    std::string_view name = kModeNames[i];
-    if (value.size() != name.size()) {
-      continue;
-    }
-    bool match = true;
-    for (size_t j = 0; j < value.size(); ++j) {
-      char c = value[j];
-      if (c >= 'A' && c <= 'Z') {
-        c = static_cast<char>(c - 'A' + 'a');
-      }
-      if (c != name[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
+    if (normalized == kModeNames[i]) {
       return static_cast<ThemeMode>(i);
     }
   }

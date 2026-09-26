@@ -26,17 +26,16 @@ void add_file(std::vector<fs::path>& result, const fs::path& root, const std::st
   }
 }
 
-void add_skill_manifests(std::vector<fs::path>& result, const fs::path& root,
-                         const std::string& relative) {
+template <typename Iterator, typename Predicate>
+void add_directory_files(std::vector<fs::path>& result, const fs::path& base,
+                         fs::directory_options options, Predicate matches) {
   std::error_code ec;
-  auto base = root / relative;
   if (!fs::is_directory(base, ec)) {
     return;
   }
   std::vector<fs::path> paths;
-  for (const auto& entry :
-       fs::recursive_directory_iterator(base, fs::directory_options::skip_permission_denied, ec)) {
-    if (entry.is_regular_file(ec) && entry.path().filename() == "SKILL.md") {
+  for (const auto& entry : Iterator(base, options, ec)) {
+    if (matches(entry, ec)) {
       paths.push_back(entry.path());
     }
   }
@@ -44,39 +43,21 @@ void add_skill_manifests(std::vector<fs::path>& result, const fs::path& root,
   result.insert(result.end(), paths.begin(), paths.end());
 }
 
-void add_markdown_files(std::vector<fs::path>& result, const fs::path& root,
-                        const std::string& relative) {
-  std::error_code ec;
-  auto base = root / relative;
-  if (!fs::is_directory(base, ec)) {
-    return;
-  }
-  std::vector<fs::path> paths;
-  for (const auto& entry : fs::directory_iterator(base, ec)) {
-    if (entry.is_regular_file(ec) && entry.path().extension() == ".md") {
-      paths.push_back(entry.path());
-    }
-  }
-  std::sort(paths.begin(), paths.end());
-  result.insert(result.end(), paths.begin(), paths.end());
+void add_skill_manifests(std::vector<fs::path>& result, const fs::path& root,
+                         const std::string& relative) {
+  add_directory_files<fs::recursive_directory_iterator>(
+      result, root / relative, fs::directory_options::skip_permission_denied,
+      [](const auto& entry, auto& ec) {
+        return entry.is_regular_file(ec) && entry.path().filename() == "SKILL.md";
+      });
 }
 
 void add_manifests(std::vector<fs::path>& result, const fs::path& root, const std::string& relative,
                    const char* name) {
-  std::error_code ec;
-  auto base = root / relative;
-  if (!fs::is_directory(base, ec)) {
-    return;
-  }
-  std::vector<fs::path> paths;
-  for (const auto& entry : fs::directory_iterator(base, ec)) {
-    auto manifest = entry.path() / name;
-    if (entry.is_directory(ec) && fs::is_regular_file(manifest, ec)) {
-      paths.push_back(manifest);
-    }
-  }
-  std::sort(paths.begin(), paths.end());
-  result.insert(result.end(), paths.begin(), paths.end());
+  add_directory_files<fs::directory_iterator>(
+      result, root / relative, fs::directory_options::none, [name](const auto& entry, auto& ec) {
+        return entry.is_directory(ec) && fs::is_regular_file(entry.path() / name, ec);
+      });
 }
 
 json read_trust_doc() {
@@ -153,7 +134,10 @@ std::vector<fs::path> project_trust_resources(const fs::path& workspace) {
   }
   for (const auto& path : {std::string(".agent/prompts"), std::string(".agents/prompts"),
                            std::string(".niminal/prompts")}) {
-    add_markdown_files(result, root, path);
+    add_directory_files<fs::directory_iterator>(
+        result, root / path, fs::directory_options::none, [](const auto& entry, auto& ec) {
+          return entry.is_regular_file(ec) && entry.path().extension() == ".md";
+        });
   }
   for (const auto& path :
        {std::string(".agent/tools"), std::string(".agents/tools"), std::string(".niminal/tools")}) {

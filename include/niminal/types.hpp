@@ -151,6 +151,19 @@ struct UserInput {
       : text(std::move(value)), images(std::move(attachments)) {}
 };
 
+inline json user_content(const UserInput& input) {
+  if (input.images.empty())
+    return input.text;
+  json content = json::array();
+  if (!input.text.empty()) {
+    content.push_back(json{{"type", "text"}, {"text", input.text}});
+  }
+  for (const auto& image : input.images) {
+    content.push_back(image);
+  }
+  return content;
+}
+
 struct ToolResult {
   std::string text;
   json images = json::array();

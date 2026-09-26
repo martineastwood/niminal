@@ -334,10 +334,9 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
   if (cmd == "/thinking" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
     for (const auto& level : thinking_choices(provider, model)) {
-      if (!arg.empty() && !level.starts_with(arg)) {
-        continue;
+      if (arg.empty() || level.starts_with(arg)) {
+        out.push_back({"/thinking " + level, level});
       }
-      out.push_back({"/thinking " + level, level});
     }
     if (!out.empty()) {
       return out;
@@ -346,11 +345,11 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
 
   if (cmd == "/theme" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
+    const auto query = niminal::lower_copy(arg);
     for (const auto& name : theme_names()) {
-      if (!arg.empty() && !name.starts_with(niminal::lower_copy(arg))) {
-        continue;
+      if (arg.empty() || name.starts_with(query)) {
+        out.push_back({"/theme " + name, name});
       }
-      out.push_back({"/theme " + name, name});
     }
     if (!out.empty()) {
       return out;
@@ -382,6 +381,12 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
   }
 
   std::vector<Suggestion> out;
+  auto add_named = [&](std::string slash, std::string description) {
+    if (!niminal::lower_copy(slash).starts_with(cmd)) {
+      return;
+    }
+    out.push_back({std::move(slash) + " ", std::move(description)});
+  };
   for (const auto& spec : kSlash) {
     if (!std::string_view(spec.name).starts_with(cmd)) {
       continue;
@@ -397,23 +402,18 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
     if (is_builtin_slash(niminal::lower_copy(slash))) {
       continue;
     }
-    if (!niminal::lower_copy(slash).starts_with(cmd)) {
-      continue;
-    }
-    out.push_back({slash + " ", slash + (prompt.description.empty() ? std::string()
-                                                                    : "  " + prompt.description)});
+    add_named(std::move(slash),
+              "/" + prompt.name +
+                  (prompt.description.empty() ? std::string() : "  " + prompt.description));
   }
   for (const auto& command : extension_commands) {
     auto slash = "/" + command.name;
     if (is_builtin_slash(niminal::lower_copy(slash))) {
       continue;
     }
-    if (!niminal::lower_copy(slash).starts_with(cmd)) {
-      continue;
-    }
-    out.push_back(
-        {slash + " ",
-         slash + (command.description.empty() ? std::string() : "  " + command.description)});
+    add_named(std::move(slash),
+              "/" + command.name +
+                  (command.description.empty() ? std::string() : "  " + command.description));
   }
   sort_suggestions(out);
   return out;

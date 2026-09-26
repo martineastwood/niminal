@@ -265,6 +265,34 @@ std::string_view trim_boundary_whitespace(std::string_view text) {
   return text;
 }
 
+template <typename Warnings>
+void append_warnings(std::vector<Block>& blocks, const Warnings& warnings) {
+  for (const auto& warning : warnings) {
+    blocks.push_back(Block{BlockKind::status, warning});
+  }
+}
+
+Element extension_text(const std::string& value, std::string_view style, const Theme& theme,
+                       bool accent_default) {
+  auto line = text(value);
+  if (style == "muted") {
+    return line | color(theme.muted);
+  }
+  if (style == "success") {
+    return line | color(theme.add);
+  }
+  if (style == "warning") {
+    return line | color(theme.emphasis);
+  }
+  if (style == "error") {
+    return line | color(theme.error);
+  }
+  if (style == "emphasis") {
+    return line | bold | color(theme.emphasis);
+  }
+  return line | color(accent_default ? theme.accent : theme.muted);
+}
+
 } // namespace
 
 int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& session,
@@ -402,6 +430,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   // returned value silently skips the body; keep the call in one place.
   auto with_restored_io = [&](const std::function<void()>& body) {
     run_on_ui([&] { screen.WithRestoredIO(body)(); });
+  };
+  auto quit_ui = [&] {
+    cancel->request();
+    ui_alive = false;
+    screen.Exit();
   };
 
   auto finish_ask_user = [&](niminal::ToolResult result) {
@@ -725,6 +758,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   auto usage_totals = session.usage_totals();
   size_t footer_revision = 0;
   auto apply_event = [&](StreamEvent ev) {
+    auto find_tool = [&](std::string_view id) {
+      return std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
+        return block.kind == BlockKind::tool && block.tool_id == id;
+      });
+    };
     auto append_delta = [&](BlockKind kind) {
       const auto& turn_id = ev.turn_id.empty() ? ev.run_id : ev.turn_id;
       auto block = blocks.rend();
@@ -757,6 +795,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         blocks.insert(tool, std::move(next));
       }
     };
+    auto update_tool = [&] {
+      if (ev.tool_id.empty()) {
+        return blocks.rend();
+      }
+      auto tool = find_tool(ev.tool_id);
+      if (tool != blocks.rend()) {
+        tool->result = ev.text;
+      }
+      return tool;
+    };
     if (ev.kind == EventKind::tool_result) {
       suggestions_input.reset();
     }
@@ -770,14 +818,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       activity = "Thinking…";
       break;
     case EventKind::tool_output_delta:
-      if (!ev.tool_id.empty()) {
-        auto tool = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
-          return block.kind == BlockKind::tool && block.tool_id == ev.tool_id;
-        });
-        if (tool != blocks.rend()) {
-          tool->result = ev.text;
-        }
-      }
+      update_tool();
       break;
     case EventKind::tool_call: {
       Block tool{BlockKind::tool, ev.text};
@@ -800,12 +841,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       break;
     case EventKind::tool_result:
       if (!ev.tool_id.empty()) {
-        auto tool = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
-          return block.kind == BlockKind::tool && block.tool_id == ev.tool_id;
-        });
-        if (tool != blocks.rend()) {
-          tool->result = ev.text;
-        }
+        auto tool = update_tool();
         std::optional<PendingFileChange> pending;
         {
           std::lock_guard lock(file_changes_mu);
@@ -892,14 +928,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         handle_turn_idle();
       }
       break;
-    case EventKind::run_start:
-      break;
     case EventKind::step_start:
       step_block_start = blocks.size();
       break;
-    case EventKind::step_end:
-    case EventKind::run_end:
-    case EventKind::assistant_message:
+    default:
       break;
     }
     if (stick_bottom) {
@@ -997,17 +1029,27 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       post_ui(StreamEvent{EventKind::status, content, {}, {}});
     });
   };
-  configure_extension_updates(extensions);
-  configure_extension_ui(extensions);
-  bind_extensions(
-      agent, extensions, cwd, cfg,
-      [&](const std::string& warning) { post_ui(StreamEvent{EventKind::status, warning, {}, {}}); },
-      &session);
+  auto bind_extension_runtime = [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
+    configure_extension_updates(runtime);
+    configure_extension_ui(runtime);
+    bind_extensions(
+        agent, runtime, cwd, cfg,
+        [&](const std::string& warning) {
+          post_ui(StreamEvent{EventKind::status, warning, {}, {}});
+        },
+        &session);
+    bind_compaction(
+        agent, session, cfg,
+        [&](const std::string& msg) {
+          if (!msg.empty()) {
+            post_ui(StreamEvent{EventKind::status, msg, {}, {}});
+          }
+        },
+        runtime);
+  };
+  bind_extension_runtime(extensions);
   agent.approve_tool = [&](const niminal::ToolCall& call, const niminal::Tool& tool) {
-    if (yolo_mode) {
-      return true;
-    }
-    if (tool.read_only) {
+    if (yolo_mode || tool.read_only) {
       return true;
     }
     auto check = permissions.check(call);
@@ -1060,27 +1102,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     return decision != PermissionDecision::deny;
   };
-  bind_compaction(
-      agent, session, cfg,
-      [&](const std::string& msg) {
-        if (msg.empty()) {
-          return;
-        }
-        post_ui(StreamEvent{EventKind::status, msg, {}, {}});
-      },
-      extensions);
-  agent.take_steering = [&] {
-    std::lock_guard<std::mutex> lock(steering_mu);
-    auto out = std::move(steering);
-    steering.clear();
+  auto take_queue = [&](std::vector<niminal::UserInput>& queue) {
+    std::lock_guard lock(steering_mu);
+    auto out = std::move(queue);
+    queue.clear();
     return out;
   };
-  agent.take_follow_up = [&] {
-    std::lock_guard<std::mutex> lock(steering_mu);
-    auto out = std::move(follow_up);
-    follow_up.clear();
-    return out;
-  };
+  agent.take_steering = [&] { return take_queue(steering); };
+  agent.take_follow_up = [&] { return take_queue(follow_up); };
 
   auto join_worker = [&] {
     if (worker.joinable()) {
@@ -1094,44 +1123,21 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       auto shutdown = extensions->dispatch(
           HookEvent::session_shutdown,
           json{{"session_id", session.id}, {"workspace", cwd.string()}, {"reason", "reload"}});
-      for (const auto& warning : shutdown.warnings) {
-        blocks.push_back(Block{BlockKind::status, warning});
-      }
+      append_warnings(blocks, shutdown.warnings);
       auto ended =
           extensions->dispatch(HookEvent::session_end, session_hook_payload(session.id, cwd));
-      for (const auto& warning : ended.warnings) {
-        blocks.push_back(Block{BlockKind::status, warning});
-      }
+      append_warnings(blocks, ended.warnings);
     }
     if (extensions) {
       extensions->stop();
     }
     extensions = ExtensionRuntime::start(cwd, session.id, cancel);
     install_extension_tools(agent, extensions, allowed_tools);
-    configure_extension_updates(extensions);
-    configure_extension_ui(extensions);
-    bind_extensions(
-        agent, extensions, cwd, cfg,
-        [&](const std::string& warning) {
-          post_ui(StreamEvent{EventKind::status, warning, {}, {}});
-        },
-        &session);
-    bind_compaction(
-        agent, session, cfg,
-        [&](const std::string& msg) {
-          if (!msg.empty()) {
-            post_ui(StreamEvent{EventKind::status, msg, {}, {}});
-          }
-        },
-        extensions);
-    for (const auto& warning : extensions->warnings()) {
-      blocks.push_back(Block{BlockKind::status, warning});
-    }
+    bind_extension_runtime(extensions);
+    append_warnings(blocks, extensions->warnings());
     auto started =
         extensions->dispatch(HookEvent::session_start, session_hook_payload(session.id, cwd));
-    for (const auto& warning : started.warnings) {
-      blocks.push_back(Block{BlockKind::status, warning});
-    }
+    append_warnings(blocks, started.warnings);
     apply_extension_actions();
     ++transcript_revision;
   };
@@ -1173,14 +1179,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                                                                  {"workspace", cwd.string()},
                                                                  {"reason", reason},
                                                                  {"target_session_id", next.id}});
-      for (const auto& warning : shutdown.warnings) {
-        blocks.push_back(Block{BlockKind::status, warning});
-      }
+      append_warnings(blocks, shutdown.warnings);
       auto ended =
           extensions->dispatch(HookEvent::session_end, session_hook_payload(session.id, cwd));
-      for (const auto& warning : ended.warnings) {
-        blocks.push_back(Block{BlockKind::status, warning});
-      }
+      append_warnings(blocks, ended.warnings);
       extensions->stop();
     }
     session = std::move(next);
@@ -1204,9 +1206,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                                                                     {"workspace", cwd.string()},
                                                                     {"reason", reason},
                                                                     {"target_session_id", target}});
-    for (const auto& warning : outcome.warnings) {
-      blocks.push_back(Block{BlockKind::status, warning});
-    }
+    append_warnings(blocks, outcome.warnings);
     if (!outcome.allowed) {
       blocks.push_back(Block{BlockKind::status, outcome.reason});
     }
@@ -1232,9 +1232,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                                                  "\nUsing default keybindings for this launch."});
   }
   if (extensions) {
-    for (const auto& warning : extensions->warnings()) {
-      blocks.push_back(Block{BlockKind::status, warning});
-    }
+    append_warnings(blocks, extensions->warnings());
     apply_extension_actions();
   }
 
@@ -1310,11 +1308,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         [&] { reload_local(); },
         [&] { apply_extension_actions(); },
         [&](niminal::UserInput input, bool retry) { send_prompt(std::move(input), retry); },
-        [&] {
-          cancel->request();
-          ui_alive = false;
-          screen.Exit();
-        },
+        [&] { quit_ui(); },
         [&](std::string text) {
           draft = std::move(text);
           cursor = static_cast<int>(draft.size());
@@ -1663,9 +1657,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                              color(theme.accent));
       for (size_t i = 0; i < setting_count(); ++i) {
         const auto* spec = setting_at(i);
-        if (spec == nullptr) {
-          continue;
-        }
         std::string line = std::string(spec->label) + ": ";
         if (settings_edit && static_cast<int>(i) == settings_i) {
           line += *settings_edit + "▌";
@@ -1750,20 +1741,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           for (const auto& item : widget.content) {
             const auto type = item.value("type", std::string());
             if (type == "text") {
-              auto line = text(item.value("text", std::string()));
-              const auto style = item.value("style", std::string("muted"));
-              if (style == "accent") {
-                line = line | color(theme.accent);
-              } else if (style == "success") {
-                line = line | color(theme.add);
-              } else if (style == "warning") {
-                line = line | color(theme.emphasis);
-              } else if (style == "error") {
-                line = line | color(theme.error);
-              } else {
-                line = line | color(theme.muted);
-              }
-              rows.push_back(std::move(line));
+              rows.push_back(extension_text(item.value("text", std::string()),
+                                            item.value("style", "muted"), theme, false));
             } else if (type == "list") {
               for (const auto& entry : item["items"]) {
                 const auto state = entry.value("state", std::string("pending"));
@@ -1819,21 +1798,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           footer_elements.push_back(text("  ·  ") | color(theme.muted));
         }
         for (const auto& segment : status.segments) {
-          auto part = text(segment.text);
-          if (segment.style == "muted") {
-            part = part | color(theme.muted);
-          } else if (segment.style == "success") {
-            part = part | color(theme.add);
-          } else if (segment.style == "warning") {
-            part = part | color(theme.emphasis);
-          } else if (segment.style == "error") {
-            part = part | color(theme.error);
-          } else if (segment.style == "emphasis") {
-            part = part | bold | color(theme.emphasis);
-          } else {
-            part = part | color(theme.accent);
-          }
-          footer_elements.push_back(std::move(part));
+          footer_elements.push_back(extension_text(segment.text, segment.style, theme, true));
         }
       }
       stack.push_back(footer_elements.empty() ? text(" ") : hbox(std::move(footer_elements)));
@@ -1947,7 +1912,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       transcript_y = std::clamp(transcript_y + (up ? -step : step), 0.F, 1.F);
       stick_bottom = !up && transcript_y == 1.F;
     };
-    if (ask_user_open) {
+    auto scroll_event = [&] {
       if (is_wheel_up(e) || pressed(KeyAction::scroll_up)) {
         scroll_transcript(true, pressed(KeyAction::scroll_up));
         return true;
@@ -1956,15 +1921,19 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         scroll_transcript(false, pressed(KeyAction::scroll_down));
         return true;
       }
+      return false;
+    };
+    if (ask_user_open) {
+      if (scroll_event()) {
+        return true;
+      }
       if (pressed(KeyAction::cancel)) {
         finish_ask_user(niminal::ToolResult{"User cancelled the question."});
         return true;
       }
       if (pressed(KeyAction::quit)) {
         finish_ask_user(niminal::ToolResult{"interrupted"});
-        cancel->request();
-        ui_alive = false;
-        screen.Exit();
+        quit_ui();
         return true;
       }
       if (ask_user_editing_other) {
@@ -2053,9 +2022,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         resolve_approval(PermissionDecision::deny);
       } else if (pressed(KeyAction::quit)) {
         resolve_approval(PermissionDecision::deny);
-        cancel->request();
-        ui_alive = false;
-        screen.Exit();
+        quit_ui();
       } else {
         return true;
       }
@@ -2098,9 +2065,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return true;
       }
       if (pressed(KeyAction::quit)) {
-        cancel->request();
-        ui_alive = false;
-        screen.Exit();
+        quit_ui();
         return true;
       }
       if (pressed(KeyAction::previous)) {
@@ -2156,9 +2121,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return true;
       }
       if (pressed(KeyAction::quit)) {
-        cancel->request();
-        ui_alive = false;
-        screen.Exit();
+        quit_ui();
         return true;
       }
       if (pressed(KeyAction::submit)) {
@@ -2273,12 +2236,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       ++transcript_revision;
       return true;
     }
-    if (is_wheel_up(e) || pressed(KeyAction::scroll_up)) {
-      scroll_transcript(true, pressed(KeyAction::scroll_up));
-      return true;
-    }
-    if (is_wheel_down(e) || pressed(KeyAction::scroll_down)) {
-      scroll_transcript(false, pressed(KeyAction::scroll_down));
+    if (scroll_event()) {
       return true;
     }
     const auto& suggestions = current_suggestions();
@@ -2395,9 +2353,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (pressed(KeyAction::quit)) {
-      cancel->request();
-      ui_alive = false;
-      screen.Exit();
+      quit_ui();
       return true;
     }
     // FTXUI otherwise gives retired Ctrl-Left/Right draft-jump keys word movement.

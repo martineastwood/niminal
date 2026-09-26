@@ -144,6 +144,15 @@ void ensure_locked() {
   g_loaded = true;
 }
 
+const CatalogModel* find_loaded(std::string_view provider, std::string_view model) {
+  for (const auto& row : g_models) {
+    if (row.provider == provider && niminal::lower_copy(row.id) == model) {
+      return &row;
+    }
+  }
+  return nullptr;
+}
+
 } // namespace
 
 std::filesystem::path catalog_cache_path() {
@@ -291,16 +300,12 @@ ReasoningCaps lookup_reasoning_caps(std::string_view provider, std::string_view 
   auto want_m = niminal::lower_copy(std::string(model));
   std::lock_guard<std::mutex> lock(g_mu);
   ensure_locked();
-  for (const auto& row : g_models) {
-    if (row.provider != want_p || niminal::lower_copy(row.id) != want_m) {
-      continue;
-    }
+  if (const auto* row = find_loaded(want_p, want_m)) {
     caps.known = true;
-    caps.reasoning = row.reasoning;
-    caps.toggle = row.toggle;
-    caps.budget_tokens = row.budget_tokens;
-    caps.efforts = row.efforts;
-    return caps;
+    caps.reasoning = row->reasoning;
+    caps.toggle = row->toggle;
+    caps.budget_tokens = row->budget_tokens;
+    caps.efforts = row->efforts;
   }
   return caps;
 }
@@ -313,12 +318,8 @@ ModelCost lookup_model_cost(std::string_view provider, std::string_view model) {
   auto want_m = niminal::lower_copy(std::string(model));
   std::lock_guard<std::mutex> lock(g_mu);
   ensure_locked();
-  for (const auto& row : g_models) {
-    if (row.provider == want_p && niminal::lower_copy(row.id) == want_m) {
-      return row.cost;
-    }
-  }
-  return {};
+  const auto* row = find_loaded(want_p, want_m);
+  return row == nullptr ? ModelCost{} : row->cost;
 }
 
 std::string lookup_model_sdk(std::string_view provider, std::string_view model) {
