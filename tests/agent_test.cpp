@@ -28,13 +28,15 @@ niminal::json request_body(niminal::ChatRequest request) {
 void use_provider(niminal::ChatRequest& request, std::string provider, std::string model,
                   std::string url) {
   if (provider == "anthropic") {
-    request.model = cail::create_anthropic({.api_key = "test", .base_url = url})(model);
+    request.model = cail::create_anthropic(
+        {.api_key = "test", .base_url = url, .max_tokens = 1024, .headers = {}})(model);
   } else if (provider == "google") {
-    request.model = cail::create_gemini({.api_key = "test", .base_url = url})(model);
+    request.model = cail::create_gemini({.api_key = "test", .base_url = url, .headers = {}})(model);
   } else if (provider == "openai") {
     request.model = cail::create_openai({.api_key = "test", .base_url = url})(model);
   } else {
-    request.model = cail::create_openrouter({.api_key = "test", .endpoint = url})(model);
+    request.model = cail::create_openrouter(
+        {.api_key = "test", .headers = {}, .endpoint = url, .request_session_header = {}})(model);
   }
 }
 

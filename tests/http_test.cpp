@@ -188,12 +188,17 @@ int main() {
       request.model = cail::create_foundry({.api_key = "test"})(
           {.endpoint = api_url, .deployment = "original"});
     } else if (provider_name == "local") {
-      request.model = cail::create_local({.endpoint = api_url})("original");
+      request.model = cail::create_local(
+          {.api_key = {}, .headers = {}, .endpoint = api_url, .request_session_header = {}})(
+          "original");
     } else if (provider_name == "mistral") {
-      request.model = cail::create_mistral({.api_key = "test", .endpoint = api_url})("original");
+      request.model = cail::create_mistral(
+          {.api_key = "test", .headers = {}, .endpoint = api_url, .request_session_header = {}})(
+          "original");
     } else {
-      request.model =
-          cail::create_ollama_cloud({.api_key = "test", .endpoint = api_url})("original");
+      request.model = cail::create_ollama_cloud(
+          {.api_key = "test", .headers = {}, .endpoint = api_url, .request_session_header = {}})(
+          "original");
     }
     request.messages = nlohmann::json::array({
         {{"role", "assistant"},
