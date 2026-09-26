@@ -125,7 +125,7 @@ bool result_has_more(const std::string& result, int preview_lines) {
 class VirtualTranscript : public Node {
 public:
   VirtualTranscript(Elements entries, const std::vector<int>& heights)
-      : entries_(std::move(entries)) {
+      : entries_(std::move(entries)), laid_out_(entries_.size(), false) {
     offsets_.reserve(heights.size() + 1);
     offsets_.push_back(0);
     for (int height : heights) {
@@ -141,12 +141,21 @@ public:
   void Check(Status* status) override { status->need_iteration |= status->iteration == 0; }
 
   void Select(Selection& selection) override {
+    // Layout before Select so text nodes can record selection rows. Render must
+    // not call ComputeRequirement again on those nodes: FTXUI clears selection
+    // style state inside ComputeRequirement.
+    std::fill(laid_out_.begin(), laid_out_.end(), false);
     prepare(selection.GetBox());
+    select_prepared_ = true;
     Node::Select(selection);
   }
 
   void Render(Screen& screen) override {
+    if (!select_prepared_) {
+      std::fill(laid_out_.begin(), laid_out_.end(), false);
+    }
     prepare(screen.stencil);
+    select_prepared_ = false;
     Node::Render(screen);
   }
 
@@ -165,14 +174,19 @@ private:
       auto& entry = entries_[i];
       const Box entry_box{box_.x_min, box_.x_max, box_.y_min + offsets_[i],
                           box_.y_min + offsets_[i + 1] - 1};
-      Status status;
-      entry->Check(&status);
-      while (status.need_iteration && status.iteration < 20) {
-        entry->ComputeRequirement();
-        entry->SetBox(entry_box);
-        status.need_iteration = false;
-        ++status.iteration;
+      if (!laid_out_[i]) {
+        Status status;
         entry->Check(&status);
+        while (status.need_iteration && status.iteration < 20) {
+          entry->ComputeRequirement();
+          entry->SetBox(entry_box);
+          status.need_iteration = false;
+          ++status.iteration;
+          entry->Check(&status);
+        }
+        laid_out_[i] = true;
+      } else {
+        entry->SetBox(entry_box);
       }
       children_.push_back(entry);
     }
@@ -180,6 +194,8 @@ private:
 
   Elements entries_;
   std::vector<int> offsets_;
+  std::vector<char> laid_out_;
+  bool select_prepared_ = false;
 };
 
 } // namespace

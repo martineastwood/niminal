@@ -30,7 +30,7 @@ hero:
     </div>
     <pre class="not-content"><code><span class="landing-prompt">$</span> niminal
 <span class="landing-input">› Fix the failing agent test and run that test suite.</span>
-<span class="landing-muted">read</span>   src/niminal/agent.cpp, tests/agent_test.cpp
+<span class="landing-muted">read</span>   src/agent/agent.cpp, tests/agent_test.cpp
 <span class="landing-muted">edit</span>   Apply the smallest safe change
 <span class="landing-muted">bash</span>   ./dev test --suite agent
 <span class="landing-success">done   The focused test passes.</span></code></pre>

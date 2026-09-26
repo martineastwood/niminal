@@ -142,8 +142,8 @@ if(EXISTS "${_ftxui_app}")
 endif()
 
 add_library(niminal_ai
-  src/niminal/chat.cpp
-  src/niminal/agent.cpp)
+  src/agent/chat.cpp
+  src/agent/agent.cpp)
 add_library(niminal::ai ALIAS niminal_ai)
 
 target_include_directories(niminal_ai PUBLIC

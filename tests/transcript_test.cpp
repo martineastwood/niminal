@@ -207,6 +207,27 @@ int main() {
     }
   }
 
+  // Regression: drag-select highlight must survive Render. VirtualTranscript used
+  // to re-run ComputeRequirement during Render, which clears FTXUI selection rows.
+  {
+    ftxui::Elements entries{ftxui::text("selectable highlight text")};
+    std::vector<int> heights{measure_transcript_height(entries[0], 40)};
+    auto element = virtual_transcript(std::move(entries), heights);
+    ftxui::Screen screen(40, 1);
+    ftxui::Selection selection(0, 0, 9, 0);
+    ftxui::Render(screen, element.get(), selection);
+    int inverted = 0;
+    for (int x = 0; x < screen.dimx(); ++x) {
+      if (screen.PixelAt(x, 0).inverted) {
+        ++inverted;
+      }
+    }
+    if (inverted < 5) {
+      return fail("virtual transcript paints selection highlight",
+                  "inverted cells=" + std::to_string(inverted));
+    }
+  }
+
   {
     Block user{BlockKind::user, "A reusable user message"};
     auto element = render_user_message(user, resolve_theme(ThemeMode::dark));

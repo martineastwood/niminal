@@ -1224,9 +1224,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     blocks.push_back(Block{BlockKind::error, e.what()});
   }
   agent.messages = session.openai_messages();
-  load_into_ui((recovered != 0)
-                   ? "Recovered " + std::to_string(recovered) + " interrupted tool call(s)."
-                   : "");
+  {
+    std::string startup_note =
+        (session.events.empty() ? "New session " : "Session ") + session.id;
+    if (recovered != 0) {
+      startup_note = "Recovered " + std::to_string(recovered) +
+                     " interrupted tool call(s).\n" + startup_note;
+    }
+    load_into_ui(startup_note);
+  }
   if (!loaded_keybindings.error.empty()) {
     blocks.push_back(Block{BlockKind::error, loaded_keybindings.error +
                                                  "\nUsing default keybindings for this launch."});
