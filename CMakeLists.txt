@@ -37,6 +37,7 @@ if(NIMINAL_SANITIZERS)
 endif()
 
 function(niminal_strict_compile target)
+  target_compile_features(${target} PRIVATE cxx_std_23)
   target_link_libraries(${target} PRIVATE niminal_strict_warnings)
   if(NIMINAL_SANITIZERS)
     target_link_libraries(${target} PRIVATE niminal_sanitizers)
