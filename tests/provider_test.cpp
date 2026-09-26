@@ -169,7 +169,7 @@ int main() {
     return fail("select custom provider");
   }
   niminal::Agent extension_agent;
-  apply_provider(extension_agent, extension_cfg);
+  apply_provider(extension_agent, extension_cfg, "test");
   if (!extension_agent.stream_usage.has_value() || *extension_agent.stream_usage ||
       model_request(extension_agent).url != extension.endpoint ||
       niminal::app::provider_models(extension.name) != std::vector<std::string>{"custom-model"}) {
@@ -228,7 +228,7 @@ int main() {
   }
 
   niminal::Agent agent;
-  apply_provider(agent, cfg);
+  apply_provider(agent, cfg, "test");
   if (cfg.provider != "anthropic" ||
       model_request(agent).url != "https://api.anthropic.com/v1/messages" || !agent.apply_cache ||
       agent.stream_usage.has_value() || !agent.language_model) {
@@ -248,13 +248,13 @@ int main() {
   stale.model = "claude-haiku-4-5";
   stale.api_url = "https://api.anthropic.com/v1/chat/completions";
   normalize_config(stale);
-  apply_provider(agent, stale);
+  apply_provider(agent, stale, "test");
   if (!stale.api_url.empty() ||
       model_request(agent).url != "https://api.anthropic.com/v1/messages") {
     return fail("stale api_url should normalize to provider endpoint");
   }
 
-  apply_provider(agent, ollama_cfg);
+  apply_provider(agent, ollama_cfg, "test");
   if (ollama_cfg.provider != "ollama" || agent.model != "gemma4:31b" ||
       model_request(agent).url != "https://ollama.com/v1/chat/completions" ||
       agent.stream_usage.has_value() || agent.apply_cache || !agent.language_model) {
@@ -284,7 +284,7 @@ int main() {
   custom.api_url = "https://proxy.example.com/v1/chat/completions";
   custom.provider_api_urls["openrouter"] = custom.api_url;
   normalize_config(custom);
-  apply_provider(agent, custom);
+  apply_provider(agent, custom, "test");
   if (custom.api_url != "https://proxy.example.com/v1/chat/completions") {
     return fail("custom api_url should persist across normalize_config");
   }
@@ -330,13 +330,13 @@ int main() {
   if (configured.model != "coding") {
     return fail("foundry should select first configured model");
   }
-  apply_provider(agent, configured);
+  apply_provider(agent, configured, "test");
   if (agent.model != "deployment-a" ||
       model_request(agent).url != "https://example.test/openai/responses?api-version=1") {
     return fail("foundry model should resolve deployment and URL");
   }
   configured.model = "fast";
-  apply_provider(agent, configured);
+  apply_provider(agent, configured, "test");
   if (agent.model != "deployment-b" ||
       model_request(agent).url != "https://other.test/openai/responses?api-version=2") {
     return fail("switching foundry model should switch URL");
