@@ -40,11 +40,32 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends cmake gcc-12 g++-12 libssl-dev ninja-build
+          sudo apt-get install --no-install-recommends cmake gcc-12 g++-12 libssl-dev ninja-build python3-venv
+
+      - name: Install CMake 3.31
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cmake"
+          "$RUNNER_TEMP/cmake/bin/python" -m pip install --disable-pip-version-check cmake==3.31.10
+          echo "$RUNNER_TEMP/cmake/bin" >> "$GITHUB_PATH"
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: brew install openssl@3
+
+      - name: Check out CAIL
+        uses: actions/checkout@v4
+        with:
+          repository: martineastwood/cail
+          ref: v0.1.0
+          path: .ci/cail
+          fetch-depth: 1
+
+      - name: Install CAIL
+        run: |
+          cmake -S .ci/cail -B "$RUNNER_TEMP/cail-build" -DCAIL_BUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
+          cmake --build "$RUNNER_TEMP/cail-build" --parallel
+          cmake --install "$RUNNER_TEMP/cail-build" --prefix "$RUNNER_TEMP/cail"
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/cail" >> "$GITHUB_ENV"
 
       - name: Configure Linux
         if: runner.os == 'Linux'

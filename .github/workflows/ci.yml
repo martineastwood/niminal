@@ -24,13 +24,31 @@ jobs:
       - name: Install build and analysis tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev clang-format-20 clang-tidy-20
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev python3-venv clang-format-20 clang-tidy-20
+          python3 -m venv "$RUNNER_TEMP/cmake"
+          "$RUNNER_TEMP/cmake/bin/python" -m pip install --disable-pip-version-check cmake==3.31.10
+          echo "$RUNNER_TEMP/cmake/bin" >> "$GITHUB_PATH"
           # Ubuntu's default clang 18 cannot parse libstdc++'s <expected>, so
           # clang-tidy rejects every C++23 source. Use clang 20 and expose the
           # unversioned names that ./dev looks up.
           for tool in clang-format clang-tidy run-clang-tidy; do
             sudo ln -sf "/usr/bin/${tool}-20" "/usr/local/bin/${tool}"
           done
+
+      - name: Check out CAIL
+        uses: actions/checkout@v4
+        with:
+          repository: martineastwood/cail
+          ref: v0.1.0
+          path: .ci/cail
+          fetch-depth: 1
+
+      - name: Install CAIL
+        run: |
+          cmake -S .ci/cail -B "$RUNNER_TEMP/cail-build" -G Ninja -DCAIL_BUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
+          cmake --build "$RUNNER_TEMP/cail-build" --parallel
+          cmake --install "$RUNNER_TEMP/cail-build" --prefix "$RUNNER_TEMP/cail"
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/cail" >> "$GITHUB_ENV"
 
       # clang-tidy runs as its own job, so a tidy failure does not hide the
       # build, unit test, and sanitizer results.
@@ -48,10 +66,28 @@ jobs:
       - name: Install build and analysis tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev clang-format-20 clang-tidy-20
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev python3-venv clang-format-20 clang-tidy-20
+          python3 -m venv "$RUNNER_TEMP/cmake"
+          "$RUNNER_TEMP/cmake/bin/python" -m pip install --disable-pip-version-check cmake==3.31.10
+          echo "$RUNNER_TEMP/cmake/bin" >> "$GITHUB_PATH"
           for tool in clang-format clang-tidy run-clang-tidy; do
             sudo ln -sf "/usr/bin/${tool}-20" "/usr/local/bin/${tool}"
           done
+
+      - name: Check out CAIL
+        uses: actions/checkout@v4
+        with:
+          repository: martineastwood/cail
+          ref: v0.1.0
+          path: .ci/cail
+          fetch-depth: 1
+
+      - name: Install CAIL
+        run: |
+          cmake -S .ci/cail -B "$RUNNER_TEMP/cail-build" -G Ninja -DCAIL_BUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
+          cmake --build "$RUNNER_TEMP/cail-build" --parallel
+          cmake --install "$RUNNER_TEMP/cail-build" --prefix "$RUNNER_TEMP/cail"
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/cail" >> "$GITHUB_ENV"
 
       # clang-tidy only needs the compile commands, not a built binary.
       - name: Configure
