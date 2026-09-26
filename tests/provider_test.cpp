@@ -82,8 +82,10 @@ int main() {
     if (custom && !niminal::app::register_provider({.name = name,
                                                     .endpoint = "http://127.0.0.1:1",
                                                     .default_model = "test",
+                                                    .env_keys = {},
                                                     .session_routing = true,
                                                     .prompt_cache_key = true,
+                                                    .models = {},
                                                     .requires_api_key = false})) {
       return fail("register routing provider");
     }
@@ -151,6 +153,8 @@ int main() {
   niminal::app::CustomProvider extension{.name = "extension-test",
                                          .endpoint = "https://proxy.example/v1/chat/completions",
                                          .default_model = "custom-model",
+                                         .env_keys = {},
+                                         .models = {},
                                          .requires_api_key = false};
   if (!niminal::app::register_provider(extension) || !niminal::app::register_provider(extension)) {
     return fail("overlapping extension runtimes can register the same provider");
