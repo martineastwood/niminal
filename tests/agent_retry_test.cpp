@@ -1,9 +1,31 @@
 #include <niminal/agent.hpp>
 #include <niminal/chat.hpp>
 
+#include <cail/opencode.hpp>
+
 #include <atomic>
 #include <barrier>
 #include <iostream>
+
+namespace {
+
+class StreamTransport final : public cail::HttpTransport {
+public:
+  std::function<std::string(const cail::HttpRequest&)> response;
+
+  cail::Result<cail::HttpResponse> send(const cail::HttpRequest&) override {
+    throw niminal::Error("expected a streaming request");
+  }
+
+  cail::Result<cail::HttpResponse> stream(const cail::HttpRequest& request,
+                                          const cail::HttpDataHandler& on_data,
+                                          std::stop_token) override {
+    on_data(response(request));
+    return cail::HttpResponse{.status_code = 200, .headers = {}, .body = {}};
+  }
+};
+
+} // namespace
 
 int main() {
   niminal::Agent agent;
@@ -42,6 +64,91 @@ int main() {
   if (agent.run("hello", false) != "recovered" || calls != 4 || persisted_users != 1) {
     std::cerr << "manual retry should reuse the persisted user message\n";
     return 1;
+  }
+
+  for (const auto& error : {
+           niminal::json{
+               {"message", "Streaming response failed: [server_error] upstream service timeout"}},
+           niminal::json{{"message", "upstream service timeout"}, {"code", "server_error"}},
+           niminal::json{{"message", "upstream service timeout"}, {"type", "server_error"}},
+       }) {
+    niminal::Agent opencode;
+    opencode.model = "glm-5.3-flash";
+    opencode.conversation_id = "test-session";
+    int requests = 0;
+    int tool_runs = 0;
+    int saved_users = 0;
+    int retry_events = 0;
+    std::string failed_request;
+    opencode.persist_user = [&](const niminal::UserInput&) { ++saved_users; };
+    opencode.on_event = [&](const niminal::StreamEvent& event) {
+      if (event.retry) {
+        ++retry_events;
+      }
+    };
+    opencode.tools.push_back(
+        niminal::Tool{"lookup",
+                      "lookup",
+                      {{"type", "object"}, {"properties", niminal::json::object()}},
+                      [&](const niminal::json&) {
+                        ++tool_runs;
+                        return "found";
+                      }});
+    auto transport = std::make_unique<StreamTransport>();
+    transport->response = [&](const cail::HttpRequest& request) -> std::string {
+      if (++requests == 1) {
+        return "data: "
+               R"({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})"
+               "\n\ndata: [DONE]\n\n";
+      }
+      if (requests == 2) {
+        failed_request = request.body;
+        return "data: "
+               R"({"choices":[{"index":0,"delta":{"content":"partial"}}]})"
+               "\n\ndata: " +
+               niminal::json{{"error", error}}.dump() + "\n\n";
+      }
+      if (request.body != failed_request) {
+        throw niminal::Error("retry changed the provider request");
+      }
+      return "data: "
+             R"({"choices":[{"index":0,"delta":{"content":"recovered"},"finish_reason":"stop"}]})"
+             "\n\ndata: [DONE]\n\n";
+    };
+    opencode.language_model = cail::create_opencode(
+        {.api_key = "test", .service = cail::OpenCodeService::go, .base_url = "http://unused"})(
+        opencode.model, cail::OpenCodeApiFamily::chat_completions, std::move(transport));
+    if (opencode.run("look it up") != "recovered" || requests != 3 || tool_runs != 1 ||
+        saved_users != 1 || retry_events != 1) {
+      std::cerr << "OpenCode stream failures should retry without repeating completed tools\n";
+      return 1;
+    }
+  }
+
+  for (const auto* code : {"invalid_request_error", "authentication_error"}) {
+    auto transport = std::make_unique<StreamTransport>();
+    transport->response = [code](const cail::HttpRequest&) {
+      return "data: " +
+             niminal::json{{"error", {{"message", "request rejected"}, {"type", code}}}}.dump() +
+             "\n\n";
+    };
+    niminal::ChatRequest request;
+    request.conversation_id = "test-session";
+    request.messages = niminal::json::array({{{"role", "user"}, {"content", "hello"}}});
+    request.model = cail::create_opencode(
+        {.api_key = "test", .service = cail::OpenCodeService::go, .base_url = "http://unused"})(
+        "glm-5.3-flash", cail::OpenCodeApiFamily::chat_completions, std::move(transport));
+    try {
+      niminal::stream_chat(request);
+      std::cerr << "permanent stream errors should fail\n";
+      return 1;
+    } catch (const niminal::Error& error) {
+      if (error.retryable || error.http_status != 200) {
+        std::cerr << "permanent stream errors should retain status without becoming retryable: "
+                  << error.what() << '\n';
+        return 1;
+      }
+    }
   }
 
   niminal::Agent reasoning_agent;

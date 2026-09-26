@@ -22,10 +22,10 @@ using json = nlohmann::json;
 
 struct Error : std::runtime_error {
   int http_status = 0;
-  bool transport = false;
+  bool retryable = false;
 
-  explicit Error(const std::string& message, int status = 0, bool transport_error = false)
-      : std::runtime_error(message), http_status(status), transport(transport_error) {}
+  explicit Error(const std::string& message, int status = 0, bool can_retry = false)
+      : std::runtime_error(message), http_status(status), retryable(can_retry) {}
 };
 
 // Cooperative cancel for a run. request() stops in-flight model calls immediately.

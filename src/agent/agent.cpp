@@ -55,7 +55,7 @@ bool looks_overflow(std::string_view msg) {
 }
 
 bool looks_transient(const Error& error) {
-  return error.transport || error.http_status == 429 ||
+  return error.retryable || error.http_status == 429 ||
          (error.http_status >= 500 && error.http_status < 600);
 }
 

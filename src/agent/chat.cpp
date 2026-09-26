@@ -221,12 +221,18 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
   if (error.code == cail::ErrorCode::cancelled) {
     throw Cancelled{};
   }
-  const bool transport = error.code == cail::ErrorCode::transport;
+  const auto transient = [](std::string_view code) {
+    return code == "server_error" || code == "overloaded_error" || code == "rate_limit_error";
+  };
+  const bool retryable = error.code == cail::ErrorCode::transport ||
+                         (error.code == cail::ErrorCode::provider_response &&
+                          (transient(error.provider_code) || transient(error.provider_type) ||
+                           error.message.starts_with("Streaming response failed: [server_error]")));
   if (error.http_status != 0) {
     throw Error("http " + std::to_string(error.http_status) + ": " + error.message,
-                error.http_status, transport);
+                error.http_status, retryable);
   }
-  throw Error(error.message, 0, transport);
+  throw Error(error.message, 0, retryable);
 }
 
 ChatResult convert_response(const cail::GenerationResponse& response) {
