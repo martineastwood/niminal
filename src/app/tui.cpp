@@ -1853,7 +1853,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         }
         stack.push_back(text(names + "  (Backspace with empty text removes last)") | dim);
       }
-      stack.push_back(hbox({text(busy ? "…" : "› ") | bold,
+      stack.push_back(hbox({text(busy ? " " : "› ") | bold,
                             wrapped_input->Render() | xflex | size(HEIGHT, LESS_THAN, 8)}));
     }
     stack.push_back(hbox({

@@ -301,7 +301,8 @@ Element render_user_message(const Block& block, const Theme& theme) {
   auto body =
       hbox({text(" "), paragraph_preserving_whitespace(block.text) | color(theme.input_fg) | xflex,
             text(" ")});
-  return hbox({filler() | bgcolor(theme.accent) | size(WIDTH, EQUAL, 1),
+  // "▌" is a full-height, half-width block: a thinner rail than a solid fill.
+  return hbox({text("▌") | color(theme.accent),
                vbox({text(" "), body, text(" ")}) | bgcolor(theme.input_bg) | xflex});
 }
 
