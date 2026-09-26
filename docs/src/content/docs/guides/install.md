@@ -44,13 +44,13 @@ The Linux ARM64 binary is built on Ubuntu 24.04.
 ## Build from source
 
 To build from a source checkout, you need CMake 3.22 or later, Ninja, a C++23
-compiler, OpenSSL 3 development libraries, and CAIL v0.1.0. CAIL requires
+compiler, OpenSSL 3 development libraries, and CAIL v0.1.1. CAIL requires
 CMake 3.31 or later and network access while its dependencies are downloaded.
 
 Install CAIL next to your Niminal checkout:
 
 ```sh
-git clone --branch v0.1.0 --depth 1 https://github.com/martineastwood/cail.git ../cail
+git clone --branch v0.1.1 --depth 1 https://github.com/martineastwood/cail.git ../cail
 cmake -S ../cail -B ../cail/build -DCAIL_BUILD_EXAMPLES=OFF
 cmake --build ../cail/build
 cmake --install ../cail/build --prefix ../cail/build/install

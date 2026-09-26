@@ -39,8 +39,11 @@ Result<HttpResponse> HttpClient::get(std::string_view url, long timeout_seconds)
       .url = std::string(url),
       .timeout = timeout,
       .strategy = glz::stream_read_strategy::immediate_delivery,
+      .body = {},
+      .headers = {},
       .on_data = [state](std::string_view bytes) { state->response.body.append(bytes); },
       .on_error = [state](std::error_code error) { state->error = error; },
+      .on_progress = {},
       .on_connect =
           [state](const glz::response& response) { state->response.status = response.status_code; },
       .on_disconnect =

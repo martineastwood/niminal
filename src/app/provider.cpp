@@ -95,6 +95,7 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
         .api_key = key,
         .base_url = endpoint(cail::AnthropicSettings{}.base_url),
         .max_tokens = 16384,
+        .headers = {},
     })(model);
   }
   if (config.provider == "google") {
@@ -108,6 +109,7 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
     return cail::create_gemini(cail::GeminiSettings{
         .api_key = key,
         .base_url = config.api_url.empty() ? cail::GeminiSettings{}.base_url : config.api_url,
+        .headers = {},
     })(google_model);
   }
   if (config.provider == "opencode" || config.provider == "opencodezen") {
@@ -131,19 +133,25 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
   if (config.provider == "hyper") {
     return cail::create_hyper(cail::HyperSettings{
         .api_key = key,
+        .headers = {},
         .endpoint = endpoint(cail::HyperSettings{}.endpoint),
+        .request_session_header = {},
     })(model);
   }
   if (config.provider == "ollama") {
     return cail::create_ollama_cloud(cail::OllamaCloudSettings{
         .api_key = key,
+        .headers = {},
         .endpoint = endpoint(cail::OllamaCloudSettings{}.endpoint),
+        .request_session_header = {},
     })(model);
   }
   if (config.provider == "local") {
     return cail::create_local(cail::LocalSettings{
         .api_key = key,
+        .headers = {},
         .endpoint = endpoint(cail::LocalSettings{}.endpoint),
+        .request_session_header = {},
     })(model);
   }
   if (config.provider == "openai") {
@@ -155,7 +163,9 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
   if (config.provider == "mistral") {
     return cail::create_mistral(cail::MistralSettings{
         .api_key = key,
+        .headers = {},
         .endpoint = endpoint(cail::MistralSettings{}.endpoint),
+        .request_session_header = {},
     })(model);
   }
   if (config.provider == "openrouter") {
@@ -163,12 +173,15 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
         .api_key = key,
         .headers = {{"HTTP-Referer", "https://niminal.dev"}, {"X-Title", "niminal"}},
         .endpoint = endpoint(cail::OpenRouterSettings{}.endpoint),
+        .request_session_header = {},
     })(model);
   }
   const auto& custom = custom_providers.at(config.provider).spec;
   return cail::create_chat_completions({
       .endpoint = config.api_url.empty() ? custom.endpoint : config.api_url,
       .api_key = key.empty() ? read_environment(custom.env_keys) : key,
+      .headers = {},
+      .request_session_header = {},
       .prompt_cache_key = custom.prompt_cache_key,
       .session_body = custom.session_routing,
   })(model);
