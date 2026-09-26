@@ -241,6 +241,28 @@ int main() {
     }
   }
 
+  // Regression: the rail must span the whole card, not just the first line.
+  {
+    Block user{BlockKind::user,
+               "A long user question with enough words to wrap across several lines"};
+    const auto theme = resolve_theme(ThemeMode::dark);
+    auto element = render_user_message(user, theme);
+    ftxui::Screen screen(24, 8);
+    ftxui::Render(screen, element);
+    int rows = 0;
+    for (int y = 0; y < screen.dimy(); ++y) {
+      if (screen.PixelAt(0, y).background_color == theme.accent) {
+        ++rows;
+      }
+      if (screen.PixelAt(0, y).background_color != theme.accent) {
+        return fail("user message rail spans every wrapped row", screen.ToString());
+      }
+    }
+    if (rows < 3) {
+      return fail("user message wraps onto several rows", std::to_string(rows));
+    }
+  }
+
   Block read{BlockKind::tool, R"({"path":"README.md"})"};
   read.tool_name = "read";
   read.expanded = false;
