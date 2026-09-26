@@ -89,16 +89,7 @@ jobs:
           -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
           -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
 
-      - name: Show macOS compile flags
-        if: runner.os == 'macOS'
-        run: grep -m 1 'src/agent/chat.cpp' build/compile_commands.json
-
       - name: Build binary
-        if: runner.os == 'Linux'
-        run: cmake --build build --target niminal_cli --parallel
-
-      - name: Build binary
-        if: runner.os == 'macOS'
         run: cmake --build build --target niminal_cli --parallel
 
       - name: Package binary

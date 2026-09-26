@@ -26,6 +26,10 @@ target_compile_options(niminal_strict_warnings INTERFACE
   -Wold-style-cast
   -Werror)
 
+if(APPLE)
+  target_compile_options(niminal_strict_warnings INTERFACE -fexperimental-library)
+endif()
+
 add_library(niminal_sanitizers INTERFACE)
 if(NIMINAL_SANITIZERS)
   target_compile_options(niminal_sanitizers INTERFACE
