@@ -102,7 +102,7 @@ send({
 After restarting Niminal or running `/reload`, select it with `/provider litellm`
 or `--provider litellm`. Use `/model` to choose one of the registered models.
 When your proxy does not require authentication, set `"requires_api_key": false`.
-You can also register `url_match` and the `session_routing`, `stream_usage`,
+You can also register the `session_routing`, `stream_usage`,
 `apply_cache`, and `prompt_cache_key` flags. Provider hooks can further change
 request headers and JSON payloads.
 

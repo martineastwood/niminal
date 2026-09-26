@@ -11,9 +11,9 @@ using json = nlohmann::json;
 
 namespace {
 Config active_compaction_config(const niminal::Agent& agent, Config cfg) {
-  if (agent.provider == "local" || agent.provider == "foundry") {
-    for (const auto& model : models_for(agent.provider)) {
-      if (model.model == agent.model && model.api_url == agent.api_url) {
+  if (cfg.provider == "local" || cfg.provider == "foundry") {
+    for (const auto& model : models_for(cfg.provider)) {
+      if (model.model == agent.model && model.api_url == cfg.api_url) {
         if (model.context_window > 0) {
           cfg.context_window = model.context_window;
           cfg.reserve_tokens = std::min(cfg.reserve_tokens, model.context_window / 4);
@@ -287,10 +287,10 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
   return result;
 }
 
-void bind_compaction(niminal::Agent& agent, Session& session,
+void bind_compaction(niminal::Agent& agent, Session& session, const Config& cfg,
                      const std::function<void(const std::string&)>& note,
-                     const std::shared_ptr<ExtensionRuntime>& extensions, const Config& cfg) {
-  agent.before_request = [&agent, &session, note, extensions, cfg] {
+                     const std::shared_ptr<ExtensionRuntime>& extensions) {
+  agent.before_request = [&agent, &session, note, extensions, &cfg] {
     if (!cfg.compaction_enabled) {
       return;
     }
@@ -319,7 +319,7 @@ void bind_compaction(niminal::Agent& agent, Session& session,
       note(result.message);
     }
   };
-  agent.recover_overflow = [&agent, &session, note, extensions, cfg] {
+  agent.recover_overflow = [&agent, &session, note, extensions, &cfg] {
     if (note) {
       note("Context overflow — compacting and retrying…");
     }

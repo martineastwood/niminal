@@ -3,7 +3,7 @@
 #include "config.hpp"
 #include <niminal/text.hpp>
 
-#include <niminal/http.hpp>
+#include "http.hpp"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -192,7 +192,7 @@ bool catalog_stale(int max_age_seconds) {
 }
 
 bool refresh_catalog() {
-  niminal::HttpClient http;
+  niminal::app::HttpClient http;
   auto res = http.get(kUrl, 20);
   if (!res || res->status >= 400 || res->body.empty()) {
     return false;
@@ -326,7 +326,9 @@ std::string lookup_model_sdk(std::string_view provider, std::string_view model) 
   std::lock_guard<std::mutex> lock(g_mu);
   ensure_locked();
   for (const auto& row : g_models) {
-    if (row.provider == name && row.id == model) return row.sdk;
+    if (row.provider == name && row.id == model) {
+      return row.sdk;
+    }
   }
   return {};
 }

@@ -33,9 +33,8 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
                               const std::string& instruction = {},
                               const std::shared_ptr<ExtensionRuntime>& extensions = {},
                               const Config& cfg = {});
-void bind_compaction(niminal::Agent& agent, Session& session,
+void bind_compaction(niminal::Agent& agent, Session& session, const Config& cfg,
                      const std::function<void(const std::string&)>& note = {},
-                     const std::shared_ptr<ExtensionRuntime>& extensions = {},
-                     const Config& cfg = {});
+                     const std::shared_ptr<ExtensionRuntime>& extensions = {});
 
 } // namespace niminal::app

@@ -37,8 +37,7 @@ public:
   void add_bash(const std::string& command, const std::string& output, bool exclude_from_context);
   void add_assistant(const std::string& text, const nlohmann::json& tool_calls,
                      const std::string& model, const niminal::Usage& usage = {},
-                     const std::string& reasoning_content = {},
-                     const nlohmann::json& reasoning_details = nlohmann::json::array());
+                     const nlohmann::json& provider_options = {});
   niminal::Usage usage_totals() const;
   void add_tool_result(const std::string& tool_id, const niminal::ToolResult& output,
                        bool is_error);

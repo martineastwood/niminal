@@ -1,18 +1,8 @@
 #include <niminal/chat.hpp>
 
-#include <cail/anthropic.hpp>
-#include <cail/chat_completions.hpp>
-#include <cail/foundry.hpp>
-#include <cail/gemini.hpp>
-#include <cail/hyper.hpp>
-#include <cail/local.hpp>
-#include <cail/mistral.hpp>
-#include <cail/ollama_cloud.hpp>
-#include <cail/openai.hpp>
-#include <cail/opencode.hpp>
-#include <cail/openrouter.hpp>
+#include <cail/http.hpp>
+#include <cail/json.hpp>
 #include <cail/schema.hpp>
-#include <niminal/http.hpp>
 #include <niminal/text.hpp>
 
 #include <algorithm>
@@ -20,38 +10,41 @@
 #include <cstdio>
 #include <map>
 #include <optional>
-#include <stop_token>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
 namespace niminal {
 namespace {
 
-void require_request(const ChatRequest& request) {
-  if (request.api_key.empty() && request.requires_api_key && request.provider != "local") {
-    throw Error("missing API key (set " +
-                (request.key_hint.empty() ? std::string("OPENROUTER_API_KEY") : request.key_hint) +
-                ")");
+std::optional<std::string> json_options(const json& value) {
+  if (value.is_string()) {
+    const auto text = value.get<std::string>();
+    return text.empty() ? std::nullopt : std::optional<std::string>{text};
   }
-  if (request.model.empty()) {
-    throw Error("missing model");
+  if (value.is_object() && !value.empty()) {
+    return value.dump();
   }
-  if (request.provider == "foundry" && request.api_url.empty()) {
-    throw Error("missing Foundry API URL (configure the model in ~/.niminal/models.json)");
-  }
+  return std::nullopt;
 }
 
-std::optional<std::string> pick_options(const json& source,
-                                        std::initializer_list<const char*> keys) {
-  json options = json::object();
-  for (const auto* key : keys) {
-    if (source.contains(key)) {
-      options[key] = source[key];
-    }
+std::optional<std::string> provider_options_of(const json& source) {
+  if (!source.is_object() || !source.contains("provider_options")) {
+    return std::nullopt;
   }
-  return options.empty() ? std::nullopt : std::optional<std::string>{options.dump()};
+  return json_options(source["provider_options"]);
+}
+
+std::optional<std::string> merge_options(std::optional<std::string> existing,
+                                         std::string_view extra) {
+  if (!existing || existing->empty()) {
+    return std::string{extra};
+  }
+  auto merged = cail::merge_json_objects(*existing, extra);
+  if (!merged) {
+    return existing;
+  }
+  return std::move(*merged);
 }
 
 void append_image(cail::Message& message, const json& source) {
@@ -67,7 +60,7 @@ void append_image(cail::Message& message, const json& source) {
   message.content.emplace_back(cail::ImagePart{
       .bytes = std::move(*bytes),
       .mime_type = mime,
-      .provider_options = pick_options(source, {"cache_control"}),
+      .provider_options = provider_options_of(source),
   });
 }
 
@@ -88,7 +81,7 @@ void append_content(cail::Message& message, const json& content) {
     } else if (part.value("type", "") == "text" || part.contains("text")) {
       message.content.emplace_back(cail::TextPart{
           .text = part.value("text", ""),
-          .provider_options = pick_options(part, {"cache_control"}),
+          .provider_options = provider_options_of(part),
       });
     }
   }
@@ -97,9 +90,9 @@ void append_content(cail::Message& message, const json& content) {
 void mark_cache(cail::ContentPart& part) {
   constexpr auto cache = R"({"cache_control":{"type":"ephemeral"}})";
   if (auto* text = std::get_if<cail::TextPart>(&part)) {
-    text->provider_options = cache;
+    text->provider_options = merge_options(std::move(text->provider_options), cache);
   } else if (auto* image = std::get_if<cail::ImagePart>(&part)) {
-    image->provider_options = cache;
+    image->provider_options = merge_options(std::move(image->provider_options), cache);
   }
 }
 
@@ -113,7 +106,7 @@ void apply_cache(cail::GenerationRequest& out) {
   }
   for (auto it = out.messages.rbegin(); it != out.messages.rend(); ++it) {
     if (it->role == cail::MessageRole::tool) {
-      it->provider_options = cache;
+      it->provider_options = merge_options(std::move(it->provider_options), cache);
       break;
     }
     if (!it->content.empty()) {
@@ -122,42 +115,41 @@ void apply_cache(cail::GenerationRequest& out) {
     }
   }
   if (!out.tools.empty()) {
-    out.tools.back().provider_options = cache;
+    out.tools.back().provider_options =
+        merge_options(std::move(out.tools.back().provider_options), cache);
   }
 }
 
 cail::MessageRole role_of(std::string_view role) {
-  if (role == "system")
+  if (role == "system") {
     return cail::MessageRole::system;
-  if (role == "developer")
+  }
+  if (role == "developer") {
     return cail::MessageRole::developer;
-  if (role == "assistant")
+  }
+  if (role == "assistant") {
     return cail::MessageRole::assistant;
-  if (role == "tool")
+  }
+  if (role == "tool") {
     return cail::MessageRole::tool;
+  }
   return cail::MessageRole::user;
 }
 
-cail::GenerationRequest make_request(const ChatRequest& request, bool streaming) {
+cail::GenerationRequest make_request(const ChatRequest& request) {
   cail::GenerationRequest out;
   out.session_id = request.conversation_id;
-  out.max_output_tokens =
-      request.max_tokens > 0
-          ? std::optional<std::size_t>{static_cast<std::size_t>(request.max_tokens)}
-          : (!streaming ? std::optional<std::size_t>{4096} : std::nullopt);
-  out.stream_usage = request.stream_usage;
-  if (request.max_tokens <= 0 &&
-      (request.provider == "anthropic" || request.model_sdk == "@ai-sdk/anthropic")) {
-    out.max_output_tokens = 16384;
+  if (request.max_tokens > 0) {
+    out.max_output_tokens = static_cast<std::size_t>(request.max_tokens);
   }
+  out.stream_usage = request.stream_usage;
 
   if (request.messages.is_array()) {
     for (const auto& source : request.messages) {
       if (!source.is_object()) {
         continue;
       }
-      const auto role = source.value("role", "user");
-      cail::Message message{.role = role_of(role)};
+      cail::Message message{.role = role_of(source.value("role", "user"))};
       if (message.role == cail::MessageRole::tool) {
         message.tool_call_id = source.value("tool_call_id", "");
       }
@@ -170,10 +162,7 @@ cail::GenerationRequest make_request(const ChatRequest& request, bool streaming)
           }
         }
       }
-      message.provider_options =
-          request.provider == "mistral"
-              ? pick_options(source, {"cache_control"})
-              : pick_options(source, {"reasoning_content", "reasoning_details", "cache_control"});
+      message.provider_options = provider_options_of(source);
       if (source.contains("tool_calls") && source["tool_calls"].is_array()) {
         for (const auto& call : source["tool_calls"]) {
           if (!call.is_object()) {
@@ -184,7 +173,7 @@ cail::GenerationRequest make_request(const ChatRequest& request, bool streaming)
               .id = call.value("id", ""),
               .name = function.value("name", ""),
               .arguments = function.value("arguments", "{}"),
-              .provider_options = pick_options(call, {"thought_signature"}),
+              .provider_options = provider_options_of(call),
           });
         }
       }
@@ -214,18 +203,8 @@ cail::GenerationRequest make_request(const ChatRequest& request, bool streaming)
     apply_cache(out);
   }
 
-  json provider_options = request.extra.is_object() ? request.extra : json::object();
-  if (!request.conversation_id.empty()) {
-    if (request.session_routing && !provider_options.contains("session_id")) {
-      provider_options["session_id"] = request.conversation_id;
-    }
-    if ((request.prompt_cache_key || request.session_routing) &&
-        !provider_options.contains("prompt_cache_key")) {
-      provider_options["prompt_cache_key"] = request.conversation_id;
-    }
-  }
-  if (!provider_options.empty()) {
-    out.provider_options = provider_options.dump();
+  if (request.extra.is_object() && !request.extra.empty()) {
+    out.provider_options = request.extra.dump();
   }
   return out;
 }
@@ -234,49 +213,35 @@ cail::GenerationRequest make_request(const ChatRequest& request, bool streaming)
   if (error.code == cail::ErrorCode::cancelled) {
     throw Cancelled{};
   }
+  const bool transport = error.code == cail::ErrorCode::transport;
   if (error.http_status != 0) {
-    throw Error("http " + std::to_string(error.http_status) + ": " + error.message);
+    throw Error("http " + std::to_string(error.http_status) + ": " + error.message,
+                error.http_status, transport);
   }
-  throw Error(error.message);
+  throw Error(error.message, 0, transport);
 }
 
 ChatResult convert_response(const cail::GenerationResponse& response) {
   ChatResult result;
   result.text = response.text;
-  result.reasoning_content = response.reasoning;
-  if (response.provider_options) {
-    const auto options = json::parse(*response.provider_options, nullptr, false);
-    if (options.is_object() && options.contains("reasoning_details")) {
-      result.reasoning_details = options["reasoning_details"];
-    }
-  }
-  if (response.status == cail::GenerationStatus::incomplete) {
-    result.finish_reason = "length";
-  } else if (response.status == cail::GenerationStatus::refused) {
-    result.finish_reason = "stop";
-  } else {
-    result.finish_reason = response.tool_calls.empty() ? "stop" : "tool_calls";
-  }
+  result.provider_options = response.provider_options;
   for (const auto& call : response.tool_calls) {
-    result.tool_calls.push_back(
-        ToolCall{.id = call.id, .name = call.name, .arguments = call.arguments});
-    if (call.provider_options) {
-      const auto options = json::parse(*call.provider_options, nullptr, false);
-      if (options.is_object())
-        result.tool_calls.back().thought_signature = options.value("thought_signature", "");
-    }
+    result.tool_calls.push_back(ToolCall{
+        .id = call.id,
+        .name = call.name,
+        .arguments = call.arguments,
+        .provider_options = call.provider_options,
+    });
   }
   if (response.usage) {
     result.usage.input_tokens = static_cast<int>(response.usage->input_tokens);
     result.usage.output_tokens = static_cast<int>(response.usage->output_tokens);
-    result.usage.cache_read_tokens =
-        response.usage->cache_read_tokens
-            ? static_cast<int>(*response.usage->cache_read_tokens)
-            : 0;
-    result.usage.cache_write_tokens =
-        response.usage->cache_write_tokens
-            ? static_cast<int>(*response.usage->cache_write_tokens)
-            : 0;
+    result.usage.cache_read_tokens = response.usage->cache_read_tokens
+                                         ? static_cast<int>(*response.usage->cache_read_tokens)
+                                         : 0;
+    result.usage.cache_write_tokens = response.usage->cache_write_tokens
+                                          ? static_cast<int>(*response.usage->cache_write_tokens)
+                                          : 0;
     result.usage.cache_reported = response.usage->cache_read_tokens.has_value() ||
                                   response.usage->cache_write_tokens.has_value();
   }
@@ -284,180 +249,72 @@ ChatResult convert_response(const cail::GenerationResponse& response) {
 }
 
 void add_request_hooks(cail::GenerationRequest& generation, const ChatRequest& request) {
-  if (request.before_provider_request || request.before_provider_headers ||
-      !request.extra_headers.empty()) {
+  if (request.before_provider_request || request.before_provider_headers) {
     generation.before_request = [&request](cail::HttpRequest& http) {
-      if (request.before_provider_request) {
-        auto body = json::parse(http.body);
-        request.before_provider_request(body);
-        http.body = body.dump();
+      if (request.before_provider_headers) {
+        std::map<std::string, std::string> headers;
+        for (const auto& header : http.headers) {
+          headers[header.name] = header.value;
+        }
+        request.before_provider_headers(headers);
+        http.headers.clear();
+        http.headers.reserve(headers.size());
+        for (const auto& [name, value] : headers) {
+          http.headers.push_back(cail::HttpHeader{.name = name, .value = value});
+        }
       }
-      if (!request.before_provider_headers && request.extra_headers.empty()) {
+      if (!request.before_provider_request) {
         return;
       }
-      std::map<std::string, std::string> headers;
-      for (const auto& header : http.headers) {
-        headers[header.name] = header.value;
+      auto body = json::parse(http.body, nullptr, false);
+      if (!body.is_object()) {
+        throw Error("provider request body is not a JSON object");
       }
-      for (const auto& [name, value] : request.extra_headers) {
-        headers[name] = value;
-      }
-      if (request.before_provider_headers) {
-        request.before_provider_headers(headers);
-      }
-      http.headers.clear();
-      http.headers.reserve(headers.size());
-      for (const auto& [name, value] : headers) {
-        http.headers.push_back(cail::HttpHeader{.name = name, .value = value});
-      }
+      request.before_provider_request(body);
+      http.body = body.dump();
     };
   }
   if (request.after_provider_response) {
     const auto started = std::chrono::steady_clock::now();
     generation.after_response = [&request, started](const cail::HttpResponse& response) {
-      HttpResponse converted;
+      ProviderResponse converted;
       converted.status = response.status_code;
       converted.body = response.body;
       for (const auto& header : response.headers) {
         converted.headers[header.name] = header.value;
       }
-      converted.duration_ms = static_cast<int>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::steady_clock::now() - started)
-              .count());
+      converted.duration_ms =
+          static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - started)
+                               .count());
       request.after_provider_response(converted);
     };
   }
 }
 
-std::string api_base_url(std::string url) {
-  for (const auto suffix : {std::string_view{"/chat/completions"}, std::string_view{"/responses"},
-                           std::string_view{"/messages"}}) {
-    if (url.size() >= suffix.size() &&
-        url.compare(url.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      url.resize(url.size() - suffix.size());
-      break;
-    }
-  }
-  while (!url.empty() && url.back() == '/') {
-    url.pop_back();
-  }
-  return url;
-}
+} // namespace
 
-cail::LanguageModel make_model(const ChatRequest& request) {
-  if (request.provider == "foundry") {
-    return cail::create_foundry({.api_key = request.api_key})(cail::FoundryDeployment{
-        .endpoint = request.api_url,
-        .deployment = request.model,
-    });
-  }
-  if (request.provider == "anthropic") {
-    const auto base = api_base_url(request.api_url);
-    return cail::create_anthropic(cail::AnthropicSettings{
-        .api_key = request.api_key,
-        .base_url = base.empty() ? "https://api.anthropic.com/v1" : base,
-    })(request.model);
-  }
-  if (request.provider == "google") {
-    auto base = api_base_url(request.api_url);
-    if (const auto pos = base.find("/openai"); pos != std::string::npos) base.resize(pos);
-    auto model = request.model;
-    if (model.starts_with("models/")) model.erase(0, 7);
-    return cail::create_gemini(cail::GeminiSettings{
-        .api_key = request.api_key,
-        .base_url = base.empty() ? "https://generativelanguage.googleapis.com/v1beta" : base,
-    })(model);
-  }
-  if (request.provider == "opencode" || request.provider == "opencodezen") {
-    const auto family = [&] {
-      if (request.model_sdk == "@ai-sdk/openai-compatible")
-        return cail::OpenCodeApiFamily::chat_completions;
-      if (request.model_sdk == "@ai-sdk/openai") return cail::OpenCodeApiFamily::responses;
-      if (request.model_sdk == "@ai-sdk/anthropic")
-        return cail::OpenCodeApiFamily::anthropic_messages;
-      if (request.model_sdk == "@ai-sdk/google") return cail::OpenCodeApiFamily::gemini;
-      throw Error("Unsupported OpenCode model SDK: " + request.model_sdk);
-    }();
-    return cail::create_opencode(cail::OpenCodeSettings{
-        .api_key = request.api_key,
-        .service = request.provider == "opencode" ? cail::OpenCodeService::go
-                                                  : cail::OpenCodeService::zen,
-        .base_url = api_base_url(request.api_url),
-    })(request.model, family);
-  }
-  if (request.provider == "hyper") {
-    return cail::create_hyper(cail::HyperSettings{
-        .api_key = request.api_key,
-        .endpoint = request.api_url,
-    })(request.model);
-  }
-  if (request.provider == "ollama") {
-    return cail::create_ollama_cloud(cail::OllamaCloudSettings{
-        .api_key = request.api_key,
-        .endpoint = request.api_url,
-    })(request.model);
-  }
-  if (request.provider == "local") {
-    return cail::create_local(cail::LocalSettings{
-        .api_key = request.api_key,
-        .endpoint = request.api_url,
-    })(request.model);
-  }
-  if (request.provider == "openai") {
-    return cail::create_openai(cail::OpenAIProviderSettings{
-        .api_key = request.api_key,
-        .base_url = request.api_url.empty() ? "https://api.openai.com/v1"
-                                          : api_base_url(request.api_url),
-    })(request.model);
-  }
-  if (request.provider == "mistral") {
-    return cail::create_mistral(cail::MistralSettings{
-        .api_key = request.api_key,
-        .endpoint = request.api_url,
-    })(request.model);
-  }
-  if (request.provider == "openrouter") {
-    return cail::create_openrouter(cail::OpenRouterSettings{
-        .api_key = request.api_key,
-        .endpoint = request.api_url,
-    })(request.model);
-  }
-  return cail::create_chat_completions({
-      .endpoint = request.api_url,
-      .api_key = request.api_key,
-  })(request.model);
-}
+namespace {
 
 ChatResult run_chat(const ChatRequest& request, bool streaming) {
-  require_request(request);
-  auto generation = make_request(request, streaming);
+  if (!request.model) {
+    throw Error("language model is not configured");
+  }
+  auto generation = make_request(request);
   add_request_hooks(generation, request);
-
-  std::stop_source stop_source;
-  if (request.cancel != nullptr && request.cancel->load()) {
-    stop_source.request_stop();
-  }
-  std::jthread cancellation_watcher;
+  std::stop_token stop;
   if (request.cancel != nullptr) {
-    cancellation_watcher =
-        std::jthread([cancel = request.cancel, &stop_source](std::stop_token stop) {
-          while (!stop.stop_requested()) {
-            if (cancel->load()) {
-              stop_source.request_stop();
-              return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-          }
-        });
+    if (request.cancel->requested()) {
+      request.cancel->request();
+    }
+    stop = request.cancel->token();
   }
 
-  auto model = make_model(request);
   auto response = [&]() -> cail::Result<cail::GenerationResponse> {
     if (!streaming) {
-      return model.generate(generation);
+      return request.model.generate(generation);
     }
-    return model.stream(
+    return request.model.stream(
         generation,
         [&request](const cail::StreamEvent& event) {
           if (!request.on_event) {
@@ -471,9 +328,8 @@ ChatResult run_chat(const ChatRequest& request, bool streaming) {
             request.on_event(StreamEvent{EventKind::thinking_delta, thinking->text, {}, {}});
           }
         },
-        stop_source.get_token());
+        stop);
   }();
-  cancellation_watcher.request_stop();
   if (!response) {
     throw_provider_error(response.error());
   }

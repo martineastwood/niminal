@@ -132,7 +132,7 @@ private:
   std::string steering_mode_;
   std::string follow_up_mode_;
   std::thread worker_;
-  std::atomic<bool> cancel_{false};
+  niminal::Cancellation cancel_;
   std::atomic<bool> worker_done_{false};
   bool active_ = false;
   bool shutting_down_ = false;
@@ -229,7 +229,7 @@ private:
     if (worker_.joinable()) {
       worker_.join();
     }
-    cancel_.store(false);
+    cancel_.clear();
     worker_done_.store(false);
     active_step_ = -1;
     saw_error_event_ = false;
@@ -279,7 +279,7 @@ private:
     }
     worker_.join();
     active_ = false;
-    cancel_.store(false);
+    cancel_.clear();
     if (!shutting_down_) {
       start_queued_prompt();
     }
@@ -292,7 +292,7 @@ private:
     shutting_down_ = true;
     clear_queue();
     if (active_) {
-      cancel_.store(true);
+      cancel_.request();
     }
   }
 
@@ -360,7 +360,7 @@ private:
 
     if (type == "interrupt") {
       if (busy()) {
-        cancel_.store(true);
+        cancel_.request();
       }
       send(rpc_response_event(id, true, busy() ? "interrupting" : "idle"));
       return;

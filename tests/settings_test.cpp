@@ -45,6 +45,17 @@ int main() {
     return fail("thinking display");
   }
 
+  if (auto result = apply_setting_value(cfg, SettingField::api_url, "https://proxy.example/v1");
+      !result.error.empty() || cfg.provider_api_urls[cfg.provider] != cfg.api_url) {
+    return fail("set endpoint override");
+  }
+  if (auto result = apply_setting_value(cfg, SettingField::api_url, "");
+      !result.error.empty() || !cfg.api_url.empty() ||
+      cfg.provider_api_urls.contains(cfg.provider) ||
+      format_setting_value(cfg, SettingField::api_url) != "(provider default)") {
+    return fail("clear endpoint override to use Cail default");
+  }
+
   cfg.max_steps = 5;
   if (edit_initial_value(cfg, SettingField::max_steps) != "5") {
     return fail("edit initial max_steps");

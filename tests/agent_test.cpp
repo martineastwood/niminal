@@ -1,3 +1,7 @@
+#include <cail/anthropic.hpp>
+#include <cail/gemini.hpp>
+#include <cail/openai.hpp>
+#include <cail/openrouter.hpp>
 #include <niminal/ai.hpp>
 
 #include <iostream>
@@ -13,12 +17,26 @@ niminal::json request_body(niminal::ChatRequest request) {
   try {
     niminal::stream_chat(request);
   } catch (const niminal::Error&) {
-    if (body.is_null()) throw;
+    if (body.is_null())
+      throw;
   }
   return body;
 }
 
 } // namespace
+
+void use_provider(niminal::ChatRequest& request, std::string provider, std::string model,
+                  std::string url) {
+  if (provider == "anthropic") {
+    request.model = cail::create_anthropic({.api_key = "test", .base_url = url})(model);
+  } else if (provider == "google") {
+    request.model = cail::create_gemini({.api_key = "test", .base_url = url})(model);
+  } else if (provider == "openai") {
+    request.model = cail::create_openai({.api_key = "test", .base_url = url})(model);
+  } else {
+    request.model = cail::create_openrouter({.api_key = "test", .endpoint = url})(model);
+  }
+}
 
 int main() {
   niminal::Agent agent;
@@ -49,15 +67,16 @@ int main() {
   }
 
   niminal::ChatRequest req;
-  req.provider = "openrouter";
-  req.api_key = "test";
-  req.api_url = "http://127.0.0.1:1/v1/chat/completions";
-  req.model = "openai/gpt-4o-mini";
+  const auto endpoint = "http://127.0.0.1:1";
+  use_provider(req, "openrouter", "openai/gpt-4o-mini",
+               std::string(endpoint) + "/v1/chat/completions");
   req.messages = msgs;
   req.tools = nlohmann::json::array({nlohmann::json{
       {"type", "function"},
       {"function",
-       {{"name", "read"}, {"description", "d"}, {"parameters", {{"type", "object"}, {"properties", nlohmann::json::object()}}}}},
+       {{"name", "read"},
+        {"description", "d"},
+        {"parameters", {{"type", "object"}, {"properties", nlohmann::json::object()}}}}},
   }});
   auto body = request_body(req);
   if (body["tools"][0].contains("cache_control")) {
@@ -72,7 +91,8 @@ int main() {
     std::cerr << "user text should reach the provider\n";
     return 1;
   }
-  req.model = "anthropic/claude-sonnet-4";
+  use_provider(req, "openrouter", "anthropic/claude-sonnet-4",
+               std::string(endpoint) + "/v1/chat/completions");
   req.apply_cache = true;
   auto claude = request_body(req);
   if (!claude["tools"][0].contains("cache_control")) {
@@ -93,8 +113,8 @@ int main() {
     return 1;
   }
   req.apply_cache = false;
-  req.provider = "google";
-  req.model = "gemini-3.5-flash-lite";
+  use_provider(req, "google", "gemini-3.5-flash-lite",
+               "https://generativelanguage.googleapis.com/v1beta");
   req.stream_usage = false;
   req.conversation_id = "sess";
   auto gemini = request_body(req);
@@ -108,8 +128,7 @@ int main() {
     return 1;
   }
   req.apply_cache = true;
-  req.provider = "anthropic";
-  req.model = "claude-sonnet-4-6";
+  use_provider(req, "anthropic", "claude-sonnet-4-6", "https://api.anthropic.com/v1");
   auto native = request_body(req);
   if (!native.contains("system") || !native["system"].is_array() ||
       !native["system"].back().contains("cache_control")) {
@@ -129,10 +148,8 @@ int main() {
     std::cerr << "anthropic should not use Chat Completions fields\n";
     return 1;
   }
-  req.provider = "openai";
-  req.model = "gpt-5";
+  use_provider(req, "openai", "gpt-5", "https://api.openai.com/v1");
   req.apply_cache = false;
-  req.prompt_cache_key = true;
   req.conversation_id = "sess";
   auto oai = request_body(req);
   if (oai.dump().find("cache_control") != std::string::npos) {
@@ -150,8 +167,8 @@ int main() {
     return 1;
   }
   req.apply_cache = false;
-  req.provider = "google";
-  req.model = "gemini-3.5-flash";
+  use_provider(req, "google", "gemini-3.5-flash",
+               "https://generativelanguage.googleapis.com/v1beta");
   req.extra = nlohmann::json{{"reasoning_effort", "high"}};
   auto gthink = request_body(req);
   if (gthink["generationConfig"]["thinkingConfig"].value("thinkingLevel", "") != "HIGH") {
@@ -175,7 +192,7 @@ int main() {
         {"content", "screen.png"},
         {"images", nlohmann::json::array({image})}}});
   req.extra = nlohmann::json::object();
-  req.provider = "openai";
+  use_provider(req, "openai", "gpt-5", "https://api.openai.com/v1");
   auto vision = request_body(req);
   if (vision["input"][0]["content"][1]["image_url"] != "data:image/png;base64,aGVsbG8=" ||
       vision["input"].back()["content"][0]["type"] != "input_image") {
@@ -183,7 +200,7 @@ int main() {
     return 1;
   }
   req.apply_cache = true;
-  req.provider = "anthropic";
+  use_provider(req, "anthropic", "claude-sonnet-4-6", "https://api.anthropic.com/v1");
   vision = request_body(req);
   if (vision["messages"][0]["content"][1]["source"]["data"] != "aGVsbG8=" ||
       vision["messages"].back()["content"][0]["content"][1]["source"]["data"] != "aGVsbG8=") {
@@ -191,7 +208,8 @@ int main() {
     return 1;
   }
   req.apply_cache = false;
-  req.provider = "google";
+  use_provider(req, "google", "gemini-3.5-flash",
+               "https://generativelanguage.googleapis.com/v1beta");
   vision = request_body(req);
   if (vision["contents"][0]["parts"][1]["inlineData"]["data"] != "aGVsbG8=" ||
       vision["contents"].back()["parts"][1]["inlineData"]["data"] != "aGVsbG8=") {

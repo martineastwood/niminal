@@ -124,6 +124,7 @@ Rules:
   unless authorized by the user.
 - Communicate briefly and plainly. During longer tasks, share meaningful
   progress. Finish with the result, relevant checks, and unresolved issues.
+- Keep the user updated on the progress of the task.
 )";
 
 const char* kActMode =
@@ -175,8 +176,8 @@ struct SystemPromptOptions {
   std::string append;
 };
 
-niminal::Agent make_agent(niminal::app::Workspace& ws, const niminal::app::Config& cfg,
-                          int max_steps, std::atomic<bool>* cancel,
+niminal::Agent make_agent(niminal::app::Workspace& ws, niminal::app::Config& cfg,
+                          std::string_view api_key, int max_steps, niminal::Cancellation* cancel,
                           const SystemPromptOptions& system_prompt = {},
                           const niminal::app::ShellEnvFn* shell_env = nullptr) {
   niminal::Agent agent;
@@ -205,7 +206,7 @@ niminal::Agent make_agent(niminal::app::Workspace& ws, const niminal::app::Confi
     return extra;
   };
   agent.model = cfg.model;
-  niminal::app::apply_provider(agent, cfg);
+  niminal::app::apply_provider(agent, cfg, api_key);
   agent.max_steps = max_steps;
   agent.cancel = cancel;
   agent.tools = niminal::app::workspace_tools(
@@ -592,7 +593,7 @@ int main(int argc, char** argv) try {
   if (project_trust.required && !project_trust.trusted) {
     std::cerr << "Project-local resources skipped (use --approve or /trust on).\n";
   }
-  std::atomic<bool> cancel{false};
+  niminal::Cancellation cancel;
   niminal::app::install_shutdown_handlers(&cancel);
   niminal::app::Session session;
   try {
@@ -620,10 +621,13 @@ int main(int argc, char** argv) try {
 
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
   niminal::Agent agent;
-  agent.provider = provider_from_cli ? provider_override : cfg.provider;
   agent.model = model_from_cli ? model_override : cfg.model;
-  niminal::app::ShellEnvFn shell_env = [&session, &agent, &cfg] {
-    return niminal::app::make_shell_env(session, agent, cfg);
+  niminal::app::ShellEnvFn shell_env = [&session, &agent, &cfg, &provider_override] {
+    auto env = niminal::app::make_shell_env(session, agent, cfg);
+    if (!agent.language_model && !provider_override.empty()) {
+      env["NIMINAL_PROVIDER"] = provider_override;
+    }
+    return env;
   };
   auto extensions =
       niminal::app::ExtensionRuntime::start(ws.root(), session.id, &cancel, &shell_env);
@@ -641,7 +645,7 @@ int main(int argc, char** argv) try {
     }
   }
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
-  agent = make_agent(ws, cfg, max_steps, &cancel, system_prompt, &shell_env);
+  agent = make_agent(ws, cfg, api_key, max_steps, &cancel, system_prompt, &shell_env);
   if (tools_specified) {
     restrict_tools(agent, allowed_tools);
   }
@@ -649,23 +653,19 @@ int main(int argc, char** argv) try {
   agent.prepare_user = [&ws](niminal::UserInput input) {
     return niminal::app::prepare_user_input(ws, std::move(input));
   };
-  if (!api_key.empty()) {
-    agent.api_key = api_key;
-  }
-
   niminal::app::install_extension_tools(agent, extensions,
                                         tools_specified ? &allowed_tools : nullptr);
   niminal::app::bind_extensions(
-      agent, extensions, ws.root(),
-      [](const std::string& warning) { std::cerr << warning << '\n'; }, &session, cfg);
+      agent, extensions, ws.root(), cfg,
+      [](const std::string& warning) { std::cerr << warning << '\n'; }, &session);
   niminal::app::bind_compaction(
-      agent, session,
+      agent, session, cfg,
       [](const std::string& msg) {
         if (!msg.empty()) {
           std::cerr << msg << '\n';
         }
       },
-      extensions, cfg);
+      extensions);
   for (const auto& warning : extensions->warnings()) {
     std::cerr << warning << '\n';
   }
@@ -695,7 +695,7 @@ int main(int argc, char** argv) try {
       return;
     }
     drain_extension_actions();
-    cancel.store(false);
+    cancel.clear();
     auto shutdown = extensions->dispatch(niminal::app::HookEvent::session_shutdown,
                                          nlohmann::json{{"session_id", session.id},
                                                         {"workspace", ws.root().string()},

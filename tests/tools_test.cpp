@@ -65,7 +65,7 @@ int main() {
     out << "reload " << std::string(3'000, 'x') << '\n';
   }
   Workspace ws(tmp);
-  std::atomic<bool> cancel{false};
+  niminal::Cancellation cancel;
   auto tools = workspace_tools(ws, &cancel);
   if (!read_only(tools, "read") || !read_only(tools, "grep") || !read_only(tools, "glob") ||
       !read_only(tools, "ls")) {

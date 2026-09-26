@@ -128,7 +128,7 @@ public:
   struct Impl;
   static std::shared_ptr<ExtensionRuntime> start(const std::filesystem::path& workspace,
                                                  const std::string& session_id,
-                                                 std::atomic<bool>* cancel = nullptr,
+                                                 niminal::Cancellation* cancel = nullptr,
                                                  const ShellEnvFn* shell_env = nullptr);
   ~ExtensionRuntime();
 
@@ -157,12 +157,12 @@ public:
   bool activate_widget_action(const std::string& extension, const std::string& key,
                               const std::string& action);
 
-  explicit ExtensionRuntime(Access, std::filesystem::path workspace, std::atomic<bool>* cancel);
+  explicit ExtensionRuntime(Access, std::filesystem::path workspace, niminal::Cancellation* cancel);
 
 private:
   std::unique_ptr<Impl> impl_;
   std::filesystem::path workspace_;
-  std::atomic<bool>* cancel_ = nullptr;
+  niminal::Cancellation* cancel_ = nullptr;
   std::vector<ExtensionCommand> commands_;
   std::vector<std::string> warnings_;
 };
@@ -170,9 +170,9 @@ private:
 nlohmann::json session_hook_payload(const std::string& session_id,
                                     const std::filesystem::path& workspace);
 void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRuntime>& runtime,
-                     const std::filesystem::path& workspace,
+                     const std::filesystem::path& workspace, const Config& cfg,
                      const std::function<void(const std::string&)>& note = {},
-                     Session* session = nullptr, const Config& cfg = {});
+                     Session* session = nullptr);
 void install_extension_tools(niminal::Agent& agent,
                              const std::shared_ptr<ExtensionRuntime>& runtime,
                              const std::vector<std::string>* allowed = nullptr);

@@ -1,4 +1,4 @@
-#include <niminal/http.hpp>
+#include "http.hpp"
 #include <niminal/types.hpp>
 
 #include <curl/curl.h>
@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <utility>
 
-namespace niminal {
+namespace niminal::app {
 namespace {
 
 std::once_flag curl_once;
@@ -98,4 +98,4 @@ Result<HttpResponse> HttpClient::get(std::string_view url, long timeout_seconds)
   return out;
 }
 
-} // namespace niminal
+} // namespace niminal::app

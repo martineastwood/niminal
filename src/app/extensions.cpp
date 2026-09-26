@@ -1,6 +1,6 @@
 #include "extensions.hpp"
 
-#include <niminal/providers.hpp>
+#include "provider.hpp"
 #include <niminal/text.hpp>
 
 #include "compaction.hpp"
@@ -8,7 +8,6 @@
 #include "session.hpp"
 #include "trust.hpp"
 
-#include <niminal/http.hpp>
 #include <niminal/chat.hpp>
 
 #include <algorithm>
@@ -391,7 +390,7 @@ public:
     reader_ = std::thread([this] { read_loop(); });
   }
 
-  void wait_for_response(const std::string& id, std::atomic<bool>* cancel, json& response) {
+  void wait_for_response(const std::string& id, niminal::Cancellation* cancel, json& response) {
     std::unique_lock lock(state_mutex_);
     while (true) {
       auto it = responses_.find(id);
@@ -405,7 +404,7 @@ public:
                                      ? "extension '" + name + "' exited before responding"
                                      : reader_error_);
       }
-      if ((cancel != nullptr) && cancel->load()) {
+      if ((cancel != nullptr) && cancel->requested()) {
         throw Cancelled();
       }
       if (timeout_ms >= 0) {
@@ -432,7 +431,7 @@ public:
     last_activity_ = std::chrono::steady_clock::now();
   }
 
-  std::string receive(int timeout, std::atomic<bool>* cancel) {
+  std::string receive(int timeout, niminal::Cancellation* cancel) {
     auto started = std::chrono::steady_clock::now();
     while (true) {
       auto newline = buffer_.find('\n');
@@ -444,7 +443,7 @@ public:
         }
         return line;
       }
-      if ((cancel != nullptr) && cancel->load()) {
+      if ((cancel != nullptr) && cancel->requested()) {
         throw Cancelled();
       }
       int wait_ms = 50;
@@ -636,7 +635,7 @@ std::string external_failure(std::string message, const std::string& stdout_text
 }
 
 std::string run_external_tool(const ExternalTool& tool, const json& input,
-                              const fs::path& workspace, std::atomic<bool>* cancel,
+                              const fs::path& workspace, niminal::Cancellation* cancel,
                               const ShellEnv& env) {
   const auto executable = external_executable(tool);
   std::error_code ec;
@@ -709,7 +708,7 @@ std::string run_external_tool(const ExternalTool& tool, const json& input,
       if (waited < 0 && errno != EINTR) {
         throw std::runtime_error(std::strerror(errno));
       }
-      if ((cancel != nullptr) && cancel->load()) {
+      if ((cancel != nullptr) && cancel->requested()) {
         interrupted = true;
       } else if (std::chrono::steady_clock::now() >= deadline) {
         timed_out = true;
@@ -904,7 +903,7 @@ const char* hook_event_name(HookEvent event) {
   return "";
 }
 
-ExtensionRuntime::ExtensionRuntime(Access, fs::path workspace, std::atomic<bool>* cancel)
+ExtensionRuntime::ExtensionRuntime(Access, fs::path workspace, niminal::Cancellation* cancel)
     : impl_(std::make_unique<Impl>()), workspace_(std::move(workspace)), cancel_(cancel) {}
 
 ExtensionRuntime::~ExtensionRuntime() {
@@ -1182,7 +1181,7 @@ void handle_incoming(ExtensionRuntime::Impl& impl, Process& process, const std::
 }
 
 json request(ExtensionRuntime::Impl& impl, Process& process, const json& message,
-             std::atomic<bool>* cancel) {
+             niminal::Cancellation* cancel) {
   const auto id = string_field(message, "id");
   process.mark_activity();
   process.send(message);
@@ -1192,7 +1191,7 @@ json request(ExtensionRuntime::Impl& impl, Process& process, const json& message
     capture_actions(impl, process, response);
     return response;
   } catch (...) {
-    if ((cancel != nullptr) && cancel->load()) {
+    if ((cancel != nullptr) && cancel->requested()) {
       try {
         process.send(json{{"type", "cancel"}, {"id", id}});
       } catch (...) {
@@ -1206,7 +1205,7 @@ json request(ExtensionRuntime::Impl& impl, Process& process, const json& message
 
 std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& workspace,
                                                           const std::string& session_id,
-                                                          std::atomic<bool>* cancel,
+                                                          niminal::Cancellation* cancel,
                                                           const ShellEnvFn* shell_env) {
   auto runtime =
       std::make_shared<ExtensionRuntime>(Access{}, canonical_workspace(workspace), cancel);
@@ -1277,7 +1276,7 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
               {name, description, *schema, index, read_only_capabilities(tool)});
         }
       }
-      std::vector<niminal::ProviderSpec> providers;
+      std::vector<CustomProvider> providers;
       if (auto registered = registration.find("providers"); registered != registration.end()) {
         if (!registered->is_array()) {
           throw std::runtime_error("register providers must be an array");
@@ -1286,11 +1285,10 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
           if (!provider.is_object() || string_field(provider, "api") != "openai-chat-completions") {
             throw std::runtime_error("extension providers must use openai-chat-completions");
           }
-          niminal::ProviderSpec spec;
+          CustomProvider spec;
           spec.name = string_field(provider, "name");
           spec.endpoint = string_field(provider, "api_url");
           spec.default_model = string_field(provider, "default_model");
-          spec.url_match = string_field(provider, "url_match");
           spec.models = string_array(provider, "models");
           for (const auto& key : string_array(provider, "api_key_env")) {
             spec.env_keys.push_back(key);
@@ -1319,7 +1317,7 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
       });
       for (auto& provider : providers) {
         const auto name = provider.name;
-        if (!niminal::register_provider(std::move(provider))) {
+        if (!niminal::app::register_provider(std::move(provider))) {
           runtime->warnings_.push_back("extension '" + manifest.name +
                                        "' could not register provider '" + name + "'");
         } else {
@@ -1593,7 +1591,7 @@ void ExtensionRuntime::stop() {
     process->stop();
   }
   for (const auto& name : impl_->provider_names) {
-    niminal::unregister_provider(name);
+    niminal::app::unregister_provider(name);
   }
   impl_->provider_names.clear();
   impl_->processes.clear();
@@ -1673,12 +1671,12 @@ json session_hook_payload(const std::string& session_id, const fs::path& workspa
 }
 
 void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRuntime>& runtime,
-                     const fs::path& workspace, const std::function<void(const std::string&)>& note,
-                     Session* session, const Config& cfg) {
+                     const fs::path& workspace, const Config& cfg,
+                     const std::function<void(const std::string&)>& note, Session* session) {
   if (runtime) {
     const std::weak_ptr<ExtensionRuntime> weak_runtime = runtime;
-    runtime->set_host_request([&agent, session, weak_runtime, cfg](const std::string& method,
-                                                                   const json& request) {
+    runtime->set_host_request([&agent, session, weak_runtime, &cfg](const std::string& method,
+                                                                    const json& request) {
       if (method == "model.complete") {
         const auto prompt = request.value("prompt", std::string());
         if (prompt.empty()) {
@@ -1693,7 +1691,8 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
         }
         completion.messages.push_back(json{{"role", "user"}, {"content", prompt}});
         completion.tools = json::array();
-        completion.max_tokens = request.value("max_tokens", 0);
+        auto max_tokens = request.value("max_tokens", 4096);
+        completion.max_tokens = max_tokens > 0 ? max_tokens : 4096;
         completion.conversation_id = (session ? session->id : agent.conversation_id) + ":extension";
         completion.on_event = {};
         const auto text = niminal::complete_chat(completion);
@@ -1897,7 +1896,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
                                session_hook_payload(agent.conversation_id, workspace)));
     }
   };
-  agent.before_provider_headers = [runtime, workspace, &agent,
+  agent.before_provider_headers = [runtime, workspace, &agent, &cfg,
                                    report](std::map<std::string, std::string>& headers) {
     if (!runtime) {
       return;
@@ -1905,7 +1904,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
     auto outcome = runtime->dispatch(HookEvent::before_provider_headers,
                                      json{{"session_id", agent.conversation_id},
                                           {"workspace", workspace.string()},
-                                          {"provider", agent.provider},
+                                          {"provider", cfg.provider},
                                           {"model", agent.model},
                                           {"headers", headers}});
     report(outcome);
@@ -1918,14 +1917,14 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       }
     }
   };
-  agent.before_provider_request = [runtime, workspace, &agent, report](json& payload) {
+  agent.before_provider_request = [runtime, workspace, &agent, &cfg, report](json& payload) {
     if (!runtime) {
       return;
     }
     auto outcome = runtime->dispatch(HookEvent::before_provider_request,
                                      json{{"session_id", agent.conversation_id},
                                           {"workspace", workspace.string()},
-                                          {"provider", agent.provider},
+                                          {"provider", cfg.provider},
                                           {"model", agent.model},
                                           {"payload", payload}});
     report(outcome);
@@ -1933,14 +1932,14 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
       payload = std::move(outcome.payload);
     }
   };
-  agent.after_provider_response = [runtime, workspace, &agent,
-                                   report](const niminal::HttpResponse& response) {
+  agent.after_provider_response = [runtime, workspace, &agent, &cfg,
+                                   report](const niminal::ProviderResponse& response) {
     if (runtime) {
       report(runtime->dispatch(
           HookEvent::after_provider_response,
           json{{"session_id", agent.conversation_id},
                {"workspace", workspace.string()},
-               {"provider", agent.provider},
+               {"provider", cfg.provider},
                {"model", agent.model},
                {"status", response.status},
                {"headers", response.headers},

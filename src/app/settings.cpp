@@ -4,7 +4,6 @@
 #include "theme.hpp"
 #include "thinking.hpp"
 
-#include <niminal/providers.hpp>
 #include <niminal/text.hpp>
 
 #include <algorithm>
@@ -31,14 +30,6 @@ constexpr SettingSpec kSettings[] = {
     {SettingField::keep_recent_tokens, "keep_recent_tokens", SettingKind::integer},
     {SettingField::context_window, "context_window", SettingKind::integer},
 };
-
-std::vector<std::string> provider_options() {
-  std::vector<std::string> out;
-  for (const auto& spec : niminal::all_providers()) {
-    out.emplace_back(spec.name);
-  }
-  return out;
-}
 
 std::vector<std::string> thinking_options(std::string_view provider, std::string_view model) {
   std::vector<std::string> out{""};
@@ -132,7 +123,7 @@ std::string format_setting_value(const Config& cfg, SettingField field) {
   case SettingField::model:
     return cfg.model;
   case SettingField::api_url:
-    return cfg.api_url;
+    return cfg.api_url.empty() ? "(provider default)" : cfg.api_url;
   case SettingField::thinking:
     if (cfg.thinking.empty()) {
       return "(provider default)";
@@ -188,7 +179,7 @@ SettingApplyResult cycle_setting(Config& cfg, SettingField field, int direction,
                                  std::string_view agent_provider, std::string_view agent_model) {
   switch (field) {
   case SettingField::provider: {
-    const auto next = cycle_option(provider_options(), cfg.provider, direction);
+    const auto next = cycle_option(provider_names(), cfg.provider, direction);
     if (auto result = select_provider(cfg, next); !result) {
       return fail(result.error().what());
     }
@@ -248,11 +239,12 @@ SettingApplyResult apply_setting_value(Config& cfg, SettingField field, std::str
       return fail("edit this provider's API URL in ~/.niminal/models.json");
     }
     const auto trimmed = niminal::trim_copy(std::string(value));
-    if (trimmed.empty()) {
-      return fail("api_url cannot be empty");
-    }
     cfg.api_url = trimmed;
-    cfg.provider_api_urls[cfg.provider] = cfg.api_url;
+    if (trimmed.empty()) {
+      cfg.provider_api_urls.erase(cfg.provider);
+    } else {
+      cfg.provider_api_urls[cfg.provider] = trimmed;
+    }
     return ok(true);
   }
   case SettingField::editor:

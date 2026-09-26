@@ -18,6 +18,7 @@ struct Config {
   std::string provider;
   std::string model;
   std::string api_url;
+  std::string model_runtime;
   std::string thinking;
   bool show_thinking = false;
   std::string theme = "auto";

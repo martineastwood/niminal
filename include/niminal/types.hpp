@@ -1,10 +1,16 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <expected>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -15,7 +21,59 @@ namespace niminal {
 using json = nlohmann::json;
 
 struct Error : std::runtime_error {
-  using std::runtime_error::runtime_error;
+  int http_status = 0;
+  bool transport = false;
+
+  explicit Error(const std::string& message, int status = 0, bool transport_error = false)
+      : std::runtime_error(message), http_status(status), transport(transport_error) {}
+};
+
+// Cooperative cancel for a run. request() stops in-flight model calls immediately.
+// A signal handler may only call notify_from_signal(); a bridge thread turns that
+// into a stop request because request_stop is not safe to call from a signal handler.
+struct Cancellation {
+  Cancellation()
+      : bridge_([this](std::stop_token done) {
+          while (!done.stop_requested()) {
+            if (flag_.load(std::memory_order_acquire)) {
+              std::lock_guard lock(mu_);
+              if (flag_.load(std::memory_order_relaxed)) {
+                stop_.request_stop();
+              }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          }
+        }) {}
+
+  Cancellation(const Cancellation&) = delete;
+  Cancellation& operator=(const Cancellation&) = delete;
+
+  void request() {
+    std::lock_guard lock(mu_);
+    flag_.store(true, std::memory_order_release);
+    stop_.request_stop();
+  }
+
+  void notify_from_signal() noexcept { flag_.store(true, std::memory_order_release); }
+
+  void clear() {
+    std::lock_guard lock(mu_);
+    flag_.store(false, std::memory_order_release);
+    stop_ = {};
+  }
+
+  bool requested() const noexcept { return flag_.load(std::memory_order_acquire); }
+
+  std::stop_token token() const {
+    std::lock_guard lock(mu_);
+    return stop_.get_token();
+  }
+
+private:
+  std::atomic<bool> flag_{false};
+  mutable std::mutex mu_;
+  std::stop_source stop_;
+  std::jthread bridge_;
 };
 
 struct Cancelled : Error {
@@ -79,7 +137,7 @@ struct ToolCall {
   std::string id;
   std::string name;
   std::string arguments;
-  std::string thought_signature{};
+  std::optional<std::string> provider_options{};
 };
 
 struct UserInput {
@@ -121,10 +179,8 @@ inline void add_usage(Usage& a, const Usage& b) {
 
 struct ChatResult {
   std::string text;
-  std::string reasoning_content;
-  json reasoning_details = json::array();
+  std::optional<std::string> provider_options;
   std::vector<ToolCall> tool_calls;
-  std::string finish_reason;
   Usage usage;
 };
 

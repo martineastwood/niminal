@@ -1,7 +1,7 @@
 #include "config.hpp"
 #include "queue_mode.hpp"
 
-#include <niminal/providers.hpp>
+#include "provider.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -35,11 +35,8 @@ void load_non_negative_int(const json& doc, const char* key, int& target) {
 } // namespace
 
 Config::Config() {
-  if (const auto* spec = niminal::find_provider("openrouter")) {
-    provider = std::string(spec->name);
-    model = std::string(spec->default_model);
-    api_url = std::string(spec->endpoint);
-  }
+  provider = "openrouter";
+  model = provider_default_model(provider);
 }
 
 std::filesystem::path config_path() {
@@ -193,8 +190,6 @@ Config load_config_file(const fs::path& path) {
     }
     if (auto it = cfg.provider_api_urls.find(cfg.provider); it != cfg.provider_api_urls.end()) {
       cfg.api_url = it->second;
-    } else if (const auto* spec = niminal::find_provider(cfg.provider)) {
-      cfg.api_url = spec->endpoint;
     }
   } catch (...) {
     return Config{};

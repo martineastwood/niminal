@@ -3,11 +3,9 @@ title: Architecture
 description: How niminal fits together as a native coding agent.
 ---
 
-niminal is a native C++ coding agent built on the `niminal::ai` library. The
-executable handles workspace tools, sessions, permissions, extensions, and the
-TUI. The library owns the tool-capable agent loop, application HTTP, and the
-adapter that maps niminal sessions and tools onto CAIL, the C++ AI SDK used for
-model transport and provider APIs.
+You can use niminal interactively, run it from scripts, or embed its agent loop
+in a C++ application. All modes support conversations with tool calls and
+streamed model output.
 
 ## Surfaces
 
@@ -51,11 +49,12 @@ tools are simpler one-shot executables invoked only when the model calls them.
 
 ## Providers
 
-niminal keeps provider and model selection, credentials, and session history in
-OpenAI-style JSON. Each model step maps that history and the runtime tools into
-CAIL's public generation API. CAIL owns the provider wire formats (Anthropic
-Messages, OpenAI Responses, Chat Completions, Gemini, and others). Prompt
-caching breakpoints are applied on supported providers before the CAIL call.
+niminal keeps provider and model selection, credentials, and session history.
+Each model step maps that history and the runtime tools into CAIL's public
+generation API. Provider round-trip data stays attached to the message and is
+sent back unchanged. CAIL owns the provider wire formats (Anthropic Messages,
+OpenAI Responses, Chat Completions, Gemini, and others). Prompt caching
+breakpoints are applied on supported providers before the CAIL call.
 
 ## Out of scope
 
@@ -63,9 +62,29 @@ niminal does not ship a hosted service, repo index daemon, LSP integration, or
 built-in MCP client. Codex App Server is not wired. Plan mode is not exposed;
 the agent always runs in act mode.
 
-Other programs can link the `niminal::ai` CMake target for the agent loop
-without pulling in the CLI application. Standalone model clients should use
-CAIL directly.
+## Embed the agent
+
+Link your C++23 application to the `niminal::ai` CMake target and supply a
+configured CAIL model:
+
+```cpp
+#include <niminal/ai.hpp>
+#include <cail/openai.hpp>
+#include <iostream>
+
+int main() {
+  niminal::Agent agent;
+  agent.language_model = cail::openai("gpt-5");
+  agent.model = "gpt-5";
+  agent.system = "Give short, practical answers.";
+  std::cout << agent.run("How do I list files in a directory?") << '\n';
+}
+```
+
+Set `OPENAI_API_KEY` before running this example. `agent.model` labels events
+and saved replies; `agent.language_model` determines which model receives calls.
+You can supply any CAIL language model, including one configured with a custom
+endpoint. For standalone model calls without an agent loop, use CAIL directly.
 
 ## Next steps
 

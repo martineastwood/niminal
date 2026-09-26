@@ -524,7 +524,7 @@ void Session::add_bash(const std::string& command, const std::string& output,
 
 void Session::add_assistant(const std::string& text, const json& tool_calls,
                             const std::string& model, const niminal::Usage& usage,
-                            const std::string& reasoning_content, const json& reasoning_details) {
+                            const json& provider_options) {
   json content = json::array();
   if (!text.empty()) {
     content.push_back(text_block(text));
@@ -539,20 +539,22 @@ void Session::add_assistant(const std::string& text, const json& tool_calls,
         }
       } catch (...) {
       }
-      content.push_back({
+      json part = {
           {"type", "tool_use"},
           {"id", call.value("id", "")},
           {"name", call.value("function", json::object()).value("name", "")},
           {"input", input},
-      });
+      };
+      if (call.contains("provider_options") && call["provider_options"].is_object() &&
+          !call["provider_options"].empty()) {
+        part["provider_options"] = call["provider_options"];
+      }
+      content.push_back(std::move(part));
     }
   }
   json event = {{"type", "assistant"}, {"role", "assistant"}, {"content", content}};
-  if (!reasoning_content.empty()) {
-    event["reasoning_content"] = reasoning_content;
-  }
-  if (!reasoning_details.empty()) {
-    event["reasoning_details"] = reasoning_details;
+  if (provider_options.is_object() && !provider_options.empty()) {
+    event["provider_options"] = provider_options;
   }
   if (!model.empty()) {
     event["model"] = model;
@@ -824,13 +826,17 @@ json Session::openai_messages() const {
             text += part.value("text", "");
           }
           if (ptype == "tool_use") {
-            calls.push_back({
+            json call = {
                 {"id", part.value("id", "")},
                 {"type", "function"},
                 {"function",
                  {{"name", part.value("name", "")},
                   {"arguments", part.value("input", json::object()).dump()}}},
-            });
+            };
+            if (part.contains("provider_options")) {
+              call["provider_options"] = part["provider_options"];
+            }
+            calls.push_back(std::move(call));
           }
         }
         msg["content"] = text;
@@ -838,10 +844,8 @@ json Session::openai_messages() const {
       if (!calls.empty()) {
         msg["tool_calls"] = calls;
       }
-      for (const auto* key : {"reasoning_content", "reasoning_details"}) {
-        if (event.contains(key)) {
-          msg[key] = event[key];
-        }
+      if (event.contains("provider_options")) {
+        msg["provider_options"] = event["provider_options"];
       }
       out.push_back(std::move(msg));
     } else if (type == "bash") {
@@ -1170,18 +1174,25 @@ void bind_session(niminal::Agent& agent, Session& session) {
   agent.persist_extension_message = [&session](const nlohmann::json& message) {
     session.add_extension_message(message);
   };
-  agent.persist_assistant =
-      [&session](const std::string& text, const std::vector<niminal::ToolCall>& calls,
-                 const std::string& model, const niminal::Usage& usage,
-                 const std::string& reasoning_content, const nlohmann::json& reasoning_details) {
-        nlohmann::json arr = nlohmann::json::array();
-        for (const auto& call : calls) {
-          arr.push_back({{"id", call.id},
-                         {"type", "function"},
-                         {"function", {{"name", call.name}, {"arguments", call.arguments}}}});
+  agent.persist_assistant = [&session](const std::string& text,
+                                       const std::vector<niminal::ToolCall>& calls,
+                                       const std::string& model, const niminal::Usage& usage,
+                                       const nlohmann::json& provider_options) {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& call : calls) {
+      nlohmann::json item = {{"id", call.id},
+                             {"type", "function"},
+                             {"function", {{"name", call.name}, {"arguments", call.arguments}}}};
+      if (call.provider_options) {
+        auto parsed = nlohmann::json::parse(*call.provider_options, nullptr, false);
+        if (parsed.is_object()) {
+          item["provider_options"] = std::move(parsed);
         }
-        session.add_assistant(text, arr, model, usage, reasoning_content, reasoning_details);
-      };
+      }
+      arr.push_back(std::move(item));
+    }
+    session.add_assistant(text, arr, model, usage, provider_options);
+  };
   agent.persist_tool = [&session](const std::string& id, const niminal::ToolResult& output,
                                   bool error) { session.add_tool_result(id, output, error); };
   agent.persist_step = [&session] { session.sync(); };

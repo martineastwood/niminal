@@ -50,11 +50,11 @@ inline std::vector<std::string> child_environment(const ShellEnv& env, char** in
 }
 
 std::string run_bash(const std::string& command, const std::filesystem::path& cwd, int timeout_s,
-                     std::atomic<bool>* cancel,
+                     niminal::Cancellation* cancel,
                      const std::function<void(const std::string&)>& on_output, const ShellEnv& env);
 
 std::vector<niminal::Tool>
-workspace_tools(Workspace& ws, std::atomic<bool>* cancel = nullptr,
+workspace_tools(Workspace& ws, niminal::Cancellation* cancel = nullptr,
                 const std::function<void(const std::string&)>& on_bash_output = {},
                 const ShellEnvFn* shell_env = nullptr);
 

@@ -2,7 +2,6 @@
 #include "session.hpp"
 #include "trust.hpp"
 
-#include <niminal/http.hpp>
 #include <niminal/chat.hpp>
 
 #include <algorithm>
@@ -78,7 +77,7 @@ int main() {
     std::ofstream out(collision_tool_dir / "tool.json");
     out << R"({"name":"bash","description":"Collision","command":["./run"],"input_schema":{"type":"object"}})";
   }
-  std::atomic<bool> cancel{false};
+  niminal::Cancellation cancel;
   // An inherited session block must not shadow the current session's values.
   setenv("NIMINAL_SESSION_ID", "inherited", 1);
   niminal::app::ShellEnvFn env_fn = [] {
@@ -358,7 +357,8 @@ int main() {
   session.add_user("existing context");
   niminal::app::bind_session(agent, session);
   agent.messages = session.openai_messages();
-  niminal::app::bind_extensions(agent, runtime, root, {}, &session);
+  niminal::app::Config cfg;
+  niminal::app::bind_extensions(agent, runtime, root, cfg, {}, &session);
   niminal::app::ExtensionUiCallbacks ui;
   ui.editor = [](const std::string& title, const std::string& text) {
     if (title != "Edit handoff" || text != "draft") {
@@ -461,7 +461,7 @@ int main() {
   captured.before_provider_request(provider_payload);
   std::map<std::string, std::string> provider_headers{{"Authorization", "Bearer test"}};
   captured.before_provider_headers(provider_headers);
-  niminal::HttpResponse denied;
+  niminal::ProviderResponse denied;
   denied.status = 403;
   denied.body = "denied";
   captured.after_provider_response(denied);
@@ -511,7 +511,7 @@ int main() {
 
   // Cancelling a turn must not report the aborted extension requests as failures.
   runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
-  cancel = true;
+  cancel.request();
   const auto cancelled =
       runtime->dispatch(HookEvent::turn_end, nlohmann::json{{"interrupted", true}});
   if (!cancelled.warnings.empty()) {
@@ -528,7 +528,7 @@ int main() {
     std::cerr << "cancelled request threw: " << e.what() << '\n';
     return 1;
   }
-  cancel = false;
+  cancel.clear();
   if (!cancelled_request) {
     std::cerr << "cancelled request did not report cancellation\n";
     return 1;

@@ -69,7 +69,7 @@ chmod 600 ~/.niminal/auth.json
 | `context_window` | `128000` (implicit) | Token budget compaction measures against |
 | `providers.<name>.last_model` | per provider | Restored when you switch back to that provider |
 | `providers.<name>.api_url` | provider endpoint | Custom endpoint for providers other than local and Foundry |
-| `/settings` `api_url` | active provider endpoint | Saves as `providers.<active>.api_url` for providers other than local and Foundry |
+| `/settings` `api_url` | `(provider default)` | Set an endpoint override, or clear it to use the provider default. Local and Foundry endpoints belong in `models.json`. |
 
 When `thinking` is unset, the provider default applies. `/thinking` with no
 argument prints the mapped level for the current model.

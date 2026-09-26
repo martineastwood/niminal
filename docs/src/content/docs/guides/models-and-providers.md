@@ -11,7 +11,7 @@ model step to CAIL, which talks to the provider on the wire.
 | Provider | Default model | Key environment variables | Endpoint |
 | --- | --- | --- | --- |
 | `openrouter` | `openai/gpt-4o-mini` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1/chat/completions` |
-| `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` |
+| `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1` |
 | `google` | `gemini-3.5-flash-lite` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` |
 | `foundry` | first Foundry entry in `models.json` | `AZURE_FOUNDRY_API_KEY` | configured per model |
 | `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
@@ -19,8 +19,8 @@ model step to CAIL, which talks to the provider on the wire.
 | `ollama` | `gemma4:31b` | `OLLAMA_API_KEY` | `https://ollama.com/v1/chat/completions` |
 | `hyper` | `deepseek-v4-flash` | `HYPER_API_KEY` | `https://hyper.charm.land/v1/chat/completions` |
 | `mistral` | `mistral-vibe-cli-with-tools` | `MISTRAL_API_KEY` | `https://api.mistral.ai/v1/chat/completions` |
-| `opencode` | `deepseek-v4.1-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/go/v1/chat/completions` |
-| `opencodezen` | `deepseek-v4-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/v1/chat/completions` |
+| `opencode` | `deepseek-v4.1-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/go/v1` |
+| `opencodezen` | `deepseek-v4-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/v1` |
 
 OpenRouter is the default at startup. Selecting `codex` errors: Codex App Server
 is not wired.
@@ -29,9 +29,9 @@ Switch providers with `/provider NAME` or `--provider NAME`. Each provider
 remembers its last model in `providers.<name>.last_model` inside
 `~/.niminal/config.json`.
 
-`/provider` alone prints the active name, model, endpoint, and the provider's
-standard environment variable. Credentials can also come from
-`~/.niminal/auth.json` or `--api-key`.
+`/provider` alone prints the active name, model, and your endpoint override,
+or `(provider default)` when no override is set. Credentials can come from the
+environment variables above, `~/.niminal/auth.json`, or `--api-key`.
 
 ## Use Microsoft Foundry
 

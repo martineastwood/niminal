@@ -2,32 +2,26 @@
 
 #include <niminal/types.hpp>
 
-#include <atomic>
+#include <cail/language_model.hpp>
+
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace niminal {
 
 struct ChatRequest;
-struct HttpResponse;
+struct ProviderResponse;
 
 struct Agent {
   std::string system;
-  std::string model = "openai/gpt-4o-mini";
-  std::string provider = "openrouter";
-  std::string model_runtime;
-  std::string model_sdk;
-  std::string api_key;
-  std::string api_url = "https://openrouter.ai/api/v1/chat/completions";
-  std::string key_hint = "OPENROUTER_API_KEY";
-  std::map<std::string, std::string> extra_headers;
-  bool session_routing = true;
-  bool stream_usage = true;
-  bool apply_cache = true;
-  bool prompt_cache_key = true;
+  std::string model;
+  std::optional<bool> stream_usage;
+  bool apply_cache = false;
+  cail::LanguageModel language_model;
   int max_steps = 0; // 0 means unlimited.
   std::vector<Tool> tools;
   json messages = json::array();
@@ -35,14 +29,13 @@ struct Agent {
   std::function<void(const StreamEvent&)> on_event;
   std::shared_ptr<std::function<void(std::string)>> tool_output =
       std::make_shared<std::function<void(std::string)>>();
-  std::atomic<bool>* cancel = nullptr;
+  Cancellation* cancel = nullptr;
   std::vector<std::string> system_extra;
   std::function<std::vector<std::string>()> system_extra_loader;
   std::string conversation_id;
   std::function<void(const UserInput&)> persist_user;
   std::function<void(const std::string& text, const std::vector<ToolCall>& calls,
-                     const std::string& model, const Usage& usage,
-                     const std::string& reasoning_content, const json& reasoning_details)>
+                     const std::string& model, const Usage& usage, const json& provider_options)>
       persist_assistant;
   std::function<void(const std::string& id, const ToolResult& output, bool error)> persist_tool;
   std::function<void()> persist_step;
@@ -60,7 +53,7 @@ struct Agent {
   std::function<void()> agent_settled;
   std::function<void(std::map<std::string, std::string>&)> before_provider_headers;
   std::function<void(json&)> before_provider_request;
-  std::function<void(const HttpResponse&)> after_provider_response;
+  std::function<void(const ProviderResponse&)> after_provider_response;
   std::function<std::vector<UserInput>()> take_steering;
   std::function<std::vector<UserInput>()> take_follow_up;
   std::function<UserInput(UserInput)> prepare_user;
@@ -68,12 +61,11 @@ struct Agent {
   std::function<bool()> recover_overflow;
   std::function<ChatResult(const ChatRequest&)> stream_chat_fn;
   std::string run_id;
-  bool requires_api_key = true;
 
   json request_messages(const std::string& effective_system) const;
   json request_messages() const { return request_messages(system); }
   void fill_chat(ChatRequest& req) const;
-  bool cancelled() const { return cancel && cancel->load(); }
+  bool cancelled() const { return cancel != nullptr && cancel->requested(); }
   std::string run(UserInput prompt, bool append_user = true);
 };
 

@@ -2,18 +2,15 @@
 
 #include <niminal/types.hpp>
 
-#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
 
-namespace niminal {
+namespace niminal::app {
 
 struct HttpResponse {
   long status = 0;
   std::string body;
-  std::map<std::string, std::string> headers;
-  int duration_ms = 0;
 };
 
 class HttpClient {
@@ -30,4 +27,4 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-} // namespace niminal
+} // namespace niminal::app

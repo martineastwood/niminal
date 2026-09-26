@@ -139,7 +139,7 @@ bool handle_extension(SlashHost& host, const std::string& cmd, const std::string
     json context = {{"mode", "tui"},
                     {"workspace", host.cwd.string()},
                     {"session_id", host.session.id},
-                    {"provider", host.agent.provider},
+                    {"provider", host.cfg.provider},
                     {"model", host.agent.model},
                     {"messages", host.session.openai_messages()}};
     auto response = host.extensions->invoke(cmd.substr(1), arg, context);
@@ -255,8 +255,9 @@ bool handle_trust(SlashHost& host, const std::string& arg) {
 
 bool handle_provider(SlashHost& host, const std::string& arg) {
   if (arg.empty()) {
-    push_status(host, "provider: " + host.agent.provider + "\nmodel: " + host.agent.model +
-                          "\nurl: " + host.agent.api_url + "\nkey: " + host.agent.key_hint);
+    push_status(
+        host, "provider: " + host.cfg.provider + "\nmodel: " + host.agent.model +
+                  "\nurl: " + (host.cfg.api_url.empty() ? "(provider default)" : host.cfg.api_url));
     return true;
   }
   if (auto result = select_provider(host.cfg, arg); !result) {
@@ -266,8 +267,8 @@ bool handle_provider(SlashHost& host, const std::string& arg) {
   apply_provider(host.agent, host.cfg);
   try {
     save_config(host.cfg);
-    host.session.add_selection(host.cfg.model, host.agent.provider);
-    push_status(host, "provider set to " + host.agent.provider + "\nmodel: " + host.agent.model +
+    host.session.add_selection(host.cfg.model, host.cfg.provider);
+    push_status(host, "provider set to " + host.cfg.provider + "\nmodel: " + host.agent.model +
                           "\nsaved " + config_path().string());
   } catch (const std::exception& e) {
     push_error(host, "provider set for this session, save failed: " + std::string(e.what()));
@@ -277,7 +278,8 @@ bool handle_provider(SlashHost& host, const std::string& arg) {
 
 bool handle_model(SlashHost& host, const std::string& arg) {
   if (arg.empty()) {
-    push_status(host, "model: " + host.cfg.model + "\nurl: " + host.agent.api_url);
+    push_status(host, "model: " + host.cfg.model + "\nurl: " +
+                          (host.cfg.api_url.empty() ? "(provider default)" : host.cfg.api_url));
     return true;
   }
   if (host.cfg.provider == "local" || host.cfg.provider == "foundry") {
@@ -307,7 +309,7 @@ bool handle_model(SlashHost& host, const std::string& arg) {
   }
   try {
     save_config(host.cfg);
-    host.session.add_selection(host.cfg.model, host.agent.provider);
+    host.session.add_selection(host.cfg.model, host.cfg.provider);
     push_status(host, "model set to " + host.cfg.model + "\nsaved " + config_path().string());
   } catch (const std::exception& e) {
     push_error(host, "model set for this session, save failed: " + std::string(e.what()));
@@ -317,8 +319,8 @@ bool handle_model(SlashHost& host, const std::string& arg) {
 
 bool handle_thinking(SlashHost& host, const std::string& arg) {
   if (arg.empty()) {
-    const auto status = thinking_status(host.agent.provider, host.agent.model, host.cfg.thinking);
-    const auto choices = thinking_choices(host.agent.provider, host.agent.model);
+    const auto status = thinking_status(host.cfg.provider, host.agent.model, host.cfg.thinking);
+    const auto choices = thinking_choices(host.cfg.provider, host.agent.model);
     std::string msg = "thinking: ";
     if (host.cfg.thinking.empty()) {
       msg += status.empty() ? "(provider default)" : status;
@@ -344,7 +346,7 @@ bool handle_thinking(SlashHost& host, const std::string& arg) {
     return true;
   }
   apply_provider(host.agent, host.cfg);
-  const auto status = thinking_status(host.agent.provider, host.agent.model, host.cfg.thinking);
+  const auto status = thinking_status(host.cfg.provider, host.agent.model, host.cfg.thinking);
   try {
     save_config(host.cfg);
     push_status(host, "thinking set to " + (status.empty() ? host.cfg.thinking : status) +

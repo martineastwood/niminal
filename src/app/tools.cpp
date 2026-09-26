@@ -201,7 +201,7 @@ bool cap_shell_output(std::string& output) {
 } // namespace
 
 std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
-                     std::atomic<bool>* cancel,
+                     niminal::Cancellation* cancel,
                      const std::function<void(const std::string&)>& on_output,
                      const ShellEnv& env) {
   int out_pipe[2];
@@ -262,8 +262,8 @@ std::string run_bash(const std::string& command, const fs::path& cwd, int timeou
   bool timed_out = false;
   while (true) {
     auto now = std::chrono::steady_clock::now();
-    if (now >= deadline || ((cancel != nullptr) && cancel->load())) {
-      timed_out = (cancel == nullptr) || !cancel->load();
+    if (now >= deadline || ((cancel != nullptr) && cancel->requested())) {
+      timed_out = (cancel == nullptr) || !cancel->requested();
       kill_tree();
       break;
     }
@@ -325,7 +325,7 @@ wait_child:
   }
   if (timed_out) {
     msg << "exit: timeout after " << timeout_s << "s";
-  } else if ((cancel != nullptr) && cancel->load()) {
+  } else if ((cancel != nullptr) && cancel->requested()) {
     msg << "exit: interrupted";
   } else {
     msg << "exit: " << code;
@@ -361,7 +361,7 @@ void write_file_text(const fs::path& path, const std::string& content) {
 
 } // namespace
 
-std::vector<Tool> workspace_tools(Workspace& ws, std::atomic<bool>* cancel,
+std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
                                   const std::function<void(const std::string&)>& on_bash_output,
                                   const ShellEnvFn* shell_env) {
   std::vector<Tool> tools;
@@ -682,7 +682,7 @@ ShellEnv make_shell_env(const Session& session, const niminal::Agent& agent, con
   if (!session.path.empty()) {
     env["NIMINAL_SESSION_FILE"] = session.path;
   }
-  env["NIMINAL_PROVIDER"] = agent.provider;
+  env["NIMINAL_PROVIDER"] = cfg.provider;
   env["NIMINAL_MODEL"] = agent.model;
   if (!cfg.thinking.empty()) {
     env["NIMINAL_REASONING_LEVEL"] = cfg.thinking;

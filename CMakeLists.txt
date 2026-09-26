@@ -142,10 +142,8 @@ if(EXISTS "${_ftxui_app}")
 endif()
 
 add_library(niminal_ai
-  src/niminal/http.cpp
   src/niminal/chat.cpp
-  src/niminal/agent.cpp
-  src/niminal/providers.cpp)
+  src/niminal/agent.cpp)
 add_library(niminal::ai ALIAS niminal_ai)
 
 target_include_directories(niminal_ai PUBLIC
@@ -153,22 +151,13 @@ target_include_directories(niminal_ai PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(niminal_ai PUBLIC
-  CURL::libcurl
   cail::cail
-  nlohmann_json::nlohmann_json
-  OpenSSL::SSL
-  OpenSSL::Crypto
-  ZLIB::ZLIB)
-
-if(APPLE)
-  target_link_libraries(niminal_ai PUBLIC
-    "-framework CoreFoundation"
-    "-framework SystemConfiguration")
-endif()
+  nlohmann_json::nlohmann_json)
 
 niminal_strict_compile(niminal_ai)
 
 add_library(niminal_app
+  src/app/http.cpp
   src/app/tui.cpp
   src/app/clipboard.cpp
   src/app/slash.cpp
@@ -200,7 +189,13 @@ add_library(niminal_app
   src/app/diff.cpp
   src/app/theme.cpp)
 target_include_directories(niminal_app PUBLIC src/app)
-target_link_libraries(niminal_app PUBLIC niminal::ai ftxui::component)
+target_link_libraries(niminal_app PUBLIC niminal::ai ftxui::component
+  PRIVATE CURL::libcurl OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
+if(APPLE)
+  target_link_libraries(niminal_app PRIVATE
+    "-framework CoreFoundation"
+    "-framework SystemConfiguration")
+endif()
 niminal_strict_compile(niminal_app)
 
 add_executable(niminal_cli src/app/main.cpp)
@@ -251,7 +246,7 @@ target_compile_definitions(niminal_extensions_test PRIVATE
 niminal_add_test(diff niminal_app)
 niminal_add_test(theme niminal_app)
 niminal_add_test(transcript niminal_app)
-niminal_add_test(http niminal::ai)
+niminal_add_test(http niminal_app)
 niminal_add_test(rpc niminal_app)
 niminal_add_test(version niminal::ai $<TARGET_FILE:niminal_cli>)
 add_dependencies(niminal_version_test niminal_cli)

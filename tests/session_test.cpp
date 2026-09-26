@@ -60,8 +60,9 @@ int main() {
       {"type", "function"},
       {"function", {{"name", "bash"}, {"arguments", "{\"command\":\"npm test\"}"}}},
   }});
-  json reasoning_details = json::array({{{"type", "reasoning.text"}, {"text", "check"}}});
-  s.add_assistant("running tests", calls, "openai/gpt-4o-mini", {}, "check", reasoning_details);
+  json provider_options =
+      json{{"reasoning_details", json::array({{{"type", "reasoning.text"}, {"text", "check"}}})}};
+  s.add_assistant("running tests", calls, "openai/gpt-4o-mini", {}, provider_options);
   s.add_tool_result("call_1", "exit_code: 1", true);
   s.add_name("fix the parser");
   s.add_selection("anthropic/claude-sonnet-4", "openrouter");
@@ -93,9 +94,8 @@ int main() {
   if (msgs[1].value("role", "") != "assistant" || !msgs[1].contains("tool_calls")) {
     return fail("assistant tool_calls");
   }
-  if (msgs[1].value("reasoning_content", "") != "check" ||
-      msgs[1].value("reasoning_details", json::array()) != reasoning_details) {
-    return fail("assistant reasoning survives session reload");
+  if (msgs[1].value("provider_options", json::object()) != provider_options) {
+    return fail("assistant provider options survive session reload");
   }
   if (msgs[2].value("role", "") != "tool") {
     return fail("tool role");

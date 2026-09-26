@@ -27,9 +27,9 @@ json tools_payload(const std::vector<Tool>& tools) {
   json out = json::array();
   for (const auto& tool : tools) {
     out.push_back({
-        {"type", "function"},
-        {"function",
-         {{"name", tool.name}, {"description", tool.description}, {"parameters", tool.parameters}}},
+        {"name", tool.name},
+        {"description", tool.description},
+        {"parameters", tool.parameters},
     });
   }
   return out;
@@ -54,30 +54,28 @@ bool looks_overflow(std::string_view msg) {
          (s.find("context") != std::string::npos && s.find("overflow") != std::string::npos);
 }
 
-bool looks_transient(std::string_view msg) {
-  const auto text = lower_copy(std::string(msg));
-  return text.rfind("http 5", 0) == 0 || text.find("http 429:") != std::string::npos ||
-         text.find("failure when receiving") != std::string::npos ||
-         text.find("failed sending") != std::string::npos ||
-         text.find("couldn't connect") != std::string::npos ||
-         text.find("could not connect") != std::string::npos ||
-         text.find("connection refused") != std::string::npos ||
-         text.find("connection reset") != std::string::npos ||
-         text.find("timed out") != std::string::npos ||
-         text.find("timeout was reached") != std::string::npos ||
-         text.find("server returned nothing") != std::string::npos ||
-         text.find("transferred a partial file") != std::string::npos;
+bool looks_transient(const Error& error) {
+  return error.transport || error.http_status == 429 ||
+         (error.http_status >= 500 && error.http_status < 600);
 }
 
-bool wait_for_retry(std::atomic<bool>* cancel, std::chrono::milliseconds delay) {
+bool wait_for_retry(Cancellation* cancel, std::chrono::milliseconds delay) {
   const auto deadline = std::chrono::steady_clock::now() + delay;
   while (std::chrono::steady_clock::now() < deadline) {
-    if (cancel != nullptr && cancel->load()) {
+    if (cancel != nullptr && cancel->requested()) {
       return false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
-  return cancel == nullptr || !cancel->load();
+  return cancel == nullptr || !cancel->requested();
+}
+
+json object_options(const std::optional<std::string>& options) {
+  if (!options) {
+    return json();
+  }
+  auto parsed = json::parse(*options, nullptr, false);
+  return parsed.is_object() ? parsed : json();
 }
 
 } // namespace
@@ -116,19 +114,10 @@ json Agent::request_messages(const std::string& effective_system) const {
 }
 
 void Agent::fill_chat(ChatRequest& req) const {
-  req.api_url = api_url;
-  req.api_key = api_key;
-  req.model = model;
-  req.provider = provider;
-  req.model_sdk = model_sdk;
-  req.key_hint = key_hint;
-  req.requires_api_key = requires_api_key;
+  req.model = language_model;
   req.conversation_id = conversation_id;
-  req.extra_headers = extra_headers;
-  req.session_routing = session_routing;
   req.stream_usage = stream_usage;
   req.apply_cache = apply_cache;
-  req.prompt_cache_key = prompt_cache_key;
   req.extra = extra;
   req.before_provider_headers = before_provider_headers;
   req.before_provider_request = before_provider_request;
@@ -296,8 +285,8 @@ std::string Agent::run(UserInput prompt, bool append_user) {
             restart_step = true;
             break;
           }
-          if (!looks_transient(e.what()) || retries == kMaxRetries) {
-            if (retries == kMaxRetries && looks_transient(e.what())) {
+          if (!looks_transient(e) || retries == kMaxRetries) {
+            if (retries == kMaxRetries && looks_transient(e)) {
               StreamEvent retry{EventKind::status,
                                 "Connection failed after " + std::to_string(kMaxRetries) +
                                     " retries.",
@@ -342,7 +331,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       if (result.tool_calls.empty()) {
         if (persist_assistant) {
           persist_assistant(result.text, result.tool_calls, model, result.usage,
-                            result.reasoning_content, result.reasoning_details);
+                            object_options(result.provider_options));
         }
         StreamEvent assistant{EventKind::assistant_message, result.text, {}, {}};
         assistant.final = true;
@@ -381,11 +370,8 @@ std::string Agent::run(UserInput prompt, bool append_user) {
 
       empty_responses = 0;
       json assistant = {{"role", "assistant"}, {"content", result.text}};
-      if (!result.reasoning_content.empty()) {
-        assistant["reasoning_content"] = result.reasoning_content;
-      }
-      if (!result.reasoning_details.empty()) {
-        assistant["reasoning_details"] = result.reasoning_details;
+      if (const auto options = object_options(result.provider_options); !options.empty()) {
+        assistant["provider_options"] = options;
       }
       json calls = json::array();
       if (!result.text.empty()) {
@@ -399,8 +385,9 @@ std::string Agent::run(UserInput prompt, bool append_user) {
             {"type", "function"},
             {"function", {{"name", call.name}, {"arguments", call.arguments}}},
         });
-        if (!call.thought_signature.empty())
-          calls.back()["thought_signature"] = call.thought_signature;
+        if (const auto options = object_options(call.provider_options); !options.empty()) {
+          calls.back()["provider_options"] = options;
+        }
         StreamEvent tool_call{EventKind::tool_call, call.arguments, call.name, call.id};
         tool_call.input = detail::parse_tool_input(call.arguments);
         emit(std::move(tool_call));
@@ -409,7 +396,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       messages.push_back(std::move(assistant));
       if (persist_assistant) {
         persist_assistant(result.text, result.tool_calls, model, result.usage,
-                          result.reasoning_content, result.reasoning_details);
+                          object_options(result.provider_options));
       }
 
       struct ToolExecution {

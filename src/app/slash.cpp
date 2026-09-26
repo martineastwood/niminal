@@ -9,7 +9,7 @@
 #include "theme.hpp"
 #include "thinking.hpp"
 
-#include <niminal/providers.hpp>
+#include "provider.hpp"
 #include <niminal/text.hpp>
 
 #include <algorithm>
@@ -102,9 +102,8 @@ std::vector<Suggestion> suggest_models(const std::string& query, std::string_vie
     out.push_back({"/model " + id, std::move(label)});
   };
   auto q = niminal::lower_copy(query);
-  if (const auto* registered = niminal::find_provider(provider);
-      registered != nullptr && !registered->models.empty()) {
-    for (const auto& id : registered->models) {
+  if (const auto models = provider_models(provider); !models.empty()) {
+    for (const auto& id : models) {
       if (q.empty() || contains_ci(id, q)) {
         add(id, 0);
       }
@@ -366,12 +365,11 @@ slash_suggestions(const std::string& draft, const std::filesystem::path& dir,
 
   if (cmd == "/provider" && (trailing || !arg.empty())) {
     std::vector<Suggestion> out;
-    for (const auto& spec : niminal::all_providers()) {
-      if (!arg.empty() && !spec.name.starts_with(arg)) {
+    for (const auto& name : provider_names()) {
+      if (!arg.empty() && !name.starts_with(arg)) {
         continue;
       }
-      out.push_back({"/provider " + std::string(spec.name),
-                     std::string(spec.name) + "  " + std::string(spec.default_model)});
+      out.push_back({"/provider " + name, name + "  " + provider_default_model(name)});
     }
     sort_suggestions(out);
     if (!out.empty()) {

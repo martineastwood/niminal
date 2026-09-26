@@ -83,11 +83,27 @@ int main() {
   small_context.reserve_tokens = 0;
   small_context.keep_recent_tokens = 40;
   int notices = 0;
-  niminal::app::bind_compaction(
-      one_turn_agent, large_result, [&](const std::string&) { ++notices; }, {}, small_context);
+  niminal::app::bind_compaction(one_turn_agent, large_result, small_context,
+                                [&](const std::string&) { ++notices; });
   one_turn_agent.before_request();
   if (notices != 0) {
     return fail("no compaction notice when no older turn can be removed");
+  }
+
+  niminal::Agent configured_agent;
+  int summaries = 0;
+  configured_agent.language_model = cail::LanguageModel{
+      [&](const cail::GenerationRequest&) -> cail::Result<cail::GenerationResponse> {
+        ++summaries;
+        return cail::GenerationResponse{.text = "Earlier turns summarized."};
+      }};
+  small_context.context_window = 1'000'000;
+  niminal::app::bind_compaction(configured_agent, s, small_context);
+  configured_agent.before_request();
+  small_context.context_window = 100;
+  configured_agent.before_request();
+  if (summaries != 1 || s.latest_compaction_index() < 0) {
+    return fail("compaction should use the current configuration and configured Cail model");
   }
 
   std::filesystem::remove_all(dir);

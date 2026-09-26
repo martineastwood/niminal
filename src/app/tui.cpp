@@ -291,7 +291,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   size_t cached_transcript_revision = static_cast<size_t>(-1);
   size_t cached_transcript_block_count = static_cast<size_t>(-1);
   int cached_transcript_width = 0;
-  std::atomic<bool> local_cancel{false};
+  niminal::Cancellation local_cancel;
   if (agent.cancel == nullptr) {
     agent.cancel = &local_cancel;
   }
@@ -524,14 +524,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::vector<Suggestion> suggestions_cache;
   std::optional<std::tuple<std::string, int, std::string, std::string>> suggestions_input;
   auto current_suggestions = [&]() -> const std::vector<Suggestion>& {
-    const auto input_key = std::tuple{draft, cursor, agent.provider, agent.model};
+    const auto input_key = std::tuple{draft, cursor, cfg.provider, agent.model};
     if (suggestions_input == input_key) {
       return suggestions_cache;
     }
 
     std::vector<std::string> recents;
     add_unique(recents, agent.model);
-    if (auto it = cfg.last_models.find(agent.provider); it != cfg.last_models.end()) {
+    if (auto it = cfg.last_models.find(cfg.provider); it != cfg.last_models.end()) {
       add_unique(recents, it->second);
     }
     add_unique(recents, cfg.model);
@@ -543,7 +543,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     } else {
       static const std::vector<ExtensionCommand> no_commands;
       const auto& commands = extensions ? extensions->commands() : no_commands;
-      items = slash_suggestions(draft, session_dir, cwd.string(), agent.provider, agent.model,
+      items = slash_suggestions(draft, session_dir, cwd.string(), cfg.provider, agent.model,
                                 recents, commands, session);
     }
     std::string sig;
@@ -643,7 +643,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       if (result.agent_changed) {
         apply_provider(agent, cfg);
-        session.add_selection(cfg.model, agent.provider);
+        session.add_selection(cfg.model, cfg.provider);
       }
       save_config(cfg);
       flash_footer("Saved " + config_path().string());
@@ -1000,9 +1000,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   configure_extension_updates(extensions);
   configure_extension_ui(extensions);
   bind_extensions(
-      agent, extensions, cwd,
+      agent, extensions, cwd, cfg,
       [&](const std::string& warning) { post_ui(StreamEvent{EventKind::status, warning, {}, {}}); },
-      &session, cfg);
+      &session);
   agent.approve_tool = [&](const niminal::ToolCall& call, const niminal::Tool& tool) {
     if (yolo_mode) {
       return true;
@@ -1046,7 +1046,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         approval.pending = false;
         break;
       }
-      if (!ui_alive || cancel->load()) {
+      if (!ui_alive || cancel->requested()) {
         approval.pending = false;
         break;
       }
@@ -1061,14 +1061,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     return decision != PermissionDecision::deny;
   };
   bind_compaction(
-      agent, session,
+      agent, session, cfg,
       [&](const std::string& msg) {
         if (msg.empty()) {
           return;
         }
         post_ui(StreamEvent{EventKind::status, msg, {}, {}});
       },
-      extensions, cfg);
+      extensions);
   agent.take_steering = [&] {
     std::lock_guard<std::mutex> lock(steering_mu);
     auto out = std::move(steering);
@@ -1111,19 +1111,19 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     configure_extension_updates(extensions);
     configure_extension_ui(extensions);
     bind_extensions(
-        agent, extensions, cwd,
+        agent, extensions, cwd, cfg,
         [&](const std::string& warning) {
           post_ui(StreamEvent{EventKind::status, warning, {}, {}});
         },
-        &session, cfg);
+        &session);
     bind_compaction(
-        agent, session,
+        agent, session, cfg,
         [&](const std::string& msg) {
           if (!msg.empty()) {
             post_ui(StreamEvent{EventKind::status, msg, {}, {}});
           }
         },
-        extensions, cfg);
+        extensions);
     for (const auto& warning : extensions->warnings()) {
       blocks.push_back(Block{BlockKind::status, warning});
     }
@@ -1257,7 +1257,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       retry_available = false;
     }
     join_worker();
-    cancel->store(false);
+    cancel->clear();
     if (!retry) {
       blocks.push_back(Block{BlockKind::user, compose_input_preview(prompt)});
       ++transcript_revision;
@@ -1311,7 +1311,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         [&] { apply_extension_actions(); },
         [&](niminal::UserInput input, bool retry) { send_prompt(std::move(input), retry); },
         [&] {
-          cancel->store(true);
+          cancel->request();
           ui_alive = false;
           screen.Exit();
         },
@@ -1370,7 +1370,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return;
     }
     join_worker();
-    cancel->store(false);
+    cancel->clear();
     stick_bottom = true;
     transcript_y = 1.F;
     const std::string tool_id = "ubash-" + std::to_string(++user_bash_seq);
@@ -1593,7 +1593,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         activity_line = kSpin[(ms / 200) % 10];
         activity_line += ' ';
       }
-      activity_line += activity.empty() ? (cancel->load() ? "Stopping…" : "Thinking…") : activity;
+      activity_line +=
+          activity.empty() ? (cancel->requested() ? "Stopping…" : "Thinking…") : activity;
       if (activity_started) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                                  std::chrono::steady_clock::now() - *activity_started)
@@ -1622,17 +1623,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
 
     const auto next_footer_key =
-        std::tuple{agent.provider, agent.model, cfg.thinking, footer_revision};
+        std::tuple{cfg.provider, agent.model, cfg.thinking, footer_revision};
     if (footer_key != next_footer_key) {
-      think = thinking_status(agent.provider, agent.model, cfg.thinking);
+      think = thinking_status(cfg.provider, agent.model, cfg.thinking);
       if (think.empty()) {
-        think = thinking_choices(agent.provider, agent.model).empty()
+        think = thinking_choices(cfg.provider, agent.model).empty()
                     ? std::string()
                     : (cfg.thinking.empty() ? "default" : "off");
       }
       usage = format_usage_line(usage_totals);
       if (!usage.empty()) {
-        auto cost = lookup_model_cost(agent.provider, agent.model);
+        auto cost = lookup_model_cost(cfg.provider, agent.model);
         if (cost.known) {
           usage += "  " + format_cost_usd(usage_cost_usd(usage_totals, cost));
         }
@@ -1870,7 +1871,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     stack.push_back(hbox({
         text(usage.empty() ? "↑0  ↓0" : usage) | dim,
         filler(),
-        text(agent.provider + (agent.model_runtime.empty() ? "" : "/" + agent.model_runtime) + "/" +
+        text(cfg.provider + (cfg.model_runtime.empty() ? "" : "/" + cfg.model_runtime) + "/" +
              agent.model + (yolo_mode ? " [yolo]" : "")) |
             color(theme.accent),
         text(think.empty() ? std::string() : (":" + think)) | dim,
@@ -1961,7 +1962,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       if (pressed(KeyAction::quit)) {
         finish_ask_user(niminal::ToolResult{"interrupted"});
-        cancel->store(true);
+        cancel->request();
         ui_alive = false;
         screen.Exit();
         return true;
@@ -2052,7 +2053,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         resolve_approval(PermissionDecision::deny);
       } else if (pressed(KeyAction::quit)) {
         resolve_approval(PermissionDecision::deny);
-        cancel->store(true);
+        cancel->request();
         ui_alive = false;
         screen.Exit();
       } else {
@@ -2097,7 +2098,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return true;
       }
       if (pressed(KeyAction::quit)) {
-        cancel->store(true);
+        cancel->request();
         ui_alive = false;
         screen.Exit();
         return true;
@@ -2112,11 +2113,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       if (spec != nullptr) {
         if (e == Event::ArrowLeft && spec->kind == SettingKind::cycle) {
-          persist_settings(cycle_setting(cfg, spec->field, -1, agent.provider, agent.model));
+          persist_settings(cycle_setting(cfg, spec->field, -1, cfg.provider, agent.model));
           return true;
         }
         if (e == Event::ArrowRight && spec->kind == SettingKind::cycle) {
-          persist_settings(cycle_setting(cfg, spec->field, 1, agent.provider, agent.model));
+          persist_settings(cycle_setting(cfg, spec->field, 1, cfg.provider, agent.model));
           return true;
         }
         if (e == Event::Character(' ') && spec->kind == SettingKind::toggle) {
@@ -2127,7 +2128,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           if (spec->kind == SettingKind::toggle) {
             persist_settings(toggle_setting(cfg, spec->field));
           } else if (spec->kind == SettingKind::cycle) {
-            persist_settings(cycle_setting(cfg, spec->field, 1, agent.provider, agent.model));
+            persist_settings(cycle_setting(cfg, spec->field, 1, cfg.provider, agent.model));
           } else if (spec->kind == SettingKind::text || spec->kind == SettingKind::integer) {
             settings_edit = edit_initial_value(cfg, spec->field);
             settings_error.clear();
@@ -2155,7 +2156,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return true;
       }
       if (pressed(KeyAction::quit)) {
-        cancel->store(true);
+        cancel->request();
         ui_alive = false;
         screen.Exit();
         return true;
@@ -2366,7 +2367,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     if (pressed(KeyAction::cancel)) {
       if (user_bash_running) {
-        cancel->store(true);
+        cancel->request();
         activity = "Stopping…";
         return true;
       }
@@ -2376,7 +2377,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           std::lock_guard<std::mutex> lock(steering_mu);
           has_steering = !steering.empty();
         }
-        cancel->store(true);
+        cancel->request();
         activity = "Stopping…";
         if (has_steering) {
           send_queue_after_stop = true;
@@ -2394,7 +2395,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (pressed(KeyAction::quit)) {
-      cancel->store(true);
+      cancel->request();
       ui_alive = false;
       screen.Exit();
       return true;
@@ -2470,7 +2471,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   watchdog.join();
   std::cout << "\033[?2004l" << std::flush;
   ui_alive = false;
-  cancel->store(true);
+  cancel->request();
   finish_ask_user(niminal::ToolResult{"interrupted"});
   resolve_approval(PermissionDecision::deny);
   join_worker();

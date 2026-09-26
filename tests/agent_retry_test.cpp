@@ -7,7 +7,6 @@
 
 int main() {
   niminal::Agent agent;
-  agent.api_key = "test";
   agent.model = "test-model";
 
   int calls = 0;
@@ -25,7 +24,7 @@ int main() {
       if (request.on_event) {
         request.on_event(niminal::StreamEvent{niminal::EventKind::text_delta, "partial", {}, {}});
       }
-      throw niminal::Error("http: Failure when receiving data from the peer");
+      throw niminal::Error("http: Failure when receiving data from the peer", 0, true);
     }
     niminal::ChatResult result;
     result.text = "recovered";
@@ -46,7 +45,6 @@ int main() {
   }
 
   niminal::Agent reasoning_agent;
-  reasoning_agent.api_key = "test";
   reasoning_agent.model = "thinking-model";
   reasoning_agent.tools.push_back(niminal::Tool{"lookup", "lookup", niminal::json::object(),
                                                 [](const niminal::json&) { return "found"; }});
@@ -54,14 +52,14 @@ int main() {
   reasoning_agent.stream_chat_fn = [&](const niminal::ChatRequest& request) {
     niminal::ChatResult result;
     if (steps++ == 0) {
-      result.reasoning_content = "need lookup";
-      result.reasoning_details =
-          niminal::json::array({{{"type", "reasoning.text"}, {"text", "need lookup"}}});
+      result.provider_options =
+          R"({"reasoning_content":"need lookup","reasoning_details":[{"type":"reasoning.text","text":"need lookup"}]})";
       result.tool_calls.push_back({"call_1", "lookup", "{}"});
     } else {
       const auto& assistant = request.messages[1];
-      if (assistant.value("reasoning_content", "") != "need lookup" ||
-          assistant.value("reasoning_details", niminal::json::array()) !=
+      const auto options = assistant.value("provider_options", niminal::json::object());
+      if (options.value("reasoning_content", "") != "need lookup" ||
+          options.value("reasoning_details", niminal::json::array()) !=
               niminal::json::array({{{"type", "reasoning.text"}, {"text", "need lookup"}}})) {
         throw niminal::Error("reasoning missing from tool continuation");
       }
@@ -75,7 +73,6 @@ int main() {
   }
 
   niminal::Agent parallel_agent;
-  parallel_agent.api_key = "test";
   parallel_agent.model = "test-model";
   std::atomic<int> output_calls{0};
   auto output = parallel_agent.tool_output;
