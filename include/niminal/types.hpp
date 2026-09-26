@@ -79,6 +79,7 @@ struct ToolCall {
   std::string id;
   std::string name;
   std::string arguments;
+  std::string thought_signature{};
 };
 
 struct UserInput {

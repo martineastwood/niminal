@@ -63,7 +63,7 @@ std::vector<ProviderSpec>& provider_registry() {
        true,
        {}},
       {"openai",
-       "https://api.openai.com/v1/chat/completions",
+       "https://api.openai.com/v1",
        "gpt-5",
        {"OPENAI_API_KEY"},
        "api.openai.com",
@@ -219,9 +219,6 @@ std::string read_api_key(const ProviderSpec& provider) {
 }
 
 std::map<std::string, std::string> provider_headers(const ProviderSpec& provider) {
-  if (provider.name == "anthropic") {
-    return {{"anthropic-version", "2023-06-01"}};
-  }
   if (provider.name == "openrouter") {
     return {{"HTTP-Referer", "https://niminal.dev"}, {"X-Title", "niminal"}};
   }

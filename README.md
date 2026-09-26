@@ -193,8 +193,19 @@ Full guides and reference material live at [niminal.dev](https://niminal.dev):
 
 For contributors and packagers:
 
+CAIL is a separate CMake package and requires CMake 3.31 or newer. For now,
+check out CAIL next to Niminal and install it before configuring Niminal:
+
 ```sh
-cmake --preset dev
+cmake -S ../cail -B ../cail/build -DCAIL_BUILD_EXAMPLES=OFF
+cmake --build ../cail/build
+cmake --install ../cail/build --prefix ../cail/build/install
+```
+
+Then configure Niminal with that install prefix:
+
+```sh
+cmake --preset dev -DCMAKE_PREFIX_PATH=../cail/build/install
 cmake --build --preset dev
 ```
 

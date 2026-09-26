@@ -6,8 +6,6 @@
 #include <functional>
 #include <map>
 #include <string>
-#include <string_view>
-#include <vector>
 
 namespace niminal {
 
@@ -18,6 +16,7 @@ struct ChatRequest {
   std::string api_key;
   std::string model;
   std::string provider;
+  std::string model_sdk;
   std::string key_hint = "OPENROUTER_API_KEY";
   json messages;
   json tools;
@@ -25,7 +24,6 @@ struct ChatRequest {
   json extra = json::object();
   std::string conversation_id;
   std::map<std::string, std::string> extra_headers;
-  bool stream = true;
   bool session_routing = false;
   bool stream_usage = true;
   bool apply_cache = false;
@@ -38,11 +36,8 @@ struct ChatRequest {
   bool requires_api_key = true;
 };
 
-ChatResult stream_chat(ChatRequest&& request);
 ChatResult stream_chat(const ChatRequest& request);
-json chat_body(const ChatRequest& request);
 std::string complete_chat(const ChatRequest& request);
-Usage parse_chat_usage(const json& usage);
 std::string format_usage_line(const Usage& usage);
 
 } // namespace niminal

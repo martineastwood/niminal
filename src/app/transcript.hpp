@@ -33,6 +33,8 @@ struct Block {
   bool expanded = false;
   std::string tool_name;
   std::string tool_id;
+  std::string turn_id;
+  int step = -1;
 
   Block() = default;
   Block(BlockKind block_kind, std::string block_text)

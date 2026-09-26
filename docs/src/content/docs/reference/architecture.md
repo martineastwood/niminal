@@ -5,8 +5,9 @@ description: How niminal fits together as a native coding agent.
 
 niminal is a native C++ coding agent built on the `niminal::ai` library. The
 executable handles workspace tools, sessions, permissions, extensions, and the
-TUI. The library owns provider-neutral streaming, HTTP, provider adapters, and
-the tool-capable agent loop.
+TUI. The library owns the tool-capable agent loop, application HTTP, and the
+adapter that maps niminal sessions and tools onto CAIL, the C++ AI SDK used for
+model transport and provider APIs.
 
 ## Surfaces
 
@@ -50,9 +51,11 @@ tools are simpler one-shot executables invoked only when the model calls them.
 
 ## Providers
 
-niminal normalizes requests to OpenAI-style messages and tools, then adapts them
-per provider (Anthropic Messages, OpenAI Chat Completions, Google Gemini, and
-others). Prompt caching breakpoints are applied on supported providers.
+niminal keeps provider and model selection, credentials, and session history in
+OpenAI-style JSON. Each model step maps that history and the runtime tools into
+CAIL's public generation API. CAIL owns the provider wire formats (Anthropic
+Messages, OpenAI Responses, Chat Completions, Gemini, and others). Prompt
+caching breakpoints are applied on supported providers before the CAIL call.
 
 ## Out of scope
 
@@ -60,8 +63,9 @@ niminal does not ship a hosted service, repo index daemon, LSP integration, or
 built-in MCP client. Codex App Server is not wired. Plan mode is not exposed;
 the agent always runs in act mode.
 
-Other programs can link the `niminal::ai` CMake target for the provider SDK
-without pulling in the CLI application.
+Other programs can link the `niminal::ai` CMake target for the agent loop
+without pulling in the CLI application. Standalone model clients should use
+CAIL directly.
 
 ## Next steps
 

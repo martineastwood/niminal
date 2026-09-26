@@ -1,6 +1,7 @@
 #include "provider.hpp"
 #include "auth.hpp"
 #include "thinking.hpp"
+#include "models_dev.hpp"
 
 #include <niminal/text.hpp>
 
@@ -20,6 +21,7 @@ void normalize_config(Config& cfg) {
 }
 
 void apply_provider(niminal::Agent& agent, const Config& cfg) {
+  agent.model_sdk.clear();
   if (cfg.provider == "local") {
     const auto models = models_for("local");
     const auto selected =
@@ -51,6 +53,13 @@ void apply_provider(niminal::Agent& agent, const Config& cfg) {
   agent.provider = spec->name;
   agent.model_runtime.clear();
   agent.model = cfg.model.empty() ? spec->default_model : cfg.model;
+  if (agent.provider == "opencode" || agent.provider == "opencodezen") {
+    agent.model_sdk = lookup_model_sdk(agent.provider, agent.model);
+    if (agent.model_sdk.empty()) {
+      throw niminal::Error("Missing API family for " + agent.model +
+                           " in the cached models.dev catalog. Run /models refresh.");
+    }
+  }
   agent.api_url = cfg.api_url.empty() ? spec->endpoint : cfg.api_url;
   if (cfg.provider == "foundry") {
     const auto models = models_for("foundry");

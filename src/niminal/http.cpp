@@ -3,11 +3,7 @@
 
 #include <curl/curl.h>
 
-#include <atomic>
-#include <cctype>
 #include <cstdlib>
-#include <exception>
-#include <functional>
 #include <mutex>
 #include <string>
 #include <unistd.h>
@@ -26,103 +22,10 @@ void ensure_curl() {
   });
 }
 
-struct WriteBuf {
-  std::string& body;
-  std::string pending;
-  std::function<void(std::string_view)>* on_data = nullptr;
-  std::atomic<bool>* cancel = nullptr;
-  std::exception_ptr error;
-  CURL* easy = nullptr;
-};
-
 size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
-  auto* buf = static_cast<WriteBuf*>(userdata);
-  buf->body.append(ptr, size * nmemb);
+  auto& body = *static_cast<std::string*>(userdata);
+  body.append(ptr, size * nmemb);
   return size * nmemb;
-}
-
-size_t read_header(char* ptr, size_t size, size_t nmemb, void* userdata) {
-  auto& headers = *static_cast<std::map<std::string, std::string>*>(userdata);
-  std::string_view line(ptr, size * nmemb);
-  if (line.starts_with("HTTP/")) {
-    headers.clear();
-  } else if (const auto colon = line.find(':'); colon != std::string_view::npos) {
-    auto value = line.substr(colon + 1);
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
-      value.remove_prefix(1);
-    }
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
-      value.remove_suffix(1);
-    }
-    headers[std::string(line.substr(0, colon))] = std::string(value);
-  }
-  return size * nmemb;
-}
-
-void response_metadata(CURL* easy, HttpResponse& response) {
-  curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response.status);
-  curl_off_t duration_us = 0;
-  curl_easy_getinfo(easy, CURLINFO_TOTAL_TIME_T, &duration_us);
-  response.duration_ms = static_cast<int>(duration_us / 1000);
-}
-
-void flush_sse_line(WriteBuf& buf, std::string_view line) {
-  if (line.ends_with('\r')) {
-    line.remove_suffix(1);
-  }
-  if (!line.starts_with("data:")) {
-    return;
-  }
-  auto data = line.substr(5);
-  while (!data.empty() && (data.front() == ' ' || data.front() == '\t')) {
-    data.remove_prefix(1);
-  }
-  if (data.empty() || data == "[DONE]") {
-    return;
-  }
-  if (buf.on_data != nullptr) {
-    (*buf.on_data)(data);
-  }
-}
-
-size_t write_sse(char* ptr, size_t size, size_t nmemb, void* userdata) {
-  auto* buf = static_cast<WriteBuf*>(userdata);
-  if (buf->error) {
-    return 0;
-  }
-  if ((buf->cancel != nullptr) && buf->cancel->load()) {
-    return 0;
-  }
-  try {
-    buf->pending.append(ptr, size * nmemb);
-    long status = 0;
-    curl_easy_getinfo(buf->easy, CURLINFO_RESPONSE_CODE, &status);
-    if (status >= 400) {
-      buf->body.append(ptr, size * nmemb);
-    }
-    size_t start = 0;
-    while (start < buf->pending.size()) {
-      auto nl = buf->pending.find('\n', start);
-      if (nl == std::string::npos) {
-        break;
-      }
-      flush_sse_line(*buf, std::string_view(buf->pending).substr(start, nl - start));
-      start = nl + 1;
-    }
-    buf->pending.erase(0, start);
-    return size * nmemb;
-  } catch (...) {
-    buf->error = std::current_exception();
-    return 0;
-  }
-}
-
-curl_slist* slist_from(const std::map<std::string, std::string>& headers) {
-  curl_slist* list = nullptr;
-  for (const auto& [k, v] : headers) {
-    list = curl_slist_append(list, (k + ": " + v).c_str());
-  }
-  return list;
 }
 
 } // namespace
@@ -166,17 +69,8 @@ std::string default_ca_file() {
   return {};
 }
 
-int xfer_progress(void* clientp, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
-  auto* cancel = static_cast<std::atomic<bool>*>(clientp);
-  if ((cancel != nullptr) && cancel->load()) {
-    return 1;
-  }
-  return 0;
-}
-
-void apply_common(CURL* easy, const std::string& url, curl_slist* hdrs, const std::string& ca) {
+void apply_common(CURL* easy, const std::string& url, const std::string& ca) {
   curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(easy, CURLOPT_HTTPHEADER, hdrs);
   curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(easy, CURLOPT_USERAGENT, "niminal/0.1");
   if (!ca.empty()) {
@@ -184,114 +78,20 @@ void apply_common(CURL* easy, const std::string& url, curl_slist* hdrs, const st
   }
 }
 
-void apply_post(CURL* easy, const std::string& body) {
-  curl_easy_setopt(easy, CURLOPT_POST, 1L);
-  curl_easy_setopt(easy, CURLOPT_POSTFIELDS, body.c_str());
-  curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
-}
-
 } // namespace
-
-Result<HttpResponse> HttpClient::post(std::string_view url,
-                                      const std::map<std::string, std::string>& headers,
-                                      std::string_view body) {
-  HttpResponse out;
-  WriteBuf buf{out.body, {}, nullptr, nullptr, {}};
-  auto* hdrs = slist_from(headers);
-  std::string url_owned(url);
-  std::string body_owned(body);
-  std::string ca = default_ca_file();
-  curl_easy_reset(impl_->easy);
-  apply_common(impl_->easy, url_owned, hdrs, ca);
-  apply_post(impl_->easy, body_owned);
-  curl_easy_setopt(impl_->easy, CURLOPT_HEADERFUNCTION, read_header);
-  curl_easy_setopt(impl_->easy, CURLOPT_HEADERDATA, &out.headers);
-  curl_easy_setopt(impl_->easy, CURLOPT_WRITEFUNCTION, write_body);
-  curl_easy_setopt(impl_->easy, CURLOPT_WRITEDATA, &buf);
-  const auto rc = curl_easy_perform(impl_->easy);
-  response_metadata(impl_->easy, out);
-  curl_slist_free_all(hdrs);
-  if (rc != CURLE_OK) {
-    return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
-  }
-  return out;
-}
-
-Result<void> HttpClient::post_sse(std::string_view url,
-                                  const std::map<std::string, std::string>& headers,
-                                  std::string_view body,
-                                  const std::function<void(std::string_view json_data)>& on_data,
-                                  std::atomic<bool>* cancel,
-                                  const std::function<void(const HttpResponse&)>& on_response) {
-  auto on_data_mut = on_data;
-  std::string raw;
-  WriteBuf buf{raw, {}, &on_data_mut, cancel, {}};
-  auto* hdrs = slist_from(headers);
-  std::string url_owned(url);
-  std::string body_owned(body);
-  std::string ca = default_ca_file();
-  curl_easy_reset(impl_->easy);
-  buf.easy = impl_->easy;
-  apply_common(impl_->easy, url_owned, hdrs, ca);
-  apply_post(impl_->easy, body_owned);
-  HttpResponse response;
-  curl_easy_setopt(impl_->easy, CURLOPT_HEADERFUNCTION, read_header);
-  curl_easy_setopt(impl_->easy, CURLOPT_HEADERDATA, &response.headers);
-  curl_easy_setopt(impl_->easy, CURLOPT_WRITEFUNCTION, write_sse);
-  curl_easy_setopt(impl_->easy, CURLOPT_WRITEDATA, &buf);
-  curl_easy_setopt(impl_->easy, CURLOPT_TCP_NODELAY, 1L);
-  curl_easy_setopt(impl_->easy, CURLOPT_BUFFERSIZE, 1024L);
-  curl_easy_setopt(impl_->easy, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-  curl_easy_setopt(impl_->easy, CURLOPT_NOPROGRESS, 0L);
-  curl_easy_setopt(impl_->easy, CURLOPT_XFERINFOFUNCTION, xfer_progress);
-  curl_easy_setopt(impl_->easy, CURLOPT_XFERINFODATA, cancel);
-  const auto rc = curl_easy_perform(impl_->easy);
-  response_metadata(impl_->easy, response);
-  curl_slist_free_all(hdrs);
-  if (on_response) {
-    if (response.status >= 400) {
-      response.body = raw;
-    }
-    on_response(response);
-  }
-  if (buf.error) {
-    if ((cancel != nullptr) && cancel->load()) {
-      return std::unexpected(Cancelled());
-    }
-    try {
-      std::rethrow_exception(buf.error);
-    } catch (const std::exception& e) {
-      return std::unexpected(Error(e.what()));
-    }
-  }
-  if ((cancel != nullptr) && cancel->load() &&
-      (rc == CURLE_ABORTED_BY_CALLBACK || rc == CURLE_WRITE_ERROR)) {
-    return std::unexpected(Cancelled());
-  }
-  if (rc != CURLE_OK) {
-    return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
-  }
-  if (response.status >= 400) {
-    return std::unexpected(Error("http " + std::to_string(response.status) + ": " + raw));
-  }
-  return {};
-}
 
 Result<HttpResponse> HttpClient::get(std::string_view url, long timeout_seconds) {
   HttpResponse out;
-  WriteBuf buf{out.body, {}, nullptr, nullptr, {}};
-  auto* hdrs = slist_from({});
   std::string url_owned(url);
   std::string ca = default_ca_file();
   curl_easy_reset(impl_->easy);
-  apply_common(impl_->easy, url_owned, hdrs, ca);
+  apply_common(impl_->easy, url_owned, ca);
   curl_easy_setopt(impl_->easy, CURLOPT_HTTPGET, 1L);
   curl_easy_setopt(impl_->easy, CURLOPT_TIMEOUT, timeout_seconds);
   curl_easy_setopt(impl_->easy, CURLOPT_WRITEFUNCTION, write_body);
-  curl_easy_setopt(impl_->easy, CURLOPT_WRITEDATA, &buf);
+  curl_easy_setopt(impl_->easy, CURLOPT_WRITEDATA, &out.body);
   const auto rc = curl_easy_perform(impl_->easy);
   curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &out.status);
-  curl_slist_free_all(hdrs);
   if (rc != CURLE_OK) {
     return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
   }

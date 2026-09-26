@@ -3,7 +3,7 @@
 #include "trust.hpp"
 
 #include <niminal/http.hpp>
-#include <niminal/openai.hpp>
+#include <niminal/chat.hpp>
 
 #include <algorithm>
 #include <atomic>

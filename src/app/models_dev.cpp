@@ -50,12 +50,16 @@ std::vector<CatalogModel> parse_catalog(const json& doc) {
       CatalogModel row;
       row.provider = provider;
       row.id = id;
+      row.sdk = block.value("npm", "");
       if (!model.is_object()) {
         out.push_back(std::move(row));
         continue;
       }
       if (model.contains("limit") && model["limit"].is_object()) {
         row.context = model["limit"].value("context", 0);
+      }
+      if (model.contains("provider") && model["provider"].is_object()) {
+        row.sdk = model["provider"].value("npm", row.sdk);
       }
       if (model.contains("cost") && model["cost"].is_object()) {
         const auto& cost = model["cost"];
@@ -313,6 +317,16 @@ ModelCost lookup_model_cost(std::string_view provider, std::string_view model) {
     if (row.provider == want_p && niminal::lower_copy(row.id) == want_m) {
       return row.cost;
     }
+  }
+  return {};
+}
+
+std::string lookup_model_sdk(std::string_view provider, std::string_view model) {
+  const auto name = catalog_name(provider);
+  std::lock_guard<std::mutex> lock(g_mu);
+  ensure_locked();
+  for (const auto& row : g_models) {
+    if (row.provider == name && row.id == model) return row.sdk;
   }
   return {};
 }

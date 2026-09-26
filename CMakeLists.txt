@@ -60,6 +60,7 @@ endif()
 set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(cail 0.1 CONFIG REQUIRED)
 
 include(FetchContent)
 
@@ -142,7 +143,7 @@ endif()
 
 add_library(niminal_ai
   src/niminal/http.cpp
-  src/niminal/openai.cpp
+  src/niminal/chat.cpp
   src/niminal/agent.cpp
   src/niminal/providers.cpp)
 add_library(niminal::ai ALIAS niminal_ai)
@@ -153,6 +154,7 @@ target_include_directories(niminal_ai PUBLIC
 
 target_link_libraries(niminal_ai PUBLIC
   CURL::libcurl
+  cail::cail
   nlohmann_json::nlohmann_json
   OpenSSL::SSL
   OpenSSL::Crypto

@@ -1,7 +1,7 @@
 #include "compaction.hpp"
 #include "extensions.hpp"
 
-#include <niminal/openai.hpp>
+#include <niminal/chat.hpp>
 
 #include <algorithm>
 #include <sstream>

@@ -19,6 +19,7 @@ struct Agent {
   std::string model = "openai/gpt-4o-mini";
   std::string provider = "openrouter";
   std::string model_runtime;
+  std::string model_sdk;
   std::string api_key;
   std::string api_url = "https://openrouter.ai/api/v1/chat/completions";
   std::string key_hint = "OPENROUTER_API_KEY";

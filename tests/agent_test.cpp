@@ -2,6 +2,24 @@
 
 #include <iostream>
 
+namespace {
+
+niminal::json request_body(niminal::ChatRequest request) {
+  niminal::json body;
+  request.before_provider_request = [&](niminal::json& payload) {
+    body = payload;
+    throw niminal::Error("request captured");
+  };
+  try {
+    niminal::stream_chat(request);
+  } catch (const niminal::Error&) {
+    if (body.is_null()) throw;
+  }
+  return body;
+}
+
+} // namespace
+
 int main() {
   niminal::Agent agent;
   agent.system = "you are niminal";
@@ -31,14 +49,17 @@ int main() {
   }
 
   niminal::ChatRequest req;
+  req.provider = "openrouter";
+  req.api_key = "test";
+  req.api_url = "http://127.0.0.1:1/v1/chat/completions";
   req.model = "openai/gpt-4o-mini";
   req.messages = msgs;
   req.tools = nlohmann::json::array({nlohmann::json{
       {"type", "function"},
       {"function",
-       {{"name", "read"}, {"description", "d"}, {"parameters", nlohmann::json::object()}}},
+       {{"name", "read"}, {"description", "d"}, {"parameters", {{"type", "object"}, {"properties", nlohmann::json::object()}}}}},
   }});
-  auto body = niminal::chat_body(req);
+  auto body = request_body(req);
   if (body["tools"][0].contains("cache_control")) {
     std::cerr << "openai models should not send cache_control\n";
     return 1;
@@ -47,12 +68,13 @@ int main() {
     std::cerr << "openai system should not send cache_control\n";
     return 1;
   }
-  if (!body["messages"].back()["content"].is_array()) {
-    std::cerr << "user content should be a text array for a stable prefix\n";
+  if (body["messages"].back()["content"] != "hello") {
+    std::cerr << "user text should reach the provider\n";
     return 1;
   }
   req.model = "anthropic/claude-sonnet-4";
-  auto claude = niminal::chat_body(req);
+  req.apply_cache = true;
+  auto claude = request_body(req);
   if (!claude["tools"][0].contains("cache_control")) {
     std::cerr << "last tool should carry cache_control\n";
     return 1;
@@ -70,11 +92,12 @@ int main() {
     std::cerr << "stream should request usage\n";
     return 1;
   }
+  req.apply_cache = false;
   req.provider = "google";
   req.model = "gemini-3.5-flash-lite";
   req.stream_usage = false;
   req.conversation_id = "sess";
-  auto gemini = niminal::chat_body(req);
+  auto gemini = request_body(req);
   if (!gemini.contains("systemInstruction") || !gemini.contains("contents")) {
     std::cerr << "google should use generateContent\n";
     return 1;
@@ -84,16 +107,16 @@ int main() {
     std::cerr << "google should not send cache_control\n";
     return 1;
   }
+  req.apply_cache = true;
   req.provider = "anthropic";
   req.model = "claude-sonnet-4-6";
-  auto native = niminal::chat_body(req);
+  auto native = request_body(req);
   if (!native.contains("system") || !native["system"].is_array() ||
       !native["system"].back().contains("cache_control")) {
     std::cerr << "anthropic system should be cached\n";
     return 1;
   }
-  if (!native.contains("tools") || native["tools"][0].value("type", "") != "custom" ||
-      !native["tools"][0].contains("input_schema") ||
+  if (!native.contains("tools") || !native["tools"][0].contains("input_schema") ||
       !native["tools"][0].contains("cache_control")) {
     std::cerr << "anthropic tools should use Messages cache_control\n";
     return 1;
@@ -111,7 +134,7 @@ int main() {
   req.apply_cache = false;
   req.prompt_cache_key = true;
   req.conversation_id = "sess";
-  auto oai = niminal::chat_body(req);
+  auto oai = request_body(req);
   if (oai.dump().find("cache_control") != std::string::npos) {
     std::cerr << "openai should cache by prefix, not cache_control\n";
     return 1;
@@ -121,15 +144,16 @@ int main() {
     return 1;
   }
   req.extra = nlohmann::json{{"reasoning", {{"effort", "high"}}}};
-  auto reasoned = niminal::chat_body(req);
+  auto reasoned = request_body(req);
   if (reasoned["reasoning"].value("effort", "") != "high") {
     std::cerr << "chat extra reasoning\n";
     return 1;
   }
+  req.apply_cache = false;
   req.provider = "google";
   req.model = "gemini-3.5-flash";
   req.extra = nlohmann::json{{"reasoning_effort", "high"}};
-  auto gthink = niminal::chat_body(req);
+  auto gthink = request_body(req);
   if (gthink["generationConfig"]["thinkingConfig"].value("thinkingLevel", "") != "HIGH") {
     std::cerr << "google thinkingLevel\n";
     return 1;
@@ -152,37 +176,30 @@ int main() {
         {"images", nlohmann::json::array({image})}}});
   req.extra = nlohmann::json::object();
   req.provider = "openai";
-  auto vision = niminal::chat_body(req);
-  if (vision["messages"][0]["content"][1]["image_url"]["url"] != "data:image/png;base64,aGVsbG8=" ||
-      vision["messages"].back()["content"][0]["type"] != "image_url") {
+  auto vision = request_body(req);
+  if (vision["input"][0]["content"][1]["image_url"] != "data:image/png;base64,aGVsbG8=" ||
+      vision["input"].back()["content"][0]["type"] != "input_image") {
     std::cerr << "OpenAI image content\n";
     return 1;
   }
+  req.apply_cache = true;
   req.provider = "anthropic";
-  vision = niminal::chat_body(req);
+  vision = request_body(req);
   if (vision["messages"][0]["content"][1]["source"]["data"] != "aGVsbG8=" ||
       vision["messages"].back()["content"][0]["content"][1]["source"]["data"] != "aGVsbG8=") {
     std::cerr << "Anthropic image content\n";
     return 1;
   }
+  req.apply_cache = false;
   req.provider = "google";
-  vision = niminal::chat_body(req);
+  vision = request_body(req);
   if (vision["contents"][0]["parts"][1]["inlineData"]["data"] != "aGVsbG8=" ||
       vision["contents"].back()["parts"][1]["inlineData"]["data"] != "aGVsbG8=") {
     std::cerr << "Google image content\n";
     return 1;
   }
 
-  auto usage = niminal::parse_chat_usage(nlohmann::json{
-      {"prompt_tokens", 100},
-      {"completion_tokens", 20},
-      {"prompt_tokens_details", {{"cached_tokens", 80}}},
-  });
-  if (usage.input_tokens != 100 || usage.output_tokens != 20 || usage.cache_read_tokens != 80 ||
-      !usage.cache_reported) {
-    std::cerr << "parse_chat_usage\n";
-    return 1;
-  }
+  const niminal::Usage usage{100, 20, 80, 0, true};
   auto line = niminal::format_usage_line(usage);
   if (line.find("↑100") == std::string::npos || line.find("↓20") == std::string::npos ||
       line.find("CH80.0%") == std::string::npos) {
@@ -192,26 +209,6 @@ int main() {
   auto wrote = niminal::format_usage_line(niminal::Usage{100, 5, 0, 80, true});
   if (wrote.find("W80") == std::string::npos || wrote.find("CH") != std::string::npos) {
     std::cerr << "format write: " << wrote << '\n';
-    return 1;
-  }
-  auto google_usage = niminal::parse_chat_usage(nlohmann::json{
-      {"promptTokenCount", 50},
-      {"candidatesTokenCount", 10},
-      {"cachedContentTokenCount", 40},
-  });
-  if (google_usage.input_tokens != 50 || google_usage.output_tokens != 10 ||
-      google_usage.cache_read_tokens != 40 || !google_usage.cache_reported) {
-    std::cerr << "google usage\n";
-    return 1;
-  }
-  auto null_usage = niminal::parse_chat_usage(nlohmann::json{
-      {"prompt_tokens", nullptr},
-      {"completion_tokens", nullptr},
-      {"cache_read_input_tokens", nullptr},
-  });
-  if ((null_usage.input_tokens != 0) || (null_usage.output_tokens != 0) ||
-      (null_usage.cache_read_tokens != 0)) {
-    std::cerr << "null usage\n";
     return 1;
   }
   return 0;

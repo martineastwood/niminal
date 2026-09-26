@@ -1,5 +1,5 @@
 #include <niminal/agent.hpp>
-#include <niminal/openai.hpp>
+#include <niminal/chat.hpp>
 
 #include <atomic>
 #include <barrier>

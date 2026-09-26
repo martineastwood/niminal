@@ -81,8 +81,8 @@ int main() {
   niminal::Agent agent;
   apply_provider(agent, cfg);
   if (agent.provider != "anthropic" || agent.api_url.find("/v1/messages") == std::string::npos ||
-      agent.extra_headers["anthropic-version"] != "2023-06-01" || !agent.apply_cache ||
-      agent.session_routing || agent.stream_usage || agent.key_hint != "ANTHROPIC_API_KEY") {
+      !agent.extra_headers.empty() || !agent.apply_cache || agent.session_routing ||
+      agent.stream_usage || agent.key_hint != "ANTHROPIC_API_KEY") {
     return fail("apply_provider anthropic");
   }
 

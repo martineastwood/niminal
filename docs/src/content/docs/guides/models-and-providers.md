@@ -3,8 +3,8 @@ title: Models and providers
 description: Switch providers, pick models, map thinking levels, and refresh the catalog.
 ---
 
-niminal speaks one request shape (OpenAI-style messages and tools) and translates
-that to each provider's native API before it goes on the wire.
+niminal keeps one request shape (OpenAI-style messages and tools) and hands each
+model step to CAIL, which talks to the provider on the wire.
 
 ## Wired providers
 
@@ -14,7 +14,7 @@ that to each provider's native API before it goes on the wire.
 | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` |
 | `google` | `gemini-3.5-flash-lite` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` |
 | `foundry` | first Foundry entry in `models.json` | `AZURE_FOUNDRY_API_KEY` | configured per model |
-| `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1/chat/completions` |
+| `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
 | `local` | first local entry in `models.json` | optional `auth.json` key | configured per model |
 | `ollama` | `gemma4:31b` | `OLLAMA_API_KEY` | `https://ollama.com/v1/chat/completions` |
 | `hyper` | `deepseek-v4-flash` | `HYPER_API_KEY` | `https://hyper.charm.land/v1/chat/completions` |

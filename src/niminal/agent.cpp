@@ -1,7 +1,7 @@
 #include "tool_input.hpp"
 
 #include <niminal/agent.hpp>
-#include <niminal/openai.hpp>
+#include <niminal/chat.hpp>
 #include <niminal/text.hpp>
 
 #include <chrono>
@@ -120,6 +120,7 @@ void Agent::fill_chat(ChatRequest& req) const {
   req.api_key = api_key;
   req.model = model;
   req.provider = provider;
+  req.model_sdk = model_sdk;
   req.key_hint = key_hint;
   req.requires_api_key = requires_api_key;
   req.conversation_id = conversation_id;
@@ -398,6 +399,8 @@ std::string Agent::run(UserInput prompt, bool append_user) {
             {"type", "function"},
             {"function", {{"name", call.name}, {"arguments", call.arguments}}},
         });
+        if (!call.thought_signature.empty())
+          calls.back()["thought_signature"] = call.thought_signature;
         StreamEvent tool_call{EventKind::tool_call, call.arguments, call.name, call.id};
         tool_call.input = detail::parse_tool_input(call.arguments);
         emit(std::move(tool_call));

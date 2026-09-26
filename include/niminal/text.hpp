@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cctype>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -67,6 +69,44 @@ inline std::string base64_encode(std::string_view bytes) {
     out.push_back(i + 2 < bytes.size() ? alphabet[c & 63U] : '=');
   }
   return out;
+}
+
+inline std::optional<std::string> base64_decode(std::string_view encoded) {
+  constexpr std::string_view alphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  if (encoded.size() % 4 != 0) {
+    return std::nullopt;
+  }
+  std::string bytes;
+  bytes.reserve((encoded.size() / 4) * 3);
+  for (size_t i = 0; i < encoded.size(); i += 4) {
+    std::uint32_t value = 0;
+    unsigned int padding = 0;
+    for (size_t j = 0; j < 4; ++j) {
+      const char character = encoded[i + j];
+      if (character == '=') {
+        ++padding;
+        value <<= 6U;
+        continue;
+      }
+      if (padding != 0) {
+        return std::nullopt;
+      }
+      const auto index = alphabet.find(character);
+      if (index == std::string_view::npos) {
+        return std::nullopt;
+      }
+      value = (value << 6U) | static_cast<std::uint32_t>(index);
+    }
+    bytes.push_back(static_cast<char>((value >> 16U) & 0xffU));
+    if (padding < 2U) {
+      bytes.push_back(static_cast<char>((value >> 8U) & 0xffU));
+    }
+    if (padding < 1U) {
+      bytes.push_back(static_cast<char>(value & 0xffU));
+    }
+  }
+  return bytes;
 }
 
 } // namespace niminal

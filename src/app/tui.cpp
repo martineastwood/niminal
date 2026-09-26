@@ -21,7 +21,7 @@
 #include "transcript.hpp"
 #include "trust.hpp"
 
-#include <niminal/openai.hpp>
+#include <niminal/chat.hpp>
 #include <niminal/text.hpp>
 #include <niminal/version.hpp>
 
@@ -250,7 +250,19 @@ std::optional<size_t> card_at(const std::vector<Block>& blocks, const std::vecto
 
 bool same_block_content(const Block& a, const Block& b) {
   return a.kind == b.kind && a.text == b.text && a.result == b.result && a.path == b.path &&
-         a.expanded == b.expanded && a.tool_name == b.tool_name && a.tool_id == b.tool_id;
+         a.expanded == b.expanded && a.tool_name == b.tool_name && a.tool_id == b.tool_id &&
+         a.turn_id == b.turn_id && a.step == b.step;
+}
+
+std::string_view trim_boundary_whitespace(std::string_view text) {
+  auto is_whitespace = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+  while (!text.empty() && is_whitespace(text.front())) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && is_whitespace(text.back())) {
+    text.remove_suffix(1);
+  }
+  return text;
 }
 
 } // namespace
@@ -713,24 +725,48 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   auto usage_totals = session.usage_totals();
   size_t footer_revision = 0;
   auto apply_event = [&](StreamEvent ev) {
+    auto append_delta = [&](BlockKind kind) {
+      const auto& turn_id = ev.turn_id.empty() ? ev.run_id : ev.turn_id;
+      auto block = blocks.rend();
+      if (ev.step >= 0 && !turn_id.empty()) {
+        block = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& candidate) {
+          return candidate.kind == kind && candidate.step == ev.step &&
+                 candidate.turn_id == turn_id;
+        });
+      }
+      if (block != blocks.rend()) {
+        block->text += ev.text;
+      } else if (!blocks.empty() && blocks.back().kind == kind && blocks.back().step == ev.step &&
+                 blocks.back().turn_id == turn_id) {
+        blocks.back().text += ev.text;
+      } else {
+        if (trim_boundary_whitespace(ev.text).empty()) {
+          return;
+        }
+        Block next{kind, ev.text};
+        next.turn_id = turn_id;
+        next.step = ev.step;
+        next.expanded = kind == BlockKind::thinking && cfg.show_thinking;
+        auto tool = blocks.end();
+        if (ev.step >= 0 && !turn_id.empty()) {
+          tool = std::find_if(blocks.begin(), blocks.end(), [&](const Block& candidate) {
+            return (candidate.kind == BlockKind::tool || candidate.kind == BlockKind::diff) &&
+                   candidate.step == ev.step && candidate.turn_id == turn_id;
+          });
+        }
+        blocks.insert(tool, std::move(next));
+      }
+    };
     if (ev.kind == EventKind::tool_result) {
       suggestions_input.reset();
     }
     switch (ev.kind) {
     case EventKind::text_delta:
-      if (blocks.empty() || blocks.back().kind != BlockKind::assistant) {
-        blocks.push_back(Block{BlockKind::assistant, {}});
-      }
-      blocks.back().text += ev.text;
+      append_delta(BlockKind::assistant);
       activity = "Responding…";
       break;
     case EventKind::thinking_delta:
-      if (blocks.empty() || blocks.back().kind != BlockKind::thinking) {
-        Block thinking{BlockKind::thinking, {}};
-        thinking.expanded = cfg.show_thinking;
-        blocks.push_back(std::move(thinking));
-      }
-      blocks.back().text += ev.text;
+      append_delta(BlockKind::thinking);
       activity = "Thinking…";
       break;
     case EventKind::tool_output_delta:
@@ -747,6 +783,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       Block tool{BlockKind::tool, ev.text};
       tool.tool_name = ev.tool_name;
       tool.tool_id = ev.tool_id;
+      tool.turn_id = ev.turn_id.empty() ? ev.run_id : ev.turn_id;
+      tool.step = ev.step;
       blocks.push_back(std::move(tool));
     }
       activity = ev.tool_name.empty() ? "Waiting for model…" : "Running " + ev.tool_name + "…";
@@ -1488,10 +1526,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           entry = render_transcript_card(block, theme, card_boxes[i]);
         } else if (block.kind == BlockKind::user || block.kind == BlockKind::assistant) {
           auto& cached = message_cache[i];
-          if (!cached.element || cached.kind != block.kind || cached.text != block.text) {
-            cached = {block.kind, block.text,
+          const auto content = block.kind == BlockKind::assistant
+                                   ? trim_boundary_whitespace(block.text)
+                                   : std::string_view(block.text);
+          if (!cached.element || cached.kind != block.kind || cached.text != content) {
+            cached = {block.kind, std::string(content),
                       block.kind == BlockKind::user ? render_user_message(block, theme)
-                                                    : render_markdown(block.text, theme)};
+                                                    : render_markdown(content, theme)};
           }
           entry = cached.element;
         } else {
@@ -1504,7 +1545,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           }
         }
         const bool next_is_card = i + 1 < blocks.size() && is_card_block(blocks[i + 1].kind);
-        if (!(is_card_block(block.kind) && next_is_card)) {
+        const bool collapsed_card = is_card_block(block.kind) && !block.expanded;
+        if (!collapsed_card && !(is_card_block(block.kind) && next_is_card)) {
           entry = vbox({std::move(entry), text("")});
         }
         auto& cached_height = height_cache[i];

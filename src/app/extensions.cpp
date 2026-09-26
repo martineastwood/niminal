@@ -9,7 +9,7 @@
 #include "trust.hpp"
 
 #include <niminal/http.hpp>
-#include <niminal/openai.hpp>
+#include <niminal/chat.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -1695,7 +1695,6 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
         completion.tools = json::array();
         completion.max_tokens = request.value("max_tokens", 0);
         completion.conversation_id = (session ? session->id : agent.conversation_id) + ":extension";
-        completion.stream = false;
         completion.on_event = {};
         const auto text = niminal::complete_chat(completion);
         return json{{"text", text}, {"model", agent.model}, {"finish_reason", "stop"}};
