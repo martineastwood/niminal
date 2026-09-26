@@ -25,8 +25,11 @@ static int fail(const char* msg) {
 static cail::HttpRequest model_request(const niminal::Agent& agent) {
   cail::HttpRequest captured;
   cail::GenerationRequest request;
-  request.messages = {
-      {.role = cail::MessageRole::user, .content = {cail::TextPart{.text = "hello"}}}};
+  request.messages = {{.role = cail::MessageRole::user,
+                       .content = {cail::TextPart{.text = "hello", .provider_options = {}}},
+                       .tool_call_id = {},
+                       .tool_calls = {},
+                       .provider_options = {}}};
   request.session_id = "test-session";
   request.before_request = [&](cail::HttpRequest& http) {
     captured = http;

@@ -95,7 +95,16 @@ int main() {
   configured_agent.language_model = cail::LanguageModel{
       [&](const cail::GenerationRequest&) -> cail::Result<cail::GenerationResponse> {
         ++summaries;
-        return cail::GenerationResponse{.text = "Earlier turns summarized."};
+        return cail::GenerationResponse{
+            .status = cail::GenerationStatus::completed,
+            .text = "Earlier turns summarized.",
+            .reasoning = {},
+            .usage = {},
+            .tool_calls = {},
+            .tool_results = {},
+            .continuation_token = {},
+            .provider_options = {},
+        };
       }};
   small_context.context_window = 1'000'000;
   niminal::app::bind_compaction(configured_agent, s, small_context);

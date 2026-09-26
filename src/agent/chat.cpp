@@ -66,7 +66,8 @@ void append_image(cail::Message& message, const json& source) {
 
 void append_content(cail::Message& message, const json& content) {
   if (content.is_string()) {
-    message.content.emplace_back(cail::TextPart{.text = content.get<std::string>()});
+    message.content.emplace_back(
+        cail::TextPart{.text = content.get<std::string>(), .provider_options = {}});
     return;
   }
   if (!content.is_array()) {
@@ -149,7 +150,13 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
       if (!source.is_object()) {
         continue;
       }
-      cail::Message message{.role = role_of(source.value("role", "user"))};
+      cail::Message message{
+          .role = role_of(source.value("role", "user")),
+          .content = {},
+          .tool_call_id = {},
+          .tool_calls = {},
+          .provider_options = {},
+      };
       if (message.role == cail::MessageRole::tool) {
         message.tool_call_id = source.value("tool_call_id", "");
       }
@@ -195,6 +202,7 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
           .name = function.value("name", ""),
           .description = function.value("description", ""),
           .parameters = std::move(*schema),
+          .provider_options = {},
       });
     }
   }
