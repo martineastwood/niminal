@@ -13,6 +13,7 @@ struct HttpResponse {
   std::string body;
 };
 
+// HTTP client over the Glaze transport that cail already links.
 class HttpClient {
 public:
   HttpClient();
@@ -20,6 +21,7 @@ public:
   HttpClient(const HttpClient&) = delete;
   HttpClient& operator=(const HttpClient&) = delete;
 
+  // Fails once `timeout_seconds` have elapsed without a complete response.
   Result<HttpResponse> get(std::string_view url, long timeout_seconds = 20);
 
 private:

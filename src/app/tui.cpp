@@ -298,7 +298,7 @@ Element extension_text(const std::string& value, std::string_view style, const T
 int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& session,
             std::shared_ptr<ExtensionRuntime>& extensions, bool yolo,
             const std::vector<std::string>* allowed_tools,
-            std::function<void()> reload_system_prompt) {
+            std::function<void()> reload_system_prompt, CatalogStartup catalog_startup) {
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
   Theme theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
@@ -1225,11 +1225,28 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   }
   agent.messages = session.openai_messages();
   {
-    std::string startup_note =
-        (session.events.empty() ? "New session " : "Session ") + session.id;
+    std::string startup_note = (session.events.empty() ? "New session " : "Session ") + session.id;
+    std::string catalog_notice;
     if (recovered != 0) {
-      startup_note = "Recovered " + std::to_string(recovered) +
-                     " interrupted tool call(s).\n" + startup_note;
+      startup_note =
+          "Recovered " + std::to_string(recovered) + " interrupted tool call(s).\n" + startup_note;
+    }
+    switch (catalog_startup) {
+    case CatalogStartup::fresh:
+      break;
+    case CatalogStartup::downloaded:
+      catalog_notice = "Downloaded the models.dev catalog.";
+      break;
+    case CatalogStartup::stale:
+      catalog_notice = "Refreshing the stale models.dev catalog in the background…";
+      break;
+    case CatalogStartup::unavailable:
+      catalog_notice = "Could not download the models.dev catalog. Retrying in the background…";
+      break;
+    }
+    if (!catalog_notice.empty()) {
+      startup_note += "\n" + catalog_notice;
+      flash_footer(catalog_notice);
     }
     load_into_ui(startup_note);
   }
@@ -2373,11 +2390,25 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::thread catalog_thread;
   if (catalog_stale()) {
     catalog_thread = std::thread([&] {
-      refresh_catalog();
+      const bool refreshed = refresh_catalog();
       if (!ui_alive) {
         return;
       }
-      screen.Post([&] {
+      screen.Post([&, refreshed] {
+        std::string message;
+        if (refreshed) {
+          message = "Updated the models.dev catalog · " + catalog_cache_path().string();
+          blocks.push_back(Block{BlockKind::status, message});
+        } else {
+          message = catalog_startup == CatalogStartup::unavailable
+                        ? "Could not download the models.dev catalog; continuing without it. "
+                          "Use /models refresh to retry."
+                        : "Could not refresh the models.dev catalog; using the cached copy. "
+                          "Use /models refresh to retry.";
+          blocks.push_back(Block{BlockKind::error, message});
+        }
+        flash_footer(message);
+        ++transcript_revision;
         ++footer_revision;
         suggestions_input.reset();
         screen.RequestAnimationFrame();

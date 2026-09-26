@@ -1,3 +1,4 @@
+#include "models_dev.hpp"
 #include "provider.hpp"
 
 #include <cail/http.hpp>
@@ -14,6 +15,7 @@ using niminal::app::apply_provider;
 using niminal::app::Config;
 using niminal::app::normalize_config;
 using niminal::app::select_provider;
+using niminal::app::set_catalog_cache_path;
 
 static int fail(const char* msg) {
   std::cerr << msg << '\n';
@@ -25,6 +27,7 @@ static cail::HttpRequest model_request(const niminal::Agent& agent) {
   cail::GenerationRequest request;
   request.messages = {
       {.role = cail::MessageRole::user, .content = {cail::TextPart{.text = "hello"}}}};
+  request.session_id = "test-session";
   request.before_request = [&](cail::HttpRequest& http) {
     captured = http;
     throw niminal::Error("request captured");
@@ -54,6 +57,21 @@ int main() {
       std::ranges::find(names, "ollama") == names.end()) {
     return fail("provider_names");
   }
+
+  const auto catalog_root =
+      std::filesystem::temp_directory_path() / "niminal-provider-models-dev-test";
+  std::filesystem::remove_all(catalog_root);
+  set_catalog_cache_path(catalog_root / "models-dev.json");
+  Config opencode_cfg;
+  opencode_cfg.provider = "opencode";
+  opencode_cfg.model = "deepseek-v4.1-flash";
+  niminal::Agent opencode_agent;
+  apply_provider(opencode_agent, opencode_cfg, "test");
+  opencode_agent.conversation_id = "opencode-session";
+  if (model_request(opencode_agent).url != "https://opencode.ai/zen/go/v1/chat/completions") {
+    return fail("OpenCode should start without a model catalog");
+  }
+  std::filesystem::remove_all(catalog_root);
 
   // Built-in routing comes from Cail presets; extension routing remains configurable.
   for (const auto* name : {"openrouter", "openai", "mistral", "test-routing"}) {

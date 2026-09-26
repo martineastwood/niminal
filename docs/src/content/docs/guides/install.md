@@ -44,7 +44,7 @@ The Linux ARM64 binary is built on Ubuntu 24.04.
 ## Build from source
 
 To build from a source checkout, you need CMake 3.22 or later, Ninja, a C++23
-compiler, OpenSSL 3 development libraries, and zlib development libraries:
+compiler, and OpenSSL 3 development libraries:
 
 ```sh
 cmake --preset dev
@@ -63,7 +63,7 @@ export PATH="/opt/homebrew/opt/llvm@20/bin:$PATH"
 On Debian or Ubuntu:
 
 ```sh
-sudo apt install cmake ninja-build g++ libssl-dev zlib1g-dev
+sudo apt install cmake ninja-build g++ libssl-dev
 ```
 
 For full release validation with `./dev check`, also install `clang-format`,

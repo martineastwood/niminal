@@ -8,6 +8,7 @@
 #include "instructions.hpp"
 #include "json_mode.hpp"
 #include "mentions.hpp"
+#include "models_dev.hpp"
 #include "provider.hpp"
 #include "rpc.hpp"
 #include "session.hpp"
@@ -635,6 +636,7 @@ int main(int argc, char** argv) try {
     }
   }
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
+  const auto catalog_startup = niminal::app::initialize_catalog();
   agent = make_agent(ws, cfg, api_key, max_steps, &cancel, system_prompt, &shell_env);
   if (tools_specified) {
     restrict_tools(agent, allowed_tools);
@@ -731,9 +733,9 @@ int main(int argc, char** argv) try {
       auto file = niminal::app::load_system_prompt(ws.root());
       agent.system = file.empty() ? std::string(kSystem) : std::move(file);
     };
-    int code =
-        niminal::app::run_tui(agent, ws, cfg, session, extensions, yolo,
-                              tools_specified ? &allowed_tools : nullptr, reload_system_prompt);
+    int code = niminal::app::run_tui(agent, ws, cfg, session, extensions, yolo,
+                                     tools_specified ? &allowed_tools : nullptr,
+                                     reload_system_prompt, catalog_startup);
     stop_extensions();
     return code;
   }

@@ -1,5 +1,6 @@
 #include "models_dev.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -8,7 +9,7 @@ namespace fs = std::filesystem;
 using niminal::app::catalog_name;
 using niminal::app::format_context_k;
 using niminal::app::format_cost_usd;
-using niminal::app::load_catalog;
+using niminal::app::initialize_catalog;
 using niminal::app::lookup_model_cost;
 using niminal::app::lookup_reasoning_caps;
 using niminal::app::search_catalog;
@@ -51,8 +52,12 @@ int main() {
     })";
   }
   set_catalog_cache_path(path);
-  if (!load_catalog()) {
-    return fail("load_catalog");
+  if (initialize_catalog() != niminal::app::CatalogStartup::fresh) {
+    return fail("initialize_catalog");
+  }
+  fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::hours(48));
+  if (initialize_catalog() != niminal::app::CatalogStartup::stale) {
+    return fail("stale catalog");
   }
 
   auto empty = search_catalog("anthropic", "", 50, {});

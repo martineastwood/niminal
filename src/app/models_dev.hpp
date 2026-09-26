@@ -38,11 +38,19 @@ struct ReasoningCaps {
   std::vector<std::string> efforts;
 };
 
+enum class CatalogStartup {
+  fresh,
+  stale,
+  downloaded,
+  unavailable,
+};
+
 std::filesystem::path catalog_cache_path();
 void set_catalog_cache_path(const std::filesystem::path& path);
 std::string catalog_name(std::string_view provider);
 bool load_catalog();
 bool catalog_stale(int max_age_seconds = 24 * 60 * 60);
+CatalogStartup initialize_catalog();
 bool refresh_catalog();
 std::string format_context_k(int tokens);
 std::vector<CatalogModel> search_catalog(std::string_view provider, std::string_view query, int cap,

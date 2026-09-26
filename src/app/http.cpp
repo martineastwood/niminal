@@ -1,101 +1,67 @@
 #include "http.hpp"
-#include <niminal/types.hpp>
 
-#include <curl/curl.h>
+#include <glaze/net/http_client.hpp>
 
-#include <cstdlib>
+#include <chrono>
+#include <future>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
-#include <unistd.h>
+#include <system_error>
 #include <utility>
 
 namespace niminal::app {
 namespace {
 
-std::once_flag curl_once;
-
-void ensure_curl() {
-  std::call_once(curl_once, [] {
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
-      throw Error("curl_global_init failed");
-    }
-  });
-}
-
-size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
-  auto& body = *static_cast<std::string*>(userdata);
-  body.append(ptr, size * nmemb);
-  return size * nmemb;
-}
+struct StreamState {
+  HttpResponse response;
+  std::optional<std::error_code> error;
+  std::promise<void> finished;
+  std::once_flag once;
+};
 
 } // namespace
 
 struct HttpClient::Impl {
-  CURL* easy = nullptr;
-  Impl() {
-    ensure_curl();
-    easy = curl_easy_init();
-    if (easy == nullptr) {
-      throw Error("curl_easy_init failed");
-    }
-  }
-  ~Impl() {
-    if (easy != nullptr) {
-      curl_easy_cleanup(easy);
-    }
-  }
+  glz::http_client client;
 };
 
 HttpClient::HttpClient() : impl_(std::make_unique<Impl>()) {}
 HttpClient::~HttpClient() = default;
 
-namespace {
-
-std::string default_ca_file() {
-  if (const char* env = std::getenv("SSL_CERT_FILE"); (env != nullptr) && ((*env) != 0)) {
-    return env;
-  }
-  const char* candidates[] = {
-      "/opt/homebrew/etc/openssl@3/cert.pem",
-      "/usr/local/etc/openssl@3/cert.pem",
-      "/etc/ssl/cert.pem",
-      "/etc/ssl/certs/ca-certificates.crt",
-  };
-  for (auto path : candidates) {
-    if (access(path, R_OK) == 0) {
-      return path;
-    }
-  }
-  return {};
-}
-
-void apply_common(CURL* easy, const std::string& url, const std::string& ca) {
-  curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(easy, CURLOPT_USERAGENT, "niminal/0.1");
-  if (!ca.empty()) {
-    curl_easy_setopt(easy, CURLOPT_CAINFO, ca.c_str());
-  }
-}
-
-} // namespace
-
 Result<HttpResponse> HttpClient::get(std::string_view url, long timeout_seconds) {
-  HttpResponse out;
-  std::string url_owned(url);
-  std::string ca = default_ca_file();
-  curl_easy_reset(impl_->easy);
-  apply_common(impl_->easy, url_owned, ca);
-  curl_easy_setopt(impl_->easy, CURLOPT_HTTPGET, 1L);
-  curl_easy_setopt(impl_->easy, CURLOPT_TIMEOUT, timeout_seconds);
-  curl_easy_setopt(impl_->easy, CURLOPT_WRITEFUNCTION, write_body);
-  curl_easy_setopt(impl_->easy, CURLOPT_WRITEDATA, &out.body);
-  const auto rc = curl_easy_perform(impl_->easy);
-  curl_easy_getinfo(impl_->easy, CURLINFO_RESPONSE_CODE, &out.status);
-  if (rc != CURLE_OK) {
-    return std::unexpected(Error(std::string("http: ") + curl_easy_strerror(rc)));
+  auto state = std::make_shared<StreamState>();
+  auto finished = state->finished.get_future();
+  const auto timeout = std::chrono::seconds(timeout_seconds);
+  glz::stream_request_params_v2 params{
+      .method = "GET",
+      .url = std::string(url),
+      .timeout = timeout,
+      .strategy = glz::stream_read_strategy::immediate_delivery,
+      .on_data = [state](std::string_view bytes) { state->response.body.append(bytes); },
+      .on_error = [state](std::error_code error) { state->error = error; },
+      .on_connect =
+          [state](const glz::response& response) { state->response.status = response.status_code; },
+      .on_disconnect =
+          [state] { std::call_once(state->once, [state] { state->finished.set_value(); }); },
+      .status_is_error = [](int) { return false; },
+  };
+  auto connection = impl_->client.stream_request_v2(params);
+  if (!connection) {
+    return std::unexpected(Error("http: request could not be started"));
   }
-  return out;
+  // Glaze bounds the connect and handshake with the same timeout; this covers a
+  // response that stalls after the headers.
+  if (finished.wait_for(timeout) == std::future_status::timeout) {
+    connection->disconnect();
+    finished.wait();
+    return std::unexpected(Error("http: request timed out"));
+  }
+  if (state->error) {
+    return std::unexpected(Error("http: " + state->error->message()));
+  }
+  return state->response;
 }
 
 } // namespace niminal::app

@@ -112,7 +112,10 @@ cail::LanguageModel make_model(const Config& config, const std::string& model, s
   }
   if (config.provider == "opencode" || config.provider == "opencodezen") {
     const auto sdk = lookup_model_sdk(config.provider, model);
-    const auto family = opencode_family(sdk);
+    auto family = opencode_family(sdk);
+    if (!family && sdk.empty()) {
+      family = cail::OpenCodeApiFamily::chat_completions;
+    }
     if (!family) {
       throw Error("Missing or unsupported API family for " + model +
                   " in the cached models.dev catalog. Run /models refresh.");

@@ -59,7 +59,6 @@ endif()
 
 set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
-find_package(ZLIB REQUIRED)
 find_package(cail 0.1 CONFIG REQUIRED)
 
 include(FetchContent)
@@ -74,32 +73,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nlohmann_json)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(BUILD_LIBCURL_DOCS OFF CACHE BOOL "" FORCE)
-set(BUILD_MISC_DOCS OFF CACHE BOOL "" FORCE)
-set(ENABLE_CURL_MANUAL OFF CACHE BOOL "" FORCE)
-set(CURL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-set(HTTP_ONLY ON CACHE BOOL "" FORCE)
-set(CURL_USE_OPENSSL ON CACHE BOOL "" FORCE)
-set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
-# The app only uses HTTP; avoid a Homebrew libssh2 runtime dependency.
-set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
-set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
-set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
-set(USE_APPLE_IDN OFF CACHE BOOL "" FORCE)
-set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
-set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
-set(CURL_DISABLE_ALTSVC ON CACHE BOOL "" FORCE)
-set(ENABLE_ARES OFF CACHE BOOL "" FORCE)
-set(ENABLE_WEBSOCKETS OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  curl
-  GIT_REPOSITORY https://github.com/curl/curl.git
-  GIT_TAG curl-8_12_1
-  GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(curl)
 
 set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -190,7 +165,7 @@ add_library(niminal_app
   src/app/theme.cpp)
 target_include_directories(niminal_app PUBLIC src/app)
 target_link_libraries(niminal_app PUBLIC niminal::ai ftxui::component
-  PRIVATE CURL::libcurl OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
+  PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 if(APPLE)
   target_link_libraries(niminal_app PRIVATE
     "-framework CoreFoundation"

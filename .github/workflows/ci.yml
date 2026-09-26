@@ -24,7 +24,7 @@ jobs:
       - name: Install build and analysis tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev zlib1g-dev clang-format-20 clang-tidy-20
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev clang-format-20 clang-tidy-20
           # Ubuntu's default clang 18 cannot parse libstdc++'s <expected>, so
           # clang-tidy rejects every C++23 source. Use clang 20 and expose the
           # unversioned names that ./dev looks up.
@@ -48,7 +48,7 @@ jobs:
       - name: Install build and analysis tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev zlib1g-dev clang-format-20 clang-tidy-20
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev clang-format-20 clang-tidy-20
           for tool in clang-format clang-tidy run-clang-tidy; do
             sudo ln -sf "/usr/bin/${tool}-20" "/usr/local/bin/${tool}"
           done

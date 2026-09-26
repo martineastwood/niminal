@@ -133,7 +133,10 @@ provider is active.
 
 The catalog comes from [models.dev](https://models.dev/api.json), cached at
 `~/.niminal/models-dev.json`. Use `/models refresh` to fetch a fresh copy.
-niminal may also refresh stale cache data in the background at TUI startup.
+The first launch fetches the catalog when the cache is missing. niminal may
+also refresh stale cache data in the background at TUI startup. If the
+download is unavailable, niminal continues without catalog metadata and
+retries in the background.
 
 ## Thinking levels
 

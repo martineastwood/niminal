@@ -185,6 +185,13 @@ bool load_catalog() {
   return !g_models.empty();
 }
 
+CatalogStartup initialize_catalog() {
+  if (!load_catalog()) {
+    return refresh_catalog() ? CatalogStartup::downloaded : CatalogStartup::unavailable;
+  }
+  return catalog_stale() ? CatalogStartup::stale : CatalogStartup::fresh;
+}
+
 bool catalog_stale(int max_age_seconds) {
   auto path = catalog_cache_path();
   std::error_code ec;

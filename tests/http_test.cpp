@@ -6,6 +6,8 @@
 #include <niminal/chat.hpp>
 
 #include <arpa/inet.h>
+#include <atomic>
+#include <chrono>
 #include <iostream>
 #include <netinet/in.h>
 #include <string>
@@ -18,6 +20,29 @@ namespace {
 int fail(const char* message) {
   std::cerr << message << '\n';
   return 1;
+}
+
+int listen_ephemeral(int& port) {
+  const int server = socket(AF_INET, SOCK_STREAM, 0);
+  if (server < 0) {
+    return -1;
+  }
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = 0;
+  if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
+      listen(server, 1) != 0) {
+    close(server);
+    return -1;
+  }
+  socklen_t address_size = sizeof(address);
+  if (getsockname(server, reinterpret_cast<sockaddr*>(&address), &address_size) != 0) {
+    close(server);
+    return -1;
+  }
+  port = ntohs(address.sin_port);
+  return server;
 }
 
 } // namespace
@@ -35,6 +60,65 @@ int main() {
   auto bad_scheme = http.get("not-a-valid-url", 1);
   if (bad_scheme) {
     return fail("invalid url should return an error");
+  }
+
+  {
+    int port = 0;
+    const int server = listen_ephemeral(port);
+    if (server < 0) {
+      return fail("listen failed");
+    }
+    std::thread peer([&] {
+      const int client = accept(server, nullptr, nullptr);
+      if (client < 0) {
+        return;
+      }
+      const std::string body = "[]";
+      const std::string response =
+          "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
+          "\r\nConnection: close\r\n\r\n" + body;
+      send(client, response.data(), response.size(), 0);
+      close(client);
+    });
+    auto ok = http.get("http://127.0.0.1:" + std::to_string(port));
+    peer.join();
+    close(server);
+    if (!ok || ok->status != 200 || ok->body != "[]") {
+      return fail("a complete response should reach the caller");
+    }
+  }
+
+  {
+    int port = 0;
+    const int server = listen_ephemeral(port);
+    if (server < 0) {
+      return fail("listen failed");
+    }
+    std::atomic<bool> release{false};
+    std::thread peer([&] {
+      const int client = accept(server, nullptr, nullptr);
+      if (client < 0) {
+        return;
+      }
+      const std::string headers = "HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n";
+      send(client, headers.data(), headers.size(), 0);
+      while (!release.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      close(client);
+    });
+    const auto started = std::chrono::steady_clock::now();
+    auto stalled = http.get("http://127.0.0.1:" + std::to_string(port), 1);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    release.store(true);
+    peer.join();
+    close(server);
+    if (stalled) {
+      return fail("a stalled response body should time out");
+    }
+    if (elapsed < std::chrono::seconds(1) || elapsed > std::chrono::seconds(10)) {
+      return fail("a stalled response body should time out after the requested second");
+    }
   }
 
   for (const auto* provider : {"mistral", "local", "ollama", "foundry"}) {
