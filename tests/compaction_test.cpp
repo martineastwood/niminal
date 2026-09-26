@@ -78,8 +78,15 @@ int main() {
     return fail("tool context should be bounded while session keeps full result");
   }
   niminal::Agent one_turn_agent;
+  if (niminal::app::effective_context_window(one_turn_agent, niminal::app::Config{}) !=
+      niminal::app::kDefaultContextWindow) {
+    return fail("effective_context_window default");
+  }
   niminal::app::Config small_context;
   small_context.context_window = 100;
+  if (niminal::app::effective_context_window(one_turn_agent, small_context) != 100) {
+    return fail("effective_context_window explicit");
+  }
   small_context.reserve_tokens = 0;
   small_context.keep_recent_tokens = 40;
   int notices = 0;

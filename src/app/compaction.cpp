@@ -1,5 +1,6 @@
 #include "compaction.hpp"
 #include "extensions.hpp"
+#include "models_dev.hpp"
 
 #include <niminal/chat.hpp>
 
@@ -11,14 +12,12 @@ using json = nlohmann::json;
 
 namespace {
 Config active_compaction_config(const niminal::Agent& agent, Config cfg) {
+  cfg.context_window = effective_context_window(agent, cfg);
   if (cfg.provider == "local" || cfg.provider == "foundry") {
     for (const auto& model : models_for(cfg.provider)) {
-      if (model.model == agent.model && model.api_url == cfg.api_url) {
-        if (model.context_window > 0) {
-          cfg.context_window = model.context_window;
-          cfg.reserve_tokens = std::min(cfg.reserve_tokens, model.context_window / 4);
-          cfg.keep_recent_tokens = std::min(cfg.keep_recent_tokens, model.context_window / 2);
-        }
+      if (model.model == agent.model && model.api_url == cfg.api_url && model.context_window > 0) {
+        cfg.reserve_tokens = std::min(cfg.reserve_tokens, model.context_window / 4);
+        cfg.keep_recent_tokens = std::min(cfg.keep_recent_tokens, model.context_window / 2);
         break;
       }
     }
@@ -26,6 +25,23 @@ Config active_compaction_config(const niminal::Agent& agent, Config cfg) {
   return cfg;
 }
 } // namespace
+
+int effective_context_window(const niminal::Agent& agent, const Config& cfg) {
+  if (cfg.context_window > 0) {
+    return cfg.context_window;
+  }
+  if (cfg.provider == "local" || cfg.provider == "foundry") {
+    for (const auto& model : models_for(cfg.provider)) {
+      if (model.model == agent.model && model.api_url == cfg.api_url && model.context_window > 0) {
+        return model.context_window;
+      }
+    }
+  }
+  if (const int catalog = lookup_model_context(cfg.provider, agent.model); catalog > 0) {
+    return catalog;
+  }
+  return kDefaultContextWindow;
+}
 
 int estimate_tokens(std::string_view text) {
   if (text.empty()) {

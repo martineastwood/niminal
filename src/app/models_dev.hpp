@@ -57,6 +57,7 @@ std::vector<CatalogModel> search_catalog(std::string_view provider, std::string_
                                          const std::vector<std::string>& skip = {});
 ReasoningCaps lookup_reasoning_caps(std::string_view provider, std::string_view model);
 ModelCost lookup_model_cost(std::string_view provider, std::string_view model);
+int lookup_model_context(std::string_view provider, std::string_view model);
 std::string lookup_model_sdk(std::string_view provider, std::string_view model);
 double usage_cost_usd(const niminal::Usage& usage, const ModelCost& cost);
 std::string format_cost_usd(double usd);

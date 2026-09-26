@@ -403,4 +403,14 @@ std::string format_usage_line(const Usage& usage) {
   return out;
 }
 
+std::string format_context_percent(int used_tokens, int context_window) {
+  if (used_tokens <= 0 || context_window <= 0) {
+    return {};
+  }
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "context %.0f%%",
+                std::min(100.0, used_tokens * 100.0 / context_window));
+  return buf;
+}
+
 } // namespace niminal

@@ -158,6 +158,13 @@ session cost from models.dev pricing, the active `provider/model` (or
 thinking level, and `[yolo]` when YOLO mode is on. Cost and token totals price
 the whole session at the active model's rates.
 
+Next to the token totals, `context 42%` shows how much of the model's context
+window the session currently fills. It turns yellow at 70% and red at 90% so
+you know when a long session is close to its limit. After compaction the
+indicator reads `context 42% (compacted)`. The percentage is an estimate; the
+window comes from the models.dev catalog for the active model, or
+`context_window` in `~/.niminal/config.json` when you set one.
+
 Thinking, tool, and diff cards start compact in the transcript. Tool calls show
 as a single line (`→ read README.md`). Shell commands show the command and a
 short output preview; click to see the full result. Click a card, press Ctrl+O

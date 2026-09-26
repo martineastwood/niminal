@@ -231,5 +231,24 @@ int main() {
     std::cerr << "format write: " << wrote << '\n';
     return 1;
   }
+
+  if (!niminal::format_context_percent(0, 128'000).empty()) {
+    std::cerr << "format_context_percent empty usage\n";
+    return 1;
+  }
+  if (!niminal::format_context_percent(64'000, 0).empty()) {
+    std::cerr << "format_context_percent unknown window\n";
+    return 1;
+  }
+  if (niminal::format_context_percent(64'000, 128'000) != "context 50%") {
+    std::cerr << "format_context_percent half: " << niminal::format_context_percent(64'000, 128'000)
+              << '\n';
+    return 1;
+  }
+  if (niminal::format_context_percent(200'000, 128'000) != "context 100%") {
+    std::cerr << "format_context_percent clamped: "
+              << niminal::format_context_percent(200'000, 128'000) << '\n';
+    return 1;
+  }
   return 0;
 }

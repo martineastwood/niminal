@@ -17,6 +17,7 @@ class ExtensionRuntime;
 int estimate_tokens(std::string_view text);
 int estimate_session_tokens(const Session& session);
 int find_cut_index(const Session& session, int keep_recent_tokens, int from_index = 0);
+int effective_context_window(const niminal::Agent& agent, const Config& cfg);
 bool should_compact(const Session& session, int context_window = kDefaultContextWindow,
                     int reserve_tokens = kDefaultReserveTokens);
 

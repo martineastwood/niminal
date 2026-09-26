@@ -317,6 +317,18 @@ ReasoningCaps lookup_reasoning_caps(std::string_view provider, std::string_view 
   return caps;
 }
 
+int lookup_model_context(std::string_view provider, std::string_view model) {
+  if (provider.empty() || model.empty()) {
+    return 0;
+  }
+  auto want_p = catalog_name(provider);
+  auto want_m = niminal::lower_copy(std::string(model));
+  std::lock_guard<std::mutex> lock(g_mu);
+  ensure_locked();
+  const auto* row = find_loaded(want_p, want_m);
+  return row == nullptr ? 0 : row->context;
+}
+
 ModelCost lookup_model_cost(std::string_view provider, std::string_view model) {
   if (provider.empty() || model.empty()) {
     return {};

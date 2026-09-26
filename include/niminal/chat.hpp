@@ -37,5 +37,6 @@ struct ChatRequest {
 ChatResult stream_chat(const ChatRequest& request);
 std::string complete_chat(const ChatRequest& request);
 std::string format_usage_line(const Usage& usage);
+std::string format_context_percent(int used_tokens, int context_window);
 
 } // namespace niminal

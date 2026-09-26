@@ -1520,6 +1520,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::optional<std::tuple<std::string, std::string, std::string, size_t>> footer_key;
   std::string think;
   std::string usage;
+  std::string context_text;
+  int context_level = 0;
   auto view = Renderer(layout, [&] {
     card_boxes.assign(blocks.size(), Box{-1, -1, -1, -1});
     const int transcript_width = std::max(1, screen.dimx() - 1);
@@ -1649,6 +1651,19 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                     : (cfg.thinking.empty() ? "default" : "off");
       }
       usage = format_usage_line(usage_totals);
+      context_text.clear();
+      context_level = 0;
+      if (const int window = effective_context_window(agent, cfg); window > 0) {
+        const int used = estimate_session_tokens(session);
+        const int pct = used * 100 / window;
+        if (pct > 0) {
+          context_level = pct >= 90 ? 2 : (pct >= 70 ? 1 : 0);
+          context_text = format_context_percent(used, window);
+          if (session.latest_compaction_index() >= 0) {
+            context_text += " (compacted)";
+          }
+        }
+      }
       if (!usage.empty()) {
         auto cost = lookup_model_cost(cfg.provider, agent.model);
         if (cost.known) {
@@ -1856,14 +1871,21 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       stack.push_back(hbox({text(busy ? " " : "› ") | bold,
                             wrapped_input->Render() | xflex | size(HEIGHT, LESS_THAN, 8)}));
     }
-    stack.push_back(hbox({
-        text(usage.empty() ? "↑0  ↓0" : usage) | dim,
-        filler(),
-        text(cfg.provider + (cfg.model_runtime.empty() ? "" : "/" + cfg.model_runtime) + "/" +
-             agent.model + (yolo_mode ? " [yolo]" : "")) |
-            color(theme.accent),
-        text(think.empty() ? std::string() : (":" + think)) | dim,
-    }));
+    Elements usage_elements;
+    usage_elements.push_back(text(usage.empty() ? "↑0  ↓0" : usage) | dim);
+    if (!context_text.empty()) {
+      usage_elements.push_back(text("  " + context_text) |
+                               color(context_level == 2   ? theme.error
+                                     : context_level == 1 ? theme.emphasis
+                                                          : theme.muted));
+    }
+    usage_elements.push_back(filler());
+    usage_elements.push_back(text(cfg.provider +
+                                  (cfg.model_runtime.empty() ? "" : "/" + cfg.model_runtime) + "/" +
+                                  agent.model + (yolo_mode ? " [yolo]" : "")) |
+                             color(theme.accent));
+    usage_elements.push_back(text(think.empty() ? std::string() : (":" + think)) | dim);
+    stack.push_back(hbox(std::move(usage_elements)));
     return vbox(std::move(stack));
   });
 
