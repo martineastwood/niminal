@@ -27,7 +27,7 @@ to your `PATH` if it is not already there.
 Install a specific release with:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.1 sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.2.1 sh
 ```
 
 Set `NIMINAL_INSTALL_DIR` before `sh` to choose another location. See

@@ -21,14 +21,14 @@ to your `PATH` if it is not already there.
 To install a specific release, set `NIMINAL_VERSION` for the installer shell:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.1 sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.2.1 sh
 ```
 
 Set `NIMINAL_INSTALL_DIR` before `sh` in the pipeline to choose a different
 install location:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.1.1 NIMINAL_INSTALL_DIR="$HOME/bin" sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.2.1 NIMINAL_INSTALL_DIR="$HOME/bin" sh
 ```
 
 Published platforms today:
