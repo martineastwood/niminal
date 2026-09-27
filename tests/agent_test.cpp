@@ -4,7 +4,9 @@
 #include <cail/openrouter.hpp>
 #include <niminal/ai.hpp>
 
+#include <algorithm>
 #include <iostream>
+#include <vector>
 
 namespace {
 
@@ -250,5 +252,33 @@ int main() {
               << niminal::format_context_percent(200'000, 128'000) << '\n';
     return 1;
   }
+
+  niminal::Cancellation cancel;
+  cancel.request();
+  niminal::Agent cancelled;
+  cancelled.model = "test-model";
+  cancelled.cancel = &cancel;
+  std::vector<niminal::EventKind> kinds;
+  bool turn_interrupted = false;
+  cancelled.turn_end = [&](bool interrupted) { turn_interrupted = interrupted; };
+  cancelled.on_event = [&](const niminal::StreamEvent& event) {
+    if (event.kind != niminal::EventKind::text_delta) {
+      kinds.push_back(event.kind);
+    }
+  };
+  cancelled.run("hello");
+  const bool saw_interrupt =
+      std::find(kinds.begin(), kinds.end(), niminal::EventKind::interrupted) != kinds.end();
+  const bool saw_error =
+      std::find(kinds.begin(), kinds.end(), niminal::EventKind::error) != kinds.end();
+  if (!saw_interrupt || saw_error) {
+    std::cerr << "cancelling a run should emit an interrupted event and no error event\n";
+    return 1;
+  }
+  if (!turn_interrupted) {
+    std::cerr << "cancelling a run should report an interrupted turn\n";
+    return 1;
+  }
+
   return 0;
 }

@@ -111,6 +111,11 @@ nlohmann::json json_event(const niminal::StreamEvent& event) {
     out["step"] = event.step;
     out["message"] = event.text;
     break;
+  case niminal::EventKind::interrupted:
+    out["type"] = "interrupted";
+    out["step"] = event.step;
+    out["message"] = event.text;
+    break;
   case niminal::EventKind::status:
   case niminal::EventKind::done:
     return nlohmann::json();

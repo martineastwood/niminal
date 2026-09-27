@@ -51,9 +51,14 @@ All records include `"version":1`. Many stream events also include `step`,
 | `tool_output_delta` | Streamed bash output so far (`tool_id`, `tool_name`, `delta` is the captured snapshot, not an append-only chunk) |
 | `tool_result` | Tool finished (`output`, `is_error`) |
 | `error` | Failure (`message`) |
+| `interrupted` | The caller cancelled the run (`message` is a short notice) |
 
 `queue` events are emitted in [RPC mode](/reference/rpc-mode/), not in
 `--mode json` runs.
+
+`interrupted` is not a failure. It is emitted when the caller cancels the run,
+for example through an RPC `interrupt` command, and `session_end` still reports
+`"success": true`.
 
 `status` and `done` events are not written to stdout in JSON mode.
 

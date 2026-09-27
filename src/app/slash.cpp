@@ -157,6 +157,18 @@ std::optional<UserBashRequest> parse_user_bash(std::string_view prompt) {
   return req;
 }
 
+std::optional<std::pair<size_t, size_t>> user_bash_prefix(std::string_view prompt) {
+  const size_t start = prompt.find_first_not_of(" \t\n\r");
+  if (start == std::string_view::npos) {
+    return std::nullopt;
+  }
+  auto request = parse_user_bash(prompt.substr(start));
+  if (!request) {
+    return std::nullopt;
+  }
+  return std::pair{start, start + (request->exclude_from_context ? 2U : 1U)};
+}
+
 std::pair<std::string, std::string> split_slash(const std::string& prompt) {
   auto space = prompt.find(' ');
   auto cmd = space == std::string::npos ? prompt : prompt.substr(0, space);

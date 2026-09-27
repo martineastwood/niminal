@@ -36,6 +36,9 @@ Press Esc while queued messages are waiting to interrupt the current turn and
 send them immediately. Press Alt-Up or Shift-Left to move the last queued
 message back into the composer for editing.
 
+An interrupted turn is not an error. The transcript records `Interrupted.` and
+the turn ends there.
+
 Follow-up queues exist in RPC mode and through extensions. The TUI itself only
 queues steering messages while busy, but the footer `queued N` count can include
 extension follow-ups waiting after the current turn.
@@ -50,7 +53,8 @@ the next model turn:
 ```
 
 Use `!!` when you want to run a command without sending its output to the model.
-The command still appears in the transcript.
+The command still appears in the transcript. The `!` or `!!` prefix tints in the
+composer when niminal recognizes the command.
 
 Output streams into a bash card as the command runs. Press Esc to interrupt.
 Composer commands do not ask for approval: you typed the command yourself. They
@@ -74,8 +78,9 @@ message to fork from.
 Type `@` for file mention suggestions. In a git repository, gitignored files are
 excluded. Outside git, suggestions come from a directory walk that skips common
 vendor and build directories but may still include dotfiles. Accepted mentions
-expand into attached file content in the outgoing message (up to 100,000 bytes
-per attachment).
+tint in the composer so you can confirm the file is attached before you send.
+Accepted mentions expand into attached file content in the outgoing message (up
+to 100,000 bytes per attachment).
 
 You can attach a PNG, JPEG, or WebP screenshot with Ctrl-V when your terminal
 sends that shortcut to niminal. You can also `@mention` an image path or drop an

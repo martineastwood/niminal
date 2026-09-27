@@ -100,6 +100,7 @@ enum class EventKind {
   user,
   status,
   error,
+  interrupted,
   done,
   run_start,
   step_start,

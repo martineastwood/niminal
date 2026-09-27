@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -27,6 +28,8 @@ struct UserBashRequest {
 };
 
 std::optional<UserBashRequest> parse_user_bash(std::string_view prompt);
+// Byte range of a recognized `!`/`!!` prefix in a composer draft, skipping leading whitespace.
+std::optional<std::pair<size_t, size_t>> user_bash_prefix(std::string_view prompt);
 std::pair<std::string, std::string> split_slash(const std::string& prompt);
 bool is_builtin_slash(std::string_view command);
 std::string slash_help(const Keybindings& keybindings);

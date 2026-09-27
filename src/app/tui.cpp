@@ -957,8 +957,13 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       turn_failed = true;
       activity.clear();
       activity_started.reset();
-      retry_available =
-          ev.text != "interrupted" && (!retry_prompt.text.empty() || !retry_prompt.images.empty());
+      retry_available = !retry_prompt.text.empty() || !retry_prompt.images.empty();
+      break;
+    case EventKind::interrupted:
+      blocks.push_back(Block{BlockKind::status, ev.text});
+      retry_available = false;
+      activity.clear();
+      activity_started.reset();
       break;
     case EventKind::done:
       busy = false;
@@ -1038,7 +1043,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     pending_deltas.clear();
     std::optional<niminal::Usage> updated_usage;
     if (ev.kind == EventKind::step_end || ev.kind == EventKind::done ||
-        ev.kind == EventKind::error) {
+        ev.kind == EventKind::error || ev.kind == EventKind::interrupted) {
       updated_usage = session.usage_totals();
     }
     screen.Post(
@@ -1530,6 +1535,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
     const int cursor_pos = std::clamp(cursor, 0, static_cast<int>(draft.size()));
     const int terminal_width = screen.dimx() > 0 ? screen.dimx() : Terminal::Size().dimx;
+    const auto mention_ranges = accepted_mention_ranges(workspace, draft);
+    const auto bash_prefix = user_bash_prefix(draft);
     Elements rows;
     size_t line_start = 0;
     while (true) {
@@ -1540,6 +1547,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       size_t byte = line_start;
       for (const auto& glyph : Utf8ToGlyphs(line)) {
         auto cell = text(glyph);
+        const bool in_mention = std::any_of(
+            mention_ranges.begin(), mention_ranges.end(),
+            [&](const MentionRange& range) { return byte >= range.start && byte < range.end; });
+        if (in_mention) {
+          cell |= color(theme.accent);
+        } else if (bash_prefix && byte >= bash_prefix->first && byte < bash_prefix->second) {
+          cell |= color(theme.meta);
+        }
         if (!glyph.empty() && byte == static_cast<size_t>(cursor_pos)) {
           cell =
               input->Focused() ? focusCursorBarBlinking(std::move(cell)) : focus(std::move(cell));

@@ -146,9 +146,7 @@ private:
     agent_.on_event = [this](const niminal::StreamEvent& event) {
       if (event.kind == niminal::EventKind::error) {
         saw_error_event_ = true;
-        if (event.text != "interrupted" && event.text != "Interrupted") {
-          had_failure_ = true;
-        }
+        had_failure_ = true;
       }
       if (event.kind == niminal::EventKind::step_start) {
         active_step_ = event.step;

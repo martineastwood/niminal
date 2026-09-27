@@ -194,23 +194,27 @@ Full guides and reference material live at [niminal.dev](https://niminal.dev):
 For contributors and packagers:
 
 Niminal uses CAIL v0.1.1 as a separate CMake package. Check out that release
-next to Niminal and install it before configuring Niminal:
+next to Niminal, then build and install it with the setup command:
 
 ```sh
 git clone --branch v0.1.1 --depth 1 https://github.com/martineastwood/cail.git ../cail
-cmake -S ../cail -B ../cail/build -DCAIL_BUILD_EXAMPLES=OFF
-cmake --build ../cail/build
-cmake --install ../cail/build --prefix ../cail/build/install
-export CMAKE_PREFIX_PATH="$PWD/../cail/build/install"
-cmake --preset dev
-cmake --build --preset dev
+./dev setup
 ```
 
-The binary is `build/dev/niminal`. Configure once, then build the affected test
-target and run its suite while iterating:
+The setup command uses the CAIL checkout at `../cail`. Pass another source
+directory when you keep CAIL elsewhere, for example `./dev setup ~/src/cail`.
+It builds CAIL without examples or tests, installs it under its build folder,
+and configures Niminal's development build to use that package.
+
+The binary is `build/dev/niminal`. Build it with:
 
 ```sh
-./dev configure
+./dev build --target niminal_cli
+```
+
+For a focused feedback loop, build the affected test target and run its suite:
+
+```sh
 ./dev test --suite agent
 ```
 

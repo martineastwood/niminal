@@ -18,7 +18,15 @@ struct FileMention {
   std::string query;
 };
 
+struct MentionRange {
+  size_t start;
+  size_t end;
+};
+
 std::optional<FileMention> file_mention_at(std::string_view text, size_t cursor);
+// Byte ranges of `@` mentions that resolve to a workspace file, for composer highlighting.
+std::vector<MentionRange> accepted_mention_ranges(const Workspace& workspace,
+                                                  std::string_view text);
 std::vector<std::string> suggest_mentioned_files(const Workspace& workspace, std::string_view query,
                                                  size_t limit = 8);
 std::string apply_file_mention(std::string_view text, size_t cursor, std::string_view path);

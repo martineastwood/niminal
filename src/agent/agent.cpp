@@ -201,13 +201,13 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       turn_end(interrupted);
     }
   };
-  auto settle = [&](bool interrupted, bool run_end, bool emit_error = false) {
+  auto settle = [&](bool interrupted, bool run_end) {
     finish_turn(interrupted);
     if (run_end) {
       emit(StreamEvent{EventKind::run_end, {}, {}, {}});
     }
-    if (emit_error) {
-      emit(StreamEvent{EventKind::error, "interrupted", {}, {}});
+    if (interrupted) {
+      emit(StreamEvent{EventKind::interrupted, "Interrupted.", {}, {}});
     }
     if (agent_settled) {
       agent_settled();
@@ -512,7 +512,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
     if (persist_step) {
       persist_step();
     }
-    settle(true, false, true);
+    settle(true, false);
     return {};
   } catch (...) {
     if (persist_step) {

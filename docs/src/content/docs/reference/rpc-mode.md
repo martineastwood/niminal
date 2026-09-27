@@ -90,6 +90,9 @@ states include `interrupting`, `idle`, `stopped`, and `stopping`. Queue events
 use `"mode": "steer"` or `"follow_up"` with actions `enqueue`, `dequeue`, or
 `clear`.
 
+An interrupted turn emits an `interrupted` event and is not a failure:
+`session_end` reports `"success": true`.
+
 ## Next steps
 
 - [JSON mode](/reference/json-mode/) for event types during a turn

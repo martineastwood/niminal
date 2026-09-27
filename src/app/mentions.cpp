@@ -68,6 +68,18 @@ struct PathMention {
   std::string_view relative;
 };
 
+std::optional<std::filesystem::path> resolve_regular_file(const Workspace& workspace,
+                                                          std::string_view relative) {
+  try {
+    auto path = workspace.resolve(relative);
+    if (std::filesystem::is_regular_file(path)) {
+      return path;
+    }
+  } catch (const std::exception&) {
+  }
+  return std::nullopt;
+}
+
 template <typename Fn> void for_each_path_mention(std::string_view text, Fn&& fn) {
   for (size_t i = 0; i < text.size();) {
     if (text[i] != '@' || (i > 0 && !std::isspace(static_cast<unsigned char>(text[i - 1])))) {
@@ -153,19 +165,19 @@ std::string expand_file_mentions(const Workspace& workspace, std::string_view pr
     if (image_path(relative)) {
       return;
     }
+    auto path = resolve_regular_file(workspace, relative);
+    if (!path) {
+      return;
+    }
     try {
-      auto path = workspace.resolve(relative);
-      if (!std::filesystem::is_regular_file(path)) {
-        return;
-      }
-      std::ifstream in(path, std::ios::binary);
+      std::ifstream in(*path, std::ios::binary);
       std::string body((std::istreambuf_iterator<char>(in)), {});
       if (body.substr(0, std::min<size_t>(body.size(), 4096)).find('\0') != std::string::npos) {
         return;
       }
       const bool truncated = body.size() > kAttachmentLimit;
       body.resize(std::min(body.size(), kAttachmentLimit));
-      attachments += "\n<file path=\"" + workspace.relative(path) + "\">\n" + body;
+      attachments += "\n<file path=\"" + workspace.relative(*path) + "\">\n" + body;
       if (body.empty() || body.back() != '\n') {
         attachments += '\n';
       }
@@ -177,6 +189,17 @@ std::string expand_file_mentions(const Workspace& workspace, std::string_view pr
     }
   });
   return std::string(prompt) + attachments;
+}
+
+std::vector<MentionRange> accepted_mention_ranges(const Workspace& workspace,
+                                                  std::string_view text) {
+  std::vector<MentionRange> ranges;
+  for_each_path_mention(text, [&](const PathMention& mention) {
+    if (resolve_regular_file(workspace, mention.relative)) {
+      ranges.push_back({mention.start, mention.end});
+    }
+  });
+  return ranges;
 }
 
 niminal::UserInput prepare_user_input(const Workspace& workspace, niminal::UserInput input) {

@@ -44,6 +44,20 @@ int main() {
     return fail("!! echo hi");
   }
 
+  using niminal::app::user_bash_prefix;
+  if (user_bash_prefix("hello") || user_bash_prefix("!") || user_bash_prefix("!!") ||
+      user_bash_prefix("!   ") || user_bash_prefix("mail user@example.com")) {
+    return fail("non-command prefix");
+  }
+  auto single_prefix = user_bash_prefix("!git status");
+  if (!single_prefix || single_prefix->first != 0 || single_prefix->second != 1) {
+    return fail("! prefix range");
+  }
+  auto hidden_prefix = user_bash_prefix("  !!pwd");
+  if (!hidden_prefix || hidden_prefix->first != 2 || hidden_prefix->second != 4) {
+    return fail("!! prefix range");
+  }
+
   using niminal::app::is_extension_slash;
   using niminal::app::skill_slash_error;
   if (skill_slash_error("/tmp", "/help")) {

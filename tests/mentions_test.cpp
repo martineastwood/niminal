@@ -58,6 +58,19 @@ int main() {
   }
 
   {
+    const std::string text = "read @src/agent.cpp and @src/missing.cpp";
+    const size_t expected_start = text.find("@src/agent.cpp");
+    auto ranges = accepted_mention_ranges(workspace, text);
+    if (ranges.size() != 1 || ranges[0].start != expected_start ||
+        ranges[0].end != expected_start + std::string("@src/agent.cpp").size()) {
+      return 15;
+    }
+    if (!accepted_mention_ranges(workspace, "mail user@example.com").empty()) {
+      return 16;
+    }
+  }
+
+  {
     std::ofstream image(root / "screen shot.png", std::ios::binary);
     image.write("\x89PNG\r\n\x1a\n", 8);
   }

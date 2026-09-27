@@ -91,18 +91,43 @@ cmd_configure() {
     dir="$1"
     shift
   fi
+  local configure_args=()
+  if [[ -n "${NIMINAL_FETCHCONTENT_BASE_DIR:-}" ]]; then
+    configure_args+=("-DFETCHCONTENT_BASE_DIR=$NIMINAL_FETCHCONTENT_BASE_DIR")
+  fi
+  if [[ -n "${NIMINAL_CXX_COMPILER_LAUNCHER:-}" ]]; then
+    configure_args+=("-DCMAKE_CXX_COMPILER_LAUNCHER=$NIMINAL_CXX_COMPILER_LAUNCHER")
+  fi
+  configure_args+=("$@")
   log "configure ($dir)"
   if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
-    cmake --preset dev "$@"
+    cmake --preset dev "${configure_args[@]}"
   elif [[ "$dir" == "build/release" ]]; then
-    cmake --preset release "$@"
+    cmake --preset release "${configure_args[@]}"
   elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
     # The asan preset pins Debug: sanitizers do not need optimized code, and
     # unoptimized builds compile several times faster.
-    cmake --preset asan "$@"
+    cmake --preset asan "${configure_args[@]}"
   else
-    cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Debug}" "$@"
+    cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Debug}" "${configure_args[@]}"
   fi
+}
+
+cmd_setup() {
+  [[ $# -le 1 ]] || die "usage: ./dev setup [CAIL_SOURCE_DIR]"
+  local cail_source="${1:-$ROOT/../cail}"
+  [[ -f "$cail_source/CMakeLists.txt" ]] || die "CAIL source not found at $cail_source"
+  cail_source="$(cd "$cail_source" && pwd)"
+  local cail_build="$cail_source/build/niminal-dev"
+  local cail_prefix="$cail_build/install"
+
+  log "configure CAIL ($cail_build)"
+  cmake -S "$cail_source" -B "$cail_build" \
+    -DCAIL_BUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
+  log "build and install CAIL ($cail_prefix)"
+  cmake --build "$cail_build" --parallel "$JOBS"
+  cmake --install "$cail_build" --prefix "$cail_prefix"
+  cmd_configure "$BUILD_DIR" "-DCMAKE_PREFIX_PATH=$cail_prefix"
 }
 
 cmd_build() {
@@ -236,6 +261,7 @@ Usage: ./dev <command> [options]
 Commands:
   check       format, configure, build, clang-tidy, test, sanitizer test
   format      check formatting (--fix to rewrite)
+  setup       build/install CAIL and configure Niminal [CAIL_SOURCE_DIR]
   configure   configure the build (default: $BUILD_DIR)
   build       compile; pass --target to build one target (default: $BUILD_DIR)
   tidy        run clang-tidy (default: $BUILD_DIR)
@@ -266,6 +292,10 @@ EOF
 case "${1:-}" in
   check) shift; cmd_check "$@" ;;
   format) cmd_format "${2:-}" ;;
+  setup)
+    shift
+    cmd_setup "$@"
+    ;;
   configure)
     shift
     cmd_configure "$@"

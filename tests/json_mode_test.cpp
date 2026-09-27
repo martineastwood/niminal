@@ -67,5 +67,12 @@ int main() {
       queue.value("request_id", "") != "request" || queue.value("mode", "") != "steer") {
     return fail("queue JSON mismatch");
   }
+
+  StreamEvent interrupted{EventKind::interrupted, "Interrupted.", {}, {}};
+  auto interrupted_json = niminal::app::json_event(interrupted);
+  if (interrupted_json.value("type", "") != "interrupted" ||
+      interrupted_json.value("message", "") != "Interrupted.") {
+    return fail("interrupted JSON mismatch");
+  }
   return 0;
 }

@@ -253,6 +253,7 @@ int run_print(niminal::Agent& agent, const std::string& prompt) {
       }
       break;
     case niminal::EventKind::error:
+    case niminal::EventKind::interrupted:
       std::cerr << ev.text << '\n';
       break;
     default:
