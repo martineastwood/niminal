@@ -1753,8 +1753,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         auto marker = text(selected ? " › " : "   ") | bold | color(theme.accent);
         auto label = text(options[i].label);
         label = selected ? label | bold | color(theme.accent) : label;
-        auto key = text(keybindings.label(options[i].key)) | color(theme.muted);
-        auto row = hbox({marker, label | flex, key});
+        auto key = text(" (" + keybindings.label(options[i].key) + ")") | color(theme.muted);
+        auto row = hbox({marker, label, key});
         if (selected) {
           row = row | bgcolor(theme.hover_bg);
         }

@@ -74,10 +74,10 @@ scroll up.
 | Action | Default keys | What it does |
 | --- | --- | --- |
 | Up / Down | Up arrow / Down arrow | Move the highlight between the options |
-| `approval.allowOnce` | Enter, `1` | Allow once, or select the highlighted option |
+| `approval.allowOnce` | Enter | Allow once, or select the highlighted option |
 | `approval.allowSession` | `s` | Allow for this session |
 | `approval.allowProject` | `p` | Save a project grant when allowed |
-| `approval.deny` | `n`, Esc | Deny |
+| `approval.deny` | Esc | Deny |
 
 Approval keys only act while an approval prompt is open. For example, Enter can
 submit a message in the composer and select the highlighted option in the

@@ -43,10 +43,10 @@ constexpr std::array kSpecs = {
     ActionSpec{"transcript.toggleLast", "ctrl+o", Context::normal},
     ActionSpec{"transcript.toggleAll", "ctrl+shift+o", Context::normal},
     ActionSpec{"app.quit", "ctrl+c", Context::both},
-    ActionSpec{"approval.allowOnce", "enter,1", Context::approval},
+    ActionSpec{"approval.allowOnce", "enter", Context::approval},
     ActionSpec{"approval.allowSession", "s", Context::approval},
     ActionSpec{"approval.allowProject", "p", Context::approval},
-    ActionSpec{"approval.deny", "n,escape", Context::approval},
+    ActionSpec{"approval.deny", "escape", Context::approval},
 };
 
 static_assert(kSpecs.size() == static_cast<size_t>(KeyAction::count));
