@@ -1287,8 +1287,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     std::string catalog_notice;
     if (recovered != 0) {
-      const auto recovery =
-          "Recovered " + std::to_string(recovered) + " interrupted tool call(s).";
+      const auto recovery = "Recovered " + std::to_string(recovered) + " interrupted tool call(s).";
       startup_note = startup_note.empty() ? recovery : recovery + "\n" + startup_note;
     }
     switch (catalog_startup) {
@@ -1755,10 +1754,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       suggest_rows.push_back(std::move(line));
     }
 
-    const bool show_welcome =
-        session.events.empty() &&
-        !std::any_of(blocks.begin(), blocks.end(),
-                      [](const Block& block) { return is_conversation_block(block.kind); });
+    const bool show_welcome = session.events.empty() &&
+                              !std::any_of(blocks.begin(), blocks.end(), [](const Block& block) {
+                                return is_conversation_block(block.kind);
+                              });
     Element transcript;
     if (show_welcome) {
       Elements welcome_layers;
@@ -1791,8 +1790,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     transcript_element = transcript;
     const auto approval_state = approval_snapshot();
     Elements stack;
-    stack.push_back(transcript | focusPositionRelative(0.F, show_welcome ? 0.F : (stick_bottom ? 1.F : transcript_y)) |
-                    vscroll_indicator | yframe | yflex);
+    stack.push_back(
+        transcript |
+        focusPositionRelative(0.F, show_welcome ? 0.F : (stick_bottom ? 1.F : transcript_y)) |
+        vscroll_indicator | yframe | yflex);
     stack.push_back(separator());
     if (approval_state.open) {
       Elements approval_rows;
