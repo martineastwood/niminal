@@ -116,6 +116,9 @@ Inside the TUI, `/resume` lists recent sessions for this workspace and `/resume
 ID` loads one. Tab completes session ids. `/new` starts fresh. See
 [Sessions](/guides/sessions/) for naming, forking, export, and recovery.
 
+When you quit the TUI, niminal prints the command that reopens the session you
+just left, for example `To resume this session: niminal --session 1789233281025102`.
+
 ## Flags for scripts and CI
 
 These flags apply to one process only and are never written to your config:

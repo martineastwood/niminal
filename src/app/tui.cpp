@@ -333,6 +333,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
             std::function<void()> reload_system_prompt, CatalogStartup catalog_startup) {
   const auto& cwd = workspace.root();
   auto screen = ScreenInteractive::Fullscreen();
+  // FTXUI turns Ctrl-C into SIGINT by default, which kills the process before
+  // the session ends. Quit through the key binding instead.
+  screen.ForceHandleCtrlC(false);
   Theme theme = load_theme(cfg.theme).value_or(resolve_theme(ThemeMode::automatic));
   struct CachedMessage {
     BlockKind kind = BlockKind::assistant;
@@ -1278,11 +1281,15 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   }
   agent.messages = session.openai_messages();
   {
-    std::string startup_note = (session.events.empty() ? "New session " : "Session ") + session.id;
+    std::string startup_note;
+    if (!session.events.empty()) {
+      startup_note = "Session " + session.id;
+    }
     std::string catalog_notice;
     if (recovered != 0) {
-      startup_note =
-          "Recovered " + std::to_string(recovered) + " interrupted tool call(s).\n" + startup_note;
+      const auto recovery =
+          "Recovered " + std::to_string(recovered) + " interrupted tool call(s).";
+      startup_note = startup_note.empty() ? recovery : recovery + "\n" + startup_note;
     }
     switch (catalog_startup) {
     case CatalogStartup::fresh:
@@ -1298,7 +1305,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       break;
     }
     if (!catalog_notice.empty()) {
-      startup_note += "\n" + catalog_notice;
+      startup_note += startup_note.empty() ? catalog_notice : "\n" + catalog_notice;
       flash_footer(catalog_notice);
     }
     load_into_ui(startup_note);
@@ -1748,11 +1755,43 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       suggest_rows.push_back(std::move(line));
     }
 
-    auto transcript = cached_transcript;
+    const bool show_welcome =
+        session.events.empty() &&
+        !std::any_of(blocks.begin(), blocks.end(),
+                      [](const Block& block) { return is_conversation_block(block.kind); });
+    Element transcript;
+    if (show_welcome) {
+      Elements welcome_layers;
+      for (const auto& block : blocks) {
+        if (block.kind != BlockKind::status && block.kind != BlockKind::error) {
+          continue;
+        }
+        auto label = block_label(block.kind);
+        auto body = paragraph_preserving_whitespace(block.text) | block_style(block.kind, theme);
+        if (label && *label) {
+          welcome_layers.push_back(
+              vbox({text(label) | bold | block_style(block.kind, theme), body}));
+        } else {
+          welcome_layers.push_back(body);
+        }
+        welcome_layers.push_back(text(""));
+      }
+      const auto title = cwd.filename().empty() ? "niminal" : cwd.filename().string();
+      const auto model_line = cfg.provider +
+                              (cfg.model_runtime.empty() ? "" : "/" + cfg.model_runtime) + "/" +
+                              agent.model;
+      welcome_layers.push_back(filler());
+      welcome_layers.push_back(
+          hbox({filler(), render_welcome_screen(title, model_line, theme), filler()}));
+      welcome_layers.push_back(filler());
+      transcript = vbox(std::move(welcome_layers));
+    } else {
+      transcript = cached_transcript;
+    }
     transcript_element = transcript;
     const auto approval_state = approval_snapshot();
     Elements stack;
-    stack.push_back(transcript | focusPositionRelative(0.F, stick_bottom ? 1.F : transcript_y) |
+    stack.push_back(transcript | focusPositionRelative(0.F, show_welcome ? 0.F : (stick_bottom ? 1.F : transcript_y)) |
                     vscroll_indicator | yframe | yflex);
     stack.push_back(separator());
     if (approval_state.open) {

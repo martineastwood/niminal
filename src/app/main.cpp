@@ -738,6 +738,9 @@ int main(int argc, char** argv) try {
                                      tools_specified ? &allowed_tools : nullptr,
                                      reload_system_prompt, catalog_startup);
     stop_extensions();
+    if (!session.path.empty() && std::filesystem::exists(session.path)) {
+      std::cout << "To resume this session: niminal --session " << session.id << '\n';
+    }
     return code;
   }
   if (!prepare_session()) {

@@ -7,6 +7,10 @@ With no prompt and a TTY on stdin and stdout, niminal opens a fullscreen termina
 UI. Each conversation is a session: the first message creates an append-only JSONL
 file under `~/.niminal/sessions`, and later turns keep writing to it.
 
+A fresh session shows a centered welcome with the workspace folder name, the
+active provider and model, and a few hints (`/help`, `@` file mentions, `!`
+shell commands). It disappears after you send the first message.
+
 The keys below are defaults. You can [change TUI shortcuts](/reference/keybindings/)
 in `~/.niminal/keybindings.json`.
 

@@ -204,6 +204,11 @@ bool is_card_block(BlockKind kind) {
   return kind == BlockKind::thinking || kind == BlockKind::tool || kind == BlockKind::diff;
 }
 
+bool is_conversation_block(BlockKind kind) {
+  return kind == BlockKind::user || kind == BlockKind::assistant || kind == BlockKind::thinking ||
+         kind == BlockKind::tool || kind == BlockKind::diff || kind == BlockKind::approval;
+}
+
 bool is_drag_gesture(int press_x, int press_y, int release_x, int release_y) {
   return press_x != release_x || press_y != release_y;
 }
@@ -313,6 +318,20 @@ Element render_user_message(const Block& block, const Theme& theme) {
             text(" ")});
   return hbox({filler() | bgcolor(theme.accent) | size(WIDTH, EQUAL, 1),
                vbox({text(" "), body, text(" ")}) | bgcolor(theme.input_bg) | xflex});
+}
+
+Element render_welcome_screen(const std::string& title, const std::string& model_line,
+                              const Theme& theme) {
+  auto hint = [&](std::string_view cmd, std::string_view desc) {
+    const auto pad = static_cast<size_t>(std::max(1, 14 - static_cast<int>(cmd.size())));
+    return hbox({text(std::string(cmd)) | bold | color(theme.accent), text(std::string(pad, ' ')),
+                 text(std::string(desc)) | color(theme.muted)});
+  };
+  return vbox({text(title) | bold | color(theme.emphasis),
+               text(model_line) | bold | color(theme.accent), text(""),
+               hint("/help", "list commands"), hint("@file", "mention a workspace file"),
+               hint("!cmd", "run a shell command"), text(""),
+               text("describe a change in the composer below") | color(theme.muted)});
 }
 
 std::string clip_text(std::string text, size_t max_chars, int max_lines) {

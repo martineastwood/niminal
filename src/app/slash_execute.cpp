@@ -165,7 +165,7 @@ bool handle_extension(SlashHost& host, const std::string& cmd, const std::string
           return true;
         }
         auto next = new_session_for(host);
-        host.adopt_session(std::move(next), "New session", "new");
+        host.adopt_session(std::move(next), "", "new");
         restarted = true;
       } else if (kind == "switch") {
         const auto id = action->value("id", std::string());
@@ -583,8 +583,7 @@ bool handle_new(SlashHost& host, const std::string&) {
     return true;
   }
   auto next = new_session_for(host);
-  const auto id = next.id;
-  host.adopt_session(std::move(next), "New session " + id, "new");
+  host.adopt_session(std::move(next), "", "new");
   return true;
 }
 

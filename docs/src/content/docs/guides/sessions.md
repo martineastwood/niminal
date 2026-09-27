@@ -18,6 +18,16 @@ niminal --resume                 # latest session for this workspace
 niminal --session SESSION_ID     # one specific session
 ```
 
+When you quit the TUI, niminal prints the command that reopens the session you
+just left:
+
+```
+To resume this session: niminal --session 1789233281025102
+```
+
+A session that never received a message is not written to disk, so quitting an
+untouched TUI prints nothing. Runs with `--no-session` print nothing either.
+
 Inside the TUI:
 
 | Command | Purpose |

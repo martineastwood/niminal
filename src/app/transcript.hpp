@@ -46,6 +46,7 @@ struct Block {
 };
 
 bool is_card_block(BlockKind kind);
+bool is_conversation_block(BlockKind kind);
 // FTXUI reports a one-character selection for a press released on the same
 // cell, so only a pointer that moved between press and release is a selection
 // gesture. Anything else is a click.
@@ -55,6 +56,8 @@ ftxui::Element virtual_transcript(ftxui::Elements entries, const std::vector<int
 ftxui::Element render_diff_card(const Block& block, const Theme& theme);
 ftxui::Element render_approval_block(const Block& block, const Theme& theme);
 ftxui::Element render_user_message(const Block& block, const Theme& theme);
+ftxui::Element render_welcome_screen(const std::string& title, const std::string& model_line,
+                                     const Theme& theme);
 ftxui::Element render_transcript_card(const Block& block, const Theme& theme, ftxui::Box& box);
 std::vector<Block> blocks_from_events(const std::vector<nlohmann::json>& events);
 std::string clip_text(std::string text, size_t max_chars, int max_lines);
