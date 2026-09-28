@@ -1,6 +1,6 @@
 #include "auth.hpp"
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <cstdlib>
 #include <fstream>
@@ -8,7 +8,7 @@
 
 namespace niminal::app {
 namespace fs = std::filesystem;
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
@@ -61,15 +61,15 @@ std::string read_auth_key(std::string_view provider, const fs::path& path) {
   }
 
   try {
-    const auto doc = json::parse(in);
+    const auto doc = json_parse(in);
     if (!doc.is_object()) {
       return {};
     }
-    const auto it = doc.find(std::string(provider));
-    if (it == doc.end()) {
+    const auto key = std::string(provider);
+    if (!doc.contains(key)) {
       return {};
     }
-    return resolve_key(configured_key(*it));
+    return resolve_key(configured_key(doc[key]));
   } catch (...) {
     return {};
   }

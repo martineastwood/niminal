@@ -179,12 +179,12 @@ std::vector<std::string> preview_message_lines(const std::string& message) {
 
 std::string compose_input_preview(const niminal::UserInput& input) {
   std::string text = input.text;
-  for (const auto& image : input.images) {
+  for (const auto& image : input.images.get_array()) {
     if (!text.empty()) {
       text.push_back('\n');
     }
     text += "[image: ";
-    text += image.value("name", "image");
+    text += niminal::json_value(image, "name", "image");
     text.push_back(']');
   }
   return text;
@@ -369,7 +369,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   size_t step_block_start = 0;
 
   std::string draft;
-  json draft_images = json::array();
+  json draft_images = json_array();
   int cursor = 0;
   std::vector<niminal::UserInput> history;
   int history_i = -1;
@@ -507,11 +507,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                  {"description", "2 to 4 concise choices; Other is added automatically."},
                  {"minItems", 2},
                  {"maxItems", 4}}}}},
-             {"required", json::array({"question", "options"})},
+             {"required", json_array({"question", "options"})},
              {"additionalProperties", false}},
         [&](const json& input) {
           const auto question = input.at("question").get<std::string>();
-          const auto options = input.at("options").get<std::vector<std::string>>();
+          const auto options = niminal::json_as<std::vector<std::string>>(input.at("options"));
           if (question.empty() || options.size() < 2 || options.size() > 4) {
             return niminal::ToolResult{"tool error: ask_user needs a question and 2 to 4 choices"};
           }
@@ -655,16 +655,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   auto load_history = [&] {
     history.clear();
     for (const auto& event : session.events) {
-      if (!event.is_object() || event.value("type", "") != "user") {
+      if (!event.is_object() || niminal::json_value(event, "type", "") != "user") {
         continue;
       }
       std::string text;
-      auto images = json::array();
-      for (const auto& part : event.value("content", json::array())) {
-        if (part.is_object() && part.value("type", "") == "text") {
-          text += part.value("text", "");
-        } else if (part.is_object() && part.value("type", "") == "image") {
-          images.push_back(part);
+      auto images = json_array();
+      const auto content = niminal::json_value(event, "content", json_array());
+      for (const auto& part : content.get_array()) {
+        if (part.is_object() && niminal::json_value(part, "type", "") == "text") {
+          text += niminal::json_value(part, "text", "");
+        } else if (part.is_object() && niminal::json_value(part, "type", "") == "image") {
+          images.get_array().push_back(part);
         }
       }
       if (!text.empty() || !images.empty()) {
@@ -687,7 +688,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return;
     }
     if (history.empty() || history.back().text != input.text ||
-        history.back().images != input.images) {
+        !niminal::json_equal(history.back().images, input.images)) {
       history.push_back(input);
     }
     if (history.size() > 500) {
@@ -1004,8 +1005,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   auto post_ui = [&](const StreamEvent& ev) {
     if (ev.kind == EventKind::tool_call && (ev.tool_name == "edit" || ev.tool_name == "write")) {
       try {
-        auto path_arg =
-            ev.input.is_object() ? ev.input.value("path", std::string()) : std::string();
+        auto path_arg = ev.input.is_object() ? niminal::json_value(ev.input, "path", std::string())
+                                             : std::string();
         if (!path_arg.empty()) {
           auto path = workspace.resolve(path_arg);
           auto relative = workspace.relative(path);
@@ -1126,10 +1127,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       approval.decision = PermissionDecision::deny;
     }
     StreamEvent request{EventKind::approval_required, approval.description, call.name, call.id};
-    request.input = json::object();
+    request.input = json_object();
     try {
       if (!call.arguments.empty()) {
-        request.input = json::parse(call.arguments);
+        request.input = json_parse(call.arguments);
       }
     } catch (...) {
     }
@@ -1450,7 +1451,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     stick_bottom = true;
     transcript_y = 1.F;
     const std::string tool_id = "ubash-" + std::to_string(++user_bash_seq);
-    post_ui(StreamEvent{EventKind::tool_call, json{{"command", command}}.dump(), "bash", tool_id});
+    post_ui(StreamEvent{EventKind::tool_call, niminal::json_dump(json{{"command", command}}),
+                        "bash", tool_id});
     user_bash_running = true;
     activity = "Running bash…";
     worker = std::thread([&, command = std::move(command), exclude_from_context, tool_id] {
@@ -1514,7 +1516,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
     }
 
-    send_prompt(niminal::UserInput{std::move(prompt), std::exchange(draft_images, json::array())});
+    send_prompt(niminal::UserInput{std::move(prompt), std::exchange(draft_images, json_array())});
   };
 
   InputOption input_opt;
@@ -1907,19 +1909,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         for (size_t widget_index = 0; widget_index < extension_widgets.size(); ++widget_index) {
           const auto& widget = extension_widgets[widget_index];
           Elements rows;
-          for (const auto& item : widget.content) {
-            const auto type = item.value("type", std::string());
+          for (const auto& item : widget.content.get_array()) {
+            const auto type = niminal::json_value(item, "type", std::string());
             if (type == "text") {
-              rows.push_back(extension_text(item.value("text", std::string()),
-                                            item.value("style", "muted"), theme, false));
+              rows.push_back(extension_text(niminal::json_value(item, "text", std::string()),
+                                            niminal::json_value(item, "style", "muted"), theme,
+                                            false));
             } else if (type == "list") {
-              for (const auto& entry : item["items"]) {
-                const auto state = entry.value("state", std::string("pending"));
+              for (const auto& entry : item["items"].get_array()) {
+                const auto state = niminal::json_value(entry, "state", std::string("pending"));
                 const bool done = state == "done";
                 auto marker = text(done ? "✓ " : (state == "active" ? "› " : "· "));
                 marker = marker |
                          color(done ? theme.add : (state == "active" ? theme.accent : theme.muted));
-                auto label = paragraph(entry.value("text", std::string()));
+                auto label = paragraph(niminal::json_value(entry, "text", std::string()));
                 if (done) {
                   label = label | dim;
                 }
@@ -1928,7 +1931,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
             } else if (type == "progress") {
               const double maximum = item["max"].get<double>();
               const double value = std::clamp(item["value"].get<double>(), 0.0, maximum);
-              const auto label = item.value("label", std::string());
+              const auto label = niminal::json_value(item, "label", std::string());
               auto meter = gauge(static_cast<float>(value / maximum)) | size(WIDTH, EQUAL, 16) |
                            color(theme.add);
               rows.push_back(label.empty() ? std::move(meter)
@@ -1991,11 +1994,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       stack.push_back(separatorLight() | dim);
       if (!draft_images.empty()) {
         std::string names = "Images: ";
-        for (const auto& image : draft_images) {
+        for (const auto& image : draft_images.get_array()) {
           if (names != "Images: ") {
             names += ", ";
           }
-          names += image.value("name", "image");
+          names += niminal::json_value(image, "name", "image");
         }
         stack.push_back(text(names + "  (Backspace with empty text removes last)") | dim);
       }
@@ -2032,7 +2035,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   auto paste_clipboard_into_draft = [&] {
     try {
       if (auto image = paste_image_from_clipboard()) {
-        draft_images.push_back(std::move(*image));
+        draft_images.get_array().push_back(std::move(*image));
       } else {
         insert_draft(paste_from_clipboard());
       }
@@ -2056,8 +2059,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     } else {
       draft = std::move(message.text);
     }
-    for (auto& image : message.images) {
-      draft_images.push_back(std::move(image));
+    for (auto& image : message.images.get_array()) {
+      draft_images.get_array().push_back(std::move(image));
     }
     cursor = static_cast<int>(draft.size());
     history_i = -1;
@@ -2402,7 +2405,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (e == Event::Backspace && draft.empty() && !draft_images.empty()) {
-      draft_images.erase(draft_images.end() - 1);
+      draft_images.get_array().pop_back();
       return true;
     }
     if (pressed(KeyAction::toggle_last)) {
@@ -2510,7 +2513,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       draft.clear();
       cursor = 0;
       if (prompt.empty() && !draft_images.empty()) {
-        send_prompt(niminal::UserInput{"", std::exchange(draft_images, json::array())});
+        send_prompt(niminal::UserInput{"", std::exchange(draft_images, json_array())});
       } else {
         start_turn(std::move(prompt));
       }
@@ -2540,7 +2543,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         return true;
       }
       draft.clear();
-      draft_images = json::array();
+      draft_images = json_array();
       cursor = 0;
       history_i = -1;
       return true;

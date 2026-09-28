@@ -4,7 +4,7 @@
 #include <niminal/text.hpp>
 
 #include "http.hpp"
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -16,7 +16,7 @@
 namespace niminal::app {
 namespace {
 
-using json = nlohmann::json;
+using json = niminal::json;
 namespace fs = std::filesystem;
 
 constexpr const char* kUrl = "https://models.dev/api.json";
@@ -39,33 +39,32 @@ std::vector<CatalogModel> parse_catalog(const json& doc) {
   if (!doc.is_object()) {
     return out;
   }
-  for (auto& [provider, block] : doc.items()) {
+  for (auto& [provider, block] : doc.get_object()) {
     if (!block.is_object() || !block.contains("models") || !block["models"].is_object()) {
       continue;
     }
-    for (auto& [id, model] : block["models"].items()) {
+    for (auto& [id, model] : block["models"].get_object()) {
       if (id.empty()) {
         continue;
       }
       CatalogModel row;
       row.provider = provider;
       row.id = id;
-      row.sdk = block.value("npm", "");
+      row.sdk = niminal::json_value(block, "npm", "");
       if (!model.is_object()) {
         out.push_back(std::move(row));
         continue;
       }
       if (model.contains("limit") && model["limit"].is_object()) {
-        row.context = model["limit"].value("context", 0);
+        row.context = niminal::json_value(model["limit"], "context", 0);
       }
       if (model.contains("provider") && model["provider"].is_object()) {
-        row.sdk = model["provider"].value("npm", row.sdk);
+        row.sdk = niminal::json_value(model["provider"], "npm", row.sdk);
       }
       if (model.contains("cost") && model["cost"].is_object()) {
         const auto& cost = model["cost"];
         auto price = [&](const char* key) {
-          auto it = cost.find(key);
-          return it != cost.end() && it->is_number() ? it->get<double>() : 0.0;
+          return cost.contains(key) && cost[key].is_number() ? cost[key].get<double>() : 0.0;
         };
         row.cost.input = price("input");
         row.cost.output = price("output");
@@ -78,17 +77,17 @@ std::vector<CatalogModel> parse_catalog(const json& doc) {
         row.reasoning = model["reasoning"].get<bool>();
       }
       if (model.contains("reasoning_options") && model["reasoning_options"].is_array()) {
-        for (const auto& option : model["reasoning_options"]) {
+        for (const auto& option : model["reasoning_options"].get_array()) {
           if (!option.is_object()) {
             continue;
           }
-          auto type = option.value("type", "");
+          auto type = niminal::json_value(option, "type", "");
           if (type == "toggle") {
             row.toggle = true;
           } else if (type == "budget_tokens") {
             row.budget_tokens = true;
           } else if (type == "effort" && option.contains("values") && option["values"].is_array()) {
-            for (const auto& value : option["values"]) {
+            for (const auto& value : option["values"].get_array()) {
               if (!value.is_string()) {
                 continue;
               }
@@ -122,7 +121,7 @@ bool read_file(const fs::path& path, std::vector<CatalogModel>& out) {
     return false;
   }
   try {
-    json doc = json::parse(in);
+    json doc = json_parse(in);
     out = parse_catalog(doc);
     return true;
   } catch (...) {
@@ -215,7 +214,7 @@ bool refresh_catalog() {
   }
   json doc;
   try {
-    doc = json::parse(res->body);
+    doc = json_parse(res->body);
   } catch (...) {
     return false;
   }

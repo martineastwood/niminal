@@ -24,8 +24,8 @@ struct Agent {
   cail::LanguageModel language_model;
   int max_steps = 0; // 0 means unlimited.
   std::vector<Tool> tools;
-  json messages = json::array();
-  json extra = json::object();
+  json messages = json_array();
+  json extra = json_object();
   std::function<void(const StreamEvent&)> on_event;
   std::shared_ptr<std::function<void(std::string)>> tool_output =
       std::make_shared<std::function<void(std::string)>>();

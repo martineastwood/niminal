@@ -23,7 +23,7 @@ struct ChatRequest {
   json messages;
   json tools;
   int max_tokens = 0;
-  json extra = json::object();
+  json extra = json_object();
   std::string conversation_id;
   std::optional<bool> stream_usage;
   bool apply_cache = false;

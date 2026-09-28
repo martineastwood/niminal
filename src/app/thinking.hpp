@@ -1,6 +1,6 @@
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <string>
 #include <string_view>
@@ -16,7 +16,7 @@ std::string snap_to_efforts(std::string_view want, const std::vector<std::string
 std::vector<std::string> thinking_choices(std::string_view provider, std::string_view model);
 std::string thinking_status(std::string_view provider, std::string_view model,
                             std::string_view want);
-nlohmann::json thinking_body(std::string_view provider, std::string_view model,
-                             std::string_view want);
+niminal::json thinking_body(std::string_view provider, std::string_view model,
+                            std::string_view want);
 
 } // namespace niminal::app

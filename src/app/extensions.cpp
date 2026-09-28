@@ -38,7 +38,7 @@ extern char** environ;
 
 namespace niminal::app {
 namespace fs = std::filesystem;
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
@@ -54,17 +54,16 @@ constexpr size_t kMaxExternalOutputBytes = 100'000;
 constexpr auto kStopGrace = std::chrono::seconds(3);
 
 std::string string_field(const json& value, const char* key) {
-  auto it = value.find(key);
-  return it != value.end() && it->is_string() ? it->get<std::string>() : std::string();
+  return value.contains(key) && value[key].is_string() ? value[key].get<std::string>()
+                                                       : std::string();
 }
 
 std::vector<std::string> string_array(const json& value, const char* key) {
   std::vector<std::string> out;
-  auto it = value.find(key);
-  if (it == value.end() || !it->is_array()) {
+  if (!value.contains(key) || !value[key].is_array()) {
     return out;
   }
-  for (const auto& item : *it) {
+  for (const auto& item : value[key].get_array()) {
     if (item.is_string()) {
       out.push_back(item.get<std::string>());
     }
@@ -146,16 +145,15 @@ struct ExternalTool {
 };
 
 bool read_only_capabilities(const json& doc) {
-  auto it = doc.find("capabilities");
-  if (it == doc.end() || it->is_null()) {
+  if (!doc.contains("capabilities") || doc["capabilities"].is_null()) {
     return false;
   }
-  if (!it->is_array()) {
+  if (!doc["capabilities"].is_array()) {
     throw std::runtime_error("capabilities must be an array");
   }
   bool any = false;
   bool writable = false;
-  for (const auto& item : *it) {
+  for (const auto& item : doc["capabilities"].get_array()) {
     if (!item.is_string()) {
       throw std::runtime_error("capabilities must contain strings");
     }
@@ -179,7 +177,7 @@ json read_manifest_json(const fs::path& path) {
   }
   json doc;
   try {
-    in >> doc;
+    doc = json_parse(in);
   } catch (const std::exception& e) {
     throw std::runtime_error("invalid JSON: " + std::string(e.what()));
   }
@@ -192,13 +190,12 @@ json read_manifest_json(const fs::path& path) {
 std::vector<std::string> read_command(const json& doc, bool require_nonempty_array,
                                       const char* array_error, const char* entry_error,
                                       const char* empty_error = nullptr) {
-  const auto command = doc.find("command");
-  if (command == doc.end() || !command->is_array() ||
-      (require_nonempty_array && command->empty())) {
+  if (!doc.contains("command") || !doc["command"].is_array() ||
+      (require_nonempty_array && doc["command"].empty())) {
     throw std::runtime_error(array_error);
   }
   std::vector<std::string> result;
-  for (const auto& item : *command) {
+  for (const auto& item : doc["command"].get_array()) {
     if (!item.is_string() || (require_nonempty_array && item.get<std::string>().empty())) {
       throw std::runtime_error(entry_error);
     }
@@ -225,17 +222,16 @@ ExternalTool parse_external_manifest(const fs::path& path) {
   out.command = read_command(doc, true, "command must be a nonempty array",
                              "command entries must be nonempty strings");
 
-  auto schema = doc.find("input_schema");
-  if (schema == doc.end() || !schema->is_object()) {
+  if (!doc.contains("input_schema") || !doc["input_schema"].is_object()) {
     throw std::runtime_error("input_schema must be a JSON object");
   }
-  out.schema = *schema;
+  out.schema = doc["input_schema"];
 
-  if (auto timeout = doc.find("timeout_seconds"); timeout != doc.end()) {
-    if (!timeout->is_number_integer()) {
+  if (doc.contains("timeout_seconds")) {
+    if (!doc["timeout_seconds"].is_number()) {
       throw std::runtime_error("timeout_seconds must be an integer");
     }
-    const auto seconds = timeout->get<long long>();
+    const auto seconds = static_cast<long long>(doc["timeout_seconds"].get<double>());
     if (seconds < 1 || seconds > std::numeric_limits<int>::max()) {
       throw std::runtime_error("timeout_seconds must be positive");
     }
@@ -255,11 +251,12 @@ Manifest parse_manifest(const fs::path& path) {
   }
   out.command = read_command(doc, false, "command must be an array",
                              "command entries must be strings", "command must not be empty");
-  if (auto timeout = doc.find("response_timeout_seconds"); timeout != doc.end()) {
-    if (timeout->is_null()) {
+  if (doc.contains("response_timeout_seconds")) {
+    if (doc["response_timeout_seconds"].is_null()) {
       out.timeout_ms = -1;
-    } else if (timeout->is_number_integer() && timeout->get<int>() > 0) {
-      out.timeout_ms = timeout->get<int>() * 1000;
+    } else if (doc["response_timeout_seconds"].is_number() &&
+               niminal::json_as<int>(doc["response_timeout_seconds"]) > 0) {
+      out.timeout_ms = niminal::json_as<int>(doc["response_timeout_seconds"]) * 1000;
     } else {
       throw std::runtime_error("response_timeout_seconds must be a positive integer or null");
     }
@@ -366,7 +363,7 @@ public:
 
   void send(const json& message) {
     std::lock_guard lock(send_mutex_);
-    auto line = message.dump() + "\n";
+    auto line = niminal::json_dump(message) + "\n";
     size_t offset = 0;
     while (offset < line.size()) {
       auto n = write(input_, line.data() + offset, line.size() - offset);
@@ -660,7 +657,7 @@ std::string run_external_tool(const ExternalTool& tool, const json& input,
     if (!input_file) {
       throw std::runtime_error("cannot create tool input");
     }
-    input_file << (input.is_null() ? json::object() : input).dump();
+    input_file << niminal::json_dump(input.is_null() ? json_object() : input);
     input_file.close();
     std::ofstream(stdout_path, std::ios::binary | std::ios::trunc).close();
     std::ofstream(stderr_path, std::ios::binary | std::ios::trunc).close();
@@ -744,7 +741,7 @@ std::string run_external_tool(const ExternalTool& tool, const json& input,
     bool valid_json = false;
     if (!stdout_text.empty()) {
       try {
-        const auto parsed = json::parse(stdout_text);
+        const auto parsed = json_parse(stdout_text);
         (void)parsed;
         valid_json = true;
       } catch (...) {
@@ -939,17 +936,17 @@ namespace {
 
 void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const json& response) {
   std::lock_guard lock(impl.actions_mutex);
-  if (auto status = response.find("status"); status != response.end() && status->is_object()) {
-    auto key = string_field(*status, "key");
+  if (response.contains("status") && response["status"].is_object()) {
+    const auto& status = response["status"];
+    auto key = string_field(status, "key");
     ExtensionStatus item{process.name, key, {}};
     bool valid = true;
-    auto segments = status->find("segments");
-    if (segments == status->end() || !segments->is_array()) {
+    if (!status.contains("segments") || !status["segments"].is_array()) {
       valid = false;
     } else {
       static const std::set<std::string> styles = {"normal",  "muted", "accent",  "success",
                                                    "warning", "error", "emphasis"};
-      for (const auto& segment : *segments) {
+      for (const auto& segment : status["segments"].get_array()) {
         if (!segment.is_object()) {
           valid = false;
           break;
@@ -972,34 +969,36 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
       }
     }
   }
-  if (auto notice = response.find("notification");
-      notice != response.end() && notice->is_object()) {
-    auto message = string_field(*notice, "message");
+  if (response.contains("notification") && response["notification"].is_object()) {
+    const auto& notice = response["notification"];
+    auto message = string_field(notice, "message");
     if (!message.empty()) {
-      impl.notices.push_back({string_field(*notice, "level"), message});
+      impl.notices.push_back({string_field(notice, "level"), message});
     }
   }
-  if (auto widget = response.find("widget"); widget != response.end() && widget->is_object()) {
-    auto key = string_field(*widget, "key");
+  if (response.contains("widget") && response["widget"].is_object()) {
+    const auto& widget = response["widget"];
+    auto key = string_field(widget, "key");
     ExtensionWidget item;
     item.extension = process.name;
     item.key = key;
-    item.position = string_field(*widget, "position");
+    item.position = string_field(widget, "position");
     if (item.position.empty()) {
       item.position = "above_composer";
     }
-    item.title = string_field(*widget, "title");
+    item.title = string_field(widget, "title");
     bool valid = item.position == "above_composer";
-    if (auto content = widget->find("content"); content != widget->end() && content->is_array()) {
-      item.content = *content;
+    if (widget.contains("content") && widget["content"].is_array()) {
+      item.content = widget["content"];
     } else {
       valid = false;
     }
-    if (auto actions = widget->find("actions"); actions != widget->end()) {
-      if (!actions->is_array() || actions->size() > 8) {
+    if (widget.contains("actions")) {
+      const auto& actions = widget["actions"];
+      if (!actions.is_array() || actions.size() > 8) {
         valid = false;
       } else {
-        for (const auto& action : *actions) {
+        for (const auto& action : actions.get_array()) {
           if (!action.is_object()) {
             valid = false;
             break;
@@ -1019,7 +1018,7 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
     if (item.content.size() > 24) {
       valid = false;
     }
-    for (const auto& element : item.content) {
+    for (const auto& element : item.content.get_array()) {
       if (!element.is_object()) {
         valid = false;
         break;
@@ -1036,7 +1035,7 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
           valid = false;
           break;
         }
-        for (const auto& entry : element["items"]) {
+        for (const auto& entry : element["items"].get_array()) {
           if (!entry.is_object()) {
             valid = false;
             break;
@@ -1070,12 +1069,13 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
       }
     }
   }
-  if (auto entry = response.find("entry"); entry != response.end()) {
-    impl.entries.push_back({process.name, *entry});
+  if (response.contains("entry")) {
+    impl.entries.push_back({process.name, response["entry"]});
   }
-  if (auto user = response.find("user_message"); user != response.end() && user->is_object()) {
-    auto content = string_field(*user, "content");
-    auto deliver_as = string_field(*user, "deliver_as");
+  if (response.contains("user_message") && response["user_message"].is_object()) {
+    const auto& user = response["user_message"];
+    auto content = string_field(user, "content");
+    auto deliver_as = string_field(user, "deliver_as");
     if (!content.empty() &&
         (deliver_as == "now" || deliver_as == "steer" || deliver_as == "follow_up")) {
       impl.user_messages.push_back({content, deliver_as});
@@ -1091,7 +1091,7 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
 void handle_incoming(ExtensionRuntime::Impl& impl, Process& process, const std::string& line) {
   json incoming;
   try {
-    incoming = json::parse(line);
+    incoming = json_parse(line);
   } catch (...) {
     return;
   }
@@ -1228,20 +1228,18 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
                          {"version", 1},
                          {"workspace", runtime->workspace_.string()},
                          {"session_id", session_id}});
-      auto registration = json::parse(process->receive(manifest.timeout_ms, cancel));
+      auto registration = json_parse(process->receive(manifest.timeout_ms, cancel));
       if (string_field(registration, "type") != "register") {
         throw std::runtime_error("expected register response");
       }
-      auto commands = registration.find("commands");
-      if (commands == registration.end() || !commands->is_array()) {
+      if (!registration.contains("commands") || !registration["commands"].is_array()) {
         throw std::runtime_error("register commands must be an array");
       }
-      auto events = registration.find("events");
-      if (events != registration.end() && !events->is_array()) {
+      if (registration.contains("events") && !registration["events"].is_array()) {
         throw std::runtime_error("register events must be an array");
       }
-      if (events != registration.end()) {
-        for (const auto& event : *events) {
+      if (registration.contains("events")) {
+        for (const auto& event : registration["events"].get_array()) {
           if (!event.is_string()) {
             throw std::runtime_error("register events must be strings");
           }
@@ -1249,35 +1247,35 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
         }
       }
       size_t index = runtime->impl_->processes.size();
-      for (const auto& command : *commands) {
+      for (const auto& command : registration["commands"].get_array()) {
         auto name = string_field(command, "name");
         if (!name.empty()) {
           runtime->commands_.push_back({name, string_field(command, "description"), index});
         }
       }
-      auto tools = registration.find("tools");
-      if (tools != registration.end() && !tools->is_null() && !tools->is_array()) {
+      if (registration.contains("tools") && !registration["tools"].is_null() &&
+          !registration["tools"].is_array()) {
         throw std::runtime_error("register tools must be an array");
       }
-      if (tools != registration.end() && tools->is_array()) {
-        for (const auto& tool : *tools) {
+      if (registration.contains("tools") && registration["tools"].is_array()) {
+        for (const auto& tool : registration["tools"].get_array()) {
           auto name = string_field(tool, "name");
           auto description = string_field(tool, "description");
-          auto schema = tool.find("input_schema");
-          if (name.empty() || description.empty() || schema == tool.end() || !schema->is_object()) {
+          if (name.empty() || description.empty() || !tool.contains("input_schema") ||
+              !tool["input_schema"].is_object()) {
             throw std::runtime_error(
                 "registered tools require name, description, and input_schema");
           }
           runtime->impl_->tools.push_back(
-              {name, description, *schema, index, read_only_capabilities(tool)});
+              {name, description, tool["input_schema"], index, read_only_capabilities(tool)});
         }
       }
       std::vector<CustomProvider> providers;
-      if (auto registered = registration.find("providers"); registered != registration.end()) {
-        if (!registered->is_array()) {
+      if (registration.contains("providers")) {
+        if (!registration["providers"].is_array()) {
           throw std::runtime_error("register providers must be an array");
         }
-        for (const auto& provider : *registered) {
+        for (const auto& provider : registration["providers"].get_array()) {
           if (!provider.is_object() || string_field(provider, "api") != "openai-chat-completions") {
             throw std::runtime_error("extension providers must use openai-chat-completions");
           }
@@ -1289,11 +1287,11 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
           for (const auto& key : string_array(provider, "api_key_env")) {
             spec.env_keys.push_back(key);
           }
-          spec.session_routing = provider.value("session_routing", false);
-          spec.stream_usage = provider.value("stream_usage", false);
-          spec.apply_cache = provider.value("apply_cache", false);
-          spec.prompt_cache_key = provider.value("prompt_cache_key", false);
-          spec.requires_api_key = provider.value("requires_api_key", true);
+          spec.session_routing = niminal::json_value(provider, "session_routing", false);
+          spec.stream_usage = niminal::json_value(provider, "stream_usage", false);
+          spec.apply_cache = niminal::json_value(provider, "apply_cache", false);
+          spec.prompt_cache_key = niminal::json_value(provider, "prompt_cache_key", false);
+          spec.requires_api_key = niminal::json_value(provider, "requires_api_key", true);
           if (spec.name.empty() || spec.endpoint.empty() || spec.default_model.empty() ||
               (spec.requires_api_key && spec.env_keys.empty())) {
             throw std::runtime_error(
@@ -1362,32 +1360,31 @@ std::vector<niminal::Tool> ExtensionRuntime::tools() {
       warnings_.push_back("extension tool '" + tool.name + "' collides with a built-in tool");
       continue;
     }
-    result.push_back(niminal::Tool{tool.name, tool.description, tool.schema,
-                                   [self, name = tool.name](const json& input) {
-                                     auto response = self->invoke(name, input.dump());
-                                     auto content = response.find("content");
-                                     if (content == response.end() || !content->is_array()) {
-                                       throw std::runtime_error(
-                                           "extension tool content must be an array");
-                                     }
-                                     std::string value;
-                                     bool first = true;
-                                     for (const auto& part : *content) {
-                                       if (string_field(part, "type") != "text") {
-                                         continue;
-                                       }
-                                       if (!first) {
-                                         value += '\n';
-                                       }
-                                       value += string_field(part, "text");
-                                       first = false;
-                                     }
-                                     if (response.value("is_error", false)) {
-                                       return std::string("tool error: ") + value;
-                                     }
-                                     return value;
-                                   },
-                                   tool.read_only, true});
+    result.push_back(
+        niminal::Tool{tool.name, tool.description, tool.schema,
+                      [self, name = tool.name](const json& input) {
+                        auto response = self->invoke(name, niminal::json_dump(input));
+                        if (!response.contains("content") || !response["content"].is_array()) {
+                          throw std::runtime_error("extension tool content must be an array");
+                        }
+                        std::string value;
+                        bool first = true;
+                        for (const auto& part : response["content"].get_array()) {
+                          if (string_field(part, "type") != "text") {
+                            continue;
+                          }
+                          if (!first) {
+                            value += '\n';
+                          }
+                          value += string_field(part, "text");
+                          first = false;
+                        }
+                        if (niminal::json_value(response, "is_error", false)) {
+                          return std::string("tool error: ") + value;
+                        }
+                        return value;
+                      },
+                      tool.read_only, true});
   }
   for (const auto& tool : impl_->external_tools) {
     if (chosen.contains(niminal::lower_copy(tool.name))) {
@@ -1425,9 +1422,9 @@ json ExtensionRuntime::invoke(const std::string& name, const std::string& argume
     if (niminal::lower_copy(tool.name) != niminal::lower_copy(name)) {
       continue;
     }
-    json input = json::object();
+    json input = json_object();
     if (!arguments.empty()) {
-      input = json::parse(arguments);
+      input = json_parse(arguments);
     }
     return request(*impl_, *impl_->processes[tool.extension],
                    json{{"type", "tool"},
@@ -1441,27 +1438,27 @@ json ExtensionRuntime::invoke(const std::string& name, const std::string& argume
 
 HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
   HookOutcome outcome;
-  json payload = original.is_null() ? json::object() : original;
+  json payload = original.is_null() ? json_object() : original;
   auto copy_string = [&](const json& response, const char* key, std::string& target,
                          bool& present) {
-    if (auto value = response.find(key); value != response.end() && value->is_string()) {
-      target = value->get<std::string>();
+    if (response.contains(key) && response[key].is_string()) {
+      target = response[key].get<std::string>();
       present = true;
-      payload[key] = *value;
+      payload[key] = response[key];
     }
   };
   auto copy_bool = [&](const json& response, const char* key, bool& target, bool& present) {
-    if (auto value = response.find(key); value != response.end() && value->is_boolean()) {
-      target = value->get<bool>();
+    if (response.contains(key) && response[key].is_boolean()) {
+      target = response[key].get<bool>();
       present = true;
-      payload[key] = *value;
+      payload[key] = response[key];
     }
   };
   auto copy_object = [&](const json& response, const char* key, json& target, bool& present) {
-    if (auto value = response.find(key); value != response.end() && value->is_object()) {
-      target = *value;
+    if (response.contains(key) && response[key].is_object()) {
+      target = response[key];
       present = true;
-      payload[key] = *value;
+      payload[key] = response[key];
     }
   };
   for (auto& process : impl_->processes) {
@@ -1497,29 +1494,30 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
       } else if (event == HookEvent::context) {
         auto system = string_array(response, "system");
         outcome.system.insert(outcome.system.end(), system.begin(), system.end());
-        auto messages = response.find("messages");
-        if (messages != response.end() && messages->is_array()) {
-          outcome.messages.insert(outcome.messages.end(), messages->begin(), messages->end());
+        if (response.contains("messages") && response["messages"].is_array()) {
+          const auto& messages = response["messages"].get_array();
+          outcome.messages.get_array().insert(outcome.messages.get_array().end(), messages.begin(),
+                                              messages.end());
         }
       } else if (event == HookEvent::input || event == HookEvent::message_end) {
         copy_string(response, "text", outcome.text, outcome.has_text);
       } else if (event == HookEvent::before_agent_start) {
         copy_string(response, "system_prompt", outcome.system_prompt, outcome.has_system_prompt);
-        auto message = response.find("message");
-        if (message != response.end() && message->is_object() && message->contains("content") &&
-            (*message)["content"].is_string()) {
-          outcome.messages.push_back(*message);
+        if (response.contains("message") && response["message"].is_object() &&
+            response["message"].contains("content") && response["message"]["content"].is_string()) {
+          outcome.messages.get_array().push_back(response["message"]);
         }
       } else if (event == HookEvent::before_provider_headers) {
-        auto headers = response.find("headers");
-        if (headers != response.end() && headers->is_object()) {
+        if (response.contains("headers") && response["headers"].is_object()) {
+          const auto& headers = response["headers"];
           if (!outcome.has_headers) {
-            outcome.headers = payload.value("headers", json::object());
+            outcome.headers = niminal::json_value(payload, "headers", json_object());
           }
-          for (auto& [key, value] : headers->items()) {
-            for (auto existing = outcome.headers.begin(); existing != outcome.headers.end();) {
-              if (niminal::lower_copy(existing.key()) == niminal::lower_copy(key)) {
-                existing = outcome.headers.erase(existing);
+          for (const auto& [key, value] : headers.get_object()) {
+            auto& target = outcome.headers.get_object();
+            for (auto existing = target.begin(); existing != target.end();) {
+              if (niminal::lower_copy(existing->first) == niminal::lower_copy(key)) {
+                existing = target.erase(existing);
               } else {
                 ++existing;
               }
@@ -1534,18 +1532,18 @@ HookOutcome ExtensionRuntime::dispatch(HookEvent event, const json& original) {
       } else if (event == HookEvent::before_provider_request) {
         copy_object(response, "payload", outcome.payload, outcome.has_payload);
       } else if (event == HookEvent::session_before_compact) {
-        if (auto instruction = response.find("instruction");
-            instruction != response.end() && instruction->is_string()) {
-          outcome.instruction = instruction->get<std::string>();
+        if (response.contains("instruction") && response["instruction"].is_string()) {
+          outcome.instruction = response["instruction"].get<std::string>();
         }
-        auto compaction = response.find("compaction");
-        if (compaction != response.end() && compaction->is_object() &&
-            compaction->contains("summary") && (*compaction)["summary"].is_string() &&
-            compaction->contains("first_kept_index") &&
-            (*compaction)["first_kept_index"].is_number_integer()) {
-          outcome.summary = (*compaction)["summary"].get<std::string>();
-          outcome.first_kept_index = (*compaction)["first_kept_index"].get<int>();
-          outcome.details = compaction->value("details", json());
+        if (response.contains("compaction") && response["compaction"].is_object() &&
+            response["compaction"].contains("summary") &&
+            response["compaction"]["summary"].is_string() &&
+            response["compaction"].contains("first_kept_index") &&
+            response["compaction"]["first_kept_index"].is_number()) {
+          const auto& compaction = response["compaction"];
+          outcome.summary = compaction["summary"].get<std::string>();
+          outcome.first_kept_index = niminal::json_as<int>(compaction["first_kept_index"]);
+          outcome.details = niminal::json_value(compaction, "details", json());
           outcome.has_compaction = !outcome.summary.empty();
         }
       }
@@ -1650,20 +1648,20 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
     runtime->set_host_request([&agent, session, weak_runtime, &cfg](const std::string& method,
                                                                     const json& request) {
       if (method == "model.complete") {
-        const auto prompt = request.value("prompt", std::string());
+        const auto prompt = niminal::json_value(request, "prompt", std::string());
         if (prompt.empty()) {
           throw std::invalid_argument("prompt is required");
         }
         niminal::ChatRequest completion;
         agent.fill_chat(completion);
-        completion.messages = json::array();
-        const auto system = request.value("system_prompt", std::string());
+        completion.messages = json_array();
+        const auto system = niminal::json_value(request, "system_prompt", std::string());
         if (!system.empty()) {
-          completion.messages.push_back(json{{"role", "system"}, {"content", system}});
+          completion.messages.get_array().push_back(json{{"role", "system"}, {"content", system}});
         }
-        completion.messages.push_back(json{{"role", "user"}, {"content", prompt}});
-        completion.tools = json::array();
-        auto max_tokens = request.value("max_tokens", 4096);
+        completion.messages.get_array().push_back(json{{"role", "user"}, {"content", prompt}});
+        completion.tools = json_array();
+        auto max_tokens = niminal::json_value(request, "max_tokens", 4096);
         completion.max_tokens = max_tokens > 0 ? max_tokens : 4096;
         completion.conversation_id = (session ? session->id : agent.conversation_id) + ":extension";
         completion.on_event = {};
@@ -1675,8 +1673,9 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
         if (!locked) {
           throw std::runtime_error("extension host is unavailable");
         }
-        return json{{"text", locked->edit_text(request.value("title", std::string()),
-                                               request.value("text", std::string()))}};
+        return json{
+            {"text", locked->edit_text(niminal::json_value(request, "title", std::string()),
+                                       niminal::json_value(request, "text", std::string()))}};
       }
       if (method == "session.info") {
         if (!session) {
@@ -1693,7 +1692,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
           throw std::runtime_error("session is unavailable");
         }
         if (request.contains("name")) {
-          session->add_name(request.value("name", std::string()));
+          session->add_name(niminal::json_value(request, "name", std::string()));
         }
         return json{{"name", session->name}};
       }
@@ -1746,45 +1745,45 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
     }
   };
   agent.augment_context = [dispatch](json& messages) {
-    json system = json::array();
-    json conversation = json::array();
-    for (const auto& message : messages) {
-      if (message.value("role", "") == "system") {
-        auto content = message.find("content");
-        if (content != message.end() && content->is_array()) {
-          for (const auto& part : *content) {
-            if (part.value("type", "") == "text") {
-              system.push_back(part.value("text", ""));
+    json system = json_array();
+    json conversation = json_array();
+    for (const auto& message : messages.get_array()) {
+      if (niminal::json_value(message, "role", "") == "system") {
+        if (message.contains("content") && message["content"].is_array()) {
+          for (const auto& part : message["content"].get_array()) {
+            if (niminal::json_value(part, "type", "") == "text") {
+              system.get_array().push_back(niminal::json_value(part, "text", ""));
             }
           }
         }
       } else {
-        conversation.push_back(message);
+        conversation.get_array().push_back(message);
       }
     }
     auto outcome =
         dispatch(HookEvent::context, json{{"system", system}, {"messages", conversation}});
     if (!outcome.system.empty()) {
-      auto system_it = std::find_if(messages.begin(), messages.end(), [](const json& msg) {
-        return msg.value("role", "") == "system";
-      });
-      if (system_it == messages.end()) {
-        json parts = json::array();
+      auto system_it = std::find_if(
+          messages.get_array().begin(), messages.get_array().end(),
+          [](const json& msg) { return niminal::json_value(msg, "role", "") == "system"; });
+      if (system_it == messages.get_array().end()) {
+        json parts = json_array();
         for (const auto& text : outcome.system) {
-          parts.push_back(json{{"type", "text"}, {"text", text}});
+          parts.get_array().push_back(json{{"type", "text"}, {"text", text}});
         }
-        messages.insert(messages.begin(), json{{"role", "system"}, {"content", parts}});
+        messages.get_array().insert(messages.get_array().begin(),
+                                    json{{"role", "system"}, {"content", parts}});
       } else {
         if (!(*system_it)["content"].is_array()) {
-          (*system_it)["content"] = json::array();
+          (*system_it)["content"] = json_array();
         }
         for (const auto& text : outcome.system) {
-          (*system_it)["content"].push_back(json{{"type", "text"}, {"text", text}});
+          (*system_it)["content"].get_array().push_back(json{{"type", "text"}, {"text", text}});
         }
       }
     }
-    for (const auto& message : outcome.messages) {
-      messages.push_back(message);
+    for (const auto& message : outcome.messages.get_array()) {
+      messages.get_array().push_back(message);
     }
   };
   agent.turn_start = [dispatch, workspace, &agent] {
@@ -1820,14 +1819,14 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
     if (outcome.has_system_prompt) {
       system_prompt = std::move(outcome.system_prompt);
     }
-    for (const auto& injected : outcome.messages) {
-      message.push_back(json{{"role", "user"}, {"content", injected["content"]}});
+    for (const auto& injected : outcome.messages.get_array()) {
+      message.get_array().push_back(json{{"role", "user"}, {"content", injected["content"]}});
     }
   };
   agent.message_end = [dispatch, workspace, &agent](json& message) {
     auto payload = session_hook_payload(agent.conversation_id, workspace);
     payload["role"] = "assistant";
-    payload["text"] = message.value("content", "");
+    payload["text"] = niminal::json_value(message, "content", "");
     auto outcome = dispatch(HookEvent::message_end, std::move(payload));
     if (outcome.has_text) {
       message["content"] = std::move(outcome.text);
@@ -1843,7 +1842,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
     auto outcome = dispatch(HookEvent::before_provider_headers, std::move(payload));
     if (outcome.has_headers) {
       headers.clear();
-      for (auto& [key, value] : outcome.headers.items()) {
+      for (auto& [key, value] : outcome.headers.get_object()) {
         if (value.is_string()) {
           headers[key] = value.get<std::string>();
         }

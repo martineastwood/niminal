@@ -4,8 +4,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <niminal/json.hpp>
 #include <niminal/text.hpp>
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -253,11 +253,11 @@ std::expected<Theme, std::string> load_theme(std::string_view name) {
     if (!input) {
       return std::unexpected("cannot read " + path.string());
     }
-    const auto doc = nlohmann::json::parse(input);
+    const auto doc = json_parse(input);
     if (!doc.is_object()) {
       return std::unexpected("theme must be a JSON object");
     }
-    const auto base = doc.value("base", std::string("dark"));
+    const auto base = niminal::json_value(doc, "base", std::string("dark"));
     const auto mode = parse_theme_mode(base);
     if (!mode || *mode == ThemeMode::automatic) {
       return std::unexpected("theme base must be light or dark");
@@ -276,7 +276,7 @@ std::expected<Theme, std::string> load_theme(std::string_view name) {
         {"quote", &Theme::quote},       {"input_fg", &Theme::input_fg},
         {"input_bg", &Theme::input_bg}, {"hover_bg", &Theme::hover_bg},
     };
-    for (const auto& [key, value] : colors.items()) {
+    for (const auto& [key, value] : colors.get_object()) {
       if (!value.is_string()) {
         return std::unexpected("invalid color for " + key);
       }

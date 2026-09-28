@@ -8,7 +8,7 @@
 #include <sstream>
 
 namespace niminal::app {
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 Config active_compaction_config(const niminal::Agent& agent, Config cfg) {
@@ -54,13 +54,14 @@ int estimate_session_tokens(const Session& session) {
   int n = 0;
   const int compact = session.latest_compaction_index();
   if (compact >= 0) {
-    n += estimate_tokens(session.events[static_cast<size_t>(compact)].value("summary", ""));
+    n += estimate_tokens(
+        niminal::json_value(session.events[static_cast<size_t>(compact)], "summary", ""));
   }
   const size_t start =
-      compact < 0
-          ? 0
-          : static_cast<size_t>(std::max(
-                0, session.events[static_cast<size_t>(compact)].value("first_kept_index", 0)));
+      compact < 0 ? 0
+                  : static_cast<size_t>(std::max(
+                        0, niminal::json_value(session.events[static_cast<size_t>(compact)],
+                                               "first_kept_index", 0)));
   for (size_t i = start; i < session.events.size(); ++i) {
     n += estimate_session_event_tokens(session.events[i]);
   }
@@ -87,16 +88,18 @@ int find_cut_index(const Session& session, int keep_recent_tokens, int from_inde
   while (i >= from_index) {
     tokens += estimate_session_event_tokens(session.events[static_cast<size_t>(i)]);
     if (tokens >= std::max(1, keep_recent_tokens)) {
-      int cut = i;
-      while (cut > from_index &&
-             session.events[static_cast<size_t>(cut)].value("type", "") != "user") {
-        --cut;
+      for (int cut = i; cut > from_index; --cut) {
+        const auto type = niminal::json_value(session.events[static_cast<size_t>(cut)], "type", "");
+        if (type == "user") {
+          return cut;
+        }
+        if (type == "assistant" && cut > 0 &&
+            niminal::json_value(session.events[static_cast<size_t>(cut - 1)], "type", "") ==
+                "tool_result") {
+          return cut;
+        }
       }
-      if (session.events[static_cast<size_t>(cut)].value("type", "") != "user" ||
-          cut <= from_index) {
-        return -1;
-      }
-      return cut;
+      return -1;
     }
     --i;
   }
@@ -206,8 +209,8 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
   std::string previous;
   int compact = session.latest_compaction_index();
   if (compact >= 0) {
-    previous = session.events[static_cast<size_t>(compact)].value("summary", "");
-    from = session.events[static_cast<size_t>(compact)].value("first_kept_index", 0);
+    previous = niminal::json_value(session.events[static_cast<size_t>(compact)], "summary", "");
+    from = niminal::json_value(session.events[static_cast<size_t>(compact)], "first_kept_index", 0);
   }
   int cut = find_cut_index(session, effective.keep_recent_tokens, from);
   if (cut < 0) {
@@ -221,22 +224,22 @@ CompactResult compact_session(Session& session, niminal::Agent& agent,
     return result;
   }
 
-  json sys = json::object();
+  json sys = json_object();
   sys["role"] = "system";
-  json parts = json::array();
-  json part = json::object();
+  json parts = json_array();
+  json part = json_object();
   part["type"] = "text";
   part["text"] = kSummarySystem;
-  parts.push_back(std::move(part));
+  parts.get_array().push_back(std::move(part));
   sys["content"] = std::move(parts);
 
-  json user = json::object();
+  json user = json_object();
   user["role"] = "user";
   user["content"] = build_summary_prompt(previous, conversation, instruction);
 
   niminal::ChatRequest req;
   agent.fill_chat(req);
-  req.messages = json::array({std::move(sys), std::move(user)});
+  req.messages = json_array({std::move(sys), std::move(user)});
   req.max_tokens = kSummaryMaxTokens;
 
   std::string summary;
@@ -301,8 +304,9 @@ void bind_compaction(niminal::Agent& agent, Session& session, const Config& cfg,
       return;
     }
     const int compact = session.latest_compaction_index();
-    const int from =
-        compact < 0 ? 0 : session.events[static_cast<size_t>(compact)].value("first_kept_index", 0);
+    const int from = compact < 0 ? 0
+                                 : niminal::json_value(session.events[static_cast<size_t>(compact)],
+                                                       "first_kept_index", 0);
     if (find_cut_index(session, effective.keep_recent_tokens, from) < 0) {
       return;
     }
@@ -314,7 +318,7 @@ void bind_compaction(niminal::Agent& agent, Session& session, const Config& cfg,
   };
   agent.recover_overflow = [&agent, &session, note, extensions, &cfg, report] {
     if (note) {
-      note("Context overflow — compacting and retrying…");
+      note("Context overflow, compacting and retrying…");
     }
     try {
       auto result = compact_session(session, agent, "Prioritize recovering from context overflow.",

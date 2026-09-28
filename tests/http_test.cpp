@@ -70,6 +70,26 @@ int main() {
     }
     std::thread peer([&] {
       const int client = accept(server, nullptr, nullptr);
+      if (client >= 0) {
+        close(client);
+      }
+    });
+    auto interrupted = http.get("https://127.0.0.1:" + std::to_string(port), 1);
+    peer.join();
+    close(server);
+    if (interrupted) {
+      return fail("an interrupted TLS connection should return an error");
+    }
+  }
+
+  {
+    int port = 0;
+    const int server = listen_ephemeral(port);
+    if (server < 0) {
+      return fail("listen failed");
+    }
+    std::thread peer([&] {
+      const int client = accept(server, nullptr, nullptr);
       if (client < 0) {
         return;
       }
@@ -200,13 +220,13 @@ int main() {
           {.api_key = "test", .headers = {}, .endpoint = api_url, .request_session_header = {}})(
           "original");
     }
-    request.messages = nlohmann::json::array({
+    request.messages = niminal::json_array({
         {{"role", "assistant"},
          {"content", "Hello"},
          {"provider_options", {{"reasoning_content", "private thought"}}}},
         {{"role", "user"}, {"content", "ping"}},
     });
-    request.before_provider_request = [](nlohmann::json& payload) {
+    request.before_provider_request = [](niminal::json& payload) {
       payload["model"] = "replacement";
     };
     bool authorization_correct = false;

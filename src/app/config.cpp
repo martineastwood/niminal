@@ -3,7 +3,7 @@
 
 #include "provider.hpp"
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -13,7 +13,7 @@
 
 namespace niminal::app {
 namespace fs = std::filesystem;
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
@@ -24,8 +24,8 @@ void load_queue_mode(const json& doc, const char* key, std::string& target) {
 }
 
 void load_non_negative_int(const json& doc, const char* key, int& target) {
-  if (auto it = doc.find(key); it != doc.end() && it->is_number_integer()) {
-    const int value = it->get<int>();
+  if (doc.contains(key) && doc[key].is_number()) {
+    const int value = niminal::json_as<int>(doc[key]);
     if (value >= 0) {
       target = value;
     }
@@ -33,15 +33,15 @@ void load_non_negative_int(const json& doc, const char* key, int& target) {
 }
 
 void load_string(const json& doc, const char* key, std::string& target, bool allow_empty = false) {
-  if (auto it = doc.find(key);
-      it != doc.end() && it->is_string() && (allow_empty || !it->get<std::string>().empty())) {
-    target = it->get<std::string>();
+  if (doc.contains(key) && doc[key].is_string() &&
+      (allow_empty || !doc[key].get<std::string>().empty())) {
+    target = doc[key].get<std::string>();
   }
 }
 
 void load_bool(const json& doc, const char* key, bool& target) {
-  if (auto it = doc.find(key); it != doc.end() && it->is_boolean()) {
-    target = it->get<bool>();
+  if (doc.contains(key) && doc[key].is_boolean()) {
+    target = doc[key].get<bool>();
   }
 }
 
@@ -72,15 +72,15 @@ std::vector<ConfiguredModel> load_models() {
   }
   json doc;
   try {
-    doc = json::parse(in);
-  } catch (const json::exception& e) {
+    doc = json_parse(in);
+  } catch (const std::exception& e) {
     throw std::runtime_error("invalid " + path.string() + ": " + e.what());
   }
   if (!doc.is_object() || !doc.contains("models") || !doc["models"].is_array()) {
     throw std::runtime_error(path.string() + " must contain a models array");
   }
   std::vector<ConfiguredModel> models;
-  for (const auto& entry : doc["models"]) {
+  for (const auto& entry : doc["models"].get_array()) {
     if (!entry.is_object()) {
       throw std::runtime_error("each model in " + path.string() + " must be an object");
     }
@@ -108,10 +108,11 @@ std::vector<ConfiguredModel> load_models() {
       throw std::runtime_error("runtime is only valid for local models in " + path.string());
     }
     if (entry.contains("context_window")) {
-      if (!entry["context_window"].is_number_integer() || entry["context_window"].get<int>() <= 0) {
+      if (!entry["context_window"].is_number() ||
+          niminal::json_as<int>(entry["context_window"]) <= 0) {
         throw std::runtime_error("model context_window must be positive in " + path.string());
       }
-      model.context_window = entry["context_window"].get<int>();
+      model.context_window = niminal::json_as<int>(entry["context_window"]);
     } else if (model.provider == "local") {
       throw std::runtime_error("model context_window must be positive in " + path.string());
     }
@@ -146,7 +147,7 @@ Config load_config_file(const fs::path& path) {
     return cfg;
   }
   try {
-    auto doc = json::parse(in);
+    auto doc = json_parse(in);
     load_string(doc, "model", cfg.model);
     load_string(doc, "provider", cfg.provider);
     load_string(doc, "thinking", cfg.thinking, true);
@@ -161,7 +162,7 @@ Config load_config_file(const fs::path& path) {
     load_non_negative_int(doc, "keep_recent_tokens", cfg.keep_recent_tokens);
     load_non_negative_int(doc, "context_window", cfg.context_window);
     if (doc.contains("providers") && doc["providers"].is_object()) {
-      for (auto& [name, block] : doc["providers"].items()) {
+      for (auto& [name, block] : doc["providers"].get_object()) {
         if (block.is_object()) {
           if (block.contains("last_model") && block["last_model"].is_string()) {
             auto model = block["last_model"].get<std::string>();
@@ -222,7 +223,7 @@ void save_config_file(const fs::path& path, const Config& cfg) {
     doc["editor"] = cfg.editor;
   }
   if (!cfg.last_models.empty() || !cfg.provider_api_urls.empty()) {
-    json providers = json::object();
+    json providers = json_object();
     for (const auto& [name, url] : cfg.provider_api_urls) {
       if (name != "foundry") {
         providers[name]["api_url"] = url;
@@ -240,7 +241,7 @@ void save_config_file(const fs::path& path, const Config& cfg) {
     if (!out) {
       throw std::runtime_error("cannot write " + path.string());
     }
-    out << doc.dump(2) << '\n';
+    out << niminal::json_pretty(doc) << '\n';
   }
   fs::rename(tmp, path);
 }

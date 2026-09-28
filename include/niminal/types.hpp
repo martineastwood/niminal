@@ -14,11 +14,9 @@
 #include <utility>
 #include <vector>
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 namespace niminal {
-
-using json = nlohmann::json;
 
 struct Error : std::runtime_error {
   int http_status = 0;
@@ -143,7 +141,7 @@ struct ToolCall {
 
 struct UserInput {
   std::string text;
-  json images = json::array();
+  json images = json_array();
 
   UserInput() = default;
   UserInput(std::string value) : text(std::move(value)) {}
@@ -155,19 +153,19 @@ struct UserInput {
 inline json user_content(const UserInput& input) {
   if (input.images.empty())
     return input.text;
-  json content = json::array();
+  json content = json_array();
   if (!input.text.empty()) {
-    content.push_back(json{{"type", "text"}, {"text", input.text}});
+    content.get_array().push_back(json{{"type", "text"}, {"text", input.text}});
   }
-  for (const auto& image : input.images) {
-    content.push_back(image);
+  for (const auto& image : input.images.get_array()) {
+    content.get_array().push_back(image);
   }
   return content;
 }
 
 struct ToolResult {
   std::string text;
-  json images = json::array();
+  json images = json_array();
 
   ToolResult() = default;
   ToolResult(std::string value) : text(std::move(value)) {}

@@ -17,7 +17,7 @@
 
 namespace niminal::app {
 namespace fs = std::filesystem;
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
@@ -32,13 +32,14 @@ void fsync_file(const fs::path& path) {
 }
 
 const json* content_array(const json& event) {
-  const auto content = event.find("content");
-  return content != event.end() && content->is_array() ? &*content : nullptr;
+  return event.is_object() && event.contains("content") && event["content"].is_array()
+             ? &event["content"]
+             : nullptr;
 }
 
 template <typename Fn> void for_each_content_part(const json& event, Fn&& fn) {
   if (const auto* content = content_array(event)) {
-    for (const auto& part : *content) {
+    for (const auto& part : content->get_array()) {
       if (part.is_object()) {
         fn(part);
       }
@@ -48,14 +49,14 @@ template <typename Fn> void for_each_content_part(const json& event, Fn&& fn) {
 
 template <typename Fn> void for_each_tool_use(const json& event, Fn&& fn) {
   for_each_content_part(event, [&](const json& part) {
-    if (part.value("type", "") == "tool_use") {
+    if (niminal::json_value(part, "type", "") == "tool_use") {
       fn(part);
     }
   });
 }
 
 std::string first_user_text(const json& event) {
-  if (event.value("type", "") != "user") {
+  if (niminal::json_value(event, "type", "") != "user") {
     return {};
   }
   std::string text;
@@ -64,11 +65,11 @@ std::string first_user_text(const json& event) {
     if (found) {
       return;
     }
-    if (part.value("type", "") == "text") {
-      text = part.value("text", "");
+    if (niminal::json_value(part, "type", "") == "text") {
+      text = niminal::json_value(part, "text", "");
       found = true;
-    } else if (part.value("type", "") == "image") {
-      text = "[image: " + part.value("name", "image") + "]";
+    } else if (niminal::json_value(part, "type", "") == "image") {
+      text = "[image: " + niminal::json_value(part, "name", "image") + "]";
       found = true;
     }
   });
@@ -82,10 +83,10 @@ json text_block(const std::string& text) {
 std::string content_text(const json& event, bool include_images) {
   std::string text;
   for_each_content_part(event, [&](const json& part) {
-    if (part.value("type", "") == "text") {
-      text += part.value("text", "");
-    } else if (include_images && part.value("type", "") == "image") {
-      text += "[image: " + part.value("name", "image") + "]";
+    if (niminal::json_value(part, "type", "") == "text") {
+      text += niminal::json_value(part, "text", "");
+    } else if (include_images && niminal::json_value(part, "type", "") == "image") {
+      text += "[image: " + niminal::json_value(part, "name", "image") + "]";
     }
   });
   return text;
@@ -111,10 +112,11 @@ std::string bash_user_message(const std::string& command, const std::string& out
 std::string last_event_value(const Session& session, const char* key,
                              std::initializer_list<const char*> types) {
   for (auto it = session.events.rbegin(); it != session.events.rend(); ++it) {
-    if (std::find(types.begin(), types.end(), it->value("type", "")) == types.end()) {
+    if (std::find(types.begin(), types.end(), niminal::json_value(*it, "type", "")) ==
+        types.end()) {
       continue;
     }
-    auto value = it->value(key, "");
+    auto value = niminal::json_value(*it, key, "");
     if (!value.empty()) {
       return value;
     }
@@ -133,16 +135,16 @@ bool session_matches(const Session& session, const std::string& query) {
     if (!event.is_object()) {
       continue;
     }
-    auto type = event.value("type", "");
+    auto type = niminal::json_value(event, "type", "");
     if (type == "user" || type == "assistant") {
       haystack += '\n' + niminal::lower_copy(event_text(event));
     } else if (type == "bash") {
-      haystack += '\n' + niminal::lower_copy(event.value("command", ""));
-      haystack += '\n' + niminal::lower_copy(event.value("output", ""));
+      haystack += '\n' + niminal::lower_copy(niminal::json_value(event, "command", ""));
+      haystack += '\n' + niminal::lower_copy(niminal::json_value(event, "output", ""));
     } else if (type == "tool_result") {
-      haystack += '\n' + niminal::lower_copy(event.value("output", ""));
+      haystack += '\n' + niminal::lower_copy(niminal::json_value(event, "output", ""));
     } else if (type == "compaction") {
-      haystack += '\n' + niminal::lower_copy(event.value("summary", ""));
+      haystack += '\n' + niminal::lower_copy(niminal::json_value(event, "summary", ""));
     }
   }
   return haystack.find(needle) != std::string::npos;
@@ -236,17 +238,17 @@ std::string html_images(const json& images) {
     return {};
   }
   std::ostringstream out;
-  for (const auto& image : images) {
-    if (!image.is_object() || image.value("type", "") != "image") {
+  for (const auto& image : images.get_array()) {
+    if (!image.is_object() || niminal::json_value(image, "type", "") != "image") {
       continue;
     }
-    const auto mime = image.value("mime_type", "");
+    const auto mime = niminal::json_value(image, "mime_type", "");
     if (mime != "image/png" && mime != "image/jpeg" && mime != "image/webp") {
       continue;
     }
     out << "<figure><img style=\"max-width:100%;max-height:40rem\" src=\"data:" << mime
-        << ";base64," << html_escape(image.value("data", "")) << "\" alt=\""
-        << html_escape(image.value("name", "image")) << "\"></figure>\n";
+        << ";base64," << html_escape(niminal::json_value(image, "data", "")) << "\" alt=\""
+        << html_escape(niminal::json_value(image, "name", "image")) << "\"></figure>\n";
   }
   return out.str();
 }
@@ -423,11 +425,11 @@ std::string export_html(const Session& session) {
     if (!event.is_object()) {
       continue;
     }
-    auto type = event.value("type", "");
+    auto type = niminal::json_value(event, "type", "");
     if (type == "user") {
       out << "<article class=\"message user\"><div class=\"label\">You</div>\n"
           << "<div class=\"content\">" << html_escape(event_text(event)) << "</div>"
-          << html_images(event.value("content", json::array())) << "</article>\n";
+          << html_images(niminal::json_value(event, "content", json_array())) << "</article>\n";
     } else if (type == "assistant") {
       auto text = event_text(event);
       if (!text.empty()) {
@@ -435,22 +437,23 @@ std::string export_html(const Session& session) {
             << "<div class=\"content\">" << markdown_to_html(text) << "</div></article>\n";
       }
       for_each_tool_use(event, [&](const json& part) {
-        auto name = part.value("name", "");
-        auto input = part.value("input", json::object()).dump(2);
+        auto name = niminal::json_value(part, "name", "");
+        auto input = niminal::json_pretty(niminal::json_value(part, "input", json_object()));
         out << "<details class=\"tool-call\"><summary>Tool: " << html_escape(name)
             << "</summary>\n<pre>" << html_escape(input) << "</pre></details>\n";
       });
     } else if (type == "bash") {
-      out << "<pre class=\"tool-result\">$ " << html_escape(event.value("command", "")) << "\n\n"
-          << html_escape(event.value("output", "")) << "</pre>\n";
+      out << "<pre class=\"tool-result\">$ "
+          << html_escape(niminal::json_value(event, "command", "")) << "\n\n"
+          << html_escape(niminal::json_value(event, "output", "")) << "</pre>\n";
     } else if (type == "tool_result") {
-      auto error = event.value("is_error", false);
+      auto error = niminal::json_value(event, "is_error", false);
       out << "<pre class=\"tool-result" << (error ? " error" : "") << "\">"
-          << html_escape(event.value("output", "")) << "</pre>\n";
-      out << html_images(event.value("images", json::array()));
+          << html_escape(niminal::json_value(event, "output", "")) << "</pre>\n";
+      out << html_images(niminal::json_value(event, "images", json_array()));
     } else if (type == "compaction") {
       out << "<aside class=\"compaction\"><strong>Compaction</strong>\n"
-          << html_escape(event.value("summary", "")) << "</aside>\n";
+          << html_escape(niminal::json_value(event, "summary", "")) << "</aside>\n";
     }
   }
   out << "</main>\n</body>\n</html>\n";
@@ -527,9 +530,9 @@ void Session::append(const json& event, bool sync) {
     if (!parent.empty()) {
       header["parent"] = parent;
     }
-    out << header.dump() << '\n';
+    out << niminal::json_dump(header) << '\n';
   }
-  out << event.dump() << '\n';
+  out << niminal::json_dump(event) << '\n';
   out.flush();
   out.close();
   if (sync) {
@@ -545,12 +548,12 @@ void Session::sync() const {
 }
 
 void Session::add_user(const niminal::UserInput& input) {
-  json content = json::array();
+  json content = json_array();
   if (!input.text.empty()) {
-    content.push_back(text_block(input.text));
+    content.get_array().push_back(text_block(input.text));
   }
-  for (const auto& image : input.images) {
-    content.push_back(image);
+  for (const auto& image : input.images.get_array()) {
+    content.get_array().push_back(image);
   }
   append(json{{"type", "user"}, {"role", "user"}, {"content", std::move(content)}});
 }
@@ -566,31 +569,33 @@ void Session::add_bash(const std::string& command, const std::string& output,
 void Session::add_assistant(const std::string& text, const json& tool_calls,
                             const std::string& model, const niminal::Usage& usage,
                             const json& provider_options) {
-  json content = json::array();
+  json content = json_array();
   if (!text.empty()) {
-    content.push_back(text_block(text));
+    content.get_array().push_back(text_block(text));
   }
   if (tool_calls.is_array()) {
-    for (const auto& call : tool_calls) {
-      json input = json::object();
+    for (const auto& call : tool_calls.get_array()) {
+      json input = json_object();
       try {
-        auto args = call.value("function", json::object()).value("arguments", "");
+        const auto function = niminal::json_value(call, "function", json_object());
+        auto args = niminal::json_value(function, "arguments", "");
         if (!args.empty()) {
-          input = json::parse(args);
+          input = json_parse(args);
         }
       } catch (...) {
       }
       json part = {
           {"type", "tool_use"},
-          {"id", call.value("id", "")},
-          {"name", call.value("function", json::object()).value("name", "")},
+          {"id", niminal::json_value(call, "id", "")},
+          {"name",
+           niminal::json_value(niminal::json_value(call, "function", json_object()), "name", "")},
           {"input", input},
       };
       if (call.contains("provider_options") && call["provider_options"].is_object() &&
           !call["provider_options"].empty()) {
         part["provider_options"] = call["provider_options"];
       }
-      content.push_back(std::move(part));
+      content.get_array().push_back(std::move(part));
     }
   }
   json event = {{"type", "assistant"}, {"role", "assistant"}, {"content", content}};
@@ -613,16 +618,16 @@ void Session::add_assistant(const std::string& text, const json& tool_calls,
 niminal::Usage Session::usage_totals() const {
   niminal::Usage total;
   for (const auto& event : events) {
-    if (!event.is_object() || event.value("type", "") != "assistant") {
+    if (!event.is_object() || niminal::json_value(event, "type", "") != "assistant") {
       continue;
     }
     niminal::Usage u;
-    u.input_tokens = event.value("prompt_tokens", 0);
-    u.output_tokens = event.value("completion_tokens", 0);
-    u.cache_read_tokens = event.value("cache_read_tokens", 0);
-    u.cache_write_tokens = event.value("cache_write_tokens", 0);
-    u.cache_reported =
-        event.value("cache_reported", false) || u.cache_read_tokens > 0 || u.cache_write_tokens > 0;
+    u.input_tokens = niminal::json_value(event, "prompt_tokens", 0);
+    u.output_tokens = niminal::json_value(event, "completion_tokens", 0);
+    u.cache_read_tokens = niminal::json_value(event, "cache_read_tokens", 0);
+    u.cache_write_tokens = niminal::json_value(event, "cache_write_tokens", 0);
+    u.cache_reported = niminal::json_value(event, "cache_reported", false) ||
+                       u.cache_read_tokens > 0 || u.cache_write_tokens > 0;
     niminal::add_usage(total, u);
   }
   return total;
@@ -661,7 +666,7 @@ void Session::add_extension_message(const json& message) {
 
 void Session::add_compaction(const std::string& summary, int first_kept_index, int tokens_before,
                              const json& details) {
-  json event = json::object();
+  json event = json_object();
   event["type"] = "compaction";
   event["summary"] = summary;
   event["first_kept_index"] = first_kept_index;
@@ -674,7 +679,7 @@ void Session::add_compaction(const std::string& summary, int first_kept_index, i
 
 int Session::latest_compaction_index() const {
   for (int i = static_cast<int>(events.size()) - 1; i >= 0; --i) {
-    if (events[static_cast<size_t>(i)].value("type", "") == "compaction") {
+    if (niminal::json_value(events[static_cast<size_t>(i)], "type", "") == "compaction") {
       return i;
     }
   }
@@ -688,7 +693,7 @@ int Session::end_after_user_turn(int turn) const {
   int seen = 0;
   bool found = false;
   for (size_t i = 0; i < events.size(); ++i) {
-    if (events[i].value("type", "") != "user") {
+    if (niminal::json_value(events[i], "type", "") != "user") {
       continue;
     }
     ++seen;
@@ -708,7 +713,7 @@ std::vector<std::pair<int, std::string>> Session::user_turn_previews() const {
   std::vector<std::pair<int, std::string>> out;
   int turn = 0;
   for (const auto& event : events) {
-    if (event.value("type", "") != "user") {
+    if (niminal::json_value(event, "type", "") != "user") {
       continue;
     }
     ++turn;
@@ -742,7 +747,7 @@ std::string Session::export_text(std::string_view format) const {
       out["parent"] = parent;
     }
     out["events"] = events;
-    return out.dump(2) + "\n";
+    return niminal::json_pretty(out) + "\n";
   }
   if (format == "html") {
     return export_html(*this);
@@ -761,7 +766,7 @@ std::string Session::export_text(std::string_view format) const {
     if (!event.is_object()) {
       continue;
     }
-    auto type = event.value("type", "");
+    auto type = niminal::json_value(event, "type", "");
     if (type == "user") {
       out << "## User\n\n" << event_text(event) << "\n\n";
     } else if (type == "assistant") {
@@ -770,17 +775,18 @@ std::string Session::export_text(std::string_view format) const {
         out << "## Assistant\n\n" << text << "\n\n";
       }
       for_each_tool_use(event, [&](const json& part) {
-        out << "> **tool call** `" << part.value("name", "") << "` "
-            << part.value("input", json::object()).dump() << "\n\n";
+        out << "> **tool call** `" << niminal::json_value(part, "name", "") << "` "
+            << niminal::json_dump(niminal::json_value(part, "input", json_object())) << "\n\n";
       });
     } else if (type == "bash") {
-      out << "## Shell\n\n$ " << event.value("command", "") << "\n\n```\n"
-          << event.value("output", "") << "\n```\n\n";
+      out << "## Shell\n\n$ " << niminal::json_value(event, "command", "") << "\n\n```\n"
+          << niminal::json_value(event, "output", "") << "\n```\n\n";
     } else if (type == "tool_result") {
-      out << "### Tool result" << (event.value("is_error", false) ? " (error)" : "") << "\n\n```\n"
-          << event.value("output", "") << "\n```\n\n";
+      out << "### Tool result" << (niminal::json_value(event, "is_error", false) ? " (error)" : "")
+          << "\n\n```\n"
+          << niminal::json_value(event, "output", "") << "\n```\n\n";
     } else if (type == "compaction") {
-      out << "## Compaction\n\n" << event.value("summary", "") << "\n\n";
+      out << "## Compaction\n\n" << niminal::json_value(event, "summary", "") << "\n\n";
     }
   }
   return out.str();
@@ -789,12 +795,13 @@ std::string Session::export_text(std::string_view format) const {
 int Session::recover_interrupted_tools() {
   std::vector<std::string> pending;
   for (const auto& event : events) {
-    auto type = event.value("type", "");
+    auto type = niminal::json_value(event, "type", "");
     if (type == "assistant") {
       pending.clear();
-      for_each_tool_use(event, [&](const json& part) { pending.push_back(part.value("id", "")); });
+      for_each_tool_use(
+          event, [&](const json& part) { pending.push_back(niminal::json_value(part, "id", "")); });
     } else if (type == "tool_result") {
-      auto tool_id = event.value("id", "");
+      auto tool_id = niminal::json_value(event, "id", "");
       pending.erase(std::remove(pending.begin(), pending.end(), tool_id), pending.end());
     }
   }
@@ -809,58 +816,59 @@ int Session::recover_interrupted_tools() {
 }
 
 json Session::openai_messages() const {
-  json out = json::array();
+  json out = json_array();
   size_t start = 0;
   int compact = latest_compaction_index();
   if (compact >= 0) {
     const auto& event = events[static_cast<size_t>(compact)];
-    auto summary = event.value("summary", "");
-    int kept = event.value("first_kept_index", 0);
+    auto summary = niminal::json_value(event, "summary", "");
+    int kept = niminal::json_value(event, "first_kept_index", 0);
     kept = std::max(kept, 0);
     start = static_cast<size_t>(kept);
     if (!summary.empty()) {
-      json msg = json::object();
+      json msg = json_object();
       msg["role"] = "user";
       msg["content"] = "The conversation history before this point was compacted into the "
                        "following summary:\n<summary>\n" +
                        summary + "\n</summary>";
-      out.push_back(std::move(msg));
+      out.get_array().push_back(std::move(msg));
     }
   }
   start = std::min(start, events.size());
   for (size_t i = start; i < events.size(); ++i) {
     const auto& event = events[i];
-    auto type = event.value("type", "");
+    auto type = niminal::json_value(event, "type", "");
     if (type == "user") {
-      json content = event.value("content", json::array());
+      json content = niminal::json_value(event, "content", json_array());
       bool has_image = false;
       std::string text;
-      for (const auto& part : content) {
-        if (part.value("type", "") == "image") {
+      for (const auto& part : content.get_array()) {
+        if (niminal::json_value(part, "type", "") == "image") {
           has_image = true;
-        } else if (part.value("type", "") == "text") {
-          text += part.value("text", "");
+        } else if (niminal::json_value(part, "type", "") == "text") {
+          text += niminal::json_value(part, "text", "");
         }
       }
-      out.push_back({{"role", "user"}, {"content", has_image ? content : json(text)}});
+      out.get_array().push_back({{"role", "user"}, {"content", has_image ? content : json(text)}});
     } else if (type == "extension_message") {
-      out.push_back(event.at("message"));
+      out.get_array().push_back(event.at("message"));
     } else if (type == "assistant") {
       json msg = {{"role", "assistant"}, {"content", ""}};
-      json calls = json::array();
+      json calls = json_array();
       msg["content"] = text_content(event);
       for_each_tool_use(event, [&](const json& part) {
         json call = {
-            {"id", part.value("id", "")},
+            {"id", niminal::json_value(part, "id", "")},
             {"type", "function"},
             {"function",
-             {{"name", part.value("name", "")},
-              {"arguments", part.value("input", json::object()).dump()}}},
+             {{"name", niminal::json_value(part, "name", "")},
+              {"arguments",
+               niminal::json_dump(niminal::json_value(part, "input", json_object()))}}},
         };
         if (part.contains("provider_options")) {
           call["provider_options"] = part["provider_options"];
         }
-        calls.push_back(std::move(call));
+        calls.get_array().push_back(std::move(call));
       });
       if (!calls.empty()) {
         msg["tool_calls"] = calls;
@@ -868,18 +876,20 @@ json Session::openai_messages() const {
       if (event.contains("provider_options")) {
         msg["provider_options"] = event["provider_options"];
       }
-      out.push_back(std::move(msg));
+      out.get_array().push_back(std::move(msg));
     } else if (type == "bash") {
-      if (!event.value("exclude_from_context", false)) {
-        out.push_back({{"role", "user"},
-                       {"content",
-                        bash_user_message(event.value("command", ""), event.value("output", ""))}});
+      if (!niminal::json_value(event, "exclude_from_context", false)) {
+        out.get_array().push_back(
+            {{"role", "user"},
+             {"content", bash_user_message(niminal::json_value(event, "command", ""),
+                                           niminal::json_value(event, "output", ""))}});
       }
     } else if (type == "tool_result") {
-      out.push_back({{"role", "tool"},
-                     {"tool_call_id", event.value("id", "")},
-                     {"content", niminal::tool_context_text(event.value("output", ""))},
-                     {"images", event.value("images", json::array())}});
+      out.get_array().push_back(
+          {{"role", "tool"},
+           {"tool_call_id", niminal::json_value(event, "id", "")},
+           {"content", niminal::tool_context_text(niminal::json_value(event, "output", ""))},
+           {"images", niminal::json_value(event, "images", json_array())}});
     }
   }
   return out;
@@ -896,7 +906,7 @@ std::string Session::last_provider() const {
 std::string Session::last_assistant_text() const {
   for (int i = static_cast<int>(events.size()) - 1; i >= 0; --i) {
     const auto& event = events[static_cast<size_t>(i)];
-    if (event.value("type", "") != "assistant") {
+    if (niminal::json_value(event, "type", "") != "assistant") {
       continue;
     }
     const auto text = text_content(event);
@@ -957,18 +967,18 @@ Session load_session(const fs::path& dir, const std::string& id) {
       continue;
     }
     try {
-      auto node = json::parse(line);
-      if (first && node.value("type", "") == "session") {
-        s.workspace = node.value("workspace", "");
-        s.parent = node.value("parent", "");
+      auto node = json_parse(line);
+      if (first && niminal::json_value(node, "type", "") == "session") {
+        s.workspace = niminal::json_value(node, "workspace", "");
+        s.parent = niminal::json_value(node, "parent", "");
         first = false;
         prefix += kept;
         continue;
       }
       first = false;
       s.events.push_back(node);
-      if (node.value("type", "") == "name") {
-        s.name = node.value("name", "");
+      if (niminal::json_value(node, "type", "") == "name") {
+        s.name = niminal::json_value(node, "name", "");
       }
       prefix += kept;
     } catch (...) {
@@ -1065,14 +1075,14 @@ std::string format_session_list(const std::vector<SessionInfo>& infos,
 }
 
 std::string serialize_session_event(const json& event) {
-  const auto type = event.value("type", "");
+  const auto type = niminal::json_value(event, "type", "");
   if (type == "user") {
     std::string text = "user:\n";
     for_each_content_part(event, [&](const json& part) {
-      if (part.value("type", "") == "text") {
-        text += part.value("text", "") + "\n";
-      } else if (part.value("type", "") == "image") {
-        text += "[image: " + part.value("name", "image") + "]\n";
+      if (niminal::json_value(part, "type", "") == "text") {
+        text += niminal::json_value(part, "text", "") + "\n";
+      } else if (niminal::json_value(part, "type", "") == "image") {
+        text += "[image: " + niminal::json_value(part, "name", "image") + "]\n";
       }
     });
     return text;
@@ -1080,29 +1090,29 @@ std::string serialize_session_event(const json& event) {
   if (type == "assistant") {
     std::string text = "assistant:\n";
     for_each_content_part(event, [&](const json& part) {
-      const auto ptype = part.value("type", "");
+      const auto ptype = niminal::json_value(part, "type", "");
       if (ptype == "text") {
-        text += part.value("text", "") + "\n";
+        text += niminal::json_value(part, "text", "") + "\n";
       } else if (ptype == "tool_use") {
-        text += "tool_call " + part.value("name", "") + " " +
-                part.value("input", json::object()).dump() + "\n";
+        text += "tool_call " + niminal::json_value(part, "name", "") + " " +
+                niminal::json_dump(niminal::json_value(part, "input", json_object())) + "\n";
       }
     });
     return text;
   }
   if (type == "tool_result") {
-    auto output = event.value("output", "");
+    auto output = niminal::json_value(event, "output", "");
     if (output.size() > 8000) {
       output.resize(8000);
       output += "\n…(truncated)…";
     }
     std::string text = "tool_result";
-    if (event.value("is_error", false)) {
+    if (niminal::json_value(event, "is_error", false)) {
       text += " ERROR";
     }
     text += ":\n" + output + "\n";
-    for (const auto& image : event.value("images", json::array())) {
-      text += "[image: " + image.value("name", "image") + "]\n";
+    for (const auto& image : niminal::json_value(event, "images", json_array()).get_array()) {
+      text += "[image: " + niminal::json_value(image, "name", "image") + "]\n";
     }
     return text;
   }
@@ -1110,23 +1120,23 @@ std::string serialize_session_event(const json& event) {
 }
 
 int estimate_session_event_tokens(const json& event) {
-  const auto type = event.value("type", "");
+  const auto type = niminal::json_value(event, "type", "");
   if (type == "user" || type == "assistant") {
     int tokens = 0;
     for_each_content_part(event, [&](const json& part) {
-      tokens += static_cast<int>((part.value("text", "").size() + 3) / 4);
-      tokens += static_cast<int>((part.value("name", "").size() + 3) / 4);
-      if (part.value("type", "") == "image") {
+      tokens += static_cast<int>((niminal::json_value(part, "text", "").size() + 3) / 4);
+      tokens += static_cast<int>((niminal::json_value(part, "name", "").size() + 3) / 4);
+      if (niminal::json_value(part, "type", "") == "image") {
         tokens += 1000;
       }
       if (part.contains("input")) {
-        tokens += static_cast<int>((part["input"].dump().size() + 3) / 4);
+        tokens += static_cast<int>((niminal::json_dump(part["input"]).size() + 3) / 4);
       }
     });
     return tokens;
   }
   if (type == "tool_result") {
-    const auto output = event.value("output", "");
+    const auto output = niminal::json_value(event, "output", "");
     const auto context_bytes = std::min(output.size(), niminal::kMaxToolContextBytes);
     int tokens = output.empty() ? 1 : static_cast<int>((context_bytes + 3) / 4);
     if (event.contains("images") && event["images"].is_array()) {
@@ -1135,7 +1145,7 @@ int estimate_session_event_tokens(const json& event) {
     return tokens;
   }
   if (type == "compaction") {
-    const auto summary = event.value("summary", "");
+    const auto summary = niminal::json_value(event, "summary", "");
     return summary.empty() ? 1 : static_cast<int>((summary.size() + 3) / 4);
   }
   return 0;
@@ -1143,25 +1153,24 @@ int estimate_session_event_tokens(const json& event) {
 
 void bind_session(niminal::Agent& agent, Session& session) {
   agent.persist_user = [&session](const niminal::UserInput& input) { session.add_user(input); };
-  agent.persist_extension_message = [&session](const nlohmann::json& message) {
+  agent.persist_extension_message = [&session](const niminal::json& message) {
     session.add_extension_message(message);
   };
   agent.persist_assistant = [&session](const std::string& text,
                                        const std::vector<niminal::ToolCall>& calls,
                                        const std::string& model, const niminal::Usage& usage,
-                                       const nlohmann::json& provider_options) {
-    nlohmann::json arr = nlohmann::json::array();
+                                       const niminal::json& provider_options) {
+    niminal::json arr = json_array();
     for (const auto& call : calls) {
-      nlohmann::json item = {{"id", call.id},
-                             {"type", "function"},
-                             {"function", {{"name", call.name}, {"arguments", call.arguments}}}};
+      niminal::json item = {{"id", call.id},
+                            {"type", "function"},
+                            {"function", {{"name", call.name}, {"arguments", call.arguments}}}};
       if (call.provider_options) {
-        auto parsed = nlohmann::json::parse(*call.provider_options, nullptr, false);
-        if (parsed.is_object()) {
-          item["provider_options"] = std::move(parsed);
+        if (auto parsed = try_json_parse(*call.provider_options); parsed && parsed->is_object()) {
+          item["provider_options"] = std::move(*parsed);
         }
       }
-      arr.push_back(std::move(item));
+      arr.get_array().push_back(std::move(item));
     }
     session.add_assistant(text, arr, model, usage, provider_options);
   };

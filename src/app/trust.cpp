@@ -1,6 +1,6 @@
 #include "trust.hpp"
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -12,7 +12,7 @@
 
 namespace niminal::app {
 namespace fs = std::filesystem;
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
@@ -66,36 +66,36 @@ json read_trust_doc() {
   try {
     path = trust_path();
   } catch (...) {
-    return json::object();
+    return json_object();
   }
   if (!fs::is_regular_file(path, ec)) {
-    return json::object();
+    return json_object();
   }
   std::ifstream in(path);
   if (!in) {
-    return json::object();
+    return json_object();
   }
   std::ostringstream text;
   text << in.rdbuf();
   try {
-    auto doc = json::parse(text.str());
-    return doc.is_object() ? doc : json::object();
+    auto doc = json_parse(text.str());
+    return doc.is_object() ? doc : json_object();
   } catch (...) {
-    return json::object();
+    return json_object();
   }
 }
 
 std::pair<bool, bool> saved_trust(const fs::path& workspace) {
   auto doc = read_trust_doc();
-  auto projects = doc.value("projects", json::object());
+  auto projects = niminal::json_value(doc, "projects", json_object());
   if (!projects.is_object()) {
     return {false, false};
   }
   auto current = canonical_workspace(workspace);
   while (true) {
-    auto it = projects.find(current.string());
-    if (it != projects.end() && it->is_boolean()) {
-      return {true, it->get<bool>()};
+    const auto key = current.string();
+    if (projects.contains(key) && projects[key].is_boolean()) {
+      return {true, projects[key].get<bool>()};
     }
     auto parent = current.parent_path();
     if (parent == current) {
@@ -163,7 +163,7 @@ void save_project_trust(const fs::path& workspace, bool trusted) {
   fs::create_directories(path.parent_path());
   auto doc = read_trust_doc();
   if (!doc.contains("projects") || !doc["projects"].is_object()) {
-    doc["projects"] = json::object();
+    doc["projects"] = json_object();
   }
   doc["projects"][canonical_workspace(workspace).string()] = trusted;
   auto tmp = path;
@@ -173,7 +173,7 @@ void save_project_trust(const fs::path& workspace, bool trusted) {
     if (!out) {
       throw std::runtime_error("cannot write " + path.string());
     }
-    out << doc.dump(2) << '\n';
+    out << niminal::json_pretty(doc) << '\n';
   }
   fs::rename(tmp, path);
 }

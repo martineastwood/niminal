@@ -1,5 +1,7 @@
 #include "markdown.hpp"
 
+#include <niminal/text.hpp>
+
 #include <ftxui/dom/flexbox_config.hpp>
 #include <ftxui/dom/table.hpp>
 
@@ -506,22 +508,20 @@ Element style_span(const Span& s, const Theme& theme) {
 Elements flow_spans(const std::vector<Span>& spans, const Theme& theme) {
   Elements flow;
   bool first_token = true;
-  auto push = [&](Span sp) {
-    if (sp.text.empty()) {
+  auto push = [&](const Span& style, std::string_view text, bool separate) {
+    if (text.empty()) {
       return;
     }
-    if (!first_token && sp.text.front() != ' ') {
-      sp.text = " " + sp.text;
+    Span piece = style;
+    piece.text = text;
+    if (separate && !first_token && piece.text.front() != ' ') {
+      piece.text.insert(0, " ");
     }
-    flow.push_back(style_span(sp, theme));
+    flow.push_back(style_span(piece, theme));
     first_token = false;
   };
   for (const auto& span : spans) {
     if (span.text.empty()) {
-      continue;
-    }
-    if (span.code) {
-      push(span);
       continue;
     }
     size_t i = 0;
@@ -536,14 +536,13 @@ Elements flow_spans(const std::vector<Span>& spans, const Theme& theme) {
       while (j < span.text.size() && span.text[j] != ' ') {
         ++j;
       }
-      Span sp{span.text.substr(i, j - i),
-              span.bold,
-              span.italic,
-              span.code,
-              span.strike,
-              span.underline,
-              span.dim};
-      push(std::move(sp));
+      // A word wider than the row cannot wrap inside its element, so it is
+      // split into chunks the row can break between.
+      bool first_chunk = true;
+      for (auto chunk : niminal::wrap_chunks(std::string_view(span.text).substr(i, j - i))) {
+        push(span, chunk, first_chunk);
+        first_chunk = false;
+      }
       i = j;
     }
   }

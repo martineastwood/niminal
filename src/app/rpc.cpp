@@ -37,12 +37,11 @@ struct QueuedPrompt {
   std::string mode;
 };
 
-bool string_field(const nlohmann::json& object, const char* name, std::string& value) {
-  auto it = object.find(name);
-  if (it == object.end() || !it->is_string()) {
+bool string_field(const niminal::json& object, const char* name, std::string& value) {
+  if (!object.contains(name) || !object[name].is_string()) {
     return false;
   }
-  value = it->get<std::string>();
+  value = object[name].get<std::string>();
   return true;
 }
 
@@ -159,12 +158,12 @@ private:
     agent_.cancel = &cancel_;
   }
 
-  void send(const nlohmann::json& event) {
+  void send(const niminal::json& event) {
     if (event.is_null()) {
       return;
     }
     std::lock_guard lock(output_mutex_);
-    std::cout << event.dump() << '\n' << std::flush;
+    std::cout << niminal::json_dump(event) << '\n' << std::flush;
   }
 
   int queue_depth_locked() const {
@@ -296,7 +295,7 @@ private:
 
   void handle_line(const std::string& line) {
     try {
-      handle_command(nlohmann::json::parse(line));
+      handle_command(json_parse(line));
     } catch (const std::exception& error) {
       send(rpc_response_event("", false, {}, "Invalid JSON: " + std::string(error.what())));
     }
@@ -308,8 +307,7 @@ private:
     send(queue_event(session_.id, "enqueue", queue_depth(), message, id, mode));
   }
 
-  void handle_prompt(const std::string& id, const std::string& type,
-                     const nlohmann::json& command) {
+  void handle_prompt(const std::string& id, const std::string& type, const niminal::json& command) {
     const bool prompt = type == "prompt";
     std::string message;
     if (!string_field(command, "message", message) || niminal::trim_copy(message).empty()) {
@@ -346,7 +344,7 @@ private:
     queue_prompt(id, message, mode);
   }
 
-  void handle_command(const nlohmann::json& command) {
+  void handle_command(const niminal::json& command) {
     if (!command.is_object()) {
       send(rpc_response_event("", false, {}, "Command must be a JSON object."));
       return;
@@ -372,7 +370,7 @@ private:
     }
 
     if (type == "get_state") {
-      nlohmann::json response = rpc_response_event(id, true);
+      niminal::json response = rpc_response_event(id, true);
       response["session_id"] = session_.id;
       response["busy"] = busy();
       response["queued"] = queue_depth() > 0;
@@ -390,7 +388,7 @@ private:
 
     if (type == "clear_queue") {
       auto removed = clear_queue();
-      nlohmann::json response = rpc_response_event(id, true);
+      niminal::json response = rpc_response_event(id, true);
       response["steering"] = std::move(removed.first);
       response["follow_up"] = std::move(removed.second);
       send(response);

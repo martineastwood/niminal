@@ -101,15 +101,15 @@ cmd_configure() {
   configure_args+=("$@")
   log "configure ($dir)"
   if [[ "$dir" == "build/dev" && "$BUILD_DIR" == "build/dev" ]]; then
-    cmake --preset dev "${configure_args[@]}"
+    cmake --preset dev ${configure_args[@]+"${configure_args[@]}"}
   elif [[ "$dir" == "build/release" ]]; then
-    cmake --preset release "${configure_args[@]}"
+    cmake --preset release ${configure_args[@]+"${configure_args[@]}"}
   elif [[ "$dir" == "build/asan" && "$ASAN_DIR" == "build/asan" ]]; then
     # The asan preset pins Debug: sanitizers do not need optimized code, and
     # unoptimized builds compile several times faster.
-    cmake --preset asan "${configure_args[@]}"
+    cmake --preset asan ${configure_args[@]+"${configure_args[@]}"}
   else
-    cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Debug}" "${configure_args[@]}"
+    cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Debug}" ${configure_args[@]+"${configure_args[@]}"}
   fi
 }
 

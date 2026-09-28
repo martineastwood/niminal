@@ -1,9 +1,7 @@
 #pragma once
 
-#include <niminal/types.hpp>
-#include <nlohmann/json.hpp>
-
 #include <filesystem>
+#include <niminal/types.hpp>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,26 +28,26 @@ public:
   std::string workspace;
   std::string parent;
   std::string name;
-  std::vector<nlohmann::json> events;
+  std::vector<niminal::json> events;
   bool persist = true;
 
   void add_user(const niminal::UserInput& input);
   void add_bash(const std::string& command, const std::string& output, bool exclude_from_context);
-  void add_assistant(const std::string& text, const nlohmann::json& tool_calls,
+  void add_assistant(const std::string& text, const niminal::json& tool_calls,
                      const std::string& model, const niminal::Usage& usage = {},
-                     const nlohmann::json& provider_options = {});
+                     const niminal::json& provider_options = {});
   niminal::Usage usage_totals() const;
   void add_tool_result(const std::string& tool_id, const niminal::ToolResult& output,
                        bool is_error);
   void sync() const;
   void add_name(const std::string& title);
   void add_selection(const std::string& model, const std::string& provider = {});
-  void add_extension(const std::string& extension, const nlohmann::json& data);
-  void add_extension_message(const nlohmann::json& message);
+  void add_extension(const std::string& extension, const niminal::json& data);
+  void add_extension_message(const niminal::json& message);
   void add_compaction(const std::string& summary, int first_kept_index, int tokens_before,
-                      const nlohmann::json& details = {});
+                      const niminal::json& details = {});
   int recover_interrupted_tools();
-  nlohmann::json openai_messages() const;
+  niminal::json openai_messages() const;
   std::string last_model() const;
   std::string last_provider() const;
   std::string last_assistant_text() const;
@@ -64,7 +62,7 @@ private:
   std::string damaged_;
   std::string valid_prefix_;
   bool needs_newline_ = false;
-  void append(const nlohmann::json& event, bool sync = true);
+  void append(const niminal::json& event, bool sync = true);
   friend Session load_session(const std::filesystem::path& dir, const std::string& id);
 };
 
@@ -85,7 +83,7 @@ std::string format_session_list(const std::vector<SessionInfo>& infos,
                                 std::string_view heading = "Sessions (newest first)");
 void bind_session(niminal::Agent& agent, Session& session);
 
-std::string serialize_session_event(const nlohmann::json& event);
-int estimate_session_event_tokens(const nlohmann::json& event);
+std::string serialize_session_event(const niminal::json& event);
+int estimate_session_event_tokens(const niminal::json& event);
 
 } // namespace niminal::app

@@ -60,7 +60,9 @@ Use `!!` when you want to run a command without sending its output to the model.
 The command still appears in the transcript. The `!` or `!!` prefix tints in the
 composer when niminal recognizes the command.
 
-Output streams into a bash card as the command runs. Press Esc to interrupt.
+Output streams into a bash card as the command runs, and the card header marks
+the outcome once it finishes (`✓` in green, `✗ (exit 1)` or `timed out` in red).
+Press Esc to interrupt.
 Composer commands do not ask for approval: you typed the command yourself. They
 are blocked while a model turn or another user-bash command is running.
 

@@ -2,7 +2,7 @@
 
 #include "config.hpp"
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -278,13 +278,13 @@ KeybindingsLoad load_keybindings_file(const std::filesystem::path& path) {
     return result;
   }
   try {
-    const auto doc = nlohmann::json::parse(in);
+    const auto doc = json_parse(in);
     if (!doc.is_object()) {
       result.error = path.string() + ": expected a JSON object";
       return result;
     }
     Keybindings custom;
-    for (const auto& [id, value] : doc.items()) {
+    for (const auto& [id, value] : doc.get_object()) {
       const auto spec = std::ranges::find_if(
           kSpecs, [&](const ActionSpec& candidate) { return candidate.id == id; });
       if (spec == kSpecs.end()) {
@@ -295,7 +295,7 @@ KeybindingsLoad load_keybindings_file(const std::filesystem::path& path) {
       if (value.is_string()) {
         names.push_back(value.get<std::string>());
       } else if (value.is_array()) {
-        for (const auto& entry : value) {
+        for (const auto& entry : value.get_array()) {
           if (!entry.is_string()) {
             result.error = path.string() + ": '" + id + "' needs key strings";
             return result;
@@ -338,7 +338,7 @@ KeybindingsLoad load_keybindings_file(const std::filesystem::path& path) {
       }
     }
     result.bindings = std::move(custom);
-  } catch (const nlohmann::json::exception& error) {
+  } catch (const std::exception& error) {
     result.error = path.string() + ": " + error.what();
   }
   return result;

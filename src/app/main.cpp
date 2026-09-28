@@ -288,11 +288,11 @@ int run_json(niminal::Agent& agent, niminal::app::Session& session, const std::s
   bool saw_error_event = false;
   int active_step = -1;
   agent.run_id = session.id + ":turn:" + std::to_string(session.events.size());
-  auto send = [](const nlohmann::json& event) {
+  auto send = [](const niminal::json& event) {
     if (event.is_null()) {
       return;
     }
-    std::cout << event.dump() << '\n' << std::flush;
+    std::cout << niminal::json_dump(event) << '\n' << std::flush;
   };
   send(niminal::app::session_event("session_start", session.id));
   agent.on_event = [&](const niminal::StreamEvent& event) {
@@ -691,9 +691,9 @@ int main(int argc, char** argv) try {
     drain_extension_actions();
     cancel.clear();
     auto shutdown = extensions->dispatch(niminal::app::HookEvent::session_shutdown,
-                                         nlohmann::json{{"session_id", session.id},
-                                                        {"workspace", ws.root().string()},
-                                                        {"reason", "quit"}});
+                                         niminal::json{{"session_id", session.id},
+                                                       {"workspace", ws.root().string()},
+                                                       {"reason", "quit"}});
     print_warnings(shutdown.warnings);
     auto outcome = extensions->dispatch(niminal::app::HookEvent::session_end,
                                         niminal::app::session_hook_payload(session.id, ws.root()));

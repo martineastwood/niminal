@@ -5,31 +5,31 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 #include <sstream>
 #include <stdexcept>
 
 namespace niminal::app {
 namespace fs = std::filesystem;
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
 json call_input(const niminal::ToolCall& call) {
   if (call.arguments.empty()) {
-    return json::object();
+    return json_object();
   }
   try {
-    auto input = json::parse(call.arguments);
-    return input.is_object() ? input : json::object();
+    auto input = json_parse(call.arguments);
+    return input.is_object() ? input : json_object();
   } catch (...) {
-    return json::object();
+    return json_object();
   }
 }
 
 std::string command_from(const niminal::ToolCall& call) {
   auto input = call_input(call);
-  return input.value("command", std::string());
+  return niminal::json_value(input, "command", std::string());
 }
 
 bool workspace_tool(const std::string& name) {
@@ -110,12 +110,12 @@ void PermissionPolicy::reload_project() {
   std::ostringstream text;
   text << in.rdbuf();
   try {
-    auto doc = json::parse(text.str());
-    auto allow = doc.value("allow", json::array());
+    auto doc = json_parse(text.str());
+    auto allow = niminal::json_value(doc, "allow", json_array());
     if (!allow.is_array()) {
       return;
     }
-    for (const auto& item : allow) {
+    for (const auto& item : allow.get_array()) {
       if (item.is_string()) {
         project_allows_.insert(item.get<std::string>());
       }
@@ -146,9 +146,9 @@ PermissionCheck PermissionPolicy::check(const niminal::ToolCall& call) const {
 
 void PermissionPolicy::persist_project() const {
   fs::create_directories(project_path_.parent_path());
-  json doc = json{{"allow", json::array()}};
+  json doc = json{{"allow", json_array()}};
   for (const auto& key : project_allows_) {
-    doc["allow"].push_back(key);
+    doc["allow"].get_array().push_back(key);
   }
   auto tmp = project_path_;
   tmp += ".tmp";
@@ -157,7 +157,7 @@ void PermissionPolicy::persist_project() const {
     if (!out) {
       throw std::runtime_error("cannot write " + project_path_.string());
     }
-    out << doc.dump(2) << '\n';
+    out << niminal::json_pretty(doc) << '\n';
   }
   fs::rename(tmp, project_path_);
 }

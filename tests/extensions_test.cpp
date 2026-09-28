@@ -97,29 +97,28 @@ int main() {
     return 1;
   }
   auto command = runtime->invoke("hello", "world");
-  if (command.value("message", "") != "Hello world env=sess-7") {
+  if (niminal::json_value(command, "message", "") != "Hello world env=sess-7") {
     std::cerr << "extension process should receive the session env: "
-              << command.value("message", "") << '\n';
+              << niminal::json_value(command, "message", "") << '\n';
     return 1;
   }
-  runtime->set_host_request([](const std::string& method, const nlohmann::json& request) {
-    if (method != "model.complete" || request.value("max_tokens", 0) != 123) {
+  runtime->set_host_request([](const std::string& method, const niminal::json& request) {
+    if (method != "model.complete" || niminal::json_value(request, "max_tokens", 0) != 123) {
       throw std::runtime_error("unexpected model request");
     }
-    return nlohmann::json{
-        {"text", "generated"}, {"model", "test/model"}, {"finish_reason", "stop"}};
+    return niminal::json{{"text", "generated"}, {"model", "test/model"}, {"finish_reason", "stop"}};
   });
   auto model_host = runtime->invoke("host", "model");
-  if (model_host["payload"]["model"]["result"].value("text", "") != "generated" ||
-      model_host["payload"]["model"]["result"].value("model", "") != "test/model") {
+  if (niminal::json_value(model_host["payload"]["model"]["result"], "text", "") != "generated" ||
+      niminal::json_value(model_host["payload"]["model"]["result"], "model", "") != "test/model") {
     return 1;
   }
   auto first = std::async(std::launch::async, [&] { return runtime->invoke("parallel", "one"); });
   auto second = std::async(std::launch::async, [&] { return runtime->invoke("parallel", "two"); });
   auto first_result = first.get();
   auto second_result = second.get();
-  if (first_result.value("message", "") != "first" ||
-      second_result.value("message", "") != "second") {
+  if (niminal::json_value(first_result, "message", "") != "first" ||
+      niminal::json_value(second_result, "message", "") != "second") {
     return 1;
   }
   auto footer_demo = runtime->invoke("footer_demo", "");
@@ -141,10 +140,12 @@ int main() {
   };
   const auto footer_status = find_status("status_demo", "model");
   const auto subagent_widget = find_widget("widget_demo", "workers");
-  if (footer_demo.value("message", "") != "Footer status updated." || !footer_status ||
-      footer_status->segments.size() != 4 || footer_status->segments[0].style != "emphasis" ||
-      empty_todos.value("message", "").find("No todos yet.") == std::string::npos ||
-      subagents_demo.value("message", "") != "Showing simulated subagent activity." ||
+  if (niminal::json_value(footer_demo, "message", "") != "Footer status updated." ||
+      !footer_status || footer_status->segments.size() != 4 ||
+      footer_status->segments[0].style != "emphasis" ||
+      niminal::json_value(empty_todos, "message", "").find("No todos yet.") == std::string::npos ||
+      niminal::json_value(subagents_demo, "message", "") !=
+          "Showing simulated subagent activity." ||
       !subagent_widget || subagent_widget->actions.size() != 2) {
     std::cerr << "extension UI examples did not register their status and widgets\n";
     return 1;
@@ -162,16 +163,16 @@ int main() {
     return 1;
   }
   const auto created_first = todo_tool->run(
-      nlohmann::json{{"action", "create"}, {"subject", "Review the existing behavior"}});
+      niminal::json{{"action", "create"}, {"subject", "Review the existing behavior"}});
   const auto created_second =
-      todo_tool->run(nlohmann::json{{"action", "create"},
-                                    {"subject", "Add the implementation"},
-                                    {"description", "Include a regression test."}});
+      todo_tool->run(niminal::json{{"action", "create"},
+                                   {"subject", "Add the implementation"},
+                                   {"description", "Include a regression test."}});
   const auto started_first =
-      todo_tool->run(nlohmann::json{{"action", "update"},
-                                    {"id", 1},
-                                    {"status", "in_progress"},
-                                    {"activeForm", "reviewing existing behavior"}});
+      todo_tool->run(niminal::json{{"action", "update"},
+                                   {"id", 1},
+                                   {"status", "in_progress"},
+                                   {"activeForm", "reviewing existing behavior"}});
   const auto todo_widget = find_widget("todo_demo", "tasks");
   const auto todo_list = runtime->invoke("todos", "");
   if (created_first.text.find("Created [pending] #1") == std::string::npos ||
@@ -179,9 +180,10 @@ int main() {
       created_second.text.find("Current todo list:\nPending:") == std::string::npos ||
       started_first.text.find("in_progress") == std::string::npos || !todo_widget ||
       todo_widget->content.size() != 2 || todo_widget->content[0]["items"].size() != 2 ||
-      todo_widget->content[0]["items"][0]["state"] != "active" ||
+      niminal::json_value(todo_widget->content[0]["items"][0], "state", "") != "active" ||
       todo_widget->actions.size() != 2 ||
-      todo_list.value("message", "").find("Review the existing behavior") == std::string::npos) {
+      niminal::json_value(todo_list, "message", "").find("Review the existing behavior") ==
+          std::string::npos) {
     std::cerr << "todo tool did not create an agent-visible task list\n";
     return 1;
   }
@@ -195,11 +197,12 @@ int main() {
   while (std::chrono::steady_clock::now() < todo_deadline) {
     runtime->pump();
     const auto updated = find_widget("todo_demo", "tasks");
-    if (updated && std::any_of(updated->content[0]["items"].begin(),
-                               updated->content[0]["items"].end(), [](const auto& item) {
-                                 return item.value("text", "").starts_with("#1 ") &&
-                                        item.value("state", "") == "done";
-                               })) {
+    if (updated &&
+        std::any_of(updated->content[0]["items"].get_array().begin(),
+                    updated->content[0]["items"].get_array().end(), [](const auto& item) {
+                      return niminal::json_value(item, "text", "").starts_with("#1 ") &&
+                             niminal::json_value(item, "state", "") == "done";
+                    })) {
       todo_updated = true;
       break;
     }
@@ -214,8 +217,9 @@ int main() {
   while (std::chrono::steady_clock::now() < subagent_deadline) {
     runtime->pump();
     const auto updated = find_widget("widget_demo", "workers");
-    if (updated && updated->content[0]["items"][1]["state"] == "done" &&
-        updated->content[0]["items"][1]["text"] == "Second task · stopped") {
+    if (updated && niminal::json_value(updated->content[0]["items"][1], "state", "") == "done" &&
+        niminal::json_value(updated->content[0]["items"][1], "text", "") ==
+            "Second task · stopped") {
       subagent_stopped = true;
       break;
     }
@@ -226,7 +230,7 @@ int main() {
     return 1;
   }
   auto clear_footer = runtime->invoke("footer_demo", "clear");
-  if (clear_footer.value("message", "") != "Footer status updated." ||
+  if (niminal::json_value(clear_footer, "message", "") != "Footer status updated." ||
       find_status("status_demo", "model")) {
     std::cerr << "empty status segments should clear the footer entry\n";
     return 1;
@@ -242,7 +246,7 @@ int main() {
   }
   std::string persistent_output;
   if (persistent != nullptr) {
-    persistent_output = persistent->run(nlohmann::json::object()).text;
+    persistent_output = persistent->run(niminal::json_object()).text;
   }
   if ((persistent == nullptr) || !persistent->read_only || !persistent->extension ||
       persistent_output != "extension tool result") {
@@ -258,7 +262,7 @@ int main() {
     }
   }
   if ((external == nullptr) || !external->read_only || !external->extension ||
-      external->run(nlohmann::json{{"value", 1}}).text.find("\"value\":1") == std::string::npos) {
+      external->run(niminal::json{{"value", 1}}).text.find("\"value\":1") == std::string::npos) {
     return 1;
   }
   niminal::Tool* env_dump = nullptr;
@@ -268,7 +272,7 @@ int main() {
     }
   }
   if (env_dump == nullptr ||
-      env_dump->run(nlohmann::json::object()).text.find("sess-7|test/model") == std::string::npos) {
+      env_dump->run(niminal::json_object()).text.find("sess-7|test/model") == std::string::npos) {
     std::cerr << "external tool should receive the session env\n";
     return 1;
   }
@@ -289,19 +293,19 @@ int main() {
 
   auto pre =
       runtime->dispatch(HookEvent::tool_call,
-                        nlohmann::json{{"tool", "bash"}, {"arguments", {{"command", "original"}}}});
-  if (!pre.has_arguments || pre.arguments.value("command", "") != "changed") {
+                        niminal::json{{"tool", "bash"}, {"arguments", {{"command", "original"}}}});
+  if (!pre.has_arguments || niminal::json_value(pre.arguments, "command", "") != "changed") {
     return 1;
   }
-  auto post = runtime->dispatch(HookEvent::tool_result,
-                                nlohmann::json{{"tool", "bash"},
-                                               {"arguments", nlohmann::json::object()},
-                                               {"output", "original"},
-                                               {"is_error", false}});
+  auto post =
+      runtime->dispatch(HookEvent::tool_result, niminal::json{{"tool", "bash"},
+                                                              {"arguments", niminal::json_object()},
+                                                              {"output", "original"},
+                                                              {"is_error", false}});
   if (!post.has_output || post.output != "rewritten" || !post.has_is_error || !post.is_error) {
     return 1;
   }
-  auto context = runtime->dispatch(HookEvent::context, nlohmann::json::object());
+  auto context = runtime->dispatch(HookEvent::context, niminal::json_object());
   if (context.system != std::vector<std::string>{"Injected system"} ||
       context.messages.size() != 1) {
     return 1;
@@ -316,34 +320,35 @@ int main() {
   if (!fixture_status || fixture_status->segments.size() != 1 ||
       fixture_status->segments[0].text != "ready" || !fixture_widget ||
       fixture_widget->content.size() != 1 ||
-      fixture_widget->content[0].value("text", "") != "extension widget") {
+      niminal::json_value(fixture_widget->content[0], "text", "") != "extension widget") {
     return 1;
   }
   auto entries = runtime->take_entries();
   auto user_messages = runtime->take_user_messages();
-  if (entries.size() != 1 || entries[0].data.value("count", 0) != 1 || user_messages.size() != 1 ||
-      user_messages[0].content != "background done") {
+  if (entries.size() != 1 || niminal::json_value(entries[0].data, "count", 0) != 1 ||
+      user_messages.size() != 1 || user_messages[0].content != "background done") {
     return 1;
   }
-  auto compact = runtime->dispatch(HookEvent::session_before_compact, nlohmann::json::object());
+  auto compact = runtime->dispatch(HookEvent::session_before_compact, niminal::json_object());
   if (!compact.has_compaction || compact.summary != "extension summary" ||
-      compact.first_kept_index != 1 || compact.details.value("source", "") != "fixture") {
+      compact.first_kept_index != 1 ||
+      niminal::json_value(compact.details, "source", "") != "fixture") {
     return 1;
   }
   auto blocked_switch =
-      runtime->dispatch(HookEvent::session_before_switch, nlohmann::json{{"reason", "new"}});
+      runtime->dispatch(HookEvent::session_before_switch, niminal::json{{"reason", "new"}});
   if (blocked_switch.allowed || blocked_switch.reason != "unsaved work") {
     return 1;
   }
   auto headers = runtime->dispatch(HookEvent::before_provider_headers,
-                                   nlohmann::json{{"headers", {{"Authorization", "Bearer test"}}}});
+                                   niminal::json{{"headers", {{"Authorization", "Bearer test"}}}});
   if (!headers.has_headers || headers.headers.contains("Authorization") ||
-      headers.headers.value("x-test", "") != "yes") {
+      niminal::json_value(headers.headers, "x-test", "") != "yes") {
     return 1;
   }
   auto payload = runtime->dispatch(HookEvent::before_provider_request,
-                                   nlohmann::json{{"payload", {{"model", "original"}}}});
-  if (!payload.has_payload || payload.payload.value("model", "") != "replacement") {
+                                   niminal::json{{"payload", {{"model", "original"}}}});
+  if (!payload.has_payload || niminal::json_value(payload.payload, "model", "") != "replacement") {
     return 1;
   }
 
@@ -388,10 +393,10 @@ int main() {
   };
   runtime->set_ui_callbacks(std::move(dialogs));
   auto ui_host = runtime->invoke("host", "ui");
-  if (ui_host["payload"]["question"]["answer"] != "Blue" ||
-      ui_host["payload"]["confirm"]["confirmed"] != true ||
-      ui_host["payload"]["input"]["answer"] != "feature" ||
-      ui_host["payload"]["password"]["answer"] != "secret-token") {
+  if (ui_host["payload"]["question"]["answer"].get<std::string>() != "Blue" ||
+      !ui_host["payload"]["confirm"]["confirmed"].get<bool>() ||
+      ui_host["payload"]["input"]["answer"].get<std::string>() != "feature" ||
+      ui_host["payload"]["password"]["answer"].get<std::string>() != "secret-token") {
     return 1;
   }
   niminal::app::ExtensionUiCallbacks editor;
@@ -403,18 +408,19 @@ int main() {
   };
   runtime->set_ui_callbacks(std::move(editor));
   auto host = runtime->invoke("host", "session");
-  if (host["payload"]["info"]["result"].value("id", "") != "session" ||
-      host["payload"]["info"]["result"].value("event_count", 0) != 1 ||
-      host["payload"]["name"]["result"].value("name", "") != "handoff source" ||
-      host["payload"]["usage"]["result"].value("tokens", 0) <= 0 ||
-      host["payload"]["usage"]["result"].value("limit", 0) <= 0 ||
-      host["payload"]["editor"]["result"].value("text", "") != "edited handoff") {
+  if (niminal::json_value(host["payload"]["info"]["result"], "id", "") != "session" ||
+      niminal::json_value(host["payload"]["info"]["result"], "event_count", 0) != 1 ||
+      niminal::json_value(host["payload"]["name"]["result"], "name", "") != "handoff source" ||
+      niminal::json_value(host["payload"]["usage"]["result"], "tokens", 0) <= 0 ||
+      niminal::json_value(host["payload"]["usage"]["result"], "limit", 0) <= 0 ||
+      niminal::json_value(host["payload"]["editor"]["result"], "text", "") != "edited handoff") {
     return 1;
   }
-  nlohmann::json arguments{{"command", "original"}};
+  niminal::json arguments{{"command", "original"}};
   std::string reason;
   niminal::ToolCall call{"tool", "bash", R"({"command":"original"})"};
-  if (!agent.before_tool(call, arguments, reason) || arguments.value("command", "") != "changed") {
+  if (!agent.before_tool(call, arguments, reason) ||
+      niminal::json_value(arguments, "command", "") != "changed") {
     return 1;
   }
   std::string output = "original";
@@ -423,13 +429,13 @@ int main() {
   if (output != "rewritten" || !is_error) {
     return 1;
   }
-  nlohmann::json messages = nlohmann::json::array(
+  niminal::json messages = niminal::json_array(
       {{{"role", "system"},
-        {"content", nlohmann::json::array({{{"type", "text"}, {"text", "Base"}}})}},
+        {"content", niminal::json_array({{{"type", "text"}, {"text", "Base"}}})}},
        {{"role", "user"}, {"content", "Original"}}});
   agent.augment_context(messages);
   if (messages.size() != 3 || messages[0]["content"].size() != 2 ||
-      messages[2].value("content", "") != "Injected context") {
+      niminal::json_value(messages[2], "content", "") != "Injected context") {
     return 1;
   }
   agent.turn_start();
@@ -443,21 +449,23 @@ int main() {
     return result;
   };
   if (agent.run("question") != "rewritten answer" ||
-      captured.messages[0]["content"][0].value("text", "") != "Task system" ||
-      captured.messages[2].value("content", "") != "question transformed" ||
-      captured.messages[3].value("content", "") != "Persistent extension context" ||
-      session.events.back().value("type", "") != "assistant" ||
-      session.events[session.events.size() - 2].value("type", "") != "extension_message" ||
-      session.openai_messages()[2].value("content", "") != "Persistent extension context") {
-    std::cerr << "agent hook integration failed: " << captured.messages.dump() << "\n"
-              << session.openai_messages().dump() << "\n";
+      niminal::json_value(captured.messages[0]["content"][0], "text", "") != "Task system" ||
+      niminal::json_value(captured.messages[2], "content", "") != "question transformed" ||
+      niminal::json_value(captured.messages[3], "content", "") != "Persistent extension context" ||
+      niminal::json_value(session.events.back(), "type", "") != "assistant" ||
+      niminal::json_value(session.events[session.events.size() - 2], "type", "") !=
+          "extension_message" ||
+      niminal::json_value(session.openai_messages()[2], "content", "") !=
+          "Persistent extension context") {
+    std::cerr << "agent hook integration failed: " << niminal::json_dump(captured.messages) << "\n"
+              << niminal::json_dump(session.openai_messages()) << "\n";
     return 1;
   }
   if (!captured.before_provider_request || !captured.before_provider_headers ||
       !captured.after_provider_response) {
     return 1;
   }
-  nlohmann::json provider_payload{{"model", "original"}};
+  niminal::json provider_payload{{"model", "original"}};
   captured.before_provider_request(provider_payload);
   std::map<std::string, std::string> provider_headers{{"Authorization", "Bearer test"}};
   captured.before_provider_headers(provider_headers);
@@ -465,13 +473,13 @@ int main() {
   denied.status = 403;
   denied.body = "denied";
   captured.after_provider_response(denied);
-  if (provider_payload.value("model", "") != "replacement" ||
+  if (niminal::json_value(provider_payload, "model", "") != "replacement" ||
       provider_headers.contains("Authorization") || provider_headers["x-test"] != "yes") {
     std::cerr << "provider hook integration failed\n";
     return 1;
   }
-  runtime->dispatch(HookEvent::session_shutdown, nlohmann::json{{"reason", "quit"}});
-  runtime->dispatch(HookEvent::session_compact_failed, nlohmann::json{{"error", "test"}});
+  runtime->dispatch(HookEvent::session_shutdown, niminal::json{{"reason", "quit"}});
+  runtime->dispatch(HookEvent::session_compact_failed, niminal::json{{"error", "test"}});
   runtime->stop();
 
   runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
@@ -489,21 +497,21 @@ int main() {
                                   restored_todos->content[0]["items"].is_array();
   const bool first_task_completed =
       has_restored_items &&
-      std::any_of(restored_todos->content[0]["items"].begin(),
-                  restored_todos->content[0]["items"].end(), [](const auto& item) {
-                    return item.value("text", "").starts_with("#1 ") &&
-                           item.value("state", "") == "done";
+      std::any_of(restored_todos->content[0]["items"].get_array().begin(),
+                  restored_todos->content[0]["items"].get_array().end(), [](const auto& item) {
+                    return niminal::json_value(item, "text", "").starts_with("#1 ") &&
+                           niminal::json_value(item, "state", "") == "done";
                   });
   if (!has_restored_items || restored_todos->content[0]["items"].size() != 2 ||
       !first_task_completed || restored_todo_tool == nullptr ||
-      restored_todo_tool->run(nlohmann::json{{"action", "list"}})
+      restored_todo_tool->run(niminal::json{{"action", "list"}})
               .text.find("Add the implementation") == std::string::npos) {
     std::cerr << "todo tasks did not survive an extension restart\n";
     return 1;
   }
-  const auto cleared = restored_todo_tool->run(nlohmann::json{{"action", "clear"}});
+  const auto cleared = restored_todo_tool->run(niminal::json{{"action", "clear"}});
   if (!cleared.text.starts_with("Cleared 2 tasks.") ||
-      runtime->invoke("todos", "").value("message", "") != "No todos yet.") {
+      niminal::json_value(runtime->invoke("todos", ""), "message", "") != "No todos yet.") {
     std::cerr << "todo clear did not remove the saved task list\n";
     return 1;
   }
@@ -513,7 +521,7 @@ int main() {
   runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
   cancel.request();
   const auto cancelled =
-      runtime->dispatch(HookEvent::turn_end, nlohmann::json{{"interrupted", true}});
+      runtime->dispatch(HookEvent::turn_end, niminal::json{{"interrupted", true}});
   if (!cancelled.warnings.empty()) {
     std::cerr << "cancelled turn reported extension warning: " << cancelled.warnings.front()
               << '\n';

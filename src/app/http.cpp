@@ -25,6 +25,8 @@ struct StreamState {
 
 struct HttpClient::Impl {
   glz::http_client client;
+
+  Impl() { client.set_graceful_ssl_shutdown(false); }
 };
 
 HttpClient::HttpClient() : impl_(std::make_unique<Impl>()) {}

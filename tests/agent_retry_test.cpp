@@ -66,6 +66,41 @@ int main() {
     return 1;
   }
 
+  niminal::Agent rejected;
+  rejected.model = "test-model";
+  int rejected_requests = 0;
+  rejected.stream_chat_fn = [&](const niminal::ChatRequest&) -> niminal::ChatResult {
+    ++rejected_requests;
+    throw niminal::Error("http 400: ", 400);
+  };
+  try {
+    rejected.run("hello");
+    std::cerr << "an unexplained HTTP 400 should fail\n";
+    return 1;
+  } catch (const niminal::Error& error) {
+    if (rejected_requests != 1 || error.http_status != 400 ||
+        std::string_view(error.what()).find("/compact") != std::string_view::npos) {
+      std::cerr << "an unexplained HTTP 400 should not retry or suggest compaction\n";
+      return 1;
+    }
+  }
+
+  niminal::Agent permanent;
+  permanent.model = "test-model";
+  permanent.stream_chat_fn = [](const niminal::ChatRequest&) -> niminal::ChatResult {
+    throw niminal::Error("http 400: invalid model", 400);
+  };
+  try {
+    permanent.run("hello");
+    std::cerr << "a detailed HTTP 400 should fail\n";
+    return 1;
+  } catch (const niminal::Error& error) {
+    if (std::string_view(error.what()) != "http 400: invalid model") {
+      std::cerr << "a detailed HTTP 400 should preserve the provider message\n";
+      return 1;
+    }
+  }
+
   for (const auto& error : {
            niminal::json{
                {"message", "Streaming response failed: [server_error] upstream service timeout"}},
@@ -89,7 +124,7 @@ int main() {
     opencode.tools.push_back(
         niminal::Tool{"lookup",
                       "lookup",
-                      {{"type", "object"}, {"properties", niminal::json::object()}},
+                      {{"type", "object"}, {"properties", niminal::json_object()}},
                       [&](const niminal::json&) {
                         ++tool_runs;
                         return "found";
@@ -106,7 +141,7 @@ int main() {
         return "data: "
                R"({"choices":[{"index":0,"delta":{"content":"partial"}}]})"
                "\n\ndata: " +
-               niminal::json{{"error", error}}.dump() + "\n\n";
+               niminal::json_dump(niminal::json{{"error", error}}) + "\n\n";
       }
       if (request.body != failed_request) {
         throw niminal::Error("retry changed the provider request");
@@ -129,12 +164,13 @@ int main() {
     auto transport = std::make_unique<StreamTransport>();
     transport->response = [code](const cail::HttpRequest&) {
       return "data: " +
-             niminal::json{{"error", {{"message", "request rejected"}, {"type", code}}}}.dump() +
+             niminal::json_dump(
+                 niminal::json{{"error", {{"message", "request rejected"}, {"type", code}}}}) +
              "\n\n";
     };
     niminal::ChatRequest request;
     request.conversation_id = "test-session";
-    request.messages = niminal::json::array({{{"role", "user"}, {"content", "hello"}}});
+    request.messages = niminal::json_array({{{"role", "user"}, {"content", "hello"}}});
     request.model = cail::create_opencode(
         {.api_key = "test", .service = cail::OpenCodeService::go, .base_url = "http://unused"})(
         "glm-5.3-flash", cail::OpenCodeApiFamily::chat_completions, std::move(transport));
@@ -153,7 +189,7 @@ int main() {
 
   niminal::Agent reasoning_agent;
   reasoning_agent.model = "thinking-model";
-  reasoning_agent.tools.push_back(niminal::Tool{"lookup", "lookup", niminal::json::object(),
+  reasoning_agent.tools.push_back(niminal::Tool{"lookup", "lookup", niminal::json_object(),
                                                 [](const niminal::json&) { return "found"; }});
   int steps = 0;
   reasoning_agent.stream_chat_fn = [&](const niminal::ChatRequest& request) {
@@ -164,10 +200,12 @@ int main() {
       result.tool_calls.push_back({"call_1", "lookup", "{}"});
     } else {
       const auto& assistant = request.messages[1];
-      const auto options = assistant.value("provider_options", niminal::json::object());
-      if (options.value("reasoning_content", "") != "need lookup" ||
-          options.value("reasoning_details", niminal::json::array()) !=
-              niminal::json::array({{{"type", "reasoning.text"}, {"text", "need lookup"}}})) {
+      const auto options =
+          niminal::json_value(assistant, "provider_options", niminal::json_object());
+      if (niminal::json_value(options, "reasoning_content", "") != "need lookup" ||
+          !niminal::json_equal(
+              niminal::json_value(options, "reasoning_details", niminal::json_array()),
+              niminal::json_array({{{"type", "reasoning.text"}, {"text", "need lookup"}}}))) {
         throw niminal::Error("reasoning missing from tool continuation");
       }
       result.text = "done";
@@ -186,7 +224,7 @@ int main() {
   *output = [&](std::string) { ++output_calls; };
   std::barrier ready(2);
   for (const auto* name : {"left", "right"}) {
-    parallel_agent.tools.push_back(niminal::Tool{name, name, niminal::json::object(),
+    parallel_agent.tools.push_back(niminal::Tool{name, name, niminal::json_object(),
                                                  [output, &ready](const niminal::json&) {
                                                    ready.arrive_and_wait();
                                                    (*output)("snapshot");

@@ -2,9 +2,10 @@
 
 #include "theme.hpp"
 
+#include <niminal/json.hpp>
+
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/box.hpp>
-#include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
 #include <string>
@@ -59,7 +60,7 @@ ftxui::Element render_user_message(const Block& block, const Theme& theme);
 ftxui::Element render_welcome_screen(const std::string& title, const std::string& model_line,
                                      const Theme& theme);
 ftxui::Element render_transcript_card(const Block& block, const Theme& theme, ftxui::Box& box);
-std::vector<Block> blocks_from_events(const std::vector<nlohmann::json>& events);
+std::vector<Block> blocks_from_events(const std::vector<niminal::json>& events);
 std::string clip_text(std::string text, size_t max_chars, int max_lines);
 ftxui::Decorator block_style(BlockKind kind, const Theme& theme);
 const char* block_label(BlockKind kind);

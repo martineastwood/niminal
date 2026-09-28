@@ -97,7 +97,7 @@ int main() {
     routed.conversation_id = "routing-session";
     niminal::ChatRequest request;
     routed.fill_chat(request);
-    request.messages = niminal::json::array({{{"role", "user"}, {"content", "hello"}}});
+    request.messages = niminal::json_array({{{"role", "user"}, {"content", "hello"}}});
     niminal::json body;
     request.before_provider_request = [&](niminal::json& payload) {
       body = payload;
@@ -114,9 +114,9 @@ int main() {
     if (custom) {
       niminal::app::unregister_provider(name);
     }
-    if (body.value("prompt_cache_key", "") != "routing-session" ||
+    if (niminal::json_value(body, "prompt_cache_key", "") != "routing-session" ||
         ((custom || std::string_view(name) == "openrouter") &&
-         body.value("session_id", "") != "routing-session")) {
+         niminal::json_value(body, "session_id", "") != "routing-session")) {
       return fail("provider session routing");
     }
   }

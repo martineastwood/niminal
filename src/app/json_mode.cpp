@@ -3,7 +3,7 @@
 namespace niminal::app {
 namespace {
 
-void add_identity(nlohmann::json& out, const niminal::StreamEvent& event) {
+void add_identity(niminal::json& out, const niminal::StreamEvent& event) {
   if (!event.session_id.empty()) {
     out["session_id"] = event.session_id;
   }
@@ -15,11 +15,11 @@ void add_identity(nlohmann::json& out, const niminal::StreamEvent& event) {
   }
 }
 
-void add_usage(nlohmann::json& out, const niminal::Usage& usage) {
+void add_usage(niminal::json& out, const niminal::Usage& usage) {
   if (usage.input_tokens == 0 && usage.output_tokens == 0 && !usage.cache_reported) {
     return;
   }
-  out["usage"] = {
+  out["usage"] = niminal::json{
       {"input_tokens", usage.input_tokens},
       {"output_tokens", usage.output_tokens},
       {"cache_read_tokens", usage.cache_read_tokens},
@@ -28,13 +28,13 @@ void add_usage(nlohmann::json& out, const niminal::Usage& usage) {
   };
 }
 
-void add_model(nlohmann::json& out, const std::string& model) {
+void add_model(niminal::json& out, const std::string& model) {
   if (!model.empty()) {
     out["model"] = model;
   }
 }
 
-void add_tool_identity(nlohmann::json& out, const niminal::StreamEvent& event) {
+void add_tool_identity(niminal::json& out, const niminal::StreamEvent& event) {
   out["step"] = event.step;
   out["tool_id"] = event.tool_id;
   out["tool_name"] = event.tool_name;
@@ -42,8 +42,8 @@ void add_tool_identity(nlohmann::json& out, const niminal::StreamEvent& event) {
 
 } // namespace
 
-nlohmann::json json_event(const niminal::StreamEvent& event) {
-  nlohmann::json out = {{"version", kJsonEventVersion}};
+niminal::json json_event(const niminal::StreamEvent& event) {
+  niminal::json out = {{"version", kJsonEventVersion}};
   add_identity(out, event);
   switch (event.kind) {
   case niminal::EventKind::run_start:
@@ -118,7 +118,7 @@ nlohmann::json json_event(const niminal::StreamEvent& event) {
     break;
   case niminal::EventKind::status:
   case niminal::EventKind::done:
-    return nlohmann::json();
+    return niminal::json();
   }
   if (event.duration_ms > 0) {
     out["duration_ms"] = event.duration_ms;
@@ -126,18 +126,18 @@ nlohmann::json json_event(const niminal::StreamEvent& event) {
   return out;
 }
 
-nlohmann::json session_event(const std::string& type, const std::string& session_id, bool success) {
-  nlohmann::json out = {{"version", kJsonEventVersion}, {"type", type}, {"session_id", session_id}};
+niminal::json session_event(const std::string& type, const std::string& session_id, bool success) {
+  niminal::json out = {{"version", kJsonEventVersion}, {"type", type}, {"session_id", session_id}};
   if (type == "session_end") {
     out["success"] = success;
   }
   return out;
 }
 
-nlohmann::json message_event(const std::string& session_id, const std::string& turn_id,
-                             const std::string& role, const std::string& content,
-                             const std::string& model, bool final) {
-  nlohmann::json out = {
+niminal::json message_event(const std::string& session_id, const std::string& turn_id,
+                            const std::string& role, const std::string& content,
+                            const std::string& model, bool final) {
+  niminal::json out = {
       {"version", kJsonEventVersion},
       {"type", "message"},
       {"role", role},
@@ -158,14 +158,14 @@ nlohmann::json message_event(const std::string& session_id, const std::string& t
   return out;
 }
 
-nlohmann::json queue_event(const std::string& session_id, const std::string& action, int depth,
-                           const std::string& content, const std::string& request_id,
-                           const std::string& mode) {
-  nlohmann::json out = {{"version", kJsonEventVersion},
-                        {"type", "queue"},
-                        {"session_id", session_id},
-                        {"action", action},
-                        {"depth", depth}};
+niminal::json queue_event(const std::string& session_id, const std::string& action, int depth,
+                          const std::string& content, const std::string& request_id,
+                          const std::string& mode) {
+  niminal::json out = {{"version", kJsonEventVersion},
+                       {"type", "queue"},
+                       {"session_id", session_id},
+                       {"action", action},
+                       {"depth", depth}};
   if (!content.empty()) {
     out["content"] = content;
   }
@@ -178,9 +178,9 @@ nlohmann::json queue_event(const std::string& session_id, const std::string& act
   return out;
 }
 
-nlohmann::json rpc_response_event(const std::string& id, bool ok, const std::string& state,
-                                  const std::string& error) {
-  nlohmann::json out = {
+niminal::json rpc_response_event(const std::string& id, bool ok, const std::string& state,
+                                 const std::string& error) {
+  niminal::json out = {
       {"version", kJsonEventVersion}, {"type", "response"}, {"id", id}, {"ok", ok}};
   if (!state.empty()) {
     out["state"] = state;

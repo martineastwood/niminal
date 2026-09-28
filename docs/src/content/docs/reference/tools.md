@@ -158,6 +158,11 @@ In the TUI, output streams into the bash card as the command runs. Collapsed
 cards show the first 8 lines. Expand the card to follow the full captured
 output.
 
+The card header names the outcome next to the command: `ok` in green when the
+command succeeded, and `failed (exit 1)`, `timed out after 120s`, or
+`interrupted` in red when it did not. The outcome stays visible in collapsed
+cards, so you can scan a long session for failures without expanding every card.
+
 ## `skill`
 
 ```json

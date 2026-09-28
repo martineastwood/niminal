@@ -208,8 +208,8 @@ niminal::UserInput prepare_user_input(const Workspace& workspace, niminal::UserI
       return;
     }
     const auto filename = std::filesystem::path(mention.relative).filename().string();
-    for (const auto& image : input.images) {
-      if (image.value("name", "") == filename) {
+    for (const auto& image : input.images.get_array()) {
+      if (niminal::json_value(image, "name", "") == filename) {
         return;
       }
     }
@@ -217,7 +217,7 @@ niminal::UserInput prepare_user_input(const Workspace& workspace, niminal::UserI
     if (!std::filesystem::is_regular_file(path)) {
       throw niminal::Error("image not found: " + std::string(mention.relative));
     }
-    input.images.push_back(read_image(path));
+    input.images.get_array().push_back(read_image(path));
   });
   input.text = expand_file_mentions(workspace, input.text);
   if (!input.images.empty()) {
@@ -250,7 +250,7 @@ niminal::UserInput prepare_user_input(const Workspace& workspace, niminal::UserI
   if (quote != 0 || paths.empty()) {
     return input;
   }
-  niminal::json images = niminal::json::array();
+  niminal::json images = json_array();
   for (const auto& raw : paths) {
     auto path = normalize_dropped_path(raw);
     const auto file = std::filesystem::path(path).is_absolute() ? std::filesystem::path(path)
@@ -258,7 +258,7 @@ niminal::UserInput prepare_user_input(const Workspace& workspace, niminal::UserI
     if (!image_path(path) || !std::filesystem::is_regular_file(file)) {
       return input;
     }
-    images.push_back(read_image(file));
+    images.get_array().push_back(read_image(file));
   }
   input.text.clear();
   input.images = std::move(images);

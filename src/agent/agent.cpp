@@ -24,9 +24,9 @@ bool blank(std::string_view text) {
 }
 
 json tools_payload(const std::vector<Tool>& tools) {
-  json out = json::array();
+  json out = json_array();
   for (const auto& tool : tools) {
-    out.push_back({
+    out.get_array().push_back({
         {"name", tool.name},
         {"description", tool.description},
         {"parameters", tool.parameters},
@@ -74,40 +74,40 @@ json object_options(const std::optional<std::string>& options) {
   if (!options) {
     return json();
   }
-  auto parsed = json::parse(*options, nullptr, false);
-  return parsed.is_object() ? parsed : json();
+  auto parsed = try_json_parse(*options);
+  return parsed && parsed->is_object() ? std::move(*parsed) : json();
 }
 
 } // namespace
 
 json Agent::request_messages(const std::string& effective_system) const {
-  json out = json::array();
-  json parts = json::array();
+  json out = json_array();
+  json parts = json_array();
   auto add_part = [&](const std::string& text) {
     if (text.empty()) {
       return;
     }
-    json part = json::object();
+    json part = json_object();
     part["type"] = "text";
     part["text"] = text;
-    parts.push_back(std::move(part));
+    parts.get_array().push_back(std::move(part));
   };
   add_part(effective_system);
   for (const auto& block : system_extra) {
     add_part(block);
   }
   if (!parts.empty()) {
-    json sys = json::object();
+    json sys = json_object();
     sys["role"] = "system";
     sys["content"] = std::move(parts);
-    out.push_back(std::move(sys));
+    out.get_array().push_back(std::move(sys));
   }
   if (messages.is_array()) {
-    for (const auto& msg : messages) {
-      if (msg.is_object() && msg.value("role", "") == "system") {
+    for (const auto& msg : messages.get_array()) {
+      if (msg.is_object() && json_value(msg, "role", "") == "system") {
         continue;
       }
-      out.push_back(msg);
+      out.get_array().push_back(msg);
     }
   }
   return out;
@@ -137,7 +137,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
     system_extra = system_extra_loader();
   }
   if (!messages.is_array()) {
-    messages = json::array();
+    messages = json_array();
   }
   const std::string active_run_id = run_id.empty()
                                         ? (conversation_id.empty() ? "session" : conversation_id) +
@@ -165,23 +165,23 @@ std::string Agent::run(UserInput prompt, bool append_user) {
     }
   };
   std::string run_system = system;
-  json extension_message = json::array();
+  json extension_message = json_array();
   if (append_user && before_agent_start) {
     before_agent_start(prompt, run_system, extension_message);
   }
   if (append_user) {
-    messages.push_back(json{{"role", "user"}, {"content", user_content(prompt)}});
+    messages.get_array().push_back(json{{"role", "user"}, {"content", user_content(prompt)}});
     if (persist_user) {
       persist_user(prompt);
     }
-  } else if (messages.empty() || (messages.back().value("role", "") != "user" &&
-                                  messages.back().value("role", "") != "tool")) {
+  } else if (messages.empty() || (json_value(messages.get_array().back(), "role", "") != "user" &&
+                                  json_value(messages.get_array().back(), "role", "") != "tool")) {
     throw Error("nothing to retry");
   }
-  for (const auto& injected : extension_message) {
-    if (injected.is_object() && injected.value("role", "") == "user" &&
+  for (const auto& injected : extension_message.get_array()) {
+    if (injected.is_object() && json_value(injected, "role", "") == "user" &&
         injected.contains("content") && injected["content"].is_string()) {
-      messages.push_back(injected);
+      messages.get_array().push_back(injected);
       if (persist_extension_message) {
         persist_extension_message(injected);
       }
@@ -228,7 +228,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       if (input.text.empty() && input.images.empty()) {
         continue;
       }
-      messages.push_back(json{{"role", "user"}, {"content", user_content(input)}});
+      messages.get_array().push_back(json{{"role", "user"}, {"content", user_content(input)}});
       if (persist_user) {
         persist_user(input);
       }
@@ -255,7 +255,8 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       fill_chat(req);
       req.messages = request_messages(run_system);
       if (empty_response_followup_pending) {
-        req.messages.push_back(json{{"role", "user"}, {"content", kEmptyResponseFollowup}});
+        req.messages.get_array().push_back(
+            json{{"role", "user"}, {"content", kEmptyResponseFollowup}});
         empty_response_followup_pending = false;
       }
       if (augment_context) {
@@ -278,6 +279,8 @@ std::string Agent::run(UserInput prompt, bool append_user) {
           result = stream_chat_fn ? stream_chat_fn(req) : niminal::stream_chat(std::move(req));
           break;
         } catch (const Error& e) {
+          const bool unexplained_bad_request =
+              e.http_status == 400 && std::string_view(e.what()) == "http 400: ";
           if (!overflow_retried && looks_overflow(e.what()) && recover_overflow &&
               recover_overflow()) {
             overflow_retried = true;
@@ -286,6 +289,11 @@ std::string Agent::run(UserInput prompt, bool append_user) {
             break;
           }
           if (!looks_transient(e) || retries == kMaxRetries) {
+            if (unexplained_bad_request) {
+              throw Error("Provider rejected the request (HTTP 400) without details. "
+                          "Try another model with /model, then /retry.",
+                          400);
+            }
             if (retries == kMaxRetries && looks_transient(e)) {
               StreamEvent retry{EventKind::status,
                                 "Connection failed after " + std::to_string(kMaxRetries) +
@@ -318,7 +326,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       if (message_end) {
         json message{{"role", "assistant"}, {"content", result.text}};
         message_end(message);
-        if (message.is_object() && message.value("role", "") == "assistant" &&
+        if (message.is_object() && json_value(message, "role", "") == "assistant" &&
             message.contains("content") && message["content"].is_string()) {
           result.text = message["content"].get<std::string>();
         }
@@ -368,27 +376,27 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       if (const auto options = object_options(result.provider_options); !options.empty()) {
         assistant["provider_options"] = options;
       }
-      json calls = json::array();
+      json calls = json_array();
       if (!result.text.empty()) {
         StreamEvent message{EventKind::assistant_message, result.text, {}, {}};
         message.final = false;
         emit(std::move(message));
       }
       for (const auto& call : result.tool_calls) {
-        calls.push_back({
+        calls.get_array().push_back({
             {"id", call.id},
             {"type", "function"},
             {"function", {{"name", call.name}, {"arguments", call.arguments}}},
         });
         if (const auto options = object_options(call.provider_options); !options.empty()) {
-          calls.back()["provider_options"] = options;
+          calls.get_array().back()["provider_options"] = options;
         }
         StreamEvent tool_call{EventKind::tool_call, call.arguments, call.name, call.id};
         tool_call.input = detail::parse_tool_input(call.arguments);
         emit(std::move(tool_call));
       }
       assistant["tool_calls"] = std::move(calls);
-      messages.push_back(std::move(assistant));
+      messages.get_array().push_back(std::move(assistant));
       if (persist_assistant) {
         persist_assistant(result.text, result.tool_calls, model, result.usage,
                           object_options(result.provider_options));
@@ -403,9 +411,9 @@ std::string Agent::run(UserInput prompt, bool append_user) {
           return {"interrupted", true};
         }
         try {
-          json args = json::object();
+          json args = json_object();
           if (!call.arguments.empty()) {
-            args = json::parse(call.arguments);
+            args = json_parse(call.arguments);
           }
           const Tool* tool = find_tool(tools, call.name);
           if (!tool) {
@@ -464,7 +472,7 @@ std::string Agent::run(UserInput prompt, bool append_user) {
         if (persist_tool) {
           persist_tool(call.id, execution.output, is_error);
         }
-        messages.push_back(json{
+        messages.get_array().push_back(json{
             {"role", "tool"},
             {"tool_call_id", call.id},
             {"content", tool_context_text(execution.output.text)},

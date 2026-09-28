@@ -46,26 +46,27 @@ int main() {
   niminal::Agent agent;
   agent.system = "you are niminal";
   agent.system_extra = {"Project instructions.\n<file path=\"AGENTS.md\">\nbe brief\n</file>\n"};
-  agent.messages = nlohmann::json::array({nlohmann::json{{"role", "user"}, {"content", "hello"}}});
+  agent.messages = niminal::json_array({niminal::json{{"role", "user"}, {"content", "hello"}}});
   auto msgs = agent.request_messages();
   if (!msgs.is_array() || msgs.size() != 2) {
     std::cerr << "expected system + user\n";
     return 1;
   }
-  if (msgs[0].value("role", "") != "system" || !msgs[0]["content"].is_array() ||
+  if (niminal::json_value(msgs[0], "role", "") != "system" || !msgs[0]["content"].is_array() ||
       msgs[0]["content"].size() != 2) {
     std::cerr << "system should be two stable text parts\n";
     return 1;
   }
-  if (msgs[0]["content"][0].value("text", "") != "you are niminal") {
+  if (niminal::json_value(msgs[0]["content"][0], "text", "") != "you are niminal") {
     std::cerr << "base system first\n";
     return 1;
   }
-  if (msgs[0]["content"][1].value("text", "").find("AGENTS.md") == std::string::npos) {
+  if (niminal::json_value(msgs[0]["content"][1], "text", "").find("AGENTS.md") ==
+      std::string::npos) {
     std::cerr << "instructions after base system\n";
     return 1;
   }
-  if (msgs[1].value("role", "") != "user") {
+  if (niminal::json_value(msgs[1], "role", "") != "user") {
     std::cerr << "conversation after system prefix\n";
     return 1;
   }
@@ -75,23 +76,23 @@ int main() {
   use_provider(req, "openrouter", "openai/gpt-4o-mini",
                std::string(endpoint) + "/v1/chat/completions");
   req.messages = msgs;
-  req.tools = nlohmann::json::array({nlohmann::json{
+  req.tools = niminal::json_array({niminal::json{
       {"type", "function"},
       {"function",
        {{"name", "read"},
         {"description", "d"},
-        {"parameters", {{"type", "object"}, {"properties", nlohmann::json::object()}}}}},
+        {"parameters", {{"type", "object"}, {"properties", niminal::json_object()}}}}},
   }});
   auto body = request_body(req);
   if (body["tools"][0].contains("cache_control")) {
     std::cerr << "openai models should not send cache_control\n";
     return 1;
   }
-  if (body["messages"][0]["content"].back().contains("cache_control")) {
+  if (body["messages"][0]["content"].get_array().back().contains("cache_control")) {
     std::cerr << "openai system should not send cache_control\n";
     return 1;
   }
-  if (body["messages"].back()["content"] != "hello") {
+  if (body["messages"].get_array().back()["content"].get<std::string>() != "hello") {
     std::cerr << "user text should reach the provider\n";
     return 1;
   }
@@ -103,16 +104,18 @@ int main() {
     std::cerr << "last tool should carry cache_control\n";
     return 1;
   }
-  if (!claude["messages"][0]["content"].back().contains("cache_control")) {
+  if (!claude["messages"][0]["content"].get_array().back().contains("cache_control")) {
     std::cerr << "last system part should carry cache_control\n";
     return 1;
   }
-  if (!claude["messages"].back()["content"].is_array() ||
-      !claude["messages"].back()["content"].back().contains("cache_control")) {
+  if (!claude["messages"].get_array().back()["content"].is_array() ||
+      !claude["messages"].get_array().back()["content"].get_array().back().contains(
+          "cache_control")) {
     std::cerr << "last message should carry cache_control\n";
     return 1;
   }
-  if (!body.contains("stream_options") || !body["stream_options"].value("include_usage", false)) {
+  if (!body.contains("stream_options") ||
+      !niminal::json_value(body["stream_options"], "include_usage", false)) {
     std::cerr << "stream should request usage\n";
     return 1;
   }
@@ -127,7 +130,7 @@ int main() {
     return 1;
   }
   if (gemini.contains("messages") || gemini.contains("cache_control") ||
-      gemini.dump().find("cache_control") != std::string::npos) {
+      niminal::json_dump(gemini).find("cache_control") != std::string::npos) {
     std::cerr << "google should not send cache_control\n";
     return 1;
   }
@@ -135,7 +138,7 @@ int main() {
   use_provider(req, "anthropic", "claude-sonnet-4-6", "https://api.anthropic.com/v1");
   auto native = request_body(req);
   if (!native.contains("system") || !native["system"].is_array() ||
-      !native["system"].back().contains("cache_control")) {
+      !native["system"].get_array().back().contains("cache_control")) {
     std::cerr << "anthropic system should be cached\n";
     return 1;
   }
@@ -144,7 +147,8 @@ int main() {
     std::cerr << "anthropic tools should use Messages cache_control\n";
     return 1;
   }
-  if (!native["messages"].back()["content"].back().contains("cache_control")) {
+  if (!native["messages"].get_array().back()["content"].get_array().back().contains(
+          "cache_control")) {
     std::cerr << "anthropic last message should be cached\n";
     return 1;
   }
@@ -156,58 +160,64 @@ int main() {
   req.apply_cache = false;
   req.conversation_id = "sess";
   auto oai = request_body(req);
-  if (oai.dump().find("cache_control") != std::string::npos) {
+  if (niminal::json_dump(oai).find("cache_control") != std::string::npos) {
     std::cerr << "openai should cache by prefix, not cache_control\n";
     return 1;
   }
-  if (oai.value("prompt_cache_key", "") != "sess") {
+  if (niminal::json_value(oai, "prompt_cache_key", "") != "sess") {
     std::cerr << "openai should send prompt_cache_key\n";
     return 1;
   }
-  req.extra = nlohmann::json{{"reasoning", {{"effort", "high"}}}};
+  req.extra = niminal::json{{"reasoning", {{"effort", "high"}}}};
   auto reasoned = request_body(req);
-  if (reasoned["reasoning"].value("effort", "") != "high") {
+  if (niminal::json_value(reasoned["reasoning"], "effort", "") != "high") {
     std::cerr << "chat extra reasoning\n";
     return 1;
   }
   req.apply_cache = false;
   use_provider(req, "google", "gemini-3.5-flash",
                "https://generativelanguage.googleapis.com/v1beta");
-  req.extra = nlohmann::json{{"reasoning_effort", "high"}};
+  req.extra = niminal::json{{"reasoning_effort", "high"}};
   auto gthink = request_body(req);
-  if (gthink["generationConfig"]["thinkingConfig"].value("thinkingLevel", "") != "HIGH") {
+  if (niminal::json_value(gthink["generationConfig"]["thinkingConfig"], "thinkingLevel", "") !=
+      "HIGH") {
     std::cerr << "google thinkingLevel\n";
     return 1;
   }
 
-  const nlohmann::json image = {
+  const niminal::json image = {
       {"type", "image"}, {"name", "screen.png"}, {"mime_type", "image/png"}, {"data", "aGVsbG8="}};
-  req.messages = nlohmann::json::array(
+  req.messages = niminal::json_array(
       {{{"role", "user"},
-        {"content", nlohmann::json::array({{{"type", "text"}, {"text", "inspect"}}, image})}},
+        {"content", niminal::json_array({{{"type", "text"}, {"text", "inspect"}}, image})}},
        {{"role", "assistant"},
         {"content", ""},
         {"tool_calls",
-         nlohmann::json::array({{{"id", "t1"},
-                                 {"type", "function"},
-                                 {"function", {{"name", "read"}, {"arguments", "{}"}}}}})}},
+         niminal::json_array({{{"id", "t1"},
+                               {"type", "function"},
+                               {"function", {{"name", "read"}, {"arguments", "{}"}}}}})}},
        {{"role", "tool"},
         {"tool_call_id", "t1"},
         {"content", "screen.png"},
-        {"images", nlohmann::json::array({image})}}});
-  req.extra = nlohmann::json::object();
+        {"images", niminal::json_array({image})}}});
+  req.extra = niminal::json_object();
   use_provider(req, "openai", "gpt-5", "https://api.openai.com/v1");
   auto vision = request_body(req);
-  if (vision["input"][0]["content"][1]["image_url"] != "data:image/png;base64,aGVsbG8=" ||
-      vision["input"].back()["content"][0]["type"] != "input_image") {
+  if (vision["input"][0]["content"][1]["image_url"].get<std::string>() !=
+          "data:image/png;base64,aGVsbG8=" ||
+      vision["input"].get_array().back()["content"][0]["type"].get<std::string>() !=
+          "input_image") {
     std::cerr << "OpenAI image content\n";
     return 1;
   }
   req.apply_cache = true;
   use_provider(req, "anthropic", "claude-sonnet-4-6", "https://api.anthropic.com/v1");
   vision = request_body(req);
-  if (vision["messages"][0]["content"][1]["source"]["data"] != "aGVsbG8=" ||
-      vision["messages"].back()["content"][0]["content"][1]["source"]["data"] != "aGVsbG8=") {
+  if (vision["messages"][0]["content"][1]["source"]["data"].get<std::string>() != "aGVsbG8=" ||
+      vision["messages"]
+              .get_array()
+              .back()["content"][0]["content"][1]["source"]["data"]
+              .get<std::string>() != "aGVsbG8=") {
     std::cerr << "Anthropic image content\n";
     return 1;
   }
@@ -215,8 +225,9 @@ int main() {
   use_provider(req, "google", "gemini-3.5-flash",
                "https://generativelanguage.googleapis.com/v1beta");
   vision = request_body(req);
-  if (vision["contents"][0]["parts"][1]["inlineData"]["data"] != "aGVsbG8=" ||
-      vision["contents"].back()["parts"][1]["inlineData"]["data"] != "aGVsbG8=") {
+  if (vision["contents"][0]["parts"][1]["inlineData"]["data"].get<std::string>() != "aGVsbG8=" ||
+      vision["contents"].get_array().back()["parts"][1]["inlineData"]["data"].get<std::string>() !=
+          "aGVsbG8=") {
     std::cerr << "Google image content\n";
     return 1;
   }

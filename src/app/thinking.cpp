@@ -9,7 +9,7 @@
 
 namespace niminal::app {
 
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
@@ -61,7 +61,7 @@ int budget_tokens(std::string_view level) {
 }
 
 json effort_options(std::string_view provider, std::string_view level) {
-  json out = json::object();
+  json out = json_object();
   auto p = niminal::lower_copy(std::string(provider));
   auto lv = std::string(level);
   if (p == "openrouter" || p == "openai" || p == "foundry" || p == "hyper") {
@@ -91,7 +91,7 @@ json toggle_options(std::string_view provider) {
   if (p == "google" || p == "anthropic") {
     return effort_options(p, "high");
   }
-  return json::object();
+  return json_object();
 }
 
 json max_token_options(std::string_view provider, std::string_view level) {
@@ -116,7 +116,7 @@ json anthropic_adaptive(std::string_view model, std::string_view level) {
 
 struct Plan {
   std::string label;
-  json options = json::object();
+  json options = json_object();
 };
 
 Plan resolve(std::string_view provider, std::string_view model, std::string_view want) {

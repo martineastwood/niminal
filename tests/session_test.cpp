@@ -15,7 +15,7 @@ using niminal::app::load_session;
 using niminal::app::restore_session;
 using niminal::app::search_sessions;
 using niminal::app::valid_session_id;
-using json = nlohmann::json;
+using json = niminal::json;
 
 static int fail(const char* msg) {
   std::cerr << msg << '\n';
@@ -49,19 +49,21 @@ int main() {
     std::ifstream in(s.path);
     std::string line;
     std::getline(in, line);
-    auto header = json::parse(line);
-    if (header.value("type", "") != "session" || header.value("workspace", "") != "/tmp/ws-a") {
+    auto header = niminal::json_parse(line);
+    if (niminal::json_value(header, "type", "") != "session" ||
+        niminal::json_value(header, "workspace", "") != "/tmp/ws-a") {
       return fail("session header");
     }
   }
 
-  json calls = json::array({json{
+  json calls = niminal::json_array({json{
       {"id", "call_1"},
       {"type", "function"},
       {"function", {{"name", "bash"}, {"arguments", "{\"command\":\"npm test\"}"}}},
   }});
   json provider_options =
-      json{{"reasoning_details", json::array({{{"type", "reasoning.text"}, {"text", "check"}}})}};
+      json{{"reasoning_details",
+            niminal::json_array({{{"type", "reasoning.text"}, {"text", "check"}}})}};
   s.add_assistant("running tests", calls, "openai/gpt-4o-mini", {}, provider_options);
   s.add_tool_result("call_1", "exit_code: 1", true);
   s.add_name("fix the parser");
@@ -88,30 +90,31 @@ int main() {
   if (msgs.size() != 3) {
     return fail("openai_messages should skip name/selection/extension");
   }
-  if (msgs[0].value("role", "") != "user") {
+  if (niminal::json_value(msgs[0], "role", "") != "user") {
     return fail("user role");
   }
-  if (msgs[1].value("role", "") != "assistant" || !msgs[1].contains("tool_calls")) {
+  if (niminal::json_value(msgs[1], "role", "") != "assistant" || !msgs[1].contains("tool_calls")) {
     return fail("assistant tool_calls");
   }
-  if (msgs[1].value("provider_options", json::object()) != provider_options) {
+  if (!niminal::json_equal(niminal::json_value(msgs[1], "provider_options", niminal::json_object()),
+                           provider_options)) {
     return fail("assistant provider options survive session reload");
   }
-  if (msgs[2].value("role", "") != "tool") {
+  if (niminal::json_value(msgs[2], "role", "") != "tool") {
     return fail("tool role");
   }
   if (loaded.last_assistant_text() != "running tests") {
     return fail("last_assistant_text");
   }
 
-  s.add_assistant("usage turn", json::array(), "openai/gpt-4o-mini",
+  s.add_assistant("usage turn", niminal::json_array(), "openai/gpt-4o-mini",
                   niminal::Usage{100, 20, 80, 0, true});
   auto totals = s.usage_totals();
   if (totals.input_tokens != 100 || totals.output_tokens != 20 || totals.cache_read_tokens != 80) {
     return fail("usage_totals");
   }
   s.events.push_back(json("not-an-object"));
-  s.events.push_back(json::array());
+  s.events.push_back(niminal::json_array());
   auto still = s.usage_totals();
   if (still.input_tokens != 100 || still.output_tokens != 20) {
     return fail("usage_totals skips non-objects");
@@ -130,7 +133,7 @@ int main() {
   auto pending = create_session(dir, "/tmp/ws-a");
   pending.add_user("run it");
   pending.add_assistant("",
-                        json::array({json{
+                        niminal::json_array({json{
                             {"id", "call_x"},
                             {"function", {{"name", "bash"}, {"arguments", "{}"}}},
                         }}),
@@ -143,10 +146,12 @@ int main() {
     return fail("recover is idempotent");
   }
   auto last = recovered.events.back();
-  if (last.value("type", "") != "tool_result" || !last.value("is_error", false)) {
+  if (niminal::json_value(last, "type", "") != "tool_result" ||
+      !niminal::json_value(last, "is_error", false)) {
     return fail("interrupted tool_result");
   }
-  if (last.value("output", "").find("Interrupted before a tool result") == std::string::npos) {
+  if (niminal::json_value(last, "output", "").find("Interrupted before a tool result") ==
+      std::string::npos) {
     return fail("interrupted wording");
   }
 
@@ -168,9 +173,9 @@ int main() {
 
   auto compact = create_session(dir, "/tmp/ws-a");
   compact.add_user("old question");
-  compact.add_assistant("old answer", json::array(), "openai/gpt-4o-mini");
+  compact.add_assistant("old answer", niminal::json_array(), "openai/gpt-4o-mini");
   compact.add_user("new question");
-  compact.add_assistant("new answer", json::array(), "openai/gpt-4o-mini");
+  compact.add_assistant("new answer", niminal::json_array(), "openai/gpt-4o-mini");
   compact.add_compaction("Earlier work: old question.", 2, 400);
   if (compact.latest_compaction_index() != 4) {
     return fail("latest_compaction_index");
@@ -179,15 +184,15 @@ int main() {
   if (sliced.size() != 3) {
     return fail("compaction prepends summary then kept turns");
   }
-  auto summary = sliced[0].value("content", "");
+  auto summary = niminal::json_value(sliced[0], "content", "");
   if (summary.find("<summary>") == std::string::npos ||
       summary.find("old question") == std::string::npos) {
     return fail("compaction summary wrapper");
   }
-  if (sliced[1].value("content", "") != "new question") {
+  if (niminal::json_value(sliced[1], "content", "") != "new question") {
     return fail("kept user after cut");
   }
-  if (sliced[2].value("content", "") != "new answer") {
+  if (niminal::json_value(sliced[2], "content", "") != "new answer") {
     return fail("kept assistant after cut");
   }
   bool found_backup = false;
@@ -245,10 +250,10 @@ int main() {
 
   auto turns = create_session(dir, "/tmp/ws-a");
   turns.add_user("first question");
-  turns.add_assistant("first answer", json::array(), "openai/gpt-4o-mini");
+  turns.add_assistant("first answer", niminal::json_array(), "openai/gpt-4o-mini");
   turns.add_tool_result("call_t", "tool output", false);
   turns.add_user("second question");
-  turns.add_assistant("second answer", json::array(), "openai/gpt-4o-mini");
+  turns.add_assistant("second answer", niminal::json_array(), "openai/gpt-4o-mini");
   if (turns.end_after_user_turn(0) != -1 || turns.end_after_user_turn(99) != -1) {
     return fail("end_after_user_turn invalid");
   }
@@ -277,8 +282,9 @@ int main() {
       markdown.find("forked from: " + s.id) == std::string::npos) {
     return fail("export markdown");
   }
-  auto exported = json::parse(forked.export_text("json"));
-  if (exported.value("id", "") != forked.id || exported.value("parent", "") != s.id ||
+  auto exported = niminal::json_parse(forked.export_text("json"));
+  if (niminal::json_value(exported, "id", "") != forked.id ||
+      niminal::json_value(exported, "parent", "") != s.id ||
       exported["events"].size() != forked.events.size()) {
     return fail("export json");
   }
@@ -362,13 +368,14 @@ int main() {
   auto vision = create_session(dir, "/tmp/ws-a");
   const json image = {
       {"type", "image"}, {"name", "screen.png"}, {"mime_type", "image/png"}, {"data", "aGVsbG8="}};
-  vision.add_user(niminal::UserInput{"inspect", json::array({image})});
+  vision.add_user(niminal::UserInput{"inspect", niminal::json_array({image})});
   niminal::ToolResult tool_image{"screen.png"};
-  tool_image.images.push_back(image);
+  tool_image.images.get_array().push_back(image);
   vision.add_tool_result("image-call", tool_image, false);
   auto reloaded_vision = load_session(dir, vision.id);
   auto vision_messages = reloaded_vision.openai_messages();
-  if (vision_messages[0]["content"][1] != image || vision_messages[1]["images"][0] != image) {
+  if (!niminal::json_equal(vision_messages[0]["content"][1], image) ||
+      !niminal::json_equal(vision_messages[1]["images"][0], image)) {
     return fail("image session round trip");
   }
   if (reloaded_vision.export_text("html").find("data:image/png;base64,aGVsbG8=") ==
@@ -380,7 +387,7 @@ int main() {
     return fail("image export formats");
   }
   auto forked_vision = reloaded_vision.fork(dir);
-  if (forked_vision.openai_messages()[0]["content"][1] != image) {
+  if (!niminal::json_equal(forked_vision.openai_messages()[0]["content"][1], image)) {
     return fail("fork preserves images");
   }
 
@@ -421,16 +428,31 @@ int main() {
   using niminal::app::serialize_session_event;
   const json assistant_event = {
       {"type", "assistant"},
-      {"content", json::array({{{"type", "text"}, {"text", "hello"}},
-                               {{"type", "tool_use"},
-                                {"id", "t1"},
-                                {"name", "read"},
-                                {"input", json{{"path", "README.md"}}}}})}};
+      {"content", niminal::json_array({{{"type", "text"}, {"text", "hello"}},
+                                       {{"type", "tool_use"},
+                                        {"id", "t1"},
+                                        {"name", "read"},
+                                        {"input", json{{"path", "README.md"}}}}})}};
   if (serialize_session_event(assistant_event).find("tool_call read") == std::string::npos) {
     return fail("serialize_session_event includes tool calls");
   }
   if (estimate_session_event_tokens(assistant_event) < 2) {
     return fail("estimate_session_event_tokens counts assistant content");
+  }
+
+  auto control = create_session(dir, "/tmp/ws-a");
+  const std::string control_output = std::string("before\0after\x1b[93m", 17);
+  control.add_tool_result("call-control", control_output, false);
+  auto reloaded_control = load_session(dir, control.id);
+  if (reloaded_control.events.size() != 1 ||
+      niminal::json_value(reloaded_control.events[0], "output", "") != control_output) {
+    return fail("tool output with control bytes should survive session reload");
+  }
+  const auto context_output =
+      niminal::json_value(reloaded_control.openai_messages()[0], "content", "");
+  if (context_output.find('\0') != std::string::npos ||
+      context_output.find("beforeafter") == std::string::npos) {
+    return fail("model context should exclude NUL bytes from tool output");
   }
 
   fs::remove_all(dir);

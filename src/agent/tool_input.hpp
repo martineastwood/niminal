@@ -1,19 +1,19 @@
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <string>
 
 namespace niminal::detail {
 
-inline nlohmann::json parse_tool_input(const std::string& arguments) {
+inline niminal::json parse_tool_input(const std::string& arguments) {
   if (arguments.empty())
-    return nlohmann::json::object();
+    return json_object();
   try {
-    auto input = nlohmann::json::parse(arguments);
-    return input.is_object() ? input : nlohmann::json::object();
+    auto input = json_parse(arguments);
+    return input.is_object() ? input : json_object();
   } catch (...) {
-    return nlohmann::json::object();
+    return json_object();
   }
 }
 

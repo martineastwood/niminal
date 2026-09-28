@@ -68,15 +68,6 @@ find_package(cail 0.1.2 EXACT CONFIG REQUIRED)
 
 include(FetchContent)
 
-set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
-set(JSON_Install OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  nlohmann_json
-  GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG v3.11.3
-  GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(nlohmann_json)
-
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -132,7 +123,7 @@ target_include_directories(niminal_ai PUBLIC
 
 target_link_libraries(niminal_ai PUBLIC
   cail::cail
-  nlohmann_json::nlohmann_json)
+  glaze::glaze)
 
 niminal_strict_compile(niminal_ai)
 

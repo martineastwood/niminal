@@ -92,5 +92,28 @@ int main() {
     return fail("styled streaming paragraph keeps every word", streaming_selection.GetParts());
   }
 
+  // Regression: a word wider than the row wraps instead of running off the
+  // right edge. A flexbox cell cannot break, so long words need splitting.
+  {
+    const std::string url = "https://example.com/a/very/long/reference/page/that/keeps/going/on";
+    auto wrapped = render_markdown("see " + url + " and `a_long_inline_code_span_value`", {});
+    ftxui::Screen wrap_screen(40, 12);
+    ftxui::Render(wrap_screen, wrapped);
+    std::string glyphs;
+    for (int y = 0; y < wrap_screen.dimy(); ++y) {
+      for (int x = 0; x < wrap_screen.dimx(); ++x) {
+        const auto& character = wrap_screen.PixelAt(x, y).character;
+        if (!character.empty() && character != " ") {
+          glyphs += character;
+        }
+      }
+    }
+    std::string wanted = "see" + url + "anda_long_inline_code_span_value";
+    std::erase(wanted, ' ');
+    if (glyphs.find(wanted) == std::string::npos) {
+      return fail("long markdown words wrap", wrap_screen.ToString());
+    }
+  }
+
   return 0;
 }

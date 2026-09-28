@@ -154,7 +154,7 @@ niminal::Tool skill_tool(const fs::path& workspace) {
   return {"skill", std::move(description),
           json{{"type", "object"},
                {"properties", {{"name", {{"type", "string"}}}}},
-               {"required", json::array({"name"})}},
+               {"required", json_array({"name"})}},
           [workspace](const json& input) {
             return load_skill(workspace, input.at("name").get<std::string>());
           },

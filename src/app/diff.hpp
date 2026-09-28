@@ -1,6 +1,6 @@
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <string>
 #include <string_view>
@@ -13,7 +13,7 @@ struct FileDiff {
   std::string body;
 };
 
-FileDiff make_tool_diff(std::string_view tool_name, const nlohmann::json& input, bool created,
+FileDiff make_tool_diff(std::string_view tool_name, const niminal::json& input, bool created,
                         std::string_view output);
 
 } // namespace niminal::app

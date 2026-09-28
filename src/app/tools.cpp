@@ -381,7 +381,7 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
                    {{"type", "integer"}, {"description", "One-based first line, inclusive."}}},
                   {"end_line",
                    {{"type", "integer"}, {"description", "One-based last line, inclusive."}}}}},
-                {"required", json::array({"path"})}},
+                {"required", json_array({"path"})}},
            [&ws](const json& input) {
              auto path = ws.resolve(input.at("path").get<std::string>());
              if (!fs::is_regular_file(path)) {
@@ -390,11 +390,11 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
              if (image_path(path.string())) {
                ToolResult result{"path: " + ws.relative(path) +
                                  "\n[image: " + path.filename().string() + "]\n"};
-               result.images.push_back(read_image(path));
+               result.images.get_array().push_back(read_image(path));
                return result;
              }
-             int start = input.value("start_line", 1);
-             int end = input.value("end_line", 1'000'000'000);
+             int start = niminal::json_value(input, "start_line", 1);
+             int end = niminal::json_value(input, "end_line", 1'000'000'000);
              std::ostringstream out;
              out << "path: " << ws.relative(path) << '\n';
              out << "version: " << ws.file_version(path) << '\n';
@@ -419,16 +419,16 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
                   {"path", {{"type", "string"}}},
                   {"case_insensitive", {{"type", "boolean"}}},
                   {"max_matches", {{"type", "integer"}}}}},
-                {"required", json::array({"pattern"})}},
+                {"required", json_array({"pattern"})}},
            [&ws](const json& input) {
              auto pattern = input.at("pattern").get<std::string>();
              if (pattern.empty()) {
                return std::string("pattern must not be empty");
              }
-             auto glob = input.value("glob", std::string());
-             auto sub = input.value("path", std::string());
-             bool insensitive = input.value("case_insensitive", false);
-             int max_hits = std::clamp(input.value("max_matches", 80), 1, 200);
+             auto glob = niminal::json_value(input, "glob", std::string());
+             auto sub = niminal::json_value(input, "path", std::string());
+             bool insensitive = niminal::json_value(input, "case_insensitive", false);
+             int max_hits = std::clamp(niminal::json_value(input, "max_matches", 80), 1, 200);
              std::regex::flag_type flags = std::regex::ECMAScript;
              if (insensitive) {
                flags |= std::regex::icase;
@@ -518,13 +518,13 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
       ".gitignore.",
       json{{"type", "object"},
            {"properties", {{"pattern", {{"type", "string"}}}, {"path", {{"type", "string"}}}}},
-           {"required", json::array({"pattern"})}},
+           {"required", json_array({"pattern"})}},
       [&ws](const json& input) {
         auto pattern = input.at("pattern").get<std::string>();
         if (pattern.empty()) {
           return std::string("pattern must not be empty");
         }
-        auto sub = input.value("path", std::string());
+        auto sub = niminal::json_value(input, "path", std::string());
         std::string prefix;
         if (!sub.empty()) {
           auto start = ws.resolve(sub);
@@ -556,9 +556,9 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
            "glob and grep skip. Directories end with /.",
            json{{"type", "object"},
                 {"properties", {{"path", {{"type", "string"}}}}},
-                {"required", json::array()}},
+                {"required", json_array()}},
            [&ws](const json& input) {
-             auto rel = input.value("path", std::string("."));
+             auto rel = niminal::json_value(input, "path", std::string("."));
              auto dir = ws.resolve(rel);
              std::error_code ec;
              if (!fs::is_directory(dir, ec)) {
@@ -596,7 +596,7 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
              {"new_text", {{"type", "string"}}},
              {"expected_version",
               {{"type", "string"}, {"description", "Version returned by the latest read."}}}}},
-           {"required", json::array({"path", "old_text", "new_text"})}},
+           {"required", json_array({"path", "old_text", "new_text"})}},
       [&ws](const json& input) {
         auto path = ws.resolve(input.at("path").get<std::string>());
         if (!fs::is_regular_file(path)) {
@@ -625,10 +625,10 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
                  {{"path", {{"type", "string"}}},
                   {"content", {{"type", "string"}}},
                   {"overwrite", {{"type", "boolean"}}}}},
-                {"required", json::array({"path", "content"})}},
+                {"required", json_array({"path", "content"})}},
            [&ws](const json& input) {
              auto path = ws.resolve(input.at("path").get<std::string>());
-             bool overwrite = input.value("overwrite", false);
+             bool overwrite = niminal::json_value(input, "overwrite", false);
              if (fs::exists(path) && !overwrite) {
                return "File already exists: " + ws.relative(path) +
                       "\nSet overwrite: true to replace it.";
@@ -649,10 +649,10 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
            json{{"type", "object"},
                 {"properties",
                  {{"command", {{"type", "string"}}}, {"timeout_seconds", {{"type", "integer"}}}}},
-                {"required", json::array({"command"})}},
+                {"required", json_array({"command"})}},
            [&ws, cancel, on_bash_output, shell_env](const json& input) {
              auto command = input.at("command").get<std::string>();
-             int timeout = std::clamp(input.value("timeout_seconds", 120), 1, 600);
+             int timeout = std::clamp(niminal::json_value(input, "timeout_seconds", 120), 1, 600);
              ShellEnv env = shell_env != nullptr ? (*shell_env)() : ShellEnv{};
              auto out = run_bash(command, ws.root(), timeout, cancel, on_bash_output, env);
              ws.invalidate_listing();

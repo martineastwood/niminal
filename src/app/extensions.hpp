@@ -50,26 +50,26 @@ struct HookOutcome {
   bool allowed = true;
   std::string reason;
   std::vector<std::string> warnings;
-  nlohmann::json arguments;
+  niminal::json arguments;
   bool has_arguments = false;
   std::string output;
   bool has_output = false;
   bool is_error = false;
   bool has_is_error = false;
   std::vector<std::string> system;
-  nlohmann::json messages = nlohmann::json::array();
+  niminal::json messages = json_array();
   std::string instruction;
   bool has_compaction = false;
   std::string summary;
   int first_kept_index = 0;
-  nlohmann::json details;
+  niminal::json details;
   std::string text;
   bool has_text = false;
   std::string system_prompt;
   bool has_system_prompt = false;
-  nlohmann::json headers;
+  niminal::json headers;
   bool has_headers = false;
-  nlohmann::json payload;
+  niminal::json payload;
   bool has_payload = false;
 };
 
@@ -91,7 +91,7 @@ struct ExtensionUserMessage {
 
 struct ExtensionEntry {
   std::string extension;
-  nlohmann::json data;
+  niminal::json data;
 };
 
 struct ExtensionStatusSegment {
@@ -115,7 +115,7 @@ struct ExtensionWidget {
   std::string key;
   std::string position;
   std::string title;
-  nlohmann::json content = nlohmann::json::array();
+  niminal::json content = json_array();
   std::vector<ExtensionUiAction> actions;
 };
 
@@ -138,14 +138,14 @@ public:
   const std::vector<ExtensionCommand>& commands() const { return commands_; }
   const std::vector<std::string>& warnings() const { return warnings_; }
   std::vector<niminal::Tool> tools();
-  nlohmann::json invoke(const std::string& name, const std::string& arguments,
-                        const nlohmann::json& context = {});
+  niminal::json invoke(const std::string& name, const std::string& arguments,
+                       const niminal::json& context = {});
   void set_ui_callbacks(ExtensionUiCallbacks callbacks);
   std::string edit_text(const std::string& title, const std::string& text);
   void set_tool_update(std::function<void(const std::string&, const std::string&)> callback);
-  void set_host_request(
-      std::function<nlohmann::json(const std::string&, const nlohmann::json&)> callback);
-  HookOutcome dispatch(HookEvent event, const nlohmann::json& payload);
+  void
+  set_host_request(std::function<niminal::json(const std::string&, const niminal::json&)> callback);
+  HookOutcome dispatch(HookEvent event, const niminal::json& payload);
   bool pump();
   void stop();
 
@@ -167,8 +167,8 @@ private:
   std::vector<std::string> warnings_;
 };
 
-nlohmann::json session_hook_payload(const std::string& session_id,
-                                    const std::filesystem::path& workspace);
+niminal::json session_hook_payload(const std::string& session_id,
+                                   const std::filesystem::path& workspace);
 void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRuntime>& runtime,
                      const std::filesystem::path& workspace, const Config& cfg,
                      const std::function<void(const std::string&)>& note = {},

@@ -86,13 +86,14 @@ int main() {
     std::cerr << "missing bash, grep, glob, or ls\n";
     return 1;
   }
-  auto listed = ls->run(nlohmann::json{{"path", "."}}).text;
+  auto listed = ls->run(niminal::json{{"path", "."}}).text;
   {
     std::ofstream image(tmp / "screen.png", std::ios::binary);
     image.write("\x89PNG\r\n\x1a\n", 8);
   }
-  auto image_read = read->run(nlohmann::json{{"path", "screen.png"}});
-  if (image_read.images.size() != 1 || image_read.images[0].value("data", "") != "iVBORw0KGgo=" ||
+  auto image_read = read->run(niminal::json{{"path", "screen.png"}});
+  if (image_read.images.size() != 1 ||
+      niminal::json_value(image_read.images[0], "data", "") != "iVBORw0KGgo=" ||
       image_read.text.find("screen.png") == std::string::npos) {
     std::cerr << "read should return image content\n";
     return 1;
@@ -107,16 +108,15 @@ int main() {
     std::cerr << "ls should show entries the file index skips\n" << listed << '\n';
     return 1;
   }
-  if (glob->run(nlohmann::json{{"pattern", "**/*"}}).text.find("build/") != std::string::npos) {
+  if (glob->run(niminal::json{{"pattern", "**/*"}}).text.find("build/") != std::string::npos) {
     std::cerr << "glob should keep honoring the workspace file index\n";
     return 1;
   }
-  if (ls->run(nlohmann::json{{"path", "a.txt"}}).text.find("Not a directory") ==
-      std::string::npos) {
+  if (ls->run(niminal::json{{"path", "a.txt"}}).text.find("Not a directory") == std::string::npos) {
     std::cerr << "ls on a file should report Not a directory\n";
     return 1;
   }
-  auto defaulted = ls->run(nlohmann::json::object()).text;
+  auto defaulted = ls->run(niminal::json_object()).text;
   if (defaulted.find("a.txt") == std::string::npos) {
     std::cerr << "ls should default to the workspace root\n" << defaulted << '\n';
     return 1;
@@ -129,7 +129,7 @@ int main() {
     std::ofstream out(many / name);
     out << "x\n";
   }
-  auto capped = ls->run(nlohmann::json{{"path", "many"}}).text;
+  auto capped = ls->run(niminal::json{{"path", "many"}}).text;
   if (capped.find("[truncated]") == std::string::npos) {
     std::cerr << "ls should mark directories with more than 200 entries\n" << capped << '\n';
     return 1;
@@ -140,12 +140,12 @@ int main() {
     std::cerr << "ls should keep the first 200 entries after sorting\n" << capped << '\n';
     return 1;
   }
-  auto sed_read = bash->run(nlohmann::json{{"command", "cd .; sed -n 1,1p a.txt"}}).text;
+  auto sed_read = bash->run(niminal::json{{"command", "cd .; sed -n 1,1p a.txt"}}).text;
   if (sed_read.find("hi") == std::string::npos) {
     std::cerr << "bash should allow sed file reads\n" << sed_read << '\n';
     return 1;
   }
-  auto cr = bash->run(nlohmann::json{{"command", "printf 'hello\\rworld\\n'"}}).text;
+  auto cr = bash->run(niminal::json{{"command", "printf 'hello\\rworld\\n'"}}).text;
   if (cr.find("world") == std::string::npos || cr.find("hello") != std::string::npos) {
     std::cerr << "carriage return should overwrite the current line\n" << cr << '\n';
     return 1;
@@ -158,13 +158,13 @@ int main() {
     std::cerr << "missing streaming bash\n";
     return 1;
   }
-  auto streamed = streaming_bash->run(nlohmann::json{{"command", "printf 'one\\ntwo\\n'"}}).text;
+  auto streamed = streaming_bash->run(niminal::json{{"command", "printf 'one\\ntwo\\n'"}}).text;
   if (snapshots.empty() || snapshots.back().find("two") == std::string::npos ||
       streamed.find("two") == std::string::npos) {
     std::cerr << "bash should emit output snapshots while running\n";
     return 1;
   }
-  if (bash->run(nlohmann::json{{"command", "printenv NIMINAL_SESSION_ID || echo unset"}})
+  if (bash->run(niminal::json{{"command", "printenv NIMINAL_SESSION_ID || echo unset"}})
           .text.find("unset") == std::string::npos) {
     std::cerr << "bash should export nothing without a shell env provider\n";
     return 1;
@@ -187,9 +187,9 @@ int main() {
   }
   auto exported =
       env_bash
-          ->run(nlohmann::json{{"command",
-                                "echo \"$NIMINAL_SESSION_ID|$NIMINAL_SESSION_FILE|"
-                                "$NIMINAL_PROVIDER|$NIMINAL_MODEL|$NIMINAL_REASONING_LEVEL\""}})
+          ->run(niminal::json{{"command",
+                               "echo \"$NIMINAL_SESSION_ID|$NIMINAL_SESSION_FILE|"
+                               "$NIMINAL_PROVIDER|$NIMINAL_MODEL|$NIMINAL_REASONING_LEVEL\""}})
           .text;
   if (exported.find("sess-1") == std::string::npos ||
       exported.find("s.jsonl") == std::string::npos ||
@@ -200,15 +200,15 @@ int main() {
     return 1;
   }
   session_id = "sess-2";
-  auto refreshed = env_bash->run(nlohmann::json{{"command", "printenv NIMINAL_SESSION_ID"}}).text;
+  auto refreshed = env_bash->run(niminal::json{{"command", "printenv NIMINAL_SESSION_ID"}}).text;
   if (refreshed.find("sess-2") == std::string::npos) {
     std::cerr << "bash should re-evaluate the shell env per invocation\n" << refreshed << '\n';
     return 1;
   }
   auto parallel =
-      std::async(std::launch::async, [&] { return grep->run(nlohmann::json{{"pattern", "hi"}}); });
-  auto parallel2 = std::async(
-      std::launch::async, [&] { return grep->run(nlohmann::json{{"pattern", "missing-xyz"}}); });
+      std::async(std::launch::async, [&] { return grep->run(niminal::json{{"pattern", "hi"}}); });
+  auto parallel2 = std::async(std::launch::async,
+                              [&] { return grep->run(niminal::json{{"pattern", "missing-xyz"}}); });
   if (parallel.get().text.find("a.txt") == std::string::npos) {
     std::cerr << "grep should find a.txt\n";
     return 1;
@@ -217,13 +217,13 @@ int main() {
     std::cerr << "grep should report no matches\n";
     return 1;
   }
-  const auto minified = grep->run(nlohmann::json{{"pattern", "reload"}, {"path", ".astro"}}).text;
+  const auto minified = grep->run(niminal::json{{"pattern", "reload"}, {"path", ".astro"}}).text;
   if (minified.size() > 2'300 || minified.find("[line truncated]") == std::string::npos) {
     std::cerr << "grep should truncate a match on a minified line\n";
     return 1;
   }
   const auto many_matches =
-      grep->run(nlohmann::json{{"pattern", "reload"}, {"path", "many-grep"}}).text;
+      grep->run(niminal::json{{"pattern", "reload"}, {"path", "many-grep"}}).text;
   if (many_matches.size() > 32 * 1024 ||
       many_matches.find("[grep output truncated") == std::string::npos) {
     std::cerr << "grep should cap total output size\n";
@@ -232,8 +232,8 @@ int main() {
   // A timed-out command must not leave its own children behind. Killing the
   // shell alone orphans them, so the tool kills the whole process group.
   const auto timed_out =
-      bash->run(nlohmann::json{{"command", "sh -c 'sleep 30' & echo $! > child.pid; wait"},
-                               {"timeout_seconds", 1}})
+      bash->run(niminal::json{{"command", "sh -c 'sleep 30' & echo $! > child.pid; wait"},
+                              {"timeout_seconds", 1}})
           .text;
   if (timed_out.find("timeout after 1s") == std::string::npos) {
     std::cerr << "bash should report a timeout\n" << timed_out << '\n';

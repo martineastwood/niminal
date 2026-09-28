@@ -10,7 +10,7 @@ using niminal::app::estimate_tokens;
 using niminal::app::find_cut_index;
 using niminal::app::Session;
 using niminal::app::should_compact;
-using json = nlohmann::json;
+using json = niminal::json;
 
 static int fail(const char* msg) {
   std::cerr << msg << '\n';
@@ -35,14 +35,36 @@ int main() {
   std::string blob(80, 'x');
   for (int i = 0; i < 6; ++i) {
     s.add_user("turn " + std::to_string(i) + " " + blob);
-    s.add_assistant("ok " + std::to_string(i) + " " + blob, json::array(), "m");
+    s.add_assistant("ok " + std::to_string(i) + " " + blob, niminal::json_array(), "m");
   }
   int cut = find_cut_index(s, 40, 0);
   if (cut < 2) {
     return fail("cut should leave older events behind");
   }
-  if (s.events[static_cast<size_t>(cut)].value("type", "") != "user") {
+  if (niminal::json_value(s.events[static_cast<size_t>(cut)], "type", "") != "user") {
     return fail("cut lands on a user event");
+  }
+
+  auto one_turn = create_session(dir, "/tmp/ws");
+  one_turn.persist = false;
+  one_turn.add_user("inspect the project");
+  for (int i = 0; i < 6; ++i) {
+    const auto id = "call_" + std::to_string(i);
+    one_turn.add_assistant(
+        "",
+        niminal::json_array(
+            {{{"id", id}, {"function", {{"name", "lookup"}, {"arguments", "{}"}}}}}),
+        "m");
+    one_turn.add_tool_result(id, std::string(100, 'x'), false);
+  }
+  one_turn.add_user("continue");
+  const int one_turn_cut = find_cut_index(one_turn, 70, 0);
+  if (one_turn_cut <= 1 ||
+      niminal::json_value(one_turn.events[static_cast<size_t>(one_turn_cut)], "type", "") !=
+          "assistant" ||
+      niminal::json_value(one_turn.events[static_cast<size_t>(one_turn_cut - 1)], "type", "") !=
+          "tool_result") {
+    return fail("a long tool turn should compact at a completed tool boundary");
   }
 
   if (!should_compact(s, 50, 0)) {
@@ -55,10 +77,10 @@ int main() {
   auto image_session = create_session(dir, "/tmp/ws");
   image_session.persist = false;
   image_session.add_user(
-      niminal::UserInput{"look", json::array({{{"type", "image"},
-                                               {"name", "screen.png"},
-                                               {"mime_type", "image/png"},
-                                               {"data", std::string(10000, 'x')}}})});
+      niminal::UserInput{"look", niminal::json_array({{{"type", "image"},
+                                                       {"name", "screen.png"},
+                                                       {"mime_type", "image/png"},
+                                                       {"data", std::string(10000, 'x')}}})});
   if (!should_compact(image_session, 900, 0) || should_compact(image_session, 1200, 0)) {
     return fail("image token estimate should not count base64 bytes");
   }
@@ -72,9 +94,9 @@ int main() {
     return fail("one large tool result should not trigger impossible compaction");
   }
   auto bounded = large_result.openai_messages();
-  const auto context = bounded.back().value("content", std::string{});
+  const auto context = niminal::json_value(bounded.get_array().back(), "content", std::string{});
   if (context.size() > 8'100 || context.find("[truncated]") == std::string::npos ||
-      large_result.events.back().value("output", std::string{}).size() != 424'000) {
+      niminal::json_value(large_result.events.back(), "output", std::string{}).size() != 424'000) {
     return fail("tool context should be bounded while session keeps full result");
   }
   niminal::Agent one_turn_agent;

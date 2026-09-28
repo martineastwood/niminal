@@ -84,7 +84,8 @@ int main() {
   }
   fs::rename(root / "screen shot.png", root / "screen.png");
   mentioned = prepare_user_input(workspace, "inspect @screen.png");
-  if (mentioned.images.size() != 1 || mentioned.images[0].value("mime_type", "") != "image/png") {
+  if (mentioned.images.size() != 1 ||
+      niminal::json_value(mentioned.images[0], "mime_type", "") != "image/png") {
     return 10;
   }
   auto dropped = prepare_user_input(workspace, "screen.png");
@@ -102,8 +103,9 @@ int main() {
     webp.write("RIFF\0\0\0\0WEBP", 12);
   }
   dropped = prepare_user_input(workspace, "photo.jpg shot.webp");
-  if (dropped.images.size() != 2 || dropped.images[0].value("mime_type", "") != "image/jpeg" ||
-      dropped.images[1].value("mime_type", "") != "image/webp") {
+  if (dropped.images.size() != 2 ||
+      niminal::json_value(dropped.images[0], "mime_type", "") != "image/jpeg" ||
+      niminal::json_value(dropped.images[1], "mime_type", "") != "image/webp") {
     return 14;
   }
   {

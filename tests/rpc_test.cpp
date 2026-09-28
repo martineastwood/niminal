@@ -25,14 +25,16 @@ int main() {
   }
 
   auto ok = niminal::app::rpc_response_event("req-1", true, "started");
-  if (ok.value("version", 0) != 1 || ok.value("type", "") != "response" ||
-      ok.value("id", "") != "req-1" || !ok.value("ok", false) ||
-      ok.value("state", "") != "started") {
+  if (niminal::json_value(ok, "version", 0) != 1 ||
+      niminal::json_value(ok, "type", "") != "response" ||
+      niminal::json_value(ok, "id", "") != "req-1" || !niminal::json_value(ok, "ok", false) ||
+      niminal::json_value(ok, "state", "") != "started") {
     return fail("started response shape");
   }
 
   auto err = niminal::app::rpc_response_event("req-2", false, {}, "bad command");
-  if (err.value("ok", true) || err.value("error", "") != "bad command") {
+  if (niminal::json_value(err, "ok", true) ||
+      niminal::json_value(err, "error", "") != "bad command") {
     return fail("error response shape");
   }
   return 0;

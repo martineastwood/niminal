@@ -2,19 +2,20 @@
 
 #include <niminal/text.hpp>
 
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <sstream>
 #include <utility>
 
 namespace niminal::app {
 
 using namespace ftxui;
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
@@ -24,10 +25,10 @@ constexpr int kBashPreviewMaxLines = 8;
 
 json parse_tool_args(const std::string& args) {
   if (args.empty()) {
-    return json::object();
+    return json_object();
   }
   try {
-    return json::parse(args);
+    return json_parse(args);
   } catch (...) {
     return json();
   }
@@ -54,7 +55,7 @@ std::string tool_target(const std::string& name, const json& j) {
     return j["pattern"].get<std::string>();
   }
   if (!j.empty()) {
-    return niminal::clip_line(j.dump(), 120);
+    return niminal::clip_line(niminal::json_dump(j), 120);
   }
   return {};
 }
@@ -65,6 +66,39 @@ std::string bash_command(const std::string& args) {
     return j["command"].get<std::string>();
   }
   return {};
+}
+
+// The bash tool appends a trailing "exit: ..." line that the collapsed preview
+// clips away. Split it out so the card can show the outcome on the command line
+// and the body stays free of the duplicate.
+std::pair<std::string, std::string> bash_exit_status(std::string_view result) {
+  const auto newline = result.rfind('\n');
+  const auto line_start = newline == std::string_view::npos ? 0 : newline + 1;
+  constexpr std::string_view kPrefix = "exit: ";
+  if (!result.substr(line_start).starts_with(kPrefix)) {
+    return {"", std::string(result)};
+  }
+  auto body = result.substr(0, line_start);
+  if (!body.empty() && body.back() == '\n') {
+    body.remove_suffix(1);
+  }
+  return {std::string(result.substr(line_start + kPrefix.size())), std::string(body)};
+}
+
+// Shell statuses read as codes to anyone who does not know shell conventions,
+// so the card marks the outcome with an icon and keeps the code. The second
+// element reports success.
+std::pair<std::string, bool> bash_status(std::string_view status) {
+  if (status == "0") {
+    return {"✓", true};
+  }
+  if (status.find_first_not_of("0123456789") == std::string_view::npos) {
+    return {"✗ (exit " + std::string(status) + ")", false};
+  }
+  if (status.starts_with("timeout")) {
+    return {"timed out" + std::string(status.substr(7)), false};
+  }
+  return {std::string(status), false};
 }
 
 std::string tool_detail_line(const std::string& name, const std::string& args) {
@@ -84,7 +118,7 @@ std::string pretty_tool_args(const std::string& args) {
     return "{}";
   }
   try {
-    return json::parse(args).dump(2);
+    return niminal::json_pretty(json_parse(args));
   } catch (...) {
     return args;
   }
@@ -120,6 +154,60 @@ std::string take_lines(std::string_view text, int max_lines) {
 
 bool result_has_more(const std::string& result, int preview_lines) {
   return count_lines(result) > preview_lines || result.size() > kToolResultMaxChars;
+}
+
+Elements wrapped_chunks(std::string_view word) {
+  Elements chunks;
+  for (auto chunk : niminal::wrap_chunks(word)) {
+    chunks.push_back(text(chunk));
+  }
+  return chunks;
+}
+
+// Splits text into one row of chunks per source line. Spaces stay their own
+// chunks so wrapping keeps them and nothing is lost between words.
+std::vector<Elements> wrapped_rows(std::string_view value) {
+  std::vector<Elements> rows;
+  size_t line_start = 0;
+  while (true) {
+    const auto newline = value.find('\n', line_start);
+    const auto line_end = newline == std::string_view::npos ? value.size() : newline;
+    Elements parts;
+    size_t start = line_start;
+    while (start < line_end) {
+      size_t end = start + 1;
+      if (value[start] == ' ') {
+        while (end < line_end && value[end] == ' ') {
+          ++end;
+        }
+      } else {
+        while (end < line_end && value[end] != ' ') {
+          ++end;
+        }
+      }
+      auto chunks = wrapped_chunks(value.substr(start, end - start));
+      parts.insert(parts.end(), std::make_move_iterator(chunks.begin()),
+                   std::make_move_iterator(chunks.end()));
+      start = end;
+    }
+    if (parts.empty()) {
+      parts.push_back(text(""));
+    }
+    rows.push_back(std::move(parts));
+    if (newline == std::string_view::npos) {
+      break;
+    }
+    line_start = newline + 1;
+  }
+  return rows;
+}
+
+Element wrapped_text(std::string_view value) {
+  Elements rows;
+  for (auto& row : wrapped_rows(value)) {
+    rows.push_back(hflow(std::move(row)));
+  }
+  return vbox(std::move(rows));
 }
 
 class VirtualTranscript : public Node {
@@ -255,26 +343,41 @@ Element render_transcript_card(const Block& block, const Theme& theme, Box& box)
   }
   case BlockKind::tool: {
     if (block.tool_name == "bash") {
-      const std::string command = bash_command(block.text);
+      auto [status, output] = bash_exit_status(block.result);
+      auto header = wrapped_rows("$ " + bash_command(block.text));
+      for (auto& row : header) {
+        for (auto& chunk : row) {
+          chunk |= color(theme.meta);
+        }
+      }
+      if (!status.empty()) {
+        const auto [label, ok] = bash_status(status);
+        // The outcome reads as a trailing word of the command, so it stays on
+        // the command line and wraps with it instead of being clipped away.
+        for (auto& chunk : wrapped_chunks("  " + label)) {
+          header.back().push_back(std::move(chunk) | color(ok ? theme.add : theme.del));
+        }
+      }
       Elements parts;
-      parts.push_back(text("$ " + command) | color(theme.meta));
-      if (!block.result.empty()) {
+      for (auto& row : header) {
+        parts.push_back(hflow(std::move(row)));
+      }
+      if (!output.empty()) {
         if (!block.expanded) {
           parts.push_back(
-              paragraph_preserving_whitespace(take_lines(block.result, kBashPreviewMaxLines)) |
-              dim);
-          if (result_has_more(block.result, kBashPreviewMaxLines)) {
+              paragraph_preserving_whitespace(take_lines(output, kBashPreviewMaxLines)) | dim);
+          if (result_has_more(output, kBashPreviewMaxLines)) {
             parts.push_back(text("… click to expand") | dim);
           }
         } else {
-          parts.push_back(paragraph_preserving_whitespace(block.result) | dim);
+          parts.push_back(paragraph_preserving_whitespace(output) | dim);
         }
       }
       return vbox(std::move(parts)) | reflect(box);
     }
     if (!block.expanded) {
-      return text("→ " + tool_detail_line(block.tool_name, block.text)) | color(theme.meta) |
-             reflect(box);
+      const auto detail = "→ " + tool_detail_line(block.tool_name, block.text);
+      return paragraph_preserving_whitespace(detail) | color(theme.meta) | reflect(box);
     }
     Elements parts;
     parts.push_back(text("→ " + block.tool_name) | bold | color(theme.meta));
@@ -293,9 +396,11 @@ Element render_transcript_card(const Block& block, const Theme& theme, Box& box)
   case BlockKind::diff: {
     const auto header = "→ ✓ " + block.tool_name + "  " + block.path;
     if (!block.expanded) {
-      return text(header) | color(theme.muted) | reflect(box);
+      return paragraph_preserving_whitespace(header) | color(theme.muted) | reflect(box);
     }
-    return vbox({text(header) | color(theme.muted), render_diff_card(block, theme)}) | reflect(box);
+    return vbox({paragraph_preserving_whitespace(header) | color(theme.muted),
+                 render_diff_card(block, theme)}) |
+           reflect(box);
   }
   default:
     return text("") | reflect(box);
@@ -405,16 +510,16 @@ std::vector<Block> blocks_from_events(const std::vector<json>& events) {
     if (!event.is_object()) {
       continue;
     }
-    const auto type = event.value("type", "");
+    const auto type = niminal::json_value(event, "type", "");
     if (type == "user") {
       std::string text;
       if (event.contains("content") && event["content"].is_array()) {
-        for (const auto& part : event["content"]) {
-          if (part.is_object() && part.value("type", "") == "text") {
-            text += part.value("text", "");
-          } else if (part.is_object() && part.value("type", "") == "image") {
+        for (const auto& part : event["content"].get_array()) {
+          if (part.is_object() && niminal::json_value(part, "type", "") == "text") {
+            text += niminal::json_value(part, "text", "");
+          } else if (part.is_object() && niminal::json_value(part, "type", "") == "image") {
             text += (text.empty() ? "" : "\n") + std::string("[image: ") +
-                    part.value("name", "image") + "]";
+                    niminal::json_value(part, "name", "image") + "]";
           }
         }
       }
@@ -424,23 +529,24 @@ std::vector<Block> blocks_from_events(const std::vector<json>& events) {
     } else if (type == "assistant") {
       std::string text;
       if (event.contains("content") && event["content"].is_array()) {
-        for (const auto& part : event["content"]) {
+        for (const auto& part : event["content"].get_array()) {
           if (!part.is_object()) {
             continue;
           }
-          const auto ptype = part.value("type", "");
+          const auto ptype = niminal::json_value(part, "type", "");
           if (ptype == "text") {
-            text += part.value("text", "");
+            text += niminal::json_value(part, "text", "");
           }
           if (ptype == "tool_use") {
             if (!text.empty()) {
               blocks.push_back(Block{BlockKind::assistant, text});
               text.clear();
             }
-            json input = part.value("input", json::object());
-            Block tool{BlockKind::tool, input.is_object() ? input.dump() : std::string()};
-            tool.tool_name = part.value("name", "");
-            tool.tool_id = part.value("id", "");
+            json input = niminal::json_value(part, "input", json_object());
+            Block tool{BlockKind::tool,
+                       input.is_object() ? niminal::json_dump(input) : std::string()};
+            tool.tool_name = niminal::json_value(part, "name", "");
+            tool.tool_id = niminal::json_value(part, "id", "");
             blocks.push_back(std::move(tool));
           }
         }
@@ -449,13 +555,14 @@ std::vector<Block> blocks_from_events(const std::vector<json>& events) {
         blocks.push_back(Block{BlockKind::assistant, std::move(text)});
       }
     } else if (type == "bash") {
-      Block tool{BlockKind::tool, json{{"command", event.value("command", "")}}.dump()};
+      Block tool{BlockKind::tool,
+                 niminal::json_dump(json{{"command", niminal::json_value(event, "command", "")}})};
       tool.tool_name = "bash";
-      tool.result = event.value("output", "");
+      tool.result = niminal::json_value(event, "output", "");
       blocks.push_back(std::move(tool));
     } else if (type == "tool_result") {
-      const auto id = event.value("id", "");
-      const auto output = event.value("output", "");
+      const auto id = niminal::json_value(event, "id", "");
+      const auto output = niminal::json_value(event, "output", "");
       auto it = std::find_if(blocks.rbegin(), blocks.rend(), [&](const Block& block) {
         return block.kind == BlockKind::tool && block.tool_id == id;
       });
@@ -463,7 +570,7 @@ std::vector<Block> blocks_from_events(const std::vector<json>& events) {
         it->result = output;
       }
     } else if (type == "compaction") {
-      const auto summary = event.value("summary", "");
+      const auto summary = niminal::json_value(event, "summary", "");
       blocks.push_back(
           Block{BlockKind::status, "Compacted earlier turns.\n" + clip_text(summary, 1200, 12)});
     }
@@ -472,37 +579,7 @@ std::vector<Block> blocks_from_events(const std::vector<json>& events) {
 }
 
 Element paragraph_preserving_whitespace(std::string_view value) {
-  Elements rows;
-  size_t line_start = 0;
-  while (true) {
-    const auto newline = value.find('\n', line_start);
-    const auto line_end = newline == std::string_view::npos ? value.size() : newline;
-    Elements parts;
-    size_t start = line_start;
-    while (start < line_end) {
-      size_t end = start + 1;
-      if (value[start] == ' ') {
-        while (end < line_end && value[end] == ' ') {
-          ++end;
-        }
-      } else {
-        while (end < line_end && value[end] != ' ') {
-          ++end;
-        }
-      }
-      parts.push_back(text(value.substr(start, end - start)));
-      start = end;
-    }
-    if (parts.empty()) {
-      parts.push_back(text(""));
-    }
-    rows.push_back(hflow(std::move(parts)));
-    if (newline == std::string_view::npos) {
-      break;
-    }
-    line_start = newline + 1;
-  }
-  return vbox(std::move(rows));
+  return wrapped_text(value);
 }
 
 } // namespace niminal::app

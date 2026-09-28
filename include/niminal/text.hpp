@@ -1,19 +1,48 @@
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace niminal {
 
 inline constexpr size_t kMaxToolContextBytes = 8'000;
 
+// A terminal row can only break between elements, so a word wider than the row
+// runs off the right edge instead of wrapping. Words longer than
+// kBreakWordBytes are split into pieces of at most kWrapChunkBytes, which gives
+// the row somewhere to break. Bytes are never fewer than the columns a string
+// occupies, so a piece never exceeds its byte budget on screen.
+inline constexpr size_t kBreakWordBytes = 24;
+inline constexpr size_t kWrapChunkBytes = 8;
+
+inline std::vector<std::string_view> wrap_chunks(std::string_view word) {
+  if (word.size() <= kBreakWordBytes) {
+    return {word};
+  }
+  std::vector<std::string_view> chunks;
+  size_t start = 0;
+  while (start < word.size()) {
+    size_t end = std::min(start + kWrapChunkBytes, word.size());
+    while (end < word.size() && (static_cast<unsigned char>(word[end]) & 0xC0U) == 0x80U) {
+      ++end;
+    }
+    chunks.push_back(word.substr(start, end - start));
+    start = end;
+  }
+  return chunks;
+}
+
 inline std::string tool_context_text(std::string_view output) {
-  if (output.size() <= kMaxToolContextBytes)
-    return std::string(output);
-  return std::string(output.substr(0, kMaxToolContextBytes)) + "\n[truncated]";
+  std::string text = output.size() <= kMaxToolContextBytes
+                         ? std::string(output)
+                         : std::string(output.substr(0, kMaxToolContextBytes)) + "\n[truncated]";
+  std::erase(text, '\0');
+  return text;
 }
 
 inline std::string lower_copy(std::string value) {

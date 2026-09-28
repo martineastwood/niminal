@@ -3,7 +3,7 @@
 
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
-#include <nlohmann/json.hpp>
+#include <niminal/json.hpp>
 
 #include <iostream>
 #include <string>
@@ -36,6 +36,39 @@ static ftxui::Screen render_card_screen(const Block& block) {
 
 static std::string render_card(const Block& block) {
   return render_card_screen(block).ToString();
+}
+
+// Every glyph the screen shows, in reading order. Content that runs off the
+// right edge is dropped by the screen, so a missing glyph means clipped text.
+static std::string screen_glyphs(const ftxui::Screen& screen) {
+  std::string out;
+  for (int y = 0; y < screen.dimy(); ++y) {
+    for (int x = 0; x < screen.dimx(); ++x) {
+      const auto& character = screen.PixelAt(x, y).character;
+      if (!character.empty() && character != " ") {
+        out += character;
+      }
+    }
+  }
+  return out;
+}
+
+static std::string without_spaces(std::string text) {
+  std::erase(text, ' ');
+  return text;
+}
+
+// A flexbox cell cannot wrap, so a word wider than the row used to be cut off
+// at the right edge instead of continuing on the next row. Returns the rendered
+// screen when any glyph is missing, and an empty string when nothing was lost.
+static std::string clipped_text(ftxui::Element element, int width, int height,
+                                const std::string& expected) {
+  ftxui::Screen screen(width, height);
+  ftxui::Render(screen, element);
+  if (without_spaces(screen_glyphs(screen)).find(without_spaces(expected)) != std::string::npos) {
+    return {};
+  }
+  return screen.ToString();
 }
 
 int main() {
@@ -102,6 +135,114 @@ int main() {
       expanded_tool.find("arguments") != std::string::npos ||
       expanded_tool.find("line9") == std::string::npos) {
     return fail("expanded bash", expanded_tool);
+  }
+
+  // Regression: the outcome must be scannable from the collapsed preview,
+  // whose line budget clips the trailing "exit: ..." line of the output.
+  {
+    const auto theme = resolve_theme(ThemeMode::dark);
+    // The outcome is padded away from the command, so its column is found by
+    // scanning rendered cells for the label glyphs.
+    const auto label_foreground = [](const Block& block, std::string_view label) {
+      const auto screen = render_card_screen(block);
+      for (int x = 0; x < screen.dimx(); ++x) {
+        std::string window;
+        for (int i = x; i < screen.dimx() && window.size() < label.size(); ++i) {
+          window += screen.PixelAt(i, 0).character;
+        }
+        if (window == label) {
+          return screen.PixelAt(x, 0).foreground_color;
+        }
+      }
+      return ftxui::Color{};
+    };
+    Block bash{BlockKind::tool, R"({"command":"make test"})"};
+    bash.tool_name = "bash";
+    const struct {
+      const char* result;
+      const char* label;
+      bool ok;
+    } cases[] = {
+        {"compiling\nexit: 0", "✓", true},
+        {"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nexit: 3", "✗ (exit 3)",
+         false},
+        {"boom\nexit: timeout after 30s", "timed out after 30s", false},
+        {"stopped\nexit: interrupted", "interrupted", false},
+    };
+    for (const auto& test_case : cases) {
+      bash.result = test_case.result;
+      const auto rendered = render_card(bash);
+      if (rendered.find("$ make test") == std::string::npos ||
+          rendered.find(test_case.label) == std::string::npos ||
+          rendered.find("exit:") != std::string::npos ||
+          label_foreground(bash, test_case.label) != (test_case.ok ? theme.add : theme.del)) {
+        return fail(test_case.ok ? "successful bash names its outcome"
+                                 : "failed bash names its outcome in the preview",
+                    rendered);
+      }
+    }
+    bash.result = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nexit: 3";
+    const auto preview = render_card(bash);
+    if (preview.find("line9") != std::string::npos ||
+        preview.find("click to expand") == std::string::npos) {
+      return fail("bash preview still clips the output tail", preview);
+    }
+  }
+
+  // Regression: a command wider than the card wraps onto the next row instead
+  // of running off the right edge, and the outcome stays visible.
+  {
+    const std::string command = "npm run build -- --watch --verbose --mode=production --out dir";
+    Block narrow{BlockKind::tool, niminal::json_dump(niminal::json{{"command", command}})};
+    narrow.tool_name = "bash";
+    narrow.result = "out\nexit: 1";
+    ftxui::Box box;
+    auto element = render_transcript_card(narrow, resolve_theme(ThemeMode::dark), box);
+    ftxui::Screen screen(40, 8);
+    ftxui::Render(screen, element.get());
+    const auto rendered = screen.ToString();
+    if (rendered.find("✗ (exit 1)") == std::string::npos) {
+      return fail("long commands keep the outcome visible", rendered);
+    }
+    const auto clipped = clipped_text(element, 40, 8, "$ " + command + " ✗ (exit 1)");
+    if (!clipped.empty()) {
+      return fail("long bash commands wrap onto the next row", clipped);
+    }
+  }
+
+  // Regression: output and tool lines wrap mid-token instead of running off the
+  // right edge.
+  {
+    const auto theme = resolve_theme(ThemeMode::dark);
+    const std::string blob = std::string(60, 'A') + "/" + std::string(40, 'B');
+    Block bash{BlockKind::tool, R"({"command":"cat blob"})"};
+    bash.tool_name = "bash";
+    bash.result = "prefix " + blob + " suffix\nexit: 0";
+    ftxui::Box box;
+    auto element = render_transcript_card(bash, theme, box);
+    const auto clipped = clipped_text(element, 40, 12, "prefix " + blob + " suffix");
+    if (!clipped.empty()) {
+      return fail("long bash output wraps mid-token", clipped);
+    }
+
+    const std::string path =
+        "src/app/some/deeply/nested/directory/that/keeps/going/until/it/overflows.cpp";
+    Block read{BlockKind::tool, niminal::json_dump(niminal::json{{"path", path}})};
+    read.tool_name = "read";
+    ftxui::Box read_box;
+    auto read_element = render_transcript_card(read, theme, read_box);
+    const auto clipped_read = clipped_text(read_element, 40, 8, "→ read  " + path);
+    if (!clipped_read.empty()) {
+      return fail("collapsed tool lines wrap", clipped_read);
+    }
+
+    const std::string url = "https://example.com/a/very/long/reference/page/that/keeps/going/on";
+    Block user{BlockKind::user, "see " + url + " for details"};
+    const auto clipped_user =
+        clipped_text(render_user_message(user, theme), 40, 10, "see " + url + " for details");
+    if (!clipped_user.empty()) {
+      return fail("user messages wrap mid-token", clipped_user);
+    }
   }
 
   Block long_bash{BlockKind::tool, R"({"command":"yes"})"};
@@ -344,15 +485,16 @@ int main() {
     return fail("moved pointer is a drag", "reported as click");
   }
 
-  using json = nlohmann::json;
+  using json = niminal::json;
   const std::vector<json> events = {
-      json{{"type", "user"}, {"content", json::array({{{"type", "text"}, {"text", "hello"}}})}},
+      json{{"type", "user"},
+           {"content", niminal::json_array({{{"type", "text"}, {"text", "hello"}}})}},
       json{{"type", "assistant"},
-           {"content", json::array({{{"type", "text"}, {"text", "hi"}},
-                                    {{"type", "tool_use"},
-                                     {"id", "t1"},
-                                     {"name", "read"},
-                                     {"input", json{{"path", "README.md"}}}}})}},
+           {"content", niminal::json_array({{{"type", "text"}, {"text", "hi"}},
+                                            {{"type", "tool_use"},
+                                             {"id", "t1"},
+                                             {"name", "read"},
+                                             {"input", json{{"path", "README.md"}}}}})}},
       json{{"type", "tool_result"}, {"id", "t1"}, {"output", "done"}}};
   auto blocks = blocks_from_events(events);
   if (blocks.size() != 3 || blocks[0].kind != BlockKind::user || blocks[0].text != "hello" ||

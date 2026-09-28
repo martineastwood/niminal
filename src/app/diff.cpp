@@ -88,12 +88,11 @@ std::vector<HunkSpan> parse_spans(std::string_view output) {
   return result;
 }
 
-std::string value(const nlohmann::json& input, std::string_view key) {
+std::string value(const niminal::json& input, std::string_view key) {
   if (!input.is_object()) {
     return {};
   }
-  const auto it = input.find(key);
-  return it != input.end() && it->is_string() ? it->get<std::string>() : "";
+  return input.contains(key) && input[key].is_string() ? input[key].get<std::string>() : "";
 }
 
 void add_pair(std::vector<HunkEntry>& entries, std::string_view old_text, std::string_view new_text,
@@ -125,7 +124,7 @@ std::string format_entry(const HunkEntry& entry, int width) {
 
 } // namespace
 
-FileDiff make_tool_diff(std::string_view tool_name, const nlohmann::json& input, bool created,
+FileDiff make_tool_diff(std::string_view tool_name, const niminal::json& input, bool created,
                         std::string_view output) {
   if (!input.is_object()) {
     return {};
@@ -134,10 +133,10 @@ FileDiff make_tool_diff(std::string_view tool_name, const nlohmann::json& input,
   std::vector<HunkEntry> entries;
   const auto spans = parse_spans(output);
   if (tool_name == "edit") {
-    const auto replacements = input.find("replacements");
-    if (replacements != input.end() && replacements->is_array() && !replacements->empty()) {
-      for (size_t i = 0; i < replacements->size(); ++i) {
-        const auto& replacement = (*replacements)[i];
+    if (input.contains("replacements") && input["replacements"].is_array() &&
+        !input["replacements"].empty()) {
+      for (size_t i = 0; i < input["replacements"].size(); ++i) {
+        const auto& replacement = input["replacements"].get_array()[i];
         if (!replacement.is_object()) {
           continue;
         }

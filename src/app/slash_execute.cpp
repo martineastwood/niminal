@@ -27,7 +27,7 @@
 
 namespace niminal::app {
 namespace fs = std::filesystem;
-using json = nlohmann::json;
+using json = niminal::json;
 
 namespace {
 
@@ -152,14 +152,15 @@ bool handle_extension(SlashHost& host, const std::string& cmd, const std::string
                     {"model", host.agent.model},
                     {"messages", host.session.openai_messages()}};
     auto response = host.extensions->invoke(cmd.substr(1), arg, context);
-    auto message = response.value("message", std::string());
+    auto message = niminal::json_value(response, "message", std::string());
     if (!message.empty()) {
       push_status(host, std::move(message));
     }
     host.apply_extension_actions();
     bool restarted = false;
-    if (auto action = response.find("session"); action != response.end() && action->is_object()) {
-      const auto kind = action->value("action", std::string());
+    if (response.contains("session") && response["session"].is_object()) {
+      const auto& action = response["session"];
+      const auto kind = niminal::json_value(action, "action", std::string());
       if (kind == "new") {
         if (!host.allow_session_switch("new", "")) {
           return true;
@@ -168,7 +169,7 @@ bool handle_extension(SlashHost& host, const std::string& cmd, const std::string
         host.adopt_session(std::move(next), "", "new");
         restarted = true;
       } else if (kind == "switch") {
-        const auto id = action->value("id", std::string());
+        const auto id = niminal::json_value(action, "id", std::string());
         if (!host.allow_session_switch("resume", id)) {
           return true;
         }
@@ -177,21 +178,21 @@ bool handle_extension(SlashHost& host, const std::string& cmd, const std::string
         host.adopt_session(std::move(next), "Resumed " + id, "resume");
         restarted = true;
       } else if (kind == "compact") {
-        const auto compacted =
-            compact_session(host.session, host.agent, action->value("instruction", std::string()),
-                            host.extensions, host.cfg);
+        const auto compacted = compact_session(
+            host.session, host.agent, niminal::json_value(action, "instruction", std::string()),
+            host.extensions, host.cfg);
         host.agent.messages = host.session.openai_messages();
         push_status(host, compacted.message);
       }
-      const auto editor_text = action->value("editor_text", std::string());
+      const auto editor_text = niminal::json_value(action, "editor_text", std::string());
       if (!editor_text.empty()) {
         host.set_draft(editor_text);
       }
     }
-    if (response.value("reload", false) && !restarted) {
+    if (niminal::json_value(response, "reload", false) && !restarted) {
       host.restart_extensions();
     }
-    const auto next_prompt = response.value("prompt", std::string());
+    const auto next_prompt = niminal::json_value(response, "prompt", std::string());
     if (!next_prompt.empty()) {
       host.send_prompt(niminal::UserInput{next_prompt}, false);
     }

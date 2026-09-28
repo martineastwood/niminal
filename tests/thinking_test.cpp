@@ -65,7 +65,8 @@ int main() {
   if (thinking_status("openrouter", "flash", "medium") != "high") {
     return fail("snap status");
   }
-  if (thinking_body("openrouter", "flash", "medium")["reasoning"].value("effort", "") != "high") {
+  if (niminal::json_value(thinking_body("openrouter", "flash", "medium")["reasoning"], "effort",
+                          "") != "high") {
     return fail("snap body");
   }
   if (thinking_status("openrouter", "flash", "none") != "off") {
@@ -77,7 +78,8 @@ int main() {
   if (thinking_status("openrouter", "toggle-only", "medium") != "on") {
     return fail("toggle on");
   }
-  if (!thinking_body("openrouter", "toggle-only", "medium")["reasoning"].value("enabled", false)) {
+  if (!niminal::json_value(thinking_body("openrouter", "toggle-only", "medium")["reasoning"],
+                           "enabled", false)) {
     return fail("toggle body");
   }
   if (!thinking_choices("openrouter", "dumb").empty()) {
@@ -92,18 +94,20 @@ int main() {
     return fail("anthropic choices");
   }
   auto body = thinking_body("anthropic", "claude-sonnet-4-6", "high");
-  if (body["thinking"].value("type", "") != "adaptive" ||
-      body["output_config"].value("effort", "") != "high") {
+  if (niminal::json_value(body["thinking"], "type", "") != "adaptive" ||
+      niminal::json_value(body["output_config"], "effort", "") != "high") {
     return fail("anthropic adaptive");
   }
-  if (thinking_body("anthropic", "claude-sonnet-4-6", "none")["thinking"].value("type", "") !=
-      "disabled") {
+  if (niminal::json_value(thinking_body("anthropic", "claude-sonnet-4-6", "none")["thinking"],
+                          "type", "") != "disabled") {
     return fail("anthropic none");
   }
-  if (thinking_body("openai", "gpt-5", "high")["reasoning"].value("effort", "") != "high") {
+  if (niminal::json_value(thinking_body("openai", "gpt-5", "high")["reasoning"], "effort", "") !=
+      "high") {
     return fail("openai effort");
   }
-  if (thinking_body("opencode", "x", "high").value("reasoning_effort", "") != "high") {
+  if (niminal::json_value(thinking_body("opencode", "x", "high"), "reasoning_effort", "") !=
+      "high") {
     return fail("opencode effort");
   }
 

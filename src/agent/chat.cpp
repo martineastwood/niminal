@@ -23,7 +23,7 @@ std::optional<std::string> json_options(const json& value) {
     return text.empty() ? std::nullopt : std::optional<std::string>{text};
   }
   if (value.is_object() && !value.empty()) {
-    return value.dump();
+    return json_dump(value);
   }
   return std::nullopt;
 }
@@ -48,8 +48,8 @@ std::optional<std::string> merge_options(std::optional<std::string> existing,
 }
 
 void append_image(cail::Message& message, const json& source) {
-  const auto data = source.value("data", "");
-  const auto mime = source.value("mime_type", "");
+  const auto data = json_value(source, "data", "");
+  const auto mime = json_value(source, "mime_type", "");
   if (data.empty() || mime.empty()) {
     throw Error("image history requires non-empty base64 data and a MIME type");
   }
@@ -73,15 +73,15 @@ void append_content(cail::Message& message, const json& content) {
   if (!content.is_array()) {
     return;
   }
-  for (const auto& part : content) {
+  for (const auto& part : content.get_array()) {
     if (!part.is_object()) {
       continue;
     }
-    if (part.value("type", "") == "image") {
+    if (json_value(part, "type", "") == "image") {
       append_image(message, part);
-    } else if (part.value("type", "") == "text" || part.contains("text")) {
+    } else if (json_value(part, "type", "") == "text" || part.contains("text")) {
       message.content.emplace_back(cail::TextPart{
-          .text = part.value("text", ""),
+          .text = json_value(part, "text", ""),
           .provider_options = provider_options_of(part),
       });
     }
@@ -146,24 +146,24 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
   out.stream_usage = request.stream_usage;
 
   if (request.messages.is_array()) {
-    for (const auto& source : request.messages) {
+    for (const auto& source : request.messages.get_array()) {
       if (!source.is_object()) {
         continue;
       }
       cail::Message message{
-          .role = role_of(source.value("role", "user")),
+          .role = role_of(json_value(source, "role", "user")),
           .content = {},
           .tool_call_id = {},
           .tool_calls = {},
           .provider_options = {},
       };
       if (message.role == cail::MessageRole::tool) {
-        message.tool_call_id = source.value("tool_call_id", "");
+        message.tool_call_id = json_value(source, "tool_call_id", "");
       }
-      append_content(message, source.value("content", json{}));
+      append_content(message, json_value(source, "content", json{}));
       if (message.role == cail::MessageRole::tool && source.contains("images") &&
           source["images"].is_array()) {
-        for (const auto& image : source["images"]) {
+        for (const auto& image : source["images"].get_array()) {
           if (image.is_object()) {
             append_image(message, image);
           }
@@ -171,15 +171,15 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
       }
       message.provider_options = provider_options_of(source);
       if (source.contains("tool_calls") && source["tool_calls"].is_array()) {
-        for (const auto& call : source["tool_calls"]) {
+        for (const auto& call : source["tool_calls"].get_array()) {
           if (!call.is_object()) {
             continue;
           }
-          const auto function = call.value("function", json::object());
+          const auto function = json_value(call, "function", json_object());
           message.tool_calls.push_back(cail::ToolCall{
-              .id = call.value("id", ""),
-              .name = function.value("name", ""),
-              .arguments = function.value("arguments", "{}"),
+              .id = json_value(call, "id", ""),
+              .name = json_value(function, "name", ""),
+              .arguments = json_value(function, "arguments", "{}"),
               .provider_options = provider_options_of(call),
           });
         }
@@ -189,18 +189,19 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
   }
 
   if (request.tools.is_array()) {
-    for (const auto& source : request.tools) {
+    for (const auto& source : request.tools.get_array()) {
       if (!source.is_object()) {
         continue;
       }
-      const auto function = source.value("function", source);
-      auto schema = cail::schema_from_json(function.value("parameters", json::object()).dump());
+      const auto function = json_value(source, "function", source);
+      auto schema =
+          cail::schema_from_json(json_dump(json_value(function, "parameters", json_object())));
       if (!schema) {
         throw Error(schema.error().message);
       }
       out.tools.push_back(cail::ToolDefinition{
-          .name = function.value("name", ""),
-          .description = function.value("description", ""),
+          .name = json_value(function, "name", ""),
+          .description = json_value(function, "description", ""),
           .parameters = std::move(*schema),
           .provider_options = {},
       });
@@ -212,7 +213,7 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
   }
 
   if (request.extra.is_object() && !request.extra.empty()) {
-    out.provider_options = request.extra.dump();
+    out.provider_options = json_dump(request.extra);
   }
   return out;
 }
@@ -280,12 +281,12 @@ void add_request_hooks(cail::GenerationRequest& generation, const ChatRequest& r
       if (!request.before_provider_request) {
         return;
       }
-      auto body = json::parse(http.body, nullptr, false);
-      if (!body.is_object()) {
+      auto body = try_json_parse(http.body);
+      if (!body || !body->is_object()) {
         throw Error("provider request body is not a JSON object");
       }
-      request.before_provider_request(body);
-      http.body = body.dump();
+      request.before_provider_request(*body);
+      http.body = json_dump(*body);
     };
   }
   if (request.after_provider_response) {
