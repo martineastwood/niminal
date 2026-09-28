@@ -101,6 +101,11 @@ int main() {
     std::cerr << "runtime should report loaded extension names\n";
     return 1;
   }
+  const auto tool_names = runtime->tool_names();
+  if (std::find(tool_names.begin(), tool_names.end(), "echo_json") == tool_names.end()) {
+    std::cerr << "runtime should report loaded external tool names\n";
+    return 1;
+  }
   auto command = runtime->invoke("hello", "world");
   if (niminal::json_value(command, "message", "") != "Hello world env=sess-7") {
     std::cerr << "extension process should receive the session env: "

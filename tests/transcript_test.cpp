@@ -77,22 +77,25 @@ int main() {
     // The welcome screen names the skills and extensions loaded for the session.
     auto theme = resolve_theme(ThemeMode::dark);
     auto render_welcome = [&](int width, const std::vector<std::string>& skills,
-                              const std::vector<std::string>& extensions) {
+                              const std::vector<std::string>& extensions,
+                              const std::vector<std::string>& tools = {}) {
       ftxui::Screen screen(width, 20);
       ftxui::Render(screen, render_welcome_screen("workspace", "openai/gpt-5", skills, extensions,
-                                                  width, theme));
+                                                  tools, width, theme));
       return screen.ToString();
     };
-    auto loaded = render_welcome(120, {"alpha", "beta"}, {"foo"});
+    auto loaded = render_welcome(120, {"alpha", "beta"}, {"foo"}, {"echo_json"});
     if (loaded.find("skills") == std::string::npos ||
         loaded.find("alpha, beta") == std::string::npos ||
-        loaded.find("extensions") == std::string::npos || loaded.find("foo") == std::string::npos) {
-      return fail("welcome lists skills and extensions", loaded);
+        loaded.find("extensions") == std::string::npos || loaded.find("foo") == std::string::npos ||
+        loaded.find("tools") == std::string::npos ||
+        loaded.find("echo_json") == std::string::npos) {
+      return fail("welcome lists skills, extensions, and tools", loaded);
     }
     // A long list must wrap to the window width, not run off the right edge.
     const std::vector<std::string> many = {"alpha", "beta", "gamma", "delta", "epsilon",
                                            "zeta",  "eta",  "theta", "iota",  "kappa"};
-    auto wrapped = render_welcome(50, many, {"foo", "bar"});
+    auto wrapped = render_welcome(50, many, {"foo", "bar"}, {"echo_json"});
     for (const auto& name : many) {
       if (wrapped.find(name) == std::string::npos) {
         return fail("welcome wraps a long skill list", wrapped);
@@ -100,8 +103,8 @@ int main() {
     }
     auto empty = render_welcome(120, {}, {});
     if (empty.find("skills") != std::string::npos ||
-        empty.find("extensions") != std::string::npos) {
-      return fail("welcome omits empty skill and extension sections", empty);
+        empty.find("extensions") != std::string::npos || empty.find("tools") != std::string::npos) {
+      return fail("welcome omits empty skill, extension, and tool sections", empty);
     }
   }
 

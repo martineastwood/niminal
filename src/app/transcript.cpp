@@ -427,7 +427,8 @@ Element render_user_message(const Block& block, const Theme& theme) {
 
 Element render_welcome_screen(const std::string& title, const std::string& model_line,
                               const std::vector<std::string>& skills,
-                              const std::vector<std::string>& extensions, int width,
+                              const std::vector<std::string>& extensions,
+                              const std::vector<std::string>& tools, int width,
                               const Theme& theme) {
   constexpr size_t kLabelWidth = 14;
   auto hint = [&](std::string_view cmd, std::string_view desc) {
@@ -470,18 +471,16 @@ Element render_welcome_screen(const std::string& title, const std::string& model
                    hint("/help", "list commands"),
                    hint("@file", "mention a workspace file"),
                    hint("!cmd", "run a shell command")};
-  if (!skills.empty() || !extensions.empty()) {
+  auto append_list = [&](std::string_view label, const std::vector<std::string>& values) {
+    for (auto& row : list_rows(label, values)) {
+      rows.push_back(std::move(row));
+    }
+  };
+  if (!skills.empty() || !extensions.empty() || !tools.empty()) {
     rows.push_back(text(""));
-    if (!skills.empty()) {
-      for (auto& row : list_rows("skills", skills)) {
-        rows.push_back(std::move(row));
-      }
-    }
-    if (!extensions.empty()) {
-      for (auto& row : list_rows("extensions", extensions)) {
-        rows.push_back(std::move(row));
-      }
-    }
+    append_list("skills", skills);
+    append_list("extensions", extensions);
+    append_list("tools", tools);
   }
   rows.push_back(text(""));
   rows.push_back(text("describe a change in the composer below") | color(theme.muted));

@@ -9,9 +9,9 @@ file under `~/.niminal/sessions`, and later turns keep writing to it.
 
 A fresh session shows a centered welcome with the workspace folder name, the
 active provider and model, and a few hints (`/help`, `@` file mentions, `!`
-shell commands). When the workspace has any, it also lists the skills and
-extensions loaded for the session. It disappears after you send the first
-message.
+shell commands). When the workspace has any, it also lists the skills,
+extensions, and external tools loaded for the session. It disappears after you
+send the first message.
 
 The keys below are defaults. You can [change TUI shortcuts](/reference/keybindings/)
 in `~/.niminal/keybindings.json`.

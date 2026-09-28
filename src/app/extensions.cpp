@@ -1602,6 +1602,15 @@ std::vector<std::string> ExtensionRuntime::names() const {
   return out;
 }
 
+std::vector<std::string> ExtensionRuntime::tool_names() const {
+  std::vector<std::string> out;
+  out.reserve(impl_->external_tools.size());
+  for (const auto& tool : impl_->external_tools) {
+    out.push_back(tool.name);
+  }
+  return out;
+}
+
 std::vector<ExtensionStatus> ExtensionRuntime::statuses() const {
   std::lock_guard lock(impl_->actions_mutex);
   return copy_values(impl_->statuses);
