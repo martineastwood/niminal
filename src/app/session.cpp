@@ -1111,7 +1111,8 @@ std::string serialize_session_event(const json& event) {
       text += " ERROR";
     }
     text += ":\n" + output + "\n";
-    for (const auto& image : niminal::json_value(event, "images", json_array()).get_array()) {
+    const auto images = niminal::json_value(event, "images", json_array());
+    for (const auto& image : images.get_array()) {
       text += "[image: " + niminal::json_value(image, "name", "image") + "]\n";
     }
     return text;
