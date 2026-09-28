@@ -18,34 +18,43 @@
 namespace niminal {
 namespace {
 
-std::optional<std::string> json_options(const json& value) {
+cail::ProviderOptions json_options(const json& value) {
   if (value.is_string()) {
-    const auto text = value.get<std::string>();
-    return text.empty() ? std::nullopt : std::optional<std::string>{text};
+    const auto parsed = try_json_parse(value.get<std::string>());
+    return parsed && parsed->is_object() ? parsed->get_object() : cail::ProviderOptions{};
   }
-  if (value.is_object() && !value.empty()) {
-    return json_dump(value);
-  }
-  return std::nullopt;
+  return value.is_object() ? value.get_object() : cail::ProviderOptions{};
 }
 
-std::optional<std::string> provider_options_of(const json& source) {
+cail::ProviderOptions provider_options_of(const json& source) {
   if (!source.is_object() || !source.contains("provider_options")) {
-    return std::nullopt;
+    return {};
   }
   return json_options(source["provider_options"]);
 }
 
-std::optional<std::string> merge_options(std::optional<std::string> existing,
-                                         std::string_view extra) {
-  if (!existing || existing->empty()) {
-    return std::string{extra};
+cail::ProviderOptions merge_options(cail::ProviderOptions existing, std::string_view extra) {
+  const auto fields = try_json_parse(extra);
+  if (!fields || !fields->is_object()) {
+    return existing;
   }
-  auto merged = cail::merge_json_objects(*existing, extra);
+  json target;
+  target = existing;
+  auto merged = cail::merge_json_objects(json_dump(target), fields->get_object());
   if (!merged) {
     return existing;
   }
-  return std::move(*merged);
+  const auto result = try_json_parse(*merged);
+  return result && result->is_object() ? result->get_object() : existing;
+}
+
+std::optional<std::string> options_json(const cail::ProviderOptions& options) {
+  if (options.empty()) {
+    return std::nullopt;
+  }
+  json value;
+  value = options;
+  return json_dump(value);
 }
 
 void append_image(cail::Message& message, const json& source) {
@@ -214,7 +223,7 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
   }
 
   if (request.extra.is_object() && !request.extra.empty()) {
-    out.provider_options = json_dump(request.extra);
+    out.provider_options = request.extra.get_object();
   }
   return out;
 }
@@ -240,13 +249,13 @@ cail::GenerationRequest make_request(const ChatRequest& request) {
 ChatResult convert_response(const cail::GenerationResponse& response) {
   ChatResult result;
   result.text = response.text;
-  result.provider_options = response.provider_options;
+  result.provider_options = options_json(response.provider_options);
   for (const auto& call : response.tool_calls) {
     result.tool_calls.push_back(ToolCall{
         .id = call.id,
         .name = call.name,
         .arguments = call.arguments,
-        .provider_options = call.provider_options,
+        .provider_options = options_json(call.provider_options),
     });
   }
   if (response.usage) {
