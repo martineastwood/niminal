@@ -137,6 +137,7 @@ public:
 
   const std::vector<ExtensionCommand>& commands() const { return commands_; }
   const std::vector<std::string>& warnings() const { return warnings_; }
+  std::vector<std::string> names() const;
   std::vector<niminal::Tool> tools();
   niminal::json invoke(const std::string& name, const std::string& arguments,
                        const niminal::json& context = {});

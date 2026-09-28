@@ -1593,6 +1593,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::string usage;
   std::string context_text;
   int context_level = 0;
+  std::vector<std::string> welcome_skills;
+  for (const auto& skill : discover_skills(cwd)) {
+    welcome_skills.push_back(skill.name);
+  }
+  const std::vector<std::string> welcome_extensions =
+      extensions ? extensions->names() : std::vector<std::string>{};
   auto view = Renderer(layout, [&] {
     card_boxes.assign(blocks.size(), Box{-1, -1, -1, -1});
     const int transcript_width = std::max(1, screen.dimx() - 1);
@@ -1783,7 +1789,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                               agent.model;
       welcome_layers.push_back(filler());
       welcome_layers.push_back(
-          hbox({filler(), render_welcome_screen(title, model_line, theme), filler()}));
+          hbox({filler(),
+                render_welcome_screen(title, model_line, welcome_skills, welcome_extensions,
+                                      transcript_width, theme),
+                filler()}));
       welcome_layers.push_back(filler());
       transcript = vbox(std::move(welcome_layers));
     } else {

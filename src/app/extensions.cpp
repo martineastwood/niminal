@@ -1593,6 +1593,15 @@ std::vector<ExtensionEntry> ExtensionRuntime::take_entries() {
   return take_values(impl_->actions_mutex, impl_->entries);
 }
 
+std::vector<std::string> ExtensionRuntime::names() const {
+  std::vector<std::string> out;
+  out.reserve(impl_->processes.size());
+  for (const auto& process : impl_->processes) {
+    out.push_back(process->name);
+  }
+  return out;
+}
+
 std::vector<ExtensionStatus> ExtensionRuntime::statuses() const {
   std::lock_guard lock(impl_->actions_mutex);
   return copy_values(impl_->statuses);

@@ -96,6 +96,11 @@ int main() {
     }
     return 1;
   }
+  const auto names = runtime->names();
+  if (std::find(names.begin(), names.end(), "fixture") == names.end()) {
+    std::cerr << "runtime should report loaded extension names\n";
+    return 1;
+  }
   auto command = runtime->invoke("hello", "world");
   if (niminal::json_value(command, "message", "") != "Hello world env=sess-7") {
     std::cerr << "extension process should receive the session env: "

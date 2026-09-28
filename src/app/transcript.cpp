@@ -426,17 +426,66 @@ Element render_user_message(const Block& block, const Theme& theme) {
 }
 
 Element render_welcome_screen(const std::string& title, const std::string& model_line,
+                              const std::vector<std::string>& skills,
+                              const std::vector<std::string>& extensions, int width,
                               const Theme& theme) {
+  constexpr size_t kLabelWidth = 14;
   auto hint = [&](std::string_view cmd, std::string_view desc) {
     const auto pad = static_cast<size_t>(std::max(1, 14 - static_cast<int>(cmd.size())));
     return hbox({text(std::string(cmd)) | bold | color(theme.accent), text(std::string(pad, ' ')),
                  text(std::string(desc)) | color(theme.muted)});
   };
-  return vbox({text(title) | bold | color(theme.emphasis),
-               text(model_line) | bold | color(theme.accent), text(""),
-               hint("/help", "list commands"), hint("@file", "mention a workspace file"),
-               hint("!cmd", "run a shell command"), text(""),
-               text("describe a change in the composer below") | color(theme.muted)});
+  // Comma-separated names wrapped to the available width, so a long list stays
+  // on screen instead of running past the right edge.
+  auto list_rows = [&](std::string_view label, const std::vector<std::string>& values) {
+    const auto span = static_cast<size_t>(std::max(1, width - static_cast<int>(kLabelWidth)));
+    std::vector<std::string> lines;
+    std::string current;
+    for (const auto& value : values) {
+      auto candidate = current.empty() ? value : current + ", " + value;
+      if (!current.empty() && candidate.size() > span) {
+        lines.push_back(std::move(current));
+        current = value;
+      } else {
+        current = std::move(candidate);
+      }
+    }
+    if (!current.empty()) {
+      lines.push_back(std::move(current));
+    }
+    Elements rows;
+    for (size_t i = 0; i < lines.size(); ++i) {
+      if (i == 0) {
+        rows.push_back(hint(label, lines[i]));
+      } else {
+        rows.push_back(
+            hbox({text(std::string(kLabelWidth, ' ')), text(lines[i]) | color(theme.muted)}));
+      }
+    }
+    return rows;
+  };
+  Elements rows = {text(title) | bold | color(theme.emphasis),
+                   text(model_line) | bold | color(theme.accent),
+                   text(""),
+                   hint("/help", "list commands"),
+                   hint("@file", "mention a workspace file"),
+                   hint("!cmd", "run a shell command")};
+  if (!skills.empty() || !extensions.empty()) {
+    rows.push_back(text(""));
+    if (!skills.empty()) {
+      for (auto& row : list_rows("skills", skills)) {
+        rows.push_back(std::move(row));
+      }
+    }
+    if (!extensions.empty()) {
+      for (auto& row : list_rows("extensions", extensions)) {
+        rows.push_back(std::move(row));
+      }
+    }
+  }
+  rows.push_back(text(""));
+  rows.push_back(text("describe a change in the composer below") | color(theme.muted));
+  return vbox(std::move(rows));
 }
 
 std::string clip_text(std::string text, size_t max_chars, int max_lines) {

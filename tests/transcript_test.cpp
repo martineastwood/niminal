@@ -16,6 +16,7 @@ using niminal::app::measure_transcript_height;
 using niminal::app::render_approval_block;
 using niminal::app::render_transcript_card;
 using niminal::app::render_user_message;
+using niminal::app::render_welcome_screen;
 using niminal::app::resolve_theme;
 using niminal::app::ThemeMode;
 using niminal::app::virtual_transcript;
@@ -72,6 +73,38 @@ static std::string clipped_text(ftxui::Element element, int width, int height,
 }
 
 int main() {
+  {
+    // The welcome screen names the skills and extensions loaded for the session.
+    auto theme = resolve_theme(ThemeMode::dark);
+    auto render_welcome = [&](int width, const std::vector<std::string>& skills,
+                              const std::vector<std::string>& extensions) {
+      ftxui::Screen screen(width, 20);
+      ftxui::Render(screen, render_welcome_screen("workspace", "openai/gpt-5", skills, extensions,
+                                                  width, theme));
+      return screen.ToString();
+    };
+    auto loaded = render_welcome(120, {"alpha", "beta"}, {"foo"});
+    if (loaded.find("skills") == std::string::npos ||
+        loaded.find("alpha, beta") == std::string::npos ||
+        loaded.find("extensions") == std::string::npos || loaded.find("foo") == std::string::npos) {
+      return fail("welcome lists skills and extensions", loaded);
+    }
+    // A long list must wrap to the window width, not run off the right edge.
+    const std::vector<std::string> many = {"alpha", "beta", "gamma", "delta", "epsilon",
+                                           "zeta",  "eta",  "theta", "iota",  "kappa"};
+    auto wrapped = render_welcome(50, many, {"foo", "bar"});
+    for (const auto& name : many) {
+      if (wrapped.find(name) == std::string::npos) {
+        return fail("welcome wraps a long skill list", wrapped);
+      }
+    }
+    auto empty = render_welcome(120, {}, {});
+    if (empty.find("skills") != std::string::npos ||
+        empty.find("extensions") != std::string::npos) {
+      return fail("welcome omits empty skill and extension sections", empty);
+    }
+  }
+
   Block thinking{BlockKind::thinking, "line one\nline two"};
   thinking.expanded = false;
   auto compact_thinking = render_card(thinking);

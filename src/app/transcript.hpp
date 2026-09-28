@@ -58,6 +58,8 @@ ftxui::Element render_diff_card(const Block& block, const Theme& theme);
 ftxui::Element render_approval_block(const Block& block, const Theme& theme);
 ftxui::Element render_user_message(const Block& block, const Theme& theme);
 ftxui::Element render_welcome_screen(const std::string& title, const std::string& model_line,
+                                     const std::vector<std::string>& skills,
+                                     const std::vector<std::string>& extensions, int width,
                                      const Theme& theme);
 ftxui::Element render_transcript_card(const Block& block, const Theme& theme, ftxui::Box& box);
 std::vector<Block> blocks_from_events(const std::vector<niminal::json>& events);
