@@ -1228,7 +1228,10 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
                          {"version", 1},
                          {"workspace", runtime->workspace_.string()},
                          {"session_id", session_id}});
-      auto registration = json_parse(process->receive(manifest.timeout_ms, cancel));
+      // The registration handshake is not cancellable: a shutdown signal that
+      // lands during startup would otherwise abort every extension with
+      // "interrupted" instead of letting it finish loading.
+      auto registration = json_parse(process->receive(manifest.timeout_ms, nullptr));
       if (string_field(registration, "type") != "register") {
         throw std::runtime_error("expected register response");
       }

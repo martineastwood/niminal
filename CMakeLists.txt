@@ -64,7 +64,7 @@ endif()
 
 set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
-find_package(cail 0.1.3 EXACT CONFIG REQUIRED)
+find_package(cail 0.1.4 EXACT CONFIG REQUIRED)
 
 include(FetchContent)
 

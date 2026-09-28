@@ -1,6 +1,7 @@
 #include "models_dev.hpp"
 #include "provider.hpp"
 
+#include <cail/generation.hpp>
 #include <cail/http.hpp>
 #include <niminal/chat.hpp>
 
@@ -31,10 +32,12 @@ static cail::HttpRequest model_request(const niminal::Agent& agent) {
                        .tool_calls = {},
                        .provider_options = {}}};
   request.session_id = "test-session";
-  request.before_request = [&](cail::HttpRequest& http) {
+  cail::GenerationMiddleware middleware;
+  middleware.before_request = [&](cail::HttpRequest& http, const cail::MiddlewareContext&) {
     captured = http;
     throw niminal::Error("request captured");
   };
+  request.middleware.push_back(std::move(middleware));
   try {
     const auto response = agent.language_model.generate(request);
     if (!response) {

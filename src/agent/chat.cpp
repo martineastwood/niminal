@@ -1,5 +1,6 @@
 #include <niminal/chat.hpp>
 
+#include <cail/generation.hpp>
 #include <cail/http.hpp>
 #include <cail/json.hpp>
 #include <cail/schema.hpp>
@@ -265,7 +266,9 @@ ChatResult convert_response(const cail::GenerationResponse& response) {
 
 void add_request_hooks(cail::GenerationRequest& generation, const ChatRequest& request) {
   if (request.before_provider_request || request.before_provider_headers) {
-    generation.before_request = [&request](cail::HttpRequest& http) {
+    cail::GenerationMiddleware middleware;
+    middleware.before_request = [&request](cail::HttpRequest& http,
+                                           const cail::MiddlewareContext&) {
       if (request.before_provider_headers) {
         std::map<std::string, std::string> headers;
         for (const auto& header : http.headers) {
@@ -288,10 +291,13 @@ void add_request_hooks(cail::GenerationRequest& generation, const ChatRequest& r
       request.before_provider_request(*body);
       http.body = json_dump(*body);
     };
+    generation.middleware.push_back(std::move(middleware));
   }
   if (request.after_provider_response) {
     const auto started = std::chrono::steady_clock::now();
-    generation.after_response = [&request, started](const cail::HttpResponse& response) {
+    cail::GenerationMiddleware middleware;
+    middleware.after_response = [&request, started](const cail::HttpResponse& response,
+                                                    const cail::MiddlewareContext&) {
       ProviderResponse converted;
       converted.status = response.status_code;
       converted.body = response.body;
@@ -304,6 +310,7 @@ void add_request_hooks(cail::GenerationRequest& generation, const ChatRequest& r
                                .count());
       request.after_provider_response(converted);
     };
+    generation.middleware.push_back(std::move(middleware));
   }
 }
 

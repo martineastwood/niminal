@@ -553,6 +553,25 @@ int main() {
   }
   runtime->stop();
 
+  // A cancellation request during startup must not abort the registration
+  // handshake; extensions should still load.
+  cancel.request();
+  auto interrupted = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
+  cancel.clear();
+  for (const auto& warning : interrupted->warnings()) {
+    if (warning.contains("interrupted")) {
+      std::cerr << "startup aborted by cancellation: " << warning << '\n';
+      return 1;
+    }
+  }
+  const auto interrupted_names = interrupted->names();
+  if (std::find(interrupted_names.begin(), interrupted_names.end(), "fixture") ==
+      interrupted_names.end()) {
+    std::cerr << "startup under cancellation did not load extensions\n";
+    return 1;
+  }
+  interrupted->stop();
+
   // Closing stdin tells an extension that niminal is gone. A sibling that
   // inherited the pipe would hide that and leave the extension running.
   auto eof_marker = root / "eof.marker";
