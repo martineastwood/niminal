@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(niminal VERSION 0.2.4 LANGUAGES C CXX)
+project(niminal VERSION 0.2.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -64,7 +64,7 @@ endif()
 
 set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
-find_package(cail 0.2.0 EXACT CONFIG REQUIRED)
+find_package(cail 0.3.0 EXACT CONFIG REQUIRED)
 
 include(FetchContent)
 
