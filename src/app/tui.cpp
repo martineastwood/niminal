@@ -1382,7 +1382,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   };
   deliver_extension_now = [&](std::string prompt) { send_prompt(std::move(prompt)); };
   auto post_background_extension_result = [&](std::shared_ptr<ExtensionRuntime> runtime,
-                                               std::string message, BlockKind kind) {
+                                              std::string message, BlockKind kind) {
     if (!ui_alive) {
       return;
     }

@@ -65,7 +65,7 @@ parse_check_args() {
 
 cmd_format() {
   local CLANG_FORMAT
-  CLANG_FORMAT="$(find_tool clang-format /opt/homebrew/opt/llvm@20/bin/clang-format /opt/homebrew/opt/llvm/bin/clang-format /usr/local/opt/llvm/bin/clang-format)" || die "clang-format not found"
+  CLANG_FORMAT="$(find_tool clang-format-20 /opt/homebrew/opt/llvm@20/bin/clang-format /usr/local/opt/llvm@20/bin/clang-format)" || die "clang-format 20 not found"
   local fix=false
   if [[ "${1:-}" == "--fix" ]]; then
     fix=true
@@ -150,8 +150,8 @@ cmd_build() {
 
 cmd_tidy() {
   local CLANG_TIDY RUN_CLANG_TIDY
-  CLANG_TIDY="$(find_tool clang-tidy /opt/homebrew/opt/llvm@20/bin/clang-tidy /opt/homebrew/opt/llvm/bin/clang-tidy /usr/local/opt/llvm/bin/clang-tidy)" || die "clang-tidy not found"
-  RUN_CLANG_TIDY="$(find_tool run-clang-tidy /opt/homebrew/opt/llvm@20/bin/run-clang-tidy /opt/homebrew/opt/llvm/bin/run-clang-tidy /usr/local/opt/llvm/bin/run-clang-tidy)" || die "run-clang-tidy not found"
+  CLANG_TIDY="$(find_tool clang-tidy-20 /opt/homebrew/opt/llvm@20/bin/clang-tidy /usr/local/opt/llvm@20/bin/clang-tidy)" || die "clang-tidy 20 not found"
+  RUN_CLANG_TIDY="$(find_tool run-clang-tidy-20 /opt/homebrew/opt/llvm@20/bin/run-clang-tidy /usr/local/opt/llvm@20/bin/run-clang-tidy)" || die "run-clang-tidy 20 not found"
   local fix=false
   local all=true
   while [[ $# -gt 0 ]]; do

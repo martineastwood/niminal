@@ -79,15 +79,11 @@ On Debian or Ubuntu:
 sudo apt install cmake ninja-build g++ libssl-dev
 ```
 
-For full release validation with `./dev check`, also install `clang-format`,
-`clang-tidy`, and `run-clang-tidy`. Use clang 20, which is the version CI
-pins, and link the unversioned names that `./dev` looks up:
+For full release validation with `./dev check`, also install clang 20, which is
+the version CI pins. `./dev` looks up the versioned tools directly:
 
 ```sh
 sudo apt install clang-format-20 clang-tidy-20
-sudo ln -s /usr/bin/clang-format-20 /usr/local/bin/clang-format
-sudo ln -s /usr/bin/clang-tidy-20 /usr/local/bin/clang-tidy
-sudo ln -s /usr/bin/run-clang-tidy-20 /usr/local/bin/run-clang-tidy
 ```
 
 Keep the version aligned with CI. `clang-format` output changes between

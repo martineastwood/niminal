@@ -784,8 +784,8 @@ std::string complete_with_read_only_tools(niminal::ChatRequest completion,
 
   json tool_definitions = json_array();
   for (const auto& tool : tools) {
-    tool_definitions.get_array().push_back(
-        json{{"name", tool.name}, {"description", tool.description}, {"parameters", tool.parameters}});
+    tool_definitions.get_array().push_back(json{
+        {"name", tool.name}, {"description", tool.description}, {"parameters", tool.parameters}});
   }
 
   size_t tool_calls = 0;
@@ -826,7 +826,8 @@ std::string complete_with_read_only_tools(niminal::ChatRequest completion,
       std::string output_text;
       json images = json_array();
       if (tool_calls++ >= kMaxToolCalls) {
-        output_text = "Read-only lookup limit reached. Answer using the information already available.";
+        output_text =
+            "Read-only lookup limit reached. Answer using the information already available.";
       } else {
         const auto tool = std::find_if(tools.begin(), tools.end(), [&](const auto& candidate) {
           return candidate.name == call.name;
@@ -835,8 +836,8 @@ std::string complete_with_read_only_tools(niminal::ChatRequest completion,
           output_text = "unknown read-only tool: " + call.name;
         } else {
           try {
-            const auto arguments = niminal::try_json_parse(call.arguments.empty() ? "{}"
-                                                                                  : call.arguments);
+            const auto arguments =
+                niminal::try_json_parse(call.arguments.empty() ? "{}" : call.arguments);
             if (!arguments || !arguments->is_object()) {
               output_text = "tool error: arguments must be a JSON object";
             } else {
@@ -1785,9 +1786,8 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
         completion.conversation_id = (session ? session->id : agent.conversation_id) + ":extension";
         completion.on_event = {};
         const bool read_only_tools = niminal::json_value(request, "read_only_tools", false);
-        const auto text = read_only_tools
-                              ? complete_with_read_only_tools(completion, agent.tools)
-                              : niminal::complete_chat(completion);
+        const auto text = read_only_tools ? complete_with_read_only_tools(completion, agent.tools)
+                                          : niminal::complete_chat(completion);
         return json{{"text", text}, {"model", agent.model}, {"finish_reason", "stop"}};
       }
       if (method == "ui.editor") {
