@@ -1,4 +1,6 @@
 #include "transcript.hpp"
+#include "extensions.hpp"
+#include "skills.hpp"
 
 #include <niminal/text.hpp>
 
@@ -423,6 +425,19 @@ Element render_user_message(const Block& block, const Theme& theme) {
             text(" ")});
   return hbox({filler() | bgcolor(theme.accent) | size(WIDTH, EQUAL, 1),
                vbox({text(" "), body, text(" ")}) | bgcolor(theme.input_bg) | xflex});
+}
+
+WelcomeCatalog welcome_catalog(const std::filesystem::path& cwd,
+                               const ExtensionRuntime* extensions) {
+  WelcomeCatalog catalog;
+  for (const auto& skill : discover_skills(cwd)) {
+    catalog.skills.push_back(skill.name);
+  }
+  if (extensions) {
+    catalog.extensions = extensions->names();
+    catalog.tools = extensions->tool_names();
+  }
+  return catalog;
 }
 
 Element render_welcome_screen(const std::string& title, const std::string& model_line,

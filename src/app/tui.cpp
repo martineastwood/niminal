@@ -12,7 +12,6 @@
 #include "provider.hpp"
 #include "session.hpp"
 #include "settings.hpp"
-#include "skills.hpp"
 #include "slash.hpp"
 #include "slash_execute.hpp"
 #include "theme.hpp"
@@ -1593,14 +1592,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::string usage;
   std::string context_text;
   int context_level = 0;
-  std::vector<std::string> welcome_skills;
-  for (const auto& skill : discover_skills(cwd)) {
-    welcome_skills.push_back(skill.name);
-  }
-  const std::vector<std::string> welcome_extensions =
-      extensions ? extensions->names() : std::vector<std::string>{};
-  const std::vector<std::string> welcome_tools =
-      extensions ? extensions->tool_names() : std::vector<std::string>{};
   auto view = Renderer(layout, [&] {
     card_boxes.assign(blocks.size(), Box{-1, -1, -1, -1});
     const int transcript_width = std::max(1, screen.dimx() - 1);
@@ -1770,6 +1761,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                               });
     Element transcript;
     if (show_welcome) {
+      // Read fresh on every welcome render so /reload and /trust changes show
+      // up in the intro instead of a stale startup snapshot.
+      const auto welcome = welcome_catalog(cwd, extensions.get());
       Elements welcome_layers;
       for (const auto& block : blocks) {
         if (block.kind != BlockKind::status && block.kind != BlockKind::error) {
@@ -1792,8 +1786,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       welcome_layers.push_back(filler());
       welcome_layers.push_back(
           hbox({filler(),
-                render_welcome_screen(title, model_line, welcome_skills, welcome_extensions,
-                                      welcome_tools, transcript_width, theme),
+                render_welcome_screen(title, model_line, welcome.skills, welcome.extensions,
+                                      welcome.tools, transcript_width, theme),
                 filler()}));
       welcome_layers.push_back(filler());
       transcript = vbox(std::move(welcome_layers));

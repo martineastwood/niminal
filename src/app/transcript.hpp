@@ -8,12 +8,26 @@
 #include <ftxui/screen/box.hpp>
 
 #include <cstddef>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 namespace niminal::app {
+
+class ExtensionRuntime;
+
+// Names the intro screen lists. Read from the live workspace and extension
+// runtime on every call, so a reload shows up without restarting Niminal.
+struct WelcomeCatalog {
+  std::vector<std::string> skills;
+  std::vector<std::string> extensions;
+  std::vector<std::string> tools;
+};
+
+WelcomeCatalog welcome_catalog(const std::filesystem::path& cwd,
+                               const ExtensionRuntime* extensions);
 
 enum class BlockKind {
   user,

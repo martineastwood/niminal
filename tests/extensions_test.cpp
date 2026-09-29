@@ -1,5 +1,6 @@
 #include "extensions.hpp"
 #include "session.hpp"
+#include "transcript.hpp"
 #include "trust.hpp"
 
 #include <niminal/chat.hpp>
@@ -105,6 +106,49 @@ int main() {
   if (std::find(tool_names.begin(), tool_names.end(), "echo_json") == tool_names.end()) {
     std::cerr << "runtime should report loaded external tool names\n";
     return 1;
+  }
+  {
+    // The intro screen reads the workspace and the running extensions, so what
+    // it lists follows a reload instead of freezing at startup.
+    const auto before = niminal::app::welcome_catalog(root, runtime.get());
+    if (std::find(before.extensions.begin(), before.extensions.end(), "fixture") ==
+            before.extensions.end() ||
+        std::find(before.extensions.begin(), before.extensions.end(), "late") !=
+            before.extensions.end()) {
+      std::cerr << "intro catalog should list the extensions loaded at startup\n";
+      return 1;
+    }
+    const auto late_dir = root / ".niminal" / "extensions" / "late";
+    fs::create_directories(late_dir);
+    std::ofstream(late_dir / "extension.json") << R"({"name":"late","command":["./late.py"]})";
+    std::ofstream(late_dir / "late.py")
+        << "#!/usr/bin/env python3\n"
+           "import json, sys\n"
+           "print(json.dumps({\"type\": \"register\", \"commands\": [], \"tools\": [], "
+           "\"events\": []}), flush=True)\n"
+           "for _line in sys.stdin:\n"
+           "    pass\n";
+    fs::permissions(late_dir / "late.py",
+                    fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec);
+    fs::create_directories(root / ".niminal" / "skills" / "release-notes");
+    std::ofstream(root / ".niminal" / "skills" / "release-notes" / "SKILL.md")
+        << "Write release notes.\n";
+    runtime->stop();
+    runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
+    const auto after = niminal::app::welcome_catalog(root, runtime.get());
+    if (std::find(after.extensions.begin(), after.extensions.end(), "late") ==
+            after.extensions.end() ||
+        std::find(after.skills.begin(), after.skills.end(), "release-notes") ==
+            after.skills.end()) {
+      std::cerr << "intro catalog should follow a reload\n";
+      for (const auto& name : after.extensions) {
+        std::cerr << "  extension: " << name << '\n';
+      }
+      for (const auto& name : after.skills) {
+        std::cerr << "  skill: " << name << '\n';
+      }
+      return 1;
+    }
   }
   auto command = runtime->invoke("hello", "world");
   if (niminal::json_value(command, "message", "") != "Hello world env=sess-7") {
