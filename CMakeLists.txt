@@ -158,6 +158,7 @@ add_library(niminal_app
   src/app/extensions.cpp
   src/app/shutdown.cpp
   src/app/diff.cpp
+  src/app/widget_panel.cpp
   src/app/theme.cpp)
 target_include_directories(niminal_app PUBLIC src/app)
 target_link_libraries(niminal_app PUBLIC niminal::ai ftxui::component
@@ -217,6 +218,7 @@ target_compile_definitions(niminal_extensions_test PRIVATE
 niminal_add_test(diff niminal_app)
 niminal_add_test(theme niminal_app)
 niminal_add_test(transcript niminal_app)
+niminal_add_test(widget_panel niminal_app)
 niminal_add_test(http niminal_app)
 niminal_add_test(rpc niminal_app)
 niminal_add_test(version niminal::ai $<TARGET_FILE:niminal_cli>)

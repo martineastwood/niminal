@@ -19,6 +19,7 @@
 #include "tools.hpp"
 #include "transcript.hpp"
 #include "trust.hpp"
+#include "widget_panel.hpp"
 
 #include <niminal/chat.hpp>
 #include <niminal/text.hpp>
@@ -324,6 +325,26 @@ Element extension_text(const std::string& value, std::string_view style, const T
   return line | color(accent_default ? theme.accent : theme.muted);
 }
 
+// Widget content can include one markdown panel: a scrollable body that
+// renders like an assistant reply, for extension output too long for the
+// single-line text elements around it.
+bool extension_panel_element(const niminal::json& element) {
+  return niminal::json_value(element, "type", std::string()) == "markdown";
+}
+
+int extension_panel_height(const niminal::json& element) {
+  return static_cast<int>(std::clamp(niminal::json_value(element, "height", 10.0), 4.0, 24.0));
+}
+
+int extension_widget_panel_height(const niminal::json& content) {
+  for (const auto& element : content.get_array()) {
+    if (extension_panel_element(element)) {
+      return extension_panel_height(element);
+    }
+  }
+  return 0;
+}
+
 } // namespace
 
 int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& session,
@@ -395,6 +416,22 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   bool turn_failed = false;
   std::chrono::steady_clock::time_point footer_notice_until;
   std::optional<size_t> extension_action_focus;
+  // Scroll position for extension panel bodies, keyed by "extension:key".
+  std::map<std::string, WidgetPanelScroll> panel_scroll;
+  std::map<std::string, int> panel_rows;
+  std::map<std::string, Element> panel_element;
+  std::optional<std::string> panel_focus;
+  // Row count of the body rendered last frame: a markdown body only reports the
+  // height it wraps to after a frame lays it out at the panel's width.
+  auto panel_body_rows = [&](const std::string& id) {
+    const auto element = panel_element.find(id);
+    if (element == panel_element.end()) {
+      return panel_rows.find(id) == panel_rows.end() ? 0 : panel_rows.at(id);
+    }
+    const int rows = std::max(0, element->second->requirement().min_y);
+    panel_rows[id] = rows;
+    return rows;
+  };
   float transcript_y = 1.F;
   Element transcript_element;
   bool ask_user_open = false;
@@ -2006,6 +2043,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                            color(theme.add);
               rows.push_back(label.empty() ? std::move(meter)
                                            : hbox({text(label + " "), std::move(meter)}));
+            } else if (extension_panel_element(item)) {
+              const auto id = widget.extension + ":" + widget.key;
+              const int height = extension_panel_height(item);
+              auto markdown =
+                  render_markdown(niminal::json_value(item, "text", std::string()), theme);
+              auto& scroll = panel_scroll[id];
+              scroll.rows = panel_body_rows(id);
+              panel_element[id] = markdown;
+              rows.push_back(widget_panel_window(std::move(markdown),
+                                                 widget_panel_offset(scroll, height), height));
             }
           }
           for (size_t action_index = 0; action_index < widget.actions.size(); ++action_index) {
@@ -2019,9 +2066,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
             rows.push_back(std::move(row));
           }
           action_offset += widget.actions.size();
-          if (!widget.actions.empty()) {
-            rows.push_back(text(keybindings.label(KeyAction::complete) +
-                                " focus · ↑/↓ choose · enter run · esc close") |
+          if (const int panel_height = extension_widget_panel_height(widget.content);
+              !widget.actions.empty() || panel_height > 0) {
+            const auto tab = keybindings.label(KeyAction::complete);
+            rows.push_back(text(panel_height > 0
+                                    ? tab + " focus · ↑/↓ scroll · pgup/pgdn · esc leave"
+                                    : tab + " focus · ↑/↓ choose · enter run · esc close") |
                            dim);
           }
           const auto title =
@@ -2370,15 +2420,67 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     std::vector<std::tuple<std::string, std::string, std::string>> extension_actions;
+    std::map<std::string, int> panel_heights;
     if (extensions) {
+      std::set<std::string> live;
       for (const auto& widget : extensions->widgets()) {
+        const auto id = widget.extension + ":" + widget.key;
+        live.insert(id);
         for (const auto& action : widget.actions) {
           extension_actions.emplace_back(widget.extension, widget.key, action.id);
         }
+        if (const int height = extension_widget_panel_height(widget.content); height > 0) {
+          panel_heights[id] = height;
+        }
+      }
+      std::erase_if(panel_scroll, [&](const auto& entry) { return !live.contains(entry.first); });
+      if (panel_focus && !live.contains(*panel_focus)) {
+        panel_focus.reset();
       }
     }
     if (extension_action_focus && extension_actions.empty()) {
       extension_action_focus.reset();
+    }
+    if (panel_focus) {
+      if (pressed(KeyAction::cancel)) {
+        panel_focus.reset();
+        return true;
+      }
+      if (pressed(KeyAction::quit)) {
+        quit_ui();
+        return true;
+      }
+      if (pressed(KeyAction::complete) || pressed(KeyAction::complete_previous)) {
+        panel_focus.reset();
+        if (!extension_actions.empty()) {
+          extension_action_focus = 0;
+        }
+        return true;
+      }
+      // The body height in rows comes from the frame that rendered it, the same
+      // measurement the transcript uses for its own scrolling.
+      const int height = std::max(4, panel_heights[*panel_focus]);
+      const int body_rows = std::max(1, panel_body_rows(*panel_focus));
+      auto& scroll = panel_scroll[*panel_focus];
+      int delta = 0;
+      if (pressed(KeyAction::previous)) {
+        delta = -1;
+      } else if (pressed(KeyAction::next)) {
+        delta = 1;
+      } else if (pressed(KeyAction::scroll_up)) {
+        delta = -height;
+      } else if (pressed(KeyAction::scroll_down)) {
+        delta = height;
+      }
+      if (delta != 0) {
+        scroll_widget_panel(scroll, body_rows, height, delta);
+        return true;
+      }
+      if (pressed(KeyAction::submit)) {
+        return true;
+      }
+      // Any other key belongs to the composer, so hand it back.
+      panel_focus.reset();
     }
     if (extension_action_focus) {
       *extension_action_focus %= extension_actions.size();
@@ -2409,8 +2511,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       extension_action_focus.reset();
     } else if (pressed(KeyAction::complete) && draft.empty() && current_suggestions().empty() &&
-               !extension_actions.empty()) {
-      extension_action_focus = 0;
+               (!panel_heights.empty() || !extension_actions.empty())) {
+      if (panel_heights.empty()) {
+        extension_action_focus = 0;
+      } else {
+        panel_focus = panel_heights.begin()->first;
+      }
       return true;
     }
     if (e.input() == "\x1b[200~") {

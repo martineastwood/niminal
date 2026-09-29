@@ -1,0 +1,5 @@
+{
+  "name": "panel_demo",
+  "command": ["./extension.py"],
+  "response_timeout_seconds": 30
+}

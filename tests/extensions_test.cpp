@@ -38,8 +38,8 @@ int main() {
   fs::create_directories(collision_tool_dir);
   const fs::path fixtures = fs::path(NIMINAL_EXTENSIONS_FIXTURES_DIR);
   fs::create_directories(root / ".niminal" / "extensions");
-  for (const auto* name : {"fixture", "host", "orphan_guard", "parallel", "status_demo",
-                           "stdin_watcher", "todo_demo", "widget_demo"}) {
+  for (const auto* name : {"fixture", "host", "orphan_guard", "panel_demo", "parallel",
+                           "status_demo", "stdin_watcher", "todo_demo", "widget_demo"}) {
     fs::copy(fixtures / name, root / ".niminal" / "extensions" / name, fs::copy_options::recursive);
   }
   setenv("HOME", home.c_str(), 1);
@@ -89,7 +89,7 @@ int main() {
                                   {"NIMINAL_REASONING_LEVEL", "high"}};
   };
   auto runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
-  if (runtime->commands().size() != 6) {
+  if (runtime->commands().size() != 8) {
     std::cerr << "extension registration failed, got " << runtime->commands().size()
               << " commands\n";
     for (const auto& warning : runtime->warnings()) {
@@ -178,6 +178,8 @@ int main() {
   auto footer_demo = runtime->invoke("footer_demo", "");
   auto empty_todos = runtime->invoke("todos", "");
   auto subagents_demo = runtime->invoke("subagents_demo", "");
+  auto panel_demo = runtime->invoke("panel", "");
+  runtime->invoke("panel_invalid", "");
   auto find_widget = [&](const std::string& extension, const std::string& key) {
     auto widgets = runtime->widgets();
     const auto found = std::find_if(widgets.begin(), widgets.end(), [&](const auto& widget) {
@@ -194,6 +196,7 @@ int main() {
   };
   const auto footer_status = find_status("status_demo", "model");
   const auto subagent_widget = find_widget("widget_demo", "workers");
+  const auto panel_widget = find_widget("panel_demo", "body");
   if (niminal::json_value(footer_demo, "message", "") != "Footer status updated." ||
       !footer_status || footer_status->segments.size() != 4 ||
       footer_status->segments[0].style != "emphasis" ||
@@ -202,6 +205,51 @@ int main() {
           "Showing simulated subagent activity." ||
       !subagent_widget || subagent_widget->actions.size() != 2) {
     std::cerr << "extension UI examples did not register their status and widgets\n";
+    return 1;
+  }
+  // A markdown element is a scrollable panel body. Anything else in the same
+  // widget, including a bad height, drops the whole widget.
+  if (!panel_widget || panel_widget->content.size() != 1 ||
+      niminal::json_value(panel_widget->content[0], "type", "") != "markdown" ||
+      niminal::json_value(panel_widget->content[0], "height", 0) != 6 ||
+      niminal::json_value(panel_widget->content[0], "text", "").find("row 01") ==
+          std::string::npos ||
+      panel_widget->actions.size() != 2 || find_widget("panel_demo", "invalid")) {
+    std::cerr << "extension panel content validation failed\n";
+    return 1;
+  }
+  if (!runtime->activate_widget_action("panel_demo", "body", "more")) {
+    std::cerr << "panel action dispatch failed\n";
+    return 1;
+  }
+  const auto panel_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  bool panel_updated = false;
+  while (std::chrono::steady_clock::now() < panel_deadline) {
+    runtime->pump();
+    const auto updated = find_widget("panel_demo", "body");
+    if (updated &&
+        niminal::json_value(updated->content[0], "text", "").find("row 60") != std::string::npos) {
+      panel_updated = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (!panel_updated || !runtime->activate_widget_action("panel_demo", "body", "close")) {
+    std::cerr << "panel body did not stream\n";
+    return 1;
+  }
+  const auto panel_closed_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  bool panel_closed = false;
+  while (std::chrono::steady_clock::now() < panel_closed_deadline) {
+    runtime->pump();
+    if (!find_widget("panel_demo", "body")) {
+      panel_closed = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (!panel_closed) {
+    std::cerr << "panel body did not clear\n";
     return 1;
   }
   auto tools = runtime->tools();

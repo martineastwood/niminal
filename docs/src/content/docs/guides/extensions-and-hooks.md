@@ -253,13 +253,51 @@ Status styles are `normal`, `muted`, `accent`, `success`, `warning`, `error`,
 and `emphasis`. Send an empty `segments` array with the same key to clear that
 status.
 
-Widgets support `text`, `list`, and `progress` content. List items can use the
-`pending`, `active`, or `done` state. Widgets appear above the composer. To run
-an action, focus the empty composer and press Tab, move through actions with
-the up and down keys, then press Enter. Escape closes the action selector. The
-extension receives `{"type":"ui_action","widget":"tasks","action":"complete_next"}`
-and can refresh the widget by sending another `update`. To remove a widget,
-send its key with an empty title, content array, and actions array.
+Niminal redraws when your command answers, so a command that waits on slow work
+before responding leaves the screen unchanged until then. Open the widget or
+status you want to show in the response, then send later changes as `update`
+messages.
+
+Widgets support `text`, `list`, `progress`, and `markdown` content. List items
+can use the `pending`, `active`, or `done` state. Widgets appear above the
+composer. To run an action, focus the empty composer and press Tab, move through
+actions with the up and down keys, then press Enter. Escape closes the action
+selector. The extension receives
+`{"type":"ui_action","widget":"tasks","action":"complete_next"}` and can refresh
+the widget by sending another `update`. To remove a widget, send its key with an
+empty title, content array, and actions array.
+
+## Panels
+
+A `markdown` element turns its widget into a panel: a bordered, scrollable body
+for output that is longer than a status line, such as an answer or a report. Send
+`text` for the body and `height` for how many rows of it to show, between 4 and
+24:
+
+```python
+send({"type": "update",
+      "widget": {"key": "answer", "title": "Answer", "content": [
+          {"type": "markdown", "text": "## Result\n\n- 12 files\n- 2 failures",
+           "height": 12}],
+        "actions": [{"id": "close", "label": "Close"}]}})
+```
+
+The body renders like an assistant reply, with headings, lists, and code blocks.
+It starts at the top and follows its own tail once you scroll to the end, so
+streaming updates stay readable. Send a fresh `text` for each update to stream
+into a panel that is already open.
+
+Focus the empty composer and press Tab to scroll the newest panel:
+
+| Key | Effect |
+| --- | --- |
+| Up, Down | Scroll one row |
+| PageUp, PageDown | Scroll one page |
+| Tab | Move on to the widget's actions |
+| Escape | Leave the panel where it is |
+
+The panel does not block the composer or a running turn. `markdown` counts as
+one content element, and a widget can mix it with the other content types.
 
 The [extensions_and_tools](https://github.com/martineastwood/extensions_and_tools)
 repository includes runnable examples in `extensions/powerline_footer`,

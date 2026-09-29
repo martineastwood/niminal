@@ -1127,6 +1127,12 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
           valid = false;
           break;
         }
+      } else if (type == "markdown") {
+        if (!element.contains("text") || !element["text"].is_string() ||
+            (element.contains("height") && !element["height"].is_number())) {
+          valid = false;
+          break;
+        }
       } else if (type == "list") {
         if (!element.contains("items") || !element["items"].is_array() ||
             element["items"].size() > 32) {
