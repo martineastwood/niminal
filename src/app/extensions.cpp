@@ -768,6 +768,103 @@ struct RegisteredTool {
   bool read_only = false;
 };
 
+std::string complete_with_read_only_tools(niminal::ChatRequest completion,
+                                          const std::vector<niminal::Tool>& available_tools) {
+  static const std::set<std::string> allowed_names = {"glob", "grep", "ls", "read"};
+  constexpr int kMaxToolRounds = 4;
+  constexpr size_t kMaxToolCalls = 8;
+  constexpr size_t kMaxToolOutputBytes = 24'000;
+
+  std::vector<niminal::Tool> tools;
+  for (const auto& tool : available_tools) {
+    if (allowed_names.contains(tool.name) && tool.read_only && !tool.extension) {
+      tools.push_back(tool);
+    }
+  }
+
+  json tool_definitions = json_array();
+  for (const auto& tool : tools) {
+    tool_definitions.get_array().push_back(
+        json{{"name", tool.name}, {"description", tool.description}, {"parameters", tool.parameters}});
+  }
+
+  size_t tool_calls = 0;
+  for (int round = 0; round <= kMaxToolRounds; ++round) {
+    completion.tools = round < kMaxToolRounds ? tool_definitions : json_array();
+    auto result = niminal::stream_chat(completion);
+    if (result.tool_calls.empty()) {
+      return result.text;
+    }
+    if (round == kMaxToolRounds) {
+      return result.text.empty() ? "I couldn't finish the answer within the read-only lookup limit."
+                                 : result.text;
+    }
+
+    json assistant{{"role", "assistant"}, {"content", result.text}};
+    json calls = json_array();
+    for (const auto& call : result.tool_calls) {
+      json function{{"name", call.name}, {"arguments", call.arguments}};
+      json encoded_call{{"id", call.id}, {"type", "function"}, {"function", std::move(function)}};
+      if (call.provider_options) {
+        auto options = niminal::try_json_parse(*call.provider_options);
+        if (options && options->is_object()) {
+          encoded_call["provider_options"] = std::move(*options);
+        }
+      }
+      calls.get_array().push_back(std::move(encoded_call));
+    }
+    assistant["tool_calls"] = std::move(calls);
+    if (result.provider_options) {
+      auto options = niminal::try_json_parse(*result.provider_options);
+      if (options && options->is_object()) {
+        assistant["provider_options"] = std::move(*options);
+      }
+    }
+    completion.messages.get_array().push_back(std::move(assistant));
+
+    for (const auto& call : result.tool_calls) {
+      std::string output_text;
+      json images = json_array();
+      if (tool_calls++ >= kMaxToolCalls) {
+        output_text = "Read-only lookup limit reached. Answer using the information already available.";
+      } else {
+        const auto tool = std::find_if(tools.begin(), tools.end(), [&](const auto& candidate) {
+          return candidate.name == call.name;
+        });
+        if (tool == tools.end()) {
+          output_text = "unknown read-only tool: " + call.name;
+        } else {
+          try {
+            const auto arguments = niminal::try_json_parse(call.arguments.empty() ? "{}"
+                                                                                  : call.arguments);
+            if (!arguments || !arguments->is_object()) {
+              output_text = "tool error: arguments must be a JSON object";
+            } else {
+              auto output = tool->run(*arguments);
+              output_text = std::move(output.text);
+              images = std::move(output.images);
+            }
+          } catch (const std::exception& error) {
+            output_text = std::string("tool error: ") + error.what();
+          } catch (...) {
+            output_text = "tool error: unknown failure";
+          }
+          if (output_text.size() > kMaxToolOutputBytes) {
+            output_text.resize(kMaxToolOutputBytes);
+            output_text += "\n[truncated for /btw]";
+          }
+        }
+      }
+      json tool_message{{"role", "tool"}, {"tool_call_id", call.id}, {"content", output_text}};
+      if (!images.empty()) {
+        tool_message["images"] = std::move(images);
+      }
+      completion.messages.get_array().push_back(std::move(tool_message));
+    }
+  }
+  return "I couldn't finish the answer within the read-only lookup limit.";
+}
+
 } // namespace
 
 namespace {
@@ -1687,7 +1784,10 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
         completion.max_tokens = max_tokens > 0 ? max_tokens : 4096;
         completion.conversation_id = (session ? session->id : agent.conversation_id) + ":extension";
         completion.on_event = {};
-        const auto text = niminal::complete_chat(completion);
+        const bool read_only_tools = niminal::json_value(request, "read_only_tools", false);
+        const auto text = read_only_tools
+                              ? complete_with_read_only_tools(completion, agent.tools)
+                              : niminal::complete_chat(completion);
         return json{{"text", text}, {"model", agent.model}, {"finish_reason", "stop"}};
       }
       if (method == "ui.editor") {
