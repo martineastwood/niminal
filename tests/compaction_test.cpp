@@ -133,6 +133,7 @@ int main() {
             .usage = {},
             .tool_calls = {},
             .tool_results = {},
+            .turn = {},
             .continuation_token = {},
             .provider_options = {},
         };
