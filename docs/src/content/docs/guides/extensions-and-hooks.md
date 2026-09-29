@@ -240,16 +240,15 @@ send its key with an empty title, content array, and actions array.
 
 The [extensions_and_tools](https://github.com/martineastwood/extensions_and_tools)
 repository includes runnable examples in `extensions/powerline_footer`,
-`extensions/todo_widget`, and `extensions/subagent_panel`. Copy an example
-directory under
+`extensions/panel_demo`, and `extensions/todo`. Copy an example directory under
 `.niminal/extensions/` in a trusted workspace, then restart Niminal to load it.
-The commands are `/footer_demo`, `/todos`, and `/subagents_demo`.
+The commands are `/footer_demo`, `/panel_demo`, and `/todo`.
 
 The todo example also registers a `todo` tool the agent can use to create,
 update, list, inspect, delete, or clear tasks. For example, ask the agent to
 "implement the settings screen and track the work in todos." It can mark a task
 in progress as it starts and complete it when its work and checks are done.
-Run `/todos` to review the current list. Tasks are saved under
+Run `/todo` to review the current list. Tasks are saved under
 `~/.niminal/todos/`, separately for each workspace and session, so they remain
 available after an extension reload or context compaction. Because the tool
 changes saved tasks, Niminal asks for permission before the agent uses it.

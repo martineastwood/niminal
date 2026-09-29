@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <stop_token>
 #include <string>
 
 using niminal::app::create_session;
@@ -122,7 +123,8 @@ int main() {
   niminal::Agent configured_agent;
   int summaries = 0;
   configured_agent.language_model = cail::LanguageModel{
-      [&](const cail::GenerationRequest&) -> cail::Result<cail::GenerationResponse> {
+      [&](const cail::GenerationRequest&,
+          std::stop_token) -> cail::Result<cail::GenerationResponse> {
         ++summaries;
         return cail::GenerationResponse{
             .status = cail::GenerationStatus::completed,

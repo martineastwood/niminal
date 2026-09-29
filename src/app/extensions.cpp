@@ -50,7 +50,7 @@ constexpr size_t kMaxExternalOutputBytes = 100'000;
 // process group is killed. Extensions stop their own children (a subagent, a
 // helper process), and the escalation they use has to fit inside this window:
 // killing the extension first orphans the grandchildren it was stopping.
-// spawn_agent gives a subagent 1.5s to exit before it SIGKILLs it.
+// The subagent extension gives each child 1.5s to exit before it SIGKILLs it.
 constexpr auto kStopGrace = std::chrono::seconds(3);
 
 std::string string_field(const json& value, const char* key) {

@@ -1,7 +1,7 @@
 # niminal
 
 > [!WARNING]
-> This project is in alpha. Expect breaking changes, instability, and
+> This project is in beta. Expect breaking changes, instability, and
 > incomplete features. Use at your own risk.
 
 A native coding agent for your repository. Point it at a project, describe the

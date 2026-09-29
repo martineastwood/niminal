@@ -13,7 +13,7 @@ class StreamTransport final : public cail::HttpTransport {
 public:
   std::function<std::string(const cail::HttpRequest&)> response;
 
-  cail::Result<cail::HttpResponse> send(const cail::HttpRequest&) override {
+  cail::Result<cail::HttpResponse> send(const cail::HttpRequest&, std::stop_token) override {
     throw niminal::Error("expected a streaming request");
   }
 
