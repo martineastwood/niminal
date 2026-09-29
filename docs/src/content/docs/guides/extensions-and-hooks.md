@@ -253,8 +253,8 @@ Run `/todo` to review the current list. Tasks are saved under
 available after an extension reload or context compaction. Because the tool
 changes saved tasks, Niminal asks for permission before the agent uses it.
 
-The subagent panel is a UI demo with simulated work items; it does not start
-child agents.
+The panel demo behind `/panel_demo` shows fixed example items; it does not do
+real work.
 
 Extensions can also ask Niminal to show a question, confirmation, input, password,
 or external editor. Host requests support one-shot model completion, session
