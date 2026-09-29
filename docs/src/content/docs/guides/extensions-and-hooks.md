@@ -251,10 +251,8 @@ update, list, inspect, delete, or clear tasks. For example, ask the agent to
 in progress as it starts and complete it when its work and checks are done.
 Run `/todos` to review the current list. Tasks are saved under
 `~/.niminal/todos/`, separately for each workspace and session, so they remain
-available after an extension reload or context compaction. When every visible
-task is complete, choose **Clear todos** in the widget to remove the list and
-hide the widget. Because the tool changes saved tasks, Niminal asks for
-permission before the agent uses it.
+available after an extension reload or context compaction. Because the tool
+changes saved tasks, Niminal asks for permission before the agent uses it.
 
 The subagent panel is a UI demo with simulated work items; it does not start
 child agents.
