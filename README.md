@@ -129,7 +129,8 @@ Keybindings, queues, mentions, and approval prompts are covered in the
 
 ## Extend niminal
 
-Add behavior without forking the agent:
+Add behavior without forking the agent. Ready-made add-ons live in
+[niminal-extensions](https://github.com/martineastwood/niminal-extensions):
 
 - **Skills** (`SKILL.md` files) load procedures when a task needs them.
 - **Prompt templates** turn recurring requests into slash commands.
