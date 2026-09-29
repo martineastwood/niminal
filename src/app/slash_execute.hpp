@@ -53,6 +53,7 @@ struct SlashHost {
   std::function<void()> restart_extensions;
   std::function<void()> reload_local;
   std::function<void()> apply_extension_actions;
+  std::function<void(const std::string&, const std::string&)> run_extension_while_busy;
   std::function<void(niminal::UserInput prompt, bool retry)> send_prompt;
   std::function<void()> exit_ui;
   std::function<void(std::string draft)> set_draft;

@@ -413,6 +413,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::atomic<bool> ui_alive{true};
   const auto ui_thread = std::this_thread::get_id();
   std::thread worker;
+  std::vector<std::thread> background_extension_workers;
+  std::atomic<bool> canceling_background_extension_workers{false};
   PermissionPolicy permissions(cwd);
   bool yolo_mode = yolo;
   struct ApprovalGate {
@@ -1172,8 +1174,27 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       worker.join();
     }
   };
+  auto join_background_extension_workers = [&] {
+    const bool can_cancel = !busy && !user_bash_running;
+    const bool cancel_commands = can_cancel && !background_extension_workers.empty();
+    if (cancel_commands) {
+      canceling_background_extension_workers = true;
+      cancel->request();
+    }
+    for (auto& command : background_extension_workers) {
+      if (command.joinable()) {
+        command.join();
+      }
+    }
+    background_extension_workers.clear();
+    if (cancel_commands) {
+      cancel->clear();
+      canceling_background_extension_workers = false;
+    }
+  };
 
   auto restart_extensions = [&](bool end_current = true) {
+    join_background_extension_workers();
     suggestions_input.reset();
     if (extensions && end_current) {
       auto shutdown = extensions->dispatch(
@@ -1229,6 +1250,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   };
 
   auto adopt_session = [&](Session next, const std::string& note, const std::string& reason) {
+    join_background_extension_workers();
     if (extensions) {
       auto shutdown =
           extensions->dispatch(HookEvent::session_shutdown, json{{"session_id", session.id},
@@ -1359,6 +1381,46 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     });
   };
   deliver_extension_now = [&](std::string prompt) { send_prompt(std::move(prompt)); };
+  auto post_background_extension_result = [&](std::shared_ptr<ExtensionRuntime> runtime,
+                                               std::string message, BlockKind kind) {
+    if (!ui_alive) {
+      return;
+    }
+    screen.Post([&, runtime = std::move(runtime), message = std::move(message), kind] {
+      if (!ui_alive || extensions != runtime) {
+        return;
+      }
+      blocks.push_back(Block{kind, std::move(message)});
+      ++transcript_revision;
+      screen.RequestAnimationFrame();
+    });
+  };
+  auto run_extension_while_busy = [&](const std::string& name, const std::string& arguments) {
+    if (!extensions) {
+      return;
+    }
+    json context = {{"mode", "tui"},
+                    {"workspace", cwd.string()},
+                    {"session_id", session.id},
+                    {"provider", cfg.provider},
+                    {"model", agent.model},
+                    {"messages", session.openai_messages()}};
+    auto runtime = extensions;
+    background_extension_workers.emplace_back(
+        [&, runtime = std::move(runtime), name, arguments, context = std::move(context)] {
+          try {
+            auto response = runtime->invoke(name, arguments, context);
+            auto message = niminal::json_value(response, "message", std::string());
+            if (!message.empty() && !canceling_background_extension_workers) {
+              post_background_extension_result(runtime, std::move(message), BlockKind::status);
+            }
+          } catch (const std::exception& e) {
+            if (!canceling_background_extension_workers) {
+              post_background_extension_result(runtime, e.what(), BlockKind::error);
+            }
+          }
+        });
+  };
   auto run_slash = [&](const std::string& cmd, const std::string& arg, bool extension_request) {
     SlashHost slash{
         agent,
@@ -1389,6 +1451,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         [&] { restart_extensions(); },
         [&] { reload_local(); },
         [&] { apply_extension_actions(); },
+        [&](const std::string& name, const std::string& arguments) {
+          run_extension_while_busy(name, arguments);
+        },
         [&](niminal::UserInput input, bool retry) { send_prompt(std::move(input), retry); },
         [&] { quit_ui(); },
         [&](std::string text) {
@@ -2646,6 +2711,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   finish_ask_user(niminal::ToolResult{"interrupted"});
   resolve_approval(PermissionDecision::deny);
   join_worker();
+  join_background_extension_workers();
   if (catalog_thread.joinable()) {
     catalog_thread.join();
   }

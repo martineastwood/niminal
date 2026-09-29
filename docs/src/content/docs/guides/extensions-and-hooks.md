@@ -78,6 +78,29 @@ object, then answers every `command`, `tool`, and `event` request with a
 
 Use `/reload` after changing a manifest or extension program.
 
+### Run a command during a model turn
+
+Commands are blocked while niminal is working unless they opt in with
+`"while_busy": true`:
+
+```python
+send({
+    "type": "register",
+    "commands": [{
+        "name": "btw",
+        "description": "Ask a side question",
+        "while_busy": True
+    }]
+})
+```
+
+When you run an opted-in command during a turn, niminal starts it in the
+background so you can keep using the composer. Use this for independent work
+such as a side question that updates an extension widget. The background
+command's response can show a message or update extension UI. Do not return
+session, reload, or prompt actions from it, niminal does not apply those actions
+in this path.
+
 ## Add an OpenAI-compatible provider
 
 An extension can add a provider that uses the OpenAI Chat Completions API. Register

@@ -635,6 +635,10 @@ bool execute_slash(SlashHost& host, const std::string& cmd, const std::string& a
       return entry.handler(host, arg);
     }
   }
+  if (host.busy && extension_request && is_extension_slash_while_busy(host.extensions, cmd)) {
+    host.run_extension_while_busy(cmd.substr(1), arg);
+    return true;
+  }
   if (host.busy) {
     if (!extension_request && !arg.empty() &&
         (cmd == "/provider" || cmd == "/model" || cmd == "/thinking")) {

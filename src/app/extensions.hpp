@@ -77,6 +77,7 @@ struct ExtensionCommand {
   std::string name;
   std::string description;
   size_t extension = 0;
+  bool while_busy = false;
 };
 
 struct ExtensionNotice {

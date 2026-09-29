@@ -45,5 +45,7 @@ std::optional<std::string> resolve_prompt_template(const std::filesystem::path& 
                                                    const std::string& prompt, std::string_view cmd,
                                                    std::string_view arg);
 bool is_extension_slash(const std::shared_ptr<ExtensionRuntime>& extensions, std::string_view cmd);
+bool is_extension_slash_while_busy(const std::shared_ptr<ExtensionRuntime>& extensions,
+                                   std::string_view cmd);
 
 } // namespace niminal::app

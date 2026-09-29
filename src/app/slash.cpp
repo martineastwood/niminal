@@ -470,4 +470,17 @@ bool is_extension_slash(const std::shared_ptr<ExtensionRuntime>& extensions, std
   return false;
 }
 
+bool is_extension_slash_while_busy(const std::shared_ptr<ExtensionRuntime>& extensions,
+                                   std::string_view cmd) {
+  if (!extensions) {
+    return false;
+  }
+  for (const auto& command : extensions->commands()) {
+    if (command.while_busy && niminal::lower_copy("/" + command.name) == cmd) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace niminal::app

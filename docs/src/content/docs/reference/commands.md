@@ -59,7 +59,10 @@ Built-in names cannot be overridden by templates. `/quit`, `/exit`, `/version`,
 `/provider`, `/model`, and `/thinking` show the current choice during a turn;
 changes you enter take effect after the turn finishes, before the next queued
 prompt. `/models` lists configured local or Foundry models during a turn.
-Other commands are blocked until the turn finishes.
+Extension commands are blocked during a turn unless they register with
+`while_busy: true`; `/btw` uses this to answer side questions while the main
+agent keeps working. See [Extensions and hooks](/guides/extensions-and-hooks/)
+for the command option.
 
 ## `@` mentions
 

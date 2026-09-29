@@ -1253,7 +1253,8 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
       for (const auto& command : registration["commands"].get_array()) {
         auto name = string_field(command, "name");
         if (!name.empty()) {
-          runtime->commands_.push_back({name, string_field(command, "description"), index});
+          runtime->commands_.push_back({name, string_field(command, "description"), index,
+                                        niminal::json_value(command, "while_busy", false)});
         }
       }
       if (registration.contains("tools") && !registration["tools"].is_null() &&
