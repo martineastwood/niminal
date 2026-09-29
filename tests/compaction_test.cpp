@@ -122,9 +122,9 @@ int main() {
 
   niminal::Agent configured_agent;
   int summaries = 0;
-  configured_agent.language_model = cail::LanguageModel{
-      [&](const cail::GenerationRequest&,
-          std::stop_token) -> cail::Result<cail::GenerationResponse> {
+  configured_agent.language_model =
+      cail::LanguageModel{[&](const cail::GenerationRequest&,
+                              std::stop_token) -> cail::Result<cail::GenerationResponse> {
         ++summaries;
         return cail::GenerationResponse{
             .status = cail::GenerationStatus::completed,
