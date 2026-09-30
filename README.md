@@ -118,6 +118,9 @@ saved under `~/.niminal/sessions`.
 - Ctrl-V attaches a PNG, JPEG, or WebP screenshot. You can also `@mention` an
   image or drop its path into the composer.
 - Tab completes slash commands. Type `/help` for the full list.
+- Shift-Tab cycles session modes (Act and Plan by default) when the composer is
+  idle. Plan limits the agent to read-only inspection tools plus `git`, and lets
+  it interview you about open design decisions before it writes a plan.
 - `!command` runs a shell command and includes its output in the next model turn.
   `!!command` runs without sending output to the model.
 - `/resume`, `/new`, `/fork`, and `/export` manage sessions.

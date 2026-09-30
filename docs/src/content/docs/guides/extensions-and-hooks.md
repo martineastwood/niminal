@@ -341,7 +341,7 @@ dismiss shortcut.
 The panel does not block the composer or a running turn. `markdown` counts as
 one content element, and a widget can mix it with the other content types.
 
-The [extensions_and_tools](https://github.com/martineastwood/extensions_and_tools)
+The [niminal-extensions](https://github.com/martineastwood/niminal-extensions)
 repository includes runnable examples in `extensions/powerline_footer`,
 `extensions/panel_demo`, and `extensions/todo`. Copy an example directory under
 `.niminal/extensions/` in a trusted workspace, then restart Niminal to load it.
@@ -359,17 +359,50 @@ changes saved tasks, Niminal asks for permission before the agent uses it.
 The panel demo behind `/panel_demo` shows fixed example items; it does not do
 real work.
 
-Extensions can also ask Niminal to show a question, confirmation, input, password,
-or external editor. Host requests support one-shot model completion, session
-information and naming, and context usage.
+## Ask the host from an extension
+
+Extensions can block on UI or host services by sending a request and waiting for
+the matching response on stdin. Give each request a unique `id`. The TUI must be
+running for UI requests; host requests also work in headless modes when the
+capability is available.
+
+**UI requests** (`type`: `ui_request`) show overlays in the TUI:
+
+| `method` | Fields | Response |
+| --- | --- | --- |
+| `question` | `prompt`, `options` (2–4 strings) | `answer`, `cancelled` |
+| `confirm` | `prompt` | `confirmed`, `cancelled` |
+| `input` | `prompt` | `answer`, `cancelled` |
+| `password` | `prompt` | `answer`, `cancelled` (masked entry) |
+
+**Host requests** (`type`: `host_request`) call into niminal:
+
+| `method` | Fields | `result` |
+| --- | --- | --- |
+| `model.complete` | `prompt`, optional `system_prompt`, `max_tokens`, `read_only_tools` | `text`, `model`, `finish_reason` |
+| `ui.editor` | `title`, `text` | `text` from the external editor |
+| `session.info` | — | Session id, name, path, workspace, `event_count` |
+| `session.name` | optional `name` | Current `name` (set when `name` is provided) |
+| `context.usage` | — | `tokens`, `limit`, `percent` for the active session |
+
+Set `read_only_tools` to `true` on `model.complete` when the sub-call should
+only see read-only built-in tools from the current tool catalog (useful for side
+questions during Act mode without write access).
+
+```python
+send({"type": "host_request", "id": "c1", "method": "model.complete",
+      "prompt": "Summarize the last change in one sentence.",
+      "read_only_tools": True})
+# … read stdin until {"type":"host_response","id":"c1",...}
+```
 
 ## Limitations
 
 Tool results currently add text parts to model context. Image tool-result parts
 are ignored.
 
-Built-in tool names (`read`, `grep`, `glob`, `ls`, `edit`, `write`, `bash`,
-`skill`, `ask_user`) cannot be registered by extensions.
+Built-in tool names (`read`, `grep`, `glob`, `ls`, `git`, `edit`, `write`,
+`bash`, `skill`, `ask_user`) cannot be registered by extensions.
 
 Extension errors fail open: a broken extension is skipped rather than stopping the
 agent.

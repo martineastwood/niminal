@@ -49,6 +49,39 @@ Follow-up queues exist in RPC mode and through extensions. The TUI itself only
 queues steering messages while busy, but the footer `queued N` count can include
 extension follow-ups waiting after the current turn.
 
+## Session modes
+
+Niminal ships with **Act** and **Plan** modes for the main agent. Extensions can
+register more modes at startup.
+
+| Mode | Purpose |
+| --- | --- |
+| **Act** | Full built-in and extension tools. This is the default. |
+| **Plan** | Read-only inspection (`read`, `grep`, `glob`, `ls`, `git`, `ask_user`) so you can research and agree on a plan before edits. |
+
+Press Shift-Tab while the composer is idle to cycle modes. The footer shows the
+current label next to the provider and model (for example `Act` or `Plan`). A
+short status flash confirms each change. Mode cycling is disabled while a turn
+is running or an approval prompt is open.
+
+Each mode adds an authoritative prompt block to the system text (see
+[Instructions](/guides/instructions/)). Plan mode also skips approval prompts
+for its allowed tools because they cannot change the workspace. Switch back to
+Act when you want the agent to implement the plan.
+
+Plan mode interviews you before it writes the plan. The agent reads the codebase
+first, then puts the open design decisions to you one at a time with `ask_user`:
+2 to 4 choices per question, with its recommendation first. Pick a choice, choose
+`Other` for a free-text answer, or press Esc to let the agent decide for itself.
+It keeps asking while real decisions are open, skips the questions when your
+request is already unambiguous, and ends with a plan you can review before it
+touches any files.
+
+Resuming a session restores the last mode from the session file. In RPC, use
+`get_state` and `set_mode` instead. See [RPC mode](/reference/rpc-mode/) and
+[Extensions and hooks](/guides/extensions-and-hooks/#register-a-session-mode) for
+extension-defined modes.
+
 ## Run a terminal command
 
 Prefix a command with `!` to run it in the workspace and include its output in
@@ -174,8 +207,8 @@ messages while busy.
 
 The footer shows activity, extension status lines, token totals, the estimated
 session cost from models.dev pricing, the active `provider/model` (or
-`local/runtime/model` for local models), the mapped
-thinking level, and `[yolo]` when YOLO mode is on. Cost and token totals price
+`local/runtime/model` for local models), the current session mode label, the
+mapped thinking level, and `[yolo]` when YOLO mode is on. Cost and token totals price
 the whole session at the active model's rates.
 
 Next to the token totals, `context 42%` shows how much of the model's context

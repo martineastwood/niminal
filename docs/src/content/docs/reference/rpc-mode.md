@@ -85,7 +85,8 @@ change them write to `~/.niminal/config.json`.
 
 Session modes combine a prompt fragment, tool allowlist, and permission profile.
 Built-in modes are `act` (full tools) and `plan` (read-only inspection plus
-`git`). In the TUI, Shift-Tab cycles modes when the composer is idle; the footer
+`git`, and `ask_user` in the TUI so the agent can question you about the design).
+In the TUI, Shift-Tab cycles modes when the composer is idle; the footer
 shows the current mode label. Resume restores the last mode from the session
 file. Use `set_mode` to switch from RPC:
 

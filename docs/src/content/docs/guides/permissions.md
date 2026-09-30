@@ -14,6 +14,7 @@ These built-in tools run without a prompt:
 - `grep`
 - `glob`
 - `ls`
+- `git`
 - `edit`
 - `write`
 - `skill`
@@ -32,6 +33,21 @@ grant, or `n` to deny.
 
 Composer `!command` and `!!command` run without a prompt. You typed the
 command yourself.
+
+## Session modes
+
+**Plan** mode limits the main agent to read-only built-in tools plus `git`. Those
+calls run without prompts for the same reason as `read` and `grep`: they cannot
+edit files or start shell commands through the tool interface. Plan mode also
+includes `ask_user`, so the agent can question you about the design without
+pausing for approval.
+
+**Act** mode uses the normal rules above. Extension-registered modes can set
+`permissions` to `read_only`, `ask`, or `yolo`; see
+[Extensions and hooks](/guides/extensions-and-hooks/#register-a-session-mode).
+
+Shift-Tab cycles modes in the TUI when idle. The choice is saved in the session
+and restored on resume.
 
 ## Project grants
 

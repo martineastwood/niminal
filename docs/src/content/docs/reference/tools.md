@@ -27,14 +27,15 @@ workspace. The tool definitions are sent with each request.
 Path-taking tools accept workspace-relative paths only. Symlink escapes outside
 the workspace are rejected.
 
-Independent read-only built-in calls (`read`, `grep`, `glob`, `ls`, `skill`) in the
-same model response can run in parallel. Other tools run one at a time in request
-order.
+Independent read-only built-in calls (`read`, `grep`, `glob`, `ls`, `git`, `skill`)
+in the same model response can run in parallel. Other tools run one at a time in
+request order.
 
 `ask_user` is available in interactive TUI sessions. It shows the question and
 choices below the transcript, with an `Other` choice for a free-text answer. The
 transcript stays visible and scrollable while you answer. Press Esc to cancel the
-question and let the model continue.
+question and let the model continue. Plan mode includes `ask_user`, so the agent
+can put design decisions to you before it writes a plan.
 
 ```json
 {
@@ -172,6 +173,11 @@ Runs in the workspace directory. Default timeout is 120 seconds; allowed range i
 1 through 600. Combined stdout and stderr are returned with an exit code line.
 Output is capped at 100,000 bytes. Carriage return overwrites the current line,
 so progress bars do not accumulate.
+
+The subprocess receives `NIMINAL_SESSION_ID`, `NIMINAL_SESSION_FILE`,
+`NIMINAL_PROVIDER`, `NIMINAL_MODEL`, optional `NIMINAL_REASONING_LEVEL`, and
+`NIMINAL_TRUSTED` (`1` or `0`) when the workspace is trusted for project-local
+resources.
 
 In the TUI, output streams into the bash card as the command runs. Collapsed
 cards show the first 8 lines. Expand the card to follow the full captured

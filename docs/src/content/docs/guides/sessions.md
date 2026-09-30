@@ -39,8 +39,10 @@ Inside the TUI:
 | `/new` or `/clear` | Start a fresh session file |
 | `/name [title]` | Show or set the session title |
 
-Resuming restores the provider and model that session last used. It does not
-change your saved defaults in `~/.niminal/config.json`.
+Resuming restores the provider and model that session last used, and the last
+session mode (`act`, `plan`, or an extension mode). It does not change your saved
+defaults in `~/.niminal/config.json`. If a session references a mode that is no
+longer registered, niminal falls back to Act and shows a short notice.
 
 ## Fork, export, delete
 

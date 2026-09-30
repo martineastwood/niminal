@@ -39,7 +39,8 @@ the gated resources above.
 ## Workspace boundary
 
 File tools (`read`, `grep`, `glob`, `ls`, `edit`, `write`) stay inside the current
-working directory. Symlink escapes outside the workspace are rejected.
+working directory. The `git` tool runs read-only git subcommands in the workspace
+only. Symlink escapes outside the workspace are rejected.
 
 `grep` and `glob` build their file list from the workspace index. In a git
 repository that index includes tracked and untracked files and honors

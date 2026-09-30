@@ -16,10 +16,23 @@ ordered plan. Report meaningful progress and explain deviations as the work evol
 Skip checklists for simple requests.)";
 
 const char* kPlanPrompt =
-    R"(Current mode: PLAN (authoritative). Research the codebase and produce a clear plan.
+    R"(Current mode: PLAN (authoritative). Research the codebase, grill the user until the
+design is settled, then write the plan.
 Do not modify files, run shell commands, or call tools that change state.
-Use read-only inspection tools and git history when helpful. When the user switches
-to act mode, they may ask you to implement the plan.)";
+Look up every fact you can in the codebase with read-only inspection tools and git history.
+Facts come from the repo; the decisions belong to the user.
+When the request is ambiguous or leaves real design choices open, interview the user with
+`ask_user`: ask one question at a time and wait for the answer before the next, offer 2 to 4
+concrete options with your recommendation first, and take as many rounds as the design needs.
+Walk the design tree branch by branch and resolve dependencies between decisions one at a
+time. Ask only about choices that change what you would build, and never ask for something
+the codebase already answers.
+Never mix questions and the plan in the same response.
+Skip the interview when the request is already unambiguous. When the decisions are settled,
+or the user tells you to stop asking, write a short plan: the files to touch, the steps in
+order, and how you will verify the result. Do not start editing.
+If `ask_user` is not available in this session, put the open questions in your response.
+When the user switches to act mode, they may ask you to implement the plan.)";
 
 ModeSpec builtin_act() {
   return ModeSpec{.id = "act",
@@ -33,7 +46,7 @@ ModeSpec builtin_plan() {
   return ModeSpec{.id = "plan",
                   .label = "Plan",
                   .prompt = kPlanPrompt,
-                  .tool_allowlist = {"read", "grep", "glob", "ls", "git"},
+                  .tool_allowlist = {"read", "grep", "glob", "ls", "git", "ask_user"},
                   .profile = ModePermissionProfile::read_only};
 }
 

@@ -81,9 +81,14 @@ Explain how this project runs its tests, then suggest the smallest useful fix
 for the failing parser test.
 ```
 
-The interactive footer shows the active provider, model, thinking level, token
-totals, and the estimated session cost. File reads, searches, and workspace edits
-are built in. Shell commands normally ask for approval the first time.
+The interactive footer shows the active provider, model, session mode, thinking
+level, token totals, and the estimated session cost. File reads, searches, and
+workspace edits are built in. Shell commands normally ask for approval the first
+time.
+
+Press Shift-Tab while idle to switch between **Act** (implement changes) and
+**Plan** (read-only research and planning). See the
+[Interactive TUI](/guides/interactive-tui/#session-modes) guide for details.
 
 ## One-shot and piped input
 

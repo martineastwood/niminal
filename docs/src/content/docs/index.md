@@ -82,7 +82,7 @@ hero:
       <article class="landing-card">
         <span class="landing-card-index">03</span>
         <h3>You decide what runs</h3>
-        <p>Reads, searches, and workspace edits run freely. Shell commands and extension tools ask the first time, with per-session and per-project grants.</p>
+        <p>Reads, searches, and workspace edits run freely. Shell commands and extension tools ask the first time, with per-session and per-project grants. Shift-Tab switches between Act and Plan when you want research before edits.</p>
       </article>
       <article class="landing-card">
         <span class="landing-card-index">04</span>

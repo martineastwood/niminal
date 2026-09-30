@@ -25,14 +25,18 @@ int main() {
   agent.tools.push_back(niminal::Tool{"read", "r", niminal::json_object(), {}, true});
   agent.tools.push_back(niminal::Tool{"bash", "b", niminal::json_object(), {}, false});
   agent.tools.push_back(niminal::Tool{"git", "g", niminal::json_object(), {}, true});
+  agent.tools.push_back(niminal::Tool{"ask_user", "q", niminal::json_object(), {}, false});
   modes.refresh(agent);
-  if (agent.tools.size() != 2) {
-    return fail("plan should allow read and git only");
+  if (agent.tools.size() != 3) {
+    return fail("plan should allow read, git, and ask_user only");
+  }
+  if (modes.mode_prompt().find("ask_user") == std::string::npos) {
+    return fail("plan prompt should tell the model to interview the user");
   }
   if (modes.set_mode("act")) {
     modes.apply_tools(agent);
   }
-  if (agent.tools.size() != 3) {
+  if (agent.tools.size() != 4) {
     return fail("act should allow all catalog tools");
   }
   niminal::app::Session session;
