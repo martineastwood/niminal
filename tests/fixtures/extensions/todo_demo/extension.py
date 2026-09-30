@@ -111,7 +111,7 @@ def run_tool(args):
 
 
 send({"type": "register",
-      "commands": [{"name": "todos", "description": "Show the current task list"}],
+      "commands": [{"name": "todo", "description": "Show the current task list"}],
       "tools": [TOOL],
       "events": ["session_start"]})
 
@@ -125,7 +125,7 @@ for line in sys.stdin:
         if state["tasks"]:
             send({"type": "update", "widget": widget(state)})
         continue
-    if kind == "command" and message.get("name") == "todos":
+    if kind == "command" and message.get("name") == "todo":
         state = load_state()
         text = "No todos yet." if not state["tasks"] else summary(state)
         send({"type": "response", "id": message["id"], "message": text, "widget": widget(state)})

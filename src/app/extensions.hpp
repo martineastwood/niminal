@@ -143,6 +143,8 @@ public:
   std::vector<niminal::Tool> tools();
   niminal::json invoke(const std::string& name, const std::string& arguments,
                        const niminal::json& context = {});
+  // Runs a registered tool without considering commands of the same name.
+  niminal::json invoke_tool(const std::string& name, const std::string& arguments);
   void set_ui_callbacks(ExtensionUiCallbacks callbacks);
   std::string edit_text(const std::string& title, const std::string& text);
   void set_tool_update(std::function<void(const std::string&, const std::string&)> callback);

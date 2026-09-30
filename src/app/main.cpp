@@ -614,11 +614,15 @@ int main(int argc, char** argv) try {
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
   niminal::Agent agent;
   agent.model = model_from_cli ? model_override : cfg.model;
-  niminal::app::ShellEnvFn shell_env = [&session, &agent, &cfg, &provider_override] {
+  niminal::app::ShellEnvFn shell_env = [&session, &agent, &cfg, &provider_override,
+                                        trusted = project_trust.trusted] {
     auto env = niminal::app::make_shell_env(session, agent, cfg);
     if (!agent.language_model && !provider_override.empty()) {
       env["NIMINAL_PROVIDER"] = provider_override;
     }
+    // Extensions and hooks that load project files of their own need to know
+    // whether this workspace was trusted, which no other env var reports.
+    env["NIMINAL_TRUSTED"] = trusted ? "1" : "0";
     return env;
   };
   auto extensions =

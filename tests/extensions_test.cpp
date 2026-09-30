@@ -176,7 +176,7 @@ int main() {
     return 1;
   }
   auto footer_demo = runtime->invoke("footer_demo", "");
-  auto empty_todos = runtime->invoke("todos", "");
+  auto empty_todos = runtime->invoke("todo", "");
   auto subagents_demo = runtime->invoke("subagents_demo", "");
   auto panel_demo = runtime->invoke("panel", "");
   runtime->invoke("panel_invalid", "");
@@ -264,6 +264,8 @@ int main() {
     std::cerr << "todo tool was not registered for the agent\n";
     return 1;
   }
+  // The fixture registers this tool and a command under the same name, so these
+  // calls also prove a tool call is not shadowed by the command of that name.
   const auto created_first = todo_tool->run(
       niminal::json{{"action", "create"}, {"subject", "Review the existing behavior"}});
   const auto created_second =
@@ -276,7 +278,7 @@ int main() {
                                    {"status", "in_progress"},
                                    {"activeForm", "reviewing existing behavior"}});
   const auto todo_widget = find_widget("todo_demo", "tasks");
-  const auto todo_list = runtime->invoke("todos", "");
+  const auto todo_list = runtime->invoke("todo", "");
   if (created_first.text.find("Created [pending] #1") == std::string::npos ||
       created_second.text.find("Created [pending] #2") == std::string::npos ||
       created_second.text.find("Current todo list:\nPending:") == std::string::npos ||
@@ -613,7 +615,7 @@ int main() {
   }
   const auto cleared = restored_todo_tool->run(niminal::json{{"action", "clear"}});
   if (!cleared.text.starts_with("Cleared 2 tasks.") ||
-      niminal::json_value(runtime->invoke("todos", ""), "message", "") != "No todos yet.") {
+      niminal::json_value(runtime->invoke("todo", ""), "message", "") != "No todos yet.") {
     std::cerr << "todo clear did not remove the saved task list\n";
     return 1;
   }

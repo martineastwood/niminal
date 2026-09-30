@@ -1471,7 +1471,7 @@ std::vector<niminal::Tool> ExtensionRuntime::tools() {
     result.push_back(
         niminal::Tool{tool.name, tool.description, tool.schema,
                       [self, name = tool.name](const json& input) {
-                        auto response = self->invoke(name, niminal::json_dump(input));
+                        auto response = self->invoke_tool(name, niminal::json_dump(input));
                         if (!response.contains("content") || !response["content"].is_array()) {
                           throw std::runtime_error("extension tool content must be an array");
                         }
@@ -1525,6 +1525,13 @@ json ExtensionRuntime::invoke(const std::string& name, const std::string& argume
     }
     return request(*impl_, *impl_->processes[command.extension], std::move(message), cancel_);
   }
+  return invoke_tool(name, arguments);
+}
+
+// A model tool call has to reach the tool even when the extension also
+// registers a command with the same name, which the slash path runs instead:
+// an extension may pair "subagent" the tool with /subagent the command.
+json ExtensionRuntime::invoke_tool(const std::string& name, const std::string& arguments) {
   for (auto it = impl_->tools.rbegin(); it != impl_->tools.rend(); ++it) {
     const auto& tool = *it;
     if (niminal::lower_copy(tool.name) != niminal::lower_copy(name)) {
