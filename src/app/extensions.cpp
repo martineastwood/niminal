@@ -1331,7 +1331,8 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
       process->send(json{{"type", "initialize"},
                          {"version", 1},
                          {"workspace", runtime->workspace_.string()},
-                         {"session_id", session_id}});
+                         {"session_id", session_id},
+                         {"trusted", project_resources_trusted(runtime->workspace_)}});
       // The registration handshake is not cancellable: a shutdown signal that
       // lands during startup would otherwise abort every extension with
       // "interrupted" instead of letting it finish loading.

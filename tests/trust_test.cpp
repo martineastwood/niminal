@@ -22,10 +22,11 @@ int main() {
   std::ofstream(child / ".niminal" / "skills" / "review" / "SKILL.md") << "review";
   std::ofstream(child / ".niminal" / "prompts" / "review.md") << "review";
   std::ofstream(child / ".niminal" / "extensions" / "guard" / "extension.json") << "{}";
+  std::ofstream(child / ".niminal" / "mcp.json") << "{\"mcpServers\":{}}";
   setenv("HOME", home.c_str(), 1);
 
   auto resources = niminal::app::project_trust_resources(child);
-  if (resources.size() != 4) {
+  if (resources.size() != 5) {
     std::cerr << "unexpected trust resource count\n";
     return 1;
   }

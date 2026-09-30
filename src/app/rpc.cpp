@@ -81,7 +81,12 @@ public:
           request_shutdown();
           continue;
         }
-        if (result > 0 && ((ready.revents & (POLLIN | POLLHUP)) != 0)) {
+        const short events = result > 0 ? ready.revents : 0;
+        if ((events & (POLLNVAL | POLLERR)) != 0) {
+          // stdin is not pollable (for example /dev/null): no input can ever arrive,
+          // and treating it as "not ready" spins this loop at full tilt.
+          eof = true;
+        } else if ((events & (POLLIN | POLLHUP)) != 0) {
           char buffer[4096];
           const auto count = ::read(STDIN_FILENO, buffer, sizeof(buffer));
           if (count <= 0) {

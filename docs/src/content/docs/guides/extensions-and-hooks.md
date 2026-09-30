@@ -72,9 +72,20 @@ for line in sys.stdin:
         send({"type": "response", "id": message["id"]})
 ```
 
-The host sends `initialize` first. Your program replies with one `register`
-object, then answers every `command`, `tool`, and `event` request with a
-`response` carrying the same `id`. Stdout is reserved for protocol messages.
+The host sends `initialize` first:
+
+```json
+{"type":"initialize","version":1,"workspace":"/path/to/project","session_id":"…","trusted":true}
+```
+
+`trusted` is `true` when the workspace is trusted for project-local resources
+(skills, tools, extensions, and project `mcp.json`). Extensions that spawn
+commands from project configuration should load those paths only when
+`trusted` is true.
+
+Your program replies with one `register` object, then answers every `command`,
+`tool`, and `event` request with a `response` carrying the same `id`. Stdout is
+reserved for protocol messages.
 
 Use `/reload` after changing a manifest or extension program.
 

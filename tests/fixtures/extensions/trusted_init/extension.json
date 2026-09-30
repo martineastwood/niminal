@@ -1,0 +1,4 @@
+{
+  "name": "trusted_init",
+  "command": ["./extension.py"]
+}

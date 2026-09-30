@@ -39,7 +39,8 @@ int main() {
   const fs::path fixtures = fs::path(NIMINAL_EXTENSIONS_FIXTURES_DIR);
   fs::create_directories(root / ".niminal" / "extensions");
   for (const auto* name : {"fixture", "host", "orphan_guard", "panel_demo", "parallel",
-                           "status_demo", "stdin_watcher", "todo_demo", "widget_demo"}) {
+                           "status_demo", "stdin_watcher", "todo_demo", "trusted_init",
+                           "widget_demo"}) {
     fs::copy(fixtures / name, root / ".niminal" / "extensions" / name, fs::copy_options::recursive);
   }
   setenv("HOME", home.c_str(), 1);
@@ -89,7 +90,7 @@ int main() {
                                   {"NIMINAL_REASONING_LEVEL", "high"}};
   };
   auto runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
-  if (runtime->commands().size() != 8) {
+  if (runtime->commands().size() != 9) {
     std::cerr << "extension registration failed, got " << runtime->commands().size()
               << " commands\n";
     for (const auto& warning : runtime->warnings()) {
@@ -149,6 +150,12 @@ int main() {
       }
       return 1;
     }
+  }
+  auto trusted = runtime->invoke("trusted_echo", "");
+  if (niminal::json_value(trusted, "message", "") != "trusted=true") {
+    std::cerr << "initialize should pass trusted=true for a trusted workspace: "
+              << niminal::json_value(trusted, "message", "") << '\n';
+    return 1;
   }
   auto command = runtime->invoke("hello", "world");
   if (niminal::json_value(command, "message", "") != "Hello world env=sess-7") {

@@ -59,8 +59,11 @@ breakpoints are applied on supported providers before the CAIL call.
 ## Out of scope
 
 niminal does not ship a hosted service, repo index daemon, LSP integration, or
-built-in MCP client. Codex App Server is not wired. Plan mode is not exposed;
-the agent always runs in act mode.
+built-in MCP client. You can add MCP tools with the optional `mcp` extension
+from [niminal-extensions](https://github.com/martineastwood/niminal-extensions),
+which bridges stdio MCP servers into the extension tool protocol. Codex App
+Server is not wired. Plan mode is not exposed; the agent always runs in act
+mode.
 
 ## Embed the agent
 
