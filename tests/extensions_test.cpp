@@ -15,6 +15,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -39,8 +40,8 @@ int main() {
   const fs::path fixtures = fs::path(NIMINAL_EXTENSIONS_FIXTURES_DIR);
   fs::create_directories(root / ".niminal" / "extensions");
   for (const auto* name :
-       {"fixture", "host", "orphan_guard", "panel_demo", "parallel", "status_demo", "stdin_watcher",
-        "todo_demo", "trusted_init", "widget_demo"}) {
+       {"fixture", "host", "orphan_guard", "panel_demo", "parallel", "session_switch",
+        "status_demo", "stdin_watcher", "todo_demo", "trusted_init", "widget_demo"}) {
     fs::copy(fixtures / name, root / ".niminal" / "extensions" / name, fs::copy_options::recursive);
   }
   setenv("HOME", home.c_str(), 1);
@@ -148,6 +149,28 @@ int main() {
       for (const auto& name : after.skills) {
         std::cerr << "  skill: " << name << '\n';
       }
+      return 1;
+    }
+  }
+  {
+    // A session change ends the old session and starts the new one in the same
+    // extension process. Restarting the programs there would rebuild everything
+    // they hold, such as connected MCP servers.
+    const auto starts_log = home / "session_switch_starts.log";
+    const auto events_log = home / "session_switch_events.log";
+    const auto read_text = [](const fs::path& path) {
+      std::ifstream in(path);
+      return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    };
+    const auto starts_before = read_text(starts_log);
+    fs::remove(events_log);
+    const auto warnings =
+        niminal::app::switch_extension_session(*runtime, "old-session", "new-session", "new", root);
+    const auto events = read_text(events_log);
+    if (!warnings.empty() || events != "session_end:old-session:new\nsession_start:new-session\n" ||
+        read_text(starts_log) != starts_before) {
+      std::cerr << "a session change should end and start sessions in a live extension, got:\n"
+                << events;
       return 1;
     }
   }

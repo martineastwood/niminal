@@ -1804,6 +1804,23 @@ json session_hook_payload(const std::string& session_id, const fs::path& workspa
   return json{{"session_id", session_id}, {"workspace", workspace.string()}};
 }
 
+std::vector<std::string> switch_extension_session(ExtensionRuntime& runtime,
+                                                  const std::string& from_session_id,
+                                                  const std::string& to_session_id,
+                                                  const std::string& reason,
+                                                  const fs::path& workspace) {
+  std::vector<std::string> warnings;
+  const auto collect = [&](const HookOutcome& outcome) {
+    warnings.insert(warnings.end(), outcome.warnings.begin(), outcome.warnings.end());
+  };
+  auto ended = session_hook_payload(from_session_id, workspace);
+  ended["reason"] = reason;
+  collect(runtime.dispatch(HookEvent::session_end, ended));
+  collect(
+      runtime.dispatch(HookEvent::session_start, session_hook_payload(to_session_id, workspace)));
+  return warnings;
+}
+
 json provider_hook_payload(const niminal::Agent& agent, const fs::path& workspace,
                            const Config& cfg) {
   auto payload = session_hook_payload(agent.conversation_id, workspace);

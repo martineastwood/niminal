@@ -177,6 +177,14 @@ private:
 
 niminal::json session_hook_payload(const std::string& session_id,
                                    const std::filesystem::path& workspace);
+// Tells loaded extensions that the session changed. The programs keep running:
+// they get session_end for the session that closed and session_start for the
+// new one, so resources they hold (MCP servers, spawned children) survive.
+std::vector<std::string> switch_extension_session(ExtensionRuntime& runtime,
+                                                  const std::string& from_session_id,
+                                                  const std::string& to_session_id,
+                                                  const std::string& reason,
+                                                  const std::filesystem::path& workspace);
 void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRuntime>& runtime,
                      const std::filesystem::path& workspace, const Config& cfg,
                      const std::function<void(const std::string&)>& note = {},

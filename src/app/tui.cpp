@@ -1278,10 +1278,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   };
 
-  auto restart_extensions = [&](bool end_current = true) {
+  auto restart_extensions = [&] {
     join_background_extension_workers();
     suggestions_input.reset();
-    if (extensions && end_current) {
+    if (extensions) {
       auto shutdown = extensions->dispatch(
           HookEvent::session_shutdown,
           json{{"session_id", session.id}, {"workspace", cwd.string()}, {"reason", "reload"}});
@@ -1289,8 +1289,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       auto ended =
           extensions->dispatch(HookEvent::session_end, session_hook_payload(session.id, cwd));
       append_warnings(blocks, ended.warnings);
-    }
-    if (extensions) {
       extensions->stop();
     }
     extensions = ExtensionRuntime::start(cwd, session.id, cancel);
@@ -1339,18 +1337,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
   auto adopt_session = [&](Session next, const std::string& note, const std::string& reason) {
     join_background_extension_workers();
-    if (extensions) {
-      auto shutdown =
-          extensions->dispatch(HookEvent::session_shutdown, json{{"session_id", session.id},
-                                                                 {"workspace", cwd.string()},
-                                                                 {"reason", reason},
-                                                                 {"target_session_id", next.id}});
-      append_warnings(blocks, shutdown.warnings);
-      auto ended =
-          extensions->dispatch(HookEvent::session_end, session_hook_payload(session.id, cwd));
-      append_warnings(blocks, ended.warnings);
-      extensions->stop();
-    }
+    // Extensions stay loaded across a session change: they are told the old
+    // session ended and the new one started. Restarting them here would rebuild
+    // everything they hold, such as connected MCP servers.
+    const auto outgoing = session.id;
     session = std::move(next);
     usage_totals = session.usage_totals();
     ++footer_revision;
@@ -1360,7 +1350,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     apply_provider(agent, cfg);
     agent.messages = session.openai_messages();
     load_into_ui(note);
-    restart_extensions(false);
+    if (extensions) {
+      append_warnings(blocks,
+                      switch_extension_session(*extensions, outgoing, session.id, reason, cwd));
+      apply_extension_actions();
+      ++transcript_revision;
+    }
   };
   auto allow_session_switch = [&](const std::string& reason, const std::string& target) {
     if (!extensions) {

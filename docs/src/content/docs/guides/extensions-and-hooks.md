@@ -178,8 +178,8 @@ Extensions can subscribe to:
 | `turn_start` | Run at the start of a user turn |
 | `turn_end` | Run when a turn finishes |
 | `context` | Append system strings or messages before the model request |
-| `session_start` | Session opened |
-| `session_end` | Session closed |
+| `session_start` | Session opened, including the new session after a change |
+| `session_end` | Session closed, including the session you leave with `/new` or `/resume` |
 | `session_before_compact` | Block compaction or add an instruction |
 | `session_compact` | Supply a custom compaction result |
 | `input` | Replace submitted text or return `allow: false` before it is saved |
@@ -187,11 +187,18 @@ Extensions can subscribe to:
 | `message_end` | Replace the completed assistant text before it is saved |
 | `agent_settled` | Observe when the run has finished, including queued follow-ups |
 | `session_before_switch` | Return `allow: false` to cancel a TUI session change |
-| `session_shutdown` | Clean up before quitting, reloading, or changing sessions |
+| `session_shutdown` | Clean up before `/reload` or `/trust` restarts your extension |
 | `before_provider_request` | Replace the provider JSON `payload` before sending it |
 | `before_provider_headers` | Add, replace, or remove HTTP `headers` |
 | `after_provider_response` | Observe HTTP `status`, `headers`, `duration_ms`, and `error_body` |
 | `session_compact_failed` | Observe a model error or empty compaction summary |
+
+Changing sessions with `/new`, `/resume`, or `/fork` does not restart your program.
+You receive `session_end` for the session you leave and `session_start` for the new
+one, each carrying its own `session_id`. Keep anything you built at startup, such as
+server connections or child processes, and reset only what belongs to the old
+session when `session_start` arrives. `/reload` and `/trust` do restart your
+program, so `session_shutdown` is where you release that kind of resource.
 
 For example, you can tailor one run without changing the user's saved prompt.
 Register `before_agent_start` in your extension's `events` list, then reply:
@@ -216,18 +223,19 @@ headers and `null` to remove them. For `before_provider_request`, return a
 complete `payload` object to replace the outgoing JSON body.
 
 `session_before_switch` runs for new, resumed, and forked sessions in the TUI.
-`session_shutdown` includes `reason`: `quit`, `reload`, `new`, `resume`, or
-`fork`. `after_provider_response` sends an empty `error_body` on successful
-responses. On HTTP errors, it contains the response body.
+`session_shutdown` runs just before niminal restarts or stops your program, and
+includes `reason`: `reload` when `/reload` or `/trust` reloaded it, or `quit`
+when a headless run ends. `after_provider_response` sends an empty `error_body`
+on successful responses. On HTTP errors, it contains the response body.
 
 ## Shutting down
 
-Niminal sends `{"type": "shutdown"}` when it quits, reloads your extension, or
-switches sessions, and closes your stdin at the same time. Treat both as the same
-signal: stop what you started and exit. Niminal waits three seconds for your
-process to exit, then kills the process group it started you in, so anything you
-leave running is orphaned. Keep the children you start in that group and stop
-them yourself in the same pass:
+Niminal sends `{"type": "shutdown"}` when it quits or restarts your extension, and
+closes your stdin at the same time. Treat both as the same signal: stop what you
+started and exit. A session change does not send it, because your program keeps
+running. Niminal waits three seconds for your process to exit, then kills the
+process group it started you in, so anything you leave running is orphaned. Keep
+the children you start in that group and stop them yourself in the same pass:
 
 ```python
 import json, subprocess, sys

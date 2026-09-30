@@ -1,0 +1,4 @@
+{
+  "name": "session_switch",
+  "command": ["./extension.py"]
+}
