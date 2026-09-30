@@ -140,16 +140,13 @@ std::string join(const std::vector<std::string>& parts) {
   return out.str();
 }
 
-bool listed_tool(const std::vector<std::string>& allowed, const std::string& name) {
-  const auto normalized = niminal::app::ModeController::normalize_tool_name(name);
-  return std::ranges::find(allowed, normalized) != allowed.end();
-}
-
 void restrict_tools(niminal::Agent& agent, const std::vector<std::string>& allowed) {
-  agent.tools.erase(
-      std::remove_if(agent.tools.begin(), agent.tools.end(),
-                     [&](const auto& tool) { return !listed_tool(allowed, tool.name); }),
-      agent.tools.end());
+  agent.tools.erase(std::remove_if(agent.tools.begin(), agent.tools.end(),
+                                   [&](const auto& tool) {
+                                     return !niminal::app::ModeController::tool_allowed(allowed,
+                                                                                        tool.name);
+                                   }),
+                    agent.tools.end());
 }
 
 struct SystemPromptOptions {
@@ -467,7 +464,7 @@ int main(int argc, char** argv) try {
             std::cerr << "Tool names must not be empty\n";
             return 2;
           }
-          if (!listed_tool(allowed_tools, name)) {
+          if (std::ranges::find(allowed_tools, name) == allowed_tools.end()) {
             allowed_tools.push_back(name);
           }
         }

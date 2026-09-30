@@ -18,7 +18,8 @@ int main() {
   if (modes.id() != "act" || modes.label() != "Act") {
     return fail("default mode is act");
   }
-  if (!modes.cycle_next() || modes.id() != "plan") {
+  modes.cycle_next();
+  if (modes.id() != "plan") {
     return fail("cycle act to plan");
   }
   niminal::Agent agent;

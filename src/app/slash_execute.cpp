@@ -279,9 +279,7 @@ bool handle_provider(SlashHost& host, const std::string& arg) {
   } catch (const std::exception& e) {
     push_error(host, "provider set for this session, save failed: " + std::string(e.what()));
   }
-  if (host.notify_session_settings_changed) {
-    host.notify_session_settings_changed();
-  }
+  host.notify_session_settings_changed();
   return true;
 }
 
@@ -323,9 +321,7 @@ bool handle_model(SlashHost& host, const std::string& arg) {
   } catch (const std::exception& e) {
     push_error(host, "model set for this session, save failed: " + std::string(e.what()));
   }
-  if (host.notify_session_settings_changed) {
-    host.notify_session_settings_changed();
-  }
+  host.notify_session_settings_changed();
   return true;
 }
 
@@ -366,9 +362,7 @@ bool handle_thinking(SlashHost& host, const std::string& arg) {
   } catch (const std::exception& e) {
     push_error(host, "thinking set for this session, save failed: " + std::string(e.what()));
   }
-  if (host.notify_session_settings_changed) {
-    host.notify_session_settings_changed();
-  }
+  host.notify_session_settings_changed();
   return true;
 }
 

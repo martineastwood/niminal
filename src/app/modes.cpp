@@ -1,7 +1,8 @@
 #include "modes.hpp"
 
+#include <niminal/text.hpp>
+
 #include <cassert>
-#include <cctype>
 #include <ranges>
 
 namespace niminal::app {
@@ -50,14 +51,6 @@ ModeSpec builtin_plan() {
                   .profile = ModePermissionProfile::read_only};
 }
 
-bool tool_allowed(const std::vector<std::string>& allowed, const std::string& name) {
-  if (allowed.empty()) {
-    return true;
-  }
-  const auto normalized = ModeController::normalize_tool_name(name);
-  return std::ranges::find(allowed, normalized) != allowed.end();
-}
-
 } // namespace
 
 ModeController::ModeController() {
@@ -77,20 +70,7 @@ void ModeController::rebuild_modes() {
 }
 
 void ModeController::set_extension_modes(std::vector<ModeSpec> modes) {
-  extension_modes_.clear();
-  for (auto& mode : modes) {
-    if (mode.id.empty() || mode.label.empty() || mode.prompt.empty()) {
-      continue;
-    }
-    if (mode.id == "act" || mode.id == "plan") {
-      continue;
-    }
-    if (std::ranges::any_of(extension_modes_,
-                            [&](const ModeSpec& existing) { return existing.id == mode.id; })) {
-      continue;
-    }
-    extension_modes_.push_back(std::move(mode));
-  }
+  extension_modes_ = std::move(modes);
   rebuild_modes();
 }
 
@@ -120,16 +100,12 @@ void ModeController::apply_tools(niminal::Agent& agent) const {
 }
 
 std::string ModeController::normalize_tool_name(std::string name) {
-  const auto first = name.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) {
-    return {};
-  }
-  const auto last = name.find_last_not_of(" \t\r\n");
-  name = name.substr(first, last - first + 1);
-  for (char& c : name) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return name;
+  return lower_copy(trim_copy(std::move(name)));
+}
+
+bool ModeController::tool_allowed(const std::vector<std::string>& allowed,
+                                  const std::string& name) {
+  return allowed.empty() || std::ranges::find(allowed, normalize_tool_name(name)) != allowed.end();
 }
 
 std::optional<ModePermissionProfile> ModeController::parse_profile(std::string_view name) {
@@ -168,12 +144,11 @@ bool ModeController::set_mode(std::string_view id) {
   return true;
 }
 
-bool ModeController::cycle_next() {
+void ModeController::cycle_next() {
   const auto it =
       std::ranges::find_if(modes_, [&](const ModeSpec& mode) { return mode.id == current_id_; });
   const size_t index = it == modes_.end() ? 0 : static_cast<size_t>(it - modes_.begin());
   current_id_ = modes_[(index + 1) % modes_.size()].id;
-  return true;
 }
 
 std::string ModeController::label() const {
@@ -184,12 +159,8 @@ std::string ModeController::mode_prompt() const {
   return require_current().prompt;
 }
 
-ModePermissionProfile ModeController::profile() const {
-  return require_current().profile;
-}
-
 bool ModeController::skips_tool_approval() const {
-  const auto prof = profile();
+  const auto prof = require_current().profile;
   return prof == ModePermissionProfile::read_only || prof == ModePermissionProfile::yolo;
 }
 

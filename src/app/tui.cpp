@@ -791,37 +791,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     screen.RequestAnimationFrame();
   };
 
-  // Extensions keep running when the provider, model, or thinking level changes,
-  // so they are told about it. Assigned below, once the extension helpers exist.
-  std::function<void()> notify_session_settings_changed;
-
-  auto persist_settings = [&](const SettingApplyResult& result) {
-    if (!result.error.empty()) {
-      settings_error = result.error;
-      return;
-    }
-    settings_error.clear();
-    suggestions_input.reset();
-    try {
-      if (result.theme_changed) {
-        theme = load_theme(cfg.theme).value();
-        message_cache.clear();
-        ++transcript_revision;
-      }
-      if (result.agent_changed) {
-        apply_provider(agent, cfg);
-        session.add_selection(cfg.model, cfg.provider);
-        if (notify_session_settings_changed) {
-          notify_session_settings_changed();
-        }
-      }
-      save_config(cfg);
-      flash_footer("Saved " + config_path().string());
-    } catch (const std::exception& e) {
-      settings_error = e.what();
-    }
-  };
-
   auto history_prev = [&] {
     if (history.empty()) {
       return;
@@ -892,7 +861,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   };
 
-  notify_session_settings_changed = [&] {
+  auto notify_session_settings_changed = [&] {
     if (!extensions) {
       return;
     }
@@ -901,6 +870,31 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     apply_extension_actions();
     ++transcript_revision;
     screen.RequestAnimationFrame();
+  };
+
+  auto persist_settings = [&](const SettingApplyResult& result) {
+    if (!result.error.empty()) {
+      settings_error = result.error;
+      return;
+    }
+    settings_error.clear();
+    suggestions_input.reset();
+    try {
+      if (result.theme_changed) {
+        theme = load_theme(cfg.theme).value();
+        message_cache.clear();
+        ++transcript_revision;
+      }
+      if (result.agent_changed) {
+        apply_provider(agent, cfg);
+        session.add_selection(cfg.model, cfg.provider);
+        notify_session_settings_changed();
+      }
+      save_config(cfg);
+      flash_footer("Saved " + config_path().string());
+    } catch (const std::exception& e) {
+      settings_error = e.what();
+    }
   };
 
   auto usage_totals = session.usage_totals();

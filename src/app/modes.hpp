@@ -25,16 +25,14 @@ public:
   ModeController();
 
   void set_extension_modes(std::vector<ModeSpec> modes);
-  // restore catalog → prepare → capture → apply current mode filter
   void refresh(niminal::Agent& agent, const std::function<void(niminal::Agent&)>& prepare = {});
   void apply_tools(niminal::Agent& agent) const;
 
   bool set_mode(std::string_view id);
-  bool cycle_next();
+  void cycle_next();
   const std::string& id() const { return current_id_; }
   std::string label() const;
   std::string mode_prompt() const;
-  ModePermissionProfile profile() const;
   bool skips_tool_approval() const;
   std::vector<std::string> ids() const;
 
@@ -42,6 +40,7 @@ public:
 
   static std::optional<ModePermissionProfile> parse_profile(std::string_view name);
   static std::string normalize_tool_name(std::string name);
+  static bool tool_allowed(const std::vector<std::string>& allowed, const std::string& name);
 
 private:
   std::vector<ModeSpec> modes_;

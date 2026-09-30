@@ -73,12 +73,9 @@ std::vector<std::string> string_array(const json& value, const char* key) {
 }
 
 bool builtin_tool(std::string name) {
-  for (char& c : name) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  static const std::set<std::string> names = {"ask_user", "bash", "edit",  "glob", "grep",
-                                              "ls",       "read", "skill", "write"};
-  return names.contains(name);
+  static const std::set<std::string> names = {"ask_user", "bash", "edit", "git",   "glob",
+                                              "grep",     "ls",   "read", "skill", "write"};
+  return names.contains(ModeController::normalize_tool_name(std::move(name)));
 }
 
 std::vector<fs::path> scan_manifest_dirs(const std::vector<fs::path>& bases,
@@ -1842,14 +1839,6 @@ std::vector<std::string> dispatch_session_settings_changed(ExtensionRuntime& run
   return outcome.warnings;
 }
 
-json provider_hook_payload(const niminal::Agent& agent, const fs::path& workspace,
-                           const Config& cfg) {
-  auto payload = session_hook_payload(agent.conversation_id, workspace);
-  payload["provider"] = cfg.provider;
-  payload["model"] = agent.model;
-  return payload;
-}
-
 void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRuntime>& runtime,
                      const fs::path& workspace, const Config& cfg,
                      const std::function<void(const std::string&)>& note, Session* session) {
@@ -2049,7 +2038,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
   };
   agent.before_provider_headers = [dispatch, workspace, &agent,
                                    &cfg](std::map<std::string, std::string>& headers) {
-    auto payload = provider_hook_payload(agent, workspace, cfg);
+    auto payload = session_settings_payload(agent.conversation_id, workspace, cfg, agent);
     payload["headers"] = headers;
     auto outcome = dispatch(HookEvent::before_provider_headers, std::move(payload));
     if (outcome.has_headers) {
@@ -2062,7 +2051,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
     }
   };
   agent.before_provider_request = [dispatch, workspace, &agent, &cfg](json& payload) {
-    auto request = provider_hook_payload(agent, workspace, cfg);
+    auto request = session_settings_payload(agent.conversation_id, workspace, cfg, agent);
     request["payload"] = payload;
     auto outcome = dispatch(HookEvent::before_provider_request, std::move(request));
     if (outcome.has_payload) {
@@ -2071,7 +2060,7 @@ void bind_extensions(niminal::Agent& agent, const std::shared_ptr<ExtensionRunti
   };
   agent.after_provider_response = [dispatch, workspace, &agent,
                                    &cfg](const niminal::ProviderResponse& response) {
-    auto payload = provider_hook_payload(agent, workspace, cfg);
+    auto payload = session_settings_payload(agent.conversation_id, workspace, cfg, agent);
     payload["status"] = response.status;
     payload["headers"] = response.headers;
     payload["duration_ms"] = response.duration_ms;

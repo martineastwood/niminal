@@ -227,7 +227,7 @@ and sent as a user message to the model. Omit either field if you do not need it
 
 `input` receives `text` and `images`; return `text` to replace the submitted
 text, or `{"allow": false, "reason": "..."}` to stop the turn. Provider hooks
-receive the selected `provider`, `model`, and session ID. For
+receive the selected `provider`, `model`, `thinking`, and session ID. For
 `before_provider_headers`, return a `headers` object with string values to set
 headers and `null` to remove them. For `before_provider_request`, return a
 complete `payload` object to replace the outgoing JSON body.
