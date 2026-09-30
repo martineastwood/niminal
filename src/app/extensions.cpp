@@ -1,5 +1,6 @@
 #include "extensions.hpp"
 
+#include "modes.hpp"
 #include "provider.hpp"
 #include <niminal/text.hpp>
 
@@ -310,7 +311,6 @@ public:
   std::string name;
   std::set<std::string> events;
   int timeout_ms = kDefaultTimeoutMs;
-  std::mutex mutex;
 
   Process(const Manifest& manifest, const fs::path& dir, const fs::path& workspace,
           const ShellEnv& env)
@@ -801,19 +801,7 @@ std::string complete_with_read_only_tools(niminal::ChatRequest completion,
     }
 
     json assistant{{"role", "assistant"}, {"content", result.text}};
-    json calls = json_array();
-    for (const auto& call : result.tool_calls) {
-      json function{{"name", call.name}, {"arguments", call.arguments}};
-      json encoded_call{{"id", call.id}, {"type", "function"}, {"function", std::move(function)}};
-      if (call.provider_options) {
-        auto options = niminal::try_json_parse(*call.provider_options);
-        if (options && options->is_object()) {
-          encoded_call["provider_options"] = std::move(*options);
-        }
-      }
-      calls.get_array().push_back(std::move(encoded_call));
-    }
-    assistant["tool_calls"] = std::move(calls);
+    assistant["tool_calls"] = niminal::encode_tool_calls(result.tool_calls);
     if (result.provider_options) {
       auto options = niminal::try_json_parse(*result.provider_options);
       if (options && options->is_object()) {
@@ -1192,6 +1180,53 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
   }
 }
 
+void parse_register_modes(const json& registration, std::vector<ModeSpec>& out) {
+  if (!registration.contains("modes")) {
+    return;
+  }
+  if (!registration["modes"].is_array()) {
+    throw std::runtime_error("register modes must be an array");
+  }
+  for (const auto& mode_doc : registration["modes"].get_array()) {
+    if (!mode_doc.is_object()) {
+      throw std::runtime_error("register modes entries must be objects");
+    }
+    auto id = string_field(mode_doc, "id");
+    auto label = string_field(mode_doc, "label");
+    auto prompt = string_field(mode_doc, "prompt");
+    auto permissions = string_field(mode_doc, "permissions");
+    if (id.empty() || label.empty() || prompt.empty() || permissions.empty()) {
+      throw std::runtime_error("register modes require id, label, prompt, and permissions");
+    }
+    if (id == "act" || id == "plan") {
+      throw std::runtime_error("register modes cannot use reserved id '" + id + "'");
+    }
+    const auto profile = ModeController::parse_profile(permissions);
+    if (!profile) {
+      throw std::runtime_error("register modes permissions must be read_only, ask, or yolo");
+    }
+    if (!mode_doc.contains("tools") || !mode_doc["tools"].is_array() ||
+        mode_doc["tools"].get_array().empty()) {
+      throw std::runtime_error("register modes require a non-empty tools array");
+    }
+    std::vector<std::string> tools;
+    for (const auto& tool : mode_doc["tools"].get_array()) {
+      if (!tool.is_string()) {
+        throw std::runtime_error("register modes tools must be strings");
+      }
+      tools.push_back(ModeController::normalize_tool_name(tool.get<std::string>()));
+    }
+    if (std::ranges::any_of(out, [&](const ModeSpec& existing) { return existing.id == id; })) {
+      throw std::runtime_error("duplicate register mode id '" + id + "'");
+    }
+    out.push_back(ModeSpec{.id = std::move(id),
+                           .label = std::move(label),
+                           .prompt = std::move(prompt),
+                           .tool_allowlist = std::move(tools),
+                           .profile = *profile});
+  }
+}
+
 void handle_incoming(ExtensionRuntime::Impl& impl, Process& process, const std::string& line) {
   json incoming;
   try {
@@ -1324,6 +1359,7 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
     std::unique_ptr<Process> process;
     const auto command_count = runtime->commands_.size();
     const auto tool_count = runtime->impl_->tools.size();
+    const auto mode_count = runtime->registered_modes_.size();
     try {
       process = std::make_unique<Process>(manifest, dir, runtime->workspace_,
                                           runtime->impl_->shell_env ? runtime->impl_->shell_env()
@@ -1379,6 +1415,7 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
               {name, description, tool["input_schema"], index, read_only_capabilities(tool)});
         }
       }
+      parse_register_modes(registration, runtime->registered_modes_);
       std::vector<CustomProvider> providers;
       if (registration.contains("providers")) {
         if (!registration["providers"].is_array()) {
@@ -1430,6 +1467,7 @@ std::shared_ptr<ExtensionRuntime> ExtensionRuntime::start(const fs::path& worksp
     } catch (const std::exception& e) {
       runtime->commands_.resize(command_count);
       runtime->impl_->tools.resize(tool_count);
+      runtime->registered_modes_.resize(mode_count);
       if (process) {
         process->stop();
       }

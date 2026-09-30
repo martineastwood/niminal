@@ -42,7 +42,8 @@ using a key such as Backspace or Left takes precedence over its editing action.
 | `composer.wordLeft` / `composer.wordRight` | Alt-Left / Alt-Right | Move the cursor by word |
 | `composer.draftStart` / `composer.draftEnd` | Ctrl-Left or Ctrl-A / Ctrl-Right or Ctrl-E | Jump to the start or end of the draft |
 | `composer.previous` / `composer.next` | Up / Down | Move through suggestions, or through history when suggestions are closed |
-| `composer.complete` / `composer.completePrevious` | Tab / Shift-Tab | Accept a suggestion, or cycle back and accept it |
+| `composer.complete` / `composer.completePrevious` | Tab / Alt-[ | Accept a suggestion, or cycle back and accept it |
+| `mode.cycle` | Shift-Tab | Cycle session modes (Act, Plan, and extension modes) when idle |
 | `composer.cancel` | Esc | Interrupt a turn, send queued messages now, or clear an idle composer |
 | `composer.editQueued` | Alt-Up, Shift-Left | Pop the last queued steering message back into the composer |
 | `composer.paste` | Ctrl-V | Attach a clipboard image, or paste text |

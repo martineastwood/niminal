@@ -153,6 +153,7 @@ add_library(niminal_app
   src/app/json_mode.cpp
   src/app/rpc.cpp
   src/app/skills.cpp
+  src/app/modes.cpp
   src/app/permissions.cpp
   src/app/trust.cpp
   src/app/extensions.cpp
@@ -204,6 +205,7 @@ niminal_add_test(settings niminal_app)
 niminal_add_test(provider niminal_app)
 niminal_add_test(auth niminal_app)
 niminal_add_test(session niminal_app)
+niminal_add_test(modes niminal_app)
 niminal_add_test(compaction niminal_app)
 niminal_add_test(agent niminal::ai)
 niminal_add_test(agent_retry niminal::ai)

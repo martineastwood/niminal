@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include "modes.hpp"
 #include "session.hpp"
 
 #include <niminal/agent.hpp>
@@ -14,6 +15,6 @@ namespace niminal::app {
 niminal::json rpc_response_event(const std::string& id, bool ok, const std::string& state = {},
                                  const std::string& error = {});
 
-int run_rpc(niminal::Agent& agent, Session& session, Config& config);
+int run_rpc(niminal::Agent& agent, Session& session, Config& config, ModeController& modes);
 
 } // namespace niminal::app

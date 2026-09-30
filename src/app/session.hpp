@@ -42,6 +42,7 @@ public:
   void sync() const;
   void add_name(const std::string& title);
   void add_selection(const std::string& model, const std::string& provider = {});
+  void add_mode(const std::string& mode_id);
   void add_extension(const std::string& extension, const niminal::json& data);
   void add_extension_message(const niminal::json& message);
   void add_compaction(const std::string& summary, int first_kept_index, int tokens_before,
@@ -50,6 +51,7 @@ public:
   niminal::json openai_messages() const;
   std::string last_model() const;
   std::string last_provider() const;
+  std::string last_mode() const;
   std::string last_assistant_text() const;
   std::string describe() const;
   int latest_compaction_index() const;

@@ -14,6 +14,7 @@ workspace. The tool definitions are sent with each request.
 | `grep` | Search file contents with a regex or plain text | Auto |
 | `glob` | List workspace files matching a glob | Auto |
 | `ls` | List one directory | Auto |
+| `git` | Read-only git status, log, diff, show, or branch | Auto |
 | `edit` | Replace exact text in one file | Auto |
 | `write` | Create or replace a complete file | Auto |
 | `bash` | Run a shell command in the workspace | Ask |
@@ -139,6 +140,24 @@ directly.
 ```
 
 Creates a new file by default. Existing files require `"overwrite": true`.
+
+## `git`
+
+```json
+{"subcommand": "log", "limit": 20}
+```
+
+Read-only git inspection in the workspace. `subcommand` is required:
+
+| Subcommand | Purpose |
+| --- | --- |
+| `status` | Short status with branch |
+| `log` | Recent commits (`limit`, optional `ref`) |
+| `diff` | Diff against the working tree (optional `ref`, `path`) |
+| `show` | One commit patch (optional `ref`) |
+| `branch` | Local branches with upstream info |
+
+Plan mode includes `git` so the agent can read history without `bash`.
 
 ## `bash`
 

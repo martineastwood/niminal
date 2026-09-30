@@ -3,6 +3,7 @@
 #include <niminal/agent.hpp>
 
 #include "config.hpp"
+#include "modes.hpp"
 #include "tools.hpp"
 
 #include <atomic>
@@ -159,6 +160,7 @@ public:
   std::vector<ExtensionEntry> take_entries();
   std::vector<ExtensionStatus> statuses() const;
   std::vector<ExtensionWidget> widgets() const;
+  const std::vector<ModeSpec>& registered_modes() const { return registered_modes_; }
   bool activate_widget_action(const std::string& extension, const std::string& key,
                               const std::string& action);
 
@@ -170,6 +172,7 @@ private:
   niminal::Cancellation* cancel_ = nullptr;
   std::vector<ExtensionCommand> commands_;
   std::vector<std::string> warnings_;
+  std::vector<ModeSpec> registered_modes_;
 };
 
 niminal::json session_hook_payload(const std::string& session_id,

@@ -29,7 +29,8 @@ RPC mode does not accept a CLI prompt; send commands on stdin instead.
 | `prompt` | Start a turn. Requires `"message"`. While busy, also requires `"streamingBehavior": "steer"` or `"followUp"` |
 | `steer` | Queue a steering message while busy |
 | `follow_up` | Queue a follow-up message while busy |
-| `get_state` | Session id, busy flag, queue depths, queue modes, `"mode": "act"` |
+| `get_state` | Session id, busy flag, queue depths, queue modes, current session mode, available mode ids |
+| `set_mode` | Set session mode (`"mode": "plan"` or another registered id) |
 | `clear_queue` | Drain steering and follow-up queues (response includes the removed messages) |
 | `set_steering_mode` | `"mode": "all"` or `"one-at-a-time"` (saved to config) |
 | `set_follow_up_mode` | Same values as steering |
@@ -77,11 +78,20 @@ change them write to `~/.niminal/config.json`.
   "follow_up": 0,
   "steering_mode": "one-at-a-time",
   "follow_up_mode": "one-at-a-time",
-  "mode": "act"
+  "mode": "act",
+  "modes": ["act", "plan"]
 }
 ```
 
-There is no plan mode toggle. niminal always reports `"mode": "act"`.
+Session modes combine a prompt fragment, tool allowlist, and permission profile.
+Built-in modes are `act` (full tools) and `plan` (read-only inspection plus
+`git`). In the TUI, Shift-Tab cycles modes when the composer is idle; the footer
+shows the current mode label. Resume restores the last mode from the session
+file. Use `set_mode` to switch from RPC:
+
+```json
+{"id":"5","type":"set_mode","mode":"plan"}
+```
 
 Headless RPC has no approval UI, so tools run without prompting.
 

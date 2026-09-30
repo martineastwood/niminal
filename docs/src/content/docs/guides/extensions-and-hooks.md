@@ -144,6 +144,29 @@ This registration format currently supports OpenAI Chat Completions endpoints.
 It does not add a new streaming protocol such as Anthropic Messages or Google
 Generative AI.
 
+## Register a session mode
+
+Extensions can add modes that appear in the TUI mode cycle (Shift-Tab) and in RPC
+`get_state` / `set_mode`. Each mode replaces the core mode prompt fragment and
+filters tools for the main agent:
+
+```python
+send({
+    "type": "register",
+    "commands": [],
+    "modes": [{
+        "id": "review",
+        "label": "Review",
+        "prompt": "Current mode: REVIEW. Inspect changes and report findings. Do not edit files.",
+        "tools": ["read", "grep", "glob", "ls", "git"],
+        "permissions": "read_only"
+    }]
+})
+```
+
+`permissions` must be `read_only`, `ask`, or `yolo`. Reserved ids: `act`, `plan`.
+The `tools` array lists built-in and extension tool names allowed in that mode.
+
 ## Lifecycle hooks
 
 Extensions can subscribe to:

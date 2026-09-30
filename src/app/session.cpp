@@ -656,6 +656,10 @@ void Session::add_selection(const std::string& model, const std::string& provide
   append(std::move(event));
 }
 
+void Session::add_mode(const std::string& mode_id) {
+  append(json{{"type", "mode"}, {"id", mode_id}});
+}
+
 void Session::add_extension(const std::string& extension, const json& data) {
   append(json{{"type", "extension"}, {"extension", extension}, {"data", data}});
 }
@@ -901,6 +905,11 @@ std::string Session::last_model() const {
 
 std::string Session::last_provider() const {
   return last_event_value(*this, "provider", {"selection"});
+}
+
+std::string Session::last_mode() const {
+  auto value = last_event_value(*this, "id", {"mode"});
+  return value.empty() ? "act" : value;
 }
 
 std::string Session::last_assistant_text() const {
@@ -1161,19 +1170,7 @@ void bind_session(niminal::Agent& agent, Session& session) {
                                        const std::vector<niminal::ToolCall>& calls,
                                        const std::string& model, const niminal::Usage& usage,
                                        const niminal::json& provider_options) {
-    niminal::json arr = json_array();
-    for (const auto& call : calls) {
-      niminal::json item = {{"id", call.id},
-                            {"type", "function"},
-                            {"function", {{"name", call.name}, {"arguments", call.arguments}}}};
-      if (call.provider_options) {
-        if (auto parsed = try_json_parse(*call.provider_options); parsed && parsed->is_object()) {
-          item["provider_options"] = std::move(*parsed);
-        }
-      }
-      arr.get_array().push_back(std::move(item));
-    }
-    session.add_assistant(text, arr, model, usage, provider_options);
+    session.add_assistant(text, niminal::encode_tool_calls(calls), model, usage, provider_options);
   };
   agent.persist_tool = [&session](const std::string& id, const niminal::ToolResult& output,
                                   bool error) { session.add_tool_result(id, output, error); };

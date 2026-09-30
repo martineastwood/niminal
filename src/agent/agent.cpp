@@ -376,26 +376,17 @@ std::string Agent::run(UserInput prompt, bool append_user) {
       if (const auto options = object_options(result.provider_options); !options.empty()) {
         assistant["provider_options"] = options;
       }
-      json calls = json_array();
       if (!result.text.empty()) {
         StreamEvent message{EventKind::assistant_message, result.text, {}, {}};
         message.final = false;
         emit(std::move(message));
       }
       for (const auto& call : result.tool_calls) {
-        calls.get_array().push_back({
-            {"id", call.id},
-            {"type", "function"},
-            {"function", {{"name", call.name}, {"arguments", call.arguments}}},
-        });
-        if (const auto options = object_options(call.provider_options); !options.empty()) {
-          calls.get_array().back()["provider_options"] = options;
-        }
         StreamEvent tool_call{EventKind::tool_call, call.arguments, call.name, call.id};
         tool_call.input = detail::parse_tool_input(call.arguments);
         emit(std::move(tool_call));
       }
-      assistant["tool_calls"] = std::move(calls);
+      assistant["tool_calls"] = encode_tool_calls(result.tool_calls);
       messages.get_array().push_back(std::move(assistant));
       if (persist_assistant) {
         persist_assistant(result.text, result.tool_calls, model, result.usage,

@@ -139,6 +139,26 @@ struct ToolCall {
   std::optional<std::string> provider_options{};
 };
 
+inline json encode_tool_call(const ToolCall& call) {
+  json item = {{"id", call.id},
+               {"type", "function"},
+               {"function", {{"name", call.name}, {"arguments", call.arguments}}}};
+  if (call.provider_options) {
+    if (auto parsed = try_json_parse(*call.provider_options); parsed && parsed->is_object()) {
+      item["provider_options"] = std::move(*parsed);
+    }
+  }
+  return item;
+}
+
+inline json encode_tool_calls(const std::vector<ToolCall>& calls) {
+  json arr = json_array();
+  for (const auto& call : calls) {
+    arr.get_array().push_back(encode_tool_call(call));
+  }
+  return arr;
+}
+
 struct UserInput {
   std::string text;
   json images = json_array();

@@ -8,7 +8,7 @@ On each request niminal sends a stable prefix in this order:
 1. The built-in system prompt, or a replacement from `SYSTEM.md` or `--system-prompt`
 2. Optional append text from `APPEND_SYSTEM.md` or `--append-system-prompt`
 3. Project instructions from `AGENTS.md`, `AGENTS.override.md`, or `CLAUDE.md`
-4. An ACT mode block that tells the model to implement and verify changes
+4. The current session mode block (`act`, `plan`, or an extension-registered mode)
 
 ## Which files load globally
 

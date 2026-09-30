@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -637,6 +638,82 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
              ws.invalidate_listing();
              return "OK — wrote " + ws.relative(path) + "\nversion: " + ws.file_version(path);
            }});
+
+  tools.push_back(
+      Tool{"git",
+           "Read-only git inspection in the workspace: status, log, diff, show, or branch.",
+           json{{"type", "object"},
+                {"properties",
+                 {{"subcommand",
+                   {{"type", "string"},
+                    {"enum", json_array({"status", "log", "diff", "show", "branch"})}}},
+                  {"ref", {{"type", "string"}, {"description", "Commit or ref for log, diff, or show."}}},
+                  {"path", {{"type", "string"}, {"description", "Path for diff (optional)."}}},
+                  {"limit", {{"type", "integer"}, {"description", "Max commits for log (default 20)."}}}}},
+                {"required", json_array({"subcommand"})}},
+           [&ws, cancel](const json& input) {
+             auto safe_token = [](std::string_view token) {
+               if (token.empty() || token.size() > 200) {
+                 return false;
+               }
+               for (char c : token) {
+                 if (std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '/' || c == '.' ||
+                     c == '-' || c == '_' || c == '~' || c == '^' || c == ':') {
+                   continue;
+                 }
+                 return false;
+               }
+               return true;
+             };
+             const auto sub = input.at("subcommand").get<std::string>();
+             std::ostringstream cmd;
+             cmd << "git ";
+             if (sub == "status") {
+               cmd << "status --short --branch";
+             } else if (sub == "log") {
+               const int limit =
+                   std::clamp(niminal::json_value(input, "limit", 20), 1, 100);
+               cmd << "log -n " << limit << " --oneline --decorate";
+               if (input.contains("ref")) {
+                 const auto ref = input.at("ref").get<std::string>();
+                 if (!safe_token(ref)) {
+                   return std::string("invalid ref");
+                 }
+                 cmd << ' ' << ref;
+               }
+             } else if (sub == "diff") {
+               cmd << "diff";
+               if (input.contains("ref")) {
+                 const auto ref = input.at("ref").get<std::string>();
+                 if (!safe_token(ref)) {
+                   return std::string("invalid ref");
+                 }
+                 cmd << ' ' << ref;
+               }
+               if (input.contains("path")) {
+                 const auto path = input.at("path").get<std::string>();
+                 if (!safe_token(path)) {
+                   return std::string("invalid path");
+                 }
+                 cmd << " -- " << path;
+               }
+             } else if (sub == "show") {
+               cmd << "show --stat --patch --max-count=1";
+               if (input.contains("ref")) {
+                 const auto ref = input.at("ref").get<std::string>();
+                 if (!safe_token(ref)) {
+                   return std::string("invalid ref");
+                 }
+                 cmd << ' ' << ref;
+               }
+             } else if (sub == "branch") {
+               cmd << "branch -vv";
+             } else {
+               return std::string("unsupported subcommand");
+             }
+             return run_bash(cmd.str(), ws.root(), 60, cancel, {}, ShellEnv{});
+           },
+           true});
 
   tools.push_back(
       Tool{"bash",

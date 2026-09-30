@@ -9,6 +9,7 @@
 #include "json_mode.hpp"
 #include "mentions.hpp"
 #include "models_dev.hpp"
+#include "modes.hpp"
 #include "provider.hpp"
 #include "rpc.hpp"
 #include "session.hpp"
@@ -22,11 +23,11 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <ranges>
 #include <sstream>
 #include <string>
 #include <unistd.h>
@@ -128,14 +129,6 @@ Rules:
 - Keep the user updated on the progress of the task.
 )";
 
-const char* kActMode =
-    R"(Current mode: ACT (authoritative). Implement requested changes and verify them.
-Reuse the most recent plan and tool results in this session; do not repeat broad
-repository exploration unless new evidence or a changed assumption requires it.
-For multi-step work, follow the agreed plan when one exists; otherwise use a short
-ordered plan. Report meaningful progress and explain deviations as the work evolves.
-Skip checklists for simple requests.)";
-
 std::string join(const std::vector<std::string>& parts) {
   std::ostringstream out;
   for (size_t i = 0; i < parts.size(); ++i) {
@@ -147,28 +140,15 @@ std::string join(const std::vector<std::string>& parts) {
   return out.str();
 }
 
-std::string normalize_tool_name(std::string name) {
-  const auto first = name.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) {
-    return {};
-  }
-  const auto last = name.find_last_not_of(" \t\r\n");
-  name = name.substr(first, last - first + 1);
-  for (char& c : name) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return name;
-}
-
-bool tool_allowed(const std::vector<std::string>& allowed, const std::string& name) {
-  const auto normalized = normalize_tool_name(name);
-  return std::find(allowed.begin(), allowed.end(), normalized) != allowed.end();
+bool listed_tool(const std::vector<std::string>& allowed, const std::string& name) {
+  const auto normalized = niminal::app::ModeController::normalize_tool_name(name);
+  return std::ranges::find(allowed, normalized) != allowed.end();
 }
 
 void restrict_tools(niminal::Agent& agent, const std::vector<std::string>& allowed) {
   agent.tools.erase(
       std::remove_if(agent.tools.begin(), agent.tools.end(),
-                     [&](const auto& tool) { return !tool_allowed(allowed, tool.name); }),
+                     [&](const auto& tool) { return !listed_tool(allowed, tool.name); }),
       agent.tools.end());
 }
 
@@ -179,6 +159,7 @@ struct SystemPromptOptions {
 
 niminal::Agent make_agent(niminal::app::Workspace& ws, niminal::app::Config& cfg,
                           std::string_view api_key, int max_steps, niminal::Cancellation* cancel,
+                          niminal::app::ModeController& modes,
                           const SystemPromptOptions& system_prompt = {},
                           const niminal::app::ShellEnvFn* shell_env = nullptr) {
   niminal::Agent agent;
@@ -189,7 +170,7 @@ niminal::Agent make_agent(niminal::app::Workspace& ws, niminal::app::Config& cfg
     auto file = niminal::app::load_system_prompt(root);
     agent.system = file.empty() ? std::string(kSystem) : std::move(file);
   }
-  agent.system_extra_loader = [root, append = system_prompt.append] {
+  agent.system_extra_loader = [root, append = system_prompt.append, &modes] {
     std::vector<std::string> extra;
     if (!append.empty()) {
       extra.push_back(append);
@@ -203,7 +184,7 @@ niminal::Agent make_agent(niminal::app::Workspace& ws, niminal::app::Config& cfg
     if (!text.empty()) {
       extra.push_back(std::move(text));
     }
-    extra.emplace_back(kActMode);
+    extra.emplace_back(modes.mode_prompt());
     return extra;
   };
   agent.model = cfg.model;
@@ -475,18 +456,18 @@ int main(int argc, char** argv) try {
       }
       tools_specified = true;
       const std::string tools = value;
-      if (normalize_tool_name(tools) == "none") {
+      if (niminal::app::ModeController::normalize_tool_name(tools) == "none") {
         allowed_tools.clear();
       } else {
         std::stringstream names(tools);
         std::string name;
         while (std::getline(names, name, ',')) {
-          name = normalize_tool_name(std::move(name));
+          name = niminal::app::ModeController::normalize_tool_name(std::move(name));
           if (name.empty()) {
             std::cerr << "Tool names must not be empty\n";
             return 2;
           }
-          if (!tool_allowed(allowed_tools, name)) {
+          if (!listed_tool(allowed_tools, name)) {
             allowed_tools.push_back(name);
           }
         }
@@ -612,6 +593,7 @@ int main(int argc, char** argv) try {
   }
 
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
+  niminal::app::ModeController modes;
   niminal::Agent agent;
   agent.model = model_from_cli ? model_override : cfg.model;
   niminal::app::ShellEnvFn shell_env = [&session, &agent, &cfg, &provider_override,
@@ -642,7 +624,7 @@ int main(int argc, char** argv) try {
   }
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
   const auto catalog_startup = niminal::app::initialize_catalog();
-  agent = make_agent(ws, cfg, api_key, max_steps, &cancel, system_prompt, &shell_env);
+  agent = make_agent(ws, cfg, api_key, max_steps, &cancel, modes, system_prompt, &shell_env);
   if (tools_specified) {
     restrict_tools(agent, allowed_tools);
   }
@@ -652,6 +634,15 @@ int main(int argc, char** argv) try {
   };
   niminal::app::install_extension_tools(agent, extensions,
                                         tools_specified ? &allowed_tools : nullptr);
+  modes.set_extension_modes(extensions->registered_modes());
+  {
+    std::string mode_notice;
+    modes.restore_from_session(session.last_mode(), &mode_notice);
+    if (!mode_notice.empty()) {
+      std::cerr << mode_notice << '\n';
+    }
+  }
+  modes.refresh(agent);
   niminal::app::bind_extensions(
       agent, extensions, ws.root(), cfg,
       [](const std::string& warning) { std::cerr << warning << '\n'; }, &session);
@@ -721,7 +712,7 @@ int main(int argc, char** argv) try {
       return 1;
     }
     int code =
-        rpc_mode ? niminal::app::run_rpc(agent, session, cfg) : run_json(agent, session, prompt);
+        rpc_mode ? niminal::app::run_rpc(agent, session, cfg, modes) : run_json(agent, session, prompt);
     stop_extensions();
     return code;
   }
@@ -738,7 +729,7 @@ int main(int argc, char** argv) try {
       auto file = niminal::app::load_system_prompt(ws.root());
       agent.system = file.empty() ? std::string(kSystem) : std::move(file);
     };
-    int code = niminal::app::run_tui(agent, ws, cfg, session, extensions, yolo,
+    int code = niminal::app::run_tui(agent, ws, cfg, session, extensions, modes, yolo,
                                      tools_specified ? &allowed_tools : nullptr,
                                      reload_system_prompt, catalog_startup);
     stop_extensions();

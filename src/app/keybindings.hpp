@@ -20,6 +20,7 @@ enum class KeyAction {
   next,
   complete,
   complete_previous,
+  mode_cycle,
   cancel,
   edit_queued,
   paste,

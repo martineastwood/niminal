@@ -1,6 +1,7 @@
 #include "rpc.hpp"
 
 #include "json_mode.hpp"
+#include "modes.hpp"
 #include "queue_mode.hpp"
 #include "shutdown.hpp"
 
@@ -51,9 +52,9 @@ namespace {
 
 class RpcRuntimeImpl {
 public:
-  RpcRuntimeImpl(niminal::Agent& agent, Session& session, Config& config)
-      : agent_(agent), session_(session), config_(config), steering_mode_(config.steering_mode),
-        follow_up_mode_(config.follow_up_mode) {}
+  RpcRuntimeImpl(niminal::Agent& agent, Session& session, Config& config, ModeController& modes)
+      : agent_(agent), session_(session), config_(config), modes_(modes),
+        steering_mode_(config.steering_mode), follow_up_mode_(config.follow_up_mode) {}
 
   int run() {
     const auto previous_sigint = std::signal(SIGINT, handle_rpc_sigint);
@@ -129,6 +130,7 @@ private:
   niminal::Agent& agent_;
   Session& session_;
   Config& config_;
+  ModeController& modes_;
   std::mutex queue_mutex_;
   std::mutex output_mutex_;
   std::deque<QueuedPrompt> steering_queue_;
@@ -386,7 +388,26 @@ private:
         response["steering_mode"] = steering_mode_;
         response["follow_up_mode"] = follow_up_mode_;
       }
-      response["mode"] = "act";
+      response["mode"] = modes_.id();
+      niminal::json mode_list = niminal::json_array();
+      for (const auto& mode_id : modes_.ids()) {
+        mode_list.get_array().push_back(mode_id);
+      }
+      response["modes"] = std::move(mode_list);
+      send(response);
+      return;
+    }
+
+    if (type == "set_mode") {
+      std::string mode;
+      if (!string_field(command, "mode", mode) || !modes_.set_mode(mode)) {
+        send(rpc_response_event(id, false, {}, "mode must be a registered session mode id."));
+        return;
+      }
+      modes_.apply_tools(agent_);
+      session_.add_mode(modes_.id());
+      niminal::json response = rpc_response_event(id, true);
+      response["mode"] = modes_.id();
       send(response);
       return;
     }
@@ -443,8 +464,8 @@ private:
 
 } // namespace
 
-int run_rpc(niminal::Agent& agent, Session& session, Config& config) {
-  return RpcRuntimeImpl(agent, session, config).run();
+int run_rpc(niminal::Agent& agent, Session& session, Config& config, ModeController& modes) {
+  return RpcRuntimeImpl(agent, session, config, modes).run();
 }
 
 } // namespace niminal::app

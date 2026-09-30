@@ -7,6 +7,7 @@
 #include "markdown.hpp"
 #include "mentions.hpp"
 #include "models_dev.hpp"
+#include "modes.hpp"
 #include "permissions.hpp"
 #include "prompts.hpp"
 #include "provider.hpp"
@@ -389,7 +390,7 @@ int extension_widget_panel_height(const niminal::json& content) {
 } // namespace
 
 int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& session,
-            std::shared_ptr<ExtensionRuntime>& extensions, bool yolo,
+            std::shared_ptr<ExtensionRuntime>& extensions, ModeController& modes, bool yolo,
             const std::vector<std::string>* allowed_tools,
             std::function<void()> reload_system_prompt, CatalogStartup catalog_startup) {
   const auto& cwd = workspace.root();
@@ -443,8 +444,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::function<void(std::string)> deliver_extension_now;
   std::function<void()> handle_turn_idle;
   std::function<void()> apply_pending_changes;
-  bool send_queue_after_stop = false;
-  bool plain_interrupt_pending = false;
+  enum class AfterStop { none, send_steering, clear_queues };
+  AfterStop after_stop = AfterStop::none;
   std::vector<ExtensionEntry> extension_entries_pending;
   std::atomic<bool> busy{false};
   std::atomic<bool> user_bash_running{false};
@@ -575,8 +576,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   const bool ask_user_allowed =
       allowed_tools == nullptr ||
       std::find(allowed_tools->begin(), allowed_tools->end(), "ask_user") != allowed_tools->end();
-  if (ask_user_allowed) {
-    agent.tools.push_back(niminal::Tool{
+  modes.refresh(agent, [&](niminal::Agent& tools_agent) {
+    if (!ask_user_allowed) {
+      return;
+    }
+    tools_agent.tools.push_back(niminal::Tool{
         "ask_user",
         "Ask the user a multiple-choice question in the TUI with 2 to 4 concise choices. The "
         "widget adds an Other choice for a free-text answer.",
@@ -615,7 +619,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           return result.get();
         },
         false});
-  }
+  });
 
   auto configure_extension_ui = [&](const std::shared_ptr<ExtensionRuntime>& runtime) {
     if (!runtime) {
@@ -1187,7 +1191,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   };
   bind_extension_runtime(extensions);
   agent.approve_tool = [&](const niminal::ToolCall& call, const niminal::Tool& tool) {
-    if (yolo_mode || tool.read_only) {
+    if (yolo_mode || modes.skips_tool_approval() || tool.read_only) {
       return true;
     }
     auto check = permissions.check(call);
@@ -1290,7 +1294,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       extensions->stop();
     }
     extensions = ExtensionRuntime::start(cwd, session.id, cancel);
-    install_extension_tools(agent, extensions, allowed_tools);
+    modes.refresh(agent, [&](niminal::Agent& tools_agent) {
+      install_extension_tools(tools_agent, extensions, allowed_tools);
+      modes.set_extension_modes(extensions->registered_modes());
+    });
     bind_extension_runtime(extensions);
     append_warnings(blocks, extensions->warnings());
     auto started =
@@ -1552,9 +1559,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   };
   handle_turn_idle = [&] {
-    if (send_queue_after_stop) {
-      send_queue_after_stop = false;
-      plain_interrupt_pending = false;
+    const auto action = std::exchange(after_stop, AfterStop::none);
+    if (action == AfterStop::send_steering) {
       niminal::UserInput prompt;
       {
         std::lock_guard<std::mutex> lock(steering_mu);
@@ -1568,8 +1574,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       return;
     }
-    if (plain_interrupt_pending) {
-      plain_interrupt_pending = false;
+    if (action == AfterStop::clear_queues) {
       std::lock_guard<std::mutex> lock(steering_mu);
       steering.clear();
       follow_up.clear();
@@ -1733,7 +1738,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   });
 
   auto layout = Container::Vertical({wrapped_input});
-  std::optional<std::tuple<std::string, std::string, std::string, size_t>> footer_key;
+  std::optional<std::tuple<std::string, std::string, std::string, std::string, size_t>> footer_key;
   std::string think;
   std::string usage;
   std::string context_text;
@@ -1860,7 +1865,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
 
     const auto next_footer_key =
-        std::tuple{cfg.provider, agent.model, cfg.thinking, footer_revision};
+        std::tuple{cfg.provider, agent.model, cfg.thinking, modes.id(), footer_revision};
     if (footer_key != next_footer_key) {
       think = thinking_status(cfg.provider, agent.model, cfg.thinking);
       if (think.empty()) {
@@ -2194,7 +2199,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     usage_elements.push_back(filler());
     usage_elements.push_back(text(cfg.provider +
                                   (cfg.model_runtime.empty() ? "" : "/" + cfg.model_runtime) + "/" +
-                                  agent.model + (yolo_mode ? " [yolo]" : "")) |
+                                  agent.model + " · " + modes.label() +
+                                  (yolo_mode ? " [yolo]" : "")) |
                              color(theme.accent));
     usage_elements.push_back(text(think.empty() ? std::string() : (":" + think)) | dim);
     stack.push_back(hbox(std::move(usage_elements)));
@@ -2648,6 +2654,14 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       return true;
     }
+    if (pressed(KeyAction::mode_cycle) && !busy && !approval_pending()) {
+      modes.cycle_next();
+      modes.apply_tools(agent);
+      session.add_mode(modes.id());
+      flash_footer("Mode: " + modes.label());
+      ++footer_revision;
+      return true;
+    }
     if (e.is_mouse() && e.mouse().motion == Mouse::Pressed && e.mouse().button == Mouse::Left) {
       const int x = e.mouse().x;
       const int y = e.mouse().y;
@@ -2851,13 +2865,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         }
         cancel->request();
         activity = "Stopping…";
-        if (has_steering) {
-          send_queue_after_stop = true;
-          plain_interrupt_pending = false;
-        } else {
-          plain_interrupt_pending = true;
-          send_queue_after_stop = false;
-        }
+        after_stop = has_steering ? AfterStop::send_steering : AfterStop::clear_queues;
         return true;
       }
       draft.clear();
