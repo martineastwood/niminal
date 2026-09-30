@@ -260,9 +260,10 @@ messages.
 
 Widgets support `text`, `list`, `progress`, and `markdown` content. List items
 can use the `pending`, `active`, or `done` state. Widgets appear above the
-composer. To run an action, focus the empty composer and press Tab, move through
-actions with the up and down keys, then press Enter. Escape closes the action
-selector. The extension receives
+composer. To run an action, click it, or focus the empty composer and press Tab,
+move through actions with the up and down keys, then press Enter. Escape leaves
+the action selector, or runs an action whose id is `close` when that action
+exists. The extension receives
 `{"type":"ui_action","widget":"tasks","action":"complete_next"}` and can refresh
 the widget by sending another `update`. To remove a widget, send its key with an
 empty title, content array, and actions array.
@@ -287,14 +288,21 @@ It starts at the top and follows its own tail once you scroll to the end, so
 streaming updates stay readable. Send a fresh `text` for each update to stream
 into a panel that is already open.
 
-Focus the empty composer and press Tab to scroll the newest panel:
+Scroll with the mouse wheel while the pointer is over the panel. Wheel events
+outside the panel keep scrolling the transcript. Click the panel body (or focus
+the empty composer and press Tab) to arm keyboard scroll and Escape:
 
-| Key | Effect |
+| Input | Effect |
 | --- | --- |
 | Up, Down | Scroll one row |
 | PageUp, PageDown | Scroll one page |
 | Tab | Move on to the widget's actions |
-| Escape | Leave the panel where it is |
+| Escape | Run the `close` action when present, otherwise leave focus |
+| Click an action | Run that action |
+
+Typing in the composer clears panel focus. Prefer an action id of `close` when
+the panel should be dismissible; Escape and the hint line treat that id as the
+dismiss shortcut.
 
 The panel does not block the composer or a running turn. `markdown` counts as
 one content element, and a widget can mix it with the other content types.

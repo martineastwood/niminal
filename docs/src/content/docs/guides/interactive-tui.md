@@ -108,6 +108,7 @@ file in that case.
 | Input | Action |
 | --- | --- |
 | Page Up / Page Down, mouse wheel | Scroll the transcript |
+| Mouse wheel over an extension panel | Scroll that panel instead |
 | Click a thinking, tool, or diff card | Expand or collapse it |
 | Ctrl+O | Toggle the most recent thinking, tool, or diff card |
 | Ctrl+Shift+O | Expand every card, or collapse all if they are already open |

@@ -44,6 +44,7 @@
 #include <mutex>
 #include <optional>
 #include <poll.h>
+#include <set>
 #include <sstream>
 #include <termios.h>
 #include <thread>
@@ -233,6 +234,11 @@ ssize_t last_card_index(const std::vector<Block>& blocks) {
   return -1;
 }
 
+bool point_in_box(const Box& box, int x, int y) {
+  return box.x_min >= 0 && box.y_min >= 0 && box.x_min <= x && x <= box.x_max && box.y_min <= y &&
+         y <= box.y_max;
+}
+
 std::optional<size_t> card_at(const std::vector<Block>& blocks, const std::vector<Box>& boxes,
                               int x, int y) {
   const auto count = std::min(blocks.size(), boxes.size());
@@ -240,12 +246,47 @@ std::optional<size_t> card_at(const std::vector<Block>& blocks, const std::vecto
     if (!is_card_block(blocks[i].kind)) {
       continue;
     }
-    const auto& box = boxes[i];
-    if (box.x_min <= x && x <= box.x_max && box.y_min <= y && y <= box.y_max) {
+    if (point_in_box(boxes[i], x, y)) {
       return i;
     }
   }
   return std::nullopt;
+}
+
+// Hit targets for extension widgets from the last frame: panel bodies route the
+// mouse wheel, and action rows accept a click without Tab focus first.
+struct ExtensionWidgetHit {
+  std::string extension;
+  std::string key;
+  Box panel_body{-1, -1, -1, -1};
+  int panel_height = 0;
+  std::vector<std::pair<std::string, Box>> actions;
+};
+
+std::optional<size_t> widget_panel_at(const std::vector<ExtensionWidgetHit>& hits, int x, int y) {
+  for (size_t i = 0; i < hits.size(); ++i) {
+    if (hits[i].panel_height > 0 && point_in_box(hits[i].panel_body, x, y)) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::tuple<std::string, std::string, std::string>>
+widget_action_at(const std::vector<ExtensionWidgetHit>& hits, int x, int y) {
+  for (const auto& hit : hits) {
+    for (const auto& [action, box] : hit.actions) {
+      if (point_in_box(box, x, y)) {
+        return std::tuple{hit.extension, hit.key, action};
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+bool widget_has_close_action(const std::vector<ExtensionUiAction>& actions) {
+  return std::any_of(actions.begin(), actions.end(),
+                     [](const ExtensionUiAction& action) { return action.id == "close"; });
 }
 
 bool same_block_content(const Block& a, const Block& b) {
@@ -421,6 +462,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   std::map<std::string, int> panel_rows;
   std::map<std::string, Element> panel_element;
   std::optional<std::string> panel_focus;
+  std::vector<ExtensionWidgetHit> widget_hits;
+  std::optional<std::string> panel_press;
+  std::optional<std::tuple<std::string, std::string, std::string>> widget_action_press;
   // Row count of the body rendered last frame: a markdown body only reports the
   // height it wraps to after a frame lays it out at the panel's width.
   auto panel_body_rows = [&](const std::string& id) {
@@ -2013,8 +2057,16 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (!extension_widgets.empty()) {
         Elements widget_rows;
         size_t action_offset = 0;
+        widget_hits.assign(extension_widgets.size(), {});
         for (size_t widget_index = 0; widget_index < extension_widgets.size(); ++widget_index) {
           const auto& widget = extension_widgets[widget_index];
+          auto& hit = widget_hits[widget_index];
+          hit.extension = widget.extension;
+          hit.key = widget.key;
+          hit.actions.assign(widget.actions.size(), {});
+          for (size_t action_index = 0; action_index < widget.actions.size(); ++action_index) {
+            hit.actions[action_index].first = widget.actions[action_index].id;
+          }
           Elements rows;
           for (const auto& item : widget.content.get_array()) {
             const auto type = niminal::json_value(item, "type", std::string());
@@ -2051,8 +2103,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
               auto& scroll = panel_scroll[id];
               scroll.rows = panel_body_rows(id);
               panel_element[id] = markdown;
+              hit.panel_height = height;
               rows.push_back(widget_panel_window(std::move(markdown),
-                                                 widget_panel_offset(scroll, height), height));
+                                                 widget_panel_offset(scroll, height), height) |
+                             reflect(hit.panel_body));
             }
           }
           for (size_t action_index = 0; action_index < widget.actions.size(); ++action_index) {
@@ -2063,16 +2117,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                      std::to_string(action_index + 1) + "] " + widget.actions[action_index].label);
             row = selected ? row | bold | color(theme.accent) | bgcolor(theme.hover_bg)
                            : row | color(theme.muted);
-            rows.push_back(std::move(row));
+            rows.push_back(std::move(row) | reflect(hit.actions[action_index].second));
           }
           action_offset += widget.actions.size();
           if (const int panel_height = extension_widget_panel_height(widget.content);
               !widget.actions.empty() || panel_height > 0) {
             const auto tab = keybindings.label(KeyAction::complete);
-            rows.push_back(text(panel_height > 0
-                                    ? tab + " focus · ↑/↓ scroll · pgup/pgdn · esc leave"
-                                    : tab + " focus · ↑/↓ choose · enter run · esc close") |
-                           dim);
+            const bool has_close = widget_has_close_action(widget.actions);
+            rows.push_back(
+                text(panel_height > 0
+                         ? tab + " focus · ↑/↓ scroll · wheel · esc " +
+                               std::string(has_close ? "close" : "leave")
+                         : tab + " focus · ↑/↓ choose · enter run · esc " +
+                               std::string(has_close ? "close" : "leave")) |
+                dim);
           }
           const auto title =
               widget.title.empty() ? widget.extension + " · " + widget.key : widget.title;
@@ -2080,6 +2138,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                                        vbox(std::move(rows)), ROUNDED));
         }
         stack.push_back(vbox(std::move(widget_rows)));
+      } else {
+        widget_hits.clear();
       }
       Elements footer_elements;
       if (!activity_line.empty()) {
@@ -2421,6 +2481,29 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
     std::vector<std::tuple<std::string, std::string, std::string>> extension_actions;
     std::map<std::string, int> panel_heights;
+    auto activate_close = [&](const std::string& extension, const std::string& key) {
+      if (!extensions) {
+        return false;
+      }
+      for (const auto& widget : extensions->widgets()) {
+        if (widget.extension != extension || widget.key != key ||
+            !widget_has_close_action(widget.actions)) {
+          continue;
+        }
+        if (!extensions->activate_widget_action(extension, key, "close")) {
+          flash_footer("Extension action is no longer available.");
+        }
+        return true;
+      }
+      return false;
+    };
+    auto split_panel_id = [](const std::string& id) -> std::pair<std::string, std::string> {
+      const auto pos = id.find(':');
+      if (pos == std::string::npos) {
+        return {id, {}};
+      }
+      return {id.substr(0, pos), id.substr(pos + 1)};
+    };
     if (extensions) {
       std::set<std::string> live;
       for (const auto& widget : extensions->widgets()) {
@@ -2441,9 +2524,26 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (extension_action_focus && extension_actions.empty()) {
       extension_action_focus.reset();
     }
+    // Wheel over a panel body scrolls that panel. Wheel elsewhere clears panel
+    // focus and falls through to the transcript.
+    if (is_wheel_up(e) || is_wheel_down(e)) {
+      if (const auto index = widget_panel_at(widget_hits, e.mouse().x, e.mouse().y)) {
+        const auto& hit = widget_hits[*index];
+        const auto id = hit.extension + ":" + hit.key;
+        const int height = hit.panel_height > 0 ? hit.panel_height : std::max(4, panel_heights[id]);
+        scroll_widget_panel(panel_scroll[id], std::max(1, panel_body_rows(id)), height,
+                            is_wheel_up(e) ? -1 : 1);
+        return true;
+      }
+      panel_focus.reset();
+      extension_action_focus.reset();
+    }
     if (panel_focus) {
       if (pressed(KeyAction::cancel)) {
+        const auto [extension, key] = split_panel_id(*panel_focus);
+        activate_close(extension, key);
         panel_focus.reset();
+        extension_action_focus.reset();
         return true;
       }
       if (pressed(KeyAction::quit)) {
@@ -2485,7 +2585,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (extension_action_focus) {
       *extension_action_focus %= extension_actions.size();
       if (pressed(KeyAction::cancel)) {
+        const auto& focused = extension_actions[*extension_action_focus];
+        activate_close(std::get<0>(focused), std::get<1>(focused));
         extension_action_focus.reset();
+        panel_focus.reset();
         return true;
       }
       if (pressed(KeyAction::quit)) {
@@ -2548,8 +2651,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       return true;
     }
     if (e.is_mouse() && e.mouse().motion == Mouse::Pressed && e.mouse().button == Mouse::Left) {
-      card_press_index = card_at(blocks, card_boxes, e.mouse().x, e.mouse().y);
-      mouse_press = {e.mouse().x, e.mouse().y};
+      const int x = e.mouse().x;
+      const int y = e.mouse().y;
+      widget_action_press = widget_action_at(widget_hits, x, y);
+      if (widget_action_press) {
+        panel_press.reset();
+        card_press_index = std::nullopt;
+      } else if (const auto index = widget_panel_at(widget_hits, x, y)) {
+        panel_press = widget_hits[*index].extension + ":" + widget_hits[*index].key;
+        card_press_index = std::nullopt;
+      } else {
+        panel_press.reset();
+        card_press_index = card_at(blocks, card_boxes, x, y);
+      }
+      mouse_press = {x, y};
       return false;
     }
     if (e.is_mouse() && e.mouse().motion == Mouse::Released && e.mouse().button == Mouse::Left) {
@@ -2560,6 +2675,35 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (dragged && !sel.empty()) {
         copy_to_clipboard(sel);
         flash_footer("Copied to clipboard.");
+        card_press_index = std::nullopt;
+        widget_action_press.reset();
+        panel_press.reset();
+        return true;
+      }
+      if (widget_action_press) {
+        auto release = widget_action_at(widget_hits, e.mouse().x, e.mouse().y);
+        if (release && *release == *widget_action_press && extensions) {
+          const auto& [extension, widget, action] = *release;
+          if (!extensions->activate_widget_action(extension, widget, action)) {
+            flash_footer("Extension action is no longer available.");
+          }
+          panel_focus.reset();
+          extension_action_focus.reset();
+        }
+        widget_action_press.reset();
+        panel_press.reset();
+        card_press_index = std::nullopt;
+        return true;
+      }
+      if (panel_press) {
+        if (const auto index = widget_panel_at(widget_hits, e.mouse().x, e.mouse().y)) {
+          const auto id = widget_hits[*index].extension + ":" + widget_hits[*index].key;
+          if (id == *panel_press) {
+            panel_focus = id;
+            extension_action_focus.reset();
+          }
+        }
+        panel_press.reset();
         card_press_index = std::nullopt;
         return true;
       }
