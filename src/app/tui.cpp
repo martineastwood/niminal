@@ -2124,13 +2124,11 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
               !widget.actions.empty() || panel_height > 0) {
             const auto tab = keybindings.label(KeyAction::complete);
             const bool has_close = widget_has_close_action(widget.actions);
-            rows.push_back(
-                text(panel_height > 0
-                         ? tab + " focus · ↑/↓ scroll · wheel · esc " +
-                               std::string(has_close ? "close" : "leave")
-                         : tab + " focus · ↑/↓ choose · enter run · esc " +
-                               std::string(has_close ? "close" : "leave")) |
-                dim);
+            rows.push_back(text(panel_height > 0 ? tab + " focus · ↑/↓ scroll · wheel · esc " +
+                                                       std::string(has_close ? "close" : "leave")
+                                                 : tab + " focus · ↑/↓ choose · enter run · esc " +
+                                                       std::string(has_close ? "close" : "leave")) |
+                           dim);
           }
           const auto title =
               widget.title.empty() ? widget.extension + " · " + widget.key : widget.title;
