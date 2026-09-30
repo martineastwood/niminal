@@ -51,6 +51,7 @@ struct SlashHost {
   std::function<void(Session next, const std::string& note, const std::string& reason)>
       adopt_session;
   std::function<void()> restart_extensions;
+  std::function<void()> notify_session_settings_changed;
   std::function<void()> reload_local;
   std::function<void()> apply_extension_actions;
   std::function<void(const std::string&, const std::string&)> run_extension_while_busy;

@@ -791,6 +791,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     screen.RequestAnimationFrame();
   };
 
+  // Extensions keep running when the provider, model, or thinking level changes,
+  // so they are told about it. Assigned below, once the extension helpers exist.
+  std::function<void()> notify_session_settings_changed;
+
   auto persist_settings = [&](const SettingApplyResult& result) {
     if (!result.error.empty()) {
       settings_error = result.error;
@@ -807,6 +811,9 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       if (result.agent_changed) {
         apply_provider(agent, cfg);
         session.add_selection(cfg.model, cfg.provider);
+        if (notify_session_settings_changed) {
+          notify_session_settings_changed();
+        }
       }
       save_config(cfg);
       flash_footer("Saved " + config_path().string());
@@ -883,6 +890,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     if (blocks.size() != block_count) {
       ++transcript_revision;
     }
+  };
+
+  notify_session_settings_changed = [&] {
+    if (!extensions) {
+      return;
+    }
+    append_warnings(blocks,
+                    dispatch_session_settings_changed(*extensions, session.id, cwd, cfg, agent));
+    apply_extension_actions();
+    ++transcript_revision;
+    screen.RequestAnimationFrame();
   };
 
   auto usage_totals = session.usage_totals();
@@ -1278,6 +1296,12 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     }
   };
 
+  niminal::app::ShellEnvFn session_env = [&] {
+    auto env = make_shell_env(session, agent, cfg);
+    env["NIMINAL_TRUSTED"] = project_resources_trusted(cwd) ? "1" : "0";
+    return env;
+  };
+
   auto restart_extensions = [&] {
     join_background_extension_workers();
     suggestions_input.reset();
@@ -1291,15 +1315,17 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       append_warnings(blocks, ended.warnings);
       extensions->stop();
     }
-    extensions = ExtensionRuntime::start(cwd, session.id, cancel);
+    // A restart recomputes the env: niminal's own environment belongs to whoever
+    // launched niminal, not to this session.
+    extensions = ExtensionRuntime::start(cwd, session.id, cancel, &session_env);
     modes.refresh(agent, [&](niminal::Agent& tools_agent) {
       install_extension_tools(tools_agent, extensions, allowed_tools);
       modes.set_extension_modes(extensions->registered_modes());
     });
     bind_extension_runtime(extensions);
     append_warnings(blocks, extensions->warnings());
-    auto started =
-        extensions->dispatch(HookEvent::session_start, session_hook_payload(session.id, cwd));
+    auto started = extensions->dispatch(HookEvent::session_start,
+                                        session_settings_payload(session.id, cwd, cfg, agent));
     append_warnings(blocks, started.warnings);
     apply_extension_actions();
     ++transcript_revision;
@@ -1351,8 +1377,8 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     agent.messages = session.openai_messages();
     load_into_ui(note);
     if (extensions) {
-      append_warnings(blocks,
-                      switch_extension_session(*extensions, outgoing, session.id, reason, cwd));
+      append_warnings(blocks, switch_extension_session(*extensions, outgoing, session.id, reason,
+                                                       cwd, cfg, agent));
       apply_extension_actions();
       ++transcript_revision;
     }
@@ -1532,6 +1558,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
           adopt_session(std::move(next), note, reason);
         },
         [&] { restart_extensions(); },
+        [&] { notify_session_settings_changed(); },
         [&] { reload_local(); },
         [&] { apply_extension_actions(); },
         [&](const std::string& name, const std::string& arguments) {
@@ -1580,8 +1607,6 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
   }
   idle_extension_messages.clear();
 
-  auto shell_env = [&] { return make_shell_env(session, agent, cfg); };
-
   int user_bash_seq = 0;
   auto run_user_bash = [&](std::string command, bool exclude_from_context,
                            std::string history_line) {
@@ -1602,7 +1627,7 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     activity = "Running bash…";
     worker = std::thread([&, command = std::move(command), exclude_from_context, tool_id] {
       try {
-        const auto env = shell_env();
+        const auto env = session_env();
         auto output = run_bash(
             command, cwd, 120, cancel,
             [&](const std::string& snapshot) {
@@ -2192,11 +2217,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
                                                           : theme.muted));
     }
     usage_elements.push_back(filler());
-    usage_elements.push_back(text(cfg.provider +
-                                  (cfg.model_runtime.empty() ? "" : "/" + cfg.model_runtime) + "/" +
-                                  agent.model + " · " + modes.label() +
-                                  (yolo_mode ? " [yolo]" : "")) |
-                             color(theme.accent));
+    usage_elements.push_back(
+        text(cfg.provider + (cfg.model_runtime.empty() ? "" : "/" + cfg.model_runtime) + "/" +
+             agent.model + " · " + modes.label() + (yolo_mode ? " [yolo]" : "")) |
+        color(theme.accent));
     usage_elements.push_back(text(think.empty() ? std::string() : (":" + think)) | dim);
     stack.push_back(hbox(std::move(usage_elements)));
     return vbox(std::move(stack));

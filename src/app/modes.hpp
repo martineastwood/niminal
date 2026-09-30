@@ -26,7 +26,7 @@ public:
 
   void set_extension_modes(std::vector<ModeSpec> modes);
   // restore catalog → prepare → capture → apply current mode filter
-  void refresh(niminal::Agent& agent, std::function<void(niminal::Agent&)> prepare = {});
+  void refresh(niminal::Agent& agent, const std::function<void(niminal::Agent&)>& prepare = {});
   void apply_tools(niminal::Agent& agent) const;
 
   bool set_mode(std::string_view id);

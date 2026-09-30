@@ -3,7 +3,8 @@
 
 Writing a line at startup lets a test tell a session change that keeps this
 process from one that restarted it, and the event log records the lifecycle
-events with the session id each one carried.
+events with the session id and the provider, model, and thinking level the
+message carried.
 """
 import json
 import os
@@ -18,7 +19,8 @@ def append(name, line):
 append("session_switch_starts.log", "start")
 
 print(json.dumps({"type": "register", "commands": [],
-                  "events": ["session_shutdown", "session_end", "session_start"]}),
+                  "events": ["session_shutdown", "session_end", "session_start",
+                             "session_settings_changed"]}),
       flush=True)
 
 for line in sys.stdin:
@@ -33,5 +35,11 @@ for line in sys.stdin:
         parts = [message.get("event", ""), payload.get("session_id", "")]
         if payload.get("reason"):
             parts.append(payload["reason"])
+        if payload.get("provider"):
+            parts.append(payload["provider"])
+        if payload.get("model"):
+            parts.append(payload["model"])
+        if payload.get("thinking"):
+            parts.append(payload["thinking"])
         append("session_switch_events.log", ":".join(parts))
     print(json.dumps({"type": "response", "id": message.get("id", "")}), flush=True)

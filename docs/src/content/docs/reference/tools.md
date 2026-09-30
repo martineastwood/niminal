@@ -176,8 +176,8 @@ so progress bars do not accumulate.
 
 The subprocess receives `NIMINAL_SESSION_ID`, `NIMINAL_SESSION_FILE`,
 `NIMINAL_PROVIDER`, `NIMINAL_MODEL`, optional `NIMINAL_REASONING_LEVEL`, and
-`NIMINAL_TRUSTED` (`1` or `0`) when the workspace is trusted for project-local
-resources.
+`NIMINAL_TRUSTED`, which is `1` when the workspace is trusted for project-local
+resources and `0` otherwise.
 
 In the TUI, output streams into the bash card as the command runs. Collapsed
 cards show the first 8 lines. Expand the card to follow the full captured

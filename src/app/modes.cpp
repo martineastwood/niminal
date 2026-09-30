@@ -85,9 +85,8 @@ void ModeController::set_extension_modes(std::vector<ModeSpec> modes) {
     if (mode.id == "act" || mode.id == "plan") {
       continue;
     }
-    if (std::ranges::any_of(extension_modes_, [&](const ModeSpec& existing) {
-          return existing.id == mode.id;
-        })) {
+    if (std::ranges::any_of(extension_modes_,
+                            [&](const ModeSpec& existing) { return existing.id == mode.id; })) {
       continue;
     }
     extension_modes_.push_back(std::move(mode));
@@ -95,7 +94,8 @@ void ModeController::set_extension_modes(std::vector<ModeSpec> modes) {
   rebuild_modes();
 }
 
-void ModeController::refresh(niminal::Agent& agent, std::function<void(niminal::Agent&)> prepare) {
+void ModeController::refresh(niminal::Agent& agent,
+                             const std::function<void(niminal::Agent&)>& prepare) {
   if (!catalog_.empty()) {
     agent.tools = catalog_;
   }
@@ -169,7 +169,8 @@ bool ModeController::set_mode(std::string_view id) {
 }
 
 bool ModeController::cycle_next() {
-  const auto it = std::ranges::find_if(modes_, [&](const ModeSpec& mode) { return mode.id == current_id_; });
+  const auto it =
+      std::ranges::find_if(modes_, [&](const ModeSpec& mode) { return mode.id == current_id_; });
   const size_t index = it == modes_.end() ? 0 : static_cast<size_t>(it - modes_.begin());
   current_id_ = modes_[(index + 1) % modes_.size()].id;
   return true;

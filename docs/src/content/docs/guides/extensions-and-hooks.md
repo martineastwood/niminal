@@ -191,14 +191,24 @@ Extensions can subscribe to:
 | `before_provider_request` | Replace the provider JSON `payload` before sending it |
 | `before_provider_headers` | Add, replace, or remove HTTP `headers` |
 | `after_provider_response` | Observe HTTP `status`, `headers`, `duration_ms`, and `error_body` |
+| `session_settings_changed` | Observe a change to the session's provider, model, or thinking level |
 | `session_compact_failed` | Observe a model error or empty compaction summary |
 
 Changing sessions with `/new`, `/resume`, or `/fork` does not restart your program.
 You receive `session_end` for the session you leave and `session_start` for the new
-one, each carrying its own `session_id`. Keep anything you built at startup, such as
-server connections or child processes, and reset only what belongs to the old
-session when `session_start` arrives. `/reload` and `/trust` do restart your
-program, so `session_shutdown` is where you release that kind of resource.
+one, each carrying its own `session_id`. `session_start` also carries the
+`provider`, `model`, and `thinking` the new session runs with, so an extension
+that keeps provider state can follow a session change without a restart. Keep anything you
+built at startup, such as server connections or child processes, and reset only
+what belongs to the old session when `session_start` arrives. `/reload` and
+`/trust` do restart your program, and it starts again with the current session's
+environment, so `session_shutdown` is where you release that kind of resource.
+
+`session_settings_changed` covers the other way those settings change: you ran
+`/provider`, `/model`, or `/thinking`, or cycled one of them in the settings
+screen. Its payload carries the same `provider`, `model`, and `thinking` fields,
+so an extension can keep a provider-keyed mapping or a default reasoning level
+current without waiting for a `/reload`.
 
 For example, you can tailor one run without changing the user's saved prompt.
 Register `before_agent_start` in your extension's `events` list, then reply:
@@ -223,10 +233,12 @@ headers and `null` to remove them. For `before_provider_request`, return a
 complete `payload` object to replace the outgoing JSON body.
 
 `session_before_switch` runs for new, resumed, and forked sessions in the TUI.
-`session_shutdown` runs just before niminal restarts or stops your program, and
-includes `reason`: `reload` when `/reload` or `/trust` reloaded it, or `quit`
-when a headless run ends. `after_provider_response` sends an empty `error_body`
-on successful responses. On HTTP errors, it contains the response body.
+The `session_end` a session change sends carries the same `reason` (`new`,
+`resume`, or `fork`). `session_shutdown` runs just before niminal restarts or
+stops your program, and includes `reason`: `reload` when `/reload` or `/trust`
+reloaded it, or `quit` when a headless run ends. `after_provider_response` sends
+an empty `error_body` on successful responses. On HTTP errors, it contains the
+response body.
 
 ## Shutting down
 

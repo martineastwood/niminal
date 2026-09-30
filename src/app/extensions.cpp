@@ -977,7 +977,8 @@ const char* hook_event_name(HookEvent event) {
                                           "after_provider_response",
                                           "agent_settled",
                                           "message_end",
-                                          "session_compact_failed"};
+                                          "session_compact_failed",
+                                          "session_settings_changed"};
   const auto index = static_cast<size_t>(event);
   return index < sizeof(names) / sizeof(*names) ? names[index] : "";
 }
@@ -1804,11 +1805,21 @@ json session_hook_payload(const std::string& session_id, const fs::path& workspa
   return json{{"session_id", session_id}, {"workspace", workspace.string()}};
 }
 
+json session_settings_payload(const std::string& session_id, const fs::path& workspace,
+                              const Config& cfg, const niminal::Agent& agent) {
+  auto payload = session_hook_payload(session_id, workspace);
+  payload["provider"] = cfg.provider;
+  payload["model"] = agent.model;
+  payload["thinking"] = cfg.thinking;
+  return payload;
+}
+
 std::vector<std::string> switch_extension_session(ExtensionRuntime& runtime,
                                                   const std::string& from_session_id,
                                                   const std::string& to_session_id,
                                                   const std::string& reason,
-                                                  const fs::path& workspace) {
+                                                  const fs::path& workspace, const Config& cfg,
+                                                  const niminal::Agent& agent) {
   std::vector<std::string> warnings;
   const auto collect = [&](const HookOutcome& outcome) {
     warnings.insert(warnings.end(), outcome.warnings.begin(), outcome.warnings.end());
@@ -1816,9 +1827,19 @@ std::vector<std::string> switch_extension_session(ExtensionRuntime& runtime,
   auto ended = session_hook_payload(from_session_id, workspace);
   ended["reason"] = reason;
   collect(runtime.dispatch(HookEvent::session_end, ended));
-  collect(
-      runtime.dispatch(HookEvent::session_start, session_hook_payload(to_session_id, workspace)));
+  collect(runtime.dispatch(HookEvent::session_start,
+                           session_settings_payload(to_session_id, workspace, cfg, agent)));
   return warnings;
+}
+
+std::vector<std::string> dispatch_session_settings_changed(ExtensionRuntime& runtime,
+                                                           const std::string& session_id,
+                                                           const fs::path& workspace,
+                                                           const Config& cfg,
+                                                           const niminal::Agent& agent) {
+  auto outcome = runtime.dispatch(HookEvent::session_settings_changed,
+                                  session_settings_payload(session_id, workspace, cfg, agent));
+  return outcome.warnings;
 }
 
 json provider_hook_payload(const niminal::Agent& agent, const fs::path& workspace,

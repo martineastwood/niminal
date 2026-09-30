@@ -155,7 +155,9 @@ int main() {
   {
     // A session change ends the old session and starts the new one in the same
     // extension process. Restarting the programs there would rebuild everything
-    // they hold, such as connected MCP servers.
+    // they hold, such as connected MCP servers. The new session_start carries
+    // the provider, model, and thinking level that session runs with, so an
+    // extension that follows the session does not have to be restarted.
     const auto starts_log = home / "session_switch_starts.log";
     const auto events_log = home / "session_switch_events.log";
     const auto read_text = [](const fs::path& path) {
@@ -164,13 +166,36 @@ int main() {
     };
     const auto starts_before = read_text(starts_log);
     fs::remove(events_log);
-    const auto warnings =
-        niminal::app::switch_extension_session(*runtime, "old-session", "new-session", "new", root);
+    niminal::Agent switched_agent;
+    switched_agent.model = "test/model";
+    niminal::app::Config switched_cfg;
+    switched_cfg.provider = "test";
+    switched_cfg.thinking = "high";
+    const auto warnings = niminal::app::switch_extension_session(
+        *runtime, "old-session", "new-session", "new", root, switched_cfg, switched_agent);
     const auto events = read_text(events_log);
-    if (!warnings.empty() || events != "session_end:old-session:new\nsession_start:new-session\n" ||
+    if (!warnings.empty() ||
+        events != "session_end:old-session:new\nsession_start:new-session:test:test/model:high\n" ||
         read_text(starts_log) != starts_before) {
       std::cerr << "a session change should end and start sessions in a live extension, got:\n"
                 << events;
+      return 1;
+    }
+    // A settings change mid-session does not restart the extension either, so
+    // it is told what the session runs with now.
+    niminal::Agent notified_agent;
+    notified_agent.model = "test/other";
+    niminal::app::Config notified_cfg;
+    notified_cfg.provider = "other";
+    notified_cfg.thinking = "low";
+    fs::remove(events_log);
+    const auto change_warnings = niminal::app::dispatch_session_settings_changed(
+        *runtime, "new-session", root, notified_cfg, notified_agent);
+    const auto change_events = read_text(events_log);
+    if (!change_warnings.empty() ||
+        change_events != "session_settings_changed:new-session:other:test/other:low\n" ||
+        read_text(starts_log) != starts_before) {
+      std::cerr << "a settings change should reach the live extension, got:\n" << change_events;
       return 1;
     }
   }

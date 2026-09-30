@@ -660,8 +660,9 @@ int main(int argc, char** argv) try {
     }
   };
   print_warnings(extensions->warnings());
-  auto start_hook = extensions->dispatch(niminal::app::HookEvent::session_start,
-                                         niminal::app::session_hook_payload(session.id, ws.root()));
+  auto start_hook = extensions->dispatch(
+      niminal::app::HookEvent::session_start,
+      niminal::app::session_settings_payload(session.id, ws.root(), cfg, agent));
   print_warnings(start_hook.warnings);
   auto drain_extension_actions = [&] {
     if (!extensions) {
@@ -711,8 +712,8 @@ int main(int argc, char** argv) try {
     if (!prepare_session()) {
       return 1;
     }
-    int code =
-        rpc_mode ? niminal::app::run_rpc(agent, session, cfg, modes) : run_json(agent, session, prompt);
+    int code = rpc_mode ? niminal::app::run_rpc(agent, session, cfg, modes)
+                        : run_json(agent, session, prompt);
     stop_extensions();
     return code;
   }
