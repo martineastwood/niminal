@@ -21,14 +21,14 @@ to your `PATH` if it is not already there.
 To install a specific release, set `NIMINAL_VERSION` for the installer shell:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.2.5 sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.0 sh
 ```
 
 Set `NIMINAL_INSTALL_DIR` before `sh` in the pipeline to choose a different
 install location:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.2.5 NIMINAL_INSTALL_DIR="$HOME/bin" sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.0 NIMINAL_INSTALL_DIR="$HOME/bin" sh
 ```
 
 Published platforms today:
@@ -44,13 +44,13 @@ The Linux ARM64 binary is built on Ubuntu 24.04.
 ## Build from source
 
 To build from a source checkout, you need CMake 3.22 or later, Ninja, a C++23
-compiler, OpenSSL 3 development libraries, and CAIL v0.3.0. CAIL requires
+compiler, OpenSSL 3 development libraries, and CAIL v0.4.0. CAIL requires
 CMake 3.31 or later and network access while its dependencies are downloaded.
 
 Install CAIL next to your Niminal checkout:
 
 ```sh
-git clone --branch v0.3.0 --depth 1 https://github.com/martineastwood/cail.git ../cail
+git clone --branch v0.4.0 --depth 1 https://github.com/martineastwood/cail.git ../cail
 cmake -S ../cail -B ../cail/build -DCAIL_BUILD_EXAMPLES=OFF
 cmake --build ../cail/build
 cmake --install ../cail/build --prefix ../cail/build/install

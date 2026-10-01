@@ -27,7 +27,7 @@ to your `PATH` if it is not already there.
 Install a specific release with:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.2.5 sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.0 sh
 ```
 
 Set `NIMINAL_INSTALL_DIR` before `sh` to choose another location. See
@@ -197,11 +197,11 @@ Full guides and reference material live at [niminal.dev](https://niminal.dev):
 
 For contributors and packagers:
 
-Niminal uses CAIL v0.3.0 as a separate CMake package. Check out that release
+Niminal uses CAIL v0.4.0 as a separate CMake package. Check out that release
 next to Niminal, then build and install it with the setup command:
 
 ```sh
-git clone --branch v0.3.0 --depth 1 https://github.com/martineastwood/cail.git ../cail
+git clone --branch v0.4.0 --depth 1 https://github.com/martineastwood/cail.git ../cail
 ./dev setup
 ```
 
