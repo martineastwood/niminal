@@ -126,17 +126,10 @@ int main() {
       cail::LanguageModel{[&](const cail::GenerationRequest&,
                               std::stop_token) -> cail::Result<cail::GenerationResponse> {
         ++summaries;
-        return cail::GenerationResponse{
-            .status = cail::GenerationStatus::completed,
-            .text = "Earlier turns summarized.",
-            .reasoning = {},
-            .usage = {},
-            .tool_calls = {},
-            .tool_results = {},
-            .turn = {},
-            .continuation_token = {},
-            .provider_options = {},
-        };
+        cail::GenerationResponse response;
+        response.status = cail::GenerationStatus::completed;
+        response.text = "Earlier turns summarized.";
+        return response;
       }};
   small_context.context_window = 1'000'000;
   niminal::app::bind_compaction(configured_agent, s, small_context);
