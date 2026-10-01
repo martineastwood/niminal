@@ -40,6 +40,7 @@ the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/retry` | Retry the last failed request |
 | `/compact [instruction]` | Summarize older session history |
 | `/reload` | Reload trusted project resources, keybindings, and the theme |
+| `/init` | Write or update the project instruction file |
 | `/skill:NAME [request]` | Load a skill |
 | `/quit`, `/exit` | Exit |
 

@@ -27,6 +27,33 @@ Each file is capped at 64 KiB. Larger files are truncated with an
 Use `--no-context-files` or `-nc` to skip AGENTS and CLAUDE discovery for one
 process. System prompt files and flags still apply.
 
+## Write one with /init
+
+Type `/init` in the composer and niminal writes the first version for you:
+
+```text
+/init
+```
+
+The agent reads your README, build manifests, CI workflows, and the instruction
+files you already have. It runs the build and test commands it plans to document
+before writing them down, so the result describes your project instead of a guess
+at it. It writes `AGENTS.md` in the workspace root, and the next request in that
+session picks it up.
+
+When the file already exists, `/init` improves it in place. Lines that are still
+true stay, wrong ones get fixed, and stale ones get dropped. Two cases are worth
+knowing about:
+
+- If the project has `CLAUDE.md` and no `AGENTS.md`, `/init` updates `CLAUDE.md`.
+  An `AGENTS.md` beside it would win the precedence rule and quietly stop the old
+  file from loading.
+- If `AGENTS.override.md` exists, it keeps winning. The agent calls that out in
+  its report.
+
+`/init` writes a file, so it needs act mode. In plan mode it stops and tells you
+to switch. Commit the result so the rest of the team gets it too.
+
 ## Replace or extend the system prompt
 
 Replace the built-in identity with the first match:

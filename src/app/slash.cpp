@@ -52,10 +52,43 @@ constexpr SlashSpec kSlash[] = {
     {"/retry", "/retry", "retry the last failed request"},
     {"/compact", "/compact", "summarize older session history"},
     {"/reload", "/reload", "reload trusted project resources"},
+    {"/init", "/init", "write or update project instructions"},
     {"/skill:", "/skill:NAME [request]", "load a skill"},
     {"/quit", "/quit", "exit"},
     {"/exit", "/exit", "exit"},
 };
+
+constexpr std::string_view kInitPromptHead =
+    "Write or update the project instruction file for this repository.\n\nTarget file: ";
+
+constexpr std::string_view kClaudeInPlaceNote =
+    "This project has no AGENTS.md. CLAUDE.md already loads as project instructions, so update it "
+    "in place instead of creating a second file.\n\n";
+
+constexpr std::string_view kOverrideNote =
+    "AGENTS.override.md exists in this directory and takes precedence over this file. Mention that "
+    "in your report.\n\n";
+
+constexpr std::string_view kInitPromptBody =
+    R"PROMPT(Sessions that start in this directory, or in a directory below it, load this file into their system prompt. It runs before every future request in this project, so every line has to change what an agent does. Concrete beats thorough.
+
+Work in this order.
+
+1. Read the repository before writing. Cover the README, the build manifests (CMakeLists.txt, package.json, pyproject.toml, Makefile, Cargo.toml), the CI workflows, the top two levels of the source layout, and any existing instruction files (AGENTS.md, CLAUDE.md, .cursor/rules, .github/copilot-instructions.md).
+2. Run the build, test, lint, format, and check commands you intend to document. Record the exact forms that worked. Never write a command you did not run. When a command matters but you could not run it, mark it unverified.
+3. Write only what someone new to the repository cannot infer from the file list:
+   - what the project is and its main entry points
+   - the commands for the local edit loop, and what to run before pushing
+   - the order that matters, such as build before test, or format before check
+   - structure and architecture that filenames do not reveal
+   - project conventions, setup quirks, and operational gotchas
+   - pointers to the other instruction sources you found, so they stay the single source for what they already cover
+4. Do not restate the code or explain how it works. A line earns its place by changing the next action an agent takes.
+5. Keep it under 100 lines.
+6. Update the file in place when it already exists. Keep lines that are still true, fix the ones that are wrong, delete the ones that went stale. Do not reorganize it for its own sake. Call the write tool with overwrite: true.
+7. Ask at most two questions with ask_user, and only when the repository cannot answer something that changes the file. Otherwise decide and move on.
+8. Finish with a short report: the file you wrote, the lines you added, changed, or removed, the commands you ran and their outcome, and anything you left unverified.
+)PROMPT";
 
 bool contains_ci(std::string_view s, std::string_view p) {
   return niminal::lower_copy(std::string(s)).find(niminal::lower_copy(std::string(p))) !=
@@ -456,6 +489,17 @@ std::optional<std::string> resolve_prompt_template(const std::filesystem::path& 
     return expanded.empty() ? prompt : expanded;
   }
   return std::nullopt;
+}
+
+std::string init_prompt(const std::filesystem::path& workspace) {
+  const bool claude_only = !std::filesystem::exists(workspace / "AGENTS.md") &&
+                           std::filesystem::exists(workspace / "CLAUDE.md");
+  const std::string target = claude_only ? "CLAUDE.md" : "AGENTS.md";
+  std::string note = claude_only ? std::string(kClaudeInPlaceNote) : std::string();
+  if (std::filesystem::exists(workspace / "AGENTS.override.md")) {
+    note += kOverrideNote;
+  }
+  return std::string(kInitPromptHead) + target + "\n\n" + note + std::string(kInitPromptBody);
 }
 
 bool is_extension_slash(const std::shared_ptr<ExtensionRuntime>& extensions, std::string_view cmd) {

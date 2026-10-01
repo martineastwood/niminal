@@ -219,6 +219,17 @@ bool handle_reload(SlashHost& host, const std::string& arg) {
   return true;
 }
 
+bool handle_init(SlashHost& host, const std::string&) {
+  const auto writable = std::any_of(host.agent.tools.begin(), host.agent.tools.end(),
+                                    [](const auto& tool) { return tool.name == "write"; });
+  if (!writable) {
+    push_error(host, "/init writes a file. Switch to act mode (Shift-Tab) first.");
+    return true;
+  }
+  host.send_prompt(niminal::UserInput{init_prompt(host.cwd)}, false);
+  return true;
+}
+
 bool handle_permissions(SlashHost& host, const std::string& arg) {
   if (arg.empty()) {
     push_status(host, host.permissions.describe());
@@ -619,6 +630,7 @@ bool execute_slash(SlashHost& host, const std::string& cmd, const std::string& a
       {"/thinking", handle_thinking, true, true, true},
       {"/search", handle_search, true, true, false},
       {"/reload", handle_reload, false, false, false},
+      {"/init", handle_init, false, false, false},
       {"/permissions", handle_permissions, false, false, false},
       {"/trust", handle_trust, false, false, false},
       {"/settings", handle_settings, false, false, false},

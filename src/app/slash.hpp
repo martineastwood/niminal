@@ -44,6 +44,7 @@ std::optional<std::string> skill_slash_error(const std::filesystem::path& cwd,
 std::optional<std::string> resolve_prompt_template(const std::filesystem::path& cwd,
                                                    const std::string& prompt, std::string_view cmd,
                                                    std::string_view arg);
+std::string init_prompt(const std::filesystem::path& workspace);
 bool is_extension_slash(const std::shared_ptr<ExtensionRuntime>& extensions, std::string_view cmd);
 bool is_extension_slash_while_busy(const std::shared_ptr<ExtensionRuntime>& extensions,
                                    std::string_view cmd);

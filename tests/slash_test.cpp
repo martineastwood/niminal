@@ -97,5 +97,41 @@ int main() {
     return fail("model suggestions should use the active provider's entries");
   }
 
+  using niminal::app::init_prompt;
+  const auto init_root = std::filesystem::temp_directory_path() / "niminal-init-prompt-test";
+  std::filesystem::remove_all(init_root);
+  std::filesystem::create_directories(init_root);
+
+  auto empty = init_prompt(init_root);
+  if (empty.find("Target file: AGENTS.md") == std::string::npos) {
+    return fail("empty workspace should target AGENTS.md");
+  }
+  if (empty.find("Update the file in place when it already exists") == std::string::npos) {
+    return fail("/init prompt should ask for an in-place update");
+  }
+
+  std::ofstream(init_root / "CLAUDE.md") << "existing\n";
+  auto claude_only = init_prompt(init_root);
+  if (claude_only.find("Target file: CLAUDE.md") == std::string::npos) {
+    return fail("CLAUDE.md-only workspace should target CLAUDE.md");
+  }
+  if (claude_only.find("CLAUDE.md already loads as project instructions") == std::string::npos) {
+    return fail("CLAUDE.md target should explain why it updates in place");
+  }
+
+  std::ofstream(init_root / "AGENTS.md") << "existing\n";
+  auto with_agents = init_prompt(init_root);
+  if (with_agents.find("Target file: AGENTS.md") == std::string::npos) {
+    return fail("AGENTS.md should win over CLAUDE.md");
+  }
+
+  std::ofstream(init_root / "AGENTS.override.md") << "override\n";
+  auto overridden = init_prompt(init_root);
+  if (overridden.find("AGENTS.override.md exists in this directory and takes precedence") ==
+      std::string::npos) {
+    return fail("AGENTS.override.md should add the precedence note");
+  }
+  std::filesystem::remove_all(init_root);
+
   return 0;
 }
