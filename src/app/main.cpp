@@ -607,9 +607,6 @@ int main(int argc, char** argv) try {
   auto extensions =
       niminal::app::ExtensionRuntime::start(ws.root(), session.id, &cancel, &shell_env);
   niminal::app::normalize_config(cfg);
-  if (!api_url_override.empty()) {
-    cfg.api_url = api_url_override;
-  }
   if (provider_from_cli) {
     if (auto result = niminal::app::select_provider(cfg, provider_override); !result) {
       std::cerr << result.error().what() << '\n';
@@ -620,6 +617,10 @@ int main(int argc, char** argv) try {
     }
   }
   niminal::app::restore_config_from_session(cfg, session, !provider_from_cli, !model_from_cli);
+  // The startup override outranks every endpoint the files and the session supply.
+  if (!api_url_override.empty()) {
+    cfg.api_url = api_url_override;
+  }
   const auto catalog_startup = niminal::app::initialize_catalog();
   agent = make_agent(ws, cfg, api_key, max_steps, &cancel, modes, system_prompt, &shell_env);
   if (tools_specified) {
