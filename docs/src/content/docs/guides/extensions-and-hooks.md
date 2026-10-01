@@ -322,6 +322,35 @@ exists. The extension receives
 the widget by sending another `update`. To remove a widget, send its key with an
 empty title, content array, and actions array.
 
+## Chat modals
+
+Set a widget's `position` to `modal` to open a separate chat composer over the
+main conversation. Use markdown content for the transcript and register `submit`
+and `close` actions:
+
+```python
+send({"type": "response", "id": command_id, "widget": {
+    "key": "side-chat", "position": "modal", "title": "Side chat",
+    "content": [{"type": "markdown", "text": "Ask about this session."}],
+    "actions": [{"id": "submit", "label": "Send"},
+                {"id": "close", "label": "Close"}]}})
+```
+
+Enter sends a `ui_action` with `action: "submit"` and a `text` field containing
+what the user typed. Append the question and answer to your widget's markdown
+content, then send an `update` to refresh the transcript. Remove the `submit`
+action while an answer runs to prevent another submission; the user can still
+compose their next question.
+
+Escape and the **Close** button send the `close` action. Remove the widget by
+sending its key with an empty title, content array, and actions array. PageUp,
+PageDown, and the mouse wheel scroll the modal's transcript. Input in the modal
+stays separate from the main composer and is not added to the main conversation.
+
+Use a new widget key each time you open a chat, and discard late answers after
+closing it. `/btw` uses this to start a temporary conversation from a fixed
+snapshot of the main session.
+
 ## Panels
 
 A `markdown` element turns its widget into a panel: a bordered, scrollable body

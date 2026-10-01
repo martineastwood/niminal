@@ -28,6 +28,7 @@ def invalid():
 
 send({"type": "register", "commands": [
     {"name": "panel", "description": "Show a markdown panel"},
+    {"name": "modal", "description": "Open a chat modal"},
     {"name": "panel_invalid", "description": "Show a panel the host must reject"},
 ]})
 
@@ -40,6 +41,18 @@ for line in sys.stdin:
         send({"type": "response", "id": message["id"], "widget": widget(rows)})
     elif kind == "command" and message.get("name") == "panel_invalid":
         send({"type": "response", "id": message["id"], "widget": invalid()})
+    elif kind == "command" and message.get("name") == "modal":
+        send({"type": "response", "id": message["id"], "widget": {
+            "key": "chat", "position": "modal", "title": "Side chat",
+            "content": [{"type": "markdown", "text": "Ask a question"}],
+            "actions": [{"id": "submit", "label": "Send"}, {"id": "close", "label": "Close"}]}})
+    elif kind == "ui_action" and message.get("widget") == "chat":
+        if message.get("action") == "submit":
+            send({"type": "host_request", "id": "completion", "method": "model.complete",
+                  "prompt": message.get("text")})
+        elif message.get("action") == "close":
+            send({"type": "update", "widget": {
+                "key": "chat", "title": "", "content": [], "actions": []}})
     elif kind == "ui_action" and message.get("widget") == "body":
         if message.get("action") == "more":
             rows += 20

@@ -91,7 +91,7 @@ int main() {
                                   {"NIMINAL_REASONING_LEVEL", "high"}};
   };
   auto runtime = ExtensionRuntime::start(root, "session", &cancel, &env_fn);
-  if (runtime->commands().size() != 9) {
+  if (runtime->commands().size() != 10) {
     std::cerr << "extension registration failed, got " << runtime->commands().size()
               << " commands\n";
     for (const auto& warning : runtime->warnings()) {
@@ -388,6 +388,49 @@ int main() {
     std::cerr << "subagent demo action did not update its widget\n";
     return 1;
   }
+  // Model requests must not block modal updates or command responses on the reader.
+  std::promise<std::string> submitted;
+  auto submitted_text = submitted.get_future();
+  std::promise<void> release_model;
+  auto released = release_model.get_future().share();
+  runtime->set_host_request(
+      [&submitted, released](const std::string&, const niminal::json& request) {
+        submitted.set_value(niminal::json_value(request, "prompt", ""));
+        released.wait();
+        return niminal::json{{"text", "answer"}};
+      });
+  runtime->invoke("modal", "");
+  const auto modal = find_widget("panel_demo", "chat");
+  if (!modal || modal->position != "modal" ||
+      runtime->activate_widget_action("panel_demo", "chat", "missing", "question") ||
+      !runtime->activate_widget_action("panel_demo", "chat", "submit", "A side question")) {
+    release_model.set_value();
+    std::cerr << "modal registration or submit validation failed\n";
+    return 1;
+  }
+  if (submitted_text.wait_for(std::chrono::seconds(2)) != std::future_status::ready ||
+      submitted_text.get() != "A side question") {
+    release_model.set_value();
+    std::cerr << "modal submit did not deliver its text\n";
+    return 1;
+  }
+  runtime->activate_widget_action("panel_demo", "chat", "close");
+  const auto close_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (find_widget("panel_demo", "chat") && std::chrono::steady_clock::now() < close_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  const bool closed_during_request = !find_widget("panel_demo", "chat");
+  auto reopen = std::async(std::launch::async, [&] { return runtime->invoke("modal", ""); });
+  const bool reopened_during_request =
+      reopen.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+  release_model.set_value();
+  reopen.get();
+  runtime->set_host_request({});
+  if (!closed_during_request || !reopened_during_request) {
+    std::cerr << "model request blocked closing or reopening the modal\n";
+    return 1;
+  }
+  runtime->activate_widget_action("panel_demo", "chat", "close");
   auto clear_footer = runtime->invoke("footer_demo", "clear");
   if (niminal::json_value(clear_footer, "message", "") != "Footer status updated." ||
       find_status("status_demo", "model")) {

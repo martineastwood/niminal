@@ -1751,7 +1751,41 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
     return input_transform({std::move(element), false, input->Focused(), false}) | xflex;
   });
 
+  std::string modal_draft;
+  int modal_cursor = 0;
+  std::string modal_id;
+  WidgetPanelScroll modal_scroll{0, 0, true};
+  Element modal_body;
+  int modal_height = 1;
+  Box modal_close_box{-1, -1, -1, -1};
+  auto modal_options = input_opt;
+  modal_options.cursor_position = &modal_cursor;
+  auto modal_input = Input(&modal_draft, "ask a side question", modal_options);
   auto layout = Container::Vertical({wrapped_input});
+  auto current_modal = [&]() -> std::optional<ExtensionWidget> {
+    if (extensions) {
+      for (const auto& widget : extensions->widgets()) {
+        if (widget.position == "modal") {
+          return widget;
+        }
+      }
+    }
+    return std::nullopt;
+  };
+  auto focus_modal = [&](const std::optional<ExtensionWidget>& modal) {
+    const auto id = modal ? modal->extension + ":" + modal->key : std::string();
+    if (id == modal_id) {
+      return;
+    }
+    modal_id = id;
+    modal_draft.clear();
+    modal_cursor = 0;
+    modal_scroll = {0, 0, true};
+    modal_body.reset();
+    if (!modal) {
+      input->TakeFocus();
+    }
+  };
   std::optional<std::tuple<std::string, std::string, std::string, std::string, size_t>> footer_key;
   std::string think;
   std::string usage;
@@ -1822,8 +1856,10 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
 
     const auto extension_statuses =
         extensions ? extensions->statuses() : std::vector<ExtensionStatus>{};
-    const auto extension_widgets =
-        extensions ? extensions->widgets() : std::vector<ExtensionWidget>{};
+    auto extension_widgets = extensions ? extensions->widgets() : std::vector<ExtensionWidget>{};
+    const auto modal = current_modal();
+    focus_modal(modal);
+    std::erase_if(extension_widgets, [](const auto& widget) { return widget.position == "modal"; });
     std::vector<std::pair<size_t, size_t>> extension_action_slots;
     for (size_t widget_index = 0; widget_index < extension_widgets.size(); ++widget_index) {
       for (size_t action_index = 0; action_index < extension_widgets[widget_index].actions.size();
@@ -2217,7 +2253,36 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
         color(theme.accent));
     usage_elements.push_back(text(think.empty() ? std::string() : (":" + think)) | dim);
     stack.push_back(hbox(std::move(usage_elements)));
-    return vbox(std::move(stack));
+    auto main_view = vbox(std::move(stack));
+    if (!modal) {
+      return main_view;
+    }
+    const int width = std::max(12, std::min(100, screen.dimx() - 4));
+    modal_height = std::max(1, screen.dimy() - 12);
+    Elements messages;
+    for (const auto& item : modal->content.get_array()) {
+      messages.push_back(render_markdown(niminal::json_value(item, "text", std::string()), theme));
+    }
+    if (modal_body) {
+      modal_scroll.rows = modal_body->requirement().min_y;
+    }
+    modal_body = vbox(std::move(messages));
+    const bool can_send = std::any_of(modal->actions.begin(), modal->actions.end(),
+                                      [](const auto& action) { return action.id == "submit"; });
+    auto chat =
+        window(hbox({text(" " + modal->title + " ") | bold | color(theme.accent), filler(),
+                     text("[Close]") | color(theme.muted) | reflect(modal_close_box)}),
+               vbox({widget_panel_window(
+                         modal_body, widget_panel_offset(modal_scroll, modal_height), modal_height),
+                     separator(),
+                     hbox({text("› ") | bold,
+                           modal_input->Render() | xflex | size(HEIGHT, LESS_THAN, 4)}),
+                     text(can_send ? "enter send · esc close · pgup/pgdn scroll"
+                                   : "thinking… · esc close · pgup/pgdn scroll") |
+                         color(theme.muted)}),
+               ROUNDED) |
+        size(WIDTH, EQUAL, width) | bgcolor(theme.input_bg) | color(theme.input_fg);
+    return dbox({std::move(main_view), std::move(chat) | clear_under | center});
   });
 
   auto insert_draft = [&](const std::string& text) {
@@ -2311,6 +2376,60 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       }
       return false;
     };
+    const auto modal = current_modal();
+    focus_modal(modal);
+    if (modal) {
+      if (pressed(KeyAction::cancel) ||
+          (e.is_mouse() && e.mouse().button == Mouse::Left && e.mouse().motion == Mouse::Released &&
+           point_in_box(modal_close_box, e.mouse().x, e.mouse().y))) {
+        extensions->activate_widget_action(modal->extension, modal->key, "close");
+        return true;
+      }
+      if (pressed(KeyAction::quit)) {
+        quit_ui();
+        return true;
+      }
+      if (is_wheel_up(e) || is_wheel_down(e) || pressed(KeyAction::scroll_up) ||
+          pressed(KeyAction::scroll_down)) {
+        const bool up = is_wheel_up(e) || pressed(KeyAction::scroll_up);
+        const int delta = (is_wheel_up(e) || is_wheel_down(e)) ? 3 : modal_height;
+        scroll_widget_panel(modal_scroll, modal_body ? modal_body->requirement().min_y : 0,
+                            modal_height, up ? -delta : delta);
+        return true;
+      }
+      if (pressed(KeyAction::newline)) {
+        const int pos = std::clamp(modal_cursor, 0, static_cast<int>(modal_draft.size()));
+        modal_draft.insert(static_cast<size_t>(pos), 1, '\n');
+        modal_cursor = pos + 1;
+        return true;
+      }
+      if (pressed(KeyAction::paste)) {
+        try {
+          const auto pasted = paste_from_clipboard();
+          const int pos = std::clamp(modal_cursor, 0, static_cast<int>(modal_draft.size()));
+          modal_draft.insert(static_cast<size_t>(pos), pasted);
+          modal_cursor = pos + static_cast<int>(pasted.size());
+        } catch (const std::exception& error) {
+          flash_footer(error.what());
+        }
+        return true;
+      }
+      if (pressed(KeyAction::submit)) {
+        if (modal_draft.find_first_not_of(" \t\r\n") != std::string::npos &&
+            extensions->activate_widget_action(modal->extension, modal->key, "submit",
+                                               modal_draft)) {
+          modal_draft.clear();
+          modal_cursor = 0;
+          modal_scroll.stick = true;
+        }
+        return true;
+      }
+      if (e == Event::Custom || e.is_mouse() || pressed(KeyAction::complete)) {
+        return true;
+      }
+      modal_input->OnEvent(e);
+      return true;
+    }
     if (ask_user_open) {
       if (scroll_event()) {
         return true;

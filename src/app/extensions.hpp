@@ -163,7 +163,7 @@ public:
   std::vector<ExtensionWidget> widgets() const;
   const std::vector<ModeSpec>& registered_modes() const { return registered_modes_; }
   bool activate_widget_action(const std::string& extension, const std::string& key,
-                              const std::string& action);
+                              const std::string& action, const std::string& text = {});
 
   explicit ExtensionRuntime(Access, std::filesystem::path workspace, niminal::Cancellation* cancel);
 

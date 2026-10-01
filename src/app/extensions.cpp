@@ -19,6 +19,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fcntl.h>
 #include <fstream>
 #include <initializer_list>
@@ -382,6 +383,25 @@ public:
       reader_exited_ = false;
       reader_error_.clear();
     }
+    host_worker_ = std::thread([this] {
+      for (;;) {
+        std::string line;
+        {
+          std::unique_lock lock(host_mutex_);
+          host_cv_.wait(lock, [this] { return reader_stopping_.load() || !host_lines_.empty(); });
+          if (reader_stopping_.load()) {
+            return;
+          }
+          line = std::move(host_lines_.front());
+          host_lines_.pop_front();
+        }
+        try {
+          on_line_(line);
+        } catch (...) {
+          reader_stopping_.store(true);
+        }
+      }
+    });
     reader_ = std::thread([this] { read_loop(); });
   }
 
@@ -461,11 +481,15 @@ public:
     } catch (...) {
     }
     reader_stopping_.store(true);
-    close(input_);
-    input_ = -1;
+    host_cv_.notify_all();
     if (reader_.joinable()) {
       reader_.join();
     }
+    if (host_worker_.joinable()) {
+      host_worker_.join();
+    }
+    close(input_);
+    input_ = -1;
     // An extension may still be stopping something it started (a subagent, a
     // child process), so give it a moment before killing it.
     const auto deadline = std::chrono::steady_clock::now() + kStopGrace;
@@ -550,7 +574,16 @@ private:
         mark_activity();
         if (on_line_) {
           try {
-            on_line_(*line);
+            const auto message = niminal::try_json_parse(*line);
+            if (message && string_field(*message, "type") == "host_request") {
+              {
+                std::lock_guard lock(host_mutex_);
+                host_lines_.push_back(std::move(*line));
+              }
+              host_cv_.notify_one();
+            } else {
+              on_line_(*line);
+            }
           } catch (const std::exception& e) {
             error = e.what();
             reader_stopping_.store(true);
@@ -592,6 +625,10 @@ private:
   std::map<std::string, json> responses_;
   std::chrono::steady_clock::time_point last_activity_ = std::chrono::steady_clock::now();
   std::thread reader_;
+  std::thread host_worker_;
+  std::mutex host_mutex_;
+  std::condition_variable host_cv_;
+  std::deque<std::string> host_lines_;
   std::function<void(const std::string&)> on_line_;
   std::atomic<bool> reader_stopping_{false};
   bool reader_exited_ = false;
@@ -1071,7 +1108,7 @@ void capture_actions(ExtensionRuntime::Impl& impl, const Process& process, const
       item.position = "above_composer";
     }
     item.title = string_field(widget, "title");
-    bool valid = item.position == "above_composer";
+    bool valid = item.position == "above_composer" || item.position == "modal";
     if (widget.contains("content") && widget["content"].is_array()) {
       item.content = widget["content"];
     } else {
@@ -1774,7 +1811,7 @@ std::vector<ExtensionWidget> ExtensionRuntime::widgets() const {
 }
 
 bool ExtensionRuntime::activate_widget_action(const std::string& extension, const std::string& key,
-                                              const std::string& action) {
+                                              const std::string& action, const std::string& text) {
   {
     std::lock_guard lock(impl_->actions_mutex);
     const auto widget = impl_->widgets.find(extension + ":" + key);
@@ -1791,7 +1828,8 @@ bool ExtensionRuntime::activate_widget_action(const std::string& extension, cons
     return false;
   }
   try {
-    (*process)->send(json{{"type", "ui_action"}, {"widget", key}, {"action", action}});
+    (*process)->send(
+        json{{"type", "ui_action"}, {"widget", key}, {"action", action}, {"text", text}});
     return true;
   } catch (...) {
     return false;
