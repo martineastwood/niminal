@@ -57,7 +57,7 @@ main() {
     || fail "download failed from ${base}/${asset}"
   curl -fsSL --retry 3 --connect-timeout 10 --max-time 20 \
     "${base}/${asset}.sha256" -o "${tmp}/${asset}.sha256" \
-    || fail "checksum download failed"
+    || fail "checksum download failed from ${base}/${asset}.sha256"
 
   expected="$(awk 'NF { print tolower($1); exit }' "${tmp}/${asset}.sha256")"
   [ "$(printf '%s' "$expected" | awk '{ print length }')" -eq 64 ] ||
