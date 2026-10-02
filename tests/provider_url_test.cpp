@@ -54,6 +54,7 @@ public:
 
   ~Endpoint() {
     if (socket_ >= 0) {
+      ::shutdown(socket_, SHUT_RDWR);
       ::close(socket_);
     }
     if (thread_.joinable()) {
