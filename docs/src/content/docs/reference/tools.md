@@ -153,9 +153,10 @@ Read-only git inspection in the workspace. `subcommand` is required:
 | Subcommand | Purpose |
 | --- | --- |
 | `status` | Short status with branch |
-| `log` | Recent commits (`limit`, optional `ref`) |
+| `log` | Recent commits (`limit`, optional `ref`, `path`, `search` for the pickaxe, `follow` to cross renames) |
 | `diff` | Diff against the working tree (optional `ref`, `path`) |
 | `show` | One commit patch (optional `ref`) |
+| `blame` | Line-by-line authorship (`path`, optional `start` and `end`) |
 | `branch` | Local branches with upstream info |
 
 Plan mode includes `git` so the agent can read history without `bash`.

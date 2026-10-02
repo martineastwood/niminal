@@ -257,6 +257,117 @@ int main() {
     std::cerr << "a timed-out command should not outlive the tool call (pid " << child << ")\n";
     return 1;
   }
+  // A rewrite goes through a temp file and a rename, so the destination's mode
+  // has to survive it. Extensions and scripts are executable files.
+  {
+    const auto script = tmp / "script.sh";
+    {
+      std::ofstream out(script);
+      out << "#!/bin/sh\necho hi\n";
+    }
+    fs::permissions(script, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
+                                fs::perms::others_read | fs::perms::others_exec);
+    niminal::Tool* edit = find(tools, "edit");
+    if (edit == nullptr) {
+      std::cerr << "missing edit\n";
+      return 1;
+    }
+    const auto edited = edit->run(
+        niminal::json{{"path", "script.sh"}, {"old_text", "echo hi"}, {"new_text", "echo bye"}});
+    const auto mode = fs::status(script).permissions();
+    if ((mode & fs::perms::owner_exec) == fs::perms::none ||
+        edited.text.find("OK") == std::string::npos) {
+      std::cerr << "edit should keep the exec bit and report OK\n" << edited.text << '\n';
+      return 1;
+    }
+  }
+  // git reads stay useful without bash: file history, pickaxe, rename follow,
+  // and blame.
+  {
+    auto repo = fs::temp_directory_path() / "niminal-tools-git-test";
+    fs::remove_all(repo);
+    fs::create_directories(repo);
+    auto sh = [&repo](const std::string& args) {
+      return std::system(("git -C " + repo.string() + " " + args + " >/dev/null 2>&1").c_str()) ==
+             0;
+    };
+    auto write = [&repo](const char* name, const std::string& body) {
+      std::ofstream out(repo / name);
+      out << body;
+    };
+    if (!sh("init -q") || !sh("config user.email t@t") || !sh("config user.name t")) {
+      std::cerr << "git fixture setup failed\n";
+      return 1;
+    }
+    write("a.txt", "first\n");
+    sh("add a.txt");
+    sh("commit -qm 'add a'");
+    write("b.txt", "second\n");
+    sh("add b.txt");
+    sh("commit -qm 'add b'");
+    write("a.txt", "first\nlimit = 50\n");
+    sh("add a.txt");
+    sh("commit -qm 'tune limit'");
+    sh("mv a.txt renamed.txt");
+    sh("commit -qm 'rename a'");
+
+    Workspace git_ws(repo);
+    auto git_tools = workspace_tools(git_ws, &cancel);
+    niminal::Tool* git = find(git_tools, "git");
+    if (git == nullptr) {
+      std::cerr << "missing git\n";
+      return 1;
+    }
+    const auto subjects = git->run(niminal::json{{"subcommand", "log"}}).text;
+    if (subjects.find("add a") == std::string::npos ||
+        subjects.find("tune limit") == std::string::npos) {
+      std::cerr << "git log should list commits\n" << subjects << '\n';
+      return 1;
+    }
+    const auto scoped = git->run(niminal::json{{"subcommand", "log"}, {"path", "b.txt"}}).text;
+    if (scoped.find("add b") == std::string::npos ||
+        scoped.find("tune limit") != std::string::npos) {
+      std::cerr << "git log with path should scope to that file\n" << scoped << '\n';
+      return 1;
+    }
+    const auto pickaxe =
+        git->run(niminal::json{{"subcommand", "log"}, {"search", "limit = 50"}}).text;
+    if (pickaxe.find("tune limit") == std::string::npos ||
+        pickaxe.find("add b") != std::string::npos) {
+      std::cerr << "git log search should find the commit that added the text\n" << pickaxe << '\n';
+      return 1;
+    }
+    const auto followed =
+        git->run(niminal::json{{"subcommand", "log"}, {"path", "renamed.txt"}, {"follow", true}})
+            .text;
+    if (followed.find("add a") == std::string::npos ||
+        followed.find("rename a") == std::string::npos) {
+      std::cerr << "git log follow should cross a rename\n" << followed << '\n';
+      return 1;
+    }
+    const auto blamed =
+        git->run(niminal::json{
+                     {"subcommand", "blame"}, {"path", "renamed.txt"}, {"start", 2}, {"end", 2}})
+            .text;
+    if (blamed.find("limit = 50") == std::string::npos ||
+        blamed.find("first") != std::string::npos) {
+      std::cerr << "git blame should honor the line range\n" << blamed << '\n';
+      return 1;
+    }
+    if (git->run(niminal::json{{"subcommand", "blame"}}).text.find("blame needs a path") ==
+            std::string::npos ||
+        git->run(niminal::json{{"subcommand", "log"}, {"follow", true}})
+                .text.find("follow needs a path") == std::string::npos) {
+      std::cerr << "git should report a missing path\n";
+      return 1;
+    }
+    if (git->run(niminal::json{{"subcommand", "push"}}).text.find("unsupported subcommand") ==
+        std::string::npos) {
+      std::cerr << "git should reject an unknown subcommand\n";
+      return 1;
+    }
+    fs::remove_all(repo);
+  }
   fs::remove_all(tmp);
   return 0;
 }

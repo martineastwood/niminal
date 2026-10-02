@@ -210,6 +210,21 @@ std::string join_lines(const std::vector<std::string>& lines) {
   return out;
 }
 
+// Commands reach run_bash as one shell string, so anything a caller supplies
+// verbatim (a pickaxe search, a shell command) is single-quoted.
+std::string quote_arg(const std::string& value) {
+  std::string out = "'";
+  for (char c : value) {
+    if (c == '\'') {
+      out += "'\\''";
+    } else {
+      out += c;
+    }
+  }
+  out += "'";
+  return out;
+}
+
 } // namespace
 
 std::string run_bash(const std::string& command, const fs::path& cwd, int timeout_s,
@@ -360,6 +375,14 @@ void write_file_text(const fs::path& path, const std::string& content) {
       throw WorkspaceError("cannot write " + path.string());
     }
     out << content;
+  }
+  // The temp file starts at the default mode and rename replaces the directory
+  // entry, so a rewrite would strip the exec bit from a script. Carry the
+  // destination's mode across. Best effort: a missing file keeps the default.
+  std::error_code ec;
+  const auto mode = fs::status(path, ec).permissions();
+  if (!ec) {
+    fs::permissions(tmp, mode, ec);
   }
   fs::rename(tmp, path);
 }
@@ -640,15 +663,23 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
            }});
 
   tools.push_back(Tool{
-      "git", "Read-only git inspection in the workspace: status, log, diff, show, or branch.",
+      "git",
+      "Read-only git inspection in the workspace: status, log, diff, show, blame, or branch.",
       json{
           {"type", "object"},
           {"properties",
            {{"subcommand",
              {{"type", "string"},
-              {"enum", json_array({"status", "log", "diff", "show", "branch"})}}},
+              {"enum", json_array({"status", "log", "diff", "show", "blame", "branch"})}}},
             {"ref", {{"type", "string"}, {"description", "Commit or ref for log, diff, or show."}}},
-            {"path", {{"type", "string"}, {"description", "Path for diff (optional)."}}},
+            {"path", {{"type", "string"}, {"description", "Path for diff, log, or blame."}}},
+            {"search",
+             {{"type", "string"},
+              {"description", "Pickaxe for log: commits that added or removed this exact text."}}},
+            {"follow",
+             {{"type", "boolean"}, {"description", "Follow renames for log. Needs path."}}},
+            {"start", {{"type", "integer"}, {"description", "First line for blame."}}},
+            {"end", {{"type", "integer"}, {"description", "Last line for blame."}}},
             {"limit",
              {{"type", "integer"}, {"description", "Max commits for log (default 20)."}}}}},
           {"required", json_array({"subcommand"})}},
@@ -674,12 +705,29 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
         } else if (sub == "log") {
           const int limit = std::clamp(niminal::json_value(input, "limit", 20), 1, 100);
           cmd << "log -n " << limit << " --oneline --decorate";
+          if (input.contains("search")) {
+            cmd << " -S " << quote_arg(input.at("search").get<std::string>());
+          }
+          const bool follow = niminal::json_value(input, "follow", false);
+          if (follow && !input.contains("path")) {
+            return std::string("follow needs a path");
+          }
+          if (follow) {
+            cmd << " --follow";
+          }
           if (input.contains("ref")) {
             const auto ref = input.at("ref").get<std::string>();
             if (!safe_token(ref)) {
               return std::string("invalid ref");
             }
             cmd << ' ' << ref;
+          }
+          if (input.contains("path")) {
+            const auto path = input.at("path").get<std::string>();
+            if (!safe_token(path)) {
+              return std::string("invalid path");
+            }
+            cmd << " -- " << path;
           }
         } else if (sub == "diff") {
           cmd << "diff";
@@ -706,6 +754,24 @@ std::vector<Tool> workspace_tools(Workspace& ws, niminal::Cancellation* cancel,
             }
             cmd << ' ' << ref;
           }
+        } else if (sub == "blame") {
+          if (!input.contains("path")) {
+            return std::string("blame needs a path");
+          }
+          const auto path = input.at("path").get<std::string>();
+          if (!safe_token(path)) {
+            return std::string("invalid path");
+          }
+          cmd << "blame";
+          if (input.contains("start") || input.contains("end")) {
+            const int start = niminal::json_value(input, "start", 1);
+            const int end = niminal::json_value(input, "end", start);
+            if (start < 1 || end < start) {
+              return std::string("invalid line range");
+            }
+            cmd << " -L " << start << ',' << end;
+          }
+          cmd << " -- " << path;
         } else if (sub == "branch") {
           cmd << "branch -vv";
         } else {
