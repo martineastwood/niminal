@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Install the niminal release binary on macOS 15+ or Linux, or build from source.
+description: Install the niminal release binary on macOS 15+, Linux, or Windows via WSL, or build from source.
 ---
 
 You can install niminal with a one-line script that downloads the latest release
@@ -21,36 +21,85 @@ to your `PATH` if it is not already there.
 To install a specific release, set `NIMINAL_VERSION` for the installer shell:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.0 sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.1 sh
 ```
 
 Set `NIMINAL_INSTALL_DIR` before `sh` in the pipeline to choose a different
 install location:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.0 NIMINAL_INSTALL_DIR="$HOME/bin" sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.1 NIMINAL_INSTALL_DIR="$HOME/bin" sh
 ```
 
-Published platforms today:
+Release platforms:
 
 | Platform | Architecture |
 | --- | --- |
-| Linux | x86_64 |
-| Linux (glibc 2.38+) | arm64 |
+| Linux (glibc 2.27+) | x86_64, arm64 |
 | macOS 15+ | arm64, x86_64 |
 
-The Linux ARM64 binary is built on Ubuntu 24.04.
+You can use the Linux binary on Ubuntu 18.04+, Debian 10+, Rocky/AlmaLinux 8+,
+and Amazon Linux 2023. Alpine Linux needs a glibc environment.
+
+## HTTPS certificates
+
+On macOS, niminal uses Apple's system root certificates. You do not need Homebrew
+for the release binary. On Linux, install your distribution's `ca-certificates`
+package, especially in minimal containers:
+
+```sh
+# Ubuntu or Debian
+sudo apt-get install ca-certificates
+
+# Rocky, AlmaLinux, or Fedora
+sudo dnf install ca-certificates
+```
+
+If your network requires a custom certificate bundle, you can set its path:
+
+```sh
+SSL_CERT_FILE=/path/to/company-ca-bundle.pem niminal
+```
+
+`SSL_CERT_FILE` and `SSL_CERT_DIR` replace the default trust roots. Your bundle
+should include every CA you need. niminal still verifies certificates and server
+hostnames. Custom macOS Keychain trust settings are not imported automatically;
+use a custom bundle for those certificates.
+
+Linux release binaries do not automatically load your distribution's OpenSSL
+crypto policies. If you need a custom OpenSSL configuration, set `OPENSSL_CONF`
+to a file compatible with the bundled OpenSSL 3.5.
+
+## Windows via WSL
+
+There is no native Windows build. niminal runs inside WSL2, which uses the Linux
+binary unchanged.
+
+Use a distro with glibc 2.27 or newer, such as Ubuntu 22.04 or 24.04.
+
+```powershell
+wsl --install -d Ubuntu-24.04
+```
+
+Then install niminal inside the distro, exactly as on Linux:
+
+```sh
+curl -fsSL https://niminal.dev/install.sh | sh
+```
+
+Keep the project in the Linux filesystem, such as `~/projects/my-app`. Working
+under `/mnt/c` is slower.
 
 ## Build from source
 
 To build from a source checkout, you need CMake 3.22 or later, Ninja, a C++23
-compiler, OpenSSL 3 development libraries, and CAIL v0.4.0. CAIL requires
+compiler, OpenSSL 3 development libraries, and CAIL v0.4.1. CAIL requires
 CMake 3.31 or later and network access while its dependencies are downloaded.
 
 Install CAIL next to your Niminal checkout:
 
 ```sh
-git clone --branch v0.4.0 --depth 1 https://github.com/martineastwood/cail.git ../cail
+git clone --branch v0.4.1 --depth 1 https://github.com/martineastwood/cail.git ../cail
 cmake -S ../cail -B ../cail/build -DCAIL_BUILD_EXAMPLES=OFF
 cmake --build ../cail/build
 cmake --install ../cail/build --prefix ../cail/build/install

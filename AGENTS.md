@@ -25,7 +25,7 @@ warnings-as-errors.
 
 ## Setup
 
-- Configure fails unless CAIL 0.4.0 is installed. `./dev setup` uses a CAIL checkout at
+- Configure fails unless CAIL 0.4.1 is installed. `./dev setup` uses a CAIL checkout at
   `../cail`, builds and installs it, then configures `build/dev`. macOS gets OpenSSL from
   Homebrew.
 - `./dev` looks for `clang-format-20`/`clang-tidy-20`, then Homebrew `llvm@20` paths. An

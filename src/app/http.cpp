@@ -1,4 +1,5 @@
 #include "http.hpp"
+#include <cail/detail/system_ca.hpp>
 
 #include <glaze/net/http_client.hpp>
 
@@ -26,7 +27,12 @@ struct StreamState {
 struct HttpClient::Impl {
   glz::http_client client;
 
-  Impl() { client.set_graceful_ssl_shutdown(false); }
+  Impl() {
+    client.set_graceful_ssl_shutdown(false);
+    if (const auto trust = cail::detail::configure_system_ca(client); !trust) {
+      throw std::system_error(trust.error(), "Could not load trusted TLS certificates");
+    }
+  }
 };
 
 HttpClient::HttpClient() : impl_(std::make_unique<Impl>()) {}

@@ -14,8 +14,8 @@ Fast startup, low memory, and no idle CPU until you ask.
 
 ## Install
 
-macOS 15+ and Linux, with x86_64 and arm64 binaries. Linux arm64 requires
-glibc 2.38 or newer:
+macOS 15+, Linux with glibc 2.27 or newer, and Windows via WSL2, with x86_64 and
+arm64 binaries:
 
 ```sh
 curl -fsSL https://niminal.dev/install.sh | sh
@@ -27,7 +27,7 @@ to your `PATH` if it is not already there.
 Install a specific release with:
 
 ```sh
-curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.0 sh
+curl -fsSL https://niminal.dev/install.sh | NIMINAL_VERSION=v0.3.1 sh
 ```
 
 Set `NIMINAL_INSTALL_DIR` before `sh` to choose another location. See
@@ -197,11 +197,11 @@ Full guides and reference material live at [niminal.dev](https://niminal.dev):
 
 For contributors and packagers:
 
-Niminal uses CAIL v0.4.0 as a separate CMake package. Check out that release
+Niminal uses CAIL v0.4.1 as a separate CMake package. Check out that release
 next to Niminal, then build and install it with the setup command:
 
 ```sh
-git clone --branch v0.4.0 --depth 1 https://github.com/martineastwood/cail.git ../cail
+git clone --branch v0.4.1 --depth 1 https://github.com/martineastwood/cail.git ../cail
 ./dev setup
 ```
 

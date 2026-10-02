@@ -167,7 +167,7 @@ send({
     <div>
       <p class="landing-kicker">Start in a few lines</p>
       <h2 id="landing-start-title">Bring your provider. Keep your project.</h2>
-      <p>Install the release binary on macOS or Linux, set a provider key, and launch niminal from the workspace you want to work on.</p>
+      <p>Install the release binary on macOS, Linux, or Windows via WSL, set a provider key, and launch niminal from the workspace you want to work on.</p>
     </div>
     <pre><code><span class="landing-prompt">$</span> curl -fsSL https://niminal.dev/install.sh | sh
 <span class="landing-prompt">$</span> export OPENROUTER_API_KEY=your-key

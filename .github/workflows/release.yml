@@ -36,13 +36,15 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+      - name: Check release tag
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends cmake gcc g++ libssl-dev ninja-build python3-venv
+          version="$(sed -nE 's/^project\(niminal VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          test "$TAG" = "v$version"
 
       - name: Install CMake 3.31
+        if: runner.os == 'macOS'
         run: |
           python3 -m venv "$RUNNER_TEMP/cmake"
           "$RUNNER_TEMP/cmake/bin/python" -m pip install --disable-pip-version-check cmake==3.31.10
@@ -56,28 +58,25 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: martineastwood/cail
-          ref: v0.4.0
+          ref: v0.4.1
           path: .ci/cail
           fetch-depth: 1
 
       - name: Install CAIL
+        if: runner.os == 'macOS'
         run: |
           cmake -S .ci/cail -B "$RUNNER_TEMP/cail-build" -DCAIL_BUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
           cmake --build "$RUNNER_TEMP/cail-build" --parallel
           cmake --install "$RUNNER_TEMP/cail-build" --prefix "$RUNNER_TEMP/cail"
           echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/cail" >> "$GITHUB_ENV"
 
-      - name: Configure Linux
+      - name: Build Linux binary on Rocky 8
         if: runner.os == 'Linux'
-        # Ubuntu 24.04's GCC provides the C++23 library headers used by CAIL.
-        run: >-
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_C_COMPILER=gcc
-          -DCMAKE_CXX_COMPILER=g++
-          -DCMAKE_CXX_STANDARD=23
-          -DCMAKE_CXX_STANDARD_REQUIRED=ON
-          -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+        run: docker buildx build --file ci/linux-release.Dockerfile --output type=local,dest=build .
+
+      - name: Verify Linux compatibility
+        if: runner.os == 'Linux'
+        run: python3 ci/verify-linux.py build/niminal
 
       - name: Configure macOS
         if: runner.os == 'macOS'
@@ -90,7 +89,16 @@ jobs:
           -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
 
       - name: Build binary
+        if: runner.os == 'macOS'
         run: cmake --build build --target niminal_cli --parallel
+
+      - name: Verify macOS HTTPS without Homebrew certificates
+        if: runner.os == 'macOS'
+        run: |
+          ssl_dir="$(brew --prefix)/etc/openssl@3"
+          mv "$ssl_dir" "${ssl_dir}.disabled"
+          trap 'mv "${ssl_dir}.disabled" "$ssl_dir"' EXIT
+          python3 ci/verify_https.py build/niminal
 
       - name: Package binary
         env:

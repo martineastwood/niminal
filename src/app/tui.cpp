@@ -1594,6 +1594,20 @@ int run_tui(niminal::Agent& agent, Workspace& workspace, Config& cfg, Session& s
       std::lock_guard<std::mutex> lock(steering_mu);
       steering.clear();
       follow_up.clear();
+      return;
+    }
+    if (action == AfterStop::none) {
+      niminal::UserInput prompt;
+      {
+        std::lock_guard<std::mutex> lock(steering_mu);
+        if (!follow_up.empty()) {
+          prompt = std::move(follow_up.front());
+          follow_up.erase(follow_up.begin());
+        }
+      }
+      if (!prompt.text.empty() || !prompt.images.empty()) {
+        send_prompt(std::move(prompt));
+      }
     }
   };
   for (auto& message : idle_extension_messages) {
