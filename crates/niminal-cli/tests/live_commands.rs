@@ -212,3 +212,24 @@ fn the_daemon_refuses_what_it_cannot_do() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("TLS"), "{}", stderr(&out));
 }
+
+#[test]
+fn repl_runs_multiline_blocks_and_reports_errors_without_stopping() {
+    let daemon = Daemon::start(&[]);
+    let mut repl = niminal()
+        .args(["repl", "--port", &daemon.port.to_string(), "--quantize", "now"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = "tempo 100bpm\ninstr tone(freq: hz) {\n  osc(sine, freq)\n}\ntrack t { instrument = tone }\nplay t = [c4 zz]\nplay t = [c4]\n";
+    repl.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    let out = repl.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.contains("`zz` isn't a note"), "{stderr}");
+    // The tempo, the instrument and track, and the final play all went through.
+    assert_eq!(stdout.matches("applied").count() + stdout.matches("lands at").count(), 4, "{stdout}");
+}

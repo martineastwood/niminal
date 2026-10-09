@@ -87,6 +87,16 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Type code at a running daemon, one statement at a time.
+    Repl {
+        #[arg(long, default_value_t = 7400)]
+        port: u16,
+        /// When each statement should land, as in `now` or `next 4 bars`.
+        #[arg(long)]
+        quantize: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -105,6 +115,7 @@ fn main() -> ExitCode {
         Command::Send { code, file, port, quantize, token } => {
             run_send(code, file.as_deref(), port, quantize.as_deref(), token.as_deref())
         }
+        Command::Repl { port, quantize, token } => run_repl(port, quantize, token.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -288,26 +299,88 @@ fn run_send(
         }
     };
     let mut client = Client::connect(port, token).map_err(|e| format!("error: {e}"))?;
+    println!("{}", eval(&mut client, &source, quantize, &name)?);
+    Ok(())
+}
+
+/// Evaluate code on the daemon, describing when it lands.
+fn eval(client: &mut Client, source: &str, quantize: Option<&str>, name: &str) -> Result<String, String> {
     let mut params = json!({ "source": source });
     if let Some(q) = quantize {
         params["quantize"] = json!(q);
     }
     match client.call_raw("eval", params).map_err(|e| format!("error: {e}"))? {
-        Ok(result) => {
-            if result["id"].is_null() {
-                println!("nothing to do");
-            } else if result["in_seconds"].as_f64().unwrap_or(0.0) == 0.0 {
-                println!("applied");
-            } else {
-                println!(
-                    "lands at bar {} beat {:.2} (in {:.1}s)",
-                    result["position"]["bar"],
-                    result["position"]["beat"].as_f64().unwrap_or(1.0),
-                    result["in_seconds"].as_f64().unwrap_or(0.0)
-                );
-            }
-            Ok(())
-        }
-        Err(error) => Err(render_error(&error, &source, &name)),
+        Ok(result) => Ok(if result["id"].is_null() {
+            "nothing to do".to_string()
+        } else if result["in_seconds"].as_f64().unwrap_or(0.0) == 0.0 {
+            "applied".to_string()
+        } else {
+            format!(
+                "lands at bar {} beat {:.2} (in {:.1}s)",
+                result["position"]["bar"],
+                result["position"]["beat"].as_f64().unwrap_or(1.0),
+                result["in_seconds"].as_f64().unwrap_or(0.0)
+            )
+        }),
+        Err(error) => Err(render_error(&error, source, name)),
     }
+}
+
+/// How many brackets a line leaves open.
+fn open_brackets(line: &str) -> i32 {
+    let code = line.split("//").next().unwrap_or("");
+    code.chars().fold(0, |depth, c| match c {
+        '{' | '[' | '(' => depth + 1,
+        '}' | ']' | ')' => depth - 1,
+        _ => depth,
+    })
+}
+
+/// A statement runs once its brackets are closed, so a block can be typed
+/// over several lines. `:quantize WHEN` (or `:quantize off`) sets when
+/// statements land, and `:quit` leaves.
+fn run_repl(port: u16, mut quantize: Option<String>, token: Option<&str>) -> Result<(), String> {
+    use std::io::{BufRead, IsTerminal, Write};
+
+    let mut client = Client::connect(port, token).map_err(|e| format!("error: {e}"))?;
+    let interactive = std::io::stdin().is_terminal();
+    let prompt = |depth: i32| {
+        if interactive {
+            print!("{}", if depth > 0 { "     ... " } else { "niminal> " });
+            let _ = std::io::stdout().flush();
+        }
+    };
+    if interactive {
+        println!("connected to the daemon on port {port}. :quantize WHEN sets when code lands, :quit leaves.");
+    }
+
+    let mut pending = String::new();
+    let mut depth = 0;
+    prompt(depth);
+    for line in std::io::stdin().lock().lines() {
+        let line = line.map_err(|e| format!("error: can't read the standard input: {e}"))?;
+        let trimmed = line.trim();
+        if depth == 0 && trimmed.starts_with(':') {
+            match trimmed.split_once(' ').unwrap_or((trimmed, "")) {
+                (":quit" | ":q", _) => break,
+                (":quantize", "off" | "") => quantize = None,
+                (":quantize", when) => quantize = Some(when.trim().to_string()),
+                _ => eprintln!("error: unknown command `{trimmed}`"),
+            }
+        } else if !(depth == 0 && trimmed.is_empty()) {
+            pending.push_str(&line);
+            pending.push('\n');
+            depth += open_brackets(&line);
+            if depth <= 0 {
+                depth = 0;
+                match eval(&mut client, &pending, quantize.as_deref(), "<repl>") {
+                    Ok(message) => println!("{message}"),
+                    Err(message) => eprint!("{message}"),
+                }
+                pending.clear();
+            }
+        }
+        prompt(depth);
+    }
+    Ok(())
 }
