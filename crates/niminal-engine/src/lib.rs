@@ -6,10 +6,12 @@
 //! graph. There is no OS-specific code here, so the crate builds for WebAssembly.
 
 mod graph;
+mod master;
 mod opcode;
 pub mod ops;
 mod voice;
 
+pub use master::Master;
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
 pub use opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx};
 pub use voice::Voice;

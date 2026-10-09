@@ -11,6 +11,7 @@ pub struct Voice {
     slots: Vec<[f32; BLOCK]>,
     sample_rate: f32,
     released: bool,
+    poisoned: bool,
 }
 
 impl Voice {
@@ -28,7 +29,7 @@ impl Voice {
             slots[graph.params.len() + i] = [c; BLOCK];
         }
 
-        Voice { graph, ops, slots, sample_rate, released: false }
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false }
     }
 
     /// Set a parameter by index. Takes effect from the next block.
@@ -59,7 +60,13 @@ impl Voice {
     /// A voice lives until it has been released and every envelope has
     /// finished, which may be well after the scheduled note length.
     pub fn is_finished(&self) -> bool {
-        self.released && !self.ops.iter().any(|op| op.is_active())
+        self.poisoned || (self.released && !self.ops.iter().any(|op| op.is_active()))
+    }
+
+    /// True once the voice produced NaN or infinity. It is silenced from then
+    /// on (its state can't be trusted) and counts as finished.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
     }
 
     /// Render `out.len()` samples (at most [`BLOCK`]). Output is identical
@@ -68,6 +75,10 @@ impl Voice {
     pub fn process(&mut self, out: &mut [f32]) {
         let frames = out.len();
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
+        if self.poisoned {
+            out.fill(0.0);
+            return;
+        }
         let ctx = ProcessCtx { sample_rate: self.sample_rate, gate: !self.released };
 
         let base = self.graph.node_slot_base();
@@ -83,5 +94,9 @@ impl Voice {
         }
 
         out.copy_from_slice(&self.slots[self.graph.output_slot][..frames]);
+        if out.iter().any(|s| !s.is_finite()) {
+            self.poisoned = true;
+            out.fill(0.0);
+        }
     }
 }

@@ -1,10 +1,14 @@
-use niminal_cli::render::{SAMPLE_RATE, render};
+use niminal_cli::render::{RenderOptions, SAMPLE_RATE, render as render_with};
 use niminal_lang::{Program, compile};
 use niminal_score::Section;
 
 const SAW_LEAD: &str = include_str!("../../../examples/saw_lead.nml");
 const PHI: &str = include_str!("../../../examples/phi.nms");
 const SR: f64 = SAMPLE_RATE as f64;
+
+fn render(p: &Program, extra: &[niminal_score::Event]) -> Result<Vec<f32>, niminal_cli::render::RenderError> {
+    render_with(p, extra, &RenderOptions::default()).map(|r| r.samples)
+}
 
 fn program(src: &str) -> Program {
     compile(src).unwrap_or_else(|errs| {
@@ -132,4 +136,25 @@ fn score_events_are_checked_against_the_instrument() {
 fn a_program_with_no_notes_renders_nothing() {
     let p = program("instr a() { osc(sine, 100hz) }");
     assert!(render(&p, &[]).unwrap().is_empty());
+}
+
+#[test]
+fn the_limiter_keeps_loud_output_under_the_ceiling_and_can_be_turned_off() {
+    let p = program("instr loud() { osc(saw, 220hz) * 4 }\nloud() for 1beat");
+    let limited = render_with(&p, &[], &RenderOptions { limiter: true }).unwrap().samples;
+    let raw = render_with(&p, &[], &RenderOptions { limiter: false }).unwrap().samples;
+    let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(peak(&raw) > 3.0);
+    assert!(peak(&limited) <= 0.9661, "{}", peak(&limited));
+    assert_eq!(limited.len(), raw.len(), "latency is compensated");
+}
+
+#[test]
+fn the_limiter_does_not_move_notes() {
+    let src = "instr click() { osc(sine, 1000hz) * env[1 0.5ms 0] }\nat 250ms click() for 1beat";
+    let p = program(src);
+    let out = render(&p, &[]).unwrap();
+    let first = (0.250 * SR) as usize;
+    assert!(out[..first].iter().all(|s| s.abs() < 1e-6), "silent before the note");
+    assert!(out[first..first + 200].iter().any(|s| s.abs() > 0.1), "sounds right at the note start");
 }
