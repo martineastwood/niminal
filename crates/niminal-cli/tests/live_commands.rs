@@ -28,18 +28,25 @@ struct Daemon {
 
 impl Daemon {
     fn start(extra: &[&str]) -> Daemon {
-        let port = free_port();
-        let mut child = niminal()
-            .args(["daemon", "--no-audio", "--port", &port.to_string()])
-            .args(extra)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut line = String::new();
-        BufReader::new(child.stdout.as_mut().unwrap()).read_line(&mut line).unwrap();
-        assert!(line.contains("listening on ws://127.0.0.1"), "{line}");
-        Daemon { child, port }
+        // Another test may take the port between choosing it and binding it, so try again.
+        for _ in 0..5 {
+            let port = free_port();
+            let mut child = niminal()
+                .args(["daemon", "--no-audio", "--port", &port.to_string()])
+                .args(extra)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(child.stdout.as_mut().unwrap()).read_line(&mut line).unwrap();
+            if line.contains("listening on ws://127.0.0.1") {
+                return Daemon { child, port };
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        panic!("the daemon would not start");
     }
 
     fn send(&self, code: &str, quantize: Option<&str>) -> std::process::Output {
