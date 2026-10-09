@@ -28,6 +28,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "niminal-lang"
+version = "0.0.1"
+dependencies = [
+ "niminal-engine",
+ "niminal-score",
+]
+
+[[package]]
 name = "niminal-score"
 version = "0.0.1"
 dependencies = [

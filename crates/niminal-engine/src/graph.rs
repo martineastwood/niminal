@@ -128,7 +128,10 @@ impl GraphBuilder {
         }
     }
 
-    pub fn build(self, output: Src) -> Graph {
+    pub fn build(mut self, output: Src) -> Graph {
+        if matches!(output, Src::Const(_)) {
+            self.slot_for(output); // make sure a constant output has a slot
+        }
         let n_params = self.params.len();
         let n_consts = self.consts.len();
         let n_fixed = n_params + n_consts;
@@ -157,7 +160,7 @@ impl GraphBuilder {
             Src::Param(i) => i,
             Src::Const(v) => match self.consts.iter().position(|c| c.to_bits() == v.to_bits()) {
                 Some(i) => n_params + i,
-                None => panic!("constant output must be wired through a node"),
+                None => unreachable!("constant interned above"),
             },
             Src::Node(i) => n_fixed + i,
         };

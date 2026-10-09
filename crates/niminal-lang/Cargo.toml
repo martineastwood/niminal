@@ -1,0 +1,9 @@
+[package]
+name = "niminal-lang"
+version.workspace = true
+edition.workspace = true
+description = "niminal language: parser, unit checker, and lowering to the engine graph and score"
+
+[dependencies]
+niminal-engine = { path = "../niminal-engine" }
+niminal-score = { path = "../niminal-score" }

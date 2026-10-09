@@ -1,3 +1,3 @@
 This is a greenfield projects so breaking changes are allowed and are preferable to shimming legacy behavior.
 
-Follow YAGNI principles.
+Keep it simple, no uneccessary abstractions or over engineering.
