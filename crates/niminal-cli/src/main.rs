@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use niminal_cli::render::{SAMPLE_RATE, render, write_wav};
+use niminal_cli::render::{RenderOptions, SAMPLE_RATE, render, write_wav};
 use niminal_score::Section;
 
 #[derive(Parser)]
@@ -23,13 +23,18 @@ enum Command {
         score: Option<PathBuf>,
         #[arg(long)]
         out: PathBuf,
+        /// Turn off the master limiter (offline renders only).
+        #[arg(long)]
+        no_limiter: bool,
     },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Render { file, score, out } => run_render(&file, score.as_deref(), &out),
+        Command::Render { file, score, out, no_limiter } => {
+            run_render(&file, score.as_deref(), &out, &RenderOptions { limiter: !no_limiter })
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -47,7 +52,7 @@ fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("error: can't read {}: {e}", path.display()))
 }
 
-fn run_render(file: &Path, score: Option<&Path>, out: &Path) -> Result<(), String> {
+fn run_render(file: &Path, score: Option<&Path>, out: &Path, options: &RenderOptions) -> Result<(), String> {
     let source = read(file)?;
     let name = file.display().to_string();
     let program = niminal_lang::compile(&source)
@@ -62,14 +67,18 @@ fn run_render(file: &Path, score: Option<&Path>, out: &Path) -> Result<(), Strin
         }
     };
 
-    let samples = render(&program, &events).map_err(|e| format!("error: {e}"))?;
+    let rendered = render(&program, &events, options).map_err(|e| format!("error: {e}"))?;
+    let samples = rendered.samples;
+    if rendered.silenced_voices > 0 {
+        eprintln!("warning: {} voice(s) produced NaN or infinity and were silenced", rendered.silenced_voices);
+    }
     if samples.is_empty() {
         return Err("error: nothing to render: the file plays no notes".into());
     }
 
     let peak = samples.iter().fold(0.0f32, |p, s| p.max(s.abs()));
     if peak > 1.0 {
-        eprintln!("warning: output peaks at {peak:.2}, which will clip");
+        eprintln!("warning: output peaks at {peak:.2}, which will clip (the limiter is off)");
     }
     write_wav(out, &samples).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
     println!("wrote {} ({:.2}s)", out.display(), samples.len() as f64 / f64::from(SAMPLE_RATE));

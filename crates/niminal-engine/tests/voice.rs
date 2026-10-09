@@ -40,3 +40,49 @@ fn note_off_splitting_is_sample_accurate_regardless_of_block_size() {
     let b = render(&g, 30_000, Some(12_345), 5);
     assert_eq!(a, b);
 }
+
+mod poison {
+    use super::*;
+    use niminal_engine::{Opcode, Port, ProcessCtx, Voice};
+
+    /// Divides by zero after a while, like a runaway filter.
+    #[derive(Clone)]
+    struct Explode(usize);
+
+    impl Opcode for Explode {
+        fn name(&self) -> &'static str {
+            "explode"
+        }
+        fn ports(&self) -> &'static [Port] {
+            &[]
+        }
+        fn box_clone(&self) -> Box<dyn Opcode> {
+            Box::new(Explode(0))
+        }
+        fn process(&mut self, _: &ProcessCtx, _: &[&[f32]], out: &mut [f32]) {
+            for o in out {
+                self.0 += 1;
+                *o = if self.0 > 100 { f32::NAN } else { 0.25 };
+            }
+        }
+    }
+
+    #[test]
+    fn a_voice_that_produces_nan_is_silenced_and_finished() {
+        let mut g = GraphBuilder::new();
+        let e = g.add(Explode(0), &[]).unwrap();
+        let mut v = Voice::new(Arc::new(g.build(e)), SR);
+        let mut buf = [0.0; 32];
+        for _ in 0..3 {
+            v.process(&mut buf);
+            assert!(buf.iter().all(|s| s.is_finite()));
+        }
+        assert!(!v.is_poisoned());
+        v.process(&mut buf);
+        assert!(v.is_poisoned());
+        assert!(v.is_finished(), "even without a release");
+        assert!(buf.iter().all(|s| *s == 0.0));
+        v.process(&mut buf);
+        assert!(buf.iter().all(|s| *s == 0.0));
+    }
+}
