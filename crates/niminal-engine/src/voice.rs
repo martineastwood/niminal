@@ -77,22 +77,39 @@ impl Voice {
         self.poisoned
     }
 
-    /// Render `out.len()` samples (at most [`BLOCK`]). Output is identical
-    /// however a stretch of audio is divided into calls, so a host can split
-    /// blocks at event times for sample-accurate timing.
+    /// Number of output channels.
+    pub fn channels(&self) -> usize {
+        self.graph.channels()
+    }
+
+    /// Render `out.len()` samples (at most [`BLOCK`]) of a one-channel graph.
+    /// Output is identical however a stretch of audio is divided into calls, so
+    /// a host can split blocks at event times for sample-accurate timing.
     ///
     /// Anything the graph sends to a bus is dropped; use [`Voice::process_routed`]
     /// for graphs that send.
     pub fn process(&mut self, out: &mut [f32]) {
-        self.process_routed(out, &mut Buses::new(0));
+        self.process_routed(out, &mut Buses::new(&[]));
     }
 
     /// Like [`Voice::process`], adding the graph's sends into `buses`.
     pub fn process_routed(&mut self, out: &mut [f32], buses: &mut Buses) {
+        assert_eq!(self.channels(), 1, "this graph has {} channels; use process_blocks", self.channels());
         let frames = out.len();
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
+        let mut block = [[0.0f32; BLOCK]; 1];
+        self.process_blocks(&mut block, frames, buses);
+        out.copy_from_slice(&block[0][..frames]);
+    }
+
+    /// Render `frames` samples (at most [`BLOCK`]) of every output channel into
+    /// `out`, which must have one block per channel, and add the graph's sends
+    /// to `buses`.
+    pub fn process_blocks(&mut self, out: &mut [[f32; BLOCK]], frames: usize, buses: &mut Buses) {
+        assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
+        assert_eq!(out.len(), self.channels(), "one output block per channel");
         if self.poisoned {
-            out.fill(0.0);
+            out.iter_mut().for_each(|c| c[..frames].fill(0.0));
             return;
         }
         let ctx = ProcessCtx { sample_rate: self.sample_rate, gate: !self.released };
@@ -109,19 +126,19 @@ impl Voice {
             op.process(&ctx, &ins[..inputs.len()], &mut after[0][..frames]);
         }
 
-        out.copy_from_slice(&self.slots[self.graph.output_slot][..frames]);
-        let sends_finite = self
-            .graph
-            .sends
-            .iter()
-            .all(|&(_, slot)| self.slots[slot][..frames].iter().all(|s| s.is_finite()));
-        if !sends_finite || out.iter().any(|s| !s.is_finite()) {
+        let finite = |slot: usize| self.slots[slot][..frames].iter().all(|s| s.is_finite());
+        let healthy = self.graph.output_slots.iter().all(|&s| finite(s))
+            && self.graph.sends.iter().all(|&(_, _, s)| finite(s));
+        if !healthy {
             self.poisoned = true;
-            out.fill(0.0);
+            out.iter_mut().for_each(|c| c[..frames].fill(0.0));
             return;
         }
-        for &(bus, slot) in &self.graph.sends {
-            buses.add(bus, &self.slots[slot][..frames]);
+        for (channel, &slot) in out.iter_mut().zip(&self.graph.output_slots) {
+            channel[..frames].copy_from_slice(&self.slots[slot][..frames]);
+        }
+        for &(bus, channel, slot) in &self.graph.sends {
+            buses.add(bus, channel, &self.slots[slot][..frames]);
         }
     }
 }

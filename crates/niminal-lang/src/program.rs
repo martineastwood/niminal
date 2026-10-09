@@ -6,6 +6,7 @@ use niminal_engine::{Graph, Mixer, TrackDef};
 use niminal_score::{Event, Tempo, Value};
 
 use crate::diag::closest;
+use crate::layout::Layout;
 use crate::unit::Unit;
 
 /// A compiled instrument: an engine graph plus the typed signature that
@@ -65,8 +66,11 @@ pub struct TrackInfo {
 
 pub struct Program {
     pub tempo: Tempo,
+    /// The layout of the output, and of every voice and track.
+    pub master: Layout,
     pub instruments: Vec<Instrument>,
     pub buses: Vec<String>,
+    pub bus_layouts: Vec<Layout>,
     /// Track 0 is the implicit one that plays instruments named directly.
     pub tracks: Vec<TrackInfo>,
     /// Notes written directly in the source.
@@ -134,7 +138,9 @@ impl Program {
     /// A mixer for this program's tracks and buses.
     pub fn mixer(&self, sample_rate: f32) -> Mixer {
         let defs = self.tracks.iter().map(|t| t.def.clone()).collect();
-        Mixer::new(defs, self.buses.len(), sample_rate).expect("feedback is rejected when compiling")
+        let bus_channels = self.bus_layouts.iter().map(|l| l.channels()).collect();
+        Mixer::new(defs, bus_channels, self.master.channels(), sample_rate)
+            .expect("feedback is rejected when compiling")
     }
 }
 
@@ -166,6 +172,7 @@ impl Instrument {
             Unit::Hz => value.as_hz().map_err(unit_err)?,
             Unit::Db => value.as_gain().map_err(unit_err)?,
             Unit::Time => value.as_time().map_err(unit_err)?.to_seconds(tempo),
+            Unit::Angle => value.as_angle().map_err(unit_err)?,
             Unit::Num => {
                 let n = value.as_number().map_err(unit_err)?;
                 if let Some((lo, hi)) = param.range

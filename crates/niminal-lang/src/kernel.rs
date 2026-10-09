@@ -99,6 +99,7 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
             Stmt::Bind { name, value } => kb.bind(name, value)?,
             Stmt::State { name, init } => kb.declare_state(name, init)?,
             Stmt::AddAssign { name, .. } => return Err(add_assign_in_opcode(name)),
+            Stmt::Destructure { value, .. } => return Err(channels_in_opcode(value.span)),
             Stmt::Expr(e) => {
                 return Err(Diagnostic::new("this value is never used", e.span)
                     .with_help("bind it with `name = ...`, or make it the last line"));
@@ -108,6 +109,7 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
     let Stmt::Expr(out_expr) = last else {
         let name = match last {
             Stmt::Bind { name, .. } | Stmt::State { name, .. } | Stmt::AddAssign { name, .. } => name,
+            Stmt::Destructure { value, .. } => return Err(channels_in_opcode(value.span)),
             Stmt::Expr(_) => unreachable!(),
         };
         return Err(Diagnostic::new("an opcode must end with the value it outputs", name.span)
@@ -129,6 +131,11 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
         state_init: kb.state_init,
         output: out.reg,
     })
+}
+
+fn channels_in_opcode(span: Span) -> Diagnostic {
+    Diagnostic::new("channel lists aren't available inside an opcode", span)
+        .with_help("an opcode works on one channel; applied to a multichannel signal, it runs once per channel")
 }
 
 fn add_assign_in_opcode(name: &Ident) -> Diagnostic {
@@ -201,6 +208,7 @@ impl Kb {
                 self.binary(*op, l, r, e.span)
             }
             ExprKind::Call { name, args } => self.call(name, args),
+            ExprKind::Channels(_) => Err(channels_in_opcode(e.span)),
             ExprKind::Env(_) => Err(Diagnostic::new("envelopes can't be used inside an opcode", e.span)
                 .with_help("compute the envelope in the instrument and pass it in as an argument")),
         }

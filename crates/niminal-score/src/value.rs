@@ -14,6 +14,8 @@ pub enum Value {
     Db(f64),
     Seconds(f64),
     Beats(f64),
+    /// An angle in degrees; 0 is straight ahead and positive is to the right.
+    Degrees(f64),
     /// A pitch as a MIDI note number; c4 is 60 and a4 is 440hz.
     Note(i32),
 }
@@ -96,6 +98,7 @@ impl FromStr for Value {
             "sec" => Value::Seconds(n),
             "ms" => Value::Seconds(n / 1000.0),
             "beat" | "beats" => Value::Beats(n),
+            "deg" => Value::Degrees(n),
             _ => return Err(ParseError(format!("unknown unit `{unit}` in `{s}`"))),
         })
     }
@@ -110,6 +113,7 @@ impl fmt::Display for Value {
             Value::Seconds(n) => write!(f, "{n}sec"),
             Value::Beats(1.0) => write!(f, "1beat"),
             Value::Beats(n) => write!(f, "{n}beats"),
+            Value::Degrees(n) => write!(f, "{n}deg"),
             Value::Note(m) => write!(f, "{}{}", NOTE_NAMES[m.rem_euclid(12) as usize], m.div_euclid(12) - 1),
         }
     }
@@ -134,6 +138,14 @@ impl Value {
             Value::Db(d) => Ok(10f64.powf(d / 20.0)),
             Value::Num(n) => Ok(n),
             v => v.mismatch("a gain (db or a plain factor)"),
+        }
+    }
+
+    /// An angle in degrees.
+    pub fn as_angle(self) -> Result<f64, UnitError> {
+        match self {
+            Value::Degrees(d) => Ok(d),
+            v => v.mismatch("an angle (deg)"),
         }
     }
 
@@ -266,6 +278,7 @@ mod tests {
         assert_eq!(v("2sec"), Value::Seconds(2.0));
         assert_eq!(v("1/8beat"), Value::Beats(0.125));
         assert_eq!(v("4beats"), Value::Beats(4.0));
+        assert_eq!(v("-45deg"), Value::Degrees(-45.0));
         assert_eq!(v("0.5"), Value::Num(0.5));
         assert_eq!(v("-3"), Value::Num(-3.0));
     }
@@ -290,7 +303,7 @@ mod tests {
 
     #[test]
     fn display_round_trips() {
-        for s in ["440hz", "-6db", "0.25sec", "1beat", "2.5beats", "0.5", "c4", "a#2", "e-1"] {
+        for s in ["440hz", "-6db", "0.25sec", "1beat", "2.5beats", "0.5", "c4", "a#2", "e-1", "-45deg"] {
             assert_eq!(v(s).to_string(), s);
         }
     }

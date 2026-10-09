@@ -96,3 +96,43 @@ fn block_size_does_not_change_the_result() {
     }
     assert_eq!(a, b[m.latency()..]);
 }
+
+#[test]
+fn linked_channels_share_one_gain_so_the_image_does_not_shift() {
+    let mut master = Master::with_channels(SR, CEILING, 2);
+    let latency = master.latency();
+    // left is far too loud, right is quiet: both must be turned down together
+    let mut left = sine(220.0, 4.0, 24_000);
+    let mut right = sine(330.0, 0.25, 24_000);
+    left.extend(vec![0.0; latency]);
+    right.extend(vec![0.0; latency]);
+    let (orig_right, orig_left) = (right.clone(), left.clone());
+    master.process_linked(&mut [&mut left, &mut right]);
+
+    let (l, r) = (&left[latency..], &right[latency..]);
+    assert!(peak(l) <= CEILING + 1e-6, "{}", peak(l));
+    // an unlinked limiter would leave the quiet side alone; linked, it ducks too
+    let window = 12_000..20_000;
+    let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+    let ratio = rms(&r[window.clone()]) / rms(&orig_right[window]);
+    assert!(ratio < 0.5, "the quiet channel is ducked along with the loud one: {ratio}");
+    let _ = orig_left;
+}
+
+#[test]
+fn a_multichannel_master_passes_quiet_audio_unchanged() {
+    let mut master = Master::with_channels(SR, CEILING, 3);
+    let latency = master.latency();
+    let src: Vec<Vec<f32>> = vec![sine(300.0, 0.3, 12_000), sine(500.0, 0.2, 12_000), sine(700.0, 0.1, 12_000)];
+    let mut bufs = src.clone();
+    for b in &mut bufs {
+        b.extend(vec![0.0; latency]);
+    }
+    let mut views: Vec<&mut [f32]> = bufs.iter_mut().map(|b| b.as_mut_slice()).collect();
+    master.process_linked(&mut views);
+    for (out, orig) in bufs.iter().zip(&src) {
+        for i in 4800..12_000 {
+            assert!((out[i + latency] - orig[i]).abs() < 0.01);
+        }
+    }
+}

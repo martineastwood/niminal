@@ -8,7 +8,8 @@ use niminal_score::{Event, Tempo, Time, Value};
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::kernel::compile_opcode;
-use crate::lower::{Names, compile_chain, compile_instr, unknown_unit};
+use crate::layout::Layout;
+use crate::lower::{Names, compile_chain, compile_instr, layout_from_expr, unknown_unit};
 use crate::opcodes::Registry;
 use crate::parser;
 use crate::program::{Instrument, Program, TrackInfo, resolve_target};
@@ -37,7 +38,7 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
             Item::Opcode(d) => (&d.name, "opcode"),
             Item::Bus(d) => (&d.name, "bus"),
             Item::Track(d) => (&d.name, "track"),
-            Item::Tempo(_) | Item::Note(_) => continue,
+            Item::Tempo(_) | Item::Note(_) | Item::Config(_) => continue,
         };
         match names.kind_of(&ident.name) {
             None => names.add(&ident.name, kind),
@@ -46,6 +47,11 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
             }
             Some(_) => {}
         }
+    }
+
+    match master_layout(&items) {
+        Ok(layout) => names.master = layout,
+        Err(d) => errors.push(d),
     }
 
     let mut registry = Registry::builtin();
@@ -57,6 +63,26 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
                 registry.add(spec);
             }
             Err(d) => errors.push(d),
+        }
+    }
+
+    let mut seen_buses: Vec<&str> = Vec::new();
+    for item in &items {
+        let Item::Bus(bus) = item else { continue };
+        if seen_buses.contains(&bus.name.name.as_str()) {
+            errors.push(Diagnostic::new(format!("bus `{}` is defined twice", bus.name.name), bus.name.span));
+            continue;
+        }
+        seen_buses.push(&bus.name.name);
+        if let Some(expr) = &bus.layout {
+            match layout_from_expr(expr) {
+                Ok(layout) => {
+                    if let Some(i) = names.bus(&bus.name.name) {
+                        names.bus_layouts[i] = layout;
+                    }
+                }
+                Err(d) => errors.push(d),
+            }
         }
     }
 
@@ -75,21 +101,6 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
                 errors.push(d);
                 failed.push(name);
             }
-        }
-    }
-
-    let mut seen_buses: Vec<&str> = Vec::new();
-    for item in &items {
-        let Item::Bus(bus) = item else { continue };
-        if seen_buses.contains(&bus.name.name.as_str()) {
-            errors.push(Diagnostic::new(format!("bus `{}` is defined twice", bus.name.name), bus.name.span));
-        }
-        seen_buses.push(&bus.name.name);
-        if let Some(layout) = bus.layout.as_ref().filter(|l| l.name != "mono") {
-            errors.push(
-                Diagnostic::new(format!("`{}` buses aren't supported yet", layout.name), layout.span)
-                    .with_help("only mono signals are supported so far"),
-            );
         }
     }
 
@@ -154,7 +165,15 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
     }
 
     if errors.is_empty() {
-        Ok(Program { tempo, instruments, buses: names.buses, tracks, notes })
+        Ok(Program {
+            tempo,
+            master: names.master,
+            instruments,
+            buses: names.buses,
+            bus_layouts: names.bus_layouts,
+            tracks,
+            notes,
+        })
     } else {
         Err(errors)
     }
@@ -220,6 +239,30 @@ fn compile_track(
 }
 
 // ---- program-level statements -------------------------------------------
+
+/// The master layout from the project's `config`, mono if there is none.
+fn master_layout(items: &[Item]) -> Res<Layout> {
+    let mut layout = None;
+    let mut seen = false;
+    for item in items {
+        let Item::Config(config) = item else { continue };
+        if seen {
+            return Err(Diagnostic::new("a project has only one `config`", config.span));
+        }
+        seen = true;
+        for (key, value) in &config.entries {
+            match key.name.as_str() {
+                "channels" => layout = Some(layout_from_expr(value)?),
+                other => {
+                    let mut d = Diagnostic::new(format!("unknown setting `{other}`"), key.span);
+                    d = d.with_help("the settings so far are: channels");
+                    return Err(d);
+                }
+            }
+        }
+    }
+    Ok(layout.unwrap_or(Layout::Mono))
+}
 
 fn tempo_of(items: &[Item]) -> Res<Tempo> {
     let mut tempo = None;
@@ -310,6 +353,7 @@ fn literal_value(e: &Expr) -> Res<Value> {
             Some("sec") => Ok(Value::Seconds(*value)),
             Some("ms") => Ok(Value::Seconds(value / 1000.0)),
             Some("beat" | "beats") => Ok(Value::Beats(*value)),
+            Some("deg") => Ok(Value::Degrees(*value)),
             Some(u) => Err(unknown_unit(u, e.span)),
         },
         ExprKind::Name(n) => match n.parse::<Value>() {
@@ -322,6 +366,7 @@ fn literal_value(e: &Expr) -> Res<Value> {
             Value::Db(n) => Ok(Value::Db(-n)),
             Value::Seconds(n) => Ok(Value::Seconds(-n)),
             Value::Beats(n) => Ok(Value::Beats(-n)),
+            Value::Degrees(n) => Ok(Value::Degrees(-n)),
             Value::Note(_) => Err(bad()),
         },
         _ => Err(bad()),
@@ -648,7 +693,7 @@ track b { out = fx }
 instr i(f: hz) { osc(sine, f) }
 a(f: 100hz) for 1beat");
         assert_eq!(p.tracks[1].def.route, niminal_engine::Route::Bus(0));
-        assert_eq!(p.tracks[2].def.inputs, [niminal_engine::ChainInput::Bus(0)]);
+        assert_eq!(p.tracks[2].def.inputs, [niminal_engine::ChainInput::Bus { bus: 0, channel: 0 }]);
     }
 
     #[test]
@@ -687,8 +732,9 @@ a(f: 100hz) for 1beat");
         assert_eq!(help(&with("instr a(f: hz) { spaec += osc(saw, f) }")).as_deref(), Some("did you mean the bus `space`?"));
         assert_eq!(msg(&with("instr a(f: hz) { space += f\n0.5 }")), "`space` carries a plain signal, but this is hz");
         assert_eq!(msg("bus a\nbus a"), "bus `a` is defined twice");
-        assert_eq!(msg("bus a: stereo"), "`stereo` buses aren't supported yet");
-        ok("bus a: mono");
+        assert_eq!(msg("bus a: wobble"), "unknown channel layout `wobble`");
+        assert_eq!(msg("bus a: surround(9.1)"), "unsupported surround layout `9.1`");
+        ok("bus a: mono\nbus b: stereo\nbus c: surround(5.1)\nbus d: channels(3)");
     }
 
     #[test]
@@ -778,6 +824,146 @@ bad() for 1beat
         );
         assert_eq!(msg("instr a() { osc(saw, 100hz).delay(time: 40sec) }"), "a delay can be at most 30 seconds long");
         assert_eq!(msg("instr a(t: sec) { osc(saw, 100hz).delay(time: t, max: 5) }"), "`max` expects a time, found a plain number");
+    }
+
+    #[test]
+    fn config_sets_the_master_layout_and_instruments_follow_it() {
+        let src = |config: &str| format!("{config}\ninstr a(f: hz) {{ osc(saw, f) }}");
+        assert_eq!(ok(&src("")).master, Layout::Mono);
+        for (config, layout, channels) in [
+            ("config { channels: stereo }", Layout::Stereo, 2),
+            ("config { channels: quad }", Layout::Quad, 4),
+            ("config { channels: surround(5.1) }", Layout::Surround51, 6),
+            ("config { channels: surround(7.1) }", Layout::Surround71, 8),
+        ] {
+            let p = ok(&src(config));
+            assert_eq!(p.master, layout);
+            assert_eq!(p.instruments[0].graph.channels(), channels, "{config}");
+        }
+        // an unnamed layout has no automatic conversion from mono, but a list of that many works
+        assert_eq!(
+            msg(&src("config { channels: channels(3) }")),
+            "can't convert mono to ch[3] automatically"
+        );
+        let three = ok("config { channels: channels(3) }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f), osc(saw, f)] }");
+        assert_eq!(three.instruments[0].graph.channels(), 3);
+        assert_eq!(msg(&src("config { channels: wobble }")), "unknown channel layout `wobble`");
+        assert_eq!(msg(&src("config { speed: 2 }")), "unknown setting `speed`");
+        assert_eq!(msg(&src("config { channels: stereo }\nconfig { channels: mono }")), "a project has only one `config`");
+        assert_eq!(msg(&src("config { channels: channels(40) }")), "`channels` takes a count from 1 to 16");
+    }
+
+    #[test]
+    fn pan_places_a_mono_signal_in_the_master_layout() {
+        let p = ok("config { channels: surround(5.1) }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20deg, spread: 0.3) }");
+        assert_eq!(p.instruments[0].graph.channels(), 6);
+        ok("config { channels: stereo }\ninstr a(f: hz, az: deg = 10deg) { osc(saw, f).pan(azimuth: az) }");
+
+        let d = first_error("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20) }");
+        assert_eq!(d.message, "`azimuth` expects an angle, found a plain number");
+        assert_eq!(d.help.as_deref(), Some("did you mean `20deg`?"));
+        assert_eq!(
+            msg("config { channels: stereo }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f)].pan }"),
+            "`pan` takes a one-channel signal, but `x` has 2"
+        );
+        assert_eq!(msg("instr a(f: hz) { osc(saw, f).pan(azimuth: 5hz) }"), "`azimuth` expects an angle, found hz");
+        assert_eq!(msg("instr a(f: hz) { osc(saw, f) * 20deg }"), "an instrument outputs a plain signal, but this is an angle");
+    }
+
+    #[test]
+    fn angles_follow_the_unit_rules() {
+        ok("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20deg * 2 - 5deg) }");
+        assert_eq!(
+            msg("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20deg + 1hz) }"),
+            "can't add an angle and hz"
+        );
+    }
+
+    #[test]
+    fn channel_lists_and_destructuring() {
+        let stereo = |body: &str| format!("config {{ channels: stereo }}\ninstr a(f: hz) {{ {body} }}");
+        let p = ok(&stereo("[osc(saw, f), osc(sine, f)]"));
+        assert_eq!(p.instruments[0].graph.channels(), 2);
+
+        ok(&stereo("[l, r] = osc(saw, f).pan\nmid = (l + r) * 0.5\n[mid + l, mid - r]"));
+        // an opcode applied to a stereo signal runs once per channel
+        ok(&stereo("[osc(saw, f), osc(saw, f)].lpf(cutoff: 800hz).delay(time: 100ms).reverb"));
+        // different cutoffs per channel
+        ok(&stereo("osc(saw, f).pan.lpf(cutoff: [800hz, 1200hz])"));
+
+        assert_eq!(
+            msg(&stereo("[l, r, c] = osc(saw, f).pan\nl")),
+            "this signal has 2 channel(s), but 3 name(s) are given"
+        );
+        assert_eq!(
+            msg(&stereo("[osc(saw, f).pan, osc(saw, f)]")),
+            "a channel list takes one channel per entry, but this has 2"
+        );
+        assert_eq!(msg(&stereo("[f, f]")), "an instrument outputs a plain signal, but this is hz");
+        assert_eq!(
+            msg(&stereo("[osc(saw, f), f]")),
+            "the entries of a channel list must have the same unit: this is hz, the first was a plain number"
+        );
+        assert_eq!(
+            msg(&stereo("[osc(saw, f), osc(saw, f)] + [osc(saw, f), osc(saw, f), osc(saw, f)]")),
+            "can't combine a 2-channel signal with a 3-channel one"
+        );
+        assert_eq!(
+            msg(&stereo("osc(saw, [f, f]).lpf(cutoff: [1khz, 2khz, 3khz])")),
+            "`lpf`'s arguments have 2 and 3 channels, which can't be combined"
+        );
+        assert_eq!(msg(&stereo("[l, r] = osc(saw, f)\nl")), "this signal has 1 channel(s), but 2 name(s) are given");
+    }
+
+    #[test]
+    fn layouts_convert_automatically_where_the_spec_says_they_do() {
+        // mono into 5.1 is centred; stereo into 5.1 takes the front pair
+        ok("config { channels: surround(5.1) }\ninstr a(f: hz) { osc(saw, f) }");
+        ok("config { channels: surround(5.1) }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f)] }");
+        // 5.1 bus read by a stereo master track folds down
+        ok("config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\ntrack t { out = hall }");
+        // unnamed channel lists are taken as whatever layout has that many
+        ok("config { channels: quad }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f), osc(saw, f), osc(saw, f)] }");
+
+        let d = first_error("config { channels: stereo }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f), osc(saw, f)] }");
+        assert_eq!(d.message, "can't convert ch[3] to stereo automatically");
+        let d = first_error("config { channels: surround(5.1) }\nbus q: quad\ninstr a(f: hz) { q += [osc(saw, f), osc(saw, f), osc(saw, f), osc(saw, f)].to_layout(surround(7.1)) }");
+        assert_eq!(d.message, "can't convert ch[4] to surround(7.1) automatically");
+    }
+
+    #[test]
+    fn to_layout_converts_explicitly() {
+        ok("config { channels: surround(5.1) }\nbus s: stereo\ninstr a(f: hz) { out = osc(saw, f).pan\ns += out.to_layout(stereo) }");
+        assert_eq!(
+            msg("instr a(f: hz) { osc(saw, f).to_layout(wobble) }"),
+            "unknown channel layout `wobble`"
+        );
+        ok("instr a(f: hz) { osc(saw, f).to_layout(mono) }");
+    }
+
+    #[test]
+    fn buses_and_tracks_carry_their_layouts() {
+        let p = ok("
+config { channels: stereo }
+bus space: stereo
+bus lfe: mono
+instr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }
+track room { out = space.reverb(room: 0.8) }
+track sub { out = lfe.lpf(cutoff: 100hz) }
+a(f: 100hz) for 1beat");
+        assert_eq!(p.bus_layouts, [Layout::Stereo, Layout::Mono]);
+        assert_eq!(p.tracks[1].def.inputs.len(), 2, "a stereo bus is two inputs");
+        assert_eq!(p.tracks[2].def.inputs.len(), 1);
+        // the sub track works in mono but delivers stereo to the master
+        assert_eq!(p.tracks[2].def.chain.as_ref().unwrap().channels(), 2);
+        // routing to a bus delivers in that bus's layout
+        let routed = ok("
+config { channels: stereo }
+bus mono_bus: mono
+track t { instrument = i\nout = it.to(mono_bus) }
+track u { out = mono_bus }
+instr i(f: hz) { osc(saw, f).pan }");
+        assert_eq!(routed.tracks[1].def.chain.as_ref().unwrap().channels(), 1);
     }
 
     #[test]

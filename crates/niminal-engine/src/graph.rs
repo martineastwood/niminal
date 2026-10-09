@@ -60,8 +60,8 @@ pub struct GraphBuilder {
     consts: Vec<f32>,
     nodes: Vec<NodeDef>,
     n_inputs: usize,
-    /// (bus, encoded slot)
-    sends: Vec<(usize, usize)>,
+    /// (bus, channel, encoded slot)
+    sends: Vec<(usize, usize, usize)>,
 }
 
 impl GraphBuilder {
@@ -85,10 +85,15 @@ impl GraphBuilder {
         Src::Input(self.n_inputs - 1)
     }
 
-    /// Add `src` to a bus every block.
+    /// Add `src` to channel 0 of a bus every block.
     pub fn send(&mut self, bus: usize, src: Src) {
+        self.send_channel(bus, 0, src);
+    }
+
+    /// Add `src` to one channel of a bus every block.
+    pub fn send_channel(&mut self, bus: usize, channel: usize, src: Src) {
         let slot = self.slot_for(src);
-        self.sends.push((bus, slot));
+        self.sends.push((bus, channel, slot));
     }
 
     /// Add an opcode, wiring its ports by name. Ports left out take their
@@ -153,8 +158,16 @@ impl GraphBuilder {
         }
     }
 
-    pub fn build(mut self, output: Src) -> Graph {
-        let output_enc = self.slot_for(output); // interns a constant output
+    /// Finish a graph with a single output channel.
+    pub fn build(self, output: Src) -> Graph {
+        self.build_channels(&[output])
+    }
+
+    /// Finish a graph with one output per channel.
+    pub fn build_channels(mut self, outputs: &[Src]) -> Graph {
+        assert!(!outputs.is_empty(), "a graph needs at least one output channel");
+        // interns constant outputs
+        let output_enc: Vec<usize> = outputs.iter().map(|&o| self.slot_for(o)).collect();
         let n_params = self.params.len();
         let n_consts = self.consts.len();
         let n_inputs = self.n_inputs;
@@ -181,7 +194,7 @@ impl GraphBuilder {
                 n
             })
             .collect();
-        let sends = self.sends.iter().map(|&(bus, slot)| (bus, resolve(slot))).collect();
+        let sends = self.sends.iter().map(|&(bus, channel, slot)| (bus, channel, resolve(slot))).collect();
 
         Graph {
             params: self.params,
@@ -189,7 +202,7 @@ impl GraphBuilder {
             nodes,
             n_inputs,
             sends,
-            output_slot: resolve(output_enc),
+            output_slots: output_enc.into_iter().map(resolve).collect(),
         }
     }
 }
@@ -204,9 +217,9 @@ pub struct Graph {
     pub(crate) consts: Vec<f32>,
     pub(crate) nodes: Vec<NodeDef>,
     pub(crate) n_inputs: usize,
-    /// (bus, slot) pairs added to buses after every block.
-    pub(crate) sends: Vec<(usize, usize)>,
-    pub(crate) output_slot: usize,
+    /// (bus, channel, slot) triples added to buses after every block.
+    pub(crate) sends: Vec<(usize, usize, usize)>,
+    pub(crate) output_slots: Vec<usize>,
 }
 
 impl Graph {
@@ -218,13 +231,18 @@ impl Graph {
         self.params.iter().map(|p| p.name.as_str())
     }
 
+    /// Number of output channels.
+    pub fn channels(&self) -> usize {
+        self.output_slots.len()
+    }
+
     pub fn input_count(&self) -> usize {
         self.n_inputs
     }
 
     /// The buses this graph sends to, once each, in ascending order.
     pub fn send_buses(&self) -> Vec<usize> {
-        let mut buses: Vec<usize> = self.sends.iter().map(|&(b, _)| b).collect();
+        let mut buses: Vec<usize> = self.sends.iter().map(|&(b, _, _)| b).collect();
         buses.sort_unstable();
         buses.dedup();
         buses
