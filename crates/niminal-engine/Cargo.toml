@@ -1,0 +1,8 @@
+[package]
+name = "niminal-engine"
+version.workspace = true
+edition.workspace = true
+description = "niminal DSP runtime: graph execution, opcodes, voices"
+
+[dev-dependencies]
+hound = "3"
