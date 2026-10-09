@@ -1,0 +1,5 @@
+[package]
+name = "niminal-pattern"
+version.workspace = true
+edition.workspace = true
+description = "Patterns: values over cycles of rational time, with mini-notation and transformations"

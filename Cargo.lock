@@ -155,6 +155,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "niminal-pattern"
+version = "0.0.1"
+
+[[package]]
 name = "niminal-score"
 version = "0.0.1"
 dependencies = [
