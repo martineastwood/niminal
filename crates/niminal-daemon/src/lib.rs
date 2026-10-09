@@ -8,7 +8,9 @@ mod quantize;
 mod session;
 
 pub use log::{LogEntry, LogInput, from_lines, to_lines};
-pub use protocol::{ClientId, Daemon, PROTOCOL_VERSION, TOPICS};
+pub use protocol::{ClientId, CompiledTicket, Daemon, CompileTicket, PROTOCOL_VERSION, Request, TOPICS};
 pub use project::{Entry, Problem, Project};
 pub use quantize::{Grid, QuantizeDefaults};
-pub use session::{Accepted, Landed, PendingInfo, Session, TrackStatus, Transport};
+pub use session::{Accepted, Begin, EvalDone, EvalJob, Landed, PendingInfo, ParsedEval, Session, TrackStatus, Transport};
+
+pub use session::realtime::{RealtimeConfig, RealtimeRenderer, RenderMetrics};

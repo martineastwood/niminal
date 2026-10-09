@@ -139,6 +139,14 @@ impl Opcode for Custom {
         self.sample_rate = f64::from(sample_rate);
     }
 
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
+            && self.kernel == old.kernel
+        {
+            self.state.copy_from_slice(&old.state);
+        }
+    }
+
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         let k = &*self.kernel;
         let (regs, state) = (&mut self.regs, &mut self.state);

@@ -10,13 +10,22 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use niminal_daemon::ClientId;
+use niminal_daemon::{ClientId, Request};
 use serde_json::{Value, json};
+use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Error, Message, WebSocket};
 
 use crate::audio::{Shared, lock};
 
 type Outboxes = Arc<Mutex<HashMap<ClientId, Sender<String>>>>;
+
+/// The most clients at once, the largest message (source code, mostly) and
+/// how long a new connection has to complete its handshake.
+const MAX_CLIENTS: usize = 16;
+const MAX_MESSAGE: usize = 4 << 20;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Client threads run the compiler, so they get more stack than the default.
+const CLIENT_STACK: usize = 32 << 20;
 
 /// How the server is run.
 #[derive(Debug, Clone)]
@@ -65,11 +74,19 @@ impl Server {
             threads.push(thread::spawn(move || {
                 let mut clients: Vec<JoinHandle<()>> = Vec::new();
                 while !stop.load(Ordering::Relaxed) {
+                    clients.retain(|c| !c.is_finished());
                     match listener.accept() {
+                        Ok((stream, _)) if clients.len() >= MAX_CLIENTS => drop(stream),
                         Ok((stream, _)) => {
                             let (daemon, stop, outboxes, token) =
                                 (daemon.clone(), stop.clone(), outboxes.clone(), token.clone());
-                            clients.push(thread::spawn(move || serve(stream, daemon, outboxes, token, stop)));
+                            // Compiling happens on this thread, and deeply nested code needs room.
+                            let spawned = thread::Builder::new()
+                                .stack_size(CLIENT_STACK)
+                                .spawn(move || serve(stream, daemon, outboxes, token, stop));
+                            if let Ok(handle) = spawned {
+                                clients.push(handle);
+                            }
                         }
                         Err(e) if e.kind() == ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(10)),
                         Err(_) => break,
@@ -127,10 +144,15 @@ impl Drop for Server {
 }
 
 fn serve(stream: TcpStream, daemon: Shared, outboxes: Outboxes, token: Option<String>, stop: Arc<AtomicBool>) {
-    // Without a timeout a quiet client would hold this thread in `read` forever.
+    // A client that connects and says nothing must not hold this thread for ever.
     let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(20)));
-    let Ok(mut ws) = tungstenite::accept(stream) else { return };
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
+    let config = WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE));
+    let Ok(mut ws) = tungstenite::accept_with_config(stream, Some(config)) else { return };
+    // Then reads wake up often, to notice the server stopping and to send notifications.
+    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
 
     let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
     let client = lock(&daemon).connect();
@@ -141,14 +163,12 @@ fn serve(stream: TcpStream, daemon: Shared, outboxes: Outboxes, token: Option<St
         match ws.read() {
             Ok(Message::Text(text)) => {
                 let replies = if authenticated {
-                    preload_samples(&daemon, text.as_str());
-                    lock(&daemon).handle(client, text.as_str())
+                    request(&daemon, client, text.as_str())
                 } else {
                     match authenticate(text.as_str(), token.as_deref().unwrap_or_default()) {
                         Ok(()) => {
                             authenticated = true;
-                            preload_samples(&daemon, text.as_str());
-                            lock(&daemon).handle(client, text.as_str())
+                            request(&daemon, client, text.as_str())
                         }
                         Err(reply) => vec![reply],
                     }
@@ -177,8 +197,31 @@ fn serve(stream: TcpStream, daemon: Shared, outboxes: Outboxes, token: Option<St
     let _ = ws.flush();
 }
 
-/// Before evaluating code, read the sample files it declares, without holding
-/// the lock that the audio callback needs.
+/// Answer one message. Source parsing, sample loading and compilation happen
+/// outside the render worker's control lock; only snapshots and acceptance take it.
+fn request(daemon: &Shared, client: ClientId, text: &str) -> Vec<String> {
+    preload_samples(daemon, text);
+    let parsed = niminal_daemon::Daemon::prepare_eval(text);
+    let begun = lock(daemon).begin_prepared(client, text, parsed);
+    match begun {
+        Request::Replies(replies) => replies,
+        Request::Compile(ticket) => {
+            let mut compiled = ticket.compile();
+            loop {
+                let retry = {
+                    let mut d = lock(daemon);
+                    match d.retry(&compiled) {
+                        Some(job) => job,
+                        None => return d.finish(compiled),
+                    }
+                };
+                compiled = retry.compile();
+            }
+        }
+    }
+}
+
+/// Warm declared sample files without holding the render worker's control lock.
 fn preload_samples(daemon: &Shared, request: &str) {
     let Ok(request) = serde_json::from_str::<Value>(request) else { return };
     if request.get("method").and_then(Value::as_str) != Some("eval") {

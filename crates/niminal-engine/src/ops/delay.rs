@@ -64,6 +64,17 @@ impl Opcode for Delay {
         self.in_flight = 0;
     }
 
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
+            && self.buf.len() == old.buf.len() && self.sample_rate == old.sample_rate
+        {
+            std::mem::swap(&mut self.buf, &mut old.buf);
+            self.write = old.write;
+            self.quiet_run = old.quiet_run;
+            self.in_flight = old.in_flight;
+        }
+    }
+
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         let len = self.buf.len();
         let longest = self.max_samples;

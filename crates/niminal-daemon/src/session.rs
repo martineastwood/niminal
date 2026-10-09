@@ -2,8 +2,9 @@
 //!
 //! Evaluating code compiles it immediately, and if it compiles the result waits
 //! for a musical boundary before landing. Everything one evaluation says lands
-//! together (a transaction), at the coarsest boundary among its parts, and
-//! after anything evaluated earlier. A snippet that does not compile changes
+//! together (a transaction), at the coarsest boundary among its parts. New
+//! writes supersede older pending writes to the same destination; independent
+//! changes keep their own boundaries. A snippet that does not compile changes
 //! nothing.
 //!
 //! The session is driven by a sample clock rather than a real one, so it is
@@ -11,6 +12,7 @@
 //! however the audio is divided into blocks.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use niminal_engine::{DEFAULT_MAX_VOICES, BLOCK, MAX_CHANNELS, Master, Mixer, Transfer, VoiceId};
 use niminal_lang::{
@@ -40,6 +42,15 @@ enum NamedAction {
     Panic,
 }
 
+/// What compiling an evaluation needs to know about the session.
+#[derive(Clone)]
+struct PrepareConfig {
+    layout: Layout,
+    samples: Samples,
+    sample_rate: f32,
+}
+
+#[derive(Clone)]
 struct HistoryEntry {
     at: f64,
     action: NamedAction,
@@ -76,13 +87,170 @@ struct Pending {
     /// The project once this has landed.
     project: Project,
     /// The new program and a mixer built for it, if definitions changed.
-    program: Option<Program>,
+    program: Option<Arc<Program>>,
     mixer: Option<Mixer>,
     actions: Vec<Compiled>,
     /// Plays to start again because a pattern they use was redefined.
     replays: Vec<Compiled>,
     /// What each track is playing once this has landed.
     playing: BTreeMap<String, String>,
+}
+
+#[derive(Clone)]
+struct Waiting {
+    id: u64,
+    lands_at: u64,
+    snippet: String,
+    statements: Vec<Statement>,
+}
+
+struct Prepared {
+    queue: Vec<Pending>,
+    notices: Vec<String>,
+}
+
+/// The first part of an evaluation: either it is already settled, or there is
+/// compiling to do.
+pub enum Begin {
+    Done(Result<Accepted, Vec<Problem>>),
+    Job(Box<EvalJob>),
+}
+
+/// Parsed source that can be prepared without borrowing the live session.
+pub struct ParsedEval {
+    source: String,
+    quantize: Option<String>,
+    parsed: Result<(Vec<Statement>, Option<Quantize>), Vec<Problem>>,
+}
+
+impl ParsedEval {
+    pub fn new(source: &str, quantize: Option<&str>) -> Self {
+        let parsed = (|| {
+            let fallback = quantize.map(parse_quantum).transpose()?;
+            let statements = analyze(source).map_err(|d| {
+                vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))]
+            })?;
+            Ok((statements, fallback))
+        })();
+        Self { source: source.to_string(), quantize: quantize.map(str::to_string), parsed }
+    }
+}
+
+/// An evaluation waiting to be compiled. Holds copies of everything the
+/// compiler needs, so compiling it touches no session.
+pub struct EvalJob {
+    source: String,
+    quantize: Option<String>,
+    fallback: Option<Quantize>,
+    statements: Vec<Statement>,
+    base: Project,
+    playing: BTreeMap<String, String>,
+    /// Which state of the session this was prepared against.
+    version: u64,
+    config: PrepareConfig,
+    committed: Project,
+    committed_playing: BTreeMap<String, String>,
+    waiting: Vec<Waiting>,
+    lands_at: u64,
+}
+
+impl EvalJob {
+    /// Compile. This is the slow step.
+    pub fn compile(self) -> EvalDone {
+        let result = self.prepare();
+        EvalDone { job: self, result }
+    }
+
+    fn prepare(&self) -> Result<Prepared, Vec<Problem>> {
+        // Validate the complete transaction before superseding anything.
+        prepare_pending(&self.config, 0, self.lands_at, &self.source,
+            self.statements.clone(), &self.base, &self.playing)?;
+        let writes: Vec<&str> = self.statements.iter().filter_map(|s| s.write_key.as_deref()).collect();
+        let mut waiting = self.waiting.clone();
+        for p in &mut waiting {
+            p.statements.retain(|s| s.write_key.as_deref().is_none_or(|key| !writes.contains(&key)));
+        }
+        waiting.retain(|p| !p.statements.is_empty());
+        waiting.push(Waiting { id: 0, lands_at: self.lands_at, snippet: self.source.clone(), statements: self.statements.clone() });
+        waiting.sort_by_key(|p| (p.lands_at, p.id == 0));
+
+        let latest = waiting.iter().map(|p| p.lands_at).max().unwrap_or(self.lands_at);
+        let (mut project, mut playing) = (self.committed.clone(), self.committed_playing.clone());
+        let mut queue = Vec::new();
+        let mut deferred = Vec::new();
+        let mut notices = Vec::new();
+        for p in waiting {
+            match prepare_pending(&self.config, p.id, p.lands_at, &p.snippet, p.statements.clone(), &project, &playing) {
+                Ok(next) => {
+                    project = next.project.clone();
+                    playing = next.playing.clone();
+                    queue.push(next);
+                }
+                // A transaction can refer to definitions waiting for a later
+                // boundary. Keep it together and move it after those definitions.
+                Err(_) => deferred.push(p),
+            }
+        }
+        for p in deferred {
+            match prepare_pending(&self.config, p.id, latest, &p.snippet, p.statements.clone(), &project, &playing) {
+                Ok(next) => {
+                    project = next.project.clone();
+                    playing = next.playing.clone();
+                    queue.push(next);
+                }
+                Err(problems) if p.id == 0 => return Err(problems),
+                Err(_) => notices.push(format!("change {} was dropped: a newer pending write invalidated it", p.id)),
+            }
+        }
+        Ok(Prepared { queue, notices })
+    }
+
+}
+
+/// A compiled evaluation, ready for [`Session::finish_eval`].
+pub struct EvalDone {
+    job: EvalJob,
+    result: Result<Prepared, Vec<Problem>>,
+}
+
+pub struct CancelJob {
+    id: Option<u64>,
+    version: u64,
+    config: PrepareConfig,
+    project: Project,
+    playing: BTreeMap<String, String>,
+    waiting: Vec<Waiting>,
+}
+
+pub struct CancelDone {
+    job: CancelJob,
+    prepared: Prepared,
+    dropped: usize,
+}
+
+impl CancelJob {
+    pub fn compile(self) -> CancelDone {
+        let (mut project, mut playing) = (self.project.clone(), self.playing.clone());
+        let mut queue = Vec::new();
+        let mut notices = Vec::new();
+        let mut dropped = 0;
+        for p in &self.waiting {
+            if self.id.is_none_or(|id| id == p.id) { dropped += 1; continue; }
+            match prepare_pending(&self.config, p.id, p.lands_at, &p.snippet,
+                                  p.statements.clone(), &project, &playing) {
+                Ok(next) => {
+                    project = next.project.clone();
+                    playing = next.playing.clone();
+                    queue.push(next);
+                }
+                Err(_) => {
+                    dropped += 1;
+                    notices.push(format!("change {} was dropped: it depended on a change that was cancelled", p.id));
+                }
+            }
+        }
+        CancelDone { job: self, prepared: Prepared { queue, notices }, dropped }
+    }
 }
 
 /// What came of an accepted evaluation.
@@ -140,6 +308,7 @@ pub struct Transport {
 pub struct Session {
     sample_rate: f32,
     layout: Layout,
+    panic_epoch: Arc<AtomicU64>,
     /// Where the project's sample files are found, and the ones already read.
     samples: Samples,
     sample_dirs: Vec<std::path::PathBuf>,
@@ -147,7 +316,7 @@ pub struct Session {
     clock: u64,
 
     project: Project,
-    program: Program,
+    program: Arc<Program>,
     mixer: Mixer,
     limiter: Option<Master>,
 
@@ -172,7 +341,102 @@ pub struct Session {
     log: Vec<LogEntry>,
     silenced: usize,
     peaks: Vec<f32>,
+    /// Changes whenever what is waiting to land changes, so that an evaluation
+    /// compiled in the meantime can tell it is out of date.
+    version: u64,
+    live: Option<realtime::Planner>,
+    detached: bool,
 }
+
+#[path = "realtime.rs"]
+pub mod realtime;
+
+/// Compile everything `statements` will need when they land, against the
+/// project as it will be then (`base`, with `base_playing` running). This is
+/// the slow part of an evaluation, and needs nothing from a running session.
+fn prepare_pending(
+    cfg: &PrepareConfig,
+    id: u64,
+    lands_at: u64,
+    snippet: &str,
+    statements: Vec<Statement>,
+    base: &Project,
+    base_playing: &BTreeMap<String, String>,
+) -> Result<Pending, Vec<Problem>> {
+    let definitions: Vec<&Statement> =
+        statements.iter().filter(|s| s.kind == StatementKind::Definition).collect();
+    let delta: Vec<Entry> = definitions
+        .iter()
+        .map(|s| Entry { key: s.key.clone().expect("definitions have keys"), text: s.text.clone() })
+        .collect();
+    let from_snippet: HashMap<String, usize> =
+        definitions.iter().map(|s| (s.key.clone().expect("definitions have keys"), s.offset)).collect();
+
+    let mut project = base.clone();
+    project.apply(&delta);
+    let check = |extra: &[Piece]| -> Result<Program, Vec<Problem>> {
+        let (full, map) = project.source(&from_snippet, extra);
+        compile_with(&full, &options(cfg.layout, &cfg.samples)).map_err(|diags| {
+            diags
+                .iter()
+                .map(|d| Problem::from_diagnostic(d, snippet, map.locate(d.span)))
+                .collect::<Vec<_>>()
+        })
+    };
+
+    let program = check(&[])?;
+    if program.master != cfg.layout {
+        return Err(vec![Problem::plain(format!(
+            "this session outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
+            cfg.layout, program.master
+        ))]);
+    }
+
+    let mut actions = Vec::new();
+    for s in statements.iter().filter(|s| s.kind != StatementKind::Definition) {
+        let piece = Piece { text: s.text.clone(), origin: Origin::Snippet { offset: s.offset } };
+        actions.push(Compiled { statement: s.clone(), program: check(&[piece])? });
+    }
+
+    // What will be playing, and which of it has to start over.
+    let mut playing = base_playing.clone();
+    for a in &actions {
+        apply_to_playing(&mut playing, &a.program, &a.statement);
+    }
+    let changed: Vec<String> = definitions.iter().filter_map(|s| s.binding.clone()).collect();
+    let retimes = definitions.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")));
+    let mut replays = Vec::new();
+    for (track, what) in base_playing {
+        if !(retimes || mentions_any(what, &changed)) {
+            continue;
+        }
+        let text = format!("play {track} = {what}");
+        let Some(statement) = analyze(&text).ok().and_then(|mut s| s.pop()) else { continue };
+        let piece = Piece { text: text.clone(), origin: Origin::Snippet { offset: 0 } };
+        // If the new version no longer works for the track, leave it playing as it was.
+        if let Ok(program) = check(&[piece]) {
+            playing.insert(track.clone(), what.clone());
+            replays.push(Compiled { statement, program });
+        }
+    }
+
+    let has_definitions = !definitions.is_empty();
+    let mixer = has_definitions.then(|| program.mixer(cfg.sample_rate));
+    Ok(Pending {
+        id,
+        lands_at,
+        snippet: snippet.to_string(),
+        summary: statements.iter().map(summarize).collect(),
+        statements,
+        project,
+        program: has_definitions.then(|| Arc::new(program)),
+        mixer,
+        actions,
+        replays,
+        playing,
+    })
+}
+
 
 /// The most notices that wait to be collected, and how long before the same one is said again.
 const MAX_NOTICES: usize = 100;
@@ -191,12 +455,13 @@ impl Session {
         Session {
             sample_rate,
             layout,
+            panic_epoch: Arc::new(AtomicU64::new(0)),
             samples: Samples::default(),
             sample_dirs: Vec::new(),
             defaults: QuantizeDefaults::default(),
             clock: 0,
             project: Project::default(),
-            program,
+            program: Arc::new(program),
             mixer,
             limiter: Some(Master::with_channels(sample_rate, CEILING, layout.channels())),
             history: Vec::new(),
@@ -215,6 +480,9 @@ impl Session {
             log: Vec::new(),
             silenced: 0,
             peaks: vec![0.0; layout.channels()],
+            version: 0,
+            live: None,
+            detached: false,
         }
     }
 
@@ -246,7 +514,7 @@ impl Session {
 
     /// Samples of delay the limiter adds to the output.
     pub fn latency(&self) -> usize {
-        self.limiter.as_ref().map_or(0, Master::latency)
+        self.limiter.as_ref().map(Master::latency).unwrap_or_else(|| self.live.as_ref().map_or(0, |p| p.state.latency))
     }
 
     pub fn channels(&self) -> usize {
@@ -287,170 +555,164 @@ impl Session {
     /// quantum each asks for (or `quantize`, or the default for its kind), all
     /// together at the latest of them. If it does not, nothing changes.
     pub fn eval(&mut self, source: &str, quantize: Option<&str>) -> Result<Accepted, Vec<Problem>> {
-        self.log.push(LogEntry {
-            sample: self.clock,
-            input: LogInput::Eval { source: source.to_string(), quantize: quantize.map(str::to_string) },
-        });
-        self.eval_inner(source, quantize)
+        match self.begin_eval(source, quantize) {
+            Begin::Done(result) => result,
+            Begin::Job(job) => self.finish_eval(job.compile()),
+        }
     }
 
-    fn eval_inner(&mut self, source: &str, quantize: Option<&str>) -> Result<Accepted, Vec<Problem>> {
-        let fallback = match quantize {
-            None => None,
-            Some(text) => Some(parse_quantum(text)?),
+    /// The quick first part of [`Session::eval`]: read the code and note what
+    /// the project is like now. Compiling is the slow part, and
+    /// [`EvalJob::compile`] needs no access to the session, so a daemon can do
+    /// it without holding the render worker's control lock.
+    pub fn begin_eval(&mut self, source: &str, quantize: Option<&str>) -> Begin {
+        self.begin_parsed(ParsedEval::new(source, quantize))
+    }
+
+    pub fn begin_parsed(&mut self, input: ParsedEval) -> Begin {
+        self.sync_realtime();
+        let ParsedEval { source, quantize, parsed } = input;
+        let (statements, fallback) = match parsed {
+            Ok(parsed) => parsed,
+            Err(problems) => {
+                self.log_eval(&source, quantize.as_deref());
+                return Begin::Done(Err(problems));
+            }
         };
-        let statements = analyze(source)
-            .map_err(|d| vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))])?;
         if statements.is_empty() {
-            return Ok(Accepted { id: None, lands_at: self.clock, position: self.grid().position(self.clock), changes: vec![] });
+            let nothing = Accepted { id: None, lands_at: self.clock, position: self.grid().position(self.clock), changes: vec![] };
+            self.log_eval(&source, quantize.as_deref());
+            return Begin::Done(Ok(nothing));
         }
+        let (base, playing) = self.projected();
+        Begin::Job(Box::new(EvalJob {
+            source,
+            quantize,
+            fallback,
+            statements: statements.clone(),
+            base,
+            playing,
+            version: self.version,
+            config: self.prepare_config(),
+            committed: self.project.clone(),
+            committed_playing: self.playing.clone(),
+            waiting: self.pending.iter().map(|p| Waiting { id: p.id, lands_at: p.lands_at,
+                snippet: p.snippet.clone(), statements: p.statements.clone() }).collect(),
+            lands_at: self.landing(&statements, fallback),
+        }))
+    }
 
-        // One transaction lands together, at the coarsest of its boundaries,
-        // and never before something evaluated earlier.
+    fn landing(&self, statements: &[Statement], fallback: Option<Quantize>) -> u64 {
         let grid = self.grid();
-        let mut lands_at = statements
-            .iter()
-            .map(|s| grid.landing(self.defaults.for_statement(s, fallback), self.clock))
-            .max()
-            .expect("there is at least one statement");
-        if let Some(last) = self.pending.last() {
-            lands_at = lands_at.max(last.lands_at);
-        }
+        statements.iter().map(|s| grid.landing(self.defaults.for_statement(s, fallback), self.clock))
+            .max().expect("an evaluation has statements")
+    }
 
-        let id = self.next_id;
-        let (project, playing) = self.projected();
-        let pending = self.prepare(id, lands_at, source, statements, &project, &playing)?;
+    /// Return a fresh compilation job when the project changed while compiling.
+    /// Servers run this job outside their control lock.
+    pub fn retry_eval(&self, done: &EvalDone) -> Option<Box<EvalJob>> {
+        let job = &done.job;
+        if job.version == self.version { return None; }
+        let (base, playing) = self.projected();
+        Some(Box::new(EvalJob {
+            source: job.source.clone(), quantize: job.quantize.clone(), fallback: job.fallback,
+            statements: job.statements.clone(), base, playing, version: self.version,
+            config: self.prepare_config(), committed: self.project.clone(),
+            committed_playing: self.playing.clone(),
+            waiting: self.pending.iter().map(|p| Waiting { id: p.id, lands_at: p.lands_at,
+                snippet: p.snippet.clone(), statements: p.statements.clone() }).collect(),
+            lands_at: self.landing(&job.statements, job.fallback),
+        }))
+    }
+
+    /// Queue a compiled transaction. The synchronous API retries inline;
+    /// servers use `retry_eval` to do that compilation outside their lock.
+    pub fn finish_eval(&mut self, mut done: EvalDone) -> Result<Accepted, Vec<Problem>> {
+        self.sync_realtime();
+        while let Some(job) = self.retry_eval(&done) { done = job.compile(); }
+        let EvalDone { job, result } = done;
+        self.log_eval(&job.source, job.quantize.as_deref());
+        let Prepared { mut queue, notices } = result?;
+        let landing = self.landing(&job.statements, job.fallback);
+        let pending = queue.iter_mut().find(|p| p.id == 0).expect("the new transaction is queued");
+        // A compile that missed its grid waits for the next one. `now` lands
+        // when compilation completes, rather than at its original clock sample.
+        pending.lands_at = pending.lands_at.max(landing);
+        pending.id = self.next_id;
         self.next_id += 1;
-        let accepted = Accepted {
-            id: Some(id),
-            lands_at,
-            position: grid.position(lands_at),
-            changes: pending.summary.clone(),
-        };
-        self.pending.push(pending);
+        let accepted = Accepted { id: Some(pending.id), lands_at: pending.lands_at,
+            position: self.grid().position(pending.lands_at), changes: pending.summary.clone() };
+        // Preserve chronological snapshots if a compile crossed a boundary.
+        // Existing transactions already prepared against this one cannot land
+        // before it. Their original order remains deterministic.
+        let new_index = queue.iter().position(|p| p.id == accepted.id.unwrap()).unwrap();
+        let mut at = queue[new_index].lands_at;
+        for p in &mut queue[new_index + 1..] { p.lands_at = p.lands_at.max(at); at = p.lands_at; }
+        self.pending = queue;
+        self.invalidate_live();
+        if accepted.lands_at > job.lands_at && self.clock > job.lands_at
+            && job.statements.iter().any(|s| self.defaults.for_statement(s, job.fallback).unit != niminal_lang::QuantizeUnit::Now)
+        {
+            self.notify(format!("change {} missed its boundary while compiling; moved to bar {} beat {:.2}",
+                accepted.id.unwrap(), accepted.position.0, accepted.position.1));
+        }
+        for notice in notices { self.notify(notice); }
+        self.version += 1;
         self.land_due();
         Ok(accepted)
     }
 
-    /// Compile everything `statements` will need when they land, against the
-    /// project as it will be then (`base`, with `base_playing` running).
-    fn prepare(
-        &self,
-        id: u64,
-        lands_at: u64,
-        snippet: &str,
-        statements: Vec<Statement>,
-        base: &Project,
-        base_playing: &BTreeMap<String, String>,
-    ) -> Result<Pending, Vec<Problem>> {
-        let definitions: Vec<&Statement> =
-            statements.iter().filter(|s| s.kind == StatementKind::Definition).collect();
-        let delta: Vec<Entry> = definitions
-            .iter()
-            .map(|s| Entry { key: s.key.clone().expect("definitions have keys"), text: s.text.clone() })
-            .collect();
-        let from_snippet: HashMap<String, usize> =
-            definitions.iter().map(|s| (s.key.clone().expect("definitions have keys"), s.offset)).collect();
+    fn log_eval(&mut self, source: &str, quantize: Option<&str>) {
+        self.log.push(LogEntry {
+            sample: self.clock,
+            input: LogInput::Eval { source: source.to_string(), quantize: quantize.map(str::to_string) },
+        });
+    }
 
-        let mut project = base.clone();
-        project.apply(&delta);
-        let check = |extra: &[Piece]| -> Result<Program, Vec<Problem>> {
-            let (full, map) = project.source(&from_snippet, extra);
-            compile_with(&full, &options(self.layout, &self.samples)).map_err(|diags| {
-                diags
-                    .iter()
-                    .map(|d| Problem::from_diagnostic(d, snippet, map.locate(d.span)))
-                    .collect::<Vec<_>>()
-            })
-        };
-
-        let program = check(&[])?;
-        if program.master != self.layout {
-            return Err(vec![Problem::plain(format!(
-                "this session outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
-                self.layout, program.master
-            ))]);
-        }
-
-        let mut actions = Vec::new();
-        for s in statements.iter().filter(|s| s.kind != StatementKind::Definition) {
-            let piece = Piece { text: s.text.clone(), origin: Origin::Snippet { offset: s.offset } };
-            actions.push(Compiled { statement: s.clone(), program: check(&[piece])? });
-        }
-
-        // What will be playing, and which of it has to start over.
-        let mut playing = base_playing.clone();
-        for a in &actions {
-            apply_to_playing(&mut playing, &a.program, &a.statement);
-        }
-        let changed: Vec<String> = definitions.iter().filter_map(|s| s.binding.clone()).collect();
-        let retimes = definitions.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")));
-        let mut replays = Vec::new();
-        for (track, what) in base_playing {
-            if !(retimes || mentions_any(what, &changed)) {
-                continue;
-            }
-            let text = format!("play {track} = {what}");
-            let Some(statement) = analyze(&text).ok().and_then(|mut s| s.pop()) else { continue };
-            let piece = Piece { text: text.clone(), origin: Origin::Snippet { offset: 0 } };
-            // If the new version no longer works for the track, leave it playing as it was.
-            if let Ok(program) = check(&[piece]) {
-                playing.insert(track.clone(), what.clone());
-                replays.push(Compiled { statement, program });
-            }
-        }
-
-        let has_definitions = !definitions.is_empty();
-        let mixer = has_definitions.then(|| program.mixer(self.sample_rate));
-        Ok(Pending {
-            id,
-            lands_at,
-            snippet: snippet.to_string(),
-            summary: statements.iter().map(summarize).collect(),
-            statements,
-            project,
-            program: has_definitions.then_some(program),
-            mixer,
-            actions,
-            replays,
-            playing,
-        })
+    fn prepare_config(&self) -> PrepareConfig {
+        PrepareConfig { layout: self.layout, samples: self.samples.clone(), sample_rate: self.sample_rate }
     }
 
     /// Cancel a waiting evaluation, or all of them. Returns how many. What is
     /// left is compiled again, since it may have depended on what was cancelled.
     pub fn cancel(&mut self, id: Option<u64>) -> usize {
-        self.log.push(LogEntry { sample: self.clock, input: LogInput::Cancel { id } });
-        let before = self.pending.len();
-        let remaining: Vec<Pending> = std::mem::take(&mut self.pending);
-        let (mut project, mut playing) = (self.project.clone(), self.playing.clone());
-        let mut dropped = 0;
-        for p in remaining {
-            if id.is_none_or(|i| p.id == i) {
-                dropped += 1;
-                continue;
-            }
-            match self.prepare(p.id, p.lands_at, &p.snippet, p.statements.clone(), &project, &playing) {
-                Ok(redone) => {
-                    project = redone.project.clone();
-                    playing = redone.playing.clone();
-                    self.pending.push(redone);
-                }
-                Err(_) => {
-                    dropped += 1;
-                    self.notify(format!(
-                        "change {} was dropped: it depended on a change that was cancelled",
-                        p.id
-                    ));
-                }
-            }
-        }
-        debug_assert_eq!(before - dropped, self.pending.len());
-        dropped
+        let done = self.begin_cancel(id).compile();
+        self.finish_cancel(done)
+    }
+
+    pub fn begin_cancel(&self, id: Option<u64>) -> Box<CancelJob> {
+        Box::new(CancelJob { id, version: self.version, config: self.prepare_config(),
+            project: self.project.clone(), playing: self.playing.clone(),
+            waiting: self.pending.iter().map(|p| Waiting { id: p.id, lands_at: p.lands_at,
+                snippet: p.snippet.clone(), statements: p.statements.clone() }).collect() })
+    }
+
+    pub fn retry_cancel(&self, done: &CancelDone) -> Option<Box<CancelJob>> {
+        (done.job.version != self.version).then(|| self.begin_cancel(done.job.id))
+    }
+
+    pub fn finish_cancel(&mut self, mut done: CancelDone) -> usize {
+        self.sync_realtime();
+        while let Some(job) = self.retry_cancel(&done) { done = job.compile(); }
+        self.log.push(LogEntry { sample: self.clock, input: LogInput::Cancel { id: done.job.id } });
+        self.pending = done.prepared.queue;
+        self.invalidate_live();
+        for notice in done.prepared.notices { self.notify(notice); }
+        self.version += 1;
+        done.dropped
+    }
+
+    /// Changes on an immediate panic, allowing an output queue to discard audio
+    /// that was rendered before it. Scheduled panics are already in the audio.
+    pub fn panic_epoch(&self) -> Arc<AtomicU64> {
+        self.panic_epoch.clone()
     }
 
     /// Stop everything at once, including effect tails.
     pub fn panic(&mut self) {
+        self.sync_realtime();
+        self.panic_epoch.fetch_add(1, Ordering::Release);
+        self.invalidate_live();
         self.log.push(LogEntry { sample: self.clock, input: LogInput::Panic });
         let at = self.seconds(self.clock);
         self.history.push(HistoryEntry { at, action: NamedAction::Panic });
@@ -468,6 +730,7 @@ impl Session {
     /// the time (since the session started) at which it should sound; ones that
     /// are already late sound immediately.
     pub fn stream_events(&mut self, events: Vec<Event>) -> Result<(), Vec<Problem>> {
+        self.sync_realtime();
         self.log.push(LogEntry { sample: self.clock, input: LogInput::Events { events: events.clone() } });
         let mut problems = Vec::new();
         for event in &events {
@@ -478,6 +741,7 @@ impl Session {
         if !problems.is_empty() {
             return Err(problems);
         }
+        self.invalidate_live();
         for event in events {
             let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
             let dur = self.samples(event.dur.to_seconds(self.program.tempo));
@@ -511,7 +775,7 @@ impl Session {
             bar,
             beat,
             bpm: grid.bpm,
-            voices: self.mixer.active_voices(),
+            voices: self.live.as_ref().map_or_else(|| self.mixer.active_voices(), |p| p.state.voices.load(Ordering::Relaxed)),
             pending: self.pending.len(),
         }
     }
@@ -566,6 +830,7 @@ impl Session {
 
     /// The loudest sample on each output channel since this was last called.
     pub fn take_peaks(&mut self) -> Vec<f32> {
+        self.sync_realtime();
         std::mem::replace(&mut self.peaks, vec![0.0; self.layout.channels()])
     }
 
@@ -595,6 +860,7 @@ impl Session {
     }
 
     fn land(&mut self, p: Pending) {
+        self.version += 1;
         let at = self.clock;
         let Pending { id, summary, project, program, mixer, actions, replays, playing, .. } = p;
 
@@ -611,7 +877,17 @@ impl Session {
     }
 
     /// Replace the running program, keeping what is sounding.
-    fn swap_program(&mut self, project: Project, program: Program, mut mixer: Mixer) {
+    fn swap_program(&mut self, project: Project, program: Arc<Program>, mut mixer: Mixer) {
+        if self.detached {
+            self.program = program;
+            self.project = project;
+            return;
+        }
+        let mapping: Vec<Option<usize>> = self.program.buses.iter().enumerate().map(|(i, name)| {
+            program.buses.iter().position(|n| n == name)
+                .filter(|&j| self.program.bus_layouts[i] == program.bus_layouts[j])
+        }).collect();
+        self.mixer.remap_buses(&mapping);
         let transfers = self.plan_transfers(&project, &program);
         mixer.adopt(&mut self.mixer, &transfers);
         self.mixer = mixer;
@@ -620,12 +896,8 @@ impl Session {
     }
 
     /// Which running voices and effect chains the new program's tracks take over.
-    fn plan_transfers(&self, next: &Project, program: &Program) -> Vec<Transfer> {
+    fn plan_transfers(&self, _next: &Project, program: &Program) -> Vec<Transfer> {
         let old = &self.program;
-        let buses_same = old.buses == program.buses
-            && old.bus_layouts == program.bus_layouts
-            && old.master == program.master;
-        let environment_same = self.project.environment() == next.environment();
 
         program
             .tracks
@@ -633,11 +905,9 @@ impl Session {
             .enumerate()
             .map(|(i, track)| {
                 let from = if i == 0 { Some(0) } else { old.track_index(&track.name) };
-                let key = format!("track:{}", track.name);
-                let unchanged = self.project.text_of(&key).is_some() && self.project.text_of(&key) == next.text_of(&key);
                 Transfer {
-                    voices_from: from.filter(|_| buses_same),
-                    chain_from: from.filter(|_| i > 0 && buses_same && environment_same && unchanged),
+                    voices_from: from,
+                    chain_from: from.filter(|_| i > 0),
                 }
             })
             .collect()
@@ -663,26 +933,7 @@ impl Session {
     }
 
     fn rebuild_schedule(&mut self) {
-        let names: Vec<String> = self.program.tracks.iter().map(|t| t.name.clone()).collect();
-        let index = |track: &String| self.program.track_index(track);
-        let commands: Vec<Scheduled> = self
-            .history
-            .iter()
-            .filter_map(|h| {
-                let action = match &h.action {
-                    NamedAction::Play { track, clip } => Action::Play { track: index(track)?, clip: clip.clone() },
-                    NamedAction::Stop(t) => Action::Stop { track: index(t)? },
-                    NamedAction::Mute(t) => Action::Mute { track: index(t)? },
-                    NamedAction::Unmute(t) => Action::Unmute { track: index(t)? },
-                    NamedAction::Solo(t) => Action::Solo { track: index(t)? },
-                    NamedAction::Unsolo(t) => Action::Unsolo { track: t.as_ref().and_then(index) },
-                    NamedAction::Hush => Action::Hush,
-                    NamedAction::Panic => Action::Panic,
-                };
-                Some(Scheduled { at: Time::Seconds(h.at), action, quantize: None })
-            })
-            .collect();
-        self.schedule = Schedule::from_commands(self.program.tempo, names, &commands);
+        self.schedule = realtime::schedule_for(&self.program, &self.history);
         self.overloaded.clear();
         // Notes already taken from the old schedule may no longer be right.
         self.upcoming.retain(|u| !u.scheduled);
@@ -703,7 +954,8 @@ impl Session {
             if self.samples(t) > self.clock {
                 break;
             }
-            self.mixer.panic();
+            if !self.detached { self.mixer.panic(); }
+            if let Some(limiter) = &mut self.limiter { limiter.clear(); }
             self.held.clear();
             self.upcoming.clear();
             self.next_panic += 1;
@@ -713,6 +965,7 @@ impl Session {
     /// Mix `frames` samples, calling `sink` with each piece (a block per
     /// channel and how many of its samples are valid).
     pub fn render(&mut self, frames: usize, sink: &mut dyn FnMut(&[[f32; BLOCK]], usize)) {
+        assert!(!self.detached, "a detached session is driven by its renderer");
         let end = self.clock + frames as u64;
         let channels = self.layout.channels();
         let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];

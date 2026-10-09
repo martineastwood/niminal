@@ -15,7 +15,7 @@ use niminal_score::Section;
 use serde_json::json;
 
 #[derive(Parser)]
-#[command(name = "niminal", version)]
+#[command(name = "niminal", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("NIMINAL_BUILD"), ")"))]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -72,9 +72,13 @@ enum Command {
         /// Run without a sound card, at real speed, throwing the audio away.
         #[arg(long)]
         no_audio: bool,
-        /// Record everything sent to the session, to replay later.
+        /// Record everything sent to the session here, to replay later. By default
+        /// it goes in `~/.niminal/sessions`.
         #[arg(long)]
         log: Option<PathBuf>,
+        /// Don't record the session.
+        #[arg(long, conflicts_with = "log")]
+        no_log: bool,
         /// Require clients to give this token when they say hello.
         #[arg(long)]
         token: Option<String>,
@@ -118,7 +122,17 @@ fn main() -> ExitCode {
             run_replay(&log, &out, channels, no_limiter)
         }
         Command::Render { .. } => Err("error: give a file to render, or --replay a log".into()),
-        Command::Daemon { file, port, channels, sample_rate, no_audio, log, token, listen } => {
+        Command::Daemon { file, port, channels, sample_rate, no_audio, log, no_log, token, listen } => {
+            install_crash_log();
+            let log = log.or_else(|| {
+                if no_log {
+                    return None;
+                }
+                let dir = state_dir()?.join("sessions");
+                prune_sessions(&dir, 20);
+                let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                Some(dir.join(format!("{now}.log")))
+            });
             run_daemon(file.as_deref(), port, channels, sample_rate, no_audio, log.as_deref(), token, listen)
         }
         Command::Send { code, file, port, quantize, token } => {
@@ -135,6 +149,48 @@ fn main() -> ExitCode {
             }
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `~/.niminal`, where sessions are logged and crashes recorded.
+fn state_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let dir = PathBuf::from(home).join(".niminal");
+    std::fs::create_dir_all(dir.join("sessions")).ok()?;
+    Some(dir)
+}
+
+/// Record panics in `~/.niminal/crash.log` (as well as printing them) so that a
+/// crash during a performance can be looked at afterwards.
+fn install_crash_log() {
+    let log = state_dir().map(|d| d.join("crash.log"));
+    std::panic::set_hook(Box::new(move |info| {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let thread = std::thread::current();
+        let report = format!(
+            "[{now}] niminal {} panicked in thread `{}`: {info}\n{}\n",
+            env!("NIMINAL_BUILD"),
+            thread.name().unwrap_or("?"),
+            std::backtrace::Backtrace::force_capture()
+        );
+        eprintln!("niminal: internal error: {info}");
+        if let Some(path) = &log
+            && let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path)
+        {
+            use std::io::Write;
+            let _ = file.write_all(report.as_bytes());
+            eprintln!("niminal: details are in {}", path.display());
+        }
+    }));
+}
+
+/// The newest session logs are kept, the rest removed.
+fn prune_sessions(dir: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut logs: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+    logs.sort();
+    for old in logs.iter().take(logs.len().saturating_sub(keep)) {
+        let _ = std::fs::remove_file(old);
     }
 }
 
@@ -264,6 +320,7 @@ fn run_daemon(
     let where_to = output.as_ref().map_or_else(|| "no audio output".to_string(), |o| format!("audio to {}", o.name()));
 
     let daemon: Shared = Arc::new(Mutex::new(Daemon::new(Session::new(rate as f32, layout))));
+    let health = output.as_ref().map(Output::health);
     let _audio = match output {
         Some(o) => Some(o.start(daemon.clone())?),
         None => None,
@@ -277,8 +334,29 @@ fn run_daemon(
         watched = Some(load(&daemon, path, Some("now")));
     }
     let mut written = 0;
+    let mut reported = (0, 0, 0);
+    let mut last_report = std::time::Instant::now();
     loop {
         std::thread::sleep(Duration::from_millis(250));
+        if let Some(h) = &health
+            && last_report.elapsed() >= Duration::from_secs(2)
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let now = (h.panics.load(Relaxed), h.errors.load(Relaxed), h.underruns.load(Relaxed));
+            if now.0 > reported.0 {
+                eprintln!("audio: the engine failed on {} buffer(s) and was silenced for them; see the crash log", now.0 - reported.0);
+            }
+            if now.1 > reported.1 {
+                eprintln!("audio: {} device problem(s); check the output device", now.1 - reported.1);
+            }
+            if now.2 > reported.2 {
+                eprintln!("audio: {} output buffer(s) ran dry and were silenced", now.2 - reported.2);
+            }
+            if now != reported {
+                reported = now;
+                last_report = std::time::Instant::now();
+            }
+        }
         if let (Some(path), Some(last)) = (file, watched.as_mut()) {
             let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
             if modified.is_some() && modified != *last {
@@ -314,10 +392,27 @@ fn load(daemon: &Shared, path: &Path, quantize: Option<&str>) -> Option<SystemTi
             return modified;
         }
     };
-    let result = {
+    let parsed = niminal_daemon::ParsedEval::new(&source, quantize);
+    let begun = {
         let mut d = lock(daemon);
         d.session_mut().set_sample_dir(path.parent().unwrap_or(Path::new(".")));
-        d.session_mut().eval(&source, quantize)
+        d.session_mut().begin_parsed(parsed)
+    };
+    let result = match begun {
+        niminal_daemon::Begin::Done(result) => result,
+        niminal_daemon::Begin::Job(job) => {
+            let mut done = job.compile();
+            loop {
+                let retry = {
+                    let mut d = lock(daemon);
+                    match d.session().retry_eval(&done) {
+                        Some(job) => job,
+                        None => break d.session_mut().finish_eval(done),
+                    }
+                };
+                done = retry.compile();
+            }
+        }
     };
     match result {
         Ok(a) => match a.id {

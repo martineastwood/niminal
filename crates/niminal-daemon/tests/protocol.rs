@@ -274,3 +274,64 @@ fn status_lists_scenes_clips_and_what_each_track_is_doing() {
     assert_eq!(after["tracks"][0]["soloed"], true);
     assert_eq!(after["tracks"][1], json!({"name": "bass", "clip": "riff", "muted": true, "soloed": false}));
 }
+
+#[test]
+fn begin_and_finish_answer_an_eval_like_handle_does() {
+    use niminal_daemon::Request;
+    let (mut d, c) = ready();
+    let request = json!({"jsonrpc": "2.0", "id": 2, "method": "eval", "params": {"source": SETUP.replace("\\n", "\n"), "quantize": "now"}});
+    let Request::Compile(ticket) = d.begin(c, &request.to_string()) else { panic!("an eval needs compiling") };
+    let replies = d.finish(ticket.compile());
+    let reply: Value = serde_json::from_str(&replies[0]).unwrap();
+    assert_eq!(reply["id"], 2);
+    assert!(reply["result"]["id"].is_u64());
+
+    // a mistake is an error reply, still with the request's id
+    let bad = json!({"jsonrpc": "2.0", "id": 3, "method": "eval", "params": {"source": "play lead = [zz]"}});
+    let Request::Compile(ticket) = d.begin(c, &bad.to_string()) else { panic!() };
+    let reply: Value = serde_json::from_str(&d.finish(ticket.compile())[0]).unwrap();
+    assert_eq!(reply["id"], 3);
+    assert_eq!(reply["error"]["code"], -32001);
+
+    // other methods are answered straight away, and an eval before hello is refused
+    let Request::Replies(r) = d.begin(c, &json!({"jsonrpc": "2.0", "id": 4, "method": "status"}).to_string()) else { panic!() };
+    assert_eq!(serde_json::from_str::<Value>(&r[0]).unwrap()["id"], 4);
+    let stranger = d.connect();
+    let Request::Replies(r) = d.begin(stranger, &request.to_string()) else { panic!("not greeted") };
+    assert_eq!(serde_json::from_str::<Value>(&r[0]).unwrap()["error"]["code"], -32000);
+}
+
+#[test]
+fn cancellation_compiles_outside_the_session_and_retries_if_it_became_stale() {
+    use niminal_daemon::Request;
+    let (mut d, c) = ready();
+    call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
+    let first = call(&mut d, c, 3, "eval", json!({"source": "play lead = [c4]", "quantize": "next 4 bars"}));
+    let request = json!({"jsonrpc": "2.0", "id": 4, "method": "cancel", "params": {"id": first["result"]["id"]}}).to_string();
+    let Request::Compile(ticket) = d.begin(c, &request) else { panic!("cancel is prepared off the session") };
+    let done = ticket.compile();
+    call(&mut d, c, 5, "eval", json!({"source": "mute lead", "quantize": "next 4 bars"}));
+    let retry = d.retry(&done).expect("the pending queue changed");
+    let done = retry.compile();
+    assert!(d.retry(&done).is_none());
+    let reply: Value = serde_json::from_str(&d.finish(done)[0]).unwrap();
+    assert_eq!(reply["id"], 4);
+    assert_eq!(reply["result"]["cancelled"], 1);
+    assert_eq!(d.session().pending().len(), 1);
+    assert_eq!(d.session().pending()[0].changes, ["mute lead"]);
+}
+
+#[test]
+fn hush_uses_the_background_compilation_path() {
+    use niminal_daemon::Request;
+    let (mut d, c) = ready();
+    call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
+    call(&mut d, c, 3, "eval", json!({"source": "play lead = [c4]", "quantize": "now"}));
+    let request = json!({"jsonrpc": "2.0", "id": 4, "method": "hush", "params": {}}).to_string();
+    let parsed = Daemon::prepare_eval(&request);
+    let Request::Compile(ticket) = d.begin_prepared(c, &request, parsed) else { panic!("hush needs background work") };
+    let reply: Value = serde_json::from_str(&d.finish(ticket.compile())[0]).unwrap();
+    assert_eq!(reply["id"], 4);
+    assert!(reply["result"]["id"].is_u64());
+    assert!(d.session().tracks().iter().all(|t| t.clip.is_none()));
+}

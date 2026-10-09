@@ -7,14 +7,14 @@ bus space: stereo
 
 instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {
   level = env[0 2ms 1 400ms.exp 0]
-  voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6), res: 0.25) * level
+  voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * level
   out = voice.pan(azimuth: az)
   space += out.gain(-12db)
 }
 
 track hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
 track bass { instrument = pluck(bright: 0.2) }
-track lead { instrument = pluck(bright: 0.7) }
+track lead { instrument = pluck(bright: 0.8) }
 
 clip riff {
   notes:  [c2 ~ c2 eb2 ~ g1 bb1 ~]
@@ -24,7 +24,7 @@ clip riff {
 
 theme = [c4 e4 g4 b4].every(2, it.reverse)
 answer = theme.transpose(+5st).thin(25%)
-spread = [c5].euclid(hits: 5, steps: 8)
+spread = [c5].euclid(hits: 4, steps: 8)
 
 scene verse  { bass: riff, lead: theme }
 scene chorus { bass: riff.transpose(+5st), lead: answer }
@@ -36,3 +36,18 @@ at bar 9 mute bass
 at bar 11 unmute bass
 at bar 13 launch outro
 at bar 15 hush
+
+
+
+//----
+
+launch verse
+launch chorus @ next 4 bars
+mute bass
+unmute bass @ next bar
+unsolo lead
+launch outro @ next 2 bars
+hush
+
+// unmute bass
+hush

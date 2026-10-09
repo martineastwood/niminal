@@ -76,7 +76,8 @@ fn evaluating_exactly_on_a_boundary_with_next_waits_for_the_following_one() {
     let accepted = s.eval("mute lead @ next bar", None).unwrap();
     assert_eq!(accepted.lands_at, 2 * BAR as u64);
     let plain = s.eval("unmute lead @ bar", None).unwrap();
-    assert_eq!(plain.lands_at, 2 * BAR as u64, "plain `bar` may land right away, but never before earlier changes");
+    assert_eq!(plain.lands_at, BAR as u64, "the newer unmute supersedes the pending mute and lands now");
+    assert!(s.pending().is_empty());
 }
 
 #[test]
@@ -133,15 +134,15 @@ fn a_transaction_lands_together_at_the_coarsest_boundary() {
 }
 
 #[test]
-fn changes_land_in_the_order_they_were_evaluated() {
+fn independent_changes_land_at_their_own_boundaries() {
     let mut s = ready();
     let first = s.eval("play lead = [c4] @ next 4 bars", None).unwrap();
-    // asks for a nearer boundary, but must come after the first
+    // This write is independent of the play, so it keeps its nearer boundary.
     let second = s.eval("mute lead @ next beat", None).unwrap();
-    assert!(second.lands_at >= first.lands_at);
+    assert!(second.lands_at < first.lands_at);
     run(&mut s, 4 * BAR + 100);
     let ids: Vec<u64> = s.take_landed().iter().map(|l| l.id).collect();
-    assert_eq!(ids, [1, 2, 3], "setup, then the two in order");
+    assert_eq!(ids, [1, 3, 2], "setup, mute, then play");
 }
 
 #[test]
@@ -313,22 +314,21 @@ fn an_effect_tail_survives_unrelated_changes() {
 }
 
 #[test]
-fn redefining_a_track_starts_its_effects_afresh() {
+fn redefining_a_track_keeps_compatible_effect_memory() {
     let mut live = with_tail();
     run(&mut live, 5000);
     live.eval("track hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }", Some("now")).unwrap();
     let after = run(&mut live, BAR);
-    assert!(peak(&after) < 1e-6, "the old tail went with the old track");
+    assert!(peak(&after) > 1e-4, "the reverb tail survives the track edit");
 }
 
 #[test]
-fn changing_the_buses_cannot_keep_voices() {
+fn adding_a_bus_keeps_sounding_voices() {
     let mut s = ready();
     s.eval("lead(freq: a3) for 4beats", Some("now")).unwrap();
     run(&mut s, 5000);
     s.eval("bus extra", Some("now")).unwrap();
-    // the bus list changed, so what was sounding could now be wired wrongly: it stops
-    assert!(peak(&run(&mut s, 5000)) < 1e-6);
+    assert!(peak(&run(&mut s, 5000)) > 0.1);
 }
 
 #[test]
@@ -536,4 +536,199 @@ fn a_live_eval_plays_a_kit_from_the_sample_folder_and_picks_up_a_changed_file() 
     // the clip starts where it lands, so its second step is a quarter bar later
     assert!(out[24_500] < 0.0, "{}", out[24_500]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn compiling_can_happen_away_from_the_session() {
+    use niminal_daemon::Begin;
+    let mut s = ready();
+    let Begin::Job(job) = s.begin_eval("play lead = [c4]", Some("now")) else { panic!("expected something to compile") };
+    // the session is free to run while the code compiles elsewhere
+    run(&mut s, 1000);
+    let done = job.compile();
+    let accepted = s.finish_eval(done).unwrap();
+    assert_eq!(accepted.lands_at, 1000, "it lands now, which is when the session finished it");
+    assert!(rms(&run(&mut s, 12_000)[2000..]) > 0.1);
+    // and what the session logged replays to the same sound
+    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), 13_000, false);
+    assert!(rms(&replayed[0][3000..]) > 0.1);
+}
+
+#[test]
+fn an_evaluation_compiled_before_another_landed_is_compiled_again() {
+    use niminal_daemon::Begin;
+    let mut s = ready();
+    let Begin::Job(first) = s.begin_eval("clip riff { notes: [c4 e4] }", Some("next bar")) else { panic!() };
+    let Begin::Job(second) = s.begin_eval("play lead = riff", Some("next bar")) else { panic!() };
+    // `second` was prepared before `riff` existed; finishing the first moves the project on
+    let first = first.compile();
+    let second = second.compile();
+    s.finish_eval(first).unwrap();
+    s.finish_eval(second).expect("it is compiled again against the project that now has `riff`");
+    assert_eq!(s.pending().len(), 2);
+}
+
+#[test]
+fn a_rejected_evaluation_through_the_two_step_path_changes_nothing() {
+    use niminal_daemon::Begin;
+    let mut s = ready();
+    let Begin::Job(job) = s.begin_eval("play lead = [c4 zz]", Some("now")) else { panic!() };
+    let problems = s.finish_eval(job.compile()).unwrap_err();
+    assert!(problems[0].message.contains("zz"));
+    assert!(s.pending().is_empty());
+}
+
+
+#[test]
+fn a_new_play_replaces_a_pending_play_for_the_same_track() {
+    let mut s = ready();
+    run(&mut s, 1000);
+    let old = s.eval("play lead = [c4] @ next 4 bars", None).unwrap();
+    let new = s.eval("play lead = [a4] @ next beat", None).unwrap();
+    assert!(new.lands_at < old.lands_at);
+    assert_eq!(s.pending().len(), 1);
+    assert_eq!(s.pending()[0].id, new.id.unwrap());
+    let mut reference = ready();
+    run(&mut reference, 1000);
+    reference.eval("play lead = [a4] @ next beat", None).unwrap();
+    assert_eq!(run(&mut s, 5 * BAR), run(&mut reference, 5 * BAR));
+    let landed = s.take_landed();
+    assert!(!landed.iter().any(|l| Some(l.id) == old.id));
+}
+
+#[test]
+fn replacing_one_write_preserves_the_rest_of_an_older_transaction() {
+    let mut s = ready();
+    run(&mut s, 1000);
+    let old = s.eval("play lead = [c4]
+play bass = [c2]", Some("next 4 bars")).unwrap();
+    s.eval("play lead = [a4]", Some("now")).unwrap();
+    assert_eq!(s.pending().len(), 1);
+    assert_eq!(s.pending()[0].id, old.id.unwrap());
+    assert_eq!(s.pending()[0].changes, ["play bass = [c2]"]);
+    let mut reference = ready();
+    run(&mut reference, 1000);
+    reference.eval("play lead = [a4]", Some("now")).unwrap();
+    reference.eval("play bass = [c2]", Some("next 4 bars")).unwrap();
+    assert_eq!(run(&mut s, 5 * BAR), run(&mut reference, 5 * BAR));
+}
+
+#[test]
+fn a_later_definition_snapshot_cannot_revert_a_newer_write() {
+    let mut s = ready();
+    run(&mut s, 1000);
+    s.eval("instr pluck(freq: hz) { osc(sine, freq) * 0.1 }
+clip extra { notes: [c4] }", Some("next 4 bars")).unwrap();
+    s.eval("instr pluck(freq: hz) { osc(sine, freq) * 0.8 }", Some("now")).unwrap();
+    run(&mut s, 5 * BAR);
+    s.eval("pluck(freq: a4) for 1beat", Some("now")).unwrap();
+    assert!(peak(&run(&mut s, 5000)) > 0.7);
+}
+
+#[test]
+fn rejected_replacements_leave_the_pending_transaction_intact() {
+    let mut s = ready();
+    run(&mut s, 1000);
+    let old = s.eval("play lead = [c4]", Some("next bar")).unwrap();
+    assert!(s.eval("play lead = nonexistent", Some("now")).is_err());
+    assert_eq!(s.pending()[0].id, old.id.unwrap());
+    run(&mut s, BAR);
+    assert!(s.take_landed().iter().any(|l| Some(l.id) == old.id));
+}
+
+#[test]
+fn an_effect_parameter_edit_keeps_its_tail_and_uses_the_new_setting() {
+    let mut live = with_tail();
+    run(&mut live, 5000);
+    live.eval("track hall { out = space.reverb(room: 0.95, damp: 0.2) }", Some("now")).unwrap();
+    assert!(peak(&run(&mut live, BAR)) > 1e-4);
+}
+
+#[test]
+fn panic_clears_the_limiter_lookahead_as_well_as_the_mixer() {
+    let mut s = Session::new(SR, Layout::Mono);
+    s.eval(SETUP, Some("now")).unwrap();
+    s.eval("pluck(freq: a4) for 4beats", Some("now")).unwrap();
+    assert!(peak(&run(&mut s, 1000)) > 0.1);
+    let epoch = s.panic_epoch();
+    s.panic();
+    assert_eq!(epoch.load(std::sync::atomic::Ordering::Acquire), 1);
+    assert_eq!(peak(&run(&mut s, 1000)), 0.0);
+}
+
+
+#[test]
+fn a_track_edit_keeps_memory_but_applies_the_new_output_gain() {
+    let mut live = with_tail();
+    let mut reference = with_tail();
+    run(&mut live, 5000);
+    run(&mut reference, 5000);
+    live.eval("track hall { out = space.reverb(room: 0.8, damp: 0.5) * 0.5 }", Some("now")).unwrap();
+    let expected = run(&mut reference, BAR);
+    let actual = run(&mut live, BAR);
+    assert!(peak(&expected) > 1e-4);
+    for (a, b) in actual.iter().zip(expected) { assert_eq!(*a, b * 0.5); }
+}
+
+#[test]
+fn instrument_replacements_do_not_supersede_explicitly_timed_notes() {
+    let mut s = ready();
+    run(&mut s, 1000);
+    s.eval("at bar 3 play lead = [c4]", Some("next bar")).unwrap();
+    s.eval("play lead = [a4]", Some("next beat")).unwrap();
+    assert_eq!(s.pending().len(), 2);
+    run(&mut s, 3 * BAR);
+    assert_eq!(s.take_landed().len(), 3);
+}
+
+#[test]
+fn replacing_a_pending_definition_moves_its_dependent_play_to_the_new_boundary() {
+    let mut s = ready();
+    run(&mut s, 1000);
+    s.eval("riff = [c4]", Some("next beat")).unwrap();
+    s.eval("play lead = riff", Some("next bar")).unwrap();
+    let replacement = s.eval("riff = [a4]", Some("next 4 bars")).unwrap();
+    assert_eq!(s.pending().len(), 2);
+    assert!(s.pending().iter().all(|p| p.lands_at == replacement.lands_at));
+    let mut reference = ready();
+    run(&mut reference, 1000);
+    reference.eval("riff = [a4]
+play lead = riff", Some("next 4 bars")).unwrap();
+    assert_eq!(run(&mut s, 5 * BAR), run(&mut reference, 5 * BAR));
+}
+
+
+#[test]
+fn a_slow_compile_moves_to_the_next_boundary_and_reports_it() {
+    let mut s = ready();
+    run(&mut s, 23_000);
+    let niminal_daemon::Begin::Job(job) = s.begin_eval("play lead = [a4]", Some("next beat")) else { panic!() };
+    let done = job.compile();
+    run(&mut s, 10_000);
+    let accepted = s.finish_eval(done).unwrap();
+    assert_eq!(accepted.lands_at, 48_000);
+    assert!(s.take_notices().iter().any(|n| n.contains("missed its boundary")));
+}
+
+#[test]
+fn superseded_pending_changes_replay_to_the_same_audio() {
+    let mut s = ready();
+    let mut original = run(&mut s, 1000);
+    s.eval("riff = [c4]
+play bass = [c2]", Some("next 4 bars")).unwrap();
+    s.eval("riff = [a4]
+play lead = riff", Some("now")).unwrap();
+    original.extend(run(&mut s, 5 * BAR));
+    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), original.len() as u64, false);
+    assert_eq!(original, replayed[0]);
+}
+
+#[test]
+fn adding_a_bus_keeps_existing_effect_memory() {
+    let mut live = with_tail();
+    let mut reference = with_tail();
+    run(&mut live, 5000);
+    run(&mut reference, 5000);
+    live.eval("bus extra", Some("now")).unwrap();
+    assert_eq!(run(&mut live, BAR), run(&mut reference, BAR));
 }

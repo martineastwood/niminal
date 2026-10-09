@@ -45,7 +45,7 @@ pub struct ProcessCtx {
 ///
 /// A graph holds one template of each opcode; every voice gets its own copy via
 /// [`Opcode::box_clone`], which must return a freshly initialised instance.
-pub trait Opcode: Send + Sync {
+pub trait Opcode: Send + Sync + std::any::Any {
     fn name(&self) -> &str;
 
     /// Input ports, in the order `process` receives them.
@@ -65,6 +65,10 @@ pub trait Opcode: Send + Sync {
     fn is_active(&self) -> bool {
         false
     }
+
+    /// Carry compatible runtime state into a newly compiled instance. Settings
+    /// and wiring belong to the new instance; implementations only copy memory.
+    fn carry_state(&mut self, _old: &mut dyn Opcode) {}
 
     /// Samples of delay the opcode introduces, for latency compensation.
     fn latency(&self) -> usize {
@@ -96,6 +100,10 @@ impl Opcode for Box<dyn Opcode> {
 
     fn is_active(&self) -> bool {
         (**self).is_active()
+    }
+
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        (**self).carry_state(old);
     }
 
     fn latency(&self) -> usize {

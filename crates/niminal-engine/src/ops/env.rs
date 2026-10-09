@@ -192,6 +192,17 @@ impl Opcode for Env {
         self.reset(sample_rate);
     }
 
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
+            && self.start == old.start && self.segments == old.segments
+            && self.sustain_at == old.sustain_at && self.lengths == old.lengths
+        {
+            self.level = old.level;
+            self.phase = old.phase;
+            self.released = old.released;
+        }
+    }
+
     fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
         if !ctx.gate && !self.released {
             self.release();
