@@ -14,6 +14,9 @@ pub enum Value {
     Db(f64),
     Seconds(f64),
     Beats(f64),
+    Bars(f64),
+    /// Semitones: a pitch interval, applied to a frequency or note.
+    Semitones(f64),
     /// An angle in degrees; 0 is straight ahead and positive is to the right.
     Degrees(f64),
     /// A pitch as a MIDI note number; c4 is 60 and a4 is 440hz.
@@ -98,6 +101,8 @@ impl FromStr for Value {
             "sec" => Value::Seconds(n),
             "ms" => Value::Seconds(n / 1000.0),
             "beat" | "beats" => Value::Beats(n),
+            "bar" | "bars" => Value::Bars(n),
+            "st" => Value::Semitones(n),
             "deg" => Value::Degrees(n),
             _ => return Err(ParseError(format!("unknown unit `{unit}` in `{s}`"))),
         })
@@ -113,6 +118,9 @@ impl fmt::Display for Value {
             Value::Seconds(n) => write!(f, "{n}sec"),
             Value::Beats(1.0) => write!(f, "1beat"),
             Value::Beats(n) => write!(f, "{n}beats"),
+            Value::Bars(1.0) => write!(f, "1bar"),
+            Value::Bars(n) => write!(f, "{n}bars"),
+            Value::Semitones(n) => write!(f, "{n}st"),
             Value::Degrees(n) => write!(f, "{n}deg"),
             Value::Note(m) => write!(f, "{}{}", NOTE_NAMES[m.rem_euclid(12) as usize], m.div_euclid(12) - 1),
         }
@@ -149,6 +157,14 @@ impl Value {
         }
     }
 
+    /// A pitch interval in semitones.
+    pub fn as_semitones(self) -> Result<f64, UnitError> {
+        match self {
+            Value::Semitones(s) => Ok(s),
+            v => v.mismatch("an interval (st)"),
+        }
+    }
+
     pub fn as_number(self) -> Result<f64, UnitError> {
         match self {
             Value::Num(n) => Ok(n),
@@ -160,7 +176,8 @@ impl Value {
         match self {
             Value::Seconds(s) => Ok(Time::Seconds(s)),
             Value::Beats(b) => Ok(Time::Beats(b)),
-            v => v.mismatch("a time (sec, ms or beats)"),
+            Value::Bars(b) => Ok(Time::Bars(b)),
+            v => v.mismatch("a time (sec, ms, beats or bars)"),
         }
     }
 }
@@ -207,12 +224,21 @@ impl<'de> Deserialize<'de> for Value {
 pub enum Time {
     Seconds(f64),
     Beats(f64),
+    Bars(f64),
 }
 
-/// A constant tempo.
+/// A constant tempo and meter.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tempo {
     pub bpm: f64,
+    pub beats_per_bar: f64,
+}
+
+impl Tempo {
+    /// `bpm` in 4/4.
+    pub fn new(bpm: f64) -> Self {
+        Tempo { bpm, beats_per_bar: 4.0 }
+    }
 }
 
 impl Time {
@@ -220,6 +246,16 @@ impl Time {
         match self {
             Time::Seconds(s) => s,
             Time::Beats(b) => b * 60.0 / tempo.bpm,
+            Time::Bars(b) => b * tempo.beats_per_bar * 60.0 / tempo.bpm,
+        }
+    }
+
+    /// The length in beats, or `None` for an absolute time in seconds.
+    pub fn to_beats(self, tempo: Tempo) -> Option<f64> {
+        match self {
+            Time::Seconds(_) => None,
+            Time::Beats(b) => Some(b),
+            Time::Bars(b) => Some(b * tempo.beats_per_bar),
         }
     }
 }
@@ -229,6 +265,7 @@ impl From<Time> for Value {
         match t {
             Time::Seconds(s) => Value::Seconds(s),
             Time::Beats(b) => Value::Beats(b),
+            Time::Bars(b) => Value::Bars(b),
         }
     }
 }
@@ -279,6 +316,10 @@ mod tests {
         assert_eq!(v("1/8beat"), Value::Beats(0.125));
         assert_eq!(v("4beats"), Value::Beats(4.0));
         assert_eq!(v("-45deg"), Value::Degrees(-45.0));
+        assert_eq!(v("16bars"), Value::Bars(16.0));
+        assert_eq!(v("1bar"), Value::Bars(1.0));
+        assert_eq!(v("+7st"), Value::Semitones(7.0));
+        assert_eq!(v("-12st"), Value::Semitones(-12.0));
         assert_eq!(v("0.5"), Value::Num(0.5));
         assert_eq!(v("-3"), Value::Num(-3.0));
     }
@@ -303,7 +344,7 @@ mod tests {
 
     #[test]
     fn display_round_trips() {
-        for s in ["440hz", "-6db", "0.25sec", "1beat", "2.5beats", "0.5", "c4", "a#2", "e-1", "-45deg"] {
+        for s in ["440hz", "-6db", "0.25sec", "1beat", "2.5beats", "0.5", "c4", "a#2", "e-1", "-45deg", "16bars", "1bar", "7st"] {
             assert_eq!(v(s).to_string(), s);
         }
     }
@@ -323,9 +364,14 @@ mod tests {
 
     #[test]
     fn beats_follow_tempo() {
-        let t = Tempo { bpm: 120.0 };
+        let t = Tempo::new(120.0);
         assert_eq!(Time::Beats(1.0).to_seconds(t), 0.5);
         assert_eq!(Time::Seconds(1.0).to_seconds(t), 1.0);
+        assert_eq!(Time::Bars(2.0).to_seconds(t), 4.0, "two bars of 4/4 at 120bpm");
+        let waltz = Tempo { beats_per_bar: 3.0, ..t };
+        assert_eq!(Time::Bars(2.0).to_seconds(waltz), 3.0);
+        assert_eq!(Time::Bars(2.0).to_beats(waltz), Some(6.0));
+        assert_eq!(Time::Seconds(1.0).to_beats(t), None);
         assert!("440hz".parse::<Time>().is_err());
     }
 

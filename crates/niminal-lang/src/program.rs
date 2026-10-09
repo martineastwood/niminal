@@ -173,6 +173,7 @@ impl Instrument {
             Unit::Db => value.as_gain().map_err(unit_err)?,
             Unit::Time => value.as_time().map_err(unit_err)?.to_seconds(tempo),
             Unit::Angle => value.as_angle().map_err(unit_err)?,
+            Unit::Semitones => value.as_semitones().map_err(unit_err)?,
             Unit::Num => {
                 let n = value.as_number().map_err(unit_err)?;
                 if let Some((lo, hi)) = param.range

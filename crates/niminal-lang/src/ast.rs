@@ -160,5 +160,5 @@ pub struct NoteStmt {
 
 /// Units that measure time.
 pub fn is_time_unit(unit: &str) -> bool {
-    matches!(unit, "sec" | "ms" | "beat" | "beats")
+    matches!(unit, "sec" | "ms" | "beat" | "beats" | "bar" | "bars")
 }

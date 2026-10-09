@@ -7,6 +7,8 @@ pub enum Unit {
     Time,
     /// Degrees; 0 is straight ahead and positive is to the right.
     Angle,
+    /// A pitch interval; applied to a frequency it scales it by a power of two.
+    Semitones,
 }
 
 impl Unit {
@@ -17,6 +19,7 @@ impl Unit {
             Unit::Db => "db",
             Unit::Time => "a time",
             Unit::Angle => "an angle",
+            Unit::Semitones => "an interval",
         }
     }
 
@@ -28,6 +31,7 @@ impl Unit {
             Unit::Db => Some("db"),
             Unit::Time => Some("sec"),
             Unit::Angle => Some("deg"),
+            Unit::Semitones => Some("st"),
         }
     }
 }
