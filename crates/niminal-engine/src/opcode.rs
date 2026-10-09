@@ -61,3 +61,34 @@ pub trait Opcode: Send + Sync {
         0
     }
 }
+
+/// Lets a boxed opcode be added to a graph like any other.
+impl Opcode for Box<dyn Opcode> {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        (**self).ports()
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        (**self).box_clone()
+    }
+
+    fn prepare(&mut self, sample_rate: f32) {
+        (**self).prepare(sample_rate);
+    }
+
+    fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        (**self).process(ctx, inputs, out);
+    }
+
+    fn is_active(&self) -> bool {
+        (**self).is_active()
+    }
+
+    fn latency(&self) -> usize {
+        (**self).latency()
+    }
+}
