@@ -1,0 +1,16 @@
+{
+  "scopeName": "source.niminal",
+  "name": "niminal",
+  "patterns": [
+    { "name": "comment.line.double-slash.niminal", "match": "//.*$" },
+    { "name": "keyword.control.niminal", "match": "\\b(instr|opcode|bus|track|config|clip|scene|meter|tempo|state|let|use|notes|play|stop|mute|unmute|solo|unsolo|hush|panic|launch|at|next|now)\\b" },
+    { "name": "constant.numeric.unit.niminal", "match": "[+-]?\\b\\d+(\\.\\d+)?(hz|khz|db|bpm|sec|ms|beats?|bars?|deg|st|s|%)(?![A-Za-z0-9_])" },
+    { "name": "constant.numeric.niminal", "match": "[+-]?\\b\\d+(\\.\\d+)?\\b" },
+    { "name": "constant.language.note.niminal", "match": "\\b[a-g](#|b)?-?\\d\\b" },
+    { "name": "constant.language.wave.niminal", "match": "\\b(sine|saw|square|tri|triangle|noise|stereo|mono|quad)\\b" },
+    { "name": "keyword.operator.niminal", "match": "\\+=|\\.\\.|=|[-+*/<>]|~" },
+    { "name": "support.function.niminal", "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\()" },
+    { "name": "entity.name.function.method.niminal", "match": "(?<=\\.)[A-Za-z_][A-Za-z0-9_]*" },
+    { "name": "variable.parameter.niminal", "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=:)" }
+  ]
+}
