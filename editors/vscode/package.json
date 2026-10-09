@@ -5,44 +5,270 @@
   "version": "0.0.1",
   "publisher": "niminal",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Programming Languages"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
   "main": "./extension.js",
-  "scripts": { "test": "node --test" },
-  "dependencies": { "ws": "8.18.0" },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "8.18.0"
+  },
   "contributes": {
     "languages": [
       {
         "id": "niminal",
-        "aliases": ["niminal"],
-        "extensions": [".nml"],
+        "aliases": [
+          "niminal"
+        ],
+        "extensions": [
+          ".nml"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
-      { "language": "niminal", "scopeName": "source.niminal", "path": "./syntaxes/niminal.tmLanguage.json" }
+      {
+        "language": "niminal",
+        "scopeName": "source.niminal",
+        "path": "./syntaxes/niminal.tmLanguage.json"
+      }
     ],
     "commands": [
-      { "command": "niminal.evalBlock", "title": "Evaluate Selection or Block", "category": "niminal" },
-      { "command": "niminal.evalFile", "title": "Evaluate File", "category": "niminal" },
-      { "command": "niminal.hush", "title": "Hush", "category": "niminal" },
-      { "command": "niminal.panic", "title": "Panic", "category": "niminal" },
-      { "command": "niminal.connect", "title": "Connect to Daemon", "category": "niminal" },
-      { "command": "niminal.startDaemon", "title": "Start Daemon in a Terminal", "category": "niminal" }
+      {
+        "command": "niminal.evalBlock",
+        "title": "Evaluate Selection or Block",
+        "category": "niminal"
+      },
+      {
+        "command": "niminal.evalFile",
+        "title": "Evaluate File",
+        "category": "niminal"
+      },
+      {
+        "command": "niminal.hush",
+        "title": "Hush",
+        "category": "niminal"
+      },
+      {
+        "command": "niminal.panic",
+        "title": "Panic",
+        "category": "niminal"
+      },
+      {
+        "command": "niminal.connect",
+        "title": "Connect to Daemon",
+        "category": "niminal"
+      },
+      {
+        "command": "niminal.startDaemon",
+        "title": "Start Daemon in a Terminal",
+        "category": "niminal"
+      },
+      {
+        "command": "niminal.launchScene",
+        "title": "Launch Scene",
+        "category": "niminal",
+        "icon": "$(play)"
+      },
+      {
+        "command": "niminal.launchNth",
+        "title": "Launch Scene by Number",
+        "category": "niminal"
+      },
+      {
+        "command": "niminal.toggleMute",
+        "title": "Mute or Unmute Track",
+        "category": "niminal",
+        "icon": "$(mute)"
+      },
+      {
+        "command": "niminal.toggleSolo",
+        "title": "Solo or Unsolo Track",
+        "category": "niminal",
+        "icon": "$(star)"
+      },
+      {
+        "command": "niminal.stopTrack",
+        "title": "Stop Track",
+        "category": "niminal",
+        "icon": "$(debug-stop)"
+      }
     ],
     "keybindings": [
-      { "command": "niminal.evalBlock", "key": "ctrl+enter", "mac": "cmd+enter", "when": "editorTextFocus && editorLangId == niminal" },
-      { "command": "niminal.evalFile", "key": "ctrl+shift+enter", "mac": "cmd+shift+enter", "when": "editorTextFocus && editorLangId == niminal" },
-      { "command": "niminal.hush", "key": "ctrl+.", "mac": "cmd+.", "when": "editorLangId == niminal" }
+      {
+        "command": "niminal.evalBlock",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.evalFile",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.hush",
+        "key": "ctrl+.",
+        "mac": "cmd+.",
+        "when": "editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 1,
+        "key": "ctrl+1",
+        "mac": "cmd+1",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 2,
+        "key": "ctrl+2",
+        "mac": "cmd+2",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 3,
+        "key": "ctrl+3",
+        "mac": "cmd+3",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 4,
+        "key": "ctrl+4",
+        "mac": "cmd+4",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 5,
+        "key": "ctrl+5",
+        "mac": "cmd+5",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 6,
+        "key": "ctrl+6",
+        "mac": "cmd+6",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 7,
+        "key": "ctrl+7",
+        "mac": "cmd+7",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 8,
+        "key": "ctrl+8",
+        "mac": "cmd+8",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.launchNth",
+        "args": 9,
+        "key": "ctrl+9",
+        "mac": "cmd+9",
+        "when": "editorTextFocus && editorLangId == niminal"
+      }
     ],
     "configuration": {
       "title": "niminal",
       "properties": {
-        "niminal.port": { "type": "number", "default": 7400, "description": "The port the daemon listens on." },
-        "niminal.token": { "type": "string", "default": "", "description": "The daemon's token, if it was started with --token." },
-        "niminal.quantize": { "type": "string", "default": "", "description": "When evaluated code lands, as in `now` or `next 4 bars`. Empty uses the daemon's default." },
-        "niminal.path": { "type": "string", "default": "niminal", "description": "The niminal executable, used to start a daemon." }
+        "niminal.port": {
+          "type": "number",
+          "default": 7400,
+          "description": "The port the daemon listens on."
+        },
+        "niminal.token": {
+          "type": "string",
+          "default": "",
+          "description": "The daemon's token, if it was started with --token."
+        },
+        "niminal.quantize": {
+          "type": "string",
+          "default": "",
+          "description": "When evaluated code lands, as in `now` or `next 4 bars`. Empty uses the daemon's default."
+        },
+        "niminal.path": {
+          "type": "string",
+          "default": "niminal",
+          "description": "The niminal executable, used to start a daemon."
+        }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "niminal",
+          "title": "niminal",
+          "icon": "media/niminal.svg"
+        }
+      ]
+    },
+    "views": {
+      "niminal": [
+        {
+          "id": "niminal.scenes",
+          "name": "Scenes"
+        },
+        {
+          "id": "niminal.tracks",
+          "name": "Tracks"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "niminal.launchScene",
+          "when": "view == niminal.scenes",
+          "group": "inline"
+        },
+        {
+          "command": "niminal.toggleMute",
+          "when": "view == niminal.tracks",
+          "group": "inline@1"
+        },
+        {
+          "command": "niminal.toggleSolo",
+          "when": "view == niminal.tracks",
+          "group": "inline@2"
+        },
+        {
+          "command": "niminal.stopTrack",
+          "when": "view == niminal.tracks",
+          "group": "inline@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "niminal.launchScene",
+          "when": "false"
+        },
+        {
+          "command": "niminal.toggleMute",
+          "when": "false"
+        },
+        {
+          "command": "niminal.toggleSolo",
+          "when": "false"
+        },
+        {
+          "command": "niminal.stopTrack",
+          "when": "false"
+        }
+      ]
     }
   }
 }
