@@ -695,8 +695,12 @@ impl Session {
         defaults: QuantizeDefaults,
         log: &[LogEntry],
         frames: u64,
+        limiter: bool,
     ) -> Vec<Vec<f32>> {
         let mut session = Session::new(sample_rate, layout).with_defaults(defaults);
+        if !limiter {
+            session = session.without_limiter();
+        }
         let mut out = vec![Vec::new(); layout.channels()];
         let mut extend = |session: &mut Session, upto: u64| {
             let gap = upto.saturating_sub(session.clock) as usize;

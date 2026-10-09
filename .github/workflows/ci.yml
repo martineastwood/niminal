@@ -11,6 +11,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # the audio library needs the ALSA headers on Linux
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 

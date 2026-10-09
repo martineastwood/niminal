@@ -204,6 +204,18 @@ fn the_transport_and_meters_are_pushed_regularly() {
 }
 
 #[test]
+fn the_meters_are_left_alone_unless_someone_is_listening() {
+    let (mut d, c) = ready();
+    call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
+    call(&mut d, c, 3, "eval", json!({"source": "lead(freq: a4) for 1beat", "quantize": "now"}));
+    d.session_mut().process(10_000);
+    d.notifications(); // someone polling must not eat the readings
+    d.session_mut().process(10_000);
+    d.notifications();
+    assert!(d.session_mut().take_peaks()[0] > 0.5);
+}
+
+#[test]
 fn notices_tell_subscribers_what_went_wrong_while_playing() {
     let (mut d, c) = ready();
     call(&mut d, c, 2, "subscribe", json!({"topics": ["notices"]}));
