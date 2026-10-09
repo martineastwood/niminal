@@ -1,0 +1,9 @@
+[package]
+name = "niminal-score"
+version.workspace = true
+edition.workspace = true
+description = "niminal score model: values with units, events, sections, and the .nms file format"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
