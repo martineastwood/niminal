@@ -7,5 +7,5 @@ mod pattern;
 mod rational;
 
 pub use mini::{Hit, MiniError, grid, parse, parse_with};
-pub use pattern::{Hap, Pattern, Span, euclid_steps};
+pub use pattern::{Hap, MAX_REPEATS, Pattern, Span, euclid_steps, with_budget};
 pub use rational::Rational;

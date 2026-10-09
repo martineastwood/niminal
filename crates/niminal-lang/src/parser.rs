@@ -8,7 +8,20 @@ pub fn parse(src: &str) -> Result<Vec<Item>, Diagnostic> {
 
 /// Like [`parse`], with the stretch of source each top-level item covers.
 pub fn parse_spanned(src: &str) -> Result<Vec<(Item, Span)>, Diagnostic> {
-    let mut p = Parser { tokens: lex(src)?, pos: 0 };
+    if src.len() > MAX_SOURCE {
+        return Err(Diagnostic::new(
+            format!("this is {} KB of code; niminal takes at most {} KB at a time", src.len() / 1024, MAX_SOURCE / 1024),
+            Span::new(0, 0),
+        ));
+    }
+    let tokens = lex(src)?;
+    if tokens.len() > MAX_TOKENS {
+        return Err(Diagnostic::new(
+            format!("this has {} tokens; niminal takes at most {MAX_TOKENS} at a time", tokens.len()),
+            tokens[MAX_TOKENS].span,
+        ));
+    }
+    let mut p = Parser { tokens, pos: 0, depth: 0 };
     let mut items = Vec::new();
     loop {
         p.skip_newlines();
@@ -26,9 +39,17 @@ pub fn parse_spanned(src: &str) -> Result<Vec<(Item, Span)>, Diagnostic> {
 
 type Res<T> = Result<T, Diagnostic>;
 
+/// The most source and tokens one evaluation may hold, and how deeply
+/// expressions may nest. Past these the parser and everything after it would
+/// recurse far enough to overflow the stack.
+const MAX_SOURCE: usize = 1 << 20;
+const MAX_TOKENS: usize = 50_000;
+const MAX_DEPTH: usize = 64;
+
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
 
 fn describe(tok: &Tok) -> String {
@@ -537,7 +558,22 @@ impl Parser {
 
     // ---- expressions -------------------------------------------------
 
+    /// Run `f` one level deeper, refusing to go too deep.
+    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Res<T>) -> Res<T> {
+        if self.depth >= MAX_DEPTH {
+            return Err(Diagnostic::new(format!("this is nested more than {MAX_DEPTH} levels deep"), self.span()));
+        }
+        self.depth += 1;
+        let result = f(self);
+        self.depth -= 1;
+        result
+    }
+
     fn expr(&mut self) -> Res<Expr> {
+        self.nested(Self::sum)
+    }
+
+    fn sum(&mut self) -> Res<Expr> {
         let mut lhs = self.term()?;
         loop {
             let op = match self.peek() {
@@ -569,11 +605,11 @@ impl Parser {
         // a leading `+`, as in `+5st`, changes nothing
         if self.peek() == &Tok::Plus {
             self.bump();
-            return self.unary();
+            return self.nested(Self::unary);
         }
         if self.peek() == &Tok::Minus {
             let start = self.bump().span;
-            let inner = self.unary()?;
+            let inner = self.nested(Self::unary)?;
             let span = start.to(inner.span);
             return Ok(Expr { kind: ExprKind::Neg(Box::new(inner)), span });
         }

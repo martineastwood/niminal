@@ -10,9 +10,9 @@
 //! deterministic: the same inputs at the same samples give the same audio,
 //! however the audio is divided into blocks.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use niminal_engine::{BLOCK, MAX_CHANNELS, Master, Mixer, Transfer, VoiceId};
+use niminal_engine::{DEFAULT_MAX_VOICES, BLOCK, MAX_CHANNELS, Master, Mixer, Transfer, VoiceId};
 use niminal_lang::{
     Action, Clip, CompileOptions, Layout, Samples, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
     analyze, compile_with,
@@ -155,7 +155,9 @@ pub struct Session {
     schedule: Schedule,
     /// Notes up to this sample have been taken from the schedule.
     fetched_until: u64,
-    upcoming: Vec<Upcoming>,
+    upcoming: VecDeque<Upcoming>,
+    /// Tracks whose clips are not searched for notes because they asked for too many.
+    overloaded: Vec<usize>,
     held: Vec<(u64, VoiceId)>,
     next_panic: usize,
 
@@ -166,10 +168,15 @@ pub struct Session {
     playing: BTreeMap<String, String>,
     landed: Vec<Landed>,
     notices: Vec<String>,
+    recent_notices: Vec<(String, u64)>,
     log: Vec<LogEntry>,
     silenced: usize,
     peaks: Vec<f32>,
 }
+
+/// The most notices that wait to be collected, and how long before the same one is said again.
+const MAX_NOTICES: usize = 100;
+const NOTICE_REPEAT_SECONDS: u64 = 10;
 
 fn options(layout: Layout, samples: &Samples) -> CompileOptions {
     CompileOptions { default_layout: layout, samples: samples.clone() }
@@ -195,7 +202,8 @@ impl Session {
             history: Vec::new(),
             schedule,
             fetched_until: 0,
-            upcoming: Vec::new(),
+            upcoming: VecDeque::new(),
+            overloaded: Vec::new(),
             held: Vec::new(),
             next_panic: 0,
             pending: Vec::new(),
@@ -203,6 +211,7 @@ impl Session {
             playing: BTreeMap::new(),
             landed: Vec::new(),
             notices: Vec::new(),
+            recent_notices: Vec::new(),
             log: Vec::new(),
             silenced: 0,
             peaks: vec![0.0; layout.channels()],
@@ -429,7 +438,7 @@ impl Session {
                 }
                 Err(_) => {
                     dropped += 1;
-                    self.notices.push(format!(
+                    self.notify(format!(
                         "change {} was dropped: it depended on a change that was cancelled",
                         p.id
                     ));
@@ -531,6 +540,17 @@ impl Session {
     /// Changes that have landed since this was last called.
     pub fn take_landed(&mut self) -> Vec<Landed> {
         std::mem::take(&mut self.landed)
+    }
+
+    /// Queue a notice, unless the same one is already waiting: a problem that
+    /// recurs every fraction of a second must not bury everything else.
+    fn notify(&mut self, notice: String) {
+        let quiet_until = u64::from(self.sample_rate as u32) * NOTICE_REPEAT_SECONDS;
+        self.recent_notices.retain(|(_, at)| self.clock.saturating_sub(*at) < quiet_until);
+        if self.notices.len() < MAX_NOTICES && !self.recent_notices.iter().any(|(n, _)| *n == notice) {
+            self.recent_notices.push((notice.clone(), self.clock));
+            self.notices.push(notice);
+        }
     }
 
     /// Things worth telling the user that aren't errors in what they sent: a
@@ -663,6 +683,7 @@ impl Session {
             })
             .collect();
         self.schedule = Schedule::from_commands(self.program.tempo, names, &commands);
+        self.overloaded.clear();
         // Notes already taken from the old schedule may no longer be right.
         self.upcoming.retain(|u| !u.scheduled);
         self.fetched_until = self.clock;
@@ -795,29 +816,37 @@ impl Session {
             return;
         }
         let (from, to) = (self.seconds(self.fetched_until), self.seconds(horizon));
-        match self.schedule.events(from, to) {
-            Ok(events) => {
-                for event in events {
-                    let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
-                    let dur = self.samples(event.dur.to_seconds(self.program.tempo));
-                    self.insert_upcoming(Upcoming { start, dur, event, scheduled: true });
-                }
+        let found = self.schedule.events_lenient(from, to, &self.overloaded);
+        for track in found.overloaded {
+            if !self.overloaded.contains(&track) {
+                self.overloaded.push(track);
             }
-            Err(e) => self.notices.push(e.to_string()),
+        }
+        let (events, problem) = (found.events, found.problem);
+        for event in events {
+            let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
+            let dur = self.samples(event.dur.to_seconds(self.program.tempo));
+            self.insert_upcoming(Upcoming { start, dur, event, scheduled: true });
+        }
+        if let Some(e) = problem {
+            self.notify(e.to_string());
         }
         self.fetched_until = horizon;
     }
 
     fn start_due(&mut self) {
-        while self.upcoming.first().is_some_and(|u| u.start <= self.clock) {
-            let note = self.upcoming.remove(0);
+        while self.upcoming.front().is_some_and(|u| u.start <= self.clock) {
+            let Some(note) = self.upcoming.pop_front() else { break };
             match self.program.plan(&note.event) {
                 Ok(plan) => {
                     let graph = self.program.instruments[plan.instrument].graph.clone();
                     let id = self.mixer.note_on(plan.track, graph, &plan.params, plan.choke);
                     self.held.push((self.clock + note.dur, id));
+                    if self.mixer.take_stolen() > 0 {
+                        self.notify(format!("too many notes at once: the oldest are ended early to keep to {} voices", DEFAULT_MAX_VOICES));
+                    }
                 }
-                Err(e) => self.notices.push(format!("note for `{}` could not play: {e}", note.event.target)),
+                Err(e) => self.notify(format!("note for `{}` could not play: {e}", note.event.target)),
             }
         }
     }
