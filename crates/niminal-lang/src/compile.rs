@@ -9,9 +9,10 @@ use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::kernel::compile_opcode;
 use crate::layout::Layout;
-use crate::lower::{Names, compile_chain, compile_instr, layout_from_expr, unknown_unit};
+use crate::lower::{Names, compile_chain, compile_instr, compile_sampler, layout_from_expr, unknown_unit};
 use crate::opcodes::Registry;
 use crate::perform::{Context, compile_performance};
+use crate::sample::Samples;
 use crate::parser;
 use crate::program::{Instrument, Program, TrackInfo, resolve_target};
 
@@ -20,15 +21,17 @@ type Res<T> = Result<T, Diagnostic>;
 const DEFAULT_BPM: f64 = 120.0;
 
 /// Settings for compiling a project.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone)]
 pub struct CompileOptions {
     /// The output layout when the source has no `config { channels: ... }`.
     pub default_layout: Layout,
+    /// Where the files named by `sample` and `kit` are found.
+    pub samples: Samples,
 }
 
 impl Default for CompileOptions {
     fn default() -> Self {
-        CompileOptions { default_layout: Layout::Mono }
+        CompileOptions { default_layout: Layout::Mono, samples: Samples::default() }
     }
 }
 
@@ -57,6 +60,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Item::Opcode(d) => (&d.name, "opcode"),
             Item::Bus(d) => (&d.name, "bus"),
             Item::Track(d) => (&d.name, "track"),
+            Item::Sample(d) => (&d.name, if d.is_kit { "kit" } else { "sample" }),
             Item::Tempo(_)
             | Item::Meter(_)
             | Item::Bind { .. }
@@ -130,6 +134,23 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
     }
 
+    let mut sample_names: Vec<String> = Vec::new();
+    for item in &items {
+        let Item::Sample(decl) = item else { continue };
+        let name = decl.name.name.as_str();
+        if instruments.iter().any(|i| i.name == name) || failed.contains(&name) {
+            errors.push(Diagnostic::new(format!("`{name}` is defined twice"), decl.name.span));
+            continue;
+        }
+        match compile_sample(decl, &options.samples, tempo, &registry, &names, &mut sample_names) {
+            Ok(i) => instruments.push(i),
+            Err(d) => {
+                errors.push(d);
+                failed.push(name);
+            }
+        }
+    }
+
     // Track 0 plays bare instruments, so it may send to any bus an instrument does.
     let implicit = TrackInfo {
         name: String::new(),
@@ -178,7 +199,14 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         );
     }
 
-    let cx = Context { tempo, names: &names, instruments: &instruments, tracks: &tracks, failed: &failed };
+    let cx = Context {
+        tempo,
+        names: &names,
+        instruments: &instruments,
+        tracks: &tracks,
+        failed: &failed,
+        sample_names: &sample_names,
+    };
     let performance = match compile_performance(&items, &cx) {
         Ok(compiled) => compiled.actions,
         Err(mut found) => {
@@ -207,6 +235,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             buses: names.buses,
             bus_layouts: names.bus_layouts,
             tracks,
+            sample_names,
             notes,
             performance,
         })
@@ -273,6 +302,62 @@ fn compile_track(
         def: TrackDef { chain: chain.graph, inputs: chain.inputs, route: chain.route, voice_sends },
     }))
 }
+
+/// A `sample` or `kit` declaration as an instrument. The names of a kit's
+/// samples are added to `sample_names`.
+fn compile_sample(
+    decl: &SampleDecl,
+    samples: &Samples,
+    tempo: Tempo,
+    registry: &Registry,
+    names: &Names,
+    sample_names: &mut Vec<String>,
+) -> Res<Instrument> {
+    let mut root = DEFAULT_ROOT_HZ;
+    for arg in &decl.options {
+        let Some(key) = &arg.name else {
+            return Err(Diagnostic::new("options are written `name: value`", arg.value.span));
+        };
+        match key.name.as_str() {
+            "root" => {
+                root = literal_value(&arg.value)?
+                    .as_hz()
+                    .map_err(|e| Diagnostic::new(format!("`root` should be a note or a frequency: {e}"), arg.value.span))?
+                    as f32;
+            }
+            other => {
+                let mut d = Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
+                if let Some(c) = closest(other, ["root"]) {
+                    d = d.with_help(format!("did you mean `{c}`?"));
+                }
+                return Err(d.with_help("the only option so far is `root`, the note at which the sample plays as recorded"));
+            }
+        }
+    }
+    let file_error = |e: String| Diagnostic::new(e, decl.path_span);
+    let members = if decl.is_kit {
+        let kit = samples.load_kit(&decl.path).map_err(file_error)?;
+        for (name, _) in &kit {
+            if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') || name.starts_with(|c: char| c.is_ascii_digit()) {
+                return Err(Diagnostic::new(
+                    format!("the file `{name}.wav` can't be named in a pattern"),
+                    decl.path_span,
+                )
+                .with_help("name sample files with letters, digits and underscores, starting with a letter"));
+            }
+            if !sample_names.contains(name) {
+                sample_names.push(name.clone());
+            }
+        }
+        kit
+    } else {
+        vec![(decl.name.name.clone(), samples.load(&decl.path).map_err(file_error)?)]
+    };
+    compile_sampler(&decl.name, &members, decl.is_kit, root, tempo, registry, names)
+}
+
+/// The pitch (c4) at which a sample plays as recorded unless it says otherwise.
+const DEFAULT_ROOT_HZ: f32 = 261.625_56;
 
 // ---- program-level statements -------------------------------------------
 
@@ -450,7 +535,7 @@ fn literal_value(e: &Expr) -> Res<Value> {
             Value::Bars(n) => Ok(Value::Bars(-n)),
             Value::Semitones(n) => Ok(Value::Semitones(-n)),
             Value::Degrees(n) => Ok(Value::Degrees(-n)),
-            Value::Note(_) => Err(bad()),
+            Value::Note(_) | Value::Sample(_) => Err(bad()),
         },
         _ => Err(bad()),
     }
@@ -1354,7 +1439,7 @@ at bar 3 unsolo bass"));
         // bad atoms are pointed at, even inside brackets and alternations
         let src = stage("play lead = [c4 [e4 kick] g4]");
         let d = first_error(&src);
-        assert!(d.message.contains("`kick` isn't a note or a value"), "{}", d.message);
+        assert!(d.message.contains("`kick` isn't a note, a value, or a sample in a kit"), "{}", d.message);
         assert_eq!(&src[d.span.start..d.span.start + 4], "kick");
         let d = first_error(&stage("play lead = [c4 e4"));
         assert_eq!(d.message, "this `[` is never closed");

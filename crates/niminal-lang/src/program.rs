@@ -16,6 +16,8 @@ pub struct Instrument {
     pub graph: Arc<Graph>,
     /// In graph parameter order.
     pub params: Vec<Param>,
+    /// For a kit, the names of its samples, in the order its `sample` parameter counts them.
+    pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +75,8 @@ pub struct Program {
     pub bus_layouts: Vec<Layout>,
     /// Track 0 is the implicit one that plays instruments named directly.
     pub tracks: Vec<TrackInfo>,
+    /// Every sample name used by a kit, which is what a `Value::Sample` counts.
+    pub sample_names: Vec<String>,
     /// Notes written directly in the source.
     pub notes: Vec<Event>,
     /// Commands that play clips and scenes, in source order.
@@ -128,6 +132,21 @@ impl Program {
         self.tracks.iter().skip(1).position(|t| t.name == name).map(|i| i + 1)
     }
 
+    /// Where the kit sample `id` sits in `instrument`.
+    fn kit_index(&self, instrument: &Instrument, id: u32, target: &str) -> Result<usize, ArgError> {
+        let name = self.sample_names.get(id as usize).map_or("?", String::as_str);
+        if instrument.members.is_empty() {
+            return Err(ArgError {
+                message: format!("`{name}` is a kit sample, but `{target}` plays `{}`, which isn't a kit", instrument.name),
+                help: None,
+            });
+        }
+        instrument.members.iter().position(|m| m == name).ok_or_else(|| ArgError {
+            message: format!("`{name}` isn't in the kit `{}`", instrument.name),
+            help: closest(name, instrument.members.iter().map(String::as_str)).map(|c| format!("did you mean `{c}`?")),
+        })
+    }
+
     pub fn instrument(&self, name: &str) -> Option<&Instrument> {
         self.instruments.iter().find(|i| i.name == name)
     }
@@ -138,6 +157,11 @@ impl Program {
             resolve_target(&self.instruments, &self.tracks, &event.target)?;
         let mut args = defaults.cloned().unwrap_or_default();
         args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
+        for value in args.values_mut() {
+            if let Value::Sample(id) = *value {
+                *value = Value::Num(self.kit_index(&self.instruments[instrument], id, &event.target)? as f64);
+            }
+        }
         let params = self.instruments[instrument].bind_args(&args, self.tempo)?;
         Ok(NotePlan { track, instrument, params })
     }

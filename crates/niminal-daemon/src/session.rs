@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use niminal_engine::{BLOCK, MAX_CHANNELS, Master, Mixer, Transfer, VoiceId};
 use niminal_lang::{
-    Action, Clip, CompileOptions, Layout, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
+    Action, Clip, CompileOptions, Layout, Samples, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
     analyze, compile_with,
 };
 use niminal_score::{Event, Time};
@@ -130,6 +130,8 @@ pub struct Transport {
 pub struct Session {
     sample_rate: f32,
     layout: Layout,
+    /// Where the project's sample files are found, and the ones already read.
+    samples: Samples,
     defaults: QuantizeDefaults,
     clock: u64,
 
@@ -158,19 +160,20 @@ pub struct Session {
     peaks: Vec<f32>,
 }
 
-fn options(layout: Layout) -> CompileOptions {
-    CompileOptions { default_layout: layout }
+fn options(layout: Layout, samples: &Samples) -> CompileOptions {
+    CompileOptions { default_layout: layout, samples: samples.clone() }
 }
 
 impl Session {
     /// A session that outputs `layout` at `sample_rate`, with the limiter on.
     pub fn new(sample_rate: f32, layout: Layout) -> Session {
-        let program = compile_with("", &options(layout)).expect("an empty project compiles");
+        let program = compile_with("", &options(layout, &Samples::default())).expect("an empty project compiles");
         let mixer = program.mixer(sample_rate);
         let schedule = program.schedule();
         Session {
             sample_rate,
             layout,
+            samples: Samples::default(),
             defaults: QuantizeDefaults::default(),
             clock: 0,
             project: Project::default(),
@@ -191,6 +194,13 @@ impl Session {
             log: Vec::new(),
             silenced: 0,
             peaks: vec![0.0; layout.channels()],
+        }
+    }
+
+    /// Find the paths in `sample` and `kit` declarations from `dir`.
+    pub fn set_sample_dir(&mut self, dir: &std::path::Path) {
+        if self.samples.base() != dir {
+            self.samples = self.samples.with_base(dir);
         }
     }
 
@@ -317,7 +327,7 @@ impl Session {
         project.apply(&delta);
         let check = |extra: &[Piece]| -> Result<Program, Vec<Problem>> {
             let (full, map) = project.source(&from_snippet, extra);
-            compile_with(&full, &options(self.layout)).map_err(|diags| {
+            compile_with(&full, &options(self.layout, &self.samples)).map_err(|diags| {
                 diags
                     .iter()
                     .map(|d| Problem::from_diagnostic(d, snippet, map.locate(d.span)))

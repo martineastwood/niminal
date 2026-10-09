@@ -12,6 +12,7 @@ pub enum Item {
     Opcode(OpcodeDef),
     Bus(BusDecl),
     Track(TrackDecl),
+    Sample(SampleDecl),
     Config(ConfigDecl),
     Tempo(TempoStmt),
     /// `meter 3/4`
@@ -102,6 +103,17 @@ pub struct InstrDef {
     pub name: Ident,
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+/// `sample kick = "drums/kick.wav" with(root: c4)`, or `kit drums = "drums/808"`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SampleDecl {
+    pub is_kit: bool,
+    pub name: Ident,
+    pub path: String,
+    pub path_span: Span,
+    pub options: Vec<Arg>,
     pub span: Span,
 }
 

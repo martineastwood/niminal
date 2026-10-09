@@ -87,6 +87,8 @@ pub(crate) struct Context<'a> {
     /// Tracks whose definition failed to compile; mentions of them are not
     /// reported again.
     pub failed: &'a [&'a str],
+    /// The names of the samples in kits, which a pattern may use as steps.
+    pub sample_names: &'a [String],
 }
 
 struct Perform<'a> {
@@ -140,14 +142,19 @@ fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value> {
     })
 }
 
-/// A pattern atom as a value: a note name, or a number with a unit.
-fn atom_value(atom: &str) -> Result<Value, String> {
-    atom.parse::<Value>().map_err(|e| {
-        if atom.chars().all(|c| c.is_ascii_alphabetic()) {
-            format!("`{atom}` isn't a note or a value (samples aren't supported yet)")
-        } else {
-            e.to_string()
+/// A pattern atom as a value: a note name, a number with a unit, or the name
+/// of a sample in a kit.
+fn atom_value(atom: &str, sample_names: &[String]) -> Result<Value, String> {
+    atom.parse::<Value>().or_else(|e| match sample_names.iter().position(|n| n == atom) {
+        Some(id) => Ok(Value::Sample(id as u32)),
+        None if atom.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+            let mut message = format!("`{atom}` isn't a note, a value, or a sample in a kit");
+            if let Some(c) = closest(atom, sample_names.iter().map(String::as_str)) {
+                message.push_str(&format!(" (did you mean `{c}`?)"));
+            }
+            Err(message)
         }
+        None => Err(e.to_string()),
     })
 }
 
@@ -181,7 +188,7 @@ impl Perform<'_> {
             ExprKind::Name(name) => match self.bindings.get(name) {
                 Some(v) => Ok(v.clone()),
                 // a lone note or value is a one-step pattern
-                None => match atom_value(name) {
+                None => match atom_value(name, self.cx.sample_names) {
                     Ok(v) => Ok(PerfValue::Pattern(Pattern::pure(v))),
                     Err(_) => {
                         let mut d = Diagnostic::new(format!("`{name}` is not defined"), e.span);
@@ -209,7 +216,7 @@ impl Perform<'_> {
     }
 
     fn pattern(&self, raw: &str, span: Span) -> Res<Pattern<Value>> {
-        parse_with(raw, atom_value).map_err(|e| at_offset(e.message, span, e.offset))
+        parse_with(raw, |atom| atom_value(atom, self.cx.sample_names)).map_err(|e| at_offset(e.message, span, e.offset))
     }
 
     // ---- numbers -----------------------------------------------------------
@@ -735,7 +742,7 @@ fn negate(v: Value) -> Value {
         Value::Bars(n) => Value::Bars(-n),
         Value::Semitones(n) => Value::Semitones(-n),
         Value::Degrees(n) => Value::Degrees(-n),
-        note @ Value::Note(_) => note,
+        keep @ (Value::Note(_) | Value::Sample(_)) => keep,
     }
 }
 

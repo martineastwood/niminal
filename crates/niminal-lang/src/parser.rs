@@ -55,6 +55,7 @@ fn describe(tok: &Tok) -> String {
         Tok::At => "`@`".into(),
         Tok::Pattern(_) => "a pattern".into(),
         Tok::Grid(_) => "a grid".into(),
+        Tok::Str(_) => "a string".into(),
         Tok::Newline => "the end of the line".into(),
         Tok::Eof => "the end of the file".into(),
     }
@@ -134,6 +135,26 @@ impl Parser {
             let name = self.ident("a bus name")?;
             let layout = self.eat(&Tok::Colon).then(|| self.expr()).transpose()?;
             Ok(Item::Bus(BusDecl { name, layout }))
+        } else if self.is_keyword("sample") || self.is_keyword("kit") {
+            let is_kit = self.is_keyword("kit");
+            let start = self.bump().span;
+            let name = self.ident(if is_kit { "a kit name" } else { "a sample name" })?;
+            self.expect(&Tok::Eq)?;
+            let path_span = self.span();
+            let Tok::Str(path) = self.peek().clone() else {
+                return Err(self.unexpected("a file path in quotes").with_help(if is_kit {
+                    "for example `kit drums = \"drums/808\"`"
+                } else {
+                    "for example `sample kick = \"drums/kick.wav\"`"
+                }));
+            };
+            self.bump();
+            let mut options = Vec::new();
+            if self.is_keyword("with") {
+                self.bump();
+                options = self.args()?;
+            }
+            Ok(Item::Sample(SampleDecl { is_kit, name, path, path_span, options, span: start.to(self.prev_span()) }))
         } else if self.is_keyword("config") {
             let start = self.bump().span;
             let (entries, end) = self.entries()?;

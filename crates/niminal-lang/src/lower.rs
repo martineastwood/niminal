@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use niminal_engine::ops::{Add, Curve, Env, Fn1, Func, Mul, PanChannel, Segment, Sub};
+use niminal_engine::ops::{Add, Curve, Env, Fn1, Func, Mul, PanChannel, SampleData, Sampler, Segment, Sub};
 use niminal_engine::{ChainInput, Graph, GraphBuilder, Route, Src};
 use niminal_score::{Tempo, Value};
 
@@ -291,8 +291,68 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
         name: def.name.name.clone(),
         graph: Arc::new(lower.g.build_channels(&result.srcs)),
         params,
+        members: Vec::new(),
     })
 }
+
+/// An instrument that plays recorded audio. A kit has one player per sample,
+/// and its `sample` parameter picks which one sounds.
+pub(crate) fn compile_sampler(
+    name: &Ident,
+    members: &[(String, Arc<SampleData>)],
+    is_kit: bool,
+    root_hz: f32,
+    tempo: Tempo,
+    registry: &Registry,
+    names: &Names,
+) -> Res<Instrument> {
+    let mut lower = Lower::new(registry, names, tempo);
+    lower.mode = Mode::Instrument;
+    let mut params: Vec<Param> = Vec::new();
+    let mut declare = |lower: &mut Lower, pname: &str, unit: Unit, default: f32| {
+        params.push(Param { name: pname.to_string(), unit, range: None, default: Some(default) });
+        lower.g.param(pname, default).expect("sampler parameter names are distinct")
+    };
+    let freq = declare(&mut lower, "freq", Unit::Hz, root_hz);
+    let pitch = declare(&mut lower, "pitch", Unit::Semitones, 0.0);
+    let rate = declare(&mut lower, "rate", Unit::Num, 1.0);
+    let start = declare(&mut lower, "start", Unit::Time, 0.0);
+    let pick = is_kit.then(|| declare(&mut lower, "sample", Unit::Num, 0.0));
+    let gain = declare(&mut lower, GAIN_PARAM, Unit::Db, 1.0);
+
+    let too_many = |n: usize| {
+        Diagnostic::new(format!("a sample with {n} channels is more than the {MAX_SAMPLE_CHANNELS} niminal supports"), name.span)
+    };
+    let mut mix: Option<Sig> = None;
+    for (i, (_, data)) in members.iter().enumerate() {
+        let channels = data.channels.len();
+        if channels > MAX_SAMPLE_CHANNELS {
+            return Err(too_many(channels));
+        }
+        let mut srcs = Vec::with_capacity(channels);
+        for c in 0..channels {
+            let mut wires = vec![("freq", freq), ("pitch", pitch), ("rate", rate), ("start", start)];
+            wires.extend(pick.map(|p| ("sample", p)));
+            let player = Sampler::new(data.clone(), c, root_hz, is_kit.then_some(i));
+            srcs.push(lower.g.add(player, &wires).map_err(|e| Diagnostic::new(e.to_string(), name.span))?);
+        }
+        let sig = lower.convert(&Sig::channels(srcs, Layout::from_count(channels)), names.master, name.span)?;
+        mix = Some(match mix {
+            None => sig,
+            Some(so_far) => lower.binary(BinOp::Add, so_far, sig, name.span)?,
+        });
+    }
+    let result = mix.expect("a sample or kit has at least one sample");
+    let result = lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, name.span)?;
+    Ok(Instrument {
+        name: name.name.clone(),
+        graph: Arc::new(lower.g.build_channels(&result.srcs)),
+        params,
+        members: if is_kit { members.iter().map(|(n, _)| n.clone()).collect() } else { Vec::new() },
+    })
+}
+
+const MAX_SAMPLE_CHANNELS: usize = 16;
 
 /// A compiled track: its processing, what feeds that processing, and where
 /// the result goes.

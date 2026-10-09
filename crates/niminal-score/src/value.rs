@@ -21,6 +21,9 @@ pub enum Value {
     Degrees(f64),
     /// A pitch as a MIDI note number; c4 is 60 and a4 is 440hz.
     Note(i32),
+    /// A kit sample picked by name in a pattern, by its number among the
+    /// project's kit sample names. Only the compiler gives these meaning.
+    Sample(u32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +125,7 @@ impl fmt::Display for Value {
             Value::Bars(n) => write!(f, "{n}bars"),
             Value::Semitones(n) => write!(f, "{n}st"),
             Value::Degrees(n) => write!(f, "{n}deg"),
+            Value::Sample(id) => write!(f, "sample #{id}"),
             Value::Note(m) => write!(f, "{}{}", NOTE_NAMES[m.rem_euclid(12) as usize], m.div_euclid(12) - 1),
         }
     }

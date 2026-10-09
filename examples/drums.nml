@@ -1,0 +1,12 @@
+// Samples and kits. Every .wav in the folder is a sample you can name in a pattern.
+// Render with:  niminal render examples/drums.nml --out drums.wav --bars 4
+config { channels: stereo }
+tempo 100bpm
+
+kit drums = "drums"
+track beat { instrument = drums }
+track hats { instrument = drums(gain: -8db) }
+
+// the kick and snare, and eighth-note hats
+play beat = [kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare]
+play hats = [hat hat hat hat hat hat hat hat]

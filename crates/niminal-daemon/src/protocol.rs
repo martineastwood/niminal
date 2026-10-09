@@ -161,6 +161,9 @@ impl Daemon {
             .and_then(Value::as_str)
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`eval` needs a string `source`"))?;
         let quantize = params.get("quantize").and_then(Value::as_str);
+        if let Some(dir) = params.get("dir").and_then(Value::as_str) {
+            self.session.set_sample_dir(std::path::Path::new(dir));
+        }
         match self.session.eval(source, quantize) {
             Ok(a) => Ok(accepted_json(&self.session, &a)),
             Err(problems) => Err(rejected(&problems)),
