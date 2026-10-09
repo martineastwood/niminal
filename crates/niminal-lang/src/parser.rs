@@ -3,6 +3,11 @@ use crate::diag::{Diagnostic, Span};
 use crate::lexer::{Tok, Token, lex};
 
 pub fn parse(src: &str) -> Result<Vec<Item>, Diagnostic> {
+    parse_spanned(src).map(|items| items.into_iter().map(|(item, _)| item).collect())
+}
+
+/// Like [`parse`], with the stretch of source each top-level item covers.
+pub fn parse_spanned(src: &str) -> Result<Vec<(Item, Span)>, Diagnostic> {
     let mut p = Parser { tokens: lex(src)?, pos: 0 };
     let mut items = Vec::new();
     loop {
@@ -10,7 +15,9 @@ pub fn parse(src: &str) -> Result<Vec<Item>, Diagnostic> {
         if p.peek() == &Tok::Eof {
             return Ok(items);
         }
-        items.push(p.item()?);
+        let start = p.span();
+        let item = p.item()?;
+        items.push((item, start.to(p.prev_span())));
         if !matches!(p.peek(), Tok::Newline | Tok::Eof) {
             return Err(p.unexpected("end of statement"));
         }

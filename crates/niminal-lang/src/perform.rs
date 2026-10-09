@@ -688,7 +688,7 @@ impl Perform<'_> {
     }
 }
 
-fn convert_quantize(q: QuantizeSpec) -> Quantize {
+pub(crate) fn convert_quantize(q: QuantizeSpec) -> Quantize {
     Quantize {
         relation: match q.relation {
             Relation::OnGrid => QuantizeRelation::OnGrid,
