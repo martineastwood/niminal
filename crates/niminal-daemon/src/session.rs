@@ -210,6 +210,11 @@ impl Session {
     }
 
     /// Find the paths in `sample` and `kit` declarations from `dir`.
+    /// The sample files this session has read.
+    pub fn sample_files(&self) -> &Samples {
+        &self.samples
+    }
+
     /// Folders given earlier are still searched, after this one.
     pub fn set_sample_dir(&mut self, dir: &std::path::Path) {
         if self.sample_dirs.first().is_none_or(|d| d != dir) {
