@@ -1,6 +1,7 @@
 //! Program-level compilation: tempo, opcodes, instruments and notes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use niminal_engine::{Route, TrackDef, execution_order};
 use niminal_score::{Event, Tempo, Time, Value};
@@ -9,7 +10,7 @@ use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::kernel::compile_opcode;
 use crate::layout::Layout;
-use crate::lower::{Names, compile_chain, compile_instr, compile_sampler, layout_from_expr, unknown_unit};
+use crate::lower::{Member, Names, compile_chain, compile_instr, compile_sampler, layout_from_expr, unknown_unit};
 use crate::opcodes::Registry;
 use crate::perform::{Context, compile_performance};
 use crate::sample::Samples;
@@ -134,8 +135,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
     }
 
-    let mut sample_names: Vec<String> = Vec::new();
-    let mut choke_groups: Vec<String> = Vec::new();
+    let mut samples_state = SampleState::default();
     for item in &items {
         let Item::Sample(decl) = item else { continue };
         let name = decl.name.name.as_str();
@@ -143,7 +143,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             errors.push(Diagnostic::new(format!("`{name}` is defined twice"), decl.name.span));
             continue;
         }
-        match compile_sample(decl, &options.samples, tempo, &registry, &names, &mut sample_names, &mut choke_groups) {
+        match compile_sample(decl, &options.samples, tempo, &registry, &names, &mut samples_state) {
             Ok(i) => instruments.push(i),
             Err(d) => {
                 errors.push(d);
@@ -206,7 +206,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         instruments: &instruments,
         tracks: &tracks,
         failed: &failed,
-        sample_names: &sample_names,
+        sample_names: &samples_state.names,
     };
     let performance = match compile_performance(&items, &cx) {
         Ok(compiled) => compiled.actions,
@@ -236,8 +236,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             buses: names.buses,
             bus_layouts: names.bus_layouts,
             tracks,
-            sample_names,
-            choke_groups,
+            sample_names: samples_state.names,
+            choke_groups: samples_state.groups,
             notes,
             performance,
         })
@@ -305,16 +305,53 @@ fn compile_track(
     }))
 }
 
-/// A `sample` or `kit` declaration as an instrument. The names of a kit's
-/// samples are added to `sample_names`.
+/// What the `sample` and `kit` declarations of a project define between them.
+#[derive(Default)]
+struct SampleState {
+    /// The names of the samples in kits, which a pattern may use.
+    names: Vec<String>,
+    /// The names of choke groups.
+    groups: Vec<String>,
+    /// Lone samples already loaded, for `.slices` to cut up.
+    loaded: HashMap<String, Arc<niminal_engine::ops::SampleData>>,
+}
+
+/// The kit made by cutting `data` into `count` equal pieces called `s0`, `s1`...
+fn slice_members(decl: &SampleDecl, sample: &Ident, count: f64, state: &SampleState) -> Res<Vec<Member>> {
+    let Some(data) = state.loaded.get(&sample.name) else {
+        let mut d = Diagnostic::new(format!("no sample named `{}` to slice", sample.name), sample.span);
+        if let Some(c) = closest(&sample.name, state.loaded.keys().map(String::as_str)) {
+            d = d.with_help(format!("did you mean `{c}`?"));
+        } else {
+            d = d.with_help("declare it first with `sample name = \"file.wav\"`");
+        }
+        return Err(d);
+    };
+    if count.fract() != 0.0 || count < 1.0 || count as usize > data.len() {
+        return Err(Diagnostic::new(
+            format!("a sample of {} frames can be cut into 1 to {} slices", data.len(), data.len()),
+            decl.source_span,
+        ));
+    }
+    let count = count as usize;
+    let each = data.len() / count;
+    Ok((0..count)
+        .map(|i| Member {
+            name: format!("s{i}"),
+            data: data.clone(),
+            slice: Some((i * each, if i + 1 == count { data.len() } else { (i + 1) * each })),
+        })
+        .collect())
+}
+
+/// A `sample` or `kit` declaration as an instrument.
 fn compile_sample(
     decl: &SampleDecl,
     samples: &Samples,
     tempo: Tempo,
     registry: &Registry,
     names: &Names,
-    sample_names: &mut Vec<String>,
-    choke_groups: &mut Vec<String>,
+    state: &mut SampleState,
 ) -> Res<Instrument> {
     let mut root = DEFAULT_ROOT_HZ;
     let mut chokes: Vec<&Arg> = Vec::new();
@@ -340,33 +377,41 @@ fn compile_sample(
             }
         }
     }
-    let file_error = |e: String| Diagnostic::new(e, decl.path_span);
-    let members = if decl.is_kit {
-        let kit = samples.load_kit(&decl.path).map_err(file_error)?;
-        for (name, _) in &kit {
+    let file_error = |e: String| Diagnostic::new(e, decl.source_span);
+    let members: Vec<Member> = match (&decl.source, decl.is_kit) {
+        (SampleSource::Path(path), true) => samples
+            .load_kit(path)
+            .map_err(file_error)?
+            .into_iter()
+            .map(|(name, data)| Member { name, data, slice: None })
+            .collect(),
+        (SampleSource::Path(path), false) => {
+            let data = samples.load(path).map_err(file_error)?;
+            state.loaded.insert(decl.name.name.clone(), data.clone());
+            vec![Member { name: decl.name.name.clone(), data, slice: None }]
+        }
+        (SampleSource::Slices { sample, count }, _) => slice_members(decl, sample, *count, state)?,
+    };
+    if decl.is_kit {
+        for member in &members {
+            let name = &member.name;
             if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') || name.starts_with(|c: char| c.is_ascii_digit()) {
-                return Err(Diagnostic::new(
-                    format!("the file `{name}.wav` can't be named in a pattern"),
-                    decl.path_span,
-                )
-                .with_help("name sample files with letters, digits and underscores, starting with a letter"));
+                return Err(Diagnostic::new(format!("the file `{name}.wav` can't be named in a pattern"), decl.source_span)
+                    .with_help("name sample files with letters, digits and underscores, starting with a letter"));
             }
-            if !sample_names.contains(name) {
-                sample_names.push(name.clone());
+            if !state.names.contains(name) {
+                state.names.push(name.clone());
             }
         }
-        kit
-    } else {
-        vec![(decl.name.name.clone(), samples.load(&decl.path).map_err(file_error)?)]
-    };
+    }
     let mut instrument = compile_sampler(&decl.name, &members, decl.is_kit, root, tempo, registry, names)?;
 
     // `choke: hats` for a sample; `choke: hats(open, closed)` for samples in a kit.
     instrument.chokes = vec![None; members.len()];
     let mut group_of = |name: &str| -> u32 {
-        let id = choke_groups.iter().position(|g| g == name).unwrap_or_else(|| {
-            choke_groups.push(name.to_string());
-            choke_groups.len() - 1
+        let id = state.groups.iter().position(|g| g == name).unwrap_or_else(|| {
+            state.groups.push(name.to_string());
+            state.groups.len() - 1
         });
         id as u32
     };
@@ -380,9 +425,9 @@ fn compile_sample(
                     let ExprKind::Name(m) = &member.value.kind else {
                         return Err(Diagnostic::new("expected the name of a sample in the kit", member.value.span));
                     };
-                    let Some(i) = members.iter().position(|(n, _)| n == m) else {
+                    let Some(i) = members.iter().position(|x| x.name == *m) else {
                         let mut d = Diagnostic::new(format!("there is no sample `{m}` in the kit `{}`", decl.name.name), member.value.span);
-                        if let Some(c) = closest(m, members.iter().map(|(n, _)| n.as_str())) {
+                        if let Some(c) = closest(m, members.iter().map(|x| x.name.as_str())) {
                             d = d.with_help(format!("did you mean `{c}`?"));
                         }
                         return Err(d);
