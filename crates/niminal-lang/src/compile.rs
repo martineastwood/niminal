@@ -313,12 +313,12 @@ struct SampleState {
     /// The names of choke groups.
     groups: Vec<String>,
     /// Lone samples already loaded, for `.slices` to cut up.
-    loaded: HashMap<String, Arc<niminal_engine::ops::SampleData>>,
+    loaded: HashMap<String, (Arc<niminal_engine::ops::SampleData>, f64)>,
 }
 
 /// The kit made by cutting `data` into `count` equal pieces called `s0`, `s1`...
 fn slice_members(decl: &SampleDecl, sample: &Ident, count: f64, state: &SampleState) -> Res<Vec<Member>> {
-    let Some(data) = state.loaded.get(&sample.name) else {
+    let Some((data, speed)) = state.loaded.get(&sample.name) else {
         let mut d = Diagnostic::new(format!("no sample named `{}` to slice", sample.name), sample.span);
         if let Some(c) = closest(&sample.name, state.loaded.keys().map(String::as_str)) {
             d = d.with_help(format!("did you mean `{c}`?"));
@@ -340,6 +340,7 @@ fn slice_members(decl: &SampleDecl, sample: &Ident, count: f64, state: &SampleSt
             name: format!("s{i}"),
             data: data.clone(),
             slice: Some((i * each, if i + 1 == count { data.len() } else { (i + 1) * each })),
+            speed: *speed,
         })
         .collect())
 }
@@ -355,6 +356,7 @@ fn compile_sample(
 ) -> Res<Instrument> {
     let mut root = DEFAULT_ROOT_HZ;
     let mut chokes: Vec<&Arg> = Vec::new();
+    let (mut beats, mut fit): (Option<f64>, Option<&Arg>) = (None, None);
     for arg in &decl.options {
         let Some(key) = &arg.name else {
             return Err(Diagnostic::new("options are written `name: value`", arg.value.span));
@@ -367,14 +369,36 @@ fn compile_sample(
                     as f32;
             }
             "choke" => chokes.push(arg),
+            "beats" => match &arg.value.kind {
+                ExprKind::Num { value, unit: None } if *value > 0.0 => beats = Some(*value),
+                _ => return Err(Diagnostic::new("`beats` is how many beats the loop lasts, such as `4`", arg.value.span)),
+            },
+            "fit" => fit = Some(arg),
             other => {
                 let mut d = Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
-                d = match closest(other, ["root", "choke"]) {
+                d = match closest(other, ["root", "choke", "beats", "fit"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
-                    None => d.with_help("the options are `root`, the note at which the sample plays as recorded, and `choke`"),
+                    None => d.with_help("the options are `root`, `choke`, `beats` and `fit`"),
                 };
                 return Err(d);
             }
+        }
+    }
+    let fit_error = |d: Diagnostic| d.with_help("for example `with(beats: 4, fit: rate)` plays a 4-beat loop in time with the tempo");
+    if let Some(arg) = fit {
+        match (&arg.value.kind, beats) {
+            (ExprKind::Name(n), Some(_)) if n == "rate" => {}
+            (ExprKind::Name(n), _) if n == "slice" || n == "stretch" => {
+                return Err(Diagnostic::new(format!("`fit: {n}` isn't supported yet"), arg.value.span)
+                    .with_help("`fit: rate` speeds the loop up or down with the tempo"));
+            }
+            (ExprKind::Name(n), None) if n == "rate" => {
+                return Err(fit_error(Diagnostic::new("`fit: rate` needs to know the loop's length", arg.value.span)));
+            }
+            _ => return Err(fit_error(Diagnostic::new("`fit` should be `rate`", arg.value.span))),
+        }
+        if !matches!(decl.source, SampleSource::Path(_)) || decl.is_kit {
+            return Err(Diagnostic::new("only a single sample can be fitted to the tempo", arg.value.span));
         }
     }
     let file_error = |e: String| Diagnostic::new(e, decl.source_span);
@@ -383,12 +407,17 @@ fn compile_sample(
             .load_kit(path)
             .map_err(file_error)?
             .into_iter()
-            .map(|(name, data)| Member { name, data, slice: None })
+            .map(|(name, data)| Member { name, data, slice: None, speed: 1.0 })
             .collect(),
         (SampleSource::Path(path), false) => {
             let data = samples.load(path).map_err(file_error)?;
-            state.loaded.insert(decl.name.name.clone(), data.clone());
-            vec![Member { name: decl.name.name.clone(), data, slice: None }]
+            // Fitting to the tempo: the loop's own length in seconds against the time its beats take.
+            let speed = match (fit, beats) {
+                (Some(_), Some(b)) => (data.len() as f64 / f64::from(data.sample_rate)) / (b * 60.0 / tempo.bpm),
+                _ => 1.0,
+            };
+            state.loaded.insert(decl.name.name.clone(), (data.clone(), speed));
+            vec![Member { name: decl.name.name.clone(), data, slice: None, speed }]
         }
         (SampleSource::Slices { sample, count }, _) => slice_members(decl, sample, *count, state)?,
     };

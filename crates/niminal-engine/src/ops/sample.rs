@@ -42,6 +42,8 @@ pub struct Sampler {
     member: Option<usize>,
     /// The part of the sample this player covers, in frames.
     range: (usize, usize),
+    /// A fixed playback speed on top of the pitch, to fit a loop to a tempo.
+    speed: f64,
     position: f64,
     started: bool,
     done: bool,
@@ -51,7 +53,13 @@ pub struct Sampler {
 impl Sampler {
     pub fn new(data: Arc<SampleData>, channel: usize, root_hz: f32, member: Option<usize>) -> Self {
         let range = (0, data.len());
-        Sampler { data, channel, root_hz, member, range, position: 0.0, started: false, done: false, sample_rate: 48_000.0 }
+        Sampler { data, channel, root_hz, member, range, speed: 1.0, position: 0.0, started: false, done: false, sample_rate: 48_000.0 }
+    }
+
+    /// Play `speed` times as fast, whatever the pitch asked for.
+    pub fn with_speed(mut self, speed: f64) -> Self {
+        self.speed = speed;
+        self
     }
 
     /// Play only frames `start..end` of the sample.
@@ -128,7 +136,7 @@ impl Opcode for Sampler {
                 *y *= edge.clamp(0.0, 1.0) as f32;
             }
             let pitch = f64::from(inputs[1][n]) / 12.0;
-            let ratio = f64::from(inputs[0][n]) / f64::from(self.root_hz) * pitch.exp2() * f64::from(inputs[2][n]);
+            let ratio = f64::from(inputs[0][n]) / f64::from(self.root_hz) * pitch.exp2() * f64::from(inputs[2][n]) * self.speed;
             self.position += ratio.max(0.0) * f64::from(self.data.sample_rate) / f64::from(self.sample_rate);
         }
     }
@@ -212,6 +220,13 @@ mod tests {
         let mut no = sampler(ramp(40, 48_000.0), Some(2));
         assert!(run(&mut no, 100.0, 0.0, 1.0, 0.0, 1.0, 1).iter().all(|&y| y == 0.0));
         assert!(!no.is_active());
+    }
+
+    #[test]
+    fn a_fixed_speed_scales_the_playback() {
+        let mut s = sampler(ramp(200, 48_000.0), None).with_speed(0.5);
+        let out = run(&mut s, 100.0, 0.0, 1.0, 0.0, 0.0, 1);
+        assert!((out[10] - 5.0).abs() < 1e-3, "{}", out[10]);
     }
 
     #[test]
