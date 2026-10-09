@@ -44,8 +44,8 @@ fn block(m: &mut Mixer) -> Vec<f32> {
 #[test]
 fn voices_sum_to_the_master() {
     let mut m = Mixer::new(vec![master_track(), master_track()], vec![], 1, SR).unwrap();
-    m.note_on(0, source(0.25, None), &[]);
-    m.note_on(1, source(0.5, None), &[]);
+    m.note_on(0, source(0.25, None), &[], None);
+    m.note_on(1, source(0.5, None), &[], None);
     assert!(block(&mut m).iter().all(|s| (s - 0.75).abs() < 1e-6));
 }
 
@@ -58,8 +58,8 @@ fn a_chain_processes_its_tracks_summed_voices() {
         voice_sends: vec![],
     };
     let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
-    m.note_on(0, source(0.1, None), &[]);
-    m.note_on(0, source(0.2, None), &[]);
+    m.note_on(0, source(0.1, None), &[], None);
+    m.note_on(0, source(0.2, None), &[], None);
     assert!(block(&mut m).iter().all(|s| (s - 0.6).abs() < 1e-6));
 }
 
@@ -68,7 +68,7 @@ fn sends_reach_their_reader_in_the_same_block_whatever_the_declaration_order() {
     // The reader is declared first; it must still run after the writer.
     let writer = TrackDef { voice_sends: vec![0], ..master_track() };
     let mut m = Mixer::new(vec![reader(0, 2.0), writer], vec![1], 1, SR).unwrap();
-    m.note_on(1, source(0.0, Some((0, 0.25))), &[]);
+    m.note_on(1, source(0.0, Some((0, 0.25))), &[], None);
     let out = block(&mut m);
     assert!(out.iter().all(|s| (s - 0.5).abs() < 1e-6), "{:?}", &out[..4]);
 }
@@ -77,7 +77,7 @@ fn sends_reach_their_reader_in_the_same_block_whatever_the_declaration_order() {
 fn buses_are_cleared_every_block() {
     let writer = TrackDef { voice_sends: vec![0], ..master_track() };
     let mut m = Mixer::new(vec![writer, reader(0, 1.0)], vec![1], 1, SR).unwrap();
-    let id = m.note_on(0, source(0.0, Some((0, 1.0))), &[]);
+    let id = m.note_on(0, source(0.0, Some((0, 1.0))), &[], None);
     assert!(block(&mut m).iter().all(|s| *s == 1.0));
     m.release(id);
     // the voice is gone (no envelope), so nothing is written and nothing lingers
@@ -89,8 +89,8 @@ fn buses_are_cleared_every_block() {
 fn several_sends_to_one_bus_are_summed() {
     let writer = TrackDef { voice_sends: vec![0], ..master_track() };
     let mut m = Mixer::new(vec![writer, reader(0, 1.0)], vec![1], 1, SR).unwrap();
-    m.note_on(0, source(0.0, Some((0, 0.25))), &[]);
-    m.note_on(0, source(0.0, Some((0, 0.5))), &[]);
+    m.note_on(0, source(0.0, Some((0, 0.25))), &[], None);
+    m.note_on(0, source(0.0, Some((0, 0.5))), &[], None);
     assert!(block(&mut m).iter().all(|s| (s - 0.75).abs() < 1e-6));
 }
 
@@ -98,7 +98,7 @@ fn several_sends_to_one_bus_are_summed() {
 fn a_track_can_route_to_a_bus_instead_of_the_master() {
     let to_bus = TrackDef { route: Route::Bus(0), ..master_track() };
     let mut m = Mixer::new(vec![reader(0, 3.0), to_bus], vec![1], 1, SR).unwrap();
-    m.note_on(1, source(0.2, None), &[]);
+    m.note_on(1, source(0.2, None), &[], None);
     // the routed track is silent on the master; only the reader is heard
     assert!(block(&mut m).iter().all(|s| (s - 0.6).abs() < 1e-6));
 }
@@ -117,7 +117,7 @@ fn chains_can_send_too() {
         voice_sends: vec![],
     };
     let mut m = Mixer::new(vec![reader(0, 1.0), chain], vec![1], 1, SR).unwrap();
-    m.note_on(1, source(0.4, None), &[]);
+    m.note_on(1, source(0.4, None), &[], None);
     assert!(block(&mut m).iter().all(|s| (s - 0.4).abs() < 1e-6));
 }
 
@@ -157,7 +157,7 @@ fn independent_tracks_keep_declaration_order() {
 fn nan_in_a_send_silences_the_voice_and_does_not_poison_the_bus() {
     let writer = TrackDef { voice_sends: vec![0], ..master_track() };
     let mut m = Mixer::new(vec![writer, reader(0, 1.0)], vec![1], 1, SR).unwrap();
-    m.note_on(0, source(0.0, Some((0, f32::NAN))), &[]);
+    m.note_on(0, source(0.0, Some((0, f32::NAN))), &[], None);
     let out = block(&mut m);
     assert!(out.iter().all(|s| *s == 0.0));
     assert_eq!(m.take_silenced(), 1);
@@ -168,7 +168,7 @@ fn nan_in_a_send_silences_the_voice_and_does_not_poison_the_bus() {
 #[test]
 fn releasing_a_finished_voice_is_harmless() {
     let mut m = Mixer::new(vec![master_track()], vec![], 1, SR).unwrap();
-    let id = m.note_on(0, source(0.5, None), &[]);
+    let id = m.note_on(0, source(0.5, None), &[], None);
     m.release(id);
     block(&mut m);
     assert_eq!(m.active_voices(), 0);
@@ -207,8 +207,8 @@ mod stereo {
     fn the_mixer_keeps_channels_apart() {
         let master = TrackDef { chain: None, inputs: vec![], route: Route::Master, voice_sends: vec![] };
         let mut m = Mixer::new(vec![master], vec![], 2, SR).unwrap();
-        m.note_on(0, two_channels(0.25, 0.5), &[]);
-        m.note_on(0, two_channels(0.25, 0.0), &[]);
+        m.note_on(0, two_channels(0.25, 0.5), &[], None);
+        m.note_on(0, two_channels(0.25, 0.0), &[], None);
         let [l, r] = stereo_block(&mut m);
         assert!(l.iter().all(|s| (s - 0.5).abs() < 1e-6));
         assert!(r.iter().all(|s| (s - 0.5).abs() < 1e-6));
@@ -243,7 +243,7 @@ mod stereo {
         let writer = TrackDef { voice_sends: vec![0], chain: None, inputs: vec![], route: Route::Master };
 
         let mut m = Mixer::new(vec![reader, writer], vec![2], 2, SR).unwrap();
-        m.note_on(1, sender, &[]);
+        m.note_on(1, sender, &[], None);
         let [l, r] = stereo_block(&mut m);
         assert!(l.iter().all(|s| (s - 0.5).abs() < 1e-6), "{:?}", &l[..2]);
         assert!(r.iter().all(|s| (s - 0.25).abs() < 1e-6));
@@ -254,7 +254,7 @@ mod stereo {
     fn an_instrument_with_the_wrong_channel_count_is_rejected() {
         let master = TrackDef { chain: None, inputs: vec![], route: Route::Master, voice_sends: vec![] };
         let mut m = Mixer::new(vec![master], vec![], 2, SR).unwrap();
-        m.note_on(0, source(0.5, None), &[]);
+        m.note_on(0, source(0.5, None), &[], None);
     }
 }
 
@@ -285,7 +285,7 @@ mod panic {
             voice_sends: vec![],
         };
         let mut m = Mixer::new(vec![track], vec![], 1, SR).unwrap();
-        m.note_on(0, source(0.5, None), &[]);
+        m.note_on(0, source(0.5, None), &[], None);
         for _ in 0..10 {
             block(&mut m);
         }
@@ -299,7 +299,7 @@ mod panic {
         }
 
         // the mixer still works afterwards
-        m.note_on(0, source(0.25, None), &[]);
+        m.note_on(0, source(0.25, None), &[], None);
         let later: Vec<f32> = (0..3).flat_map(|_| block(&mut m)).collect();
         assert!(later.iter().any(|s| *s != 0.0), "the 1ms delay is 48 samples, more than one block");
     }
@@ -308,7 +308,7 @@ mod panic {
     fn panic_empties_the_buses() {
         let writer = TrackDef { voice_sends: vec![0], ..master_track() };
         let mut m = Mixer::new(vec![writer, reader(0, 1.0)], vec![1], 1, SR).unwrap();
-        m.note_on(0, source(0.0, Some((0, 1.0))), &[]);
+        m.note_on(0, source(0.0, Some((0, 1.0))), &[], None);
         assert!(block(&mut m).iter().any(|s| *s != 0.0));
         m.panic();
         assert!(block(&mut m).iter().all(|s| *s == 0.0));
@@ -337,7 +337,7 @@ mod adopting {
     #[test]
     fn voices_keep_sounding_on_the_new_mixer() {
         let mut old = Mixer::new(vec![master_track()], vec![], 1, SR).unwrap();
-        let id = old.note_on(0, source(0.25, None), &[]);
+        let id = old.note_on(0, source(0.25, None), &[], None);
         block(&mut old);
 
         // the new mixer has an extra track first; the voice moves to the second
@@ -356,7 +356,7 @@ mod adopting {
     #[test]
     fn a_chain_keeps_its_echoes_across_the_swap() {
         let mut old = Mixer::new(vec![delay_track()], vec![], 1, SR).unwrap();
-        let id = old.note_on(0, source(0.5, None), &[]);
+        let id = old.note_on(0, source(0.5, None), &[], None);
         for _ in 0..4 {
             block(&mut old);
         }
@@ -369,7 +369,7 @@ mod adopting {
         assert!(echoes.iter().any(|s| s.abs() > 0.1), "the echoes carried over");
 
         let mut fresh_old = Mixer::new(vec![delay_track()], vec![], 1, SR).unwrap();
-        let id = fresh_old.note_on(0, source(0.5, None), &[]);
+        let id = fresh_old.note_on(0, source(0.5, None), &[], None);
         for _ in 0..4 {
             block(&mut fresh_old);
         }
@@ -384,13 +384,47 @@ mod adopting {
     #[test]
     fn serials_continue_so_ids_stay_unique() {
         let mut old = Mixer::new(vec![master_track()], vec![], 1, SR).unwrap();
-        let a = old.note_on(0, source(0.1, None), &[]);
+        let a = old.note_on(0, source(0.1, None), &[], None);
         let mut new = Mixer::new(vec![master_track()], vec![], 1, SR).unwrap();
         new.adopt(&mut old, &[Transfer { voices_from: Some(0), chain_from: None }]);
-        let b = new.note_on(0, source(0.1, None), &[]);
+        let b = new.note_on(0, source(0.1, None), &[], None);
         assert_ne!(a, b);
         new.release(a);
         block(&mut new);
         assert_eq!(new.active_voices(), 1, "releasing the first left the second");
     }
+}
+
+#[test]
+fn a_new_note_in_a_choke_group_fades_out_the_old_one_without_touching_others() {
+    let mut m = Mixer::new(vec![master_track(), master_track()], vec![], 1, SR).unwrap();
+    m.note_on(0, source(0.5, None), &[], Some(1));
+    m.note_on(1, source(0.25, None), &[], Some(2));
+    block(&mut m);
+    assert_eq!(m.active_voices(), 2);
+
+    // the new note is in group 1, on another track
+    m.note_on(1, source(0.125, None), &[], Some(1));
+    let mut total = Vec::new();
+    for _ in 0..12 {
+        total.extend(block(&mut m));
+    }
+    // 5ms is 240 samples: the choked 0.5 ramps down across the first ones and is gone by 8 blocks
+    assert!((total[0] - (0.5 + 0.25 + 0.125)).abs() < 1e-3, "{}", total[0]);
+    assert!(total.windows(2).all(|w| w[1] <= w[0] + 1e-6), "it only gets quieter, smoothly");
+    assert!((total[total.len() - 1] - 0.375).abs() < 1e-6, "{}", total[total.len() - 1]);
+    assert_eq!(m.active_voices(), 2, "the choked voice has been removed");
+}
+
+#[test]
+fn a_choke_fade_also_covers_what_a_voice_sends_to_a_bus() {
+    let mut m = Mixer::new(vec![master_track(), reader(0, 1.0)], vec![1], 1, SR).unwrap();
+    m.note_on(0, source(0.0, Some((0, 0.5))), &[], Some(7));
+    block(&mut m);
+    m.note_on(0, source(0.0, None), &[], Some(7));
+    let mut tail = Vec::new();
+    for _ in 0..12 {
+        tail.extend(block(&mut m));
+    }
+    assert!(tail[0] > 0.4 && tail[tail.len() - 1].abs() < 1e-6, "{} {}", tail[0], tail[tail.len() - 1]);
 }

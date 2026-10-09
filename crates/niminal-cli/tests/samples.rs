@@ -173,3 +173,58 @@ fn a_kit_sample_on_the_wrong_kit_is_an_error() {
     let err = program.plan(&events[0]).unwrap_err().to_string();
     assert!(err.contains("`hat` isn't in the kit `a`"), "{err}");
 }
+
+#[test]
+fn a_choke_group_cuts_off_the_sample_it_replaces() {
+    let dir = scratch("choke");
+    std::fs::create_dir_all(dir.join("hats")).unwrap();
+    write_wav(&dir.join("hats/open.wav"), &[block(0.5, 1500)]);
+    write_wav(&dir.join("hats/closed.wav"), &[block(0.125, 20)]);
+    let src = |opts: &str| {
+        format!("tempo 120bpm\nkit h = \"hats\"{opts}\ntrack t {{ instrument = h }}\nplay t = [open ~ closed ~]")
+    };
+    let at = |out: &[Vec<f32>], s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
+
+    // without a group, the open hat rings on under the closed one
+    let free = play(&dir, &src(""));
+    assert!((at(&free, 0.5) - 0.5).abs() < 1e-3);
+    assert!((at(&free, 1.005) - 0.625).abs() < 1e-3, "{}", at(&free, 1.005));
+    assert!((at(&free, 0.95) - 0.5).abs() < 1e-3);
+
+    // in one group, the closed hat ends it: nothing is left of the open hat once the fade is done
+    let choked = play(&dir, &src(" with(choke: hats(open, closed))"));
+    assert!((at(&choked, 0.99) - 0.5).abs() < 1e-3, "before the closed hat it's still sounding");
+    assert!((at(&choked, 1.01) - 0.125).abs() < 1e-3, "{}", at(&choked, 1.01));
+    assert!(at(&choked, 1.05).abs() < 1e-6, "and afterwards only silence");
+}
+
+#[test]
+fn choke_options_are_checked() {
+    let dir = scratch("chokeerr");
+    std::fs::create_dir_all(dir.join("hats")).unwrap();
+    write_wav(&dir.join("hats/open.wav"), &[block(0.5, 10)]);
+    write_wav(&dir.join("hats/closed.wav"), &[block(0.5, 10)]);
+    write_wav(&dir.join("s.wav"), &[block(0.5, 10)]);
+
+    let e = errors(&dir, "kit h = \"hats\" with(choke: hats(open, clsed))");
+    assert!(e.contains("no sample `clsed` in the kit `h`") || e.contains("there is no sample `clsed`"), "{e}");
+    assert!(e.contains("did you mean `closed`?"), "{e}");
+    let e = errors(&dir, "kit h = \"hats\" with(choke: hats)");
+    assert!(e.contains("a kit names the samples in each group"), "{e}");
+    let e = errors(&dir, "sample s = \"s.wav\" with(choke: hats(a))");
+    assert!(e.contains("expected the name of a choke group"), "{e}");
+    let e = errors(&dir, "sample s = \"s.wav\" with(chok: hats)");
+    assert!(e.contains("did you mean `choke`?"), "{e}");
+}
+
+#[test]
+fn single_samples_can_share_a_choke_group_with_each_other_and_a_kit() {
+    let dir = scratch("chokeshared");
+    write_wav(&dir.join("a.wav"), &[block(0.5, 1500)]);
+    write_wav(&dir.join("b.wav"), &[block(0.25, 20)]);
+    let src = "tempo 120bpm\nsample a = \"a.wav\" with(choke: g)\nsample b = \"b.wav\" with(choke: g)\n\
+               track ta { instrument = a }\ntrack tb { instrument = b }\nplay ta = [c4 ~ ~ ~]\nplay tb = [~ ~ c4 ~]";
+    let out = play(&dir, src);
+    // `a` would ring until 1.5s; the render ends when `b` ends at 1.02s because `a` was cut off
+    assert!(out[0].len() < (1.1 * SR as f64) as usize, "{}", out[0].len());
+}

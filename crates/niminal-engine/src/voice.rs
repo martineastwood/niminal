@@ -13,7 +13,14 @@ pub struct Voice {
     sample_rate: f32,
     released: bool,
     poisoned: bool,
+    /// The choke group this note belongs to, if any.
+    group: Option<u32>,
+    /// Samples of fade-out left once the voice has been choked.
+    choke_left: Option<usize>,
 }
+
+/// How long a choked voice takes to fade out, in seconds.
+const CHOKE_FADE: f32 = 0.005;
 
 impl Voice {
     pub fn new(graph: Arc<Graph>, sample_rate: f32) -> Self {
@@ -30,7 +37,7 @@ impl Voice {
             slots[graph.params.len() + i] = [c; BLOCK];
         }
 
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false }
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, choke_left: None }
     }
 
     /// Fill external input `index` for the coming block. Only the first
@@ -61,6 +68,27 @@ impl Voice {
         self.released = true;
     }
 
+    /// Put the note in a choke group: a later note in the same group ends it.
+    pub fn set_group(&mut self, group: Option<u32>) {
+        self.group = group;
+    }
+
+    pub fn group(&self) -> Option<u32> {
+        self.group
+    }
+
+    /// End the note now, with a short fade so it doesn't click.
+    pub fn choke(&mut self) {
+        self.released = true;
+        if self.choke_left.is_none() {
+            self.choke_left = Some(((self.sample_rate * CHOKE_FADE) as usize).max(1));
+        }
+    }
+
+    pub fn is_choked(&self) -> bool {
+        self.choke_left.is_some()
+    }
+
     pub fn is_released(&self) -> bool {
         self.released
     }
@@ -68,7 +96,7 @@ impl Voice {
     /// A voice lives until it has been released and every envelope has
     /// finished, which may be well after the scheduled note length.
     pub fn is_finished(&self) -> bool {
-        self.poisoned || (self.released && !self.ops.iter().any(|op| op.is_active()))
+        self.poisoned || self.choke_left == Some(0) || (self.released && self.choke_left.is_none() && !self.ops.iter().any(|op| op.is_active()))
     }
 
     /// True once the voice produced NaN or infinity. It is silenced from then
@@ -134,11 +162,31 @@ impl Voice {
             out.iter_mut().for_each(|c| c[..frames].fill(0.0));
             return;
         }
+        // A choked voice fades linearly to nothing over `CHOKE_FADE`.
+        let fade = self.choke_left.map(|left| {
+            let total = ((self.sample_rate * CHOKE_FADE) as usize).max(1) as f32;
+            let mut gains = [0.0f32; BLOCK];
+            for (n, g) in gains[..frames].iter_mut().enumerate() {
+                *g = (left.saturating_sub(n) as f32 / total).max(0.0);
+            }
+            self.choke_left = Some(left.saturating_sub(frames));
+            gains
+        });
         for (channel, &slot) in out.iter_mut().zip(&self.graph.output_slots) {
             channel[..frames].copy_from_slice(&self.slots[slot][..frames]);
+            if let Some(g) = &fade {
+                channel[..frames].iter_mut().zip(g).for_each(|(y, g)| *y *= g);
+            }
         }
         for &(bus, channel, slot) in &self.graph.sends {
-            buses.add(bus, channel, &self.slots[slot][..frames]);
+            match &fade {
+                None => buses.add(bus, channel, &self.slots[slot][..frames]),
+                Some(g) => {
+                    let mut faded = [0.0f32; BLOCK];
+                    faded[..frames].iter_mut().zip(&self.slots[slot]).zip(g).for_each(|((y, x), g)| *y = x * g);
+                    buses.add(bus, channel, &faded[..frames]);
+                }
+            }
         }
     }
 }

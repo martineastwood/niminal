@@ -233,9 +233,20 @@ impl Mixer {
 
     /// Start a note on `track`, setting `(parameter index, value)` pairs. The
     /// graph must produce as many channels as the mixer's master has.
-    pub fn note_on(&mut self, track: usize, graph: Arc<Graph>, params: &[(usize, f32)]) -> VoiceId {
+    ///
+    /// A note in a choke `group` ends every sounding note in the same group
+    /// (on any track), with a short fade.
+    pub fn note_on(&mut self, track: usize, graph: Arc<Graph>, params: &[(usize, f32)], group: Option<u32>) -> VoiceId {
         assert_eq!(graph.channels(), self.channels, "an instrument must output the master's channel count");
+        if group.is_some() {
+            for (_, v) in self.tracks.iter_mut().flat_map(|t| t.voices.iter_mut()) {
+                if v.group() == group {
+                    v.choke();
+                }
+            }
+        }
         let mut voice = Voice::new(graph, self.sample_rate);
+        voice.set_group(group);
         for &(index, value) in params {
             voice.set_param(index, value);
         }

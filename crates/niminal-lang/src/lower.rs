@@ -292,6 +292,7 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
         graph: Arc::new(lower.g.build_channels(&result.srcs)),
         params,
         members: Vec::new(),
+        chokes: Vec::new(),
     })
 }
 
@@ -349,6 +350,7 @@ pub(crate) fn compile_sampler(
         graph: Arc::new(lower.g.build_channels(&result.srcs)),
         params,
         members: if is_kit { members.iter().map(|(n, _)| n.clone()).collect() } else { Vec::new() },
+        chokes: Vec::new(),
     })
 }
 
