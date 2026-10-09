@@ -55,18 +55,34 @@ struct Upcoming {
     scheduled: bool,
 }
 
-/// An evaluation that has compiled and is waiting to land.
+/// A statement that runs when a change lands, with the program it was
+/// compiled in (so landing does no compiling).
+struct Compiled {
+    statement: Statement,
+    program: Program,
+}
+
+/// An evaluation that has compiled and is waiting to land. Everything that
+/// could be slow, such as compiling and building the mixer, was done when it
+/// was evaluated, so that landing only has to move things into place.
 struct Pending {
     id: u64,
     lands_at: u64,
-    delta: Vec<Entry>,
-    actions: Vec<Statement>,
-    /// Patterns, clips and scenes this changes, so that tracks playing them
-    /// can pick up the new version.
-    changed_bindings: Vec<String>,
-    /// Does this change the tempo or meter, which moves every running clip?
-    retimes: bool,
+    /// What was evaluated, so that the change can be redone if one before it
+    /// is cancelled.
+    snippet: String,
+    statements: Vec<Statement>,
     summary: Vec<String>,
+    /// The project once this has landed.
+    project: Project,
+    /// The new program and a mixer built for it, if definitions changed.
+    program: Option<Program>,
+    mixer: Option<Mixer>,
+    actions: Vec<Compiled>,
+    /// Plays to start again because a pattern they use was redefined.
+    replays: Vec<Compiled>,
+    /// What each track is playing once this has landed.
+    playing: BTreeMap<String, String>,
 }
 
 /// What came of an accepted evaluation.
@@ -244,40 +260,8 @@ impl Session {
             None => None,
             Some(text) => Some(parse_quantum(text)?),
         };
-        let statements = analyze(source).map_err(|d| {
-            vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))]
-        })?;
-
-        let (definitions, actions): (Vec<_>, Vec<_>) =
-            statements.iter().cloned().partition(|s| s.kind == StatementKind::Definition);
-        let delta: Vec<Entry> = definitions
-            .iter()
-            .map(|s| Entry { key: s.key.clone().expect("definitions have keys"), text: s.text.clone() })
-            .collect();
-        let from_snippet: HashMap<String, usize> =
-            definitions.iter().map(|s| (s.key.clone().expect("definitions have keys"), s.offset)).collect();
-
-        // The project as it will be once everything already waiting has landed.
-        let mut projected = self.projected();
-        projected.apply(&delta);
-        let pieces: Vec<Piece> = actions
-            .iter()
-            .map(|s| Piece { text: s.text.clone(), origin: Origin::Snippet { offset: s.offset } })
-            .collect();
-        let (full, map) = projected.source(&from_snippet, &pieces);
-        let program = compile_with(&full, &options(self.layout)).map_err(|diags| {
-            diags
-                .iter()
-                .map(|d| Problem::from_diagnostic(d, source, map.locate(d.span)))
-                .collect::<Vec<_>>()
-        })?;
-        if program.master != self.layout {
-            return Err(vec![Problem::plain(format!(
-                "this session outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
-                self.layout, program.master
-            ))]);
-        }
-
+        let statements = analyze(source)
+            .map_err(|d| vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))])?;
         if statements.is_empty() {
             return Ok(Accepted { id: None, lands_at: self.clock, position: self.grid().position(self.clock), changes: vec![] });
         }
@@ -294,31 +278,136 @@ impl Session {
             lands_at = lands_at.max(last.lands_at);
         }
 
-        let summary: Vec<String> = statements.iter().map(summarize).collect();
         let id = self.next_id;
+        let (project, playing) = self.projected();
+        let pending = self.prepare(id, lands_at, source, statements, &project, &playing)?;
         self.next_id += 1;
-        let retimes = definitions.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")));
-        self.pending.push(Pending {
-            id,
+        let accepted = Accepted {
+            id: Some(id),
             lands_at,
-            delta,
-            actions,
-            changed_bindings: definitions.iter().filter_map(|s| s.binding.clone()).collect(),
-            retimes,
-            summary: summary.clone(),
-        });
-        let accepted =
-            Accepted { id: Some(id), lands_at, position: grid.position(lands_at), changes: summary };
+            position: grid.position(lands_at),
+            changes: pending.summary.clone(),
+        };
+        self.pending.push(pending);
         self.land_due();
         Ok(accepted)
     }
 
-    /// Cancel a waiting evaluation, or all of them. Returns how many.
+    /// Compile everything `statements` will need when they land, against the
+    /// project as it will be then (`base`, with `base_playing` running).
+    fn prepare(
+        &self,
+        id: u64,
+        lands_at: u64,
+        snippet: &str,
+        statements: Vec<Statement>,
+        base: &Project,
+        base_playing: &BTreeMap<String, String>,
+    ) -> Result<Pending, Vec<Problem>> {
+        let definitions: Vec<&Statement> =
+            statements.iter().filter(|s| s.kind == StatementKind::Definition).collect();
+        let delta: Vec<Entry> = definitions
+            .iter()
+            .map(|s| Entry { key: s.key.clone().expect("definitions have keys"), text: s.text.clone() })
+            .collect();
+        let from_snippet: HashMap<String, usize> =
+            definitions.iter().map(|s| (s.key.clone().expect("definitions have keys"), s.offset)).collect();
+
+        let mut project = base.clone();
+        project.apply(&delta);
+        let check = |extra: &[Piece]| -> Result<Program, Vec<Problem>> {
+            let (full, map) = project.source(&from_snippet, extra);
+            compile_with(&full, &options(self.layout)).map_err(|diags| {
+                diags
+                    .iter()
+                    .map(|d| Problem::from_diagnostic(d, snippet, map.locate(d.span)))
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        let program = check(&[])?;
+        if program.master != self.layout {
+            return Err(vec![Problem::plain(format!(
+                "this session outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
+                self.layout, program.master
+            ))]);
+        }
+
+        let mut actions = Vec::new();
+        for s in statements.iter().filter(|s| s.kind != StatementKind::Definition) {
+            let piece = Piece { text: s.text.clone(), origin: Origin::Snippet { offset: s.offset } };
+            actions.push(Compiled { statement: s.clone(), program: check(&[piece])? });
+        }
+
+        // What will be playing, and which of it has to start over.
+        let mut playing = base_playing.clone();
+        for a in &actions {
+            apply_to_playing(&mut playing, &a.program, &a.statement);
+        }
+        let changed: Vec<String> = definitions.iter().filter_map(|s| s.binding.clone()).collect();
+        let retimes = definitions.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")));
+        let mut replays = Vec::new();
+        for (track, what) in base_playing {
+            if !(retimes || mentions_any(what, &changed)) {
+                continue;
+            }
+            let text = format!("play {track} = {what}");
+            let Some(statement) = analyze(&text).ok().and_then(|mut s| s.pop()) else { continue };
+            let piece = Piece { text: text.clone(), origin: Origin::Snippet { offset: 0 } };
+            // If the new version no longer works for the track, leave it playing as it was.
+            if let Ok(program) = check(&[piece]) {
+                playing.insert(track.clone(), what.clone());
+                replays.push(Compiled { statement, program });
+            }
+        }
+
+        let has_definitions = !definitions.is_empty();
+        let mixer = has_definitions.then(|| program.mixer(self.sample_rate));
+        Ok(Pending {
+            id,
+            lands_at,
+            snippet: snippet.to_string(),
+            summary: statements.iter().map(summarize).collect(),
+            statements,
+            project,
+            program: has_definitions.then_some(program),
+            mixer,
+            actions,
+            replays,
+            playing,
+        })
+    }
+
+    /// Cancel a waiting evaluation, or all of them. Returns how many. What is
+    /// left is compiled again, since it may have depended on what was cancelled.
     pub fn cancel(&mut self, id: Option<u64>) -> usize {
         self.log.push(LogEntry { sample: self.clock, input: LogInput::Cancel { id } });
         let before = self.pending.len();
-        self.pending.retain(|p| id.is_some_and(|i| p.id != i));
-        before - self.pending.len()
+        let remaining: Vec<Pending> = std::mem::take(&mut self.pending);
+        let (mut project, mut playing) = (self.project.clone(), self.playing.clone());
+        let mut dropped = 0;
+        for p in remaining {
+            if id.is_none_or(|i| p.id == i) {
+                dropped += 1;
+                continue;
+            }
+            match self.prepare(p.id, p.lands_at, &p.snippet, p.statements.clone(), &project, &playing) {
+                Ok(redone) => {
+                    project = redone.project.clone();
+                    playing = redone.playing.clone();
+                    self.pending.push(redone);
+                }
+                Err(_) => {
+                    dropped += 1;
+                    self.notices.push(format!(
+                        "change {} was dropped: it depended on a change that was cancelled",
+                        p.id
+                    ));
+                }
+            }
+        }
+        debug_assert_eq!(before - dropped, self.pending.len());
+        dropped
     }
 
     /// Stop everything at once, including effect tails.
@@ -416,19 +505,13 @@ impl Session {
 
     // ---- the project --------------------------------------------------------------
 
-    fn projected(&self) -> Project {
-        let mut project = self.project.clone();
-        for p in &self.pending {
-            project.apply(&p.delta);
+    /// The project and what is playing as they will be once everything
+    /// waiting has landed.
+    fn projected(&self) -> (Project, BTreeMap<String, String>) {
+        match self.pending.last() {
+            Some(p) => (p.project.clone(), p.playing.clone()),
+            None => (self.project.clone(), self.playing.clone()),
         }
-        project
-    }
-
-    fn compile_project(&self, project: &Project, extra: &[Piece]) -> Result<Program, String> {
-        let (source, _) = project.source(&HashMap::new(), extra);
-        compile_with(&source, &options(self.layout)).map_err(|diags| {
-            diags.first().map_or_else(|| "failed to compile".to_string(), |d| d.message.clone())
-        })
     }
 
     // ---- landing ------------------------------------------------------------------------
@@ -442,50 +525,23 @@ impl Session {
 
     fn land(&mut self, p: Pending) {
         let at = self.clock;
-        let mut replay_tracks: Vec<(String, String)> = Vec::new();
+        let Pending { id, summary, project, program, mixer, actions, replays, playing, .. } = p;
 
-        if !p.delta.is_empty() {
-            let mut next = self.project.clone();
-            next.apply(&p.delta);
-            match self.compile_project(&next, &[]) {
-                Ok(program) => self.swap_program(next, program),
-                Err(why) => {
-                    self.notices.push(format!("change {} could not land: {why}", p.id));
-                }
-            }
-            // Tracks playing something that just changed pick up the new version.
-            let everything = p.retimes;
-            for (track, what) in &self.playing {
-                if everything || mentions_any(what, &p.changed_bindings) {
-                    replay_tracks.push((track.clone(), what.clone()));
-                }
-            }
+        if let (Some(program), Some(mixer)) = (program, mixer) {
+            self.swap_program(project, program, mixer);
         }
-
-        for statement in &p.actions {
-            self.run_action(statement, at);
+        for a in actions.iter().chain(&replays) {
+            self.run_action(a, at);
         }
-        for (track, what) in replay_tracks {
-            let text = format!("play {track} = {what}");
-            let statement = analyze(&text).ok().and_then(|mut s| s.pop());
-            if let Some(statement) = statement {
-                self.run_action(&statement, at);
-            }
-        }
+        self.playing = playing;
 
         self.rebuild_schedule();
-        self.landed.push(Landed {
-            id: p.id,
-            at,
-            position: self.grid().position(at),
-            changes: p.summary,
-        });
+        self.landed.push(Landed { id, at, position: self.grid().position(at), changes: summary });
     }
 
     /// Replace the running program, keeping what is sounding.
-    fn swap_program(&mut self, project: Project, program: Program) {
+    fn swap_program(&mut self, project: Project, program: Program, mut mixer: Mixer) {
         let transfers = self.plan_transfers(&project, &program);
-        let mut mixer = program.mixer(self.sample_rate);
         mixer.adopt(&mut self.mixer, &transfers);
         self.mixer = mixer;
         self.program = program;
@@ -516,18 +572,10 @@ impl Session {
             .collect()
     }
 
-    /// Carry out one `play`, `mute`, note... statement that has landed.
-    fn run_action(&mut self, statement: &Statement, at: u64) {
-        let program = match self.compile_project(&self.project, &[Piece {
-            text: statement.text.clone(),
-            origin: Origin::Snippet { offset: 0 },
-        }]) {
-            Ok(p) => p,
-            Err(why) => {
-                self.notices.push(format!("`{}` could not run: {why}", first_line(&statement.text)));
-                return;
-            }
-        };
+    /// Carry out one `play`, `mute`, note... statement that has landed. It was
+    /// compiled when it was evaluated.
+    fn run_action(&mut self, action: &Compiled, at: u64) {
+        let (statement, program) = (&action.statement, &action.program);
         let tempo = program.tempo;
         let landing_seconds = self.seconds(at);
 
@@ -539,24 +587,7 @@ impl Session {
         }
         for scheduled in &program.performance {
             let when = if statement.has_at { scheduled.at.to_seconds(tempo) } else { landing_seconds };
-            let action = name_action(&program, &scheduled.action);
-            self.track_playing(&action, statement);
-            self.history.push(HistoryEntry { at: when, action });
-        }
-    }
-
-    fn track_playing(&mut self, action: &NamedAction, statement: &Statement) {
-        match action {
-            NamedAction::Play { track, .. } => {
-                if let Some(plays) = statement.plays.as_ref().filter(|p| &p.track == track) {
-                    self.playing.insert(track.clone(), plays.what.clone());
-                }
-            }
-            NamedAction::Stop(track) => {
-                self.playing.remove(track);
-            }
-            NamedAction::Hush | NamedAction::Panic => self.playing.clear(),
-            _ => {}
+            self.history.push(HistoryEntry { at: when, action: name_action(program, &scheduled.action) });
         }
     }
 
@@ -789,4 +820,23 @@ fn mentions_any(source: &str, names: &[String]) -> bool {
     source
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .any(|word| names.iter().any(|n| n == word))
+}
+
+/// Update the record of what each track is playing for a statement that has
+/// been compiled: `play` records its source, `stop` and `hush` forget.
+fn apply_to_playing(playing: &mut BTreeMap<String, String>, program: &Program, statement: &Statement) {
+    for scheduled in &program.performance {
+        match name_action(program, &scheduled.action) {
+            NamedAction::Play { track, .. } => {
+                if let Some(plays) = statement.plays.as_ref().filter(|p| p.track == track) {
+                    playing.insert(track, plays.what.clone());
+                }
+            }
+            NamedAction::Stop(track) => {
+                playing.remove(&track);
+            }
+            NamedAction::Hush | NamedAction::Panic => playing.clear(),
+            _ => {}
+        }
+    }
 }
