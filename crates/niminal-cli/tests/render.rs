@@ -432,6 +432,34 @@ echo() for 1beat");
     }
 
     #[test]
+    fn a_reverb_inside_an_instrument_rings_out_as_it_does_on_a_track() {
+        let in_instrument = raw("
+instr click() { out = (osc(sine, 1000hz) * env[1 0.5ms 0]).reverb(room: 0.8, damp: 0.5) }
+click() for 1/8beat");
+        let on_track = raw("
+bus space
+instr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }
+track hall { out = space.reverb(room: 0.8, damp: 0.5) }
+click() for 1/8beat");
+        assert!(in_instrument.len() > SR as usize, "the voice outlived its note: {}", in_instrument.len());
+        assert_eq!(in_instrument.len(), on_track.len());
+        let worst = in_instrument.iter().zip(&on_track).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(worst < 1e-6, "largest difference {worst}");
+    }
+
+    #[test]
+    fn a_delay_inside_an_instrument_is_not_cut_off_at_note_end() {
+        let out = raw("
+tempo 120bpm
+instr click() { out = (osc(sine, 1000hz) * env[1 0.5ms 0]).delay(time: 1/2beat, feedback: 0.5) }
+click() for 1/16beat");
+        // the note ends after 1/16 beat (~31ms); echoes at 250ms intervals still sound
+        let at = |n: usize| peak(&out[n..n + 200]);
+        assert!(at(12_000) > 0.5, "first echo {}", at(12_000));
+        assert!(at(24_000) > 0.2, "second echo {}", at(24_000));
+    }
+
+    #[test]
     fn the_example_with_effects_renders() {
         let out = raw(include_str!("../../../examples/room.nml"));
         assert!(out.iter().all(|s| s.is_finite()));

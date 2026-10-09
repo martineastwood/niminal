@@ -1,5 +1,8 @@
 use std::borrow::Cow;
 
+/// The level (-90db) below which a fading tail counts as finished.
+pub const TAIL_LEVEL: f32 = 3.162_277_7e-5;
+
 /// Samples per processing block. Control changes and bus sends are
 /// block-aligned; stateful opcodes still run per sample inside a block.
 pub const BLOCK: usize = 32;

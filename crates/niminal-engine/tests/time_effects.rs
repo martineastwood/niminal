@@ -131,3 +131,57 @@ fn reverb_is_deterministic_and_block_size_independent() {
     let g = reverb_graph(0.7, 0.3);
     assert_eq!(render(&g, 20_000, None, 32), render(&g, 20_000, None, 13));
 }
+
+mod tails {
+    use super::*;
+    use niminal_engine::Voice;
+
+    /// Samples a released voice runs before it reports finished, and the
+    /// loudest output in its final block.
+    fn samples_until_finished(graph: Arc<Graph>) -> (usize, f32) {
+        let mut v = Voice::new(graph, SR);
+        let mut buf = [0.0f32; 32];
+        v.process(&mut buf); // the note has started and the signal is in the effect
+        v.release();
+        let mut n = 32;
+        let mut last_peak = 0.0;
+        while !v.is_finished() {
+            v.process(&mut buf);
+            last_peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            n += 32;
+            assert!(n < 60 * 48_000, "never finishes");
+        }
+        (n, last_peak)
+    }
+
+    #[test]
+    fn a_delay_keeps_its_voice_alive_until_the_echoes_fade() {
+        let (n, last) = samples_until_finished(delay_graph(1.0, 0.010, 0.5));
+        // 0.5^n < -90db after about 15 passes of 480 samples
+        assert!((13 * 480..20 * 480).contains(&n), "{n}");
+        assert!(last < 1e-4, "no click when the voice goes: {last}");
+    }
+
+    #[test]
+    fn without_feedback_one_echo_is_all_there_is() {
+        let (n, _) = samples_until_finished(delay_graph(1.0, 0.010, 0.0));
+        assert!(n < 3 * 480, "{n}");
+    }
+
+    #[test]
+    fn a_reverb_keeps_its_voice_alive_until_the_tail_fades() {
+        let (small, last) = samples_until_finished(reverb_graph(0.2, 0.5));
+        let (big, _) = samples_until_finished(reverb_graph(0.9, 0.5));
+        assert!(big > small * 2, "{big} vs {small}");
+        assert!(big > 48_000, "a big room rings for more than a second: {big}");
+        assert!(last < 1e-3, "{last}");
+    }
+
+    #[test]
+    fn a_silent_delay_or_reverb_does_not_hold_a_voice() {
+        let mut g = GraphBuilder::new();
+        let d = g.add(Delay::new(2.0), &[("x", Src::Const(0.0)), ("time", Src::Const(1.0))]).unwrap();
+        let (n, _) = samples_until_finished(Arc::new(g.build(d)));
+        assert!(n <= 64, "{n}");
+    }
+}
