@@ -13,7 +13,7 @@ pub mod ops;
 mod voice;
 
 pub use master::Master;
-pub use mixer::{Buses, ChainInput, MAX_CHANNELS, Mixer, Route, TrackDef, VoiceId, execution_order};
+pub use mixer::{Buses, ChainInput, MAX_CHANNELS, Mixer, Route, TrackDef, Transfer, VoiceId, execution_order};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
 pub use opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};
 pub use voice::Voice;

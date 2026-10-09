@@ -170,6 +170,15 @@ struct Track {
     chain_silenced: bool,
 }
 
+/// How a new mixer's track takes over from an old mixer's tracks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Transfer {
+    /// The old track whose sounding voices continue on this one.
+    pub voices_from: Option<usize>,
+    /// The old track whose effect chain, with its state, this one keeps.
+    pub chain_from: Option<usize>,
+}
+
 pub struct Mixer {
     buses: Buses,
     tracks: Vec<Track>,
@@ -236,10 +245,20 @@ impl Mixer {
         VoiceId { track, serial }
     }
 
-    /// Release a note. A voice that has already finished is ignored.
+    /// Release a note. A voice that has already finished is ignored. Voices keep
+    /// their id when they move between tracks (see [`Mixer::adopt`]), so the
+    /// track it started on is only a hint.
     pub fn release(&mut self, id: VoiceId) {
-        if let Some((_, v)) = self.tracks[id.track].voices.iter_mut().find(|(s, _)| *s == id.serial) {
+        let hinted = self.tracks.get_mut(id.track).and_then(|t| t.voices.iter_mut().find(|(s, _)| *s == id.serial));
+        if let Some((_, v)) = hinted {
             v.release();
+            return;
+        }
+        for track in &mut self.tracks {
+            if let Some((_, v)) = track.voices.iter_mut().find(|(s, _)| *s == id.serial) {
+                v.release();
+                return;
+            }
         }
     }
 
@@ -333,6 +352,33 @@ impl Mixer {
                 }
             }
         }
+    }
+
+    /// Take over running state from `old`, which this mixer replaces: for each
+    /// of this mixer's tracks, `transfers` says which of the old tracks' voices
+    /// to continue with and whose effect chain (with its delay lines and filter
+    /// memory) to keep. Voices keep playing on the instrument definition they
+    /// started with. Old tracks that nothing claims are dropped.
+    ///
+    /// The caller must only carry a chain over where it is the same as the new
+    /// definition, and only carry voices where the buses are unchanged.
+    pub fn adopt(&mut self, old: &mut Mixer, transfers: &[Transfer]) {
+        assert_eq!(transfers.len(), self.tracks.len(), "one transfer per track");
+        for (track, transfer) in self.tracks.iter_mut().zip(transfers) {
+            if let Some(from) = transfer.voices_from
+                && old.channels == self.channels
+            {
+                track.voices.append(&mut old.tracks[from].voices);
+            }
+            if let Some(from) = transfer.chain_from
+                && let Some(chain) = old.tracks[from].chain.take()
+            {
+                track.chain = Some(chain);
+                track.chain_silenced = old.tracks[from].chain_silenced;
+            }
+        }
+        self.next_serial = self.next_serial.max(old.next_serial);
+        self.silenced += std::mem::take(&mut old.silenced);
     }
 
     /// The channel count of each bus.
