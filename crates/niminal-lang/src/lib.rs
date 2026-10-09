@@ -4,6 +4,7 @@
 mod ast;
 mod compile;
 mod diag;
+mod kernel;
 mod lexer;
 mod opcodes;
 mod parser;

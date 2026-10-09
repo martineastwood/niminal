@@ -158,3 +158,82 @@ fn the_limiter_does_not_move_notes() {
     assert!(out[..first].iter().all(|s| s.abs() < 1e-6), "silent before the note");
     assert!(out[first..first + 200].iter().any(|s| s.abs() > 0.1), "sounds right at the note start");
 }
+
+mod opcodes {
+    use super::*;
+
+    const LIB: &str = "
+opcode one_pole(x, cutoff: hz) {
+  state y = 0.0
+  a = exp(-2 * pi * cutoff / sample_rate)
+  y = x * (1 - a) + y * a
+  y
+}
+
+opcode drive(x, amount: 0..1 = 0.5) {
+  (x * (1 + amount * 9)).tanh
+}
+
+opcode dc_block(x) {
+  state x1 = 0.0
+  state y1 = 0.0
+  y = x - x1 + 0.995 * y1
+  x1 = x
+  y1 = y
+  y
+}
+";
+
+    fn raw(src: &str) -> Vec<f32> {
+        let p = program(&format!("{LIB}{src}"));
+        render_with(&p, &[], &RenderOptions { limiter: false }).unwrap().samples
+    }
+
+    fn peak(x: &[f32]) -> f32 {
+        x.iter().fold(0.0, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn a_user_lowpass_filters() {
+        let bright = raw("instr a() { osc(saw, 2000hz) }\na() for 1beat");
+        let dull = raw("instr a() { osc(saw, 2000hz).one_pole(cutoff: 300hz) }\na() for 1beat");
+        let mid = bright.len() / 2;
+        let (b, d) = (rms(&bright[mid..mid + 9600]), rms(&dull[mid..mid + 9600]));
+        assert!(d < b / 4.0, "300hz one-pole should take most of a 2khz saw away: {d} vs {b}");
+    }
+
+    #[test]
+    fn a_user_waveshaper_bounds_the_signal() {
+        let loud = raw("instr a() { osc(sine, 100hz) * 20 }\na() for 1beat");
+        let driven = raw("instr a() { (osc(sine, 100hz) * 20).drive(amount: 1) }\na() for 1beat");
+        assert!(peak(&loud) > 15.0);
+        assert!(peak(&driven) <= 1.0);
+        assert!(peak(&driven) > 0.99, "hard-driven tanh nearly reaches 1");
+    }
+
+    #[test]
+    fn a_user_dc_blocker_removes_offset() {
+        let offset = raw("instr a() { osc(sine, 440hz) * 0.3 + 0.5 }\na() for 2beats");
+        let blocked = raw("instr a() { (osc(sine, 440hz) * 0.3 + 0.5).dc_block }\na() for 2beats");
+        let mean = |x: &[f32]| x.iter().sum::<f32>() / x.len() as f32;
+        let tail = |x: &Vec<f32>| x[x.len() / 2..].to_vec();
+        assert!((mean(&tail(&offset)) - 0.5).abs() < 0.01);
+        assert!(mean(&tail(&blocked)).abs() < 0.02, "{}", mean(&tail(&blocked)));
+    }
+
+    #[test]
+    fn state_belongs_to_the_voice_so_repeated_notes_sound_identical() {
+        let out = raw("instr a() { osc(saw, 300hz).one_pole(cutoff: 500hz) * env[1 0.2sec 1] }\na() for 1/4beat\nat 1beat a() for 1/4beat");
+        let second = (0.5 * SR) as usize; // 1 beat at 120bpm
+        assert_eq!(&out[..4800], &out[second..second + 4800]);
+    }
+
+    #[test]
+    fn overlapping_notes_do_not_share_state() {
+        let solo = raw("instr a(f: hz) { osc(saw, f).one_pole(cutoff: 500hz) * env[1 1sec 1] }\na(f: 200hz) for 1beat");
+        let both = raw("instr a(f: hz) { osc(saw, f).one_pole(cutoff: 500hz) * env[1 1sec 1] }\na(f: 200hz) for 1beat\nat 100ms a(f: 330hz) for 1beat");
+        // before the second note starts the output is identical
+        assert_eq!(&solo[..4700], &both[..4700]);
+        assert_ne!(&solo[5000..6000], &both[5000..6000]);
+    }
+}

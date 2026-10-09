@@ -10,7 +10,8 @@ use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
-use crate::opcodes::{self, Kind};
+use crate::kernel::compile_opcode;
+use crate::opcodes::{self, Kind, Registry};
 use crate::parser;
 use crate::program::{Instrument, Param, Program};
 use crate::unit::Unit;
@@ -32,6 +33,18 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
         }
     };
 
+    let mut registry = Registry::builtin();
+    for item in &items {
+        let Item::Opcode(def) = item else { continue };
+        match compile_opcode(def, &registry, tempo) {
+            Ok((spec, body_error)) => {
+                errors.extend(body_error);
+                registry.add(spec);
+            }
+            Err(d) => errors.push(d),
+        }
+    }
+
     let mut instruments: Vec<Instrument> = Vec::new();
     let mut failed: Vec<&str> = Vec::new();
     for item in &items {
@@ -41,7 +54,7 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
             errors.push(Diagnostic::new(format!("instrument `{name}` is defined twice"), def.name.span));
             continue;
         }
-        match compile_instr(def, tempo) {
+        match compile_instr(def, tempo, &registry) {
             Ok(i) => instruments.push(i),
             Err(d) => {
                 errors.push(d);
@@ -171,6 +184,33 @@ fn literal_value(e: &Expr) -> Res<Value> {
     }
 }
 
+/// A literal's unit and value. Decibels become gain factors and beats become
+/// seconds at `tempo`.
+pub(crate) fn literal_sig(value: f64, unit: Option<&str>, tempo: Tempo, span: Span) -> Res<(Unit, f64)> {
+    Ok(match unit {
+        None => (Unit::Num, value),
+        Some("hz") => (Unit::Hz, value),
+        Some("khz") => (Unit::Hz, value * 1000.0),
+        Some("db") => (Unit::Db, 10f64.powf(value / 20.0)),
+        Some("sec") => (Unit::Time, value),
+        Some("ms") => (Unit::Time, value / 1000.0),
+        Some("beat" | "beats") => (Unit::Time, value * 60.0 / tempo.bpm),
+        Some("bpm") => {
+            return Err(Diagnostic::new("`bpm` can only be used with `tempo`", span)
+                .with_help("for example `tempo 120bpm`"));
+        }
+        Some(u) => return Err(unknown_unit(u, span)),
+    })
+}
+
+pub(crate) fn unknown_name<'a>(name: &str, span: Span, known: impl IntoIterator<Item = &'a str>) -> Diagnostic {
+    let mut d = Diagnostic::new(format!("`{name}` is not defined"), span);
+    if let Some(c) = closest(name, known) {
+        d = d.with_help(format!("did you mean `{c}`?"));
+    }
+    d
+}
+
 fn unknown_unit(unit: &str, span: Span) -> Diagnostic {
     let mut d = Diagnostic::new(format!("unknown unit `{unit}`"), span);
     if let Some(c) = closest(unit, UNIT_NAMES) {
@@ -199,21 +239,26 @@ impl Sig {
     }
 }
 
-struct Lower {
+pub(crate) struct Lower<'a> {
+    registry: &'a Registry,
     g: GraphBuilder,
     tempo: Tempo,
     scope: HashMap<String, Sig>,
 }
 
-fn compile_instr(def: &InstrDef, tempo: Tempo) -> Res<Instrument> {
-    let mut lower = Lower { g: GraphBuilder::new(), tempo, scope: HashMap::new() };
+fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry) -> Res<Instrument> {
+    let mut lower = Lower::new(registry, tempo);
     let mut params: Vec<Param> = Vec::new();
 
     for p in &def.params {
         if params.iter().any(|q| q.name == p.name.name) {
             return Err(Diagnostic::new(format!("parameter `{}` is declared twice", p.name.name), p.name.span));
         }
-        let (unit, range) = param_type(&p.ty)?;
+        let Some(ty) = &p.ty else {
+            return Err(Diagnostic::new(format!("parameter `{}` needs a type", p.name.name), p.name.span)
+                .with_help(format!("for example `{}: hz`", p.name.name)));
+        };
+        let (unit, range) = param_type(ty)?;
         let default = match &p.default {
             None => None,
             Some(e) => Some(lower.param_default(e, unit, range, &p.name.name)?),
@@ -236,16 +281,20 @@ fn compile_instr(def: &InstrDef, tempo: Tempo) -> Res<Instrument> {
                 let sig = lower.expr(value)?;
                 lower.scope.insert(name.name.clone(), sig);
             }
+            Stmt::State { name, .. } => return Err(state_outside_opcode(name)),
             Stmt::Expr(e) => {
                 return Err(Diagnostic::new("this value is never used", e.span)
                     .with_help("bind it with `name = ...`, or make it the last line"));
             }
         }
     }
-    let Stmt::Expr(out_expr) = last else {
-        let Stmt::Bind { name, .. } = last else { unreachable!() };
-        return Err(Diagnostic::new("an instrument must end with the signal it outputs", name.span)
-            .with_help(format!("add a last line such as `{}`", name.name)));
+    let out_expr = match last {
+        Stmt::Expr(e) => e,
+        Stmt::State { name, .. } => return Err(state_outside_opcode(name)),
+        Stmt::Bind { name, .. } => {
+            return Err(Diagnostic::new("an instrument must end with the signal it outputs", name.span)
+                .with_help(format!("add a last line such as `{}`", name.name)));
+        }
     };
     let out = lower.expr(out_expr)?;
     if out.unit != Unit::Num {
@@ -258,7 +307,12 @@ fn compile_instr(def: &InstrDef, tempo: Tempo) -> Res<Instrument> {
     Ok(Instrument { name: def.name.name.clone(), graph: Arc::new(lower.g.build(out.src)), params })
 }
 
-fn param_type(ty: &TypeSpec) -> Res<(Unit, Option<(f64, f64)>)> {
+fn state_outside_opcode(name: &Ident) -> Diagnostic {
+    Diagnostic::new("`state` can only be used inside an `opcode`", name.span)
+        .with_help("an instrument's filters and delays keep their own state")
+}
+
+pub(crate) fn param_type(ty: &TypeSpec) -> Res<(Unit, Option<(f64, f64)>)> {
     match ty {
         TypeSpec::Range { lo, hi, span } => {
             if lo >= hi {
@@ -276,8 +330,12 @@ fn param_type(ty: &TypeSpec) -> Res<(Unit, Option<(f64, f64)>)> {
     }
 }
 
-impl Lower {
-    fn param_default(&mut self, e: &Expr, unit: Unit, range: Option<(f64, f64)>, name: &str) -> Res<f32> {
+impl<'a> Lower<'a> {
+    pub(crate) fn new(registry: &'a Registry, tempo: Tempo) -> Self {
+        Lower { registry, g: GraphBuilder::new(), tempo, scope: HashMap::new() }
+    }
+
+    pub(crate) fn param_default(&mut self, e: &Expr, unit: Unit, range: Option<(f64, f64)>, name: &str) -> Res<f32> {
         let sig = self.expr(e)?;
         let Some(v) = sig.konst else {
             return Err(Diagnostic::new(format!("the default for `{name}` must be a constant"), e.span));
@@ -296,20 +354,7 @@ impl Lower {
     }
 
     fn literal(&self, value: f64, unit: Option<&str>, span: Span) -> Res<Sig> {
-        Ok(match unit {
-            None => Sig::constant(Unit::Num, value),
-            Some("hz") => Sig::constant(Unit::Hz, value),
-            Some("khz") => Sig::constant(Unit::Hz, value * 1000.0),
-            Some("db") => Sig::constant(Unit::Db, 10f64.powf(value / 20.0)),
-            Some("sec") => Sig::constant(Unit::Time, value),
-            Some("ms") => Sig::constant(Unit::Time, value / 1000.0),
-            Some("beat" | "beats") => Sig::constant(Unit::Time, value * 60.0 / self.tempo.bpm),
-            Some("bpm") => {
-                return Err(Diagnostic::new("`bpm` can only be used with `tempo`", span)
-                    .with_help("for example `tempo 120bpm`"));
-            }
-            Some(u) => return Err(unknown_unit(u, span)),
-        })
+        literal_sig(value, unit, self.tempo, span).map(|(unit, v)| Sig::constant(unit, v))
     }
 
     fn expr(&mut self, e: &Expr) -> Res<Sig> {
@@ -340,11 +385,7 @@ impl Lower {
             return Err(Diagnostic::new(format!("`{name}` is a waveform, not a value"), span)
                 .with_help("waveforms go in the first slot of `osc`, as in `osc(saw, freq)`"));
         }
-        let mut d = Diagnostic::new(format!("`{name}` is not defined"), span);
-        if let Some(c) = closest(name, self.scope.keys().map(String::as_str)) {
-            d = d.with_help(format!("did you mean `{c}`?"));
-        }
-        Err(d)
+        Err(unknown_name(name, span, self.scope.keys().map(String::as_str)))
     }
 
     // ---- arithmetic ----------------------------------------------------
@@ -399,11 +440,9 @@ impl Lower {
                 Ok(Sig::signal(src.expect("add/sub ports"), l.unit))
             }
             BinOp::Mul => match (l.unit, r.unit) {
-                (Unit::Db, _) | (_, Unit::Db) => Err(Diagnostic::new(
-                    "multiplying a db value isn't supported yet",
-                    span,
-                )
-                .with_help("add or subtract decibels instead, such as `amp - 6db`")),
+                // Applying a gain to a plain value.
+                (Unit::Num, Unit::Db) | (Unit::Db, Unit::Num) => Ok(self.mul(l, r, Unit::Num)),
+                (Unit::Db, _) | (_, Unit::Db) => Err(mismatch()),
                 (Unit::Num, u) | (u, Unit::Num) => Ok(self.mul(l, r, u)),
                 _ => Err(mismatch()),
             },
@@ -435,14 +474,15 @@ impl Lower {
     // ---- calls ----------------------------------------------------------
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
-        let Some(spec) = opcodes::find(&name.name) else {
+        let registry = self.registry;
+        let Some(spec) = registry.find(&name.name) else {
             let mut d = Diagnostic::new(format!("unknown opcode `{}`", name.name), name.span);
-            if let Some(c) = closest(&name.name, opcodes::OPCODES.iter().map(|o| o.name)) {
+            if let Some(c) = closest(&name.name, registry.names()) {
                 d = d.with_help(format!("did you mean `{c}`?"));
             }
             return Err(d);
         };
-        let op = spec.name;
+        let op = spec.name.as_str();
 
         // Match arguments to parameters.
         let mut bound: Vec<Option<&Arg>> = vec![None; spec.params.len()];
@@ -465,7 +505,7 @@ impl Lower {
                     Some(i) => i,
                     None => {
                         let mut d = Diagnostic::new(format!("`{op}` has no argument named `{}`", n.name), n.span);
-                        if let Some(c) = closest(&n.name, spec.params.iter().map(|p| p.name)) {
+                        if let Some(c) = closest(&n.name, spec.params.iter().map(|p| p.name.as_str())) {
                             d = d.with_help(format!("did you mean `{c}`?"));
                         }
                         return Err(d);
@@ -482,7 +522,7 @@ impl Lower {
         }
 
         let mut wave = None;
-        let mut wired: Vec<(&'static str, Src)> = Vec::new();
+        let mut wired: Vec<(&str, Src)> = Vec::new();
         for (param, arg) in spec.params.iter().zip(bound) {
             let Some(arg) = arg else {
                 if param.required {
@@ -506,9 +546,9 @@ impl Lower {
                 Kind::Signal(expected) => {
                     let sig = self.expr(&arg.value)?;
                     if sig.unit != expected {
-                        return Err(self.unit_mismatch(param.name, expected, sig.unit, &arg.value));
+                        return Err(self.unit_mismatch(&param.name, expected, sig.unit, &arg.value));
                     }
-                    wired.push((param.name, sig.src));
+                    wired.push((&param.name, sig.src));
                 }
                 Kind::Gain => {
                     let sig = self.expr(&arg.value)?;
@@ -518,12 +558,16 @@ impl Lower {
                             arg.value.span,
                         ));
                     }
-                    wired.push((param.name, sig.src));
+                    wired.push((&param.name, sig.src));
                 }
             }
         }
 
-        let src = self.g.add((spec.build)(wave), &wired).expect("ports match the opcode table");
+        let Some(opcode) = spec.instantiate(wave) else {
+            // The opcode's own body is broken and already reported.
+            return Ok(Sig::constant(Unit::Num, 0.0));
+        };
+        let src = self.g.add(opcode, &wired).expect("ports match the opcode table");
         Ok(Sig::signal(src, Unit::Num))
     }
 
@@ -682,7 +726,7 @@ saw_lead(freq: a3) for 1beat
         assert_eq!(msg("instr a(f: hz) { osc(saw, f + 1) }"), "can't add hz and a plain number");
         assert_eq!(msg("instr a(f: hz) { f }"), "an instrument outputs a plain signal, but this is hz");
         assert_eq!(msg("instr a(f: hz = 6db) { osc(saw, f) }"), "`f` expects hz, found db");
-        assert_eq!(msg("instr a(f: hz) { osc(saw, f).gain(f * 2db) }"), "multiplying a db value isn't supported yet");
+        assert_eq!(msg("instr a(f: hz) { osc(saw, f).gain(f * 2db) }"), "can't multiply hz and db");
         assert_eq!(msg("instr a(f: hz) { osc(saw, f / 0) }"), "division by zero");
     }
 
@@ -754,6 +798,106 @@ saw_lead(freq: a3) for 1beat
         assert_eq!(msg(&note("lead(freq: c4) for 440hz")), "expected a time");
         assert_eq!(msg(&note("lead(freq: c4, freq: c5) for 1beat")), "argument `freq` given more than once");
         assert_eq!(msg(&note("lead(freq: c4 + 1st) for 1beat")), "note arguments must be literal values");
+    }
+
+    const SPEC_OPCODES: &str = "
+opcode one_pole(x, cutoff: hz) {
+  state y = 0.0
+  a = exp(-2 * pi * cutoff / sample_rate)
+  y = x * (1 - a) + y * a
+  y
+}
+
+opcode drive(x, amount: 0..1 = 0.5) {
+  (x * (1 + amount * 9)).tanh
+}
+
+opcode dc_block(x) {
+  state x1 = 0.0
+  state y1 = 0.0
+  y = x - x1 + 0.995 * y1
+  x1 = x
+  y1 = y
+  y
+}
+
+opcode fold(x, amount: 0..1 = 0.5) {
+  (x * (1 + amount * 8)).sin
+}
+";
+
+    #[test]
+    fn the_specs_example_opcodes_compile_and_can_be_used() {
+        ok(&format!(
+            "{SPEC_OPCODES}
+instr a(freq: hz) {{ osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz) }}
+instr b(freq: hz) {{ osc(sine, freq).fold(amount: env[0 2sec 1 2sec 0]).dc_block }}
+instr c(freq: hz) {{ drive(osc(saw, freq)) }}
+a(freq: 110hz) for 1beat"
+        ));
+    }
+
+    #[test]
+    fn opcode_arguments_are_checked_like_any_other() {
+        let with = |call: &str| format!("{SPEC_OPCODES}\ninstr a(freq: hz) {{ {call} }}");
+        assert_eq!(msg(&with("osc(saw, freq).one_pole(cutoff: 800)")), "`cutoff` expects hz, found a plain number");
+        assert_eq!(help(&with("osc(saw, freq).one_pole(cutoff: 800)")).as_deref(), Some("did you mean `800hz`?"));
+        assert_eq!(msg(&with("osc(saw, freq).one_pole()")), "`one_pole` needs an argument `cutoff`");
+        assert_eq!(msg(&with("osc(saw, freq).drive(amont: 0.3)")), "`drive` has no argument named `amont`");
+        assert_eq!(msg(&with("osc(saw, freq).drive(0.3)")), "`drive` takes its other arguments by name");
+        ok(&with("osc(saw, freq).drive"));
+    }
+
+    #[test]
+    fn opcode_body_errors() {
+        let body = |b: &str| format!("opcode f(x, amount: 0..1 = 0.5, cutoff: hz = 100hz) {{ {b} }}");
+        assert_eq!(msg(&body("x * undefined_thing")), "`undefined_thing` is not defined");
+        assert_eq!(msg(&body("exp(cutoff)")), "`exp` expects a plain number, found hz");
+        assert_eq!(msg(&body("x + cutoff")), "can't add a plain number and hz");
+        assert_eq!(msg(&body("cutoff")), "an opcode outputs a plain signal, but this is hz");
+        assert_eq!(msg(&body("x.lpf(cutoff: 100hz)")), "`lpf` can't be used inside an opcode");
+        assert_eq!(msg(&body("x.exxp")), "`exxp` can't be used inside an opcode");
+        assert_eq!(help(&body("x.exxp")).as_deref(), Some("did you mean `exp`?"));
+        assert_eq!(msg(&body("exp(x, x)")), "`exp` takes one argument");
+        assert_eq!(msg(&body("env[0 1sec 1]")), "envelopes can't be used inside an opcode");
+        assert_eq!(msg(&body("")), "opcode `f` is empty");
+        assert_eq!(msg(&body("state s = x\ns")), "the starting value of a state must be a number");
+        assert_eq!(msg(&body("state s = 0.0\ns = cutoff\ns")), "`s` holds a plain number, but this is hz");
+        assert_eq!(msg(&body("state x = 0.0\nx")), "`x` is already defined");
+        assert_eq!(msg(&body("x = 1")), "an opcode must end with the value it outputs");
+        assert_eq!(msg(&body("x\nx")), "this value is never used");
+    }
+
+    #[test]
+    fn opcode_signature_errors() {
+        assert_eq!(msg("opcode lpf(x) { x }"), "`lpf` is already an opcode");
+        assert_eq!(msg("opcode f(x) { x }\nopcode f(x) { x }"), "`f` is already an opcode");
+        assert_eq!(msg("opcode f(x, x) { x }"), "parameter `x` is declared twice");
+        assert_eq!(msg("opcode f(x, a: 0..1 = 3) { x }"), "the default for `a` is outside 0..1");
+        assert_eq!(msg("opcode f(x, a: furlongs) { x }"), "unknown parameter type `furlongs`");
+    }
+
+    #[test]
+    fn state_and_untyped_parameters_belong_to_the_right_definitions() {
+        assert_eq!(msg("instr a() { state y = 0.0\n0.5 }"), "`state` can only be used inside an `opcode`");
+        assert_eq!(msg("instr a(freq) { osc(saw, freq) }"), "parameter `freq` needs a type");
+    }
+
+    #[test]
+    fn a_broken_opcode_is_reported_once_even_if_it_is_used() {
+        let errs = errors("
+opcode bad(x) { x + undefined_thing }
+instr a(f: hz) { osc(saw, f).bad }
+a(f: 100hz) for 1beat
+");
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert_eq!(errs[0].message, "`undefined_thing` is not defined");
+    }
+
+    #[test]
+    fn db_gains_apply_to_plain_values() {
+        ok("instr a(f: hz, amp: db = -6db) { osc(saw, f) * amp }");
+        ok("opcode g(x, amp: db = -6db) { x * amp }\ninstr a(f: hz) { osc(saw, f).g(amp: -3db) }");
     }
 
     #[test]

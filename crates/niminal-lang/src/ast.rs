@@ -9,6 +9,7 @@ pub struct Ident {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Instr(InstrDef),
+    Opcode(OpcodeDef),
     Tempo(Expr),
     Note(NoteStmt),
 }
@@ -21,10 +22,20 @@ pub struct InstrDef {
     pub span: Span,
 }
 
+/// `opcode name(x, cutoff: hz) { ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpcodeDef {
+    pub name: Ident,
+    pub params: Vec<ParamDef>,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamDef {
     pub name: Ident,
-    pub ty: TypeSpec,
+    /// Optional in an opcode, where an untyped parameter is a plain signal.
+    pub ty: Option<TypeSpec>,
     pub default: Option<Expr>,
 }
 
@@ -39,6 +50,8 @@ pub enum TypeSpec {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Bind { name: Ident, value: Expr },
+    /// `state y = 0.0`, only inside an opcode.
+    State { name: Ident, init: Expr },
     Expr(Expr),
 }
 

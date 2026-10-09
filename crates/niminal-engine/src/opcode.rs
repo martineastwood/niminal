@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 /// Samples per processing block. Control changes and bus sends are
 /// block-aligned; stateful opcodes still run per sample inside a block.
 pub const BLOCK: usize = 32;
@@ -6,19 +8,24 @@ pub const BLOCK: usize = 32;
 pub const MAX_INPUTS: usize = 8;
 
 /// A named input of an opcode. `default: None` means the port must be wired.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Port {
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     pub default: Option<f32>,
 }
 
 impl Port {
     pub const fn required(name: &'static str) -> Self {
-        Port { name, default: None }
+        Port { name: Cow::Borrowed(name), default: None }
     }
 
     pub const fn optional(name: &'static str, default: f32) -> Self {
-        Port { name, default: Some(default) }
+        Port { name: Cow::Borrowed(name), default: Some(default) }
+    }
+
+    /// For opcodes whose ports are only known at run time (user-defined ones).
+    pub fn named(name: impl Into<String>, default: Option<f32>) -> Self {
+        Port { name: Cow::Owned(name.into()), default }
     }
 }
 
@@ -36,10 +43,10 @@ pub struct ProcessCtx {
 /// A graph holds one template of each opcode; every voice gets its own copy via
 /// [`Opcode::box_clone`], which must return a freshly initialised instance.
 pub trait Opcode: Send + Sync {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Input ports, in the order `process` receives them.
-    fn ports(&self) -> &'static [Port];
+    fn ports(&self) -> &[Port];
 
     fn box_clone(&self) -> Box<dyn Opcode>;
 
@@ -64,11 +71,11 @@ pub trait Opcode: Send + Sync {
 
 /// Lets a boxed opcode be added to a graph like any other.
 impl Opcode for Box<dyn Opcode> {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         (**self).name()
     }
 
-    fn ports(&self) -> &'static [Port] {
+    fn ports(&self) -> &[Port] {
         (**self).ports()
     }
 

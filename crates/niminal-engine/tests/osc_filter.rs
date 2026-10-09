@@ -124,7 +124,7 @@ fn filter_survives_extreme_cutoffs() {
 fn builder_reports_port_errors() {
     let mut g = GraphBuilder::new();
     let e = g.add(Osc::new(Wave::Sine), &[]).unwrap_err();
-    assert_eq!(e, GraphError::MissingPort { opcode: "osc", port: "freq" });
+    assert_eq!(e, GraphError::MissingPort { opcode: "osc".into(), port: "freq".into() });
 
     let e = g.add(Osc::new(Wave::Sine), &[("frequency", Src::Const(1.0))]).unwrap_err();
     assert!(matches!(e, GraphError::UnknownPort { .. }));

@@ -116,7 +116,11 @@ impl Parser {
 
     fn item(&mut self) -> Res<Item> {
         if self.is_keyword("instr") {
-            self.instr().map(Item::Instr)
+            let (name, params, body, span) = self.definition()?;
+            Ok(Item::Instr(InstrDef { name, params, body, span }))
+        } else if self.is_keyword("opcode") {
+            let (name, params, body, span) = self.definition()?;
+            Ok(Item::Opcode(OpcodeDef { name, params, body, span }))
         } else if self.is_keyword("tempo") {
             self.bump();
             Ok(Item::Tempo(self.expr()?))
@@ -125,15 +129,17 @@ impl Parser {
         }
     }
 
-    fn instr(&mut self) -> Res<InstrDef> {
-        let start = self.bump().span;
-        let name = self.ident("an instrument name")?;
+    /// `instr|opcode name(params) { body }`
+    fn definition(&mut self) -> Res<(Ident, Vec<ParamDef>, Vec<Stmt>, Span)> {
+        let keyword = self.bump();
+        let start = keyword.span;
+        let what = if keyword.tok == Tok::Ident("instr".into()) { "an instrument name" } else { "an opcode name" };
+        let name = self.ident(what)?;
         self.expect(&Tok::LParen)?;
         let mut params = Vec::new();
         while self.peek() != &Tok::RParen {
             let pname = self.ident("a parameter name")?;
-            self.expect(&Tok::Colon)?;
-            let ty = self.type_spec()?;
+            let ty = self.eat(&Tok::Colon).then(|| self.type_spec()).transpose()?;
             let default = self.eat(&Tok::Eq).then(|| self.expr()).transpose()?;
             params.push(ParamDef { name: pname, ty, default });
             if !self.eat(&Tok::Comma) {
@@ -155,7 +161,7 @@ impl Parser {
             }
         }
         let end = self.expect(&Tok::RBrace)?;
-        Ok(InstrDef { name, params, body, span: start.to(end) })
+        Ok((name, params, body, start.to(end)))
     }
 
     fn type_spec(&mut self) -> Res<TypeSpec> {
@@ -175,6 +181,12 @@ impl Parser {
     }
 
     fn stmt(&mut self) -> Res<Stmt> {
+        if self.is_keyword("state") && matches!(self.peek_at(1), Tok::Ident(_)) {
+            self.bump();
+            let name = self.ident("a name for the state")?;
+            self.expect(&Tok::Eq)?;
+            return Ok(Stmt::State { name, init: self.expr()? });
+        }
         if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
             let name = self.ident("a name")?;
             self.bump();
@@ -450,6 +462,7 @@ saw_lead(freq: a3) for 1beat
         assert_eq!(i.name.name, "saw_lead");
         assert_eq!(i.params.len(), 2);
         assert!(i.params[0].default.is_none());
+        assert!(i.params[0].ty.is_some());
         assert!(i.params[1].default.is_some());
         assert_eq!(i.body.len(), 2);
         let Item::Note(n) = &items[1] else { panic!() };
@@ -489,7 +502,25 @@ saw_lead(freq: a3) for 1beat
     #[test]
     fn range_typed_parameters() {
         let i = only_instr("instr a(bright: 0..1 = 0.5) { bright }");
-        assert!(matches!(i.params[0].ty, TypeSpec::Range { lo, hi, .. } if lo == 0.0 && hi == 1.0));
+        assert!(matches!(i.params[0].ty, Some(TypeSpec::Range { lo, hi, .. }) if lo == 0.0 && hi == 1.0));
+    }
+
+    #[test]
+    fn opcode_definitions_with_state_and_untyped_parameters() {
+        let items = parse_ok("
+opcode one_pole(x, cutoff: hz) {
+  state y = 0.0
+  a = exp(-2 * pi * cutoff / sample_rate)
+  y = x * (1 - a) + y * a
+  y
+}");
+        let Item::Opcode(o) = &items[0] else { panic!() };
+        assert_eq!(o.name.name, "one_pole");
+        assert!(o.params[0].ty.is_none());
+        assert!(o.params[1].ty.is_some());
+        assert!(matches!(o.body[0], Stmt::State { .. }));
+        assert_eq!(o.body.len(), 4);
+        assert_eq!(err("opcode (x) {}"), "expected an opcode name, found `(`");
     }
 
     fn env_of(src: &str) -> EnvLit {
