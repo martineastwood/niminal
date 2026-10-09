@@ -214,8 +214,10 @@ impl Schedule {
         let name = &self.track_names[segment.track];
         let clip = &segment.clip;
 
-        let freq = match pitch {
-            Value::Note(_) | Value::Hz(_) => *pitch,
+        let mut args = std::collections::BTreeMap::new();
+        match pitch {
+            Value::Note(_) | Value::Hz(_) => args.insert(crate::perform::PITCH_PARAM.to_string(), *pitch),
+            Value::Sample(_) => args.insert("sample".to_string(), *pitch),
             other => {
                 return Err(ScheduleError(format!(
                     "clip `{}` on track `{name}`: a note must be a note name or a frequency, found `{other}`",
@@ -223,9 +225,6 @@ impl Schedule {
                 )));
             }
         };
-
-        let mut args = std::collections::BTreeMap::new();
-        args.insert(crate::perform::PITCH_PARAM.to_string(), freq);
         let mut dur = Time::Seconds((whole.end - whole.start).to_f64() * cycle);
         let mut at = onset;
 

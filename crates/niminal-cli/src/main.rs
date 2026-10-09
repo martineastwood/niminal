@@ -147,7 +147,11 @@ fn run_render(
 ) -> Result<(), String> {
     let source = read(file)?;
     let name = file.display().to_string();
-    let program = niminal_lang::compile(&source)
+    let options = niminal_lang::CompileOptions {
+        samples: niminal_lang::Samples::new(file.parent().unwrap_or(Path::new("."))),
+        ..Default::default()
+    };
+    let program = niminal_lang::compile_with(&source, &options)
         .map_err(|errors| errors.iter().map(|d| d.render(&name, &source)).collect::<Vec<_>>().join("\n"))?;
 
     let bar_seconds = program.tempo.beats_per_bar * 60.0 / program.tempo.bpm;
@@ -271,7 +275,11 @@ fn load(daemon: &Shared, path: &Path, quantize: Option<&str>) -> Option<SystemTi
             return modified;
         }
     };
-    let result = lock(daemon).session_mut().eval(&source, quantize);
+    let result = {
+        let mut d = lock(daemon);
+        d.session_mut().set_sample_dir(path.parent().unwrap_or(Path::new(".")));
+        d.session_mut().eval(&source, quantize)
+    };
     match result {
         Ok(a) => match a.id {
             Some(_) => println!("{name}: lands at bar {} beat {:.2}", a.position.0, a.position.1),
@@ -306,6 +314,9 @@ fn run_send(
 /// Evaluate code on the daemon, describing when it lands.
 fn eval(client: &mut Client, source: &str, quantize: Option<&str>, name: &str) -> Result<String, String> {
     let mut params = json!({ "source": source });
+    if let Ok(dir) = std::env::current_dir() {
+        params["dir"] = json!(dir);
+    }
     if let Some(q) = quantize {
         params["quantize"] = json!(q);
     }

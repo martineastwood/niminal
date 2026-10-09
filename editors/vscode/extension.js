@@ -90,6 +90,7 @@ async function evaluate(editor, range) {
   if (!c) return;
   const { document } = editor;
   const params = { source: document.getText(range) };
+  if (document.uri.scheme === "file") params.dir = require("path").dirname(document.uri.fsPath);
   const { quantize } = settings();
   if (quantize) params.quantize = quantize;
   try {

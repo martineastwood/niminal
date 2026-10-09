@@ -14,6 +14,7 @@ mod parser;
 mod perform;
 mod performance;
 mod program;
+mod sample;
 mod schedule;
 mod unit;
 
@@ -24,4 +25,5 @@ pub use performance::{Action, Clip, Quantize, QuantizeRelation, QuantizeUnit, Sc
 pub use schedule::{Schedule, ScheduleError};
 pub use program::{ArgError, Instrument, NotePlan, Param, Program, TrackInfo};
 pub use layout::Layout;
+pub use sample::Samples;
 pub use unit::Unit;

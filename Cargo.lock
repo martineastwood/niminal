@@ -538,6 +538,7 @@ dependencies = [
 name = "niminal-daemon"
 version = "0.0.1"
 dependencies = [
+ "hound",
  "niminal-engine",
  "niminal-lang",
  "niminal-score",
@@ -556,6 +557,7 @@ dependencies = [
 name = "niminal-lang"
 version = "0.0.1"
 dependencies = [
+ "hound",
  "niminal-engine",
  "niminal-pattern",
  "niminal-score",

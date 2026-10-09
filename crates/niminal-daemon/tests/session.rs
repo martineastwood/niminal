@@ -496,3 +496,38 @@ fn logs_survive_being_written_down() {
     let b = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), &back, 100_000, true);
     assert_eq!(a, b);
 }
+
+#[test]
+fn a_live_eval_plays_a_kit_from_the_sample_folder_and_picks_up_a_changed_file() {
+    let dir = std::env::temp_dir().join(format!("niminal-live-kit-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("kit")).unwrap();
+    let write = |name: &str, level: f32| {
+        let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut w = hound::WavWriter::create(dir.join("kit").join(name), spec).unwrap();
+        (0..4800).for_each(|_| w.write_sample((level * 32767.0) as i16).unwrap());
+        w.finalize().unwrap();
+    };
+    write("kick.wav", 0.5);
+    write("snare.wav", 0.25);
+
+    let mut s = session();
+    s.set_sample_dir(&dir);
+    s.eval("tempo 120bpm\nkit k = \"kit\"\ntrack t { instrument = k }", Some("now")).unwrap();
+    s.eval("play t = [snare ~ ~ ~]", Some("now")).unwrap();
+    let out = run(&mut s, 2000);
+    assert!((out[500] - 0.25).abs() < 0.01, "{}", out[500]);
+
+    // a bad name is rejected without disturbing what plays
+    let problems = s.eval("play t = [snar]", Some("now")).unwrap_err();
+    assert!(problems[0].message.contains("did you mean `snare`?") || problems[0].help.as_deref() == Some("did you mean `snare`?"));
+
+    // replacing a file is seen the next time the project is evaluated
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    write("snare.wav", -0.25);
+    s.eval("kit k = \"kit\"", Some("now")).unwrap();
+    s.eval("play t = [~ snare ~ ~]", Some("now")).unwrap();
+    let out = run(&mut s, 26_000);
+    // the clip starts where it lands, so its second step is a quarter bar later
+    assert!(out[24_500] < 0.0, "{}", out[24_500]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

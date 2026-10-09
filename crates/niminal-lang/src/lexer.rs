@@ -29,6 +29,8 @@ pub enum Tok {
     Pattern(String),
     /// The raw text of `grid[...]`.
     Grid(String),
+    /// A quoted string such as a file path.
+    Str(String),
     Newline,
     Eof,
 }
@@ -120,6 +122,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 } else {
                     Tok::Pattern(text)
                 }
+            }
+            b'"' => {
+                let Some(len) = src[i + 1..].find(['"', '\n']).filter(|&n| bytes[i + 1 + n] == b'"') else {
+                    return Err(Diagnostic::new("this string is never closed", Span::new(i, i + 1)));
+                };
+                let text = src[i + 1..i + 1 + len].to_string();
+                i += len + 2;
+                Tok::Str(text)
             }
             b'.' => {
                 if bytes.get(i + 1) == Some(&b'.') {
