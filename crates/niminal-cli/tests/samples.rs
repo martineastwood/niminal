@@ -283,7 +283,8 @@ fn slicing_mistakes_are_reported() {
 #[test]
 fn the_breakbeat_example_plays_the_break_back_unchanged_when_the_slices_are_in_order() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let source = std::fs::read_to_string(dir.join("breakbeat.nml")).unwrap();
+    // the break was recorded at 100bpm, so at that tempo it plays back unchanged
+    let source = std::fs::read_to_string(dir.join("breakbeat.nml")).unwrap().replace("tempo 130bpm", "tempo 100bpm");
     let program = compile_in(&dir, &source).unwrap_or_else(|e| panic!("{e}"));
     let out = render(&program, &[], &RenderOptions { limiter: false, until: Some(4.8) }).unwrap().channels;
 
@@ -301,4 +302,49 @@ fn the_breakbeat_example_plays_the_break_back_unchanged_when_the_slices_are_in_o
         theirs += b * b;
     }
     assert!((ours / theirs - 1.0).abs() < 0.1, "{ours} {theirs}");
+}
+
+fn end_of(out: &[Vec<f32>]) -> f64 {
+    out[0].iter().rposition(|v| v.abs() > 0.1).unwrap() as f64 / SR as f64
+}
+
+#[test]
+fn a_loop_fitted_to_the_tempo_lasts_its_beats() {
+    let dir = scratch("fit");
+    // 2.4s is four beats at 100bpm
+    write_wav(&dir.join("loop.wav"), &[block(0.5, 2400)]);
+    let at = |tempo: u32, opts: &str| {
+        let src = format!(
+            "tempo {tempo}bpm\nsample l = \"loop.wav\" with({opts})\ntrack t {{ instrument = l }}\nplay t = [c4]"
+        );
+        end_of(&play(&dir, &src))
+    };
+    assert!((at(100, "beats: 4, fit: rate") - 2.4).abs() < 0.01);
+    assert!((at(120, "beats: 4, fit: rate") - 2.0).abs() < 0.01, "four beats at 120bpm");
+    assert!((at(60, "beats: 4, fit: rate") - 4.0).abs() < 0.01, "and at 60bpm");
+    assert!((at(120, "beats: 4") - 2.4).abs() < 0.01, "without fit it plays as recorded");
+}
+
+#[test]
+fn slices_of_a_fitted_loop_follow_the_tempo_too() {
+    let dir = scratch("fitslices");
+    write_wav(&dir.join("loop.wav"), &[block(0.5, 2400)]);
+    let src = "tempo 120bpm\nsample l = \"loop.wav\" with(beats: 4, fit: rate)\nkit k = l.slices(4)\ntrack t { instrument = k }\nplay t = [s3]";
+    // the last quarter of the loop is a step long (0.5s at 120bpm) once fitted, and starts on the downbeat
+    let out = play(&dir, src);
+    assert!((end_of(&out) - 0.5).abs() < 0.01, "{}", end_of(&out));
+}
+
+#[test]
+fn fit_mistakes_are_reported() {
+    let dir = scratch("fiterr");
+    write_wav(&dir.join("loop.wav"), &[block(0.5, 100)]);
+    let e = errors(&dir, "sample l = \"loop.wav\" with(fit: rate)");
+    assert!(e.contains("needs to know the loop's length"), "{e}");
+    let e = errors(&dir, "sample l = \"loop.wav\" with(beats: 4, fit: stretch)");
+    assert!(e.contains("`fit: stretch` isn't supported yet"), "{e}");
+    let e = errors(&dir, "sample l = \"loop.wav\" with(beats: 4, fit: fast)");
+    assert!(e.contains("`fit` should be `rate`"), "{e}");
+    let e = errors(&dir, "sample l = \"loop.wav\" with(beats: -1)");
+    assert!(e.contains("`beats` is how many beats"), "{e}");
 }

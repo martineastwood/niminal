@@ -302,6 +302,8 @@ pub(crate) struct Member {
     pub data: Arc<SampleData>,
     /// The frames of `data` it plays, if not all of them.
     pub slice: Option<(usize, usize)>,
+    /// Playback speed that fits a loop to the tempo; 1 for none.
+    pub speed: f64,
 }
 
 /// An instrument that plays recorded audio. A kit has one player per sample,
@@ -343,7 +345,7 @@ pub(crate) fn compile_sampler(
         for c in 0..channels {
             let mut wires = vec![("freq", freq), ("pitch", pitch), ("rate", rate), ("start", start)];
             wires.extend(pick.map(|p| ("sample", p)));
-            let mut player = Sampler::new(data.clone(), c, root_hz, is_kit.then_some(i));
+            let mut player = Sampler::new(data.clone(), c, root_hz, is_kit.then_some(i)).with_speed(member.speed);
             if let Some((start, end)) = member.slice {
                 player = player.slice(start, end);
             }
