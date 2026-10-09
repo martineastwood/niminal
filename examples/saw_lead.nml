@@ -1,0 +1,14 @@
+// The basic synth from the spec, playing a short phrase.
+tempo 100bpm
+
+instr saw_lead(freq: hz, amp: db = -6db) {
+  level = env[0 5ms 1 200ms 0.6 | 300ms 0]
+  osc(saw, freq)
+    .lpf(cutoff: 2khz, res: 0.2)
+    .gain(amp) * level
+}
+
+saw_lead(freq: a3) for 1beat
+at 1beat saw_lead(freq: c4) for 1beat
+at 2beats saw_lead(freq: e4, amp: -9db) for 1beat
+at 3beats saw_lead(freq: a4) for 2beats

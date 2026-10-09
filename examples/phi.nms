@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "section": "phi",
+  "length": "4beats",
+  "events": [
+    { "at": "0beat", "dur": "1/2beat", "target": "saw_lead", "args": { "freq": "e5", "amp": "-12db" } },
+    { "at": "1/2beat", "dur": "1/2beat", "target": "saw_lead", "args": { "freq": "g5", "amp": "-12db" } },
+    { "at": "1beat", "dur": "1beat", "target": "saw_lead", "args": { "freq": "b5", "amp": "-12db" } }
+  ]
+}

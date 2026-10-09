@@ -1,0 +1,16 @@
+[package]
+name = "niminal-cli"
+version.workspace = true
+edition.workspace = true
+description = "The niminal command line: offline rendering"
+
+[[bin]]
+name = "niminal"
+path = "src/main.rs"
+
+[dependencies]
+niminal-engine = { path = "../niminal-engine" }
+niminal-lang = { path = "../niminal-lang" }
+niminal-score = { path = "../niminal-score" }
+clap = { version = "4", features = ["derive"] }
+hound = "3"
