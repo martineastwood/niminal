@@ -1,0 +1,48 @@
+{
+  "name": "niminal",
+  "displayName": "niminal",
+  "description": "Live-code niminal: syntax highlighting and evaluation against a running niminal daemon.",
+  "version": "0.0.1",
+  "publisher": "niminal",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "main": "./extension.js",
+  "scripts": { "test": "node --test" },
+  "dependencies": { "ws": "8.18.0" },
+  "contributes": {
+    "languages": [
+      {
+        "id": "niminal",
+        "aliases": ["niminal"],
+        "extensions": [".nml"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      { "language": "niminal", "scopeName": "source.niminal", "path": "./syntaxes/niminal.tmLanguage.json" }
+    ],
+    "commands": [
+      { "command": "niminal.evalBlock", "title": "Evaluate Selection or Block", "category": "niminal" },
+      { "command": "niminal.evalFile", "title": "Evaluate File", "category": "niminal" },
+      { "command": "niminal.hush", "title": "Hush", "category": "niminal" },
+      { "command": "niminal.panic", "title": "Panic", "category": "niminal" },
+      { "command": "niminal.connect", "title": "Connect to Daemon", "category": "niminal" },
+      { "command": "niminal.startDaemon", "title": "Start Daemon in a Terminal", "category": "niminal" }
+    ],
+    "keybindings": [
+      { "command": "niminal.evalBlock", "key": "ctrl+enter", "mac": "cmd+enter", "when": "editorTextFocus && editorLangId == niminal" },
+      { "command": "niminal.evalFile", "key": "ctrl+shift+enter", "mac": "cmd+shift+enter", "when": "editorTextFocus && editorLangId == niminal" },
+      { "command": "niminal.hush", "key": "ctrl+.", "mac": "cmd+.", "when": "editorLangId == niminal" }
+    ],
+    "configuration": {
+      "title": "niminal",
+      "properties": {
+        "niminal.port": { "type": "number", "default": 7400, "description": "The port the daemon listens on." },
+        "niminal.token": { "type": "string", "default": "", "description": "The daemon's token, if it was started with --token." },
+        "niminal.quantize": { "type": "string", "default": "", "description": "When evaluated code lands, as in `now` or `next 4 bars`. Empty uses the daemon's default." },
+        "niminal.path": { "type": "string", "default": "niminal", "description": "The niminal executable, used to start a daemon." }
+      }
+    }
+  }
+}
