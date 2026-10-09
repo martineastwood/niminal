@@ -19,7 +19,24 @@ type Res<T> = Result<T, Diagnostic>;
 
 const DEFAULT_BPM: f64 = 120.0;
 
+/// Settings for compiling a project.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompileOptions {
+    /// The output layout when the source has no `config { channels: ... }`.
+    pub default_layout: Layout,
+}
+
+impl Default for CompileOptions {
+    fn default() -> Self {
+        CompileOptions { default_layout: Layout::Mono }
+    }
+}
+
 pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
+    compile_with(source, &CompileOptions::default())
+}
+
+pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
     let items = parser::parse(source).map_err(|d| vec![d])?;
     let mut errors = Vec::new();
 
@@ -58,7 +75,7 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
         }
     }
 
-    match master_layout(&items) {
+    match master_layout(&items, options.default_layout) {
         Ok(layout) => names.master = layout,
         Err(d) => errors.push(d),
     }
@@ -260,7 +277,7 @@ fn compile_track(
 // ---- program-level statements -------------------------------------------
 
 /// The master layout from the project's `config`, mono if there is none.
-fn master_layout(items: &[Item]) -> Res<Layout> {
+fn master_layout(items: &[Item], default: Layout) -> Res<Layout> {
     let mut layout = None;
     let mut seen = false;
     for item in items {
@@ -280,7 +297,7 @@ fn master_layout(items: &[Item]) -> Res<Layout> {
             }
         }
     }
-    Ok(layout.unwrap_or(Layout::Mono))
+    Ok(layout.unwrap_or(default))
 }
 
 /// Beats per bar from `meter 3/4`: the top over the bottom, in quarter-note beats.

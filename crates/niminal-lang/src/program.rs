@@ -123,6 +123,11 @@ pub(crate) fn resolve_target<'a>(
 }
 
 impl Program {
+    /// The index of the track called `name`.
+    pub fn track_index(&self, name: &str) -> Option<usize> {
+        self.tracks.iter().skip(1).position(|t| t.name == name).map(|i| i + 1)
+    }
+
     pub fn instrument(&self, name: &str) -> Option<&Instrument> {
         self.instruments.iter().find(|i| i.name == name)
     }

@@ -78,6 +78,23 @@ impl Master {
         }
     }
 
+    /// Process the first `frames` samples of every channel's block in place,
+    /// without allocating, for the real-time path.
+    pub fn process_block(&mut self, block: &mut [[f32; crate::opcode::BLOCK]], frames: usize) {
+        assert_eq!(block.len(), self.channels.len(), "one block per channel");
+        let mut frame = [0.0f32; crate::mixer::MAX_CHANNELS];
+        let n = block.len();
+        for i in 0..frames {
+            for (f, b) in frame.iter_mut().zip(block.iter()) {
+                *f = b[i];
+            }
+            self.process_frame(&mut frame[..n]);
+            for (f, b) in frame.iter().zip(block.iter_mut()) {
+                b[i] = *f;
+            }
+        }
+    }
+
     /// Process all channels in place; every buffer must be the same length.
     pub fn process_linked(&mut self, bufs: &mut [&mut [f32]]) {
         assert_eq!(bufs.len(), self.channels.len(), "one buffer per channel");

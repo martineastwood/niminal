@@ -58,6 +58,13 @@ impl Program {
 }
 
 impl Schedule {
+    /// A schedule from commands directly. Track indices in `commands` index
+    /// `track_names`. The commands' `at` times are what they are; their
+    /// `quantize` is ignored (a live session has already applied it).
+    pub fn from_commands(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled]) -> Schedule {
+        Schedule::new(tempo, track_names, commands)
+    }
+
     fn new(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled]) -> Schedule {
         let mut timed: Vec<(f64, &Action)> = commands.iter().map(|c| (c.at.to_seconds(tempo), &c.action)).collect();
         // Simultaneous commands keep the order they were written in.

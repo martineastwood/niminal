@@ -140,6 +140,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "niminal-daemon"
+version = "0.0.1"
+dependencies = [
+ "niminal-engine",
+ "niminal-lang",
+ "niminal-score",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "niminal-engine"
 version = "0.0.1"
 dependencies = [

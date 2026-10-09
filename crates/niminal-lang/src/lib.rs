@@ -1,6 +1,7 @@
 //! The niminal language: lex, parse, unit-check, and lower to engine graphs and
 //! score events.
 
+mod analysis;
 mod ast;
 mod compile;
 mod diag;
@@ -16,7 +17,8 @@ mod program;
 mod schedule;
 mod unit;
 
-pub use compile::compile;
+pub use analysis::{PlayInfo, Statement, StatementKind, analyze};
+pub use compile::{CompileOptions, compile, compile_with};
 pub use diag::{Diagnostic, Span};
 pub use performance::{Action, Clip, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled};
 pub use schedule::{Schedule, ScheduleError};

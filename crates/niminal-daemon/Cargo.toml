@@ -1,0 +1,12 @@
+[package]
+name = "niminal-daemon"
+version.workspace = true
+edition.workspace = true
+description = "The niminal live session: quantized, transactional evaluation, and the protocol around it"
+
+[dependencies]
+niminal-engine = { path = "../niminal-engine" }
+niminal-lang = { path = "../niminal-lang" }
+niminal-score = { path = "../niminal-score" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
