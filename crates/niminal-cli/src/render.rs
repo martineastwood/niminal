@@ -23,11 +23,13 @@ pub struct RenderOptions {
     /// Stop starting notes after this many seconds. Needed when a clip plays
     /// until stopped; the notes already sounding still ring out.
     pub until: Option<f64>,
+    /// Play this arrangement instead of the file's own `play` and `launch` commands.
+    pub arrangement: Option<String>,
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        RenderOptions { limiter: true, until: None }
+        RenderOptions { limiter: true, until: None, arrangement: None }
     }
 }
 
@@ -78,7 +80,10 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     let sr = f64::from(SAMPLE_RATE);
 
     // Notes from `play` and `launch` commands.
-    let schedule = program.schedule();
+    let schedule = match &options.arrangement {
+        Some(name) => program.arrangement_schedule(name).map_err(|e| RenderError(e.to_string()))?,
+        None => program.schedule(),
+    };
     let performed = if schedule.is_empty() {
         Vec::new()
     } else {

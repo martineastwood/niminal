@@ -1,0 +1,33 @@
+// A finished piece: scenes in order, each for a length.
+// Render with:  niminal render examples/song.nml song --out song.wav
+// ...or just a passage:  niminal render examples/song.nml song --from "bar 5" --to "bar 9" --out passage.wav
+config { channels: stereo }
+tempo 110bpm
+
+kit drums = "drums"
+bus space: stereo
+
+instr pluck(freq: hz, bright: 0..1 = 0.5) {
+  voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6), res: 0.25) * env[0 2ms 1 400ms.exp 0]
+  out = voice.pan(azimuth: 0deg)
+  space += out.gain(-12db)
+}
+
+track hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
+track beat { instrument = drums }
+track hats { instrument = drums(gain: -8db) }
+track bass { instrument = pluck(bright: 0.2) }
+track lead { instrument = pluck(bright: 0.7) }
+
+bassline = [c2 ~ c2 eb2 ~ g1 bb1 ~]
+groove   = [kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare]
+tune     = [c4 e4 g4 b4].every(2, it.reverse)
+
+scene intro  { bass: bassline, beat: ~, hats: ~ }
+scene verse  { bass: bassline, beat: groove, hats: [hat hat hat hat hat hat hat hat], lead: ~ }
+scene chorus { bass: bassline.transpose(+5st), beat: groove, hats: [hat hat hat hat hat hat hat hat], lead: tune }
+scene outro  { bass: bassline, beat: ~, hats: ~, lead: ~ }
+
+arrangement song {
+  sections: [intro.over(2 bars) verse.over(4 bars) chorus.over(4 bars) verse.over(4 bars) outro.over(2 bars)]
+}

@@ -162,8 +162,8 @@ fn a_program_with_no_notes_renders_nothing() {
 #[test]
 fn the_limiter_keeps_loud_output_under_the_ceiling_and_can_be_turned_off() {
     let p = program("instr loud() { osc(saw, 220hz) * 4 }\nloud() for 1beat");
-    let limited = mono(render_with(&p, &[], &RenderOptions { limiter: true, until: None }).unwrap());
-    let raw = mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None }).unwrap());
+    let limited = mono(render_with(&p, &[], &RenderOptions { limiter: true, until: None, ..Default::default() }).unwrap());
+    let raw = mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None, ..Default::default() }).unwrap());
     let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     assert!(peak(&raw) > 3.0);
     assert!(peak(&limited) <= 0.9661, "{}", peak(&limited));
@@ -208,7 +208,7 @@ opcode dc_block(x) {
 
     fn raw(src: &str) -> Vec<f32> {
         let p = program(&format!("{LIB}{src}"));
-        mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None }).unwrap())
+        mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None, ..Default::default() }).unwrap())
     }
 
     fn peak(x: &[f32]) -> f32 {
@@ -264,7 +264,7 @@ mod routing {
     use super::*;
 
     fn raw(src: &str) -> Vec<f32> {
-        mono(render_with(&program(src), &[], &RenderOptions { limiter: false, until: None }).unwrap())
+        mono(render_with(&program(src), &[], &RenderOptions { limiter: false, until: None, ..Default::default() }).unwrap())
     }
 
     fn close(a: &[f32], b: &[f32]) {
@@ -386,7 +386,7 @@ mod effects {
     use super::*;
 
     fn raw(src: &str) -> Vec<f32> {
-        mono(render_with(&program(src), &[], &RenderOptions { limiter: false, until: None }).unwrap())
+        mono(render_with(&program(src), &[], &RenderOptions { limiter: false, until: None, ..Default::default() }).unwrap())
     }
 
     fn peak(x: &[f32]) -> f32 {
@@ -489,7 +489,7 @@ mod channels {
 
     /// Render with the limiter off and return every channel.
     fn raw(src: &str) -> Vec<Vec<f32>> {
-        render_with(&program(src), &[], &RenderOptions { limiter: false, until: None }).unwrap().channels
+        render_with(&program(src), &[], &RenderOptions { limiter: false, until: None, ..Default::default() }).unwrap().channels
     }
 
     fn peak(x: &[f32]) -> f32 {
@@ -676,7 +676,7 @@ config { channels: stereo }
 instr a() { [osc(sine, 220hz) * 4, osc(sine, 330hz) * 0.2] * env[1 | 1ms 0] }
 a() for 1beat";
         let quiet_right = |limiter| {
-            let out = render_with(&program(src), &[], &RenderOptions { limiter, until: None }).unwrap().channels;
+            let out = render_with(&program(src), &[], &RenderOptions { limiter, until: None, ..Default::default() }).unwrap().channels;
             let mid = out[1].len() / 2;
             peak(&out[1][mid..mid + 4800])
         };
@@ -687,7 +687,7 @@ a() for 1beat";
     #[test]
     fn wav_files_interleave_the_channels() {
         let p = program("config { channels: stereo }\ninstr a() { osc(sine, 220hz).pan(azimuth: 30deg) * env[1 | 1ms 0] }\na() for 1/4beat");
-        let out = render_with(&p, &[], &RenderOptions { limiter: false, until: None }).unwrap();
+        let out = render_with(&p, &[], &RenderOptions { limiter: false, until: None, ..Default::default() }).unwrap();
         let dir = std::env::temp_dir().join(format!("niminal-wav-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("stereo.wav");
@@ -710,7 +710,7 @@ mod pitch {
 
     fn crossings_per_second(src: &str) -> f32 {
         let p = program(src);
-        let out = mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None }).unwrap());
+        let out = mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None, ..Default::default() }).unwrap());
         let n = out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
         n as f32 / (out.len() as f32 / SR as f32)
     }
@@ -749,7 +749,7 @@ track bass { instrument = pluck(bright: 0.1) }
     fn render_with_bars(body: &str, bars: Option<f64>) -> Result<Vec<f32>, niminal_cli::render::RenderError> {
         let p = program(&format!("{STAGE}{body}"));
         let until = bars.map(|b| b * 2.0); // a 4/4 bar at 120bpm is two seconds
-        render_with(&p, &[], &RenderOptions { limiter: false, until }).map(mono)
+        render_with(&p, &[], &RenderOptions { limiter: false, until, ..Default::default() }).map(mono)
     }
 
     fn raw(body: &str, bars: f64) -> Vec<f32> {
@@ -922,4 +922,106 @@ play t = [c4 e4]
         assert!(!both.status.success(), "the two lengths conflict");
         std::fs::remove_dir_all(dir).ok();
     }
+}
+
+const SONG: &str = "
+tempo 120bpm
+instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }
+track a { instrument = tone }
+track b { instrument = tone }
+scene one { a: [c4], b: ~ }
+scene two { a: [e4], b: [g4] }
+arrangement song { sections: [one.over(2 bars) two.over(1 bar)] }
+";
+
+fn arrangement(name: &str) -> RenderOptions {
+    RenderOptions { limiter: false, arrangement: Some(name.into()), ..Default::default() }
+}
+
+#[test]
+fn an_arrangement_plays_its_scenes_in_order_and_then_stops() {
+    let p = program(SONG);
+    let out = mono(render_with(&p, &[], &arrangement("song")).unwrap());
+    // a bar at 120bpm is 2s: scene one for 4s, scene two for 2s
+    let freq_in = |from: f64, to: f64| {
+        let x = &out[(from * SR) as usize..(to * SR) as usize];
+        x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (to - from)
+    };
+    assert!((freq_in(0.2, 3.9) - 261.6).abs() < 6.0, "scene one plays c4");
+    assert!(freq_in(4.2, 5.9) > 280.0, "scene two plays e4 and g4 together");
+    let secs = out.len() as f64 / SR;
+    assert!(secs < 6.2, "and nothing starts after the last section ends: {secs}");
+}
+
+#[test]
+fn render_with_an_arrangement_ignores_the_files_own_timeline() {
+    let src = format!("{SONG}\nplay a = [c6]");
+    let p = program(&src);
+    // c6 is 1046hz; the arrangement alone never plays it
+    let out = mono(render_with(&p, &[], &arrangement("song")).unwrap());
+    let x = &out[(0.2 * SR) as usize..(3.9 * SR) as usize];
+    let freq = x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / 3.7;
+    assert!((freq - 261.6).abs() < 6.0, "{freq}");
+}
+
+#[test]
+fn arrangement_mistakes_are_reported() {
+    let err = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default();
+    let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\ntrack a { instrument = t }\nscene one { a: [c4] }\n";
+    assert!(err(&format!("{base}arrangement s {{ sections: [on.over(1 bar)] }}")).contains("no scene named `on`did you mean `one`?"));
+    assert!(err(&format!("{base}arrangement s {{ sections: [one] }}")).contains("`one` needs a lengthfor example `one.over(8 bars)`"));
+    assert!(err(&format!("{base}arrangement s {{ tempo: 100bpm }}")).contains("`tempo` isn't supported in an arrangement yet"));
+    assert!(err(&format!("{base}arrangement s {{ sections: [one.over(0 bars)] }}")).contains("above zero"));
+    assert!(err(&format!("{base}arrangement s {{ sections: [one.over(1 bar)] }}\narrangement s {{ sections: [one.over(1 bar)] }}")).contains("defined twice"));
+
+    let p = program(&format!("{base}arrangement song {{ sections: [one.over(1 bar)] }}"));
+    let Err(e) = render_with(&p, &[], &arrangement("sogn")) else { panic!("expected an error") };
+    assert!(e.0.contains("no arrangement named `sogn`") && e.0.contains("did you mean `song`?"), "{e}");
+}
+
+fn render_command(args: &[&str]) -> (std::process::Output, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("niminal-render-cmd-{}-{}", std::process::id(), args.join("_").len()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("song.nml");
+    std::fs::write(&src, SONG).unwrap();
+    let out = dir.join("out.wav");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"))
+        .arg("render")
+        .arg(&src)
+        .args(args)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .unwrap();
+    (output, out)
+}
+
+fn seconds_of(wav: &std::path::Path) -> f64 {
+    let r = hound::WavReader::open(wav).unwrap();
+    f64::from(r.duration()) / f64::from(r.spec().sample_rate)
+}
+
+#[test]
+fn render_command_takes_an_arrangement_and_a_passage() {
+    let (whole, wav) = render_command(&["song"]);
+    assert!(whole.status.success(), "{}", String::from_utf8_lossy(&whole.stderr));
+    let full = seconds_of(&wav);
+    assert!((6.0..6.5).contains(&full), "{full}");
+
+    // bar 2 onwards drops the first bar (2s)
+    let (from, wav) = render_command(&["song", "--from", "bar 2"]);
+    assert!(from.status.success());
+    assert!((seconds_of(&wav) - (full - 2.0)).abs() < 0.01);
+
+    // stopping at bar 3 stops starting notes there, though scene one's tone rings out its release
+    let (to, wav) = render_command(&["song", "--to", "bar 2"]);
+    assert!(to.status.success());
+    assert!(seconds_of(&wav) < 2.5, "{}", seconds_of(&wav));
+
+    let (bad, _) = render_command(&["song", "--from", "sometime"]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("isn't a position"));
+
+    let (missing, _) = render_command(&["nope"]);
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("no arrangement named `nope`"));
 }

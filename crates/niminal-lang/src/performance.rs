@@ -83,3 +83,11 @@ pub struct Scheduled {
     pub action: Action,
     pub quantize: Option<Quantize>,
 }
+
+/// Scenes in order, each for a length: a finished piece.
+#[derive(Clone)]
+pub struct Arrangement {
+    pub name: String,
+    /// The commands that play it, from the start of the piece.
+    pub actions: Vec<Scheduled>,
+}

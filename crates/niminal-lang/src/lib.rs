@@ -21,7 +21,7 @@ mod unit;
 pub use analysis::{PlayInfo, Statement, StatementKind, analyze};
 pub use compile::{CompileOptions, compile, compile_with};
 pub use diag::{Diagnostic, Span};
-pub use performance::{Action, Clip, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled};
+pub use performance::{Action, Arrangement, Clip, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled};
 pub use schedule::{Schedule, ScheduleError, TrackState};
 pub use program::{ArgError, Instrument, NotePlan, Param, Program, TrackInfo};
 pub use layout::Layout;

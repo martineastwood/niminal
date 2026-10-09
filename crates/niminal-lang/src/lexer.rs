@@ -147,7 +147,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                         brackets.push(c);
                         if c == b'{' {
                             let inherited = braces.last().copied().unwrap_or(false);
-                            let signal = matches!(statement_keyword.as_deref(), Some("instr" | "opcode" | "track"));
+                            let signal = matches!(statement_keyword.as_deref(), Some("instr" | "opcode" | "track" | "arrangement"));
                             braces.push(inherited || signal);
                         }
                         match c {

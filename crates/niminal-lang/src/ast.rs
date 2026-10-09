@@ -13,6 +13,7 @@ pub enum Item {
     Bus(BusDecl),
     Track(TrackDecl),
     Sample(SampleDecl),
+    Arrangement(ArrangementDecl),
     Config(ConfigDecl),
     Tempo(TempoStmt),
     /// `meter 3/4`
@@ -115,6 +116,21 @@ pub struct SampleDecl {
     pub source_span: Span,
     pub options: Vec<Arg>,
     pub span: Span,
+}
+
+/// `arrangement song { sections: [verse.over(8 bars) chorus.over(8 bars)] }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrangementDecl {
+    pub name: Ident,
+    pub sections: Vec<SectionRef>,
+    pub span: Span,
+}
+
+/// One scene in an arrangement, and how long it lasts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionRef {
+    pub scene: Ident,
+    pub length: Expr,
 }
 
 /// Where a sample or kit comes from.

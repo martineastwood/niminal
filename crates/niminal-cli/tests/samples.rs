@@ -52,7 +52,7 @@ fn compile_in(dir: &Path, src: &str) -> Result<Program, String> {
 
 fn play(dir: &Path, src: &str) -> Vec<Vec<f32>> {
     let program = compile_in(dir, src).unwrap_or_else(|e| panic!("{e}"));
-    render(&program, &[], &RenderOptions { limiter: false, until: Some(2.0) }).unwrap().channels
+    render(&program, &[], &RenderOptions { limiter: false, until: Some(2.0), ..Default::default() }).unwrap().channels
 }
 
 const TRACK: &str = "tempo 120bpm\nsample s = \"s.wav\"\ntrack t { instrument = s }\n";
@@ -286,7 +286,7 @@ fn the_breakbeat_example_plays_the_break_back_unchanged_when_the_slices_are_in_o
     // the break was recorded at 100bpm, so at that tempo it plays back unchanged
     let source = std::fs::read_to_string(dir.join("breakbeat.nml")).unwrap().replace("tempo 130bpm", "tempo 100bpm");
     let program = compile_in(&dir, &source).unwrap_or_else(|e| panic!("{e}"));
-    let out = render(&program, &[], &RenderOptions { limiter: false, until: Some(4.8) }).unwrap().channels;
+    let out = render(&program, &[], &RenderOptions { limiter: false, until: Some(4.8), ..Default::default() }).unwrap().channels;
 
     // a bar at 100bpm is 2.4s
     let original = hound::WavReader::open(dir.join("break.wav")).unwrap().samples::<i16>().map(|s| s.unwrap() as f32 / 32768.0).collect::<Vec<_>>();
@@ -347,4 +347,17 @@ fn fit_mistakes_are_reported() {
     assert!(e.contains("`fit` should be `rate`"), "{e}");
     let e = errors(&dir, "sample l = \"loop.wav\" with(beats: -1)");
     assert!(e.contains("`beats` is how many beats"), "{e}");
+}
+
+#[test]
+fn the_song_example_renders_its_arrangement() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let source = std::fs::read_to_string(dir.join("song.nml")).unwrap();
+    let program = compile_in(&dir, &source).unwrap_or_else(|e| panic!("{e}"));
+    let options = RenderOptions { arrangement: Some("song".into()), ..Default::default() };
+    let out = render(&program, &[], &options).unwrap();
+    // 16 bars at 110bpm is 34.9s, plus the reverb's tail
+    let secs = out.len() as f64 / SR as f64;
+    assert!((34.9..45.0).contains(&secs), "{secs}");
+    assert!(out.peak() > 0.1 && out.peak() <= 1.0);
 }

@@ -77,6 +77,7 @@ impl Kind for Hit {
 /// Everything the performance layer's source defines.
 pub(crate) struct Compiled {
     pub actions: Vec<Scheduled>,
+    pub arrangements: Vec<Arrangement>,
 }
 
 pub(crate) struct Context<'a> {
@@ -122,7 +123,20 @@ pub(crate) fn compile_performance(items: &[Item], cx: &Context) -> Result<Compil
         }
     }
 
-    if errors.is_empty() { Ok(Compiled { actions }) } else { Err(errors) }
+    let mut arrangements: Vec<Arrangement> = Vec::new();
+    for item in items {
+        let Item::Arrangement(decl) = item else { continue };
+        if arrangements.iter().any(|a| a.name == decl.name.name) {
+            errors.push(Diagnostic::new(format!("arrangement `{}` is defined twice", decl.name.name), decl.name.span));
+            continue;
+        }
+        match p.arrangement(decl) {
+            Ok(a) => arrangements.push(a),
+            Err(d) => errors.push(d),
+        }
+    }
+
+    if errors.is_empty() { Ok(Compiled { actions, arrangements }) } else { Err(errors) }
 }
 
 fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value> {
@@ -630,29 +644,49 @@ impl Perform<'_> {
             }
             Command::Hush => vec![schedule(Action::Hush)],
             Command::Panic => vec![schedule(Action::Panic)],
-            Command::Launch(name) => {
-                let Some(PerfValue::Scene(scene)) = self.bindings.get(&name.name) else {
-                    let mut d = Diagnostic::new(format!("no scene named `{}`", name.name), name.span);
-                    let scenes = self.bindings.iter().filter(|(_, v)| matches!(v, PerfValue::Scene(_))).map(|(k, _)| k.as_str());
-                    if let Some(c) = closest(&name.name, scenes) {
-                        d = d.with_help(format!("did you mean `{c}`?"));
-                    }
-                    return Err(d);
-                };
-                let mut out = Vec::new();
-                for (track, clip) in &scene.entries {
-                    match clip {
-                        Some(clip) => {
-                            let id = Ident { name: self.cx.tracks[*track].name.clone(), span: name.span };
-                            self.check_clip(clip, *track, &id, name.span)?;
-                            out.push(schedule(Action::Play { track: *track, clip: clip.clone() }));
-                        }
-                        None => out.push(schedule(Action::Stop { track: *track })),
-                    }
-                }
-                out
-            }
+            Command::Launch(name) => self.launch(name, &schedule)?,
         })
+    }
+
+    /// The commands that launch the scene called `name`.
+    fn launch(&self, name: &Ident, schedule: &dyn Fn(Action) -> Scheduled) -> Res<Vec<Scheduled>> {
+        let Some(PerfValue::Scene(scene)) = self.bindings.get(&name.name) else {
+            let mut d = Diagnostic::new(format!("no scene named `{}`", name.name), name.span);
+            let scenes = self.bindings.iter().filter(|(_, v)| matches!(v, PerfValue::Scene(_))).map(|(k, _)| k.as_str());
+            if let Some(c) = closest(&name.name, scenes) {
+                d = d.with_help(format!("did you mean `{c}`?"));
+            }
+            return Err(d);
+        };
+        let mut out = Vec::new();
+        for (track, clip) in &scene.entries {
+            match clip {
+                Some(clip) => {
+                    let id = Ident { name: self.cx.tracks[*track].name.clone(), span: name.span };
+                    self.check_clip(clip, *track, &id, name.span)?;
+                    out.push(schedule(Action::Play { track: *track, clip: clip.clone() }));
+                }
+                None => out.push(schedule(Action::Stop { track: *track })),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Scenes one after another, each for its length, then everything stops.
+    fn arrangement(&self, decl: &ArrangementDecl) -> Res<Arrangement> {
+        let mut beat = 0.0;
+        let mut actions = Vec::new();
+        for section in &decl.sections {
+            let length = self.cycles(&section.length)?;
+            if length <= Rational::ZERO {
+                return Err(Diagnostic::new("a section needs a length above zero", section.length.span));
+            }
+            let at = Time::Beats(beat);
+            actions.extend(self.launch(&section.scene, &|action| Scheduled { at, action, quantize: None })?);
+            beat += length.to_f64() * self.cx.tempo.beats_per_bar;
+        }
+        actions.push(Scheduled { at: Time::Beats(beat), action: Action::Hush, quantize: None });
+        Ok(Arrangement { name: decl.name.name.clone(), actions })
     }
 
     /// Does `clip`'s notes and lanes make sense on `track`'s instrument?

@@ -3,7 +3,7 @@
   "name": "niminal",
   "patterns": [
     { "name": "comment.line.double-slash.niminal", "match": "//.*$" },
-    { "name": "keyword.control.niminal", "match": "\\b(instr|opcode|bus|track|config|clip|scene|meter|tempo|state|let|use|notes|play|stop|mute|unmute|solo|unsolo|hush|panic|launch|at|next|now)\\b" },
+    { "name": "keyword.control.niminal", "match": "\\b(instr|opcode|bus|track|config|clip|scene|arrangement|sample|kit|with|sections|over|meter|tempo|state|let|use|notes|play|stop|mute|unmute|solo|unsolo|hush|panic|launch|at|next|now)\\b" },
     { "name": "constant.numeric.unit.niminal", "match": "[+-]?\\b\\d+(\\.\\d+)?(hz|khz|db|bpm|sec|ms|beats?|bars?|deg|st|s|%)(?![A-Za-z0-9_])" },
     { "name": "constant.numeric.niminal", "match": "[+-]?\\b\\d+(\\.\\d+)?\\b" },
     { "name": "constant.language.note.niminal", "match": "\\b[a-g](#|b)?-?\\d\\b" },

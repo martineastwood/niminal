@@ -65,6 +65,23 @@ impl Program {
     }
 }
 
+impl Program {
+    /// The notes of the arrangement called `name`, played from the start.
+    pub fn arrangement_schedule(&self, name: &str) -> Result<Schedule, crate::program::ArgError> {
+        let Some(arrangement) = self.arrangements.iter().find(|a| a.name == name) else {
+            return Err(crate::program::ArgError {
+                message: format!("no arrangement named `{name}`"),
+                help: match crate::diag::closest(name, self.arrangements.iter().map(|a| a.name.as_str())) {
+                    Some(c) => Some(format!("did you mean `{c}`?")),
+                    None if self.arrangements.is_empty() => Some("this file has no `arrangement`".into()),
+                    None => None,
+                },
+            });
+        };
+        Ok(Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &arrangement.actions))
+    }
+}
+
 impl Schedule {
     /// A schedule from commands directly. Track indices in `commands` index
     /// `track_names`. The commands' `at` times are what they are; their
