@@ -1,4 +1,4 @@
-use niminal_pattern::{Hap, Hit, Pattern, Rational, Span, euclid_steps, grid, parse};
+use niminal_pattern::{Hap, Hit, Pattern, Rational, Span, euclid_steps, grid, parse, parse_with};
 
 fn r(n: i64, d: i64) -> Rational {
     Rational::new(n, d)
@@ -304,4 +304,21 @@ fn grids_read_hits_accents_and_ghosts() {
     assert_eq!(err.message, "`q` isn't a grid step: use x, X, o or .");
     assert_eq!(err.offset, 2);
     assert!(onsets(&grid("").unwrap(), cycles(0, 1)).is_empty());
+}
+
+#[test]
+fn atoms_are_converted_as_they_are_read_and_bad_ones_are_located() {
+    let numbers = parse_with("1 2 [3 4]*2", |a| a.parse::<i32>().map_err(|_| format!("`{a}` isn't a number"))).unwrap();
+    assert_eq!(values_of(&numbers, cycles(0, 1)), [1, 2, 3, 4, 3, 4]);
+
+    let err = parse_with("1 [2 x] 3", |a| a.parse::<i32>().map_err(|_| format!("`{a}` isn't a number"))).err().unwrap();
+    assert_eq!(err.message, "`x` isn't a number");
+    assert_eq!(err.offset, 5, "at the atom, not the end of the pattern");
+
+    // atoms inside an alternation are checked even though they only play in later cycles
+    let err = parse_with("<1 2 oops>", |a| a.parse::<i32>().map_err(|_| format!("`{a}` isn't a number"))).err().unwrap();
+    assert_eq!(err.offset, 5);
+    // and in parenthesised groups
+    let err = parse_with("(1 q)", |a| a.parse::<i32>().map_err(|_| "bad".to_string())).err().unwrap();
+    assert_eq!(err.offset, 0);
 }

@@ -44,6 +44,10 @@ fn describe(tok: &Tok) -> String {
         Tok::Star => "`*`".into(),
         Tok::Slash => "`/`".into(),
         Tok::Bar => "`|`".into(),
+        Tok::Tilde => "`~`".into(),
+        Tok::At => "`@`".into(),
+        Tok::Pattern(_) => "a pattern".into(),
+        Tok::Grid(_) => "a grid".into(),
         Tok::Newline => "the end of the line".into(),
         Tok::Eof => "the end of the file".into(),
     }
@@ -125,21 +129,7 @@ impl Parser {
             Ok(Item::Bus(BusDecl { name, layout }))
         } else if self.is_keyword("config") {
             let start = self.bump().span;
-            self.expect(&Tok::LBrace)?;
-            let mut entries = Vec::new();
-            loop {
-                self.skip_newlines();
-                if self.peek() == &Tok::RBrace {
-                    break;
-                }
-                let key = self.ident("a setting name")?;
-                self.expect(&Tok::Colon)?;
-                entries.push((key, self.expr()?));
-                if !self.eat(&Tok::Comma) && !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
-                    return Err(self.unexpected("the end of the setting"));
-                }
-            }
-            let end = self.expect(&Tok::RBrace)?;
+            let (entries, end) = self.entries()?;
             Ok(Item::Config(ConfigDecl { entries, span: start.to(end) }))
         } else if self.is_keyword("track") {
             let start = self.bump().span;
@@ -150,10 +140,42 @@ impl Parser {
             let (name, params, body, span) = self.definition()?;
             Ok(Item::Opcode(OpcodeDef { name, params, body, span }))
         } else if self.is_keyword("tempo") {
+            let start = self.bump().span;
+            let value = self.expr()?;
+            let quantize = self.quantize()?;
+            let over = if self.is_keyword("over") {
+                self.bump();
+                Some(self.expr()?)
+            } else {
+                None
+            };
+            Ok(Item::Tempo(TempoStmt { value, quantize, over, span: start.to(self.prev_span()) }))
+        } else if self.is_keyword("meter") {
             self.bump();
-            Ok(Item::Tempo(self.expr()?))
+            Ok(Item::Meter(self.expr()?))
+        } else if self.is_keyword("clip") || self.is_keyword("scene") {
+            let is_clip = self.is_keyword("clip");
+            let start = self.bump().span;
+            let name = self.ident(if is_clip { "a clip name" } else { "a scene name" })?;
+            let (entries, end) = self.entries()?;
+            let block = NamedBlock { name, entries, span: start.to(end) };
+            Ok(if is_clip { Item::Clip(block) } else { Item::Scene(block) })
+        } else if self.is_keyword("at") {
+            self.bump();
+            let at = self.at_pos()?;
+            if self.at_command() {
+                self.command(Some(at)).map(Item::Command)
+            } else {
+                self.note(Some(at)).map(Item::Note)
+            }
+        } else if self.at_command() {
+            self.command(None).map(Item::Command)
+        } else if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
+            let name = self.ident("a name")?;
+            self.bump();
+            Ok(Item::Bind { name, value: self.expr()? })
         } else {
-            self.note().map(Item::Note)
+            self.note(None).map(Item::Note)
         }
     }
 
@@ -263,15 +285,9 @@ impl Parser {
         }
     }
 
-    /// `[at <time>] name(args) for <duration>`
-    fn note(&mut self) -> Res<NoteStmt> {
-        let start = self.span();
-        let at = self.is_keyword("at").then(|| {
-            self.bump();
-            self.expr()
-        });
-        let at = at.transpose()?;
-
+    /// `name(args) for <duration>`, after any `at <position>`.
+    fn note(&mut self, at: Option<AtPos>) -> Res<NoteStmt> {
+        let start = at.as_ref().map_or(self.span(), |_| self.span());
         let target = self.ident("an instrument to play")?;
         if self.peek() != &Tok::LParen {
             return Err(self.unexpected("`(` after the instrument name"));
@@ -284,6 +300,139 @@ impl Parser {
         let dur = self.expr()?;
         let span = start.to(self.prev_span());
         Ok(NoteStmt { at, target, args, dur, span })
+    }
+
+    /// `{ key: value, key: value }`, separated by commas or lines.
+    fn entries(&mut self) -> Res<(Vec<(Ident, Expr)>, Span)> {
+        self.expect(&Tok::LBrace)?;
+        let mut entries = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.peek() == &Tok::RBrace {
+                break;
+            }
+            let key = self.ident("a name")?;
+            self.expect(&Tok::Colon)?;
+            entries.push((key, self.expr()?));
+            if !self.eat(&Tok::Comma) && !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
+                return Err(self.unexpected("the end of the entry"));
+            }
+        }
+        let end = self.expect(&Tok::RBrace)?;
+        Ok((entries, end))
+    }
+
+    /// A time, or `bar 5 beat 3`.
+    fn at_pos(&mut self) -> Res<AtPos> {
+        if !self.is_keyword("bar") {
+            return Ok(AtPos::Time(self.expr()?));
+        }
+        self.bump();
+        let number = |p: &mut Parser| -> Res<Expr> {
+            let span = p.span();
+            match p.peek().clone() {
+                Tok::Num { value, unit: None } => {
+                    p.bump();
+                    Ok(Expr { kind: ExprKind::Num { value, unit: None }, span })
+                }
+                _ => Err(p.unexpected("a number")),
+            }
+        };
+        let span = self.span();
+        match self.peek().clone() {
+            // `bar 5 beat 3` lexes as `bar`, `5 beat`, `3`.
+            Tok::Num { value, unit: Some(u) } if u == "beat" || u == "beats" => {
+                self.bump();
+                let bar = Expr { kind: ExprKind::Num { value, unit: None }, span };
+                Ok(AtPos::Bar { bar, beat: Some(number(self)?) })
+            }
+            Tok::Num { value, unit: None } => {
+                self.bump();
+                let bar = Expr { kind: ExprKind::Num { value, unit: None }, span };
+                let beat = if self.is_keyword("beat") {
+                    self.bump();
+                    Some(number(self)?)
+                } else {
+                    None
+                };
+                Ok(AtPos::Bar { bar, beat })
+            }
+            _ => Err(self.unexpected("a bar number, as in `bar 5`")),
+        }
+    }
+
+    fn at_command(&self) -> bool {
+        ["play", "stop", "mute", "unmute", "solo", "unsolo", "hush", "panic", "launch"]
+            .iter()
+            .any(|kw| self.is_keyword(kw))
+    }
+
+    fn command(&mut self, at: Option<AtPos>) -> Res<CommandStmt> {
+        let start = self.span();
+        let Tok::Ident(keyword) = self.bump().tok else { unreachable!("checked by at_command") };
+        let command = match keyword.as_str() {
+            "play" => {
+                let track = self.ident("a track to play on")?;
+                self.expect(&Tok::Eq)?;
+                Command::Play { track, what: self.expr()? }
+            }
+            "stop" => Command::Stop(self.ident("a track to stop")?),
+            "mute" => Command::Mute(self.ident("a track to mute")?),
+            "unmute" => Command::Unmute(self.ident("a track to unmute")?),
+            "solo" => Command::Solo(self.ident("a track to solo")?),
+            "unsolo" => Command::Unsolo(if matches!(self.peek(), Tok::Ident(_)) && !self.is_keyword("at") {
+                Some(self.ident("a track")?)
+            } else {
+                None
+            }),
+            "hush" => Command::Hush,
+            "panic" => Command::Panic,
+            "launch" => Command::Launch(self.ident("a scene to launch")?),
+            _ => unreachable!("checked by at_command"),
+        };
+        let quantize = self.quantize()?;
+        Ok(CommandStmt { at, command, quantize, span: start.to(self.prev_span()) })
+    }
+
+    /// `@ next 4 bars`, `@ in 2 beats`, `@ bar`, `@ now`: when a change lands.
+    fn quantize(&mut self) -> Res<Option<QuantizeSpec>> {
+        if self.peek() != &Tok::At {
+            return Ok(None);
+        }
+        let start = self.bump().span;
+        let relation = if self.is_keyword("next") {
+            self.bump();
+            Relation::Next
+        } else if self.is_keyword("in") {
+            self.bump();
+            Relation::In
+        } else {
+            Relation::OnGrid
+        };
+        let (count, unit) = match self.peek().clone() {
+            Tok::Num { value, unit: Some(u) } => {
+                let unit = match u.as_str() {
+                    "beat" | "beats" => QuantUnit::Beat,
+                    "bar" | "bars" => QuantUnit::Bar,
+                    _ => return Err(self.unexpected("`beats` or `bars`")),
+                };
+                self.bump();
+                (value, unit)
+            }
+            Tok::Ident(word) => {
+                let unit = match word.as_str() {
+                    "now" => QuantUnit::Now,
+                    "beat" => QuantUnit::Beat,
+                    "bar" => QuantUnit::Bar,
+                    "cycle" => QuantUnit::Cycle,
+                    _ => return Err(self.unexpected("`now`, `beat`, `bar`, `cycle`, or a count such as `4 bars`")),
+                };
+                self.bump();
+                (1.0, unit)
+            }
+            _ => return Err(self.unexpected("when it should land, such as `bar` or `4 bars`")),
+        };
+        Ok(Some(QuantizeSpec { relation, count, unit, span: start.to(self.prev_span()) }))
     }
 
     // ---- expressions -------------------------------------------------
@@ -317,6 +466,11 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Res<Expr> {
+        // a leading `+`, as in `+5st`, changes nothing
+        if self.peek() == &Tok::Plus {
+            self.bump();
+            return self.unary();
+        }
         if self.peek() == &Tok::Minus {
             let start = self.bump().span;
             let inner = self.unary()?;
@@ -347,6 +501,18 @@ impl Parser {
             Tok::Num { value, unit } => {
                 self.bump();
                 Ok(Expr { kind: ExprKind::Num { value, unit }, span })
+            }
+            Tok::Pattern(raw) => {
+                self.bump();
+                Ok(Expr { kind: ExprKind::Pattern(raw), span })
+            }
+            Tok::Grid(raw) => {
+                self.bump();
+                Ok(Expr { kind: ExprKind::Grid(raw), span })
+            }
+            Tok::Tilde => {
+                self.bump();
+                Ok(Expr { kind: ExprKind::Rest, span })
             }
             Tok::LBracket => {
                 self.bump();
@@ -640,7 +806,7 @@ opcode one_pole(x, cutoff: hz) {
     fn note_statements() {
         let items = parse_ok("at 2beats lead(freq: c4, amp: -3db) for 1/2beat");
         let Item::Note(n) = &items[0] else { panic!() };
-        assert!(n.at.is_some());
+        assert!(matches!(n.at, Some(AtPos::Time(_))));
         assert_eq!(n.args.len(), 2);
     }
 

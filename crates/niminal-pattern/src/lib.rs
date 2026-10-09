@@ -6,6 +6,6 @@ mod mini;
 mod pattern;
 mod rational;
 
-pub use mini::{Hit, MiniError, grid, parse};
+pub use mini::{Hit, MiniError, grid, parse, parse_with};
 pub use pattern::{Hap, Pattern, Span, euclid_steps};
 pub use rational::Rational;

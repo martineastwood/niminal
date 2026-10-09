@@ -151,6 +151,7 @@ name = "niminal-lang"
 version = "0.0.1"
 dependencies = [
  "niminal-engine",
+ "niminal-pattern",
  "niminal-score",
 ]
 

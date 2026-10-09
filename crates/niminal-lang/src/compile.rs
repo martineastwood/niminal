@@ -11,6 +11,7 @@ use crate::kernel::compile_opcode;
 use crate::layout::Layout;
 use crate::lower::{Names, compile_chain, compile_instr, layout_from_expr, unknown_unit};
 use crate::opcodes::Registry;
+use crate::perform::{Context, compile_performance};
 use crate::parser;
 use crate::program::{Instrument, Program, TrackInfo, resolve_target};
 
@@ -22,13 +23,14 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
     let items = parser::parse(source).map_err(|d| vec![d])?;
     let mut errors = Vec::new();
 
-    let tempo = match tempo_of(&items) {
-        Ok(t) => t,
-        Err(d) => {
-            errors.push(d);
-            Tempo::new(DEFAULT_BPM)
-        }
-    };
+    let beats_per_bar = meter_of(&items).unwrap_or_else(|d| {
+        errors.push(d);
+        4.0
+    });
+    let tempo = tempo_of(&items, beats_per_bar).unwrap_or_else(|d| {
+        errors.push(d);
+        Tempo { bpm: DEFAULT_BPM, beats_per_bar }
+    });
 
     // Top-level names first, so locals can be kept from shadowing them.
     let mut names = Names::default();
@@ -38,7 +40,14 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
             Item::Opcode(d) => (&d.name, "opcode"),
             Item::Bus(d) => (&d.name, "bus"),
             Item::Track(d) => (&d.name, "track"),
-            Item::Tempo(_) | Item::Note(_) | Item::Config(_) => continue,
+            Item::Tempo(_)
+            | Item::Meter(_)
+            | Item::Bind { .. }
+            | Item::Clip(_)
+            | Item::Scene(_)
+            | Item::Command(_)
+            | Item::Note(_)
+            | Item::Config(_) => continue,
         };
         match names.kind_of(&ident.name) {
             None => names.add(&ident.name, kind),
@@ -152,6 +161,15 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
         );
     }
 
+    let cx = Context { tempo, names: &names, instruments: &instruments, tracks: &tracks, failed: &failed };
+    let performance = match compile_performance(&items, &cx) {
+        Ok(compiled) => compiled.actions,
+        Err(mut found) => {
+            errors.append(&mut found);
+            Vec::new()
+        }
+    };
+
     let mut notes = Vec::new();
     for item in &items {
         let Item::Note(note) = item else { continue };
@@ -173,6 +191,7 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
             bus_layouts: names.bus_layouts,
             tracks,
             notes,
+            performance,
         })
     } else {
         Err(errors)
@@ -264,24 +283,52 @@ fn master_layout(items: &[Item]) -> Res<Layout> {
     Ok(layout.unwrap_or(Layout::Mono))
 }
 
-fn tempo_of(items: &[Item]) -> Res<Tempo> {
+/// Beats per bar from `meter 3/4`: the top over the bottom, in quarter-note beats.
+fn meter_of(items: &[Item]) -> Res<f64> {
+    let mut beats_per_bar = None;
+    for item in items {
+        let Item::Meter(e) = item else { continue };
+        if beats_per_bar.is_some() {
+            return Err(Diagnostic::new("meter is set more than once", e.span));
+        }
+        let whole = |e: &Expr| match &e.kind {
+            ExprKind::Num { value, unit: None } if value.fract() == 0.0 && *value >= 1.0 => Some(*value),
+            _ => None,
+        };
+        let parsed = match &e.kind {
+            ExprKind::Binary { op: BinOp::Div, lhs, rhs } => whole(lhs).zip(whole(rhs)),
+            _ => None,
+        };
+        let Some((top, bottom)) = parsed else {
+            return Err(Diagnostic::new("meter is a fraction of whole numbers", e.span)
+                .with_help("for example `meter 3/4` or `meter 7/8`"));
+        };
+        beats_per_bar = Some(top * 4.0 / bottom);
+    }
+    Ok(beats_per_bar.unwrap_or(4.0))
+}
+
+fn tempo_of(items: &[Item], beats_per_bar: f64) -> Res<Tempo> {
     let mut tempo = None;
     for item in items {
-        let Item::Tempo(e) = item else { continue };
+        let Item::Tempo(stmt) = item else { continue };
         if tempo.is_some() {
-            return Err(Diagnostic::new("tempo is set more than once", e.span));
+            return Err(Diagnostic::new("tempo is set more than once", stmt.span));
         }
-        match &e.kind {
+        if stmt.quantize.is_some() || stmt.over.is_some() {
+            return Err(Diagnostic::new("changing the tempo while playing isn't supported yet", stmt.span));
+        }
+        match &stmt.value.kind {
             ExprKind::Num { value, unit: Some(u) } if u == "bpm" && *value > 0.0 => {
-                tempo = Some(Tempo::new(*value));
+                tempo = Some(Tempo { bpm: *value, beats_per_bar });
             }
             _ => {
-                return Err(Diagnostic::new("tempo must be a positive number of bpm", e.span)
+                return Err(Diagnostic::new("tempo must be a positive number of bpm", stmt.value.span)
                     .with_help("for example `tempo 120bpm`"));
             }
         }
     }
-    Ok(tempo.unwrap_or(Tempo::new(DEFAULT_BPM)))
+    Ok(tempo.unwrap_or(Tempo { bpm: DEFAULT_BPM, beats_per_bar }))
 }
 
 /// Literal named arguments, checked against `instr`'s parameters.
@@ -307,7 +354,11 @@ fn check_note(note: &NoteStmt, instruments: &[Instrument], tracks: &[TrackInfo],
     let target = resolve_target(instruments, tracks, &name.name).map_err(|e| arg_error(e, name.span))?;
     let instr = &instruments[target.instrument];
 
-    let at = note.at.as_ref().map_or(Ok(Time::Beats(0.0)), literal_time)?;
+    let at = match &note.at {
+        None => Time::Beats(0.0),
+        Some(AtPos::Time(e)) => literal_time(e)?,
+        Some(AtPos::Bar { bar, beat }) => bar_position(bar, beat.as_ref(), tempo)?,
+    };
     let dur = literal_time(&note.dur)?;
 
     let args = literal_args(&note.args, instr, tempo)?;
@@ -324,6 +375,16 @@ fn arg_error(e: crate::program::ArgError, span: Span) -> Diagnostic {
         Some(h) => d.with_help(h),
         None => d,
     }
+}
+
+/// `bar 5 beat 3`, counting from 1, as a number of beats.
+fn bar_position(bar: &Expr, beat: Option<&Expr>, tempo: Tempo) -> Res<Time> {
+    let number = |e: &Expr| match e.kind {
+        ExprKind::Num { value, unit: None } if value >= 1.0 => Ok(value),
+        _ => Err(Diagnostic::new("bars and beats are numbers counting from 1", e.span)),
+    };
+    let beat = beat.map(number).transpose()?.unwrap_or(1.0);
+    Ok(Time::Beats((number(bar)? - 1.0) * tempo.beats_per_bar + (beat - 1.0)))
 }
 
 fn literal_time(e: &Expr) -> Res<Time> {
@@ -418,7 +479,7 @@ saw_lead(freq: a3) for 1beat
     fn compiles_the_basic_synth() {
         let p = ok(SAW_LEAD);
         let i = p.instrument("saw_lead").unwrap();
-        assert_eq!(i.params.len(), 2);
+        assert_eq!(i.params.len(), 3, "freq, amp and the implicit gain");
         assert_eq!(i.params[0], Param { name: "freq".into(), unit: Unit::Hz, range: None, default: None });
         let amp = i.params[1].default.unwrap();
         assert!((amp - 0.501_187).abs() < 1e-5, "-6db is stored as a gain factor: {amp}");
@@ -985,6 +1046,339 @@ instr i(f: hz) { osc(saw, f).pan }");
         let notes = ok("instr a() { osc(sine, 100hz) }\na() for 2bars\nat 1bar a() for 1bar");
         assert_eq!(notes.notes[0].dur, Time::Bars(2.0));
         assert_eq!(notes.notes[1].at, Time::Bars(1.0));
+    }
+
+    // ---- the performance layer ------------------------------------------------
+
+    use crate::performance::{Action, Clip, QuantizeRelation, QuantizeUnit};
+    use niminal_pattern::{Pattern, Rational, Span as CycleSpan};
+
+    const STAGE: &str = "
+instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }
+track lead { instrument = pluck }
+track bass { instrument = pluck }
+track pad { instrument = pluck }
+";
+
+    fn stage(body: &str) -> String {
+        format!("{STAGE}{body}")
+    }
+
+    fn r(n: i64, d: i64) -> Rational {
+        Rational::new(n, d)
+    }
+
+    /// (start in cycles, value) of every event beginning in the first `cycles` cycles.
+    fn events(p: &Pattern<Value>, cycles: i64) -> Vec<(Rational, Value)> {
+        let mut v: Vec<_> = p
+            .onsets(CycleSpan::new(Rational::ZERO, Rational::int(cycles)))
+            .into_iter()
+            .map(|h| (h.whole.unwrap().start, h.value))
+            .collect();
+        v.sort_by_key(|e| e.0);
+        v
+    }
+
+    fn played(src: &str) -> Clip {
+        let p = ok(&stage(src));
+        match &p.performance[0].action {
+            Action::Play { clip, .. } => clip.clone(),
+            _ => panic!("expected a play command"),
+        }
+    }
+
+    fn notes_of(src: &str, cycles: i64) -> Vec<(Rational, Value)> {
+        events(played(src).lane("notes").unwrap(), cycles)
+    }
+
+    fn midi(m: i32) -> Value {
+        Value::Note(m)
+    }
+
+    #[test]
+    fn a_pattern_of_notes_plays_on_a_track() {
+        let p = ok(&stage("riff = [c4 ~ e4 g4]\nplay lead = riff"));
+        assert_eq!(p.performance.len(), 1);
+        let Action::Play { track, clip } = &p.performance[0].action else { panic!() };
+        assert_eq!(*track, 1, "track 0 is the implicit one");
+        assert_eq!(clip.length, Rational::ONE);
+        assert_eq!(
+            events(clip.lane("notes").unwrap(), 1),
+            [(r(0, 1), midi(60)), (r(1, 2), midi(64)), (r(3, 4), midi(67))]
+        );
+        assert_eq!(p.performance[0].at, Time::Beats(0.0));
+    }
+
+    #[test]
+    fn a_pattern_can_be_written_inline_and_used_before_it_is_defined() {
+        assert_eq!(notes_of("play lead = [a3 b3]", 1).len(), 2);
+        let p = ok(&stage("play lead = riff\nriff = [c4]"));
+        assert_eq!(p.performance.len(), 1);
+    }
+
+    #[test]
+    fn atoms_carry_units_and_note_names() {
+        let c = played("play lead = [c#4 -6db 440hz 1/8beat 0.5 7st]");
+        let values: Vec<_> = events(c.lane("notes").unwrap(), 1).into_iter().map(|e| e.1).collect();
+        assert_eq!(
+            values,
+            [
+                Value::Note(61),
+                Value::Db(-6.0),
+                Value::Hz(440.0),
+                Value::Beats(0.125),
+                Value::Num(0.5),
+                Value::Semitones(7.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn time_operations() {
+        assert_eq!(notes_of("play lead = [c4 e4].fast(2)", 1).len(), 4);
+        let slow = notes_of("play lead = [c4 e4].slow(2)", 2);
+        assert_eq!(slow, [(r(0, 1), midi(60)), (r(1, 1), midi(64))]);
+        assert_eq!(notes_of("play lead = [c4 e4 g4].reverse", 1)[0].1, midi(67));
+        let shifted = notes_of("play lead = [c4 e4].shift(1/4)", 1);
+        assert_eq!(shifted.iter().map(|e| e.0).collect::<Vec<_>>(), [r(1, 4), r(3, 4)]);
+        // beats are a share of a bar: a quarter of 4/4 is a quarter cycle
+        let by_beat = notes_of("play lead = [c4 e4].shift(1 beat)", 1);
+        assert_eq!(by_beat[0].0, r(1, 4));
+        let over = notes_of("play lead = [c4 e4].over(2 bars)", 2);
+        assert_eq!(over.len(), 2);
+        assert_eq!(over[1].0, r(1, 1));
+    }
+
+    #[test]
+    fn every_applies_a_change_on_some_cycles() {
+        let n = notes_of("play lead = [c4 e4 g4 b4].every(2, it.reverse)", 2);
+        assert_eq!(n[0].1, midi(71), "reversed on cycle 0");
+        assert_eq!(n[4].1, midi(60), "plain on cycle 1");
+        // the change can use any operation, including others that use `it`
+        assert_eq!(notes_of("play lead = [c4 e4].every(1, it.fast(2).reverse)", 1).len(), 4);
+    }
+
+    #[test]
+    fn value_operations() {
+        let up = notes_of("play lead = [c4 e4].transpose(+5st)", 1);
+        assert_eq!(up.iter().map(|e| e.1).collect::<Vec<_>>(), [midi(65), midi(69)]);
+        let down = notes_of("play lead = [c4].transpose(-12st)", 1);
+        assert_eq!(down[0].1, midi(48));
+        let detuned = notes_of("play lead = [a4].transpose(0.5st)", 1);
+        let Value::Hz(hz) = detuned[0].1 else { panic!("a fractional interval gives a frequency") };
+        assert!((hz - 440.0 * 2f64.powf(0.5 / 12.0)).abs() < 1e-9);
+
+        let e = notes_of("play lead = [c2].euclid(hits: 3, steps: 8)", 1);
+        assert_eq!(e.iter().map(|e| e.0).collect::<Vec<_>>(), [r(0, 1), r(3, 8), r(3, 4)]);
+        let rhythm = notes_of("play lead = [c4 e4 g4].rhythm(grid[x.x. x.x.])", 1);
+        assert_eq!(rhythm.len(), 4);
+        assert_eq!(rhythm[0].0, r(0, 1));
+        let masked = notes_of("play lead = [c4 e4 g4 b4].mask(grid[x.x.])", 1);
+        assert_eq!(masked.iter().map(|e| e.1).collect::<Vec<_>>(), [midi(60), midi(67)]);
+        assert_eq!(notes_of("play lead = [c4 e4].repeat_each(2)", 1).len(), 4);
+        let layered = notes_of("play lead = [c4].layer(after: 1/2, it.transpose(+12st))", 1);
+        assert_eq!(layered.iter().map(|e| e.1).collect::<Vec<_>>(), [midi(60), midi(72)]);
+    }
+
+    #[test]
+    fn thinning_is_seeded_by_the_source() {
+        let src = "play lead = [c4*16].thin(50%)";
+        let a = notes_of(src, 8).len();
+        assert_eq!(a, notes_of(src, 8).len(), "the same source thins the same way");
+        assert!((40..90).contains(&a), "about half of 128 survive: {a}");
+        assert_eq!(notes_of("play lead = [c4*4].thin(0%)", 1).len(), 4);
+        assert!(notes_of("play lead = [c4*4].thin(100%)", 1).is_empty());
+    }
+
+    #[test]
+    fn clips_have_a_length_and_lanes() {
+        let p = ok(&stage("
+clip riff {
+  length: 2 bars
+  notes: [c2 ~ eb2 g1]
+  bright: [0.2 0.8]
+  gain: [0db -6db]
+}
+play bass = riff"));
+        let Action::Play { clip, .. } = &p.performance[0].action else { panic!() };
+        assert_eq!(clip.length, Rational::int(2));
+        assert_eq!(clip.name, "riff");
+        assert_eq!(clip.lanes.len(), 3);
+        assert_eq!(events(clip.lane("bright").unwrap(), 1), [(r(0, 1), Value::Num(0.2)), (r(1, 2), Value::Num(0.8))]);
+        // length in beats is a share of a bar
+        assert_eq!(played("clip c { length: 6 beats\nnotes: [c4] }\nplay lead = c").length, r(3, 2));
+    }
+
+    #[test]
+    fn operations_apply_to_whole_clips() {
+        let sped = played("clip c { length: 2 bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nplay lead = c.fast(2)");
+        assert_eq!(sped.length, Rational::ONE, "fast shortens the clip");
+        assert_eq!(events(sped.lane("notes").unwrap(), 1).len(), 4);
+        assert_eq!(events(sped.lane("bright").unwrap(), 1).len(), 4, "every lane speeds up together");
+
+        let up = played("clip c { notes: [c4]\nbright: [0.3] }\nplay lead = c.transpose(+12st)");
+        assert_eq!(events(up.lane("notes").unwrap(), 1)[0].1, midi(72));
+        assert_eq!(events(up.lane("bright").unwrap(), 1)[0].1, Value::Num(0.3), "only the notes move");
+    }
+
+    #[test]
+    fn scenes_launch_clips_and_stop_tracks() {
+        let p = ok(&stage("
+clip riff { notes: [c2 g2] }
+verse = [c4 e4]
+scene intro { bass: riff, lead: verse, pad: ~ }
+launch intro"));
+        assert_eq!(p.performance.len(), 3);
+        let kinds: Vec<_> = p
+            .performance
+            .iter()
+            .map(|s| match &s.action {
+                Action::Play { track, clip } => format!("play {track} {}", clip.name),
+                Action::Stop { track } => format!("stop {track}"),
+                _ => "other".into(),
+            })
+            .collect();
+        assert_eq!(kinds, ["play 2 riff", "play 1 lead", "stop 3"]);
+    }
+
+    #[test]
+    fn commands_carry_times_and_quantization() {
+        let p = ok(&stage("
+tempo 120bpm
+clip riff { notes: [c2] }
+play bass = riff
+at 4 bars play lead = riff
+at bar 5 beat 3 stop bass
+at 2beats mute lead @ next bar
+unmute lead @ in 2 bars
+solo bass @ 4 bars
+hush @ now
+panic
+unsolo
+at bar 3 unsolo bass"));
+        let acts = &p.performance;
+        assert_eq!(acts[1].at, Time::Bars(4.0));
+        assert_eq!(acts[2].at, Time::Beats(18.0), "bar 5 beat 3 in 4/4 is 4 bars and 2 beats in");
+        assert_eq!(acts[3].at, Time::Beats(2.0));
+        let q = acts[3].quantize.unwrap();
+        assert_eq!((q.relation, q.count, q.unit), (QuantizeRelation::Next, 1.0, QuantizeUnit::Bar));
+        let q = acts[4].quantize.unwrap();
+        assert_eq!((q.relation, q.count, q.unit), (QuantizeRelation::In, 2.0, QuantizeUnit::Bar));
+        let q = acts[5].quantize.unwrap();
+        assert_eq!((q.relation, q.count, q.unit), (QuantizeRelation::OnGrid, 4.0, QuantizeUnit::Bar));
+        assert_eq!(acts[6].quantize.unwrap().unit, QuantizeUnit::Now);
+        assert!(matches!(acts[7].action, Action::Panic));
+        assert!(matches!(acts[8].action, Action::Unsolo { track: None }));
+        assert!(matches!(acts[9].action, Action::Unsolo { track: Some(2) }));
+        assert_eq!(acts[9].at, Time::Beats(8.0));
+        assert!(acts[0].quantize.is_none());
+    }
+
+    #[test]
+    fn meter_changes_what_a_bar_is() {
+        let p = ok(&stage("meter 3/4\nclip c { notes: [c4] }\nat bar 3 play lead = c\nat 1 bar mute lead"));
+        assert_eq!(p.tempo.beats_per_bar, 3.0);
+        assert_eq!(p.performance[0].at, Time::Beats(6.0));
+        let waltz = ok(&stage("meter 7/8\nclip c { notes: [c4] }\nat bar 2 play lead = c"));
+        assert_eq!(waltz.performance[0].at, Time::Beats(3.5));
+        assert_eq!(msg("meter 3"), "meter is a fraction of whole numbers");
+        assert_eq!(msg("meter 3/4\nmeter 4/4"), "meter is set more than once");
+        // a beat is a quarter of a bar in 4/4 and a third of one in 3/4
+        let pat = played("meter 3/4\nplay lead = [c4 e4].shift(1 beat)");
+        assert_eq!(events(pat.lane("notes").unwrap(), 1)[0].0, r(1, 3));
+    }
+
+    #[test]
+    fn instruments_accept_a_gain_control() {
+        let p = ok(&stage(""));
+        let gain = p.instruments[0].params.iter().find(|q| q.name == "gain").unwrap();
+        assert_eq!((gain.unit, gain.default), (Unit::Db, Some(1.0)));
+        assert!(p.notes.is_empty());
+        let note = ok(&stage("lead(freq: c4, gain: -6db) for 1beat"));
+        assert_eq!(note.notes[0].args["gain"], Value::Db(-6.0));
+        assert_eq!(
+            msg("instr a(gain: db) { osc(sine, 100hz) }"),
+            "`gain` is reserved: every note already has a `gain` control"
+        );
+    }
+
+    #[test]
+    fn clips_are_checked_against_the_track_they_play_on() {
+        let d = first_error(&stage("clip c { notes: [c4]\ntone: [1] }\nplay lead = c"));
+        assert_eq!(d.message, "clip `c` has a lane `tone`, but `pluck` has no such parameter");
+        let d = first_error(&stage("clip c { notes: [c4]\nbrigth: [0.1] }\nplay lead = c"));
+        assert_eq!(d.help.as_deref(), Some("did you mean `bright`?"));
+        ok(&stage("clip c { notes: [c4]\nbright: [0.1]\ngain: [-3db]\ndur: [1/4beat]\nnudge: [10ms] }\nplay lead = c"));
+        assert_eq!(
+            msg(&stage("clip c { notes: [c4]\npan: [0deg] }\nplay lead = c")),
+            "the `pan` lane isn't supported yet"
+        );
+
+        let no_pitch = "instr drone(amp: db) { osc(sine, 100hz) }\ntrack t { instrument = drone }\nplay t = [c4]";
+        assert_eq!(msg(no_pitch), "`drone` has no `freq` parameter for the notes to set");
+        let silent = "instr a(freq: hz) { osc(sine, freq) }\ntrack fx { out = it }\nplay fx = [c4]";
+        assert_eq!(msg(silent), "track `fx` has no instrument to play a clip on");
+    }
+
+    #[test]
+    fn performance_errors_are_clear_and_located() {
+        // unknown names, with suggestions
+        let d = first_error(&stage("play leed = [c4]"));
+        assert_eq!(d.message, "no track named `leed`");
+        assert_eq!(d.help.as_deref(), Some("did you mean `lead`?"));
+        let d = first_error(&stage("riff = [c4]\nplay lead = rif"));
+        assert_eq!(d.message, "`rif` is not defined");
+        assert_eq!(d.help.as_deref(), Some("did you mean `riff`?"));
+        assert_eq!(first_error(&stage("launch nothing")).message, "no scene named `nothing`");
+        let d = first_error(&stage("play lead = [c4].fsat(2)"));
+        assert_eq!(d.message, "unknown pattern operation `fsat`");
+        assert_eq!(d.help.as_deref(), Some("did you mean `fast`?"));
+
+        // bad atoms are pointed at, even inside brackets and alternations
+        let src = stage("play lead = [c4 [e4 kick] g4]");
+        let d = first_error(&src);
+        assert!(d.message.contains("`kick` isn't a note or a value"), "{}", d.message);
+        assert_eq!(&src[d.span.start..d.span.start + 4], "kick");
+        let d = first_error(&stage("play lead = [c4 e4"));
+        assert_eq!(d.message, "this `[` is never closed");
+
+        // operation arguments
+        assert_eq!(msg(&stage("play lead = [c4].fast(0)")), "`fast` must be above zero");
+        assert_eq!(msg(&stage("play lead = [c4].fast")), "`fast` needs an argument `by`");
+        assert_eq!(msg(&stage("play lead = [c4].transpose(5)")), "`transpose` takes an interval in semitones");
+        assert_eq!(msg(&stage("play lead = [c4].thin(150%)")), "`thin` takes an amount from 0% to 100%");
+        assert_eq!(msg(&stage("play lead = [c4].shift(1sec)")), "expected a length in beats or bars, found `sec`");
+        assert_eq!(msg(&stage("play lead = [c4].every(2, it.nonsense)")), "unknown pattern operation `nonsense`");
+        assert_eq!(msg(&stage("play lead = it")), "`it` is only available inside an argument, as in `every(4, it.reverse)`");
+        assert_eq!(msg(&stage("play lead = fast(2)")), "`fast` works on a pattern: write it after one, as in `riff.fast`");
+
+        // kinds of value
+        assert_eq!(
+            msg(&stage("g = grid[x.x.]\nplay lead = g")),
+            "a grid has no pitches to play"
+        );
+        assert_eq!(
+            msg(&stage("scene s { lead: [c4] }\nplay lead = s")),
+            "a scene is launched, not played"
+        );
+        assert_eq!(
+            msg(&stage("scene s { nobody: [c4] }")),
+            "no track named `nobody`"
+        );
+        assert_eq!(
+            msg(&stage("clip c { notes: env[0 1sec 1] }")),
+            "envelope lanes aren't supported yet"
+        );
+        assert_eq!(msg(&stage("clip c { length: 0 bars }")), "a clip needs a length above zero");
+        assert_eq!(msg(&stage("clip c { notes: [c4]\nnotes: [e4] }")), "lane `notes` is given twice");
+        assert_eq!(msg(&stage("g = grid[x.q]")), "`q` isn't a grid step: use x, X, o or .");
+
+        // names
+        assert_eq!(msg(&stage("riff = [c4]\nriff = [e4]")), "`riff` is defined twice");
+        assert_eq!(msg(&stage("lead = [c4]")), "`lead` is already the name of a track");
+        assert_eq!(msg(&stage("it = [c4]")), "`it` is a reserved word");
+        assert_eq!(msg("at bar 0 hush"), "bars and beats count from 1");
+        assert_eq!(msg(&stage("tempo 120bpm @ next bar")), "changing the tempo while playing isn't supported yet");
     }
 
     #[test]

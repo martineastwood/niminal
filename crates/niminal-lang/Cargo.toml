@@ -7,3 +7,4 @@ description = "niminal language: parser, unit checker, and lowering to the engin
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }
 niminal-score = { path = "../niminal-score" }
+niminal-pattern = { path = "../niminal-pattern" }

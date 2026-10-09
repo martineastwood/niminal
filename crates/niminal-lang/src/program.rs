@@ -75,6 +75,8 @@ pub struct Program {
     pub tracks: Vec<TrackInfo>,
     /// Notes written directly in the source.
     pub notes: Vec<Event>,
+    /// Commands that play clips and scenes, in source order.
+    pub performance: Vec<crate::performance::Scheduled>,
 }
 
 /// A note ready to play: which track, which instrument, and its parameters.
