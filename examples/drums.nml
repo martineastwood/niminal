@@ -5,7 +5,7 @@ tempo 100bpm
 
 kit drums = "drums"
 track beat { instrument = drums }
-track hats { instrument = drums(gain: -8db) }
+track hats { instrument = drums(gain: -1db) }
 
 // the kick and snare, and eighth-note hats
 play beat = [kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare]

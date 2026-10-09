@@ -140,21 +140,42 @@ impl Parser {
             let start = self.bump().span;
             let name = self.ident(if is_kit { "a kit name" } else { "a sample name" })?;
             self.expect(&Tok::Eq)?;
-            let path_span = self.span();
-            let Tok::Str(path) = self.peek().clone() else {
-                return Err(self.unexpected("a file path in quotes").with_help(if is_kit {
-                    "for example `kit drums = \"drums/808\"`"
-                } else {
-                    "for example `sample kick = \"drums/kick.wav\"`"
-                }));
+            let source_span = self.span();
+            let source = match self.peek().clone() {
+                Tok::Str(path) => {
+                    self.bump();
+                    SampleSource::Path(path)
+                }
+                Tok::Ident(_) if is_kit && self.peek_at(1) == &Tok::Dot => {
+                    let sample = self.ident("a sample name")?;
+                    self.bump();
+                    let method = self.ident("`slices`")?;
+                    if method.name != "slices" {
+                        return Err(Diagnostic::new(format!("a sample has no `{}`", method.name), method.span)
+                            .with_help("the only thing to make from a sample is `.slices(n)`"));
+                    }
+                    self.expect(&Tok::LParen)?;
+                    let Tok::Num { value: count, unit: None } = self.peek().clone() else {
+                        return Err(self.unexpected("how many slices, such as `16`"));
+                    };
+                    self.bump();
+                    self.expect(&Tok::RParen)?;
+                    SampleSource::Slices { sample, count }
+                }
+                _ => {
+                    return Err(self.unexpected("a file path in quotes").with_help(if is_kit {
+                        "for example `kit drums = \"drums/808\"` or `kit chops = amen.slices(16)`"
+                    } else {
+                        "for example `sample kick = \"drums/kick.wav\"`"
+                    }));
+                }
             };
-            self.bump();
             let mut options = Vec::new();
             if self.is_keyword("with") {
                 self.bump();
                 options = self.args()?;
             }
-            Ok(Item::Sample(SampleDecl { is_kit, name, path, path_span, options, span: start.to(self.prev_span()) }))
+            Ok(Item::Sample(SampleDecl { is_kit, name, source, source_span, options, span: start.to(self.prev_span()) }))
         } else if self.is_keyword("config") {
             let start = self.bump().span;
             let (entries, end) = self.entries()?;

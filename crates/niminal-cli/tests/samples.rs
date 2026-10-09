@@ -228,3 +228,77 @@ fn single_samples_can_share_a_choke_group_with_each_other_and_a_kit() {
     // `a` would ring until 1.5s; the render ends when `b` ends at 1.02s because `a` was cut off
     assert!(out[0].len() < (1.1 * SR as f64) as usize, "{}", out[0].len());
 }
+
+/// Four 100ms pieces at distinct levels, as one file: a stand-in for a break.
+fn write_break(dir: &Path) {
+    let levels = [0.1, 0.2, 0.3, 0.4];
+    write_wav(&dir.join("amen.wav"), &[levels.iter().flat_map(|&l| block(l, 100)).collect()]);
+}
+
+#[test]
+fn slices_of_a_sample_play_in_any_order() {
+    let dir = scratch("slices");
+    write_break(&dir);
+    let src = "tempo 120bpm\nsample amen = \"amen.wav\"\nkit chops = amen.slices(4)\n\
+               track t { instrument = chops }\nplay t = [s3 s0 s2 s1]";
+    let out = play(&dir, src);
+    // four steps of half a second; each plays its quarter of the file (100ms) from its start
+    let at = |s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
+    assert!((at(0.05) - 0.4).abs() < 1e-3, "{}", at(0.05));
+    assert!((at(0.55) - 0.1).abs() < 1e-3, "{}", at(0.55));
+    assert!((at(1.05) - 0.3).abs() < 1e-3, "{}", at(1.05));
+    assert!((at(1.55) - 0.2).abs() < 1e-3, "{}", at(1.55));
+    assert!(at(0.2).abs() < 1e-6, "a slice ends where the next piece of the file would start");
+    assert!(at(0.0).abs() < 0.01, "and fades in so it doesn't click");
+}
+
+#[test]
+fn slices_take_choke_groups_by_name() {
+    let dir = scratch("slicekit");
+    write_break(&dir);
+    let program = compile_in(
+        &dir,
+        "sample amen = \"amen.wav\"\nkit chops = amen.slices(4) with(choke: g(s0, s1))",
+    )
+    .unwrap();
+    assert_eq!(program.instrument("chops").unwrap().chokes, [Some(0), Some(0), None, None]);
+}
+
+#[test]
+fn slicing_mistakes_are_reported() {
+    let dir = scratch("sliceerr");
+    write_break(&dir);
+    let e = errors(&dir, "kit c = amen.slices(4)");
+    assert!(e.contains("no sample named `amen` to slice"), "{e}");
+    let e = errors(&dir, "sample amen = \"amen.wav\"\nkit c = amen.slces(4)");
+    assert!(e.contains("a sample has no `slces`"), "{e}");
+    let e = errors(&dir, "sample amen = \"amen.wav\"\nkit c = amen.slices(2.5)");
+    assert!(e.contains("can be cut into 1 to"), "{e}");
+    let e = errors(&dir, "sample amen = \"amen.wav\"\nkit c = amen.slices(4)\ntrack t { instrument = c }\nplay t = [s9]");
+    assert!(e.contains("`s9` isn't a note, a value, or a sample in a kit"), "{e}");
+    let e = errors(&dir, "sample amen = \"amen.wav\"\nsample c = amen.slices(4)");
+    assert!(e.contains("a file path in quotes"), "{e}");
+}
+
+#[test]
+fn the_breakbeat_example_plays_the_break_back_unchanged_when_the_slices_are_in_order() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let source = std::fs::read_to_string(dir.join("breakbeat.nml")).unwrap();
+    let program = compile_in(&dir, &source).unwrap_or_else(|e| panic!("{e}"));
+    let out = render(&program, &[], &RenderOptions { limiter: false, until: Some(4.8) }).unwrap().channels;
+
+    // a bar at 100bpm is 2.4s
+    let original = hound::WavReader::open(dir.join("break.wav")).unwrap().samples::<i16>().map(|s| s.unwrap() as f32 / 32768.0).collect::<Vec<_>>();
+    let rate = |t: f64, n: usize| (t * n as f64) as usize;
+    // compare a window in the middle of the bar, away from the joins' tiny fades
+    let (mut ours, mut theirs) = (0.0f64, 0.0f64);
+    for i in 0..2000 {
+        let t = 0.32 + i as f64 / 48_000.0;
+        let a = f64::from(out[0][rate(t, SR)]);
+        // the master is mono here only if configured; the example is stereo, so left is -3dB of the mono file
+        let b = f64::from(original[rate(t, 24_000)]) * std::f64::consts::FRAC_1_SQRT_2;
+        ours += a * a;
+        theirs += b * b;
+    }
+    assert!((ours / theirs - 1.0).abs() < 0.1, "{ours} {theirs}");
+}

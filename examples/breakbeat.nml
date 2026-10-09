@@ -1,0 +1,15 @@
+// Chopping a break. The one-bar loop in break.wav is cut into 16 slices (s0..s15),
+// one per sixteenth, so any order you write plays on the grid at your tempo.
+// Render with:  niminal render examples/breakbeat.nml --out breakbeat.wav --bars 4
+config { channels: stereo }
+tempo 100bpm
+
+sample brk = "break.wav"
+kit chops = brk.slices(16)
+track drums { instrument = chops }
+
+// the original order plays the break as recorded
+play drums = [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15]
+
+// ...and rearranged: edit this and evaluate it while the first plays
+// play drums = [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s4 s4 s14 s15]

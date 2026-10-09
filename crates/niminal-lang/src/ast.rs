@@ -111,10 +111,19 @@ pub struct InstrDef {
 pub struct SampleDecl {
     pub is_kit: bool,
     pub name: Ident,
-    pub path: String,
-    pub path_span: Span,
+    pub source: SampleSource,
+    pub source_span: Span,
     pub options: Vec<Arg>,
     pub span: Span,
+}
+
+/// Where a sample or kit comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SampleSource {
+    /// A file, or for a kit a folder.
+    Path(String),
+    /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier.
+    Slices { sample: Ident, count: f64 },
 }
 
 /// `bus space` or `bus space: stereo`

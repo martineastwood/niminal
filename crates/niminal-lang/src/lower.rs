@@ -296,11 +296,19 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
     })
 }
 
+/// One sample of a sampler instrument.
+pub(crate) struct Member {
+    pub name: String,
+    pub data: Arc<SampleData>,
+    /// The frames of `data` it plays, if not all of them.
+    pub slice: Option<(usize, usize)>,
+}
+
 /// An instrument that plays recorded audio. A kit has one player per sample,
 /// and its `sample` parameter picks which one sounds.
 pub(crate) fn compile_sampler(
     name: &Ident,
-    members: &[(String, Arc<SampleData>)],
+    members: &[Member],
     is_kit: bool,
     root_hz: f32,
     tempo: Tempo,
@@ -325,7 +333,8 @@ pub(crate) fn compile_sampler(
         Diagnostic::new(format!("a sample with {n} channels is more than the {MAX_SAMPLE_CHANNELS} niminal supports"), name.span)
     };
     let mut mix: Option<Sig> = None;
-    for (i, (_, data)) in members.iter().enumerate() {
+    for (i, member) in members.iter().enumerate() {
+        let data = &member.data;
         let channels = data.channels.len();
         if channels > MAX_SAMPLE_CHANNELS {
             return Err(too_many(channels));
@@ -334,7 +343,10 @@ pub(crate) fn compile_sampler(
         for c in 0..channels {
             let mut wires = vec![("freq", freq), ("pitch", pitch), ("rate", rate), ("start", start)];
             wires.extend(pick.map(|p| ("sample", p)));
-            let player = Sampler::new(data.clone(), c, root_hz, is_kit.then_some(i));
+            let mut player = Sampler::new(data.clone(), c, root_hz, is_kit.then_some(i));
+            if let Some((start, end)) = member.slice {
+                player = player.slice(start, end);
+            }
             srcs.push(lower.g.add(player, &wires).map_err(|e| Diagnostic::new(e.to_string(), name.span))?);
         }
         let sig = lower.convert(&Sig::channels(srcs, Layout::from_count(channels)), names.master, name.span)?;
@@ -349,7 +361,7 @@ pub(crate) fn compile_sampler(
         name: name.name.clone(),
         graph: Arc::new(lower.g.build_channels(&result.srcs)),
         params,
-        members: if is_kit { members.iter().map(|(n, _)| n.clone()).collect() } else { Vec::new() },
+        members: if is_kit { members.iter().map(|m| m.name.clone()).collect() } else { Vec::new() },
         chokes: Vec::new(),
     })
 }
