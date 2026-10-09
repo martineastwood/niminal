@@ -11,7 +11,7 @@ use niminal_engine::ops::{BinOp as Op, Instr, Kernel};
 use niminal_score::Tempo;
 
 use crate::ast::*;
-use crate::compile::{Lower, literal_sig, param_type, unknown_name};
+use crate::lower::{Lower, literal_sig, param_type, unknown_name};
 use crate::diag::{Diagnostic, Span, closest};
 use crate::opcodes::{Build, Kind, OpSpec, ParamSpec, Registry, math_fn};
 use crate::unit::Unit;

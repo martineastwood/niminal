@@ -10,6 +10,8 @@ pub enum Src {
     Param(usize),
     /// The output of another node.
     Node(usize),
+    /// An external input filled by the host each block (see [`GraphBuilder::input`]).
+    Input(usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +59,9 @@ pub struct GraphBuilder {
     params: Vec<ParamDef>,
     consts: Vec<f32>,
     nodes: Vec<NodeDef>,
+    n_inputs: usize,
+    /// (bus, encoded slot)
+    sends: Vec<(usize, usize)>,
 }
 
 impl GraphBuilder {
@@ -71,6 +76,19 @@ impl GraphBuilder {
         }
         self.params.push(ParamDef { name: name.to_string(), default });
         Ok(Src::Param(self.params.len() - 1))
+    }
+
+    /// Declare an external input. The host fills it before each block, for
+    /// example with a track's incoming audio or the contents of a bus.
+    pub fn input(&mut self) -> Src {
+        self.n_inputs += 1;
+        Src::Input(self.n_inputs - 1)
+    }
+
+    /// Add `src` to a bus every block.
+    pub fn send(&mut self, bus: usize, src: Src) {
+        let slot = self.slot_for(src);
+        self.sends.push((bus, slot));
     }
 
     /// Add an opcode, wiring its ports by name. Ports left out take their
@@ -128,18 +146,23 @@ impl GraphBuilder {
                 assert!(i < self.nodes.len(), "node {i} does not exist yet");
                 NODE_BASE + i
             }
+            Src::Input(i) => {
+                assert!(i < self.n_inputs, "input {i} was not declared");
+                INPUT_BASE + i
+            }
         }
     }
 
     pub fn build(mut self, output: Src) -> Graph {
-        if matches!(output, Src::Const(_)) {
-            self.slot_for(output); // make sure a constant output has a slot
-        }
+        let output_enc = self.slot_for(output); // interns a constant output
         let n_params = self.params.len();
         let n_consts = self.consts.len();
-        let n_fixed = n_params + n_consts;
+        let n_inputs = self.n_inputs;
+        let n_fixed = n_params + n_consts + n_inputs;
         let resolve = |slot: usize| {
-            if slot >= NODE_BASE {
+            if slot >= INPUT_BASE {
+                n_params + n_consts + (slot - INPUT_BASE)
+            } else if slot >= NODE_BASE {
                 n_fixed + (slot - NODE_BASE)
             } else if slot >= CONST_BASE {
                 n_params + (slot - CONST_BASE)
@@ -158,28 +181,31 @@ impl GraphBuilder {
                 n
             })
             .collect();
+        let sends = self.sends.iter().map(|&(bus, slot)| (bus, resolve(slot))).collect();
 
-        let output_slot = match output {
-            Src::Param(i) => i,
-            Src::Const(v) => match self.consts.iter().position(|c| c.to_bits() == v.to_bits()) {
-                Some(i) => n_params + i,
-                None => unreachable!("constant interned above"),
-            },
-            Src::Node(i) => n_fixed + i,
-        };
-
-        Graph { params: self.params, consts: self.consts, nodes, output_slot }
+        Graph {
+            params: self.params,
+            consts: self.consts,
+            nodes,
+            n_inputs,
+            sends,
+            output_slot: resolve(output_enc),
+        }
     }
 }
 
 const CONST_BASE: usize = 1 << 20;
 const NODE_BASE: usize = 1 << 21;
+const INPUT_BASE: usize = 1 << 22;
 
 /// An immutable compiled graph, shared between voices.
 pub struct Graph {
     pub(crate) params: Vec<ParamDef>,
     pub(crate) consts: Vec<f32>,
     pub(crate) nodes: Vec<NodeDef>,
+    pub(crate) n_inputs: usize,
+    /// (bus, slot) pairs added to buses after every block.
+    pub(crate) sends: Vec<(usize, usize)>,
     pub(crate) output_slot: usize,
 }
 
@@ -192,7 +218,23 @@ impl Graph {
         self.params.iter().map(|p| p.name.as_str())
     }
 
-    pub(crate) fn node_slot_base(&self) -> usize {
+    pub fn input_count(&self) -> usize {
+        self.n_inputs
+    }
+
+    /// The buses this graph sends to, once each, in ascending order.
+    pub fn send_buses(&self) -> Vec<usize> {
+        let mut buses: Vec<usize> = self.sends.iter().map(|&(b, _)| b).collect();
+        buses.sort_unstable();
+        buses.dedup();
+        buses
+    }
+
+    pub(crate) fn input_slot_base(&self) -> usize {
         self.params.len() + self.consts.len()
+    }
+
+    pub(crate) fn node_slot_base(&self) -> usize {
+        self.input_slot_base() + self.n_inputs
     }
 }
