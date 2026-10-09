@@ -63,6 +63,20 @@ impl Master {
         }
     }
 
+    /// Clear lookahead and DC memory on panic so pre-panic audio cannot leak.
+    pub fn clear(&mut self) {
+        for channel in &mut self.channels {
+            channel.dc_x1 = 0.0;
+            channel.dc_y1 = 0.0;
+            channel.delay.fill(0.0);
+        }
+        self.required.fill(1.0);
+        self.windowed_min.fill(1.0);
+        self.min_sum = self.window as f64;
+        self.gain = 1.0;
+        self.pos = 0;
+    }
+
     /// Samples of delay between input and output.
     pub fn latency(&self) -> usize {
         self.window - 1

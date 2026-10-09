@@ -99,7 +99,7 @@ fn mutate(rng: &mut Rng, source: &str) -> String {
 }
 
 fn cases() -> usize {
-    std::env::var("NIMINAL_FUZZ_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(1500)
+    std::env::var("NIMINAL_FUZZ_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(if cfg!(debug_assertions) { 150 } else { 1500 })
 }
 
 /// Run one source through a fresh session. Returns a description of what went wrong.

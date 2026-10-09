@@ -68,6 +68,12 @@ impl Opcode for Osc {
         self.sample_rate = sample_rate;
     }
 
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
+            self.phase = old.phase;
+        }
+    }
+
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         let sr = f64::from(self.sample_rate);
         for (i, o) in out.iter_mut().enumerate() {

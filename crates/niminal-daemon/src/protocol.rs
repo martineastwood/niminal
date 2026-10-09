@@ -11,7 +11,7 @@ use niminal_score::Event;
 use serde_json::{Value, json};
 
 use crate::project::Problem;
-use crate::session::{Accepted, Landed, PendingInfo, Session, Transport};
+use crate::session::{Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, PendingInfo, ParsedEval, Session, Transport};
 
 /// The protocol version a client must say it speaks.
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -22,6 +22,7 @@ const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
+const INTERNAL_ERROR: i64 = -32603;
 /// The client has not said hello, or speaks another version.
 const PROTOCOL_ERROR: i64 = -32000;
 /// The code sent did not compile; `data.problems` says why.
@@ -83,6 +84,7 @@ impl Daemon {
 
     /// Handle one message from `client`; the replies to send back to it.
     pub fn handle(&mut self, client: ClientId, text: &str) -> Vec<String> {
+        self.session.sync_realtime();
         let request: Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(e) => return vec![error_reply(Value::Null, PARSE_ERROR, &format!("parse error: {e}"), None)],
@@ -99,12 +101,126 @@ impl Daemon {
         };
         let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
 
-        let outcome = self.dispatch(client, method, &params);
+        // A bug in handling one request must not take the whole session down.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(client, method, &params)))
+            .unwrap_or_else(|_| Err(internal_error()));
+        self.respond(id, outcome)
+    }
+
+    fn respond(&mut self, id: Option<Value>, outcome: Result<Value, RpcError>) -> Vec<String> {
         self.queue_changes();
         match (id, outcome) {
             (None, _) => Vec::new(), // a notification from the client gets no reply
             (Some(id), Ok(result)) => vec![json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()],
             (Some(id), Err(e)) => vec![error_reply(id, e.code, &e.message, e.data)],
+        }
+    }
+
+    /// Like [`Daemon::handle`], but an `eval` comes back as a ticket to compile
+    /// away from the daemon (see [`CompileTicket::compile`]) and hand to
+    /// [`Daemon::finish`]. A server does that, so that compiling never holds
+    /// up the audio thread. Everything else is answered at once.
+    pub fn begin(&mut self, client: ClientId, text: &str) -> Request {
+        self.begin_prepared(client, text, Self::prepare_eval(text))
+    }
+
+    /// Parse potentially large source before taking the render worker's lock.
+    pub fn prepare_eval(text: &str) -> Option<ParsedEval> {
+        let request: Value = serde_json::from_str(text).ok()?;
+        match request.get("method").and_then(Value::as_str)? {
+            "eval" => Some(ParsedEval::new(request["params"]["source"].as_str()?,
+                request["params"]["quantize"].as_str())),
+            "hush" => Some(ParsedEval::new("hush", Some("now"))),
+            _ => None,
+        }
+    }
+
+    pub fn begin_prepared(&mut self, client: ClientId, text: &str, prepared: Option<ParsedEval>) -> Request {
+        let parsed: Option<Value> = serde_json::from_str(text).ok();
+        if let Some(request) = parsed.as_ref().filter(|r| {
+            r.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+                && self.clients.get(&client).is_some_and(|c| c.greeted)
+        }) {
+            match request.get("method").and_then(Value::as_str) {
+                Some("hush") => {
+                    let mut request = request.clone();
+                    request["method"] = json!("eval");
+                    request["params"] = json!({ "source": "hush", "quantize": "now" });
+                    return self.begin_prepared(client, &request.to_string(), prepared);
+                }
+                Some("cancel") => {
+                    if let Ok(id) = optional_u64(&request["params"], "id") {
+                        return Request::Compile(Box::new(CompileTicket { id: request.get("id").cloned(),
+                            job: Job::Cancel(self.session.begin_cancel(id)) }));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let eval = parsed.as_ref().filter(|r| {
+            r.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+                && r.get("method").and_then(Value::as_str) == Some("eval")
+                && r["params"].get("source").is_some_and(Value::is_string)
+                && self.clients.get(&client).is_some_and(|c| c.greeted)
+        });
+        let Some(request) = eval else { return Request::Replies(self.handle(client, text)) };
+
+        let id = request.get("id").cloned();
+        let params = &request["params"];
+        let source = params["source"].as_str().unwrap_or_default();
+        let quantize = params.get("quantize").and_then(Value::as_str);
+        if let Some(dir) = params.get("dir").and_then(Value::as_str) {
+            self.session.set_sample_dir(std::path::Path::new(dir));
+        }
+        let begun = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match prepared {
+            Some(parsed) => self.session.begin_parsed(parsed),
+            None => self.session.begin_eval(source, quantize),
+        }));
+        match begun {
+            Ok(Begin::Job(job)) => Request::Compile(Box::new(CompileTicket { id, job: Job::Eval(job) })),
+            Ok(Begin::Done(result)) => {
+                let outcome = self.eval_outcome(result);
+                Request::Replies(self.respond(id, outcome))
+            }
+            Err(_) => Request::Replies(self.respond(id, Err(internal_error()))),
+        }
+    }
+
+    /// A compilation made stale by another client or a landed change must be
+    /// retried without holding the render worker's control lock.
+    pub fn retry(&mut self, ticket: &CompiledTicket) -> Option<CompileTicket> {
+        self.session.sync_realtime();
+        let job = match ticket.done.as_ref()? {
+            Done::Eval(done) => Job::Eval(self.session.retry_eval(done)?),
+            Done::Cancel(done) => Job::Cancel(self.session.retry_cancel(done)?),
+        };
+        Some(CompileTicket { id: ticket.id.clone(), job })
+    }
+
+    /// Reply to work compiled away from the session. The server checks `retry`
+    /// under the same lock before calling this, so no compilation is needed here.
+    pub fn finish(&mut self, ticket: CompiledTicket) -> Vec<String> {
+        let CompiledTicket { id, done } = ticket;
+        let outcome = match done {
+            None => Err(internal_error()),
+            Some(done) => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match done {
+                Done::Eval(done) => {
+                    let result = self.session.finish_eval(done);
+                    self.eval_outcome(result)
+                }
+                Done::Cancel(done) => Ok(json!({ "cancelled": self.session.finish_cancel(done) })),
+            })) {
+                Ok(result) => result,
+                Err(_) => Err(internal_error()),
+            },
+        };
+        self.respond(id, outcome)
+    }
+
+    fn eval_outcome(&self, result: Result<Accepted, Vec<Problem>>) -> Result<Value, RpcError> {
+        match result {
+            Ok(a) => Ok(accepted_json(&self.session, &a)),
+            Err(problems) => Err(rejected(&problems)),
         }
     }
 
@@ -164,10 +280,8 @@ impl Daemon {
         if let Some(dir) = params.get("dir").and_then(Value::as_str) {
             self.session.set_sample_dir(std::path::Path::new(dir));
         }
-        match self.session.eval(source, quantize) {
-            Ok(a) => Ok(accepted_json(&self.session, &a)),
-            Err(problems) => Err(rejected(&problems)),
-        }
+        let result = self.session.eval(source, quantize);
+        self.eval_outcome(result)
     }
 
     fn stream(&mut self, params: &Value) -> Result<Value, RpcError> {
@@ -232,6 +346,7 @@ impl Daemon {
     /// advances: it reports changes that landed and, about ten times a second,
     /// the transport and meters.
     pub fn notifications(&mut self) -> Vec<(ClientId, String)> {
+        self.session.sync_realtime();
         for landed in self.session.take_landed() {
             self.send_to_subscribers("landed", "landed", landed_json(&landed));
         }
@@ -260,6 +375,52 @@ impl Daemon {
         }
         std::mem::take(&mut self.outbox)
     }
+}
+
+fn internal_error() -> RpcError {
+    RpcError::new(INTERNAL_ERROR, "niminal hit an internal error handling that; the session carries on")
+}
+
+/// What [`Daemon::begin`] makes of a message.
+pub enum Request {
+    /// Answered already: send these replies.
+    Replies(Vec<String>),
+    /// An evaluation or cancellation that needs background compilation.
+    Compile(Box<CompileTicket>),
+}
+
+/// A request waiting for background compilation.
+pub struct CompileTicket {
+    id: Option<Value>,
+    job: Job,
+}
+
+enum Job {
+    Eval(Box<EvalJob>),
+    Cancel(Box<CancelJob>),
+}
+
+enum Done {
+    Eval(EvalDone),
+    Cancel(CancelDone),
+}
+
+impl CompileTicket {
+    /// Compile the code. This needs nothing from the daemon, so it can run
+    /// while the render worker continues playing.
+    pub fn compile(self) -> CompiledTicket {
+        let CompileTicket { id, job } = self;
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
+            Job::Eval(job) => Done::Eval(job.compile()),
+            Job::Cancel(job) => Done::Cancel(job.compile()),
+        })).ok();
+        CompiledTicket { id, done }
+    }
+}
+
+pub struct CompiledTicket {
+    id: Option<Value>,
+    done: Option<Done>,
 }
 
 struct RpcError {
@@ -344,6 +505,12 @@ fn status_json(session: &Session) -> Value {
         "pending": session.pending().iter().map(pending_json).collect::<Vec<_>>(),
         "sample_rate": session.sample_rate(),
         "channels": session.channels(),
+        "realtime": session.realtime_metrics().map(|m| json!({
+            "prepared_until": session.prepared_until(),
+            "late_events": m.late_events, "starved_frames": m.starved_frames,
+            "capacity_drops": m.capacity_drops, "retire_pressure": m.retire_pressure,
+            "deadline_misses": m.deadline_misses, "max_render_micros": m.max_render_micros,
+        })),
         "scenes": session.defined("scene"),
         "clips": session.defined("clip"),
         "tracks": session.tracks().iter().map(|t| json!({

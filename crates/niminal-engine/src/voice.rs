@@ -15,6 +15,7 @@ pub struct Voice {
     poisoned: bool,
     /// The choke group this note belongs to, if any.
     group: Option<u32>,
+    bus_map: Vec<Option<usize>>,
     /// Samples of fade-out left once the voice has been choked.
     choke_left: Option<usize>,
 }
@@ -37,7 +38,38 @@ impl Voice {
             slots[graph.params.len() + i] = [c; BLOCK];
         }
 
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, choke_left: None }
+        let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0)).map(Some).collect();
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None }
+    }
+
+    /// Keep memory at matching call sites while retaining the new graph's
+    /// settings and wiring. Repeated identical nodes match in occurrence order.
+    pub fn carry_state(&mut self, old: &mut Voice) {
+        if self.sample_rate != old.sample_rate || old.poisoned {
+            return;
+        }
+        let old_keys = old.graph.state_keys();
+        let keys = self.graph.state_keys();
+        for (new_index, (op, key)) in self.ops.iter_mut().zip(keys).enumerate() {
+            let occurrence = keys[..new_index].iter().filter(|k| *k == key).count();
+            if let Some(i) = old_keys.iter().enumerate().filter(|(_, k)| *k == key)
+                .nth(occurrence).map(|(i, _)| i)
+            {
+                op.carry_state(&mut *old.ops[i]);
+            }
+        }
+    }
+
+    /// Update existing send mappings in place; the number of send identities
+    /// belongs to the voice's original graph and never grows during playback.
+    pub fn remap_buses(&mut self, mapping: &[Option<usize>]) {
+        self.remap_buses_with(&mut |i| mapping.get(i).copied().flatten());
+    }
+
+    pub fn remap_buses_with(&mut self, mapping: &mut impl FnMut(usize) -> Option<usize>) {
+        for bus in &mut self.bus_map {
+            *bus = bus.and_then(&mut *mapping);
+        }
     }
 
     /// Fill external input `index` for the coming block. Only the first
@@ -179,6 +211,7 @@ impl Voice {
             }
         }
         for &(bus, channel, slot) in &self.graph.sends {
+            let Some(bus) = self.bus_map.get(bus).copied().flatten() else { continue };
             match &fade {
                 None => buses.add(bus, channel, &self.slots[slot][..frames]),
                 Some(g) => {

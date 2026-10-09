@@ -90,6 +90,13 @@ impl Opcode for Svf {
         self.cached_for = (f32::NAN, f32::NAN);
     }
 
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
+            self.ic1 = old.ic1;
+            self.ic2 = old.ic2;
+        }
+    }
+
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (i, o) in out.iter_mut().enumerate() {
             self.update(inputs[1][i], inputs[2][i]);

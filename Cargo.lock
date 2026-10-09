@@ -530,6 +530,7 @@ dependencies = [
  "niminal-engine",
  "niminal-lang",
  "niminal-score",
+ "rtrb",
  "serde_json",
  "tungstenite",
 ]
@@ -542,6 +543,7 @@ dependencies = [
  "niminal-engine",
  "niminal-lang",
  "niminal-score",
+ "rtrb",
  "serde",
  "serde_json",
 ]
@@ -780,6 +782,12 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rtrb"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fae8ee26b0371a29a77d2b2d6b3ae13aa81def6f9bf1b1b92a32d279a5e709b7"
 
 [[package]]
 name = "rustc_version"

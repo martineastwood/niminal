@@ -193,6 +193,7 @@ pub struct Mixer {
     silenced: usize,
     max_voices: usize,
     stolen: usize,
+    muted: bool,
 }
 
 impl Mixer {
@@ -235,8 +236,36 @@ impl Mixer {
             silenced: 0,
             max_voices: DEFAULT_MAX_VOICES,
             stolen: 0,
+            muted: false,
         })
     }
+
+    /// Reserve bounded voice storage before handing the mixer to rendering.
+    pub fn prepare_realtime(&mut self, capacity: usize) {
+        for track in &mut self.tracks { track.voices.reserve(capacity); }
+    }
+
+    /// Admit an already constructed voice without allocating. Capacity is a
+    /// hard limit; rejected voices remain owned by the caller for retirement.
+    pub fn note_prepared(&mut self, track: usize, voice: Voice) -> Result<VoiceId, Voice> {
+        if self.muted || track >= self.tracks.len() || voice.channels() != self.channels
+            || self.tracks[track].voices.len() == self.tracks[track].voices.capacity()
+        { return Err(voice); }
+        if let Some(group) = voice.group() {
+            for (_, other) in self.tracks.iter_mut().flat_map(|t| t.voices.iter_mut()) {
+                if other.group() == Some(group) { other.choke(); }
+            }
+        }
+        self.steal_if_full();
+        let serial = self.next_serial;
+        self.next_serial += 1;
+        self.tracks[track].voices.push((serial, voice));
+        Ok(VoiceId { track, serial })
+    }
+
+    /// Immediate panic without destroying owned resources. A prepared clean
+    /// mixer replaces this one, and the old mixer is freed in the background.
+    pub fn silence(&mut self) { self.muted = true; }
 
     /// Start a note on `track`, setting `(parameter index, value)` pairs. The
     /// graph must produce as many channels as the mixer's master has.
@@ -291,6 +320,7 @@ impl Mixer {
             track.chain_silenced = false;
         }
         self.buses.clear();
+        self.muted = false;
     }
 
     /// The most voices that may sound at once. A new note past this ends the
@@ -338,10 +368,21 @@ impl Mixer {
     /// Mix `frames` samples (at most [`BLOCK`]) of everything into `out`, one
     /// block per master channel.
     pub fn process(&mut self, out: &mut [[f32; BLOCK]], frames: usize) {
+        self.process_inner(out, frames, None);
+    }
+
+    /// Render while retaining finished voices for off-thread destruction.
+    /// `retired` must have been reserved by the caller before rendering.
+    pub fn process_retained(&mut self, out: &mut [[f32; BLOCK]], frames: usize, retired: &mut Vec<Voice>) {
+        self.process_inner(out, frames, Some(retired));
+    }
+
+    fn process_inner(&mut self, out: &mut [[f32; BLOCK]], frames: usize, mut retired: Option<&mut Vec<Voice>>) {
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
         assert_eq!(out.len(), self.channels, "one output block per master channel");
         out.iter_mut().for_each(|c| c[..frames].fill(0.0));
         self.buses.clear();
+        if self.muted { return; }
 
         let n = self.channels;
         let mut summed = [[0.0f32; BLOCK]; MAX_CHANNELS];
@@ -360,8 +401,19 @@ impl Mixer {
                     }
                 }
             }
-            self.silenced += track.voices.iter().filter(|(_, v)| v.is_poisoned()).count();
-            track.voices.retain(|(_, v)| !v.is_finished());
+            if let Some(retired) = retired.as_deref_mut() {
+                let mut i = 0;
+                while i < track.voices.len() {
+                    if track.voices[i].1.is_finished() && retired.len() < retired.capacity() {
+                        let (_, voice) = track.voices.remove(i);
+                        self.silenced += usize::from(voice.is_poisoned());
+                        retired.push(voice);
+                    } else { i += 1; }
+                }
+            } else {
+                self.silenced += track.voices.iter().filter(|(_, v)| v.is_poisoned()).count();
+                track.voices.retain(|(_, v)| !v.is_finished());
+            }
 
             let result: &[[f32; BLOCK]] = match &mut track.chain {
                 None => &summed[..n],
@@ -401,14 +453,26 @@ impl Mixer {
         }
     }
 
+    /// Update sounding voices' sends before transferring them to a mixer with
+    /// a changed bus list. The graphs stay on their original definitions.
+    pub fn remap_buses(&mut self, mapping: &[Option<usize>]) {
+        self.remap_buses_with(&mut |i| mapping.get(i).copied().flatten());
+    }
+
+    pub fn remap_buses_with(&mut self, mapping: &mut impl FnMut(usize) -> Option<usize>) {
+        for track in &mut self.tracks {
+            for (_, voice) in &mut track.voices { voice.remap_buses_with(mapping); }
+        }
+    }
+
     /// Take over running state from `old`, which this mixer replaces: for each
     /// of this mixer's tracks, `transfers` says which of the old tracks' voices
     /// to continue with and whose effect chain (with its delay lines and filter
     /// memory) to keep. Voices keep playing on the instrument definition they
     /// started with. Old tracks that nothing claims are dropped.
     ///
-    /// The caller must only carry a chain over where it is the same as the new
-    /// definition, and only carry voices where the buses are unchanged.
+    /// Chains carry memory at compatible nodes into the new definition.
+    /// The caller must only carry state where bus identities are unchanged.
     pub fn adopt(&mut self, old: &mut Mixer, transfers: &[Transfer]) {
         assert_eq!(transfers.len(), self.tracks.len(), "one transfer per track");
         for (track, transfer) in self.tracks.iter_mut().zip(transfers) {
@@ -418,10 +482,9 @@ impl Mixer {
                 track.voices.append(&mut old.tracks[from].voices);
             }
             if let Some(from) = transfer.chain_from
-                && let Some(chain) = old.tracks[from].chain.take()
+                && let (Some(chain), Some(previous)) = (&mut track.chain, &mut old.tracks[from].chain)
             {
-                track.chain = Some(chain);
-                track.chain_silenced = old.tracks[from].chain_silenced;
+                chain.carry_state(previous);
             }
         }
         self.next_serial = self.next_serial.max(old.next_serial);

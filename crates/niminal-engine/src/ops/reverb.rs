@@ -89,6 +89,16 @@ impl Opcode for Reverb {
         self.quiet_run = self.longest;
     }
 
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
+            && self.channel == old.channel && self.longest == old.longest
+        {
+            std::mem::swap(&mut self.combs, &mut old.combs);
+            std::mem::swap(&mut self.allpasses, &mut old.allpasses);
+            self.quiet_run = old.quiet_run;
+        }
+    }
+
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (i, o) in out.iter_mut().enumerate() {
             let feedback = inputs[1][i].clamp(0.0, 1.0) * 0.28 + 0.7;

@@ -196,14 +196,17 @@ impl GraphBuilder {
             .collect();
         let sends = self.sends.iter().map(|&(bus, channel, slot)| (bus, channel, resolve(slot))).collect();
 
-        Graph {
+        let mut graph = Graph {
+            state_keys: Vec::new(),
             params: self.params,
             consts: self.consts,
             nodes,
             n_inputs,
             sends,
             output_slots: output_enc.into_iter().map(resolve).collect(),
-        }
+        };
+        graph.state_keys = graph.compute_state_keys();
+        graph
     }
 }
 
@@ -213,6 +216,7 @@ const INPUT_BASE: usize = 1 << 22;
 
 /// An immutable compiled graph, shared between voices.
 pub struct Graph {
+    state_keys: Vec<u64>,
     pub(crate) params: Vec<ParamDef>,
     pub(crate) consts: Vec<f32>,
     pub(crate) nodes: Vec<NodeDef>,
@@ -223,6 +227,38 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Structural node identities for live state transfer. Constants are deliberately
+    /// omitted: changing a cutoff or gain must not erase filter or delay memory.
+    fn compute_state_keys(&self) -> Vec<u64> {
+        use std::hash::{Hash, Hasher};
+        let mut keys: Vec<u64> = Vec::with_capacity(self.nodes.len());
+        let base = self.node_slot_base();
+        for node in &self.nodes {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            node.op.name().hash(&mut h);
+            for &slot in &node.inputs {
+                if slot < self.params.len() {
+                    0u8.hash(&mut h);
+                    self.params[slot].name.hash(&mut h);
+                } else if slot < self.input_slot_base() {
+                    1u8.hash(&mut h);
+                } else if slot < base {
+                    2u8.hash(&mut h);
+                    (slot - self.input_slot_base()).hash(&mut h);
+                } else {
+                    3u8.hash(&mut h);
+                    keys[slot - base].hash(&mut h);
+                }
+            }
+            keys.push(h.finish());
+        }
+        keys
+    }
+
+    pub(crate) fn state_keys(&self) -> &[u64] {
+        &self.state_keys
+    }
+
     pub fn param_index(&self, name: &str) -> Option<usize> {
         self.params.iter().position(|p| p.name == name)
     }

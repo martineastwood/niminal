@@ -30,6 +30,9 @@ pub struct Statement {
     /// What a definition defines, as `instr:name`, `clip:name`, `config`...
     /// Defining the same key again replaces the earlier definition.
     pub key: Option<String>,
+    /// Pending writes to this destination supersede older pending writes.
+    /// Explicitly timed score commands and notes are never superseded.
+    pub write_key: Option<String>,
     /// The name a pattern, clip or scene definition binds.
     pub binding: Option<String>,
     pub text: String,
@@ -50,6 +53,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
         let mut s = Statement {
             kind: StatementKind::Definition,
             key: None,
+            write_key: None,
             binding: None,
             text,
             quantize: None,
@@ -86,6 +90,15 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                 s.kind = StatementKind::Command;
                 s.has_at = c.at.is_some();
                 s.quantize = c.quantize.map(convert_quantize);
+                if c.at.is_none() {
+                    s.write_key = match &c.command {
+                        Command::Play { track, .. } | Command::Stop(track) => Some(format!("play:{}", track.name)),
+                        Command::Mute(track) | Command::Unmute(track) => Some(format!("mute:{}", track.name)),
+                        Command::Solo(_) | Command::Unsolo(_) => Some("solo".into()),
+                        Command::Launch(_) => Some("launch".into()),
+                        Command::Hush | Command::Panic => None,
+                    };
+                }
                 if let Command::Play { track, what } = &c.command {
                     s.plays = Some(PlayInfo {
                         track: track.name.clone(),
@@ -98,6 +111,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                 s.has_at = n.at.is_some();
             }
         }
+        if s.kind == StatementKind::Definition { s.write_key.clone_from(&s.key); }
         out.push(s);
     }
     Ok(out)
