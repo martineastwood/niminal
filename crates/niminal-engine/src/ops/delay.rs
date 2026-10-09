@@ -1,4 +1,7 @@
-use crate::opcode::{Opcode, Port, ProcessCtx};
+use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
+
+/// A line that has only ever held silence counts as quiet from the start.
+const ALREADY_QUIET: usize = usize::MAX / 2;
 
 /// Feedback delay with linear interpolation. Output is the delayed signal
 /// only; add the dry signal yourself for a mix.
@@ -13,11 +16,24 @@ pub struct Delay {
     buf: Vec<f32>,
     write: usize,
     sample_rate: f32,
+    /// Consecutive samples written to the line that were below [`TAIL_LEVEL`].
+    quiet_run: usize,
+    /// The delay in use, in samples: once that much quiet has gone in, the
+    /// line holds nothing audible.
+    in_flight: usize,
 }
 
 impl Delay {
     pub fn new(max_seconds: f32) -> Self {
-        let mut d = Delay { max_seconds, max_samples: 0.0, buf: Vec::new(), write: 0, sample_rate: 48_000.0 };
+        let mut d = Delay {
+            max_seconds,
+            max_samples: 0.0,
+            buf: Vec::new(),
+            write: 0,
+            sample_rate: 48_000.0,
+            quiet_run: ALREADY_QUIET,
+            in_flight: 0,
+        };
         d.prepare(48_000.0);
         d
     }
@@ -44,6 +60,8 @@ impl Opcode for Delay {
         // room for the longest delay, one sample of interpolation, and the write head
         self.buf = vec![0.0; max as usize + 3];
         self.write = 0;
+        self.quiet_run = ALREADY_QUIET;
+        self.in_flight = 0;
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
@@ -64,9 +82,17 @@ impl Opcode for Delay {
             let delayed = newer + (older - newer) * frac;
 
             let feedback = inputs[2][i].clamp(0.0, 0.995);
-            self.buf[self.write] = inputs[0][i] + feedback * delayed;
+            let written = inputs[0][i] + feedback * delayed;
+            self.buf[self.write] = written;
+            self.quiet_run = if written.abs() < TAIL_LEVEL { self.quiet_run.saturating_add(1) } else { 0 };
+            self.in_flight = samples.ceil() as usize + 1;
             self.write = (self.write + 1) % len;
             *o = delayed;
         }
+    }
+
+    /// Echoes still in the line keep the voice alive.
+    fn is_active(&self) -> bool {
+        self.quiet_run < self.in_flight
     }
 }

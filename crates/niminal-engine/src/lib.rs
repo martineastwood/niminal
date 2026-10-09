@@ -15,5 +15,5 @@ mod voice;
 pub use master::Master;
 pub use mixer::{Buses, ChainInput, Mixer, Route, TrackDef, VoiceId, execution_order};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
-pub use opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx};
+pub use opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};
 pub use voice::Voice;
