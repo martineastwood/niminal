@@ -517,6 +517,12 @@ fn a_live_eval_plays_a_kit_from_the_sample_folder_and_picks_up_a_changed_file() 
     let out = run(&mut s, 2000);
     assert!((out[500] - 0.25).abs() < 0.01, "{}", out[500]);
 
+    // code sent from another folder doesn't lose the files the project already named
+    let elsewhere = std::env::temp_dir();
+    s.set_sample_dir(&elsewhere);
+    s.eval("play t = [snare ~ ~ ~]", Some("now")).unwrap();
+    s.set_sample_dir(&dir);
+
     // a bad name is rejected without disturbing what plays
     let problems = s.eval("play t = [snar]", Some("now")).unwrap_err();
     assert!(problems[0].message.contains("did you mean `snare`?") || problems[0].help.as_deref() == Some("did you mean `snare`?"));
