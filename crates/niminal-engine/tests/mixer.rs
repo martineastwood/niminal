@@ -314,3 +314,83 @@ mod panic {
         assert!(block(&mut m).iter().all(|s| *s == 0.0));
     }
 }
+
+mod adopting {
+    use super::*;
+    use niminal_engine::Transfer;
+    use niminal_engine::ops::Delay;
+
+    fn delay_track() -> TrackDef {
+        let mut g = GraphBuilder::new();
+        let input = g.input();
+        let d = g
+            .add(Delay::new(0.1), &[("x", input), ("time", Src::Const(0.001)), ("feedback", Src::Const(0.9))])
+            .unwrap();
+        TrackDef {
+            chain: Some(Arc::new(g.build(d))),
+            inputs: vec![ChainInput::It { channel: 0 }],
+            route: Route::Master,
+            voice_sends: vec![],
+        }
+    }
+
+    #[test]
+    fn voices_keep_sounding_on_the_new_mixer() {
+        let mut old = Mixer::new(vec![master_track()], vec![], 1, SR).unwrap();
+        let id = old.note_on(0, source(0.25, None), &[]);
+        block(&mut old);
+
+        // the new mixer has an extra track first; the voice moves to the second
+        let mut new = Mixer::new(vec![master_track(), master_track()], vec![], 1, SR).unwrap();
+        new.adopt(&mut old, &[Transfer::default(), Transfer { voices_from: Some(0), chain_from: None }]);
+        assert_eq!(new.active_voices(), 1);
+        assert_eq!(old.active_voices(), 0);
+        assert!(block(&mut new).iter().all(|s| (s - 0.25).abs() < 1e-6));
+
+        // releasing by the old id still finds it
+        new.release(id);
+        block(&mut new);
+        assert_eq!(new.active_voices(), 0);
+    }
+
+    #[test]
+    fn a_chain_keeps_its_echoes_across_the_swap() {
+        let mut old = Mixer::new(vec![delay_track()], vec![], 1, SR).unwrap();
+        let id = old.note_on(0, source(0.5, None), &[]);
+        for _ in 0..4 {
+            block(&mut old);
+        }
+        old.release(id);
+        block(&mut old);
+
+        let mut kept = Mixer::new(vec![delay_track()], vec![], 1, SR).unwrap();
+        kept.adopt(&mut old, &[Transfer { voices_from: None, chain_from: Some(0) }]);
+        let echoes: Vec<f32> = (0..3).flat_map(|_| block(&mut kept)).collect();
+        assert!(echoes.iter().any(|s| s.abs() > 0.1), "the echoes carried over");
+
+        let mut fresh_old = Mixer::new(vec![delay_track()], vec![], 1, SR).unwrap();
+        let id = fresh_old.note_on(0, source(0.5, None), &[]);
+        for _ in 0..4 {
+            block(&mut fresh_old);
+        }
+        fresh_old.release(id);
+        block(&mut fresh_old);
+        let mut dropped = Mixer::new(vec![delay_track()], vec![], 1, SR).unwrap();
+        dropped.adopt(&mut fresh_old, &[Transfer::default()]);
+        let silent: Vec<f32> = (0..3).flat_map(|_| block(&mut dropped)).collect();
+        assert!(silent.iter().all(|s| *s == 0.0), "without the transfer the new chain starts empty");
+    }
+
+    #[test]
+    fn serials_continue_so_ids_stay_unique() {
+        let mut old = Mixer::new(vec![master_track()], vec![], 1, SR).unwrap();
+        let a = old.note_on(0, source(0.1, None), &[]);
+        let mut new = Mixer::new(vec![master_track()], vec![], 1, SR).unwrap();
+        new.adopt(&mut old, &[Transfer { voices_from: Some(0), chain_from: None }]);
+        let b = new.note_on(0, source(0.1, None), &[]);
+        assert_ne!(a, b);
+        new.release(a);
+        block(&mut new);
+        assert_eq!(new.active_voices(), 1, "releasing the first left the second");
+    }
+}
