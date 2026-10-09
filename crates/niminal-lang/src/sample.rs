@@ -12,9 +12,12 @@ type Loaded = (Option<SystemTime>, Arc<SampleData>);
 
 /// Where sample paths are found from, and the files already read. Clones
 /// share one cache, so a live session reads each file once until it changes.
+///
+/// A relative path is looked for in each base folder in turn, so a project
+/// built from snippets sent from several folders still finds all its files.
 #[derive(Clone)]
 pub struct Samples {
-    base: PathBuf,
+    bases: Vec<PathBuf>,
     cache: Arc<Mutex<HashMap<PathBuf, Loaded>>>,
 }
 
@@ -26,20 +29,22 @@ impl Default for Samples {
 
 impl Samples {
     pub fn new(base: impl Into<PathBuf>) -> Self {
-        Samples { base: base.into(), cache: Arc::default() }
+        Samples { bases: vec![base.into()], cache: Arc::default() }
     }
 
-    /// The same cache, with paths found from `base`.
-    pub fn with_base(&self, base: impl Into<PathBuf>) -> Self {
-        Samples { base: base.into(), cache: self.cache.clone() }
+    /// The same cache, with paths looked for in `bases`, first match wins.
+    pub fn with_bases(&self, bases: Vec<PathBuf>) -> Self {
+        Samples { bases, cache: self.cache.clone() }
     }
 
-    pub fn base(&self) -> &Path {
-        &self.base
+    /// Where `path` is, or where it was first looked for if it isn't anywhere.
+    fn resolve(&self, path: &str) -> PathBuf {
+        let found = self.bases.iter().map(|b| b.join(path)).find(|p| p.exists());
+        found.unwrap_or_else(|| self.bases.first().map_or_else(|| PathBuf::from(path), |b| b.join(path)))
     }
 
     pub fn load(&self, path: &str) -> Result<Arc<SampleData>, String> {
-        self.load_file(&self.base.join(path))
+        self.load_file(&self.resolve(path))
     }
 
     fn load_file(&self, path: &Path) -> Result<Arc<SampleData>, String> {
@@ -57,7 +62,7 @@ impl Samples {
 
     /// Every WAV file in a folder, by name without the extension, in name order.
     pub fn load_kit(&self, path: &str) -> Result<Vec<(String, Arc<SampleData>)>, String> {
-        let dir = self.base.join(path);
+        let dir = self.resolve(path);
         let entries = std::fs::read_dir(&dir).map_err(|e| format!("can't read the folder {}: {e}", dir.display()))?;
         let mut files: Vec<PathBuf> = entries
             .filter_map(Result::ok)

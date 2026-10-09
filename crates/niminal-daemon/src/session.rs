@@ -142,6 +142,7 @@ pub struct Session {
     layout: Layout,
     /// Where the project's sample files are found, and the ones already read.
     samples: Samples,
+    sample_dirs: Vec<std::path::PathBuf>,
     defaults: QuantizeDefaults,
     clock: u64,
 
@@ -184,6 +185,7 @@ impl Session {
             sample_rate,
             layout,
             samples: Samples::default(),
+            sample_dirs: Vec::new(),
             defaults: QuantizeDefaults::default(),
             clock: 0,
             project: Project::default(),
@@ -208,9 +210,12 @@ impl Session {
     }
 
     /// Find the paths in `sample` and `kit` declarations from `dir`.
+    /// Folders given earlier are still searched, after this one.
     pub fn set_sample_dir(&mut self, dir: &std::path::Path) {
-        if self.samples.base() != dir {
-            self.samples = self.samples.with_base(dir);
+        if self.sample_dirs.first().is_none_or(|d| d != dir) {
+            self.sample_dirs.retain(|d| d != dir);
+            self.sample_dirs.insert(0, dir.to_path_buf());
+            self.samples = self.samples.with_bases(self.sample_dirs.clone());
         }
     }
 
