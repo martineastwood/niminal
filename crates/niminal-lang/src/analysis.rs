@@ -61,6 +61,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Instr(d) => s.key = Some(format!("instr:{}", d.name.name)),
             Item::Opcode(d) => s.key = Some(format!("opcode:{}", d.name.name)),
             Item::Sample(d) => s.key = Some(format!("{}:{}", if d.is_kit { "kit" } else { "sample" }, d.name.name)),
+            Item::Arrangement(d) => s.key = Some(format!("arrangement:{}", d.name.name)),
             Item::Bus(d) => s.key = Some(format!("bus:{}", d.name.name)),
             Item::Track(d) => s.key = Some(format!("track:{}", d.name.name)),
             Item::Config(_) => s.key = Some("config".into()),

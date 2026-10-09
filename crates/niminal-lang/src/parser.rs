@@ -176,6 +176,10 @@ impl Parser {
                 options = self.args()?;
             }
             Ok(Item::Sample(SampleDecl { is_kit, name, source, source_span, options, span: start.to(self.prev_span()) }))
+        } else if self.is_keyword("arrangement") {
+            let start = self.bump().span;
+            let name = self.ident("an arrangement name")?;
+            self.arrangement(name, start).map(Item::Arrangement)
         } else if self.is_keyword("config") {
             let start = self.bump().span;
             let (entries, end) = self.entries()?;
@@ -226,6 +230,53 @@ impl Parser {
         } else {
             self.note(None).map(Item::Note)
         }
+    }
+
+    /// The body of `arrangement name { sections: [scene.over(8 bars) ...] }`.
+    fn arrangement(&mut self, name: Ident, start: Span) -> Res<ArrangementDecl> {
+        self.expect(&Tok::LBrace)?;
+        let mut sections = None;
+        loop {
+            self.skip_newlines();
+            if self.peek() == &Tok::RBrace {
+                break;
+            }
+            let key = self.ident("`sections`")?;
+            if key.name != "sections" {
+                return Err(Diagnostic::new(format!("`{}` isn't supported in an arrangement yet", key.name), key.span)
+                    .with_help("an arrangement has `sections` so far; tempo, meter and automation lanes come later"));
+            }
+            self.expect(&Tok::Colon)?;
+            if sections.is_some() {
+                return Err(Diagnostic::new("`sections` is given twice", key.span));
+            }
+            self.expect(&Tok::LBracket)?;
+            let mut list = Vec::new();
+            while self.peek() != &Tok::RBracket {
+                let scene = self.ident("a scene name")?;
+                if !(self.eat(&Tok::Dot) && self.is_keyword("over")) {
+                    return Err(Diagnostic::new(format!("`{}` needs a length", scene.name), scene.span)
+                        .with_help(format!("for example `{}.over(8 bars)`", scene.name)));
+                }
+                self.bump();
+                self.expect(&Tok::LParen)?;
+                let length = self.expr()?;
+                self.expect(&Tok::RParen)?;
+                list.push(SectionRef { scene, length });
+                self.eat(&Tok::Comma);
+            }
+            self.expect(&Tok::RBracket)?;
+            sections = Some(list);
+            if !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
+                return Err(self.unexpected("the end of the line"));
+            }
+        }
+        let end = self.expect(&Tok::RBrace)?;
+        let sections = sections.ok_or_else(|| {
+            Diagnostic::new(format!("arrangement `{}` has no sections", name.name), name.span)
+                .with_help("add `sections: [scene.over(8 bars) ...]`")
+        })?;
+        Ok(ArrangementDecl { name, sections, span: start.to(end) })
     }
 
     /// `instr|opcode name(params) { body }`

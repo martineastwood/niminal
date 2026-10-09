@@ -62,6 +62,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Item::Bus(d) => (&d.name, "bus"),
             Item::Track(d) => (&d.name, "track"),
             Item::Sample(d) => (&d.name, if d.is_kit { "kit" } else { "sample" }),
+            Item::Arrangement(d) => (&d.name, "arrangement"),
             Item::Tempo(_)
             | Item::Meter(_)
             | Item::Bind { .. }
@@ -208,11 +209,11 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         failed: &failed,
         sample_names: &samples_state.names,
     };
-    let performance = match compile_performance(&items, &cx) {
-        Ok(compiled) => compiled.actions,
+    let (performance, arrangements) = match compile_performance(&items, &cx) {
+        Ok(compiled) => (compiled.actions, compiled.arrangements),
         Err(mut found) => {
             errors.append(&mut found);
-            Vec::new()
+            (Vec::new(), Vec::new())
         }
     };
 
@@ -240,6 +241,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             choke_groups: samples_state.groups,
             notes,
             performance,
+            arrangements,
         })
     } else {
         Err(errors)

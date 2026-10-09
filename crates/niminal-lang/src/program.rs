@@ -86,6 +86,7 @@ pub struct Program {
     pub notes: Vec<Event>,
     /// Commands that play clips and scenes, in source order.
     pub performance: Vec<crate::performance::Scheduled>,
+    pub arrangements: Vec<crate::performance::Arrangement>,
 }
 
 /// A note ready to play: which track, which instrument, and its parameters.

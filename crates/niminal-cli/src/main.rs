@@ -28,6 +28,9 @@ enum Command {
         /// The .nml source to render.
         #[arg(required_unless_present = "replay", conflicts_with = "replay")]
         file: Option<PathBuf>,
+        /// An `arrangement` in the file to render, in place of its `play` and `launch` commands.
+        #[arg(requires = "file")]
+        arrangement: Option<String>,
         /// A .nms score whose events are played on the file's instruments.
         #[arg(long, requires = "file")]
         score: Option<PathBuf>,
@@ -42,6 +45,12 @@ enum Command {
         /// Render this many seconds of a piece that plays until stopped.
         #[arg(long, requires = "file")]
         seconds: Option<f64>,
+        /// Start the audio at this position, such as `bar 64` (an arrangement or timeline).
+        #[arg(long, requires = "file")]
+        from: Option<String>,
+        /// Stop starting notes at this position, such as `bar 80`. Their tails still ring out.
+        #[arg(long, requires = "file", conflicts_with_all = ["bars", "seconds"])]
+        to: Option<String>,
         /// Re-render a live set from the log a daemon recorded with `--log`.
         #[arg(long)]
         replay: Option<PathBuf>,
@@ -102,8 +111,8 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Render { file: Some(file), score, out, no_limiter, bars, seconds, .. } => {
-            run_render(&file, score.as_deref(), &out, no_limiter, bars, seconds)
+        Command::Render { file: Some(file), arrangement, score, out, no_limiter, bars, seconds, from, to, .. } => {
+            run_render(&file, arrangement, score.as_deref(), &out, no_limiter, bars, seconds, from.as_deref(), to.as_deref())
         }
         Command::Render { replay: Some(log), out, no_limiter, channels, .. } => {
             run_replay(&log, &out, channels, no_limiter)
@@ -137,13 +146,26 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
+/// A position such as `bar 64` or `64`, as seconds from the start.
+fn position_seconds(text: &str, bar_seconds: f64) -> Result<f64, String> {
+    let number = text.trim().strip_prefix("bar").unwrap_or(text).trim();
+    match number.parse::<f64>() {
+        Ok(bar) if bar >= 1.0 => Ok((bar - 1.0) * bar_seconds),
+        _ => Err(format!("error: `{text}` isn't a position: write `bar 64`, counting from bar 1")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_render(
     file: &Path,
+    arrangement: Option<String>,
     score: Option<&Path>,
     out: &Path,
     no_limiter: bool,
     bars: Option<f64>,
     seconds: Option<f64>,
+    from: Option<&str>,
+    to: Option<&str>,
 ) -> Result<(), String> {
     let source = read(file)?;
     let name = file.display().to_string();
@@ -155,13 +177,15 @@ fn run_render(
         .map_err(|errors| errors.iter().map(|d| d.render(&name, &source)).collect::<Vec<_>>().join("\n"))?;
 
     let bar_seconds = program.tempo.beats_per_bar * 60.0 / program.tempo.bpm;
-    let until = match (bars, seconds) {
-        (Some(b), _) if b > 0.0 => Some(b * bar_seconds),
-        (_, Some(s)) if s > 0.0 => Some(s),
-        (None, None) => None,
+    let until = match (bars, seconds, to) {
+        (_, _, Some(to)) => Some(position_seconds(to, bar_seconds)?),
+        (Some(b), _, _) if b > 0.0 => Some(b * bar_seconds),
+        (_, Some(s), _) if s > 0.0 => Some(s),
+        (None, None, None) => None,
         _ => return Err("error: --bars and --seconds must be above zero".into()),
     };
-    let options = RenderOptions { limiter: !no_limiter, until };
+    let from_seconds = from.map(|f| position_seconds(f, bar_seconds)).transpose()?.unwrap_or(0.0);
+    let options = RenderOptions { limiter: !no_limiter, until, arrangement };
 
     let events = match score {
         None => Vec::new(),
@@ -172,12 +196,21 @@ fn run_render(
         }
     };
 
-    let rendered = render(&program, &events, &options).map_err(|e| format!("error: {e}"))?;
+    let mut rendered = render(&program, &events, &options).map_err(|e| format!("error: {e}"))?;
     if rendered.silenced_voices > 0 {
         eprintln!("warning: {} voice(s) produced NaN or infinity and were silenced", rendered.silenced_voices);
     }
     if rendered.is_empty() {
         return Err("error: nothing to render: the file plays no notes".into());
+    }
+
+    // `--from` drops the audio before it, which the earlier bars still shaped (their tails are kept).
+    let skip = (from_seconds * f64::from(SAMPLE_RATE)).round() as usize;
+    if skip >= rendered.len() {
+        return Err(format!("error: the piece ends before {}", from.unwrap_or_default()));
+    }
+    for channel in &mut rendered.channels {
+        channel.drain(..skip);
     }
 
     let peak = rendered.peak();
