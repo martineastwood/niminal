@@ -26,14 +26,20 @@ enum Command {
         /// Turn off the master limiter (offline renders only).
         #[arg(long)]
         no_limiter: bool,
+        /// Render this many bars of a piece that plays until stopped.
+        #[arg(long, conflicts_with = "seconds")]
+        bars: Option<f64>,
+        /// Render this many seconds of a piece that plays until stopped.
+        #[arg(long)]
+        seconds: Option<f64>,
     },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Render { file, score, out, no_limiter } => {
-            run_render(&file, score.as_deref(), &out, &RenderOptions { limiter: !no_limiter })
+        Command::Render { file, score, out, no_limiter, bars, seconds } => {
+            run_render(&file, score.as_deref(), &out, no_limiter, bars, seconds)
         }
     };
     match result {
@@ -52,11 +58,27 @@ fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("error: can't read {}: {e}", path.display()))
 }
 
-fn run_render(file: &Path, score: Option<&Path>, out: &Path, options: &RenderOptions) -> Result<(), String> {
+fn run_render(
+    file: &Path,
+    score: Option<&Path>,
+    out: &Path,
+    no_limiter: bool,
+    bars: Option<f64>,
+    seconds: Option<f64>,
+) -> Result<(), String> {
     let source = read(file)?;
     let name = file.display().to_string();
     let program = niminal_lang::compile(&source)
         .map_err(|errors| errors.iter().map(|d| d.render(&name, &source)).collect::<Vec<_>>().join("\n"))?;
+
+    let bar_seconds = program.tempo.beats_per_bar * 60.0 / program.tempo.bpm;
+    let until = match (bars, seconds) {
+        (Some(b), _) if b > 0.0 => Some(b * bar_seconds),
+        (_, Some(s)) if s > 0.0 => Some(s),
+        (None, None) => None,
+        _ => return Err("error: --bars and --seconds must be above zero".into()),
+    };
+    let options = RenderOptions { limiter: !no_limiter, until };
 
     let events = match score {
         None => Vec::new(),
@@ -67,7 +89,7 @@ fn run_render(file: &Path, score: Option<&Path>, out: &Path, options: &RenderOpt
         }
     };
 
-    let rendered = render(&program, &events, options).map_err(|e| format!("error: {e}"))?;
+    let rendered = render(&program, &events, &options).map_err(|e| format!("error: {e}"))?;
     if rendered.silenced_voices > 0 {
         eprintln!("warning: {} voice(s) produced NaN or infinity and were silenced", rendered.silenced_voices);
     }

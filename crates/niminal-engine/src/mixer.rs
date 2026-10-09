@@ -243,6 +243,18 @@ impl Mixer {
         }
     }
 
+    /// Silence everything at once: stop every voice, clear every effect's
+    /// memory (delay lines, reverb tails) and empty the buses.
+    pub fn panic(&mut self) {
+        let rate = self.sample_rate;
+        for track in &mut self.tracks {
+            track.voices.clear();
+            track.chain = track.def.chain.as_ref().map(|g| Voice::new(g.clone(), rate));
+            track.chain_silenced = false;
+        }
+        self.buses.clear();
+    }
+
     pub fn active_voices(&self) -> usize {
         self.tracks.iter().map(|t| t.voices.len()).sum()
     }

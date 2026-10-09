@@ -20,11 +20,14 @@ const MAX_TAIL_SECONDS: f32 = 60.0;
 pub struct RenderOptions {
     /// The safety limiter is on unless an offline render turns it off.
     pub limiter: bool,
+    /// Stop starting notes after this many seconds. Needed when a clip plays
+    /// until stopped; the notes already sounding still ring out.
+    pub until: Option<f64>,
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        RenderOptions { limiter: true }
+        RenderOptions { limiter: true, until: None }
     }
 }
 
@@ -73,8 +76,24 @@ struct Note {
 /// ring out, so the result includes every release.
 pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Result<RenderOutput, RenderError> {
     let sr = f64::from(SAMPLE_RATE);
+
+    // Notes from `play` and `launch` commands.
+    let schedule = program.schedule();
+    let performed = if schedule.is_empty() {
+        Vec::new()
+    } else {
+        let Some(until) = options.until.or(schedule.end()) else {
+            return Err(RenderError(
+                "this file plays until it is stopped: say how long to render, for example with `--bars 16`".into(),
+            ));
+        };
+        schedule.events(0.0, until).map_err(|e| RenderError(e.to_string()))?
+    };
+    let mut panics: Vec<usize> = schedule.panics().iter().map(|t| (t * sr).round() as usize).collect();
+    panics.sort_unstable();
+
     let mut notes = Vec::new();
-    for event in program.notes.iter().chain(extra) {
+    for event in program.notes.iter().chain(extra).chain(&performed) {
         let plan = program
             .plan(event)
             .map_err(|e| RenderError(format!("note for `{}`: {e}", event.target)))?;
@@ -92,9 +111,17 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     let mut held: Vec<(usize, VoiceId)> = Vec::new();
     let mut silenced_voices = 0;
     let mut next = 0;
+    let mut next_panic = 0;
     let mut pos = 0;
 
     loop {
+        // `panic` silences everything at once.
+        while panics.get(next_panic).is_some_and(|&p| p <= pos) {
+            mixer.panic();
+            held.clear();
+            next_panic += 1;
+        }
+
         while next < notes.len() && notes[next].start == pos {
             let note = &notes[next];
             let graph = program.instruments[note.plan.instrument].graph.clone();
@@ -116,7 +143,12 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
                     return Ok(finish(out, silenced_voices + mixer.take_silenced(), options));
                 }
                 Some(n) => {
-                    // Nothing sounding: skip the silence.
+                    // Nothing sounding: skip the silence, applying any panics on the way
+                    // (they still clear effect tails).
+                    while panics.get(next_panic).is_some_and(|&p| p <= n.start) {
+                        mixer.panic();
+                        next_panic += 1;
+                    }
                     out.iter_mut().for_each(|c| c.resize(n.start, 0.0));
                     pos = n.start;
                     continue;
@@ -132,6 +164,9 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
         }
         for &(off, _) in &held {
             n = n.min(off - pos);
+        }
+        if let Some(&p) = panics.get(next_panic) {
+            n = n.min(p - pos);
         }
 
         mix_block(&mut mixer, &mut out, n);

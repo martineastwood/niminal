@@ -162,8 +162,8 @@ fn a_program_with_no_notes_renders_nothing() {
 #[test]
 fn the_limiter_keeps_loud_output_under_the_ceiling_and_can_be_turned_off() {
     let p = program("instr loud() { osc(saw, 220hz) * 4 }\nloud() for 1beat");
-    let limited = mono(render_with(&p, &[], &RenderOptions { limiter: true }).unwrap());
-    let raw = mono(render_with(&p, &[], &RenderOptions { limiter: false }).unwrap());
+    let limited = mono(render_with(&p, &[], &RenderOptions { limiter: true, until: None }).unwrap());
+    let raw = mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None }).unwrap());
     let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     assert!(peak(&raw) > 3.0);
     assert!(peak(&limited) <= 0.9661, "{}", peak(&limited));
@@ -208,7 +208,7 @@ opcode dc_block(x) {
 
     fn raw(src: &str) -> Vec<f32> {
         let p = program(&format!("{LIB}{src}"));
-        mono(render_with(&p, &[], &RenderOptions { limiter: false }).unwrap())
+        mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None }).unwrap())
     }
 
     fn peak(x: &[f32]) -> f32 {
@@ -264,7 +264,7 @@ mod routing {
     use super::*;
 
     fn raw(src: &str) -> Vec<f32> {
-        mono(render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap())
+        mono(render_with(&program(src), &[], &RenderOptions { limiter: false, until: None }).unwrap())
     }
 
     fn close(a: &[f32], b: &[f32]) {
@@ -386,7 +386,7 @@ mod effects {
     use super::*;
 
     fn raw(src: &str) -> Vec<f32> {
-        mono(render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap())
+        mono(render_with(&program(src), &[], &RenderOptions { limiter: false, until: None }).unwrap())
     }
 
     fn peak(x: &[f32]) -> f32 {
@@ -489,7 +489,7 @@ mod channels {
 
     /// Render with the limiter off and return every channel.
     fn raw(src: &str) -> Vec<Vec<f32>> {
-        render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap().channels
+        render_with(&program(src), &[], &RenderOptions { limiter: false, until: None }).unwrap().channels
     }
 
     fn peak(x: &[f32]) -> f32 {
@@ -676,7 +676,7 @@ config { channels: stereo }
 instr a() { [osc(sine, 220hz) * 4, osc(sine, 330hz) * 0.2] * env[1 | 1ms 0] }
 a() for 1beat";
         let quiet_right = |limiter| {
-            let out = render_with(&program(src), &[], &RenderOptions { limiter }).unwrap().channels;
+            let out = render_with(&program(src), &[], &RenderOptions { limiter, until: None }).unwrap().channels;
             let mid = out[1].len() / 2;
             peak(&out[1][mid..mid + 4800])
         };
@@ -687,7 +687,7 @@ a() for 1beat";
     #[test]
     fn wav_files_interleave_the_channels() {
         let p = program("config { channels: stereo }\ninstr a() { osc(sine, 220hz).pan(azimuth: 30deg) * env[1 | 1ms 0] }\na() for 1/4beat");
-        let out = render_with(&p, &[], &RenderOptions { limiter: false }).unwrap();
+        let out = render_with(&p, &[], &RenderOptions { limiter: false, until: None }).unwrap();
         let dir = std::env::temp_dir().join(format!("niminal-wav-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("stereo.wav");
@@ -710,7 +710,7 @@ mod pitch {
 
     fn crossings_per_second(src: &str) -> f32 {
         let p = program(src);
-        let out = mono(render_with(&p, &[], &RenderOptions { limiter: false }).unwrap());
+        let out = mono(render_with(&p, &[], &RenderOptions { limiter: false, until: None }).unwrap());
         let n = out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
         n as f32 / (out.len() as f32 / SR as f32)
     }
@@ -733,5 +733,193 @@ mod pitch {
         let base = crossings_per_second(&src("0st"));
         let octave = crossings_per_second(&src("12st"));
         assert!((octave / base - 2.0).abs() < 0.05, "{octave} vs {base}");
+    }
+}
+
+mod performance {
+    use super::*;
+
+    const STAGE: &str = "
+tempo 120bpm
+instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) * env[1 | 20ms 0] }
+track lead { instrument = pluck }
+track bass { instrument = pluck(bright: 0.1) }
+";
+
+    fn render_with_bars(body: &str, bars: Option<f64>) -> Result<Vec<f32>, niminal_cli::render::RenderError> {
+        let p = program(&format!("{STAGE}{body}"));
+        let until = bars.map(|b| b * 2.0); // a 4/4 bar at 120bpm is two seconds
+        render_with(&p, &[], &RenderOptions { limiter: false, until }).map(mono)
+    }
+
+    fn raw(body: &str, bars: f64) -> Vec<f32> {
+        render_with_bars(body, Some(bars)).unwrap()
+    }
+
+    #[test]
+    fn a_played_pattern_renders_exactly_like_the_same_notes_written_out() {
+        let played = raw("play lead = [c4 e4]", 2.0);
+        // two bars of two one-second steps: four notes, two beats each
+        let written = raw(
+            "lead(freq: c4) for 2beats\nat 2beats lead(freq: e4) for 2beats\nat 4beats lead(freq: c4) for 2beats\nat 6beats lead(freq: e4) for 2beats",
+            0.0,
+        );
+        assert!(!played.is_empty());
+        assert_eq!(played, written);
+    }
+
+    #[test]
+    fn lanes_become_note_parameters() {
+        let lane = raw("clip c { notes: [c4 e4]\nbright: [0.1 0.9]\ngain: [-6db] }\nplay lead = c", 1.0);
+        let written = raw(
+            "lead(freq: c4, bright: 0.1, gain: -6db) for 2beats\nat 2beats lead(freq: e4, bright: 0.9, gain: -6db) for 2beats",
+            0.0,
+        );
+        assert_eq!(lane, written);
+    }
+
+    #[test]
+    fn a_track_applies_its_instrument_defaults_to_played_notes() {
+        let played = raw("play bass = [c2]", 1.0);
+        let written = raw("bass(freq: c2) for 4beats", 0.0);
+        assert_eq!(played, written);
+        let explicit = raw("lead(freq: c2, bright: 0.1) for 4beats", 0.0);
+        assert_eq!(played, explicit, "the bass track's bright: 0.1 is the same as writing it");
+    }
+
+    #[test]
+    fn an_open_ended_piece_needs_a_length() {
+        let err = render_with_bars("play lead = [c4]", None).unwrap_err();
+        assert!(err.0.contains("plays until it is stopped") && err.0.contains("--bars"), "{err}");
+        // but one that ends itself doesn't
+        let out = render_with_bars("play lead = [c4]\nat 2 bars hush", None).unwrap();
+        assert!(out.len() > (3.9 * SR) as usize && out.len() < (4.5 * SR) as usize, "{}", out.len() as f64 / SR);
+    }
+
+    #[test]
+    fn the_notes_after_the_length_are_not_started_but_ringing_ones_finish() {
+        let out = raw("play lead = [c4]", 1.0);
+        // one note starts at 0; the one at 2s is past the end of the render
+        let sound = |from: f64, to: f64| rms(&out[(from * SR) as usize..(to * SR) as usize]);
+        assert!(sound(0.2, 1.5) > 0.05);
+        assert!(out.len() < (2.5 * SR) as usize, "{}", out.len() as f64 / SR);
+    }
+
+    #[test]
+    fn muting_silences_a_track_for_a_while() {
+        let out = raw("play lead = [c4]\nat 1 bar mute lead\nat 3 bars unmute lead", 4.0);
+        let loud = |s: f64| rms(&out[(s * SR) as usize..((s + 1.0) * SR) as usize]) > 0.05;
+        assert!(loud(0.2), "before the mute");
+        assert!(!loud(2.4), "muted (the note from 0s has rung out by 2.4s)");
+        assert!(!loud(4.4), "still muted");
+        assert!(loud(6.2), "the clip kept its place and sounds again");
+    }
+
+    #[test]
+    fn solo_isolates_a_track() {
+        let both = raw("play lead = [c4]\nplay bass = [c2]", 1.0);
+        let solo = raw("play lead = [c4]\nplay bass = [c2]\nsolo bass", 1.0);
+        let bass_only = raw("play bass = [c2]", 1.0);
+        assert!(rms(&both) > rms(&bass_only));
+        assert_eq!(solo, bass_only);
+    }
+
+    #[test]
+    fn panic_cuts_everything_including_effect_tails() {
+        let base = "
+bus space
+instr ping(freq: hz) { space += osc(sine, freq) * env[1 5ms 0] }
+track echo { out = space.delay(time: 100ms, feedback: 0.9) }
+track src { instrument = ping }
+play src = [c4*2]
+";
+        let ringing = raw(base, 2.0);
+        let cut = raw(&format!("{base}at 1 bar panic"), 2.0);
+        assert!(ringing.len() > (4.0 * SR) as usize, "the echoes run on: {}", ringing.len() as f64 / SR);
+        // panic at 2s: nothing is heard after it (the echo of the last ping is gone)
+        assert!(cut.len() < (2.05 * SR) as usize, "{}", cut.len() as f64 / SR);
+        assert!(cut.len() > (1.9 * SR) as usize, "sound up to the panic");
+    }
+
+    #[test]
+    fn scenes_play_in_sequence() {
+        let out = raw("
+clip a { notes: [c4] }
+clip b { notes: [c2] }
+scene one { lead: a }
+scene two { lead: b }
+launch one
+at 1 bar launch two", 2.0);
+        let written = raw("lead(freq: c4) for 4beats\nat 4beats lead(freq: c2) for 4beats", 0.0);
+        assert_eq!(out, written);
+    }
+
+    #[test]
+    fn the_groove_example_renders_in_stereo() {
+        let p = program(include_str!("../../../examples/groove.nml"));
+        let out = render_with(&p, &[], &RenderOptions::default()).unwrap();
+        assert_eq!(out.channels.len(), 2);
+        assert!(out.len() > (20.0 * SR) as usize, "{}", out.len() as f64 / SR);
+        assert!(out.peak() > 0.1 && out.peak() <= 0.9661);
+        assert_eq!(out.silenced_voices, 0);
+        assert_ne!(out.channels[0], out.channels[1]);
+    }
+}
+
+mod command_line {
+    use std::process::Command;
+
+    fn niminal() -> Command {
+        Command::new(env!("CARGO_BIN_EXE_niminal"))
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("niminal-cli-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    const OPEN_ENDED: &str = "
+instr p(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
+track t { instrument = p }
+play t = [c4 e4]
+";
+
+    #[test]
+    fn bars_bound_a_piece_that_plays_until_stopped() {
+        let dir = scratch("bars");
+        let src = dir.join("open.nml");
+        std::fs::write(&src, OPEN_ENDED).unwrap();
+        let wav = dir.join("open.wav");
+
+        let refused = niminal().args(["render", src.to_str().unwrap(), "--out", wav.to_str().unwrap()]).output().unwrap();
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("--bars"));
+
+        let ok = niminal()
+            .args(["render", src.to_str().unwrap(), "--out", wav.to_str().unwrap(), "--bars", "2"])
+            .output()
+            .unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let said = String::from_utf8_lossy(&ok.stdout);
+        assert!(said.contains("1 channel"), "{said}");
+        let reader = hound::WavReader::open(&wav).unwrap();
+        // 2 bars at the default 120bpm is 4 seconds, plus the last note's release
+        let seconds = reader.duration() as f64 / 48_000.0;
+        assert!((3.9..5.0).contains(&seconds), "{seconds}");
+
+        let seconds_flag = niminal()
+            .args(["render", src.to_str().unwrap(), "--out", wav.to_str().unwrap(), "--seconds", "1"])
+            .output()
+            .unwrap();
+        assert!(seconds_flag.status.success());
+        assert!(hound::WavReader::open(&wav).unwrap().duration() < 48_000 * 2);
+
+        let both = niminal()
+            .args(["render", src.to_str().unwrap(), "--out", wav.to_str().unwrap(), "--bars", "1", "--seconds", "1"])
+            .output()
+            .unwrap();
+        assert!(!both.status.success(), "the two lengths conflict");
+        std::fs::remove_dir_all(dir).ok();
     }
 }
