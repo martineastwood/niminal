@@ -7,11 +7,13 @@
 
 mod graph;
 mod master;
+mod mixer;
 mod opcode;
 pub mod ops;
 mod voice;
 
 pub use master::Master;
+pub use mixer::{Buses, ChainInput, Mixer, Route, TrackDef, VoiceId, execution_order};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
 pub use opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx};
 pub use voice::Voice;

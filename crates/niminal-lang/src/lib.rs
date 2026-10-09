@@ -6,6 +6,7 @@ mod compile;
 mod diag;
 mod kernel;
 mod lexer;
+mod lower;
 mod opcodes;
 mod parser;
 mod program;

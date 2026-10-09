@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::graph::Graph;
+use crate::mixer::Buses;
 use crate::opcode::{BLOCK, MAX_INPUTS, Opcode, ProcessCtx};
 
 /// One running note: a private copy of every opcode's state plus the signal
@@ -30,6 +31,13 @@ impl Voice {
         }
 
         Voice { graph, ops, slots, sample_rate, released: false, poisoned: false }
+    }
+
+    /// Fill external input `index` for the coming block. Only the first
+    /// `data.len()` samples are meaningful, so process no more than that.
+    pub fn set_input(&mut self, index: usize, data: &[f32]) {
+        let slot = self.graph.input_slot_base() + index;
+        self.slots[slot][..data.len()].copy_from_slice(data);
     }
 
     /// Set a parameter by index. Takes effect from the next block.
@@ -72,7 +80,15 @@ impl Voice {
     /// Render `out.len()` samples (at most [`BLOCK`]). Output is identical
     /// however a stretch of audio is divided into calls, so a host can split
     /// blocks at event times for sample-accurate timing.
+    ///
+    /// Anything the graph sends to a bus is dropped; use [`Voice::process_routed`]
+    /// for graphs that send.
     pub fn process(&mut self, out: &mut [f32]) {
+        self.process_routed(out, &mut Buses::new(0));
+    }
+
+    /// Like [`Voice::process`], adding the graph's sends into `buses`.
+    pub fn process_routed(&mut self, out: &mut [f32], buses: &mut Buses) {
         let frames = out.len();
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
         if self.poisoned {
@@ -94,9 +110,18 @@ impl Voice {
         }
 
         out.copy_from_slice(&self.slots[self.graph.output_slot][..frames]);
-        if out.iter().any(|s| !s.is_finite()) {
+        let sends_finite = self
+            .graph
+            .sends
+            .iter()
+            .all(|&(_, slot)| self.slots[slot][..frames].iter().all(|s| s.is_finite()));
+        if !sends_finite || out.iter().any(|s| !s.is_finite()) {
             self.poisoned = true;
             out.fill(0.0);
+            return;
+        }
+        for &(bus, slot) in &self.graph.sends {
+            buses.add(bus, &self.slots[slot][..frames]);
         }
     }
 }
