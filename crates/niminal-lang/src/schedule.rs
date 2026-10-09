@@ -41,6 +41,14 @@ enum Gate {
     Unsolo(Option<usize>),
 }
 
+/// What a track is doing at a moment, for showing in an editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackState {
+    pub clip: Option<String>,
+    pub muted: bool,
+    pub soloed: bool,
+}
+
 pub struct Schedule {
     tempo: Tempo,
     track_names: Vec<String>,
@@ -126,7 +134,8 @@ impl Schedule {
         self.tempo.beats_per_bar * 60.0 / self.tempo.bpm
     }
 
-    fn audible(&self, track: usize, at: f64) -> bool {
+    /// The tracks that are muted and soloed at `at`.
+    fn gate_state(&self, at: f64) -> (Vec<usize>, Vec<usize>) {
         let mut muted: Vec<usize> = Vec::new();
         let mut soloed: Vec<usize> = Vec::new();
         for (when, gate) in &self.gates {
@@ -149,7 +158,24 @@ impl Schedule {
                 Gate::Unsolo(Some(t)) => soloed.retain(|s| *s != t),
             }
         }
+        (muted, soloed)
+    }
+
+    fn audible(&self, track: usize, at: f64) -> bool {
+        let (muted, soloed) = self.gate_state(at);
         !muted.contains(&track) && (soloed.is_empty() || soloed.contains(&track))
+    }
+
+    /// What `track` is doing at `at` seconds: the clip playing on it, and
+    /// whether it was muted or soloed.
+    pub fn track_state(&self, track: usize, at: f64) -> TrackState {
+        let (muted, soloed) = self.gate_state(at);
+        let playing = self.segments.iter().rev().find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e));
+        TrackState {
+            clip: playing.map(|s| s.clip.name.clone()),
+            muted: muted.contains(&track),
+            soloed: soloed.contains(&track),
+        }
     }
 
     /// Every note that starts in `from..to` seconds, in time order.
