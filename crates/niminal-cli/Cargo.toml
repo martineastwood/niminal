@@ -14,3 +14,7 @@ niminal-lang = { path = "../niminal-lang" }
 niminal-score = { path = "../niminal-score" }
 clap = { version = "4", features = ["derive"] }
 hound = "3"
+niminal-daemon = { path = "../niminal-daemon" }
+cpal = "0.18"
+tungstenite = "0.30"
+serde_json = "1"

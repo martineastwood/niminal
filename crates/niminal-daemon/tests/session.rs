@@ -170,6 +170,47 @@ fn cancelling_removes_what_is_waiting() {
 }
 
 #[test]
+fn cancelling_a_change_drops_later_ones_that_depended_on_it() {
+    let mut s = ready();
+    run(&mut s, 1000);
+    let first = s.eval("riff = [c4]", None).unwrap();
+    s.eval("play lead = riff", None).unwrap(); // uses riff, so it only works with the first
+    s.eval("mute bass", None).unwrap(); // independent
+    assert_eq!(s.pending().len(), 3);
+
+    assert_eq!(s.cancel(first.id), 2, "the one cancelled and the one that needed it");
+    assert_eq!(s.pending().len(), 1);
+    let notices = s.take_notices();
+    assert!(notices[0].contains("depended on a change that was cancelled"), "{notices:?}");
+    run(&mut s, 2 * BAR);
+    assert_eq!(s.take_landed().len(), 2, "the setup and the independent change");
+    // and nothing is half-applied
+    assert!(s.eval("play lead = riff", Some("now")).is_err());
+}
+
+#[test]
+fn landing_does_no_compiling() {
+    // a snippet with a lot to compile is slow to evaluate, and then lands in a
+    // fraction of that time: the work is done up front
+    let mut s = ready();
+    run(&mut s, 1000);
+    let big: String = (0..40).map(|i| format!("instr i{i}(freq: hz) {{ osc(saw, freq).lpf(cutoff: 2khz).reverb(room: 0.8) }}\n")).collect();
+    let start = std::time::Instant::now();
+    let accepted = s.eval(&big, Some("next bar")).unwrap();
+    let evaluating = start.elapsed();
+
+    // get close to the landing, then time only the block it happens in
+    let lands = accepted.lands_at as usize;
+    let to_go = lands - s.clock() as usize;
+    run(&mut s, to_go - 64);
+    let start = std::time::Instant::now();
+    run(&mut s, 128);
+    let landing = start.elapsed();
+    assert!(s.take_landed().len() >= 2);
+    assert!(landing * 5 < evaluating, "evaluating took {evaluating:?} but the block that lands took {landing:?}");
+}
+
+#[test]
 fn written_notes_play_when_evaluated() {
     let mut s = ready();
     s.eval("lead(freq: a4) for 1beat", None).unwrap();
