@@ -257,3 +257,60 @@ mod stereo {
         m.note_on(0, source(0.5, None), &[]);
     }
 }
+
+mod panic {
+    use super::*;
+    use niminal_engine::ops::Delay;
+    use niminal_engine::Graph;
+
+    /// A chain that delays its input by `samples` with feedback.
+    fn echo_chain() -> Arc<Graph> {
+        let mut g = GraphBuilder::new();
+        let input = g.input();
+        let d = g
+            .add(
+                Delay::new(0.1),
+                &[("x", input), ("time", Src::Const(0.001)), ("feedback", Src::Const(0.9))],
+            )
+            .unwrap();
+        Arc::new(g.build(d))
+    }
+
+    #[test]
+    fn panic_stops_voices_and_clears_the_echoes_in_a_chain() {
+        let track = TrackDef {
+            chain: Some(echo_chain()),
+            inputs: vec![ChainInput::It { channel: 0 }],
+            route: Route::Master,
+            voice_sends: vec![],
+        };
+        let mut m = Mixer::new(vec![track], vec![], 1, SR).unwrap();
+        m.note_on(0, source(0.5, None), &[]);
+        for _ in 0..10 {
+            block(&mut m);
+        }
+        assert!(block(&mut m).iter().any(|s| s.abs() > 0.1), "sounding, with echoes");
+
+        m.panic();
+        assert_eq!(m.active_voices(), 0);
+        assert!(block(&mut m).iter().all(|s| *s == 0.0), "silence within the first block");
+        for _ in 0..50 {
+            assert!(block(&mut m).iter().all(|s| *s == 0.0), "and the echoes are gone for good");
+        }
+
+        // the mixer still works afterwards
+        m.note_on(0, source(0.25, None), &[]);
+        let later: Vec<f32> = (0..3).flat_map(|_| block(&mut m)).collect();
+        assert!(later.iter().any(|s| *s != 0.0), "the 1ms delay is 48 samples, more than one block");
+    }
+
+    #[test]
+    fn panic_empties_the_buses() {
+        let writer = TrackDef { voice_sends: vec![0], ..master_track() };
+        let mut m = Mixer::new(vec![writer, reader(0, 1.0)], vec![1], 1, SR).unwrap();
+        m.note_on(0, source(0.0, Some((0, 1.0))), &[]);
+        assert!(block(&mut m).iter().any(|s| *s != 0.0));
+        m.panic();
+        assert!(block(&mut m).iter().all(|s| *s == 0.0));
+    }
+}
