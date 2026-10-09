@@ -757,6 +757,30 @@ bad() for 1beat
     }
 
     #[test]
+    fn delay_and_reverb_compile_with_units_checked() {
+        ok("instr a(f: hz) { osc(saw, f).delay(time: 3/16beat, feedback: 0.4).reverb(room: 0.8, damp: 0.3) }");
+        ok("instr a(f: hz) { osc(saw, f).delay(time: 250ms).reverb }");
+
+        let d = first_error("instr a(f: hz) { osc(saw, f).delay(time: 0.2) }");
+        assert_eq!(d.message, "`time` expects a time, found a plain number");
+        assert_eq!(d.help.as_deref(), Some("did you mean `0.2sec`?"));
+        assert_eq!(msg("instr a(f: hz) { osc(saw, f).delay(time: 1beat, feedback: 1sec) }"), "`feedback` expects a plain number, found a time");
+    }
+
+    #[test]
+    fn a_changing_delay_time_needs_a_max() {
+        let e = msg("instr a(t: sec) { osc(saw, 100hz).delay(time: t) }");
+        assert_eq!(e, "`delay` needs a constant `time`, or a `max:` that bounds a changing one");
+        ok("instr a(t: sec) { osc(saw, 100hz).delay(time: t, max: 2sec) }");
+        assert_eq!(
+            msg("instr a(t: sec) { osc(saw, 100hz).delay(time: t, max: 31sec) }"),
+            "a delay can be at most 30 seconds long"
+        );
+        assert_eq!(msg("instr a() { osc(saw, 100hz).delay(time: 40sec) }"), "a delay can be at most 30 seconds long");
+        assert_eq!(msg("instr a(t: sec) { osc(saw, 100hz).delay(time: t, max: 5) }"), "`max` expects a time, found a plain number");
+    }
+
+    #[test]
     fn reports_errors_from_several_instruments_without_cascading() {
         let errs = errors("
 instr a() { osc(saw, 440) }

@@ -1,6 +1,6 @@
 use std::fmt;
 
-use niminal_engine::{BLOCK, Master, VoiceId};
+use niminal_engine::{BLOCK, Master, Mixer, VoiceId};
 use niminal_lang::{NotePlan, Program};
 use niminal_score::Event;
 
@@ -8,6 +8,14 @@ pub const SAMPLE_RATE: u32 = 48_000;
 
 /// The master limiter's ceiling: -0.3db.
 const CEILING: f32 = 0.966_051;
+
+/// Once nothing is playing, rendering carries on until the output has stayed
+/// quieter than this (-90db) for [`TAIL_SILENCE`] seconds, so echoes and reverb
+/// tails aren't cut off. The silence itself is trimmed from the result.
+const TAIL_THRESHOLD: f32 = 3.162_277_7e-5;
+const TAIL_SILENCE: f32 = 1.0;
+/// A tail that never settles (a runaway effect) is cut off here.
+const MAX_TAIL_SECONDS: f32 = 60.0;
 
 pub struct RenderOptions {
     /// The safety limiter is on unless an offline render turns it off.
@@ -85,7 +93,10 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
 
         if mixer.active_voices() == 0 {
             match notes.get(next) {
-                None => return Ok(finish(out, silenced_voices + mixer.take_silenced(), options)),
+                None => {
+                    ring_out(&mut mixer, &mut out);
+                    return Ok(finish(out, silenced_voices + mixer.take_silenced(), options));
+                }
                 Some(n) => {
                     // Nothing sounding: skip the silence.
                     out.resize(n.start, 0.0);
@@ -110,6 +121,25 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
         silenced_voices += mixer.take_silenced();
         pos += n;
     }
+}
+
+/// Keep mixing after the last voice has ended, until the tracks' effects have
+/// died away, then trim the trailing silence.
+fn ring_out(mixer: &mut Mixer, out: &mut Vec<f32>) {
+    let needed = (TAIL_SILENCE * SAMPLE_RATE as f32) as usize;
+    let limit = out.len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
+    let quiet = |s: &f32| s.abs() < TAIL_THRESHOLD;
+
+    let mut silent = out.iter().rev().take_while(|s| quiet(s)).count();
+    while silent < needed && out.len() < limit {
+        let start = out.len();
+        out.resize(start + BLOCK, 0.0);
+        mixer.process(&mut out[start..]);
+        for s in &out[start..] {
+            silent = if quiet(s) { silent + 1 } else { 0 };
+        }
+    }
+    out.truncate(out.len() - silent);
 }
 
 /// Apply the master stage, removing the limiter's lookahead delay so notes

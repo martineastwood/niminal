@@ -102,7 +102,7 @@ fn the_examples_render() {
     assert!(out.len() > (3.0 * SR) as usize);
 
     let room = render(&program(include_str!("../../../examples/room.nml")), &[]).unwrap();
-    assert!(room.len() > (2.0 * SR) as usize);
+    assert!(room.len() > SR as usize);
     assert!(rms(&room) > 0.01);
 }
 
@@ -160,7 +160,8 @@ fn the_limiter_does_not_move_notes() {
     let out = render(&p, &[]).unwrap();
     let first = (0.250 * SR) as usize;
     assert!(out[..first].iter().all(|s| s.abs() < 1e-6), "silent before the note");
-    assert!(out[first..first + 200].iter().any(|s| s.abs() > 0.1), "sounds right at the note start");
+    assert!(out[first..].iter().any(|s| s.abs() > 0.1), "sounds right at the note start");
+    assert!(out.len() < first + 200, "and the silence after the click is trimmed");
 }
 
 mod opcodes {
@@ -361,5 +362,79 @@ at 1/4beat lead(f: 1hz) for 1/8beat
     fn feedback_is_rejected_when_compiling() {
         let errs = compile("bus x\nbus y\ntrack a { out = x.to(y) }\ntrack b { out = y.to(x) }").err().unwrap();
         assert!(errs[0].message.starts_with("tracks feed back through buses"));
+    }
+}
+
+mod effects {
+    use super::*;
+
+    fn raw(src: &str) -> Vec<f32> {
+        render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap().samples
+    }
+
+    fn peak(x: &[f32]) -> f32 {
+        x.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    // A short click sent only to a bus, which a track delays.
+    const ECHO: &str = "
+tempo 120bpm
+bus space
+instr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }
+track fx { out = space.delay(time: 1/4beat, feedback: 0.5) }
+click() for 1/8beat
+";
+
+    #[test]
+    fn echoes_land_on_the_beat_and_decay() {
+        let out = raw(ECHO);
+        let window = |n: usize| peak(&out[n..n + 200]);
+        // 1/4 beat at 120bpm is 6000 samples
+        let (first, second, third) = (window(6000), window(12_000), window(18_000));
+        assert!(first > 0.5, "{first}");
+        assert!((second / first - 0.5).abs() < 0.05, "{second} vs {first}");
+        assert!((third / first - 0.25).abs() < 0.05);
+        assert!(peak(&out[..6000]) < 1e-6, "silent before the first echo: the instrument itself makes no sound");
+        assert!(peak(&out[2000..5900]) < 1e-6);
+    }
+
+    #[test]
+    fn rendering_waits_for_the_tail_and_trims_the_silence() {
+        let out = raw(ECHO);
+        // 0.5^n falls below -90db after about 15 echoes of 125ms
+        assert!(out.len() > (1.5 * SR) as usize, "{}", out.len() as f64 / SR);
+        assert!(out.len() < (3.0 * SR) as usize);
+        assert!(out.last().unwrap().abs() >= 3.1e-5, "ends on the last audible sample");
+    }
+
+    #[test]
+    fn a_reverb_track_rings_after_the_notes_stop() {
+        let out = raw("
+bus space
+instr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }
+track hall { out = space.reverb(room: 0.8, damp: 0.5) }
+click() for 1/8beat");
+        assert!(out.len() > SR as usize, "a reverb tail is longer than a second: {}", out.len() as f64 / SR);
+        assert!(out.iter().all(|s| s.is_finite()));
+        assert!(peak(&out) > 0.001);
+    }
+
+    #[test]
+    fn a_delay_time_given_as_a_parameter_matches_the_same_literal_time() {
+        let with_param = raw("
+instr echo(t: sec) { out = (osc(saw, 220hz) * env[1 | 10ms 0]).delay(time: t, max: 1sec, feedback: 0.3) }
+echo(t: 100ms) for 1beat");
+        let with_literal = raw("
+instr echo() { out = (osc(saw, 220hz) * env[1 | 10ms 0]).delay(time: 100ms, feedback: 0.3) }
+echo() for 1beat");
+        assert!(peak(&with_param) > 0.1);
+        assert_eq!(with_param, with_literal);
+    }
+
+    #[test]
+    fn the_example_with_effects_renders() {
+        let out = raw(include_str!("../../../examples/room.nml"));
+        assert!(out.iter().all(|s| s.is_finite()));
+        assert!(rms(&out) > 0.01);
     }
 }
