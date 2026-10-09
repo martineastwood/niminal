@@ -61,7 +61,7 @@ pub fn compile_opcode(def: &OpcodeDef, registry: &Registry, names: &Names, tempo
             None => None,
         };
         let kind = if unit == Unit::Db { Kind::Gain } else { Kind::Signal(unit) };
-        params.push(ParamSpec { name: p.name.name.clone(), kind, required: default.is_none() });
+        params.push(ParamSpec { name: p.name.name.clone(), kind, required: default.is_none(), wired: true });
         ports.push(Port::named(&p.name.name, default));
         units.push(unit);
     }

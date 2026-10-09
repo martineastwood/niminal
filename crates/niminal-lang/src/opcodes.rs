@@ -2,9 +2,10 @@
 //! order, and the unit each argument expects. Argument names match the engine's
 //! port names.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use niminal_engine::ops::{Custom, Fn1, FilterMode, Func, Gain, Kernel, Osc, Svf, Wave};
+use niminal_engine::ops::{Custom, Delay, Fn1, FilterMode, Func, Gain, Kernel, Osc, Reverb, Svf, Wave};
 use niminal_engine::Opcode;
 
 use crate::unit::Unit;
@@ -23,18 +24,38 @@ pub struct ParamSpec {
     pub name: String,
     pub kind: Kind,
     pub required: bool,
+    /// False for settings that shape the opcode when it is built (such as a
+    /// delay's `max`) rather than signals wired into it.
+    pub wired: bool,
 }
 
 fn req(name: &str, kind: Kind) -> ParamSpec {
-    ParamSpec { name: name.into(), kind, required: true }
+    ParamSpec { name: name.into(), kind, required: true, wired: true }
 }
 
 fn opt(name: &str, kind: Kind) -> ParamSpec {
-    ParamSpec { name: name.into(), kind, required: false }
+    ParamSpec { name: name.into(), kind, required: false, wired: true }
 }
 
+fn setting(name: &str, kind: Kind) -> ParamSpec {
+    ParamSpec { name: name.into(), kind, required: false, wired: false }
+}
+
+/// What is known at compile time when an opcode is built.
+#[derive(Default)]
+pub struct BuildArgs {
+    pub wave: Option<Wave>,
+    /// Arguments whose value is a compile-time constant, in engine units.
+    pub consts: HashMap<String, f64>,
+}
+
+type BuildFn = fn(&BuildArgs) -> Result<Box<dyn Opcode>, String>;
+
+/// The longest delay line a program may ask for.
+const MAX_DELAY_SECONDS: f64 = 30.0;
+
 pub enum Build {
-    Builtin(fn(Option<Wave>) -> Box<dyn Opcode>),
+    Builtin(BuildFn),
     Custom(Arc<Kernel>),
     /// A user-defined opcode whose body had errors. Calls to it are still
     /// checked against its signature, so one mistake isn't reported twice.
@@ -51,12 +72,12 @@ pub struct OpSpec {
 }
 
 impl OpSpec {
-    /// `None` for an invalid opcode, which has nothing to run.
-    pub fn instantiate(&self, wave: Option<Wave>) -> Option<Box<dyn Opcode>> {
+    /// `Ok(None)` for an invalid opcode, which has nothing to run.
+    pub fn instantiate(&self, args: &BuildArgs) -> Result<Option<Box<dyn Opcode>>, String> {
         match &self.build {
-            Build::Builtin(f) => Some(f(wave)),
-            Build::Custom(k) => Some(Box::new(Custom::new(k.clone()))),
-            Build::Invalid => None,
+            Build::Builtin(f) => f(args).map(Some),
+            Build::Custom(k) => Ok(Some(Box::new(Custom::new(k.clone())))),
+            Build::Invalid => Ok(None),
         }
     }
 }
@@ -67,11 +88,11 @@ fn filter_params() -> Vec<ParamSpec> {
     vec![req("x", SIGNAL), req("cutoff", Kind::Signal(Unit::Hz)), opt("res", SIGNAL)]
 }
 
-fn filter(name: &str, build: fn(Option<Wave>) -> Box<dyn Opcode>) -> OpSpec {
+fn filter(name: &str, build: BuildFn) -> OpSpec {
     OpSpec { name: name.into(), params: filter_params(), positional: 1, build: Build::Builtin(build) }
 }
 
-fn math(name: &str, build: fn(Option<Wave>) -> Box<dyn Opcode>) -> OpSpec {
+fn math(name: &str, build: BuildFn) -> OpSpec {
     OpSpec { name: name.into(), params: vec![req("x", SIGNAL)], positional: 1, build: Build::Builtin(build) }
 }
 
@@ -86,23 +107,48 @@ impl Registry {
                 name: "osc".into(),
                 params: vec![req("wave", Kind::Wave), req("freq", Kind::Signal(Unit::Hz)), opt("phase_mod", SIGNAL)],
                 positional: 2,
-                build: Build::Builtin(|w| Box::new(Osc::new(w.expect("osc has a wave")))),
+                build: Build::Builtin(|a| Ok(Box::new(Osc::new(a.wave.expect("osc has a wave"))))),
             },
-            filter("lpf", |_| Box::new(Svf::new(FilterMode::Low))),
-            filter("hpf", |_| Box::new(Svf::new(FilterMode::High))),
-            filter("bpf", |_| Box::new(Svf::new(FilterMode::Band))),
-            filter("notch", |_| Box::new(Svf::new(FilterMode::Notch))),
+            filter("lpf", |_| Ok(Box::new(Svf::new(FilterMode::Low)))),
+            filter("hpf", |_| Ok(Box::new(Svf::new(FilterMode::High)))),
+            filter("bpf", |_| Ok(Box::new(Svf::new(FilterMode::Band)))),
+            filter("notch", |_| Ok(Box::new(Svf::new(FilterMode::Notch)))),
             OpSpec {
                 name: "gain".into(),
                 params: vec![req("x", SIGNAL), req("gain", Kind::Gain)],
                 positional: 2,
-                build: Build::Builtin(|_| Box::new(Gain)),
+                build: Build::Builtin(|_| Ok(Box::new(Gain))),
             },
-            math("sin", |_| Box::new(Func(Fn1::Sin))),
-            math("cos", |_| Box::new(Func(Fn1::Cos))),
-            math("tanh", |_| Box::new(Func(Fn1::Tanh))),
-            math("exp", |_| Box::new(Func(Fn1::Exp))),
-            math("abs", |_| Box::new(Func(Fn1::Abs))),
+            OpSpec {
+                name: "delay".into(),
+                params: vec![
+                    req("x", SIGNAL),
+                    req("time", Kind::Signal(Unit::Time)),
+                    opt("feedback", SIGNAL),
+                    setting("max", Kind::Signal(Unit::Time)),
+                ],
+                positional: 1,
+                build: Build::Builtin(|a| {
+                    let max = a.consts.get("max").or_else(|| a.consts.get("time")).copied().ok_or_else(|| {
+                        "`delay` needs a constant `time`, or a `max:` that bounds a changing one".to_string()
+                    })?;
+                    if max > MAX_DELAY_SECONDS {
+                        return Err(format!("a delay can be at most {MAX_DELAY_SECONDS} seconds long"));
+                    }
+                    Ok(Box::new(Delay::new(max.max(0.0) as f32)))
+                }),
+            },
+            OpSpec {
+                name: "reverb".into(),
+                params: vec![req("x", SIGNAL), opt("room", SIGNAL), opt("damp", SIGNAL)],
+                positional: 1,
+                build: Build::Builtin(|_| Ok(Box::new(Reverb::new()))),
+            },
+            math("sin", |_| Ok(Box::new(Func(Fn1::Sin)))),
+            math("cos", |_| Ok(Box::new(Func(Fn1::Cos)))),
+            math("tanh", |_| Ok(Box::new(Func(Fn1::Tanh)))),
+            math("exp", |_| Ok(Box::new(Func(Fn1::Exp)))),
+            math("abs", |_| Ok(Box::new(Func(Fn1::Abs)))),
         ];
         Registry { ops }
     }

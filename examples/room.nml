@@ -1,11 +1,12 @@
-// A pluck that sends part of itself to a bus, a track that reads the bus,
-// and a lead track that plays the pluck. Declaration order doesn't matter.
+// A pluck that sends part of itself to a bus, a track that turns the bus into
+// echoes and reverb, and a lead track that plays the pluck. Declaration order doesn't matter.
 tempo 110bpm
 
 bus space
 
 track room {
-  out = space.lpf(cutoff: 2500hz).gain(0.8)
+  echoes = space.delay(time: 3/16beat, feedback: 0.4).lpf(cutoff: 3khz)
+  out = (echoes + space.reverb(room: 0.8, damp: 0.4)).gain(0.8)
 }
 
 track lead {

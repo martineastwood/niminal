@@ -10,7 +10,7 @@ use niminal_score::{Tempo, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
-use crate::opcodes::{self, Kind, Registry};
+use crate::opcodes::{self, BuildArgs, Kind, Registry};
 use crate::program::{Instrument, Param};
 use crate::unit::Unit;
 
@@ -603,7 +603,7 @@ impl<'a> Lower<'a> {
             bound[index] = Some(arg);
         }
 
-        let mut wave = None;
+        let mut build = BuildArgs::default();
         let mut wired: Vec<(&str, Src)> = Vec::new();
         for (param, arg) in spec.params.iter().zip(bound) {
             let Some(arg) = arg else {
@@ -623,14 +623,19 @@ impl<'a> Lower<'a> {
                         return Err(Diagnostic::new("expected a waveform", arg.value.span)
                             .with_help(format!("one of {}", names.join(", "))));
                     };
-                    wave = Some(w);
+                    build.wave = Some(w);
                 }
                 Kind::Signal(expected) => {
                     let sig = self.expr(&arg.value)?;
                     if sig.unit != expected {
                         return Err(self.unit_mismatch(&param.name, expected, sig.unit, &arg.value));
                     }
-                    wired.push((&param.name, sig.src));
+                    if let Some(k) = sig.konst {
+                        build.consts.insert(param.name.clone(), k);
+                    }
+                    if param.wired {
+                        wired.push((&param.name, sig.src));
+                    }
                 }
                 Kind::Gain => {
                     let sig = self.expr(&arg.value)?;
@@ -645,7 +650,7 @@ impl<'a> Lower<'a> {
             }
         }
 
-        let Some(opcode) = spec.instantiate(wave) else {
+        let Some(opcode) = spec.instantiate(&build).map_err(|m| Diagnostic::new(m, span))? else {
             // The opcode's own body is broken and already reported.
             return Ok(Sig::constant(Unit::Num, 0.0));
         };
