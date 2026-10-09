@@ -116,6 +116,16 @@ pub struct PendingInfo {
     pub changes: Vec<String>,
 }
 
+/// A track as an editor shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackStatus {
+    pub name: String,
+    /// The clip playing on it now.
+    pub clip: Option<String>,
+    pub muted: bool,
+    pub soloed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transport {
     pub sample: u64,
@@ -485,6 +495,27 @@ impl Session {
             voices: self.mixer.active_voices(),
             pending: self.pending.len(),
         }
+    }
+
+    /// The project's tracks and what they are doing now.
+    pub fn tracks(&self) -> Vec<TrackStatus> {
+        let now = self.seconds(self.clock);
+        self.program
+            .tracks
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(i, t)| {
+                let state = self.schedule.track_state(i, now);
+                TrackStatus { name: t.name.clone(), clip: state.clip, muted: state.muted, soloed: state.soloed }
+            })
+            .collect()
+    }
+
+    /// The names of the project's definitions of one kind (`scene`, `clip`...), in order.
+    pub fn defined(&self, kind: &str) -> Vec<String> {
+        let prefix = format!("{kind}:");
+        self.project.entries.iter().filter_map(|e| e.key.strip_prefix(&prefix)).map(str::to_string).collect()
     }
 
     /// Changes that have landed since this was last called.

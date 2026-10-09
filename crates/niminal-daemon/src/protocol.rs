@@ -344,5 +344,10 @@ fn status_json(session: &Session) -> Value {
         "pending": session.pending().iter().map(pending_json).collect::<Vec<_>>(),
         "sample_rate": session.sample_rate(),
         "channels": session.channels(),
+        "scenes": session.defined("scene"),
+        "clips": session.defined("clip"),
+        "tracks": session.tracks().iter().map(|t| json!({
+            "name": t.name, "clip": t.clip, "muted": t.muted, "soloed": t.soloed,
+        })).collect::<Vec<_>>(),
     })
 }

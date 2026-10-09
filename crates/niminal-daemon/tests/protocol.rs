@@ -256,3 +256,21 @@ fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
     assert!(d.session_mut().process(10_000).remove(0).iter().any(|s| s.abs() > 0.1));
     assert!(call(&mut d, b, 3, "status", json!({}))["result"]["transport"]["voices"].as_u64().unwrap() >= 1);
 }
+
+#[test]
+fn status_lists_scenes_clips_and_what_each_track_is_doing() {
+    let (mut d, c) = ready();
+    let code = format!("{SETUP}\\ntrack bass {{ instrument = pluck }}\\nclip riff {{ notes: [c2 ~] }}\\nscene verse {{ lead: [c4 e4], bass: riff }}");
+    assert!(call(&mut d, c, 2, "eval", json!({"source": code.replace("\\n", "\n"), "quantize": "now"}))["result"].is_object());
+
+    let before = call(&mut d, c, 3, "status", json!({}))["result"].clone();
+    assert_eq!(before["scenes"], json!(["verse"]));
+    assert_eq!(before["clips"], json!(["riff"]));
+    assert_eq!(before["tracks"][0], json!({"name": "lead", "clip": null, "muted": false, "soloed": false}));
+
+    call(&mut d, c, 4, "eval", json!({"source": "launch verse\nmute bass\nsolo lead", "quantize": "now"}));
+    let after = call(&mut d, c, 5, "status", json!({}))["result"].clone();
+    assert_eq!(after["tracks"][0]["clip"], "lead", "a bare pattern is named for its track");
+    assert_eq!(after["tracks"][0]["soloed"], true);
+    assert_eq!(after["tracks"][1], json!({"name": "bass", "clip": "riff", "muted": true, "soloed": false}));
+}
