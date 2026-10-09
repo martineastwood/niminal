@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use niminal_engine::ops::{Add, Curve, Env, Mul, Segment, Sub};
-use niminal_engine::{GraphBuilder, Src};
+use niminal_engine::{ChainInput, Graph, GraphBuilder, Route, Src};
 use niminal_score::{Tempo, Value};
 
 use crate::ast::*;
@@ -73,21 +73,78 @@ impl Sig {
     }
 }
 
+/// Every top-level name, so locals can be kept from shadowing them.
+#[derive(Default)]
+pub(crate) struct Names {
+    entries: Vec<(String, &'static str)>,
+    pub buses: Vec<String>,
+}
+
+impl Names {
+    pub fn add(&mut self, name: &str, kind: &'static str) {
+        if kind == "bus" && !self.buses.iter().any(|b| b == name) {
+            self.buses.push(name.to_string());
+        }
+        self.entries.push((name.to_string(), kind));
+    }
+
+    pub fn kind_of(&self, name: &str) -> Option<&'static str> {
+        self.entries.iter().find(|(n, _)| n == name).map(|(_, k)| *k)
+    }
+
+    pub fn bus(&self, name: &str) -> Option<usize> {
+        self.buses.iter().position(|b| b == name)
+    }
+
+    /// An error if a local may not be called `name`.
+    fn check_local(&self, name: &Ident) -> Res<()> {
+        if let Some(kind) = self.kind_of(&name.name) {
+            return Err(Diagnostic::new(
+                format!("`{}` is already the name of a {kind}, so it can't be used for a local", name.name),
+                name.span,
+            ));
+        }
+        if matches!(name.name.as_str(), "out" | "it" | "instrument" | "state") {
+            return Err(Diagnostic::new(format!("`{}` is a reserved word", name.name), name.span));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Evaluating constants such as parameter defaults.
+    Plain,
+    Instrument,
+    Track,
+}
+
 pub(crate) struct Lower<'a> {
     registry: &'a Registry,
+    names: &'a Names,
+    mode: Mode,
     g: GraphBuilder,
     tempo: Tempo,
     scope: HashMap<String, Sig>,
+    /// The value of `out` so far.
+    out: Option<Sig>,
+    sends: usize,
+    /// In a track: what feeds each external input, and the inputs made so far.
+    chain_inputs: Vec<ChainInput>,
+    input_sigs: HashMap<String, Sig>,
+    route: Route,
 }
 
-pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry) -> Res<Instrument> {
-    let mut lower = Lower::new(registry, tempo);
+pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, names: &Names) -> Res<Instrument> {
+    let mut lower = Lower::new(registry, names, tempo);
+    lower.mode = Mode::Instrument;
     let mut params: Vec<Param> = Vec::new();
 
     for p in &def.params {
         if params.iter().any(|q| q.name == p.name.name) {
             return Err(Diagnostic::new(format!("parameter `{}` is declared twice", p.name.name), p.name.span));
         }
+        names.check_local(&p.name)?;
         let Some(ty) = &p.ty else {
             return Err(Diagnostic::new(format!("parameter `{}` needs a type", p.name.name), p.name.span)
                 .with_help(format!("for example `{}: hz`", p.name.name)));
@@ -105,40 +162,83 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry) -
         params.push(Param { name: p.name.name.clone(), unit, range, default });
     }
 
-    let Some((last, init)) = def.body.split_last() else {
+    if def.body.is_empty() {
         return Err(Diagnostic::new(format!("instrument `{}` is empty", def.name.name), def.name.span)
             .with_help("the last line of an instrument is the signal it outputs"));
-    };
-    for stmt in init {
-        match stmt {
-            Stmt::Bind { name, value } => {
-                let sig = lower.expr(value)?;
-                lower.scope.insert(name.name.clone(), sig);
-            }
-            Stmt::State { name, .. } => return Err(state_outside_opcode(name)),
-            Stmt::Expr(e) => {
-                return Err(Diagnostic::new("this value is never used", e.span)
-                    .with_help("bind it with `name = ...`, or make it the last line"));
-            }
-        }
     }
-    let out_expr = match last {
-        Stmt::Expr(e) => e,
-        Stmt::State { name, .. } => return Err(state_outside_opcode(name)),
-        Stmt::Bind { name, .. } => {
+    let body: Vec<&Stmt> = def.body.iter().collect();
+    let tail = lower.run_body(&body)?;
+
+    let result = match (lower.out, tail) {
+        (Some(_), Some((_, span))) => {
+            return Err(Diagnostic::new("this instrument sets `out`, so its last line can't also be a value", span)
+                .with_help("assign it to `out`, or remove the `out` lines"));
+        }
+        (Some(out), None) => out,
+        (None, Some((sig, span))) => {
+            if sig.unit != Unit::Num {
+                return Err(Diagnostic::new(
+                    format!("an instrument outputs a plain signal, but this is {}", sig.unit.describe()),
+                    span,
+                ));
+            }
+            sig
+        }
+        // Only sends: the instrument makes no sound of its own.
+        (None, None) if lower.sends > 0 => Sig::constant(Unit::Num, 0.0),
+        (None, None) => {
+            let name = match body.last() {
+                Some(Stmt::Bind { name, .. }) => name,
+                _ => &def.name,
+            };
             return Err(Diagnostic::new("an instrument must end with the signal it outputs", name.span)
                 .with_help(format!("add a last line such as `{}`", name.name)));
         }
     };
-    let out = lower.expr(out_expr)?;
-    if out.unit != Unit::Num {
-        return Err(Diagnostic::new(
-            format!("an instrument outputs a plain signal, but this is {}", out.unit.describe()),
-            out_expr.span,
-        ));
-    }
 
-    Ok(Instrument { name: def.name.name.clone(), graph: Arc::new(lower.g.build(out.src)), params })
+    Ok(Instrument { name: def.name.name.clone(), graph: Arc::new(lower.g.build(result.src)), params })
+}
+
+/// A compiled track: its processing, what feeds that processing, and where
+/// the result goes.
+pub(crate) struct Chain {
+    pub graph: Option<Arc<Graph>>,
+    pub inputs: Vec<ChainInput>,
+    pub route: Route,
+}
+
+/// Compile a track's statements (everything except its `instrument` line).
+pub(crate) fn compile_chain(
+    track: &Ident,
+    body: &[&Stmt],
+    has_instrument: bool,
+    tempo: Tempo,
+    registry: &Registry,
+    names: &Names,
+) -> Res<Chain> {
+    let mut lower = Lower::new(registry, names, tempo);
+    lower.mode = Mode::Track;
+
+    if body.is_empty() {
+        return if has_instrument {
+            Ok(Chain { graph: None, inputs: Vec::new(), route: Route::Master })
+        } else {
+            Err(Diagnostic::new(format!("track `{}` does nothing", track.name), track.span)
+                .with_help("give it an `instrument = ...`, or an `out = ...` that reads a bus"))
+        };
+    }
+    lower.run_body(body)?;
+
+    let out = match lower.out {
+        Some(out) => out,
+        None if has_instrument => lower.input("it", ChainInput::It),
+        None if lower.sends > 0 => Sig::constant(Unit::Num, 0.0),
+        None => {
+            return Err(Diagnostic::new(format!("track `{}` never sets `out`", track.name), track.span)
+                .with_help("add `out = it` to pass its sound through, or send to a bus with `bus += ...`"));
+        }
+    };
+    Ok(Chain { graph: Some(Arc::new(lower.g.build(out.src))), inputs: lower.chain_inputs, route: lower.route })
 }
 
 fn state_outside_opcode(name: &Ident) -> Diagnostic {
@@ -165,8 +265,131 @@ pub(crate) fn param_type(ty: &TypeSpec) -> Res<(Unit, Option<(f64, f64)>)> {
 }
 
 impl<'a> Lower<'a> {
-    pub(crate) fn new(registry: &'a Registry, tempo: Tempo) -> Self {
-        Lower { registry, g: GraphBuilder::new(), tempo, scope: HashMap::new() }
+    pub(crate) fn new(registry: &'a Registry, names: &'a Names, tempo: Tempo) -> Self {
+        Lower {
+            registry,
+            names,
+            mode: Mode::Plain,
+            g: GraphBuilder::new(),
+            tempo,
+            scope: HashMap::new(),
+            out: None,
+            sends: 0,
+            chain_inputs: Vec::new(),
+            input_sigs: HashMap::new(),
+            route: Route::Master,
+        }
+    }
+
+    /// Run a body's statements, returning its trailing bare expression, if any.
+    fn run_body(&mut self, body: &[&Stmt]) -> Res<Option<(Sig, Span)>> {
+        let mut tail = None;
+        for (i, stmt) in body.iter().enumerate() {
+            match stmt {
+                Stmt::State { name, .. } => return Err(state_outside_opcode(name)),
+                Stmt::Bind { name, value } => self.assign(name, value)?,
+                Stmt::AddAssign { name, value } => self.add_assign(name, value)?,
+                Stmt::Expr(e) if self.mode == Mode::Track => {
+                    return Err(Diagnostic::new("a track makes sound through `out`", e.span)
+                        .with_help("write `out = ...`"));
+                }
+                Stmt::Expr(e) if i + 1 == body.len() => tail = Some((self.expr(e)?, e.span)),
+                Stmt::Expr(e) => {
+                    return Err(Diagnostic::new("this value is never used", e.span)
+                        .with_help("bind it with `name = ...`, or make it the last line"));
+                }
+            }
+        }
+        Ok(tail)
+    }
+
+    fn assign(&mut self, name: &Ident, value: &Expr) -> Res<()> {
+        match name.name.as_str() {
+            "out" => {
+                let sig = self.out_value(value)?;
+                self.set_out(sig, value.span)
+            }
+            "it" => Err(Diagnostic::new("`it` is an input and can't be assigned", name.span)),
+            "instrument" => Err(Diagnostic::new("`instrument` is only available in a track", name.span)),
+            _ => {
+                self.names.check_local(name)?;
+                let sig = self.expr(value)?;
+                self.scope.insert(name.name.clone(), sig);
+                Ok(())
+            }
+        }
+    }
+
+    fn add_assign(&mut self, name: &Ident, value: &Expr) -> Res<()> {
+        if name.name == "out" {
+            let sig = self.expr(value)?;
+            self.require_signal("out", sig, value.span)?;
+            let sum = match self.out {
+                None => sig,
+                Some(prev) => self.binary(BinOp::Add, prev, sig, value.span)?,
+            };
+            self.out = Some(sum);
+            return Ok(());
+        }
+        if let Some(bus) = self.names.bus(&name.name) {
+            let sig = self.expr(value)?;
+            self.require_signal(&name.name, sig, value.span)?;
+            self.g.send(bus, sig.src);
+            self.sends += 1;
+            return Ok(());
+        }
+        let mut d = Diagnostic::new(format!("`+=` can only add to `out` or a bus, not `{}`", name.name), name.span);
+        if self.scope.contains_key(&name.name) {
+            d = d.with_help(format!("to change a local, write `{0} = {0} + ...`", name.name));
+        } else if let Some(c) = closest(&name.name, self.names.buses.iter().map(String::as_str)) {
+            d = d.with_help(format!("did you mean the bus `{c}`?"));
+        }
+        Err(d)
+    }
+
+    fn require_signal(&self, what: &str, sig: Sig, span: Span) -> Res<()> {
+        if sig.unit == Unit::Num {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(format!("`{what}` carries a plain signal, but this is {}", sig.unit.describe()), span))
+        }
+    }
+
+    fn set_out(&mut self, sig: Sig, span: Span) -> Res<()> {
+        self.require_signal("out", sig, span)?;
+        self.out = Some(sig);
+        Ok(())
+    }
+
+    /// The value assigned to `out`. In a track, `x.to(bus)` routes the track's
+    /// output to a bus instead of the master.
+    fn out_value(&mut self, value: &Expr) -> Res<Sig> {
+        let ExprKind::Call { name, args } = &value.kind else { return self.expr(value) };
+        if name.name != "to" || self.mode != Mode::Track {
+            return self.expr(value);
+        }
+        let [source, target] = args.as_slice() else {
+            return Err(Diagnostic::new("`to` takes a bus", name.span).with_help("for example `out = it.to(space)`"));
+        };
+        let bus = match (&target.name, &target.value.kind) {
+            (None, ExprKind::Name(b)) => self.names.bus(b).ok_or_else(|| {
+                unknown_name(b, target.value.span, self.names.buses.iter().map(String::as_str))
+            })?,
+            _ => return Err(Diagnostic::new("`to` takes the name of a bus", target.value.span)),
+        };
+        self.route = Route::Bus(bus);
+        self.expr(&source.value)
+    }
+
+    /// An external input of a track's chain, made on first use.
+    fn input(&mut self, key: &str, source: ChainInput) -> Sig {
+        if let Some(sig) = self.input_sigs.get(key) {
+            return *sig;
+        }
+        let sig = Sig::signal(self.g.input(), Unit::Num);
+        self.chain_inputs.push(source);
+        self.input_sigs.insert(key.to_string(), sig);
+        sig
     }
 
     pub(crate) fn param_default(&mut self, e: &Expr, unit: Unit, range: Option<(f64, f64)>, name: &str) -> Res<f32> {
@@ -208,9 +431,30 @@ impl<'a> Lower<'a> {
         }
     }
 
-    fn name(&self, name: &str, span: Span) -> Res<Sig> {
+    fn name(&mut self, name: &str, span: Span) -> Res<Sig> {
         if let Some(s) = self.scope.get(name) {
             return Ok(*s);
+        }
+        match name {
+            "out" => {
+                return self.out.ok_or_else(|| {
+                    Diagnostic::new("`out` has no value yet", span).with_help("set it first, with `out = ...`")
+                });
+            }
+            "it" => {
+                return match self.mode {
+                    Mode::Track => Ok(self.input("it", ChainInput::It)),
+                    _ => Err(Diagnostic::new("`it` is only available inside a track", span)),
+                };
+            }
+            _ => {}
+        }
+        if let Some(bus) = self.names.bus(name) {
+            return match self.mode {
+                Mode::Track => Ok(self.input(name, ChainInput::Bus(bus))),
+                _ => Err(Diagnostic::new(format!("`{name}` is a bus, and only a track can read a bus"), span)
+                    .with_help(format!("an instrument can send to it with `{name} += ...`"))),
+            };
         }
         if let Ok(note @ Value::Note(_)) = name.parse::<Value>() {
             return Ok(Sig::constant(Unit::Hz, note.as_hz().expect("a note is a frequency")));
@@ -308,6 +552,10 @@ impl<'a> Lower<'a> {
     // ---- calls ----------------------------------------------------------
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
+        if name.name == "to" {
+            return Err(Diagnostic::new("`to` can only end the line that sets a track's `out`", name.span)
+                .with_help("for example `out = it.lpf(cutoff: 1khz).to(space)`"));
+        }
         let registry = self.registry;
         let Some(spec) = registry.find(&name.name) else {
             let mut d = Diagnostic::new(format!("unknown opcode `{}`", name.name), name.span);

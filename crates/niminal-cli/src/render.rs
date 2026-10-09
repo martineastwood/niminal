@@ -1,7 +1,7 @@
 use std::fmt;
 
-use niminal_engine::{BLOCK, Master, Voice};
-use niminal_lang::Program;
+use niminal_engine::{BLOCK, Master, VoiceId};
+use niminal_lang::{NotePlan, Program};
 use niminal_score::Event;
 
 pub const SAMPLE_RATE: u32 = 48_000;
@@ -40,13 +40,7 @@ impl std::error::Error for RenderError {}
 struct Note {
     start: usize,
     off: usize,
-    instrument: usize,
-    params: Vec<(usize, f32)>,
-}
-
-struct Playing {
-    voice: Voice,
-    off: usize,
+    plan: NotePlan,
 }
 
 /// Render the program's own notes plus `extra` events (for example from a
@@ -56,22 +50,20 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     let sr = f64::from(SAMPLE_RATE);
     let mut notes = Vec::new();
     for event in program.notes.iter().chain(extra) {
-        let Some(instrument) = program.instruments.iter().position(|i| i.name == event.target) else {
-            return Err(RenderError(format!("no instrument named `{}`", event.target)));
-        };
-        let params = program.instruments[instrument]
-            .bind_args(&event.args, program.tempo)
+        let plan = program
+            .plan(event)
             .map_err(|e| RenderError(format!("note for `{}`: {e}", event.target)))?;
 
         let start = (event.at.to_seconds(program.tempo) * sr).round().max(0.0) as usize;
         let dur = (event.dur.to_seconds(program.tempo) * sr).round().max(0.0) as usize;
-        notes.push(Note { start, off: start + dur, instrument, params });
+        notes.push(Note { start, off: start + dur, plan });
     }
     notes.sort_by_key(|n| n.start);
 
+    let mut mixer = program.mixer(SAMPLE_RATE as f32);
     let mut out: Vec<f32> = Vec::new();
-    let mut playing: Vec<Playing> = Vec::new();
-    let mut scratch = [0.0f32; BLOCK];
+    // Notes that have started but not yet been released, in no particular order.
+    let mut held: Vec<(usize, VoiceId)> = Vec::new();
     let mut silenced_voices = 0;
     let mut next = 0;
     let mut pos = 0;
@@ -79,22 +71,21 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     loop {
         while next < notes.len() && notes[next].start == pos {
             let note = &notes[next];
-            let mut voice = Voice::new(program.instruments[note.instrument].graph.clone(), SAMPLE_RATE as f32);
-            for &(index, value) in &note.params {
-                voice.set_param(index, value);
-            }
-            playing.push(Playing { voice, off: note.off });
+            let graph = program.instruments[note.plan.instrument].graph.clone();
+            let id = mixer.note_on(note.plan.track, graph, &note.plan.params);
+            held.push((note.off, id));
             next += 1;
         }
-        for p in &mut playing {
-            if !p.voice.is_released() && p.off <= pos {
-                p.voice.release();
+        held.retain(|&(off, id)| {
+            if off <= pos {
+                mixer.release(id);
             }
-        }
+            off > pos
+        });
 
-        if playing.is_empty() {
+        if mixer.active_voices() == 0 {
             match notes.get(next) {
-                None => return Ok(finish(out, silenced_voices, options)),
+                None => return Ok(finish(out, silenced_voices + mixer.take_silenced(), options)),
                 Some(n) => {
                     // Nothing sounding: skip the silence.
                     out.resize(n.start, 0.0);
@@ -110,19 +101,13 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
         if let Some(note) = notes.get(next) {
             n = n.min(note.start - pos);
         }
-        for p in playing.iter().filter(|p| !p.voice.is_released()) {
-            n = n.min(p.off - pos);
+        for &(off, _) in &held {
+            n = n.min(off - pos);
         }
 
         out.resize(pos + n, 0.0);
-        for p in &mut playing {
-            p.voice.process(&mut scratch[..n]);
-            for (o, s) in out[pos..].iter_mut().zip(&scratch[..n]) {
-                *o += s;
-            }
-        }
-        silenced_voices += playing.iter().filter(|p| p.voice.is_poisoned()).count();
-        playing.retain(|p| !p.voice.is_finished());
+        mixer.process(&mut out[pos..pos + n]);
+        silenced_voices += mixer.take_silenced();
         pos += n;
     }
 }

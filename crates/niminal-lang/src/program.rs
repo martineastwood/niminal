@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use niminal_engine::Graph;
+use niminal_engine::{Graph, Mixer, TrackDef};
 use niminal_score::{Event, Tempo, Value};
 
 use crate::diag::closest;
@@ -52,16 +52,89 @@ impl ArgError {
     }
 }
 
+/// A track as the mixer sees it, plus what the language knows about it.
+pub struct TrackInfo {
+    /// Empty for the implicit track that plays bare instruments.
+    pub name: String,
+    /// Index into `Program::instruments`.
+    pub instrument: Option<usize>,
+    /// Arguments given in `instrument = name(...)`, applied to every note.
+    pub defaults: BTreeMap<String, Value>,
+    pub def: TrackDef,
+}
+
 pub struct Program {
     pub tempo: Tempo,
     pub instruments: Vec<Instrument>,
+    pub buses: Vec<String>,
+    /// Track 0 is the implicit one that plays instruments named directly.
+    pub tracks: Vec<TrackInfo>,
     /// Notes written directly in the source.
     pub notes: Vec<Event>,
+}
+
+/// A note ready to play: which track, which instrument, and its parameters.
+#[derive(Debug, PartialEq)]
+pub struct NotePlan {
+    pub track: usize,
+    pub instrument: usize,
+    pub params: Vec<(usize, f32)>,
+}
+
+/// What a note's target resolves to.
+pub(crate) struct Target<'a> {
+    pub track: usize,
+    pub instrument: usize,
+    /// Arguments a track applies to all its notes.
+    pub defaults: Option<&'a BTreeMap<String, Value>>,
+}
+
+/// Find what a note's target plays: an instrument by name (on the implicit
+/// track), or a track (with its instrument and default arguments).
+pub(crate) fn resolve_target<'a>(
+    instruments: &[Instrument],
+    tracks: &'a [TrackInfo],
+    target: &str,
+) -> Result<Target<'a>, ArgError> {
+    if let Some(t) = tracks.iter().skip(1).position(|t| t.name == target) {
+        let track = &tracks[t + 1];
+        return match track.instrument {
+            Some(i) => Ok(Target { track: t + 1, instrument: i, defaults: Some(&track.defaults) }),
+            None => Err(ArgError {
+                message: format!("track `{target}` has no instrument to play"),
+                help: Some("add `instrument = ...` to the track".into()),
+            }),
+        };
+    }
+    if let Some(i) = instruments.iter().position(|i| i.name == target) {
+        return Ok(Target { track: 0, instrument: i, defaults: None });
+    }
+    let known = instruments.iter().map(|i| i.name.as_str()).chain(tracks.iter().skip(1).map(|t| t.name.as_str()));
+    Err(ArgError {
+        message: format!("no instrument or track named `{target}`"),
+        help: closest(target, known).map(|c| format!("did you mean `{c}`?")),
+    })
 }
 
 impl Program {
     pub fn instrument(&self, name: &str) -> Option<&Instrument> {
         self.instruments.iter().find(|i| i.name == name)
+    }
+
+    /// Check an event against its target and resolve it to a note to play.
+    pub fn plan(&self, event: &Event) -> Result<NotePlan, ArgError> {
+        let Target { track, instrument, defaults } =
+            resolve_target(&self.instruments, &self.tracks, &event.target)?;
+        let mut args = defaults.cloned().unwrap_or_default();
+        args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
+        let params = self.instruments[instrument].bind_args(&args, self.tempo)?;
+        Ok(NotePlan { track, instrument, params })
+    }
+
+    /// A mixer for this program's tracks and buses.
+    pub fn mixer(&self, sample_rate: f32) -> Mixer {
+        let defs = self.tracks.iter().map(|t| t.def.clone()).collect();
+        Mixer::new(defs, self.buses.len(), sample_rate).expect("feedback is rejected when compiling")
     }
 }
 

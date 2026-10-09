@@ -118,6 +118,16 @@ impl Parser {
         if self.is_keyword("instr") {
             let (name, params, body, span) = self.definition()?;
             Ok(Item::Instr(InstrDef { name, params, body, span }))
+        } else if self.is_keyword("bus") {
+            self.bump();
+            let name = self.ident("a bus name")?;
+            let layout = self.eat(&Tok::Colon).then(|| self.ident("a channel layout, such as `mono`")).transpose()?;
+            Ok(Item::Bus(BusDecl { name, layout }))
+        } else if self.is_keyword("track") {
+            let start = self.bump().span;
+            let name = self.ident("a track name")?;
+            let (body, end) = self.block()?;
+            Ok(Item::Track(TrackDecl { name, body, span: start.to(end) }))
         } else if self.is_keyword("opcode") {
             let (name, params, body, span) = self.definition()?;
             Ok(Item::Opcode(OpcodeDef { name, params, body, span }))
@@ -147,8 +157,13 @@ impl Parser {
             }
         }
         self.expect(&Tok::RParen)?;
-        self.expect(&Tok::LBrace)?;
+        let (body, end) = self.block()?;
+        Ok((name, params, body, start.to(end)))
+    }
 
+    /// `{ statements }`, returning the statements and the span of the braces.
+    fn block(&mut self) -> Res<(Vec<Stmt>, Span)> {
+        let start = self.expect(&Tok::LBrace)?;
         let mut body = Vec::new();
         loop {
             self.skip_newlines();
@@ -161,7 +176,7 @@ impl Parser {
             }
         }
         let end = self.expect(&Tok::RBrace)?;
-        Ok((name, params, body, start.to(end)))
+        Ok((body, start.to(end)))
     }
 
     fn type_spec(&mut self) -> Res<TypeSpec> {
@@ -186,6 +201,12 @@ impl Parser {
             let name = self.ident("a name for the state")?;
             self.expect(&Tok::Eq)?;
             return Ok(Stmt::State { name, init: self.expr()? });
+        }
+        if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Plus && self.peek_at(2) == &Tok::Eq {
+            let name = self.ident("a name")?;
+            self.bump();
+            self.bump();
+            return Ok(Stmt::AddAssign { name, value: self.expr()? });
         }
         if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
             let name = self.ident("a name")?;
@@ -566,6 +587,26 @@ opcode one_pole(x, cutoff: hz) {
         let Item::Note(n) = &items[0] else { panic!() };
         assert!(n.at.is_some());
         assert_eq!(n.args.len(), 2);
+    }
+
+    #[test]
+    fn buses_tracks_and_add_assign() {
+        let items = parse_ok("
+bus space
+bus hall: stereo
+track lead {
+  instrument = pluck(bright: 0.6)
+  out = it.lpf(cutoff: 1khz)
+  space += out.gain(-12db)
+}");
+        let Item::Bus(b) = &items[0] else { panic!() };
+        assert_eq!((b.name.name.as_str(), b.layout.is_none()), ("space", true));
+        let Item::Bus(b) = &items[1] else { panic!() };
+        assert_eq!(b.layout.as_ref().unwrap().name, "stereo");
+        let Item::Track(t) = &items[2] else { panic!() };
+        assert_eq!(t.name.name, "lead");
+        assert_eq!(t.body.len(), 3);
+        assert!(matches!(&t.body[2], Stmt::AddAssign { name, .. } if name.name == "space"));
     }
 
     #[test]

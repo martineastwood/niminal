@@ -14,5 +14,5 @@ mod unit;
 
 pub use compile::compile;
 pub use diag::{Diagnostic, Span};
-pub use program::{ArgError, Instrument, Param, Program};
+pub use program::{ArgError, Instrument, NotePlan, Param, Program, TrackInfo};
 pub use unit::Unit;

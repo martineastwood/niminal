@@ -10,6 +10,8 @@ pub struct Ident {
 pub enum Item {
     Instr(InstrDef),
     Opcode(OpcodeDef),
+    Bus(BusDecl),
+    Track(TrackDecl),
     Tempo(Expr),
     Note(NoteStmt),
 }
@@ -18,6 +20,21 @@ pub enum Item {
 pub struct InstrDef {
     pub name: Ident,
     pub params: Vec<ParamDef>,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+/// `bus space` or `bus space: mono`
+#[derive(Debug, Clone, PartialEq)]
+pub struct BusDecl {
+    pub name: Ident,
+    pub layout: Option<Ident>,
+}
+
+/// `track name { instrument = ...  out = ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackDecl {
+    pub name: Ident,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
@@ -52,6 +69,8 @@ pub enum Stmt {
     Bind { name: Ident, value: Expr },
     /// `state y = 0.0`, only inside an opcode.
     State { name: Ident, init: Expr },
+    /// `out += expr` layers a signal; `space += expr` sends to a bus.
+    AddAssign { name: Ident, value: Expr },
     Expr(Expr),
 }
 
