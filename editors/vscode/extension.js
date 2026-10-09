@@ -1,12 +1,17 @@
 const vscode = require("vscode");
 const { Client } = require("./client");
 const { blockAround } = require("./blocks");
+const { trackDescription, commands: panelCommands } = require("./panel");
 
 let client = null;
 let status;
 let diagnostics;
 let channel;
 let transport = null;
+let performance = { scenes: [], tracks: [] };
+const scenesChanged = new vscode.EventEmitter();
+const tracksChanged = new vscode.EventEmitter();
+let refreshTimer;
 
 const flash = vscode.window.createTextEditorDecorationType({
   backgroundColor: new vscode.ThemeColor("editor.findMatchHighlightBackground"),
@@ -45,6 +50,7 @@ async function connect() {
         transport = params;
         showStatus();
       } else if (method === "landed") {
+        refreshPerformance();
         channel.appendLine(`landed at bar ${params.position.bar} beat ${params.position.beat.toFixed(2)}`);
       } else if (method === "notice") {
         channel.appendLine(`notice: ${params.message ?? JSON.stringify(params)}`);
@@ -52,13 +58,46 @@ async function connect() {
     },
     onClose() {
       transport = null;
+      performance = { scenes: [], tracks: [] };
+      scenesChanged.fire();
+      tracksChanged.fire();
       showStatus();
     },
   });
   await client.connect();
   await client.call("subscribe", { topics: ["transport", "landed", "notices"] });
   showStatus();
+  refreshPerformance();
   return client;
+}
+
+async function refreshPerformance() {
+  if (!client?.connected) return;
+  try {
+    const status = await client.call("status");
+    performance = { scenes: status.scenes ?? [], tracks: status.tracks ?? [] };
+    scenesChanged.fire();
+    tracksChanged.fire();
+  } catch {
+    // the connection went away; onClose clears the panel
+  }
+}
+
+/** Send a line of code from a panel button or key, as if it had been evaluated in an editor. */
+async function sendCode(code) {
+  const c = await ensureConnected();
+  if (!c) return;
+  const params = { source: code };
+  const { quantize } = settings();
+  if (quantize) params.quantize = quantize;
+  try {
+    const result = await c.call("eval", params);
+    const where = result.id === null ? "nothing to do" : result.in_seconds === 0 ? "applied" : `lands at bar ${result.position.bar} beat ${result.position.beat.toFixed(2)}`;
+    vscode.window.setStatusBarMessage(`niminal: ${code} — ${where}`, 2500);
+    refreshPerformance();
+  } catch (e) {
+    vscode.window.showErrorMessage(`niminal: ${e.message}`);
+  }
 }
 
 async function ensureConnected() {
@@ -163,7 +202,40 @@ function activate(context) {
     command("niminal.panic", () => simple("panic")),
     command("niminal.connect", ensureConnected),
     command("niminal.startDaemon", startDaemon),
+    vscode.window.registerTreeDataProvider("niminal.scenes", {
+      onDidChangeTreeData: scenesChanged.event,
+      getChildren: () => performance.scenes.map((name, i) => ({ name, number: i + 1 })),
+      getTreeItem: ({ name, number }) => {
+        const item = new vscode.TreeItem(name);
+        item.description = number <= 9 ? `${process.platform === "darwin" ? "⌘" : "Ctrl+"}${number}` : "";
+        item.command = { command: "niminal.launchScene", title: "Launch", arguments: [{ name }] };
+        item.iconPath = new vscode.ThemeIcon("play");
+        return item;
+      },
+    }),
+    vscode.window.registerTreeDataProvider("niminal.tracks", {
+      onDidChangeTreeData: tracksChanged.event,
+      getChildren: () => performance.tracks,
+      getTreeItem: (track) => {
+        const item = new vscode.TreeItem(track.name);
+        item.description = trackDescription(track);
+        item.iconPath = new vscode.ThemeIcon(track.muted ? "mute" : track.clip ? "play" : "circle-outline");
+        return item;
+      },
+    }),
+    command("niminal.launchScene", (scene) => scene && sendCode(panelCommands.launch(scene.name))),
+    command("niminal.launchNth", (n) => {
+      const name = performance.scenes[n - 1];
+      if (name) return sendCode(panelCommands.launch(name));
+      vscode.window.setStatusBarMessage(`niminal: no scene number ${n}`, 2000);
+    }),
+    command("niminal.toggleMute", (track) => track && sendCode(panelCommands.mute(track))),
+    command("niminal.toggleSolo", (track) => track && sendCode(panelCommands.solo(track))),
+    command("niminal.stopTrack", (track) => track && sendCode(panelCommands.stop(track))),
+    { dispose: () => clearInterval(refreshTimer) },
   );
+  // Tracks change without any evaluation when a timeline command comes due.
+  refreshTimer = setInterval(refreshPerformance, 2000);
 }
 
 function deactivate() {
