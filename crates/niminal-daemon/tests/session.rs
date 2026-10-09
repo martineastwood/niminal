@@ -479,7 +479,7 @@ fn a_replay_reproduces_the_original_audio_exactly() {
             original.extend(s.process(block).remove(0));
         }
         let total = s.clock();
-        let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), total)
+        let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), total, true)
             .remove(0);
         assert_eq!(original.len(), replayed.len(), "block {block}");
         assert_eq!(original, replayed, "block {block}: replaying the log gives back the audio");
@@ -492,7 +492,7 @@ fn logs_survive_being_written_down() {
     let text = to_lines(s.log());
     let back = from_lines(&text).unwrap();
     assert_eq!(back, s.log());
-    let a = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), 100_000);
-    let b = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), &back, 100_000);
+    let a = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), 100_000, true);
+    let b = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), &back, 100_000, true);
     assert_eq!(a, b);
 }

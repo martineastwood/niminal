@@ -201,6 +201,10 @@ impl Daemon {
 
     // ---- notifications -------------------------------------------------------------
 
+    fn has_subscribers(&self, topic: &str) -> bool {
+        self.clients.values().any(|c| c.greeted && c.topics.contains(topic))
+    }
+
     fn send_to_subscribers(&mut self, topic: &str, method: &str, params: Value) {
         let text = json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string();
         for (id, client) in &self.clients {
@@ -245,8 +249,11 @@ impl Daemon {
         if self.last_transport.is_none_or(|t| now >= t + self.transport_every) {
             self.last_transport = Some(now);
             self.send_to_subscribers("transport", "transport", transport_json(&self.session.transport()));
-            let peaks = self.session.take_peaks();
-            self.send_to_subscribers("meters", "meters", json!({ "peaks": peaks }));
+            // reading the meters resets them, so only do it for someone listening
+            if self.has_subscribers("meters") {
+                let peaks = self.session.take_peaks();
+                self.send_to_subscribers("meters", "meters", json!({ "peaks": peaks }));
+            }
         }
         std::mem::take(&mut self.outbox)
     }
