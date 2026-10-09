@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use niminal_engine::ops::{Custom, Delay, Fn1, FilterMode, Func, Gain, Kernel, Osc, Reverb, Svf, Wave};
+use niminal_engine::ops::{Custom, Delay, Fn1, FilterMode, Func, Gain, Kernel, Osc, Reverb, Svf};
+pub use niminal_engine::ops::Wave;
 use niminal_engine::Opcode;
 
 use crate::unit::Unit;
@@ -18,6 +19,8 @@ pub enum Kind {
     Signal(Unit),
     /// A gain: decibels, or a plain linear factor.
     Gain,
+    /// A channel layout such as `stereo`.
+    Layout,
 }
 
 pub struct ParamSpec {
@@ -45,6 +48,8 @@ fn setting(name: &str, kind: Kind) -> ParamSpec {
 #[derive(Default)]
 pub struct BuildArgs {
     pub wave: Option<Wave>,
+    /// Which channel of a multichannel signal this copy of the opcode serves.
+    pub channel: usize,
     /// Arguments whose value is a compile-time constant, in engine units.
     pub consts: HashMap<String, f64>,
 }
@@ -57,6 +62,10 @@ const MAX_DELAY_SECONDS: f64 = 30.0;
 pub enum Build {
     Builtin(BuildFn),
     Custom(Arc<Kernel>),
+    /// `pan`: one output per speaker of the master layout.
+    Pan,
+    /// `to_layout`: converts between layouts.
+    ToLayout,
     /// A user-defined opcode whose body had errors. Calls to it are still
     /// checked against its signature, so one mistake isn't reported twice.
     Invalid,
@@ -77,7 +86,7 @@ impl OpSpec {
         match &self.build {
             Build::Builtin(f) => f(args).map(Some),
             Build::Custom(k) => Ok(Some(Box::new(Custom::new(k.clone())))),
-            Build::Invalid => Ok(None),
+            Build::Invalid | Build::Pan | Build::ToLayout => Ok(None),
         }
     }
 }
@@ -142,7 +151,19 @@ impl Registry {
                 name: "reverb".into(),
                 params: vec![req("x", SIGNAL), opt("room", SIGNAL), opt("damp", SIGNAL)],
                 positional: 1,
-                build: Build::Builtin(|_| Ok(Box::new(Reverb::new()))),
+                build: Build::Builtin(|a| Ok(Box::new(Reverb::for_channel(a.channel)))),
+            },
+            OpSpec {
+                name: "pan".into(),
+                params: vec![req("x", SIGNAL), opt("azimuth", Kind::Signal(Unit::Angle)), opt("spread", SIGNAL)],
+                positional: 1,
+                build: Build::Pan,
+            },
+            OpSpec {
+                name: "to_layout".into(),
+                params: vec![req("x", SIGNAL), req("layout", Kind::Layout)],
+                positional: 2,
+                build: Build::ToLayout,
             },
             math("sin", |_| Ok(Box::new(Func(Fn1::Sin)))),
             math("cos", |_| Ok(Box::new(Func(Fn1::Cos)))),

@@ -1,0 +1,23 @@
+// Stereo: each note is panned by its own `az` argument, and the reverb track
+// turns a stereo bus into decorrelated left and right tails.
+config { channels: stereo }
+tempo 100bpm
+
+bus space: stereo
+
+instr pluck(freq: hz, az: deg = 0deg, amp: db = -6db) {
+  level = env[0 2ms 1 500ms.exp 0]
+  voice = osc(saw, freq).lpf(cutoff: freq * 6, res: 0.2).gain(amp) * level
+  out = voice.pan(azimuth: az)
+  space += out.gain(-10db)
+}
+
+track hall {
+  out = space.reverb(room: 0.85, damp: 0.4).gain(0.9)
+}
+
+pluck(freq: c4, az: -30deg) for 1/2beat
+at 1/2beat pluck(freq: e4, az: -15deg) for 1/2beat
+at 1beat pluck(freq: g4, az: 0deg) for 1/2beat
+at 3/2beat pluck(freq: b4, az: 15deg) for 1/2beat
+at 2beats pluck(freq: c5, az: 30deg) for 2beats

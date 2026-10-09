@@ -12,31 +12,43 @@ use crate::graph::Graph;
 use crate::opcode::BLOCK;
 use crate::voice::Voice;
 
-/// Block-sized buffers that are summed into and cleared every block.
+/// The most channels any signal path may carry (7.1.4 needs 12).
+pub const MAX_CHANNELS: usize = 16;
+
+/// Block-sized, possibly multichannel buffers that are summed into and cleared
+/// every block.
 pub struct Buses {
-    data: Vec<[f32; BLOCK]>,
+    data: Vec<Vec<[f32; BLOCK]>>,
 }
 
 impl Buses {
-    pub fn new(count: usize) -> Self {
-        Buses { data: vec![[0.0; BLOCK]; count] }
+    /// One bus per entry, with that many channels.
+    pub fn new(channels: &[usize]) -> Self {
+        Buses { data: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect() }
     }
 
     pub fn clear(&mut self) {
-        self.data.iter_mut().for_each(|b| *b = [0.0; BLOCK]);
+        for bus in &mut self.data {
+            bus.iter_mut().for_each(|c| *c = [0.0; BLOCK]);
+        }
     }
 
-    /// Add `samples` to the start of a bus. A bus that doesn't exist is ignored.
-    pub fn add(&mut self, bus: usize, samples: &[f32]) {
-        if let Some(b) = self.data.get_mut(bus) {
-            for (d, s) in b.iter_mut().zip(samples) {
+    /// Add `samples` to the start of one channel of a bus. A bus or channel that
+    /// doesn't exist is ignored.
+    pub fn add(&mut self, bus: usize, channel: usize, samples: &[f32]) {
+        if let Some(c) = self.data.get_mut(bus).and_then(|b| b.get_mut(channel)) {
+            for (d, s) in c.iter_mut().zip(samples) {
                 *d += s;
             }
         }
     }
 
-    pub fn get(&self, bus: usize, frames: usize) -> &[f32] {
-        &self.data[bus][..frames]
+    pub fn get(&self, bus: usize, channel: usize, frames: usize) -> &[f32] {
+        &self.data[bus][channel][..frames]
+    }
+
+    pub fn channels(&self, bus: usize) -> usize {
+        self.data[bus].len()
     }
 }
 
@@ -47,12 +59,13 @@ pub enum Route {
     Bus(usize),
 }
 
-/// What feeds one of a track chain's external inputs.
+/// What feeds one of a track chain's external (mono) inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChainInput {
-    /// The summed output of the track's voices.
-    It,
-    Bus(usize),
+    /// One channel of the summed output of the track's voices.
+    It { channel: usize },
+    /// One channel of a bus.
+    Bus { bus: usize, channel: usize },
 }
 
 #[derive(Clone)]
@@ -71,9 +84,11 @@ impl TrackDef {
         self.inputs
             .iter()
             .filter_map(|i| match i {
-                ChainInput::Bus(b) => Some(*b),
-                ChainInput::It => None,
+                ChainInput::Bus { bus, .. } => Some(*bus),
+                ChainInput::It { .. } => None,
             })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect()
     }
 
@@ -159,14 +174,33 @@ pub struct Mixer {
     buses: Buses,
     tracks: Vec<Track>,
     order: Vec<usize>,
+    channels: usize,
+    bus_channels: Vec<usize>,
     sample_rate: f32,
     next_serial: u64,
     silenced: usize,
 }
 
 impl Mixer {
-    pub fn new(defs: Vec<TrackDef>, bus_count: usize, sample_rate: f32) -> Result<Mixer, Vec<usize>> {
+    /// `bus_channels` gives the channel count of each bus; voices and the master
+    /// have `channels`. A track's chain must produce as many channels as its
+    /// destination has.
+    pub fn new(
+        defs: Vec<TrackDef>,
+        bus_channels: Vec<usize>,
+        channels: usize,
+        sample_rate: f32,
+    ) -> Result<Mixer, Vec<usize>> {
+        assert!((1..=MAX_CHANNELS).contains(&channels), "unsupported channel count {channels}");
         let order = execution_order(&defs)?;
+        for def in &defs {
+            let wanted = match def.route {
+                Route::Master => channels,
+                Route::Bus(b) => bus_channels[b],
+            };
+            let got = def.chain.as_ref().map_or(channels, |g| g.channels());
+            assert_eq!(got, wanted, "a track produces {got} channels but its destination has {wanted}");
+        }
         let tracks = defs
             .into_iter()
             .map(|def| Track {
@@ -177,17 +211,21 @@ impl Mixer {
             })
             .collect();
         Ok(Mixer {
-            buses: Buses::new(bus_count),
+            buses: Buses::new(&bus_channels),
             tracks,
             order,
+            channels,
+            bus_channels,
             sample_rate,
             next_serial: 0,
             silenced: 0,
         })
     }
 
-    /// Start a note on `track`, setting `(parameter index, value)` pairs.
+    /// Start a note on `track`, setting `(parameter index, value)` pairs. The
+    /// graph must produce as many channels as the mixer's master has.
     pub fn note_on(&mut self, track: usize, graph: Arc<Graph>, params: &[(usize, f32)]) -> VoiceId {
+        assert_eq!(graph.channels(), self.channels, "an instrument must output the master's channel count");
         let mut voice = Voice::new(graph, self.sample_rate);
         for &(index, value) in params {
             voice.set_param(index, value);
@@ -215,52 +253,78 @@ impl Mixer {
         std::mem::take(&mut self.silenced)
     }
 
-    /// Mix `out.len()` samples (at most [`BLOCK`]) of everything to the master.
-    pub fn process(&mut self, out: &mut [f32]) {
-        let frames = out.len();
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Mix `frames` samples (at most [`BLOCK`]) of everything into `out`, one
+    /// block per master channel.
+    pub fn process(&mut self, out: &mut [[f32; BLOCK]], frames: usize) {
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
-        out.fill(0.0);
+        assert_eq!(out.len(), self.channels, "one output block per master channel");
+        out.iter_mut().for_each(|c| c[..frames].fill(0.0));
         self.buses.clear();
 
-        let mut summed = [0.0f32; BLOCK];
-        let mut scratch = [0.0f32; BLOCK];
-        let mut processed = [0.0f32; BLOCK];
+        let n = self.channels;
+        let mut summed = [[0.0f32; BLOCK]; MAX_CHANNELS];
+        let mut scratch = [[0.0f32; BLOCK]; MAX_CHANNELS];
+        let mut processed = [[0.0f32; BLOCK]; MAX_CHANNELS];
 
         for &t in &self.order {
             let track = &mut self.tracks[t];
 
-            summed[..frames].fill(0.0);
+            summed[..n].iter_mut().for_each(|c| c[..frames].fill(0.0));
             for (_, voice) in &mut track.voices {
-                voice.process_routed(&mut scratch[..frames], &mut self.buses);
-                for (s, v) in summed[..frames].iter_mut().zip(&scratch[..frames]) {
-                    *s += v;
+                voice.process_blocks(&mut scratch[..n], frames, &mut self.buses);
+                for (sum, voice_out) in summed[..n].iter_mut().zip(&scratch[..n]) {
+                    for (s, v) in sum[..frames].iter_mut().zip(&voice_out[..frames]) {
+                        *s += v;
+                    }
                 }
             }
             self.silenced += track.voices.iter().filter(|(_, v)| v.is_poisoned()).count();
             track.voices.retain(|(_, v)| !v.is_finished());
 
-            let result: &[f32] = match &mut track.chain {
-                None => &summed[..frames],
+            let result: &[[f32; BLOCK]] = match &mut track.chain {
+                None => &summed[..n],
                 Some(chain) => {
                     for (i, input) in track.def.inputs.iter().enumerate() {
-                        match input {
-                            ChainInput::It => chain.set_input(i, &summed[..frames]),
-                            ChainInput::Bus(b) => chain.set_input(i, self.buses.get(*b, frames)),
+                        match *input {
+                            ChainInput::It { channel } => chain.set_input(i, &summed[channel][..frames]),
+                            ChainInput::Bus { bus, channel } => {
+                                chain.set_input(i, self.buses.get(bus, channel, frames));
+                            }
                         }
                     }
-                    chain.process_routed(&mut processed[..frames], &mut self.buses);
+                    let out_channels = chain.channels();
+                    chain.process_blocks(&mut processed[..out_channels], frames, &mut self.buses);
                     if chain.is_poisoned() && !track.chain_silenced {
                         track.chain_silenced = true;
                         self.silenced += 1;
                     }
-                    &processed[..frames]
+                    &processed[..out_channels]
                 }
             };
 
             match track.def.route {
-                Route::Master => out.iter_mut().zip(result).for_each(|(o, r)| *o += r),
-                Route::Bus(b) => self.buses.add(b, result),
+                Route::Master => {
+                    for (o, r) in out.iter_mut().zip(result) {
+                        for (d, s) in o[..frames].iter_mut().zip(&r[..frames]) {
+                            *d += s;
+                        }
+                    }
+                }
+                Route::Bus(b) => {
+                    for (c, r) in result.iter().enumerate() {
+                        self.buses.add(b, c, &r[..frames]);
+                    }
+                }
             }
         }
+    }
+
+    /// The channel count of each bus.
+    pub fn bus_channels(&self) -> &[usize] {
+        &self.bus_channels
     }
 }

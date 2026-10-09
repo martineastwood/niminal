@@ -12,6 +12,7 @@ pub enum Item {
     Opcode(OpcodeDef),
     Bus(BusDecl),
     Track(TrackDecl),
+    Config(ConfigDecl),
     Tempo(Expr),
     Note(NoteStmt),
 }
@@ -24,11 +25,19 @@ pub struct InstrDef {
     pub span: Span,
 }
 
-/// `bus space` or `bus space: mono`
+/// `bus space` or `bus space: stereo`
 #[derive(Debug, Clone, PartialEq)]
 pub struct BusDecl {
     pub name: Ident,
-    pub layout: Option<Ident>,
+    /// A layout such as `stereo` or `surround(5.1)`.
+    pub layout: Option<Expr>,
+}
+
+/// `config { channels: stereo }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigDecl {
+    pub entries: Vec<(Ident, Expr)>,
+    pub span: Span,
 }
 
 /// `track name { instrument = ...  out = ... }`
@@ -69,6 +78,8 @@ pub enum Stmt {
     Bind { name: Ident, value: Expr },
     /// `state y = 0.0`, only inside an opcode.
     State { name: Ident, init: Expr },
+    /// `[l, r] = src` names the channels of a multichannel signal.
+    Destructure { names: Vec<Ident>, value: Expr },
     /// `out += expr` layers a signal; `space += expr` sends to a bus.
     AddAssign { name: Ident, value: Expr },
     Expr(Expr),
@@ -95,6 +106,8 @@ pub enum ExprKind {
     /// `f(a, b)`. `x.f(a)` is parsed as `f(x, a)` with `x` marked as the receiver.
     Call { name: Ident, args: Vec<Arg> },
     Neg(Box<Expr>),
+    /// `[a, b]`: a comma list is a multichannel signal, one expression per channel.
+    Channels(Vec<Expr>),
     Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
     Env(EnvLit),
 }

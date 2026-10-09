@@ -7,6 +7,9 @@ const ALLPASS_LENGTHS: [usize; 4] = [556, 441, 341, 225];
 const INPUT_GAIN: f32 = 0.015;
 const WET_SCALE: f32 = 3.0;
 const ALLPASS_FEEDBACK: f32 = 0.5;
+/// Samples (at 44.1kHz) added to every delay line for each successive channel,
+/// so the channels of a multichannel reverb are decorrelated, as in stereo Freeverb.
+const CHANNEL_SPREAD: usize = 23;
 /// The most the network can amplify what is stored in its combs on the way
 /// out: eight combs summed, the wet scale, and some allpass headroom.
 const OUTPUT_GAIN_BOUND: f32 = COMB_LENGTHS.len() as f32 * WET_SCALE * 2.0;
@@ -38,11 +41,20 @@ pub struct Reverb {
     quiet_run: usize,
     /// How long the longest comb takes to go round once.
     longest: usize,
+    /// Which channel of a multichannel reverb this is.
+    channel: usize,
 }
 
 impl Reverb {
+    /// A reverb for channel 0 (or a mono signal).
     pub fn new() -> Self {
-        let mut r = Reverb { combs: Vec::new(), allpasses: Vec::new(), quiet_run: 0, longest: 0 };
+        Reverb::for_channel(0)
+    }
+
+    /// The reverb for one channel of a multichannel signal. Each channel gets
+    /// slightly different delay lengths, so they don't ring in lockstep.
+    pub fn for_channel(channel: usize) -> Self {
+        let mut r = Reverb { combs: Vec::new(), allpasses: Vec::new(), quiet_run: 0, longest: 0, channel };
         r.prepare(48_000.0);
         r
     }
@@ -65,11 +77,12 @@ impl Opcode for Reverb {
     }
 
     fn box_clone(&self) -> Box<dyn Opcode> {
-        Box::new(Reverb::new())
+        Box::new(Reverb::for_channel(self.channel))
     }
 
     fn prepare(&mut self, sample_rate: f32) {
-        let scale = |n: usize| ((n as f32 * sample_rate / 44_100.0).round() as usize).max(1);
+        let offset = self.channel * CHANNEL_SPREAD;
+        let scale = |n: usize| (((n + offset) as f32 * sample_rate / 44_100.0).round() as usize).max(1);
         self.combs = COMB_LENGTHS.iter().map(|&n| Comb { buf: vec![0.0; scale(n)], pos: 0, store: 0.0 }).collect();
         self.allpasses = ALLPASS_LENGTHS.iter().map(|&n| Allpass { buf: vec![0.0; scale(n)], pos: 0 }).collect();
         self.longest = self.combs.iter().map(|c| c.buf.len()).max().unwrap_or(0);

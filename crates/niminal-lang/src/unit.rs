@@ -5,6 +5,8 @@ pub enum Unit {
     Hz,
     Db,
     Time,
+    /// Degrees; 0 is straight ahead and positive is to the right.
+    Angle,
 }
 
 impl Unit {
@@ -14,6 +16,7 @@ impl Unit {
             Unit::Hz => "hz",
             Unit::Db => "db",
             Unit::Time => "a time",
+            Unit::Angle => "an angle",
         }
     }
 
@@ -24,6 +27,7 @@ impl Unit {
             Unit::Hz => Some("hz"),
             Unit::Db => Some("db"),
             Unit::Time => Some("sec"),
+            Unit::Angle => Some("deg"),
         }
     }
 }

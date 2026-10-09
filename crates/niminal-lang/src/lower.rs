@@ -1,22 +1,29 @@
 //! Unit checking and lowering, in one pass: each expression is typed and turned
 //! into engine graph nodes as it is visited.
+//!
+//! Signals can have several channels. The engine's nodes are all mono, so a
+//! multichannel signal here is a bundle of mono ones, and an opcode applied to
+//! it is built once per channel (each with its own state), which is the spec's
+//! multichannel expansion. Conversions between layouts are emitted as gain and
+//! sum nodes.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use niminal_engine::ops::{Add, Curve, Env, Mul, Segment, Sub};
+use niminal_engine::ops::{Add, Curve, Env, Mul, PanChannel, Segment, Sub};
 use niminal_engine::{ChainInput, Graph, GraphBuilder, Route, Src};
 use niminal_score::{Tempo, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
-use crate::opcodes::{self, BuildArgs, Kind, Registry};
+use crate::layout::{Layout, conversion};
+use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
 use crate::program::{Instrument, Param};
 use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
 
-const UNIT_NAMES: [&str; 8] = ["hz", "khz", "db", "sec", "ms", "beat", "beats", "bpm"];
+const UNIT_NAMES: [&str; 9] = ["hz", "khz", "db", "sec", "ms", "beat", "beats", "bpm", "deg"];
 
 /// A literal's unit and value. Decibels become gain factors and beats become
 /// seconds at `tempo`.
@@ -29,6 +36,7 @@ pub(crate) fn literal_sig(value: f64, unit: Option<&str>, tempo: Tempo, span: Sp
         Some("sec") => (Unit::Time, value),
         Some("ms") => (Unit::Time, value / 1000.0),
         Some("beat" | "beats") => (Unit::Time, value * 60.0 / tempo.bpm),
+        Some("deg") => (Unit::Angle, value),
         Some("bpm") => {
             return Err(Diagnostic::new("`bpm` can only be used with `tempo`", span)
                 .with_help("for example `tempo 120bpm`"));
@@ -53,37 +61,63 @@ pub(crate) fn unknown_unit(unit: &str, span: Span) -> Diagnostic {
     d
 }
 
-// ---- instruments -----------------------------------------------------------
+const LAYOUT_HELP: &str = "one of mono, stereo, quad, surround(5.1), surround(7.1), or channels(n)";
 
-#[derive(Clone, Copy)]
-struct Sig {
-    src: Src,
-    unit: Unit,
-    /// Known at compile time. Decibel values are held as linear gain factors.
-    konst: Option<f64>,
+/// A layout written in source: `stereo`, `surround(5.1)`, `channels(3)`.
+pub(crate) fn layout_from_expr(e: &Expr) -> Res<Layout> {
+    let bad = |what: String| Diagnostic::new(what, e.span).with_help(LAYOUT_HELP);
+    match &e.kind {
+        ExprKind::Name(n) => match n.as_str() {
+            "mono" => Ok(Layout::Mono),
+            "stereo" => Ok(Layout::Stereo),
+            "quad" => Ok(Layout::Quad),
+            other => Err(bad(format!("unknown channel layout `{other}`"))),
+        },
+        ExprKind::Call { name, args } if name.name == "surround" => match args.as_slice() {
+            [Arg { name: None, value: Expr { kind: ExprKind::Num { value, unit: None }, .. }, .. }] => {
+                if (*value - 5.1).abs() < 1e-9 {
+                    Ok(Layout::Surround51)
+                } else if (*value - 7.1).abs() < 1e-9 {
+                    Ok(Layout::Surround71)
+                } else {
+                    Err(bad(format!("unsupported surround layout `{value}`")))
+                }
+            }
+            _ => Err(bad("`surround` takes a layout such as `surround(5.1)`".into())),
+        },
+        ExprKind::Call { name, args } if name.name == "channels" => match args.as_slice() {
+            [Arg { name: None, value: Expr { kind: ExprKind::Num { value, unit: None }, .. }, .. }]
+                if value.fract() == 0.0 && (1.0..=16.0).contains(value) =>
+            {
+                Ok(Layout::from_count(*value as usize))
+            }
+            _ => Err(bad("`channels` takes a count from 1 to 16".into())),
+        },
+        _ => Err(bad("expected a channel layout".into())),
+    }
 }
 
-impl Sig {
-    fn constant(unit: Unit, v: f64) -> Sig {
-        Sig { src: Src::Const(v as f32), unit, konst: Some(v) }
-    }
-
-    fn signal(src: Src, unit: Unit) -> Sig {
-        Sig { src, unit, konst: None }
-    }
-}
-
-/// Every top-level name, so locals can be kept from shadowing them.
-#[derive(Default)]
+/// Every top-level name, so locals can be kept from shadowing them, plus the
+/// layouts that tracks and buses use.
 pub(crate) struct Names {
     entries: Vec<(String, &'static str)>,
     pub buses: Vec<String>,
+    pub bus_layouts: Vec<Layout>,
+    /// The layout of the master, and so of every voice and track.
+    pub master: Layout,
+}
+
+impl Default for Names {
+    fn default() -> Self {
+        Names { entries: Vec::new(), buses: Vec::new(), bus_layouts: Vec::new(), master: Layout::Mono }
+    }
 }
 
 impl Names {
     pub fn add(&mut self, name: &str, kind: &'static str) {
         if kind == "bus" && !self.buses.iter().any(|b| b == name) {
             self.buses.push(name.to_string());
+            self.bus_layouts.push(Layout::Mono);
         }
         self.entries.push((name.to_string(), kind));
     }
@@ -119,6 +153,48 @@ enum Mode {
     Track,
 }
 
+/// A value in the graph: one source per channel.
+#[derive(Clone)]
+struct Sig {
+    srcs: Vec<Src>,
+    layout: Layout,
+    unit: Unit,
+    /// Known at compile time (single channel only). Decibel values are held as
+    /// linear gain factors.
+    konst: Option<f64>,
+}
+
+impl Sig {
+    fn constant(unit: Unit, v: f64) -> Sig {
+        Sig { srcs: vec![Src::Const(v as f32)], layout: Layout::Mono, unit, konst: Some(v) }
+    }
+
+    fn signal(src: Src, unit: Unit) -> Sig {
+        Sig { srcs: vec![src], layout: Layout::Mono, unit, konst: None }
+    }
+
+    /// A plain signal with one source per channel.
+    fn channels(srcs: Vec<Src>, layout: Layout) -> Sig {
+        Sig { srcs, layout, unit: Unit::Num, konst: None }
+    }
+
+    fn count(&self) -> usize {
+        self.srcs.len()
+    }
+
+    /// The source for channel `k`; a one-channel signal feeds every channel.
+    fn pick(&self, k: usize) -> Src {
+        if self.srcs.len() == 1 { self.srcs[0] } else { self.srcs[k] }
+    }
+}
+
+/// A call's evaluated argument.
+enum Val {
+    Wave(opcodes::Wave),
+    Layout(Layout),
+    Sig(Sig),
+}
+
 pub(crate) struct Lower<'a> {
     registry: &'a Registry,
     names: &'a Names,
@@ -129,7 +205,7 @@ pub(crate) struct Lower<'a> {
     /// The value of `out` so far.
     out: Option<Sig>,
     sends: usize,
-    /// In a track: what feeds each external input, and the inputs made so far.
+    /// In a track: what feeds each external input, and the bundles made so far.
     chain_inputs: Vec<ChainInput>,
     input_sigs: HashMap<String, Sig>,
     route: Route,
@@ -169,12 +245,12 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
     let body: Vec<&Stmt> = def.body.iter().collect();
     let tail = lower.run_body(&body)?;
 
-    let result = match (lower.out, tail) {
+    let (result, span) = match (lower.out.take(), tail) {
         (Some(_), Some((_, span))) => {
             return Err(Diagnostic::new("this instrument sets `out`, so its last line can't also be a value", span)
                 .with_help("assign it to `out`, or remove the `out` lines"));
         }
-        (Some(out), None) => out,
+        (Some(out), None) => (out, def.name.span),
         (None, Some((sig, span))) => {
             if sig.unit != Unit::Num {
                 return Err(Diagnostic::new(
@@ -182,10 +258,10 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
                     span,
                 ));
             }
-            sig
+            (sig, span)
         }
         // Only sends: the instrument makes no sound of its own.
-        (None, None) if lower.sends > 0 => Sig::constant(Unit::Num, 0.0),
+        (None, None) if lower.sends > 0 => (Sig::constant(Unit::Num, 0.0), def.name.span),
         (None, None) => {
             let name = match body.last() {
                 Some(Stmt::Bind { name, .. }) => name,
@@ -196,7 +272,13 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
         }
     };
 
-    Ok(Instrument { name: def.name.name.clone(), graph: Arc::new(lower.g.build(result.src)), params })
+    // Every voice leaves the instrument in the master's layout.
+    let result = lower.convert(&result, names.master, span)?;
+    Ok(Instrument {
+        name: def.name.name.clone(),
+        graph: Arc::new(lower.g.build_channels(&result.srcs)),
+        params,
+    })
 }
 
 /// A compiled track: its processing, what feeds that processing, and where
@@ -229,16 +311,26 @@ pub(crate) fn compile_chain(
     }
     lower.run_body(body)?;
 
-    let out = match lower.out {
+    let out = match lower.out.take() {
         Some(out) => out,
-        None if has_instrument => lower.input("it", ChainInput::It),
+        None if has_instrument => lower.it(),
         None if lower.sends > 0 => Sig::constant(Unit::Num, 0.0),
         None => {
             return Err(Diagnostic::new(format!("track `{}` never sets `out`", track.name), track.span)
                 .with_help("add `out = it` to pass its sound through, or send to a bus with `bus += ...`"));
         }
     };
-    Ok(Chain { graph: Some(Arc::new(lower.g.build(out.src))), inputs: lower.chain_inputs, route: lower.route })
+    // The chain delivers in its destination's layout.
+    let destination = match lower.route {
+        Route::Master => names.master,
+        Route::Bus(b) => names.bus_layouts[b],
+    };
+    let out = lower.convert(&out, destination, track.span)?;
+    Ok(Chain {
+        graph: Some(Arc::new(lower.g.build_channels(&out.srcs))),
+        inputs: lower.chain_inputs,
+        route: lower.route,
+    })
 }
 
 fn state_outside_opcode(name: &Ident) -> Diagnostic {
@@ -258,8 +350,9 @@ pub(crate) fn param_type(ty: &TypeSpec) -> Res<(Unit, Option<(f64, f64)>)> {
             "hz" => Ok((Unit::Hz, None)),
             "db" => Ok((Unit::Db, None)),
             "sec" => Ok((Unit::Time, None)),
+            "deg" => Ok((Unit::Angle, None)),
             other => Err(Diagnostic::new(format!("unknown parameter type `{other}`"), id.span)
-                .with_help("use a unit (`hz`, `db`, `sec`) or a range such as `0..1`")),
+                .with_help("use a unit (`hz`, `db`, `sec`, `deg`) or a range such as `0..1`")),
         },
     }
 }
@@ -288,6 +381,7 @@ impl<'a> Lower<'a> {
             match stmt {
                 Stmt::State { name, .. } => return Err(state_outside_opcode(name)),
                 Stmt::Bind { name, value } => self.assign(name, value)?,
+                Stmt::Destructure { names, value } => self.destructure(names, value)?,
                 Stmt::AddAssign { name, value } => self.add_assign(name, value)?,
                 Stmt::Expr(e) if self.mode == Mode::Track => {
                     return Err(Diagnostic::new("a track makes sound through `out`", e.span)
@@ -320,11 +414,28 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// `[l, r] = src`: one name per channel.
+    fn destructure(&mut self, names: &[Ident], value: &Expr) -> Res<()> {
+        let sig = self.expr(value)?;
+        self.require_signal("a channel", &sig, value.span)?;
+        if sig.count() != names.len() {
+            return Err(Diagnostic::new(
+                format!("this signal has {} channel(s), but {} name(s) are given", sig.count(), names.len()),
+                value.span,
+            ));
+        }
+        for (name, src) in names.iter().zip(&sig.srcs) {
+            self.names.check_local(name)?;
+            self.scope.insert(name.name.clone(), Sig::signal(*src, Unit::Num));
+        }
+        Ok(())
+    }
+
     fn add_assign(&mut self, name: &Ident, value: &Expr) -> Res<()> {
         if name.name == "out" {
             let sig = self.expr(value)?;
-            self.require_signal("out", sig, value.span)?;
-            let sum = match self.out {
+            self.require_signal("out", &sig, value.span)?;
+            let sum = match self.out.take() {
                 None => sig,
                 Some(prev) => self.binary(BinOp::Add, prev, sig, value.span)?,
             };
@@ -333,8 +444,11 @@ impl<'a> Lower<'a> {
         }
         if let Some(bus) = self.names.bus(&name.name) {
             let sig = self.expr(value)?;
-            self.require_signal(&name.name, sig, value.span)?;
-            self.g.send(bus, sig.src);
+            self.require_signal(&name.name, &sig, value.span)?;
+            let sig = self.convert(&sig, self.names.bus_layouts[bus], value.span)?;
+            for (channel, src) in sig.srcs.iter().enumerate() {
+                self.g.send_channel(bus, channel, *src);
+            }
             self.sends += 1;
             return Ok(());
         }
@@ -347,7 +461,7 @@ impl<'a> Lower<'a> {
         Err(d)
     }
 
-    fn require_signal(&self, what: &str, sig: Sig, span: Span) -> Res<()> {
+    fn require_signal(&self, what: &str, sig: &Sig, span: Span) -> Res<()> {
         if sig.unit == Unit::Num {
             Ok(())
         } else {
@@ -356,7 +470,7 @@ impl<'a> Lower<'a> {
     }
 
     fn set_out(&mut self, sig: Sig, span: Span) -> Res<()> {
-        self.require_signal("out", sig, span)?;
+        self.require_signal("out", &sig, span)?;
         self.out = Some(sig);
         Ok(())
     }
@@ -381,15 +495,68 @@ impl<'a> Lower<'a> {
         self.expr(&source.value)
     }
 
-    /// An external input of a track's chain, made on first use.
-    fn input(&mut self, key: &str, source: ChainInput) -> Sig {
+    /// A bundle of a track chain's external inputs, made on first use. Each
+    /// channel is its own mono input.
+    fn input_bundle(&mut self, key: &str, layout: Layout, source: impl Fn(usize) -> ChainInput) -> Sig {
         if let Some(sig) = self.input_sigs.get(key) {
-            return *sig;
+            return sig.clone();
         }
-        let sig = Sig::signal(self.g.input(), Unit::Num);
-        self.chain_inputs.push(source);
-        self.input_sigs.insert(key.to_string(), sig);
+        let srcs = (0..layout.channels())
+            .map(|c| {
+                self.chain_inputs.push(source(c));
+                self.g.input()
+            })
+            .collect();
+        let sig = Sig::channels(srcs, layout);
+        self.input_sigs.insert(key.to_string(), sig.clone());
         sig
+    }
+
+    /// `it`: what the track's voices produced, in the master's layout.
+    fn it(&mut self) -> Sig {
+        self.input_bundle("it", self.names.master, |channel| ChainInput::It { channel })
+    }
+
+    /// Turn a signal into another layout using the automatic rules, as gain and
+    /// sum nodes. An unnamed `channels(n)` signal may be taken as any layout
+    /// with `n` channels.
+    fn convert(&mut self, sig: &Sig, to: Layout, span: Span) -> Res<Sig> {
+        if sig.layout == to {
+            return Ok(sig.clone());
+        }
+        if matches!(sig.layout, Layout::Channels(_)) && sig.count() == to.channels() {
+            return Ok(Sig { layout: to, ..sig.clone() });
+        }
+        let Some(matrix) = conversion(sig.layout, to) else {
+            return Err(Diagnostic::new(
+                format!("can't convert {} to {} automatically", sig.layout, to),
+                span,
+            )
+            .with_help("pan the signal, or take its channels apart with `[a, b] = ...` and rebuild them"));
+        };
+
+        let mut srcs = Vec::with_capacity(to.channels());
+        for row in &matrix {
+            let mut sum: Option<Src> = None;
+            for (input, &coeff) in row.iter().enumerate() {
+                if coeff == 0.0 {
+                    continue;
+                }
+                let term = if coeff == 1.0 {
+                    sig.srcs[input]
+                } else {
+                    self.g
+                        .add(Mul, &[("a", sig.srcs[input]), ("b", Src::Const(coeff as f32))])
+                        .expect("mul ports")
+                };
+                sum = Some(match sum {
+                    None => term,
+                    Some(prev) => self.g.add(Add, &[("a", prev), ("b", term)]).expect("add ports"),
+                });
+            }
+            srcs.push(sum.unwrap_or(Src::Const(0.0)));
+        }
+        Ok(Sig::channels(srcs, to))
     }
 
     pub(crate) fn param_default(&mut self, e: &Expr, unit: Unit, range: Option<(f64, f64)>, name: &str) -> Res<f32> {
@@ -422,6 +589,7 @@ impl<'a> Lower<'a> {
                 let s = self.expr(inner)?;
                 self.negate(s, e.span)
             }
+            ExprKind::Channels(items) => self.channel_list(items, e.span),
             ExprKind::Binary { op, lhs, rhs } => {
                 let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
                 self.binary(*op, l, r, e.span)
@@ -431,19 +599,55 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// `[a, b, c]`: one single-channel entry per channel. Entries share a unit,
+    /// so `[800hz, 1200hz]` is a two-channel frequency.
+    fn channel_list(&mut self, items: &[Expr], span: Span) -> Res<Sig> {
+        let mut srcs = Vec::with_capacity(items.len());
+        let mut unit = None;
+        for item in items {
+            let sig = self.expr(item)?;
+            if sig.count() != 1 {
+                return Err(Diagnostic::new(
+                    format!("a channel list takes one channel per entry, but this has {}", sig.count()),
+                    item.span,
+                ));
+            }
+            match unit {
+                None => unit = Some(sig.unit),
+                Some(u) if u != sig.unit => {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "the entries of a channel list must have the same unit: this is {}, the first was {}",
+                            sig.unit.describe(),
+                            u.describe()
+                        ),
+                        item.span,
+                    ));
+                }
+                Some(_) => {}
+            }
+            srcs.push(sig.srcs[0]);
+        }
+        if srcs.len() > niminal_engine::MAX_CHANNELS {
+            return Err(Diagnostic::new("too many channels", span));
+        }
+        let layout = Layout::from_count(srcs.len());
+        Ok(Sig { srcs, layout, unit: unit.unwrap_or(Unit::Num), konst: None })
+    }
+
     fn name(&mut self, name: &str, span: Span) -> Res<Sig> {
         if let Some(s) = self.scope.get(name) {
-            return Ok(*s);
+            return Ok(s.clone());
         }
         match name {
             "out" => {
-                return self.out.ok_or_else(|| {
+                return self.out.clone().ok_or_else(|| {
                     Diagnostic::new("`out` has no value yet", span).with_help("set it first, with `out = ...`")
                 });
             }
             "it" => {
                 return match self.mode {
-                    Mode::Track => Ok(self.input("it", ChainInput::It)),
+                    Mode::Track => Ok(self.it()),
                     _ => Err(Diagnostic::new("`it` is only available inside a track", span)),
                 };
             }
@@ -451,7 +655,10 @@ impl<'a> Lower<'a> {
         }
         if let Some(bus) = self.names.bus(name) {
             return match self.mode {
-                Mode::Track => Ok(self.input(name, ChainInput::Bus(bus))),
+                Mode::Track => {
+                    let layout = self.names.bus_layouts[bus];
+                    Ok(self.input_bundle(name, layout, |channel| ChainInput::Bus { bus, channel }))
+                }
                 _ => Err(Diagnostic::new(format!("`{name}` is a bus, and only a track can read a bus"), span)
                     .with_help(format!("an instrument can send to it with `{name} += ...`"))),
             };
@@ -468,12 +675,38 @@ impl<'a> Lower<'a> {
 
     // ---- arithmetic ----------------------------------------------------
 
-    fn mul(&mut self, a: Sig, b: Sig, unit: Unit) -> Sig {
+    /// Combine two signals channel by channel. A one-channel signal is applied
+    /// to every channel of the other.
+    fn elementwise(
+        &mut self,
+        a: &Sig,
+        b: &Sig,
+        unit: Unit,
+        span: Span,
+        make: fn(&mut GraphBuilder, Src, Src) -> Src,
+    ) -> Res<Sig> {
+        let n = match (a.count(), b.count()) {
+            (x, y) if x == y => x,
+            (1, y) => y,
+            (x, 1) => x,
+            (x, y) => {
+                return Err(Diagnostic::new(
+                    format!("can't combine a {x}-channel signal with a {y}-channel one"),
+                    span,
+                )
+                .with_help("a one-channel signal can be combined with any; otherwise the counts must match"));
+            }
+        };
+        let layout = if a.count() >= b.count() { a.layout } else { b.layout };
+        let srcs = (0..n).map(|k| make(&mut self.g, a.pick(k), b.pick(k))).collect();
+        Ok(Sig { srcs, layout, unit, konst: None })
+    }
+
+    fn mul(&mut self, a: &Sig, b: &Sig, unit: Unit, span: Span) -> Res<Sig> {
         if let (Some(x), Some(y)) = (a.konst, b.konst) {
-            return Sig::constant(unit, x * y);
+            return Ok(Sig::constant(unit, x * y));
         }
-        let src = self.g.add(Mul, &[("a", a.src), ("b", b.src)]).expect("mul ports");
-        Sig::signal(src, unit)
+        self.elementwise(a, b, unit, span, |g, x, y| g.add(Mul, &[("a", x), ("b", y)]).expect("mul ports"))
     }
 
     fn negate(&mut self, s: Sig, span: Span) -> Res<Sig> {
@@ -481,7 +714,7 @@ impl<'a> Lower<'a> {
             // A decibel value is held as a gain factor, so negating it inverts it.
             (Unit::Db, Some(k)) => Ok(Sig::constant(Unit::Db, 1.0 / k)),
             (Unit::Db, None) => Err(Diagnostic::new("negating a changing db value isn't supported yet", span)),
-            (unit, _) => Ok(self.mul(s, Sig::constant(Unit::Num, -1.0), unit)),
+            (unit, _) => self.mul(&s, &Sig::constant(Unit::Num, -1.0), unit, span),
         }
     }
 
@@ -492,36 +725,34 @@ impl<'a> Lower<'a> {
             BinOp::Mul => "multiply",
             BinOp::Div => "divide",
         };
-        let mismatch = || {
-            Diagnostic::new(format!("can't {verb} {} and {}", l.unit.describe(), r.unit.describe()), span)
-        };
+        let (lu, ru) = (l.unit, r.unit);
+        let mismatch = || Diagnostic::new(format!("can't {verb} {} and {}", lu.describe(), ru.describe()), span);
 
         match op {
             BinOp::Add | BinOp::Sub => {
-                if l.unit != r.unit {
+                if lu != ru {
                     return Err(mismatch());
                 }
-                if l.unit == Unit::Db {
+                if lu == Unit::Db {
                     // Adding decibels multiplies gain factors.
-                    let r = if op == BinOp::Sub { self.invert(r, span)? } else { r };
-                    return Ok(self.mul(l, r, Unit::Db));
+                    let r = if op == BinOp::Sub { self.invert(&r, span)? } else { r };
+                    return self.mul(&l, &r, Unit::Db, span);
                 }
                 if let (Some(x), Some(y)) = (l.konst, r.konst) {
                     let v = if op == BinOp::Add { x + y } else { x - y };
-                    return Ok(Sig::constant(l.unit, v));
+                    return Ok(Sig::constant(lu, v));
                 }
-                let src = if op == BinOp::Add {
-                    self.g.add(Add, &[("a", l.src), ("b", r.src)])
+                if op == BinOp::Add {
+                    self.elementwise(&l, &r, lu, span, |g, x, y| g.add(Add, &[("a", x), ("b", y)]).expect("add ports"))
                 } else {
-                    self.g.add(Sub, &[("a", l.src), ("b", r.src)])
-                };
-                Ok(Sig::signal(src.expect("add/sub ports"), l.unit))
+                    self.elementwise(&l, &r, lu, span, |g, x, y| g.add(Sub, &[("a", x), ("b", y)]).expect("sub ports"))
+                }
             }
-            BinOp::Mul => match (l.unit, r.unit) {
+            BinOp::Mul => match (lu, ru) {
                 // Applying a gain to a plain value.
-                (Unit::Num, Unit::Db) | (Unit::Db, Unit::Num) => Ok(self.mul(l, r, Unit::Num)),
+                (Unit::Num, Unit::Db) | (Unit::Db, Unit::Num) => self.mul(&l, &r, Unit::Num, span),
                 (Unit::Db, _) | (_, Unit::Db) => Err(mismatch()),
-                (Unit::Num, u) | (u, Unit::Num) => Ok(self.mul(l, r, u)),
+                (Unit::Num, u) | (u, Unit::Num) => self.mul(&l, &r, u, span),
                 _ => Err(mismatch()),
             },
             BinOp::Div => {
@@ -531,18 +762,18 @@ impl<'a> Lower<'a> {
                 if k == 0.0 {
                     return Err(Diagnostic::new("division by zero", span));
                 }
-                let unit = match (l.unit, r.unit) {
+                let unit = match (lu, ru) {
                     (Unit::Db, _) | (_, Unit::Db) => return Err(mismatch()),
                     (u, Unit::Num) => u,
                     (a, b) if a == b => Unit::Num,
                     _ => return Err(mismatch()),
                 };
-                Ok(self.mul(l, Sig::constant(Unit::Num, 1.0 / k), unit))
+                self.mul(&l, &Sig::constant(Unit::Num, 1.0 / k), unit, span)
             }
         }
     }
 
-    fn invert(&mut self, s: Sig, span: Span) -> Res<Sig> {
+    fn invert(&mut self, s: &Sig, span: Span) -> Res<Sig> {
         match s.konst {
             Some(k) => Ok(Sig::constant(s.unit, 1.0 / k)),
             None => Err(Diagnostic::new("subtracting a changing db value isn't supported yet", span)),
@@ -603,16 +834,17 @@ impl<'a> Lower<'a> {
             bound[index] = Some(arg);
         }
 
-        let mut build = BuildArgs::default();
-        let mut wired: Vec<(&str, Src)> = Vec::new();
+        // Evaluate each argument according to what the parameter wants.
+        let mut vals: Vec<Option<Val>> = Vec::with_capacity(spec.params.len());
         for (param, arg) in spec.params.iter().zip(bound) {
             let Some(arg) = arg else {
                 if param.required {
                     return Err(Diagnostic::new(format!("`{op}` needs an argument `{}`", param.name), span));
                 }
+                vals.push(None);
                 continue;
             };
-            match param.kind {
+            vals.push(Some(match param.kind {
                 Kind::Wave => {
                     let found = match &arg.value.kind {
                         ExprKind::Name(n) => opcodes::wave(n),
@@ -623,19 +855,15 @@ impl<'a> Lower<'a> {
                         return Err(Diagnostic::new("expected a waveform", arg.value.span)
                             .with_help(format!("one of {}", names.join(", "))));
                     };
-                    build.wave = Some(w);
+                    Val::Wave(w)
                 }
+                Kind::Layout => Val::Layout(layout_from_expr(&arg.value)?),
                 Kind::Signal(expected) => {
                     let sig = self.expr(&arg.value)?;
                     if sig.unit != expected {
                         return Err(self.unit_mismatch(&param.name, expected, sig.unit, &arg.value));
                     }
-                    if let Some(k) = sig.konst {
-                        build.consts.insert(param.name.clone(), k);
-                    }
-                    if param.wired {
-                        wired.push((&param.name, sig.src));
-                    }
+                    Val::Sig(sig)
                 }
                 Kind::Gain => {
                     let sig = self.expr(&arg.value)?;
@@ -645,17 +873,101 @@ impl<'a> Lower<'a> {
                             arg.value.span,
                         ));
                     }
-                    wired.push((&param.name, sig.src));
+                    Val::Sig(sig)
+                }
+            }));
+        }
+
+        match spec.build {
+            Build::Invalid => Ok(Sig::constant(Unit::Num, 0.0)), // already reported
+            Build::Pan => self.pan(spec, &vals, span),
+            Build::ToLayout => {
+                let (Some(Val::Sig(x)), Some(Val::Layout(layout))) = (&vals[0], &vals[1]) else {
+                    unreachable!("to_layout has a signal and a layout")
+                };
+                self.convert(x, *layout, span)
+            }
+            _ => self.expand(spec, &vals, span),
+        }
+    }
+
+    /// Build an opcode once per channel of its widest argument.
+    fn expand(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Sig> {
+        let mut build = BuildArgs::default();
+        let mut width = 1;
+        let mut layout = Layout::Mono;
+        for (param, val) in spec.params.iter().zip(vals) {
+            match val {
+                Some(Val::Wave(w)) => build.wave = Some(*w),
+                Some(Val::Layout(_)) | None => {}
+                Some(Val::Sig(sig)) => {
+                    if let Some(k) = sig.konst {
+                        build.consts.insert(param.name.clone(), k);
+                    }
+                    if param.wired && sig.count() > 1 {
+                        if width > 1 && sig.count() != width {
+                            return Err(Diagnostic::new(
+                                format!(
+                                    "`{}`'s arguments have {width} and {} channels, which can't be combined",
+                                    spec.name,
+                                    sig.count()
+                                ),
+                                span,
+                            ));
+                        }
+                        width = sig.count();
+                        layout = sig.layout;
+                    }
                 }
             }
         }
 
-        let Some(opcode) = spec.instantiate(&build).map_err(|m| Diagnostic::new(m, span))? else {
-            // The opcode's own body is broken and already reported.
-            return Ok(Sig::constant(Unit::Num, 0.0));
-        };
-        let src = self.g.add(opcode, &wired).expect("ports match the opcode table");
-        Ok(Sig::signal(src, Unit::Num))
+        let mut srcs = Vec::with_capacity(width);
+        for channel in 0..width {
+            build.channel = channel;
+            let Some(opcode) = spec.instantiate(&build).map_err(|m| Diagnostic::new(m, span))? else {
+                return Ok(Sig::constant(Unit::Num, 0.0));
+            };
+            let wired: Vec<(&str, Src)> = spec
+                .params
+                .iter()
+                .zip(vals)
+                .filter(|(p, _)| p.wired)
+                .filter_map(|(p, v)| match v {
+                    Some(Val::Sig(sig)) => Some((p.name.as_str(), sig.pick(channel))),
+                    _ => None,
+                })
+                .collect();
+            srcs.push(self.g.add(opcode, &wired).expect("ports match the opcode table"));
+        }
+        Ok(if width == 1 { Sig::signal(srcs[0], Unit::Num) } else { Sig::channels(srcs, layout) })
+    }
+
+    /// `pan`: place a mono signal in the master's layout.
+    fn pan(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Sig> {
+        let mut wired: Vec<(&str, Src)> = Vec::new();
+        for (param, val) in spec.params.iter().zip(vals) {
+            let Some(Val::Sig(sig)) = val else { continue };
+            if sig.count() != 1 {
+                return Err(Diagnostic::new(
+                    format!("`pan` takes a one-channel signal, but `{}` has {}", param.name, sig.count()),
+                    span,
+                )
+                .with_help("pan each channel separately, or convert to mono first"));
+            }
+            wired.push((param.name.as_str(), sig.srcs[0]));
+        }
+
+        let master = self.names.master;
+        let angles: Arc<[Option<f32>]> = master.speaker_angles().into();
+        let srcs = (0..master.channels())
+            .map(|k| {
+                self.g
+                    .add(PanChannel::new(angles.clone(), k), &wired)
+                    .expect("ports match the opcode table")
+            })
+            .collect::<Vec<_>>();
+        Ok(if srcs.len() == 1 { Sig::signal(srcs[0], Unit::Num) } else { Sig::channels(srcs, master) })
     }
 
     fn unit_mismatch(&self, param: &str, expected: Unit, found: Unit, arg: &Expr) -> Diagnostic {
@@ -723,4 +1035,3 @@ impl<'a> Lower<'a> {
         Ok(sig)
     }
 }
-

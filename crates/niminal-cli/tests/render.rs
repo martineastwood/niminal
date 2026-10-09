@@ -6,8 +6,14 @@ const SAW_LEAD: &str = include_str!("../../../examples/saw_lead.nml");
 const PHI: &str = include_str!("../../../examples/phi.nms");
 const SR: f64 = SAMPLE_RATE as f64;
 
+/// The only channel of a mono render.
+fn mono(out: niminal_cli::render::RenderOutput) -> Vec<f32> {
+    assert_eq!(out.channels.len(), 1, "expected a mono render");
+    out.channels.into_iter().next().unwrap()
+}
+
 fn render(p: &Program, extra: &[niminal_score::Event]) -> Result<Vec<f32>, niminal_cli::render::RenderError> {
-    render_with(p, extra, &RenderOptions::default()).map(|r| r.samples)
+    render_with(p, extra, &RenderOptions::default()).map(mono)
 }
 
 fn program(src: &str) -> Program {
@@ -101,6 +107,17 @@ fn the_examples_render() {
     let out = render(&p, &events).unwrap();
     assert!(out.len() > (3.0 * SR) as usize);
 
+    let stereo = render_with(
+        &program(include_str!("../../../examples/stereo.nml")),
+        &[],
+        &RenderOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(stereo.channels.len(), 2);
+    assert!(stereo.peak() > 0.1 && stereo.peak() <= 0.9661);
+    assert!(stereo.len() > (3.0 * SR) as usize);
+    assert_ne!(stereo.channels[0], stereo.channels[1]);
+
     let room = render(&program(include_str!("../../../examples/room.nml")), &[]).unwrap();
     assert!(room.len() > SR as usize);
     assert!(rms(&room) > 0.01);
@@ -145,8 +162,8 @@ fn a_program_with_no_notes_renders_nothing() {
 #[test]
 fn the_limiter_keeps_loud_output_under_the_ceiling_and_can_be_turned_off() {
     let p = program("instr loud() { osc(saw, 220hz) * 4 }\nloud() for 1beat");
-    let limited = render_with(&p, &[], &RenderOptions { limiter: true }).unwrap().samples;
-    let raw = render_with(&p, &[], &RenderOptions { limiter: false }).unwrap().samples;
+    let limited = mono(render_with(&p, &[], &RenderOptions { limiter: true }).unwrap());
+    let raw = mono(render_with(&p, &[], &RenderOptions { limiter: false }).unwrap());
     let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     assert!(peak(&raw) > 3.0);
     assert!(peak(&limited) <= 0.9661, "{}", peak(&limited));
@@ -191,7 +208,7 @@ opcode dc_block(x) {
 
     fn raw(src: &str) -> Vec<f32> {
         let p = program(&format!("{LIB}{src}"));
-        render_with(&p, &[], &RenderOptions { limiter: false }).unwrap().samples
+        mono(render_with(&p, &[], &RenderOptions { limiter: false }).unwrap())
     }
 
     fn peak(x: &[f32]) -> f32 {
@@ -247,7 +264,7 @@ mod routing {
     use super::*;
 
     fn raw(src: &str) -> Vec<f32> {
-        render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap().samples
+        mono(render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap())
     }
 
     fn close(a: &[f32], b: &[f32]) {
@@ -369,7 +386,7 @@ mod effects {
     use super::*;
 
     fn raw(src: &str) -> Vec<f32> {
-        render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap().samples
+        mono(render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap())
     }
 
     fn peak(x: &[f32]) -> f32 {
@@ -464,5 +481,226 @@ click() for 1/16beat");
         let out = raw(include_str!("../../../examples/room.nml"));
         assert!(out.iter().all(|s| s.is_finite()));
         assert!(rms(&out) > 0.01);
+    }
+}
+
+mod channels {
+    use super::*;
+
+    /// Render with the limiter off and return every channel.
+    fn raw(src: &str) -> Vec<Vec<f32>> {
+        render_with(&program(src), &[], &RenderOptions { limiter: false }).unwrap().channels
+    }
+
+    fn peak(x: &[f32]) -> f32 {
+        x.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    fn crossings(x: &[f32]) -> usize {
+        x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count()
+    }
+
+    const TONE: &str = "osc(sine, 220hz) * env[1 | 1ms 0]";
+
+    #[test]
+    fn a_mono_instrument_is_centred_in_a_stereo_master() {
+        let out = raw(&format!("config {{ channels: stereo }}\ninstr a() {{ {TONE} }}\na() for 1beat"));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], out[1]);
+        assert!((peak(&out[0]) - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "-3db each side: {}", peak(&out[0]));
+    }
+
+    #[test]
+    fn pan_places_the_sound_between_the_speakers() {
+        let at = |az: &str| {
+            raw(&format!(
+                "config {{ channels: stereo }}\ninstr a() {{ ({TONE}).pan(azimuth: {az}) }}\na() for 1beat"
+            ))
+        };
+        let (left, right) = (at("-30deg"), at("30deg"));
+        assert!(peak(&left[0]) > 0.99 && peak(&left[1]) < 1e-6, "hard left");
+        assert!(peak(&right[1]) > 0.99 && peak(&right[0]) < 1e-6, "hard right");
+
+        let centre = at("0deg");
+        assert_eq!(centre[0], centre[1]);
+        let power = |c: &[Vec<f32>], i: usize| c[0][i] * c[0][i] + c[1][i] * c[1][i];
+        // constant power across the pan
+        let mid = at("12deg");
+        let i = 5000;
+        assert!((power(&mid, i) - power(&centre, i)).abs() < 1e-4);
+        assert!(peak(&mid[1]) > peak(&mid[0]), "12 degrees is right of centre");
+    }
+
+    #[test]
+    fn surround_pan_uses_the_right_speakers() {
+        let at = |az: &str| {
+            raw(&format!(
+                "config {{ channels: surround(5.1) }}\ninstr a() {{ ({TONE}).pan(azimuth: {az}) }}\na() for 1beat"
+            ))
+        };
+        let ahead = at("0deg");
+        assert_eq!(ahead.len(), 6);
+        let loud: Vec<usize> = (0..6).filter(|&c| peak(&ahead[c]) > 0.01).collect();
+        assert_eq!(loud, [2], "straight ahead is the centre speaker only");
+
+        let behind = at("180deg");
+        assert!(peak(&behind[4]) > 0.5 && peak(&behind[5]) > 0.5);
+        assert!(peak(&behind[0]) < 1e-6 && peak(&behind[2]) < 1e-6);
+        assert_eq!(peak(&behind[3]), 0.0, "the LFE is never panned to");
+    }
+
+    #[test]
+    fn a_channel_list_puts_each_entry_on_its_own_channel() {
+        let out = raw("
+config { channels: stereo }
+instr a() { [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0] }
+a() for 2beats");
+        let (l, r) = (&out[0], &out[1]);
+        assert!((crossings(l) as f32 - 220.0).abs() <= 2.0, "left is 220hz: {}", crossings(l));
+        assert!((crossings(r) as f32 - 330.0).abs() <= 2.0, "right is 330hz: {}", crossings(r));
+    }
+
+    #[test]
+    fn destructuring_and_rebuilding_can_swap_channels() {
+        let plain = raw("
+config { channels: stereo }
+instr a() { [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0] }
+a() for 1beat");
+        let swapped = raw("
+config { channels: stereo }
+instr a() {
+  [l, r] = [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0]
+  [r, l]
+}
+a() for 1beat");
+        assert_eq!(plain[0], swapped[1]);
+        assert_eq!(plain[1], swapped[0]);
+    }
+
+    #[test]
+    fn a_per_channel_argument_gives_each_channel_its_own_value() {
+        let out = raw("
+config { channels: stereo }
+instr a() { [osc(saw, 110hz), osc(saw, 110hz)].lpf(cutoff: [300hz, 4khz]) * env[1 | 1ms 0] }
+a() for 1beat");
+        // the brighter filter keeps the saw's sharp edges: more curvature
+        let roughness = |c: &[f32]| {
+            let d2: Vec<f32> = c.windows(3).map(|w| w[2] - 2.0 * w[1] + w[0]).collect();
+            d2.iter().map(|x| x.abs()).sum::<f32>() / peak(c)
+        };
+        assert!(roughness(&out[1]) > roughness(&out[0]) * 2.0, "{} vs {}", roughness(&out[1]), roughness(&out[0]));
+    }
+
+    #[test]
+    fn filters_on_stereo_keep_separate_state_per_channel() {
+        // the same filter on a stereo pair, fed silence on the right: nothing leaks across
+        let out = raw("
+config { channels: stereo }
+instr a() { [osc(saw, 110hz), 0 * osc(saw, 110hz)].lpf(cutoff: 500hz) * env[1 | 1ms 0] }
+a() for 1beat");
+        assert!(peak(&out[0]) > 0.1);
+        assert_eq!(peak(&out[1]), 0.0);
+    }
+
+    #[test]
+    fn surround_folds_down_to_stereo_without_the_lfe() {
+        // a bus in 5.1 receives mono (centre) and is read by a stereo-master track
+        let out = raw("
+config { channels: stereo }
+bus hall: surround(5.1)
+instr a() { hall += osc(sine, 220hz) * env[1 | 1ms 0] }
+track t { out = hall }
+a() for 1beat");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], out[1]);
+        assert!((peak(&out[0]) - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "centre folds in at -3db");
+
+        let lfe_only = raw("
+config { channels: stereo }
+bus hall: surround(5.1)
+instr a() { hall += [0, 0, 0, osc(sine, 80hz), 0, 0] }
+track t { out = hall }
+a() for 1beat");
+        assert!(lfe_only.iter().all(|c| peak(c) < 1e-6), "the LFE doesn't reach stereo");
+    }
+
+    #[test]
+    fn routing_to_a_mono_bus_then_back_up() {
+        let out = raw("
+config { channels: stereo }
+bus m: mono
+instr a() { osc(sine, 220hz).pan(azimuth: -30deg) * env[1 | 1ms 0] }
+track t { instrument = a\nout = it.to(m) }
+track back { out = m }
+t() for 1beat");
+        // hard-left stereo averaged to mono (half), then centred in stereo at -3db
+        assert_eq!(out[0], out[1]);
+        let expected = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+        assert!((peak(&out[0]) - expected).abs() < 0.01, "{} vs {expected}", peak(&out[0]));
+    }
+
+    #[test]
+    fn a_stereo_reverb_decorrelates_the_channels() {
+        let out = raw("
+config { channels: stereo }
+bus space: stereo
+instr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }
+track hall { out = space.reverb(room: 0.8, damp: 0.5) }
+click() for 1/8beat");
+        assert!(out[0].len() > SR as usize);
+        assert_ne!(out[0], out[1]);
+        let diff: f32 = out[0].iter().zip(&out[1]).map(|(a, b)| (a - b).abs()).sum();
+        assert!(diff > 0.01);
+    }
+
+    #[test]
+    fn notes_start_on_the_same_sample_on_every_channel() {
+        let out = raw("
+config { channels: surround(5.1) }
+instr click() { osc(sine, 1000hz).pan(azimuth: 70deg) * env[1 0.5ms 0] }
+at 250ms click() for 1beat");
+        let first = |c: &[f32]| c.iter().position(|s| s.abs() > 1e-6);
+        let starts: Vec<_> = out.iter().map(|c| first(c)).collect();
+        // the sine rises from zero, so the first non-zero sample is one after the note start
+        let on = starts.iter().flatten().copied().min().unwrap();
+        assert!((on as f64 - 0.25 * SR).abs() <= 1.0);
+        for s in starts.iter().flatten() {
+            assert_eq!(*s, on);
+        }
+    }
+
+    #[test]
+    fn the_limiter_ducks_all_channels_together() {
+        let src = "
+config { channels: stereo }
+instr a() { [osc(sine, 220hz) * 4, osc(sine, 330hz) * 0.2] * env[1 | 1ms 0] }
+a() for 1beat";
+        let quiet_right = |limiter| {
+            let out = render_with(&program(src), &[], &RenderOptions { limiter }).unwrap().channels;
+            let mid = out[1].len() / 2;
+            peak(&out[1][mid..mid + 4800])
+        };
+        let (on, off) = (quiet_right(true), quiet_right(false));
+        assert!(on < off * 0.5, "the quiet side is ducked with the loud one: {on} vs {off}");
+    }
+
+    #[test]
+    fn wav_files_interleave_the_channels() {
+        let p = program("config { channels: stereo }\ninstr a() { osc(sine, 220hz).pan(azimuth: 30deg) * env[1 | 1ms 0] }\na() for 1/4beat");
+        let out = render_with(&p, &[], &RenderOptions { limiter: false }).unwrap();
+        let dir = std::env::temp_dir().join(format!("niminal-wav-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stereo.wav");
+        niminal_cli::render::write_wav(&path, &out.channels).unwrap();
+
+        let mut reader = hound::WavReader::open(&path).unwrap();
+        assert_eq!(reader.spec().channels, 2);
+        let samples: Vec<f32> = reader.samples::<f32>().map(Result::unwrap).collect();
+        assert_eq!(samples.len(), out.len() * 2);
+        for i in [0, 100, 1000] {
+            assert_eq!(samples[2 * i], out.channels[0][i]);
+            assert_eq!(samples[2 * i + 1], out.channels[1][i]);
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

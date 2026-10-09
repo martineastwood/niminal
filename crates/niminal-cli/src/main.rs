@@ -68,19 +68,24 @@ fn run_render(file: &Path, score: Option<&Path>, out: &Path, options: &RenderOpt
     };
 
     let rendered = render(&program, &events, options).map_err(|e| format!("error: {e}"))?;
-    let samples = rendered.samples;
     if rendered.silenced_voices > 0 {
         eprintln!("warning: {} voice(s) produced NaN or infinity and were silenced", rendered.silenced_voices);
     }
-    if samples.is_empty() {
+    if rendered.is_empty() {
         return Err("error: nothing to render: the file plays no notes".into());
     }
 
-    let peak = samples.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+    let peak = rendered.peak();
     if peak > 1.0 {
         eprintln!("warning: output peaks at {peak:.2}, which will clip (the limiter is off)");
     }
-    write_wav(out, &samples).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
-    println!("wrote {} ({:.2}s)", out.display(), samples.len() as f64 / f64::from(SAMPLE_RATE));
+    write_wav(out, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
+    println!(
+        "wrote {} ({:.2}s, {} channel{})",
+        out.display(),
+        rendered.len() as f64 / f64::from(SAMPLE_RATE),
+        rendered.channels.len(),
+        if rendered.channels.len() == 1 { "" } else { "s" }
+    );
     Ok(())
 }

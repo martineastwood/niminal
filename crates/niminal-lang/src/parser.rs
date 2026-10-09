@@ -121,8 +121,26 @@ impl Parser {
         } else if self.is_keyword("bus") {
             self.bump();
             let name = self.ident("a bus name")?;
-            let layout = self.eat(&Tok::Colon).then(|| self.ident("a channel layout, such as `mono`")).transpose()?;
+            let layout = self.eat(&Tok::Colon).then(|| self.expr()).transpose()?;
             Ok(Item::Bus(BusDecl { name, layout }))
+        } else if self.is_keyword("config") {
+            let start = self.bump().span;
+            self.expect(&Tok::LBrace)?;
+            let mut entries = Vec::new();
+            loop {
+                self.skip_newlines();
+                if self.peek() == &Tok::RBrace {
+                    break;
+                }
+                let key = self.ident("a setting name")?;
+                self.expect(&Tok::Colon)?;
+                entries.push((key, self.expr()?));
+                if !self.eat(&Tok::Comma) && !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
+                    return Err(self.unexpected("the end of the setting"));
+                }
+            }
+            let end = self.expect(&Tok::RBrace)?;
+            Ok(Item::Config(ConfigDecl { entries, span: start.to(end) }))
         } else if self.is_keyword("track") {
             let start = self.bump().span;
             let name = self.ident("a track name")?;
@@ -195,7 +213,35 @@ impl Parser {
         }
     }
 
+    /// Is the next thing `[name, name] =`?
+    fn at_destructure(&self) -> bool {
+        if self.peek() != &Tok::LBracket {
+            return false;
+        }
+        let mut i = 1;
+        loop {
+            if !matches!(self.peek_at(i), Tok::Ident(_)) {
+                return false;
+            }
+            match self.peek_at(i + 1) {
+                Tok::Comma => i += 2,
+                Tok::RBracket => return self.peek_at(i + 2) == &Tok::Eq,
+                _ => return false,
+            }
+        }
+    }
+
     fn stmt(&mut self) -> Res<Stmt> {
+        if self.at_destructure() {
+            self.bump();
+            let mut names = vec![self.ident("a name")?];
+            while self.eat(&Tok::Comma) {
+                names.push(self.ident("a name")?);
+            }
+            self.expect(&Tok::RBracket)?;
+            self.expect(&Tok::Eq)?;
+            return Ok(Stmt::Destructure { names, value: self.expr()? });
+        }
         if self.is_keyword("state") && matches!(self.peek_at(1), Tok::Ident(_)) {
             self.bump();
             let name = self.ident("a name for the state")?;
@@ -301,6 +347,15 @@ impl Parser {
             Tok::Num { value, unit } => {
                 self.bump();
                 Ok(Expr { kind: ExprKind::Num { value, unit }, span })
+            }
+            Tok::LBracket => {
+                self.bump();
+                let mut items = vec![self.expr()?];
+                while self.eat(&Tok::Comma) {
+                    items.push(self.expr()?);
+                }
+                let end = self.expect(&Tok::RBracket)?;
+                Ok(Expr { kind: ExprKind::Channels(items), span: span.to(end) })
             }
             Tok::LParen => {
                 self.bump();
@@ -602,11 +657,31 @@ track lead {
         let Item::Bus(b) = &items[0] else { panic!() };
         assert_eq!((b.name.name.as_str(), b.layout.is_none()), ("space", true));
         let Item::Bus(b) = &items[1] else { panic!() };
-        assert_eq!(b.layout.as_ref().unwrap().name, "stereo");
+        assert!(matches!(&b.layout.as_ref().unwrap().kind, ExprKind::Name(n) if n == "stereo"));
         let Item::Track(t) = &items[2] else { panic!() };
         assert_eq!(t.name.name, "lead");
         assert_eq!(t.body.len(), 3);
         assert!(matches!(&t.body[2], Stmt::AddAssign { name, .. } if name.name == "space"));
+    }
+
+    #[test]
+    fn channel_lists_destructuring_and_config() {
+        let items = parse_ok("
+config { channels: surround(5.1) }
+instr a(f: hz) {
+  [l, r] = osc(saw, f).pan(azimuth: 20deg)
+  mid = (l + r) * 0.5
+  [mid + l, mid - r]
+}");
+        let Item::Config(c) = &items[0] else { panic!() };
+        assert_eq!(c.entries[0].0.name, "channels");
+        assert!(matches!(&c.entries[0].1.kind, ExprKind::Call { name, .. } if name.name == "surround"));
+        let Item::Instr(i) = &items[1] else { panic!() };
+        assert!(matches!(&i.body[0], Stmt::Destructure { names, .. } if names.len() == 2));
+        let Stmt::Expr(e) = &i.body[2] else { panic!() };
+        assert!(matches!(&e.kind, ExprKind::Channels(items) if items.len() == 2));
+        // a bracketed expression that is not followed by `=` is a value, not a pattern
+        assert!(matches!(parse_ok("config { a: 1, b: 2 }")[0], Item::Config(_)));
     }
 
     #[test]

@@ -185,3 +185,104 @@ mod tails {
         assert!(n <= 64, "{n}");
     }
 }
+
+mod channels {
+    use super::*;
+    use niminal_engine::ops::{PanChannel, pan_gains};
+
+    fn stereo() -> Arc<[Option<f32>]> {
+        Arc::from(vec![Some(-30.0), Some(30.0)])
+    }
+
+    fn surround() -> Arc<[Option<f32>]> {
+        // L R C LFE Ls Rs
+        Arc::from(vec![Some(-30.0), Some(30.0), Some(0.0), None, Some(-110.0), Some(110.0)])
+    }
+
+    fn power(gains: &[f32]) -> f32 {
+        gains.iter().map(|g| g * g).sum()
+    }
+
+    #[test]
+    fn stereo_panning_is_constant_power_between_the_speakers() {
+        let centre = pan_gains(&stereo(), 0.0, 0.0);
+        assert!((centre[0] - centre[1]).abs() < 1e-6);
+        assert!((power(&centre) - 1.0).abs() < 1e-5);
+
+        let left = pan_gains(&stereo(), -30.0, 0.0);
+        assert!((left[0] - 1.0).abs() < 1e-6 && left[1].abs() < 1e-6);
+        let right = pan_gains(&stereo(), 30.0, 0.0);
+        assert!((right[1] - 1.0).abs() < 1e-6 && right[0].abs() < 1e-6);
+
+        for az in (-30..=30).step_by(5) {
+            assert!((power(&pan_gains(&stereo(), az as f32, 0.0)) - 1.0).abs() < 1e-5, "{az}");
+        }
+    }
+
+    #[test]
+    fn beyond_a_stereo_pair_the_nearer_speaker_takes_the_sound() {
+        let g = pan_gains(&stereo(), 120.0, 0.0);
+        assert!((g[1] - 1.0).abs() < 1e-6 && g[0] == 0.0);
+        let g = pan_gains(&stereo(), -150.0, 0.0);
+        assert!((g[0] - 1.0).abs() < 1e-6 && g[1] == 0.0);
+    }
+
+    #[test]
+    fn surround_panning_goes_round_the_room_and_skips_the_lfe() {
+        let ahead = pan_gains(&surround(), 0.0, 0.0);
+        assert!((ahead[2] - 1.0).abs() < 1e-6, "straight ahead is the centre speaker");
+
+        let behind = pan_gains(&surround(), 180.0, 0.0);
+        assert!((behind[4] - behind[5]).abs() < 1e-5 && behind[4] > 0.5, "{:?}", &behind[..6]);
+
+        for az in (0..360).step_by(10) {
+            let g = pan_gains(&surround(), az as f32, 0.0);
+            assert!((power(&g) - 1.0).abs() < 1e-4, "azimuth {az}: power {}", power(&g));
+            assert_eq!(g[3], 0.0, "nothing is panned to the LFE");
+        }
+    }
+
+    #[test]
+    fn spread_blends_towards_all_speakers_keeping_the_power() {
+        let narrow = pan_gains(&surround(), 0.0, 0.0);
+        let wide = pan_gains(&surround(), 0.0, 1.0);
+        assert!(wide[0] > narrow[0] && wide[4] > narrow[4]);
+        assert!((power(&wide) - 1.0).abs() < 1e-4);
+        assert!((wide[0] - wide[2]).abs() < 1e-5, "fully spread is equal across speakers");
+    }
+
+    #[test]
+    fn wrapping_azimuths_are_equivalent() {
+        let a = pan_gains(&surround(), -90.0, 0.2);
+        let b = pan_gains(&surround(), 270.0, 0.2);
+        assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5));
+    }
+
+    #[test]
+    fn a_pan_channel_scales_its_input_by_its_gain() {
+        let mut g = GraphBuilder::new();
+        let tone = g.add(niminal_engine::ops::Osc::new(niminal_engine::ops::Wave::Sine), &[("freq", Src::Const(100.0))]).unwrap();
+        let right = g
+            .add(PanChannel::new(stereo(), 1), &[("x", tone), ("azimuth", Src::Const(30.0))])
+            .unwrap();
+        let out = render(&Arc::new(g.build(right)), 480, None, 32);
+        let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!((peak - 1.0).abs() < 1e-3, "hard right passes the full signal: {peak}");
+    }
+
+    #[test]
+    fn reverb_channels_are_decorrelated() {
+        let channel = |c: usize| {
+            let mut g = GraphBuilder::new();
+            let i = g.add(Impulse(false), &[]).unwrap();
+            let r = g.add(Reverb::for_channel(c), &[("x", i), ("room", Src::Const(0.8))]).unwrap();
+            render(&Arc::new(g.build(r)), 20_000, None, 32)
+        };
+        let (l, r) = (channel(0), channel(1));
+        assert_ne!(l, r);
+        let diff: f32 = l.iter().zip(&r).map(|(a, b)| (a - b).abs()).sum();
+        assert!(diff > 0.01);
+        // but they are similar in character: comparable energy
+        assert!((rms(&l) / rms(&r) - 1.0).abs() < 0.3);
+    }
+}

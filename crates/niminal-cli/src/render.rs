@@ -1,6 +1,6 @@
 use std::fmt;
 
-use niminal_engine::{BLOCK, Master, Mixer, VoiceId};
+use niminal_engine::{BLOCK, MAX_CHANNELS, Master, Mixer, VoiceId};
 use niminal_lang::{NotePlan, Program};
 use niminal_score::Event;
 
@@ -29,9 +29,26 @@ impl Default for RenderOptions {
 }
 
 pub struct RenderOutput {
-    pub samples: Vec<f32>,
+    /// One buffer per channel of the master layout, all the same length.
+    pub channels: Vec<Vec<f32>>,
     /// Voices that produced NaN or infinity and were silenced.
     pub silenced_voices: usize,
+}
+
+impl RenderOutput {
+    /// Length in samples per channel.
+    pub fn len(&self) -> usize {
+        self.channels.first().map_or(0, Vec::len)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The loudest sample on any channel.
+    pub fn peak(&self) -> f32 {
+        self.channels.iter().flatten().fold(0.0, |p, s| p.max(s.abs()))
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -52,8 +69,8 @@ struct Note {
 }
 
 /// Render the program's own notes plus `extra` events (for example from a
-/// `.nms` score) to mono audio. Voices run until their envelopes finish, so
-/// the result includes every release tail.
+/// `.nms` score). Voices run until their envelopes finish, and effect tails
+/// ring out, so the result includes every release.
 pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Result<RenderOutput, RenderError> {
     let sr = f64::from(SAMPLE_RATE);
     let mut notes = Vec::new();
@@ -69,7 +86,8 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     notes.sort_by_key(|n| n.start);
 
     let mut mixer = program.mixer(SAMPLE_RATE as f32);
-    let mut out: Vec<f32> = Vec::new();
+    let n_channels = mixer.channels();
+    let mut out: Vec<Vec<f32>> = vec![Vec::new(); n_channels];
     // Notes that have started but not yet been released, in no particular order.
     let mut held: Vec<(usize, VoiceId)> = Vec::new();
     let mut silenced_voices = 0;
@@ -99,7 +117,7 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
                 }
                 Some(n) => {
                     // Nothing sounding: skip the silence.
-                    out.resize(n.start, 0.0);
+                    out.iter_mut().for_each(|c| c.resize(n.start, 0.0));
                     pos = n.start;
                     continue;
                 }
@@ -116,55 +134,72 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
             n = n.min(off - pos);
         }
 
-        out.resize(pos + n, 0.0);
-        mixer.process(&mut out[pos..pos + n]);
+        mix_block(&mut mixer, &mut out, n);
         silenced_voices += mixer.take_silenced();
         pos += n;
     }
 }
 
+/// Mix `frames` more samples onto the end of every channel.
+fn mix_block(mixer: &mut Mixer, out: &mut [Vec<f32>], frames: usize) {
+    let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];
+    mixer.process(&mut block[..out.len()], frames);
+    for (channel, mixed) in out.iter_mut().zip(&block) {
+        channel.extend_from_slice(&mixed[..frames]);
+    }
+}
+
 /// Keep mixing after the last voice has ended, until the tracks' effects have
 /// died away, then trim the trailing silence.
-fn ring_out(mixer: &mut Mixer, out: &mut Vec<f32>) {
+fn ring_out(mixer: &mut Mixer, out: &mut [Vec<f32>]) {
     let needed = (TAIL_SILENCE * SAMPLE_RATE as f32) as usize;
-    let limit = out.len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
-    let quiet = |s: &f32| s.abs() < TAIL_THRESHOLD;
+    let limit = out[0].len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
+    let quiet_at = |out: &[Vec<f32>], i: usize| out.iter().all(|c| c[i].abs() < TAIL_THRESHOLD);
 
-    let mut silent = out.iter().rev().take_while(|s| quiet(s)).count();
-    while silent < needed && out.len() < limit {
-        let start = out.len();
-        out.resize(start + BLOCK, 0.0);
-        mixer.process(&mut out[start..]);
-        for s in &out[start..] {
-            silent = if quiet(s) { silent + 1 } else { 0 };
+    let mut silent = (0..out[0].len()).rev().take_while(|&i| quiet_at(out, i)).count();
+    while silent < needed && out[0].len() < limit {
+        let start = out[0].len();
+        mix_block(mixer, out, BLOCK);
+        for i in start..start + BLOCK {
+            silent = if quiet_at(out, i) { silent + 1 } else { 0 };
         }
     }
-    out.truncate(out.len() - silent);
+    let keep = out[0].len() - silent;
+    out.iter_mut().for_each(|c| c.truncate(keep));
 }
 
 /// Apply the master stage, removing the limiter's lookahead delay so notes
 /// still land exactly where they were scheduled.
-fn finish(mut samples: Vec<f32>, silenced_voices: usize, options: &RenderOptions) -> RenderOutput {
+fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, options: &RenderOptions) -> RenderOutput {
     if options.limiter {
-        let mut master = Master::new(SAMPLE_RATE as f32, CEILING);
+        let mut master = Master::with_channels(SAMPLE_RATE as f32, CEILING, channels.len());
         let latency = master.latency();
-        samples.extend(std::iter::repeat_n(0.0, latency));
-        master.process(&mut samples);
-        samples.drain(..latency);
+        for c in &mut channels {
+            c.extend(std::iter::repeat_n(0.0, latency));
+        }
+        let mut views: Vec<&mut [f32]> = channels.iter_mut().map(Vec::as_mut_slice).collect();
+        master.process_linked(&mut views);
+        for c in &mut channels {
+            c.drain(..latency);
+        }
     }
-    RenderOutput { samples, silenced_voices }
+    RenderOutput { channels, silenced_voices }
 }
 
-pub fn write_wav(path: &std::path::Path, samples: &[f32]) -> Result<(), hound::Error> {
+/// Write the channels as an interleaved 32-bit float WAV.
+pub fn write_wav(path: &std::path::Path, channels: &[Vec<f32>]) -> Result<(), hound::Error> {
     let spec = hound::WavSpec {
-        channels: 1,
+        channels: channels.len() as u16,
         sample_rate: SAMPLE_RATE,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
     let mut writer = hound::WavWriter::create(path, spec)?;
-    for s in samples {
-        writer.write_sample(*s)?;
+    let len = channels.first().map_or(0, Vec::len);
+    for i in 0..len {
+        for c in channels {
+            writer.write_sample(c[i])?;
+        }
     }
     writer.finalize()
 }
