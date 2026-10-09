@@ -14,9 +14,9 @@ pub enum Src {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphError {
-    UnknownPort { opcode: &'static str, port: String },
-    DuplicatePort { opcode: &'static str, port: String },
-    MissingPort { opcode: &'static str, port: &'static str },
+    UnknownPort { opcode: String, port: String },
+    DuplicatePort { opcode: String, port: String },
+    MissingPort { opcode: String, port: String },
     DuplicateParam(String),
 }
 
@@ -76,16 +76,16 @@ impl GraphBuilder {
     /// Add an opcode, wiring its ports by name. Ports left out take their
     /// default; a port with no default must be given.
     pub fn add(&mut self, op: impl Opcode + 'static, args: &[(&str, Src)]) -> Result<Src, GraphError> {
-        let ports = op.ports();
+        let ports = op.ports().to_vec();
         assert!(ports.len() <= MAX_INPUTS, "`{}` declares too many ports", op.name());
 
         let mut wired: Vec<Option<Src>> = vec![None; ports.len()];
         for &(name, src) in args {
             let Some(i) = ports.iter().position(|p| p.name == name) else {
-                return Err(GraphError::UnknownPort { opcode: op.name(), port: name.to_string() });
+                return Err(GraphError::UnknownPort { opcode: op.name().to_string(), port: name.to_string() });
             };
             if wired[i].is_some() {
-                return Err(GraphError::DuplicatePort { opcode: op.name(), port: name.to_string() });
+                return Err(GraphError::DuplicatePort { opcode: op.name().to_string(), port: name.to_string() });
             }
             wired[i] = Some(src);
         }
@@ -96,7 +96,10 @@ impl GraphBuilder {
                 (Some(s), _) => s,
                 (None, Some(d)) => Src::Const(d),
                 (None, None) => {
-                    return Err(GraphError::MissingPort { opcode: op.name(), port: port.name });
+                    return Err(GraphError::MissingPort {
+                        opcode: op.name().to_string(),
+                        port: port.name.to_string(),
+                    });
                 }
             };
             inputs.push(self.slot_for(src));
