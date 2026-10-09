@@ -63,6 +63,9 @@ pub(crate) fn unknown_unit(unit: &str, span: Span) -> Diagnostic {
     d
 }
 
+/// The control every instrument has, applied after its output.
+pub(crate) const GAIN_PARAM: &str = "gain";
+
 const LAYOUT_HELP: &str = "one of mono, stereo, quad, surround(5.1), surround(7.1), or channels(n)";
 
 /// A layout written in source: `stereo`, `surround(5.1)`, `channels(3)`.
@@ -240,6 +243,13 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
         params.push(Param { name: p.name.name.clone(), unit, range, default });
     }
 
+    // Every note accepts a `gain` control, applied after the instrument.
+    if let Some(p) = def.params.iter().find(|p| p.name.name == GAIN_PARAM) {
+        return Err(Diagnostic::new(format!("`{GAIN_PARAM}` is reserved: every note already has a `{GAIN_PARAM}` control"), p.name.span));
+    }
+    let gain = lower.g.param(GAIN_PARAM, 1.0).expect("name checked above");
+    params.push(Param { name: GAIN_PARAM.to_string(), unit: Unit::Db, range: None, default: Some(1.0) });
+
     if def.body.is_empty() {
         return Err(Diagnostic::new(format!("instrument `{}` is empty", def.name.name), def.name.span)
             .with_help("the last line of an instrument is the signal it outputs"));
@@ -276,6 +286,7 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
 
     // Every voice leaves the instrument in the master's layout.
     let result = lower.convert(&result, names.master, span)?;
+    let result = lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, span)?;
     Ok(Instrument {
         name: def.name.name.clone(),
         graph: Arc::new(lower.g.build_channels(&result.srcs)),
@@ -599,6 +610,12 @@ impl<'a> Lower<'a> {
             }
             ExprKind::Call { name, args } => self.call(name, args, e.span),
             ExprKind::Env(env) => self.env(env),
+            ExprKind::Pattern(_) | ExprKind::Rest => Err(Diagnostic::new(
+                "a pattern can't be used inside an instrument, opcode or track",
+                e.span,
+            )
+            .with_help("patterns go in `clip`, `scene` and `play`; use `[a, b]` here for a channel list")),
+            ExprKind::Grid(_) => Err(Diagnostic::new("grids as trigger signals aren't supported yet", e.span)),
         }
     }
 

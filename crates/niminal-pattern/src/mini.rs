@@ -26,10 +26,21 @@ impl std::error::Error for MiniError {}
 
 type Res<T> = Result<T, MiniError>;
 
-/// Parse mini-notation into a pattern of atoms. What an atom means (a note, a
-/// number with a unit) is up to the caller.
+/// Parse mini-notation into a pattern of atom text. What an atom means (a note,
+/// a number with a unit) is up to the caller.
 pub fn parse(src: &str) -> Res<Pattern<String>> {
-    let mut p = Parser { src, chars: src.char_indices().collect(), i: 0 };
+    parse_with(src, |atom| Ok(atom.to_string()))
+}
+
+/// Parse mini-notation, turning each atom into a value as it is read. An atom
+/// that `convert` rejects is an error at that atom's position, so a typo is
+/// reported when the pattern is written rather than when it is first played.
+pub fn parse_with<T: Clone + Send + Sync + 'static>(
+    src: &str,
+    convert: impl Fn(&str) -> Result<T, String>,
+) -> Res<Pattern<T>> {
+    let convert: &dyn Fn(&str) -> Result<T, String> = &convert;
+    let mut p = Parser { src, chars: src.char_indices().collect(), i: 0, convert };
     let pattern = p.stack(None)?;
     p.skip_space();
     match p.peek() {
@@ -38,13 +49,14 @@ pub fn parse(src: &str) -> Res<Pattern<String>> {
     }
 }
 
-struct Parser<'a> {
+struct Parser<'a, T> {
     src: &'a str,
     chars: Vec<(usize, char)>,
     i: usize,
+    convert: &'a dyn Fn(&str) -> Result<T, String>,
 }
 
-impl Parser<'_> {
+impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     fn peek(&self) -> Option<char> {
         self.chars.get(self.i).map(|(_, c)| *c)
     }
@@ -77,7 +89,7 @@ impl Parser<'_> {
     }
 
     /// Sequences separated by commas, played together, up to `close`.
-    fn stack(&mut self, close: Option<char>) -> Res<Pattern<String>> {
+    fn stack(&mut self, close: Option<char>) -> Res<Pattern<T>> {
         let mut layers = vec![self.sequence(close)?];
         while self.peek() == Some(',') {
             self.i += 1;
@@ -87,8 +99,8 @@ impl Parser<'_> {
     }
 
     /// Steps, one after another, until a comma, `close` or the end.
-    fn sequence(&mut self, close: Option<char>) -> Res<Pattern<String>> {
-        let mut steps: Vec<(Rational, Pattern<String>)> = Vec::new();
+    fn sequence(&mut self, close: Option<char>) -> Res<Pattern<T>> {
+        let mut steps: Vec<(Rational, Pattern<T>)> = Vec::new();
         loop {
             self.skip_space();
             match self.peek() {
@@ -119,7 +131,7 @@ impl Parser<'_> {
         self.peek_at(n).is_none_or(|c| c.is_whitespace() || matches!(c, ',' | ']' | '>'))
     }
 
-    fn term(&mut self) -> Res<Pattern<String>> {
+    fn term(&mut self) -> Res<Pattern<T>> {
         let mut term = match self.peek() {
             Some('[') => {
                 self.i += 1;
@@ -153,7 +165,7 @@ impl Parser<'_> {
     }
 
     /// `<a b c>`: one alternative per cycle.
-    fn alternatives(&mut self) -> Res<Pattern<String>> {
+    fn alternatives(&mut self) -> Res<Pattern<T>> {
         let mut options = Vec::new();
         loop {
             self.skip_space();
@@ -177,7 +189,8 @@ impl Parser<'_> {
         Ok(Pattern::slowcat(options))
     }
 
-    fn atom(&mut self) -> Res<Pattern<String>> {
+    fn atom(&mut self) -> Res<Pattern<T>> {
+        let start = self.offset();
         let mut text = String::new();
         while let Some(c) = self.peek() {
             if c.is_whitespace() || matches!(c, '[' | ']' | '<' | '>' | ',' | '*') {
@@ -189,11 +202,18 @@ impl Parser<'_> {
         if text.is_empty() {
             return Err(self.error(format!("unexpected `{}`", self.peek().unwrap_or(' '))));
         }
-        Ok(Pattern::pure(text))
+        self.atom_value(text, start)
+    }
+
+    fn atom_value(&self, text: String, offset: usize) -> Res<Pattern<T>> {
+        match (self.convert)(&text) {
+            Ok(value) => Ok(Pattern::pure(value)),
+            Err(message) => Err(MiniError { message, offset }),
+        }
     }
 
     /// `(1/8 beat)`: parentheses make one atom out of text with spaces in it.
-    fn grouped_atom(&mut self) -> Res<Pattern<String>> {
+    fn grouped_atom(&mut self) -> Res<Pattern<T>> {
         let open = self.offset();
         self.i += 1;
         let mut text = String::new();
@@ -215,7 +235,7 @@ impl Parser<'_> {
         if text.is_empty() {
             return Err(MiniError { message: "empty parentheses".into(), offset: open });
         }
-        Ok(Pattern::pure(text))
+        self.atom_value(text, open)
     }
 }
 

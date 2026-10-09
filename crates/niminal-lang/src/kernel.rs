@@ -209,6 +209,9 @@ impl Kb {
             }
             ExprKind::Call { name, args } => self.call(name, args),
             ExprKind::Channels(_) => Err(channels_in_opcode(e.span)),
+            ExprKind::Pattern(_) | ExprKind::Grid(_) | ExprKind::Rest => {
+                Err(Diagnostic::new("patterns can't be used inside an opcode", e.span))
+            }
             ExprKind::Env(_) => Err(Diagnostic::new("envelopes can't be used inside an opcode", e.span)
                 .with_help("compute the envelope in the instrument and pass it in as an argument")),
         }

@@ -13,8 +13,88 @@ pub enum Item {
     Bus(BusDecl),
     Track(TrackDecl),
     Config(ConfigDecl),
-    Tempo(Expr),
+    Tempo(TempoStmt),
+    /// `meter 3/4`
+    Meter(Expr),
+    /// `name = expr` at the top level: a pattern, clip or scene value.
+    Bind { name: Ident, value: Expr },
+    Clip(NamedBlock),
+    Scene(NamedBlock),
+    Command(CommandStmt),
     Note(NoteStmt),
+}
+
+/// `tempo 124bpm`, optionally `@ next bar over 2 bars` for a change while playing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TempoStmt {
+    pub value: Expr,
+    pub quantize: Option<QuantizeSpec>,
+    pub over: Option<Expr>,
+    pub span: Span,
+}
+
+/// `clip name { key: value ... }` or `scene name { track: clip ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedBlock {
+    pub name: Ident,
+    pub entries: Vec<(Ident, Expr)>,
+    pub span: Span,
+}
+
+/// Where a statement happens: a time, or `bar 5 beat 3`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AtPos {
+    Time(Expr),
+    /// Bars and beats count from 1.
+    Bar { bar: Expr, beat: Option<Expr> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    Play { track: Ident, what: Expr },
+    Stop(Ident),
+    Mute(Ident),
+    Unmute(Ident),
+    Solo(Ident),
+    Unsolo(Option<Ident>),
+    Hush,
+    Panic,
+    Launch(Ident),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommandStmt {
+    pub at: Option<AtPos>,
+    pub command: Command,
+    pub quantize: Option<QuantizeSpec>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Relation {
+    /// Land on the grid: `@ bar`, `@ 4 bars`.
+    OnGrid,
+    /// The next line of the grid: `@ next 4 bars`.
+    Next,
+    /// Counted from now: `@ in 4 bars`.
+    In,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuantUnit {
+    Now,
+    Beat,
+    Bar,
+    Cycle,
+}
+
+/// When a change should land, relative to a musical grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuantizeSpec {
+    pub relation: Relation,
+    pub count: f64,
+    pub unit: QuantUnit,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +186,12 @@ pub enum ExprKind {
     /// `f(a, b)`. `x.f(a)` is parsed as `f(x, a)` with `x` marked as the receiver.
     Call { name: Ident, args: Vec<Arg> },
     Neg(Box<Expr>),
+    /// A mini-notation pattern: the raw text between the brackets.
+    Pattern(String),
+    /// `grid[x.x.]`: the raw text between the brackets.
+    Grid(String),
+    /// `~`: nothing, or stop.
+    Rest,
     /// `[a, b]`: a comma list is a multichannel signal, one expression per channel.
     Channels(Vec<Expr>),
     Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
@@ -151,7 +237,7 @@ pub struct EnvLit {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteStmt {
-    pub at: Option<Expr>,
+    pub at: Option<AtPos>,
     pub target: Ident,
     pub args: Vec<Arg>,
     pub dur: Expr,
