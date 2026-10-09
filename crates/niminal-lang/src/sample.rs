@@ -43,6 +43,20 @@ impl Samples {
         found.unwrap_or_else(|| self.bases.first().map_or_else(|| PathBuf::from(path), |b| b.join(path)))
     }
 
+    /// Read the files `source` declares into the cache, ignoring any problems
+    /// (compiling reports them). A live daemon does this before it takes the
+    /// lock that the audio thread needs, so reading a big file can't stall it.
+    pub fn warm(&self, source: &str) {
+        let Ok(items) = crate::parser::parse(source) else { return };
+        for item in items {
+            if let crate::ast::Item::Sample(decl) = item
+                && let crate::ast::SampleSource::Path(path) = &decl.source
+            {
+                let _ = if decl.is_kit { self.load_kit(path).map(drop) } else { self.load(path).map(drop) };
+            }
+        }
+    }
+
     pub fn load(&self, path: &str) -> Result<Arc<SampleData>, String> {
         self.load_file(&self.resolve(path))
     }
@@ -109,4 +123,26 @@ fn read_wav(path: &Path) -> Result<SampleData, String> {
         }
     }
     Ok(SampleData { channels: buffers, sample_rate: spec.sample_rate as f32 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn warming_reads_each_declared_file_once_and_ignores_problems() {
+        let dir = std::env::temp_dir().join(format!("niminal-warm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut w = hound::WavWriter::create(dir.join("a.wav"), spec).unwrap();
+        w.write_sample(1000_i16).unwrap();
+        w.finalize().unwrap();
+
+        let samples = Samples::new(&dir);
+        samples.warm("sample a = \"a.wav\"\nsample gone = \"missing.wav\"\nthis is not valid");
+        samples.warm("sample a = \"a.wav\"\nkit k = \"nofolder\"");
+        let first = samples.load("a.wav").unwrap();
+        assert!(Arc::ptr_eq(&first, &samples.load("a.wav").unwrap()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

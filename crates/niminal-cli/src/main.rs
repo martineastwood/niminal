@@ -253,11 +253,17 @@ fn run_daemon(
             }
         }
         if let Some(path) = log {
-            let d = lock(&daemon);
-            let entries = d.session().log();
-            if entries.len() != written {
-                written = entries.len();
-                let _ = std::fs::write(path, to_lines(entries));
+            // format under the lock, write to disk without it
+            let text = {
+                let d = lock(&daemon);
+                let entries = d.session().log();
+                (entries.len() != written).then(|| {
+                    written = entries.len();
+                    to_lines(entries)
+                })
+            };
+            if let Some(text) = text {
+                let _ = std::fs::write(path, text);
             }
         }
     }

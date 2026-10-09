@@ -141,11 +141,13 @@ fn serve(stream: TcpStream, daemon: Shared, outboxes: Outboxes, token: Option<St
         match ws.read() {
             Ok(Message::Text(text)) => {
                 let replies = if authenticated {
+                    preload_samples(&daemon, text.as_str());
                     lock(&daemon).handle(client, text.as_str())
                 } else {
                     match authenticate(text.as_str(), token.as_deref().unwrap_or_default()) {
                         Ok(()) => {
                             authenticated = true;
+                            preload_samples(&daemon, text.as_str());
                             lock(&daemon).handle(client, text.as_str())
                         }
                         Err(reply) => vec![reply],
@@ -173,6 +175,25 @@ fn serve(stream: TcpStream, daemon: Shared, outboxes: Outboxes, token: Option<St
     lock(&daemon).disconnect(client);
     let _ = ws.close(None);
     let _ = ws.flush();
+}
+
+/// Before evaluating code, read the sample files it declares, without holding
+/// the lock that the audio callback needs.
+fn preload_samples(daemon: &Shared, request: &str) {
+    let Ok(request) = serde_json::from_str::<Value>(request) else { return };
+    if request.get("method").and_then(Value::as_str) != Some("eval") {
+        return;
+    }
+    let params = &request["params"];
+    let Some(source) = params.get("source").and_then(Value::as_str) else { return };
+    let samples = {
+        let mut d = lock(daemon);
+        if let Some(dir) = params.get("dir").and_then(Value::as_str) {
+            d.session_mut().set_sample_dir(std::path::Path::new(dir));
+        }
+        d.session().sample_files().clone()
+    };
+    samples.warm(source);
 }
 
 /// A client with a token must open with a `hello` that carries it.
