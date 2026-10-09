@@ -18,6 +18,9 @@ pub struct Instrument {
     pub params: Vec<Param>,
     /// For a kit, the names of its samples, in the order its `sample` parameter counts them.
     pub members: Vec<String>,
+    /// The choke group of each sample: one entry per kit member, or at most
+    /// one for a lone sample.
+    pub chokes: Vec<Option<u32>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +80,8 @@ pub struct Program {
     pub tracks: Vec<TrackInfo>,
     /// Every sample name used by a kit, which is what a `Value::Sample` counts.
     pub sample_names: Vec<String>,
+    /// The names of the choke groups, which an instrument's `chokes` count.
+    pub choke_groups: Vec<String>,
     /// Notes written directly in the source.
     pub notes: Vec<Event>,
     /// Commands that play clips and scenes, in source order.
@@ -89,6 +94,8 @@ pub struct NotePlan {
     pub track: usize,
     pub instrument: usize,
     pub params: Vec<(usize, f32)>,
+    /// The choke group of the sample this note plays: it ends other notes in the group.
+    pub choke: Option<u32>,
 }
 
 /// What a note's target resolves to.
@@ -163,7 +170,9 @@ impl Program {
             }
         }
         let params = self.instruments[instrument].bind_args(&args, self.tempo)?;
-        Ok(NotePlan { track, instrument, params })
+        let picked = args.get("sample").and_then(|v| v.as_number().ok()).unwrap_or(0.0) as usize;
+        let choke = self.instruments[instrument].chokes.get(picked).copied().flatten();
+        Ok(NotePlan { track, instrument, params, choke })
     }
 
     /// A mixer for this program's tracks and buses.

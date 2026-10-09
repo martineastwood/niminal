@@ -135,6 +135,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     }
 
     let mut sample_names: Vec<String> = Vec::new();
+    let mut choke_groups: Vec<String> = Vec::new();
     for item in &items {
         let Item::Sample(decl) = item else { continue };
         let name = decl.name.name.as_str();
@@ -142,7 +143,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             errors.push(Diagnostic::new(format!("`{name}` is defined twice"), decl.name.span));
             continue;
         }
-        match compile_sample(decl, &options.samples, tempo, &registry, &names, &mut sample_names) {
+        match compile_sample(decl, &options.samples, tempo, &registry, &names, &mut sample_names, &mut choke_groups) {
             Ok(i) => instruments.push(i),
             Err(d) => {
                 errors.push(d);
@@ -236,6 +237,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             bus_layouts: names.bus_layouts,
             tracks,
             sample_names,
+            choke_groups,
             notes,
             performance,
         })
@@ -312,8 +314,10 @@ fn compile_sample(
     registry: &Registry,
     names: &Names,
     sample_names: &mut Vec<String>,
+    choke_groups: &mut Vec<String>,
 ) -> Res<Instrument> {
     let mut root = DEFAULT_ROOT_HZ;
+    let mut chokes: Vec<&Arg> = Vec::new();
     for arg in &decl.options {
         let Some(key) = &arg.name else {
             return Err(Diagnostic::new("options are written `name: value`", arg.value.span));
@@ -325,12 +329,14 @@ fn compile_sample(
                     .map_err(|e| Diagnostic::new(format!("`root` should be a note or a frequency: {e}"), arg.value.span))?
                     as f32;
             }
+            "choke" => chokes.push(arg),
             other => {
                 let mut d = Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
-                if let Some(c) = closest(other, ["root"]) {
-                    d = d.with_help(format!("did you mean `{c}`?"));
-                }
-                return Err(d.with_help("the only option so far is `root`, the note at which the sample plays as recorded"));
+                d = match closest(other, ["root", "choke"]) {
+                    Some(c) => d.with_help(format!("did you mean `{c}`?")),
+                    None => d.with_help("the options are `root`, the note at which the sample plays as recorded, and `choke`"),
+                };
+                return Err(d);
             }
         }
     }
@@ -353,7 +359,48 @@ fn compile_sample(
     } else {
         vec![(decl.name.name.clone(), samples.load(&decl.path).map_err(file_error)?)]
     };
-    compile_sampler(&decl.name, &members, decl.is_kit, root, tempo, registry, names)
+    let mut instrument = compile_sampler(&decl.name, &members, decl.is_kit, root, tempo, registry, names)?;
+
+    // `choke: hats` for a sample; `choke: hats(open, closed)` for samples in a kit.
+    instrument.chokes = vec![None; members.len()];
+    let mut group_of = |name: &str| -> u32 {
+        let id = choke_groups.iter().position(|g| g == name).unwrap_or_else(|| {
+            choke_groups.push(name.to_string());
+            choke_groups.len() - 1
+        });
+        id as u32
+    };
+    for arg in chokes {
+        let value = &arg.value;
+        match (&value.kind, decl.is_kit) {
+            (ExprKind::Name(group), false) => instrument.chokes[0] = Some(group_of(group)),
+            (ExprKind::Call { name: group, args }, true) => {
+                let id = group_of(&group.name);
+                for member in args {
+                    let ExprKind::Name(m) = &member.value.kind else {
+                        return Err(Diagnostic::new("expected the name of a sample in the kit", member.value.span));
+                    };
+                    let Some(i) = members.iter().position(|(n, _)| n == m) else {
+                        let mut d = Diagnostic::new(format!("there is no sample `{m}` in the kit `{}`", decl.name.name), member.value.span);
+                        if let Some(c) = closest(m, members.iter().map(|(n, _)| n.as_str())) {
+                            d = d.with_help(format!("did you mean `{c}`?"));
+                        }
+                        return Err(d);
+                    };
+                    instrument.chokes[i] = Some(id);
+                }
+            }
+            (_, false) => {
+                return Err(Diagnostic::new("expected the name of a choke group", value.span)
+                    .with_help("for example `with(choke: hats)`"));
+            }
+            (_, true) => {
+                return Err(Diagnostic::new("a kit names the samples in each group", value.span)
+                    .with_help("for example `with(choke: hats(hat_open, hat_closed))`"));
+            }
+        }
+    }
+    Ok(instrument)
 }
 
 /// The pitch (c4) at which a sample plays as recorded unless it says otherwise.

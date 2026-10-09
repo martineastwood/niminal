@@ -125,7 +125,7 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
         while next < notes.len() && notes[next].start == pos {
             let note = &notes[next];
             let graph = program.instruments[note.plan.instrument].graph.clone();
-            let id = mixer.note_on(note.plan.track, graph, &note.plan.params);
+            let id = mixer.note_on(note.plan.track, graph, &note.plan.params, note.plan.choke);
             held.push((note.off, id));
             next += 1;
         }

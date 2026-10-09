@@ -773,7 +773,7 @@ impl Session {
             match self.program.plan(&note.event) {
                 Ok(plan) => {
                     let graph = self.program.instruments[plan.instrument].graph.clone();
-                    let id = self.mixer.note_on(plan.track, graph, &plan.params);
+                    let id = self.mixer.note_on(plan.track, graph, &plan.params, plan.choke);
                     self.held.push((self.clock + note.dur, id));
                 }
                 Err(e) => self.notices.push(format!("note for `{}` could not play: {e}", note.event.target)),
