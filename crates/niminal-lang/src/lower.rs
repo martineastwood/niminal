@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use niminal_engine::ops::{Add, Curve, Env, Mul, PanChannel, Segment, Sub};
+use niminal_engine::ops::{Add, Curve, Env, Fn1, Func, Mul, PanChannel, Segment, Sub};
 use niminal_engine::{ChainInput, Graph, GraphBuilder, Route, Src};
 use niminal_score::{Tempo, Value};
 
@@ -23,7 +23,7 @@ use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
 
-const UNIT_NAMES: [&str; 9] = ["hz", "khz", "db", "sec", "ms", "beat", "beats", "bpm", "deg"];
+const UNIT_NAMES: [&str; 12] = ["hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "bpm", "deg", "st"];
 
 /// A literal's unit and value. Decibels become gain factors and beats become
 /// seconds at `tempo`.
@@ -36,7 +36,9 @@ pub(crate) fn literal_sig(value: f64, unit: Option<&str>, tempo: Tempo, span: Sp
         Some("sec") => (Unit::Time, value),
         Some("ms") => (Unit::Time, value / 1000.0),
         Some("beat" | "beats") => (Unit::Time, value * 60.0 / tempo.bpm),
+        Some("bar" | "bars") => (Unit::Time, value * tempo.beats_per_bar * 60.0 / tempo.bpm),
         Some("deg") => (Unit::Angle, value),
+        Some("st") => (Unit::Semitones, value),
         Some("bpm") => {
             return Err(Diagnostic::new("`bpm` can only be used with `tempo`", span)
                 .with_help("for example `tempo 120bpm`"));
@@ -351,8 +353,9 @@ pub(crate) fn param_type(ty: &TypeSpec) -> Res<(Unit, Option<(f64, f64)>)> {
             "db" => Ok((Unit::Db, None)),
             "sec" => Ok((Unit::Time, None)),
             "deg" => Ok((Unit::Angle, None)),
+            "st" => Ok((Unit::Semitones, None)),
             other => Err(Diagnostic::new(format!("unknown parameter type `{other}`"), id.span)
-                .with_help("use a unit (`hz`, `db`, `sec`, `deg`) or a range such as `0..1`")),
+                .with_help("use a unit (`hz`, `db`, `sec`, `deg`, `st`) or a range such as `0..1`")),
         },
     }
 }
@@ -730,6 +733,13 @@ impl<'a> Lower<'a> {
 
         match op {
             BinOp::Add | BinOp::Sub => {
+                // A frequency moved by an interval.
+                if lu == Unit::Hz && ru == Unit::Semitones {
+                    return self.transpose(&l, &r, op == BinOp::Sub, span);
+                }
+                if lu == Unit::Semitones && ru == Unit::Hz && op == BinOp::Add {
+                    return self.transpose(&r, &l, false, span);
+                }
                 if lu != ru {
                     return Err(mismatch());
                 }
@@ -771,6 +781,25 @@ impl<'a> Lower<'a> {
                 self.mul(&l, &Sig::constant(Unit::Num, 1.0 / k), unit, span)
             }
         }
+    }
+
+    /// `freq + 7st`: scale a frequency by 2^(st/12).
+    fn transpose(&mut self, freq: &Sig, interval: &Sig, down: bool, span: Span) -> Res<Sig> {
+        let direction = if down { -1.0 } else { 1.0 };
+        if let Some(st) = interval.konst {
+            let ratio = Sig::constant(Unit::Num, 2f64.powf(direction * st / 12.0));
+            return self.mul(freq, &ratio, Unit::Hz, span);
+        }
+        // Changing intervals go through exp: 2^x = e^(x ln 2).
+        let scale = Sig::constant(Unit::Num, direction * std::f64::consts::LN_2 / 12.0);
+        let exponent = self.mul(interval, &scale, Unit::Num, span)?;
+        let srcs = exponent
+            .srcs
+            .iter()
+            .map(|&s| self.g.add(Func(Fn1::Exp), &[("x", s)]).expect("exp has one port"))
+            .collect();
+        let ratio = Sig { srcs, layout: exponent.layout, unit: Unit::Num, konst: None };
+        self.mul(freq, &ratio, Unit::Hz, span)
     }
 
     fn invert(&mut self, s: &Sig, span: Span) -> Res<Sig> {

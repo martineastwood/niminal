@@ -26,7 +26,7 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
         Ok(t) => t,
         Err(d) => {
             errors.push(d);
-            Tempo { bpm: DEFAULT_BPM }
+            Tempo::new(DEFAULT_BPM)
         }
     };
 
@@ -273,7 +273,7 @@ fn tempo_of(items: &[Item]) -> Res<Tempo> {
         }
         match &e.kind {
             ExprKind::Num { value, unit: Some(u) } if u == "bpm" && *value > 0.0 => {
-                tempo = Some(Tempo { bpm: *value });
+                tempo = Some(Tempo::new(*value));
             }
             _ => {
                 return Err(Diagnostic::new("tempo must be a positive number of bpm", e.span)
@@ -281,7 +281,7 @@ fn tempo_of(items: &[Item]) -> Res<Tempo> {
             }
         }
     }
-    Ok(tempo.unwrap_or(Tempo { bpm: DEFAULT_BPM }))
+    Ok(tempo.unwrap_or(Tempo::new(DEFAULT_BPM)))
 }
 
 /// Literal named arguments, checked against `instr`'s parameters.
@@ -332,10 +332,11 @@ fn literal_time(e: &Expr) -> Res<Time> {
             "sec" => return Ok(Time::Seconds(*value)),
             "ms" => return Ok(Time::Seconds(value / 1000.0)),
             "beat" | "beats" => return Ok(Time::Beats(*value)),
+            "bar" | "bars" => return Ok(Time::Bars(*value)),
             _ => {}
         }
     }
-    Err(Diagnostic::new("expected a time", e.span).with_help("for example `1beat`, `2beats` or `250ms`"))
+    Err(Diagnostic::new("expected a time", e.span).with_help("for example `1beat`, `2bars` or `250ms`"))
 }
 
 /// Note arguments are plain values for now: a number with a unit, or a note name.
@@ -353,6 +354,8 @@ fn literal_value(e: &Expr) -> Res<Value> {
             Some("sec") => Ok(Value::Seconds(*value)),
             Some("ms") => Ok(Value::Seconds(value / 1000.0)),
             Some("beat" | "beats") => Ok(Value::Beats(*value)),
+            Some("bar" | "bars") => Ok(Value::Bars(*value)),
+            Some("st") => Ok(Value::Semitones(*value)),
             Some("deg") => Ok(Value::Degrees(*value)),
             Some(u) => Err(unknown_unit(u, e.span)),
         },
@@ -366,6 +369,8 @@ fn literal_value(e: &Expr) -> Res<Value> {
             Value::Db(n) => Ok(Value::Db(-n)),
             Value::Seconds(n) => Ok(Value::Seconds(-n)),
             Value::Beats(n) => Ok(Value::Beats(-n)),
+            Value::Bars(n) => Ok(Value::Bars(-n)),
+            Value::Semitones(n) => Ok(Value::Semitones(-n)),
             Value::Degrees(n) => Ok(Value::Degrees(-n)),
             Value::Note(_) => Err(bad()),
         },
@@ -964,6 +969,22 @@ track t { instrument = i\nout = it.to(mono_bus) }
 track u { out = mono_bus }
 instr i(f: hz) { osc(saw, f).pan }");
         assert_eq!(routed.tracks[1].def.chain.as_ref().unwrap().channels(), 1);
+    }
+
+    #[test]
+    fn bars_and_semitones() {
+        let p = ok("instr a(f: hz) { osc(sine, f + 7st) * env[1 1bar 0] }");
+        assert_eq!(p.instruments.len(), 1);
+        ok("instr a(f: hz, up: st = 7st) { osc(sine, f + up) }");
+        ok("instr a(f: hz) { osc(sine, f - 12st + 3st) }");
+        ok("instr a(f: hz) { osc(sine, c4 + 12st) }");
+        ok("instr a(f: hz) { osc(sine, 7st + f) }");
+        assert_eq!(msg("instr a(f: hz) { osc(sine, f + 7) }"), "can't add hz and a plain number");
+        assert_eq!(msg("instr a(f: hz) { osc(sine, 7st - f) }"), "can't subtract an interval and hz");
+        assert_eq!(msg("instr a(f: hz) { osc(sine, f * 2st) }"), "can't multiply hz and an interval");
+        let notes = ok("instr a() { osc(sine, 100hz) }\na() for 2bars\nat 1bar a() for 1bar");
+        assert_eq!(notes.notes[0].dur, Time::Bars(2.0));
+        assert_eq!(notes.notes[1].at, Time::Bars(1.0));
     }
 
     #[test]
