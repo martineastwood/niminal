@@ -2,15 +2,16 @@
 
 use std::collections::BTreeMap;
 
+use niminal_engine::{Route, TrackDef, execution_order};
 use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::kernel::compile_opcode;
-use crate::lower::{compile_instr, unknown_unit};
+use crate::lower::{Names, compile_chain, compile_instr, unknown_unit};
 use crate::opcodes::Registry;
 use crate::parser;
-use crate::program::{Instrument, Program};
+use crate::program::{Instrument, Program, TrackInfo, resolve_target};
 
 type Res<T> = Result<T, Diagnostic>;
 
@@ -28,10 +29,29 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
         }
     };
 
+    // Top-level names first, so locals can be kept from shadowing them.
+    let mut names = Names::default();
+    for item in &items {
+        let (ident, kind) = match item {
+            Item::Instr(d) => (&d.name, "instrument"),
+            Item::Opcode(d) => (&d.name, "opcode"),
+            Item::Bus(d) => (&d.name, "bus"),
+            Item::Track(d) => (&d.name, "track"),
+            Item::Tempo(_) | Item::Note(_) => continue,
+        };
+        match names.kind_of(&ident.name) {
+            None => names.add(&ident.name, kind),
+            Some(existing) if existing != kind => {
+                errors.push(Diagnostic::new(format!("`{}` is already the name of a {existing}", ident.name), ident.span));
+            }
+            Some(_) => {}
+        }
+    }
+
     let mut registry = Registry::builtin();
     for item in &items {
         let Item::Opcode(def) = item else { continue };
-        match compile_opcode(def, &registry, tempo) {
+        match compile_opcode(def, &registry, &names, tempo) {
             Ok((spec, body_error)) => {
                 errors.extend(body_error);
                 registry.add(spec);
@@ -49,7 +69,7 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
             errors.push(Diagnostic::new(format!("instrument `{name}` is defined twice"), def.name.span));
             continue;
         }
-        match compile_instr(def, tempo, &registry) {
+        match compile_instr(def, tempo, &registry, &names) {
             Ok(i) => instruments.push(i),
             Err(d) => {
                 errors.push(d);
@@ -58,19 +78,145 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
         }
     }
 
+    let mut seen_buses: Vec<&str> = Vec::new();
+    for item in &items {
+        let Item::Bus(bus) = item else { continue };
+        if seen_buses.contains(&bus.name.name.as_str()) {
+            errors.push(Diagnostic::new(format!("bus `{}` is defined twice", bus.name.name), bus.name.span));
+        }
+        seen_buses.push(&bus.name.name);
+        if let Some(layout) = bus.layout.as_ref().filter(|l| l.name != "mono") {
+            errors.push(
+                Diagnostic::new(format!("`{}` buses aren't supported yet", layout.name), layout.span)
+                    .with_help("only mono signals are supported so far"),
+            );
+        }
+    }
+
+    // Track 0 plays bare instruments, so it may send to any bus an instrument does.
+    let implicit = TrackInfo {
+        name: String::new(),
+        instrument: None,
+        defaults: BTreeMap::new(),
+        def: TrackDef {
+            chain: None,
+            inputs: Vec::new(),
+            route: Route::Master,
+            voice_sends: {
+                let mut sends: Vec<usize> = instruments.iter().flat_map(|i| i.graph.send_buses()).collect();
+                sends.sort_unstable();
+                sends.dedup();
+                sends
+            },
+        },
+    };
+    let mut tracks = vec![implicit];
+    let mut track_spans = vec![Span::default()];
+    for item in &items {
+        let Item::Track(decl) = item else { continue };
+        let name = decl.name.name.as_str();
+        if tracks.iter().skip(1).any(|t| t.name == name) || failed.contains(&name) {
+            errors.push(Diagnostic::new(format!("track `{name}` is defined twice"), decl.name.span));
+            continue;
+        }
+        match compile_track(decl, &instruments, &failed, tempo, &registry, &names) {
+            Ok(Some(t)) => {
+                tracks.push(t);
+                track_spans.push(decl.name.span);
+            }
+            Ok(None) => failed.push(name),
+            Err(d) => {
+                errors.push(d);
+                failed.push(name);
+            }
+        }
+    }
+
+    let defs: Vec<TrackDef> = tracks.iter().map(|t| t.def.clone()).collect();
+    if let Err(cycle) = execution_order(&defs) {
+        let path: Vec<&str> = cycle.iter().chain(cycle.first()).map(|&i| tracks[i].name.as_str()).collect();
+        errors.push(
+            Diagnostic::new(format!("tracks feed back through buses: {}", path.join(" -> ")), track_spans[cycle[0]])
+                .with_help("a bus has to be written before it is read; breaking the loop with `prev` isn't available yet"),
+        );
+    }
+
     let mut notes = Vec::new();
     for item in &items {
         let Item::Note(note) = item else { continue };
         if failed.contains(&note.target.name.as_str()) {
-            continue; // already reported against the instrument
+            continue; // already reported against the instrument or track
         }
-        match check_note(note, &instruments, tempo) {
+        match check_note(note, &instruments, &tracks, tempo) {
             Ok(e) => notes.push(e),
             Err(d) => errors.push(d),
         }
     }
 
-    if errors.is_empty() { Ok(Program { tempo, instruments, notes }) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(Program { tempo, instruments, buses: names.buses, tracks, notes })
+    } else {
+        Err(errors)
+    }
+}
+
+/// A track's chain, plus the instrument named by its `instrument = ...` line.
+/// `None` when that instrument failed to compile, which is already reported.
+fn compile_track(
+    decl: &TrackDecl,
+    instruments: &[Instrument],
+    failed: &[&str],
+    tempo: Tempo,
+    registry: &Registry,
+    names: &Names,
+) -> Res<Option<TrackInfo>> {
+    let mut instrument_line: Option<&Expr> = None;
+    let mut rest: Vec<&Stmt> = Vec::new();
+    for stmt in &decl.body {
+        match stmt {
+            Stmt::Bind { name, value } if name.name == "instrument" => {
+                if instrument_line.is_some() {
+                    return Err(Diagnostic::new("a track has only one instrument", name.span));
+                }
+                instrument_line = Some(value);
+            }
+            other => rest.push(other),
+        }
+    }
+
+    let mut instrument = None;
+    let mut defaults = BTreeMap::new();
+    if let Some(value) = instrument_line {
+        let (name, span, args): (&str, Span, &[Arg]) = match &value.kind {
+            ExprKind::Name(n) => (n, value.span, &[]),
+            ExprKind::Call { name, args } if !args.iter().any(|a| a.receiver) => (&name.name, name.span, args),
+            _ => {
+                return Err(Diagnostic::new("expected an instrument here", value.span)
+                    .with_help("for example `instrument = pluck` or `instrument = pluck(bright: 0.6)`"));
+            }
+        };
+        if failed.contains(&name) {
+            return Ok(None);
+        }
+        let Some(index) = instruments.iter().position(|i| i.name == name) else {
+            let mut d = Diagnostic::new(format!("no instrument named `{name}`"), span);
+            if let Some(c) = closest(name, instruments.iter().map(|i| i.name.as_str())) {
+                d = d.with_help(format!("did you mean `{c}`?"));
+            }
+            return Err(d);
+        };
+        defaults = literal_args(args, &instruments[index], tempo)?;
+        instrument = Some(index);
+    }
+
+    let chain = compile_chain(&decl.name, &rest, instrument.is_some(), tempo, registry, names)?;
+    let voice_sends = instrument.map(|i| instruments[i].graph.send_buses()).unwrap_or_default();
+    Ok(Some(TrackInfo {
+        name: decl.name.name.clone(),
+        instrument,
+        defaults,
+        def: TrackDef { chain: chain.graph, inputs: chain.inputs, route: chain.route, voice_sends },
+    }))
 }
 
 // ---- program-level statements -------------------------------------------
@@ -95,21 +241,10 @@ fn tempo_of(items: &[Item]) -> Res<Tempo> {
     Ok(tempo.unwrap_or(Tempo { bpm: DEFAULT_BPM }))
 }
 
-fn check_note(note: &NoteStmt, instruments: &[Instrument], tempo: Tempo) -> Res<Event> {
-    let name = &note.target;
-    let Some(instr) = instruments.iter().find(|i| i.name == name.name) else {
-        let mut d = Diagnostic::new(format!("no instrument named `{}`", name.name), name.span);
-        if let Some(c) = closest(&name.name, instruments.iter().map(|i| i.name.as_str())) {
-            d = d.with_help(format!("did you mean `{c}`?"));
-        }
-        return Err(d);
-    };
-
-    let at = note.at.as_ref().map_or(Ok(Time::Beats(0.0)), literal_time)?;
-    let dur = literal_time(&note.dur)?;
-
-    let mut args = BTreeMap::new();
-    for arg in &note.args {
+/// Literal named arguments, checked against `instr`'s parameters.
+fn literal_args(args: &[Arg], instr: &Instrument, tempo: Tempo) -> Res<BTreeMap<String, Value>> {
+    let mut out = BTreeMap::new();
+    for arg in args {
         let Some(arg_name) = &arg.name else {
             return Err(Diagnostic::new("name the arguments of a note", arg.value.span)
                 .with_help("for example `lead(freq: c4)`"));
@@ -117,11 +252,25 @@ fn check_note(note: &NoteStmt, instruments: &[Instrument], tempo: Tempo) -> Res<
         let (_, param) = instr.param(&arg_name.name).map_err(|e| arg_error(e, arg_name.span))?;
         let value = literal_value(&arg.value)?;
         instr.param_value(param, value, tempo).map_err(|e| arg_error(e, arg.value.span))?;
-        if args.insert(arg_name.name.clone(), value).is_some() {
+        if out.insert(arg_name.name.clone(), value).is_some() {
             return Err(Diagnostic::new(format!("argument `{}` given more than once", arg_name.name), arg_name.span));
         }
     }
-    instr.bind_args(&args, tempo).map_err(|e| arg_error(e, note.span))?;
+    Ok(out)
+}
+
+fn check_note(note: &NoteStmt, instruments: &[Instrument], tracks: &[TrackInfo], tempo: Tempo) -> Res<Event> {
+    let name = &note.target;
+    let target = resolve_target(instruments, tracks, &name.name).map_err(|e| arg_error(e, name.span))?;
+    let instr = &instruments[target.instrument];
+
+    let at = note.at.as_ref().map_or(Ok(Time::Beats(0.0)), literal_time)?;
+    let dur = literal_time(&note.dur)?;
+
+    let args = literal_args(&note.args, instr, tempo)?;
+    let mut merged = target.defaults.cloned().unwrap_or_default();
+    merged.extend(args.iter().map(|(k, v)| (k.clone(), *v)));
+    instr.bind_args(&merged, tempo).map_err(|e| arg_error(e, note.span))?;
 
     Ok(Event { target: name.name.clone(), at, dur, args })
 }
@@ -337,7 +486,7 @@ saw_lead(freq: a3) for 1beat
         assert_eq!(msg(&note("lead(freq: c4, bright: 1.5) for 1beat")), "argument `bright` must be between 0 and 1, got 1.5");
         assert_eq!(msg(&note("lead(freq: c4, brigt: 1) for 1beat")), "`lead` has no parameter `brigt`");
         assert_eq!(help(&note("lead(freq: c4, brigt: 1) for 1beat")).as_deref(), Some("did you mean `bright`?"));
-        assert_eq!(msg(&note("lede(freq: c4) for 1beat")), "no instrument named `lede`");
+        assert_eq!(msg(&note("lede(freq: c4) for 1beat")), "no instrument or track named `lede`");
         assert_eq!(msg(&note("lead(c4) for 1beat")), "name the arguments of a note");
         assert_eq!(msg(&note("lead(freq: c4) for 440hz")), "expected a time");
         assert_eq!(msg(&note("lead(freq: c4, freq: c5) for 1beat")), "argument `freq` given more than once");
@@ -442,6 +591,169 @@ a(f: 100hz) for 1beat
     fn db_gains_apply_to_plain_values() {
         ok("instr a(f: hz, amp: db = -6db) { osc(saw, f) * amp }");
         ok("opcode g(x, amp: db = -6db) { x * amp }\ninstr a(f: hz) { osc(saw, f).g(amp: -3db) }");
+    }
+
+    const ROUTING: &str = "
+bus space
+
+instr pluck(freq: hz, bright: 0..1 = 0.5) {
+  out = osc(saw, freq).lpf(cutoff: 900hz + bright * 1khz)
+  space += out.gain(-14db)
+}
+
+track room {
+  out = space.lpf(cutoff: 4khz).hpf(cutoff: 150hz)
+}
+
+track lead {
+  instrument = pluck(bright: 0.6)
+  out = it.gain(0.5)
+  space += out.gain(-12db)
+}
+";
+
+    #[test]
+    fn buses_and_tracks_compile() {
+        let p = ok(&format!("{ROUTING}\nlead(freq: c4) for 1beat\npluck(freq: c4) for 1beat"));
+        assert_eq!(p.buses, ["space"]);
+        assert_eq!(p.tracks.len(), 3, "the implicit track, room and lead");
+        assert_eq!(p.tracks[2].name, "lead");
+        assert_eq!(p.tracks[2].instrument, Some(0));
+        assert_eq!(p.tracks[2].defaults["bright"], Value::Num(0.6));
+        assert_eq!(p.tracks[0].def.voice_sends, [0], "bare instruments may send to the bus");
+        assert_eq!(p.notes.len(), 2);
+
+        // the plan for a track note uses the track's defaults, and the note wins over them
+        let plan = |e: &Event| p.plan(e).unwrap();
+        let bright = p.instruments[0].params.iter().position(|q| q.name == "bright").unwrap();
+        let on_track = plan(&p.notes[0]);
+        assert_eq!(on_track.track, 2);
+        assert!(on_track.params.contains(&(bright, 0.6)));
+        let bare = plan(&p.notes[1]);
+        assert_eq!(bare.track, 0);
+        assert!(!bare.params.iter().any(|(i, _)| *i == bright), "no default applied on the implicit track");
+        let overridden = p.plan(&Event {
+            args: [("freq".to_string(), Value::Note(60)), ("bright".to_string(), Value::Num(0.1))].into(),
+            ..p.notes[0].clone()
+        });
+        assert!(overridden.unwrap().params.contains(&(bright, 0.1)));
+    }
+
+    #[test]
+    fn routing_a_track_to_a_bus() {
+        let p = ok("
+bus fx
+track a { instrument = i\n out = it.to(fx) }
+track b { out = fx }
+instr i(f: hz) { osc(sine, f) }
+a(f: 100hz) for 1beat");
+        assert_eq!(p.tracks[1].def.route, niminal_engine::Route::Bus(0));
+        assert_eq!(p.tracks[2].def.inputs, [niminal_engine::ChainInput::Bus(0)]);
+    }
+
+    #[test]
+    fn out_and_it_rules() {
+        // an instrument either sets out or ends with a value, not both
+        assert_eq!(
+            msg("instr a(f: hz) { out = osc(saw, f)\nosc(sine, f) }"),
+            "this instrument sets `out`, so its last line can't also be a value"
+        );
+        ok("instr a(f: hz) { out = osc(saw, f)\nout += osc(sine, f / 2) }");
+        assert_eq!(msg("instr a(f: hz) { out += out\nout }"), "`out` has no value yet");
+        assert_eq!(msg("instr a(f: hz) { out = f }"), "`out` carries a plain signal, but this is hz");
+        assert_eq!(msg("instr a(f: hz) { osc(saw, it) }"), "`it` is only available inside a track");
+        assert_eq!(msg("instr a(f: hz) { it = 1 }"), "`it` is an input and can't be assigned");
+        assert_eq!(msg("instr a(f: hz) { instrument = 1\n0.5 }"), "`instrument` is only available in a track");
+        // only sends: silent but valid
+        ok("bus b\ninstr a(f: hz) { b += osc(saw, f) }");
+    }
+
+    #[test]
+    fn bus_rules() {
+        let with = |body: &str| format!("bus space\n{body}");
+        assert_eq!(
+            msg(&with("instr a(f: hz) { osc(saw, space) }")),
+            "`space` is a bus, and only a track can read a bus"
+        );
+        assert_eq!(
+            help(&with("instr a(f: hz) { osc(saw, space) }")).as_deref(),
+            Some("an instrument can send to it with `space += ...`")
+        );
+        assert_eq!(msg(&with("instr a(f: hz) { x = osc(saw, f)\nx += osc(saw, f)\nx }")), "`+=` can only add to `out` or a bus, not `x`");
+        assert_eq!(
+            help(&with("instr a(f: hz) { x = osc(saw, f)\nx += osc(saw, f)\nx }")).as_deref(),
+            Some("to change a local, write `x = x + ...`")
+        );
+        assert_eq!(help(&with("instr a(f: hz) { spaec += osc(saw, f) }")).as_deref(), Some("did you mean the bus `space`?"));
+        assert_eq!(msg(&with("instr a(f: hz) { space += f\n0.5 }")), "`space` carries a plain signal, but this is hz");
+        assert_eq!(msg("bus a\nbus a"), "bus `a` is defined twice");
+        assert_eq!(msg("bus a: stereo"), "`stereo` buses aren't supported yet");
+        ok("bus a: mono");
+    }
+
+    #[test]
+    fn locals_cannot_shadow_top_level_names() {
+        let with = |body: &str| format!("bus space\ninstr other(f: hz) {{ osc(sine, f) }}\n{body}");
+        assert_eq!(
+            msg(&with("instr a(f: hz) { space = 1\nosc(saw, f) }")),
+            "`space` is already the name of a bus, so it can't be used for a local"
+        );
+        assert_eq!(
+            msg(&with("instr a(other: hz) { osc(saw, other) }")),
+            "`other` is already the name of a instrument, so it can't be used for a local"
+        );
+        assert_eq!(msg(&with("instr a(f: hz) { space = 1 }")), "`space` is already the name of a bus, so it can't be used for a local");
+        assert_eq!(msg("bus x\ninstr x(f: hz) { osc(saw, f) }"), "`x` is already the name of a bus");
+    }
+
+    #[test]
+    fn track_errors() {
+        let base = "bus space\ninstr i(f: hz, b: 0..1 = 0.5) { osc(saw, f) }\n";
+        let track = |body: &str| format!("{base}track t {{ {body} }}");
+        assert_eq!(msg(&track("")), "track `t` does nothing");
+        assert_eq!(msg(&track("x = 1")), "track `t` never sets `out`");
+        ok(&track("out = it")); // valid, though silent: nothing feeds `it`
+        assert_eq!(msg(&track("instrument = i\ninstrument = i")), "a track has only one instrument");
+        assert_eq!(msg(&track("instrument = j")), "no instrument named `j`");
+        assert_eq!(msg(&track("instrument = i(q: 1)")), "`i` has no parameter `q`");
+        assert_eq!(msg(&track("instrument = i(b: 2)")), "argument `b` must be between 0 and 1, got 2");
+        assert_eq!(msg(&track("instrument = i\n0.5")), "a track makes sound through `out`");
+        assert_eq!(msg(&track("instrument = i\nout = it.to(spce)")), "`spce` is not defined");
+        assert_eq!(msg(&track("instrument = i\nout = it.to(1)")), "`to` takes the name of a bus");
+        assert_eq!(msg(&track("instrument = i\nout = it.gain(1).to(space).gain(1)")), "`to` can only end the line that sets a track's `out`");
+        assert_eq!(msg(&format!("{base}track t {{ instrument = i }}\ntrack t {{ instrument = i }}")), "track `t` is defined twice");
+        // a track with an instrument and nothing else just plays it
+        ok(&track("instrument = i"));
+        // an effect track with no instrument can't be played
+        let e = first_error(&format!("{base}track fx {{ out = space }}\nfx(f: 100hz) for 1beat"));
+        assert_eq!(e.message, "track `fx` has no instrument to play");
+    }
+
+    #[test]
+    fn feedback_between_tracks_is_an_error_naming_them() {
+        let src = "
+bus x
+bus y
+track a { out = x.lpf(cutoff: 1khz).to(y) }
+track b { out = y.lpf(cutoff: 1khz).to(x) }
+";
+        let d = first_error(src);
+        assert!(d.message == "tracks feed back through buses: a -> b -> a" || d.message == "tracks feed back through buses: b -> a -> b", "{}", d.message);
+        assert!(d.help.unwrap().contains("`prev`"));
+
+        let d = first_error("bus x\ntrack a { out = x.to(x) }");
+        assert_eq!(d.message, "tracks feed back through buses: a -> a");
+    }
+
+    #[test]
+    fn a_broken_instrument_does_not_cascade_into_its_tracks_and_notes() {
+        let errs = errors("
+instr bad(f: hz) { osc(saw, 440) }
+track t { instrument = bad }
+t() for 1beat
+bad() for 1beat
+");
+        assert_eq!(errs.len(), 1, "{errs:?}");
     }
 
     #[test]

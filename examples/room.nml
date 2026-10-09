@@ -1,0 +1,28 @@
+// A pluck that sends part of itself to a bus, a track that reads the bus,
+// and a lead track that plays the pluck. Declaration order doesn't matter.
+tempo 110bpm
+
+bus space
+
+track room {
+  out = space.lpf(cutoff: 2500hz).gain(0.8)
+}
+
+track lead {
+  instrument = pluck(bright: 0.6)
+  out = it.gain(0.8)
+}
+
+instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {
+  level = env[0 2ms 1 600ms.exp 0]
+  out = osc(saw, freq)
+    .lpf(cutoff: freq * (2 + bright * 6), res: 0.3)
+    .gain(amp) * level
+  space += out.gain(-9db)
+}
+
+lead(freq: c4) for 1/2beat
+at 1/2beat lead(freq: eb4) for 1/2beat
+at 1beat lead(freq: g4) for 1/2beat
+at 3/2beat lead(freq: c5) for 2beats
+at 0beat pluck(freq: c2, amp: -3db) for 4beats

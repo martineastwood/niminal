@@ -11,7 +11,7 @@ use niminal_engine::ops::{BinOp as Op, Instr, Kernel};
 use niminal_score::Tempo;
 
 use crate::ast::*;
-use crate::lower::{Lower, literal_sig, param_type, unknown_name};
+use crate::lower::{Lower, Names, literal_sig, param_type, unknown_name};
 use crate::diag::{Diagnostic, Span, closest};
 use crate::opcodes::{Build, Kind, OpSpec, ParamSpec, Registry, math_fn};
 use crate::unit::Unit;
@@ -37,7 +37,7 @@ struct Kb {
 /// Compile an opcode definition. `Err` means its signature is unusable. `Ok`
 /// carries the opcode and, if its body had a mistake, the diagnostic; the
 /// opcode is then a stub that callers are still checked against.
-pub fn compile_opcode(def: &OpcodeDef, registry: &Registry, tempo: Tempo) -> Res<(OpSpec, Option<Diagnostic>)> {
+pub fn compile_opcode(def: &OpcodeDef, registry: &Registry, names: &Names, tempo: Tempo) -> Res<(OpSpec, Option<Diagnostic>)> {
     let name = def.name.name.clone();
     if registry.find(&name).is_some() {
         return Err(Diagnostic::new(format!("`{name}` is already an opcode"), def.name.span));
@@ -47,7 +47,7 @@ pub fn compile_opcode(def: &OpcodeDef, registry: &Registry, tempo: Tempo) -> Res
     let mut params = Vec::new();
     let mut ports = Vec::new();
     let mut units = Vec::new();
-    let mut defaults = Lower::new(registry, tempo);
+    let mut defaults = Lower::new(registry, names, tempo);
     for p in &def.params {
         if params.iter().any(|q: &ParamSpec| q.name == p.name.name) {
             return Err(Diagnostic::new(format!("parameter `{}` is declared twice", p.name.name), p.name.span));
@@ -98,6 +98,7 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
         match stmt {
             Stmt::Bind { name, value } => kb.bind(name, value)?,
             Stmt::State { name, init } => kb.declare_state(name, init)?,
+            Stmt::AddAssign { name, .. } => return Err(add_assign_in_opcode(name)),
             Stmt::Expr(e) => {
                 return Err(Diagnostic::new("this value is never used", e.span)
                     .with_help("bind it with `name = ...`, or make it the last line"));
@@ -106,7 +107,7 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
     }
     let Stmt::Expr(out_expr) = last else {
         let name = match last {
-            Stmt::Bind { name, .. } | Stmt::State { name, .. } => name,
+            Stmt::Bind { name, .. } | Stmt::State { name, .. } | Stmt::AddAssign { name, .. } => name,
             Stmt::Expr(_) => unreachable!(),
         };
         return Err(Diagnostic::new("an opcode must end with the value it outputs", name.span)
@@ -128,6 +129,11 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
         state_init: kb.state_init,
         output: out.reg,
     })
+}
+
+fn add_assign_in_opcode(name: &Ident) -> Diagnostic {
+    Diagnostic::new("`+=` isn't available inside an opcode", name.span)
+        .with_help(format!("write `{0} = {0} + ...`", name.name))
 }
 
 impl Kb {
