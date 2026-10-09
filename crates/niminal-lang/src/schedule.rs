@@ -14,6 +14,20 @@ use niminal_score::{Event, Tempo, Time, Value};
 use crate::performance::{Action, Clip, Scheduled};
 use crate::program::Program;
 
+/// The pattern queries and events one clip may spend in a search: a base
+/// amount plus more for a longer stretch of time.
+/// The notes one clip may start: a base amount plus so many for each second searched.
+const EVENTS_BASE: usize = 16;
+const EVENTS_PER_SECOND: f64 = 800.0;
+const BASE_WORK: usize = 2_000;
+const WORK_PER_SECOND: f64 = 2_000.0;
+
+/// The most notes one search of the schedule keeps: the earliest ones.
+const MAX_EVENTS: usize = 2_048;
+
+/// How much time one search covers when asked for a long stretch.
+const CHUNK_SECONDS: f64 = 8.0;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduleError(pub String);
 
@@ -47,6 +61,37 @@ pub struct TrackState {
     pub clip: Option<String>,
     pub muted: bool,
     pub soloed: bool,
+}
+
+/// Padding, in cycles, around the part of a clip that a search looks at.
+const PAD_CYCLES: f64 = 1e-4;
+
+trait Micro {
+    fn floor_to_micro(self) -> i64;
+    fn ceil_to_micro(self) -> i64;
+}
+
+impl Micro for f64 {
+    fn floor_to_micro(self) -> i64 {
+        (self * 1e6).floor() as i64
+    }
+
+    fn ceil_to_micro(self) -> i64 {
+        (self * 1e6).ceil() as i64
+    }
+}
+
+/// A time in millionths of a cycle, as an exact fraction.
+fn micro_cycles(micro: i64) -> Rational {
+    Rational::new(micro, 1_000_000)
+}
+
+/// What a search of the schedule found.
+pub struct Found {
+    pub events: Vec<Event>,
+    pub problem: Option<ScheduleError>,
+    /// Tracks whose clips used up their allowance.
+    pub overloaded: Vec<usize>,
 }
 
 pub struct Schedule {
@@ -195,14 +240,64 @@ impl Schedule {
         }
     }
 
-    /// Every note that starts in `from..to` seconds, in time order.
+    /// Every note that starts in `from..to` seconds, in time order. A pattern
+    /// that asks for more work than a clip is allowed is an error.
     pub fn events(&self, from: f64, to: f64) -> Result<Vec<Event>, ScheduleError> {
+        // A long stretch is searched a piece at a time, each with its own limits.
+        let mut out = Vec::new();
+        let mut start = from;
+        while start < to {
+            let end = (start + CHUNK_SECONDS).min(to);
+            let found = self.events_lenient(start, end, &[]);
+            match found.problem {
+                None => out.extend(found.events),
+                Some(problem) => return Err(problem),
+            }
+            start = end;
+        }
+        Ok(out)
+    }
+
+    /// Like [`Schedule::events`], but a live session would rather play what
+    /// it can than nothing: this returns the notes found, the problem that
+    /// cut the search short if any, and the tracks whose clips asked for more
+    /// than they are allowed (which the caller should stop searching, since
+    /// searching again costs the same). Tracks in `skip` are not searched.
+    pub fn events_lenient(&self, from: f64, to: f64, skip: &[usize]) -> Found {
         let mut out: Vec<(f64, Event)> = Vec::new();
-        for segment in &self.segments {
-            self.segment_events(segment, from, to, &mut out)?;
+        let mut problem = None;
+        let mut overloaded = Vec::new();
+        let work = BASE_WORK + (WORK_PER_SECOND * (to - from).max(0.0)) as usize;
+        for segment in self.segments.iter().filter(|s| !skip.contains(&s.track)) {
+            let before = out.len();
+            let (result, exhausted) =
+                niminal_pattern::with_budget(work, || self.segment_events(segment, from, to, &mut out));
+            if let Err(e) = result {
+                problem.get_or_insert(e);
+            }
+            let allowed = EVENTS_BASE + (EVENTS_PER_SECOND * (to - from).max(0.0)) as usize;
+            let too_many = out.len() - before > allowed;
+            if too_many {
+                out.truncate(before + allowed);
+            }
+            if exhausted || too_many {
+                overloaded.push(segment.track);
+                problem.get_or_insert_with(|| {
+                    ScheduleError(format!(
+                        "the clip on track `{}` plays more notes than niminal can schedule; it is stopped until you evaluate again",
+                        self.track_names[segment.track]
+                    ))
+                });
+            }
         }
         out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        Ok(out.into_iter().map(|(_, e)| e).collect())
+        if out.len() > MAX_EVENTS {
+            out.truncate(MAX_EVENTS);
+            problem.get_or_insert_with(|| {
+                ScheduleError(format!("more than {MAX_EVENTS} notes start within {:.1} seconds; the latest are dropped", to - from))
+            });
+        }
+        Found { events: out.into_iter().map(|(_, e)| e).collect(), problem, overloaded }
     }
 
     fn segment_events(
@@ -227,7 +322,18 @@ impl Schedule {
 
         for k in first_loop..last_loop {
             let loop_start = segment.start + k as f64 * loop_len;
-            let span = CycleSpan::new(Rational::ZERO, segment.clip.length);
+            // Only the part of the loop inside the window, padded a little so that
+            // rounding can't lose a note on an edge; the check below decides.
+            let to_cycles = |seconds: f64| seconds / cycle;
+            let a = to_cycles((window_start - loop_start).max(0.0)) - PAD_CYCLES;
+            let b = to_cycles((until - loop_start).min(loop_len)) + PAD_CYCLES;
+            let span = CycleSpan::new(
+                micro_cycles(a.floor_to_micro()).max(Rational::ZERO),
+                micro_cycles(b.ceil_to_micro()).min(segment.clip.length),
+            );
+            if span.start >= span.end {
+                continue;
+            }
             for hap in notes.onsets(span) {
                 let whole = hap.whole.expect("notes have a duration");
                 let onset = loop_start + whole.start.to_f64() * cycle;

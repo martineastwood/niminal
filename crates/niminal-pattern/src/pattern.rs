@@ -1,6 +1,30 @@
+use std::cell::Cell;
 use std::sync::Arc;
 
 use crate::Rational;
+
+/// The most a step can be repeated or divided into.
+pub const MAX_REPEATS: i64 = 1024;
+
+/// The most cycles one query looks through.
+const MAX_CYCLES_PER_QUERY: usize = 4096;
+
+thread_local! {
+    /// How many more queries (and events) this thread may spend, if limited.
+    static BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Run `f` allowing patterns at most `work` queries and events between them.
+/// Past that every query returns nothing, so a pattern that asks for an
+/// absurd number of events costs a bounded amount of time. Also says whether
+/// the budget ran out.
+pub fn with_budget<R>(work: usize, f: impl FnOnce() -> R) -> (R, bool) {
+    let before = BUDGET.replace(Some(work));
+    let result = f();
+    let exhausted = BUDGET.get() == Some(0);
+    BUDGET.set(before);
+    (result, exhausted)
+}
 
 /// A stretch of cycle time, `start` up to `end`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -31,7 +55,9 @@ impl Span {
         }
         let mut out = Vec::new();
         let mut start = self.start;
-        while start < self.end {
+        // A query this long (a pattern sped up a billion times, say) is cut
+        // short instead of running for ever.
+        while start < self.end && out.len() < MAX_CYCLES_PER_QUERY {
             let next = Rational::int(start.floor() + 1).min(self.end);
             out.push(Span::new(start, next));
             start = next;
@@ -106,7 +132,15 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
     }
 
     pub fn query(&self, span: Span) -> Vec<Hap<T>> {
-        (self.query)(span)
+        let left = BUDGET.get();
+        if left == Some(0) {
+            return Vec::new();
+        }
+        let out = (self.query)(span);
+        if let Some(left) = left {
+            BUDGET.set(Some(left.saturating_sub(out.len().max(1))));
+        }
+        out
     }
 
     /// Only the events that start within `span`.
@@ -344,6 +378,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         if n < 1 {
             return Pattern::silence();
         }
+        let n = n.min(MAX_REPEATS);
         let p = self.clone();
         Pattern::new(move |span| {
             let mut out = Vec::new();
@@ -404,6 +439,7 @@ impl Pattern<bool> {
     /// `hits` events spread as evenly as possible over `steps`, rotated by
     /// `rotation` steps: `euclid(3, 8)` is `x..x..x.`.
     pub fn euclid(hits: usize, steps: usize, rotation: usize) -> Pattern<bool> {
+        let steps = steps.min(MAX_REPEATS as usize);
         let mut rhythm = euclid_steps(hits, steps);
         if !rhythm.is_empty() {
             let r = rotation % rhythm.len();

@@ -26,6 +26,11 @@ impl std::error::Error for MiniError {}
 
 type Res<T> = Result<T, MiniError>;
 
+/// How deeply brackets may nest.
+const MAX_DEPTH: usize = 48;
+
+use crate::MAX_REPEATS as MAX_REPEAT;
+
 /// Parse mini-notation into a pattern of atom text. What an atom means (a note,
 /// a number with a unit) is up to the caller.
 pub fn parse(src: &str) -> Res<Pattern<String>> {
@@ -40,7 +45,7 @@ pub fn parse_with<T: Clone + Send + Sync + 'static>(
     convert: impl Fn(&str) -> Result<T, String>,
 ) -> Res<Pattern<T>> {
     let convert: &dyn Fn(&str) -> Result<T, String> = &convert;
-    let mut p = Parser { src, chars: src.char_indices().collect(), i: 0, convert };
+    let mut p = Parser { src, chars: src.char_indices().collect(), i: 0, depth: 0, convert };
     let pattern = p.stack(None)?;
     p.skip_space();
     match p.peek() {
@@ -53,6 +58,8 @@ struct Parser<'a, T> {
     src: &'a str,
     chars: Vec<(usize, char)>,
     i: usize,
+    /// How many brackets deep the parser is.
+    depth: usize,
     convert: &'a dyn Fn(&str) -> Result<T, String>,
 }
 
@@ -132,6 +139,16 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     }
 
     fn term(&mut self) -> Res<Pattern<T>> {
+        if self.depth >= MAX_DEPTH {
+            return Err(self.error(format!("brackets are nested more than {MAX_DEPTH} deep")));
+        }
+        self.depth += 1;
+        let result = self.term_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn term_inner(&mut self) -> Res<Pattern<T>> {
         let mut term = match self.peek() {
             Some('[') => {
                 self.i += 1;
@@ -157,8 +174,11 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                 self.i += 1;
             }
             let factor = parse_factor(&text)
-                .filter(|f| *f > Rational::ZERO)
-                .ok_or(MiniError { message: format!("`*` needs a positive number, found `{text}`"), offset: start })?;
+                .filter(|f| *f > Rational::ZERO && *f <= Rational::int(MAX_REPEAT))
+                .ok_or(MiniError {
+                    message: format!("`*` needs a number from above 0 to {MAX_REPEAT}, found `{text}`"),
+                    offset: start,
+                })?;
             term = term.fast(factor);
         }
         Ok(term)

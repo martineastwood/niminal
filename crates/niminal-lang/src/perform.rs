@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use niminal_pattern::{Hit, Pattern, Rational, grid, parse_with};
+use niminal_pattern::{Hit, MAX_REPEATS, Pattern, Rational, grid, parse_with};
 use niminal_score::{Tempo, Time, Value};
 
 use crate::ast::*;
@@ -327,6 +327,9 @@ impl Perform<'_> {
             "euclid" => {
                 let hits = self.plain(self.arg(name, rest, "hits", span)?)?;
                 let steps = self.plain(self.arg(name, rest, "steps", span)?)?;
+                if steps > Rational::int(MAX_REPEATS) {
+                    return Err(Diagnostic::new(format!("`euclid` takes at most {MAX_REPEATS} steps"), name.span));
+                }
                 let rotation = match self.find(name, rest, "rotation") {
                     Some(e) => self.plain(e)?,
                     None => Rational::ZERO,
@@ -389,8 +392,15 @@ impl Perform<'_> {
         span: Span,
         _it: Option<&PerfValue>,
     ) -> Res<Option<Pattern<T>>> {
+        let max = MAX_REPEATS;
         let positive = |r: Rational, what: &str, at: Span| {
-            if r > Rational::ZERO { Ok(r) } else { Err(Diagnostic::new(format!("`{what}` must be above zero"), at)) }
+            if r <= Rational::ZERO {
+                Err(Diagnostic::new(format!("`{what}` must be above zero"), at))
+            } else if r > Rational::int(max) || r < Rational::new(1, max) {
+                Err(Diagnostic::new(format!("`{what}` takes a number from 1/{max} to {max}"), at))
+            } else {
+                Ok(r)
+            }
         };
         Ok(Some(match name.name.as_str() {
             "fast" => {
@@ -409,8 +419,8 @@ impl Perform<'_> {
             "shift" => p.shift(self.cycles(self.arg(name, rest, "by", span)?)?),
             "repeat_each" => {
                 let n = self.plain(self.arg(name, rest, "times", span)?)?;
-                if !n.is_integer() || n < Rational::ONE {
-                    return Err(Diagnostic::new("`repeat_each` takes a whole number of at least 1", name.span));
+                if !n.is_integer() || n < Rational::ONE || n > Rational::int(MAX_REPEATS) {
+                    return Err(Diagnostic::new(format!("`repeat_each` takes a whole number from 1 to {MAX_REPEATS}"), name.span));
                 }
                 p.repeat_each(n.numer())
             }

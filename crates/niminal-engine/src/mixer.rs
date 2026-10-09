@@ -170,6 +170,9 @@ struct Track {
     chain_silenced: bool,
 }
 
+/// Voices that may sound at once unless told otherwise.
+pub const DEFAULT_MAX_VOICES: usize = 256;
+
 /// How a new mixer's track takes over from an old mixer's tracks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Transfer {
@@ -188,6 +191,8 @@ pub struct Mixer {
     sample_rate: f32,
     next_serial: u64,
     silenced: usize,
+    max_voices: usize,
+    stolen: usize,
 }
 
 impl Mixer {
@@ -228,6 +233,8 @@ impl Mixer {
             sample_rate,
             next_serial: 0,
             silenced: 0,
+            max_voices: DEFAULT_MAX_VOICES,
+            stolen: 0,
         })
     }
 
@@ -245,6 +252,7 @@ impl Mixer {
                 }
             }
         }
+        self.steal_if_full();
         let mut voice = Voice::new(graph, self.sample_rate);
         voice.set_group(group);
         for &(index, value) in params {
@@ -283,6 +291,34 @@ impl Mixer {
             track.chain_silenced = false;
         }
         self.buses.clear();
+    }
+
+    /// The most voices that may sound at once. A new note past this ends the
+    /// oldest one that is still going, with a short fade.
+    pub fn set_max_voices(&mut self, max: usize) {
+        self.max_voices = max.max(1);
+    }
+
+    /// How many voices were ended early for lack of room since this was last called.
+    pub fn take_stolen(&mut self) -> usize {
+        std::mem::take(&mut self.stolen)
+    }
+
+    fn steal_if_full(&mut self) {
+        let count = self.active_voices();
+        if count < self.max_voices {
+            return;
+        }
+        let oldest = self
+            .tracks
+            .iter_mut()
+            .flat_map(|t| t.voices.iter_mut())
+            .filter(|(_, v)| !v.is_choked())
+            .min_by_key(|(serial, _)| *serial);
+        if let Some((_, voice)) = oldest {
+            voice.choke();
+            self.stolen += 1;
+        }
     }
 
     pub fn active_voices(&self) -> usize {

@@ -128,8 +128,8 @@ fn mini_notation_errors_point_at_the_problem() {
     assert_eq!(err(". a").message, "a `.` holds the step before it, but there isn't one");
     assert_eq!(err("<a b").message, "this `<` is never closed");
     assert_eq!(err("<>").message, "`< >` needs at least one alternative");
-    assert_eq!(err("a*x").message, "`*` needs a positive number, found ``");
-    assert_eq!(err("a*0").message, "`*` needs a positive number, found `0`");
+    assert_eq!(err("a*x").message, "`*` needs a number from above 0 to 1024, found ``");
+    assert_eq!(err("a*0").message, "`*` needs a number from above 0 to 1024, found `0`");
     assert_eq!(err("<a, b>").message, "commas aren't supported inside `< >`");
     assert_eq!(err("(a b").message, "this `(` is never closed");
     assert!(parse("").is_ok(), "an empty pattern is silence");
