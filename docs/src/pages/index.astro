@@ -1,0 +1,276 @@
+---
+import { Code } from '@astrojs/starlight/components';
+import { readFileSync } from 'node:fs';
+import '../styles/landing.css';
+
+const REPO = 'https://github.com/martineastwood/niminal';
+const media = import.meta.env.PUBLIC_MEDIA_URL ?? '/audio';
+const example = (file: string) =>
+  readFileSync(new URL(`../examples/${file}`, `file://${process.cwd()}/`), 'utf8').trimEnd();
+const audio = (file: string) => `${media}/${file}.mp3`;
+
+// Trim an example to the part worth showing.
+const hero = example('saw_lead.nml');
+const groove = example('groove.nml').split('\n').filter((l) => !l.startsWith('//')).join('\n').trim();
+const room = example('room.nml').split('\n').filter((l) => !l.startsWith('//')).join('\n').trim();
+const song = example('song.nml').split('\n').filter((l) => !l.startsWith('//')).join('\n').trim();
+
+const features = [
+  ['01', 'Live', 'Send code to a running daemon from VS Code, the REPL or a socket. Changes land on the beat you choose, and every input is logged by sample.'],
+  ['02', 'Offline', 'The same file renders to audio with one command. Sessions replay from their log to identical samples.'],
+  ['03', 'Extensible', 'Write opcodes and instruments in the language. They get types, units, hover docs and diagnostics like the built-ins.'],
+  ['04', 'Musical', 'Rational time, mini-notation, clips, scenes and arrangements. One pattern cycle is one bar.'],
+];
+---
+<!doctype html>
+<html lang="en" data-mode="ink" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>niminal: write sound, change it while it plays</title>
+    <meta name="description" content="niminal is a live-coding audio language with its own DSP engine. Write instruments, patterns and scenes, hear them change as you type, and render the same file to audio." />
+    <meta property="og:title" content="niminal" />
+    <meta property="og:description" content="A live-coding audio language with its own DSP engine." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <script is:inline>
+      // Shares Starlight's theme key, so the choice carries between this page and the docs.
+      // `auto` counts as dark: ink is the default whatever the OS prefers.
+      (function () {
+        var light = false;
+        try {
+          var saved = localStorage.getItem('starlight-theme');
+          light = saved === 'light';
+          if (!saved) localStorage.setItem('starlight-theme', 'dark');
+        } catch (e) {}
+        var root = document.documentElement;
+        root.setAttribute('data-mode', light ? 'paper' : 'ink');
+        root.setAttribute('data-theme', light ? 'light' : 'dark');
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>niminal</a>
+      <nav>
+        <a href="/guide/getting-started/">Docs</a>
+        <a href="/reference/opcodes/">Opcodes</a>
+        <a href="/guide/live-coding/">Live coding</a>
+        <a href={REPO}>GitHub</a>
+      </nav>
+      <div class="nav-end">
+        <div class="ground" role="group" aria-label="Colour scheme">
+          <button data-ground="ink">ink</button><button data-ground="paper">paper</button>
+        </div>
+        <a class="btn btn-solid btn-sm" href="/guide/getting-started/">Install</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-left">
+          <p class="eyebrow">live-coding audio language</p>
+          <h1>Write sound.<br />Change it while it plays.</h1>
+          <p class="lede">niminal is a language and a DSP engine built together. Describe instruments, patterns and scenes, hear every edit land on the beat, then render the very same file to audio.</p>
+          <div class="cta">
+            <a class="btn btn-solid" href="/guide/getting-started/">Get started</a>
+            <a class="btn" href={REPO}>View on GitHub ↗</a>
+          </div>
+          <button class="install" data-copy="cargo install --git https://github.com/martineastwood/niminal niminal-cli" title="Copy">
+            <span class="prompt">$</span> cargo install --git github.com/martineastwood/niminal niminal-cli <span class="copy-hint">copy</span>
+          </button>
+        </div>
+        <div class="hero-right">
+          <div class="panel">
+            <div class="panel-bar"><i></i><i></i><i></i><span>saw_lead.nml</span></div>
+            <Code code={hero} lang="niminal" />
+            <div class="player" data-src={audio('saw_lead')}>
+              <button class="play" aria-label="Play"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg></button>
+              <canvas class="scope" width="900" height="120"></canvas>
+              <span class="player-label">rendered by <b>niminal render</b></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="features">
+        {features.map(([n, title, body]) => (
+          <article>
+            <span class="num">{n}</span>
+            <h3>{title}</h3>
+            <p>{body}</p>
+          </article>
+        ))}
+      </section>
+
+      <section class="showcase">
+        <div class="section-head">
+          <p class="eyebrow">what it sounds like</p>
+          <h2>Every clip on this page is rendered from the code beside it.</h2>
+        </div>
+
+        <div class="row">
+          <div class="copy">
+            <p class="eyebrow">instruments and buses</p>
+            <h3>Signal flow you can read.</h3>
+            <p>Instruments are plain expressions with units that are checked at compile time: <code>hz</code>, <code>db</code>, <code>ms</code>, <code>deg</code>. Buses and tracks wire up effects, and declaration order doesn't matter.</p>
+          </div>
+          <div class="panel">
+            <div class="panel-bar"><i></i><i></i><i></i><span>room.nml</span></div>
+            <Code code={room} lang="niminal" />
+            <div class="player" data-src={audio('room')}>
+              <button class="play" aria-label="Play"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg></button>
+              <canvas class="scope" width="900" height="120"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="row flip">
+          <div class="copy">
+            <p class="eyebrow">patterns, clips and scenes</p>
+            <h3>Perform with the music, not around it.</h3>
+            <p>Mini-notation for rhythm, functions like <code>every</code>, <code>euclid</code> and <code>transpose</code> for variation, and scenes you launch quantized to the bar.</p>
+          </div>
+          <div class="panel">
+            <div class="panel-bar"><i></i><i></i><i></i><span>groove.nml</span></div>
+            <Code code={groove} lang="niminal" />
+            <div class="player" data-src={audio('groove')}>
+              <button class="play" aria-label="Play"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg></button>
+              <canvas class="scope" width="900" height="120"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="copy">
+            <p class="eyebrow">arrangements and samples</p>
+            <h3>From sketch to finished piece.</h3>
+            <p>Drum kits load from a folder, sections play in order, and <code>niminal render</code> can bounce the whole song or just bars 5 to 9.</p>
+          </div>
+          <div class="panel">
+            <div class="panel-bar"><i></i><i></i><i></i><span>song.nml</span></div>
+            <Code code={song} lang="niminal" />
+            <div class="player" data-src={audio('song')}>
+              <button class="play" aria-label="Play"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg></button>
+              <canvas class="scope" width="900" height="120"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="session">
+        <div class="section-head">
+          <p class="eyebrow">the loop</p>
+          <h2>Start a daemon. Send it code. Hear it change.</h2>
+        </div>
+        <pre class="term"><code><span class="c"># play sound and listen for code</span>
+<span class="p">$</span> niminal daemon examples/groove.nml --midi
+
+<span class="c"># change the music, landing four bars from now</span>
+<span class="p">$</span> niminal send 'launch chorus' --quantize "next 4 bars"
+
+<span class="c"># later: replay the whole session, sample for sample</span>
+<span class="p">$</span> niminal render --replay ~/.niminal/sessions/1760112000.log --out set.wav</code></pre>
+      </section>
+
+      <section class="tools">
+        <article><span class="num">editor</span><h3>VS Code</h3><p>Highlighting, evaluate block or file, diagnostics, and a scenes panel you can launch with Cmd+1..9.</p></article>
+        <article><span class="num">lsp</span><h3>Language server</h3><p>Completion, hover, go to definition and an outline from <code>niminal lsp</code>, for any editor.</p></article>
+        <article><span class="num">control</span><h3>MIDI and OSC</h3><p>Bind a control to a knob with <code>ctl x = midi.cc(21)</code> or an OSC address. Inputs are logged and replay too.</p></article>
+        <article><span class="num">engine</span><h3>Rust, no allocations on the audio thread</h3><p>Compilation happens at eval time; landing a change only moves things. The engine builds for WebAssembly.</p></article>
+      </section>
+
+      <section class="final">
+        <h2>Make some noise.</h2>
+        <div class="cta">
+          <a class="btn btn-solid" href="/guide/getting-started/">Read the guide</a>
+          <a class="btn" href="/reference/opcodes/">Browse opcodes</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>niminal · open source</span>
+      <span><a href={REPO}>GitHub</a> · <a href="/guide/getting-started/">Docs</a></span>
+    </footer>
+
+    <script>
+      const root = document.documentElement;
+      const setGround = (mode: 'ink' | 'paper') => {
+        root.setAttribute('data-mode', mode);
+        root.setAttribute('data-theme', mode === 'paper' ? 'light' : 'dark');
+        try { localStorage.setItem('starlight-theme', mode === 'paper' ? 'light' : 'dark'); } catch {}
+      };
+      document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
+        b.addEventListener('click', () => setGround(b.dataset.ground as 'ink' | 'paper')));
+
+      document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((b) =>
+        b.addEventListener('click', () => {
+          navigator.clipboard?.writeText(b.dataset.copy!);
+          const hint = b.querySelector('.copy-hint');
+          if (hint) { hint.textContent = 'copied'; setTimeout(() => (hint.textContent = 'copy'), 1500); }
+        }));
+
+      // One shared AudioContext; each player draws its own waveform while it plays.
+      let ctx: AudioContext | undefined;
+      let current: HTMLAudioElement | undefined;
+      const css = (name: string) => getComputedStyle(root).getPropertyValue(name).trim();
+
+      document.querySelectorAll<HTMLElement>('.player').forEach((player) => {
+        const canvas = player.querySelector('canvas')!;
+        const g = canvas.getContext('2d')!;
+        const button = player.querySelector<HTMLButtonElement>('.play')!;
+        let audio: HTMLAudioElement | undefined;
+        let analyser: AnalyserNode | undefined;
+        let raf = 0;
+
+        const draw = () => {
+          const { width: w, height: h } = canvas;
+          g.clearRect(0, 0, w, h);
+          g.lineWidth = 2;
+          g.strokeStyle = css('--accent');
+          g.beginPath();
+          const t = performance.now() / 1000;
+          const data = new Uint8Array(analyser?.fftSize ?? 0);
+          analyser?.getByteTimeDomainData(data);
+          const n = 240;
+          for (let i = 0; i <= n; i++) {
+            const x = (i / n) * w;
+            const y = analyser && !audio!.paused
+              ? (data[Math.floor((i / n) * (data.length - 1))] / 255) * h
+              : h / 2 + Math.sin(i / 14 + t * 0.8) * h * 0.06;
+            i ? g.lineTo(x, y) : g.moveTo(x, y);
+          }
+          g.stroke();
+          if (audio) {
+            g.fillStyle = css('--accent');
+            g.fillRect(0, h - 3, (audio.currentTime / (audio.duration || 1)) * w, 3);
+          }
+          raf = requestAnimationFrame(draw);
+        };
+        draw();
+
+        button.addEventListener('click', async () => {
+          if (!audio) {
+            audio = new Audio(player.dataset.src);
+            audio.crossOrigin = 'anonymous';
+            ctx ??= new AudioContext();
+            analyser = ctx.createAnalyser();
+            analyser.fftSize = 1024;
+            ctx.createMediaElementSource(audio).connect(analyser);
+            analyser.connect(ctx.destination);
+            audio.addEventListener('ended', () => player.classList.remove('playing'));
+            audio.addEventListener('pause', () => player.classList.remove('playing'));
+          }
+          if (!audio.paused) { audio.pause(); return; }
+          if (current && current !== audio) current.pause();
+          await ctx!.resume();
+          current = audio;
+          audio.play().then(() => player.classList.add('playing'), () => player.classList.add('missing'));
+        });
+      });
+    </script>
+  </body>
+</html>

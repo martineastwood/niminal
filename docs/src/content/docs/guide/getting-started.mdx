@@ -1,0 +1,22 @@
+---
+title: Getting started
+description: Install niminal and hear your first sound.
+---
+
+import Example from '../../../components/Example.astro';
+
+Build from source:
+
+```sh
+cargo install --path crates/niminal-cli
+```
+
+Save this as `saw_lead.nml`:
+
+<Example file="saw_lead.nml" />
+
+Render it to a WAV file:
+
+```sh
+niminal render saw_lead.nml --out saw_lead.wav
+```

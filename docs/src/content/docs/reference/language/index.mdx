@@ -1,0 +1,34 @@
+---
+title: Language overview
+description: The niminal orchestra language — syntax, instruments, routing, patterns and performance.
+---
+
+The **orchestra** is niminal’s DSP and composition language: typed parameters, named arguments, opcodes you can chain, and a score model any client can write.
+
+This reference follows the [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md). Read it in order, or jump to what you need:
+
+| Section | Topics |
+| --- | --- |
+| [Syntax](/reference/language/syntax/) | Comments, bindings, UFCS, control flow |
+| [Units and rates](/reference/language/units-and-rates/) | Hz, dB, beats; init, control and audio |
+| [Envelopes](/reference/language/envelopes/) | `env[...]`, sustain, curves, ADSR |
+| [Instruments](/reference/language/instruments/) | `instr`, `mono`, voices, `out`, parameters |
+| [Opcodes and functions](/reference/language/opcodes/) | User opcodes, `fn`, scheduling |
+| [Routing](/reference/language/routing/) | Buses, execution order, delay, latency, layouts |
+| [Samples and spectral](/reference/language/samples/) | Tables, kits, playback, FFT |
+| [Patterns](/reference/language/patterns/) | Mini-notation, grids, pattern transforms |
+| [Performance](/reference/language/performance/) | Tracks, clips, scenes, live commands |
+| [Score model](/reference/score-model/) | Events, lanes, sections (wire format) |
+| [Reserved words](/reference/reserved-words/) | Names the language keeps |
+| [Built-in opcodes](/reference/opcodes/) | Core opcode library (v1) |
+
+A minimal instrument:
+
+```nml
+instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {
+  level = env[0 2ms 1 600ms.exp 0]
+  osc(saw, freq)
+    .lpf(cutoff: freq * (2 + bright * 6), res: 0.3, model: ladder)
+    .gain(amp) * level
+}
+```

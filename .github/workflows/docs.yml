@@ -1,0 +1,47 @@
+name: docs
+on:
+  push:
+    branches: [main]
+    paths: [docs/**, examples/**, editors/vscode/syntaxes/**, crates/**]
+  pull_request:
+    paths: [docs/**, examples/**, editors/vscode/syntaxes/**, crates/**]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev ffmpeg
+      - run: cargo install --path crates/niminal-cli --locked
+      # The audio on the page comes from the code on the page; a broken example fails the build.
+      - run: docs/scripts/render-examples.sh
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: docs/package-lock.json }
+      - run: npm ci
+        working-directory: docs
+      - run: npm run build
+        working-directory: docs
+        env:
+          PUBLIC_MEDIA_URL: https://media.niminal.dev
+      # Audio goes to R2 (free egress, range requests); the site itself stays small.
+      - name: Upload audio to R2
+        if: github.ref == 'refs/heads/main'
+        working-directory: docs
+        run: |
+          for f in public/audio/*.mp3; do
+            npx wrangler r2 object put "niminal-media/$(basename "$f")" --file "$f" --content-type audio/mpeg --remote
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: docs
+          command: pages deploy dist --project-name=niminal --branch=${{ github.head_ref || github.ref_name }}

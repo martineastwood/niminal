@@ -1,0 +1,18 @@
+---
+title: Live coding
+description: Run the daemon and send code to it.
+---
+
+Start the daemon, then send code to it from the REPL, the CLI or the [VS Code extension](/reference/editor/). Syntax help and completion come from [`niminal lsp`](/reference/editor/) and work without a daemon.
+
+```sh
+niminal daemon examples/groove.nml
+niminal repl
+niminal send 'launch chorus' --quantize "next 4 bars"
+```
+
+Every input to a live session is logged by sample, so a session replays to identical audio:
+
+```sh
+niminal render --replay ~/.niminal/sessions/<log>
+```
