@@ -148,7 +148,12 @@ impl Parser {
     // ---- items -------------------------------------------------------
 
     fn item(&mut self) -> Res<Item> {
-        if self.is_keyword("instr") {
+        if self.is_keyword("ctl") {
+            self.bump();
+            let name = self.ident("a control name")?;
+            self.expect(&Tok::Eq)?;
+            Ok(Item::Control { name, value: self.expr()? })
+        } else if self.is_keyword("instr") {
             let (name, params, body, span) = self.definition()?;
             Ok(Item::Instr(InstrDef { name, params, body, span }))
         } else if self.is_keyword("bus") {

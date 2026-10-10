@@ -333,7 +333,7 @@ fn run_daemon(
     if let Some(path) = file {
         watched = Some(load(&daemon, path, Some("now")));
     }
-    let mut written = 0;
+    let mut written = (0, 0);
     let mut reported = (0, 0, 0);
     let mut last_report = std::time::Instant::now();
     loop {
@@ -366,10 +366,12 @@ fn run_daemon(
         if let Some(path) = log {
             // format under the lock, write to disk without it
             let text = {
-                let d = lock(&daemon);
+                let mut d = lock(&daemon);
+                d.session_mut().sync_realtime();
                 let entries = d.session().log();
-                (entries.len() != written).then(|| {
-                    written = entries.len();
+                let version = d.session().log_version();
+                (version != written).then(|| {
+                    written = version;
                     to_lines(entries)
                 })
             };

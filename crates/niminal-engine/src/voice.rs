@@ -79,6 +79,10 @@ impl Voice {
         self.slots[slot][..data.len()].copy_from_slice(data);
     }
 
+    pub fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
+        for op in &mut self.ops { op.set_control(key, start, target, frames, elapsed); }
+    }
+
     /// Set a parameter by index. Takes effect from the next block.
     pub fn set_param(&mut self, index: usize, value: f32) {
         self.slots[index] = [value; BLOCK];

@@ -249,7 +249,7 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
     wav.finalize().unwrap();
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     s.set_sample_dir(&dir);
-    let mut source = String::from("kit k = \"kit\"\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 }\n");
+    let mut source = String::from("ctl level = 1.0\nkit k = \"kit\"\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n");
     for i in 0..8 {
         source.push_str(&format!("track lead{i} {{ instrument = poly\n out = it.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\nplay lead{i} = [c4 e4 g4 b4].fast(64)\n"));
     }
@@ -261,6 +261,9 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     for i in 0..400 {
+        if i % 5 == 0 {
+            s.set_control("level", 0.8 + (i % 20) as f64 / 100.0, None, None, None).unwrap();
+        }
         if i % 50 == 0 {
             s.eval(&format!("track lead0 {{ instrument = poly\n out = it.lpf(cutoff: {}hz).reverb(room: 0.5, damp: 0.5) }}", 2000 + i), Some("next beat")).unwrap();
         }
@@ -269,7 +272,7 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
         assert!(out.iter().all(|v| v.is_finite()));
     }
     let metrics = r.metrics();
-    eprintln!("12 tracks, samples, 128 held voices and quantized edit stress: {metrics:?}");
+    eprintln!("12 tracks, samples, 128 held voices, control automation and quantized edit stress: {metrics:?}");
     assert_eq!(metrics.capacity_drops, 0);
     assert_eq!(metrics.late_events, 0);
     assert_eq!(metrics.starved_frames, 0);
@@ -307,4 +310,119 @@ fn a_scheduled_panic_discards_explicit_notes_prepared_for_later() {
         measured(&mut r, 256, &mut out);
         assert_eq!(out, [0.0; 256]);
     }
+}
+
+#[test]
+fn timestamped_controls_match_offline_audio_and_do_no_heap_work() {
+    const SOURCE: &str = "ctl level = 0.0\nctl other = 1.0\ninstr flat() { level * other }\nflat() for 1beat\nat 3ms flat() for 1beat";
+    let mut direct = Session::new(48_000.0, Layout::Mono).without_limiter();
+    direct.eval(SOURCE, Some("now")).unwrap();
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(SOURCE, Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let horizon = s.prepared_until();
+    for session in [&mut s, &mut direct] {
+        session.set_control("level", 1.0, None, Some(37), Some(2.0)).unwrap();
+        session.set_control("other", 0.5, None, Some(80), Some(1.0)).unwrap();
+        session.set_control("level", 0.2, None, Some(160), Some(1.0)).unwrap();
+    }
+    assert_eq!(s.prepared_until(), horizon);
+    let expected = direct.process(512).remove(0);
+    let mut out = [0.0; 512];
+    measured(&mut r, 512, &mut out);
+    assert_eq!(out.as_slice(), expected);
+    assert_eq!(r.metrics().late_events, 0);
+    s.sync_realtime();
+    let replay = Session::replay(48_000.0, Layout::Mono, Default::default(), s.log(), 512, false);
+    assert_eq!(replay[0], out);
+}
+
+#[test]
+fn turning_controls_does_not_invalidate_prepared_notes_or_allocate_in_render() {
+    let mut s = session();
+    s.eval("ctl cutoff = 2000hz\ntrack lead { instrument = tone\n out = it.lpf(cutoff: cutoff) }\nplay lead = [c4 e4 g4 b4].fast(32)", Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut out = [0.0; 256];
+    for i in 0..100 {
+        let horizon = s.prepared_until();
+        s.set_control("cutoff", 500.0 + i as f64 * 20.0, None, None, None).unwrap();
+        assert_eq!(s.prepared_until(), horizon);
+        measured(&mut r, 256, &mut out);
+        s.prepare_realtime();
+        assert!(out.iter().all(|v| v.is_finite()));
+    }
+    assert_eq!(r.metrics().starved_frames, 0);
+    assert_eq!(r.metrics().late_events, 0);
+}
+
+#[test]
+fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval("ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nflat() for 1beat", Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let mut out = vec![0.0; 128];
+        let mut pos = 0;
+        r.render(128, &mut |block, n| {
+            out[pos..pos+n].copy_from_slice(&block[0][..n]);
+            if pos == 0 {
+                ready_tx.send(()).unwrap();
+                resume_rx.recv().unwrap();
+            }
+            pos += n;
+        });
+        (r, out)
+    });
+    ready_rx.recv().unwrap();
+    // The first block has already been mixed, but its clock has not published.
+    s.set_control("level", 1.0, None, None, Some(1.0)).unwrap();
+    resume_tx.send(()).unwrap();
+    let (r, out) = thread.join().unwrap();
+    s.sync_realtime();
+    assert_eq!(r.metrics().late_events, 1);
+    assert!(matches!(s.log().last().unwrap().input, niminal_daemon::LogInput::Control { at: 32, .. }));
+    let replay = Session::replay(48_000.0, Layout::Mono, Default::default(), s.log(), 128, false);
+    assert_eq!(out, replay[0]);
+}
+
+#[test]
+fn quantized_control_redeclarations_restore_code_values_even_when_text_is_unchanged() {
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    const DECL: &str = "ctl level = 0.0.smooth(0ms)";
+    s.eval(&format!("{DECL}\ninstr flat() {{ level }}\nflat() for 2beats"), Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    s.set_control("level", 0.5, None, None, None).unwrap();
+    let mut out = [0.0; 256];
+    measured(&mut r, 256, &mut out);
+    assert_eq!(out, [0.5; 256]);
+    let accepted = s.eval(DECL, Some("next beat")).unwrap();
+    assert_eq!(accepted.lands_at, 24_000);
+    while r.clock() < 24_000 {
+        s.prepare_realtime();
+        let n = (24_000 - r.clock()).min(256) as usize;
+        measured(&mut r, n, &mut out[..n]);
+        assert_eq!(&out[..n], &vec![0.5; n]);
+    }
+    s.prepare_realtime();
+    measured(&mut r, 256, &mut out);
+    assert_eq!(out, [0.0; 256]);
+}
+
+#[test]
+fn a_control_update_waits_for_its_new_declaration_to_reach_dsp() {
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    let mut r = s.start_realtime(RealtimeConfig { queued_windows: 1, lookahead_frames: 512, ..Default::default() });
+    s.eval("ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nflat() for 1beat", Some("now")).unwrap();
+    s.set_control("level", 0.5, None, None, None).unwrap();
+    s.prepare_realtime(); // The old window occupies the only queue slot.
+    let mut out = [0.0; 256];
+    measured(&mut r, 256, &mut out);
+    s.prepare_realtime();
+    measured(&mut r, 256, &mut out);
+    assert_eq!(out, [0.5; 256]);
+    assert_eq!(r.metrics().control_drops, 0);
+    s.sync_realtime();
+    assert_eq!(s.control_values()[0].1, 0.5);
 }

@@ -1,0 +1,20 @@
+// Run with: niminal daemon examples/live_controls.nml
+// Send control.set through the WebSocket client to turn cutoff or volume.
+config { channels: stereo }
+tempo 120bpm
+
+ctl cutoff = 1khz.smooth(10ms)
+ctl volume = -18db
+
+instr tone(freq: hz) {
+  osc(saw, freq)
+  .lpf(cutoff: cutoff, res: 0.2)
+  .pan(azimuth: 0deg) * env[0 2ms 1 200ms 0]
+}
+
+track lead {
+  instrument = tone
+  out = it.gain(volume)
+}
+
+play lead = [c4 e4 g4 b4]

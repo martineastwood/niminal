@@ -293,6 +293,19 @@ impl Mixer {
         VoiceId { track, serial }
     }
 
+    pub fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
+        for track in &mut self.tracks {
+            for (_, voice) in &mut track.voices { voice.set_control(key, start, target, frames, elapsed); }
+            if let Some(chain) = &mut track.chain { chain.set_control(key, start, target, frames, elapsed); }
+        }
+    }
+
+    pub fn set_voice_control(&mut self, id: VoiceId, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
+        if let Some(track) = self.tracks.get_mut(id.track)
+            && let Some((_, voice)) = track.voices.iter_mut().find(|(serial, _)| *serial == id.serial)
+        { voice.set_control(key, start, target, frames, elapsed); }
+    }
+
     /// Release a note. A voice that has already finished is ignored. Voices keep
     /// their id when they move between tracks (see [`Mixer::adopt`]), so the
     /// track it started on is only a hint.

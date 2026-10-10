@@ -57,6 +57,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let mut names = Names::default();
     for item in &items {
         let (ident, kind) = match item {
+            Item::Control { name, .. } => (name, "control"),
             Item::Instr(d) => (&d.name, "instrument"),
             Item::Opcode(d) => (&d.name, "opcode"),
             Item::Bus(d) => (&d.name, "bus"),
@@ -94,6 +95,18 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 errors.extend(body_error);
                 registry.add(spec);
             }
+            Err(d) => errors.push(d),
+        }
+    }
+
+    for item in &items {
+        let Item::Control { name, value } = item else { continue };
+        if names.controls.iter().any(|c| c.name == name.name) {
+            errors.push(Diagnostic::new(format!("control `{}` is defined twice", name.name), name.span));
+            continue;
+        }
+        match crate::lower::compile_control(name, value, tempo, &registry, &names) {
+            Ok(control) => names.controls.push(control),
             Err(d) => errors.push(d),
         }
     }
@@ -231,6 +244,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
 
     if errors.is_empty() {
         Ok(Program {
+            controls: names.controls,
             tempo,
             master: names.master,
             instruments,

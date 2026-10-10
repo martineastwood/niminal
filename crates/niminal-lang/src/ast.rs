@@ -9,6 +9,7 @@ pub struct Ident {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Instr(InstrDef),
+    Control { name: Ident, value: Expr },
     Opcode(OpcodeDef),
     Bus(BusDecl),
     Track(TrackDecl),
