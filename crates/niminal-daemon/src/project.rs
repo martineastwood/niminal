@@ -200,12 +200,12 @@ mod tests {
     fn errors_are_located_in_the_snippet_or_in_earlier_definitions() {
         let mut p = Project::default();
         p.apply(&[entry("instr:a", "instr a() { osc(sine, 100hz) }")]);
-        let snippet = "\n\nplay lead = nope";
-        let extra = [Piece { text: "play lead = nope".into(), origin: Origin::Snippet { offset: 2 } }];
+        let snippet = "\n\nlead.play(nope)";
+        let extra = [Piece { text: "lead.play(nope)".into(), origin: Origin::Snippet { offset: 2 } }];
         let (text, map) = p.source(&std::collections::HashMap::new(), &extra);
         let at = text.find("nope").unwrap();
         let located = map.locate(Span::new(at, at + 4));
-        assert_eq!(located, Located::Snippet(Span::new(2 + "play lead = ".len(), 2 + "play lead = nope".len())));
+        assert_eq!(located, Located::Snippet(Span::new(2 + "lead.play(".len(), 2 + "lead.play(nope".len())));
 
         let d = Diagnostic::new("x", Span::new(0, 1));
         assert_eq!(map.locate(Span::new(0, 5)), Located::Earlier("instr:a".into()));

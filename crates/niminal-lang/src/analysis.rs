@@ -42,7 +42,7 @@ pub struct Statement {
     /// For `bass.reverse`, where in `text` that is: `plays.what` is only the change, `reverse`,
     /// until the session joins it to what the track is playing.
     pub edit: Option<std::ops::Range<usize>>,
-    /// The scene a `launch` starts.
+    /// The scene a `verse.start` starts, once the session has worked out that `verse` is a scene.
     pub launch: Option<String>,
     /// Whether the statement says when it happens (`at bar 5 ...`).
     /// At a fixed time on the session's clock. `at +2 bars` is not: it is after the code lands.
@@ -125,12 +125,13 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                         Command::Play { track, .. } | Command::Stop(track) => Some(format!("play:{}", track.name)),
                         Command::Mute(track) | Command::Unmute(track) => Some(format!("mute:{}", track.name)),
                         Command::Solo(_) | Command::Unsolo(_) => Some("solo".into()),
-                        Command::Launch(_) => Some("launch".into()),
-                        Command::Hush | Command::Panic | Command::Reset | Command::Edit { .. } => None,
+                        Command::Hush | Command::Panic | Command::Reset | Command::Edit { .. } | Command::Start { .. } => None,
                     };
                 }
-                if let Command::Launch(scene) = &c.command {
-                    s.launch = Some(scene.name.clone());
+                if let Command::Start { name, verb } = &c.command {
+                    // the session decides whether this is a scene or a clip
+                    s.plays = Some(PlayInfo { track: name.name.clone(), what: "start".into() });
+                    s.edit = Some(name.span.start - span.start..verb.end - span.start);
                 }
                 if let Command::Edit { track, change } = &c.command {
                     s.plays = Some(PlayInfo { track: track.name.clone(), what: source[change.start..change.end].to_string() });
@@ -165,8 +166,8 @@ tempo 120bpm @ next bar
 instr a(f: hz) { osc(sine, f) }
 riff = [c4 e4]
 clip c { notes: [c4] }
-play lead = riff.fast(2) @ next 4 bars
-mute lead
+lead.play(riff.fast(2)) @ next 4 bars
+lead.mute
 a(f: 440hz) for 1beat
 ";
         let s = analyze(src).unwrap();
@@ -185,7 +186,7 @@ a(f: 440hz) for 1beat
         assert!(s[5].plays.is_none());
         assert_eq!(s[6].kind, StatementKind::Note);
         assert!(!s[6].has_at);
-        assert!(analyze("at 2 bars mute lead").unwrap()[0].has_at);
+        assert!(analyze("at 2 bars lead.mute").unwrap()[0].has_at);
         assert!(analyze("at 1beat a(f: 1hz) for 1beat").unwrap()[0].has_at);
         assert!(s[6].key.is_none());
     }

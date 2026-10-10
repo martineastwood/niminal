@@ -136,3 +136,23 @@ fn a_multichannel_master_passes_quiet_audio_unchanged() {
         }
     }
 }
+
+#[test]
+fn silence_after_silence_is_skipped_without_changing_what_comes_next() {
+    use niminal_engine::BLOCK;
+    let blocks = |signal: f32| -> Vec<[f32; BLOCK]> { vec![[signal; BLOCK]] };
+    let mut skipping = Master::with_channels(SR, CEILING, 1);
+    let mut reference = Master::with_channels(SR, CEILING, 1);
+    let mut out = (Vec::new(), Vec::new());
+    // a loud burst, then a long silence, then a burst again
+    for step in 0..2000 {
+        let level = if (4..1990).contains(&step) { 0.0 } else { 1.5 };
+        let (mut a, mut b) = (blocks(level), blocks(level));
+        skipping.process_block(&mut a, BLOCK);
+        // `process_linked` never takes the shortcut
+        reference.process_linked(&mut [&mut b[0][..]]);
+        out.0.extend_from_slice(&a[0]);
+        out.1.extend_from_slice(&b[0]);
+    }
+    assert_eq!(out.0, out.1);
+}

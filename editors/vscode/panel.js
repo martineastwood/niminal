@@ -10,10 +10,10 @@ function trackDescription(track) {
 
 /** The commands a panel button sends, as niminal code. */
 const commands = {
-  launch: (scene) => `launch ${scene}`,
-  mute: (track) => (track.muted ? `unmute ${track.name}` : `mute ${track.name}`),
-  solo: (track) => (track.soloed ? `unsolo ${track.name}` : `solo ${track.name}`),
-  stop: (track) => `stop ${track.name}`,
+  launch: (scene) => `${scene}.start`,
+  mute: (track) => (track.muted ? `${track.name}.unmute` : `${track.name}.mute`),
+  solo: (track) => (track.soloed ? `${track.name}.unsolo` : `${track.name}.solo`),
+  stop: (track) => `${track.name}.stop`,
 };
 
 module.exports = { trackDescription, commands };

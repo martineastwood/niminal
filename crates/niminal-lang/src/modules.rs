@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn private_names_cannot_be_written_from_outside() {
         let dir = project(&[("rig.nml", RIG)]);
-        let err = expand_here("use rig\nplay x = rig::_secret\n", &dir).err().unwrap();
+        let err = expand_here("use rig\nx.play(rig::_secret)\n", &dir).err().unwrap();
         assert_eq!(err.message, "`_secret` is private to `rig`");
     }
 

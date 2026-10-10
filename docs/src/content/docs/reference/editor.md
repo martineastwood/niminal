@@ -69,7 +69,7 @@ The **niminal** sidebar lists scenes and tracks (mute, solo, stop). Compile erro
 | --- | --- | --- |
 | Transport | stdio | WebSocket (default port 7400) |
 | Audio | No | Yes |
-| Live `play` / `launch` | No | Yes |
+| Live `start` / `stop` / changes | No | Yes |
 | Diagnostics / completion | Yes | Eval diagnostics via extension/REPL |
 
 For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `control.set`, see [Daemon protocol](/reference/protocol/).

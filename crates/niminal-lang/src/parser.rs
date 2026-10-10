@@ -230,7 +230,8 @@ impl Parser {
             self.bump();
             let name = self.ident("a bus name")?;
             let layout = self.eat(&Tok::Colon).then(|| self.expr()).transpose()?;
-            Ok(Item::Bus(BusDecl { name, layout }))
+            let body = if self.peek() == &Tok::LBrace { Some(self.block()?.0) } else { None };
+            Ok(Item::Bus(BusDecl { name, layout, body }))
         } else if self.is_keyword("sample") || self.is_keyword("kit") {
             let is_kit = self.is_keyword("kit");
             let start = self.bump().span;
@@ -278,7 +279,7 @@ impl Parser {
             self.arrangement(name, start).map(Item::Arrangement)
         } else if self.is_keyword("config") {
             let start = self.bump().span;
-            let (entries, end) = self.entries()?;
+            let (entries, end) = self.entries(false)?;
             Ok(Item::Config(ConfigDecl { entries, span: start.to(end) }))
         } else if self.is_keyword("track") {
             let start = self.bump().span;
@@ -306,7 +307,7 @@ impl Parser {
             let is_clip = self.is_keyword("clip");
             let start = self.bump().span;
             let name = self.ident(if is_clip { "a clip name" } else { "a scene name" })?;
-            let (entries, end) = self.entries()?;
+            let (entries, end) = self.entries(!is_clip)?;
             let block = NamedBlock { name, entries, span: start.to(end) };
             Ok(if is_clip { Item::Clip(block) } else { Item::Scene(block) })
         } else if self.is_keyword("at") {
@@ -503,7 +504,8 @@ impl Parser {
     }
 
     /// `{ key: value, key: value }`, separated by commas or lines.
-    fn entries(&mut self) -> Res<(Vec<(Ident, Expr)>, Span)> {
+    /// `{ key: value, ... }`. With `bare`, a lone name is shorthand for `name: name`.
+    fn entries(&mut self, bare: bool) -> Res<(Vec<(Ident, Expr)>, Span)> {
         self.expect(&Tok::LBrace)?;
         let mut entries = Vec::new();
         loop {
@@ -512,8 +514,13 @@ impl Parser {
                 break;
             }
             let key = self.ident("a name")?;
-            self.expect(&Tok::Colon)?;
-            entries.push((key, self.expr()?));
+            if bare && matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::RBrace) {
+                let value = Expr { kind: ExprKind::Name(key.name.clone()), span: key.span };
+                entries.push((key, value));
+            } else {
+                self.expect(&Tok::Colon)?;
+                entries.push((key, self.expr()?));
+            }
             if !self.eat(&Tok::Comma) && !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
                 return Err(self.unexpected("the end of the entry"));
             }
@@ -569,19 +576,50 @@ impl Parser {
         matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Dot
     }
 
-    /// `bass.reverse` or `lead.transpose(+5st).thin(10%)`.
+    /// `bass.reverse`, `lead.transpose(+5st).thin(10%)`, or a command such as `bass.mute` or `verse.start`.
     fn edit(&mut self, at: Option<AtPos>) -> Res<CommandStmt> {
         let start = self.span();
         let track = self.ident("a track")?;
         self.expect(&Tok::Dot)?;
         let first = self.span();
+        // `bass.mute`, `verse.start`...: the commands, written after the thing they act on
+        if let Tok::Ident(verb) = self.peek().clone()
+            && !matches!(self.peek_at(1), Tok::LParen | Tok::Dot)
+        {
+            let command = match verb.as_str() {
+                "start" => Some(Command::Start { name: track.clone(), verb: first }),
+                "stop" => Some(Command::Stop(track.clone())),
+                "mute" => Some(Command::Mute(track.clone())),
+                "unmute" => Some(Command::Unmute(track.clone())),
+                "solo" => Some(Command::Solo(track.clone())),
+                "unsolo" => Some(Command::Unsolo(Some(track.clone()))),
+                _ => None,
+            };
+            if let Some(command) = command {
+                self.bump();
+                let quantize = self.quantize()?;
+                return Ok(CommandStmt { at, command, quantize, span: start.to(self.prev_span()) });
+            }
+        }
+        // `lead.play(answer)`: put this on the part
+        if let Tok::Ident(verb) = self.peek().clone()
+            && verb == "play"
+            && self.peek_at(1) == &Tok::LParen
+        {
+            self.bump();
+            self.bump();
+            let what = self.expr()?;
+            self.expect(&Tok::RParen)?;
+            let quantize = self.quantize()?;
+            return Ok(CommandStmt { at, command: Command::Play { track, what }, quantize, span: start.to(self.prev_span()) });
+        }
         let change = self.expr()?;
         let quantize = self.quantize()?;
         Ok(CommandStmt { at, command: Command::Edit { track, change: first.to(change.span) }, quantize, span: start.to(self.prev_span()) })
     }
 
     fn at_command(&self) -> bool {
-        ["play", "stop", "mute", "unmute", "solo", "unsolo", "hush", "panic", "reset", "launch"]
+        ["hush", "panic", "reset", "unsolo"]
             .iter()
             .any(|kw| self.is_keyword(kw))
     }
@@ -590,24 +628,10 @@ impl Parser {
         let start = self.span();
         let Tok::Ident(keyword) = self.bump().tok else { unreachable!("checked by at_command") };
         let command = match keyword.as_str() {
-            "play" => {
-                let track = self.ident("a track to play on")?;
-                self.expect(&Tok::Eq)?;
-                Command::Play { track, what: self.expr()? }
-            }
-            "stop" => Command::Stop(self.ident("a track to stop")?),
-            "mute" => Command::Mute(self.ident("a track to mute")?),
-            "unmute" => Command::Unmute(self.ident("a track to unmute")?),
-            "solo" => Command::Solo(self.ident("a track to solo")?),
-            "unsolo" => Command::Unsolo(if matches!(self.peek(), Tok::Ident(_)) && !self.is_keyword("at") {
-                Some(self.ident("a track")?)
-            } else {
-                None
-            }),
             "hush" => Command::Hush,
             "panic" => Command::Panic,
             "reset" => Command::Reset,
-            "launch" => Command::Launch(self.ident("a scene to launch")?),
+            "unsolo" => Command::Unsolo(None),
             _ => unreachable!("checked by at_command"),
         };
         let quantize = self.quantize()?;

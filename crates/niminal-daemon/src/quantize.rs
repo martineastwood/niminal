@@ -168,14 +168,14 @@ mod tests {
         let unit = |src: &str| d.for_statement(&first(src), None).unit;
         assert_eq!(unit("instr a(f: hz) { osc(sine, f) }"), QuantizeUnit::Beat);
         assert_eq!(unit("track t { out = it }"), QuantizeUnit::Bar);
-        assert_eq!(unit("play t = [c4]"), QuantizeUnit::Cycle);
-        assert_eq!(unit("mute t"), QuantizeUnit::Bar);
+        assert_eq!(unit("t.play([c4])"), QuantizeUnit::Cycle);
+        assert_eq!(unit("t.mute"), QuantizeUnit::Bar);
         assert_eq!(unit("a(f: 1hz) for 1beat"), QuantizeUnit::Now);
         assert_eq!(unit("riff = [c4]"), QuantizeUnit::Bar);
         // a statement's own `@` wins, then an override, then the kind's default
-        let own = first("mute t @ next beat");
+        let own = first("t.mute @ next beat");
         let over = Some(q("now"));
         assert_eq!(d.for_statement(&own, over).unit, QuantizeUnit::Beat);
-        assert_eq!(d.for_statement(&first("mute t"), over).unit, QuantizeUnit::Now);
+        assert_eq!(d.for_statement(&first("t.mute"), over).unit, QuantizeUnit::Now);
     }
 }

@@ -112,7 +112,7 @@ impl Server {
                             }
                         }
                     }
-                    thread::sleep(Duration::from_millis(20));
+                    thread::sleep(Duration::from_millis(40));
                 }
             }));
         }

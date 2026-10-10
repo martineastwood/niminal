@@ -78,14 +78,17 @@ pub enum Command {
     Mute(Ident),
     Unmute(Ident),
     Solo(Ident),
+    /// `unsolo` clears every solo; `bass.unsolo` just that one.
     Unsolo(Option<Ident>),
     Hush,
     Panic,
     /// Stop everything and count bars from the next bar line.
     Reset,
+    /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its track.
+    /// `verb` is the `start`.
+    Start { name: Ident, verb: Span },
     /// `bass.reverse`: change what a track is playing. `change` is `reverse`, in the source.
     Edit { track: Ident, change: Span },
-    Launch(Ident),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +175,9 @@ pub struct BusDecl {
     pub name: Ident,
     /// A layout such as `stereo` or `surround(5.1)`.
     pub layout: Option<Expr>,
+    /// `bus space: stereo { out = it.reverb(room: 0.8) }`: what the bus is processed by.
+    /// `it` is what the bus has collected.
+    pub body: Option<Vec<Stmt>>,
 }
 
 /// `config { channels: stereo }`

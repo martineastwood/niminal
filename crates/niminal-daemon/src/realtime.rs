@@ -48,6 +48,8 @@ pub(super) struct State {
     deadline_misses: AtomicUsize,
     max_render_micros: AtomicU64,
     pub(super) latency: usize,
+    /// The thread that plans ahead, woken when something changes that it must act on at once.
+    planner_thread: std::sync::Mutex<Option<std::thread::Thread>>,
 }
 
 impl State {
@@ -150,6 +152,7 @@ impl Session {
             voices: AtomicUsize::new(self.mixer.active_voices()), peaks: std::array::from_fn(|_| AtomicU32::new(0)),
             silenced: AtomicUsize::new(0), late_events: AtomicUsize::new(0), starved_frames: AtomicUsize::new(0),
             capacity_drops: AtomicUsize::new(0), control_drops: AtomicUsize::new(0), retire_pressure: AtomicUsize::new(0), deadline_misses: AtomicUsize::new(0), max_render_micros: AtomicU64::new(0), latency: self.latency(),
+            planner_thread: std::sync::Mutex::new(None),
         });
         assert!(self.mixer.active_voices() <= config.max_voices * 2, "existing voices exceed realtime capacity");
         let mut mixer = std::mem::replace(&mut self.mixer, self.program.mixer(self.sample_rate));
@@ -173,7 +176,20 @@ impl Session {
     }
 
     pub(super) fn invalidate_live(&self) {
-        if let Some(planner) = &self.live { planner.state.revision.fetch_add(1, Ordering::AcqRel); }
+        if let Some(planner) = &self.live {
+            planner.state.revision.fetch_add(1, Ordering::AcqRel);
+            if let Some(thread) = planner.state.planner_thread.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                thread.unpark();
+            }
+        }
+    }
+
+    /// The thread that calls [`Session::prepare_realtime`]: it is woken at once when a change lands,
+    /// instead of when it next looks.
+    pub fn set_planner_thread(&self, thread: std::thread::Thread) {
+        if let Some(planner) = &self.live {
+            *planner.state.planner_thread.lock().unwrap_or_else(|e| e.into_inner()) = Some(thread);
+        }
     }
 
     /// Bring control metadata up to the renderer's clock. This does no DSP.

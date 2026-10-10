@@ -30,6 +30,6 @@ track lead {
   echo      += out.delay(time: 3/8beat, feedback: 0.6).gain(-8db)
 }
 
-play bass = [c2 ~ c2 eb2 ~ g1 bb1 ~]
-play lead = [c4 e4 g4 b4].every(2, it.reverse)
+bass.play([c2 ~ c2 eb2 ~ g1 bb1 ~])
+lead.play([c4 e4 g4 b4].every(2, it.reverse))
 at +4 bars hush

@@ -8,7 +8,7 @@ Start the daemon, then send code to it from the REPL, the CLI or the [VS Code ex
 ```sh
 niminal daemon examples/groove.nml
 niminal repl
-niminal send 'launch chorus' --quantize "next 4 bars"
+niminal send 'chorus.start' --quantize "next 4 bars"
 ```
 
 Every input to a live session is logged by sample, so a session replays to identical audio:

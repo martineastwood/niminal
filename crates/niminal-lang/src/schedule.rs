@@ -445,7 +445,7 @@ track bass { instrument = pluck }
     #[test]
     fn a_looping_pattern_produces_notes_on_the_beat() {
         // 120bpm in 4/4: a bar is 2 seconds, so two steps are 1 second apart
-        let s = schedule("play lead = [c4 e4]");
+        let s = schedule("lead.play([c4 e4])");
         let n = notes(&s, 0.0, 4.0);
         assert_eq!(
             n,
@@ -463,7 +463,7 @@ track bass { instrument = pluck }
 
     #[test]
     fn windows_select_the_notes_that_start_in_them() {
-        let s = schedule("play lead = [c4 e4 g4 b4]");
+        let s = schedule("lead.play([c4 e4 g4 b4])");
         assert_eq!(times(&s, 0.5, 2.0), [0.5, 1.0, 1.5]);
         assert_eq!(times(&s, 2.0, 2.0), Vec::<f64>::new());
         assert_eq!(times(&s, 0.0, 0.5), [0.0]);
@@ -478,27 +478,27 @@ track bass { instrument = pluck }
 
     #[test]
     fn a_clip_loops_every_length_and_restarts_its_alternations() {
-        let s = schedule("clip c { length: 3 bars\nnotes: [<c4 e4>] }\nplay lead = c");
+        let s = schedule("clip c { length: 3 bars\nnotes: [<c4 e4>] }\nlead.play(c)");
         // one note per bar (2s); alternation over bars 0,1,2 then restart
         let n: Vec<i32> = notes(&s, 0.0, 12.0).into_iter().map(|e| e.2).collect();
         assert_eq!(n, [60, 64, 60, 60, 64, 60]);
         // a short pattern in a long clip simply repeats
-        let s = schedule("clip c { length: 2 bars\nnotes: [c4 e4] }\nplay lead = c");
+        let s = schedule("clip c { length: 2 bars\nnotes: [c4 e4] }\nlead.play(c)");
         assert_eq!(times(&s, 0.0, 8.0).len(), 8);
     }
 
     #[test]
     fn a_clip_keeps_counting_cycles_until_it_is_given_a_length() {
         let order = |s: &Schedule| notes(s, 0.0, 8.0).into_iter().map(|e| e.2).collect::<Vec<_>>();
-        assert_eq!(order(&schedule("play lead = [<c4 e4>]")), [60, 64, 60, 64]);
-        assert_eq!(order(&schedule("play lead = [c4 e4].every(2, it.reverse)")), [64, 60, 60, 64, 64, 60, 60, 64]);
-        assert_eq!(order(&schedule("clip c { notes: [<c4 e4>] }\nplay lead = c")), [60, 64, 60, 64]);
-        assert_eq!(order(&schedule("clip c { length: 1 bar\nnotes: [<c4 e4>] }\nplay lead = c")), [60, 60, 60, 60]);
+        assert_eq!(order(&schedule("lead.play([<c4 e4>])")), [60, 64, 60, 64]);
+        assert_eq!(order(&schedule("lead.play([c4 e4].every(2, it.reverse))")), [64, 60, 60, 64, 64, 60, 60, 64]);
+        assert_eq!(order(&schedule("clip c { notes: [<c4 e4>] }\nlead.play(c)")), [60, 64, 60, 64]);
+        assert_eq!(order(&schedule("clip c { length: 1 bar\nnotes: [<c4 e4>] }\nlead.play(c)")), [60, 60, 60, 60]);
     }
 
     #[test]
     fn launching_a_scene_stops_the_tracks_it_does_not_name() {
-        let s = schedule("scene a { lead: [c4], bass: [c2] }\nscene b { lead: [e4] }\nlaunch a\nat +2 bars launch b");
+        let s = schedule("scene a { lead: [c4], bass: [c2] }\nscene b { lead: [e4] }\na.start\nat +2 bars b.start");
         let tracks = |from, to| notes(&s, from, to).into_iter().map(|e| e.1).collect::<Vec<_>>();
         assert_eq!(tracks(0.0, 2.0), ["lead", "bass"]);
         assert_eq!(tracks(4.0, 6.0), ["lead"], "bass was not in scene b");
@@ -506,7 +506,7 @@ track bass { instrument = pluck }
 
     #[test]
     fn other_lanes_are_read_where_each_note_starts() {
-        let s = schedule("clip c { notes: [c4 e4 g4 b4]\nbright: [0.2 0.8] }\nplay lead = c");
+        let s = schedule("clip c { notes: [c4 e4 g4 b4]\nbright: [0.2 0.8] }\nlead.play(c)");
         let e = s.events(0.0, 2.0).unwrap();
         let brights: Vec<_> = e.iter().map(|e| e.args["bright"]).collect();
         assert_eq!(brights, [Value::Num(0.2), Value::Num(0.2), Value::Num(0.8), Value::Num(0.8)]);
@@ -515,23 +515,23 @@ track bass { instrument = pluck }
 
     #[test]
     fn dur_and_nudge_lanes_shape_each_note() {
-        let s = schedule("clip c { notes: [c4 e4]\ndur: [1/4beat]\nnudge: [0ms 100ms] }\nplay lead = c");
+        let s = schedule("clip c { notes: [c4 e4]\ndur: [1/4beat]\nnudge: [0ms 100ms] }\nlead.play(c)");
         let e = s.events(0.0, 2.0).unwrap();
         assert_eq!(e[0].dur, Time::Beats(0.25));
         assert_eq!(e[0].at, Time::Seconds(0.0));
         assert_eq!(e[1].at, Time::Seconds(1.1), "100ms late");
         assert!(!e[0].args.contains_key("dur") && !e[0].args.contains_key("nudge"), "they aren't instrument arguments");
         // a nudge never pushes a note before the start
-        let early = schedule("clip c { notes: [c4]\nnudge: [-50ms] }\nplay lead = c");
+        let early = schedule("clip c { notes: [c4]\nnudge: [-50ms] }\nlead.play(c)");
         assert_eq!(early.events(0.0, 1.0).unwrap()[0].at, Time::Seconds(0.0));
     }
 
     #[test]
     fn commands_start_replace_and_stop_clips() {
         let s = schedule("
-play lead = [c4]
-at 2 bars play lead = [e4]
-at 3 bars stop lead");
+lead.play([c4])
+at 2 bars lead.play([e4])
+at 3 bars lead.stop");
         // bar = 2s: c4 for the first 4s, e4 for 4s..6s, then silence
         let n = notes(&s, 0.0, 20.0);
         assert_eq!(n.iter().map(|e| e.2).collect::<Vec<_>>(), [60, 60, 64]);
@@ -541,15 +541,15 @@ at 3 bars stop lead");
 
     #[test]
     fn a_clip_started_later_starts_its_own_cycle_there() {
-        let s = schedule("at bar 3 play lead = [c4 e4]");
+        let s = schedule("at bar 3 lead.play([c4 e4])");
         assert_eq!(times(&s, 0.0, 8.0), [4.0, 5.0, 6.0, 7.0]);
-        let mid_beat = schedule("at 1beat play lead = [c4 e4]");
+        let mid_beat = schedule("at 1beat lead.play([c4 e4])");
         assert_eq!(times(&mid_beat, 0.0, 3.0), [0.5, 1.5, 2.5]);
     }
 
     #[test]
     fn tracks_play_independently_and_hush_ends_them_all() {
-        let s = schedule("play lead = [c4]\nplay bass = [c2 g2]\nat 2 bars hush");
+        let s = schedule("lead.play([c4])\nbass.play([c2 g2])\nat 2 bars hush");
         let n = notes(&s, 0.0, 20.0);
         assert_eq!(n.iter().filter(|e| e.1 == "lead").count(), 2);
         assert_eq!(n.iter().filter(|e| e.1 == "bass").count(), 4);
@@ -559,23 +559,23 @@ at 3 bars stop lead");
 
     #[test]
     fn mute_and_solo_silence_tracks_without_stopping_them() {
-        let s = schedule("play lead = [c4]\nplay bass = [c2]\nat 1 bar mute lead\nat 3 bars unmute lead");
+        let s = schedule("lead.play([c4])\nbass.play([c2])\nat 1 bar lead.mute\nat 3 bars lead.unmute");
         let lead: Vec<f64> = notes(&s, 0.0, 10.0).into_iter().filter(|e| e.1 == "lead").map(|e| e.0).collect();
         assert_eq!(lead, [0.0, 6.0, 8.0], "silent between 2s and 6s; the clip kept its place");
         assert_eq!(notes(&s, 0.0, 10.0).iter().filter(|e| e.1 == "bass").count(), 5);
 
-        let solo = schedule("play lead = [c4]\nplay bass = [c2]\nat 1 bar solo bass\nat 2 bars unsolo");
+        let solo = schedule("lead.play([c4])\nbass.play([c2])\nat 1 bar bass.solo\nat 2 bars unsolo");
         let who = |t0, t1| notes(&solo, t0, t1).into_iter().map(|e| e.1).collect::<Vec<_>>();
         assert_eq!(who(0.0, 2.0), ["lead", "bass"]);
         assert_eq!(who(2.0, 4.0), ["bass"], "only the soloed track");
         assert_eq!(who(4.0, 6.0), ["lead", "bass"]);
-        let one = schedule("play lead = [c4]\nplay bass = [c2]\nsolo lead\nsolo bass\nat 1 bar unsolo bass");
+        let one = schedule("lead.play([c4])\nbass.play([c2])\nlead.solo\nbass.solo\nat 1 bar bass.unsolo");
         assert_eq!(notes(&one, 2.0, 4.0).iter().map(|e| e.1.as_str()).collect::<Vec<_>>(), ["lead"]);
     }
 
     #[test]
     fn panic_is_reported_and_ends_every_clip() {
-        let s = schedule("play lead = [c4]\nat 3 bars panic");
+        let s = schedule("lead.play([c4])\nat 3 bars panic");
         assert_eq!(s.panics(), [6.0]);
         assert_eq!(s.end(), Some(6.0));
         assert_eq!(times(&s, 0.0, 20.0), [0.0, 2.0, 4.0]);
@@ -587,8 +587,8 @@ at 3 bars stop lead");
 clip riff { notes: [c2 g2] }
 scene verse { bass: riff, lead: [c4] }
 scene bridge { bass: ~, lead: [e4] }
-launch verse
-at 2 bars launch bridge");
+verse.start
+at 2 bars bridge.start");
         let n = notes(&s, 0.0, 8.0);
         let bass = n.iter().filter(|e| e.1 == "bass").count();
         assert_eq!(bass, 4, "two bars of two notes, then stopped");
@@ -598,7 +598,7 @@ at 2 bars launch bridge");
 
     #[test]
     fn thinned_patterns_are_the_same_whichever_way_they_are_asked_for() {
-        let s = schedule("play lead = [c4*8].thin(40%)");
+        let s = schedule("lead.play([c4*8].thin(40%))");
         let whole = times(&s, 0.0, 16.0);
         let mut pieces = Vec::new();
         for i in 0..8 {
@@ -610,10 +610,10 @@ at 2 bars launch bridge");
 
     #[test]
     fn notes_that_are_not_pitches_are_errors() {
-        let s = schedule("play lead = [0.5]");
+        let s = schedule("lead.play([0.5])");
         let e = s.events(0.0, 2.0).unwrap_err();
         assert!(e.0.contains("must be a note name or a frequency"), "{e}");
-        let s = schedule("clip c { notes: [c4]\ndur: [440hz] }\nplay lead = c");
+        let s = schedule("clip c { notes: [c4]\ndur: [440hz] }\nlead.play(c)");
         assert!(s.events(0.0, 2.0).unwrap_err().0.contains("lane `dur`"));
     }
 
@@ -627,7 +627,7 @@ at 2 bars launch bridge");
 
     #[test]
     fn other_meters_change_the_length_of_a_cycle() {
-        let src = "meter 3/4\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) }\ntrack t { instrument = p }\nplay t = [c4 e4 g4]";
+        let src = "meter 3/4\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) }\ntrack t { instrument = p }\nt.play([c4 e4 g4])";
         let s = compile(src).unwrap().schedule();
         // a 3/4 bar at 120bpm is 1.5 seconds, so three steps are half a second apart
         assert_eq!(times(&s, 0.0, 1.6), [0.0, 0.5, 1.0, 1.5]);

@@ -8,5 +8,5 @@ track beat { instrument = drums }
 track hats { instrument = drums(gain: -1db) }
 
 // the kick and snare, and eighth-note hats
-play beat = [kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare]
-play hats = [hat hat hat hat hat hat hat hat]
+beat.play([kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare])
+hats.play([hat hat hat hat hat hat hat hat])

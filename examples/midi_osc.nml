@@ -17,4 +17,4 @@ track lead {
   out = it.gain(volume)
 }
 
-play lead = [c3 e3 g3 b3]
+lead.play([c3 e3 g3 b3])

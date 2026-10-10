@@ -40,16 +40,16 @@ fn a_client_evaluates_code_and_is_told_when_it_lands() {
     c.call("subscribe", json!({"topics": ["landed"]})).unwrap();
     c.call("eval", json!({"source": SETUP, "quantize": "now"})).unwrap();
 
-    let reply = c.call("eval", json!({"source": "play lead = [c4]"})).unwrap();
+    let reply = c.call("eval", json!({"source": "lead.play([c4])"})).unwrap();
     assert!(reply["lands_at"].as_u64().is_some());
-    assert_eq!(reply["changes"][0], "play lead = [c4]");
+    assert_eq!(reply["changes"][0], "lead.play([c4])");
 
     // it waits for its boundary, and the daemon says so
     let landed = c.wait_for("landed", WAIT).unwrap();
-    assert!(landed["changes"].to_string().contains("tempo 120bpm") || landed["changes"].to_string().contains("play lead"));
-    let mut saw_play = landed["changes"].to_string().contains("play lead");
+    assert!(landed["changes"].to_string().contains("tempo 120bpm") || landed["changes"].to_string().contains("lead.play"));
+    let mut saw_play = landed["changes"].to_string().contains("lead.play");
     while !saw_play {
-        saw_play = c.wait_for("landed", WAIT).unwrap()["changes"].to_string().contains("play lead");
+        saw_play = c.wait_for("landed", WAIT).unwrap()["changes"].to_string().contains("lead.play");
     }
     r.server.stop();
 }
@@ -59,7 +59,7 @@ fn code_that_does_not_compile_is_refused_with_its_problems() {
     let r = start(None);
     let mut c = connect(&r);
     c.call("eval", json!({"source": SETUP, "quantize": "now"})).unwrap();
-    let refusal = c.call_raw("eval", json!({"source": "play lead = [c4\n"})).unwrap().unwrap_err();
+    let refusal = c.call_raw("eval", json!({"source": "lead.play([c4)\n"})).unwrap().unwrap_err();
     assert_eq!(refusal["code"], -32001);
     assert_eq!(refusal["data"]["problems"][0]["message"], "this `[` is never closed");
     assert_eq!(refusal["data"]["problems"][0]["line"], 1);
@@ -87,7 +87,7 @@ fn clients_share_one_session() {
     let mut b = connect(&r);
     a.call("eval", json!({"source": SETUP, "quantize": "now"})).unwrap();
     // `b` builds on what `a` defined
-    b.call("eval", json!({"source": "play lead = [c4]", "quantize": "now"})).unwrap();
+    b.call("eval", json!({"source": "lead.play([c4])", "quantize": "now"})).unwrap();
     let started = std::time::Instant::now();
     while b.call("status", json!({})).unwrap()["transport"]["voices"].as_u64().unwrap() == 0 {
         assert!(started.elapsed() < WAIT, "the shared clip never sounded");

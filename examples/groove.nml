@@ -1,11 +1,14 @@
-// The performance layer: clips and scenes launched on a timeline.
+// The performance layer: clips that carry their instrument, scenes, and live commands.
 // Render with:  niminal render examples/groove.nml --out groove.wav
-// Live, try:  launch verse   then   bass.reverse   or   lead.transpose(+5st)   then   stop verse
+// Live, try:  verse.start   then   bass.reverse   then   lead.transpose(+5st)   then   bass.undo   then   verse.stop
 // The `at +N bars` lines count from when the code lands, so you can submit it again at any time in a live session.
 config { channels: stereo }
 tempo 110bpm
 
-bus space: stereo
+// A bus can process what is sent to it. `it` is what it has collected.
+bus space: stereo {
+  out = it.reverb(room: 0.8, damp: 0.4).gain(0.8)
+}
 
 instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {
   level = env[0 2ms 1 400ms.exp 0]
@@ -14,27 +17,33 @@ instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {
   space += out.gain(-12db)
 }
 
-track hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
-track bass { instrument = pluck(bright: 0.2) }
-track lead { instrument = pluck(bright: 0.8) }
-
-clip riff {
+// A clip with an `instrument:` is a part: start it, stop it, mute it and change it by name.
+clip bass {
+  instrument: pluck(bright: 0.2)
   notes:  [c2 ~ c2 eb2 ~ g1 bb1 ~]
   gain:   [0db -6db -3db]
   bright: [0.2 0.5 0.8]
 }
 
-theme = [c4 e4 g4 b4].every(2, it.reverse)
-answer = theme.transpose(+5st).thin(25%)
+clip lead {
+  instrument: pluck(bright: 0.8)
+  notes: [c4 e4 g4 b4].every(2, it.reverse)
+}
+
+// Without an instrument these are just material, to play on a part.
+answer = [c4 e4 g4 b4].every(2, it.reverse).transpose(+5st).thin(25%)
 spread = [c5].euclid(hits: 4, steps: 8)
 
-scene verse  { bass: riff, lead: theme }
-scene chorus { bass: riff.transpose(+5st), lead: answer }
+// Starting a scene starts what it lists and stops the other parts.
+scene verse  { bass, lead }
+scene chorus { bass: bass.transpose(+5st), lead: answer }
 scene outro  { lead: spread }
 
-launch verse
-at +4 bars launch chorus
-at +8 bars mute bass
-at +10 bars unmute bass
-at +12 bars launch outro
+verse.start
+at +4 bars chorus.start
+at +8 bars bass.mute
+at +10 bars bass.unmute
+at +12 bars outro.start
 at +14 bars hush
+
+

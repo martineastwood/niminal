@@ -40,7 +40,7 @@ Start the engine with an initial file, then send more code from the REPL or CLI:
 niminal daemon examples/groove.nml
 niminal repl
 # in another terminal:
-niminal send 'launch chorus' --quantize "next 4 bars"
+niminal send 'chorus.start' --quantize "next 4 bars"
 ```
 
 Sessions are logged sample-accurately, so you can replay them:

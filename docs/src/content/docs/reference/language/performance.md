@@ -3,11 +3,46 @@ title: Performance
 description: Tracks, clips, scenes, live commands, quantization, and control.
 ---
 
-The performance layer is session-view style: **tracks** persist, **clips** launch on them, **scenes** launch sets of clips. Arrangements sequence the same structures for offline renders.
+The performance layer is session-view style: **clips** carry their instrument and are started and stopped by name, **scenes** start sets of clips, and **tracks** are there when you need a mixer channel with effects. Arrangements sequence the same structures for offline renders.
+
+## Parts: clips with an instrument
+
+A clip with an `instrument:` is a *part*. It is also a track of the same name, which plays it, so you start, mute and change it by its name:
+
+```nml
+clip bass {
+  instrument: pluck(bright: 0.2)
+  notes:  [c2 ~ c2 eb2 ~ g1 bb1 ~]
+  gain:   [0db -6db -3db]
+}
+clip lead {
+  instrument: pluck(bright: 0.8)
+  notes:  [c4 e4 g4 b4]
+}
+
+scene verse { bass, lead }       // short for { bass: bass, lead: lead }
+
+verse.start
+bass.reverse
+lead.transpose(+5st)
+bass.mute
+bass.unmute
+verse.stop
+```
+
+Instruments send to buses from inside their definition (`space += out.gain(-12db)`), and a bus can process what it collects:
+
+```nml
+bus space: stereo {
+  out = it.reverb(room: 0.8, damp: 0.4).gain(0.8)
+}
+```
+
+The commands are written after the thing they act on: `start`, `stop`, `mute`, `unmute`, `solo` and `unsolo` on a part, `start` and `stop` on a scene. Anything else after the dot is a change to what the part plays (below). Put other material on a part with `lead.play(answer)`. `hush`, `panic`, `reset` and `unsolo` (every solo at once) act on everything.
 
 ## Tracks
 
-A track has parameters, default instrument, note effects, audio effects, sends, and a mixer. In each stage, **`it`** is that stage’s input.
+A part's track is made for you. Write a `track` yourself when you want more than an instrument: effects on the part, sends, or a channel that only processes a bus. A track has parameters, default instrument, note effects, audio effects, sends, and a mixer. In each stage, **`it`** is that stage’s input.
 
 ```nml
 track bass(tone: hz = 2khz) {
@@ -49,7 +84,7 @@ clip riff {
 scene verse  { bass: riff, drums: groove, keys: ~ }
 scene chorus { bass: riff.transpose(+5st), drums: groove, keys: chords }
 
-launch chorus @ next 4 bars
+chorus.start @ next 4 bars
 ```
 
 A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only a `notes` lane, and everything below works the same on both. A clip with no `length:` runs freely: its cycles keep counting, so `<a b>` and `every` alternate. Give it a `length:` and it loops, starting over each time.
@@ -60,13 +95,13 @@ See [Score model](/reference/score-model/) for arrangement-level tempo, meter, a
 
 ## Live commands
 
-While a scene is playing you can change what a track plays by writing the change after its name. It lands on the next boundary, like a `play`, and the track's clip starts over there:
+While a scene is playing you can change what a part plays by writing the change after its name. It lands on the next boundary, like a `play`, and the track's clip starts over there:
 
 ```nml
-launch verse
+verse.start
 bass.reverse            // the bass clip now plays backwards
 lead.transpose(+5st).thin(25%)
-stop verse              // every track in the scene stops together
+verse.stop              // every part in the scene stops together
 ```
 
 Each change builds on what the track is playing, in the order you made them, and the tracks panel shows the stack (`▶ riff · reverse → thin(25%)`):
@@ -80,9 +115,27 @@ bass.clear              // takes off all of them
 
 - One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A track carries at most 16.
 - Redefining the clip itself (`riff = …`) keeps your changes and applies them to the new clip.
-- A `play` line or launching a scene starts the track fresh, with no changes.
+- `lead.play(…)`, `lead.start` or starting a scene that has it starts the part fresh, with no changes.
 - `thin` drops the same notes for the same amount wherever it is written, so undoing something else doesn't change which notes it drops.
-- Only a live session can do this: in a file, write the change into the play line.
+- Only a live session can do this. In a file these lines do nothing, so you can keep them in a scratch file next to your song: write the change into the play line to make it part of the piece.
+
+## Timed commands and the transport
+
+Two small pieces of syntax say *when*, and they answer different questions:
+
+- **`@ next 4 bars`, written after a command, is when the change lands.** It is a musical boundary, counted from now. Use it live: `bass.reverse @ next 4 bars`.
+- **`at +4 bars`, written before a command, is when in the timeline it happens,** counted from when the code lands. Use it to lay out a section; the times line up down the left of the file.
+
+```nml
+verse.start
+at +4 bars chorus.start
+at +8 bars bass.mute
+at +12 bars hush
+```
+
+`at bar 5 chorus.start` is at bar 5 on the session's clock, which keeps counting while the daemon runs, so submitting it again after bar 5 does nothing. Prefer `at +N` in anything you will submit more than once.
+
+`reset` stops everything (like `hush`) and makes the next bar line bar 1, so `at bar 5` and the bar numbers in the status bar count from there again. It lands on the next bar like other commands: send it on its own, then the timeline. In a render, `reset` is a `hush`.
 
 ## Quantized changes
 

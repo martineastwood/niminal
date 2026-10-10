@@ -169,7 +169,7 @@ const features = [
 <span class="p">$</span> niminal daemon examples/groove.nml --midi
 
 <span class="c"># change the music, landing four bars from now</span>
-<span class="p">$</span> niminal send 'launch chorus' --quantize "next 4 bars"
+<span class="p">$</span> niminal send 'chorus.start' --quantize "next 4 bars"
 
 <span class="c"># later: replay the whole session, sample for sample</span>
 <span class="p">$</span> niminal render --replay ~/.niminal/sessions/1760112000.log --out set.wav</code></pre>

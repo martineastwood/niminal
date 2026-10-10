@@ -91,7 +91,7 @@ Compile and queue niminal source. Failed compile returns **-32001** with **`erro
   "lands_at": 96000,
   "position": { "bar": 2, "beat": 1.0 },
   "in_seconds": 1.79,
-  "changes": ["play lead = [c4]"]
+  "changes": ["lead.play([c4])"]
 }
 ```
 
@@ -176,7 +176,7 @@ Inject score-model **events** from an external client (Python, tracker, etc.) wi
 
 Validation matches orchestra typing. Unknown target or bad units → **-32001** with **`problems`**.
 
-There is no separate **`launch`** RPC yet — use **`eval`** with source like `launch chorus` or `play bass = riff`.
+There is no separate **`launch`** RPC yet — use **`eval`** with source like `chorus.start` or `bass.play(riff)`.
 
 ## Error codes
 
@@ -218,10 +218,10 @@ The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%
 → {"jsonrpc":"2.0","id":3,"method":"eval","params":{"source":"tempo 120bpm\ninstr x(freq: hz) { osc(sine, freq) }\ntrack t { instrument = x }","quantize":"now"}}
 ← {"jsonrpc":"2.0","id":3,"result":{"id":1,"lands_at":0,...}}
 
-→ {"jsonrpc":"2.0","id":4,"method":"eval","params":{"source":"play t = [c4 e4 g4]","quantize":"next bar"}}
+→ {"jsonrpc":"2.0","id":4,"method":"eval","params":{"source":"t.play([c4 e4 g4])","quantize":"next bar"}}
 ← {"jsonrpc":"2.0","id":4,"result":{"id":2,"lands_at":96000,"position":{"bar":2,"beat":1.0},...}}
 
-← {"jsonrpc":"2.0","method":"landed","params":{"id":2,"at":96000,"changes":["play t = [c4 e4 g4]"],...}}
+← {"jsonrpc":"2.0","method":"landed","params":{"id":2,"at":96000,"changes":["t.play([c4 e4 g4])"],...}}
 ```
 
 See also [Command line](/reference/cli/) (`send`, `repl`), [Editor and LSP](/reference/editor/), and [Live coding](/guide/live-coding/).

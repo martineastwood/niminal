@@ -174,7 +174,7 @@ fn atom_value(atom: &str, sample_names: &[String]) -> Result<Value, String> {
 
 impl Perform<'_> {
     fn define(&mut self, name: &Ident, value: PerfValue) -> Res<()> {
-        if let Some(kind) = self.cx.names.kind_of(&name.name) {
+        if let Some(kind) = self.cx.names.kind_of(&name.name).filter(|k| !(*k == "part" && matches!(value, PerfValue::Clip(_)))) {
             return Err(Diagnostic::new(format!("`{}` is already the name of a {kind}", name.name), name.span));
         }
         if matches!(name.name.as_str(), "it" | "out") {
@@ -593,8 +593,8 @@ impl Perform<'_> {
             PerfValue::Grid(_) => Err(Diagnostic::new("a grid has no pitches to play", span)
                 .with_help("give it notes with `.rhythm(grid[...])` on a pattern instead")),
             PerfValue::Scene(_) => Err(Diagnostic::new("a scene is launched, not played", span)
-                .with_help("write `launch name`")),
-            PerfValue::Rest => Err(Diagnostic::new("`~` stops a track in a scene; to stop one, write `stop track`", span)),
+                .with_help("write `name.start`")),
+            PerfValue::Rest => Err(Diagnostic::new("`~` stops a track in a scene; to stop one, write `track.stop`", span)),
         }
     }
 
@@ -646,6 +646,30 @@ impl Perform<'_> {
                 self.check_clip(&clip, t, track, what.span)?;
                 vec![schedule(Action::Play { track: t, clip })]
             }
+            Command::Start { name, .. } => {
+                if matches!(self.bindings.get(&name.name), Some(PerfValue::Scene(_))) {
+                    return self.launch(name, &schedule);
+                }
+                if self.cx.failed.contains(&name.name.as_str()) {
+                    return Ok(Vec::new());
+                }
+                let Ok(t) = self.track(name) else {
+                    let scenes = self.bindings.iter().filter(|(_, v)| matches!(v, PerfValue::Scene(_))).map(|(k, _)| k.as_str());
+                    let parts = self.cx.tracks.iter().map(|t| t.name.as_str());
+                    let mut d = Diagnostic::new(format!("no scene or part named `{}`", name.name), name.span);
+                    if let Some(c) = closest(&name.name, scenes.chain(parts)) {
+                        d = d.with_help(format!("did you mean `{c}`?"));
+                    }
+                    return Err(d);
+                };
+                if !matches!(self.bindings.get(&name.name), Some(PerfValue::Clip(_) | PerfValue::Pattern(_))) {
+                    return Err(Diagnostic::new(format!("`{0}` is not a scene or a clip, so `{0}.start` has nothing to start", name.name), name.span));
+                }
+                let what = Expr { kind: ExprKind::Name(name.name.clone()), span: name.span };
+                let clip = self.to_clip(self.eval(&what, None)?, &name.name, name.span)?;
+                self.check_clip(&clip, t, name, name.span)?;
+                vec![schedule(Action::Play { track: t, clip })]
+            }
             Command::Stop(t) => match self.bindings.get(&t.name) {
                 // stopping a scene stops the tracks it plays on
                 Some(PerfValue::Scene(scene)) => scene.entries.iter().map(|(track, _)| schedule(Action::Stop { track: *track })).collect(),
@@ -661,14 +685,8 @@ impl Perform<'_> {
             Command::Hush => vec![schedule(Action::Hush)],
             Command::Panic => vec![schedule(Action::Panic)],
             Command::Reset => vec![schedule(Action::Reset)],
-            Command::Edit { track, .. } => {
-                return Err(Diagnostic::new(
-                    format!("`{}.…` changes what the track is playing, so it only works in a live session", track.name),
-                    track.span,
-                )
-                .with_help(format!("in a file, write the change into the play line: `play {} = …`", track.name)));
-            }
-            Command::Launch(name) => self.launch(name, &schedule)?,
+            // changing what a track plays is for a live session; in a file it does nothing
+            Command::Edit { .. } => Vec::new(),
         })
     }
 

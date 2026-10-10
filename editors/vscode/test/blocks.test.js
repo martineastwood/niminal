@@ -5,7 +5,7 @@ const { blockAround } = require("../blocks");
 const lines = (text) => text.split("\n");
 
 test("a block is the lines around the cursor up to blank lines", () => {
-  const src = lines("tempo 100bpm\n\nplay a = [c4]\nplay b = [e4]\n\nhush");
+  const src = lines("tempo 100bpm\n\na.play([c4])\nb.play([e4])\n\nhush");
   assert.deepStrictEqual(blockAround(src, 3), { start: 2, end: 3 });
   assert.deepStrictEqual(blockAround(src, 0), { start: 0, end: 0 });
   assert.strictEqual(blockAround(src, 1), null);
@@ -18,6 +18,6 @@ test("blank lines inside brackets don't end the block", () => {
 });
 
 test("brackets in comments are ignored", () => {
-  const src = lines("play a = [c4] // [\n\nhush");
+  const src = lines("a.play([c4]) // [\n\nhush");
   assert.deepStrictEqual(blockAround(src, 0), { start: 0, end: 0 });
 });

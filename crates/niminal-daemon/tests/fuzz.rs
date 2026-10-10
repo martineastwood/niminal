@@ -108,7 +108,7 @@ fn run(source: &str, layout: Layout, accepted: &mut usize) -> Option<String> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let mut s = Session::new(48_000.0, layout);
         let ok = s.eval(source, Some("now")).is_ok();
-        let _ = s.eval("launch verse\nplay lead = [c4 e4 g4]\nhush", Some("now"));
+        let _ = s.eval("verse.start\nlead.play([c4 e4 g4])\nhush", Some("now"));
         let _ = s.process(48_000 * 3);
         ok
     }));
@@ -173,16 +173,16 @@ track lead { instrument = tone }
 /// Programs that are legal but ask for far more than any machine can play.
 /// None may take long to accept, and the session must keep rendering audio.
 const GREEDY: [&str; 10] = [
-    "play lead = [c4*1024]",
-    "play lead = [[c4*1024]*1024]",
-    "play lead = [[[c4*1024]*1024]*1024]",
-    "play lead = [c4 e4 g4].fast(100000)",
-    "play lead = [c4 e4 g4].fast(1000000000000)",
-    "play lead = [c4].euclid(hits: 50000, steps: 100000)",
-    "play lead = [c4 e4 g4 b4].repeat_each(100000)",
-    "play lead = [c4*64, e4*64, g4*64, b4*64, c5*64, e5*64, g5*64, b5*64]",
-    "clip huge { length: 100000bars\n notes: [c4*512] }\nplay lead = huge",
-    "play lead = [c4].every(1, it.fast(1000)).fast(1000)",
+    "lead.play([c4*1024])",
+    "lead.play([[c4*1024]*1024])",
+    "lead.play([[[c4*1024]*1024]*1024])",
+    "lead.play([c4 e4 g4].fast(100000))",
+    "lead.play([c4 e4 g4].fast(1000000000000))",
+    "lead.play([c4].euclid(hits: 50000, steps: 100000))",
+    "lead.play([c4 e4 g4 b4].repeat_each(100000))",
+    "lead.play([c4*64, e4*64, g4*64, b4*64, c5*64, e5*64, g5*64, b5*64])",
+    "clip huge { length: 100000bars\n notes: [c4*512] }\nlead.play(huge)",
+    "lead.play([c4].every(1, it.fast(1000)).fast(1000))",
 ];
 
 #[test]

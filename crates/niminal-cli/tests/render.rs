@@ -758,7 +758,7 @@ track bass { instrument = pluck(bright: 0.1) }
 
     #[test]
     fn a_played_pattern_renders_exactly_like_the_same_notes_written_out() {
-        let played = raw("play lead = [c4 e4]", 2.0);
+        let played = raw("lead.play([c4 e4])", 2.0);
         // two bars of two one-second steps: four notes, two beats each
         let written = raw(
             "lead(freq: c4) for 2beats\nat 2beats lead(freq: e4) for 2beats\nat 4beats lead(freq: c4) for 2beats\nat 6beats lead(freq: e4) for 2beats",
@@ -770,7 +770,7 @@ track bass { instrument = pluck(bright: 0.1) }
 
     #[test]
     fn lanes_become_note_parameters() {
-        let lane = raw("clip c { notes: [c4 e4]\nbright: [0.1 0.9]\ngain: [-6db] }\nplay lead = c", 1.0);
+        let lane = raw("clip c { notes: [c4 e4]\nbright: [0.1 0.9]\ngain: [-6db] }\nlead.play(c)", 1.0);
         let written = raw(
             "lead(freq: c4, bright: 0.1, gain: -6db) for 2beats\nat 2beats lead(freq: e4, bright: 0.9, gain: -6db) for 2beats",
             0.0,
@@ -780,7 +780,7 @@ track bass { instrument = pluck(bright: 0.1) }
 
     #[test]
     fn a_track_applies_its_instrument_defaults_to_played_notes() {
-        let played = raw("play bass = [c2]", 1.0);
+        let played = raw("bass.play([c2])", 1.0);
         let written = raw("bass(freq: c2) for 4beats", 0.0);
         assert_eq!(played, written);
         let explicit = raw("lead(freq: c2, bright: 0.1) for 4beats", 0.0);
@@ -789,16 +789,16 @@ track bass { instrument = pluck(bright: 0.1) }
 
     #[test]
     fn an_open_ended_piece_needs_a_length() {
-        let err = render_with_bars("play lead = [c4]", None).unwrap_err();
+        let err = render_with_bars("lead.play([c4])", None).unwrap_err();
         assert!(err.0.contains("plays until it is stopped") && err.0.contains("--bars"), "{err}");
         // but one that ends itself doesn't
-        let out = render_with_bars("play lead = [c4]\nat 2 bars hush", None).unwrap();
+        let out = render_with_bars("lead.play([c4])\nat 2 bars hush", None).unwrap();
         assert!(out.len() > (3.9 * SR) as usize && out.len() < (4.5 * SR) as usize, "{}", out.len() as f64 / SR);
     }
 
     #[test]
     fn the_notes_after_the_length_are_not_started_but_ringing_ones_finish() {
-        let out = raw("play lead = [c4]", 1.0);
+        let out = raw("lead.play([c4])", 1.0);
         // one note starts at 0; the one at 2s is past the end of the render
         let sound = |from: f64, to: f64| rms(&out[(from * SR) as usize..(to * SR) as usize]);
         assert!(sound(0.2, 1.5) > 0.05);
@@ -807,7 +807,7 @@ track bass { instrument = pluck(bright: 0.1) }
 
     #[test]
     fn muting_silences_a_track_for_a_while() {
-        let out = raw("play lead = [c4]\nat 1 bar mute lead\nat 3 bars unmute lead", 4.0);
+        let out = raw("lead.play([c4])\nat 1 bar lead.mute\nat 3 bars lead.unmute", 4.0);
         let loud = |s: f64| rms(&out[(s * SR) as usize..((s + 1.0) * SR) as usize]) > 0.05;
         assert!(loud(0.2), "before the mute");
         assert!(!loud(2.4), "muted (the note from 0s has rung out by 2.4s)");
@@ -817,9 +817,9 @@ track bass { instrument = pluck(bright: 0.1) }
 
     #[test]
     fn solo_isolates_a_track() {
-        let both = raw("play lead = [c4]\nplay bass = [c2]", 1.0);
-        let solo = raw("play lead = [c4]\nplay bass = [c2]\nsolo bass", 1.0);
-        let bass_only = raw("play bass = [c2]", 1.0);
+        let both = raw("lead.play([c4])\nbass.play([c2])", 1.0);
+        let solo = raw("lead.play([c4])\nbass.play([c2])\nbass.solo", 1.0);
+        let bass_only = raw("bass.play([c2])", 1.0);
         assert!(rms(&both) > rms(&bass_only));
         assert_eq!(solo, bass_only);
     }
@@ -831,7 +831,7 @@ bus space
 instr ping(freq: hz) { space += osc(sine, freq) * env[1 5ms 0] }
 track echo { out = space.delay(time: 100ms, feedback: 0.9) }
 track src { instrument = ping }
-play src = [c4*2]
+src.play([c4*2])
 ";
         let ringing = raw(base, 2.0);
         let cut = raw(&format!("{base}at 1 bar panic"), 2.0);
@@ -848,8 +848,8 @@ clip a { notes: [c4] }
 clip b { notes: [c2] }
 scene one { lead: a }
 scene two { lead: b }
-launch one
-at 1 bar launch two", 2.0);
+one.start
+at 1 bar two.start", 2.0);
         let written = raw("lead(freq: c4) for 4beats\nat 4beats lead(freq: c2) for 4beats", 0.0);
         assert_eq!(out, written);
     }
@@ -882,7 +882,7 @@ mod command_line {
     const OPEN_ENDED: &str = "
 instr p(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
 track t { instrument = p }
-play t = [c4 e4]
+t.play([c4 e4])
 ";
 
     #[test]
@@ -955,7 +955,7 @@ fn an_arrangement_plays_its_scenes_in_order_and_then_stops() {
 
 #[test]
 fn render_with_an_arrangement_ignores_the_files_own_timeline() {
-    let src = format!("{SONG}\nplay a = [c6]");
+    let src = format!("{SONG}\na.play([c6])");
     let p = program(&src);
     // c6 is 1046hz; the arrangement alone never plays it
     let out = mono(render_with(&p, &[], &arrangement("song")).unwrap());

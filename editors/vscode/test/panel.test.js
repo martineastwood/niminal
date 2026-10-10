@@ -9,9 +9,9 @@ test("a track says what it plays and whether it is muted or soloed", () => {
 });
 
 test("buttons toggle: a muted track is unmuted", () => {
-  assert.strictEqual(commands.mute({ name: "bass", muted: false }), "mute bass");
-  assert.strictEqual(commands.mute({ name: "bass", muted: true }), "unmute bass");
-  assert.strictEqual(commands.solo({ name: "bass", soloed: true }), "unsolo bass");
-  assert.strictEqual(commands.launch("verse"), "launch verse");
-  assert.strictEqual(commands.stop({ name: "lead" }), "stop lead");
+  assert.strictEqual(commands.mute({ name: "bass", muted: false }), "bass.mute");
+  assert.strictEqual(commands.mute({ name: "bass", muted: true }), "bass.unmute");
+  assert.strictEqual(commands.solo({ name: "bass", soloed: true }), "bass.unsolo");
+  assert.strictEqual(commands.launch("verse"), "verse.start");
+  assert.strictEqual(commands.stop({ name: "lead" }), "lead.stop");
 });

@@ -45,7 +45,7 @@ fn measured(r: &mut RealtimeRenderer, n: usize, out: &mut [f32]) {
 
 #[test]
 fn prepared_audio_matches_direct_rendering_and_retires_without_heap_work() {
-    let source = "play lead = [c4 e4 g4].fast(64)";
+    let source = "lead.play([c4 e4 g4].fast(64))";
     let mut expected = session();
     expected.eval(source, Some("now")).unwrap();
     let expected = expected.process(48_000).remove(0);
@@ -65,7 +65,7 @@ fn prepared_audio_matches_direct_rendering_and_retires_without_heap_work() {
 #[test]
 fn live_graph_edits_and_panic_do_no_heap_work() {
     let mut s = session();
-    s.eval("play lead = [c4 e4].fast(8)", Some("now")).unwrap();
+    s.eval("lead.play([c4 e4].fast(8))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     measured(&mut r, 256, &mut out);
@@ -101,7 +101,7 @@ fn notes_wait_for_the_exact_sample_and_future_preparation_is_separate() {
 #[test]
 fn delayed_notes_do_not_hold_up_earlier_notes_in_later_windows() {
     let source = "clip c { notes: [c4 e4 g4 b4].fast(16)
- nudge: [100ms 0ms] }\nplay lead = c";
+ nudge: [100ms 0ms] }\nlead.play(c)";
     let mut direct = session();
     direct.eval(source, Some("now")).unwrap();
     let expected = direct.process(12_000).remove(0);
@@ -149,7 +149,7 @@ fn cancelled_quantized_changes_never_reach_the_renderer() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     measured(&mut r, 256, &mut out);
-    let pending = s.eval("play lead = [c4]", Some("next beat")).unwrap();
+    let pending = s.eval("lead.play([c4])", Some("next beat")).unwrap();
     s.prepare_realtime();
     assert_eq!(s.cancel(pending.id), 1);
     for _ in 0..110 {
@@ -165,7 +165,7 @@ fn quantized_definitions_and_notes_land_inside_prepared_windows() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = vec![0.0; 24_512];
     measured(&mut r, 128, &mut out[..128]);
-    let accepted = s.eval("instr new(freq: hz) { osc(saw, freq) }\ntrack newtrack { instrument = new }\nplay newtrack = [c4]", Some("next beat")).unwrap();
+    let accepted = s.eval("instr new(freq: hz) { osc(saw, freq) }\ntrack newtrack { instrument = new }\nnewtrack.play([c4])", Some("next beat")).unwrap();
     assert_eq!(accepted.lands_at, 24_000);
     let mut pos = 128;
     while pos < out.len() {
@@ -222,7 +222,7 @@ fn overload_is_bounded_and_does_no_heap_work_during_rendering() {
 #[test]
 fn repeated_edits_keep_audio_finite_and_render_without_heap_work() {
     let mut s = session();
-    s.eval("play lead = [c4 e4 g4 b4].fast(32)", Some("now")).unwrap();
+    s.eval("lead.play([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     for i in 0..100 {
@@ -251,10 +251,10 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
     s.set_sample_dir(&dir);
     let mut source = String::from("ctl level = 1.0\nkit k = \"kit\"\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n");
     for i in 0..8 {
-        source.push_str(&format!("track lead{i} {{ instrument = poly\n out = it.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\nplay lead{i} = [c4 e4 g4 b4].fast(64)\n"));
+        source.push_str(&format!("track lead{i} {{ instrument = poly\n out = it.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\nlead{i}.play([c4 e4 g4 b4].fast(64))\n"));
     }
     for i in 0..4 {
-        source.push_str(&format!("track drums{i} {{ instrument = k }}\nplay drums{i} = [kick].fast(128)\n"));
+        source.push_str(&format!("track drums{i} {{ instrument = k }}\ndrums{i}.play([kick].fast(128))\n"));
     }
     source.push_str(&"poly(freq: 220hz) for 2beats\n".repeat(128));
     s.eval(&source, Some("now")).unwrap();
@@ -282,7 +282,7 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
 #[test]
 fn retirement_backpressure_retains_resources_until_the_planner_returns() {
     let mut s = session();
-    s.eval("play lead = [c4 e4].fast(128)", Some("now")).unwrap();
+    s.eval("lead.play([c4 e4].fast(128))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig {
         lookahead_frames: 16_384, max_voices: 1, ..RealtimeConfig::default()
     });
@@ -340,7 +340,7 @@ fn timestamped_controls_match_offline_audio_and_do_no_heap_work() {
 #[test]
 fn turning_controls_does_not_invalidate_prepared_notes_or_allocate_in_render() {
     let mut s = session();
-    s.eval("ctl cutoff = 2000hz\ntrack lead { instrument = tone\n out = it.lpf(cutoff: cutoff) }\nplay lead = [c4 e4 g4 b4].fast(32)", Some("now")).unwrap();
+    s.eval("ctl cutoff = 2000hz\ntrack lead { instrument = tone\n out = it.lpf(cutoff: cutoff) }\nlead.play([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     for i in 0..100 {

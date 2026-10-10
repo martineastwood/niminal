@@ -22,7 +22,7 @@ track keys {
   out = it.gain(-3db)
 }
 
-play keys = [c3 e3 g3 b3]
+keys.play([c3 e3 g3 b3])
 
 // 1. ERRORS: change `saw` above to `sawz`, or `lpf(cutoff: cutoff` to `lpf(cutof: cutoff`,
 //    or write `lpf(cutoff: 3)` (a plain number where hz is wanted). Undo clears them.

@@ -174,11 +174,21 @@ struct RenderWorker {
 
 fn start_planner(daemon: Shared, stop: Arc<AtomicBool>) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new().name("niminal-plan".into()).spawn(move || {
+        if let Ok(d) = daemon.lock() {
+            d.session().set_planner_thread(thread::current());
+        }
         while !stop.load(Ordering::Relaxed) {
-            if let Ok(mut d) = daemon.try_lock() {
-                d.session_mut().prepare_realtime();
+            match daemon.try_lock() {
+                Ok(mut d) => {
+                    d.session_mut().prepare_realtime();
+                    // A window is about 10ms of sound and the plan reaches 170ms ahead, so there is no
+                    // hurry. A change that lands wakes this thread at once.
+                    drop(d);
+                    thread::park_timeout(Duration::from_millis(8));
+                }
+                // someone is evaluating: look again in a moment
+                Err(_) => thread::sleep(Duration::from_micros(200)),
             }
-            thread::sleep(Duration::from_micros(500));
         }
     })
 }
@@ -186,12 +196,13 @@ fn start_planner(daemon: Shared, stop: Arc<AtomicBool>) -> std::io::Result<JoinH
 impl RenderWorker {
     fn start(daemon: Shared, channels: usize, queue_frames: usize, health: Arc<Health>) -> Result<(Playback, Self), String> {
         let (producer, consumer) = RingBuffer::new(queue_frames);
-        let (next, epoch, mut renderer) = {
+        let (next, epoch, mut renderer, rate) = {
             let mut d = lock(&daemon);
             let next = d.session().clock();
             let epoch = d.session().panic_epoch();
+            let rate = f64::from(d.session().sample_rate());
             let renderer = d.session_mut().start_realtime(RealtimeConfig::default());
-            (next, epoch, renderer)
+            (next, epoch, renderer, rate)
         };
         let clock = Arc::new(AtomicU64::new(next));
         let playback = Playback { queue: consumer, channels, clock: clock.clone(), epoch: epoch.clone(),
@@ -205,12 +216,14 @@ impl RenderWorker {
             // Prime the queue before starting the sound card.
             fill_queue(&mut renderer, &mut producer, queue_frames, next, &epoch, &health);
             let _ = ready_tx.send(());
+            // Top the queue up in chunks, and sleep until the sound card has used enough for the next one.
+            let chunk = BLOCK * 8;
             while !flag.load(Ordering::Relaxed) {
                 let free = producer.slots();
-                if free > 0 {
-                    fill_queue(&mut renderer, &mut producer, free.min(BLOCK * 8), clock.load(Ordering::Acquire), &epoch, &health);
+                if free >= chunk {
+                    fill_queue(&mut renderer, &mut producer, chunk, clock.load(Ordering::Acquire), &epoch, &health);
                 } else {
-                    thread::sleep(Duration::from_micros(250));
+                    thread::sleep(Duration::from_secs_f64(((chunk - free) as f64 / rate).clamp(0.001, 0.002)));
                 }
             }
         });

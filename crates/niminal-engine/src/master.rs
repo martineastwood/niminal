@@ -77,6 +77,15 @@ impl Master {
         self.pos = 0;
     }
 
+    /// Nothing is in the delay line, no gain reduction is in progress and the DC blocker has
+    /// settled, so silence in gives exactly silence out and the state does not change.
+    fn at_rest(&self) -> bool {
+        self.gain == 1.0
+            && self.channels.iter().all(|c| c.dc_x1 == 0.0 && c.dc_y1.abs() < 1e-18 && c.delay.iter().all(|d| *d == 0.0))
+            && self.required.iter().all(|r| *r == 1.0)
+            && self.windowed_min.iter().all(|m| *m == 1.0)
+    }
+
     /// Samples of delay between input and output.
     pub fn latency(&self) -> usize {
         self.window - 1
@@ -96,6 +105,10 @@ impl Master {
     /// without allocating, for the real-time path.
     pub fn process_block(&mut self, block: &mut [[f32; crate::opcode::BLOCK]], frames: usize) {
         assert_eq!(block.len(), self.channels.len(), "one block per channel");
+        // Silence into a master that has nothing left to say comes out as silence: skip the work.
+        if self.at_rest() && block.iter().all(|b| b[..frames].iter().all(|s| *s == 0.0)) {
+            return;
+        }
         let mut frame = [0.0f32; crate::mixer::MAX_CHANNELS];
         let n = block.len();
         for i in 0..frames {

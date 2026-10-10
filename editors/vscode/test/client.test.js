@@ -41,9 +41,9 @@ test("evaluates code, reports problems with positions, and hears transport", asy
     const ok = await client.call("eval", { source: setup, quantize: "now" });
     assert.ok(ok.id !== undefined);
 
-    await assert.rejects(client.call("eval", { source: "play t = [c4 zz]" }), (e) => {
+    await assert.rejects(client.call("eval", { source: "t.play([c4 zz])" }), (e) => {
       assert.strictEqual(e.problems[0].line, 1);
-      assert.strictEqual(e.problems[0].column, 14);
+      assert.strictEqual(e.problems[0].column, 12);
       assert.match(e.message, /zz/);
       return true;
     });

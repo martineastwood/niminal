@@ -83,7 +83,7 @@ fn eval_replies_with_where_the_change_lands() {
     assert_eq!(r["result"]["changes"].as_array().unwrap().len(), 3);
 
     d.session_mut().process(10_000);
-    let r = call(&mut d, c, 3, "eval", json!({"source": "play lead = [c4]"}));
+    let r = call(&mut d, c, 3, "eval", json!({"source": "lead.play([c4])"}));
     assert_eq!(r["result"]["lands_at"], 96_000);
     assert_eq!(r["result"]["position"], json!({"bar": 2, "beat": 1.0}));
     let secs = r["result"]["in_seconds"].as_f64().unwrap();
@@ -95,13 +95,13 @@ fn eval_replies_with_where_the_change_lands() {
 fn a_rejected_eval_carries_located_problems() {
     let (mut d, c) = ready();
     call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
-    let r = call(&mut d, c, 3, "eval", json!({"source": "riff = [c4]\nplay lead = nope"}));
+    let r = call(&mut d, c, 3, "eval", json!({"source": "riff = [c4]\nlead.play(nope)"}));
     assert_eq!(r["error"]["code"], -32001);
     assert_eq!(r["error"]["message"], "`nope` is not defined");
     let p = &r["error"]["data"]["problems"][0];
     assert_eq!(p["line"], 2);
-    assert_eq!(p["column"], 13);
-    assert_eq!(p["span"]["start"], 24);
+    assert_eq!(p["column"], 11);
+    assert_eq!(p["span"]["start"], 22);
     assert_eq!(p["message"], "`nope` is not defined");
 
     let bad_quantum = call(&mut d, c, 4, "eval", json!({"source": "hush", "quantize": "whenever"}));
@@ -114,7 +114,7 @@ fn cancel_hush_and_panic() {
     let (mut d, c) = ready();
     call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
     d.session_mut().process(1000);
-    call(&mut d, c, 3, "eval", json!({"source": "play lead = [c4]"}));
+    call(&mut d, c, 3, "eval", json!({"source": "lead.play([c4])"}));
     assert_eq!(call(&mut d, c, 4, "status", json!({}))["result"]["pending"].as_array().unwrap().len(), 1);
     assert_eq!(call(&mut d, c, 5, "cancel", json!({}))["result"]["cancelled"], 1);
     assert_eq!(call(&mut d, c, 6, "cancel", json!({"id": 5}))["result"]["cancelled"], 0);
@@ -156,7 +156,7 @@ fn subscribers_hear_about_changes_landing() {
 
     call(&mut d, c, 3, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
     d.session_mut().process(1000);
-    call(&mut d, c, 4, "eval", json!({"source": "play lead = [c4]"}));
+    call(&mut d, c, 4, "eval", json!({"source": "lead.play([c4])"}));
 
     // the evaluation that is waiting is announced to subscribers, not to others
     let messages = d.notifications();
@@ -175,7 +175,7 @@ fn subscribers_hear_about_changes_landing() {
         .filter(|m| m["method"] == "landed")
         .collect();
     assert!(!landed.is_empty());
-    assert_eq!(landed.last().unwrap()["params"]["changes"][0], "play lead = [c4]");
+    assert_eq!(landed.last().unwrap()["params"]["changes"][0], "lead.play([c4])");
     assert_eq!(landed.last().unwrap()["params"]["at"], 96_000);
     let empties: Vec<Value> = after
         .iter()
@@ -220,7 +220,7 @@ fn notices_tell_subscribers_what_went_wrong_while_playing() {
     let (mut d, c) = ready();
     call(&mut d, c, 2, "subscribe", json!({"topics": ["notices"]}));
     call(&mut d, c, 3, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
-    call(&mut d, c, 4, "eval", json!({"source": "play lead = [c4*2]", "quantize": "now"}));
+    call(&mut d, c, 4, "eval", json!({"source": "lead.play([c4*2])", "quantize": "now"}));
     call(&mut d, c, 5, "eval", json!({"source": "instr pluck(pitch: hz) { osc(sine, pitch) }", "quantize": "now"}));
     d.session_mut().process(96_000);
     let notes: Vec<Value> = d
@@ -250,7 +250,7 @@ fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
     call(&mut d, b, 1, "hello", json!({"protocol": 1}));
     call(&mut d, a, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
     // the other client sees what the first defined, and builds on it
-    let r = call(&mut d, b, 2, "eval", json!({"source": "play lead = [c4]", "quantize": "now"}));
+    let r = call(&mut d, b, 2, "eval", json!({"source": "lead.play([c4])", "quantize": "now"}));
     assert!(r["result"].is_object());
     d.disconnect(a);
     assert!(d.session_mut().process(10_000).remove(0).iter().any(|s| s.abs() > 0.1));
@@ -268,7 +268,7 @@ fn status_lists_scenes_clips_and_what_each_track_is_doing() {
     assert_eq!(before["clips"], json!(["riff"]));
     assert_eq!(before["tracks"][0], json!({"name": "lead", "clip": null, "muted": false, "soloed": false, "edits": []}));
 
-    call(&mut d, c, 4, "eval", json!({"source": "launch verse\nmute bass\nsolo lead", "quantize": "now"}));
+    call(&mut d, c, 4, "eval", json!({"source": "verse.start\nbass.mute\nlead.solo", "quantize": "now"}));
     let after = call(&mut d, c, 5, "status", json!({}))["result"].clone();
     assert_eq!(after["tracks"][0]["clip"], "lead", "a bare pattern is named for its track");
     assert_eq!(after["tracks"][0]["soloed"], true);
@@ -291,7 +291,7 @@ fn begin_and_finish_answer_an_eval_like_handle_does() {
     assert!(reply["result"]["id"].is_u64());
 
     // a mistake is an error reply, still with the request's id
-    let bad = json!({"jsonrpc": "2.0", "id": 3, "method": "eval", "params": {"source": "play lead = [zz]"}});
+    let bad = json!({"jsonrpc": "2.0", "id": 3, "method": "eval", "params": {"source": "lead.play([zz])"}});
     let Request::Compile(ticket) = d.begin(c, &bad.to_string()) else { panic!() };
     let reply: Value = serde_json::from_str(&d.finish(ticket.compile())[0]).unwrap();
     assert_eq!(reply["id"], 3);
@@ -310,11 +310,11 @@ fn cancellation_compiles_outside_the_session_and_retries_if_it_became_stale() {
     use niminal_daemon::Request;
     let (mut d, c) = ready();
     call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
-    let first = call(&mut d, c, 3, "eval", json!({"source": "play lead = [c4]", "quantize": "next 4 bars"}));
+    let first = call(&mut d, c, 3, "eval", json!({"source": "lead.play([c4])", "quantize": "next 4 bars"}));
     let request = json!({"jsonrpc": "2.0", "id": 4, "method": "cancel", "params": {"id": first["result"]["id"]}}).to_string();
     let Request::Compile(ticket) = d.begin(c, &request) else { panic!("cancel is prepared off the session") };
     let done = ticket.compile();
-    call(&mut d, c, 5, "eval", json!({"source": "mute lead", "quantize": "next 4 bars"}));
+    call(&mut d, c, 5, "eval", json!({"source": "lead.mute", "quantize": "next 4 bars"}));
     let retry = d.retry(&done).expect("the pending queue changed");
     let done = retry.compile();
     assert!(d.retry(&done).is_none());
@@ -322,7 +322,7 @@ fn cancellation_compiles_outside_the_session_and_retries_if_it_became_stale() {
     assert_eq!(reply["id"], 4);
     assert_eq!(reply["result"]["cancelled"], 1);
     assert_eq!(d.session().pending().len(), 1);
-    assert_eq!(d.session().pending()[0].changes, ["mute lead"]);
+    assert_eq!(d.session().pending()[0].changes, ["lead.mute"]);
 }
 
 #[test]
@@ -330,7 +330,7 @@ fn hush_uses_the_background_compilation_path() {
     use niminal_daemon::Request;
     let (mut d, c) = ready();
     call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
-    call(&mut d, c, 3, "eval", json!({"source": "play lead = [c4]", "quantize": "now"}));
+    call(&mut d, c, 3, "eval", json!({"source": "lead.play([c4])", "quantize": "now"}));
     let request = json!({"jsonrpc": "2.0", "id": 4, "method": "hush", "params": {}}).to_string();
     let parsed = Daemon::prepare_eval(&request);
     let Request::Compile(ticket) = d.begin_prepared(c, &request, parsed) else { panic!("hush needs background work") };
