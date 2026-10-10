@@ -1,0 +1,15 @@
+---
+// Shows an example from /examples and, if rendered, plays it. The code on the
+// page is the file that produced the audio.
+import { Code } from '@astrojs/starlight/components';
+import { readFileSync } from 'node:fs';
+
+const { file, audio = true } = Astro.props;
+const code = readFileSync(new URL(`../examples/${file}`, `file://${process.cwd()}/`), 'utf8').trimEnd();
+const media = import.meta.env.PUBLIC_MEDIA_URL ?? '/audio';
+const src = `${media}/${file.replace(/\.nml$/, '')}.mp3`;
+---
+<div class="example">
+  <Code code={code} lang="niminal" title={file} />
+  {audio && <audio controls preload="none" src={src}></audio>}
+</div>

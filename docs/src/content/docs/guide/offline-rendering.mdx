@@ -1,0 +1,15 @@
+---
+title: Offline rendering
+description: Turn a file or an arrangement into audio.
+---
+
+import Example from '../../../components/Example.astro';
+
+An `arrangement` plays scenes in order. Render it by name, or just a passage of it:
+
+<Example file="song.nml" />
+
+```sh
+niminal render examples/song.nml song --out song.wav
+niminal render examples/song.nml song --from "bar 5" --to "bar 9" --out passage.wav
+```

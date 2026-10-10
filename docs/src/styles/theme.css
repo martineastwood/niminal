@@ -1,0 +1,56 @@
+/* Docs theme: matches the landing page. Ink (dark) is the default, paper is light. */
+:root {
+  --sl-font: Inter, system-ui, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+
+  --sl-color-accent-low: #3a2406;
+  --sl-color-accent: #f5a524;
+  --sl-color-accent-high: #ffc766;
+
+  --sl-color-white: #f0ece0;
+  --sl-color-gray-1: #dedad0;
+  --sl-color-gray-2: #b9b5aa;
+  --sl-color-gray-3: #8a8a80;
+  --sl-color-gray-4: #5c5c55;
+  --sl-color-gray-5: #2e2e2b;
+  --sl-color-gray-6: #181816;
+  --sl-color-gray-7: #131312;
+  --sl-color-black: #0c0c0b;
+  --sl-color-bg-nav: #0c0c0b;
+  --sl-color-bg-sidebar: #0c0c0b;
+  --sl-color-hairline-light: #252522;
+  --sl-color-hairline: #252522;
+  --sl-color-hairline-shade: #1a1a18;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #fde8c8;
+  --sl-color-accent: #b45309;
+  --sl-color-accent-high: #7c3a06;
+
+  --sl-color-white: #1a1a18;
+  --sl-color-gray-1: #2a2a27;
+  --sl-color-gray-2: #3a3a36;
+  --sl-color-gray-3: #6b6b66;
+  --sl-color-gray-4: #8a8a84;
+  --sl-color-gray-5: #c4c1b8;
+  --sl-color-gray-6: #efece5;
+  --sl-color-gray-7: #f3f0e8;
+  --sl-color-black: #f7f5f0;
+  --sl-color-bg-nav: #f7f5f0;
+  --sl-color-bg-sidebar: #f7f5f0;
+  --sl-color-hairline-light: #dcd9d1;
+  --sl-color-hairline: #dcd9d1;
+  --sl-color-hairline-shade: #e6e3da;
+}
+
+h1, h2, h3, .site-title { font-family: Archivo, Inter, system-ui, sans-serif; letter-spacing: -0.02em; }
+h1 { font-weight: 900; }
+h2, h3 { font-weight: 800; }
+.site-title { font-weight: 800; }
+
+/* Code on the same ground as the page, in both modes. */
+.expressive-code { --ec-codeBg: #0c0c0b !important; --ec-frm-edBg: #0c0c0b !important; --ec-frm-trmBg: #0c0c0b !important; --ec-frm-edTabBarBg: #131312 !important; --ec-frm-edActTabBg: #0c0c0b !important; --ec-frm-edActTabIndicatorTopCol: #f5a524 !important; --ec-frm-trmTtbBg: #131312 !important; --ec-brdCol: #252522 !important; }
+:root[data-theme='light'] .expressive-code { --ec-codeBg: #fffefb !important; --ec-frm-edBg: #fffefb !important; --ec-frm-trmBg: #fffefb !important; --ec-frm-edTabBarBg: #f3f0e8 !important; --ec-frm-edActTabBg: #fffefb !important; --ec-frm-edActTabIndicatorTopCol: #b45309 !important; --ec-frm-trmTtbBg: #f3f0e8 !important; --ec-brdCol: #dcd9d1 !important; }
+
+.example { margin: 1.5rem 0; }
+.example audio { width: 100%; margin-top: 0.5rem; }
