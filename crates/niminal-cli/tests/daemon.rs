@@ -88,8 +88,11 @@ fn clients_share_one_session() {
     a.call("eval", json!({"source": SETUP, "quantize": "now"})).unwrap();
     // `b` builds on what `a` defined
     b.call("eval", json!({"source": "play lead = [c4]", "quantize": "now"})).unwrap();
-    std::thread::sleep(Duration::from_millis(60));
-    assert!(b.call("status", json!({})).unwrap()["transport"]["voices"].as_u64().unwrap() >= 1);
+    let started = std::time::Instant::now();
+    while b.call("status", json!({})).unwrap()["transport"]["voices"].as_u64().unwrap() == 0 {
+        assert!(started.elapsed() < WAIT, "the shared clip never sounded");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     drop(a);
     assert!(b.call("status", json!({})).is_ok(), "a disconnect doesn't disturb the others");
 }
@@ -123,4 +126,26 @@ fn the_audio_the_clock_produces_is_the_sessions() {
     std::thread::sleep(Duration::from_millis(200));
     let peaks = r.daemon.lock().unwrap().session_mut().take_peaks();
     assert!(peaks[0] > 0.5, "the note was mixed: {peaks:?}");
+}
+
+#[test]
+fn websocket_controls_reach_the_live_renderer_and_appear_in_status() {
+    let r = start(None);
+    let mut c = connect(&r);
+    c.call("eval", json!({
+        "source": "ctl level = 0.0.smooth(0ms)\ninstr flat(freq: hz) { level }\ntrack t { instrument = flat }\nt(freq: 440hz) for 100bars",
+        "quantize": "now"
+    })).unwrap();
+    let reply = c.call("control.set", json!({ "name": "level", "value": 0.5, "smooth_ms": 0 })).unwrap();
+    assert!(reply["at"].as_u64().is_some());
+    let started = std::time::Instant::now();
+    loop {
+        let peaks = r.daemon.lock().unwrap().session_mut().take_peaks();
+        if peaks[0] >= 0.5 { break; }
+        assert!(started.elapsed() < WAIT, "the live control never sounded");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let status = c.call("status", json!({})).unwrap();
+    assert_eq!(status["controls"][0]["name"], "level");
+    assert_eq!(status["controls"][0]["value"], 0.5);
 }

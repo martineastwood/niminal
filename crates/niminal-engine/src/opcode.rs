@@ -70,6 +70,9 @@ pub trait Opcode: Send + Sync + std::any::Any {
     /// and wiring belong to the new instance; implementations only copy memory.
     fn carry_state(&mut self, _old: &mut dyn Opcode) {}
 
+    /// Apply a named control target, with a linear ramp measured in samples.
+    fn set_control(&mut self, _key: &str, _start: f32, _target: f32, _frames: u64, _elapsed: u64) {}
+
     /// Samples of delay the opcode introduces, for latency compensation.
     fn latency(&self) -> usize {
         0
@@ -92,6 +95,10 @@ impl Opcode for Box<dyn Opcode> {
 
     fn prepare(&mut self, sample_rate: f32) {
         (**self).prepare(sample_rate);
+    }
+
+    fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
+        (**self).set_control(key, start, target, frames, elapsed);
     }
 
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {

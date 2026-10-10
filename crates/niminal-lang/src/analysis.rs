@@ -62,6 +62,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             offset: span.start,
         };
         match &item {
+            Item::Control { name, .. } => s.key = Some(format!("ctl:{}", name.name)),
             Item::Instr(d) => s.key = Some(format!("instr:{}", d.name.name)),
             Item::Opcode(d) => s.key = Some(format!("opcode:{}", d.name.name)),
             Item::Sample(d) => s.key = Some(format!("{}:{}", if d.is_kit { "kit" } else { "sample" }, d.name.name)),

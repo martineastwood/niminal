@@ -306,6 +306,9 @@ pub struct Transport {
 }
 
 pub struct Session {
+    controls: Vec<crate::controls::State>,
+    control_changes: Vec<crate::controls::Change>,
+    next_control: u64,
     sample_rate: f32,
     layout: Layout,
     panic_epoch: Arc<AtomicU64>,
@@ -339,6 +342,7 @@ pub struct Session {
     notices: Vec<String>,
     recent_notices: Vec<(String, u64)>,
     log: Vec<LogEntry>,
+    log_corrections: u64,
     silenced: usize,
     peaks: Vec<f32>,
     /// Changes whenever what is waiting to land changes, so that an evaluation
@@ -457,6 +461,7 @@ impl Session {
             layout,
             panic_epoch: Arc::new(AtomicU64::new(0)),
             samples: Samples::default(),
+            controls: Vec::new(), control_changes: Vec::new(), next_control: 0,
             sample_dirs: Vec::new(),
             defaults: QuantizeDefaults::default(),
             clock: 0,
@@ -478,6 +483,7 @@ impl Session {
             notices: Vec::new(),
             recent_notices: Vec::new(),
             log: Vec::new(),
+            log_corrections: 0,
             silenced: 0,
             peaks: vec![0.0; layout.channels()],
             version: 0,
@@ -750,6 +756,57 @@ impl Session {
         Ok(())
     }
 
+    /// Queue a typed control update at an absolute sample, or at the render
+    /// clock when no timestamp is given. No parsing or graph compilation occurs.
+    pub fn set_control(&mut self, name: &str, value: f64, unit: Option<&str>, at: Option<u64>, smooth_ms: Option<f64>) -> Result<u64, Vec<Problem>> {
+        self.sync_realtime();
+        let error = |message: String| vec![Problem::plain(message)];
+        let index = self.program.controls.iter().position(|c| c.name == name)
+            .ok_or_else(|| error(format!("unknown control `{name}`")))?;
+        let def = &self.program.controls[index];
+        let converted = def.convert(value, unit, self.program.tempo).map_err(error)?;
+        let at = at.unwrap_or(self.clock);
+        if at < self.clock { return Err(error("a control timestamp cannot be in the past".into())); }
+        let seconds = smooth_ms.map_or(def.smooth_seconds, |ms| ms / 1000.0);
+        if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
+            return Err(error("control smoothing must be between 0ms and 60sec".into()));
+        }
+        if self.control_changes.len() >= crate::controls::CAPACITY {
+            return Err(error("the control update queue is full".into()));
+        }
+        let change = crate::controls::Change { index, unit: def.unit, revision: self.controls[index].revision, at, value: converted,
+            frames: (seconds * f64::from(self.sample_rate)).round() as u64, serial: self.next_control, log_index: self.log.len(), applied: !self.detached };
+        if let Some(planner) = &mut self.live {
+            planner.push_control(change).map_err(|_| error("the control update queue is full".into()))?;
+        }
+        self.next_control += 1;
+        self.control_changes.push(change);
+        self.control_changes.sort_unstable_by_key(|c| (c.at, c.serial));
+        self.log.push(LogEntry { sample: self.clock, input: LogInput::Control {
+            name: name.into(), value, unit: unit.map(str::to_owned), at, smooth_ms,
+        } });
+        Ok(at)
+    }
+
+    pub fn control_values(&self) -> Vec<(String, f32, f32, Option<&'static str>)> {
+        self.program.controls.iter().zip(&self.controls)
+            .map(|(def, state)| (def.name.clone(), state.value(self.clock), state.target, def.unit.suffix())).collect()
+    }
+
+    fn apply_controls(&mut self) {
+        while let Some(index) = self.control_changes.iter().position(|c| c.at <= self.clock && c.applied) {
+            let change = self.control_changes.remove(index);
+            if self.program.controls.get(change.index).is_some_and(|d| d.unit == change.unit)
+                && let Some(state) = self.controls.get_mut(change.index)
+            {
+                state.set(change.at, change.value, change.frames);
+                if !self.detached {
+                    self.mixer.set_control(&state.key, state.start, state.target, state.frames, self.clock.saturating_sub(state.at));
+                }
+            } else { self.notify("a queued control update was dropped after its unit changed".into()); }
+        }
+    }
+
     // ---- state ----------------------------------------------------------------
 
     pub fn pending(&self) -> Vec<PendingInfo> {
@@ -834,6 +891,9 @@ impl Session {
         std::mem::replace(&mut self.peaks, vec![0.0; self.layout.channels()])
     }
 
+    /// Changes when entries are appended or actual control timing is acknowledged.
+    pub fn log_version(&self) -> (usize, u64) { (self.log.len(), self.log_corrections) }
+
     /// Everything that has been sent to the session, with when.
     pub fn log(&self) -> &[LogEntry] {
         &self.log
@@ -862,10 +922,10 @@ impl Session {
     fn land(&mut self, p: Pending) {
         self.version += 1;
         let at = self.clock;
-        let Pending { id, summary, project, program, mixer, actions, replays, playing, .. } = p;
+        let Pending { id, statements, summary, project, program, mixer, actions, replays, playing, .. } = p;
 
         if let (Some(program), Some(mixer)) = (program, mixer) {
-            self.swap_program(project, program, mixer);
+            self.swap_program(project, program, mixer, &statements, id);
         }
         for a in actions.iter().chain(&replays) {
             self.run_action(a, at);
@@ -877,7 +937,11 @@ impl Session {
     }
 
     /// Replace the running program, keeping what is sounding.
-    fn swap_program(&mut self, project: Project, program: Arc<Program>, mut mixer: Mixer) {
+    fn swap_program(&mut self, project: Project, program: Arc<Program>, mut mixer: Mixer, statements: &[Statement], revision: u64) {
+        let mut controls = crate::controls::build(&program);
+        crate::controls::mark(&mut controls, &program, statements, revision);
+        crate::controls::adopt(&mut controls, &self.controls, &program, self.clock, self.sample_rate);
+        self.controls = controls;
         if self.detached {
             self.program = program;
             self.project = project;
@@ -890,6 +954,7 @@ impl Session {
         self.mixer.remap_buses(&mapping);
         let transfers = self.plan_transfers(&project, &program);
         mixer.adopt(&mut self.mixer, &transfers);
+        crate::controls::sync_mixer(&self.controls, &mut mixer, self.clock);
         self.mixer = mixer;
         self.program = program;
         self.project = project;
@@ -954,7 +1019,10 @@ impl Session {
             if self.samples(t) > self.clock {
                 break;
             }
-            if !self.detached { self.mixer.panic(); }
+            if !self.detached {
+                self.mixer.panic();
+                crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
+            }
             if let Some(limiter) = &mut self.limiter { limiter.clear(); }
             self.held.clear();
             self.upcoming.clear();
@@ -973,12 +1041,16 @@ impl Session {
         while self.clock < end {
             self.land_due();
             self.apply_panics();
+            self.apply_controls();
             self.release_due();
 
             // How far we can go before something needs doing.
             let mut n = (end - self.clock).min(BLOCK as u64);
             if let Some(p) = self.pending.first() {
                 n = n.min(p.lands_at - self.clock);
+            }
+            if let Some(change) = self.control_changes.first() {
+                n = n.min(change.at.saturating_sub(self.clock).max(1));
             }
             for &(off, _) in &self.held {
                 n = n.min(off.saturating_sub(self.clock).max(1));
@@ -1044,6 +1116,9 @@ impl Session {
                     session.cancel(*id);
                 }
                 LogInput::Panic => session.panic(),
+                LogInput::Control { name, value, unit, at, smooth_ms } => {
+                    let _ = session.set_control(name, *value, unit.as_deref(), Some(*at), *smooth_ms);
+                }
                 LogInput::Events { events } => {
                     let _ = session.stream_events(events.clone());
                 }
@@ -1094,6 +1169,7 @@ impl Session {
                 Ok(plan) => {
                     let graph = self.program.instruments[plan.instrument].graph.clone();
                     let id = self.mixer.note_on(plan.track, graph, &plan.params, plan.choke);
+                    crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
                     self.held.push((self.clock + note.dur, id));
                     if self.mixer.take_stolen() > 0 {
                         self.notify(format!("too many notes at once: the oldest are ended early to keep to {} voices", DEFAULT_MAX_VOICES));

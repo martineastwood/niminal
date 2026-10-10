@@ -18,7 +18,7 @@ use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::layout::{Layout, conversion};
 use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
-use crate::program::{Instrument, Param};
+use crate::program::{ControlDef, Instrument, Param};
 use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
@@ -105,6 +105,7 @@ pub(crate) fn layout_from_expr(e: &Expr) -> Res<Layout> {
 /// Every top-level name, so locals can be kept from shadowing them, plus the
 /// layouts that tracks and buses use.
 pub(crate) struct Names {
+    pub controls: Vec<ControlDef>,
     entries: Vec<(String, &'static str)>,
     pub buses: Vec<String>,
     pub bus_layouts: Vec<Layout>,
@@ -114,7 +115,7 @@ pub(crate) struct Names {
 
 impl Default for Names {
     fn default() -> Self {
-        Names { entries: Vec::new(), buses: Vec::new(), bus_layouts: Vec::new(), master: Layout::Mono }
+        Names { controls: Vec::new(), entries: Vec::new(), buses: Vec::new(), bus_layouts: Vec::new(), master: Layout::Mono }
     }
 }
 
@@ -214,6 +215,46 @@ pub(crate) struct Lower<'a> {
     chain_inputs: Vec<ChainInput>,
     input_sigs: HashMap<String, Sig>,
     route: Route,
+}
+
+pub(crate) fn compile_control(name: &Ident, value: &Expr, tempo: Tempo, registry: &Registry, names: &Names) -> Res<ControlDef> {
+    if matches!(name.name.as_str(), "out" | "it" | "instrument" | "state" | "ctl") {
+        return Err(Diagnostic::new(format!("`{}` is a reserved word", name.name), name.span));
+    }
+    let mut lower = Lower::new(registry, names, tempo);
+    let mut initial = value.clone();
+    let mut smooth_seconds = 0.005;
+    let (smooth_expr, negative) = match &value.kind {
+        ExprKind::Neg(inner) => (inner.as_ref(), true),
+        _ => (value, false),
+    };
+    if let ExprKind::Call { name: method, args } = &smooth_expr.kind
+        && method.name == "smooth"
+    {
+        let [receiver, duration] = args.as_slice() else {
+            return Err(Diagnostic::new("a control's .smooth takes one duration", value.span));
+        };
+        if !receiver.receiver || duration.name.is_some() {
+            return Err(Diagnostic::new("write ctl name = value.smooth(5ms)", value.span));
+        }
+        initial = receiver.value.clone();
+        if negative { initial = Expr { kind: ExprKind::Neg(Box::new(initial)), span: value.span }; }
+        let smooth = lower.expr(&duration.value)?;
+        if smooth.unit != Unit::Time {
+            return Err(Diagnostic::new("control smoothing needs a duration, such as 5ms", duration.value.span));
+        }
+        smooth_seconds = smooth.konst.ok_or_else(|| Diagnostic::new("smoothing must be constant", duration.value.span))?;
+        if !smooth_seconds.is_finite() || !(0.0..=60.0).contains(&smooth_seconds) {
+            return Err(Diagnostic::new("control smoothing must be between 0ms and 60sec", duration.value.span));
+        }
+    }
+    let sig = lower.expr(&initial)?;
+    let value = sig.konst.ok_or_else(|| Diagnostic::new("a control's initial value must be constant", initial.span))? as f32;
+    if !value.is_finite() || (sig.unit == Unit::Db && value <= 0.0) {
+        return Err(Diagnostic::new("control values must be finite and representable", initial.span));
+    }
+    Ok(ControlDef { name: name.name.clone(), key: format!("ctl:{}:{:?}", name.name, sig.unit),
+        unit: sig.unit, initial: value, smooth_seconds })
 }
 
 pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, names: &Names) -> Res<Instrument> {
@@ -748,6 +789,14 @@ impl<'a> Lower<'a> {
                 };
             }
             _ => {}
+        }
+        if let Some(control) = self.names.controls.iter().find(|c| c.name == name) {
+            if self.mode == Mode::Plain {
+                return Err(Diagnostic::new("a live control cannot be used as a constant", span));
+            }
+            let src = self.g.add(niminal_engine::ops::Control::new(control.key.clone(), control.initial), &[])
+                .map_err(|e| Diagnostic::new(e.to_string(), span))?;
+            return Ok(Sig { srcs: vec![src], layout: Layout::Mono, unit: control.unit, konst: None });
         }
         if let Some(bus) = self.names.bus(name) {
             return match self.mode {

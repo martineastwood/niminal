@@ -75,7 +75,62 @@ sample timing and zero heap allocations **and deallocations** while rendering
 notes, completing voices, swapping compatible effects, and handling panic.
 
 The release stress test covers 12 tracks with sample playback, 128 held voices,
-filters, reverbs, and repeated quantized edits. On the development machine the
-maximum 256-frame render took 0.507ms against a 5.33ms budget at 48kHz, with zero
+filters, reverbs, live control automation, and repeated quantized edits. On the
+development machine the maximum 256-frame render took 0.467ms against a 5.33ms budget at 48kHz, with zero
 late events, starvation, capacity drops, or deadline misses. Physical-device
 latency and underrun testing remain separate from this synthetic check.
+
+### Live controls
+
+Named controls are typed signals available in instruments and track effects:
+
+```niminal
+ctl cutoff = 1khz.smooth(10ms)
+ctl volume = -18db
+
+instr tone(freq: hz) { osc(saw, freq).lpf(cutoff: cutoff) }
+track lead { instrument = tone
+  out = it.gain(volume)
+}
+```
+
+Controls use a 5ms linear glide by default. Set `.smooth(0ms)` on the declaration
+to disable it. Re-evaluating a control glides back to its code value; unrelated
+graph edits preserve its current target and glide. Newly started notes join the
+same control trajectory as existing notes.
+
+The WebSocket JSON-RPC method `control.set` updates a control without compiling
+or replacing any graphs or prepared notes:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "control.set",
+  "params": {
+    "name": "cutoff",
+    "value": 2.4,
+    "unit": "khz",
+    "smooth_ms": 10
+  }
+}
+```
+
+`name` and numeric `value` are required. `unit` defaults to the declaration's
+canonical unit: plain numbers, hz, db, sec, deg, or st. Compatible units such as
+khz, ms, beats, and bars are converted and checked. `smooth_ms` overrides the
+declaration's smoothing for that update (0–60,000ms). Optional `at` is an absolute
+sample timestamp; omit it to use the current render clock. The response contains
+the requested `at`. Past timestamps, unknown controls, mismatched units, invalid
+values, and full update queues are rejected.
+
+`status.controls` reports each control's name, current value, target, and unit.
+Values are shown in canonical units; db controls are shown in decibels.
+Control changes use their own bounded queue and land inside an engine block.
+If a late update lands after its requested sample, its actual sample is
+acknowledged into the evaluation log so offline replay reproduces the live audio.
+The log file is rewritten when this timing is corrected. `realtime.control_drops`
+reports queued updates invalidated by a later change to a control's unit.
+MIDI and OSC can feed this same path in a subsequent milestone.
+
+See [live_controls.nml](../../examples/live_controls.nml) for a complete patch.

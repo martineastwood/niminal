@@ -69,7 +69,32 @@ pub struct TrackInfo {
     pub def: TrackDef,
 }
 
+/// A named scalar control. Values in graphs use engine units (db is gain).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControlDef {
+    pub name: String,
+    pub key: String,
+    pub unit: Unit,
+    pub initial: f32,
+    pub smooth_seconds: f64,
+}
+
+impl ControlDef {
+    pub fn convert(&self, value: f64, suffix: Option<&str>, tempo: Tempo) -> Result<f32, String> {
+        let suffix = suffix.or(self.unit.suffix());
+        let (unit, converted) = crate::lower::literal_sig(value, suffix, tempo, crate::Span::default())
+            .map_err(|d| d.message)?;
+        if unit != self.unit { return Err(format!("control `{}` expects {}", self.name, self.unit.describe())); }
+        let converted = converted as f32;
+        if !value.is_finite() || !converted.is_finite() || (unit == Unit::Db && converted <= 0.0) {
+            return Err("control values must be finite and representable".into());
+        }
+        Ok(converted)
+    }
+}
+
 pub struct Program {
+    pub controls: Vec<ControlDef>,
     pub tempo: Tempo,
     /// The layout of the output, and of every voice and track.
     pub master: Layout,

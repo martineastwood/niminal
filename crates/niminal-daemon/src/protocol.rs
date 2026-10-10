@@ -246,6 +246,7 @@ impl Daemon {
                 Ok(json!({}))
             }
             "event.stream" => self.stream(params),
+            "control.set" => self.control(params),
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
             "status" => Ok(status_json(&self.session)),
             other => Err(RpcError::new(METHOD_NOT_FOUND, &format!("no method `{other}`"))),
@@ -282,6 +283,24 @@ impl Daemon {
         }
         let result = self.session.eval(source, quantize);
         self.eval_outcome(result)
+    }
+
+    fn control(&mut self, params: &Value) -> Result<Value, RpcError> {
+        let name = params.get("name").and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`control.set` needs a string `name`"))?;
+        let value = params.get("value").and_then(Value::as_f64)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`control.set` needs a number `value`"))?;
+        let unit = match params.get("unit") {
+            None => None,
+            Some(value) => Some(value.as_str().ok_or_else(|| RpcError::new(INVALID_PARAMS, "`unit` must be a string"))?),
+        };
+        let smooth = match params.get("smooth_ms") {
+            None => None,
+            Some(value) => Some(value.as_f64().ok_or_else(|| RpcError::new(INVALID_PARAMS, "`smooth_ms` must be a number"))?),
+        };
+        let at = optional_u64(params, "at")?;
+        let at = self.session.set_control(name, value, unit, at, smooth).map_err(|p| rejected(&p))?;
+        Ok(json!({ "at": at }))
     }
 
     fn stream(&mut self, params: &Value) -> Result<Value, RpcError> {
@@ -508,9 +527,13 @@ fn status_json(session: &Session) -> Value {
         "realtime": session.realtime_metrics().map(|m| json!({
             "prepared_until": session.prepared_until(),
             "late_events": m.late_events, "starved_frames": m.starved_frames,
-            "capacity_drops": m.capacity_drops, "retire_pressure": m.retire_pressure,
+            "capacity_drops": m.capacity_drops, "control_drops": m.control_drops, "retire_pressure": m.retire_pressure,
             "deadline_misses": m.deadline_misses, "max_render_micros": m.max_render_micros,
         })),
+        "controls": session.control_values().iter().map(|(name, value, target, unit)| {
+            let display = |value: f32| if *unit == Some("db") { 20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10() } else { f64::from(value) };
+            json!({ "name": name, "value": display(*value), "target": display(*target), "unit": unit })
+        }).collect::<Vec<_>>(),
         "scenes": session.defined("scene"),
         "clips": session.defined("clip"),
         "tracks": session.tracks().iter().map(|t| json!({

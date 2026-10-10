@@ -335,3 +335,33 @@ fn hush_uses_the_background_compilation_path() {
     assert!(reply["result"]["id"].is_u64());
     assert!(d.session().tracks().iter().all(|t| t.clip.is_none()));
 }
+
+#[test]
+fn controls_are_typed_timestamped_and_reported_in_status() {
+    let (mut d, c) = ready();
+    let accepted = call(&mut d, c, 2, "eval", json!({
+        "source": "ctl cutoff = 1khz\nctl volume = -6db", "quantize": "now"
+    }));
+    assert!(accepted.get("error").is_none(), "{accepted}");
+    let update = call(&mut d, c, 3, "control.set", json!({
+        "name": "cutoff", "value": 2.0, "unit": "khz", "at": 37, "smooth_ms": 0
+    }));
+    assert_eq!(update["result"]["at"], 37);
+    d.session_mut().process(64);
+    let status = call(&mut d, c, 4, "status", json!({}));
+    assert_eq!(status["result"]["controls"][0]["name"], "cutoff");
+    assert_eq!(status["result"]["controls"][0]["value"], 2000.0);
+    assert_eq!(status["result"]["controls"][0]["unit"], "hz");
+    assert!((status["result"]["controls"][1]["value"].as_f64().unwrap() + 6.0).abs() < 1e-5);
+    for params in [
+        json!({"name": "cutoff", "value": 2.0, "unit": "db"}),
+        json!({"name": "missing", "value": 2.0}),
+        json!({"name": "cutoff", "value": "2khz"}),
+        json!({"name": "cutoff", "value": 2.0, "at": -1}),
+        json!({"name": "cutoff", "value": 2.0, "smooth_ms": -1}),
+        json!({"name": "cutoff", "value": 2.0, "unit": 7}),
+    ] {
+        let result = call(&mut d, c, 5, "control.set", params);
+        assert!(result.get("error").is_some(), "{result}");
+    }
+}

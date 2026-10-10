@@ -17,6 +17,15 @@ pub enum LogInput {
         id: Option<u64>,
     },
     Panic,
+    Control {
+        name: String,
+        value: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+        at: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        smooth_ms: Option<f64>,
+    },
     Events {
         events: Vec<Event>,
     },

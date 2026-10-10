@@ -1,6 +1,7 @@
 //! The niminal live session: quantized, transactional evaluation of code into
 //! a running mixer, and the protocol around it.
 
+mod controls;
 mod log;
 mod project;
 mod protocol;
