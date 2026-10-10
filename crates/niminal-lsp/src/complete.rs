@@ -110,8 +110,10 @@ pub fn symbol_items(symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -
 /// What a `.` is after, as far as the text before it says.
 #[derive(Debug, PartialEq)]
 enum Receiver {
-    /// A pattern, clip or grid: `riff.`, `[c4 e4].`, `it.`
+    /// A pattern, clip, grid or track: `riff.`, `[c4 e4].`, `it.`, `bass.`
     Pattern,
+    /// A track: `bass.` changes what it plays, and can take changes off again.
+    Track,
     /// A scene: `verse.`
     Scene,
     /// A signal, or anything else.
@@ -122,6 +124,7 @@ enum Receiver {
 /// by walking back over calls, brackets and `.name` parts, and say what it begins with.
 fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
     let mut rest = text.trim_end();
+    let mut chained = false;
     loop {
         // a call's arguments or a pattern's brackets
         let mut literal = false;
@@ -154,6 +157,7 @@ fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
         }
         if before.ends_with('.') && !before.ends_with("..") {
             rest = before[..before.len() - 1].trim_end();
+            chained = true;
             continue;
         }
         if literal {
@@ -165,6 +169,8 @@ fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
         }
         return match symbols.iter().find(|s| s.name == name).map(|s| s.kind) {
             Some(SymbolKind::Pattern | SymbolKind::Clip) => Receiver::Pattern,
+            Some(SymbolKind::Track) if chained => Receiver::Pattern,
+            Some(SymbolKind::Track) => Receiver::Track,
             Some(SymbolKind::Scene) => Receiver::Scene,
             _ => Receiver::Signal,
         };
@@ -188,6 +194,14 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
         let dot = before[..word_start].trim_end();
         match receiver(&dot[..dot.len() - 1], symbols) {
             Receiver::Pattern => return pattern_ops().iter().map(op_item).collect(),
+            Receiver::Track => {
+                let mut out = vec![
+                    item("undo", FUNCTION, "undo()", "Take the last change made to this track off again."),
+                    item("clear", FUNCTION, "clear()", "Take every change made to this track off, back to what it was started with."),
+                ];
+                out.extend(pattern_ops().iter().map(op_item));
+                return out;
+            }
             Receiver::Scene => return pattern_ops().iter().filter(|o| o.name == "over").map(op_item).collect(),
             Receiver::Signal => {}
         }
@@ -290,11 +304,11 @@ mod tests {
         items(before, &symbols, &|_| String::new()).iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
     }
 
-    const SONG: &str = "opcode wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\n";
+    const SONG: &str = "opcode wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\ninstr pluck(freq: hz) { freq }\ntrack bass { instrument = pluck }\n";
 
     #[test]
     fn a_dot_after_a_pattern_offers_pattern_operations_only() {
-        for before in ["riff.", "c.", "[c4 e4].", "riff.fast(2).", "riff.transpose(+5st).th", "riff.every(2, it.", "x = riff.every(2, "] {
+        for before in ["riff.", "c.", "bass.", "bass.reverse.", "[c4 e4].", "riff.fast(2).", "riff.transpose(+5st).th", "riff.every(2, it.", "x = riff.every(2, "] {
             let l = labels_in(SONG, before);
             if before.ends_with("(2, ") {
                 assert!(l.contains(&"it".to_string()), "{before}");
@@ -303,6 +317,14 @@ mod tests {
             assert!(l.contains(&"every".to_string()) && l.contains(&"transpose".to_string()), "{before}: {l:?}");
             assert!(!l.contains(&"abs".to_string()) && !l.contains(&"lpf".to_string()) && !l.contains(&"wobble".to_string()), "{before}");
         }
+    }
+
+    #[test]
+    fn a_dot_after_a_track_also_offers_undo_and_clear() {
+        let l = labels_in(SONG, "bass.");
+        assert_eq!(&l[..2], ["undo", "clear"]);
+        assert!(l.contains(&"every".to_string()));
+        assert!(!labels_in(SONG, "riff.").contains(&"undo".to_string()));
     }
 
     #[test]

@@ -787,3 +787,90 @@ fn reset_makes_the_next_bar_line_bar_one() {
     let after = run(&mut s, BAR);
     assert!(peak(&before) < 1e-6 && peak(&after) > 0.1, "bar 3 is two bars after the reset, not 3 bars after the start");
 }
+
+fn hz(x: &[f32]) -> f32 {
+    crossings(x) as f32 / (x.len() as f32 / SR)
+}
+
+#[test]
+fn a_track_playing_a_launched_scene_can_be_changed_by_name() {
+    let mut s = ready();
+    s.eval("riff = [c4 e4 g4 b4]\nscene verse { lead: riff, bass: riff }\nlaunch verse", Some("now")).unwrap();
+    let first = run(&mut s, BAR);
+    assert!((hz(&first[2000..22_000]) - 262.0).abs() < 10.0, "starts on c4");
+    s.eval("lead.reverse", Some("now")).unwrap();
+    let second = run(&mut s, BAR);
+    assert!((hz(&second[2000..22_000]) - 494.0).abs() < 15.0, "now starts on b4: {}", hz(&second[2000..22_000]));
+    // and again: changes build on each other
+    s.eval("lead.reverse", Some("now")).unwrap();
+    let third = run(&mut s, BAR);
+    assert!((hz(&third[2000..22_000]) - 262.0).abs() < 10.0, "back to c4");
+}
+
+#[test]
+fn a_clip_that_a_scene_plays_follows_a_redefinition() {
+    let mut s = ready();
+    s.eval("riff = [a3]\nscene verse { lead: riff }\nlaunch verse", Some("now")).unwrap();
+    run(&mut s, BAR);
+    s.eval("riff = [a4]", Some("now")).unwrap();
+    let after = run(&mut s, BAR);
+    assert!((hz(&after[2000..BAR - 2000]) - 440.0).abs() < 12.0, "{}", hz(&after[2000..BAR - 2000]));
+}
+
+#[test]
+fn stopping_a_scene_stops_its_tracks_and_a_track_with_nothing_playing_cannot_be_changed() {
+    let mut s = ready();
+    s.eval("riff = [c4]\nscene verse { lead: riff, bass: riff }\nlaunch verse", Some("now")).unwrap();
+    run(&mut s, BAR);
+    s.eval("stop verse", Some("now")).unwrap();
+    run(&mut s, 24_000);
+    assert!(peak(&run(&mut s, BAR)[10_000..]) < 1e-3, "silent once the notes have rung out");
+    let problems = s.eval("lead.reverse", Some("now")).unwrap_err();
+    assert!(problems[0].message.contains("isn't playing anything"), "{}", problems[0].message);
+}
+
+#[test]
+fn changes_stack_and_can_be_undone_or_cleared() {
+    let first_beat = |s: &mut Session| hz(&run(s, BAR)[2000..22_000]);
+    let mut s = ready();
+    s.eval("riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nlaunch verse", Some("now")).unwrap();
+    assert!((first_beat(&mut s) - 262.0).abs() < 10.0);
+
+    s.eval("lead.reverse", Some("now")).unwrap();
+    assert!((first_beat(&mut s) - 494.0).abs() < 15.0, "reversed");
+    s.eval("lead.transpose(+12st)", Some("now")).unwrap();
+    assert!((first_beat(&mut s) - 988.0).abs() < 30.0, "reversed, then up an octave");
+
+    s.eval("lead.undo", Some("now")).unwrap();
+    assert!((first_beat(&mut s) - 494.0).abs() < 15.0, "the octave is off, the reverse stays");
+    s.eval("lead.transpose(+12st)\nlead.clear", Some("now")).unwrap();
+    assert!((first_beat(&mut s) - 262.0).abs() < 10.0, "everything off, in one go");
+
+    let problems = s.eval("lead.undo", Some("now")).unwrap_err();
+    assert!(problems[0].message.contains("nothing to undo"), "{}", problems[0].message);
+    s.eval("lead.reverse", Some("now")).unwrap();
+    s.eval("launch verse", Some("now")).unwrap();
+    assert!((first_beat(&mut s) - 262.0).abs() < 10.0, "launching the scene again starts from its clips");
+}
+
+#[test]
+fn a_redefined_clip_keeps_the_changes_made_to_a_track() {
+    let mut s = ready();
+    s.eval("riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nlaunch verse\nlead.reverse", Some("now")).unwrap();
+    run(&mut s, BAR);
+    s.eval("riff = [a3 a4 a4 a4]", Some("now")).unwrap();
+    let out = run(&mut s, BAR);
+    assert!((hz(&out[2000..22_000]) - 440.0).abs() < 15.0, "reversed: a4 comes first, a3 last: {}", hz(&out[2000..22_000]));
+}
+
+#[test]
+fn thin_drops_the_same_notes_wherever_it_is_written() {
+    let thinned = |code: &str| {
+        let mut s = ready();
+        s.eval(code, Some("now")).unwrap();
+        run(&mut s, 4 * BAR)
+    };
+    let a = thinned("play lead = [c4 e4 g4 b4 c5 e5 g5 b5].thin(50%)");
+    let b = thinned("riff = [c3]\nplay lead = [c4 e4 g4 b4 c5 e5 g5 b5].thin(50%)");
+    assert_eq!(a, b);
+}

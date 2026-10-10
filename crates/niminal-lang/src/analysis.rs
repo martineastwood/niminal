@@ -39,11 +39,37 @@ pub struct Statement {
     /// The `@ ...` written after the statement, if any.
     pub quantize: Option<Quantize>,
     pub plays: Option<PlayInfo>,
+    /// For `bass.reverse`, where in `text` that is: `plays.what` is only the change, `reverse`,
+    /// until the session joins it to what the track is playing.
+    pub edit: Option<std::ops::Range<usize>>,
+    /// The scene a `launch` starts.
+    pub launch: Option<String>,
     /// Whether the statement says when it happens (`at bar 5 ...`).
     /// At a fixed time on the session's clock. `at +2 bars` is not: it is after the code lands.
     pub has_at: bool,
     /// Where the statement starts in the source.
     pub offset: usize,
+}
+
+/// What each track plays in the scene defined by `source`, as written: `None` for `~`.
+pub fn scene_entries(source: &str) -> Vec<(String, Option<String>)> {
+    let Ok(items) = parse_spanned(source) else { return Vec::new() };
+    items
+        .into_iter()
+        .find_map(|(item, _)| match item {
+            Item::Scene(block) => Some(
+                block
+                    .entries
+                    .iter()
+                    .map(|(track, e)| {
+                        let what = (!matches!(e.kind, ExprKind::Rest)).then(|| source[e.span.start..e.span.end].to_string());
+                        (track.name.clone(), what)
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// Split `source` into statements.
@@ -59,6 +85,8 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             text,
             quantize: None,
             plays: None,
+            edit: None,
+            launch: None,
             has_at: false,
             offset: span.start,
         };
@@ -98,8 +126,15 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                         Command::Mute(track) | Command::Unmute(track) => Some(format!("mute:{}", track.name)),
                         Command::Solo(_) | Command::Unsolo(_) => Some("solo".into()),
                         Command::Launch(_) => Some("launch".into()),
-                        Command::Hush | Command::Panic | Command::Reset => None,
+                        Command::Hush | Command::Panic | Command::Reset | Command::Edit { .. } => None,
                     };
+                }
+                if let Command::Launch(scene) = &c.command {
+                    s.launch = Some(scene.name.clone());
+                }
+                if let Command::Edit { track, change } = &c.command {
+                    s.plays = Some(PlayInfo { track: track.name.clone(), what: source[change.start..change.end].to_string() });
+                    s.edit = Some(track.span.start - span.start..change.end - span.start);
                 }
                 if let Command::Play { track, what } = &c.command {
                     s.plays = Some(PlayInfo {

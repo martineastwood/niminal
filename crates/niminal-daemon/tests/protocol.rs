@@ -266,13 +266,17 @@ fn status_lists_scenes_clips_and_what_each_track_is_doing() {
     let before = call(&mut d, c, 3, "status", json!({}))["result"].clone();
     assert_eq!(before["scenes"], json!(["verse"]));
     assert_eq!(before["clips"], json!(["riff"]));
-    assert_eq!(before["tracks"][0], json!({"name": "lead", "clip": null, "muted": false, "soloed": false}));
+    assert_eq!(before["tracks"][0], json!({"name": "lead", "clip": null, "muted": false, "soloed": false, "edits": []}));
 
     call(&mut d, c, 4, "eval", json!({"source": "launch verse\nmute bass\nsolo lead", "quantize": "now"}));
     let after = call(&mut d, c, 5, "status", json!({}))["result"].clone();
     assert_eq!(after["tracks"][0]["clip"], "lead", "a bare pattern is named for its track");
     assert_eq!(after["tracks"][0]["soloed"], true);
-    assert_eq!(after["tracks"][1], json!({"name": "bass", "clip": "riff", "muted": true, "soloed": false}));
+    assert_eq!(after["tracks"][1], json!({"name": "bass", "clip": "riff", "muted": true, "soloed": false, "edits": []}));
+
+    call(&mut d, c, 6, "eval", json!({"source": "bass.reverse\nbass.thin(25%)", "quantize": "now"}));
+    let edited = call(&mut d, c, 7, "status", json!({}))["result"].clone();
+    assert_eq!(edited["tracks"][1]["edits"], json!(["reverse", "thin(25%)"]));
 }
 
 #[test]

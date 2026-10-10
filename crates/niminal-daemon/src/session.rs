@@ -95,7 +95,7 @@ struct Pending {
     /// Plays to start again because a pattern they use was redefined.
     replays: Vec<Compiled>,
     /// What each track is playing once this has landed.
-    playing: BTreeMap<String, String>,
+    playing: BTreeMap<String, Playing>,
 }
 
 #[derive(Clone)]
@@ -187,12 +187,12 @@ pub struct EvalJob {
     fallback: Option<Quantize>,
     statements: Vec<Statement>,
     base: Project,
-    playing: BTreeMap<String, String>,
+    playing: BTreeMap<String, Playing>,
     /// Which state of the session this was prepared against.
     version: u64,
     config: PrepareConfig,
     committed: Project,
-    committed_playing: BTreeMap<String, String>,
+    committed_playing: BTreeMap<String, Playing>,
     waiting: Vec<Waiting>,
     lands_at: u64,
 }
@@ -268,7 +268,7 @@ pub struct CancelJob {
     version: u64,
     config: PrepareConfig,
     project: Project,
-    playing: BTreeMap<String, String>,
+    playing: BTreeMap<String, Playing>,
     waiting: Vec<Waiting>,
 }
 
@@ -342,6 +342,8 @@ pub struct TrackStatus {
     pub clip: Option<String>,
     pub muted: bool,
     pub soloed: bool,
+    /// The changes made to it live (`reverse`, `thin(25%)`), oldest first.
+    pub edits: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -395,7 +397,7 @@ pub struct Session {
     next_id: u64,
     /// What each track was last told to play, as source, so that redefining a
     /// pattern can start the new version.
-    playing: BTreeMap<String, String>,
+    playing: BTreeMap<String, Playing>,
     landed: Vec<Landed>,
     notices: Vec<String>,
     recent_notices: Vec<(String, u64)>,
@@ -423,7 +425,7 @@ fn prepare_pending(
     snippet: &str,
     statements: Vec<Statement>,
     base: &Project,
-    base_playing: &BTreeMap<String, String>,
+    base_playing: &BTreeMap<String, Playing>,
 ) -> Result<Pending, Vec<Problem>> {
     let definitions: Vec<&Statement> =
         statements.iter().filter(|s| s.kind == StatementKind::Definition).collect();
@@ -454,22 +456,33 @@ fn prepare_pending(
         ))]);
     }
 
+    // The commands run in order, each seeing what the ones before it left playing.
+    let mut playing = base_playing.clone();
     let mut actions = Vec::new();
     for s in statements.iter().filter(|s| s.kind != StatementKind::Definition) {
+        let (s, edited) = join_edit(s, &playing)?;
         let piece = Piece { text: s.text.clone(), origin: Origin::Snippet { offset: s.offset } };
-        actions.push(Compiled { statement: s.clone(), program: check(&[piece])? });
+        let program = check(&[piece])?;
+        apply_to_playing(&mut playing, &program, &s);
+        if let Some(scene) = &s.launch {
+            apply_launch(&mut playing, &program, &project, scene);
+        }
+        if let Some((track, edited)) = edited {
+            playing.insert(track, edited);
+        }
+        actions.push(Compiled { statement: s, program });
     }
 
-    // What will be playing, and which of it has to start over.
-    let mut playing = base_playing.clone();
-    for a in &actions {
-        apply_to_playing(&mut playing, &a.program, &a.statement);
-    }
     let changed: Vec<String> = definitions.iter().filter_map(|s| s.binding.clone()).collect();
     let retimes = definitions.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")));
+    // Tracks that play something this change touches start it over, unless the commands
+    // here already start them.
+    let relaunched = actions.iter().any(|a| a.statement.launch.is_some());
     let mut replays = Vec::new();
-    for (track, what) in base_playing {
-        if !(retimes || mentions_any(what, &changed)) {
+    for (track, now) in playing.clone() {
+        let started = relaunched || actions.iter().any(|a| a.statement.plays.as_ref().is_some_and(|p| p.track == track));
+        let what = now.text();
+        if started || !(retimes || mentions_any(&what, &changed)) {
             continue;
         }
         let text = format!("play {track} = {what}");
@@ -477,7 +490,6 @@ fn prepare_pending(
         let piece = Piece { text: text.clone(), origin: Origin::Snippet { offset: 0 } };
         // If the new version no longer works for the track, leave it playing as it was.
         if let Ok(program) = check(&[piece]) {
-            playing.insert(track.clone(), what.clone());
             replays.push(Compiled { statement, program });
         }
     }
@@ -929,7 +941,13 @@ impl Session {
             .skip(1)
             .map(|(i, t)| {
                 let state = self.schedule.track_state(i, now);
-                TrackStatus { name: t.name.clone(), clip: state.clip, muted: state.muted, soloed: state.soloed }
+                TrackStatus {
+                    name: t.name.clone(),
+                    clip: state.clip,
+                    muted: state.muted,
+                    soloed: state.soloed,
+                    edits: self.playing.get(&t.name).map(|p| p.edits.clone()).unwrap_or_default(),
+                }
             })
             .collect()
     }
@@ -985,7 +1003,7 @@ impl Session {
 
     /// The project and what is playing as they will be once everything
     /// waiting has landed.
-    fn projected(&self) -> (Project, BTreeMap<String, String>) {
+    fn projected(&self) -> (Project, BTreeMap<String, Playing>) {
         match self.pending.last() {
             Some(p) => (p.project.clone(), p.playing.clone()),
             None => (self.project.clone(), self.playing.clone()),
@@ -1325,14 +1343,92 @@ fn mentions_any(source: &str, names: &[String]) -> bool {
         .any(|word| names.iter().any(|n| n == word))
 }
 
+/// What a track is playing: a clip, as written, and the changes made to it live with
+/// `bass.reverse` and the like, in order.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Playing {
+    base: String,
+    edits: Vec<String>,
+}
+
+/// The most changes one track can carry.
+const MAX_EDITS: usize = 16;
+
+impl Playing {
+    fn new(base: impl Into<String>) -> Playing {
+        Playing { base: base.into(), edits: Vec::new() }
+    }
+
+    /// `riff.reverse.thin(25%)`
+    fn text(&self) -> String {
+        self.edits.iter().fold(self.base.clone(), |text, edit| format!("{text}.{edit}"))
+    }
+}
+
+/// A statement to compile, and for a change to a track, what the track is playing after it.
+type Edited = (Statement, Option<(String, Playing)>);
+
+/// `bass.reverse` becomes `play bass = <what bass is playing>.reverse`, `bass.undo` takes
+/// the last change off, and `bass.clear` all of them. Returns the statement to compile and
+/// what the track is playing after it.
+fn join_edit(statement: &Statement, playing: &BTreeMap<String, Playing>) -> Result<Edited, Vec<Problem>> {
+    let (Some(range), Some(plays)) = (&statement.edit, &statement.plays) else { return Ok((statement.clone(), None)) };
+    let track = plays.track.clone();
+    let Some(current) = playing.get(&track) else {
+        return Err(vec![Problem::plain(format!(
+            "`{track}` isn't playing anything to change; start it first, for example `play {track} = …` or `launch` a scene with it"
+        ))]);
+    };
+    let mut next = current.clone();
+    match plays.what.trim() {
+        "undo" => {
+            if next.edits.pop().is_none() {
+                return Err(vec![Problem::plain(format!("nothing to undo: `{track}` has no changes made to it"))]);
+            }
+        }
+        "clear" => next.edits.clear(),
+        change if next.edits.len() >= MAX_EDITS => {
+            return Err(vec![Problem::plain(format!(
+                "`{track}` already has {MAX_EDITS} changes (`{change}` would be one more); `{track}.undo` or `{track}.clear` takes some off"
+            ))]);
+        }
+        change => next.edits.push(change.to_string()),
+    }
+    let text = next.text();
+    let mut statement = statement.clone();
+    statement.text.replace_range(range.clone(), &format!("play {track} = {text}"));
+    statement.plays = Some(niminal_lang::PlayInfo { track: track.clone(), what: text });
+    statement.write_key = Some(format!("play:{track}"));
+    statement.edit = None;
+    Ok((statement, Some((track, next))))
+}
+
+/// Record what a launched scene plays: its tracks play what it says, and every other
+/// track with an instrument stops.
+fn apply_launch(playing: &mut BTreeMap<String, Playing>, program: &Program, project: &Project, scene: &str) {
+    let Some(text) = project.text_of(&format!("scene:{scene}")) else { return };
+    let entries = niminal_lang::scene_entries(text);
+    for track in program.tracks.iter().filter(|t| t.instrument.is_some()) {
+        if !entries.iter().any(|(name, _)| *name == track.name) {
+            playing.remove(&track.name);
+        }
+    }
+    for (track, what) in entries {
+        match what {
+            Some(what) => playing.insert(track, Playing::new(what)),
+            None => playing.remove(&track),
+        };
+    }
+}
+
 /// Update the record of what each track is playing for a statement that has
 /// been compiled: `play` records its source, `stop` and `hush` forget.
-fn apply_to_playing(playing: &mut BTreeMap<String, String>, program: &Program, statement: &Statement) {
+fn apply_to_playing(playing: &mut BTreeMap<String, Playing>, program: &Program, statement: &Statement) {
     for scheduled in &program.performance {
         match name_action(program, &scheduled.action) {
             NamedAction::Play { track, .. } => {
                 if let Some(plays) = statement.plays.as_ref().filter(|p| p.track == track) {
-                    playing.insert(track, plays.what.clone());
+                    playing.insert(track, Playing::new(plays.what.clone()));
                 }
             }
             NamedAction::Stop(track) => {

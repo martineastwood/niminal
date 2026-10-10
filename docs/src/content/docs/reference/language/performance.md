@@ -52,36 +52,37 @@ scene chorus { bass: riff.transpose(+5st), drums: groove, keys: chords }
 launch chorus @ next 4 bars
 ```
 
+A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only a `notes` lane, and everything below works the same on both. A clip with no `length:` runs freely: its cycles keep counting, so `<a b>` and `every` alternate. Give it a `length:` and it loops, starting over each time.
+
+Launching a scene starts the clips it lists and **stops every other track** that has an instrument, so a scene is the whole picture: leave a track out and it falls silent. `~` still works for a track you want to name as silent. To add a fill for a bar, write it as a `play` line instead of a scene.
+
 See [Score model](/reference/score-model/) for arrangement-level tempo, meter, and lanes.
 
 ## Live commands
 
-```nml
-play bass = riff
-play bass = riff.fast(2)
-mute drums @ next bar
-solo bass
-unsolo
-stop keys
-hush
-panic
-reset
-```
-
-**Bindings are reactive:** redefining `riff = ...` updates every track playing it at each track’s quantize point.
-
-## Timed commands and the transport
-
-`at bar 5 launch chorus` happens at bar 5 on the session's clock, which keeps counting while the daemon runs. Submit a file with `at bar 5` after the session is past bar 5 and nothing fires. Two ways to keep a timeline reusable:
+While a scene is playing you can change what a track plays by writing the change after its name. It lands on the next boundary, like a `play`, and the track's clip starts over there:
 
 ```nml
 launch verse
-at +4 bars launch chorus     // 4 bars after this code lands
-at +8 bars mute bass
-at +16 bars hush
+bass.reverse            // the bass clip now plays backwards
+lead.transpose(+5st).thin(25%)
+stop verse              // every track in the scene stops together
 ```
 
-`reset` stops everything (like `hush`) and makes the next bar line bar 1, so `at bar 5` and the bar numbers in the status bar count from there again. It lands on the next bar like other commands. Put `reset` in its own evaluation, then submit the timeline. In a render, `+` counts from the start and `reset` is a `hush`.
+Each change builds on what the track is playing, in the order you made them, and the tracks panel shows the stack (`▶ riff · reverse → thin(25%)`):
+
+```nml
+bass.reverse
+bass.thin(25%)          // reversed, then thinned
+bass.undo               // takes off the last change you made (here, the thin)
+bass.clear              // takes off all of them
+```
+
+- One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A track carries at most 16.
+- Redefining the clip itself (`riff = …`) keeps your changes and applies them to the new clip.
+- A `play` line or launching a scene starts the track fresh, with no changes.
+- `thin` drops the same notes for the same amount wherever it is written, so undoing something else doesn't change which notes it drops.
+- Only a live session can do this: in a file, write the change into the play line.
 
 ## Quantized changes
 

@@ -20,7 +20,7 @@ mod sample;
 mod schedule;
 mod unit;
 
-pub use analysis::{PlayInfo, Statement, StatementKind, analyze};
+pub use analysis::{PlayInfo, Statement, StatementKind, analyze, scene_entries};
 pub use compile::{CompileOptions, compile, compile_with};
 pub use diag::{Diagnostic, Span, closest};
 pub use ide::{OpInfo, ParamInfo, Symbol, SymbolKind, SymbolParam, builtin_ops, pattern_ops, symbols, waves};

@@ -314,11 +314,15 @@ impl Parser {
             let at = self.at_pos()?;
             if self.at_command() {
                 self.command(Some(at)).map(Item::Command)
+            } else if self.is_edit() {
+                self.edit(Some(at)).map(Item::Command)
             } else {
                 self.note(Some(at)).map(Item::Note)
             }
         } else if self.at_command() {
             self.command(None).map(Item::Command)
+        } else if self.is_edit() {
+            self.edit(None).map(Item::Command)
         } else if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
             let name = self.ident("a name")?;
             self.bump();
@@ -559,6 +563,21 @@ impl Parser {
             }
             _ => Err(self.unexpected("a bar number, as in `bar 5`")),
         }
+    }
+
+    fn is_edit(&self) -> bool {
+        matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Dot
+    }
+
+    /// `bass.reverse` or `lead.transpose(+5st).thin(10%)`.
+    fn edit(&mut self, at: Option<AtPos>) -> Res<CommandStmt> {
+        let start = self.span();
+        let track = self.ident("a track")?;
+        self.expect(&Tok::Dot)?;
+        let first = self.span();
+        let change = self.expr()?;
+        let quantize = self.quantize()?;
+        Ok(CommandStmt { at, command: Command::Edit { track, change: first.to(change.span) }, quantize, span: start.to(self.prev_span()) })
     }
 
     fn at_command(&self) -> bool {

@@ -1,0 +1,35 @@
+// Tracks as mixer channels: an instrument, an effect chain, and sends to shared buses.
+// Render with:  niminal render examples/tracks.nml --out tracks.wav
+config { channels: stereo }
+tempo 110bpm
+
+bus space: stereo
+bus echo: stereo
+
+instr pluck(freq: hz, bright: 0..1 = 0.5) {
+  voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * env[0 2ms 1 400ms.exp 0]
+  voice.pan(azimuth: 0deg)
+}
+
+// An effects-only track: it has no instrument, it processes what the buses collect.
+track hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
+track slap { out = echo.lpf(cutoff: 6khz).gain(-1db) }
+
+// `it` is the summed sound of the track's voices. The sends copy `out` to the
+// buses; the track's own `out` still goes to the master.
+track bass {
+  instrument = pluck(bright: 0.2)
+  out        = it.lpf(cutoff: 1500hz).gain(-3db)
+  space     += out.gain(-16db)
+}
+
+track lead {
+  instrument = pluck(bright: 0.8)
+  out        = it.gain(-6db)
+  space     += out.gain(-1db)
+  echo      += out.delay(time: 3/8beat, feedback: 0.6).gain(-8db)
+}
+
+play bass = [c2 ~ c2 eb2 ~ g1 bb1 ~]
+play lead = [c4 e4 g4 b4].every(2, it.reverse)
+at +4 bars hush

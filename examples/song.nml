@@ -23,10 +23,10 @@ bassline = [c2 ~ c2 eb2 ~ g1 bb1 ~]
 groove   = [kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare]
 tune     = [c4 e4 g4 b4].every(2, it.reverse)
 
-scene intro  { bass: bassline, beat: ~, hats: ~ }
-scene verse  { bass: bassline, beat: groove, hats: [hat hat hat hat hat hat hat hat], lead: ~ }
+scene intro  { bass: bassline }
+scene verse  { bass: bassline, beat: groove, hats: [hat hat hat hat hat hat hat hat] }
 scene chorus { bass: bassline.transpose(+5st), beat: groove, hats: [hat hat hat hat hat hat hat hat], lead: tune }
-scene outro  { bass: bassline, beat: ~, hats: ~, lead: ~ }
+scene outro  { bass: bassline }
 
 arrangement song {
   sections: [intro.over(2 bars) verse.over(4 bars) chorus.over(4 bars) verse.over(4 bars) outro.over(2 bars)]

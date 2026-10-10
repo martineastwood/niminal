@@ -488,11 +488,20 @@ track bass { instrument = pluck }
     }
 
     #[test]
-    fn a_bare_pattern_keeps_counting_cycles_but_a_clip_restarts() {
+    fn a_clip_keeps_counting_cycles_until_it_is_given_a_length() {
         let order = |s: &Schedule| notes(s, 0.0, 8.0).into_iter().map(|e| e.2).collect::<Vec<_>>();
         assert_eq!(order(&schedule("play lead = [<c4 e4>]")), [60, 64, 60, 64]);
         assert_eq!(order(&schedule("play lead = [c4 e4].every(2, it.reverse)")), [64, 60, 60, 64, 64, 60, 60, 64]);
-        assert_eq!(order(&schedule("clip c { notes: [<c4 e4>] }\nplay lead = c")), [60, 60, 60, 60]);
+        assert_eq!(order(&schedule("clip c { notes: [<c4 e4>] }\nplay lead = c")), [60, 64, 60, 64]);
+        assert_eq!(order(&schedule("clip c { length: 1 bar\nnotes: [<c4 e4>] }\nplay lead = c")), [60, 60, 60, 60]);
+    }
+
+    #[test]
+    fn launching_a_scene_stops_the_tracks_it_does_not_name() {
+        let s = schedule("scene a { lead: [c4], bass: [c2] }\nscene b { lead: [e4] }\nlaunch a\nat +2 bars launch b");
+        let tracks = |from, to| notes(&s, from, to).into_iter().map(|e| e.1).collect::<Vec<_>>();
+        assert_eq!(tracks(0.0, 2.0), ["lead", "bass"]);
+        assert_eq!(tracks(4.0, 6.0), ["lead"], "bass was not in scene b");
     }
 
     #[test]

@@ -83,6 +83,8 @@ pub enum Command {
     Panic,
     /// Stop everything and count bars from the next bar line.
     Reset,
+    /// `bass.reverse`: change what a track is playing. `change` is `reverse`, in the source.
+    Edit { track: Ident, change: Span },
     Launch(Ident),
 }
 

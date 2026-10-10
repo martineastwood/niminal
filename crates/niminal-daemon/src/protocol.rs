@@ -541,7 +541,7 @@ fn status_json(session: &Session) -> Value {
         "scenes": session.defined("scene"),
         "clips": session.defined("clip"),
         "tracks": session.tracks().iter().map(|t| json!({
-            "name": t.name, "clip": t.clip, "muted": t.muted, "soloed": t.soloed,
+            "name": t.name, "clip": t.clip, "muted": t.muted, "soloed": t.soloed, "edits": t.edits,
         })).collect::<Vec<_>>(),
     })
 }

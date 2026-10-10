@@ -380,7 +380,7 @@ impl Perform<'_> {
             "over" => self.cycles(self.arg(name, rest, "length", span)?)?.max(Rational::new(1, 1000)),
             _ => clip.length,
         };
-        Ok(Clip { name: clip.name, length, endless: false, lanes })
+        Ok(Clip { name: clip.name, length, endless: clip.endless && name.name != "over", lanes })
     }
 
     /// Operations that work on any kind of pattern. `None` if `name` isn't one.
@@ -435,8 +435,8 @@ impl Perform<'_> {
                 if !(0.0..=1.0).contains(&drop) {
                     return Err(Diagnostic::new("`thin` takes an amount from 0% to 100%", e.span));
                 }
-                // The same source always thins the same events.
-                p.thin(drop, span.start as u64)
+                // The same amount always thins the same events, wherever it is written.
+                p.thin(drop, drop.to_bits())
             }
             "every" => {
                 let n = self.plain(self.arg(name, rest, "n", span)?)?;
@@ -538,14 +538,15 @@ impl Perform<'_> {
     // ---- clips and scenes ------------------------------------------------------
 
     fn clip(&self, block: &NamedBlock) -> Res<Clip> {
-        let mut length = Rational::ONE;
+        let mut length = None;
         let mut lanes: Vec<(String, Pattern<Value>)> = Vec::new();
         for (key, value) in &block.entries {
             if key.name == "length" {
-                length = self.cycles(value)?;
-                if length <= Rational::ZERO {
+                let cycles = self.cycles(value)?;
+                if cycles <= Rational::ZERO {
                     return Err(Diagnostic::new("a clip needs a length above zero", value.span));
                 }
+                length = Some(cycles);
                 continue;
             }
             if lanes.iter().any(|(n, _)| *n == key.name) {
@@ -560,7 +561,7 @@ impl Perform<'_> {
             };
             lanes.push((key.name.clone(), pattern));
         }
-        Ok(Clip { name: block.name.name.clone(), length, endless: false, lanes })
+        Ok(Clip { name: block.name.name.clone(), length: length.unwrap_or(Rational::ONE), endless: length.is_none(), lanes })
     }
 
     fn scene(&self, block: &NamedBlock) -> Res<Scene> {
@@ -645,7 +646,11 @@ impl Perform<'_> {
                 self.check_clip(&clip, t, track, what.span)?;
                 vec![schedule(Action::Play { track: t, clip })]
             }
-            Command::Stop(t) => vec![schedule(Action::Stop { track: self.track(t)? })],
+            Command::Stop(t) => match self.bindings.get(&t.name) {
+                // stopping a scene stops the tracks it plays on
+                Some(PerfValue::Scene(scene)) => scene.entries.iter().map(|(track, _)| schedule(Action::Stop { track: *track })).collect(),
+                _ => vec![schedule(Action::Stop { track: self.track(t)? })],
+            },
             Command::Mute(t) => vec![schedule(Action::Mute { track: self.track(t)? })],
             Command::Unmute(t) => vec![schedule(Action::Unmute { track: self.track(t)? })],
             Command::Solo(t) => vec![schedule(Action::Solo { track: self.track(t)? })],
@@ -656,11 +661,19 @@ impl Perform<'_> {
             Command::Hush => vec![schedule(Action::Hush)],
             Command::Panic => vec![schedule(Action::Panic)],
             Command::Reset => vec![schedule(Action::Reset)],
+            Command::Edit { track, .. } => {
+                return Err(Diagnostic::new(
+                    format!("`{}.…` changes what the track is playing, so it only works in a live session", track.name),
+                    track.span,
+                )
+                .with_help(format!("in a file, write the change into the play line: `play {} = …`", track.name)));
+            }
             Command::Launch(name) => self.launch(name, &schedule)?,
         })
     }
 
-    /// The commands that launch the scene called `name`.
+    /// The commands that launch the scene called `name`: its clips start, and
+    /// every other track with an instrument stops.
     fn launch(&self, name: &Ident, schedule: &dyn Fn(Action) -> Scheduled) -> Res<Vec<Scheduled>> {
         let Some(PerfValue::Scene(scene)) = self.bindings.get(&name.name) else {
             let mut d = Diagnostic::new(format!("no scene named `{}`", name.name), name.span);
@@ -679,6 +692,11 @@ impl Perform<'_> {
                     out.push(schedule(Action::Play { track: *track, clip: clip.clone() }));
                 }
                 None => out.push(schedule(Action::Stop { track: *track })),
+            }
+        }
+        for (track, info) in self.cx.tracks.iter().enumerate() {
+            if info.instrument.is_some() && !scene.entries.iter().any(|(t, _)| *t == track) {
+                out.push(schedule(Action::Stop { track }));
             }
         }
         Ok(out)

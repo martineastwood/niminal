@@ -1,5 +1,6 @@
 // The performance layer: clips and scenes launched on a timeline.
 // Render with:  niminal render examples/groove.nml --out groove.wav
+// Live, try:  launch verse   then   bass.reverse   or   lead.transpose(+5st)   then   stop verse
 // The `at +N bars` lines count from when the code lands, so you can submit it again at any time in a live session.
 config { channels: stereo }
 tempo 110bpm
@@ -29,7 +30,7 @@ spread = [c5].euclid(hits: 4, steps: 8)
 
 scene verse  { bass: riff, lead: theme }
 scene chorus { bass: riff.transpose(+5st), lead: answer }
-scene outro  { bass: ~, lead: spread }
+scene outro  { lead: spread }
 
 launch verse
 at +4 bars launch chorus
