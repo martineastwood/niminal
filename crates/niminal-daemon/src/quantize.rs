@@ -56,8 +56,9 @@ pub struct Grid {
     pub sample_rate: f64,
     pub bpm: f64,
     pub beats_per_bar: f64,
-    /// The sample where bar 1 starts: where the last `reset` landed.
-    pub origin: u64,
+    /// The sample where bar 1 starts: where the last `reset` landed. It is before the start of the
+    /// session when a slower tempo or longer bar has stretched the bars played so far.
+    pub origin: i64,
 }
 
 impl Grid {
@@ -78,7 +79,7 @@ impl Grid {
             QuantizeUnit::Bar | QuantizeUnit::Cycle => self.bar_seconds(),
         };
         let grid = (q.count * unit * self.sample_rate).round().max(1.0);
-        let now_f = now.saturating_sub(self.origin) as f64;
+        let now_f = (now as i64 - self.origin) as f64;
         let target = match q.relation {
             // the next line of the grid, at or after now
             QuantizeRelation::OnGrid => (now_f / grid).ceil() * grid,
@@ -86,12 +87,12 @@ impl Grid {
             QuantizeRelation::Next => ((now_f / grid).floor() + 1.0) * grid,
             QuantizeRelation::In => now_f + grid,
         };
-        target as u64 + self.origin
+        (target as i64 + self.origin).max(0) as u64
     }
 
     /// `bar:beat` of a sample, counting from 1.
     pub fn position(&self, sample: u64) -> (u64, f64) {
-        let beats = sample.saturating_sub(self.origin) as f64 / self.sample_rate / self.beat_seconds();
+        let beats = (sample as i64 - self.origin) as f64 / self.sample_rate / self.beat_seconds();
         let bar = (beats / self.beats_per_bar).floor();
         (bar as u64 + 1, beats - bar * self.beats_per_bar + 1.0)
     }

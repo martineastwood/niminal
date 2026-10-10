@@ -487,6 +487,7 @@ pub(super) fn schedule_for(program: &Program, history: &[HistoryEntry]) -> Sched
             NamedAction::Hush => Action::Hush,
             NamedAction::Panic => Action::Panic,
             NamedAction::Reset => Action::Reset,
+            NamedAction::Origin => return None,
         };
         Some(Scheduled { at: Time::Seconds(h.at), action, quantize: None })
     }).collect::<Vec<_>>();
@@ -584,9 +585,15 @@ impl RealtimeRenderer {
                                         .filter(|&j| program.bus_layouts[i] == self.program.bus_layouts[j])
                                 });
                                 controls::sync_voice(&self.controls, &mut prepared, self.clock);
-                                match self.mixer.note_prepared(target, prepared) {
-                                    Ok(id) => self.held.push((*off, id, *key)),
-                                    Err(rejected) => { *voice = Some(rejected); self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
+                                if let Some(id) = self.mixer.merge_legato(target, &prepared) {
+                                    // the note took over a sounding voice; the spare goes back to be freed off this thread
+                                    self.held.push((*off, id, *key));
+                                    *voice = Some(prepared);
+                                } else {
+                                    match self.mixer.note_prepared(target, prepared) {
+                                        Ok(id) => self.held.push((*off, id, *key)),
+                                        Err(rejected) => { *voice = Some(rejected); self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
+                                    }
                                 }
                             } else { self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
                         }

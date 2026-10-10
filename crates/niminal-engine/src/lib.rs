@@ -16,4 +16,4 @@ pub use master::Master;
 pub use mixer::{Buses, DEFAULT_MAX_VOICES, ChainInput, MAX_CHANNELS, Mixer, Route, Stems, TrackDef, Transfer, VoiceId, execution_order};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
 pub use opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};
-pub use voice::{Voice, VoiceRule};
+pub use voice::{Priority, Voice, VoiceRule};

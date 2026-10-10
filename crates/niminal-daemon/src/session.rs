@@ -42,6 +42,9 @@ enum NamedAction {
     Panic,
     /// Stop everything; bars count from here.
     Reset,
+    /// Bars count from here. The session starts with one, so a new tempo or meter can stretch it
+    /// along with the clips.
+    Origin,
 }
 
 /// What compiling an evaluation needs to know about the session.
@@ -510,8 +513,6 @@ fn prepare_pending(
     }
 
     let changed: Vec<String> = definitions.iter().filter_map(|s| s.binding.clone()).collect();
-    // a new tempo keeps clips in place (see `retime`); a new meter changes what a bar is
-    let retimes = definitions.iter().any(|s| s.key.as_deref() == Some("meter"));
     // Tracks that play something this change touches start it over, unless the commands
     // here already start them.
     let relaunched = actions.iter().any(|a| a.statement.launch.is_some());
@@ -519,7 +520,7 @@ fn prepare_pending(
     for (track, now) in playing.clone() {
         let started = relaunched || actions.iter().any(|a| a.statement.plays.as_ref().is_some_and(|p| p.track == track));
         let what = now.text();
-        if started || !(retimes || mentions_any(&what, &changed)) {
+        if started || !mentions_any(&what, &changed) {
             continue;
         }
         let text = format!("{track}.play({what})");
@@ -577,7 +578,7 @@ impl Session {
             program: Arc::new(program),
             mixer,
             limiter: Some(Master::with_channels(sample_rate, CEILING, layout.channels())),
-            history: Vec::new(),
+            history: vec![HistoryEntry { at: 0.0, action: NamedAction::Origin }],
             schedule,
             fetched_until: 0,
             upcoming: VecDeque::new(),
@@ -652,7 +653,7 @@ impl Session {
             sample_rate: f64::from(self.sample_rate),
             bpm: self.program.tempo.bpm,
             beats_per_bar: self.program.tempo.beats_per_bar,
-            origin: self.samples(origin_of(&self.history)),
+            origin: (origin_of(&self.history) * f64::from(self.sample_rate)).round() as i64,
         }
     }
 
@@ -1477,8 +1478,9 @@ impl Session {
     }
 }
 
-/// A tempo change keeps every clip where it is in its bar: what has happened is stretched, and what is
-/// still to come, `at bar 9` for one, is stretched the same way around `now`.
+/// A tempo or meter change keeps every clip where it is in its bar: what has happened is stretched, and
+/// what is still to come, `at bar 9` for one, is stretched the same way around `now`. So are the bar
+/// lines, which keeps the bar and beat that `now` is at.
 fn retime(history: &mut [HistoryEntry], now: f64, old: Tempo, new: Tempo) {
     let (was, is) = (old.beats_per_bar / old.bpm, new.beats_per_bar / new.bpm);
     if was == is {
@@ -1492,7 +1494,7 @@ fn retime(history: &mut [HistoryEntry], now: f64, old: Tempo, new: Tempo) {
 
 /// When bar 1 is, in session seconds: where the last `reset` landed.
 fn origin_of(history: &[HistoryEntry]) -> f64 {
-    history.iter().rev().find(|h| matches!(h.action, NamedAction::Reset)).map_or(0.0, |h| h.at)
+    history.iter().rev().find(|h| matches!(h.action, NamedAction::Reset | NamedAction::Origin)).map_or(0.0, |h| h.at)
 }
 
 fn name_action(program: &Program, action: &Action) -> NamedAction {

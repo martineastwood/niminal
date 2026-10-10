@@ -482,3 +482,24 @@ fn a_tempo_ramp_sounds_the_same_through_the_prepared_path() {
     assert!(first.iter().any(|v| v.abs() > 0.1));
     assert_eq!(actual, first, "the same notes in the same places");
 }
+
+#[test]
+fn a_legato_glide_instrument_sounds_the_same_on_the_prepared_path_without_heap_work() {
+    const SOURCE: &str = "tempo 120bpm\nmono bass(freq: hz) with(legato: true, glide: 30ms, priority: highest) { osc(saw, freq) * env[0 20ms 1 | 20ms 0] }\ntrack b { instrument = bass }\nb(freq: 110hz) for 4beats\nat 1/4beat b(freq: 165hz) for 1beat\nat 1/2beat b(freq: 82hz) for 2beats";
+    let mut direct = Session::new(48_000.0, Layout::Mono).without_limiter();
+    direct.eval(SOURCE, Some("now")).unwrap();
+    let expected = direct.process(60_000).remove(0);
+    assert!(expected.iter().any(|v| v.abs() > 0.1));
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(SOURCE, Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut actual = vec![0.0; 60_000];
+    let mut pos = 0;
+    while pos < actual.len() {
+        s.prepare_realtime();
+        let n = 256.min(actual.len() - pos);
+        measured(&mut r, n, &mut actual[pos..pos + n]);
+        pos += n;
+    }
+    assert_eq!(actual, expected);
+}

@@ -352,6 +352,10 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
         chokes: Vec::new(),
         max_voices: None,
         release_same_note: false,
+        steal_quietest: false,
+        legato: false,
+        priority: Default::default(),
+        glide: None,
     })
 }
 
@@ -426,6 +430,10 @@ pub(crate) fn compile_sampler(
         chokes: Vec::new(),
         max_voices: None,
         release_same_note: false,
+        steal_quietest: false,
+        legato: false,
+        priority: Default::default(),
+        glide: None,
     })
 }
 

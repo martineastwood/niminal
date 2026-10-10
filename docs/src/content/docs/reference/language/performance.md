@@ -161,9 +161,11 @@ tempo 124bpm @ next bar over 2 bars
 
 Boundaries: `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. One evaluation is one transaction. Last write wins for pending changes.
 
-### Tempo
+### Tempo and meter
 
-A new tempo keeps every running clip where it is in its bar: a bar that was three eighths played is still three eighths played, only shorter or longer. Commands set for later (`at +8 bars …`, `at bar 9 …`) keep their place in the music too. A new `meter` is different: it changes what a bar is, so running clips start again.
+A new tempo keeps every running clip where it is in its bar: a bar that was three eighths played is still three eighths played, only shorter or longer. Commands set for later (`at +8 bars …`, `at bar 9 …`) keep their place in the music too, and so do the bar lines: if it was bar 4, beat 2.5, it still is.
+
+A new `meter` does the same. Going from `4/4` to `3/4` halfway through a bar leaves you halfway through a bar that is now three beats long, and the clips carry on from there with their cycles squeezed into it. Nothing restarts. (A `meter` and a `tempo` that change together keep the bar the same length, so nothing needs to move.)
 
 `over` makes the change gradual:
 

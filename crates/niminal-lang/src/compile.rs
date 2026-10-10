@@ -374,9 +374,15 @@ fn compile_track(
     }))
 }
 
-/// `mono bass(...)` and `instr pad(...) with(max: 8, steal: oldest, same_note: release, choke: group)`.
+/// `mono bass(...) with(legato: true, glide: 80ms, priority: lowest)` and
+/// `instr pad(...) with(max: 8, steal: quietest, same_note: release, choke: group)`.
 fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut SampleState) -> Res<()> {
     let mut max = def.mono.then_some(1);
+    let mono_only = |option: &Ident| {
+        Diagnostic::new(format!("`{}` is for `mono` instruments", option.name), option.span)
+            .with_help("write `mono` where `instr` is")
+    };
+    let mut mono_option = None;
     for arg in &def.options {
         let Some(option) = &arg.name else {
             return Err(Diagnostic::new("an option is a name and a value, as in `max: 8`", arg.value.span));
@@ -394,10 +400,8 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
             }
             "steal" => match &value.kind {
                 ExprKind::Name(n) if n == "oldest" => {}
-                ExprKind::Name(n) if n == "quietest" => {
-                    return Err(Diagnostic::new("`steal: quietest` isn't supported yet", value.span).with_help("`steal: oldest` is what happens"));
-                }
-                _ => return Err(Diagnostic::new("`steal` is `oldest`", value.span)),
+                ExprKind::Name(n) if n == "quietest" => instrument.steal_quietest = true,
+                _ => return Err(Diagnostic::new("`steal` is `oldest` or `quietest`", value.span)),
             },
             "same_note" => match &value.kind {
                 ExprKind::Name(n) if n == "release" => instrument.release_same_note = true,
@@ -413,19 +417,49 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
                 }
                 _ => return Err(Diagnostic::new("expected the name of a choke group", value.span).with_help("for example `with(choke: bass)`")),
             },
-            "legato" | "priority" | "pitch" => {
-                return Err(Diagnostic::new(format!("`{}` isn't supported yet", option.name), option.span)
-                    .with_help("a `mono` instrument ends the previous note when a new one starts"));
+            "legato" => {
+                if !def.mono { return Err(mono_only(option)); }
+                instrument.legato = match &value.kind {
+                    ExprKind::Name(n) if n == "true" => true,
+                    ExprKind::Name(n) if n == "false" => false,
+                    _ => return Err(Diagnostic::new("`legato` is `true` or `false`", value.span)),
+                };
+                mono_option = Some(option);
+            }
+            "priority" => {
+                if !def.mono { return Err(mono_only(option)); }
+                instrument.priority = match &value.kind {
+                    ExprKind::Name(n) if n == "last" => niminal_engine::Priority::Last,
+                    ExprKind::Name(n) if n == "lowest" => niminal_engine::Priority::Lowest,
+                    ExprKind::Name(n) if n == "highest" => niminal_engine::Priority::Highest,
+                    _ => return Err(Diagnostic::new("`priority` is `last`, `lowest` or `highest`", value.span)),
+                };
+                mono_option = Some(option);
+            }
+            "glide" => {
+                if !def.mono { return Err(mono_only(option)); }
+                instrument.glide = Some(literal_time(value)?);
+                mono_option = Some(option);
             }
             other => {
                 let mut d = Diagnostic::new(format!("an instrument has no option `{other}`"), option.span);
-                d = match closest(other, ["max", "steal", "same_note", "choke"]) {
+                d = match closest(other, ["max", "steal", "same_note", "choke", "legato", "priority", "glide"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
-                    None => d.with_help("the options are `max`, `steal`, `same_note` and `choke`"),
+                    None => d.with_help("the options are `max`, `steal`, `same_note`, `choke`, and for `mono` instruments `legato`, `priority` and `glide`"),
                 };
                 return Err(d);
             }
         }
+    }
+    if let Some(option) = mono_option
+        && !instrument.params.iter().any(|p| p.name == crate::perform::PITCH_PARAM)
+    {
+        return Err(Diagnostic::new(format!("`{}` moves the pitch, and this instrument has no `{}` parameter", option.name, crate::perform::PITCH_PARAM), option.span)
+            .with_help(format!("give it a `{}: hz` parameter", crate::perform::PITCH_PARAM)));
+    }
+    if instrument.priority != niminal_engine::Priority::Last && !instrument.legato {
+        return Err(Diagnostic::new("`priority` decides which held note a legato voice sounds", def.options.iter().find_map(|a| a.name.as_ref().filter(|n| n.name == "priority")).map_or(def.options[0].value.span, |n| n.span))
+            .with_help("add `legato: true`"));
     }
     instrument.max_voices = max;
     Ok(())

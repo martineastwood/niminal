@@ -318,10 +318,15 @@ impl Mixer {
                 if other.group() == Some(group) { other.choke(); }
             }
         }
-        if let Some(rule) = voice.rule() { self.make_room(track, &rule); }
+        let mut voice = voice;
+        if let Some(rule) = voice.rule() {
+            self.glide_into(track, &rule, &mut voice);
+            self.make_room(track, &rule);
+        }
         self.steal_if_full();
         let serial = self.next_serial;
         self.next_serial += 1;
+        if voice.rule().is_some_and(|r| r.legato) { voice.hold(serial); }
         self.tracks[track].voices.push((serial, voice));
         Ok(VoiceId { track, serial })
     }
@@ -349,18 +354,46 @@ impl Mixer {
                 }
             }
         }
-        if let Some(rule) = &rule { self.make_room(track, rule); }
-        self.steal_if_full();
         let mut voice = Voice::new(graph, self.sample_rate);
         voice.set_group(group);
         voice.set_rule(rule);
         for &(index, value) in params {
             voice.set_param(index, value);
         }
+        if let Some(rule) = &rule {
+            if let Some(id) = self.merge_legato(track, &voice) { return id; }
+            self.glide_into(track, rule, &mut voice);
+            self.make_room(track, rule);
+        }
+        self.steal_if_full();
         let serial = self.next_serial;
         self.next_serial += 1;
+        if rule.is_some_and(|r| r.legato) { voice.hold(serial); }
         self.tracks[track].voices.push((serial, voice));
         VoiceId { track, serial }
+    }
+
+    /// A legato note that starts while its instrument's voice is held takes that voice over, so the
+    /// envelopes carry on and only the pitch moves. The `note` it came from is only read, so a caller
+    /// that must not free memory can retire it afterwards. Allocates nothing.
+    pub fn merge_legato(&mut self, track: usize, note: &Voice) -> Option<VoiceId> {
+        let rule = note.rule().filter(|r| r.legato && !self.muted)?;
+        let serial = self.next_serial;
+        let (_, voice) = self.tracks.get_mut(track)?.voices.iter_mut()
+            .find(|(_, v)| v.is_legato_open() && v.rule().is_some_and(|r| r.instrument == rule.instrument))?;
+        voice.legato_on(serial, note);
+        self.next_serial += 1;
+        Some(VoiceId { track, serial })
+    }
+
+    /// A glissando into `voice`: it starts at the pitch the instrument's newest note had reached.
+    fn glide_into(&self, track: usize, rule: &VoiceRule, voice: &mut Voice) {
+        if rule.glide <= 0.0 { return; }
+        let Some(track) = self.tracks.get(track) else { return };
+        let previous = track.voices.iter()
+            .filter(|(_, v)| !v.is_choked() && v.rule().is_some_and(|r| r.instrument == rule.instrument))
+            .max_by_key(|(serial, _)| *serial);
+        if let Some((_, v)) = previous { voice.glide_from(v.pitch_now(), self.sample_rate); }
     }
 
     /// Make room for a note under `rule`: release the sounding note of the same pitch if asked, and
@@ -374,15 +407,17 @@ impl Mixer {
             }
         }
         loop {
-            let (mut count, mut oldest) = (0usize, None::<u64>);
+            // the voice to end: the quietest (the oldest of equals), or just the oldest
+            let (mut count, mut ends) = (0usize, None::<(u64, f32)>);
             for (serial, v) in track.voices.iter() {
                 if mine(v) && !v.is_choked() {
                     count += 1;
-                    oldest = Some(oldest.map_or(*serial, |o| o.min(*serial)));
+                    let level = if rule.steal_quietest { v.level() } else { 0.0 };
+                    if ends.is_none_or(|(s, l)| level < l || (level == l && *serial < s)) { ends = Some((*serial, level)); }
                 }
             }
-            let Some(oldest) = oldest.filter(|_| count >= rule.max.max(1)) else { break };
-            if let Some((_, v)) = track.voices.iter_mut().find(|(serial, _)| *serial == oldest) { v.choke(); }
+            let Some((ends, _)) = ends.filter(|_| count >= rule.max.max(1)) else { break };
+            if let Some((_, v)) = track.voices.iter_mut().find(|(serial, _)| *serial == ends) { v.choke(); }
         }
     }
 
@@ -403,14 +438,15 @@ impl Mixer {
     /// their id when they move between tracks (see [`Mixer::adopt`]), so the
     /// track it started on is only a hint.
     pub fn release(&mut self, id: VoiceId) {
-        let hinted = self.tracks.get_mut(id.track).and_then(|t| t.voices.iter_mut().find(|(s, _)| *s == id.serial));
+        let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
+        let hinted = self.tracks.get_mut(id.track).and_then(|t| t.voices.iter_mut().find(|n| ends(n)));
         if let Some((_, v)) = hinted {
-            v.release();
+            v.note_off(id.serial);
             return;
         }
         for track in &mut self.tracks {
-            if let Some((_, v)) = track.voices.iter_mut().find(|(s, _)| *s == id.serial) {
-                v.release();
+            if let Some((_, v)) = track.voices.iter_mut().find(|n| ends(n)) {
+                v.note_off(id.serial);
                 return;
             }
         }

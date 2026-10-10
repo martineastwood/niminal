@@ -1090,8 +1090,8 @@ fn voice_options_are_checked() {
     let mut s = session();
     let err = |code: &str, s: &mut Session| s.eval(code, Some("now")).unwrap_err()[0].message.clone();
     assert!(err("mono x(freq: hz) with(max: 4) { osc(sine, freq) }", &mut s).contains("one voice"));
-    assert!(err("instr x(freq: hz) with(legato: true) { osc(sine, freq) }", &mut s).contains("isn't supported yet"));
-    assert!(err("instr x(freq: hz) with(steal: quietest) { osc(sine, freq) }", &mut s).contains("quietest"));
+    assert!(err("instr x(freq: hz) with(legato: true) { osc(sine, freq) }", &mut s).contains("is for `mono`"));
+    assert!(err("instr x(freq: hz) with(steal: newest) { osc(sine, freq) }", &mut s).contains("`oldest` or `quietest`"));
     assert!(err("instr x(freq: hz) with(maxx: 3) { osc(sine, freq) }", &mut s).contains("no option `maxx`"));
     assert!(err("instr x(freq: hz) with(max: 0) { osc(sine, freq) }", &mut s).contains("whole number"));
 }
@@ -1107,6 +1107,39 @@ fn a_new_tempo_keeps_the_clip_in_place_in_its_bar() {
     let after = run(&mut s, 18_000);
     // the bar is now a second long and was 3/8 through: the third note starts an eighth of a bar later
     assert!((hz(&after[7_000..11_000]) - 392.0).abs() < 15.0, "g4 comes next, not c4 again: {}", hz(&after[7_000..11_000]));
+}
+
+#[test]
+fn a_new_meter_keeps_the_clip_in_place_in_its_bar_and_the_bar_count_going() {
+    let mut s = ready();
+    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    // at 120bpm a bar is 2s: 0.75s in, the second note is half done
+    run(&mut s, 36_000);
+    s.eval("meter 2/4", Some("now")).unwrap();
+    let t = s.transport();
+    assert_eq!((t.bar, (t.beat * 1000.0).round()), (1, 1750.0), "3/8 through a bar of two beats: 0.75 beats in {t:?}");
+    let after = run(&mut s, 18_000);
+    // the bar is now a second long and was 3/8 through: the third note starts an eighth of a bar later
+    assert!((hz(&after[1_000..5_000]) - 330.0).abs() < 15.0, "still e4: {}", hz(&after[1_000..5_000]));
+    assert!((hz(&after[7_000..11_000]) - 392.0).abs() < 15.0, "g4 comes next, not c4 again: {}", hz(&after[7_000..11_000]));
+}
+
+#[test]
+fn a_meter_change_late_in_a_piece_keeps_the_bar_number_and_bar_lines_in_step_with_the_clips() {
+    let mut s = ready();
+    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    // three and a half bars of 4/4
+    run(&mut s, 7 * BAR / 2);
+    assert_eq!(s.transport().bar, 4);
+    s.eval("meter 3/4", Some("now")).unwrap();
+    let t = s.transport();
+    assert_eq!(t.bar, 4, "{t:?}");
+    assert!((t.beat - 2.5).abs() < 0.01, "halfway through the bar, which is now 3 beats: {t:?}");
+    // the next bar line is half a 3/4 bar away, and the clip starts over there too
+    s.eval("lead.mute", Some("next bar")).unwrap();
+    let all = run(&mut s, 40_000);
+    assert!(rms(&all[30_000..35_900]) > 0.5);
+    assert!(rms(&all[38_000..]) < 1e-6, "muted at the bar line, half a 3/4 bar on, once its release is over: {}", rms(&all[38_000..]));
 }
 
 #[test]

@@ -26,6 +26,14 @@ pub struct Instrument {
     pub max_voices: Option<usize>,
     /// `with(same_note: release)`: a note releases the sounding note of the same pitch.
     pub release_same_note: bool,
+    /// `with(steal: quietest)`: when `max` is reached, the quietest note ends, not the oldest.
+    pub steal_quietest: bool,
+    /// `with(legato: true)` on a `mono` instrument: a note over a held one changes its pitch.
+    pub legato: bool,
+    /// `with(priority: lowest)`: which held note a legato voice sounds.
+    pub priority: niminal_engine::Priority,
+    /// `with(glide: 80ms)`: how long a change of pitch takes.
+    pub glide: Option<niminal_score::Time>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -228,13 +236,19 @@ impl Program {
         let choke = self.instruments[instrument].chokes.get(picked).copied().flatten();
         let rule = {
             let this = &self.instruments[instrument];
+            let pitch_param = this.params.iter().position(|p| p.name == crate::perform::PITCH_PARAM);
             (this.max_voices.is_some() || this.release_same_note).then(|| niminal_engine::VoiceRule {
                 instrument: instrument as u32,
                 max: this.max_voices.unwrap_or(usize::MAX),
+                steal_quietest: this.steal_quietest,
                 release_same_pitch: this.release_same_note,
-                pitch: this.params.iter().position(|p| p.name == crate::perform::PITCH_PARAM)
-                    .and_then(|i| params.iter().find(|(index, _)| *index == i))
-                    .map_or(0.0, |&(_, value)| value),
+                pitch: pitch_param
+                    .and_then(|i| params.iter().find(|(index, _)| *index == i).map(|&(_, v)| v).or(this.params[i].default))
+                    .unwrap_or(0.0),
+                pitch_param,
+                legato: this.legato,
+                priority: this.priority,
+                glide: this.glide.map_or(0.0, |t| t.to_seconds(self.tempo) as f32),
             })
         };
         Ok(NotePlan { track, instrument, params, choke, rule })

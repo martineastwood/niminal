@@ -46,18 +46,35 @@ Options follow the parameters: `instr pad(freq: hz) with(max: 8, same_note: rele
 | `choke: group` | New note ends other voices in the group, whichever instrument they are of | yes |
 | `same_note: release` | New note releases the previous voice at the same pitch | yes |
 | `max: n`, `steal: oldest` | Caps the voices of the instrument sounding on a part; the oldest end, with a short fade | yes |
-| `steal: quietest` | Ends the quietest instead | no |
-| `legato: true` (mono) | Overlapping notes don’t retrigger envelopes | no |
-| `priority: last`, `lowest`, or `highest` (mono) | Which held note sounds | no |
+| `steal: quietest` | With `max`, ends the quietest voice instead of the oldest | yes |
+| `legato: true` (mono) | A note that starts while another is held takes over its voice: envelopes carry on, only the pitch moves | yes |
+| `priority: last`, `lowest`, or `highest` (mono, needs `legato`) | Which held note sounds; letting go of one goes back to another still held | yes |
+| `glide: 80ms` (mono) | A change of pitch slides to the new note in this time, evenly in semitones | yes |
 | `pitch: name` | Which parameter is pitch (default `freq`) | no |
 | `compensate: false` | Opt out of latency compensation | no |
 | `quantize: 1 beat` | When redefinitions land | no |
 
 An option that isn't built is rejected with a message, not ignored. `mono` is `max: 1`: the previous note fades out over a few milliseconds as the new one starts. Voices are counted per part, so two parts playing the same `mono` instrument each keep their own.
 
+### Playing a mono instrument
+
+```nml
+mono bass(freq: hz, amp: db = -6db) with(legato: true, glide: 60ms, priority: lowest) {
+  level = env[0 5ms 1 | 200ms 0]
+  out = osc(saw, freq).lpf(cutoff: freq * 4).gain(amp) * level
+}
+```
+
+- **Plain `mono`** retriggers: each note fades the last one out and starts its own envelopes.
+- **`glide`** alone makes the new note start from the pitch the last one had reached and slide to its own. It works on the pitch, `freq`, so the instrument needs that parameter.
+- **`legato: true`** keeps one voice for as long as notes overlap. A note that starts while another is held doesn't attack again: the envelopes carry on, the note's other parameters (`amp`, lanes) apply, and the pitch moves, with `glide` if there is one. When the newest note ends, the voice goes back to a note still held; when the last one ends, the voice releases. The voice remembers up to 8 held notes.
+- **`priority`** picks which held note legato sounds. `last` (the default) is the newest; `lowest` and `highest` hold the lowest or highest pitch, so a higher note played over a held bass note joins it but isn't heard until the low one ends.
+
+With keys from `midi.keys()` this plays like a mono synth: hold a note, roll a second one over it, let go of it, and the first comes back.
+
 **Lifetimes:** a voice ends naturally (released, envelopes done) or forcibly (choked, stolen, replaced), always with a short global fade.
 
-**Parameters are signals.** The design is that in `mono` a new note updates parameters on the running voice, so glide is ordinary processing: `osc(saw, freq.glide(40ms))`, and the same mechanism carries MPE and aftertouch. That is not built yet: today `mono` replaces the voice instead.
+**Parameters are signals.** With `legato: true` a new note updates parameters on the running voice, which is what carries `glide`. Per-note expression (MPE, pressure) will use the same mechanism and is not built.
 
 **Pitch:** parameter `freq` is pitch by convention — used by `same_note`, mono priority, `keys.note`, and unqualified `transpose`.
 

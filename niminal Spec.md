@@ -159,7 +159,7 @@ instr pad(freq: hz, amp: db = -3db) {
 | Keyword | A new note… | Used by |
 | --- | --- | --- |
 | `instr` | Spawns a new voice (poly, the default) | Most instruments |
-| `mono` | Updates the one running voice (today: ends the previous voice and starts its own) | Bass, leads |
+| `mono` | Ends the voice before it and starts its own; with `legato: true`, updates the one running voice | Bass, leads |
 
 Anything that runs continuously, such as an effect or a generator, is a **track** (see Performance), which adds a mixer, meters, sends and its own stem.
 
@@ -170,14 +170,15 @@ Options go in `with(...)`:
 | `choke: group` | A new note ends other voices in the group |
 | `same_note: release` | A new note releases the previous voice at the same pitch |
 | `max: n, steal: oldest` or `quietest` | Caps voices |
-| `legato: true` (mono) | Overlapping notes don't retrigger envelopes |
-| `priority: last`, `lowest` or `highest` (mono) | Which held note sounds; default last, returning to notes still held |
+| `legato: true` (mono) | Overlapping notes don't retrigger envelopes: the note takes over the running voice |
+| `priority: last`, `lowest` or `highest` (mono, with `legato`) | Which held note sounds; default last, returning to notes still held |
+| `glide: 80ms` (mono) | A change of pitch slides over this long |
 | `pitch: name` | Which parameter is the pitch (default `freq`) |
 | `compensate: false` | Opts out of latency compensation |
 | `quantize: 1 beat` | When redefinitions land |
 
 - **Lifetimes:** a voice ends naturally (released and envelopes finished) or forcibly (choked, stolen, replaced), always with a short global fade so it never clicks.
-- **Parameters are signals.** In `mono`, a new note updates parameters on the running voice, so glide is ordinary processing: `osc(saw, freq.glide(40ms))`. The same mechanism gives per-note expression (MPE, aftertouch).
+- **Parameters are signals.** In a legato `mono`, a new note updates parameters on the running voice, which is what carries `glide`. The same mechanism will give per-note expression (MPE, aftertouch), which is not built.
 - **Pitch:** the parameter named `freq` is the pitch by convention. This is what `same_note`, mono priority, `keys.note` and an unqualified `transpose` act on.
 - **No voice limits by default.** A global emergency brake (`config { max_voices: 512 }`) steals the quietest voices and warns. Voice pools grow on a background thread.
 

@@ -20,19 +20,113 @@ pub struct Voice {
     choke_left: Option<usize>,
     /// How many notes of this instrument may sound at once, and what a new note does to the others.
     rule: Option<VoiceRule>,
+    /// Where the pitch parameter is on its way to, when the instrument glides or plays legato.
+    glide: Glide,
+    /// The notes held on a legato voice, which sounds the one its priority picks. Made along with the
+    /// rule, so that starting a note never allocates.
+    held: Option<Box<Held>>,
+    /// The loudest sample of the last block, or the largest value before the voice has sounded.
+    level: f32,
 }
 
-/// A limit on the notes one instrument has sounding on a track.
+/// Which held note a legato voice sounds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Priority {
+    #[default]
+    Last,
+    Lowest,
+    Highest,
+}
+
+/// A limit on the notes one instrument has sounding on a track, and how a mono instrument joins them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoiceRule {
     /// Which instrument the notes are of, so the notes can be counted.
     pub instrument: u32,
-    /// A new note ends the oldest if this many already sound.
+    /// A new note ends one of them if this many already sound.
     pub max: usize,
+    /// The one it ends is the quietest, not the oldest.
+    pub steal_quietest: bool,
     /// A new note releases a sounding note of the same pitch.
     pub release_same_pitch: bool,
     /// The pitch of this note, in hz.
     pub pitch: f32,
+    /// Which parameter is the pitch, if the instrument has one.
+    pub pitch_param: Option<usize>,
+    /// A note that starts while another is held changes the held voice's pitch instead of starting a new voice.
+    pub legato: bool,
+    pub priority: Priority,
+    /// Seconds a change of pitch takes; 0 jumps.
+    pub glide: f32,
+}
+
+/// A pitch moving to its target by a constant ratio per sample.
+#[derive(Clone, Copy, Debug, Default)]
+struct Glide {
+    now: f32,
+    target: f32,
+    ratio: f32,
+    left: usize,
+}
+
+impl Glide {
+    fn start(&mut self, to: f32, seconds: f32, sample_rate: f32) {
+        self.target = to;
+        let frames = (seconds * sample_rate) as usize;
+        if frames == 0 || self.now <= 0.0 || to <= 0.0 {
+            self.now = to;
+            self.left = 0;
+        } else {
+            self.ratio = (to / self.now).powf(1.0 / frames as f32);
+            self.left = frames;
+        }
+    }
+
+    fn step(&mut self) -> f32 {
+        let value = self.now;
+        if self.left > 0 {
+            self.left -= 1;
+            self.now = if self.left == 0 { self.target } else { self.now * self.ratio };
+        }
+        value
+    }
+}
+
+/// The most notes a legato voice remembers; a ninth drops the oldest.
+const HELD_NOTES: usize = 8;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Held {
+    /// `(note id, pitch)` in the order the notes started.
+    notes: [(u64, f32); HELD_NOTES],
+    len: usize,
+}
+
+impl Held {
+    fn push(&mut self, serial: u64, pitch: f32) {
+        if self.len == HELD_NOTES {
+            self.notes.copy_within(1.., 0);
+            self.len -= 1;
+        }
+        self.notes[self.len] = (serial, pitch);
+        self.len += 1;
+    }
+
+    fn remove(&mut self, serial: u64) {
+        if let Some(i) = self.notes[..self.len].iter().position(|n| n.0 == serial) {
+            self.notes.copy_within(i + 1..self.len, i);
+            self.len -= 1;
+        }
+    }
+
+    fn pick(&self, priority: Priority) -> Option<f32> {
+        let mut pitches = self.notes[..self.len].iter().map(|n| n.1);
+        match priority {
+            Priority::Last => pitches.next_back(),
+            Priority::Lowest => pitches.reduce(f32::min),
+            Priority::Highest => pitches.reduce(f32::max),
+        }
+    }
 }
 
 /// How long a choked voice takes to fade out, in seconds.
@@ -54,7 +148,7 @@ impl Voice {
         }
 
         let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0)).map(Some).collect();
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None }
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX }
     }
 
     /// Keep memory at matching call sites while retaining the new graph's
@@ -130,6 +224,84 @@ impl Voice {
 
     pub fn set_rule(&mut self, rule: Option<VoiceRule>) {
         self.rule = rule;
+        if let Some(rule) = rule {
+            self.glide = Glide { now: rule.pitch, target: rule.pitch, ratio: 1.0, left: 0 };
+            self.held = rule.legato.then(Box::<Held>::default);
+        }
+    }
+
+    /// How loud the voice was in its last block.
+    pub fn level(&self) -> f32 {
+        self.level
+    }
+
+    /// The pitch the voice is sounding right now, in hz.
+    pub fn pitch_now(&self) -> f32 {
+        self.glide.now
+    }
+
+    /// Start at `from` and glide to this note's own pitch.
+    pub fn glide_from(&mut self, from: f32, sample_rate: f32) {
+        let Some(rule) = self.rule else { return };
+        let to = self.glide.target;
+        self.glide.now = from;
+        self.glide.start(to, rule.glide, sample_rate);
+    }
+
+    /// Make this the first note of a legato voice, which `serial` stands for.
+    pub fn hold(&mut self, serial: u64) {
+        let pitch = self.glide.target;
+        if let Some(held) = &mut self.held {
+            held.len = 0;
+            held.push(serial, pitch);
+        }
+    }
+
+    /// Whether this voice is playing a note as `serial`, one it took over from a later note.
+    pub fn holds(&self, serial: u64) -> bool {
+        self.held.as_ref().is_some_and(|h| h.notes[..h.len].iter().any(|n| n.0 == serial))
+    }
+
+    /// Whether a new legato note can take this voice over.
+    pub fn is_legato_open(&self) -> bool {
+        self.held.is_some() && !self.released && self.choke_left.is_none() && !self.poisoned
+    }
+
+    /// A later note, as `serial`, takes over this legato voice: its parameters apply, the envelopes
+    /// carry on, and the pitch moves to whichever held note the priority picks.
+    pub fn legato_on(&mut self, serial: u64, note: &Voice) {
+        let Some(rule) = self.rule else { return };
+        for i in 0..self.graph.params.len().min(note.graph.params.len()) {
+            if Some(i) != rule.pitch_param {
+                self.slots[i] = note.slots[i];
+            }
+        }
+        if let Some(held) = &mut self.held {
+            held.push(serial, note.glide.target);
+        }
+        self.retarget();
+    }
+
+    /// Note `serial` ended. A legato voice goes back to a note still held, or lets go if there is none.
+    pub fn note_off(&mut self, serial: u64) {
+        let Some(held) = &mut self.held else {
+            self.release();
+            return;
+        };
+        held.remove(serial);
+        if held.len == 0 {
+            self.release();
+        } else {
+            self.retarget();
+        }
+    }
+
+    fn retarget(&mut self) {
+        let Some(rule) = self.rule else { return };
+        let picked = self.held.as_ref().and_then(|h| h.pick(rule.priority));
+        if let Some(pitch) = picked.filter(|p| *p != self.glide.target) {
+            self.glide.start(pitch, rule.glide, self.sample_rate);
+        }
     }
 
     pub fn rule(&self) -> Option<VoiceRule> {
@@ -201,6 +373,14 @@ impl Voice {
         }
         let ctx = ProcessCtx { sample_rate: self.sample_rate, gate: !self.released };
 
+        if let Some(param) = self.rule.and_then(|r| r.pitch_param)
+            && (self.glide.left > 0 || self.glide.now != self.slots[param][0])
+        {
+            for sample in &mut self.slots[param][..frames] {
+                *sample = self.glide.step();
+            }
+        }
+
         let base = self.graph.node_slot_base();
         for (i, op) in self.ops.iter_mut().enumerate() {
             let inputs = &self.graph.nodes[i].inputs;
@@ -231,12 +411,15 @@ impl Voice {
             self.choke_left = Some(left.saturating_sub(frames));
             gains
         });
+        let mut level = 0.0f32;
         for (channel, &slot) in out.iter_mut().zip(&self.graph.output_slots) {
             channel[..frames].copy_from_slice(&self.slots[slot][..frames]);
             if let Some(g) = &fade {
                 channel[..frames].iter_mut().zip(g).for_each(|(y, g)| *y *= g);
             }
+            level = channel[..frames].iter().fold(level, |l, y| l.max(y.abs()));
         }
+        self.level = level;
         for &(bus, channel, slot, delayed) in &self.graph.sends {
             let Some(bus) = self.bus_map.get(bus).copied().flatten() else { continue };
             match &fade {
