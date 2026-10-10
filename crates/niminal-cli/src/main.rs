@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use clap::{Parser, Subcommand};
 use niminal_cli::audio::{NullClock, Output, Shared, lock};
 use niminal_cli::live::{DEFAULT_SAMPLE_RATE, layout_for, render_error, render_problems, replay};
-use niminal_cli::render::{RenderOptions, SAMPLE_RATE, render, write_wav};
+use niminal_cli::render::{End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav};
 use niminal_cli::server::{Client, Server, ServerConfig};
 use niminal_daemon::{Daemon, Session, from_lines, to_lines};
 use niminal_score::Section;
@@ -255,7 +255,9 @@ fn run_render(
     };
     let expanded = niminal_lang::expand(&source, file.parent().unwrap_or(Path::new(".")))
         .map_err(|d| d.render(&name, &source))?;
-    let program = niminal_lang::compile_with(&expanded.text, &options).map_err(|errors| {
+    // a tempo ramp is made as the music plays, so a file with one is played through a session
+    let (rest, ramps) = niminal_cli::render::split_ramps(&expanded.text).map_err(|d| d.render(&name, &source))?;
+    let program = niminal_lang::compile_with(&rest, &options).map_err(|errors| {
         errors.into_iter().map(|d| expanded.locate(d).render(&name, &source)).collect::<Vec<_>>().join("\n")
     })?;
 
@@ -269,6 +271,22 @@ fn run_render(
     };
     let from_seconds = from.map(|f| position_seconds(f, bar_seconds)).transpose()?.unwrap_or(0.0);
     let options = RenderOptions { limiter: !no_limiter, until, arrangement, stems };
+
+    if !ramps.is_empty() {
+        if stems || options.arrangement.is_some() || score.is_some() || from.is_some() || to.is_some() {
+            return Err("error: a file with a tempo ramp renders as it is played: --stems, --arrangement, --score, --from and --to aren't available for it".into());
+        }
+        let end = match (bars, seconds) {
+            (Some(b), _) if b > 0.0 => End::Bars(b),
+            (_, Some(s)) if s > 0.0 => End::Seconds(s),
+            _ => return Err("error: a file with a tempo ramp renders by the clock: say how long with `--bars 16` or `--seconds 30`".into()),
+        };
+        let dir = file.parent().unwrap_or(Path::new("."));
+        let rendered = render_session(&expanded.text, dir, program.master, end, !no_limiter).map_err(|e| format!("error: {e}"))?;
+        write_wav(out, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
+        println!("wrote {} ({:.2}s, {} channel{})", out.display(), rendered.len() as f64 / f64::from(SAMPLE_RATE), rendered.channels.len(), plural(rendered.channels.len()));
+        return Ok(());
+    }
 
     let events = match score {
         None => Vec::new(),

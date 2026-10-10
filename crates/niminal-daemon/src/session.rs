@@ -11,7 +11,7 @@
 //! deterministic: the same inputs at the same samples give the same audio,
 //! however the audio is divided into blocks.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use niminal_engine::{DEFAULT_MAX_VOICES, BLOCK, MAX_CHANNELS, Master, Mixer, Transfer, VoiceId};
@@ -19,9 +19,9 @@ use niminal_lang::{
     Action, Clip, CompileOptions, Layout, Samples, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
     Expanded, InputSource, analyze, compile_with,
 };
-use niminal_score::{Event, Tempo, Time};
+use niminal_score::{Event, Tempo, Time, Value};
 
-use crate::log::{LogEntry, LogInput};
+use crate::log::{Expression, LogEntry, LogInput};
 use crate::project::{Entry, Located, Origin, Piece, Problem, Project};
 use crate::quantize::{Grid, QuantizeDefaults};
 
@@ -61,6 +61,9 @@ struct HistoryEntry {
     action: NamedAction,
 }
 
+/// How far a keyboard's pitch bend goes each way, in semitones.
+const BEND_RANGE: f64 = 2.0;
+
 /// A tempo ramp changes the tempo this many times a beat.
 const RAMP_STEPS_PER_BEAT: f64 = 4.0;
 const MAX_RAMP_STEPS: f64 = 1024.0;
@@ -92,6 +95,8 @@ struct Compiled {
 /// was evaluated, so that landing only has to move things into place.
 struct Pending {
     id: u64,
+    /// The first change of the tempo ramp this is a step of: cancelling any of them cancels the rest.
+    group: Option<u64>,
     lands_at: u64,
     /// What was evaluated, so that the change can be redone if one before it
     /// is cancelled.
@@ -113,6 +118,7 @@ struct Pending {
 #[derive(Clone)]
 struct Waiting {
     id: u64,
+    group: Option<u64>,
     lands_at: u64,
     snippet: String,
     statements: Vec<Statement>,
@@ -242,9 +248,9 @@ impl EvalJob {
             p.statements.retain(|s| s.write_key.as_deref().is_none_or(|key| !writes.contains(&key)));
         }
         waiting.retain(|p| !p.statements.is_empty());
-        waiting.push(Waiting { id: 0, lands_at: self.lands_at, snippet: self.source.clone(), statements: self.statements.clone() });
+        waiting.push(Waiting { id: 0, group: None, lands_at: self.lands_at, snippet: self.source.clone(), statements: self.statements.clone() });
         for (k, (after, statement)) in self.ramp.iter().enumerate() {
-            waiting.push(Waiting { id: NEW_BASE + k as u64, lands_at: self.lands_at + after, snippet: self.source.clone(), statements: vec![statement.clone()] });
+            waiting.push(Waiting { id: NEW_BASE + k as u64, group: None, lands_at: self.lands_at + after, snippet: self.source.clone(), statements: vec![statement.clone()] });
         }
         waiting.sort_by_key(|p| (p.lands_at, !is_new(p.id), p.id));
 
@@ -255,9 +261,10 @@ impl EvalJob {
         let mut notices = Vec::new();
         for p in waiting {
             match prepare_pending(&self.config, p.id, p.lands_at, &p.snippet, p.statements.clone(), &project, &playing) {
-                Ok(next) => {
+                Ok(mut next) => {
                     project = next.project.clone();
                     playing = next.playing.clone();
+                    next.group = p.group;
                     queue.push(next);
                 }
                 // A transaction can refer to definitions waiting for a later
@@ -267,9 +274,10 @@ impl EvalJob {
         }
         for p in deferred {
             match prepare_pending(&self.config, p.id, latest, &p.snippet, p.statements.clone(), &project, &playing) {
-                Ok(next) => {
+                Ok(mut next) => {
                     project = next.project.clone();
                     playing = next.playing.clone();
+                    next.group = p.group;
                     queue.push(next);
                 }
                 Err(problems) if is_new(p.id) => return Err(problems),
@@ -308,13 +316,16 @@ impl CancelJob {
         let mut queue = Vec::new();
         let mut notices = Vec::new();
         let mut dropped = 0;
+        // a step of a ramp goes with the rest of it
+        let group = self.id.and_then(|id| self.waiting.iter().find(|p| p.id == id).and_then(|p| p.group).or(Some(id)));
         for p in &self.waiting {
-            if self.id.is_none_or(|id| id == p.id) { dropped += 1; continue; }
+            if self.id.is_none_or(|id| id == p.id) || (p.group.is_some() && p.group == group) { dropped += 1; continue; }
             match prepare_pending(&self.config, p.id, p.lands_at, &p.snippet,
                                   p.statements.clone(), &project, &playing) {
-                Ok(next) => {
+                Ok(mut next) => {
                     project = next.project.clone();
                     playing = next.playing.clone();
+                    next.group = p.group;
                     queue.push(next);
                 }
                 Err(_) => {
@@ -388,6 +399,10 @@ pub enum ControlSignal<'a> {
     MidiCc { cc: u8, channel: u8, value: u8 },
     /// A key pressed (`velocity` from 1) or let go (`velocity` 0), on a MIDI channel from 1.
     MidiNote { note: u8, channel: u8, velocity: u8 },
+    /// Pitch bend on a channel, 0 to 16383 with 8192 in the middle.
+    MidiBend { channel: u8, value: u16 },
+    /// Pressure on a channel, or on one key (`note`), 0 to 127.
+    MidiPressure { channel: u8, note: Option<u8>, value: u8 },
     Osc { address: &'a str, value: f64 },
 }
 
@@ -401,6 +416,14 @@ pub struct Session {
     /// The notes each held key started, by channel and note, and the keys let go of lately.
     keys_down: BTreeMap<(u8, u8), Vec<u32>>,
     key_offs: Vec<(u32, u64)>,
+    /// Changes of a held key's bend or pressure: `(key, parameter, value, when)`.
+    key_params: Vec<(u32, &'static str, f32, u64)>,
+    /// Keys let go of while the sustain pedal was down, by channel and note, until it comes up.
+    sustained: Vec<(u8, u8, u32)>,
+    pedals: BTreeSet<u8>,
+    /// What each channel's bend (semitones) and pressure are now, for the keys that come next.
+    bends: BTreeMap<u8, f64>,
+    pressures: BTreeMap<u8, f64>,
     next_key: u32,
     sample_rate: f32,
     layout: Layout,
@@ -536,6 +559,7 @@ fn prepare_pending(
     let mixer = has_definitions.then(|| program.mixer(cfg.sample_rate));
     Ok(Pending {
         id,
+        group: None,
         lands_at,
         snippet: snippet.to_string(),
         summary: statements.iter().map(summarize).collect(),
@@ -571,6 +595,7 @@ impl Session {
             samples: Samples::default(),
             controls: Vec::new(), control_changes: Vec::new(), next_control: 0, learned: BTreeMap::new(), learned_out: Vec::new(),
             keys_down: BTreeMap::new(), key_offs: Vec::new(), next_key: 0,
+            key_params: Vec::new(), sustained: Vec::new(), pedals: BTreeSet::new(), bends: BTreeMap::new(), pressures: BTreeMap::new(),
             sample_dirs: Vec::new(),
             defaults: QuantizeDefaults::default(),
             clock: 0,
@@ -726,7 +751,7 @@ impl Session {
             config: self.prepare_config(),
             committed: self.project.clone(),
             committed_playing: self.playing.clone(),
-            waiting: self.pending.iter().map(|p| Waiting { id: p.id, lands_at: p.lands_at,
+            waiting: self.pending.iter().map(|p| Waiting { id: p.id, group: p.group, lands_at: p.lands_at,
                 snippet: p.snippet.clone(), statements: p.statements.clone() }).collect(),
             lands_at: self.landing(&statements, fallback),
         }))
@@ -780,7 +805,7 @@ impl Session {
             statements: job.statements.clone(), ramp: job.ramp.clone(), base, playing, version: self.version,
             config: self.prepare_config(), committed: self.project.clone(),
             committed_playing: self.playing.clone(),
-            waiting: self.pending.iter().map(|p| Waiting { id: p.id, lands_at: p.lands_at,
+            waiting: self.pending.iter().map(|p| Waiting { id: p.id, group: p.group, lands_at: p.lands_at,
                 snippet: p.snippet.clone(), statements: p.statements.clone() }).collect(),
             lands_at: self.landing(&job.statements, job.fallback),
         }))
@@ -811,7 +836,13 @@ impl Session {
         for step in queue.iter_mut().filter(|p| p.id >= NEW_BASE) {
             step.lands_at = first_at + job.ramp[(step.id - NEW_BASE) as usize].0;
             step.id = self.next_id;
+            step.group = accepted.id;
             self.next_id += 1;
+        }
+        if !job.ramp.is_empty()
+            && let Some(first) = queue.iter_mut().find(|p| p.id == accepted.id.unwrap())
+        {
+            first.group = accepted.id;
         }
         let new_index = queue.iter().position(|p| p.id == accepted.id.unwrap()).unwrap();
         let mut at = queue[new_index].lands_at;
@@ -851,7 +882,7 @@ impl Session {
     pub fn begin_cancel(&self, id: Option<u64>) -> Box<CancelJob> {
         Box::new(CancelJob { id, version: self.version, config: self.prepare_config(),
             project: self.project.clone(), playing: self.playing.clone(),
-            waiting: self.pending.iter().map(|p| Waiting { id: p.id, lands_at: p.lands_at,
+            waiting: self.pending.iter().map(|p| Waiting { id: p.id, group: p.group, lands_at: p.lands_at,
                 snippet: p.snippet.clone(), statements: p.statements.clone() }).collect() })
     }
 
@@ -954,8 +985,15 @@ impl Session {
     /// exactly as if `control.set` had been called, so it is logged and replays.
     /// Returns how many controls took it.
     pub fn control_input(&mut self, signal: &ControlSignal) -> usize {
-        if let ControlSignal::MidiNote { note, channel, velocity } = signal {
-            return self.key_input(*channel, *note, *velocity);
+        match signal {
+            ControlSignal::MidiNote { note, channel, velocity } => return self.key_input(*channel, *note, *velocity),
+            // a bend of 2 semitones each way
+            ControlSignal::MidiBend { channel, value } =>
+                return self.expression_input(*channel, Expression::Bend, (f64::from(*value) - 8192.0) / 8192.0 * BEND_RANGE, None),
+            ControlSignal::MidiPressure { channel, note, value } =>
+                return self.expression_input(*channel, Expression::Pressure, f64::from(*value) / 127.0, *note),
+            ControlSignal::MidiCc { cc: 64, channel, value } => { self.expression_input(*channel, Expression::Sustain, f64::from(*value) / 127.0, None); }
+            _ => {}
         }
         self.learn(signal);
         let targets: Vec<(String, f64, Option<&'static str>)> = self.program.controls.iter().filter_map(|def| {
@@ -984,16 +1022,76 @@ impl Session {
         self.key_event(channel, note, velocity)
     }
 
+    /// A keyboard's pitch bend, pressure or sustain pedal. A held key's note gets a `bend` (an interval) or
+    /// `pressure` (0 to 1) parameter changed if its instrument has one; keys played later start with the
+    /// channel's current value. The pedal holds the notes of keys that come up until it does. It is logged.
+    /// Returns how many notes it reached.
+    pub fn expression_input(&mut self, channel: u8, what: Expression, value: f64, note: Option<u8>) -> usize {
+        self.sync_realtime();
+        self.log.push(LogEntry { sample: self.clock, input: LogInput::Expression { channel, what, value, note } });
+        let keys_of = |s: &Self| -> Vec<u32> {
+            let down = s.keys_down.iter().filter(|((c, n), _)| *c == channel && note.is_none_or(|k| k == *n)).flat_map(|(_, keys)| keys.iter().copied());
+            let held = s.sustained.iter().filter(|(c, n, _)| *c == channel && note.is_none_or(|k| k == *n)).map(|s| s.2);
+            down.chain(held).collect()
+        };
+        match what {
+            Expression::Sustain if value >= 0.5 => {
+                self.pedals.insert(channel);
+                0
+            }
+            Expression::Sustain => {
+                self.pedals.remove(&channel);
+                let (up, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sustained).into_iter().partition(|s| s.0 == channel);
+                self.sustained = kept;
+                for (_, _, key) in &up {
+                    self.release_key(*key);
+                }
+                up.len()
+            }
+            Expression::Bend | Expression::Pressure => {
+                let (name, map) = if what == Expression::Bend { ("bend", &mut self.bends) } else { ("pressure", &mut self.pressures) };
+                if note.is_none() {
+                    map.insert(channel, value);
+                }
+                let keys = keys_of(self);
+                for &key in &keys {
+                    self.key_param(key, name, value as f32);
+                }
+                keys.len()
+            }
+        }
+    }
+
+    /// Set a parameter of the note a key holds, now.
+    fn key_param(&mut self, key: u32, name: &'static str, value: f32) {
+        let stale = self.clock.saturating_sub(self.samples(2.0));
+        self.key_params.retain(|p| p.3 > stale);
+        self.key_params.push((key, name, value, self.clock));
+        for held in self.held.iter().filter(|h| h.2 == key) {
+            self.mixer.set_voice_param(held.1, name, value);
+        }
+        self.invalidate_live();
+    }
+
     fn key_event(&mut self, channel: u8, note: u8, velocity: u8) -> usize {
         if velocity == 0 {
             let keys = self.keys_down.remove(&(channel, note)).unwrap_or_default();
             for &key in &keys {
-                self.release_key(key);
+                if self.pedals.contains(&channel) {
+                    self.sustained.push((channel, note, key));
+                } else {
+                    self.release_key(key);
+                }
             }
             return keys.len();
         }
-        // pressing a key that is still down lets the first one go
+        // pressing a key that is still down, or held by the pedal, lets the first one go
         for key in self.keys_down.remove(&(channel, note)).unwrap_or_default() {
+            self.release_key(key);
+        }
+        let (again, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sustained).into_iter().partition(|s| s.0 == channel && s.1 == note);
+        self.sustained = kept;
+        for (_, _, key) in again {
             self.release_key(key);
         }
         let now = self.seconds(self.clock);
@@ -1002,10 +1100,21 @@ impl Session {
             .filter_map(|track| self.schedule.key_event(track, now, channel, i32::from(note), gain))
             .collect();
         let mut keys = Vec::new();
-        for event in events {
-            if let Err(e) = self.program.plan(&event) {
-                self.notify(format!("key for `{}` could not play: {e}", event.target));
-                continue;
+        for mut event in events {
+            let plan = match self.program.plan(&event) {
+                Ok(plan) => plan,
+                Err(e) => {
+                    self.notify(format!("key for `{}` could not play: {e}", event.target));
+                    continue;
+                }
+            };
+            // a note starts with the bend and pressure the channel is at
+            let params = &self.program.instruments[plan.instrument].params;
+            if let Some(&bend) = self.bends.get(&channel).filter(|b| **b != 0.0 && params.iter().any(|p| p.name == "bend")) {
+                event.args.insert("bend".into(), Value::Semitones(bend));
+            }
+            if let Some(&pressure) = self.pressures.get(&channel).filter(|p| **p != 0.0 && params.iter().any(|p| p.name == "pressure")) {
+                event.args.insert("pressure".into(), Value::Num(pressure));
             }
             let key = self.next_key;
             self.next_key = self.next_key.wrapping_add(1) % NO_KEY;
@@ -1205,6 +1314,10 @@ impl Session {
         if let (Some(program), Some(mixer)) = (program, mixer) {
             let now = self.seconds(at);
             retime(&mut self.history, now, self.program.tempo, program.tempo);
+            let (old, new) = (self.program.tempo, program.tempo);
+            let mut pending = std::mem::take(&mut self.pending);
+            rescale_pending(&mut pending, at, old, new, |p| self.landing_unit_is_bar(p));
+            self.pending = pending;
             self.swap_program(project, program, mixer, &statements, id);
         }
         for a in actions.iter().chain(&replays) {
@@ -1277,6 +1390,12 @@ impl Session {
             let when = if statement.has_at { origin + after } else { landing_seconds + after };
             self.history.push(HistoryEntry { at: when, action: name_action(program, &scheduled.action) });
         }
+    }
+
+    /// Whether a pending change waits for a bar line, not a beat.
+    fn landing_unit_is_bar(&self, p: &Pending) -> bool {
+        use niminal_lang::QuantizeUnit;
+        p.statements.iter().any(|s| matches!(self.defaults.for_statement(s, None).unit, QuantizeUnit::Bar | QuantizeUnit::Cycle))
     }
 
     fn rebuild_schedule(&mut self) {
@@ -1407,6 +1526,9 @@ impl Session {
                 LogInput::Key { channel, note, velocity } => {
                     session.key_input(*channel, *note, *velocity);
                 }
+                LogInput::Expression { channel, what, value, note } => {
+                    session.expression_input(*channel, *what, *value, *note);
+                }
             }
         }
         extend(&mut session, frames);
@@ -1476,6 +1598,31 @@ impl Session {
             off > now
         });
     }
+}
+
+/// Where a change that waits for a boundary lands once the tempo or meter has changed at `now`: the same
+/// number of bars (or beats) on. Changes that are themselves a tempo or meter keep their time, as the steps
+/// of a ramp are spaced by the tempo they pass through.
+pub(super) fn rescale_landing(lands_at: u64, now: u64, factor: f64) -> u64 {
+    now + (lands_at.saturating_sub(now) as f64 * factor).round() as u64
+}
+
+/// How much longer a bar (`by_bar`) or a beat gets when the tempo or meter changes from `old` to `new`.
+pub(super) fn landing_factor(by_bar: bool, old: Tempo, new: Tempo) -> f64 {
+    if by_bar { (new.beats_per_bar / new.bpm) / (old.beats_per_bar / old.bpm) } else { old.bpm / new.bpm }
+}
+
+/// Whether a pending change sets the tempo or meter.
+fn is_timing(p: &Pending) -> bool {
+    p.statements.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")))
+}
+
+fn rescale_pending(pending: &mut [Pending], now: u64, old: Tempo, new: Tempo, by_bar: impl Fn(&Pending) -> bool) {
+    if old == new { return; }
+    for p in pending.iter_mut().filter(|p| !is_timing(p)) {
+        p.lands_at = rescale_landing(p.lands_at, now, landing_factor(by_bar(p), old, new));
+    }
+    pending.sort_by_key(|p| p.lands_at);
 }
 
 /// A tempo or meter change keeps every clip where it is in its bar: what has happened is stretched, and

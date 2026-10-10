@@ -452,6 +452,18 @@ impl Mixer {
         }
     }
 
+    /// Set a parameter of a sounding note by name, as a keyboard's pitch bend does. A note that has
+    /// ended, or an instrument without the parameter, ignores it. Allocates nothing.
+    pub fn set_voice_param(&mut self, id: VoiceId, name: &str, value: f32) {
+        let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
+        for track in &mut self.tracks {
+            if let Some((_, v)) = track.voices.iter_mut().find(|n| ends(n)) {
+                v.set_param_by_name(name, value);
+                return;
+            }
+        }
+    }
+
     /// Silence everything at once: stop every voice, clear every effect's
     /// memory (delay lines, reverb tails) and empty the buses.
     pub fn panic(&mut self) {

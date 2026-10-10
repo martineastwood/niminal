@@ -74,7 +74,7 @@ With keys from `midi.keys()` this plays like a mono synth: hold a note, roll a s
 
 **Lifetimes:** a voice ends naturally (released, envelopes done) or forcibly (choked, stolen, replaced), always with a short global fade.
 
-**Parameters are signals.** With `legato: true` a new note updates parameters on the running voice, which is what carries `glide`. Per-note expression (MPE, pressure) will use the same mechanism and is not built.
+**Parameters are signals.** With `legato: true` a new note updates parameters on the running voice, which is what carries `glide`. A keyboard's pitch bend and pressure set the `bend` and `pressure` parameters of the notes it holds (see [Performance](/reference/language/performance/)). MPE is not built.
 
 **Pitch:** parameter `freq` is pitch by convention — used by `same_note`, mono priority, `keys.note`, and unqualified `transpose`.
 

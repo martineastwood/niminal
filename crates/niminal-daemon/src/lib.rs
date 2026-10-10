@@ -8,7 +8,7 @@ mod protocol;
 mod quantize;
 mod session;
 
-pub use log::{LogEntry, LogInput, from_lines, to_lines};
+pub use log::{Expression, LogEntry, LogInput, from_lines, to_lines};
 pub use protocol::{ClientId, CompiledTicket, Daemon, CompileTicket, PROTOCOL_VERSION, Request, TOPICS};
 pub use project::{Entry, Problem, Project, expand_uses};
 pub use quantize::{Grid, QuantizeDefaults};

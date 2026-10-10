@@ -842,7 +842,7 @@ track bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth)
 ```
 
 - **Units come from the mapping;** hardware controls are lightly smoothed by default (`.smooth(0ms)` turns it off); `midi.learn` binds to the next control moved and rewrites itself to the actual CC.
-- **Keyboards** play a part live. A clip with `keys:` in place of `notes:` is played from a MIDI keyboard; each key plays the instrument's pitch from the note number, with the velocity as `gain`, and holds the note until the key comes up. Other lanes give every note their value. Per-note pressure as a signal (MPE) is designed but not built:
+- **Keyboards** play a part live. A clip with `keys:` in place of `notes:` is played from a MIDI keyboard; each key plays the instrument's pitch from the note number, with the velocity as `gain`, and holds the note until the key comes up. Other lanes give every note their value. The keyboard's pitch bend (two semitones each way) and pressure (channel or per-key aftertouch) reach an instrument that has `bend: st` and `pressure: 0..1` parameters, and the sustain pedal (CC 64) holds notes after their keys come up. MPE (a channel per note) is not built:
 
 ```
 clip pad {

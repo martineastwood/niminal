@@ -503,3 +503,42 @@ fn a_legato_glide_instrument_sounds_the_same_on_the_prepared_path_without_heap_w
     }
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn bend_pressure_and_the_pedal_sound_the_same_through_the_prepared_path() {
+    use niminal_daemon::Expression::{Bend, Pressure, Sustain};
+    const CODE: &str = "tempo 120bpm\ninstr organ(freq: hz, bend: st = 0st, pressure: 0..1 = 0) { osc(sine, freq + bend) * (0.2 + pressure * 0.6) * env[1 | 10ms 0] }\nclip pad { instrument: organ\n keys: midi.keys(channel: 1) }\npad.start";
+    let play = |s: &mut Session, step: &mut dyn FnMut(&mut Session, usize) -> Vec<f32>| {
+        let mut out = step(s, 600);
+        s.key_input(1, 69, 100);
+        out.extend(step(s, 2048));
+        s.expression_input(1, Bend, 1.0, None);
+        out.extend(step(s, 2048));
+        s.expression_input(1, Pressure, 0.7, None);
+        s.expression_input(1, Sustain, 1.0, None);
+        s.key_input(1, 69, 0);
+        out.extend(step(s, 4096));
+        s.expression_input(1, Sustain, 0.0, None);
+        out.extend(step(s, 4096));
+        out
+    };
+    let mut direct = Session::new(48_000.0, Layout::Mono).without_limiter();
+    direct.eval(CODE, Some("now")).unwrap();
+    let expected = play(&mut direct, &mut |s, n| s.process(n).remove(0));
+
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(CODE, Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let actual = play(&mut s, &mut |s, frames| {
+        let mut out = vec![0.0; frames];
+        for chunk in out.chunks_mut(256) {
+            s.prepare_realtime();
+            let mut pos = 0;
+            r.render(chunk.len(), &mut |b, n| { chunk[pos..pos + n].copy_from_slice(&b[0][..n]); pos += n; });
+        }
+        out
+    });
+    assert_eq!(actual.len(), expected.len());
+    let worst = actual.iter().zip(&expected).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 0.05, "the live path follows the offline one: {worst}");
+}

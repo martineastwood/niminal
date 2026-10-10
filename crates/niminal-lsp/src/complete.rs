@@ -102,6 +102,38 @@ fn enclosing_call(before: &str) -> Option<Call<'_>> {
     Some(Call { name, receiver, receiver_text, named, unnamed_before, current })
 }
 
+/// Options of `instr ... with(...)`, and for `mono` instruments the ones that are for them alone. Each has
+/// what it does and the values it takes.
+const OPTIONS: &[(&str, bool, &str, &[&str])] = &[
+    ("max", false, "The most notes of this instrument sounding at once; the oldest end first", &[]),
+    ("steal", false, "Which note ends when `max` is reached", &["oldest", "quietest"]),
+    ("same_note", false, "A new note releases the sounding note of the same pitch", &["release"]),
+    ("choke", false, "A new note ends the notes in this group, whichever instrument they are of", &[]),
+    ("legato", true, "A note that starts over a held one takes over its voice instead of attacking again", &["true", "false"]),
+    ("priority", true, "Which held note a legato voice sounds (needs `legato: true`)", &["last", "lowest", "highest"]),
+    ("glide", true, "How long a change of pitch takes to slide, for example `80ms`", &[]),
+];
+
+/// Whether the instrument being written, the last `instr` or `mono` before the cursor, is a `mono`.
+fn is_mono_head(before: &str) -> bool {
+    before.lines().rev().find_map(|l| {
+        let l = l.trim_start();
+        l.strip_prefix("mono ").map(|_| true).or_else(|| l.strip_prefix("instr ").map(|_| false))
+    }).unwrap_or(false)
+}
+
+/// What goes inside `with(`: the options not yet given, or the values of the one being written.
+fn option_items(call: &Call, mono: bool) -> Vec<Value> {
+    if let Some((name, _)) = call.current.split_once(':') {
+        let values = OPTIONS.iter().find(|o| o.0 == name.trim()).map_or(&[][..], |o| o.3);
+        return values.iter().map(|v| item(v, ENUM_MEMBER, name.trim(), "")).collect();
+    }
+    OPTIONS.iter()
+        .filter(|(name, mono_only, ..)| (mono || !mono_only) && !call.named.contains(name))
+        .map(|(name, _, doc, _)| item(&format!("{name}:"), PROPERTY, "", doc))
+        .collect()
+}
+
 /// Just the given names, for after `alias::`.
 pub fn symbol_items(symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -> Vec<Value> {
     symbols.iter().map(|s| item(&s.name, symbol_kind(s.kind), &s.detail, &user_docs(s))).collect()
@@ -234,6 +266,9 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
 
     let mut out = Vec::new();
     if let Some(call) = enclosing_call(before) {
+        if call.name == "with" && !call.receiver {
+            return option_items(&call, is_mono_head(before));
+        }
         let consumed = usize::from(call.receiver) + call.unnamed_before;
         let in_value = call.current.contains(':');
         let on_pattern = call.receiver && receiver(call.receiver_text, symbols) != Receiver::Signal;
@@ -380,5 +415,15 @@ mod tests {
         assert_eq!(&l[..4], ["bright:", "dur:", "nudge:", "gain:"], "{l:?}");
         assert_eq!(&labels_in(code, "bass.set(bright: 0.9, ")[..3], ["dur:", "nudge:", "gain:"]);
         assert!(labels_in(code, "bass.").contains(&"set".to_string()));
+    }
+
+    #[test]
+    fn with_offers_the_options_and_mono_ones_only_for_mono() {
+        let l = labels_in("", "instr pad(freq: hz) with(");
+        assert!(l.contains(&"max:".to_string()) && l.contains(&"choke:".to_string()) && !l.contains(&"legato:".to_string()), "{l:?}");
+        let l = labels_in("", "mono bass(freq: hz) with(max");
+        assert!(l.contains(&"legato:".to_string()) && l.contains(&"glide:".to_string()));
+        assert!(!labels_in("", "mono bass(freq: hz) with(legato: true, ").contains(&"legato:".to_string()));
+        assert_eq!(labels_in("", "mono bass(freq: hz) with(priority: "), ["last", "lowest", "highest"]);
     }
 }

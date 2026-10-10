@@ -173,7 +173,16 @@ A new `meter` does the same. Going from `4/4` to `3/4` halfway through a bar lea
 tempo 140bpm @ next bar over 8 bars     // from where it is now, a quarter of a beat at a time
 ```
 
-A ramp is a run of ordinary tempo changes, four to a beat, queued at once. They show up in the pending list, and a later `tempo` cancels the ones still waiting. A ramp is a live thing: in a file, `tempo 140bpm over 8 bars` just sets 140bpm from the start. `cancel` without an id drops every pending change, but one id cancels only that step.
+A ramp is a run of ordinary tempo changes, four to a beat, queued at once. They show up in the pending list, and a later `tempo` cancels the ones still waiting. Cancelling the id the ramp gave back (or any one of its steps) cancels the rest of it; `cancel` without an id drops every pending change.
+
+A file can have a ramp too. Keep the starting `tempo` and add the ramp, which sets off from it at the boundary it names:
+
+```nml
+tempo 100bpm
+tempo 140bpm @ next 4 bars over 8 bars
+```
+
+`niminal render` plays a file like that through a session, as the daemon would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
 
 ## Live coding model
 
@@ -214,7 +223,21 @@ clip pad {
 pad.start
 ```
 
-Each key plays the instrument's `freq` from the note number, with the velocity as the note's `gain` (-30db to 0db), and holds it until the key comes up. A part that is muted, soloed out or stopped doesn't answer the keys. Presses and releases are logged, so a set replays. Pressure, pitch bend and sustain aren't read yet.
+Each key plays the instrument's `freq` from the note number, with the velocity as the note's `gain` (-30db to 0db), and holds it until the key comes up. A part that is muted, soloed out or stopped doesn't answer the keys. Presses and releases are logged, so a set replays.
+
+**Expression:** the keyboard's pitch bend, pressure and sustain pedal are read too. An instrument takes them by having parameters with these names, and ignores them otherwise:
+
+```nml
+instr organ(freq: hz, bend: st = 0st, pressure: 0..1 = 0) {
+  out = osc(saw, freq + bend).lpf(cutoff: 600hz + pressure * 4khz) * env[1 | 10ms 0]
+}
+```
+
+- **`bend`** (an interval) follows the pitch wheel, two semitones each way. Scale it in the instrument for more (`bend * 6`).
+- **`pressure`** (0 to 1) follows channel aftertouch, or one key's polyphonic aftertouch. A held note changes as it comes, and keys played later start at the channel's current value.
+- **The sustain pedal** (CC 64) keeps a note sounding after its key comes up, until the pedal does. Pressing the same key again with the pedal down damps the old note.
+
+All three are logged, so a set with them replays exactly.
 
 **Triggers:** `key("r")` and `osc_in`. **Inputs:** `input(1)` or `input(1..2)`.
 

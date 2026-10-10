@@ -35,6 +35,23 @@ pub enum LogInput {
         note: u8,
         velocity: u8,
     },
+    /// A keyboard's pitch bend (in semitones), pressure (0 to 1, for one key if `note` is given) or sustain pedal.
+    Expression {
+        channel: u8,
+        what: Expression,
+        value: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<u8>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Expression {
+    Bend,
+    Pressure,
+    /// Down for a value of 0.5 or more.
+    Sustain,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

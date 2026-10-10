@@ -22,6 +22,15 @@ pub fn parse_midi(bytes: &[u8]) -> Option<ControlSignal<'static>> {
         [status @ 0x80..=0x8F, note, velocity] if *note < 128 && *velocity < 128 => {
             Some(ControlSignal::MidiNote { note: *note, channel: (status & 0x0F) + 1, velocity: 0 })
         }
+        [status @ 0xA0..=0xAF, note, value] if *note < 128 && *value < 128 => {
+            Some(ControlSignal::MidiPressure { channel: (status & 0x0F) + 1, note: Some(*note), value: *value })
+        }
+        [status @ 0xD0..=0xDF, value] if *value < 128 => {
+            Some(ControlSignal::MidiPressure { channel: (status & 0x0F) + 1, note: None, value: *value })
+        }
+        [status @ 0xE0..=0xEF, low, high] if *low < 128 && *high < 128 => {
+            Some(ControlSignal::MidiBend { channel: (status & 0x0F) + 1, value: u16::from(*high) << 7 | u16::from(*low) })
+        }
         [status @ 0xB0..=0xBF, cc, value] if *cc < 128 && *value < 128 => {
             Some(ControlSignal::MidiCc { cc: *cc, channel: (status & 0x0F) + 1, value: *value })
         }
@@ -155,7 +164,12 @@ mod tests {
         assert_eq!(parse_midi(&[0x90, 60, 100]), Some(ControlSignal::MidiNote { note: 60, channel: 1, velocity: 100 }));
         assert_eq!(parse_midi(&[0x93, 60, 0]), Some(ControlSignal::MidiNote { note: 60, channel: 4, velocity: 0 }));
         assert_eq!(parse_midi(&[0x80, 60, 64]), Some(ControlSignal::MidiNote { note: 60, channel: 1, velocity: 0 }));
-        assert_eq!(parse_midi(&[0xE0, 0, 64]), None);
+        // centre, and all the way up, of the pitch bend
+        assert_eq!(parse_midi(&[0xE0, 0, 64]), Some(ControlSignal::MidiBend { channel: 1, value: 8192 }));
+        assert_eq!(parse_midi(&[0xE2, 127, 127]), Some(ControlSignal::MidiBend { channel: 3, value: 16383 }));
+        assert_eq!(parse_midi(&[0xD0, 90]), Some(ControlSignal::MidiPressure { channel: 1, note: None, value: 90 }));
+        assert_eq!(parse_midi(&[0xA1, 60, 30]), Some(ControlSignal::MidiPressure { channel: 2, note: Some(60), value: 30 }));
+        assert_eq!(parse_midi(&[0xC0, 5]), None);
         assert_eq!(parse_midi(&[0xB0, 7]), None);
     }
 

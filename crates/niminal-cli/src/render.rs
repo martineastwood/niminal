@@ -1,7 +1,8 @@
 use std::fmt;
 
 use niminal_engine::{BLOCK, MAX_CHANNELS, Master, Mixer, VoiceId};
-use niminal_lang::{NotePlan, Program};
+use niminal_daemon::Session;
+use niminal_lang::{Layout, NotePlan, Program};
 use niminal_score::Event;
 
 pub const SAMPLE_RATE: u32 = 48_000;
@@ -277,4 +278,78 @@ pub fn write_wav(path: &std::path::Path, channels: &[Vec<f32>]) -> Result<(), ho
         }
     }
     writer.finalize()
+}
+
+/// The file without its tempo ramps (their lines left blank so everything stays where it was), and the
+/// ramps. Empty if there are none.
+pub fn split_ramps(source: &str) -> Result<(String, Vec<String>), niminal_lang::Diagnostic> {
+    let statements = niminal_lang::analyze(source)?;
+    let mut rest = source.to_string();
+    let mut ramps = Vec::new();
+    for ramp in statements.iter().filter(|s| s.ramp.is_some()) {
+        let blank: String = ramp.text.chars().map(|c| if c == '\n' { '\n' } else { ' ' }).collect();
+        rest.replace_range(ramp.offset..ramp.offset + ramp.text.len(), &blank);
+        ramps.push(ramp.text.clone());
+    }
+    Ok((rest, ramps))
+}
+
+/// How far to render a file that is played through a session.
+#[derive(Clone, Copy)]
+pub enum End {
+    Bars(f64),
+    Seconds(f64),
+}
+
+/// Render a file the way the daemon would play it: sent to a session all at once, then run for `end`.
+/// This is how a tempo ramp (`tempo 140bpm @ next bar over 8 bars`) is heard, since a ramp is a run of
+/// changes made as the music goes. Everything still sounding when the time is up rings out.
+///
+/// `source` has its `use` lines already joined in. The file's own `tempo` stays the starting tempo; each
+/// ramp is sent after the rest, so it sets off from there at the boundary it names.
+pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: End, limiter: bool) -> Result<RenderOutput, RenderError> {
+    const STEP: usize = BLOCK * 8;
+    let problems = |ps: Vec<niminal_daemon::Problem>| RenderError(ps.iter().map(|p| p.message.clone()).collect::<Vec<_>>().join("\n"));
+    let (rest, ramps) = split_ramps(source).map_err(|d| RenderError(d.message))?;
+    let mut session = Session::new(SAMPLE_RATE as f32, layout).without_limiter();
+    session.set_sample_dir(dir);
+    session.eval(&rest, Some("now")).map_err(problems)?;
+    for ramp in &ramps {
+        session.eval(ramp, Some("now")).map_err(problems)?;
+    }
+
+    let mut out: Vec<Vec<f32>> = vec![Vec::new(); layout.channels()];
+    let run = |session: &mut Session, out: &mut Vec<Vec<f32>>| {
+        for (o, block) in out.iter_mut().zip(session.process(STEP)) {
+            o.extend(block);
+        }
+    };
+    loop {
+        run(&mut session, &mut out);
+        let t = session.transport();
+        let done = match end {
+            End::Bars(bars) => (t.bar - 1) as f64 + (t.beat - 1.0) / session.program().tempo.beats_per_bar >= bars,
+            End::Seconds(s) => t.seconds >= s,
+        };
+        if done {
+            break;
+        }
+    }
+    session.hush().map_err(|_| RenderError("couldn't stop the piece".into()))?;
+
+    let needed = (TAIL_SILENCE * SAMPLE_RATE as f32) as usize;
+    let limit = out[0].len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
+    let quiet_at = |out: &[Vec<f32>], i: usize| out.iter().all(|c| c[i].abs() < TAIL_THRESHOLD);
+    let mut silent = (0..out[0].len()).rev().take_while(|&i| quiet_at(&out, i)).count();
+    while silent < needed && out[0].len() < limit {
+        let start = out[0].len();
+        run(&mut session, &mut out);
+        for i in start..out[0].len() {
+            silent = if quiet_at(&out, i) { silent + 1 } else { 0 };
+        }
+    }
+    let keep = out[0].len() - silent;
+    out.iter_mut().for_each(|c| c.truncate(keep));
+    let silenced = session.take_silenced();
+    Ok(finish(out, silenced, Vec::new(), &RenderOptions { limiter, ..Default::default() }))
 }

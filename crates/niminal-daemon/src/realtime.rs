@@ -81,6 +81,8 @@ enum Kind {
     Note { track: Option<String>, program: Arc<Program>, off: u64, key: u32, voice: Option<Voice> },
     /// Let go of the notes a key is holding open.
     Release { key: u32 },
+    /// Change a parameter (a keyboard's `bend` or `pressure`) of the notes a key is holding.
+    Param { key: u32, name: &'static str, value: f32 },
     Swap { mixer: Box<Mixer>, program: Arc<Program>, controls: Vec<ControlState>, transfers: Vec<Transfer> },
     Reset { mixer: Box<Mixer>, program: Arc<Program>, controls: Vec<ControlState>, epoch: u64 },
 }
@@ -276,7 +278,7 @@ impl Session {
             }
             planner.deferred = future;
             window.commands.sort_by_key(|c| (c.at, match c.kind {
-                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } => 3,
+                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } | Kind::Param { .. } => 3,
             }));
             match planner.ready.push(Box::new(window)) {
                 Ok(()) => { planner.prepared_until = to; planner.refresh = false; },
@@ -327,33 +329,46 @@ impl Session {
         // Pending transactions are previewed without committing control state.
         // Window boundaries and note times remain sample positions, independent
         // of how far ahead this thread happens to prepare them.
-        for pending in &self.pending {
-            if pending.lands_at >= to { break; }
-            let boundary = pending.lands_at.max(from);
+        // A new tempo or meter moves the changes still waiting, as it will when it lands for real.
+        let mut queue: Vec<(u64, &Pending)> = self.pending.iter().map(|p| (p.lands_at, p)).collect();
+        let mut i = 0;
+        while i < queue.len() {
+            let (lands_at, pending) = queue[i];
+            i += 1;
+            if lands_at >= to { break; }
+            let boundary = lands_at.max(from);
             if position < boundary {
                 self.plan_notes(&program, &history, &explicit, position..boundary, config, &mut window);
                 position = boundary;
             }
             if let Some(next) = &pending.program {
-                if pending.lands_at >= from {
-                    let mut swap = self.swap_command(pending.lands_at, next, config);
+                if lands_at >= from {
+                    let mut swap = self.swap_command(lands_at, next, config);
                     if let Kind::Swap { controls, .. } = &mut swap.kind {
                         controls::mark(controls, next, &pending.statements, pending.id);
                     }
                     window.commands.push(swap);
                 }
-                let landing = self.seconds(pending.lands_at);
+                let landing = self.seconds(lands_at);
                 super::retime(&mut history, landing, program.tempo, next.tempo);
+                if program.tempo != next.tempo {
+                    for (at, p) in &mut queue[i..] {
+                        if !super::is_timing(p) {
+                            *at = super::rescale_landing(*at, lands_at, super::landing_factor(self.landing_unit_is_bar(p), program.tempo, next.tempo));
+                        }
+                    }
+                    queue[i..].sort_by_key(|(at, _)| *at);
+                }
                 program = next.clone();
             }
             for action in pending.actions.iter().chain(&pending.replays) {
-                preview_action(action, pending.lands_at, self.sample_rate, &mut history, &mut explicit);
+                preview_action(action, lands_at, self.sample_rate, &mut history, &mut explicit);
             }
         }
         if position < to { self.plan_notes(&program, &history, &explicit, position..to, config, &mut window); }
         // Stable sorting keeps a graph swap/reset before notes at the same sample.
         window.commands.sort_by_key(|c| (c.at, match c.kind {
-                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } => 3,
+                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } | Kind::Param { .. } => 3,
             }));
         for notice in window.notices.drain(..) { self.notify(notice); }
         *stopped = std::mem::take(&mut window.stopped);
@@ -415,6 +430,22 @@ impl Session {
             if *at >= from && *at < to && panic.is_none_or(|p| *at < p) {
                 self.prepare_note(program, event, Hold { at: *at, dur: *dur, key: *key }, config, window);
             }
+        }
+        // a key's bend and pressure: those from this window as they were, and for each the latest from
+        // before it, in case the window that carried it never played
+        let mut latest: Vec<(u32, &'static str, f32)> = Vec::new();
+        for &(key, name, value, at) in &self.key_params {
+            if at >= from && at < to {
+                window.commands.push(Command { at, kind: Kind::Param { key, name, value } });
+            } else if at < from {
+                match latest.iter_mut().find(|l| l.0 == key && l.1 == name) {
+                    Some(l) => l.2 = value,
+                    None => latest.push((key, name, value)),
+                }
+            }
+        }
+        for (key, name, value) in latest {
+            window.commands.push(Command { at: from, kind: Kind::Param { key, name, value } });
         }
         // keys that came up: each key is its own note, so a release that is repeated in a later window does no harm
         for &(key, at) in &self.key_offs {
@@ -572,6 +603,9 @@ impl RealtimeRenderer {
                     match &mut command.kind {
                         Kind::Release { key } => {
                             for held in self.held.iter_mut().filter(|h| h.2 == *key) { held.0 = self.clock; }
+                        }
+                        Kind::Param { key, name, value } => {
+                            for held in self.held.iter().filter(|h| h.2 == *key) { self.mixer.set_voice_param(held.1, name, *value); }
                         }
                         Kind::Note { track, program, off, key, voice } => {
                             let target = track.as_ref().map_or(Some(0), |name| self.program.track_index(name));
