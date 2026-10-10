@@ -504,13 +504,22 @@ track bass { instrument = pluck }
 
     #[test]
     fn a_clip_loops_every_length_and_restarts_its_alternations() {
+        // the lane spans the three bars, so it is one cycle of the clip: it restarts every 6s
         let s = schedule("clip c { length: 3 bars\nnotes: [<c4 e4>] }\nlead.play(c)");
-        // one note per bar (2s); alternation over bars 0,1,2 then restart
         let n: Vec<i32> = notes(&s, 0.0, 12.0).into_iter().map(|e| e.2).collect();
-        assert_eq!(n, [60, 64, 60, 60, 64, 60]);
-        // a short pattern in a long clip simply repeats
+        assert_eq!(n, [60, 60]);
+        // a short pattern in a long clip is spread over it
         let s = schedule("clip c { length: 2 bars\nnotes: [c4 e4] }\nlead.play(c)");
-        assert_eq!(times(&s, 0.0, 8.0).len(), 8);
+        assert_eq!(times(&s, 0.0, 8.0), [0.0, 2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn lanes_span_a_longer_clip_and_line_up() {
+        let s = schedule("clip c { length: 2 bars\nnotes: [c4 e4 g4 b4]\ngain: [0db -6db -12db -18db] }\nlead.play(c)");
+        // four notes spread over the two bars (4s), then the clip starts again
+        assert_eq!(times(&s, 0.0, 8.0), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+        let gains: Vec<Value> = s.events(0.0, 4.0).unwrap().into_iter().map(|e| e.args["gain"]).collect();
+        assert_eq!(gains, [Value::Db(0.0), Value::Db(-6.0), Value::Db(-12.0), Value::Db(-18.0)]);
     }
 
     #[test]

@@ -21,12 +21,36 @@ mono acid(freq: hz, cutoff: hz = 400hz, envmod: hz = 2khz, res: 0..1 = 0.9, acce
   echo += out.gain(-14db)
 }
 
-// One bar of sixteenths. A `dur` longer than a step overlaps the next note and slides into it.
+// Two bars of sixteenths: every lane spans the clip's `length`. A `dur` longer than a step overlaps
+// the next note and slides into it.
 clip line {
   instrument: acid
-  notes:  [a1 a1 a2 a1  ~ a1 c2 a1   a1 a1 e2 ~  g1 a1 a2 ~ ]
-  dur:    [0.25beat 0.15beat 0.15beat 0.5beat  0.15beat 0.15beat 0.3beat 0.15beat  0.15beat 0.15beat 0.3beat 0.75beat  0.3beat 0.1beat 0.15beat 0.15beat]
-  accent: [1 0 1 0  0 0 1 0  0 0 1 0  0 1 0 0]
+  length: 2 bars
+  // a line per beat, four sixteenths each: the first four lines are bar 1, the last four bar 2
+  notes: [a1        a1        a2        a1
+          ~         a1        c2        a1
+          a1        a1        e2        ~
+          g1        a1        a2        ~
+          a1        a1        a2        a1
+          ~         a1        c2        a1
+          f1        f1        c2        ~
+          g1        ~         a1        c2]
+  dur: [0.25beat  0.15beat  0.15beat  0.5beat
+        0.15beat  0.15beat  0.3beat   0.15beat
+        0.15beat  0.15beat  0.3beat   0.75beat
+        0.3beat   0.1beat   0.15beat  0.15beat
+        0.25beat  0.15beat  0.15beat  0.5beat
+        0.15beat  0.15beat  0.3beat   0.15beat
+        0.15beat  0.15beat  0.3beat   0.15beat
+        0.3beat   0.15beat  0.3beat   0.15beat]
+  accent: [1         0         1         0
+           0         0         1         0
+           0         0         1         0
+           0         1         0         0
+           1         0         1         0
+           0         0         1         0
+           0         0         1         0
+           0         1         0         1]
 }
 
 line.start

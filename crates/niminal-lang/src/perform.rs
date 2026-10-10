@@ -420,6 +420,18 @@ impl Perform<'_> {
         if name.name == "set" {
             return self.set_lanes(rest, clip, it);
         }
+        // The lanes span the clip, so `over` stretches them from the clip's length to the new one.
+        if name.name == "over" {
+            let e = self.arg(name, rest, "length", span)?;
+            let length = self.cycles(e)?;
+            if length <= Rational::ZERO {
+                return Err(Diagnostic::new("`over` must be above zero", e.span));
+            }
+            let length = length.max(Rational::new(1, 1000));
+            let factor = length / clip.length;
+            let lanes = clip.lanes.into_iter().map(|(lane, p)| (lane, p.slow(factor))).collect();
+            return Ok(Clip { name: clip.name, length, endless: false, lanes, keys: clip.keys });
+        }
         // Pitch operations touch only the notes; time operations touch every lane.
         let notes_only = matches!(name.name.as_str(), "transpose" | "euclid" | "rhythm" | "mask");
         let mut lanes = Vec::with_capacity(clip.lanes.len());
@@ -457,6 +469,7 @@ impl Perform<'_> {
                     return Err(Diagnostic::new(format!("a lane holds a pattern or a number, but this is {}", other.describe()), arg.value.span));
                 }
             };
+            let pattern = pattern.slow(clip.length);
             match clip.lanes.iter_mut().find(|(n, _)| *n == lane.name) {
                 Some((_, existing)) => *existing = pattern,
                 None => clip.lanes.push((lane.name.clone(), pattern)),
@@ -650,6 +663,10 @@ impl Perform<'_> {
                 }
             };
             lanes.push((key.name.clone(), pattern));
+        }
+        // a lane spans the whole clip, whatever its length
+        if let Some(length) = length {
+            lanes = lanes.into_iter().map(|(name, p)| (name, p.slow(length))).collect();
         }
         Ok(Clip { name: block.name.name.clone(), length: length.unwrap_or(Rational::ONE), endless: length.is_none(), lanes, keys })
     }

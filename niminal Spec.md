@@ -723,7 +723,7 @@ scene verse { bass, lead }       // short for { bass: bass, lead: lead }
 - **Lane targets:** `notes` (pitch, or samples for drum clips), instrument parameters, track parameters, and universal controls. An unknown lane name is an error. Lanes target only their own part, so clips stay portable; scene and arrangement lanes can target any part.
 - **Step lanes** are read when each note starts and cycle at their own length (polymeter); `.per_note` gives the nth note the nth value instead.
 - **Envelope and signal lanes** run on the clip's timeline, restart on launch and loop with it.
-- **`length:`** makes a clip loop: it plays that long and starts over, restarting its alternations (`<a b>`, `every`). Without it a clip runs freely, so its cycles keep counting.
+- **`length:`** makes a clip loop: it plays that long and starts over, restarting its alternations (`<a b>`, `every`). Every lane spans the length, so a 2-bar clip's `notes: [c2 ~ eb2 g1]` is four steps over two bars. Without it a clip runs freely, so its cycles keep counting.
 - **A bare pattern is a clip.** `theme = [c4 e4 g4 b4]` means `clip { notes: [c4 e4 g4 b4] }` and has no instrument, so it is material to play on a part (`lead: theme` in a scene, or `lead.play(theme)`). A section loaded from a client (`load("score/riff.nms")`) is a clip too.
 - **Lanes are fields.** `riff.set(bright: 0.9)` and `riff.set(gain: [0db -6db])` give the clip those lanes in place of its own; a number is a lane that never changes.
 - **Instruments send from inside their definition** (`space += out.gain(-12db)`), so a clip needs no routing of its own.

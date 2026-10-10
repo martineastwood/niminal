@@ -1693,7 +1693,8 @@ bass.play(riff)"));
         assert_eq!(clip.length, Rational::int(2));
         assert_eq!(clip.name, "riff");
         assert_eq!(clip.lanes.len(), 3);
-        assert_eq!(events(clip.lane("bright").unwrap(), 1), [(r(0, 1), Value::Num(0.2)), (r(1, 2), Value::Num(0.8))]);
+        // a lane spans the whole clip: two steps over two bars
+        assert_eq!(events(clip.lane("bright").unwrap(), 2), [(r(0, 1), Value::Num(0.2)), (r(1, 1), Value::Num(0.8))]);
         // length in beats is a share of a bar
         assert_eq!(played("clip c { length: 6 beats\nnotes: [c4] }\nlead.play(c)").length, r(3, 2));
     }
@@ -1702,8 +1703,12 @@ bass.play(riff)"));
     fn operations_apply_to_whole_clips() {
         let sped = played("clip c { length: 2 bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.fast(2))");
         assert_eq!(sped.length, Rational::ONE, "fast shortens the clip");
-        assert_eq!(events(sped.lane("notes").unwrap(), 1).len(), 4);
-        assert_eq!(events(sped.lane("bright").unwrap(), 1).len(), 4, "every lane speeds up together");
+        assert_eq!(events(sped.lane("notes").unwrap(), 1).len(), 2, "the lanes are squeezed into the shorter clip");
+        assert_eq!(events(sped.lane("bright").unwrap(), 1).len(), 2, "every lane speeds up together");
+
+        let stretched = played("clip c { length: 2 bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.over(4 bars))");
+        assert_eq!(stretched.length, Rational::int(4));
+        assert_eq!(events(stretched.lane("notes").unwrap(), 4).len(), 2, "over stretches the lanes with the clip");
 
         let up = played("clip c { notes: [c4]\nbright: [0.3] }\nlead.play(c.transpose(+12st))");
         assert_eq!(events(up.lane("notes").unwrap(), 1)[0].1, midi(72));

@@ -79,6 +79,7 @@ clip riff {
 - Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip.
 - Shorthand: `[c2 ~ eb2]` → `clip { notes: [...] }`. **`load("...nms")`** is also a clip.
 - **`riff.set(bright: [0.9])`** — lanes are fields.
+- **Longer than a bar:** with `length: 2 bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`). Without a `length:` a lane's cycle is one bar. `riff.over(4 bars)` stretches the whole clip, and `riff.set(...)` lanes span it too.
 
 ## Scenes and arrangement
 
@@ -89,7 +90,7 @@ scene chorus { bass: riff.transpose(+5st), drums: groove, keys: chords }
 chorus.start @ next 4 bars
 ```
 
-A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only a `notes` lane, and everything below works the same on both. A clip with no `length:` runs freely: its cycles keep counting, so `<a b>` and `every` alternate. Give it a `length:` and it loops, starting over each time.
+A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only a `notes` lane, and everything below works the same on both. A clip with no `length:` runs freely: its cycles keep counting, so `<a b>` and `every` alternate. Give it a `length:` and its lanes span that length and it loops, starting over each time.
 
 Launching a scene starts the clips it lists and **stops every other track** that has an instrument, so a scene is the whole picture: leave a track out and it falls silent. `~` still works for a track you want to name as silent. To add a fill for a bar, write it as a `play` line instead of a scene.
 
