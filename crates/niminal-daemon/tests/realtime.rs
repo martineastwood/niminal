@@ -426,3 +426,59 @@ fn a_control_update_waits_for_its_new_declaration_to_reach_dsp() {
     s.sync_realtime();
     assert_eq!(s.control_values()[0].1, 0.5);
 }
+
+#[test]
+fn a_held_key_sounds_through_the_prepared_path_until_it_is_let_go() {
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval("tempo 120bpm\ninstr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip pad { instrument: organ\n keys: midi.keys(channel: 1) }\npad.start", Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let render = |s: &mut Session, r: &mut RealtimeRenderer, frames: usize| {
+        let mut out = vec![0.0; frames];
+        for chunk in out.chunks_mut(256) {
+            s.prepare_realtime();
+            let mut pos = 0;
+            r.render(chunk.len(), &mut |b, n| { chunk[pos..pos + n].copy_from_slice(&b[0][..n]); pos += n; });
+        }
+        out
+    };
+    let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert_eq!(peak(&render(&mut s, &mut r, 2048)), 0.0);
+    assert_eq!(s.key_input(1, 69, 127), 1);
+    let held = render(&mut s, &mut r, 48_000);
+    assert!(peak(&held[4096..]) > 0.5, "sounding a second after the key went down");
+    s.key_input(1, 69, 0);
+    render(&mut s, &mut r, 4096);
+    assert!(peak(&render(&mut s, &mut r, 8192)) < 1e-3, "released");
+    // a tap is heard and ends
+    s.key_input(1, 60, 127);
+    s.key_input(1, 60, 0);
+    let tap = render(&mut s, &mut r, 4096);
+    assert!(peak(&tap) > 0.01, "even a very short tap makes a sound");
+    assert!(peak(&render(&mut s, &mut r, 8192)) < 1e-3);
+}
+
+#[test]
+fn a_tempo_ramp_sounds_the_same_through_the_prepared_path() {
+    let code = "lead.play([c4 e4 g4 b4].fast(2))";
+    let ramp = "tempo 180bpm @ now over 1 bar";
+    let mut expected = session();
+    expected.eval(code, Some("now")).unwrap();
+    let mut first = expected.process(10_240).remove(0);
+    expected.eval(ramp, Some("now")).unwrap();
+    first.extend(expected.process(150_000).remove(0));
+
+    let mut s = session();
+    s.eval(code, Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut actual = vec![0.0; first.len()];
+    for (i, chunk) in actual.chunks_mut(256).enumerate() {
+        if i * 256 == 10_240 {
+            s.eval(ramp, Some("now")).unwrap();
+        }
+        s.prepare_realtime();
+        let mut pos = 0;
+        r.render(chunk.len(), &mut |b, n| { chunk[pos..pos + n].copy_from_slice(&b[0][..n]); pos += n; });
+    }
+    assert!(first.iter().any(|v| v.abs() > 0.1));
+    assert_eq!(actual, first, "the same notes in the same places");
+}

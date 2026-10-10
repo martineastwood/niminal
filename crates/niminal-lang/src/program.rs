@@ -22,6 +22,10 @@ pub struct Instrument {
     /// The choke group of each sample: one entry per kit member, or at most
     /// one for a lone sample.
     pub chokes: Vec<Option<u32>>,
+    /// `with(max: 8)`, or `mono`: the most notes of this instrument sounding on a track at once.
+    pub max_voices: Option<usize>,
+    /// `with(same_note: release)`: a note releases the sounding note of the same pitch.
+    pub release_same_note: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,6 +148,8 @@ pub struct NotePlan {
     pub params: Vec<(usize, f32)>,
     /// The choke group of the sample this note plays: it ends other notes in the group.
     pub choke: Option<u32>,
+    /// How many notes of the instrument may sound at once, if limited.
+    pub rule: Option<niminal_engine::VoiceRule>,
 }
 
 /// What a note's target resolves to.
@@ -220,7 +226,18 @@ impl Program {
         let params = self.instruments[instrument].bind_args(&args, self.tempo)?;
         let picked = args.get("sample").and_then(|v| v.as_number().ok()).unwrap_or(0.0) as usize;
         let choke = self.instruments[instrument].chokes.get(picked).copied().flatten();
-        Ok(NotePlan { track, instrument, params, choke })
+        let rule = {
+            let this = &self.instruments[instrument];
+            (this.max_voices.is_some() || this.release_same_note).then(|| niminal_engine::VoiceRule {
+                instrument: instrument as u32,
+                max: this.max_voices.unwrap_or(usize::MAX),
+                release_same_pitch: this.release_same_note,
+                pitch: this.params.iter().position(|p| p.name == crate::perform::PITCH_PARAM)
+                    .and_then(|i| params.iter().find(|(index, _)| *index == i))
+                    .map_or(0.0, |&(_, value)| value),
+            })
+        };
+        Ok(NotePlan { track, instrument, params, choke, rule })
     }
 
     /// A mixer for this program's tracks and buses.

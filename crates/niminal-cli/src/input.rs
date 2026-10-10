@@ -12,9 +12,16 @@ use niminal_daemon::ControlSignal;
 
 use crate::audio::{Shared, lock};
 
-/// A control-change message: `1011nnnn 0ccccccc 0vvvvvvv`.
+/// A control change (`1011nnnn 0ccccccc 0vvvvvvv`) or a key going down (`1001nnnn`) or up (`1000nnnn`).
+/// A key down with velocity 0 is a key up.
 pub fn parse_midi(bytes: &[u8]) -> Option<ControlSignal<'static>> {
     match bytes {
+        [status @ 0x90..=0x9F, note, velocity] if *note < 128 && *velocity < 128 => {
+            Some(ControlSignal::MidiNote { note: *note, channel: (status & 0x0F) + 1, velocity: *velocity })
+        }
+        [status @ 0x80..=0x8F, note, velocity] if *note < 128 && *velocity < 128 => {
+            Some(ControlSignal::MidiNote { note: *note, channel: (status & 0x0F) + 1, velocity: 0 })
+        }
         [status @ 0xB0..=0xBF, cc, value] if *cc < 128 && *value < 128 => {
             Some(ControlSignal::MidiCc { cc: *cc, channel: (status & 0x0F) + 1, value: *value })
         }
@@ -145,7 +152,10 @@ mod tests {
     #[test]
     fn midi_control_changes_parse_and_everything_else_is_ignored() {
         assert_eq!(parse_midi(&[0xB1, 7, 100]), Some(ControlSignal::MidiCc { cc: 7, channel: 2, value: 100 }));
-        assert_eq!(parse_midi(&[0x90, 60, 100]), None);
+        assert_eq!(parse_midi(&[0x90, 60, 100]), Some(ControlSignal::MidiNote { note: 60, channel: 1, velocity: 100 }));
+        assert_eq!(parse_midi(&[0x93, 60, 0]), Some(ControlSignal::MidiNote { note: 60, channel: 4, velocity: 0 }));
+        assert_eq!(parse_midi(&[0x80, 60, 64]), Some(ControlSignal::MidiNote { note: 60, channel: 1, velocity: 0 }));
+        assert_eq!(parse_midi(&[0xE0, 0, 64]), None);
         assert_eq!(parse_midi(&[0xB0, 7]), None);
     }
 

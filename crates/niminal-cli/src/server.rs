@@ -237,6 +237,11 @@ fn preload_samples(daemon: &Shared, request: &str) {
         d.session().sample_files().clone()
     };
     samples.warm(source);
+    // files named by modules the code uses
+    let dir = params.get("dir").and_then(Value::as_str).unwrap_or(".");
+    if let Ok(expanded) = niminal_lang::expand(source, std::path::Path::new(dir)) {
+        samples.warm(&expanded.text[expanded.root_len..]);
+    }
 }
 
 /// A client with a token must open with a `hello` that carries it.

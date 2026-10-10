@@ -40,6 +40,8 @@ pub struct ControlInput {
 pub enum InputSource {
     /// `midi.cc(number)` or `midi.cc(number, channel)`; channels count from 1.
     MidiCc { cc: u8, channel: Option<u8> },
+    /// `midi.learn`: binds to the next control moved, which the session then reports.
+    MidiLearn,
     /// `osc_in("/address")`
     Osc(String),
 }
@@ -132,6 +134,10 @@ pub struct InstrDef {
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,
+    /// `mono bass(...)`: one note sounds at a time.
+    pub mono: bool,
+    /// `with(max: 8, same_note: release)`
+    pub options: Vec<Arg>,
 }
 
 /// `sample kick = "drums/kick.wav" with(root: c4)`, or `kit drums = "drums/808"`.

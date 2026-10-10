@@ -20,11 +20,11 @@ mod sample;
 mod schedule;
 mod unit;
 
-pub use analysis::{PlayInfo, Statement, StatementKind, analyze, scene_entries};
+pub use analysis::{PlayInfo, Ramp, Statement, StatementKind, analyze, scene_entries};
 pub use compile::{CompileOptions, compile, compile_with};
 pub use diag::{Diagnostic, Span, closest};
 pub use ide::{OpInfo, ParamInfo, Symbol, SymbolKind, SymbolParam, builtin_ops, pattern_ops, symbols, waves};
-pub use performance::{Action, Arrangement, Clip, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled};
+pub use performance::{Action, Arrangement, Clip, Keys, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled};
 pub use schedule::{Found, Schedule, ScheduleError, TrackState};
 pub use ast::{ControlInput, InputSource};
 pub use program::{ControlBinding, ControlDef, ArgError, Instrument, NotePlan, Param, Program, TrackInfo};

@@ -186,6 +186,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
 
     let mut instruments: Vec<Instrument> = Vec::new();
     let mut failed: Vec<&str> = Vec::new();
+    let mut samples_state = SampleState::default();
     for item in &items {
         let Item::Instr(def) = item else { continue };
         let name = def.name.name.as_str();
@@ -193,7 +194,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             errors.push(Diagnostic::new(format!("instrument `{name}` is defined twice"), def.name.span));
             continue;
         }
-        match compile_instr(def, tempo, &registry, &names) {
+        match compile_instr(def, tempo, &registry, &names).and_then(|mut i| voice_options(def, &mut i, &mut samples_state).map(|()| i)) {
             Ok(i) => instruments.push(i),
             Err(d) => {
                 errors.push(d);
@@ -202,7 +203,6 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
     }
 
-    let mut samples_state = SampleState::default();
     for item in &items {
         let Item::Sample(decl) = item else { continue };
         let name = decl.name.name.as_str();
@@ -263,7 +263,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         let path: Vec<&str> = cycle.iter().chain(cycle.first()).map(|&i| tracks[i].name.as_str()).collect();
         errors.push(
             Diagnostic::new(format!("tracks feed back through buses: {}", path.join(" -> ")), track_spans[cycle[0]])
-                .with_help("a bus has to be written before it is read; breaking the loop with `prev` isn't available yet"),
+                .with_help("a bus has to be written before it is read; break the loop with `prev`, by sending a late copy: `echo += prev(out)`"),
         );
     }
 
@@ -372,6 +372,63 @@ fn compile_track(
         defaults,
         def: TrackDef { chain: chain.graph, inputs: chain.inputs, route: chain.route, voice_sends },
     }))
+}
+
+/// `mono bass(...)` and `instr pad(...) with(max: 8, steal: oldest, same_note: release, choke: group)`.
+fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut SampleState) -> Res<()> {
+    let mut max = def.mono.then_some(1);
+    for arg in &def.options {
+        let Some(option) = &arg.name else {
+            return Err(Diagnostic::new("an option is a name and a value, as in `max: 8`", arg.value.span));
+        };
+        let value = &arg.value;
+        match option.name.as_str() {
+            "max" => {
+                if def.mono {
+                    return Err(Diagnostic::new("a `mono` instrument is one voice, so it has no `max`", option.span));
+                }
+                match &value.kind {
+                    ExprKind::Num { value: n, unit: None } if n.fract() == 0.0 && *n >= 1.0 && *n <= 4096.0 => max = Some(*n as usize),
+                    _ => return Err(Diagnostic::new("`max` is a whole number of voices, from 1", value.span)),
+                }
+            }
+            "steal" => match &value.kind {
+                ExprKind::Name(n) if n == "oldest" => {}
+                ExprKind::Name(n) if n == "quietest" => {
+                    return Err(Diagnostic::new("`steal: quietest` isn't supported yet", value.span).with_help("`steal: oldest` is what happens"));
+                }
+                _ => return Err(Diagnostic::new("`steal` is `oldest`", value.span)),
+            },
+            "same_note" => match &value.kind {
+                ExprKind::Name(n) if n == "release" => instrument.release_same_note = true,
+                _ => return Err(Diagnostic::new("`same_note` is `release`", value.span)),
+            },
+            "choke" => match &value.kind {
+                ExprKind::Name(group) => {
+                    let id = state.groups.iter().position(|g| g == group).unwrap_or_else(|| {
+                        state.groups.push(group.clone());
+                        state.groups.len() - 1
+                    });
+                    instrument.chokes = vec![Some(id as u32)];
+                }
+                _ => return Err(Diagnostic::new("expected the name of a choke group", value.span).with_help("for example `with(choke: bass)`")),
+            },
+            "legato" | "priority" | "pitch" => {
+                return Err(Diagnostic::new(format!("`{}` isn't supported yet", option.name), option.span)
+                    .with_help("a `mono` instrument ends the previous note when a new one starts"));
+            }
+            other => {
+                let mut d = Diagnostic::new(format!("an instrument has no option `{other}`"), option.span);
+                d = match closest(other, ["max", "steal", "same_note", "choke"]) {
+                    Some(c) => d.with_help(format!("did you mean `{c}`?")),
+                    None => d.with_help("the options are `max`, `steal`, `same_note` and `choke`"),
+                };
+                return Err(d);
+            }
+        }
+    }
+    instrument.max_voices = max;
+    Ok(())
 }
 
 /// What the `sample` and `kit` declarations of a project define between them.
@@ -607,9 +664,7 @@ fn tempo_of(items: &[Item], beats_per_bar: f64) -> Res<Tempo> {
         if tempo.is_some() {
             return Err(Diagnostic::new("tempo is set more than once", stmt.span));
         }
-        if stmt.quantize.is_some() || stmt.over.is_some() {
-            return Err(Diagnostic::new("changing the tempo while playing isn't supported yet", stmt.span));
-        }
+        // `@ next bar` and `over 2 bars` say how a live session gets there; a file starts at the tempo.
         match &stmt.value.kind {
             ExprKind::Num { value, unit: Some(u) } if u == "bpm" && *value > 0.0 => {
                 tempo = Some(Tempo { bpm: *value, beats_per_bar });
@@ -771,6 +826,8 @@ mod tests {
         // hz sweeps are geometric: halfway is the geometric mean
         assert!((cutoff.map_input(0.5).unwrap() - (200.0f64 * 4000.0).sqrt()).abs() < 0.1);
         assert_eq!(p.controls[1].input.as_ref().unwrap().source, InputSource::Osc("/fx/width".into()));
+        let learning = ok("ctl drive = midi.learn.range(0..1)");
+        assert_eq!(learning.controls[0].input.as_ref().unwrap().source, InputSource::MidiLearn);
         assert!((p.controls[1].map_input(0.25).unwrap() - 0.25).abs() < 1e-6);
         // db sweeps are even in decibels, and come back in db
         assert!((p.controls[2].map_input(0.5).unwrap() + 30.0).abs() < 1e-3);
@@ -780,7 +837,7 @@ mod tests {
     #[test]
     fn bad_control_inputs_are_explained() {
         assert_eq!(msg("ctl a = midi.cc(200)"), "expected a CC number from 0 to 127, found a number");
-        assert_eq!(msg("ctl a = midi.note(1)"), "`midi.note` isn't supported; use `midi.cc(number)`");
+        assert_eq!(msg("ctl a = midi.note(1)"), "`midi.note` isn't supported; use `midi.cc(number)` or `midi.learn`");
         assert_eq!(msg("ctl a = midi.cc(1).range(200hz..1)"), "the range's ends need the same unit: hz and a plain number");
         assert_eq!(msg("ctl a = midi.cc(1).range(1..0)"), "the upper end of a range must be above the lower end");
         assert_eq!(msg("ctl a = osc_in(\"fx\")"), "an OSC address starts with `/`");
@@ -1172,6 +1229,10 @@ track b { out = y.lpf(cutoff: 1khz).to(x) }
         assert!(d.message == "tracks feed back through buses: a -> b -> a" || d.message == "tracks feed back through buses: b -> a -> b", "{}", d.message);
         assert!(d.help.unwrap().contains("`prev`"));
 
+        // a late send breaks the loop
+        ok("bus x\nbus y\ntrack a { out = x.lpf(cutoff: 1khz).to(y) }\ntrack b { out = y\n x += prev(out) }");
+        let d = first_error("bus x\ntrack a { out = prev(x) }");
+        assert_eq!(d.message, "`prev` is only available when sending to a bus");
         let d = first_error("bus x\ntrack a { out = x.to(x) }");
         assert_eq!(d.message, "tracks feed back through buses: a -> a");
     }
@@ -1649,6 +1710,10 @@ at bar 3 bass.unsolo"));
         assert_eq!(d.message, "`rif` is not defined");
         assert_eq!(d.help.as_deref(), Some("did you mean `riff`?"));
         assert_eq!(first_error(&stage("nothing.start")).message, "no scene or part named `nothing`");
+        assert_eq!(first_error(&stage("lead.play([c4].set(0.9))")).message, "`set` takes a lane and its value, as in `set(bright: 0.9)`");
+        assert_eq!(first_error(&stage("lead.play([c4].set(length: 2))")).message, "a clip's length can't be set; use `over(…)`");
+        let d = first_error(&stage("lead.play([c4].set(wobble: 1))"));
+        assert!(d.message.contains("wobble"), "{}", d.message);
         let d = first_error(&stage("lead.play([c4].fsat(2))"));
         assert_eq!(d.message, "unknown pattern operation `fsat`");
         assert_eq!(d.help.as_deref(), Some("did you mean `fast`?"));
@@ -1697,7 +1762,8 @@ at bar 3 bass.unsolo"));
         assert_eq!(msg(&stage("lead = [c4]")), "`lead` is already the name of a track");
         assert_eq!(msg(&stage("it = [c4]")), "`it` is a reserved word");
         assert_eq!(msg("at bar 0 hush"), "bars and beats count from 1");
-        assert_eq!(msg(&stage("tempo 120bpm @ next bar")), "changing the tempo while playing isn't supported yet");
+        // a file starts at its tempo; how a live session gets there is not the compiler's concern
+        assert_eq!(ok(&stage("tempo 90bpm @ next bar over 2 bars")).tempo.bpm, 90.0);
     }
 
     #[test]

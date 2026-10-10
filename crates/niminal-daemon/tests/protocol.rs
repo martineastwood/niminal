@@ -47,7 +47,7 @@ fn a_client_must_say_hello_with_the_right_version() {
     let ok = call(&mut d, c, 4, "hello", json!({"protocol": 1}));
     assert_eq!(ok["result"]["sample_rate"], 48_000.0);
     assert_eq!(ok["result"]["channels"], 1);
-    assert_eq!(ok["result"]["topics"].as_array().unwrap().len(), 5);
+    assert_eq!(ok["result"]["topics"].as_array().unwrap().len(), 6);
     assert!(call(&mut d, c, 5, "status", json!({}))["result"]["transport"].is_object());
 }
 

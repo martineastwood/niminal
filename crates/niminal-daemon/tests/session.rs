@@ -951,3 +951,199 @@ fn a_bus_with_a_body_processes_what_instruments_send_to_it() {
     let (loud, quiet) = (heard("0.5") - direct, heard("0.25") - direct);
     assert!(quiet > 0.05 && (loud / quiet - 2.0).abs() < 0.1, "the bus's gain shapes the sound: {loud} vs {quiet}");
 }
+
+#[test]
+fn set_changes_a_lane_live_and_undo_puts_it_back() {
+    // the first bit of each bar is the last bar's note dying away
+    let level = |s: &mut Session| peak(&run(s, BAR)[2000..]);
+    let mut s = session();
+    s.eval("tempo 120bpm\ninstr loud(freq: hz, amp: 0..1 = 1) { osc(sine, freq) * amp * env[1 | 10ms 0] }\nclip lead { instrument: loud\n notes: [c4] }\nlead.start", Some("now")).unwrap();
+    let full = level(&mut s);
+    assert!(full > 0.9, "{full}");
+    s.eval("lead.set(amp: 0.25)", Some("now")).unwrap();
+    let quiet = level(&mut s);
+    assert!((quiet - 0.25).abs() < 0.03, "{quiet}");
+    assert_eq!(s.tracks()[0].edits, ["set(amp: 0.25)"]);
+    s.eval("lead.set(amp: 0.5)", Some("now")).unwrap();
+    assert!((level(&mut s) - 0.5).abs() < 0.03, "the newer set wins");
+    s.eval("lead.undo\nlead.undo", Some("now")).unwrap();
+    assert!(level(&mut s) > 0.9, "back to the clip as written");
+    let problems = s.eval("lead.set(wobble: 1)", Some("now")).unwrap_err();
+    assert!(problems[0].message.contains("wobble"), "{}", problems[0].message);
+}
+
+#[test]
+fn undo_can_name_the_change_to_take_off() {
+    let mut s = ready();
+    s.eval("riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nverse.start", Some("now")).unwrap();
+    s.eval("lead.reverse\nlead.transpose(+12st)\nlead.thin(10%)", Some("now")).unwrap();
+    assert_eq!(s.tracks()[0].edits, ["reverse", "transpose(+12st)", "thin(10%)"]);
+    s.eval("lead.undo(reverse)", Some("now")).unwrap();
+    assert_eq!(s.tracks()[0].edits, ["transpose(+12st)", "thin(10%)"], "the middle one went, order kept");
+    let problems = s.eval("lead.undo(reverse)", Some("now")).unwrap_err();
+    assert!(problems[0].message.contains("no `reverse` change to undo"), "{}", problems[0].message);
+}
+
+#[test]
+fn a_change_named_for_a_clip_goes_to_every_part_playing_it() {
+    let mut s = ready();
+    s.eval("answer = [c4 e4 g4 b4]\nother = [c3]\nscene chorus { lead: answer, bass: answer.fast(2) }\nchorus.start", Some("now")).unwrap();
+    s.eval("answer.reverse", Some("now")).unwrap();
+    let edits: Vec<_> = s.tracks().iter().map(|t| t.edits.clone()).collect();
+    assert_eq!(edits, [vec!["reverse"], vec!["reverse"]], "both parts play `answer`");
+    s.eval("answer.clear", Some("now")).unwrap();
+    assert!(s.tracks().iter().all(|t| t.edits.is_empty()));
+    let problems = s.eval("other.reverse", Some("now")).unwrap_err();
+    assert!(problems[0].message.contains("isn't playing anything"), "{}", problems[0].message);
+}
+
+const KEYBOARD: &str = "
+tempo 120bpm
+instr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
+clip pad { instrument: organ
+  keys: midi.keys(channel: 1) }
+pad.start
+";
+
+#[test]
+fn a_keyboard_clip_plays_the_notes_held_and_lets_go_when_the_key_comes_up() {
+    let mut s = session();
+    s.eval(KEYBOARD, Some("now")).unwrap();
+    assert_eq!(peak(&run(&mut s, 2000)), 0.0, "nothing sounds until a key is pressed");
+    assert_eq!(s.key_input(2, 69, 100), 0, "another channel");
+    assert_eq!(s.key_input(1, 69, 127), 1);
+    let held = run(&mut s, 3 * BAR);
+    assert!((hz(&held[2000..BAR]) - 440.0).abs() < 12.0, "a4: {}", hz(&held[2000..BAR]));
+    assert!(peak(&held[2 * BAR..]) > 0.5, "still held after three bars");
+    assert_eq!(s.key_input(1, 69, 0), 1);
+    run(&mut s, 2000);
+    assert!(peak(&run(&mut s, BAR)) < 1e-3, "released");
+}
+
+#[test]
+fn harder_keys_are_louder_and_two_keys_sound_together() {
+    let level = |velocity: u8| {
+        let mut s = session();
+        s.eval(KEYBOARD, Some("now")).unwrap();
+        s.key_input(1, 60, velocity);
+        peak(&run(&mut s, 4800))
+    };
+    assert!(level(127) > 2.0 * level(40), "{} vs {}", level(127), level(40));
+    let mut s = session();
+    s.eval(KEYBOARD, Some("now")).unwrap();
+    s.key_input(1, 60, 100);
+    s.key_input(1, 67, 100);
+    let both = run(&mut s, 9600);
+    assert!(peak(&both[2000..]) > 0.35, "two notes add up");
+    s.key_input(1, 60, 0);
+    run(&mut s, 2400);
+    let one = run(&mut s, 4800);
+    assert!(peak(&one) > 0.1 && peak(&one) < peak(&both), "the other key still sounds");
+}
+
+#[test]
+fn a_keyboard_set_replays_from_the_log() {
+    let mut s = session();
+    s.eval(KEYBOARD, Some("now")).unwrap();
+    let mut original = run(&mut s, 1000);
+    s.key_input(1, 64, 100);
+    original.extend(run(&mut s, 5000));
+    s.key_input(1, 64, 0);
+    original.extend(run(&mut s, 5000));
+    let log = from_lines(&to_lines(s.log())).unwrap();
+    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), &log, original.len() as u64, false);
+    assert!(peak(&original) > 0.1);
+    assert_eq!(original, replayed[0]);
+}
+
+#[test]
+fn a_keyboard_clip_checks_its_lanes() {
+    let mut s = session();
+    let both = "tempo 120bpm\ninstr organ(freq: hz) { osc(sine, freq) }\nclip pad { instrument: organ\n keys: midi.keys()\n notes: [c4] }\npad.start";
+    let problems = s.eval(both, Some("now")).unwrap_err();
+    assert!(problems[0].message.contains("both `notes` and `keys`"), "{}", problems[0].message);
+    let bad = "tempo 120bpm\ninstr organ(freq: hz) { osc(sine, freq) }\nclip pad { instrument: organ\n keys: midi.notes() }";
+    assert!(s.eval(bad, Some("now")).unwrap_err()[0].message.contains("keys: midi.keys"));
+}
+
+#[test]
+fn a_mono_instrument_sounds_one_note_at_a_time_and_max_caps_a_poly_one() {
+    let sounding = |defs: &str, notes: &str| {
+        let mut s = session();
+        s.eval(&format!("tempo 120bpm\n{defs}\ntrack t {{ instrument = x }}\n{notes}"), Some("now")).unwrap();
+        run(&mut s, 2000);
+        s.transport().voices
+    };
+    let held = "x(freq: 220hz) for 4beats\nx(freq: 330hz) for 4beats\nx(freq: 440hz) for 4beats";
+    assert_eq!(sounding("instr x(freq: hz) { osc(sine, freq) }", held), 3, "poly: all three");
+    assert_eq!(sounding("mono x(freq: hz) { osc(sine, freq) }", held), 1, "mono: the newest only (the others are fading out)");
+    assert_eq!(sounding("instr x(freq: hz) with(max: 2) { osc(sine, freq) }", held), 2);
+    assert_eq!(
+        sounding("instr x(freq: hz) with(same_note: release) { osc(sine, freq) * env[1 | 5ms 0] }", "x(freq: 220hz) for 4beats\nx(freq: 220hz) for 4beats\nx(freq: 330hz) for 4beats"),
+        2,
+        "the second 220hz released the first, which has ended by now"
+    );
+}
+
+#[test]
+fn voice_options_are_checked() {
+    let mut s = session();
+    let err = |code: &str, s: &mut Session| s.eval(code, Some("now")).unwrap_err()[0].message.clone();
+    assert!(err("mono x(freq: hz) with(max: 4) { osc(sine, freq) }", &mut s).contains("one voice"));
+    assert!(err("instr x(freq: hz) with(legato: true) { osc(sine, freq) }", &mut s).contains("isn't supported yet"));
+    assert!(err("instr x(freq: hz) with(steal: quietest) { osc(sine, freq) }", &mut s).contains("quietest"));
+    assert!(err("instr x(freq: hz) with(maxx: 3) { osc(sine, freq) }", &mut s).contains("no option `maxx`"));
+    assert!(err("instr x(freq: hz) with(max: 0) { osc(sine, freq) }", &mut s).contains("whole number"));
+}
+
+#[test]
+fn a_new_tempo_keeps_the_clip_in_place_in_its_bar() {
+    let mut s = ready();
+    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    // at 120bpm a note lasts half a second: 0.75s in, the second note is half done
+    run(&mut s, 36_000);
+    s.eval("tempo 240bpm", Some("now")).unwrap();
+    assert_eq!(s.transport().bpm, 240.0);
+    let after = run(&mut s, 18_000);
+    // the bar is now a second long and was 3/8 through: the third note starts an eighth of a bar later
+    assert!((hz(&after[7_000..11_000]) - 392.0).abs() < 15.0, "g4 comes next, not c4 again: {}", hz(&after[7_000..11_000]));
+}
+
+#[test]
+fn a_tempo_change_can_name_when_it_lands_and_ramp_over_a_stretch() {
+    let mut s = ready();
+    s.eval("tempo 120bpm @ next bar", None).unwrap();
+    assert_eq!(s.pending().len(), 1);
+    let accepted = s.eval("tempo 180bpm @ now over 1 bar", Some("now")).unwrap();
+    assert!(s.pending().len() >= 2, "a ramp is a run of changes: {}", s.pending().len());
+    assert_eq!(accepted.changes, ["tempo 123.750bpm"], "the first step: 16 steps from 120 to 180");
+    let mut seen = vec![s.transport().bpm];
+    for _ in 0..40 {
+        run(&mut s, 6_000);
+        seen.push(s.transport().bpm);
+    }
+    assert!(seen.windows(2).all(|w| w[1] >= w[0]), "it only speeds up: {seen:?}");
+    assert!(seen.iter().any(|&b| b > 130.0 && b < 175.0), "and passes through the tempos between: {seen:?}");
+    assert_eq!(*seen.last().unwrap(), 180.0, "and ends at the tempo asked for");
+    assert!(s.pending().is_empty());
+}
+
+#[test]
+fn a_tempo_ramp_replays_to_the_same_audio() {
+    let mut s = ready();
+    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    let mut original = run(&mut s, 20_000);
+    s.eval("tempo 200bpm @ now over 2 beats", Some("now")).unwrap();
+    original.extend(run(&mut s, 120_000));
+    let log = from_lines(&to_lines(s.log())).unwrap();
+    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), &log, original.len() as u64, false);
+    assert_eq!(original, replayed[0]);
+    assert_eq!(s.transport().bpm, 200.0);
+}
+
+#[test]
+fn a_ramp_that_is_too_long_is_refused() {
+    let mut s = ready();
+    let problems = s.eval("tempo 200bpm over 1000 bars", Some("now")).unwrap_err();
+    assert!(problems[0].message.contains("a tempo ramp takes"), "{}", problems[0].message);
+}

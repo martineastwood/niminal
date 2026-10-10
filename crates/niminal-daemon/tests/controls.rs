@@ -182,3 +182,23 @@ fn bound_controls_replay_from_the_log() {
     let replay = Session::replay(48_000.0, Layout::Mono, QuantizeDefaults::default(), &log, 400, false);
     assert_eq!(original, replay[0]);
 }
+
+const LEARNING: &str = "ctl level = midi.learn.range(0..1).smooth(0ms)\nctl pan = midi.learn.range(0..1).smooth(0ms)\ninstr flat() { level + pan * 10 }\nflat() for 1beat";
+
+#[test]
+fn midi_learn_takes_the_next_control_change_and_reports_it() {
+    let mut s = session(LEARNING);
+    // nothing is moved until a control change is heard
+    assert_eq!(s.control_values()[0].1, 0.0);
+    // the first control waiting takes the first CC
+    assert_eq!(s.control_input(&ControlSignal::MidiCc { cc: 21, channel: 3, value: 127 }), 1);
+    assert_eq!(s.take_learned(), [("level".to_string(), "midi.cc(21)".to_string())]);
+    // and the next control the next CC; a CC that is already learned moves only its control
+    assert_eq!(s.control_input(&ControlSignal::MidiCc { cc: 22, channel: 1, value: 127 }), 1);
+    assert_eq!(s.take_learned(), [("pan".to_string(), "midi.cc(22)".to_string())]);
+    assert_eq!(s.control_input(&ControlSignal::MidiCc { cc: 21, channel: 1, value: 0 }), 1);
+    assert_eq!(s.control_input(&ControlSignal::MidiCc { cc: 30, channel: 1, value: 127 }), 0, "nothing left to learn");
+    assert!(s.take_learned().is_empty());
+    // the control still follows what it learned
+    assert_eq!(s.process(8)[0], vec![0.0 + 10.0; 8]);
+}

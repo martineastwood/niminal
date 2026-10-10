@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::graph::Graph;
 use crate::opcode::BLOCK;
-use crate::voice::Voice;
+use crate::voice::{Voice, VoiceRule};
 
 /// The most channels any signal path may carry (7.1.4 needs 12).
 pub const MAX_CHANNELS: usize = 16;
@@ -19,24 +19,74 @@ pub const MAX_CHANNELS: usize = 16;
 /// every block.
 pub struct Buses {
     data: Vec<Vec<[f32; BLOCK]>>,
+    /// What delayed sends put in over the last `BLOCK` samples, as a ring: a sample comes out
+    /// where it went in, `BLOCK` samples later.
+    late: Vec<Vec<[f32; BLOCK]>>,
+    /// What delayed sends have put in during the current block.
+    staged: Vec<Vec<[f32; BLOCK]>>,
+    late_pos: usize,
 }
 
 impl Buses {
     /// One bus per entry, with that many channels.
     pub fn new(channels: &[usize]) -> Self {
-        Buses { data: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect() }
+        Buses {
+            data: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
+            late: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
+            staged: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
+            late_pos: 0,
+        }
     }
 
+    /// Empty every bus, including what is on its way.
     pub fn clear(&mut self) {
-        for bus in &mut self.data {
+        for bus in self.data.iter_mut().chain(&mut self.late).chain(&mut self.staged) {
             bus.iter_mut().for_each(|c| *c = [0.0; BLOCK]);
         }
+        self.late_pos = 0;
+    }
+
+    /// Start a block of `frames` samples: the buses hold what delayed sends put in a block ago
+    /// (exactly `BLOCK` samples ago, whatever the length of the blocks in between).
+    pub fn begin_block(&mut self, frames: usize) {
+        for ((data, late), staged) in self.data.iter_mut().zip(&mut self.late).zip(&mut self.staged) {
+            for ((d, l), s) in data.iter_mut().zip(late.iter_mut()).zip(staged.iter_mut()) {
+                *s = [0.0; BLOCK];
+                *d = [0.0; BLOCK];
+                for (i, out) in d[..frames].iter_mut().enumerate() {
+                    let at = (self.late_pos + i) % BLOCK;
+                    *out = l[at];
+                    l[at] = 0.0;
+                }
+            }
+        }
+    }
+
+    /// Finish the block: what delayed sends staged waits to arrive in `BLOCK` samples.
+    pub fn end_block(&mut self, frames: usize) {
+        for (late, staged) in self.late.iter_mut().zip(&self.staged) {
+            for (l, s) in late.iter_mut().zip(staged) {
+                for i in 0..frames {
+                    l[(self.late_pos + i) % BLOCK] += s[i];
+                }
+            }
+        }
+        self.late_pos = (self.late_pos + frames) % BLOCK;
     }
 
     /// Add `samples` to the start of one channel of a bus. A bus or channel that
     /// doesn't exist is ignored.
     pub fn add(&mut self, bus: usize, channel: usize, samples: &[f32]) {
         if let Some(c) = self.data.get_mut(bus).and_then(|b| b.get_mut(channel)) {
+            for (d, s) in c.iter_mut().zip(samples) {
+                *d += s;
+            }
+        }
+    }
+
+    /// Like [`Buses::add`], but the samples arrive `BLOCK` samples later.
+    pub fn add_delayed(&mut self, bus: usize, channel: usize, samples: &[f32]) {
+        if let Some(c) = self.staged.get_mut(bus).and_then(|b| b.get_mut(channel)) {
             for (d, s) in c.iter_mut().zip(samples) {
                 *d += s;
             }
@@ -182,7 +232,16 @@ pub struct Transfer {
     pub chain_from: Option<usize>,
 }
 
+/// What each track put out, and what each bus carried, kept for an offline render's stems:
+/// one buffer per channel for each, grown block by block.
+#[derive(Default)]
+pub struct Stems {
+    pub tracks: Vec<Vec<Vec<f32>>>,
+    pub buses: Vec<Vec<Vec<f32>>>,
+}
+
 pub struct Mixer {
+    stems: Option<Stems>,
     buses: Buses,
     tracks: Vec<Track>,
     order: Vec<usize>,
@@ -226,6 +285,7 @@ impl Mixer {
             })
             .collect();
         Ok(Mixer {
+            stems: None,
             buses: Buses::new(&bus_channels),
             tracks,
             order,
@@ -247,6 +307,8 @@ impl Mixer {
 
     /// Admit an already constructed voice without allocating. Capacity is a
     /// hard limit; rejected voices remain owned by the caller for retirement.
+    // the voice comes back in the error so that its owner can retire it without allocating
+    #[allow(clippy::result_large_err)]
     pub fn note_prepared(&mut self, track: usize, voice: Voice) -> Result<VoiceId, Voice> {
         if self.muted || track >= self.tracks.len() || voice.channels() != self.channels
             || self.tracks[track].voices.len() == self.tracks[track].voices.capacity()
@@ -256,6 +318,7 @@ impl Mixer {
                 if other.group() == Some(group) { other.choke(); }
             }
         }
+        if let Some(rule) = voice.rule() { self.make_room(track, &rule); }
         self.steal_if_full();
         let serial = self.next_serial;
         self.next_serial += 1;
@@ -273,6 +336,11 @@ impl Mixer {
     /// A note in a choke `group` ends every sounding note in the same group
     /// (on any track), with a short fade.
     pub fn note_on(&mut self, track: usize, graph: Arc<Graph>, params: &[(usize, f32)], group: Option<u32>) -> VoiceId {
+        self.note_on_with(track, graph, params, group, None)
+    }
+
+    /// Like [`Mixer::note_on`], for an instrument that limits its own voices.
+    pub fn note_on_with(&mut self, track: usize, graph: Arc<Graph>, params: &[(usize, f32)], group: Option<u32>, rule: Option<VoiceRule>) -> VoiceId {
         assert_eq!(graph.channels(), self.channels, "an instrument must output the master's channel count");
         if group.is_some() {
             for (_, v) in self.tracks.iter_mut().flat_map(|t| t.voices.iter_mut()) {
@@ -281,9 +349,11 @@ impl Mixer {
                 }
             }
         }
+        if let Some(rule) = &rule { self.make_room(track, rule); }
         self.steal_if_full();
         let mut voice = Voice::new(graph, self.sample_rate);
         voice.set_group(group);
+        voice.set_rule(rule);
         for &(index, value) in params {
             voice.set_param(index, value);
         }
@@ -291,6 +361,29 @@ impl Mixer {
         self.next_serial += 1;
         self.tracks[track].voices.push((serial, voice));
         VoiceId { track, serial }
+    }
+
+    /// Make room for a note under `rule`: release the sounding note of the same pitch if asked, and
+    /// end the oldest notes of the instrument until fewer than `max` are left. Allocates nothing.
+    fn make_room(&mut self, track: usize, rule: &VoiceRule) {
+        let Some(track) = self.tracks.get_mut(track) else { return };
+        let mine = |v: &Voice| v.rule().is_some_and(|r| r.instrument == rule.instrument);
+        if rule.release_same_pitch {
+            for (_, v) in track.voices.iter_mut() {
+                if mine(v) && !v.is_released() && v.rule().is_some_and(|r| r.pitch == rule.pitch) { v.release(); }
+            }
+        }
+        loop {
+            let (mut count, mut oldest) = (0usize, None::<u64>);
+            for (serial, v) in track.voices.iter() {
+                if mine(v) && !v.is_choked() {
+                    count += 1;
+                    oldest = Some(oldest.map_or(*serial, |o| o.min(*serial)));
+                }
+            }
+            let Some(oldest) = oldest.filter(|_| count >= rule.max.max(1)) else { break };
+            if let Some((_, v)) = track.voices.iter_mut().find(|(serial, _)| *serial == oldest) { v.choke(); }
+        }
     }
 
     pub fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
@@ -334,6 +427,27 @@ impl Mixer {
         }
         self.buses.clear();
         self.muted = false;
+    }
+
+    /// Start keeping what every track puts out (after its effects, before the master) and what every
+    /// bus carries. Only for offline renders: it grows without bound.
+    pub fn capture_stems(&mut self) {
+        self.stems = Some(Stems { tracks: vec![Vec::new(); self.tracks.len()], buses: vec![Vec::new(); self.bus_channels.len()] });
+    }
+
+    /// Fill the captured stems with silence up to `len` samples each, for stretches the caller skipped
+    /// mixing because nothing could be heard.
+    pub fn pad_stems(&mut self, len: usize) {
+        if let Some(stems) = &mut self.stems {
+            for channel in stems.tracks.iter_mut().chain(stems.buses.iter_mut()).flatten() {
+                if channel.len() < len { channel.resize(len, 0.0); }
+            }
+        }
+    }
+
+    /// The stems captured so far, which are no longer kept.
+    pub fn take_stems(&mut self) -> Option<Stems> {
+        self.stems.take()
     }
 
     /// The most voices that may sound at once. A new note past this ends the
@@ -394,8 +508,11 @@ impl Mixer {
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
         assert_eq!(out.len(), self.channels, "one output block per master channel");
         out.iter_mut().for_each(|c| c[..frames].fill(0.0));
-        self.buses.clear();
-        if self.muted { return; }
+        if self.muted {
+            self.buses.clear();
+            return;
+        }
+        self.buses.begin_block(frames);
 
         let n = self.channels;
         let mut summed = [[0.0f32; BLOCK]; MAX_CHANNELS];
@@ -449,6 +566,9 @@ impl Mixer {
                 }
             };
 
+            if let Some(stems) = &mut self.stems {
+                keep(&mut stems.tracks[t], result, frames);
+            }
             match track.def.route {
                 Route::Master => {
                     for (o, r) in out.iter_mut().zip(result) {
@@ -461,6 +581,16 @@ impl Mixer {
                     for (c, r) in result.iter().enumerate() {
                         self.buses.add(b, c, &r[..frames]);
                     }
+                }
+            }
+        }
+        self.buses.end_block(frames);
+        if let Some(stems) = &mut self.stems {
+            for (bus, kept) in stems.buses.iter_mut().enumerate() {
+                let channels = self.bus_channels[bus];
+                kept.resize(channels, Vec::new());
+                for (c, channel) in kept.iter_mut().enumerate() {
+                    channel.extend_from_slice(self.buses.get(bus, c, frames));
                 }
             }
         }
@@ -507,5 +637,13 @@ impl Mixer {
     /// The channel count of each bus.
     pub fn bus_channels(&self) -> &[usize] {
         &self.bus_channels
+    }
+}
+
+/// Append the first `frames` samples of every channel of `block` to `kept`.
+fn keep(kept: &mut Vec<Vec<f32>>, block: &[[f32; BLOCK]], frames: usize) {
+    kept.resize(block.len(), Vec::new());
+    for (channel, samples) in kept.iter_mut().zip(block) {
+        channel.extend_from_slice(&samples[..frames]);
     }
 }

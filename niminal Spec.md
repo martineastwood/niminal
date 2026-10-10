@@ -159,7 +159,7 @@ instr pad(freq: hz, amp: db = -3db) {
 | Keyword | A new note… | Used by |
 | --- | --- | --- |
 | `instr` | Spawns a new voice (poly, the default) | Most instruments |
-| `mono` | Updates the one running voice | Bass, leads |
+| `mono` | Updates the one running voice (today: ends the previous voice and starts its own) | Bass, leads |
 
 Anything that runs continuously, such as an effect or a generator, is a **track** (see Performance), which adds a mixer, meters, sends and its own stem.
 
@@ -279,18 +279,17 @@ A comma list of signals builds a multichannel signal; the compiler warns when it
 Buses replace Csound's globals. They are declared once, summed automatically and cleared every block.
 
 ```
-bus space: stereo
-
 instr pluck(freq: hz) {
   out = osc(saw, freq).lpf(cutoff: 900hz)
   space += out.gain(-14db)          // send a copy
 }
 
-track room {
-  out = space.reverb(room: 0.8, model: plate)
+bus space: stereo {
+  out = it.reverb(room: 0.8, model: plate)   // `it` is what the bus has collected
 }
 ```
 
+- **A bus can carry its own processing,** which makes it a channel: instruments send to it and it processes the sum. A `track` that reads the bus does the same thing and is there when the channel needs more.
 - **`bus += x` sends a copy** and leaves the original routing alone.
 - **`.to(bus)` routes** an output to a bus instead of the master.
 - **A track's `out`** goes to the master unless routed with `.to(bus)`.
@@ -638,6 +637,7 @@ Naming rules: say what it does; keep the accepted term when there is one; one na
 | `chop`, `striate` | `chop(16)`, `interleave_chops(16)` | Cut sample events |
 | `linger` | `repeat_start(25%)` | Loop the start of each cycle |
 | `inv` | `invert` | Swap hits and rests |
+| (none) | `set(bright: 0.9)` | Give a clip lanes in place of its own |
 
 ### Composition tools
 
@@ -697,11 +697,39 @@ gain: env[-18db 6beats -6db 6beats -12db]
 
 ## Performance
 
-The performance layer organizes playing live the way Ableton's session view does: tracks persist, clips come and go on them, scenes launch sets of clips. The same tracks, clips and scenes are what an arrangement sequences, so live work and finished pieces share one structure.
+The performance layer organizes playing live around **parts**. A part is a clip that carries its instrument: you start it, stop it, mute it and change it by its name, and a **scene** starts a set of them together. The same clips and scenes are what an arrangement sequences, so live work and finished pieces share one structure.
+
+### Parts: clips with an instrument
+
+A clip is a bundle of **lanes** sharing one timeline. Give it an `instrument:` and it is a part, which is also a track of the same name that plays it.
+
+```
+clip bass {
+  instrument: pluck(bright: 0.2)
+  notes:  [c2 ~ c2 eb2 ~ g1 bb1 ~]
+  gain:   [0db -6db -3db]
+  bright: [0.2 0.5 0.8]
+}
+
+clip lead {
+  instrument: pluck(bright: 0.8)
+  notes:  [c4 e4 g4 b4].every(2, it.reverse)
+}
+
+scene verse { bass, lead }       // short for { bass: bass, lead: lead }
+```
+
+- **Lane targets:** `notes` (pitch, or samples for drum clips), instrument parameters, track parameters, and universal controls. An unknown lane name is an error. Lanes target only their own part, so clips stay portable; scene and arrangement lanes can target any part.
+- **Step lanes** are read when each note starts and cycle at their own length (polymeter); `.per_note` gives the nth note the nth value instead.
+- **Envelope and signal lanes** run on the clip's timeline, restart on launch and loop with it.
+- **`length:`** makes a clip loop: it plays that long and starts over, restarting its alternations (`<a b>`, `every`). Without it a clip runs freely, so its cycles keep counting.
+- **A bare pattern is a clip.** `theme = [c4 e4 g4 b4]` means `clip { notes: [c4 e4 g4 b4] }` and has no instrument, so it is material to play on a part (`lead: theme` in a scene, or `lead.play(theme)`). A section loaded from a client (`load("score/riff.nms")`) is a clip too.
+- **Lanes are fields.** `riff.set(bright: 0.9)` and `riff.set(gain: [0db -6db])` give the clip those lanes in place of its own; a number is a lane that never changes.
+- **Instruments send from inside their definition** (`space += out.gain(-12db)`), so a clip needs no routing of its own.
 
 ### Tracks
 
-A track has parameters, a default instrument, note effects, audio effects, sends and a mixer. In each stage, `it` is that stage's input: incoming events for `notes`, the summed voices for `out`.
+A part's track is made for it. Write a `track` yourself when you want more than an instrument: effects on the part, sends, or a channel that only processes a bus. A track has parameters, a default instrument, note effects, audio effects, sends and a mixer. In each stage, `it` is that stage's input: incoming events for `notes`, the summed voices for `out`.
 
 ```
 track bass(tone: hz = 2khz) {
@@ -712,57 +740,59 @@ track bass(tone: hz = 2khz) {
 }
 ```
 
-- **A track with an instrument plays plain note patterns,** like a MIDI clip on an instrument track.
-- **Tracks are created on first use** with no effects, so quick ideas need no declaration.
 - **Mixer:** `gain`, `pan`, `mute`, `solo`; `with(quantize: ...)` sets launch quantization.
 - **Re-evaluating a track** carries its effects' state over, without clicks.
-
-### Clips
-
-A clip is a section for one track: a bundle of **lanes** sharing one timeline.
-
-```
-clip riff {
-  length: 2 bars
-  notes:  [c2 ~ eb2 g1 ~ c2 bb1 ~]
-  gain:   [0db -6db -3db -9db]
-  bright: [0.2 0.5 0.8]
-  tone:   env[400hz (2 bars).exp 3khz]       // clip envelope on a track parameter
-}
-```
-
-- **Lane targets:** `notes` (pitch, or samples for drum clips), instrument parameters, track parameters, and universal controls. An unknown lane name is an error. Lanes target only their own track, so clips stay portable; scene and arrangement lanes can target any track.
-- **Step lanes** are read when each note starts and cycle at their own length (polymeter); `.per_note` gives the nth note the nth value instead.
-- **Envelope and signal lanes** run on the clip's timeline, restart on launch and loop with it.
-- **`length:`** defaults to one cycle.
-- **Shorthand:** `[c2 ~ eb2]` means `clip { notes: [c2 ~ eb2] }`, and a section loaded from a client (`load("score/riff.nms")`) is a clip too.
-- **Lanes are fields,** so clips can be changed lane by lane: `riff.set(bright: [0.9])`, `riff.set(gain: riff.gain.reverse)`.
+- **Status:** track parameters and note effects are designed but not built yet; `instrument`, `out` and sends work.
 
 ### Scenes
 
-A scene is a named set of clips, one per track, launched together. An arrangement is scenes (or other sections) over time.
+A scene is a named set of parts, started together. An arrangement is scenes (or other sections) over time.
 
 ```
-scene verse  { bass: riff, drums: groove, keys: ~ }      // ~ stops that track
-scene chorus { bass: riff.transpose(+5st), drums: groove, keys: chords }
+scene verse  { bass, lead }
+scene chorus { bass: bass.transpose(+5st), lead: answer }
+scene outro  { lead: spread }
 
-launch chorus @ next 4 bars
+verse.start
+chorus.start @ next 4 bars
 ```
+
+- **A scene is the whole picture.** Starting one starts the clips it lists and stops every other part, so leaving a part out silences it. `~` still names a part as silent. To add a fill for a bar, put it on a part with `lead.play(fill)`.
+- **A name on its own** (`{ bass, lead }`) means the clip of that name on the part of that name. `part: expr` plays anything else on a part.
+- **`verse.stop`** stops every part in the scene together.
 
 ### Live commands
 
+Commands are written after the thing they act on:
+
 ```
-play bass = riff                 // launch a clip on a track
-play bass = riff.fast(2)         // swap it at the track's next cycle
-mute drums @ next bar
-solo bass
-unsolo
-stop keys
-hush                             // stop all tracks gracefully
+verse.start                      // a scene starts its clips and stops the rest
+bass.start                       // a part starts its clip, from the beginning
+bass.stop
+bass.mute                        // silent, still running; unmute brings it back
+bass.solo                        // unsolo takes it out; a bare unsolo clears every solo
+lead.play(answer)                // put other material on a part
+hush                             // stop all parts gracefully
 panic                            // emergency stop: silence within one block
+reset                            // stop all, and make the next bar line bar 1
 ```
 
-**Bindings are reactive:** re-evaluating `riff = ...` updates every track playing it, each at its own quantize point, without touching the `play` line.
+Anything else after the dot changes what the part is playing:
+
+```
+bass.reverse                     // the clip now plays backwards, from the next boundary
+bass.thin(25%)                   // then thinned
+bass.set(bright: 0.9)            // a lane for every note
+bass.undo                        // takes off the last change
+bass.clear                       // takes off all of them
+```
+
+- **Changes stack in the order made** and are shown in the editor (`riff · reverse → thin(25%)`). One line is one change, so a line with several operations is undone in one `undo`. A part carries at most 16.
+- **Starting the part fresh clears them:** `bass.start`, `bass.play(...)` or starting a scene that has it.
+- **Bindings are reactive:** re-evaluating `riff = ...` updates every part playing it, each at its own quantize point, and keeps the changes made to the part.
+- **`thin` is stable:** the same amount drops the same notes wherever it is written, so undoing another change does not shuffle which notes go.
+- **Timing.** A trailing `@ next 4 bars` says when the change lands. A leading `at +4 bars` says when in the timeline a command happens, counted from when the code lands, so a section reads as a timeline and can be submitted again at any time. `at bar 5` is bar 5 on the session's clock.
+- **Live only.** In a file the stack commands do nothing, so a scratch file can sit next to the song; write the change into the clip to make it part of the piece.
 
 ### Quantized changes
 
@@ -782,6 +812,8 @@ config {
 
 tempo 124bpm @ next bar over 2 bars
 ```
+
+A tempo ramp is a run of ordinary tempo changes, four to a beat, queued when the line is evaluated, and a new tempo keeps every running clip where it is in its bar. A file starts at the tempo it names; the ramp is for live sets.
 
 - **Boundaries:** `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. `@ next 4 bars` aligns to the 4-bar grid; `@ in 4 bars` counts from now.
 - **One evaluation is one transaction:** all its changes land together, at the coarsest boundary among them.
@@ -809,11 +841,15 @@ track bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth)
 ```
 
 - **Units come from the mapping;** hardware controls are lightly smoothed by default (`.smooth(0ms)` turns it off); `midi.learn` binds to the next control moved and rewrites itself to the actual CC.
-- **Keyboards** are live value patterns with fields, with per-note pressure as a signal (MPE):
+- **Keyboards** play a part live. A clip with `keys:` in place of `notes:` is played from a MIDI keyboard; each key plays the instrument's pitch from the note number, with the velocity as `gain`, and holds the note until the key comes up. Other lanes give every note their value. Per-note pressure as a signal (MPE) is designed but not built:
 
 ```
-keys = midi.keys(channel: 1)
-play live = pluck(freq: keys.note, amp: keys.velocity.range(-30db..0db), bright: keys.pressure)
+clip pad {
+  instrument: pluck
+  keys: midi.keys(channel: 1)
+  bright: 0.6
+}
+pad.start
 ```
 
 - **Triggers:** `key("r")` from a connected client, MIDI notes and `osc_in` messages.
@@ -878,11 +914,13 @@ niminal render --replay set.log --out set.wav                   // re-render a l
 
 ### Modules and namespaces
 
-A module is a file. `use rig` loads `rig.nml` from next to the current file, then the project library, then installed packages.
+A module is a file. `use rig` loads `rig.nml` from next to the current file, then a `lib` folder in the project, then installed packages (`$NIMINAL_PACKAGES`, or `~/.niminal/packages`).
 
-- **The core library is always in scope.** `use` imports a module's names unqualified; `as` gives it an alias; `::` qualifies a name only on collision.
-- **Everything top-level is visible** except names starting with `_`. Using a module starts its tracks. A module loads once; circular `use` is an error.
-- **One `config` per project.** Imported files are watched and re-evaluated as a whole on save, transactionally.
+- **The core library is always in scope.** `use rig` imports a module's names under the names it gave them; `use rig as r` imports them only as `r::name`, so two modules can define the same name.
+- **Names starting with `_` are private** to their module: another file cannot write them, and they never clash with its own.
+- **Everything else is visible.** Using a module starts its parts and its `play` lines. A module loads once, under one name, and circular `use` is an error; its definitions come before the file that uses it.
+- **One `config` per project.** Imported files are watched and re-evaluated as a whole on save, transactionally. The evaluation log keeps the joined code, so a log replays without the module files.
+- **Errors in a module** point at the `use` line, naming the module's own file and line.
 
 ```
 use rig
@@ -922,7 +960,7 @@ None of these can be used as a name.
 | Kind | Names |
 | --- | --- |
 | Declarations | `instr`, `mono`, `opcode`, `fn`, `state`, `bus`, `buffer`, `table`, `sample`, `kit`, `ctl`, `track`, `clip`, `scene`, `arrangement`, `config`, `use`, `as`, `with` |
-| Performance and score | `play`, `stop`, `mute`, `unmute`, `solo`, `unsolo`, `launch`, `hush`, `panic`, `freeze`, `unfreeze`, `tempo`, `meter`, `at`, `for`, `over`, `next`, `now`, `cycle` |
+| Performance and score | `start`, `stop`, `play`, `mute`, `unmute`, `solo`, `unsolo`, `undo`, `clear`, `set`, `hush`, `panic`, `reset`, `freeze`, `unfreeze`, `tempo`, `meter`, `at`, `for`, `over`, `next`, `now`, `cycle` |
 | Control flow | `if`, `else`, `for`, `in` |
 | Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }`; a kit's name before brackets (`drums[...]`) |
 | Units | `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
@@ -985,10 +1023,8 @@ instr folded(freq: hz) {
 ### A track with an effects bus
 
 ```
-bus space: stereo
-
-track room {
-  out = space.delay(time: 3/16 beat, feedback: 0.35).reverb(room: 0.8, model: plate).hpf(cutoff: 150hz)
+bus space: stereo {
+  out = it.delay(time: 3/16beat, feedback: 0.35).reverb(room: 0.8, model: plate).hpf(cutoff: 150hz)
 }
 
 track lead {
@@ -997,7 +1033,7 @@ track lead {
   space += out.gain(-12db)
 }
 
-play lead = [c4 eb4 g4 c5].fast(2)
+lead.play([c4 eb4 g4 c5].fast(2))
 ```
 
 ### A live set
@@ -1007,12 +1043,8 @@ use rig
 kit drums = "drums/808"
 tempo 122bpm
 
-track bass(tone: hz = 1khz) {
-  instrument = pluck
-  out = it.lpf(cutoff: tone)
-}
-
-clip riff {
+clip bass {
+  instrument: pluck
   notes: [c2 ~ c2 eb2 ~ g1 bb1 ~]
   gain:  [0db -6db -3db]
   tone:  env[400hz (1 bar).exp 2khz]
@@ -1024,13 +1056,15 @@ groove = grid(drums) {
   hat:   x.x. x.xX x.x. xxx.
 }
 
-play bass = riff
-play perc = groove.every(4, it.thin(30%))
+bass.start
+perc.play(groove.every(4, it.thin(30%)))
 
 // later, one line at a time
-play bass = riff.set(notes: [c2 c2 eb2 g2].fast(2))
-mute perc @ next bar
-unmute perc @ next 4 bars
+bass.set(notes: [c2 c2 eb2 g2].fast(2))
+perc.mute @ next bar
+perc.unmute @ next 4 bars
+bass.reverse
+bass.undo
 tempo 128bpm @ next bar over 8 bars
 ```
 
@@ -1039,9 +1073,9 @@ tempo 128bpm @ next bar over 8 bars
 ```
 theme = load("score/theme.nms")       // written in the line client
 
-at bar 1  play keys = theme
-at bar 5  play keys = theme.transpose(+5st)
-at bar 9  play keys = theme.retrograde.slow(2)
+at bar 1  keys.play(theme)
+at bar 5  keys.play(theme.transpose(+5st))
+at bar 9  keys.play(theme.retrograde.slow(2))
 ```
 
 ### BT-style: a 5.1 passage
@@ -1129,3 +1163,6 @@ The design history and earlier decisions live in the v1 doc. These are new to v2
 - [x] **Python client scope:** decided. Full protocol: loading, launching, streaming, `ctl` values and transport.
 - [x] **Numbered sample variations:** decided. Field syntax (`snare.2`) on kit entries that are folders, plus a `variation` lane on clips.
 - [x] **Browser playground:** decided. After v1, with a WebAssembly engine build in CI from day one.
+- [x] **Parts instead of required tracks:** decided. A clip with an `instrument:` is a part, with a track of its own name made for it. Tracks remain for effects, sends and bus-only channels. A scene starts its clips and stops every other part. The commands are `thing.verb`; the older statement forms (`launch`, `play t = x`, `mute t`) are gone.
+- [x] **Timing syntax:** decided. Keep two prefixes with two jobs: a trailing `@ next 4 bars` says when a change lands, and a leading `at +4 bars` says when in the timeline a command happens. Not a `.bars(4)` chain, because dots after a part already mean "change what it plays".
+- [x] **Live changes:** decided. They stack in the order made on the part, with `undo` and `clear`, and starting the part fresh clears them. Removing one change by name (`undo(reverse)`) and changes addressed by clip name for clips that are not parts are left until dogfooding asks for them.

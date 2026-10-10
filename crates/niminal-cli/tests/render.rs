@@ -1025,3 +1025,130 @@ fn render_command_takes_an_arrangement_and_a_passage() {
     let (missing, _) = render_command(&["nope"]);
     assert!(String::from_utf8_lossy(&missing.stderr).contains("no arrangement named `nope`"));
 }
+
+mod stems {
+    use super::*;
+
+    const SONG: &str = "
+tempo 120bpm
+bus space: mono {
+  out = it.gain(0.5)
+}
+instr tone(freq: hz) { out = osc(sine, freq) * env[1 | 5ms 0]
+  space += out * 0.5 }
+clip bass {
+  instrument: tone
+  notes: [c2 ~]
+}
+clip lead {
+  instrument: tone
+  notes: [~ c4]
+}
+scene verse { bass, lead }
+verse.start
+at +1 bars hush
+";
+
+    fn stems_of(src: &str) -> (Vec<f32>, Vec<niminal_cli::render::Stem>) {
+        let out = render_with(&program(src), &[], &RenderOptions { limiter: false, stems: true, ..Default::default() }).unwrap();
+        let mix = out.channels.into_iter().next().unwrap();
+        (mix, out.stems)
+    }
+
+    fn peak(x: &[f32]) -> f32 {
+        x.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn every_track_and_bus_has_its_own_stem_as_long_as_the_mix() {
+        let (mix, stems) = stems_of(SONG);
+        let mut names: Vec<_> = stems.iter().map(|s| s.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["bass", "lead", "space", "space.fx"], "the track nobody plays directly is left out");
+        assert!(stems.iter().all(|s| s.channels[0].len() == mix.len()), "same length as the mix");
+        let stem = |name: &str| &stems.iter().find(|s| s.name == name).unwrap().channels[0];
+        // bass plays in the first half of the bar, lead in the second
+        let half = SR as usize;
+        assert!(peak(&stem("bass")[..half]) > 0.5 && peak(&stem("bass")[half + 4800..]) < 1e-3);
+        assert!(peak(&stem("lead")[..half]) < 1e-3 && peak(&stem("lead")[half..]) > 0.5);
+        assert!(peak(stem("space")) > 0.3, "the bus carries what was sent to it");
+        assert!(peak(stem("space.fx")) > 0.1, "and its processing has its own stem");
+    }
+
+    #[test]
+    fn the_stems_of_the_tracks_add_up_to_the_mix() {
+        let (mix, stems) = stems_of(SONG);
+        for (i, m) in mix.iter().enumerate() {
+            let sum: f32 = stems.iter().filter(|s| s.name != "space").map(|s| s.channels[0][i]).sum();
+            assert!((m - sum).abs() < 1e-5, "sample {i}: mix {m} vs stems {sum}");
+        }
+    }
+
+    #[test]
+    fn no_stems_unless_asked_for() {
+        let out = render_with(&program(SONG), &[], &RenderOptions { limiter: false, ..Default::default() }).unwrap();
+        assert!(out.stems.is_empty());
+    }
+}
+
+mod prev_feedback {
+    use super::*;
+
+    fn peak(x: &[f32]) -> f32 {
+        x.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    // A click into a bus. The track reads the bus at half level and sends its own output back to the bus a block late.
+    const LOOP: &str = "
+tempo 120bpm
+bus fb
+instr click() { fb += osc(sine, 1000hz) * env[1 0.5ms 0] }
+track again { out = fb.gain(0.5)
+  fb += prev(out) }
+click() for 1beat
+";
+
+    #[test]
+    fn a_late_send_makes_a_feedback_loop_one_block_long() {
+        let out = render_with(&program(LOOP), &[], &RenderOptions { limiter: false, ..Default::default() }).unwrap().channels.remove(0);
+        let block = niminal_engine::BLOCK;
+        let echo = |k: usize| peak(&out[k * block..(k + 1) * block]);
+        assert!(echo(0) > 0.2, "the click, at half level");
+        for k in 1..5 {
+            assert!((echo(k) / echo(k - 1) - 0.5).abs() < 0.05, "echo {k} is half the one before: {} vs {}", echo(k), echo(k - 1));
+        }
+    }
+}
+
+mod prev_in_opcodes {
+    use super::*;
+
+    fn raw(src: &str) -> Vec<f32> {
+        mono(render_with(&program(src), &[], &RenderOptions { limiter: false, ..Default::default() }).unwrap())
+    }
+
+    #[test]
+    fn prev_is_the_value_one_sample_ago_so_feedback_is_a_loop_in_one_line() {
+        // y = x + y/2 from a steady 1 settles at 2
+        let out = raw("opcode loop(x, g: 0..1 = 0.5) {\n y = x + prev(y) * g\n y\n}\ninstr a() { env[1 | 10ms 0].loop(g: 0.5) * 0.25 }\na() for 1beat");
+        let at = (0.2 * SR) as usize;
+        assert!((out[at] - 0.5).abs() < 1e-4, "{}", out[at]);
+        assert!(out[2].abs() < 0.5 && out[2] > 0.25, "it builds up over the first samples: {}", out[2]);
+    }
+
+    #[test]
+    fn prev_of_an_expression_delays_it_a_sample() {
+        // out(n) = x(n-1): a ramp from env, delayed one sample, is one step behind
+        let direct = raw("opcode same(x) { x }\ninstr a() { env[0 100ms 1 | 10ms 0].same() * 0.5 }\na() for 1beat");
+        let delayed = raw("opcode late(x) { prev(x) }\ninstr a() { env[0 100ms 1 | 10ms 0].late() * 0.5 }\na() for 1beat");
+        for i in 100..400 {
+            assert!((delayed[i] - direct[i - 1]).abs() < 1e-6, "sample {i}");
+        }
+    }
+
+    #[test]
+    fn prev_of_a_name_that_is_never_defined_is_an_error() {
+        let errors = compile("opcode bad(x) {\n x + prev(nothing)\n}").err().unwrap();
+        assert!(errors[0].message.contains("never defined"), "{}", errors[0].message);
+    }
+}

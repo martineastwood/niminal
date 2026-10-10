@@ -22,6 +22,15 @@ pub struct Clip {
     /// `notes` is the pitch lane; other lanes set parameters or universal
     /// controls note by note.
     pub lanes: Vec<(String, Pattern<Value>)>,
+    /// `keys: midi.keys(channel: 1)`: played from a keyboard instead of by `notes`.
+    pub keys: Option<Keys>,
+}
+
+/// Where a clip's notes come from when it is played live.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Keys {
+    /// The MIDI channel, from 1; any channel if none.
+    pub channel: Option<u8>,
 }
 
 impl Clip {

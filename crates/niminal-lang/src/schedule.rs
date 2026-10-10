@@ -240,6 +240,30 @@ impl Schedule {
         }
     }
 
+    /// The note a key press plays on `track` at `at` seconds, if a clip played from a keyboard is
+    /// playing there, on this MIDI channel, and the track is audible. `note` is the MIDI note
+    /// number and `gain` how loud, in db. The clip's other lanes give the note their value at the
+    /// start of a cycle.
+    pub fn key_event(&self, track: usize, at: f64, channel: u8, note: i32, gain: f64) -> Option<Event> {
+        let segment = self.segments.iter().rev().find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e))?;
+        segment.clip.keys.filter(|k| k.channel.is_none_or(|c| c == channel))?;
+        if !self.audible(track, at) {
+            return None;
+        }
+        let mut args = std::collections::BTreeMap::new();
+        for (lane, pattern) in &segment.clip.lanes {
+            if matches!(lane.as_str(), "dur" | "nudge") {
+                continue;
+            }
+            if let Some(hap) = pattern.query(CycleSpan::new(Rational::ZERO, Rational::ZERO)).into_iter().next() {
+                args.insert(lane.clone(), hap.value);
+            }
+        }
+        args.insert(crate::perform::PITCH_PARAM.to_string(), Value::Note(note));
+        args.insert(crate::lower::GAIN_PARAM.to_string(), Value::Db(gain));
+        Some(Event { target: self.track_names[track].clone(), at: Time::Seconds(at), dur: Time::Seconds(0.0), args })
+    }
+
     /// Every note that starts in `from..to` seconds, in time order. A pattern
     /// that asks for more work than a clip is allowed is an error.
     pub fn events(&self, from: f64, to: f64) -> Result<Vec<Event>, ScheduleError> {
@@ -502,6 +526,17 @@ track bass { instrument = pluck }
         let tracks = |from, to| notes(&s, from, to).into_iter().map(|e| e.1).collect::<Vec<_>>();
         assert_eq!(tracks(0.0, 2.0), ["lead", "bass"]);
         assert_eq!(tracks(4.0, 6.0), ["lead"], "bass was not in scene b");
+    }
+
+    #[test]
+    fn set_gives_a_clip_or_a_pattern_lanes_in_place_of_its_own() {
+        let bright = |s: &Schedule| -> Vec<Value> { s.events(0.0, 4.0).unwrap().iter().map(|e| e.args["bright"]).collect() };
+        let s = schedule("clip c { notes: [c4 e4]\nbright: [0.2] }\nlead.play(c.set(bright: 0.9))");
+        assert_eq!(bright(&s)[..2], [Value::Num(0.9), Value::Num(0.9)], "replaced");
+        let s = schedule("lead.play([c4 e4].set(bright: [0.1 0.7]))");
+        assert_eq!(bright(&s)[..2], [Value::Num(0.1), Value::Num(0.7)], "added to a bare pattern");
+        let s = schedule("lead.play([c4].reverse.set(gain: -6db))");
+        assert_eq!(s.events(0.0, 1.0).unwrap()[0].args["gain"], Value::Db(-6.0));
     }
 
     #[test]

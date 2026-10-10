@@ -33,26 +33,31 @@ instr pad(freq: hz, amp: db = -3db) {
 | Keyword | A new note… | Used by |
 | --- | --- | --- |
 | `instr` | Spawns a new voice (poly, default) | Most instruments |
-| `mono` | Updates the one running voice | Bass, leads |
+| `mono` | Ends the voice before it and starts its own (one voice at a time, per part) | Bass, leads |
 
 Continuous processors and generators are **tracks** (see [Performance](/reference/language/performance/)), not instruments.
 
 ### `with(...)` options
 
-| Option | Effect |
-| --- | --- |
-| `choke: group` | New note ends other voices in the group |
-| `same_note: release` | New note releases the previous voice at the same pitch |
-| `max: n, steal: oldest` or `quietest` | Caps voices |
-| `legato: true` (mono) | Overlapping notes don’t retrigger envelopes |
-| `priority: last`, `lowest`, or `highest` (mono) | Which held note sounds |
-| `pitch: name` | Which parameter is pitch (default `freq`) |
-| `compensate: false` | Opt out of latency compensation |
-| `quantize: 1 beat` | When redefinitions land |
+Options follow the parameters: `instr pad(freq: hz) with(max: 8, same_note: release) { … }`.
+
+| Option | Effect | Built |
+| --- | --- | --- |
+| `choke: group` | New note ends other voices in the group, whichever instrument they are of | yes |
+| `same_note: release` | New note releases the previous voice at the same pitch | yes |
+| `max: n`, `steal: oldest` | Caps the voices of the instrument sounding on a part; the oldest end, with a short fade | yes |
+| `steal: quietest` | Ends the quietest instead | no |
+| `legato: true` (mono) | Overlapping notes don’t retrigger envelopes | no |
+| `priority: last`, `lowest`, or `highest` (mono) | Which held note sounds | no |
+| `pitch: name` | Which parameter is pitch (default `freq`) | no |
+| `compensate: false` | Opt out of latency compensation | no |
+| `quantize: 1 beat` | When redefinitions land | no |
+
+An option that isn't built is rejected with a message, not ignored. `mono` is `max: 1`: the previous note fades out over a few milliseconds as the new one starts. Voices are counted per part, so two parts playing the same `mono` instrument each keep their own.
 
 **Lifetimes:** a voice ends naturally (released, envelopes done) or forcibly (choked, stolen, replaced), always with a short global fade.
 
-**Parameters are signals.** In `mono`, a new note updates parameters on the running voice — glide is ordinary processing: `osc(saw, freq.glide(40ms))`. Same mechanism for MPE and aftertouch.
+**Parameters are signals.** The design is that in `mono` a new note updates parameters on the running voice, so glide is ordinary processing: `osc(saw, freq.glide(40ms))`, and the same mechanism carries MPE and aftertouch. That is not built yet: today `mono` replaces the voice instead.
 
 **Pitch:** parameter `freq` is pitch by convention — used by `same_note`, mono priority, `keys.note`, and unqualified `transpose`.
 

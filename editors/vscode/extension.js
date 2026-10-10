@@ -3,6 +3,7 @@ const { LanguageClient } = require("vscode-languageclient/node");
 const { Client } = require("./client");
 const { blockAround } = require("./blocks");
 const { trackDescription, commands: panelCommands } = require("./panel");
+const { rewriteLearned } = require("./learn");
 
 let client = null;
 let languageServer = null;
@@ -41,6 +42,20 @@ function showStatus() {
   status.text = `$(unmute) ${transport.bar}.${Math.floor(transport.beat)} · ${Math.round(transport.bpm)} bpm · ${transport.voices} voices${pending}`;
 }
 
+/** The daemon heard a control change for `midi.learn`: write it into the code that asked. */
+async function applyLearned(control, source) {
+  channel.appendLine(`learned: ctl ${control} = ${source}`);
+  for (const document of vscode.workspace.textDocuments) {
+    if (document.languageId !== "niminal") continue;
+    const text = document.getText();
+    const next = rewriteLearned(text, control, source);
+    if (next === null) continue;
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(document.uri, new vscode.Range(document.positionAt(0), document.positionAt(text.length)), next);
+    await vscode.workspace.applyEdit(edit);
+  }
+}
+
 async function connect() {
   if (client?.connected) return client;
   const { port, token } = settings();
@@ -54,6 +69,8 @@ async function connect() {
       } else if (method === "landed") {
         refreshPerformance();
         channel.appendLine(`landed at bar ${params.position.bar} beat ${params.position.beat.toFixed(2)}`);
+      } else if (method === "learned") {
+        applyLearned(params.control, params.source);
       } else if (method === "notice") {
         channel.appendLine(`notice: ${params.message ?? JSON.stringify(params)}`);
       }
@@ -67,7 +84,7 @@ async function connect() {
     },
   });
   await client.connect();
-  await client.call("subscribe", { topics: ["transport", "landed", "notices"] });
+  await client.call("subscribe", { topics: ["transport", "landed", "notices", "learned"] });
   showStatus();
   refreshPerformance();
   return client;

@@ -25,11 +25,13 @@ pub struct RenderOptions {
     pub until: Option<f64>,
     /// Play this arrangement instead of the file's own `play` and `launch` commands.
     pub arrangement: Option<String>,
+    /// Also keep what each track put out and what each bus carried.
+    pub stems: bool,
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        RenderOptions { limiter: true, until: None, arrangement: None }
+        RenderOptions { limiter: true, until: None, arrangement: None, stems: false }
     }
 }
 
@@ -38,6 +40,14 @@ pub struct RenderOutput {
     pub channels: Vec<Vec<f32>>,
     /// Voices that produced NaN or infinity and were silenced.
     pub silenced_voices: usize,
+    /// With `RenderOptions::stems`: each track and bus, before the master stage, as long as `channels`.
+    pub stems: Vec<Stem>,
+}
+
+/// One track's or bus's sound on its own.
+pub struct Stem {
+    pub name: String,
+    pub channels: Vec<Vec<f32>>,
 }
 
 impl RenderOutput {
@@ -110,6 +120,9 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     notes.sort_by_key(|n| n.start);
 
     let mut mixer = program.mixer(SAMPLE_RATE as f32);
+    if options.stems {
+        mixer.capture_stems();
+    }
     let n_channels = mixer.channels();
     let mut out: Vec<Vec<f32>> = vec![Vec::new(); n_channels];
     // Notes that have started but not yet been released, in no particular order.
@@ -130,7 +143,7 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
         while next < notes.len() && notes[next].start == pos {
             let note = &notes[next];
             let graph = program.instruments[note.plan.instrument].graph.clone();
-            let id = mixer.note_on(note.plan.track, graph, &note.plan.params, note.plan.choke);
+            let id = mixer.note_on_with(note.plan.track, graph, &note.plan.params, note.plan.choke, note.plan.rule);
             held.push((note.off, id));
             next += 1;
         }
@@ -145,7 +158,8 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
             match notes.get(next) {
                 None => {
                     ring_out(&mut mixer, &mut out);
-                    return Ok(finish(out, silenced_voices + mixer.take_silenced(), options));
+                    let stems = collect_stems(program, &mut mixer, out[0].len());
+                    return Ok(finish(out, silenced_voices + mixer.take_silenced(), stems, options));
                 }
                 Some(n) => {
                     // Nothing sounding: skip the silence, applying any panics on the way
@@ -155,6 +169,7 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
                         next_panic += 1;
                     }
                     out.iter_mut().for_each(|c| c.resize(n.start, 0.0));
+                    mixer.pad_stems(n.start);
                     pos = n.start;
                     continue;
                 }
@@ -210,7 +225,7 @@ fn ring_out(mixer: &mut Mixer, out: &mut [Vec<f32>]) {
 
 /// Apply the master stage, removing the limiter's lookahead delay so notes
 /// still land exactly where they were scheduled.
-fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, options: &RenderOptions) -> RenderOutput {
+fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, stems: Vec<Stem>, options: &RenderOptions) -> RenderOutput {
     if options.limiter {
         let mut master = Master::with_channels(SAMPLE_RATE as f32, CEILING, channels.len());
         let latency = master.latency();
@@ -223,7 +238,27 @@ fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, options: &RenderO
             c.drain(..latency);
         }
     }
-    RenderOutput { channels, silenced_voices }
+    RenderOutput { channels, silenced_voices, stems }
+}
+
+/// The captured stems, named for their track or bus and cut to `len` samples. The track that plays
+/// bare instruments is left out if it was never heard.
+fn collect_stems(program: &Program, mixer: &mut Mixer, len: usize) -> Vec<Stem> {
+    let Some(captured) = mixer.take_stems() else { return Vec::new() };
+    let named = captured.tracks.into_iter().enumerate().map(|(i, c)| (program.tracks[i].name.clone(), c))
+        .chain(captured.buses.into_iter().enumerate().map(|(i, c)| (program.buses[i].clone(), c)));
+    let mut stems = Vec::new();
+    for (i, (name, mut channels)) in named.enumerate() {
+        channels.iter_mut().for_each(|c| c.resize(len, 0.0));
+        let silent = channels.iter().flatten().all(|s| *s == 0.0);
+        // the implicit track has no name; say what it is
+        match (i, name.is_empty()) {
+            (0, true) if silent => continue,
+            (0, true) => stems.push(Stem { name: "direct".into(), channels }),
+            _ => stems.push(Stem { name, channels }),
+        }
+    }
+    stems
 }
 
 /// Write the channels as an interleaved 32-bit float WAV.

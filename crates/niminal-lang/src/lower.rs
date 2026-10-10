@@ -211,6 +211,8 @@ pub(crate) struct Lower<'a> {
     /// The value of `out` so far.
     out: Option<Sig>,
     sends: usize,
+    /// Set while the value of a send to a bus is lowered: `prev(x)` is `x` there, and marks the send late.
+    in_send: Option<bool>,
     /// In a track: what feeds each external input, and the bundles made so far.
     chain_inputs: Vec<ChainInput>,
     input_sigs: HashMap<String, Sig>,
@@ -348,6 +350,8 @@ pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, n
         params,
         members: Vec::new(),
         chokes: Vec::new(),
+        max_voices: None,
+        release_same_note: false,
     })
 }
 
@@ -420,6 +424,8 @@ pub(crate) fn compile_sampler(
         params,
         members: if is_kit { members.iter().map(|m| m.name.clone()).collect() } else { Vec::new() },
         chokes: Vec::new(),
+        max_voices: None,
+        release_same_note: false,
     })
 }
 
@@ -513,6 +519,7 @@ impl<'a> Lower<'a> {
             scope: HashMap::new(),
             out: None,
             sends: 0,
+            in_send: None,
             chain_inputs: Vec::new(),
             input_sigs: HashMap::new(),
             route: Route::Master,
@@ -588,11 +595,18 @@ impl<'a> Lower<'a> {
             return Ok(());
         }
         if let Some(bus) = self.names.bus(&name.name) {
-            let sig = self.expr(value)?;
+            self.in_send = Some(false);
+            let sig = self.expr(value);
+            let delayed = self.in_send.take() == Some(true);
+            let sig = sig?;
             self.require_signal(&name.name, &sig, value.span)?;
             let sig = self.convert(&sig, self.names.bus_layouts[bus], value.span)?;
             for (channel, src) in sig.srcs.iter().enumerate() {
-                self.g.send_channel(bus, channel, *src);
+                if delayed {
+                    self.g.send_channel_delayed(bus, channel, *src);
+                } else {
+                    self.g.send_channel(bus, channel, *src);
+                }
             }
             self.sends += 1;
             return Ok(());
@@ -968,6 +982,18 @@ impl<'a> Lower<'a> {
     // ---- calls ----------------------------------------------------------
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
+        if name.name == "prev" {
+            // `echo += prev(out).gain(-20db)`: the send arrives a block late, which breaks a loop through buses
+            let [arg] = args else {
+                return Err(Diagnostic::new("`prev` takes one value", name.span));
+            };
+            let Some(late) = &mut self.in_send else {
+                return Err(Diagnostic::new("`prev` is only available when sending to a bus", name.span)
+                    .with_help("for example `echo += prev(out).gain(-20db)`; inside an opcode, `prev(x)` is the value one sample ago"));
+            };
+            *late = true;
+            return self.expr(&arg.value);
+        }
         if name.name == "to" {
             return Err(Diagnostic::new("`to` can only end the line that sets a track's `out`", name.span)
                 .with_help("for example `out = it.lpf(cutoff: 1khz).to(space)`"));

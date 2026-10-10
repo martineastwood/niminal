@@ -31,6 +31,10 @@ struct Kb {
     /// State variable name to (slot, unit).
     states: HashMap<String, (usize, Unit)>,
     state_init: Vec<f64>,
+    /// `prev(y)` written before `y` is: the state it reads, and where, so `y = ...` can store into it.
+    forward: HashMap<String, (usize, Span)>,
+    /// `prev(expr)`: the state to store the value in at the end of the sample.
+    deferred: Vec<(usize, usize)>,
     tempo: Tempo,
 }
 
@@ -82,6 +86,8 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
         scope: HashMap::new(),
         states: HashMap::new(),
         state_init: Vec::new(),
+        forward: HashMap::new(),
+        deferred: Vec::new(),
         tempo,
     };
 
@@ -116,6 +122,12 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
             .with_help(format!("add a last line such as `{}`", name.name)));
     };
     let out = kb.expr(out_expr)?;
+    if let Some((name, (_, span))) = kb.forward.iter().next() {
+        return Err(Diagnostic::new(format!("`prev({name})` reads `{name}`, which is never defined"), *span));
+    }
+    for (slot, src) in std::mem::take(&mut kb.deferred) {
+        kb.code.push(Instr::StoreState { slot, src });
+    }
     if out.unit != Unit::Num {
         return Err(Diagnostic::new(
             format!("an opcode outputs a plain signal, but this is {}", out.unit.describe()),
@@ -176,6 +188,15 @@ impl Kb {
 
     fn bind(&mut self, name: &Ident, value: &Expr) -> Res<()> {
         let v = self.expr(value)?;
+        if let Some((slot, _)) = self.forward.remove(&name.name) {
+            if v.unit != Unit::Num {
+                return Err(Diagnostic::new(
+                    format!("`prev({0})` is a plain number, but `{0}` is {1}", name.name, v.unit.describe()),
+                    value.span,
+                ));
+            }
+            self.code.push(Instr::StoreState { slot, src: v.reg });
+        }
         if let Some(&(slot, unit)) = self.states.get(&name.name) {
             if v.unit != unit {
                 return Err(Diagnostic::new(
@@ -279,7 +300,41 @@ impl Kb {
         Ok(Value { reg: self.emit(|dst| Instr::Bin { dst, op, a: l.reg, b: r.reg }), unit })
     }
 
+    /// `prev(x)`: what `x` was one sample ago. `y = x + prev(y) * 0.5` is a feedback loop.
+    fn prev(&mut self, name: &Ident, args: &[Arg]) -> Res<Value> {
+        let [arg] = args else {
+            return Err(Diagnostic::new("`prev` takes one value", name.span));
+        };
+        if let Some(n) = &arg.name {
+            return Err(Diagnostic::new("`prev` takes its value without a name", n.span));
+        }
+        // a second `prev(y)` of a name still to come reads the same state
+        if let ExprKind::Name(n) = &arg.value.kind
+            && let Some(&(slot, _)) = self.forward.get(n)
+        {
+            return Ok(Value { reg: self.emit(|dst| Instr::LoadState { dst, slot }), unit: Unit::Num });
+        }
+        let slot = self.state_init.len();
+        self.state_init.push(0.0);
+        let reg = self.emit(|dst| Instr::LoadState { dst, slot });
+        if let ExprKind::Name(n) = &arg.value.kind
+            && !self.scope.contains_key(n)
+            && n != "pi"
+            && n != "sample_rate"
+        {
+            // a name defined further down: this is feedback
+            self.forward.insert(n.clone(), (slot, arg.value.span));
+            return Ok(Value { reg, unit: Unit::Num });
+        }
+        let v = self.expr(&arg.value)?;
+        self.deferred.push((slot, v.reg));
+        Ok(Value { reg, unit: v.unit })
+    }
+
     fn call(&mut self, name: &Ident, args: &[Arg]) -> Res<Value> {
+        if name.name == "prev" {
+            return self.prev(name, args);
+        }
         let Some(f) = math_fn(&name.name) else {
             let math = ["sin", "cos", "tanh", "exp", "abs"];
             let help = format!("opcodes are built from arithmetic and these functions: {}", math.join(", "));

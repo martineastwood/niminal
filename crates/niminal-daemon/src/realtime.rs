@@ -78,7 +78,9 @@ struct Window {
 struct Command { at: u64, kind: Kind }
 
 enum Kind {
-    Note { track: Option<String>, program: Arc<Program>, off: u64, voice: Option<Voice> },
+    Note { track: Option<String>, program: Arc<Program>, off: u64, key: u32, voice: Option<Voice> },
+    /// Let go of the notes a key is holding open.
+    Release { key: u32 },
     Swap { mixer: Box<Mixer>, program: Arc<Program>, controls: Vec<ControlState>, transfers: Vec<Transfer> },
     Reset { mixer: Box<Mixer>, program: Arc<Program>, controls: Vec<ControlState>, epoch: u64 },
 }
@@ -129,7 +131,7 @@ pub struct RealtimeRenderer {
     clock: u64,
     current: Option<Box<Window>>,
     cursor: usize,
-    held: Vec<(u64, VoiceId)>,
+    held: Vec<(u64, VoiceId, u32)>,
     finished: Vec<Voice>,
     config: RealtimeConfig,
 }
@@ -274,7 +276,7 @@ impl Session {
             }
             planner.deferred = future;
             window.commands.sort_by_key(|c| (c.at, match c.kind {
-                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2,
+                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } => 3,
             }));
             match planner.ready.push(Box::new(window)) {
                 Ok(()) => { planner.prepared_until = to; planner.refresh = false; },
@@ -317,8 +319,8 @@ impl Session {
         let mut window = Window { end: to, revision, commands: Vec::new(), notices: Vec::new(), stopped: std::mem::take(stopped), dropped: 0 };
         let mut program = self.program.clone();
         let mut history = self.history.clone();
-        let mut explicit: Vec<(u64, u64, Event, u64)> = self.upcoming.iter()
-            .filter(|n| !n.scheduled).map(|n| (n.start.max(self.clock), n.dur.saturating_sub(self.clock.saturating_sub(n.start)), n.event.clone(), self.clock)).collect();
+        let mut explicit: Vec<Explicit> = self.upcoming.iter()
+            .filter(|n| !n.scheduled).map(|n| (n.start.max(self.clock), n.dur.saturating_sub(self.clock.saturating_sub(n.start)), n.event.clone(), self.clock, n.key)).collect();
         let mut position = from;
         if reset { window.commands.push(self.reset_command(from, &program, config)); }
         else if refresh { window.commands.push(self.swap_command(from, &program, config)); }
@@ -340,6 +342,8 @@ impl Session {
                     }
                     window.commands.push(swap);
                 }
+                let landing = self.seconds(pending.lands_at);
+                super::retime(&mut history, landing, program.tempo, next.tempo);
                 program = next.clone();
             }
             for action in pending.actions.iter().chain(&pending.replays) {
@@ -349,7 +353,7 @@ impl Session {
         if position < to { self.plan_notes(&program, &history, &explicit, position..to, config, &mut window); }
         // Stable sorting keeps a graph swap/reset before notes at the same sample.
         window.commands.sort_by_key(|c| (c.at, match c.kind {
-                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2,
+                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } => 3,
             }));
         for notice in window.notices.drain(..) { self.notify(notice); }
         *stopped = std::mem::take(&mut window.stopped);
@@ -384,7 +388,7 @@ impl Session {
         Command { at, kind: Kind::Reset { mixer: Box::new(mixer), program: program.clone(), controls: self.control_states(program), epoch: self.panic_epoch.load(Ordering::Acquire) } }
     }
 
-    fn plan_notes(&self, program: &Arc<Program>, history: &[HistoryEntry], explicit: &[(u64, u64, Event, u64)],
+    fn plan_notes(&self, program: &Arc<Program>, history: &[HistoryEntry], explicit: &[Explicit],
                   range: std::ops::Range<u64>, config: RealtimeConfig, window: &mut Window) {
         let (from, to) = (range.start, range.end);
         let schedule = schedule_for(program, history);
@@ -404,17 +408,24 @@ impl Session {
         for event in found.events {
             let at = self.samples(event.at.to_seconds(program.tempo));
             let dur = self.samples(event.dur.to_seconds(program.tempo));
-            self.prepare_note(program, &event, at.max(from), dur, config, window);
+            self.prepare_note(program, &event, Hold { at: at.max(from), dur, key: None }, config, window);
         }
-        for (at, dur, event, created) in explicit {
+        for (at, dur, event, created, key) in explicit {
             let panic = schedule.panics().iter().map(|&at| self.samples(at)).find(|&at| at >= *created);
             if *at >= from && *at < to && panic.is_none_or(|p| *at < p) {
-                self.prepare_note(program, event, *at, *dur, config, window);
+                self.prepare_note(program, event, Hold { at: *at, dur: *dur, key: *key }, config, window);
+            }
+        }
+        // keys that came up: each key is its own note, so a release that is repeated in a later window does no harm
+        for &(key, at) in &self.key_offs {
+            if at < to {
+                window.commands.push(Command { at: at.max(from), kind: Kind::Release { key } });
             }
         }
     }
 
-    fn prepare_note(&self, program: &Arc<Program>, event: &Event, at: u64, dur: u64, config: RealtimeConfig, window: &mut Window) {
+    fn prepare_note(&self, program: &Arc<Program>, event: &Event, when: Hold, config: RealtimeConfig, window: &mut Window) {
+        let Hold { at, dur, key } = when;
         if window.commands.len() >= config.max_voices * 4 {
             window.dropped += 1;
             let notice = "prepared event window reached capacity; extra notes were dropped";
@@ -429,19 +440,31 @@ impl Session {
             let mut voice = Voice::new(program.instruments[plan.instrument].graph.clone(), self.sample_rate);
             for &(i, value) in &plan.params { voice.set_param(i, value); }
             voice.set_group(plan.choke);
+            voice.set_rule(plan.rule);
             window.commands.push(Command { at, kind: Kind::Note { track: (plan.track != 0).then(|| program.tracks[plan.track].name.clone()),
-                program: program.clone(), off: at.saturating_add(dur), voice: Some(voice) } });
+                program: program.clone(), off: if key.is_some() { u64::MAX } else { at.saturating_add(dur) },
+                key: key.unwrap_or(super::NO_KEY), voice: Some(voice) } });
         }
     }
 }
 
-fn preview_action(action: &Compiled, at: u64, sample_rate: f32, history: &mut Vec<HistoryEntry>, explicit: &mut Vec<(u64, u64, Event, u64)>) {
+/// When a note starts, how long it lasts, and the key holding it open if there is one.
+struct Hold {
+    at: u64,
+    dur: u64,
+    key: Option<u32>,
+}
+
+/// A note the session was handed directly: when, how long, what, the clock it was handed at, and the key holding it open.
+type Explicit = (u64, u64, Event, u64, Option<u32>);
+
+fn preview_action(action: &Compiled, at: u64, sample_rate: f32, history: &mut Vec<HistoryEntry>, explicit: &mut Vec<Explicit>) {
     let sample = |sec: f64| (sec * f64::from(sample_rate)).round().max(0.0) as u64;
     let origin = super::origin_of(history);
     for event in &action.program.notes {
         let offset = event.at.to_seconds(action.program.tempo);
         let start = if action.statement.has_at { sample(origin + offset).max(at) } else { at + sample(offset) };
-        explicit.push((start, sample(event.dur.to_seconds(action.program.tempo)), event.clone(), at));
+        explicit.push((start, sample(event.dur.to_seconds(action.program.tempo)), event.clone(), at, None));
     }
     for scheduled in &action.program.performance {
         let after = scheduled.at.to_seconds(action.program.tempo);
@@ -546,7 +569,10 @@ impl RealtimeRenderer {
                     if command.at > self.clock { break; }
                     if command.at < self.clock { self.state.late_events.fetch_add(1, Ordering::Relaxed); }
                     match &mut command.kind {
-                        Kind::Note { track, program, off, voice } => {
+                        Kind::Release { key } => {
+                            for held in self.held.iter_mut().filter(|h| h.2 == *key) { held.0 = self.clock; }
+                        }
+                        Kind::Note { track, program, off, key, voice } => {
                             let target = track.as_ref().map_or(Some(0), |name| self.program.track_index(name));
                             if let Some(target) = target
                                 && *off > self.clock && self.held.len() < self.held.capacity()
@@ -559,7 +585,7 @@ impl RealtimeRenderer {
                                 });
                                 controls::sync_voice(&self.controls, &mut prepared, self.clock);
                                 match self.mixer.note_prepared(target, prepared) {
-                                    Ok(id) => self.held.push((*off, id)),
+                                    Ok(id) => self.held.push((*off, id, *key)),
                                     Err(rejected) => { *voice = Some(rejected); self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
                                 }
                             } else { self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
@@ -610,7 +636,7 @@ impl RealtimeRenderer {
                     self.mixer.set_control(&control.key, control.start, control.target, control.frames, 0);
                 } else { self.state.control_drops.fetch_add(1, Ordering::Relaxed); }
             }
-            self.held.retain(|&(off, id)| { if off <= self.clock { self.mixer.release(id); false } else { true } });
+            self.held.retain(|&(off, id, _)| { if off <= self.clock { self.mixer.release(id); false } else { true } });
             let mut n = (end - self.clock).min(BLOCK as u64);
             if ready && let Some(window) = &self.current {
                 if let Some(command) = window.commands.get(self.cursor) { n = n.min(command.at.saturating_sub(self.clock).max(1)); }
@@ -621,7 +647,7 @@ impl RealtimeRenderer {
             {
                 n = n.min(change.at - self.clock);
             }
-            for &(off, _) in &self.held { n = n.min(off.saturating_sub(self.clock).max(1)); }
+            for &(off, _, _) in &self.held { n = n.min(off.saturating_sub(self.clock).max(1)); }
             let n = n.max(1) as usize;
             if !ready { self.state.starved_frames.fetch_add(n, Ordering::Relaxed); }
             self.mixer.process_retained(&mut block[..self.channels], n, &mut self.finished);

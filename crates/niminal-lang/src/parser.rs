@@ -2,6 +2,9 @@ use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
 use crate::lexer::{Tok, Token, lex};
 
+/// A name, its parameters, its `with(...)` options, its body, and where it all is.
+type Definition = (Ident, Vec<ParamDef>, Vec<Arg>, Vec<Stmt>, Span);
+
 pub fn parse(src: &str) -> Result<Vec<Item>, Diagnostic> {
     parse_spanned(src).map(|items| items.into_iter().map(|(item, _)| item).collect())
 }
@@ -148,18 +151,23 @@ impl Parser {
         let source = if self.is_keyword("midi") {
             self.bump();
             self.expect(&Tok::Dot)?;
-            let method = self.ident("`cc`")?;
-            if method.name != "cc" {
-                return Err(Diagnostic::new(format!("`midi.{}` isn't supported; use `midi.cc(number)`", method.name), method.span));
+            let method = self.ident("`cc` or `learn`")?;
+            match method.name.as_str() {
+                "learn" => InputSource::MidiLearn,
+                "cc" => {
+                    self.expect(&Tok::LParen)?;
+                    let cc = self.small_number("a CC number from 0 to 127", 127)?;
+                    let channel = if self.eat(&Tok::Comma) { Some(self.small_number("a channel from 1 to 16", 16)?) } else { None };
+                    if channel == Some(0) {
+                        return Err(Diagnostic::new("MIDI channels count from 1", start.to(self.prev_span())));
+                    }
+                    self.expect(&Tok::RParen)?;
+                    InputSource::MidiCc { cc, channel }
+                }
+                other => {
+                    return Err(Diagnostic::new(format!("`midi.{other}` isn't supported; use `midi.cc(number)` or `midi.learn`"), method.span));
+                }
             }
-            self.expect(&Tok::LParen)?;
-            let cc = self.small_number("a CC number from 0 to 127", 127)?;
-            let channel = if self.eat(&Tok::Comma) { Some(self.small_number("a channel from 1 to 16", 16)?) } else { None };
-            if channel == Some(0) {
-                return Err(Diagnostic::new("MIDI channels count from 1", start.to(self.prev_span())));
-            }
-            self.expect(&Tok::RParen)?;
-            InputSource::MidiCc { cc, channel }
         } else {
             self.bump();
             self.expect(&Tok::LParen)?;
@@ -223,9 +231,10 @@ impl Parser {
                 return self.input_control(name);
             }
             Ok(Item::Control { name, value: self.expr()?, input: None })
-        } else if self.is_keyword("instr") {
-            let (name, params, body, span) = self.definition()?;
-            Ok(Item::Instr(InstrDef { name, params, body, span }))
+        } else if self.is_keyword("instr") || self.is_keyword("mono") {
+            let mono = self.is_keyword("mono");
+            let (name, params, options, body, span) = self.definition()?;
+            Ok(Item::Instr(InstrDef { name, params, body, span, mono, options }))
         } else if self.is_keyword("bus") {
             self.bump();
             let name = self.ident("a bus name")?;
@@ -287,7 +296,10 @@ impl Parser {
             let (body, end) = self.block()?;
             Ok(Item::Track(TrackDecl { name, body, span: start.to(end) }))
         } else if self.is_keyword("opcode") {
-            let (name, params, body, span) = self.definition()?;
+            let (name, params, options, body, span) = self.definition()?;
+            if let Some(option) = options.first() {
+                return Err(Diagnostic::new("an opcode has no options", option.value.span));
+            }
             Ok(Item::Opcode(OpcodeDef { name, params, body, span }))
         } else if self.is_keyword("tempo") {
             let start = self.bump().span;
@@ -381,10 +393,10 @@ impl Parser {
     }
 
     /// `instr|opcode name(params) { body }`
-    fn definition(&mut self) -> Res<(Ident, Vec<ParamDef>, Vec<Stmt>, Span)> {
+    fn definition(&mut self) -> Res<Definition> {
         let keyword = self.bump();
         let start = keyword.span;
-        let what = if keyword.tok == Tok::Ident("instr".into()) { "an instrument name" } else { "an opcode name" };
+        let what = if matches!(&keyword.tok, Tok::Ident(k) if k == "instr" || k == "mono") { "an instrument name" } else { "an opcode name" };
         let name = self.ident(what)?;
         self.expect(&Tok::LParen)?;
         let mut params = Vec::new();
@@ -398,8 +410,14 @@ impl Parser {
             }
         }
         self.expect(&Tok::RParen)?;
+        let options = if self.is_keyword("with") {
+            self.bump();
+            self.args()?
+        } else {
+            Vec::new()
+        };
         let (body, end) = self.block()?;
-        Ok((name, params, body, start.to(end)))
+        Ok((name, params, options, body, start.to(end)))
     }
 
     /// `{ statements }`, returning the statements and the span of the braces.

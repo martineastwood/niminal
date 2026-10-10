@@ -4,7 +4,7 @@ use niminal_lang::{OpInfo, Symbol, SymbolKind, builtin_ops, pattern_ops, waves};
 use serde_json::{Value, json};
 
 const KEYWORDS: &[&str] = &[
-    "instr", "opcode", "bus", "sample", "kit", "ctl", "track", "clip", "scene", "arrangement", "config", "tempo", "meter",
+    "instr", "mono", "opcode", "bus", "sample", "kit", "ctl", "track", "clip", "scene", "arrangement", "config", "tempo", "meter",
     "unsolo", "hush", "panic", "reset", "at", "for", "over", "next", "now",
 ];
 const UNITS: &[(&str, &str)] = &[
@@ -124,7 +124,7 @@ enum Receiver {
 
 /// Find the start of the chain that ends at the end of `text` (`riff.fast(2).thin(10%)`),
 /// by walking back over calls, brackets and `.name` parts, and say what it begins with.
-fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
+fn receiver_and_root<'a>(text: &'a str, symbols: &[Symbol]) -> (Receiver, Option<&'a str>) {
     let mut rest = text.trim_end();
     let mut chained = false;
     loop {
@@ -147,7 +147,7 @@ fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
                     _ => {}
                 }
             }
-            let Some(open) = open else { return Receiver::Signal };
+            let Some(open) = open else { return (Receiver::Signal, None) };
             rest = rest[..open].trim_end();
         }
         let name_start = rest.char_indices().rev().take_while(|(_, c)| c.is_alphanumeric() || *c == '_').last().map_or(rest.len(), |(i, _)| i);
@@ -155,7 +155,7 @@ fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
         let before = rest[..name_start].trim_end();
         if name.is_empty() {
             // `[c4 e4].` has no name in front of its brackets
-            return if literal { Receiver::Pattern } else { Receiver::Signal };
+            return (if literal { Receiver::Pattern } else { Receiver::Signal }, None);
         }
         if before.ends_with('.') && !before.ends_with("..") {
             rest = before[..before.len() - 1].trim_end();
@@ -164,22 +164,27 @@ fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
         }
         if literal {
             // `grid[...]` and `name[...]` are not a bare pattern
-            return Receiver::Signal;
+            return (Receiver::Signal, None);
         }
         if name == "it" {
-            return Receiver::Pattern;
+            return (Receiver::Pattern, None);
         }
         // at the start of a statement, `bass.` is a command to give; inside an expression it is a value
         let line = text[..name_start].rsplit('\n').next().unwrap_or_default().trim();
         let command = !chained && (line.is_empty() || line.starts_with("at "));
-        return match symbols.iter().find(|s| s.name == name).map(|s| s.kind) {
+        let kind = match symbols.iter().find(|s| s.name == name).map(|s| s.kind) {
             Some(SymbolKind::Clip | SymbolKind::Track) if command => Receiver::Track,
             Some(SymbolKind::Pattern | SymbolKind::Clip | SymbolKind::Track) => Receiver::Pattern,
             Some(SymbolKind::Scene) if command => Receiver::SceneCommand,
             Some(SymbolKind::Scene) => Receiver::Scene,
             _ => Receiver::Signal,
         };
+        return (kind, Some(name));
     }
+}
+
+fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
+    receiver_and_root(text, symbols).0
 }
 
 pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -> Vec<Value> {
@@ -233,7 +238,12 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
         let in_value = call.current.contains(':');
         let on_pattern = call.receiver && receiver(call.receiver_text, symbols) != Receiver::Signal;
         let patterns = pattern_ops();
-        let params: Vec<(String, &str, usize)> = if let Some(op) = patterns.iter().find(|o| on_pattern && o.name == call.name) {
+        // `bass.set(`: the lanes this part has, from its instrument
+        let root = if call.receiver { receiver_and_root(call.receiver_text, symbols).1 } else { None };
+        let lanes = root.filter(|_| call.name == "set").and_then(|r| symbols.iter().find(|s| s.name == r && s.kind == SymbolKind::Clip));
+        let params: Vec<(String, &str, usize)> = if let Some(clip) = lanes {
+            clip.params.iter().map(|p| (p.name.clone(), "", 1)).collect()
+        } else if let Some(op) = patterns.iter().find(|o| on_pattern && o.name == call.name) {
             // a pattern operation lists only the arguments after the receiver
             op.params.iter().enumerate().map(|(i, p)| (p.name.clone(), p.ty, i + 1)).collect()
         } else if let Some(op) = ops.iter().find(|o| o.name == call.name) {
@@ -361,5 +371,14 @@ mod tests {
         assert_eq!(&labels_in(SONG, "riff.euclid(")[..3], ["hits:", "steps:", "rotation:"]);
         assert_eq!(&labels_in(SONG, "riff.euclid(3, ")[..2], ["steps:", "rotation:"]);
         assert_eq!(labels_in(SONG, "riff.every(2, ")[0], "change:");
+    }
+
+    #[test]
+    fn set_offers_the_lanes_of_the_parts_instrument() {
+        let code = "instr pluck(freq: hz, bright: 0..1 = 0.5) { freq }\nclip bass {\n  instrument: pluck(bright: 0.2)\n  notes: [c2]\n}\n";
+        let l = labels_in(code, "bass.set(");
+        assert_eq!(&l[..4], ["bright:", "dur:", "nudge:", "gain:"], "{l:?}");
+        assert_eq!(&labels_in(code, "bass.set(bright: 0.9, ")[..3], ["dur:", "nudge:", "gain:"]);
+        assert!(labels_in(code, "bass.").contains(&"set".to_string()));
     }
 }

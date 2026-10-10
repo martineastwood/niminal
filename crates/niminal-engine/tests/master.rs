@@ -79,7 +79,7 @@ fn non_finite_input_becomes_silence() {
 #[test]
 fn latency_is_about_a_millisecond_and_silence_stays_silent() {
     let m = Master::new(SR, CEILING);
-    assert_eq!(m.latency(), 47);
+    assert_eq!(m.latency(), 47 + 12, "a millisecond of lookahead, and a few samples to see between samples");
     let (out, _) = run(&vec![0.0; 1000]);
     assert!(out.iter().all(|s| *s == 0.0));
 }
@@ -155,4 +155,38 @@ fn silence_after_silence_is_skipped_without_changing_what_comes_next() {
         out.1.extend_from_slice(&b[0]);
     }
     assert_eq!(out.0, out.1);
+}
+
+/// The highest the signal gets between samples, found with a long windowed sinc at 16 times the rate.
+fn true_peak(x: &[f32]) -> f32 {
+    const SPAN: i64 = 24;
+    let mut peak = 0.0f64;
+    for i in SPAN as usize..x.len().saturating_sub(SPAN as usize) {
+        for step in 0..16 {
+            let frac = f64::from(step) / 16.0;
+            let mut sum = 0.0;
+            for k in -SPAN..SPAN {
+                let d = frac - k as f64;
+                let sinc = if d == 0.0 { 1.0 } else { (std::f64::consts::PI * d).sin() / (std::f64::consts::PI * d) };
+                let window = 0.5 * (1.0 + (std::f64::consts::PI * d / SPAN as f64).cos());
+                sum += f64::from(x[(i as i64 + k) as usize]) * sinc * window;
+            }
+            peak = peak.max(sum.abs());
+        }
+    }
+    peak as f32
+}
+
+#[test]
+fn the_ceiling_holds_between_samples_too() {
+    // a sine a quarter of the sample rate, 45 degrees in: every sample is +-0.78 but the wave reaches 1.1
+    let input: Vec<f32> = (0..24_000)
+        .map(|i| 1.1 * (std::f32::consts::FRAC_PI_2 * i as f32 + std::f32::consts::FRAC_PI_4).sin())
+        .collect();
+    assert!(peak(&input) < CEILING, "the samples alone are under the ceiling");
+    assert!(true_peak(&input) > 1.05, "but the wave is over it");
+    let (out, _) = run(&input);
+    let settled = &out[4000..];
+    assert!(true_peak(settled) <= CEILING * 1.003, "true peak {} is over the ceiling", true_peak(settled));
+    assert!(true_peak(settled) > CEILING * 0.9, "limited, not crushed: {}", true_peak(settled));
 }

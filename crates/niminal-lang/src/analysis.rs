@@ -17,6 +17,13 @@ pub enum StatementKind {
     Note,
 }
 
+/// `tempo 124bpm @ next bar over 8 bars`: the tempo to reach and how long to take.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ramp {
+    pub bpm: f64,
+    pub over: niminal_score::Time,
+}
+
 /// A command that starts a clip on a track, and the source of what it plays.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayInfo {
@@ -39,6 +46,8 @@ pub struct Statement {
     /// The `@ ...` written after the statement, if any.
     pub quantize: Option<Quantize>,
     pub plays: Option<PlayInfo>,
+    /// A tempo that is reached gradually rather than at once.
+    pub ramp: Option<Ramp>,
     /// For `bass.reverse`, where in `text` that is: `plays.what` is only the change, `reverse`,
     /// until the session joins it to what the track is playing.
     pub edit: Option<std::ops::Range<usize>>,
@@ -85,6 +94,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             text,
             quantize: None,
             plays: None,
+            ramp: None,
             edit: None,
             launch: None,
             has_at: false,
@@ -103,6 +113,18 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Tempo(t) => {
                 s.key = Some("tempo".into());
                 s.quantize = t.quantize.map(convert_quantize);
+                if let (Some(over), ExprKind::Num { value: bpm, unit: Some(u) }) = (&t.over, &t.value.kind)
+                    && u == "bpm"
+                    && let ExprKind::Num { value, unit: Some(unit) } = &over.kind
+                {
+                    let length = match unit.as_str() {
+                        "bar" | "bars" => Some(niminal_score::Time::Bars(*value)),
+                        "beat" | "beats" => Some(niminal_score::Time::Beats(*value)),
+                        "sec" => Some(niminal_score::Time::Seconds(*value)),
+                        _ => None,
+                    };
+                    s.ramp = length.filter(|l| l.to_seconds(niminal_score::Tempo::new(60.0)) > 0.0).map(|over| Ramp { bpm: *bpm, over });
+                }
             }
             Item::Bind { name, .. } => {
                 s.key = Some(format!("bind:{}", name.name));
@@ -187,6 +209,9 @@ a(f: 440hz) for 1beat
         assert_eq!(s[6].kind, StatementKind::Note);
         assert!(!s[6].has_at);
         assert!(analyze("at 2 bars lead.mute").unwrap()[0].has_at);
+        let later = &analyze("at +2 bars unsolo").unwrap()[0];
+        assert!(!later.has_at, "relative to when the code lands");
+        assert_eq!(later.kind, StatementKind::Command);
         assert!(analyze("at 1beat a(f: 1hz) for 1beat").unwrap()[0].has_at);
         assert!(s[6].key.is_none());
     }

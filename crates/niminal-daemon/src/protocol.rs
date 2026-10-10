@@ -29,7 +29,7 @@ const PROTOCOL_ERROR: i64 = -32000;
 const REJECTED: i64 = -32001;
 
 /// What a client can subscribe to.
-pub const TOPICS: [&str; 5] = ["landed", "pending", "transport", "meters", "notices"];
+pub const TOPICS: [&str; 6] = ["landed", "pending", "transport", "meters", "notices", "learned"];
 
 #[derive(Default)]
 struct Client {
@@ -372,6 +372,9 @@ impl Daemon {
         self.session.sync_realtime();
         for landed in self.session.take_landed() {
             self.send_to_subscribers("landed", "landed", landed_json(&landed));
+        }
+        for (control, source) in self.session.take_learned() {
+            self.send_to_subscribers("learned", "learned", json!({ "control": control, "source": source }));
         }
         for notice in self.session.take_notices() {
             self.send_to_subscribers("notices", "notice", json!({ "message": notice }));

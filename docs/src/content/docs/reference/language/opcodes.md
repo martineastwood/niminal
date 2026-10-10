@@ -23,6 +23,7 @@ out = osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz)
 ```
 
 - The **last expression** is the output.
+- **`prev(x)`** is `x` one sample ago, so feedback is explicit and sample-accurate: `y = x + prev(y) * 0.5` reads `y` before it is defined. `prev` of a name that is never defined is an error. (Between buses, `prev` works differently: it sends a block late. See [Routing](/reference/language/routing/).)
 - **`state`** declares a variable that persists between samples, per call site and per voice.
 - **Multiple outputs** are named and returned as fields:
 

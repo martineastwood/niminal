@@ -21,7 +21,7 @@ type Change<'a, T> = Box<dyn Fn(Pattern<T>) -> Pattern<T> + 'a>;
 /// The parameter that notes in a clip's `notes` lane set.
 pub const PITCH_PARAM: &str = "freq";
 /// Lanes every note understands, whatever the instrument.
-const UNIVERSAL_LANES: [&str; 3] = ["dur", "nudge", GAIN_PARAM];
+pub(crate) const UNIVERSAL_LANES: [&str; 3] = ["dur", "nudge", GAIN_PARAM];
 
 #[derive(Clone)]
 enum PerfValue {
@@ -288,6 +288,11 @@ impl Perform<'_> {
         };
         let rest = &args[1..];
         match self.eval(&receiver.value, it)? {
+            // `set` gives lanes to a clip; a pattern is a clip with only its notes
+            PerfValue::Pattern(p) if name.name == "set" => {
+                let clip = Clip { name: String::new(), length: Rational::ONE, endless: true, lanes: vec![("notes".to_string(), p)], keys: None };
+                self.on_clip(name, rest, clip, span, it).map(PerfValue::Clip)
+            }
             PerfValue::Pattern(p) => self.on_pattern(name, rest, p, span, it),
             PerfValue::Grid(g) => match self.generic(name, rest, g, span, it)? {
                 Some(g) => Ok(PerfValue::Grid(g)),
@@ -361,6 +366,9 @@ impl Perform<'_> {
     }
 
     fn on_clip(&self, name: &Ident, rest: &[Arg], clip: Clip, span: Span, it: Option<&PerfValue>) -> Res<Clip> {
+        if name.name == "set" {
+            return self.set_lanes(rest, clip, it);
+        }
         // Pitch operations touch only the notes; time operations touch every lane.
         let notes_only = matches!(name.name.as_str(), "transpose" | "euclid" | "rhythm" | "mask");
         let mut lanes = Vec::with_capacity(clip.lanes.len());
@@ -380,7 +388,30 @@ impl Perform<'_> {
             "over" => self.cycles(self.arg(name, rest, "length", span)?)?.max(Rational::new(1, 1000)),
             _ => clip.length,
         };
-        Ok(Clip { name: clip.name, length, endless: clip.endless && name.name != "over", lanes })
+        Ok(Clip { name: clip.name, length, endless: clip.endless && name.name != "over", lanes, keys: clip.keys })
+    }
+
+    /// `riff.set(bright: 0.9, gain: [0db -6db])`: these lanes, in place of the clip's own.
+    fn set_lanes(&self, rest: &[Arg], mut clip: Clip, it: Option<&PerfValue>) -> Res<Clip> {
+        for arg in rest {
+            let Some(lane) = &arg.name else {
+                return Err(Diagnostic::new("`set` takes a lane and its value, as in `set(bright: 0.9)`", arg.value.span));
+            };
+            if lane.name == "length" {
+                return Err(Diagnostic::new("a clip's length can't be set; use `over(…)`", lane.span));
+            }
+            let pattern = match self.eval(&arg.value, it)? {
+                PerfValue::Pattern(p) => p,
+                other => {
+                    return Err(Diagnostic::new(format!("a lane holds a pattern or a number, but this is {}", other.describe()), arg.value.span));
+                }
+            };
+            match clip.lanes.iter_mut().find(|(n, _)| *n == lane.name) {
+                Some((_, existing)) => *existing = pattern,
+                None => clip.lanes.push((lane.name.clone(), pattern)),
+            }
+        }
+        Ok(clip)
     }
 
     /// Operations that work on any kind of pattern. `None` if `name` isn't one.
@@ -476,9 +507,9 @@ impl Perform<'_> {
     }
 
     fn unknown_op(&self, name: &str, span: Span) -> Diagnostic {
-        const OPS: [&str; 15] = [
+        const OPS: [&str; 16] = [
             "fast", "slow", "over", "reverse", "shift", "repeat_each", "thin", "every", "layer", "transpose",
-            "euclid", "rhythm", "mask", "play", "launch",
+            "euclid", "rhythm", "mask", "set", "play", "launch",
         ];
         let mut d = Diagnostic::new(format!("unknown pattern operation `{name}`"), span);
         if let Some(c) = closest(name, OPS) {
@@ -539,8 +570,16 @@ impl Perform<'_> {
 
     fn clip(&self, block: &NamedBlock) -> Res<Clip> {
         let mut length = None;
+        let mut keys = None;
         let mut lanes: Vec<(String, Pattern<Value>)> = Vec::new();
         for (key, value) in &block.entries {
+            if key.name == "keys" {
+                if keys.is_some() {
+                    return Err(Diagnostic::new("lane `keys` is given twice", key.span));
+                }
+                keys = Some(self.keys(value)?);
+                continue;
+            }
             if key.name == "length" {
                 let cycles = self.cycles(value)?;
                 if cycles <= Rational::ZERO {
@@ -561,7 +600,34 @@ impl Perform<'_> {
             };
             lanes.push((key.name.clone(), pattern));
         }
-        Ok(Clip { name: block.name.name.clone(), length: length.unwrap_or(Rational::ONE), endless: length.is_none(), lanes })
+        Ok(Clip { name: block.name.name.clone(), length: length.unwrap_or(Rational::ONE), endless: length.is_none(), lanes, keys })
+    }
+
+    /// `midi.keys()` or `midi.keys(channel: 1)`
+    fn keys(&self, e: &Expr) -> Res<Keys> {
+        let ExprKind::Call { name, args } = &e.kind else { return Err(self.keys_error(e.span)) };
+        let from_midi = matches!(args.first(), Some(Arg { receiver: true, value: Expr { kind: ExprKind::Name(m), .. }, .. }) if m == "midi");
+        if name.name != "keys" || !from_midi {
+            return Err(self.keys_error(e.span));
+        }
+        let mut channel = None;
+        for arg in &args[1..] {
+            match arg.name.as_ref().map(|n| n.name.as_str()) {
+                Some("channel") => {
+                    let n = self.plain(&arg.value)?;
+                    if !n.is_integer() || n < Rational::ONE || n > Rational::int(16) {
+                        return Err(Diagnostic::new("a MIDI channel is a whole number from 1 to 16", arg.value.span));
+                    }
+                    channel = Some(n.numer() as u8);
+                }
+                _ => return Err(Diagnostic::new("`midi.keys` takes `channel:`", arg.value.span)),
+            }
+        }
+        Ok(Keys { channel })
+    }
+
+    fn keys_error(&self, span: Span) -> Diagnostic {
+        Diagnostic::new("`keys` plays a clip from a keyboard: write `keys: midi.keys(channel: 1)`", span)
     }
 
     fn scene(&self, block: &NamedBlock) -> Res<Scene> {
@@ -589,6 +655,7 @@ impl Perform<'_> {
                 length: Rational::ONE,
                 endless: true,
                 lanes: vec![("notes".to_string(), p)],
+                keys: None,
             }),
             PerfValue::Grid(_) => Err(Diagnostic::new("a grid has no pitches to play", span)
                 .with_help("give it notes with `.rhythm(grid[...])` on a pattern instead")),
@@ -744,6 +811,18 @@ impl Perform<'_> {
             return Err(Diagnostic::new(format!("track `{}` has no instrument to play a clip on", id.name), id.span)
                 .with_help("add `instrument = ...` to the track"));
         };
+        if clip.keys.is_some() {
+            if clip.lane("notes").is_some() {
+                return Err(Diagnostic::new(format!("clip `{}` has both `notes` and `keys`: it is played by one or the other", clip.name), span));
+            }
+            if !instrument.params.iter().any(|p| p.name == PITCH_PARAM && p.unit == Unit::Hz) {
+                return Err(Diagnostic::new(
+                    format!("`{}` has no `{PITCH_PARAM}` parameter for the keys to set", instrument.name),
+                    span,
+                )
+                .with_help(format!("give the instrument a `{PITCH_PARAM}: hz` parameter")));
+            }
+        }
         for (lane, _) in &clip.lanes {
             if lane == "notes" {
                 let pitched = instrument.params.iter().any(|p| p.name == PITCH_PARAM && p.unit == Unit::Hz);

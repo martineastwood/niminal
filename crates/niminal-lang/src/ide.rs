@@ -45,7 +45,8 @@ pub struct SymbolParam {
 /// The names defined at the top level of `source`. Fails if it doesn't parse.
 pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
     let mut out = Vec::new();
-    for (item, span) in parse_spanned(source)? {
+    let items = parse_spanned(source)?;
+    for (item, span) in items.iter().map(|(item, span)| (item.clone(), *span)) {
         let first_line = || source[span.start..span.end].lines().next().unwrap_or_default().trim().to_string();
         let mut param_list = Vec::new();
         let (name, kind, detail) = match &item {
@@ -61,7 +62,10 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
             Item::Track(d) => (&d.name, SymbolKind::Track, format!("track {}", d.name.name)),
             Item::Sample(d) => (&d.name, if d.is_kit { SymbolKind::Kit } else { SymbolKind::Sample }, first_line()),
-            Item::Clip(b) => (&b.name, SymbolKind::Clip, format!("clip {}", b.name.name)),
+            Item::Clip(b) => {
+                param_list = clip_lanes(source, b, &items);
+                (&b.name, SymbolKind::Clip, format!("clip {}", b.name.name))
+            }
             Item::Scene(b) => (&b.name, SymbolKind::Scene, format!("scene {}", b.name.name)),
             Item::Arrangement(d) => (&d.name, SymbolKind::Arrangement, format!("arrangement {}", d.name.name)),
             Item::Bind { name, .. } => (name, SymbolKind::Pattern, first_line()),
@@ -70,6 +74,25 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
         out.push(Symbol { name: name.name.clone(), kind, name_span: name.span, span, detail, params: param_list });
     }
     Ok(out)
+}
+
+/// The lanes a clip with an `instrument:` can be given: the instrument's parameters, and the lanes every note has.
+fn clip_lanes(source: &str, clip: &NamedBlock, items: &[(Item, Span)]) -> Vec<SymbolParam> {
+    let Some((_, instrument)) = clip.entries.iter().find(|(key, _)| key.name == "instrument") else { return Vec::new() };
+    let name = match &instrument.kind {
+        ExprKind::Call { name, .. } => name.name.as_str(),
+        ExprKind::Name(name) => name.as_str(),
+        _ => return Vec::new(),
+    };
+    let Some(def) = items.iter().find_map(|(item, _)| match item {
+        Item::Instr(d) if d.name.name == name => Some(d),
+        _ => None,
+    }) else {
+        return Vec::new();
+    };
+    let mut lanes: Vec<SymbolParam> = params(source, &def.params).into_iter().filter(|p| p.name != "freq").collect();
+    lanes.extend(crate::perform::UNIVERSAL_LANES.iter().map(|l| SymbolParam { name: (*l).to_string(), label: (*l).to_string() }));
+    lanes
 }
 
 fn params(source: &str, params: &[ParamDef]) -> Vec<SymbolParam> {
@@ -159,6 +182,11 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         ),
         op("rhythm", "Give the notes the rhythm of a grid or pattern.", &[("structure", "grid", true)]),
         op("mask", "Keep only the notes where a grid or pattern has a hit.", &[("mask", "grid", true)]),
+        op(
+            "set",
+            "Give the clip these lanes instead of its own, a number or a pattern each: `set(bright: 0.9)`, `set(gain: [0db -6db])`.",
+            &[("lane", "value", true)],
+        ),
     ]
 }
 

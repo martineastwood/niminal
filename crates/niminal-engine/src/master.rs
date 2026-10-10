@@ -7,12 +7,22 @@
 //! average of the same length, which guarantees the output never exceeds the
 //! ceiling. Gain then recovers slowly so bass notes aren't distorted.
 //!
-//! The ceiling applies to sample peaks. Inter-sample (true) peaks can exceed it
-//! by a fraction of a decibel.
+//! The ceiling applies to true peaks: each stretch between two samples is
+//! looked at at 4x its sample rate, so a signal that would swing over the
+//! ceiling between samples in a converter is caught too. That needs a few
+//! samples of the future, which is why the signal is delayed by a few samples
+//! more than the lookahead.
 
 const LOOKAHEAD_SECONDS: f32 = 0.001;
 const RELEASE_SECONDS: f64 = 0.05;
 const DC_CUTOFF_HZ: f64 = 5.0;
+
+/// The interpolator that finds peaks between samples looks at this many samples, centred on the
+/// stretch between the two `HALF` and `HALF - 1` samples ago.
+const TAPS: usize = 24;
+const HALF: usize = TAPS / 2;
+/// Where between two samples to look: a quarter, a half and three quarters of the way.
+const PHASES: [f64; 3] = [0.25, 0.5, 0.75];
 
 pub struct Master {
     channels: Vec<ChannelState>,
@@ -25,6 +35,8 @@ pub struct Master {
     min_sum: f64,
     release_coeff: f64,
     gain: f64,
+    /// The weights that find the signal between two samples, for each of `PHASES`.
+    between: [[f64; TAPS]; PHASES.len()],
 }
 
 /// The per-channel parts: DC blocker memory and the lookahead delay line.
@@ -32,6 +44,8 @@ struct ChannelState {
     dc_x1: f64,
     dc_y1: f64,
     delay: Vec<f64>,
+    /// The latest `TAPS` samples after the DC blocker, newest first.
+    recent: [f64; TAPS],
 }
 
 impl Master {
@@ -49,7 +63,7 @@ impl Master {
         let window = ((LOOKAHEAD_SECONDS * sample_rate).round() as usize).max(2);
         Master {
             channels: (0..channels)
-                .map(|_| ChannelState { dc_x1: 0.0, dc_y1: 0.0, delay: vec![0.0; window] })
+                .map(|_| ChannelState { dc_x1: 0.0, dc_y1: 0.0, delay: vec![0.0; window], recent: [0.0; TAPS] })
                 .collect(),
             dc_r: 1.0 - std::f64::consts::TAU * DC_CUTOFF_HZ / sr,
             ceiling: f64::from(ceiling),
@@ -60,6 +74,7 @@ impl Master {
             min_sum: window as f64,
             release_coeff: 1.0 - (-1.0 / (RELEASE_SECONDS * sr)).exp(),
             gain: 1.0,
+            between: std::array::from_fn(|i| interpolation_weights(PHASES[i])),
         }
     }
 
@@ -69,6 +84,7 @@ impl Master {
             channel.dc_x1 = 0.0;
             channel.dc_y1 = 0.0;
             channel.delay.fill(0.0);
+            channel.recent = [0.0; TAPS];
         }
         self.required.fill(1.0);
         self.windowed_min.fill(1.0);
@@ -81,14 +97,16 @@ impl Master {
     /// settled, so silence in gives exactly silence out and the state does not change.
     fn at_rest(&self) -> bool {
         self.gain == 1.0
-            && self.channels.iter().all(|c| c.dc_x1 == 0.0 && c.dc_y1.abs() < 1e-18 && c.delay.iter().all(|d| *d == 0.0))
+            && self.channels.iter().all(|c| {
+                c.dc_x1 == 0.0 && c.dc_y1.abs() < 1e-18 && c.delay.iter().all(|d| *d == 0.0) && c.recent.iter().all(|r| *r == 0.0)
+            })
             && self.required.iter().all(|r| *r == 1.0)
             && self.windowed_min.iter().all(|m| *m == 1.0)
     }
 
     /// Samples of delay between input and output.
     pub fn latency(&self) -> usize {
-        self.window - 1
+        self.window - 1 + HALF
     }
 
     /// Process a one-channel master in place.
@@ -150,8 +168,14 @@ impl Master {
             let x = input - state.dc_x1 + self.dc_r * state.dc_y1;
             state.dc_x1 = input;
             state.dc_y1 = x;
-            state.delay[p] = x;
-            peak = peak.max(x.abs());
+            state.recent.rotate_right(1);
+            state.recent[0] = x;
+            // The sample from `HALF` ago is the one going into the lookahead, so the stretch after it
+            // can be looked at with samples from before and after.
+            let sample = state.recent[HALF];
+            state.delay[p] = sample;
+            let between = self.between.iter().map(|w| w.iter().zip(&state.recent).map(|(w, r)| w * r).sum::<f64>().abs());
+            peak = between.fold(peak.max(sample.abs()), f64::max);
         }
         self.required[p] = if peak > self.ceiling { self.ceiling / peak } else { 1.0 };
 
@@ -172,4 +196,20 @@ impl Master {
         }
         self.pos = (p + 1) % n;
     }
+}
+
+/// Weights for the signal a fraction `phase` of the way from the sample `HALF` ago to the next one,
+/// from the latest `TAPS` samples: a sinc narrowed by a Hann window.
+fn interpolation_weights(phase: f64) -> [f64; TAPS] {
+    let mut weights = [0.0; TAPS];
+    for (k, weight) in weights.iter_mut().enumerate() {
+        // samples are `k` back; the point looked for is `HALF - phase` back
+        let distance = k as f64 - (HALF as f64 - phase);
+        let sinc = if distance == 0.0 { 1.0 } else { (std::f64::consts::PI * distance).sin() / (std::f64::consts::PI * distance) };
+        let window = 0.5 * (1.0 + (std::f64::consts::PI * distance / HALF as f64).cos());
+        *weight = if distance.abs() < HALF as f64 { sinc * window } else { 0.0 };
+    }
+    let sum: f64 = weights.iter().sum();
+    weights.iter_mut().for_each(|w| *w /= sum);
+    weights
 }

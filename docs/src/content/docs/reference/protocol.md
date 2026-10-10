@@ -43,7 +43,7 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
   "protocol": 1,
   "sample_rate": 48000,
   "channels": 2,
-  "topics": ["landed", "pending", "transport", "meters", "notices"]
+  "topics": ["landed", "pending", "transport", "meters", "notices", "learned"]
 }
 ```
 
@@ -62,6 +62,7 @@ Valid topics (same as in `hello`):
 | `transport` | `transport` | About ten times per second while the clock runs |
 | `meters` | `meters` | With `transport`, if anyone subscribed (peak readings) |
 | `notices` | `notice` | Warnings (playback issues, cancelled dependents, NaN voices, …) |
+| `learned` | `learned` | A `midi.learn` control took a control change: `{ "control": "filth", "source": "midi.cc(21)" }` |
 
 Notifications have **no `id`**:
 

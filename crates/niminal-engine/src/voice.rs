@@ -18,6 +18,21 @@ pub struct Voice {
     bus_map: Vec<Option<usize>>,
     /// Samples of fade-out left once the voice has been choked.
     choke_left: Option<usize>,
+    /// How many notes of this instrument may sound at once, and what a new note does to the others.
+    rule: Option<VoiceRule>,
+}
+
+/// A limit on the notes one instrument has sounding on a track.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VoiceRule {
+    /// Which instrument the notes are of, so the notes can be counted.
+    pub instrument: u32,
+    /// A new note ends the oldest if this many already sound.
+    pub max: usize,
+    /// A new note releases a sounding note of the same pitch.
+    pub release_same_pitch: bool,
+    /// The pitch of this note, in hz.
+    pub pitch: f32,
 }
 
 /// How long a choked voice takes to fade out, in seconds.
@@ -39,7 +54,7 @@ impl Voice {
         }
 
         let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0)).map(Some).collect();
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None }
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None }
     }
 
     /// Keep memory at matching call sites while retaining the new graph's
@@ -111,6 +126,14 @@ impl Voice {
 
     pub fn group(&self) -> Option<u32> {
         self.group
+    }
+
+    pub fn set_rule(&mut self, rule: Option<VoiceRule>) {
+        self.rule = rule;
+    }
+
+    pub fn rule(&self) -> Option<VoiceRule> {
+        self.rule
     }
 
     /// End the note now, with a short fade so it doesn't click.
@@ -192,7 +215,7 @@ impl Voice {
 
         let finite = |slot: usize| self.slots[slot][..frames].iter().all(|s| s.is_finite());
         let healthy = self.graph.output_slots.iter().all(|&s| finite(s))
-            && self.graph.sends.iter().all(|&(_, _, s)| finite(s));
+            && self.graph.sends.iter().all(|&(_, _, s, _)| finite(s));
         if !healthy {
             self.poisoned = true;
             out.iter_mut().for_each(|c| c[..frames].fill(0.0));
@@ -214,14 +237,19 @@ impl Voice {
                 channel[..frames].iter_mut().zip(g).for_each(|(y, g)| *y *= g);
             }
         }
-        for &(bus, channel, slot) in &self.graph.sends {
+        for &(bus, channel, slot, delayed) in &self.graph.sends {
             let Some(bus) = self.bus_map.get(bus).copied().flatten() else { continue };
             match &fade {
+                None if delayed => buses.add_delayed(bus, channel, &self.slots[slot][..frames]),
                 None => buses.add(bus, channel, &self.slots[slot][..frames]),
                 Some(g) => {
                     let mut faded = [0.0f32; BLOCK];
                     faded[..frames].iter_mut().zip(&self.slots[slot]).zip(g).for_each(|((y, x), g)| *y = x * g);
-                    buses.add(bus, channel, &faded[..frames]);
+                    if delayed {
+                        buses.add_delayed(bus, channel, &faded[..frames]);
+                    } else {
+                        buses.add(bus, channel, &faded[..frames]);
+                    }
                 }
             }
         }

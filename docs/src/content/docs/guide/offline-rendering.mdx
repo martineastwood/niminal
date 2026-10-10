@@ -13,3 +13,14 @@ An `arrangement` plays scenes in order. Render it by name, or just a passage of 
 niminal render examples/song.nml song --out song.wav
 niminal render examples/song.nml song --from "bar 5" --to "bar 9" --out passage.wav
 ```
+
+## Stems
+
+`--stems` writes a file for every track and every bus as well as the mix, into the folder given by `--out`:
+
+```sh
+niminal render examples/groove.nml --stems --out stems/
+# wrote 5 files into stems/ (33.49s): mix, space.fx, bass, lead, space
+```
+
+Each stem is what that track put out after its own effects and before the master stage, so it has no limiter on it. The stems of the tracks that go to the master add up to the mix, and all files are the same length, so they line up in a mixer. A bus's file is the sum of what was sent to it; the channel that processes a bus (`space.fx` for `bus space { … }`) has its own. Parts that play bare instruments with no part of their own are in `direct.wav`.

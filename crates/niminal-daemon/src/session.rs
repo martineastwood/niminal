@@ -19,7 +19,7 @@ use niminal_lang::{
     Action, Clip, CompileOptions, Layout, Samples, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
     Expanded, InputSource, analyze, compile_with,
 };
-use niminal_score::{Event, Time};
+use niminal_score::{Event, Tempo, Time};
 
 use crate::log::{LogEntry, LogInput};
 use crate::project::{Entry, Located, Origin, Piece, Problem, Project};
@@ -58,11 +58,20 @@ struct HistoryEntry {
     action: NamedAction,
 }
 
+/// A tempo ramp changes the tempo this many times a beat.
+const RAMP_STEPS_PER_BEAT: f64 = 4.0;
+const MAX_RAMP_STEPS: f64 = 1024.0;
+
+/// The key of a note that is not held open by one.
+pub(crate) const NO_KEY: u32 = u32::MAX;
+
 /// A note waiting for its moment.
 struct Upcoming {
     start: u64,
     dur: u64,
     event: Event,
+    /// A key being held plays this note until it is let go, whatever `dur` says.
+    key: Option<u32>,
     /// Taken from the schedule (so it is dropped and fetched again if the
     /// schedule changes), rather than written out or sent from outside.
     scheduled: bool,
@@ -195,6 +204,15 @@ pub struct EvalJob {
     committed_playing: BTreeMap<String, Playing>,
     waiting: Vec<Waiting>,
     lands_at: u64,
+    /// The later steps of a tempo ramp: how long after `lands_at` each lands, and what it does.
+    ramp: Vec<(u64, Statement)>,
+}
+
+/// Ids below this are real. A ramp's steps are new transactions too, numbered from here until they are queued.
+const NEW_BASE: u64 = 1 << 62;
+
+fn is_new(id: u64) -> bool {
+    id == 0 || id >= NEW_BASE
 }
 
 impl EvalJob {
@@ -222,7 +240,10 @@ impl EvalJob {
         }
         waiting.retain(|p| !p.statements.is_empty());
         waiting.push(Waiting { id: 0, lands_at: self.lands_at, snippet: self.source.clone(), statements: self.statements.clone() });
-        waiting.sort_by_key(|p| (p.lands_at, p.id == 0));
+        for (k, (after, statement)) in self.ramp.iter().enumerate() {
+            waiting.push(Waiting { id: NEW_BASE + k as u64, lands_at: self.lands_at + after, snippet: self.source.clone(), statements: vec![statement.clone()] });
+        }
+        waiting.sort_by_key(|p| (p.lands_at, !is_new(p.id), p.id));
 
         let latest = waiting.iter().map(|p| p.lands_at).max().unwrap_or(self.lands_at);
         let (mut project, mut playing) = (self.committed.clone(), self.committed_playing.clone());
@@ -248,7 +269,7 @@ impl EvalJob {
                     playing = next.playing.clone();
                     queue.push(next);
                 }
-                Err(problems) if p.id == 0 => return Err(problems),
+                Err(problems) if is_new(p.id) => return Err(problems),
                 Err(_) => notices.push(format!("change {} was dropped: a newer pending write invalidated it", p.id)),
             }
         }
@@ -362,6 +383,8 @@ pub struct Transport {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControlSignal<'a> {
     MidiCc { cc: u8, channel: u8, value: u8 },
+    /// A key pressed (`velocity` from 1) or let go (`velocity` 0), on a MIDI channel from 1.
+    MidiNote { note: u8, channel: u8, velocity: u8 },
     Osc { address: &'a str, value: f64 },
 }
 
@@ -369,6 +392,13 @@ pub struct Session {
     controls: Vec<crate::controls::State>,
     control_changes: Vec<crate::controls::Change>,
     next_control: u64,
+    /// The control change each `midi.learn` control took, and what is waiting to be reported.
+    learned: BTreeMap<String, u8>,
+    learned_out: Vec<(String, String)>,
+    /// The notes each held key started, by channel and note, and the keys let go of lately.
+    keys_down: BTreeMap<(u8, u8), Vec<u32>>,
+    key_offs: Vec<(u32, u64)>,
+    next_key: u32,
     sample_rate: f32,
     layout: Layout,
     panic_epoch: Arc<AtomicU64>,
@@ -390,7 +420,8 @@ pub struct Session {
     upcoming: VecDeque<Upcoming>,
     /// Tracks whose clips are not searched for notes because they asked for too many.
     overloaded: Vec<usize>,
-    held: Vec<(u64, VoiceId)>,
+    /// Sounding notes: when each is released, and the key holding it open (or `NO_KEY`).
+    held: Vec<(u64, VoiceId, u32)>,
     next_panic: usize,
 
     pending: Vec<Pending>,
@@ -460,25 +491,27 @@ fn prepare_pending(
     let mut playing = base_playing.clone();
     let mut actions = Vec::new();
     for s in statements.iter().filter(|s| s.kind != StatementKind::Definition) {
-        let (s, edited) = join_edit(s, &playing, &project)?;
-        let piece = Piece { text: s.text.clone(), origin: Origin::Snippet { offset: s.offset } };
-        let program = check(&[piece])?;
-        // A command for later (`at +4 bars launch chorus`) is not what is playing now.
-        let later = program.performance.iter().any(|p| p.at.to_seconds(program.tempo) > 0.0);
-        if !later {
-            apply_to_playing(&mut playing, &program, &s);
-            if let Some(scene) = &s.launch {
-                apply_launch(&mut playing, &program, &project, scene);
+        for (s, edited) in join_edit(s, &playing, &project)? {
+            let piece = Piece { text: s.text.clone(), origin: Origin::Snippet { offset: s.offset } };
+            let program = check(&[piece])?;
+            // A command for later (`at +4 bars chorus.start`) is not what is playing now.
+            let later = program.performance.iter().any(|p| p.at.to_seconds(program.tempo) > 0.0);
+            if !later {
+                apply_to_playing(&mut playing, &program, &s);
+                if let Some(scene) = &s.launch {
+                    apply_launch(&mut playing, &program, &project, scene);
+                }
+                if let Some((track, edited)) = edited {
+                    playing.insert(track, edited);
+                }
             }
-            if let Some((track, edited)) = edited {
-                playing.insert(track, edited);
-            }
+            actions.push(Compiled { statement: s, program });
         }
-        actions.push(Compiled { statement: s, program });
     }
 
     let changed: Vec<String> = definitions.iter().filter_map(|s| s.binding.clone()).collect();
-    let retimes = definitions.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")));
+    // a new tempo keeps clips in place (see `retime`); a new meter changes what a bar is
+    let retimes = definitions.iter().any(|s| s.key.as_deref() == Some("meter"));
     // Tracks that play something this change touches start it over, unless the commands
     // here already start them.
     let relaunched = actions.iter().any(|a| a.statement.launch.is_some());
@@ -535,7 +568,8 @@ impl Session {
             layout,
             panic_epoch: Arc::new(AtomicU64::new(0)),
             samples: Samples::default(),
-            controls: Vec::new(), control_changes: Vec::new(), next_control: 0,
+            controls: Vec::new(), control_changes: Vec::new(), next_control: 0, learned: BTreeMap::new(), learned_out: Vec::new(),
+            keys_down: BTreeMap::new(), key_offs: Vec::new(), next_key: 0,
             sample_dirs: Vec::new(),
             defaults: QuantizeDefaults::default(),
             clock: 0,
@@ -669,6 +703,14 @@ impl Session {
             self.log_eval(&source, quantize.as_deref());
             return Begin::Done(Ok(nothing));
         }
+        let mut statements = statements;
+        let ramp = match self.expand_ramp(&mut statements) {
+            Ok(ramp) => ramp,
+            Err(problems) => {
+                self.log_eval(&source, quantize.as_deref());
+                return Begin::Done(Err(problems));
+            }
+        };
         let (base, playing) = self.projected();
         Begin::Job(Box::new(EvalJob {
             source,
@@ -676,6 +718,7 @@ impl Session {
             quantize,
             fallback,
             statements: statements.clone(),
+            ramp,
             base,
             playing,
             version: self.version,
@@ -686,6 +729,37 @@ impl Session {
                 snippet: p.snippet.clone(), statements: p.statements.clone() }).collect(),
             lands_at: self.landing(&statements, fallback),
         }))
+    }
+
+    /// `tempo 124bpm @ next bar over 8 bars` becomes a tempo for each quarter beat on the way:
+    /// the first replaces the statement, and the rest are returned with how long after it each lands.
+    fn expand_ramp(&self, statements: &mut [Statement]) -> Result<Vec<(u64, Statement)>, Vec<Problem>> {
+        let Some(index) = statements.iter().position(|s| s.ramp.is_some()) else { return Ok(Vec::new()) };
+        let Some(ramp) = statements[index].ramp.take() else { return Ok(Vec::new()) };
+        let tempo = self.program.tempo;
+        let beats = ramp.over.to_seconds(tempo) * tempo.bpm / 60.0;
+        let steps = (beats * RAMP_STEPS_PER_BEAT).ceil();
+        if !(1.0..=MAX_RAMP_STEPS).contains(&steps) {
+            return Err(vec![Problem::plain(format!(
+                "a tempo ramp takes from a quarter of a beat up to {} beats", MAX_RAMP_STEPS / RAMP_STEPS_PER_BEAT
+            ))]);
+        }
+        let steps = steps as usize;
+        let step_text = |bpm: f64| format!("tempo {bpm:.3}bpm");
+        let (mut extras, mut after) = (Vec::new(), 0u64);
+        for k in 0..steps {
+            let bpm = tempo.bpm + (ramp.bpm - tempo.bpm) * (k + 1) as f64 / steps as f64;
+            if k == 0 {
+                statements[index].text = step_text(bpm);
+            } else {
+                let mut step = statements[index].clone();
+                step.text = step_text(bpm);
+                step.quantize = None;
+                extras.push((after, step));
+            }
+            after += self.samples(60.0 / bpm / RAMP_STEPS_PER_BEAT);
+        }
+        Ok(extras)
     }
 
     fn landing(&self, statements: &[Statement], fallback: Option<Quantize>) -> u64 {
@@ -702,7 +776,7 @@ impl Session {
         let (base, playing) = self.projected();
         Some(Box::new(EvalJob {
             source: job.source.clone(), uses: job.uses.clone(), quantize: job.quantize.clone(), fallback: job.fallback,
-            statements: job.statements.clone(), base, playing, version: self.version,
+            statements: job.statements.clone(), ramp: job.ramp.clone(), base, playing, version: self.version,
             config: self.prepare_config(), committed: self.project.clone(),
             committed_playing: self.playing.clone(),
             waiting: self.pending.iter().map(|p| Waiting { id: p.id, lands_at: p.lands_at,
@@ -726,11 +800,18 @@ impl Session {
         pending.lands_at = pending.lands_at.max(landing);
         pending.id = self.next_id;
         self.next_id += 1;
+        let first_at = pending.lands_at;
         let accepted = Accepted { id: Some(pending.id), lands_at: pending.lands_at,
             position: self.grid().position(pending.lands_at), changes: pending.summary.clone() };
         // Preserve chronological snapshots if a compile crossed a boundary.
         // Existing transactions already prepared against this one cannot land
         // before it. Their original order remains deterministic.
+        // the steps of a tempo ramp follow the first by the spacing worked out when it was written
+        for step in queue.iter_mut().filter(|p| p.id >= NEW_BASE) {
+            step.lands_at = first_at + job.ramp[(step.id - NEW_BASE) as usize].0;
+            step.id = self.next_id;
+            self.next_id += 1;
+        }
         let new_index = queue.iter().position(|p| p.id == accepted.id.unwrap()).unwrap();
         let mut at = queue[new_index].lands_at;
         for p in &mut queue[new_index + 1..] { p.lands_at = p.lands_at.max(at); at = p.lands_at; }
@@ -831,7 +912,7 @@ impl Session {
         for event in events {
             let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
             let dur = self.samples(event.dur.to_seconds(self.program.tempo));
-            self.insert_upcoming(Upcoming { start, dur, event, scheduled: false });
+            self.insert_upcoming(Upcoming { start, dur, event, key: None, scheduled: false });
         }
         Ok(())
     }
@@ -872,9 +953,16 @@ impl Session {
     /// exactly as if `control.set` had been called, so it is logged and replays.
     /// Returns how many controls took it.
     pub fn control_input(&mut self, signal: &ControlSignal) -> usize {
+        if let ControlSignal::MidiNote { note, channel, velocity } = signal {
+            return self.key_input(*channel, *note, *velocity);
+        }
+        self.learn(signal);
         let targets: Vec<(String, f64, Option<&'static str>)> = self.program.controls.iter().filter_map(|def| {
             let binding = def.input.as_ref()?;
-            let t = match (&binding.source, signal) {
+            // a learning control listens to the control change it was given
+            let learned = self.learned.get(&def.name).map(|&cc| InputSource::MidiCc { cc, channel: None });
+            let source = if binding.source == InputSource::MidiLearn { learned.as_ref()? } else { &binding.source };
+            let t = match (source, signal) {
                 (InputSource::MidiCc { cc, channel }, ControlSignal::MidiCc { cc: got, channel: on, value }) =>
                     (cc == got && channel.is_none_or(|c| c == *on)).then(|| f64::from(*value) / 127.0)?,
                 (InputSource::Osc(address), ControlSignal::Osc { address: got, value }) =>
@@ -884,6 +972,89 @@ impl Session {
             Some((def.name.clone(), def.map_input(t)?, def.unit.suffix()))
         }).collect();
         targets.iter().filter(|(name, value, unit)| self.set_control(name, *value, *unit, None, None).is_ok()).count()
+    }
+
+    /// A key pressed (`velocity` from 1) or let go (0) on a MIDI keyboard. Every part whose clip is
+    /// played from keys on this channel (`keys: midi.keys(channel: 1)`) plays the note until the key
+    /// comes up. Returns how many parts took it. It is logged, so a set replays.
+    pub fn key_input(&mut self, channel: u8, note: u8, velocity: u8) -> usize {
+        self.sync_realtime();
+        self.log.push(LogEntry { sample: self.clock, input: LogInput::Key { channel, note, velocity } });
+        self.key_event(channel, note, velocity)
+    }
+
+    fn key_event(&mut self, channel: u8, note: u8, velocity: u8) -> usize {
+        if velocity == 0 {
+            let keys = self.keys_down.remove(&(channel, note)).unwrap_or_default();
+            for &key in &keys {
+                self.release_key(key);
+            }
+            return keys.len();
+        }
+        // pressing a key that is still down lets the first one go
+        for key in self.keys_down.remove(&(channel, note)).unwrap_or_default() {
+            self.release_key(key);
+        }
+        let now = self.seconds(self.clock);
+        let gain = -30.0 + 30.0 * f64::from(velocity.min(127)) / 127.0;
+        let events: Vec<Event> = (1..self.program.tracks.len())
+            .filter_map(|track| self.schedule.key_event(track, now, channel, i32::from(note), gain))
+            .collect();
+        let mut keys = Vec::new();
+        for event in events {
+            if let Err(e) = self.program.plan(&event) {
+                self.notify(format!("key for `{}` could not play: {e}", event.target));
+                continue;
+            }
+            let key = self.next_key;
+            self.next_key = self.next_key.wrapping_add(1) % NO_KEY;
+            let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
+            self.insert_upcoming(Upcoming { start, dur: 0, event, key: Some(key), scheduled: false });
+            keys.push(key);
+        }
+        self.invalidate_live();
+        let taken = keys.len();
+        if taken > 0 {
+            self.keys_down.insert((channel, note), keys);
+        }
+        taken
+    }
+
+    /// Let go of the note a key started: now, if it is sounding, or as soon as it starts.
+    fn release_key(&mut self, key: u32) {
+        let stale = self.clock.saturating_sub(self.samples(2.0));
+        self.key_offs.retain(|&(_, at)| at > stale);
+        self.key_offs.push((key, self.clock));
+        for held in self.held.iter_mut().filter(|h| h.2 == key) {
+            held.0 = self.clock;
+        }
+        // a note that has not started yet is played as a blip, long enough to hear
+        let blip = self.samples(0.01);
+        for note in self.upcoming.iter_mut().filter(|u| u.key == Some(key)) {
+            note.key = None;
+            note.dur = blip;
+        }
+        self.invalidate_live();
+    }
+
+    /// The first control waiting on `midi.learn` takes the control change that just arrived.
+    fn learn(&mut self, signal: &ControlSignal) {
+        let ControlSignal::MidiCc { cc, .. } = signal else { return };
+        let waiting = self.program.controls.iter()
+            .find(|d| d.input.as_ref().is_some_and(|i| i.source == InputSource::MidiLearn) && !self.learned.contains_key(&d.name))
+            .map(|d| d.name.clone());
+        if let Some(name) = waiting {
+            let source = format!("midi.cc({cc})");
+            self.notify(format!("learned: ctl {name} = {source}"));
+            self.learned.insert(name.clone(), *cc);
+            self.learned_out.push((name, source));
+        }
+    }
+
+    /// The controls that learned a control change since this was last called, with what
+    /// `midi.learn` should be rewritten to.
+    pub fn take_learned(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.learned_out)
     }
 
     pub fn control_values(&self) -> Vec<(String, f32, f32, Option<&'static str>)> {
@@ -1031,6 +1202,8 @@ impl Session {
         let Pending { id, statements, summary, project, program, mixer, actions, replays, playing, .. } = p;
 
         if let (Some(program), Some(mixer)) = (program, mixer) {
+            let now = self.seconds(at);
+            retime(&mut self.history, now, self.program.tempo, program.tempo);
             self.swap_program(project, program, mixer, &statements, id);
         }
         for a in actions.iter().chain(&replays) {
@@ -1096,7 +1269,7 @@ impl Session {
             let offset = event.at.to_seconds(tempo);
             let start = if statement.has_at { self.samples(origin + offset) } else { at + self.samples(offset) };
             let dur = self.samples(event.dur.to_seconds(tempo));
-            self.insert_upcoming(Upcoming { start: start.max(at), dur, event: event.clone(), scheduled: false });
+            self.insert_upcoming(Upcoming { start: start.max(at), dur, event: event.clone(), key: None, scheduled: false });
         }
         for scheduled in &program.performance {
             let after = scheduled.at.to_seconds(tempo);
@@ -1160,7 +1333,7 @@ impl Session {
             if let Some(change) = self.control_changes.first() {
                 n = n.min(change.at.saturating_sub(self.clock).max(1));
             }
-            for &(off, _) in &self.held {
+            for &(off, _, _) in &self.held {
                 n = n.min(off.saturating_sub(self.clock).max(1));
             }
             if let Some(&t) = self.schedule.panics().get(self.next_panic) {
@@ -1230,6 +1403,9 @@ impl Session {
                 LogInput::Events { events } => {
                     let _ = session.stream_events(events.clone());
                 }
+                LogInput::Key { channel, note, velocity } => {
+                    session.key_input(*channel, *note, *velocity);
+                }
             }
         }
         extend(&mut session, frames);
@@ -1262,7 +1438,7 @@ impl Session {
         for event in events {
             let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
             let dur = self.samples(event.dur.to_seconds(self.program.tempo));
-            self.insert_upcoming(Upcoming { start, dur, event, scheduled: true });
+            self.insert_upcoming(Upcoming { start, dur, event, key: None, scheduled: true });
         }
         if let Some(e) = problem {
             self.notify(e.to_string());
@@ -1276,9 +1452,10 @@ impl Session {
             match self.program.plan(&note.event) {
                 Ok(plan) => {
                     let graph = self.program.instruments[plan.instrument].graph.clone();
-                    let id = self.mixer.note_on(plan.track, graph, &plan.params, plan.choke);
+                    let id = self.mixer.note_on_with(plan.track, graph, &plan.params, plan.choke, plan.rule);
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
-                    self.held.push((self.clock + note.dur, id));
+                    let off = if note.key.is_some() { u64::MAX } else { self.clock + note.dur };
+                    self.held.push((off, id, note.key.unwrap_or(NO_KEY)));
                     if self.mixer.take_stolen() > 0 {
                         self.notify(format!("too many notes at once: the oldest are ended early to keep to {} voices", DEFAULT_MAX_VOICES));
                     }
@@ -1291,12 +1468,25 @@ impl Session {
     fn release_due(&mut self) {
         let now = self.clock;
         let mixer = &mut self.mixer;
-        self.held.retain(|&(off, id)| {
+        self.held.retain(|&(off, id, _)| {
             if off <= now {
                 mixer.release(id);
             }
             off > now
         });
+    }
+}
+
+/// A tempo change keeps every clip where it is in its bar: what has happened is stretched, and what is
+/// still to come, `at bar 9` for one, is stretched the same way around `now`.
+fn retime(history: &mut [HistoryEntry], now: f64, old: Tempo, new: Tempo) {
+    let (was, is) = (old.beats_per_bar / old.bpm, new.beats_per_bar / new.bpm);
+    if was == is {
+        return;
+    }
+    let ratio = is / was;
+    for entry in history {
+        entry.at = now + (entry.at - now) * ratio;
     }
 }
 
@@ -1375,52 +1565,87 @@ impl Playing {
 type Edited = (Statement, Option<(String, Playing)>);
 
 /// `bass.reverse` becomes `bass.play(<what bass is playing>.reverse)`, `bass.undo` takes
-/// the last change off, and `bass.clear` all of them. Returns the statement to compile and
-/// what the track is playing after it.
-fn join_edit(statement: &Statement, playing: &BTreeMap<String, Playing>, project: &Project) -> Result<Edited, Vec<Problem>> {
-    let (Some(range), Some(plays)) = (&statement.edit, &statement.plays) else { return Ok((statement.clone(), None)) };
-    let track = plays.track.clone();
+/// the last change off, `bass.undo(reverse)` the last `reverse`, and `bass.clear` all of
+/// them. Returns the statements to compile and what each track is playing after them.
+///
+/// The name before the dot is usually a part. For a clip that is only material, such as
+/// `answer`, the change goes to every part playing it.
+fn join_edit(statement: &Statement, playing: &BTreeMap<String, Playing>, project: &Project) -> Result<Vec<Edited>, Vec<Problem>> {
+    let (Some(range), Some(plays)) = (&statement.edit, &statement.plays) else { return Ok(vec![(statement.clone(), None)]) };
+    let name = plays.track.clone();
     if plays.what.trim() == "start" {
         // `verse.start` launches the scene of that name, `bass.start` plays the clip of that name
         let mut statement = statement.clone();
         statement.edit = None;
-        if project.text_of(&format!("scene:{track}")).is_some() {
+        if project.text_of(&format!("scene:{name}")).is_some() {
             statement.plays = None;
-            statement.launch = Some(track);
+            statement.launch = Some(name);
             statement.write_key = Some("launch".into());
         } else {
-            statement.write_key = Some(format!("play:{track}"));
-            statement.plays = Some(niminal_lang::PlayInfo { track: track.clone(), what: track });
+            statement.write_key = Some(format!("play:{name}"));
+            statement.plays = Some(niminal_lang::PlayInfo { track: name.clone(), what: name });
         }
-        return Ok((statement, None));
+        return Ok(vec![(statement, None)]);
     }
-    let Some(current) = playing.get(&track) else {
-        return Err(vec![Problem::plain(format!(
-            "`{track}` isn't playing anything to change; start it first, for example `{track}.start`, or start a scene that has it"
-        ))]);
+    let parts: Vec<&String> = if playing.contains_key(&name) {
+        vec![&name]
+    } else {
+        playing.iter().filter(|(_, p)| root_name(&p.base) == name).map(|(track, _)| track).collect()
     };
+    if parts.is_empty() {
+        return Err(vec![Problem::plain(format!(
+            "`{name}` isn't playing anything to change; start it first, for example `{name}.start`, or start a scene that has it"
+        ))]);
+    }
+    let mut out = Vec::new();
+    for track in parts {
+        let next = change_playing(&playing[track], plays.what.trim(), track)?;
+        let text = next.text();
+        let mut one = statement.clone();
+        one.text.replace_range(range.clone(), &format!("{track}.play({text})"));
+        one.plays = Some(niminal_lang::PlayInfo { track: track.clone(), what: text });
+        one.write_key = Some(format!("play:{track}"));
+        one.edit = None;
+        out.push((one, Some((track.clone(), next))));
+    }
+    Ok(out)
+}
+
+/// What a track plays after `change`: one more change, or `undo`, `undo(name)` or `clear`.
+fn change_playing(current: &Playing, change: &str, track: &str) -> Result<Playing, Vec<Problem>> {
     let mut next = current.clone();
-    match plays.what.trim() {
+    let problem = |message: String| Err(vec![Problem::plain(message)]);
+    match change {
         "undo" => {
             if next.edits.pop().is_none() {
-                return Err(vec![Problem::plain(format!("nothing to undo: `{track}` has no changes made to it"))]);
+                return problem(format!("nothing to undo: `{track}` has no changes made to it"));
             }
         }
         "clear" => next.edits.clear(),
+        named if named.starts_with("undo(") && named.ends_with(')') => {
+            let wanted = named[5..named.len() - 1].trim();
+            match next.edits.iter().rposition(|edit| root_name(edit) == wanted) {
+                Some(at) => {
+                    next.edits.remove(at);
+                }
+                None => return problem(format!("`{track}` has no `{wanted}` change to undo")),
+            }
+        }
         change if next.edits.len() >= MAX_EDITS => {
-            return Err(vec![Problem::plain(format!(
+            return problem(format!(
                 "`{track}` already has {MAX_EDITS} changes (`{change}` would be one more); `{track}.undo` or `{track}.clear` takes some off"
-            ))]);
+            ));
         }
         change => next.edits.push(change.to_string()),
     }
-    let text = next.text();
-    let mut statement = statement.clone();
-    statement.text.replace_range(range.clone(), &format!("{track}.play({text})"));
-    statement.plays = Some(niminal_lang::PlayInfo { track: track.clone(), what: text });
-    statement.write_key = Some(format!("play:{track}"));
-    statement.edit = None;
-    Ok((statement, Some((track, next))))
+    Ok(next)
+}
+
+/// The first name in an expression: `riff` in `riff.reverse.thin(25%)`, `thin` in `thin(25%)`.
+fn root_name(text: &str) -> &str {
+    let text = text.trim_start();
+    let end = text.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(text.len());
+    &text[..end]
 }
 
 /// Record what a launched scene plays: its tracks play what it says, and every other

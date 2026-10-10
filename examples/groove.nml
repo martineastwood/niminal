@@ -1,6 +1,6 @@
 // The performance layer: clips that carry their instrument, scenes, and live commands.
 // Render with:  niminal render examples/groove.nml --out groove.wav
-// Live, try:  verse.start   then   bass.reverse   then   lead.transpose(+5st)   then   bass.undo   then   verse.stop
+// Live, try:  verse.start   then   bass.reverse   then   lead.transpose(+5st)   then   bass.set(bright: 0.9)   then   bass.undo   then   verse.stop
 // The `at +N bars` lines count from when the code lands, so you can submit it again at any time in a live session.
 config { channels: stereo }
 tempo 110bpm

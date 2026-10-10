@@ -34,8 +34,12 @@ enum Command {
         /// A .nms score whose events are played on the file's instruments.
         #[arg(long, requires = "file")]
         score: Option<PathBuf>,
+        /// A WAV file, or with `--stems` a folder.
         #[arg(long)]
         out: PathBuf,
+        /// Write a file for every track and bus as well as the mix, into the folder given by `--out`.
+        #[arg(long, requires = "file", conflicts_with = "replay")]
+        stems: bool,
         /// Turn off the master limiter (offline renders only).
         #[arg(long)]
         no_limiter: bool,
@@ -126,8 +130,8 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Render { file: Some(file), arrangement, score, out, no_limiter, bars, seconds, from, to, .. } => {
-            run_render(&file, arrangement, score.as_deref(), &out, no_limiter, bars, seconds, from.as_deref(), to.as_deref())
+        Command::Render { file: Some(file), arrangement, score, out, stems, no_limiter, bars, seconds, from, to, .. } => {
+            run_render(&file, arrangement, score.as_deref(), &out, stems, no_limiter, bars, seconds, from.as_deref(), to.as_deref())
         }
         Command::Render { replay: Some(log), out, no_limiter, channels, .. } => {
             run_replay(&log, &out, channels, no_limiter)
@@ -236,6 +240,7 @@ fn run_render(
     arrangement: Option<String>,
     score: Option<&Path>,
     out: &Path,
+    stems: bool,
     no_limiter: bool,
     bars: Option<f64>,
     seconds: Option<f64>,
@@ -263,7 +268,7 @@ fn run_render(
         _ => return Err("error: --bars and --seconds must be above zero".into()),
     };
     let from_seconds = from.map(|f| position_seconds(f, bar_seconds)).transpose()?.unwrap_or(0.0);
-    let options = RenderOptions { limiter: !no_limiter, until, arrangement };
+    let options = RenderOptions { limiter: !no_limiter, until, arrangement, stems };
 
     let events = match score {
         None => Vec::new(),
@@ -287,13 +292,30 @@ fn run_render(
     if skip >= rendered.len() {
         return Err(format!("error: the piece ends before {}", from.unwrap_or_default()));
     }
-    for channel in &mut rendered.channels {
+    for channel in rendered.channels.iter_mut().chain(rendered.stems.iter_mut().flat_map(|s| s.channels.iter_mut())) {
         channel.drain(..skip);
     }
 
     let peak = rendered.peak();
     if peak > 1.0 {
         eprintln!("warning: output peaks at {peak:.2}, which will clip (the limiter is off)");
+    }
+    if stems {
+        std::fs::create_dir_all(out).map_err(|e| format!("error: can't make {}: {e}", out.display()))?;
+        let mix = out.join("mix.wav");
+        write_wav(&mix, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", mix.display()))?;
+        for stem in &rendered.stems {
+            let path = out.join(format!("{}.wav", stem.name));
+            write_wav(&path, &stem.channels).map_err(|e| format!("error: can't write {}: {e}", path.display()))?;
+        }
+        println!(
+            "wrote {} files into {} ({:.2}s): mix{}",
+            rendered.stems.len() + 1,
+            out.display(),
+            rendered.len() as f64 / f64::from(SAMPLE_RATE),
+            rendered.stems.iter().map(|s| format!(", {}", s.name)).collect::<String>()
+        );
+        return Ok(());
     }
     write_wav(out, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
     println!(

@@ -29,6 +29,12 @@ pub enum LogInput {
     Events {
         events: Vec<Event>,
     },
+    /// A key on a MIDI keyboard: pressed with `velocity` from 1, or let go with 0.
+    Key {
+        channel: u8,
+        note: u8,
+        velocity: u8,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

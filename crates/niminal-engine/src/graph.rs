@@ -61,7 +61,7 @@ pub struct GraphBuilder {
     nodes: Vec<NodeDef>,
     n_inputs: usize,
     /// (bus, channel, encoded slot)
-    sends: Vec<(usize, usize, usize)>,
+    sends: Vec<(usize, usize, usize, bool)>,
 }
 
 impl GraphBuilder {
@@ -93,7 +93,15 @@ impl GraphBuilder {
     /// Add `src` to one channel of a bus every block.
     pub fn send_channel(&mut self, bus: usize, channel: usize, src: Src) {
         let slot = self.slot_for(src);
-        self.sends.push((bus, channel, slot));
+        self.sends.push((bus, channel, slot, false));
+    }
+
+    /// Like [`GraphBuilder::send_channel`], but what is sent reaches the bus one block later than
+    /// it is made. That is how a loop through buses is broken: a delayed send is not something
+    /// the bus's readers have to wait for.
+    pub fn send_channel_delayed(&mut self, bus: usize, channel: usize, src: Src) {
+        let slot = self.slot_for(src);
+        self.sends.push((bus, channel, slot, true));
     }
 
     /// Add an opcode, wiring its ports by name. Ports left out take their
@@ -194,7 +202,7 @@ impl GraphBuilder {
                 n
             })
             .collect();
-        let sends = self.sends.iter().map(|&(bus, channel, slot)| (bus, channel, resolve(slot))).collect();
+        let sends = self.sends.iter().map(|&(bus, channel, slot, delayed)| (bus, channel, resolve(slot), delayed)).collect();
 
         let mut graph = Graph {
             state_keys: Vec::new(),
@@ -222,7 +230,8 @@ pub struct Graph {
     pub(crate) nodes: Vec<NodeDef>,
     pub(crate) n_inputs: usize,
     /// (bus, channel, slot) triples added to buses after every block.
-    pub(crate) sends: Vec<(usize, usize, usize)>,
+    /// Bus, channel, the slot sent, and whether it arrives a block late.
+    pub(crate) sends: Vec<(usize, usize, usize, bool)>,
     pub(crate) output_slots: Vec<usize>,
 }
 
@@ -276,9 +285,10 @@ impl Graph {
         self.n_inputs
     }
 
-    /// The buses this graph sends to, once each, in ascending order.
+    /// The buses this graph sends to, once each, in ascending order, that must be written before
+    /// they are read. Delayed sends are left out: they do not constrain the order.
     pub fn send_buses(&self) -> Vec<usize> {
-        let mut buses: Vec<usize> = self.sends.iter().map(|&(b, _, _)| b).collect();
+        let mut buses: Vec<usize> = self.sends.iter().filter(|s| !s.3).map(|&(b, _, _, _)| b).collect();
         buses.sort_unstable();
         buses.dedup();
         buses

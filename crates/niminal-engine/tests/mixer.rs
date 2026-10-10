@@ -428,3 +428,23 @@ fn a_choke_fade_also_covers_what_a_voice_sends_to_a_bus() {
     }
     assert!(tail[0] > 0.4 && tail[tail.len() - 1].abs() < 1e-6, "{} {}", tail[0], tail[tail.len() - 1]);
 }
+
+#[test]
+fn a_delayed_send_arrives_exactly_one_block_of_samples_later_whatever_the_call_sizes() {
+    use niminal_engine::{BLOCK, Buses};
+    // an impulse every 100 samples, written in calls of uneven length
+    let mut buses = Buses::new(&[1]);
+    let mut seen = Vec::new();
+    let mut at = 0usize;
+    for frames in [7usize, 32, 1, 20, 32, 9, 32, 32, 31, 32, 32, 32] {
+        buses.begin_block(frames);
+        seen.extend_from_slice(buses.get(0, 0, frames));
+        let send: Vec<f32> = (0..frames).map(|i| if (at + i).is_multiple_of(100) { 1.0 } else { 0.0 }).collect();
+        buses.add_delayed(0, 0, &send);
+        buses.add(0, 0, &[0.0]);
+        buses.end_block(frames);
+        at += frames;
+    }
+    let arrivals: Vec<usize> = seen.iter().enumerate().filter(|(_, v)| **v != 0.0).map(|(i, _)| i).collect();
+    assert_eq!(arrivals, [BLOCK, 100 + BLOCK, 200 + BLOCK], "each impulse comes out BLOCK samples after it went in");
+}

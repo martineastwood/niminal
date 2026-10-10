@@ -109,10 +109,13 @@ Each change builds on what the track is playing, in the order you made them, and
 ```nml
 bass.reverse
 bass.thin(25%)          // reversed, then thinned
-bass.undo               // takes off the last change you made (here, the thin)
+bass.set(bright: 0.9)   // a lane for every note: a number or a pattern
+bass.set(gain: -6db)    // part volume (replaces the clip's own gain lane)
+bass.undo               // takes off the last change you made (here, the gain)
 bass.clear              // takes off all of them
 ```
 
+- `set` gives the clip a lane in place of its own, so typing `bass.set(` offers the lanes the part's instrument has. Setting the same lane again just replaces the earlier value, and `undo` brings the earlier one back.
 - One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A track carries at most 16.
 - Redefining the clip itself (`riff = …`) keeps your changes and applies them to the new clip.
 - `lead.play(…)`, `lead.start` or starting a scene that has it starts the part fresh, with no changes.
@@ -158,6 +161,18 @@ tempo 124bpm @ next bar over 2 bars
 
 Boundaries: `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. One evaluation is one transaction. Last write wins for pending changes.
 
+### Tempo
+
+A new tempo keeps every running clip where it is in its bar: a bar that was three eighths played is still three eighths played, only shorter or longer. Commands set for later (`at +8 bars …`, `at bar 9 …`) keep their place in the music too. A new `meter` is different: it changes what a bar is, so running clips start again.
+
+`over` makes the change gradual:
+
+```nml
+tempo 140bpm @ next bar over 8 bars     // from where it is now, a quarter of a beat at a time
+```
+
+A ramp is a run of ordinary tempo changes, four to a beat, queued at once. They show up in the pending list, and a later `tempo` cancels the ones still waiting. A ramp is a live thing: in a file, `tempo 140bpm over 8 bars` just sets 140bpm from the start. `cancel` without an id drops every pending change, but one id cancels only that step.
+
 ## Live coding model
 
 - Evaluate block/line while performing; whole file when rendering.
@@ -177,9 +192,29 @@ ctl drive  = 0.3
 track bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
 ```
 
-**Keyboards:** `midi.keys` with `note`, `velocity`, `pressure` as signals.
+**Learning a controller:** write `midi.learn` and move the knob you want. The next control change binds to it, and the daemon tells the editor to rewrite the line to what it heard.
 
-**Triggers:** `key("r")`, MIDI notes, `osc_in`. **Inputs:** `input(1)` or `input(1..2)`.
+```nml
+ctl filth = midi.learn.range(200hz..4khz)      // move a knob...
+ctl filth = midi.cc(21).range(200hz..4khz)     // ...and the line becomes this
+```
+
+With several `midi.learn` controls waiting, each takes the next control change in the order they appear. Start the daemon with `--midi` to listen to a controller.
+
+**Keyboards:** a clip with `keys:` instead of `notes:` is played from a MIDI keyboard. Start it like any part, then play:
+
+```nml
+clip pad {
+  instrument: organ
+  keys: midi.keys(channel: 1)      // any channel without the argument
+  bright: 0.6                      // other lanes give every note their value
+}
+pad.start
+```
+
+Each key plays the instrument's `freq` from the note number, with the velocity as the note's `gain` (-30db to 0db), and holds it until the key comes up. A part that is muted, soloed out or stopped doesn't answer the keys. Presses and releases are logged, so a set replays. Pressure, pitch bend and sustain aren't read yet.
+
+**Triggers:** `key("r")` and `osc_in`. **Inputs:** `input(1)` or `input(1..2)`.
 
 ## Modules
 

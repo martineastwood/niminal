@@ -15,7 +15,7 @@ Run `niminal <command> --help` for every flag.
 
 | Command | What it does |
 | --- | --- |
-| `niminal render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, stems-style workflows via arrangement; or `--replay` a session log. |
+| `niminal render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, `--stems` (one file per track and bus into the `--out` folder); or `--replay` a session log. |
 | `niminal daemon` | Live engine: audio, [WebSocket protocol](/reference/protocol/), optional `--midi`, `--osc-port`, `--log`, `--token`, `--no-audio`. |
 | `niminal repl` | REPL connected to a running daemon (`--port`, `--quantize`, `--token`). |
 | `niminal send` | One-shot eval to the daemon (code argument, `--file`, or stdin). |
