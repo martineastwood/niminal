@@ -99,6 +99,11 @@ fn enclosing_call(before: &str) -> Option<Call<'_>> {
     Some(Call { name, receiver, named, unnamed_before, current })
 }
 
+/// Just the given names, for after `alias::`.
+pub fn symbol_items(symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -> Vec<Value> {
+    symbols.iter().map(|s| item(&s.name, symbol_kind(s.kind), &s.detail, &user_docs(s))).collect()
+}
+
 pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -> Vec<Value> {
     let ops = builtin_ops();
     let op_item = |op: &OpInfo| item(&op.name, FUNCTION, &op.signature(), &op.doc);

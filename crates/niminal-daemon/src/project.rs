@@ -1,7 +1,7 @@
 //! The project a session is playing: definitions kept as source text, so that
 //! a snippet can replace one of them and the whole thing be compiled again.
 
-use niminal_lang::{Diagnostic, Span};
+use niminal_lang::{Diagnostic, Expanded, Span};
 
 /// One top-level definition.
 #[derive(Debug, Clone, PartialEq)]
@@ -139,7 +139,23 @@ pub struct Problem {
     pub in_definition: Option<String>,
 }
 
+/// Resolve the `use` lines of code sent from `dir`.
+pub fn expand_uses(source: &str, dir: &std::path::Path) -> Result<Expanded, Vec<Problem>> {
+    niminal_lang::expand(source, dir).map_err(|d| vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))])
+}
+
 impl Problem {
+    /// A problem found in a module, as a problem with the `use` line in `original`.
+    pub fn in_module(self, expanded: &Expanded, original: &str) -> Problem {
+        let Some(span) = self.span else { return self };
+        let mut d = expanded.locate(Diagnostic::new(self.message.clone(), span));
+        if d.span == span {
+            return self;
+        }
+        d.help = self.help;
+        Problem::from_diagnostic(&d, original, Located::Snippet(d.span))
+    }
+
     pub fn plain(message: impl Into<String>) -> Problem {
         Problem { message: message.into(), help: None, line: None, column: None, span: None, in_definition: None }
     }

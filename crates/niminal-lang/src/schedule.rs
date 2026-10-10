@@ -309,7 +309,7 @@ impl Schedule {
     ) -> Result<(), ScheduleError> {
         let Some(notes) = segment.clip.lane("notes") else { return Ok(()) };
         let cycle = self.cycle();
-        let loop_len = segment.clip.length.to_f64() * cycle;
+        let loop_len = if segment.clip.endless { f64::INFINITY } else { segment.clip.length.to_f64() * cycle };
         let until = segment.end.map_or(to, |e| e.min(to));
         let window_start = from.max(segment.start);
         if window_start >= until || loop_len <= 0.0 {
@@ -318,10 +318,10 @@ impl Schedule {
 
         // The loops of the clip that overlap the window.
         let first_loop = ((window_start - segment.start) / loop_len).floor().max(0.0) as i64;
-        let last_loop = ((until - segment.start) / loop_len).ceil() as i64;
+        let last_loop = (((until - segment.start) / loop_len).ceil() as i64).max(1);
 
         for k in first_loop..last_loop {
-            let loop_start = segment.start + k as f64 * loop_len;
+            let loop_start = if segment.clip.endless { segment.start } else { segment.start + k as f64 * loop_len };
             // Only the part of the loop inside the window, padded a little so that
             // rounding can't lose a note on an edge; the check below decides.
             let to_cycles = |seconds: f64| seconds / cycle;
@@ -329,7 +329,7 @@ impl Schedule {
             let b = to_cycles((until - loop_start).min(loop_len)) + PAD_CYCLES;
             let span = CycleSpan::new(
                 micro_cycles(a.floor_to_micro()).max(Rational::ZERO),
-                micro_cycles(b.ceil_to_micro()).min(segment.clip.length),
+                if segment.clip.endless { micro_cycles(b.ceil_to_micro()) } else { micro_cycles(b.ceil_to_micro()).min(segment.clip.length) },
             );
             if span.start >= span.end {
                 continue;
@@ -485,6 +485,14 @@ track bass { instrument = pluck }
         // a short pattern in a long clip simply repeats
         let s = schedule("clip c { length: 2 bars\nnotes: [c4 e4] }\nplay lead = c");
         assert_eq!(times(&s, 0.0, 8.0).len(), 8);
+    }
+
+    #[test]
+    fn a_bare_pattern_keeps_counting_cycles_but_a_clip_restarts() {
+        let order = |s: &Schedule| notes(s, 0.0, 8.0).into_iter().map(|e| e.2).collect::<Vec<_>>();
+        assert_eq!(order(&schedule("play lead = [<c4 e4>]")), [60, 64, 60, 64]);
+        assert_eq!(order(&schedule("play lead = [c4 e4].every(2, it.reverse)")), [64, 60, 60, 64, 64, 60, 60, 64]);
+        assert_eq!(order(&schedule("clip c { notes: [<c4 e4>] }\nplay lead = c")), [60, 60, 60, 60]);
     }
 
     #[test]

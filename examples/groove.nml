@@ -36,18 +36,3 @@ at bar 9 mute bass
 at bar 11 unmute bass
 at bar 13 launch outro
 at bar 15 hush
-
-
-
-//----
-
-launch verse
-launch chorus @ next 4 bars
-mute bass
-unmute bass @ next bar
-unsolo lead
-launch outro @ next 2 bars
-hush
-
-// unmute bass
-hush

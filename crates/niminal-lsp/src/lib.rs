@@ -10,8 +10,18 @@ use std::io::{BufRead, Write};
 use niminal_lang::{CompileOptions, Layout, Samples, Symbol, SymbolKind, builtin_ops, compile_with, symbols, waves};
 use serde_json::{Value, json};
 
+/// A module the document uses.
+struct Import {
+    path: std::path::PathBuf,
+    alias: Option<String>,
+    text: String,
+    /// What it defines that is not private.
+    symbols: Vec<Symbol>,
+}
+
 struct Document {
     text: String,
+    imports: Vec<Import>,
     /// The names from the last version of the text that parsed, so completion
     /// and hover keep working while a statement is half typed.
     symbols: Vec<Symbol>,
@@ -96,9 +106,24 @@ impl Server {
 
     fn update(&mut self, uri: &str, text: &str, out: &mut Vec<Value>) {
         let previous = self.documents.remove(uri).map(|d| d.symbols);
-        let symbols = symbols(text).ok().or(previous).unwrap_or_default();
-        out.push(notification("textDocument/publishDiagnostics", json!({ "uri": uri, "diagnostics": diagnostics(uri, text) })));
-        self.documents.insert(uri.to_string(), Document { text: text.to_string(), symbols });
+        let expanded = niminal_lang::expand(text, &text::directory_of(uri));
+        let (symbols, imports) = match &expanded {
+            Ok(e) => (
+                symbols(&e.text).ok().map(|all| all.into_iter().filter(|s| s.span.end <= e.root_len).collect()),
+                e.imports()
+                    .map(|i| Import {
+                        path: i.path.to_path_buf(),
+                        alias: i.alias.map(str::to_string),
+                        text: i.source.to_string(),
+                        symbols: symbols(i.source).unwrap_or_default().into_iter().filter(|s| !s.name.starts_with('_')).collect(),
+                    })
+                    .collect(),
+            ),
+            Err(_) => (None, Vec::new()),
+        };
+        let symbols = symbols.or(previous).unwrap_or_default();
+        out.push(notification("textDocument/publishDiagnostics", json!({ "uri": uri, "diagnostics": diagnostics(uri, text, expanded) })));
+        self.documents.insert(uri.to_string(), Document { text: text.to_string(), imports, symbols });
     }
 
     fn document(&self, params: &Value) -> Option<(&Document, usize)> {
@@ -108,16 +133,24 @@ impl Server {
 
     fn completion(&self, params: &Value) -> Value {
         let Some((doc, offset)) = self.document(params) else { return json!([]) };
-        let items = complete::items(&doc.text[..offset], &doc.symbols, &|s| doc_comment(&doc.text, s));
-        json!({ "isIncomplete": false, "items": items })
+        let before = &doc.text[..offset];
+        let docs = |s: &Symbol| doc.comment_of(s);
+        // `alias::` offers what that module defines
+        if let Some(alias) = text::qualifier(before) {
+            let names: Vec<Symbol> = doc.imports.iter().filter(|i| i.alias.as_deref() == Some(alias)).flat_map(|i| i.symbols.clone()).collect();
+            return json!({ "isIncomplete": false, "items": complete::symbol_items(&names, &docs) });
+        }
+        let mut symbols = doc.symbols.clone();
+        symbols.extend(doc.imports.iter().filter(|i| i.alias.is_none()).flat_map(|i| i.symbols.clone()));
+        json!({ "isIncomplete": false, "items": complete::items(before, &symbols, &docs) })
     }
 
     fn hover(&self, params: &Value) -> Value {
         let Some((doc, offset)) = self.document(params) else { return Value::Null };
         let Some((word, start, end)) = text::word_at(&doc.text, offset) else { return Value::Null };
         let code = |text: &str| format!("```niminal\n{text}\n```");
-        let contents = if let Some(symbol) = doc.symbols.iter().find(|s| s.name == word) {
-            let comment = doc_comment(&doc.text, symbol);
+        let contents = if let Some((symbol, text, _)) = doc.find(word) {
+            let comment = doc_comment(text, symbol);
             if comment.is_empty() { code(&symbol.detail) } else { format!("{}\n\n{comment}", code(&symbol.detail)) }
         } else if let Some(op) = builtin_ops().into_iter().find(|o| o.name == word) {
             format!("{}\n\n{}", code(&op.signature()), op.doc)
@@ -132,10 +165,10 @@ impl Server {
     fn definition(&self, params: &Value) -> Value {
         let Some((doc, offset)) = self.document(params) else { return Value::Null };
         let Some((word, ..)) = text::word_at(&doc.text, offset) else { return Value::Null };
-        match doc.symbols.iter().find(|s| s.name == word) {
-            Some(s) => json!({
-                "uri": params["textDocument"]["uri"],
-                "range": text::range(&doc.text, s.name_span.start, s.name_span.end),
+        match doc.find(word) {
+            Some((s, text, file)) => json!({
+                "uri": file.map_or_else(|| params["textDocument"]["uri"].clone(), |f| json!(text::file_uri(f))),
+                "range": text::range(text, s.name_span.start, s.name_span.end),
             }),
             None => Value::Null,
         }
@@ -164,6 +197,33 @@ impl Server {
     }
 }
 
+impl Document {
+    /// The definition of a name as written here: in this file, or in a module
+    /// as `alias::name` or plain `name`. With the text it is in and, for a
+    /// module, the file.
+    fn find(&self, word: &str) -> Option<(&Symbol, &str, Option<&std::path::Path>)> {
+        if let Some(s) = self.symbols.iter().find(|s| s.name == word) {
+            return Some((s, &self.text, None));
+        }
+        self.imports.iter().find_map(|i| {
+            let name = match &i.alias {
+                Some(alias) => word.strip_prefix(alias.as_str())?.strip_prefix("::")?,
+                None => word,
+            };
+            i.symbols.iter().find(|s| s.name == name).map(|s| (s, i.text.as_str(), Some(i.path.as_path())))
+        })
+    }
+
+    /// The comment above a definition, in this file or a module.
+    fn comment_of(&self, symbol: &Symbol) -> String {
+        if self.symbols.contains(symbol) {
+            return doc_comment(&self.text, symbol);
+        }
+        let module = self.imports.iter().find(|i| i.symbols.contains(symbol));
+        doc_comment(module.map_or(&self.text, |i| &i.text), symbol)
+    }
+}
+
 fn notification(method: &str, params: Value) -> Value {
     json!({ "jsonrpc": "2.0", "method": method, "params": params })
 }
@@ -180,25 +240,28 @@ fn doc_comment(text: &str, symbol: &Symbol) -> String {
     lines.join("\n")
 }
 
-fn diagnostics(uri: &str, text: &str) -> Vec<Value> {
+fn diagnostics(uri: &str, text: &str, expanded: Result<niminal_lang::Expanded, niminal_lang::Diagnostic>) -> Vec<Value> {
     let options = CompileOptions { default_layout: Layout::Mono, samples: Samples::new(text::directory_of(uri)) };
+    let expanded = match expanded {
+        Ok(e) => e,
+        Err(d) => return vec![diagnostic(text, &d)],
+    };
     // a compiler bug must not take the editor's language support down with it
-    let result = std::panic::catch_unwind(|| compile_with(text, &options));
+    let result = std::panic::catch_unwind(|| compile_with(&expanded.text, &options));
     let errors = match result {
         Ok(Ok(_)) => return Vec::new(),
-        Ok(Err(errors)) => errors,
+        Ok(Err(errors)) => errors.into_iter().map(|d| expanded.locate(d)).collect::<Vec<_>>(),
         Err(_) => return Vec::new(),
     };
-    errors
-        .iter()
-        .map(|d| {
-            let message = match &d.help {
-                Some(help) => format!("{}\nhelp: {help}", d.message),
-                None => d.message.clone(),
-            };
-            json!({ "range": text::range(text, d.span.start, d.span.end), "severity": 1, "source": "niminal", "message": message })
-        })
-        .collect()
+    errors.iter().map(|d| diagnostic(text, d)).collect()
+}
+
+fn diagnostic(text: &str, d: &niminal_lang::Diagnostic) -> Value {
+    let message = match &d.help {
+        Some(help) => format!("{}\nhelp: {help}", d.message),
+        None => d.message.clone(),
+    };
+    json!({ "range": text::range(text, d.span.start, d.span.end), "severity": 1, "source": "niminal", "message": message })
 }
 
 /// Serve LSP over `reader` and `writer` until the editor says `exit` or hangs up.
@@ -332,5 +395,38 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("hoverProvider") && output.contains("isn't supported"));
         assert_eq!(run("".as_bytes(), Vec::new()), 1);
+    }
+
+    #[test]
+    fn names_from_used_modules_complete_hover_and_jump() {
+        let dir = std::env::temp_dir().join(format!("niminal-lsp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("rig.nml"), "/// A plucked note.\ninstr tone(freq: hz) { osc(sine, freq) }\n_secret = [c4]\n").unwrap();
+        std::fs::write(dir.join("plain.nml"), "instr bell(freq: hz) { osc(sine, freq) }\n").unwrap();
+        let uri = format!("file://{}/song.nml", dir.display());
+        let at = |line: u32, character: u32| json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character } });
+        let mut server = Server::new();
+        let text = "use rig as r\nuse plain\nr::tone(freq: 440hz) for 1beat\n";
+        let out = server.handle(&json!({ "method": "textDocument/didOpen", "params": { "textDocument": { "uri": uri, "text": text } } }));
+        assert_eq!(out[0]["params"]["diagnostics"], json!([]), "{out:?}");
+
+        let labels = |v: &Value| v["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let after_alias = request(&mut server, 1, "textDocument/completion", at(2, 3));
+        assert_eq!(labels(&after_alias), ["tone"]);
+        let anywhere = request(&mut server, 2, "textDocument/completion", at(1, 0));
+        let anywhere = labels(&anywhere);
+        assert!(anywhere.contains(&"bell".to_string()) && !anywhere.contains(&"tone".to_string()) && !anywhere.contains(&"_secret".to_string()));
+
+        let hover = request(&mut server, 3, "textDocument/hover", at(2, 4));
+        let hover = hover["contents"]["value"].as_str().unwrap();
+        assert!(hover.contains("instr tone(freq: hz)") && hover.contains("A plucked note."), "{hover}");
+        let location = request(&mut server, 4, "textDocument/definition", at(2, 4));
+        assert!(location["uri"].as_str().unwrap().ends_with("/rig.nml"), "{location}");
+        assert_eq!(location["range"]["start"], json!({ "line": 1, "character": 6 }));
+
+        let out = server.handle(&json!({ "method": "textDocument/didChange", "params": {
+            "textDocument": { "uri": uri }, "contentChanges": [{ "text": "use nowhere\n" }] } }));
+        assert!(out[0]["params"]["diagnostics"][0]["message"].as_str().unwrap().contains("no module `nowhere`"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

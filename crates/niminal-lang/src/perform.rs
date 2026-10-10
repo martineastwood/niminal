@@ -380,7 +380,7 @@ impl Perform<'_> {
             "over" => self.cycles(self.arg(name, rest, "length", span)?)?.max(Rational::new(1, 1000)),
             _ => clip.length,
         };
-        Ok(Clip { name: clip.name, length, lanes })
+        Ok(Clip { name: clip.name, length, endless: false, lanes })
     }
 
     /// Operations that work on any kind of pattern. `None` if `name` isn't one.
@@ -560,7 +560,7 @@ impl Perform<'_> {
             };
             lanes.push((key.name.clone(), pattern));
         }
-        Ok(Clip { name: block.name.name.clone(), length, lanes })
+        Ok(Clip { name: block.name.name.clone(), length, endless: false, lanes })
     }
 
     fn scene(&self, block: &NamedBlock) -> Res<Scene> {
@@ -586,6 +586,7 @@ impl Perform<'_> {
             PerfValue::Pattern(p) => Ok(Clip {
                 name: hint.to_string(),
                 length: Rational::ONE,
+                endless: true,
                 lanes: vec![("notes".to_string(), p)],
             }),
             PerfValue::Grid(_) => Err(Diagnostic::new("a grid has no pitches to play", span)

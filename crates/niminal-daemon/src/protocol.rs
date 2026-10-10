@@ -128,8 +128,11 @@ impl Daemon {
     pub fn prepare_eval(text: &str) -> Option<ParsedEval> {
         let request: Value = serde_json::from_str(text).ok()?;
         match request.get("method").and_then(Value::as_str)? {
-            "eval" => Some(ParsedEval::new(request["params"]["source"].as_str()?,
-                request["params"]["quantize"].as_str())),
+            "eval" => {
+                let params = &request["params"];
+                let dir = params["dir"].as_str().unwrap_or(".");
+                Some(ParsedEval::from_dir(params["source"].as_str()?, std::path::Path::new(dir), params["quantize"].as_str()))
+            }
             "hush" => Some(ParsedEval::new("hush", Some("now"))),
             _ => None,
         }
@@ -278,10 +281,11 @@ impl Daemon {
             .and_then(Value::as_str)
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`eval` needs a string `source`"))?;
         let quantize = params.get("quantize").and_then(Value::as_str);
-        if let Some(dir) = params.get("dir").and_then(Value::as_str) {
-            self.session.set_sample_dir(std::path::Path::new(dir));
+        let dir = params.get("dir").and_then(Value::as_str).map(std::path::Path::new);
+        if let Some(dir) = dir {
+            self.session.set_sample_dir(dir);
         }
-        let result = self.session.eval(source, quantize);
+        let result = self.session.eval_parsed(ParsedEval::from_dir(source, dir.unwrap_or(std::path::Path::new(".")), quantize));
         self.eval_outcome(result)
     }
 

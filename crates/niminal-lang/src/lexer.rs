@@ -104,6 +104,15 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                         end += 1;
                     }
                 }
+                // `alias::name` is one identifier.
+                if src[end..].starts_with("::")
+                    && bytes.get(end + 2).is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+                {
+                    end += 2;
+                    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                        end += 1;
+                    }
+                }
                 let tok = Tok::Ident(src[i..end].to_string());
                 i = end;
                 tok

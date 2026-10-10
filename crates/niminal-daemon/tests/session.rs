@@ -732,3 +732,31 @@ fn adding_a_bus_keeps_existing_effect_memory() {
     live.eval("bus extra", Some("now")).unwrap();
     assert_eq!(run(&mut live, BAR), run(&mut reference, BAR));
 }
+
+fn rig_dir(rig: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("niminal-use-{}-{}", std::process::id(), rig.len()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("rig.nml"), rig).unwrap();
+    dir
+}
+
+#[test]
+fn used_modules_play_and_replay_without_their_files() {
+    let dir = rig_dir("instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\ntrack lead { instrument = pluck }\n");
+    let mut s = session();
+    s.eval_parsed(niminal_daemon::ParsedEval::from_dir("use rig\nplay lead = [c4]", &dir, Some("now"))).unwrap();
+    let original = run(&mut s, BAR);
+    assert!(peak(&original) > 0.1);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), BAR as u64, false);
+    assert_eq!(original, replayed[0]);
+}
+
+#[test]
+fn a_problem_in_a_used_module_points_at_the_use_line() {
+    let dir = rig_dir("instr broken() { nonsense(1) }\n");
+    let mut s = session();
+    let problems = s.eval_parsed(niminal_daemon::ParsedEval::from_dir("use rig\n", &dir, Some("now"))).unwrap_err();
+    assert!(problems[0].message.starts_with("in rig.nml line 1:"), "{}", problems[0].message);
+    assert_eq!(problems[0].line, Some(1));
+}

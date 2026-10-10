@@ -40,14 +40,47 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// The identifier the offset is in or at the end of, with its byte range.
+/// The identifier the offset is in or at the end of, with its byte range. An
+/// `alias::name` is one identifier.
 pub fn word_at(text: &str, offset: usize) -> Option<(&str, usize, usize)> {
     let offset = offset.min(text.len());
-    let start = text[..offset].char_indices().rev().take_while(|(_, c)| is_word(*c)).last().map_or(offset, |(i, _)| i);
-    let end = offset + text[offset..].char_indices().find(|(_, c)| !is_word(*c)).map_or(text.len() - offset, |(i, _)| i);
-    (start < end).then(|| (&text[start..end], start, end))
+    let mut start = text[..offset].char_indices().rev().take_while(|(_, c)| is_word(*c)).last().map_or(offset, |(i, _)| i);
+    let mut end = offset + text[offset..].char_indices().find(|(_, c)| !is_word(*c)).map_or(text.len() - offset, |(i, _)| i);
+    if start >= end {
+        return None;
+    }
+    if text[end..].starts_with("::") && text[end + 2..].starts_with(is_word) {
+        end += 2 + text[end + 2..].find(|c| !is_word(c)).unwrap_or(text.len() - end - 2);
+    }
+    if text[..start].ends_with("::") {
+        let head = &text[..start - 2];
+        let alias = head.len() - head.trim_end_matches(is_word).len();
+        if alias > 0 {
+            start -= 2 + alias;
+        }
+    }
+    Some((&text[start..end], start, end))
 }
 
+/// The alias in `alias::partial` at the end of `before`.
+pub fn qualifier(before: &str) -> Option<&str> {
+    let head = before.trim_end_matches(is_word).strip_suffix("::")?;
+    let alias = &head[head.trim_end_matches(is_word).len()..];
+    (!alias.is_empty()).then_some(alias)
+}
+
+/// A `file://` address for a path.
+pub fn file_uri(path: &std::path::Path) -> String {
+    let mut uri = String::from("file://");
+    for b in path.to_string_lossy().bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~') {
+            uri.push(b as char);
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
+    }
+    uri
+}
 /// The directory a `file://` URI is in, for finding sample files.
 pub fn directory_of(uri: &str) -> std::path::PathBuf {
     let Some(path) = uri.strip_prefix("file://") else { return ".".into() };
@@ -95,6 +128,11 @@ mod tests {
         assert_eq!(word_at(text, 7), Some(("saw", 4, 7)));
         assert_eq!(word_at(text, 3), Some(("osc", 0, 3)));
         assert_eq!(word_at("a  b", 2), None);
+        assert_eq!(qualifier("x.av::sh"), Some("av"));
+        assert_eq!(qualifier("x.av::"), Some("av"));
+        assert_eq!(qualifier("x.av"), None);
+        assert_eq!(word_at("x.av::shimmer(", 8), Some(("av::shimmer", 2, 13)));
+        assert_eq!(word_at("x.av::shimmer(", 3), Some(("av::shimmer", 2, 13)));
         assert_eq!(directory_of("file:///home/me/my%20set/a.nml"), std::path::PathBuf::from("/home/me/my set"));
         assert_eq!(directory_of("untitled:Untitled-1"), std::path::PathBuf::from("."));
     }

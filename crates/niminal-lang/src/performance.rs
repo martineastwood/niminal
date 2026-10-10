@@ -8,13 +8,17 @@ use niminal_score::{Time, Value};
 /// A clip: lanes of patterns sharing one timeline.
 ///
 /// One pattern cycle is one bar. A clip plays `length` cycles and then starts
-/// over, so a one-cycle pattern in a four-cycle clip simply repeats.
+/// over, so a one-cycle pattern in a four-cycle clip simply repeats. A bare
+/// pattern played on its own is `endless` instead: its cycles keep counting, so
+/// `<a b>` and `every` alternate.
 #[derive(Clone)]
 pub struct Clip {
     /// Where the clip came from, for messages.
     pub name: String,
     /// Length in cycles (bars). Defaults to one.
     pub length: Rational,
+    /// Never starts over: `length` is only the first cycle.
+    pub endless: bool,
     /// `notes` is the pitch lane; other lanes set parameters or universal
     /// controls note by note.
     pub lanes: Vec<(String, Pattern<Value>)>,

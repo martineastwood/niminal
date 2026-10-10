@@ -1,0 +1,4 @@
+use voices
+
+tempo 120bpm
+pluck(freq: 440hz) for 1beat

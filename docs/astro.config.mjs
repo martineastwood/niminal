@@ -48,6 +48,7 @@ export default defineConfig({
             { slug: 'reference/language/samples' },
             { slug: 'reference/language/patterns' },
             { slug: 'reference/language/performance' },
+            { slug: 'reference/language/modules' },
           ] },
           { slug: 'reference/score-model' },
           { slug: 'reference/reserved-words' },

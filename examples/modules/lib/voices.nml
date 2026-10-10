@@ -1,0 +1,2 @@
+// Instruments shared by the songs in this folder.
+instr pluck(freq: hz) { osc(sine, freq) * env[1 | 200ms 0] }

@@ -17,7 +17,7 @@ use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use niminal_engine::{DEFAULT_MAX_VOICES, BLOCK, MAX_CHANNELS, Master, Mixer, Transfer, VoiceId};
 use niminal_lang::{
     Action, Clip, CompileOptions, Layout, Samples, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
-    InputSource, analyze, compile_with,
+    Expanded, InputSource, analyze, compile_with,
 };
 use niminal_score::{Event, Time};
 
@@ -121,18 +121,58 @@ pub struct ParsedEval {
     source: String,
     quantize: Option<String>,
     parsed: Result<(Vec<Statement>, Option<Quantize>), Vec<Problem>>,
+    uses: Option<Arc<Uses>>,
+}
+
+/// The modules joined into an evaluation, and the code as it was sent, so a
+/// problem in a module can be pointed at the line that uses it.
+struct Uses {
+    expanded: Expanded,
+    sent: String,
+}
+
+impl Uses {
+    fn locate(&self, problems: Vec<Problem>) -> Vec<Problem> {
+        problems.into_iter().map(|p| p.in_module(&self.expanded, &self.sent)).collect()
+    }
 }
 
 impl ParsedEval {
     pub fn new(source: &str, quantize: Option<&str>) -> Self {
+        Self::from_text(source, quantize, None)
+    }
+
+    /// Code sent from `dir`, whose `use` lines are joined in. The log keeps the
+    /// joined text, so a replay needs no files.
+    pub fn from_dir(sent: &str, dir: &std::path::Path, quantize: Option<&str>) -> Self {
+        match crate::project::expand_uses(sent, dir) {
+            Ok(expanded) => {
+                let text = expanded.text.clone();
+                let uses = Arc::new(Uses { expanded, sent: sent.to_string() });
+                Self::from_text(&text, quantize, Some(uses))
+            }
+            Err(problems) => Self { source: sent.to_string(), quantize: quantize.map(str::to_string), parsed: Err(problems), uses: None },
+        }
+    }
+
+    /// The module files that were joined in.
+    pub fn module_files(&self) -> Vec<std::path::PathBuf> {
+        self.uses.iter().flat_map(|u| u.expanded.files().map(std::path::Path::to_path_buf)).collect()
+    }
+
+    fn from_text(source: &str, quantize: Option<&str>, uses: Option<Arc<Uses>>) -> Self {
         let parsed = (|| {
             let fallback = quantize.map(parse_quantum).transpose()?;
             let statements = analyze(source).map_err(|d| {
-                vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))]
+                let problems = vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))];
+                match &uses {
+                    Some(u) => u.locate(problems),
+                    None => problems,
+                }
             })?;
             Ok((statements, fallback))
         })();
-        Self { source: source.to_string(), quantize: quantize.map(str::to_string), parsed }
+        Self { source: source.to_string(), quantize: quantize.map(str::to_string), parsed, uses }
     }
 }
 
@@ -140,6 +180,7 @@ impl ParsedEval {
 /// compiler needs, so compiling it touches no session.
 pub struct EvalJob {
     source: String,
+    uses: Option<Arc<Uses>>,
     quantize: Option<String>,
     fallback: Option<Quantize>,
     statements: Vec<Statement>,
@@ -162,6 +203,13 @@ impl EvalJob {
     }
 
     fn prepare(&self) -> Result<Prepared, Vec<Problem>> {
+        self.prepare_all().map_err(|problems| match &self.uses {
+            Some(u) => u.locate(problems),
+            None => problems,
+        })
+    }
+
+    fn prepare_all(&self) -> Result<Prepared, Vec<Problem>> {
         // Validate the complete transaction before superseding anything.
         prepare_pending(&self.config, 0, self.lands_at, &self.source,
             self.statements.clone(), &self.base, &self.playing)?;
@@ -569,7 +617,11 @@ impl Session {
     /// quantum each asks for (or `quantize`, or the default for its kind), all
     /// together at the latest of them. If it does not, nothing changes.
     pub fn eval(&mut self, source: &str, quantize: Option<&str>) -> Result<Accepted, Vec<Problem>> {
-        match self.begin_eval(source, quantize) {
+        self.eval_parsed(ParsedEval::new(source, quantize))
+    }
+
+    pub fn eval_parsed(&mut self, input: ParsedEval) -> Result<Accepted, Vec<Problem>> {
+        match self.begin_parsed(input) {
             Begin::Done(result) => result,
             Begin::Job(job) => self.finish_eval(job.compile()),
         }
@@ -585,7 +637,7 @@ impl Session {
 
     pub fn begin_parsed(&mut self, input: ParsedEval) -> Begin {
         self.sync_realtime();
-        let ParsedEval { source, quantize, parsed } = input;
+        let ParsedEval { source, quantize, parsed, uses } = input;
         let (statements, fallback) = match parsed {
             Ok(parsed) => parsed,
             Err(problems) => {
@@ -601,6 +653,7 @@ impl Session {
         let (base, playing) = self.projected();
         Begin::Job(Box::new(EvalJob {
             source,
+            uses,
             quantize,
             fallback,
             statements: statements.clone(),
@@ -629,7 +682,7 @@ impl Session {
         if job.version == self.version { return None; }
         let (base, playing) = self.projected();
         Some(Box::new(EvalJob {
-            source: job.source.clone(), quantize: job.quantize.clone(), fallback: job.fallback,
+            source: job.source.clone(), uses: job.uses.clone(), quantize: job.quantize.clone(), fallback: job.fallback,
             statements: job.statements.clone(), base, playing, version: self.version,
             config: self.prepare_config(), committed: self.project.clone(),
             committed_playing: self.playing.clone(),

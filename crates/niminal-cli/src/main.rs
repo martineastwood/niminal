@@ -248,8 +248,11 @@ fn run_render(
         samples: niminal_lang::Samples::new(file.parent().unwrap_or(Path::new("."))),
         ..Default::default()
     };
-    let program = niminal_lang::compile_with(&source, &options)
-        .map_err(|errors| errors.iter().map(|d| d.render(&name, &source)).collect::<Vec<_>>().join("\n"))?;
+    let expanded = niminal_lang::expand(&source, file.parent().unwrap_or(Path::new(".")))
+        .map_err(|d| d.render(&name, &source))?;
+    let program = niminal_lang::compile_with(&expanded.text, &options).map_err(|errors| {
+        errors.into_iter().map(|d| expanded.locate(d).render(&name, &source)).collect::<Vec<_>>().join("\n")
+    })?;
 
     let bar_seconds = program.tempo.beats_per_bar * 60.0 / program.tempo.bpm;
     let until = match (bars, seconds, to) {
@@ -394,10 +397,10 @@ fn run_daemon(
                 last_report = std::time::Instant::now();
             }
         }
-        if let (Some(path), Some(last)) = (file, watched.as_mut()) {
-            let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if let (Some(path), Some((files, last))) = (file, watched.as_mut()) {
+            let modified = newest(files);
             if modified.is_some() && modified != *last {
-                *last = load(&daemon, path, None);
+                (*files, *last) = load(&daemon, path, None);
             }
         }
         if let Some(path) = log {
@@ -419,19 +422,27 @@ fn run_daemon(
     }
 }
 
-/// Evaluate a project file, reporting what happened. Returns its modification
-/// time, to notice when it changes again.
-fn load(daemon: &Shared, path: &Path, quantize: Option<&str>) -> Option<SystemTime> {
-    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+/// The latest modification time among `files`.
+fn newest(files: &[PathBuf]) -> Option<SystemTime> {
+    files.iter().filter_map(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok()).max()
+}
+
+/// Evaluate a project file, reporting what happened. Returns the files it is
+/// made of and when they were last changed, to notice when any changes again.
+fn load(daemon: &Shared, path: &Path, quantize: Option<&str>) -> (Vec<PathBuf>, Option<SystemTime>) {
+    let mut files = vec![path.to_path_buf()];
     let name = path.display().to_string();
     let source = match read(path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{e}");
-            return modified;
+            return (files.clone(), newest(&files));
         }
     };
-    let parsed = niminal_daemon::ParsedEval::new(&source, quantize);
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let parsed = niminal_daemon::ParsedEval::from_dir(&source, dir, quantize);
+    files.extend(parsed.module_files());
+    let modified = newest(&files);
     let begun = {
         let mut d = lock(daemon);
         d.session_mut().set_sample_dir(path.parent().unwrap_or(Path::new(".")));
@@ -460,7 +471,7 @@ fn load(daemon: &Shared, path: &Path, quantize: Option<&str>) -> Option<SystemTi
         },
         Err(problems) => eprint!("{}", render_problems(&problems, &source, &name)),
     }
-    modified
+    (files, modified)
 }
 
 fn run_send(
