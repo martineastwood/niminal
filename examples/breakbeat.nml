@@ -24,5 +24,3 @@ drums.play(grid {
   s12: .... .... .... ..x.
   s9:  .... .... ...x ....
 })
-
-// drums.stop

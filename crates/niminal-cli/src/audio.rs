@@ -102,10 +102,10 @@ pub struct Running {
     _worker: RenderWorker,
 }
 
-/// About 21ms at 48kHz. This bounds control latency and lets the worker run
+/// About 43ms at 48kHz. This bounds control latency and lets the worker run
 /// independently of device callbacks. Frames are timestamped so a late worker
 /// cannot replay old audio after an underrun.
-const QUEUE_FRAMES: usize = 1024;
+const QUEUE_FRAMES: usize = 2048;
 
 struct Frame {
     at: u64,
@@ -213,6 +213,7 @@ impl RenderWorker {
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let thread = thread::Builder::new().name("niminal-render".into()).spawn(move || {
             let mut producer = producer;
+            prefer_low_latency_scheduling();
             // Prime the queue before starting the sound card.
             fill_queue(&mut renderer, &mut producer, queue_frames, next, &epoch, &health);
             let _ = ready_tx.send(());
@@ -238,6 +239,15 @@ impl RenderWorker {
         let worker = Self { stop, thread: Some(thread), planner: Some(planner) };
         ready_rx.recv().map_err(|_| "the audio render worker stopped before starting".to_string())?;
         Ok((playback, worker))
+    }
+}
+
+/// Without this macOS may park the render thread for tens of milliseconds, which dries the queue.
+fn prefer_low_latency_scheduling() {
+    #[cfg(target_os = "macos")]
+    // SAFETY: sets the scheduling class of the calling thread; nothing else is touched.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
     }
 }
 

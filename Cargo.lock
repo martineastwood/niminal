@@ -692,6 +692,7 @@ dependencies = [
  "clap",
  "cpal",
  "hound",
+ "libc",
  "midir",
  "niminal-daemon",
  "niminal-engine",
