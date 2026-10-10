@@ -16,6 +16,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "vscode-languageclient": "9.0.1",
     "ws": "8.18.0"
   },
   "contributes": {
@@ -97,6 +98,11 @@
         "title": "Stop Track",
         "category": "niminal",
         "icon": "$(debug-stop)"
+      },
+      {
+        "command": "niminal.restartLanguageServer",
+        "title": "Restart Language Server",
+        "category": "niminal"
       }
     ],
     "keybindings": [

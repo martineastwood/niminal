@@ -15,6 +15,7 @@ niminal-score = { path = "../niminal-score" }
 clap = { version = "4", features = ["derive"] }
 hound = "3"
 niminal-daemon = { path = "../niminal-daemon" }
+niminal-lsp = { path = "../niminal-lsp" }
 cpal = "0.18"
 tungstenite = "0.30"
 serde_json = "1"

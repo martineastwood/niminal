@@ -71,7 +71,7 @@ pub fn compile_opcode(def: &OpcodeDef, registry: &Registry, names: &Names, tempo
         Ok(kernel) => (Build::Custom(Arc::new(Kernel { name: name.clone(), ports, ..kernel })), None),
         Err(d) => (Build::Invalid, Some(d)),
     };
-    let spec = OpSpec { name, params, positional: 1, build: build.0 };
+    let spec = OpSpec { name, doc: String::new(), params, positional: 1, build: build.0 };
     Ok((spec, build.1))
 }
 

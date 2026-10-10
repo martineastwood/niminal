@@ -240,3 +240,28 @@ fn repl_runs_multiline_blocks_and_reports_errors_without_stopping() {
     // The tempo, the instrument and track, and the final play all went through.
     assert_eq!(stdout.matches("applied").count() + stdout.matches("lands at").count(), 4, "{stdout}");
 }
+
+#[test]
+fn the_lsp_subcommand_answers_an_editor_over_stdio() {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(env!("CARGO_BIN_EXE_niminal"))
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for body in [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"shutdown"}"#,
+        r#"{"jsonrpc":"2.0","method":"exit"}"#,
+    ] {
+        write!(stdin, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    }
+    drop(stdin);
+    let mut out = String::new();
+    child.stdout.take().unwrap().read_to_string(&mut out).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(out.contains("hoverProvider"), "{out}");
+}

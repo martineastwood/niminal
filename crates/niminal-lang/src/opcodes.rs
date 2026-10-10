@@ -73,6 +73,8 @@ pub enum Build {
 
 pub struct OpSpec {
     pub name: String,
+    /// What the opcode does, for hover and completion. Empty for user-defined opcodes.
+    pub doc: String,
     pub params: Vec<ParamSpec>,
     /// How many leading arguments may be given without a name. The receiver of
     /// a method call counts as the first.
@@ -97,12 +99,12 @@ fn filter_params() -> Vec<ParamSpec> {
     vec![req("x", SIGNAL), req("cutoff", Kind::Signal(Unit::Hz)), opt("res", SIGNAL)]
 }
 
-fn filter(name: &str, build: BuildFn) -> OpSpec {
-    OpSpec { name: name.into(), params: filter_params(), positional: 1, build: Build::Builtin(build) }
+fn filter(name: &str, doc: &str, build: BuildFn) -> OpSpec {
+    OpSpec { name: name.into(), doc: doc.into(), params: filter_params(), positional: 1, build: Build::Builtin(build) }
 }
 
-fn math(name: &str, build: BuildFn) -> OpSpec {
-    OpSpec { name: name.into(), params: vec![req("x", SIGNAL)], positional: 1, build: Build::Builtin(build) }
+fn math(name: &str, doc: &str, build: BuildFn) -> OpSpec {
+    OpSpec { name: name.into(), doc: doc.into(), params: vec![req("x", SIGNAL)], positional: 1, build: Build::Builtin(build) }
 }
 
 pub struct Registry {
@@ -114,22 +116,25 @@ impl Registry {
         let ops = vec![
             OpSpec {
                 name: "osc".into(),
+                doc: "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri; `phase_mod` bends the phase for FM.".into(),
                 params: vec![req("wave", Kind::Wave), req("freq", Kind::Signal(Unit::Hz)), opt("phase_mod", SIGNAL)],
                 positional: 2,
                 build: Build::Builtin(|a| Ok(Box::new(Osc::new(a.wave.expect("osc has a wave"))))),
             },
-            filter("lpf", |_| Ok(Box::new(Svf::new(FilterMode::Low)))),
-            filter("hpf", |_| Ok(Box::new(Svf::new(FilterMode::High)))),
-            filter("bpf", |_| Ok(Box::new(Svf::new(FilterMode::Band)))),
-            filter("notch", |_| Ok(Box::new(Svf::new(FilterMode::Notch)))),
+            filter("lpf", "A low-pass filter: lets frequencies below `cutoff` through. `res` adds resonance.", |_| Ok(Box::new(Svf::new(FilterMode::Low)))),
+            filter("hpf", "A high-pass filter: lets frequencies above `cutoff` through. `res` adds resonance.", |_| Ok(Box::new(Svf::new(FilterMode::High)))),
+            filter("bpf", "A band-pass filter: lets frequencies around `cutoff` through. `res` narrows the band.", |_| Ok(Box::new(Svf::new(FilterMode::Band)))),
+            filter("notch", "A notch filter: removes frequencies around `cutoff`. `res` narrows the notch.", |_| Ok(Box::new(Svf::new(FilterMode::Notch)))),
             OpSpec {
                 name: "gain".into(),
+                doc: "Scales a signal by a gain in db or a plain factor.".into(),
                 params: vec![req("x", SIGNAL), req("gain", Kind::Gain)],
                 positional: 2,
                 build: Build::Builtin(|_| Ok(Box::new(Gain))),
             },
             OpSpec {
                 name: "delay".into(),
+                doc: "A delay line. `time` is how long to wait, `feedback` feeds the output back in. A changing `time` needs `max:` to size the line (at most 30 seconds).".into(),
                 params: vec![
                     req("x", SIGNAL),
                     req("time", Kind::Signal(Unit::Time)),
@@ -149,27 +154,30 @@ impl Registry {
             },
             OpSpec {
                 name: "reverb".into(),
+                doc: "A reverb: `room` sets its size and `damp` how quickly the highs die away.".into(),
                 params: vec![req("x", SIGNAL), opt("room", SIGNAL), opt("damp", SIGNAL)],
                 positional: 1,
                 build: Build::Builtin(|a| Ok(Box::new(Reverb::for_channel(a.channel)))),
             },
             OpSpec {
                 name: "pan".into(),
+                doc: "Places a signal in the master layout. `azimuth` is in degrees (0 is straight ahead, positive is right); `spread` widens it.".into(),
                 params: vec![req("x", SIGNAL), opt("azimuth", Kind::Signal(Unit::Angle)), opt("spread", SIGNAL)],
                 positional: 1,
                 build: Build::Pan,
             },
             OpSpec {
                 name: "to_layout".into(),
+                doc: "Converts a signal to a channel layout such as `stereo`.".into(),
                 params: vec![req("x", SIGNAL), req("layout", Kind::Layout)],
                 positional: 2,
                 build: Build::ToLayout,
             },
-            math("sin", |_| Ok(Box::new(Func(Fn1::Sin)))),
-            math("cos", |_| Ok(Box::new(Func(Fn1::Cos)))),
-            math("tanh", |_| Ok(Box::new(Func(Fn1::Tanh)))),
-            math("exp", |_| Ok(Box::new(Func(Fn1::Exp)))),
-            math("abs", |_| Ok(Box::new(Func(Fn1::Abs)))),
+            math("sin", "Sine of a signal (radians).", |_| Ok(Box::new(Func(Fn1::Sin)))),
+            math("cos", "Cosine of a signal (radians).", |_| Ok(Box::new(Func(Fn1::Cos)))),
+            math("tanh", "Soft-clips a signal into -1..1; a classic saturator.", |_| Ok(Box::new(Func(Fn1::Tanh)))),
+            math("exp", "e raised to a signal.", |_| Ok(Box::new(Func(Fn1::Exp)))),
+            math("abs", "Absolute value of a signal.", |_| Ok(Box::new(Func(Fn1::Abs)))),
         ];
         Registry { ops }
     }
