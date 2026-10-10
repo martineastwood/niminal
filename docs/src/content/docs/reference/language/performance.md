@@ -54,8 +54,10 @@ track bass(tone: hz = 2khz) {
 ```
 
 - Tracks with an instrument play plain note patterns (MIDI-clip style).
-- Tracks are created on first use.
-- Mixer: `gain`, `pan`, `mute`, `solo`; `with(quantize: ...)` for launch quantization.
+- **Parameters** (`tone: hz = 2khz`) are controls named `bass::tone`, which the track's lines read by their short name. Set one from outside like any `ctl` (a client, or MIDI or OSC bound to it), or change its starting value in the header and re-evaluate: it glides there. A clip lane can't drive one yet, and says so if you try.
+- **`notes`** changes the notes of every clip played on the track, with `it` the clip's notes. `notes = it.thin(10%)` drops a tenth of them whatever is playing. A clip played from keys is left as it is. A mistake in it is reported where a clip is played on the track.
+- **Short forms:** `track bass = pluck(bright: 0.4)` is a track with only an instrument. Naming an instrument where a part goes, as in `pluck.start` or a scene's `{ pluck: riff }`, makes a track of that name playing it.
+- Mixer: `gain`, `pan`, `mute`, `solo`; `with(quantize: ...)` for launch quantization (not built yet: use `.gain()` in `out`, and the mute and solo commands).
 - Re-evaluating a track carries effect state without clicks.
 
 ## Clips
@@ -91,7 +93,19 @@ A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only
 
 Launching a scene starts the clips it lists and **stops every other track** that has an instrument, so a scene is the whole picture: leave a track out and it falls silent. `~` still works for a track you want to name as silent. To add a fill for a bar, write it as a `play` line instead of a scene.
 
-See [Score model](/reference/score-model/) for arrangement-level tempo, meter, and lanes.
+An `arrangement` plays scenes in order, each for a length, and sections can have a tempo and meter of their own, one for each section:
+
+```nml
+arrangement song {
+  sections: [dawn.over(16 bars) build.over(32 bars) theme.over(24 bars)]
+  tempo:    [84bpm 96bpm 96bpm]
+  meter:    [4/4 4/4 7/8]
+}
+```
+
+A section's bars are its own: `over(8 bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section; a tempo that moves gradually within one isn't built, and neither are automation lanes. Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
+
+See [Score model](/reference/score-model/) for arrangement-level lanes.
 
 ## Live commands
 

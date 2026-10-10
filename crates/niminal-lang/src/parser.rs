@@ -293,8 +293,20 @@ impl Parser {
         } else if self.is_keyword("track") {
             let start = self.bump().span;
             let name = self.ident("a track name")?;
+            // `track bass = pluck(bright: 0.4)` is `track bass { instrument = pluck(bright: 0.4) }`
+            if self.eat(&Tok::Eq) {
+                let value = self.expr()?;
+                let end = self.prev_span();
+                let key = Ident { name: "instrument".into(), span: start };
+                return Ok(Item::Track(TrackDecl { name, params: Vec::new(), body: vec![Stmt::Bind { name: key, value }], span: start.to(end) }));
+            }
+            let params = if self.peek() == &Tok::LParen { self.params()? } else { Vec::new() };
+            if let Some(p) = params.iter().find(|p| p.default.is_none()) {
+                return Err(Diagnostic::new(format!("track parameter `{}` needs a starting value", p.name.name), p.name.span)
+                    .with_help("for example `track bass(tone: hz = 2khz)`"));
+            }
             let (body, end) = self.block()?;
-            Ok(Item::Track(TrackDecl { name, body, span: start.to(end) }))
+            Ok(Item::Track(TrackDecl { name, params, body, span: start.to(end) }))
         } else if self.is_keyword("opcode") {
             let (name, params, options, body, span) = self.definition()?;
             if let Some(option) = options.first() {
@@ -349,15 +361,35 @@ impl Parser {
     fn arrangement(&mut self, name: Ident, start: Span) -> Res<ArrangementDecl> {
         self.expect(&Tok::LBrace)?;
         let mut sections = None;
+        let (mut tempos, mut meters) = (None, None);
         loop {
             self.skip_newlines();
             if self.peek() == &Tok::RBrace {
                 break;
             }
             let key = self.ident("`sections`")?;
+            if key.name == "tempo" || key.name == "meter" {
+                self.expect(&Tok::Colon)?;
+                let slot = if key.name == "tempo" { &mut tempos } else { &mut meters };
+                if slot.is_some() {
+                    return Err(Diagnostic::new(format!("`{}` is given twice", key.name), key.span));
+                }
+                self.expect(&Tok::LBracket)?;
+                let mut list = Vec::new();
+                while self.peek() != &Tok::RBracket {
+                    list.push(self.expr()?);
+                    self.eat(&Tok::Comma);
+                }
+                self.expect(&Tok::RBracket)?;
+                *slot = Some(list);
+                if !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
+                    return Err(self.unexpected("the end of the line"));
+                }
+                continue;
+            }
             if key.name != "sections" {
                 return Err(Diagnostic::new(format!("`{}` isn't supported in an arrangement yet", key.name), key.span)
-                    .with_help("an arrangement has `sections` so far; tempo, meter and automation lanes come later"));
+                    .with_help("an arrangement has `sections`, and `tempo` and `meter` for each of them; automation lanes come later"));
             }
             self.expect(&Tok::Colon)?;
             if sections.is_some() {
@@ -389,15 +421,12 @@ impl Parser {
             Diagnostic::new(format!("arrangement `{}` has no sections", name.name), name.span)
                 .with_help("add `sections: [scene.over(8 bars) ...]`")
         })?;
-        Ok(ArrangementDecl { name, sections, span: start.to(end) })
+        Ok(ArrangementDecl { name, sections, tempos, meters, span: start.to(end) })
     }
 
     /// `instr|opcode name(params) { body }`
-    fn definition(&mut self) -> Res<Definition> {
-        let keyword = self.bump();
-        let start = keyword.span;
-        let what = if matches!(&keyword.tok, Tok::Ident(k) if k == "instr" || k == "mono") { "an instrument name" } else { "an opcode name" };
-        let name = self.ident(what)?;
+    /// `(a: hz = 1khz, b)`
+    fn params(&mut self) -> Res<Vec<ParamDef>> {
         self.expect(&Tok::LParen)?;
         let mut params = Vec::new();
         while self.peek() != &Tok::RParen {
@@ -410,6 +439,15 @@ impl Parser {
             }
         }
         self.expect(&Tok::RParen)?;
+        Ok(params)
+    }
+
+    fn definition(&mut self) -> Res<Definition> {
+        let keyword = self.bump();
+        let start = keyword.span;
+        let what = if matches!(&keyword.tok, Tok::Ident(k) if k == "instr" || k == "mono") { "an instrument name" } else { "an opcode name" };
+        let name = self.ident(what)?;
+        let params = self.params()?;
         let options = if self.is_keyword("with") {
             self.bump();
             self.args()?

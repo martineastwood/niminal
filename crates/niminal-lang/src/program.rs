@@ -79,6 +79,8 @@ pub struct TrackInfo {
     pub instrument: Option<usize>,
     /// Arguments given in `instrument = name(...)`, applied to every note.
     pub defaults: BTreeMap<String, Value>,
+    /// `notes = it.thin(10%)`: how every clip played on the track has its notes changed, with `it` the clip's.
+    pub notes: Option<crate::ast::Expr>,
     pub def: TrackDef,
 }
 

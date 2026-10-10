@@ -269,10 +269,15 @@ impl Perform<'_> {
     /// A length of time as a number of cycles (bars). Beats are a share of a
     /// bar; seconds would depend on the tempo, so they are not accepted.
     fn cycles(&self, e: &Expr) -> Res<Rational> {
+        self.cycles_in(e, self.cx.tempo.beats_per_bar)
+    }
+
+    /// Like [`Perform::cycles`], for bars that are `beats_per_bar` long.
+    fn cycles_in(&self, e: &Expr, beats_per_bar: f64) -> Res<Rational> {
         let (r, unit) = self.quantity(e)?;
         match unit.as_deref() {
             None | Some("bar" | "bars") => Ok(r),
-            Some("beat" | "beats") => Ok(r / Rational::from_f64(self.cx.tempo.beats_per_bar)),
+            Some("beat" | "beats") => Ok(r / Rational::from_f64(beats_per_bar)),
             Some(u) => Err(Diagnostic::new(format!("expected a length in beats or bars, found `{u}`"), e.span)),
         }
     }
@@ -710,7 +715,7 @@ impl Perform<'_> {
                 }
                 let t = self.track(track)?;
                 let clip = self.to_clip(self.eval(what, None)?, &track.name, what.span)?;
-                self.check_clip(&clip, t, track, what.span)?;
+                let clip = self.on_track(clip, t, track, what.span)?;
                 vec![schedule(Action::Play { track: t, clip })]
             }
             Command::Start { name, .. } => {
@@ -734,7 +739,7 @@ impl Perform<'_> {
                 }
                 let what = Expr { kind: ExprKind::Name(name.name.clone()), span: name.span };
                 let clip = self.to_clip(self.eval(&what, None)?, &name.name, name.span)?;
-                self.check_clip(&clip, t, name, name.span)?;
+                let clip = self.on_track(clip, t, name, name.span)?;
                 vec![schedule(Action::Play { track: t, clip })]
             }
             Command::Stop(t) => match self.bindings.get(&t.name) {
@@ -773,8 +778,8 @@ impl Perform<'_> {
             match clip {
                 Some(clip) => {
                     let id = Ident { name: self.cx.tracks[*track].name.clone(), span: name.span };
-                    self.check_clip(clip, *track, &id, name.span)?;
-                    out.push(schedule(Action::Play { track: *track, clip: clip.clone() }));
+                    let clip = self.on_track(clip.clone(), *track, &id, name.span)?;
+                    out.push(schedule(Action::Play { track: *track, clip }));
                 }
                 None => out.push(schedule(Action::Stop { track: *track })),
             }
@@ -787,21 +792,66 @@ impl Perform<'_> {
         Ok(out)
     }
 
-    /// Scenes one after another, each for its length, then everything stops.
+    /// Scenes one after another, each for its length, then everything stops. A section may have its own
+    /// tempo and meter, from the `tempo` and `meter` lists.
     fn arrangement(&self, decl: &ArrangementDecl) -> Res<Arrangement> {
-        let mut beat = 0.0;
+        for (name, list) in [("tempo", &decl.tempos), ("meter", &decl.meters)] {
+            if let Some(list) = list
+                && list.len() != decl.sections.len()
+            {
+                return Err(Diagnostic::new(
+                    format!("`{name}` has {} where there are {} sections", list.len(), decl.sections.len()),
+                    list.first().map_or(decl.name.span, |e| e.span),
+                )
+                .with_help(format!("give `{name}` one for each section")));
+            }
+        }
+        let own = decl.tempos.is_some() || decl.meters.is_some();
+        let mut seconds = 0.0;
         let mut actions = Vec::new();
-        for section in &decl.sections {
-            let length = self.cycles(&section.length)?;
+        let mut tempos = Vec::new();
+        for (i, section) in decl.sections.iter().enumerate() {
+            let mut tempo = self.cx.tempo;
+            if let Some(e) = decl.tempos.as_ref().map(|l| &l[i]) {
+                tempo.bpm = crate::compile::bpm_of(e)?;
+            }
+            if let Some(e) = decl.meters.as_ref().map(|l| &l[i]) {
+                tempo.beats_per_bar = crate::compile::meter_beats(e)?;
+            }
+            let length = self.cycles_in(&section.length, tempo.beats_per_bar)?;
             if length <= Rational::ZERO {
                 return Err(Diagnostic::new("a section needs a length above zero", section.length.span));
             }
-            let at = Time::Beats(beat);
+            let at = Time::Seconds(seconds);
             actions.extend(self.launch(&section.scene, &|action| Scheduled { at, action, quantize: None })?);
-            beat += length.to_f64() * self.cx.tempo.beats_per_bar;
+            if own {
+                tempos.push((seconds, tempo));
+            }
+            seconds += length.to_f64() * tempo.beats_per_bar * 60.0 / tempo.bpm;
         }
-        actions.push(Scheduled { at: Time::Beats(beat), action: Action::Hush, quantize: None });
-        Ok(Arrangement { name: decl.name.name.clone(), actions })
+        actions.push(Scheduled { at: Time::Seconds(seconds), action: Action::Hush, quantize: None });
+        Ok(Arrangement { name: decl.name.name.clone(), actions, tempos })
+    }
+
+    /// The clip as `track` plays it: its `notes` line, if it has one, changes the clip's notes. It also
+    /// has to make sense on the track's instrument.
+    fn on_track(&self, mut clip: Clip, track: usize, id: &Ident, span: Span) -> Res<Clip> {
+        if let Some(effect) = &self.cx.tracks[track].notes
+            && let Some(at) = clip.lanes.iter().position(|(lane, _)| lane == "notes")
+        {
+            let it = PerfValue::Pattern(clip.lanes[at].1.clone());
+            match self.eval(effect, Some(&it)).map_err(|d| {
+                Diagnostic::new(format!("the `notes` line of track `{}`: {}", id.name, d.message), effect.span)
+            })? {
+                PerfValue::Pattern(p) => clip.lanes[at].1 = p,
+                other => {
+                    return Err(Diagnostic::new(format!("the `notes` line of track `{}` makes {}, not a pattern", id.name, other.describe()), effect.span)
+                        .with_help("it should change `it`, as in `notes = it.thin(10%)`"));
+                }
+            }
+        }
+        self.check_clip(&clip, track, id, span)?;
+        Ok(clip)
     }
 
     /// Does `clip`'s notes and lanes make sense on `track`'s instrument?
@@ -840,6 +890,11 @@ impl Perform<'_> {
             }
             if matches!(lane.as_str(), "pan" | "to") {
                 return Err(Diagnostic::new(format!("the `{lane}` lane isn't supported yet"), span));
+            }
+            let control = format!("{}::{lane}", info.name);
+            if self.cx.names.controls.iter().any(|c| c.name == control) {
+                return Err(Diagnostic::new(format!("`{lane}` is a parameter of track `{}`, not of a note", info.name), span)
+                    .with_help(format!("change it from outside as the control `{control}`, or by changing its starting value in the track")));
             }
             let mut known: Vec<&str> = instrument.params.iter().map(|p| p.name.as_str()).collect();
             known.extend(UNIVERSAL_LANES);

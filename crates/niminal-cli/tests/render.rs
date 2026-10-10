@@ -954,6 +954,24 @@ fn an_arrangement_plays_its_scenes_in_order_and_then_stops() {
 }
 
 #[test]
+fn sections_can_have_their_own_tempo_and_meter() {
+    let song = |lanes: &str| format!("{SONG}\narrangement fast {{ sections: [one.over(2 bars) two.over(1 bar)]\n{lanes} }}");
+    let secs = |lanes: &str| mono(render_with(&program(&song(lanes)), &[], &arrangement("fast")).unwrap()).len() as f64 / SR;
+    let plain = secs("");
+    assert!((plain - 6.0).abs() < 0.2, "{plain}");
+    // the second section at twice the speed lasts half as long
+    let faster = secs("tempo: [120bpm 240bpm]");
+    assert!((faster - 5.0).abs() < 0.2, "4s and 1s: {faster}");
+    // and in 3/4 a bar is three beats: two bars of 3/4 at 120bpm are 3s, one bar of 7/8 (3.5 beats) is 1.75s
+    let meters = secs("meter: [3/4 7/8]");
+    assert!((meters - 4.75).abs() < 0.2, "{meters}");
+    // a section's clip cycles with its bar, so the notes of a faster section come faster
+    let out = mono(render_with(&program(&song("tempo: [120bpm 120bpm]")), &[], &arrangement("fast")).unwrap());
+    let quick = mono(render_with(&program(&song("tempo: [240bpm 240bpm]")), &[], &arrangement("fast")).unwrap());
+    assert!(quick.len() * 2 < out.len() + 4800, "{} vs {}", quick.len(), out.len());
+}
+
+#[test]
 fn render_with_an_arrangement_ignores_the_files_own_timeline() {
     let src = format!("{SONG}\na.play([c6])");
     let p = program(&src);
@@ -970,7 +988,11 @@ fn arrangement_mistakes_are_reported() {
     let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\ntrack a { instrument = t }\nscene one { a: [c4] }\n";
     assert!(err(&format!("{base}arrangement s {{ sections: [on.over(1 bar)] }}")).contains("no scene named `on`did you mean `one`?"));
     assert!(err(&format!("{base}arrangement s {{ sections: [one] }}")).contains("`one` needs a lengthfor example `one.over(8 bars)`"));
-    assert!(err(&format!("{base}arrangement s {{ tempo: 100bpm }}")).contains("`tempo` isn't supported in an arrangement yet"));
+    assert!(err(&format!("{base}arrangement s {{ volume: [1] }}")).contains("`volume` isn't supported in an arrangement yet"));
+    let two = "sections: [one.over(1 bar) one.over(1 bar)]";
+    assert!(err(&format!("{base}arrangement s {{ {two}\n tempo: [100bpm] }}")).contains("`tempo` has 1 where there are 2 sectionsgive `tempo` one for each section"));
+    assert!(err(&format!("{base}arrangement s {{ {two}\n meter: [4/4 4] }}")).contains("meter is a fraction of whole numbers"));
+    assert!(err(&format!("{base}arrangement s {{ {two}\n tempo: [100bpm 0bpm] }}")).contains("positive number of bpm"));
     assert!(err(&format!("{base}arrangement s {{ sections: [one.over(0 bars)] }}")).contains("above zero"));
     assert!(err(&format!("{base}arrangement s {{ sections: [one.over(1 bar)] }}\narrangement s {{ sections: [one.over(1 bar)] }}")).contains("defined twice"));
 

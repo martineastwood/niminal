@@ -106,4 +106,6 @@ pub struct Arrangement {
     pub name: String,
     /// The commands that play it, from the start of the piece.
     pub actions: Vec<Scheduled>,
+    /// Where each section's own tempo and meter begin, in seconds. Empty if the piece has just the file's.
+    pub tempos: Vec<(f64, niminal_score::Tempo)>,
 }

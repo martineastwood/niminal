@@ -41,6 +41,8 @@ impl std::error::Error for ScheduleError {}
 
 /// A clip playing on a track from `start` until `end` (seconds).
 struct Segment {
+    /// The tempo and meter it plays in, which set how long a cycle is.
+    tempo: Tempo,
     track: usize,
     clip: Clip,
     start: f64,
@@ -95,7 +97,6 @@ pub struct Found {
 }
 
 pub struct Schedule {
-    tempo: Tempo,
     track_names: Vec<String>,
     segments: Vec<Segment>,
     /// Mute and solo changes, in time order.
@@ -106,7 +107,7 @@ pub struct Schedule {
 impl Program {
     /// The notes this program's `play`, `launch` and related commands produce.
     pub fn schedule(&self) -> Schedule {
-        Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &self.performance)
+        Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &self.performance, &[])
     }
 }
 
@@ -123,7 +124,7 @@ impl Program {
                 },
             });
         };
-        Ok(Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &arrangement.actions))
+        Ok(Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &arrangement.actions, &arrangement.tempos))
     }
 }
 
@@ -132,10 +133,12 @@ impl Schedule {
     /// `track_names`. The commands' `at` times are what they are; their
     /// `quantize` is ignored (a live session has already applied it).
     pub fn from_commands(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled]) -> Schedule {
-        Schedule::new(tempo, track_names, commands)
+        Schedule::new(tempo, track_names, commands, &[])
     }
 
-    fn new(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled]) -> Schedule {
+    /// `sections` says where the tempo and meter change from `tempo`, as seconds and what they become.
+    fn new(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled], sections: &[(f64, Tempo)]) -> Schedule {
+        let tempo_at = |at: f64| sections.iter().rev().find(|(start, _)| *start <= at).map_or(tempo, |(_, t)| *t);
         let mut timed: Vec<(f64, &Action)> = commands.iter().map(|c| (c.at.to_seconds(tempo), &c.action)).collect();
         // Simultaneous commands keep the order they were written in.
         timed.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -154,7 +157,7 @@ impl Schedule {
             match action {
                 Action::Play { track, clip } => {
                     close(&mut segments, Some(*track), at);
-                    segments.push(Segment { track: *track, clip: clip.clone(), start: at, end: None });
+                    segments.push(Segment { track: *track, clip: clip.clone(), start: at, end: None, tempo: tempo_at(at) });
                 }
                 Action::Stop { track } => close(&mut segments, Some(*track), at),
                 Action::Hush | Action::Reset => close(&mut segments, None, at),
@@ -168,7 +171,7 @@ impl Schedule {
                 Action::Unsolo { track } => gates.push((at, Gate::Unsolo(*track))),
             }
         }
-        Schedule { tempo, track_names, segments, gates, panics }
+        Schedule { track_names, segments, gates, panics }
     }
 
     /// When the last clip stops, in seconds; `None` if something plays until
@@ -189,11 +192,6 @@ impl Schedule {
     /// Does anything play at all?
     pub fn is_empty(&self) -> bool {
         self.segments.is_empty()
-    }
-
-    /// Seconds in one pattern cycle: a bar.
-    fn cycle(&self) -> f64 {
-        self.tempo.beats_per_bar * 60.0 / self.tempo.bpm
     }
 
     /// The tracks that are muted and soloed at `at`.
@@ -332,7 +330,7 @@ impl Schedule {
         out: &mut Vec<(f64, Event)>,
     ) -> Result<(), ScheduleError> {
         let Some(notes) = segment.clip.lane("notes") else { return Ok(()) };
-        let cycle = self.cycle();
+        let cycle = segment.tempo.beats_per_bar * 60.0 / segment.tempo.bpm;
         let loop_len = if segment.clip.endless { f64::INFINITY } else { segment.clip.length.to_f64() * cycle };
         let until = segment.end.map_or(to, |e| e.min(to));
         let window_start = from.max(segment.start);
@@ -383,7 +381,7 @@ impl Schedule {
         pitch: &Value,
         onset: f64,
     ) -> Result<Event, ScheduleError> {
-        let cycle = self.cycle();
+        let cycle = segment.tempo.beats_per_bar * 60.0 / segment.tempo.bpm;
         let name = &self.track_names[segment.track];
         let clip = &segment.clip;
 
@@ -415,7 +413,7 @@ impl Schedule {
                 }
                 ("nudge", v) => {
                     let nudge = v.as_time().map_err(|e| lane_error(clip, name, lane, &e.to_string()))?;
-                    at = (at + nudge.to_seconds(self.tempo)).max(0.0);
+                    at = (at + nudge.to_seconds(segment.tempo)).max(0.0);
                 }
                 (_, v) => {
                     args.insert(lane.clone(), v);

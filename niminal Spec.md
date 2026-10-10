@@ -477,7 +477,7 @@ The engine understands one score model, as data. Every notation and client produ
 
 - **Musical time** (beats and bars, through a tempo and meter map) or **absolute time** (seconds). Both can appear in one score.
 - **Positions** read as `bar 5 beat 3`; offsets as `1/8beat` or `250ms`.
-- **Tempo and meter are lanes** on the arrangement, so they can change and ramp over a piece.
+- **Tempo and meter are lanes** on the arrangement, so they can change and ramp over a piece. Built so far: a tempo and a meter for each section, as a list with one entry per section (a step at the section's start). Gradual change within a section (`env[...]`) and automation lanes are not built.
 
 ```
 arrangement song {
@@ -743,7 +743,10 @@ track bass(tone: hz = 2khz) {
 
 - **Mixer:** `gain`, `pan`, `mute`, `solo`; `with(quantize: ...)` sets launch quantization.
 - **Re-evaluating a track** carries its effects' state over, without clicks.
-- **Status:** track parameters and note effects are designed but not built yet; `instrument`, `out` and sends work.
+- **Parameters** are controls named `bass::tone`: set them like any `ctl` (from a client, MIDI or OSC bound to it), or change the starting value in the header and re-evaluate. Clip lanes can't drive them yet, and neither can `bass.set(...)`.
+- **Note effects:** the `notes` line changes the notes of every clip played on the track, with `it` the clip's notes: `notes = it.thin(10%)`. A clip played from keys is left as it is.
+- **Short forms:** `track bass = pluck(bright: 0.4)` is a track with just an instrument, and naming an instrument where a part goes (`pluck.start`, or in a scene) makes a track of that name playing it.
+- **Status:** the mixer's `gain`, `pan`, `mute` and `solo` lines are not built; `instrument`, `notes`, `out`, parameters and sends work.
 
 ### Scenes
 

@@ -46,7 +46,7 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
                 if let Some(at) = block.entries.iter().position(|(key, _)| key.name == "instrument") {
                     let (key, value) = block.entries.remove(at);
                     let body = vec![Stmt::Bind { name: key, value }];
-                    out.push(Item::Track(TrackDecl { name: block.name.clone(), body, span: block.span }));
+                    out.push(Item::Track(TrackDecl { name: block.name.clone(), params: Vec::new(), body, span: block.span }));
                 }
             }
             Item::Bus(bus) => {
@@ -62,26 +62,85 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
                     }
                     // a name no one can type, so it never meets a track of the user's
                     let name = Ident { name: format!("{}.fx", bus.name.name), span: bus.name.span };
-                    out.push(Item::Track(TrackDecl { name, body, span: bus.name.span }));
+                    out.push(Item::Track(TrackDecl { name, params: Vec::new(), body, span: bus.name.span }));
+                }
+            }
+            Item::Track(track) => {
+                // a parameter is a control called `track::param`, and the body reads it by its short name
+                for param in std::mem::take(&mut track.params) {
+                    let Some(default) = param.default else { continue };
+                    let long = format!("{}::{}", track.name.name, param.name.name);
+                    for stmt in &mut track.body {
+                        match stmt {
+                            Stmt::Bind { value, .. } | Stmt::AddAssign { value, .. } | Stmt::Destructure { value, .. } => rename(value, &param.name.name, &long),
+                            Stmt::Expr(e) => rename(e, &param.name.name, &long),
+                            Stmt::State { .. } => {}
+                        }
+                    }
+                    out.push(Item::Control { name: Ident { name: long, span: param.name.span }, value: default, input: None });
                 }
             }
             _ => {}
         }
         out.push(item);
     }
+    add_implicit_tracks(&mut out);
     out
+}
+
+/// Naming an instrument where a part goes (`pluck.play([c4 e4])`, or in a scene) makes a track of that name
+/// playing it, so there is nothing to declare for the simple case.
+fn add_implicit_tracks(items: &mut Vec<Item>) {
+    let mut used: Vec<Ident> = Vec::new();
+    for item in items.iter() {
+        match item {
+            Item::Command(c) => match &c.command {
+                Command::Play { track: t, .. } | Command::Stop(t) | Command::Mute(t) | Command::Unmute(t) | Command::Solo(t)
+                | Command::Unsolo(Some(t)) | Command::Edit { track: t, .. } | Command::Start { name: t, .. } => used.push(t.clone()),
+                _ => {}
+            },
+            Item::Scene(block) => used.extend(block.entries.iter().map(|(t, _)| t.clone())),
+            _ => {}
+        }
+    }
+    for name in used {
+        let is_instrument = items.iter().any(|i| matches!(i, Item::Instr(d) if d.name.name == name.name));
+        let taken = items.iter().any(|i| match i {
+            Item::Track(t) => t.name.name == name.name,
+            Item::Clip(b) => b.name.name == name.name,
+            Item::Scene(b) => b.name.name == name.name,
+            Item::Bind { name: n, .. } => n.name == name.name,
+            _ => false,
+        });
+        if is_instrument && !taken {
+            let value = Expr { kind: ExprKind::Name(name.name.clone()), span: name.span };
+            let body = vec![Stmt::Bind { name: Ident { name: "instrument".into(), span: name.span }, value }];
+            items.push(Item::Track(TrackDecl { name: name.clone(), params: Vec::new(), body, span: name.span }));
+        }
+    }
+}
+
+/// A track that does nothing but play the instrument of its own name.
+fn plays_its_namesake(track: &TrackDecl) -> bool {
+    matches!(track.body.as_slice(), [Stmt::Bind { name, value }]
+        if name.name == "instrument" && matches!(&value.kind, ExprKind::Name(n) if *n == track.name.name))
 }
 
 /// In a bus's processing, `it` is the bus.
 fn replace_it(e: &mut Expr, bus: &str) {
+    rename(e, "it", bus);
+}
+
+/// Every use of the name `from` in `e` becomes `to`.
+fn rename(e: &mut Expr, from: &str, to: &str) {
     match &mut e.kind {
-        ExprKind::Name(name) if name == "it" => *name = bus.to_string(),
-        ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| replace_it(&mut a.value, bus)),
-        ExprKind::Neg(inner) => replace_it(inner, bus),
-        ExprKind::Channels(items) => items.iter_mut().for_each(|i| replace_it(i, bus)),
+        ExprKind::Name(name) if name == from => *name = to.to_string(),
+        ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| rename(&mut a.value, from, to)),
+        ExprKind::Neg(inner) => rename(inner, from, to),
+        ExprKind::Channels(items) => items.iter_mut().for_each(|i| rename(i, from, to)),
         ExprKind::Binary { lhs, rhs, .. } => {
-            replace_it(lhs, bus);
-            replace_it(rhs, bus);
+            rename(lhs, from, to);
+            rename(rhs, from, to);
         }
         _ => {}
     }
@@ -128,6 +187,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         };
         match names.kind_of(&ident.name) {
             None => names.add(&ident.name, kind),
+            // a track may play the instrument of its own name, and share it
+            Some("instrument") if matches!(item, Item::Track(t) if plays_its_namesake(t)) => {}
             Some(existing) if existing != kind => {
                 errors.push(Diagnostic::new(format!("`{}` is already the name of a {existing}", ident.name), ident.span));
             }
@@ -224,6 +285,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         name: String::new(),
         instrument: None,
         defaults: BTreeMap::new(),
+        notes: None,
         def: TrackDef {
             chain: None,
             inputs: Vec::new(),
@@ -326,9 +388,16 @@ fn compile_track(
     names: &Names,
 ) -> Res<Option<TrackInfo>> {
     let mut instrument_line: Option<&Expr> = None;
+    let mut notes_line: Option<&Expr> = None;
     let mut rest: Vec<&Stmt> = Vec::new();
     for stmt in &decl.body {
         match stmt {
+            Stmt::Bind { name, value } if name.name == "notes" => {
+                if notes_line.is_some() {
+                    return Err(Diagnostic::new("a track has only one `notes` line", name.span));
+                }
+                notes_line = Some(value);
+            }
             Stmt::Bind { name, value } if name.name == "instrument" => {
                 if instrument_line.is_some() {
                     return Err(Diagnostic::new("a track has only one instrument", name.span));
@@ -370,6 +439,7 @@ fn compile_track(
         name: decl.name.name.clone(),
         instrument,
         defaults,
+        notes: notes_line.cloned(),
         def: TrackDef { chain: chain.graph, inputs: chain.inputs, route: chain.route, voice_sends },
     }))
 }
@@ -674,21 +744,34 @@ fn meter_of(items: &[Item]) -> Res<f64> {
         if beats_per_bar.is_some() {
             return Err(Diagnostic::new("meter is set more than once", e.span));
         }
-        let whole = |e: &Expr| match &e.kind {
-            ExprKind::Num { value, unit: None } if value.fract() == 0.0 && *value >= 1.0 => Some(*value),
-            _ => None,
-        };
-        let parsed = match &e.kind {
-            ExprKind::Binary { op: BinOp::Div, lhs, rhs } => whole(lhs).zip(whole(rhs)),
-            _ => None,
-        };
-        let Some((top, bottom)) = parsed else {
-            return Err(Diagnostic::new("meter is a fraction of whole numbers", e.span)
-                .with_help("for example `meter 3/4` or `meter 7/8`"));
-        };
-        beats_per_bar = Some(top * 4.0 / bottom);
+        beats_per_bar = Some(meter_beats(e)?);
     }
     Ok(beats_per_bar.unwrap_or(4.0))
+}
+
+/// Beats per bar from a fraction such as `3/4`.
+pub(crate) fn meter_beats(e: &Expr) -> Res<f64> {
+    let whole = |e: &Expr| match &e.kind {
+        ExprKind::Num { value, unit: None } if value.fract() == 0.0 && *value >= 1.0 => Some(*value),
+        _ => None,
+    };
+    let parsed = match &e.kind {
+        ExprKind::Binary { op: BinOp::Div, lhs, rhs } => whole(lhs).zip(whole(rhs)),
+        _ => None,
+    };
+    let Some((top, bottom)) = parsed else {
+        return Err(Diagnostic::new("meter is a fraction of whole numbers", e.span)
+            .with_help("for example `meter 3/4` or `meter 7/8`"));
+    };
+    Ok(top * 4.0 / bottom)
+}
+
+/// Beats per minute from a number such as `120bpm`.
+pub(crate) fn bpm_of(e: &Expr) -> Res<f64> {
+    match &e.kind {
+        ExprKind::Num { value, unit: Some(u) } if u == "bpm" && *value > 0.0 => Ok(*value),
+        _ => Err(Diagnostic::new("tempo must be a positive number of bpm", e.span).with_help("for example `tempo 120bpm`")),
+    }
 }
 
 fn tempo_of(items: &[Item], beats_per_bar: f64) -> Res<Tempo> {
@@ -699,15 +782,7 @@ fn tempo_of(items: &[Item], beats_per_bar: f64) -> Res<Tempo> {
             return Err(Diagnostic::new("tempo is set more than once", stmt.span));
         }
         // `@ next bar` and `over 2 bars` say how a live session gets there; a file starts at the tempo.
-        match &stmt.value.kind {
-            ExprKind::Num { value, unit: Some(u) } if u == "bpm" && *value > 0.0 => {
-                tempo = Some(Tempo { bpm: *value, beats_per_bar });
-            }
-            _ => {
-                return Err(Diagnostic::new("tempo must be a positive number of bpm", stmt.value.span)
-                    .with_help("for example `tempo 120bpm`"));
-            }
-        }
+        tempo = Some(Tempo { bpm: bpm_of(&stmt.value)?, beats_per_bar });
     }
     Ok(tempo.unwrap_or(Tempo { bpm: DEFAULT_BPM, beats_per_bar }))
 }
@@ -1809,4 +1884,49 @@ a() for 1beat
 ");
         assert_eq!(errs.len(), 2, "one per broken instrument, none for the note: {errs:?}");
     }
+
+    #[test]
+    fn a_track_parameter_is_a_control_the_track_can_read() {
+        let src = "instr p(freq: hz) { osc(saw, freq) }\ntrack hall(tone: hz = 2khz, drive: 0..1 = 0.2) {\n  instrument = p\n  out = it.lpf(cutoff: tone).gain(drive)\n}\n";
+        let p = ok(src);
+        let names: Vec<&str> = p.controls.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["hall::tone", "hall::drive"]);
+        assert_eq!(p.controls[0].initial, 2000.0);
+        assert_eq!(msg("track t(tone: hz) { out = it }"), "track parameter `tone` needs a starting value");
+        assert_eq!(help("track t(tone: hz) { out = it }").as_deref(), Some("for example `track bass(tone: hz = 2khz)`"));
+    }
+
+    #[test]
+    fn a_tracks_notes_line_changes_every_clip_played_on_it() {
+        let song = |notes: &str| format!("{STAGE}\ntrack lead2 {{ instrument = pluck\n {notes} }}\nlead2.play([c4 e4 g4])");
+        let plain = ok(&song(""));
+        let reversed = ok(&song("notes = it.reverse"));
+        let first = |p: &Program| match &p.performance[0].action {
+            Action::Play { clip, .. } => events(clip.lane("notes").unwrap(), 1),
+            _ => panic!("expected a play command"),
+        };
+        assert_eq!(first(&plain)[0].1, midi(60));
+        assert_eq!(first(&reversed)[0].1, midi(67), "g4 first");
+        let e = errors(&song("notes = ~"));
+        assert!(e[0].message.contains("the `notes` line of track `lead2`"), "{}", e[0].message);
+    }
+
+
+    #[test]
+    fn a_track_can_be_one_line_and_an_instrument_named_as_a_part_gets_one() {
+        let one = ok("instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq) }\ntrack bass = pluck(bright: 0.2)\nbass.play([c2])");
+        assert_eq!(one.tracks[1].name, "bass");
+        assert_eq!(one.tracks[1].instrument, Some(0));
+        assert_eq!(one.tracks[1].defaults.len(), 1);
+
+        let implicit = ok("instr pluck(freq: hz) { osc(saw, freq) }\npluck.play([c2 e2])\nscene verse { pluck: [c4] }");
+        assert_eq!(implicit.tracks.len(), 2, "one track, made once");
+        assert_eq!((implicit.tracks[1].name.as_str(), implicit.tracks[1].instrument), ("pluck", Some(0)));
+        assert!(matches!(implicit.performance[0].action, Action::Play { track: 1, .. }));
+        // naming something that is not an instrument still says so
+        assert_eq!(msg("instr pluck(freq: hz) { osc(saw, freq) }\nnope.play([c2])"), "no track named `nope`");
+        // a track of the instrument's own name is the same thing, written out
+        ok("instr pluck(freq: hz) { osc(saw, freq) }\ntrack pluck { instrument = pluck }\npluck.play([c2])");
+    }
+
 }

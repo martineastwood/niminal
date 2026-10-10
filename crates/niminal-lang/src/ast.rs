@@ -156,6 +156,10 @@ pub struct SampleDecl {
 pub struct ArrangementDecl {
     pub name: Ident,
     pub sections: Vec<SectionRef>,
+    /// `tempo: [84bpm 96bpm]`: the tempo of each section, if it has its own.
+    pub tempos: Option<Vec<Expr>>,
+    /// `meter: [4/4 7/8]`: the meter of each section.
+    pub meters: Option<Vec<Expr>>,
     pub span: Span,
 }
 
@@ -197,6 +201,8 @@ pub struct ConfigDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackDecl {
     pub name: Ident,
+    /// `track bass(tone: hz = 2khz)`: each is a control, set from outside, that the track's body can read.
+    pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
