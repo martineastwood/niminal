@@ -617,7 +617,7 @@ impl Perform<'_> {
         let bpb = self.cx.tempo.beats_per_bar;
         match at {
             None => Ok(Time::Beats(0.0)),
-            Some(AtPos::Time(e)) => time_of(e, self),
+            Some(AtPos::Time(e) | AtPos::After(e)) => time_of(e, self),
             Some(AtPos::Bar { bar, beat }) => {
                 let number = |e: &Expr| self.plain(e).map(|r| r.to_f64());
                 let bar_n = number(bar)?;
@@ -655,6 +655,7 @@ impl Perform<'_> {
             }
             Command::Hush => vec![schedule(Action::Hush)],
             Command::Panic => vec![schedule(Action::Panic)],
+            Command::Reset => vec![schedule(Action::Reset)],
             Command::Launch(name) => self.launch(name, &schedule)?,
         })
     }

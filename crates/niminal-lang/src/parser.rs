@@ -520,6 +520,10 @@ impl Parser {
 
     /// A time, or `bar 5 beat 3`.
     fn at_pos(&mut self) -> Res<AtPos> {
+        if self.peek() == &Tok::Plus {
+            self.bump();
+            return Ok(AtPos::After(self.expr()?));
+        }
         if !self.is_keyword("bar") {
             return Ok(AtPos::Time(self.expr()?));
         }
@@ -558,7 +562,7 @@ impl Parser {
     }
 
     fn at_command(&self) -> bool {
-        ["play", "stop", "mute", "unmute", "solo", "unsolo", "hush", "panic", "launch"]
+        ["play", "stop", "mute", "unmute", "solo", "unsolo", "hush", "panic", "reset", "launch"]
             .iter()
             .any(|kw| self.is_keyword(kw))
     }
@@ -583,6 +587,7 @@ impl Parser {
             }),
             "hush" => Command::Hush,
             "panic" => Command::Panic,
+            "reset" => Command::Reset,
             "launch" => Command::Launch(self.ident("a scene to launch")?),
             _ => unreachable!("checked by at_command"),
         };

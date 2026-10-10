@@ -56,6 +56,8 @@ pub struct Grid {
     pub sample_rate: f64,
     pub bpm: f64,
     pub beats_per_bar: f64,
+    /// The sample where bar 1 starts: where the last `reset` landed.
+    pub origin: u64,
 }
 
 impl Grid {
@@ -76,7 +78,7 @@ impl Grid {
             QuantizeUnit::Bar | QuantizeUnit::Cycle => self.bar_seconds(),
         };
         let grid = (q.count * unit * self.sample_rate).round().max(1.0);
-        let now_f = now as f64;
+        let now_f = now.saturating_sub(self.origin) as f64;
         let target = match q.relation {
             // the next line of the grid, at or after now
             QuantizeRelation::OnGrid => (now_f / grid).ceil() * grid,
@@ -84,12 +86,12 @@ impl Grid {
             QuantizeRelation::Next => ((now_f / grid).floor() + 1.0) * grid,
             QuantizeRelation::In => now_f + grid,
         };
-        target as u64
+        target as u64 + self.origin
     }
 
     /// `bar:beat` of a sample, counting from 1.
     pub fn position(&self, sample: u64) -> (u64, f64) {
-        let beats = sample as f64 / self.sample_rate / self.beat_seconds();
+        let beats = sample.saturating_sub(self.origin) as f64 / self.sample_rate / self.beat_seconds();
         let bar = (beats / self.beats_per_bar).floor();
         (bar as u64 + 1, beats - bar * self.beats_per_bar + 1.0)
     }
@@ -102,7 +104,7 @@ mod tests {
 
     fn grid() -> Grid {
         // 120bpm in 4/4: a bar is 2 seconds, 96000 samples
-        Grid { sample_rate: 48_000.0, bpm: 120.0, beats_per_bar: 4.0 }
+        Grid { sample_rate: 48_000.0, bpm: 120.0, beats_per_bar: 4.0, origin: 0 }
     }
 
     fn q(text: &str) -> Quantize {
@@ -135,6 +137,16 @@ mod tests {
         assert_eq!(g.landing(q("in 2 beats"), 5), 48_005);
         assert_eq!(g.landing(q("now"), 12_345), 12_345);
         assert_eq!(g.landing(q("cycle"), 1), 96_000);
+    }
+
+    #[test]
+    fn a_reset_moves_the_bar_lines() {
+        let g = Grid { origin: 100_000, ..grid() };
+        assert_eq!(g.position(100_000), (1, 1.0));
+        assert_eq!(g.position(196_000), (2, 1.0));
+        assert_eq!(g.landing(q("next bar"), 110_000), 196_000);
+        assert_eq!(g.landing(q("next 4 bars"), 110_000), 484_000);
+        assert_eq!(g.landing(q("now"), 110_000), 110_000);
     }
 
     #[test]

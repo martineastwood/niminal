@@ -1,11 +1,11 @@
 //! What to offer at the cursor.
 
-use niminal_lang::{OpInfo, Symbol, SymbolKind, builtin_ops, waves};
+use niminal_lang::{OpInfo, Symbol, SymbolKind, builtin_ops, pattern_ops, waves};
 use serde_json::{Value, json};
 
 const KEYWORDS: &[&str] = &[
     "instr", "opcode", "bus", "sample", "kit", "ctl", "track", "clip", "scene", "arrangement", "config", "tempo", "meter",
-    "play", "stop", "mute", "unmute", "solo", "unsolo", "launch", "hush", "panic", "at", "for", "over", "next", "now",
+    "play", "stop", "mute", "unmute", "solo", "unsolo", "launch", "hush", "panic", "reset", "at", "for", "over", "next", "now",
 ];
 const UNITS: &[(&str, &str)] = &[
     ("hz", "frequency"), ("khz", "frequency, in thousands of hz"), ("db", "gain in decibels"), ("ms", "milliseconds"),
@@ -41,6 +41,8 @@ fn symbol_kind(kind: SymbolKind) -> u32 {
 struct Call<'a> {
     name: &'a str,
     receiver: bool,
+    /// The text before the `.` of `x.name(`.
+    receiver_text: &'a str,
     named: Vec<&'a str>,
     unnamed_before: usize,
     /// The text of the argument being written, up to the cursor.
@@ -71,6 +73,7 @@ fn enclosing_call(before: &str) -> Option<Call<'_>> {
     let start = head.char_indices().rev().take_while(|(_, c)| c.is_alphanumeric() || *c == '_').last().map(|(i, _)| i)?;
     let name = &head[start..];
     let receiver = head[..start].trim_end().ends_with('.');
+    let receiver_text = head[..start].trim_end().strip_suffix('.').unwrap_or_default();
 
     let mut named = Vec::new();
     let mut unnamed_before = 0;
@@ -96,12 +99,76 @@ fn enclosing_call(before: &str) -> Option<Call<'_>> {
             _ => unnamed_before += 1,
         }
     }
-    Some(Call { name, receiver, named, unnamed_before, current })
+    Some(Call { name, receiver, receiver_text, named, unnamed_before, current })
 }
 
 /// Just the given names, for after `alias::`.
 pub fn symbol_items(symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -> Vec<Value> {
     symbols.iter().map(|s| item(&s.name, symbol_kind(s.kind), &s.detail, &user_docs(s))).collect()
+}
+
+/// What a `.` is after, as far as the text before it says.
+#[derive(Debug, PartialEq)]
+enum Receiver {
+    /// A pattern, clip or grid: `riff.`, `[c4 e4].`, `it.`
+    Pattern,
+    /// A scene: `verse.`
+    Scene,
+    /// A signal, or anything else.
+    Signal,
+}
+
+/// Find the start of the chain that ends at the end of `text` (`riff.fast(2).thin(10%)`),
+/// by walking back over calls, brackets and `.name` parts, and say what it begins with.
+fn receiver(text: &str, symbols: &[Symbol]) -> Receiver {
+    let mut rest = text.trim_end();
+    loop {
+        // a call's arguments or a pattern's brackets
+        let mut literal = false;
+        if rest.ends_with([')', ']']) {
+            literal = rest.ends_with(']');
+            let mut depth = 0usize;
+            let mut open = None;
+            for (i, c) in rest.char_indices().rev() {
+                match c {
+                    ')' | ']' => depth += 1,
+                    '(' | '[' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            open = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(open) = open else { return Receiver::Signal };
+            rest = rest[..open].trim_end();
+        }
+        let name_start = rest.char_indices().rev().take_while(|(_, c)| c.is_alphanumeric() || *c == '_').last().map_or(rest.len(), |(i, _)| i);
+        let name = &rest[name_start..];
+        let before = rest[..name_start].trim_end();
+        if name.is_empty() {
+            // `[c4 e4].` has no name in front of its brackets
+            return if literal { Receiver::Pattern } else { Receiver::Signal };
+        }
+        if before.ends_with('.') && !before.ends_with("..") {
+            rest = before[..before.len() - 1].trim_end();
+            continue;
+        }
+        if literal {
+            // `grid[...]` and `name[...]` are not a bare pattern
+            return Receiver::Signal;
+        }
+        if name == "it" {
+            return Receiver::Pattern;
+        }
+        return match symbols.iter().find(|s| s.name == name).map(|s| s.kind) {
+            Some(SymbolKind::Pattern | SymbolKind::Clip) => Receiver::Pattern,
+            Some(SymbolKind::Scene) => Receiver::Scene,
+            _ => Receiver::Signal,
+        };
+    }
 }
 
 pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -> Vec<Value> {
@@ -118,6 +185,12 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
 
     // after a dot: methods
     if before[..word_start].trim_end().ends_with('.') && !before[..word_start].trim_end().ends_with("..") {
+        let dot = before[..word_start].trim_end();
+        match receiver(&dot[..dot.len() - 1], symbols) {
+            Receiver::Pattern => return pattern_ops().iter().map(op_item).collect(),
+            Receiver::Scene => return pattern_ops().iter().filter(|o| o.name == "over").map(op_item).collect(),
+            Receiver::Signal => {}
+        }
         let mut out: Vec<Value> = ops.iter().filter(|o| o.positional >= 1 && o.params.first().is_some_and(|p| p.ty != "wave")).map(op_item).collect();
         out.extend(symbols.iter().filter(|s| s.kind == SymbolKind::Opcode).map(symbol_item));
         return out;
@@ -127,7 +200,12 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
     if let Some(call) = enclosing_call(before) {
         let consumed = usize::from(call.receiver) + call.unnamed_before;
         let in_value = call.current.contains(':');
-        let params: Vec<(String, &str, usize)> = if let Some(op) = ops.iter().find(|o| o.name == call.name) {
+        let on_pattern = call.receiver && receiver(call.receiver_text, symbols) != Receiver::Signal;
+        let patterns = pattern_ops();
+        let params: Vec<(String, &str, usize)> = if let Some(op) = patterns.iter().find(|o| on_pattern && o.name == call.name) {
+            // a pattern operation lists only the arguments after the receiver
+            op.params.iter().enumerate().map(|(i, p)| (p.name.clone(), p.ty, i + 1)).collect()
+        } else if let Some(op) = ops.iter().find(|o| o.name == call.name) {
             op.params.iter().enumerate().map(|(i, p)| (p.name.clone(), p.ty, i)).collect()
         } else if let Some(s) = symbols.iter().find(|s| s.name == call.name && matches!(s.kind, SymbolKind::Opcode | SymbolKind::Instrument)) {
             s.params.iter().enumerate().map(|(i, p)| (p.name.clone(), "", i)).collect()
@@ -145,6 +223,9 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
                 && call.current.trim().chars().all(|c| c.is_alphanumeric() || c == '_')
             {
                 out.extend(waves().map(|w| item(w, ENUM_MEMBER, "waveform", "")));
+            }
+            if matches!(call.name, "every" | "layer") {
+                out.push(item("it", VARIABLE, "the pattern being changed", "Write `it.reverse`, `it.transpose(+7st)`..."));
             }
         } else if let Some((name, _)) = call.current.split_once(':')
             && ops.iter().find(|o| o.name == call.name).and_then(|o| o.params.iter().find(|p| p.name == name.trim())).is_some_and(|p| p.ty == "wave")
@@ -202,5 +283,40 @@ mod tests {
     fn elsewhere_offers_names_and_keywords() {
         let l = labels("");
         assert!(l.contains(&"tone".to_string()) && l.contains(&"track".to_string()) && l.contains(&"lpf".to_string()));
+    }
+
+    fn labels_in(code: &str, before: &str) -> Vec<String> {
+        let symbols = niminal_lang::symbols(code).unwrap();
+        items(before, &symbols, &|_| String::new()).iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
+    }
+
+    const SONG: &str = "opcode wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\n";
+
+    #[test]
+    fn a_dot_after_a_pattern_offers_pattern_operations_only() {
+        for before in ["riff.", "c.", "[c4 e4].", "riff.fast(2).", "riff.transpose(+5st).th", "riff.every(2, it.", "x = riff.every(2, "] {
+            let l = labels_in(SONG, before);
+            if before.ends_with("(2, ") {
+                assert!(l.contains(&"it".to_string()), "{before}");
+                continue;
+            }
+            assert!(l.contains(&"every".to_string()) && l.contains(&"transpose".to_string()), "{before}: {l:?}");
+            assert!(!l.contains(&"abs".to_string()) && !l.contains(&"lpf".to_string()) && !l.contains(&"wobble".to_string()), "{before}");
+        }
+    }
+
+    #[test]
+    fn a_dot_after_a_scene_offers_over_and_after_a_signal_still_offers_opcodes() {
+        assert_eq!(labels_in(SONG, "verse."), ["over"]);
+        let l = labels_in(SONG, "osc(saw, 440hz).");
+        assert!(l.contains(&"lpf".to_string()) && l.contains(&"wobble".to_string()) && !l.contains(&"every".to_string()));
+        assert!(!labels_in(SONG, "pluck(freq: 440hz).").contains(&"every".to_string()));
+    }
+
+    #[test]
+    fn a_pattern_operation_offers_its_own_arguments() {
+        assert_eq!(&labels_in(SONG, "riff.euclid(")[..3], ["hits:", "steps:", "rotation:"]);
+        assert_eq!(&labels_in(SONG, "riff.euclid(3, ")[..2], ["steps:", "rotation:"]);
+        assert_eq!(labels_in(SONG, "riff.every(2, ")[0], "change:");
     }
 }

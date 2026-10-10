@@ -760,3 +760,30 @@ fn a_problem_in_a_used_module_points_at_the_use_line() {
     assert!(problems[0].message.starts_with("in rig.nml line 1:"), "{}", problems[0].message);
     assert_eq!(problems[0].line, Some(1));
 }
+
+#[test]
+fn at_plus_counts_from_where_the_code_lands() {
+    let mut s = ready();
+    run(&mut s, 3 * BAR + 1000);
+    s.eval("at +2 bars play lead = [c4]", Some("now")).unwrap();
+    let before = run(&mut s, 2 * BAR - 1000);
+    let after = run(&mut s, BAR);
+    assert!(peak(&before) < 1e-6, "nothing before bar 6");
+    assert!(peak(&after) > 0.1, "the note starts two bars after landing");
+}
+
+#[test]
+fn reset_makes_the_next_bar_line_bar_one() {
+    let mut s = ready();
+    run(&mut s, 3 * BAR + 1000);
+    let accepted = s.eval("reset", None).unwrap();
+    assert_eq!(accepted.lands_at, 4 * BAR as u64, "on the next bar line");
+    run(&mut s, BAR - 900);
+    // bar 5 on the old grid is bar 1 of the new one
+    assert_eq!(s.transport().bar, 1);
+    let accepted = s.eval("at bar 3 play lead = [c4]", Some("now")).unwrap();
+    assert_eq!(accepted.position.0, 1);
+    let before = run(&mut s, 2 * BAR - 100);
+    let after = run(&mut s, BAR);
+    assert!(peak(&before) < 1e-6 && peak(&after) > 0.1, "bar 3 is two bars after the reset, not 3 bars after the start");
+}

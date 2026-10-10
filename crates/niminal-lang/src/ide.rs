@@ -124,6 +124,44 @@ impl OpInfo {
     }
 }
 
+/// The operations on patterns, clips and grids, written after one: `riff.every(2, it.reverse)`.
+/// The pattern itself is the receiver, so it is not among the parameters.
+pub fn pattern_ops() -> Vec<OpInfo> {
+    let op = |name: &str, doc: &str, params: &[(&'static str, &'static str, bool)]| OpInfo {
+        name: name.to_string(),
+        doc: doc.to_string(),
+        positional: 1 + params.len(),
+        params: params.iter().map(|&(name, ty, required)| ParamInfo { name: name.to_string(), ty, required }).collect(),
+    };
+    vec![
+        op("fast", "Play it this many times faster.", &[("by", "number", true)]),
+        op("slow", "Play it this many times slower.", &[("by", "number", true)]),
+        op("over", "Stretch it to fill this long, as in `over(4 bars)`.", &[("length", "bars", true)]),
+        op("reverse", "Play each cycle backwards.", &[]),
+        op("shift", "Move it later by this many bars (earlier if negative).", &[("by", "bars", true)]),
+        op("repeat_each", "Play each note this many times within its own length.", &[("times", "number", true)]),
+        op("thin", "Drop some notes at random, the same ones every time: `thin(25%)`.", &[("amount", "percent", true)]),
+        op(
+            "every",
+            "Apply a change on every nth cycle, starting with the first: `every(2, it.reverse)`. `it` is the pattern.",
+            &[("n", "number", true), ("change", "transform", true)],
+        ),
+        op(
+            "layer",
+            "Play it together with a changed copy, optionally later: `layer(change: it.transpose(+7st))`.",
+            &[("after", "bars", false), ("change", "transform", true)],
+        ),
+        op("transpose", "Move the notes by an interval: `transpose(+5st)`.", &[("by", "semitones", true)]),
+        op(
+            "euclid",
+            "Spread this many hits over this many steps as evenly as possible, and place the notes on them.",
+            &[("hits", "number", true), ("steps", "number", true), ("rotation", "number", false)],
+        ),
+        op("rhythm", "Give the notes the rhythm of a grid or pattern.", &[("structure", "grid", true)]),
+        op("mask", "Keep only the notes where a grid or pattern has a hit.", &[("mask", "grid", true)]),
+    ]
+}
+
 pub fn builtin_ops() -> Vec<OpInfo> {
     let registry = Registry::builtin();
     registry

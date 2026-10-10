@@ -40,6 +40,7 @@ pub struct Statement {
     pub quantize: Option<Quantize>,
     pub plays: Option<PlayInfo>,
     /// Whether the statement says when it happens (`at bar 5 ...`).
+    /// At a fixed time on the session's clock. `at +2 bars` is not: it is after the code lands.
     pub has_at: bool,
     /// Where the statement starts in the source.
     pub offset: usize,
@@ -89,7 +90,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             }
             Item::Command(c) => {
                 s.kind = StatementKind::Command;
-                s.has_at = c.at.is_some();
+                s.has_at = matches!(c.at, Some(AtPos::Time(_) | AtPos::Bar { .. }));
                 s.quantize = c.quantize.map(convert_quantize);
                 if c.at.is_none() {
                     s.write_key = match &c.command {
@@ -97,7 +98,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                         Command::Mute(track) | Command::Unmute(track) => Some(format!("mute:{}", track.name)),
                         Command::Solo(_) | Command::Unsolo(_) => Some("solo".into()),
                         Command::Launch(_) => Some("launch".into()),
-                        Command::Hush | Command::Panic => None,
+                        Command::Hush | Command::Panic | Command::Reset => None,
                     };
                 }
                 if let Command::Play { track, what } = &c.command {
@@ -109,7 +110,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             }
             Item::Note(n) => {
                 s.kind = StatementKind::Note;
-                s.has_at = n.at.is_some();
+                s.has_at = matches!(n.at, Some(AtPos::Time(_) | AtPos::Bar { .. }));
             }
         }
         if s.kind == StatementKind::Definition { s.write_key.clone_from(&s.key); }

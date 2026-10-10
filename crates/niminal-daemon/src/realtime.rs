@@ -421,13 +421,15 @@ impl Session {
 
 fn preview_action(action: &Compiled, at: u64, sample_rate: f32, history: &mut Vec<HistoryEntry>, explicit: &mut Vec<(u64, u64, Event, u64)>) {
     let sample = |sec: f64| (sec * f64::from(sample_rate)).round().max(0.0) as u64;
+    let origin = super::origin_of(history);
     for event in &action.program.notes {
-        let start = sample(event.at.to_seconds(action.program.tempo));
-        let start = if action.statement.has_at { start.max(at) } else { at + start };
+        let offset = event.at.to_seconds(action.program.tempo);
+        let start = if action.statement.has_at { sample(origin + offset).max(at) } else { at + sample(offset) };
         explicit.push((start, sample(event.dur.to_seconds(action.program.tempo)), event.clone(), at));
     }
     for scheduled in &action.program.performance {
-        let when = if action.statement.has_at { scheduled.at.to_seconds(action.program.tempo) } else { at as f64 / f64::from(sample_rate) };
+        let after = scheduled.at.to_seconds(action.program.tempo);
+        let when = if action.statement.has_at { origin + after } else { at as f64 / f64::from(sample_rate) + after };
         history.push(HistoryEntry { at: when, action: name_action(&action.program, &scheduled.action) });
     }
 }
@@ -445,6 +447,7 @@ pub(super) fn schedule_for(program: &Program, history: &[HistoryEntry]) -> Sched
             NamedAction::Unsolo(t) => Action::Unsolo { track: t.as_ref().and_then(index) },
             NamedAction::Hush => Action::Hush,
             NamedAction::Panic => Action::Panic,
+            NamedAction::Reset => Action::Reset,
         };
         Some(Scheduled { at: Time::Seconds(h.at), action, quantize: None })
     }).collect::<Vec<_>>();

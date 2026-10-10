@@ -1,5 +1,6 @@
 // The performance layer: clips and scenes launched on a timeline.
 // Render with:  niminal render examples/groove.nml --out groove.wav
+// The `at +N bars` lines count from when the code lands, so you can submit it again at any time in a live session.
 config { channels: stereo }
 tempo 110bpm
 
@@ -31,8 +32,8 @@ scene chorus { bass: riff.transpose(+5st), lead: answer }
 scene outro  { bass: ~, lead: spread }
 
 launch verse
-at bar 5 launch chorus
-at bar 9 mute bass
-at bar 11 unmute bass
-at bar 13 launch outro
-at bar 15 hush
+at +4 bars launch chorus
+at +8 bars mute bass
+at +10 bars unmute bass
+at +12 bars launch outro
+at +14 bars hush

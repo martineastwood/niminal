@@ -40,6 +40,8 @@ enum NamedAction {
     Unsolo(Option<String>),
     Hush,
     Panic,
+    /// Stop everything; bars count from here.
+    Reset,
 }
 
 /// What compiling an evaluation needs to know about the session.
@@ -600,6 +602,7 @@ impl Session {
             sample_rate: f64::from(self.sample_rate),
             bpm: self.program.tempo.bpm,
             beats_per_bar: self.program.tempo.beats_per_bar,
+            origin: self.samples(origin_of(&self.history)),
         }
     }
 
@@ -1063,15 +1066,17 @@ impl Session {
         let (statement, program) = (&action.statement, &action.program);
         let tempo = program.tempo;
         let landing_seconds = self.seconds(at);
+        let origin = origin_of(&self.history);
 
         for event in &program.notes {
             let offset = event.at.to_seconds(tempo);
-            let start = if statement.has_at { self.samples(offset) } else { at + self.samples(offset) };
+            let start = if statement.has_at { self.samples(origin + offset) } else { at + self.samples(offset) };
             let dur = self.samples(event.dur.to_seconds(tempo));
             self.insert_upcoming(Upcoming { start: start.max(at), dur, event: event.clone(), scheduled: false });
         }
         for scheduled in &program.performance {
-            let when = if statement.has_at { scheduled.at.to_seconds(tempo) } else { landing_seconds };
+            let after = scheduled.at.to_seconds(tempo);
+            let when = if statement.has_at { origin + after } else { landing_seconds + after };
             self.history.push(HistoryEntry { at: when, action: name_action(program, &scheduled.action) });
         }
     }
@@ -1271,6 +1276,11 @@ impl Session {
     }
 }
 
+/// When bar 1 is, in session seconds: where the last `reset` landed.
+fn origin_of(history: &[HistoryEntry]) -> f64 {
+    history.iter().rev().find(|h| matches!(h.action, NamedAction::Reset)).map_or(0.0, |h| h.at)
+}
+
 fn name_action(program: &Program, action: &Action) -> NamedAction {
     let name = |t: &usize| program.tracks[*t].name.clone();
     match action {
@@ -1282,6 +1292,7 @@ fn name_action(program: &Program, action: &Action) -> NamedAction {
         Action::Unsolo { track } => NamedAction::Unsolo(track.as_ref().map(name)),
         Action::Hush => NamedAction::Hush,
         Action::Panic => NamedAction::Panic,
+        Action::Reset => NamedAction::Reset,
     }
 }
 
@@ -1327,7 +1338,7 @@ fn apply_to_playing(playing: &mut BTreeMap<String, String>, program: &Program, s
             NamedAction::Stop(track) => {
                 playing.remove(&track);
             }
-            NamedAction::Hush | NamedAction::Panic => playing.clear(),
+            NamedAction::Hush | NamedAction::Panic | NamedAction::Reset => playing.clear(),
             _ => {}
         }
     }

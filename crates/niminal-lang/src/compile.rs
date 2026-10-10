@@ -595,7 +595,7 @@ fn check_note(note: &NoteStmt, instruments: &[Instrument], tracks: &[TrackInfo],
 
     let at = match &note.at {
         None => Time::Beats(0.0),
-        Some(AtPos::Time(e)) => literal_time(e)?,
+        Some(AtPos::Time(e) | AtPos::After(e)) => literal_time(e)?,
         Some(AtPos::Bar { bar, beat }) => bar_position(bar, beat.as_ref(), tempo)?,
     };
     let dur = literal_time(&note.dur)?;

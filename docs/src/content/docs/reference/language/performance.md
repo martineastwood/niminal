@@ -65,9 +65,23 @@ unsolo
 stop keys
 hush
 panic
+reset
 ```
 
 **Bindings are reactive:** redefining `riff = ...` updates every track playing it at each track’s quantize point.
+
+## Timed commands and the transport
+
+`at bar 5 launch chorus` happens at bar 5 on the session's clock, which keeps counting while the daemon runs. Submit a file with `at bar 5` after the session is past bar 5 and nothing fires. Two ways to keep a timeline reusable:
+
+```nml
+launch verse
+at +4 bars launch chorus     // 4 bars after this code lands
+at +8 bars mute bass
+at +16 bars hush
+```
+
+`reset` stops everything (like `hush`) and makes the next bar line bar 1, so `at bar 5` and the bar numbers in the status bar count from there again. It lands on the next bar like other commands. Put `reset` in its own evaluation, then submit the timeline. In a render, `+` counts from the start and `reset` is a `hush`.
 
 ## Quantized changes
 

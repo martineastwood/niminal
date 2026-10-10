@@ -157,7 +157,7 @@ impl Schedule {
                     segments.push(Segment { track: *track, clip: clip.clone(), start: at, end: None });
                 }
                 Action::Stop { track } => close(&mut segments, Some(*track), at),
-                Action::Hush => close(&mut segments, None, at),
+                Action::Hush | Action::Reset => close(&mut segments, None, at),
                 Action::Panic => {
                     close(&mut segments, None, at);
                     panics.push(at);

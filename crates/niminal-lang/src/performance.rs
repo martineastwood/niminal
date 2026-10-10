@@ -51,6 +51,9 @@ pub enum Action {
     Hush,
     /// Stop everything at once.
     Panic,
+    /// Stop every track, and count bars from here. Only a live session can do the
+    /// counting; a render treats it as `hush`.
+    Reset,
 }
 
 /// Which grid a change waits for.

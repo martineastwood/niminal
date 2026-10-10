@@ -67,6 +67,8 @@ pub enum AtPos {
     Time(Expr),
     /// Bars and beats count from 1.
     Bar { bar: Expr, beat: Option<Expr> },
+    /// `+4 bars`: that long after the code lands.
+    After(Expr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +81,8 @@ pub enum Command {
     Unsolo(Option<Ident>),
     Hush,
     Panic,
+    /// Stop everything and count bars from the next bar line.
+    Reset,
     Launch(Ident),
 }
 
