@@ -1,0 +1,32 @@
+// An acid bassline. A mono saw through a squelchy resonant low-pass, with slides and accents.
+// Render with:  niminal render examples/acid.nml --out acid.wav --bars 4
+// Live, try:  line.set(cutoff: 300hz)   then   line.set(envmod: 4khz)   then   line.set(res: 0.95)
+//             then   line.transpose(+5st)   then   line.undo
+config { channels: stereo }
+tempo 126bpm
+
+bus echo: stereo {
+  out = it.delay(time: 3/16beat, feedback: 0.45).lpf(cutoff: 2khz).gain(-4db)
+}
+
+// `legato` keeps one voice while notes overlap, and `glide` slides the pitch between them.
+// So a note that runs into the next one is a slide: the filter envelope doesn't restart.
+mono acid(freq: hz, cutoff: hz = 400hz, envmod: hz = 2khz, res: 0..1 = 0.9, accent: 0..1 = 0) with(legato: true, glide: 50ms) {
+  amp = env[0 2ms 1 | 8ms 0]
+  sweep = env[0 1ms 1 220ms.exp 0]
+  // an accent opens the filter further and plays louder
+  open = cutoff + sweep * envmod * (0.5 + accent * 0.5)
+  voice = osc(saw, freq).lpf(cutoff: open, res: res).tanh * amp * (0.55 + accent * 0.45)
+  out = voice.pan(azimuth: 0deg)
+  echo += out.gain(-14db)
+}
+
+// One bar of sixteenths. A `dur` longer than a step overlaps the next note and slides into it.
+clip line {
+  instrument: acid
+  notes:  [a1 a1 a2 a1  ~ a1 c2 a1   a1 a1 e2 ~  g1 a1 a2 ~ ]
+  dur:    [0.25beat 0.15beat 0.15beat 0.5beat  0.15beat 0.15beat 0.3beat 0.15beat  0.15beat 0.15beat 0.3beat 0.75beat  0.3beat 0.1beat 0.15beat 0.15beat]
+  accent: [1 0 1 0  0 0 1 0  0 0 1 0  0 1 0 0]
+}
+
+line.start
