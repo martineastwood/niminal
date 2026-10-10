@@ -768,7 +768,9 @@ impl<'a> Lower<'a> {
                 e.span,
             )
             .with_help("patterns go in `clip`, `scene` and `play`; use `[a, b]` here for a channel list")),
-            ExprKind::Grid(_) => Err(Diagnostic::new("grids as trigger signals aren't supported yet", e.span)),
+            ExprKind::Grid(_) | ExprKind::Rows(_) => {
+                Err(Diagnostic::new("grids as trigger signals aren't supported yet", e.span))
+            }
         }
     }
 

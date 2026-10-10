@@ -389,6 +389,10 @@ impl Schedule {
         match pitch {
             Value::Note(_) | Value::Hz(_) => args.insert(crate::perform::PITCH_PARAM.to_string(), *pitch),
             Value::Sample(_) => args.insert("sample".to_string(), *pitch),
+            Value::SampleGain(id, db) => {
+                args.insert(crate::lower::GAIN_PARAM.to_string(), Value::Db(*db));
+                args.insert("sample".to_string(), Value::Sample(*id))
+            }
             other => {
                 return Err(ScheduleError(format!(
                     "clip `{}` on track `{name}`: a note must be a note name or a frequency, found `{other}`",

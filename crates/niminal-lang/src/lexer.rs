@@ -29,6 +29,8 @@ pub enum Tok {
     Pattern(String),
     /// The raw text of `grid[...]`.
     Grid(String),
+    /// The raw text of `grid { ... }`: one row per sample.
+    Rows(String),
     /// A quoted string such as a file path.
     Str(String),
     Newline,
@@ -131,6 +133,15 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 } else {
                     Tok::Pattern(text)
                 }
+            }
+            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid") => {
+                let Some(len) = src[i + 1..].find('}') else {
+                    return Err(Diagnostic::new("this `{` is never closed", Span::new(i, i + 1)));
+                };
+                let text = src[i + 1..i + 1 + len].to_string();
+                start = tokens.pop().map_or(start, |t| t.span.start);
+                i += len + 2;
+                Tok::Rows(text)
             }
             b'"' => {
                 let Some(len) = src[i + 1..].find(['"', '\n']).filter(|&n| bytes[i + 1 + n] == b'"') else {

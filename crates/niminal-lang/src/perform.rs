@@ -23,6 +23,10 @@ pub const PITCH_PARAM: &str = "freq";
 /// Lanes every note understands, whatever the instrument.
 pub(crate) const UNIVERSAL_LANES: [&str; 3] = ["dur", "nudge", GAIN_PARAM];
 
+/// How much louder an accent (`X`) and how much quieter a ghost note (`o`) are than a hit (`x`).
+const ACCENT_DB: f64 = 3.0;
+const GHOST_DB: f64 = -12.0;
+
 #[derive(Clone)]
 enum PerfValue {
     Pattern(Pattern<Value>),
@@ -195,6 +199,7 @@ impl Perform<'_> {
             ExprKind::Grid(raw) => grid(raw)
                 .map(PerfValue::Grid)
                 .map_err(|err| at_offset(err.message, e.span, err.offset)),
+            ExprKind::Rows(raw) => self.rows(raw, e.span).map(PerfValue::Pattern),
             ExprKind::Rest => Ok(PerfValue::Rest),
             ExprKind::Name(name) if name == "it" => it.cloned().ok_or_else(|| {
                 Diagnostic::new("`it` is only available inside an argument, as in `every(4, it.reverse)`", e.span)
@@ -231,6 +236,47 @@ impl Perform<'_> {
 
     fn pattern(&self, raw: &str, span: Span) -> Res<Pattern<Value>> {
         parse_with(raw, |atom| atom_value(atom, self.cx.sample_names)).map_err(|e| at_offset(e.message, span, e.offset))
+    }
+
+    /// `grid { kick: x... snare: .x.. }`: each row plays the sample it names on its hits,
+    /// and the rows play together.
+    fn rows(&self, raw: &str, span: Span) -> Res<Pattern<Value>> {
+        let base = span.end - 1 - raw.len();
+        let mut layers = Vec::new();
+        let mut line_start = 0;
+        for line in raw.split('\n') {
+            let at = base + line_start;
+            line_start += line.len() + 1;
+            let code = line.split("//").next().unwrap_or("");
+            if code.trim().is_empty() {
+                continue;
+            }
+            let here = |offset: usize, message: String| {
+                Diagnostic::new(message, Span::new(at + offset, (at + offset + 1).min(span.end)))
+            };
+            let Some((name, cells)) = code.split_once(':') else {
+                return Err(here(0, "a grid row is `sample: x...`".into()));
+            };
+            let sample = name.trim();
+            let Some(id) = self.cx.sample_names.iter().position(|n| n == sample) else {
+                let mut message = format!("`{sample}` isn't a sample in a kit");
+                if let Some(c) = closest(sample, self.cx.sample_names.iter().map(String::as_str)) {
+                    message.push_str(&format!(" (did you mean `{c}`?)"));
+                }
+                return Err(here(name.len() - name.trim_start().len(), message));
+            };
+            let hits = grid(cells).map_err(|e| here(name.len() + 1 + e.offset, e.message))?;
+            let id = id as u32;
+            layers.push(hits.map(move |hit| match hit {
+                Hit::Normal => Value::Sample(id),
+                Hit::Accent => Value::SampleGain(id, ACCENT_DB),
+                Hit::Ghost => Value::SampleGain(id, GHOST_DB),
+            }));
+        }
+        if layers.is_empty() {
+            return Err(Diagnostic::new("a grid needs at least one row", span).with_help("for example `grid { kick: x... }`"));
+        }
+        Ok(Pattern::stack(layers))
     }
 
     // ---- numbers -----------------------------------------------------------
@@ -756,7 +802,7 @@ impl Perform<'_> {
             }
             Command::Hush => vec![schedule(Action::Hush)],
             Command::Panic => vec![schedule(Action::Panic)],
-            Command::Reset => vec![schedule(Action::Reset)],
+            Command::Reset | Command::New => vec![schedule(Action::Reset)],
             // changing what a track plays is for a live session; in a file it does nothing
             Command::Edit { .. } => Vec::new(),
         })
@@ -958,7 +1004,7 @@ fn negate(v: Value) -> Value {
         Value::Bars(n) => Value::Bars(-n),
         Value::Semitones(n) => Value::Semitones(-n),
         Value::Degrees(n) => Value::Degrees(-n),
-        keep @ (Value::Note(_) | Value::Sample(_)) => keep,
+        keep @ (Value::Note(_) | Value::Sample(_) | Value::SampleGain(..)) => keep,
     }
 }
 

@@ -493,6 +493,12 @@ fn prepare_pending(
     let from_snippet: HashMap<String, usize> =
         definitions.iter().map(|s| (s.key.clone().expect("definitions have keys"), s.offset)).collect();
 
+    // `new` forgets everything sent before this snippet; the output layout stays, since it
+    // can only be chosen when the daemon starts.
+    let clears = statements.iter().any(|s| s.clears);
+    let fresh = Project { entries: base.entries.iter().filter(|e| e.key == "config").cloned().collect() };
+    let (base, base_playing) = if clears { (&fresh, &BTreeMap::new()) } else { (base, base_playing) };
+
     let mut project = base.clone();
     project.apply(&delta);
     let check = |extra: &[Piece]| -> Result<Program, Vec<Problem>> {
@@ -555,7 +561,7 @@ fn prepare_pending(
         }
     }
 
-    let has_definitions = !definitions.is_empty();
+    let has_definitions = !definitions.is_empty() || clears;
     let mixer = has_definitions.then(|| program.mixer(cfg.sample_rate));
     Ok(Pending {
         id,

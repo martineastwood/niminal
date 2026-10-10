@@ -889,7 +889,7 @@ fn literal_value(e: &Expr) -> Res<Value> {
             Value::Bars(n) => Ok(Value::Bars(-n)),
             Value::Semitones(n) => Ok(Value::Semitones(-n)),
             Value::Degrees(n) => Ok(Value::Degrees(-n)),
-            Value::Note(_) | Value::Sample(_) => Err(bad()),
+            Value::Note(_) | Value::Sample(_) | Value::SampleGain(..) => Err(bad()),
         },
         _ => Err(bad()),
     }

@@ -78,6 +78,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Tilde => "`~`".into(),
         Tok::At => "`@`".into(),
         Tok::Pattern(_) => "a pattern".into(),
+        Tok::Rows(_) => "a grid".into(),
         Tok::Grid(_) => "a grid".into(),
         Tok::Str(_) => "a string".into(),
         Tok::Newline => "the end of the line".into(),
@@ -675,7 +676,7 @@ impl Parser {
     }
 
     fn at_command(&self) -> bool {
-        ["hush", "panic", "reset", "unsolo"]
+        ["hush", "panic", "reset", "new", "unsolo"]
             .iter()
             .any(|kw| self.is_keyword(kw))
     }
@@ -687,6 +688,7 @@ impl Parser {
             "hush" => Command::Hush,
             "panic" => Command::Panic,
             "reset" => Command::Reset,
+            "new" => Command::New,
             "unsolo" => Command::Unsolo(None),
             _ => unreachable!("checked by at_command"),
         };
@@ -824,6 +826,10 @@ impl Parser {
             Tok::Grid(raw) => {
                 self.bump();
                 Ok(Expr { kind: ExprKind::Grid(raw), span })
+            }
+            Tok::Rows(raw) => {
+                self.bump();
+                Ok(Expr { kind: ExprKind::Rows(raw), span })
             }
             Tok::Tilde => {
                 self.bump();

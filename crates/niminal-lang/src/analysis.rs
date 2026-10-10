@@ -56,6 +56,8 @@ pub struct Statement {
     /// Whether the statement says when it happens (`at bar 5 ...`).
     /// At a fixed time on the session's clock. `at +2 bars` is not: it is after the code lands.
     pub has_at: bool,
+    /// `new`: a live session forgets what it was sent before this statement.
+    pub clears: bool,
     /// Where the statement starts in the source.
     pub offset: usize,
 }
@@ -98,6 +100,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             edit: None,
             launch: None,
             has_at: false,
+            clears: false,
             offset: span.start,
         };
         match &item {
@@ -147,9 +150,10 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                         Command::Play { track, .. } | Command::Stop(track) => Some(format!("play:{}", track.name)),
                         Command::Mute(track) | Command::Unmute(track) => Some(format!("mute:{}", track.name)),
                         Command::Solo(_) | Command::Unsolo(_) => Some("solo".into()),
-                        Command::Hush | Command::Panic | Command::Reset | Command::Edit { .. } | Command::Start { .. } => None,
+                        Command::Hush | Command::Panic | Command::Reset | Command::New | Command::Edit { .. } | Command::Start { .. } => None,
                     };
                 }
+                s.clears = matches!(c.command, Command::New);
                 if let Command::Start { name, verb } = &c.command {
                     // the session decides whether this is a scene or a clip
                     s.plays = Some(PlayInfo { track: name.name.clone(), what: "start".into() });

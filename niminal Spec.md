@@ -567,7 +567,7 @@ Each character is one step; spaces group steps for readability. `x` hit, `X` acc
 ```
 hats = grid[x.x. x.x. x.x. x.xX]
 
-groove = grid(drums) {
+groove = grid {
   kick:  x... x... x... x..x
   snare: .... x... .... x...
   hat:   x.x. x.xX x.x. xxx.
@@ -779,6 +779,7 @@ lead.play(answer)                // put other material on a part
 hush                             // stop all parts gracefully
 panic                            // emergency stop: silence within one block
 reset                            // stop all, and make the next bar line bar 1
+new                              // reset, and forget every definition sent so far (live)
 ```
 
 Anything else after the dot changes what the part is playing:
@@ -964,9 +965,9 @@ None of these can be used as a name.
 | Kind | Names |
 | --- | --- |
 | Declarations | `instr`, `mono`, `opcode`, `fn`, `state`, `bus`, `buffer`, `table`, `sample`, `kit`, `ctl`, `track`, `clip`, `scene`, `arrangement`, `config`, `use`, `as`, `with` |
-| Performance and score | `start`, `stop`, `play`, `mute`, `unmute`, `solo`, `unsolo`, `undo`, `clear`, `set`, `hush`, `panic`, `reset`, `freeze`, `unfreeze`, `tempo`, `meter`, `at`, `for`, `over`, `next`, `now`, `cycle` |
+| Performance and score | `start`, `stop`, `play`, `mute`, `unmute`, `solo`, `unsolo`, `undo`, `clear`, `set`, `hush`, `panic`, `reset`, `new`, `freeze`, `unfreeze`, `tempo`, `meter`, `at`, `for`, `over`, `next`, `now`, `cycle` |
 | Control flow | `if`, `else`, `for`, `in` |
-| Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }`; a kit's name before brackets (`drums[...]`) |
+| Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }` |
 | Units | `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
 | Implicit names | `out`, `it` |
 | Universal controls | `pan`, `gain`, `to`, `dur`, `nudge` |
@@ -1054,7 +1055,7 @@ clip bass {
   tone:  env[400hz (1 bar).exp 2khz]
 }
 
-groove = grid(drums) {
+groove = grid {
   kick:  x... x... x... x...
   snare: .... x... .... x...
   hat:   x.x. x.xX x.x. xxx.

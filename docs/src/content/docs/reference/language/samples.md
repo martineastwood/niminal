@@ -33,7 +33,7 @@ Parameters are playback settings:
 - **`rate:`** or **`pitch:`** (not both); **`start:`** / **`end:`** in time, `%`, or beats; **`reverse:`**; **`interp:`**.
 - **Loops:** `loop: 1.2sec..2.8sec`, `loop_mode:`, `crossfade:`; `loop: from_file` reads metadata.
 - **Tempo-synced:** `fit: rate`, `stretch`, or `slice` with `align: bar`.
-- **`amen.slices(16)`** — callable, patternable slices.
+- **`amen.slices(16)`** — callable, patternable slices. Chop a break with a grid, a row per slice: `grid { s0: x... .... s4: .... x... }`.
 - **SFZ** chooses zone from pitch and layer from gain.
 
 ```nml

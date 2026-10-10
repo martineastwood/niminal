@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 const KEYWORDS: &[&str] = &[
     "instr", "mono", "opcode", "bus", "sample", "kit", "ctl", "track", "clip", "scene", "arrangement", "config", "tempo", "meter",
-    "unsolo", "hush", "panic", "reset", "at", "for", "over", "next", "now",
+    "unsolo", "hush", "panic", "reset", "new", "at", "for", "over", "next", "now",
 ];
 const UNITS: &[(&str, &str)] = &[
     ("hz", "frequency"), ("khz", "frequency, in thousands of hz"), ("db", "gain in decibels"), ("ms", "milliseconds"),

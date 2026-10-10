@@ -31,12 +31,14 @@ Each character is one step; spaces group steps for readability. `x` hit, `X` acc
 ```nml
 hats = grid[x.x. x.x. x.x. x.xX]
 
-groove = grid(drums) {
+groove = grid {
   kick:  x... x... x... x..x
   snare: .... x... .... x...
   hat:   x.x. x.xX x.x. xxx.
 }
 ```
+
+A multi-row grid is a pattern of samples: each row names a sample in a kit (a slice such as `s4` works too) and plays it on its hits, and the rows play together. `X` is an accent (+3db) and `o` a ghost note (-12db). Choke groups on the kit (`with(choke: g(s4, s12))`) apply to its rows as they do to any pattern.
 
 ## Score functions
 

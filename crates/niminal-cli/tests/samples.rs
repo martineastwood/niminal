@@ -253,6 +253,63 @@ fn slices_of_a_sample_play_in_any_order() {
 }
 
 #[test]
+fn a_grid_row_per_slice_plays_slices_together() {
+    let dir = scratch("slicegrid");
+    write_break(&dir);
+    let src = "tempo 120bpm\nsample amen = \"amen.wav\"\nkit chops = amen.slices(4)\n\
+               track t { instrument = chops }\nt.play(grid {\n  s3: x... ....\n  s0: .... x...\n  s1: x... ....\n})";
+    let out = play(&dir, src);
+    let at = |s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
+    // the first step plays s3 (0.4) and s1 (0.2) at once, the second step s0 (0.1)
+    assert!((at(0.05) - 0.6).abs() < 1e-3, "{}", at(0.05));
+    assert!((at(1.05) - 0.1).abs() < 1e-3, "{}", at(1.05));
+}
+
+#[test]
+fn grid_accents_and_ghosts_change_the_gain() {
+    let dir = scratch("gridghost");
+    write_break(&dir);
+    let src = "tempo 120bpm\nsample amen = \"amen.wav\"\nkit chops = amen.slices(4)\n\
+               track t { instrument = chops }\nt.play(grid {\n  s3: x.o. X...\n})";
+    let out = play(&dir, src);
+    let at = |s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
+    let db = |d: f32| 10f32.powf(d / 20.0);
+    assert!((at(0.05) - 0.4).abs() < 1e-3, "{}", at(0.05));
+    assert!((at(0.55) - 0.4 * db(-12.0)).abs() < 1e-3, "{}", at(0.55));
+    assert!((at(1.05) - 0.4 * db(3.0)).abs() < 1e-3, "{}", at(1.05));
+}
+
+#[test]
+fn a_grid_follows_the_kits_choke_groups() {
+    let dir = scratch("gridchoke");
+    write_break(&dir);
+    // 32 steps in a 2s bar: s1 starts 62.5ms in, while s0 (100ms long) is still sounding
+    let play_with = |with: &str| {
+        let src = format!(
+            "tempo 120bpm\nsample amen = \"amen.wav\"\nkit chops = amen.slices(4){with}\n\
+             track t {{ instrument = chops }}\nt.play(grid {{\n  s0: x...............................\n  s1: .x..............................\n}})"
+        );
+        play(&dir, &src)
+    };
+    let at = |out: &[Vec<f32>], s: f64| out[0][(s * SR as f64) as usize];
+    assert!((at(&play_with(""), 0.07) - 0.3).abs() < 1e-3, "without a choke both sound");
+    assert!((at(&play_with(" with(choke: g(s0, s1))"), 0.07) - 0.2).abs() < 1e-3, "s1 chokes s0");
+}
+
+#[test]
+fn grid_rows_must_name_samples() {
+    let dir = scratch("gridrows");
+    write_break(&dir);
+    let head = "sample amen = \"amen.wav\"\nkit c = amen.slices(4)\ntrack t { instrument = c }\n";
+    let e = errors(&dir, &format!("{head}t.play(grid {{\n  s0: x...\n  s7: x...\n}})"));
+    assert!(e.contains("`s7` isn't a sample in a kit"), "{e}");
+    let e = errors(&dir, &format!("{head}t.play(grid {{\n  s0 x...\n}})"));
+    assert!(e.contains("a grid row is `sample: x...`"), "{e}");
+    let e = errors(&dir, &format!("{head}t.play(grid {{\n  s0: x.?.\n}})"));
+    assert!(e.contains("isn't a grid step"), "{e}");
+}
+
+#[test]
 fn slices_take_choke_groups_by_name() {
     let dir = scratch("slicekit");
     write_break(&dir);

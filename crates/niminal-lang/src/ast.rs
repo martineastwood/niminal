@@ -86,6 +86,8 @@ pub enum Command {
     Panic,
     /// Stop everything and count bars from the next bar line.
     Reset,
+    /// Like `reset`, and a live session also forgets every definition it was sent.
+    New,
     /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its track.
     /// `verb` is the `start`.
     Start { name: Ident, verb: Span },
@@ -269,6 +271,8 @@ pub enum ExprKind {
     Pattern(String),
     /// `grid[x.x.]`: the raw text between the brackets.
     Grid(String),
+    /// `grid { kick: x... }`: the raw text between the braces, a row per sample.
+    Rows(String),
     /// `~`: nothing, or stop.
     Rest,
     /// `[a, b]`: a comma list is a multichannel signal, one expression per channel.

@@ -1295,3 +1295,25 @@ fn expression_replays_to_the_same_audio() {
     let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), original.len() as u64, false);
     assert_eq!(original, replayed[0]);
 }
+
+#[test]
+fn new_forgets_the_old_piece_so_another_can_start() {
+    let mut s = ready();
+    s.eval("lead.play([c4 e4])", Some("now")).unwrap();
+    run(&mut s, 4_800);
+    s.eval("new", Some("now")).unwrap();
+    let silent = run(&mut s, BAR);
+    assert!(peak(&silent) < 1e-6, "everything stopped");
+    assert!(s.tracks().iter().all(|t| t.name != "lead" && t.name != "bass"), "the old tracks are gone");
+    s.eval("instr pluck(freq: hz) { osc(saw, freq) }\ntrack drone { instrument = pluck }\ndrone.play([a2])", Some("now")).unwrap();
+    assert!(peak(&run(&mut s, BAR)) > 1e-3, "the new piece plays");
+    assert_eq!(s.tracks().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["drone"]);
+}
+
+#[test]
+fn new_and_the_next_piece_can_arrive_together() {
+    let mut s = ready();
+    s.eval("new\ninstr pluck(freq: hz) { osc(saw, freq) }\ntrack drone { instrument = pluck }\ndrone.play([a2])", Some("now")).unwrap();
+    assert!(peak(&run(&mut s, BAR)) > 1e-3);
+    assert_eq!(s.tracks().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["drone"]);
+}
