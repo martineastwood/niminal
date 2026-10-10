@@ -1,0 +1,20 @@
+// Run with: niminal daemon examples/midi_osc.nml --midi --osc-port 9000
+// CC 21 sweeps the filter, CC 7 sets the level, and an OSC sender (TouchOSC, say)
+// can drive "/fx/pan" from 0 to 1. Everything is logged, so a set replays.
+config { channels: stereo }
+tempo 120bpm
+
+ctl cutoff = midi.cc(21).range(200hz..4khz).smooth(10ms)
+ctl volume = midi.cc(7).range(-60db..0db)
+ctl pan    = osc_in("/fx/pan").range(-60deg..60deg)
+
+instr tone(freq: hz) {
+  osc(saw, freq).lpf(cutoff: cutoff, res: 0.2).pan(azimuth: pan) * env[0 2ms 1 200ms 0]
+}
+
+track lead {
+  instrument = tone
+  out = it.gain(volume)
+}
+
+play lead = [c3 e3 g3 b3]

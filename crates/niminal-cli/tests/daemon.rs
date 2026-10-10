@@ -149,3 +149,27 @@ fn websocket_controls_reach_the_live_renderer_and_appear_in_status() {
     assert_eq!(status["controls"][0]["name"], "level");
     assert_eq!(status["controls"][0]["value"], 0.5);
 }
+
+#[test]
+fn osc_over_udp_moves_a_bound_control_and_is_logged() {
+    use niminal_cli::input::OscInput;
+    let r = start(None);
+    let mut c = connect(&r);
+    c.call("eval", json!({
+        "source": "ctl level = osc_in(\"/level\").range(0..1).smooth(0ms)\ninstr flat(freq: hz) { level }\ntrack t { instrument = flat }\nt(freq: 440hz) for 100bars",
+        "quantize": "now"
+    })).unwrap();
+    let osc = OscInput::start(r.daemon.clone(), 0).unwrap();
+    let mut packet = b"/level\0\0,f\0\0".to_vec();
+    packet.extend(0.5f32.to_be_bytes());
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    socket.send_to(&packet, ("127.0.0.1", osc.port())).unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        let peaks = r.daemon.lock().unwrap().session_mut().take_peaks();
+        if peaks[0] >= 0.5 { break; }
+        assert!(started.elapsed() < WAIT, "the OSC control never sounded");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(niminal_daemon::to_lines(r.daemon.lock().unwrap().session().log()).contains("\"control\""));
+}

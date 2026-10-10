@@ -18,7 +18,7 @@ use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::layout::{Layout, conversion};
 use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
-use crate::program::{ControlDef, Instrument, Param};
+use crate::program::{ControlBinding, ControlDef, Instrument, Param};
 use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
@@ -217,7 +217,7 @@ pub(crate) struct Lower<'a> {
     route: Route,
 }
 
-pub(crate) fn compile_control(name: &Ident, value: &Expr, tempo: Tempo, registry: &Registry, names: &Names) -> Res<ControlDef> {
+pub(crate) fn compile_control(name: &Ident, value: &Expr, input: Option<&ControlInput>, tempo: Tempo, registry: &Registry, names: &Names) -> Res<ControlDef> {
     if matches!(name.name.as_str(), "out" | "it" | "instrument" | "state" | "ctl") {
         return Err(Diagnostic::new(format!("`{}` is a reserved word", name.name), name.span));
     }
@@ -253,8 +253,22 @@ pub(crate) fn compile_control(name: &Ident, value: &Expr, tempo: Tempo, registry
     if !value.is_finite() || (sig.unit == Unit::Db && value <= 0.0) {
         return Err(Diagnostic::new("control values must be finite and representable", initial.span));
     }
+    let input = match input {
+        None => None,
+        Some(input) => {
+            let hi = lower.expr(&input.hi)?;
+            let hi_value = hi.konst.ok_or_else(|| Diagnostic::new("a control's range must be constant", input.hi.span))? as f32;
+            if hi.unit != sig.unit {
+                return Err(Diagnostic::new(format!("the range's ends need the same unit: {} and {}", sig.unit.describe(), hi.unit.describe()), input.hi.span));
+            }
+            if !hi_value.is_finite() || hi_value <= value {
+                return Err(Diagnostic::new("the upper end of a range must be above the lower end", input.hi.span));
+            }
+            Some(ControlBinding { source: input.source.clone(), lo: value, hi: hi_value })
+        }
+    };
     Ok(ControlDef { name: name.name.clone(), key: format!("ctl:{}:{:?}", name.name, sig.unit),
-        unit: sig.unit, initial: value, smooth_seconds })
+        unit: sig.unit, initial: value, smooth_seconds, input })
 }
 
 pub(crate) fn compile_instr(def: &InstrDef, tempo: Tempo, registry: &Registry, names: &Names) -> Res<Instrument> {

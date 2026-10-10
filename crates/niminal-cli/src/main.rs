@@ -85,6 +85,13 @@ enum Command {
         /// The address to listen on. Only local addresses are accepted for now.
         #[arg(long, default_value = "127.0.0.1")]
         listen: IpAddr,
+        /// Take MIDI control changes from every input whose name contains this
+        /// (give an empty name for all inputs), for `ctl x = midi.cc(n)`.
+        #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
+        midi: Option<String>,
+        /// Take OSC over UDP on this local port, for `ctl x = osc_in("/address")`.
+        #[arg(long, value_name = "PORT")]
+        osc_port: Option<u16>,
     },
     /// Send code to a running daemon.
     Send {
@@ -122,7 +129,7 @@ fn main() -> ExitCode {
             run_replay(&log, &out, channels, no_limiter)
         }
         Command::Render { .. } => Err("error: give a file to render, or --replay a log".into()),
-        Command::Daemon { file, port, channels, sample_rate, no_audio, log, no_log, token, listen } => {
+        Command::Daemon { file, port, channels, sample_rate, no_audio, log, no_log, token, listen, midi, osc_port } => {
             install_crash_log();
             let log = log.or_else(|| {
                 if no_log {
@@ -133,7 +140,7 @@ fn main() -> ExitCode {
                 let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
                 Some(dir.join(format!("{now}.log")))
             });
-            run_daemon(file.as_deref(), port, channels, sample_rate, no_audio, log.as_deref(), token, listen)
+            run_daemon(file.as_deref(), port, channels, sample_rate, no_audio, log.as_deref(), token, listen, midi.as_deref(), osc_port)
         }
         Command::Send { code, file, port, quantize, token } => {
             run_send(code, file.as_deref(), port, quantize.as_deref(), token.as_deref())
@@ -313,6 +320,8 @@ fn run_daemon(
     log: Option<&Path>,
     token: Option<String>,
     listen: IpAddr,
+    midi: Option<&str>,
+    osc_port: Option<u16>,
 ) -> Result<(), String> {
     let layout = layout_for(channels)?;
     let output = if no_audio { None } else { Some(Output::open(channels, sample_rate)?) };
@@ -328,6 +337,22 @@ fn run_daemon(
     let _clock = no_audio.then(|| NullClock::start(daemon.clone(), 1.0));
     let server = Server::start(daemon.clone(), ServerConfig { listen, port, token })?;
     println!("niminal daemon listening on ws://{listen}:{} ({layout}, {rate} Hz, {where_to})", server.port());
+    let _midi = match midi {
+        Some(filter) => {
+            let (connections, names) = niminal_cli::input::start_midi(&daemon, filter)?;
+            println!("MIDI control from {}", names.join(", "));
+            Some(connections)
+        }
+        None => None,
+    };
+    let _osc = match osc_port {
+        Some(port) => {
+            let osc = niminal_cli::input::OscInput::start(daemon.clone(), port)?;
+            println!("OSC control on udp://127.0.0.1:{}", osc.port());
+            Some(osc)
+        }
+        None => None,
+    };
 
     let mut watched = None;
     if let Some(path) = file {
