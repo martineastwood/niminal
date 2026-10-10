@@ -7,7 +7,7 @@ bus space: stereo
 bus echo: stereo
 
 instr pluck(freq: hz, bright: 0..1 = 0.5) {
-  voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * env[0 2ms 1 400ms.exp 0]
+  voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * perc(decay: 400ms)
   voice.pan(azimuth: 0deg)
 }
 

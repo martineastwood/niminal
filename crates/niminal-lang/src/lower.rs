@@ -1004,6 +1004,9 @@ impl<'a> Lower<'a> {
             *late = true;
             return self.expr(&arg.value);
         }
+        if matches!(name.name.as_str(), "adsr" | "perc") && self.registry.find(&name.name).is_none() {
+            return self.env_shortcut(name, args);
+        }
         if name.name == "to" {
             return Err(Diagnostic::new("`to` can only end the line that sets a track's `out`", name.span)
                 .with_help("for example `out = it.lpf(cutoff: 1khz).to(space)`"));
@@ -1246,6 +1249,60 @@ impl<'a> Lower<'a> {
         let env = Env::new(start.konst.unwrap() as f32, segments, env.sustain_at);
         let src = self.g.add(env, &[]).expect("env has no ports");
         Ok(Sig::signal(src, unit))
+    }
+
+    /// `adsr(attack: 5ms, decay: 120ms, sustain: 0.4, release: 600ms)` and `perc(decay: 400ms)`
+    /// stand for the envelope literals `env[0 5ms 1 120ms 0.4 | 600ms 0]` and `env[0 2ms 1 400ms.exp 0]`.
+    fn env_shortcut(&mut self, name: &Ident, args: &[Arg]) -> Res<Sig> {
+        let (params, defaults): (&[&str], &[(&str, f64, &str)]) = match name.name.as_str() {
+            "adsr" => (&["attack", "decay", "sustain", "release"], &[]),
+            _ => (&["attack", "decay"], &[("attack", 2.0, "ms")]),
+        };
+        let mut given: Vec<Option<EnvNum>> = vec![None; params.len()];
+        for (i, arg) in args.iter().enumerate() {
+            let slot = match &arg.name {
+                Some(n) => params.iter().position(|p| *p == n.name).ok_or_else(|| {
+                    Diagnostic::new(format!("`{}` has no `{}`", name.name, n.name), n.span)
+                        .with_help(format!("it takes {}", params.join(", ")))
+                })?,
+                None if i < params.len() => i,
+                None => return Err(Diagnostic::new(format!("`{}` takes {}", name.name, params.join(", ")), arg.value.span)),
+            };
+            let ExprKind::Num { value, unit } = &arg.value.kind else {
+                return Err(Diagnostic::new("an envelope's times and levels must be plain values such as `5ms` or `0.4`", arg.value.span));
+            };
+            if given[slot].replace(EnvNum { value: *value, unit: unit.clone(), span: arg.value.span }).is_some() {
+                return Err(Diagnostic::new(format!("`{}` is given twice", params[slot]), arg.value.span));
+            }
+        }
+        let mut take = |param: &str| -> Res<EnvNum> {
+            let slot = params.iter().position(|p| *p == param).expect("a parameter of the shortcut");
+            given[slot].take().or_else(|| {
+                defaults.iter().find(|d| d.0 == param).map(|&(_, value, unit)| EnvNum { value, unit: Some(unit.into()), span: name.span })
+            }).ok_or_else(|| Diagnostic::new(format!("`{}` needs `{param}`", name.name), name.span))
+        };
+        let level = |value: f64| EnvNum { value, unit: None, span: name.span };
+        let env = if name.name == "adsr" {
+            EnvLit {
+                start: level(0.0),
+                segments: vec![
+                    EnvSegment { dur: take("attack")?, curve: None, level: level(1.0) },
+                    EnvSegment { dur: take("decay")?, curve: None, level: take("sustain")? },
+                    EnvSegment { dur: take("release")?, curve: None, level: level(0.0) },
+                ],
+                sustain_at: Some(2),
+            }
+        } else {
+            EnvLit {
+                start: level(0.0),
+                segments: vec![
+                    EnvSegment { dur: take("attack")?, curve: None, level: level(1.0) },
+                    EnvSegment { dur: take("decay")?, curve: Some(CurveKind::Exp), level: level(0.0) },
+                ],
+                sustain_at: None,
+            }
+        };
+        self.env(&env)
     }
 
     fn env_level(&self, n: &EnvNum) -> Res<Sig> {

@@ -105,7 +105,16 @@ Envelopes have their own literal: levels and durations alternate. `env[0 5ms 1 1
 - **Curves are methods on the duration:** `900ms.exp`, `5ms.log`, `600ms.curve(-4)`.
 - **Levels can have any unit, as long as they all match:** hz, db or unitless.
 - **Releasing mid-segment** starts the release from the current level. `.loop` repeats the shape.
-- `adsr(attack:, decay:, sustain:, release:)` is a named-argument shortcut for the same thing.
+
+Shortcuts for the two shapes most instruments want (each is exactly the literal beside it):
+
+```
+adsr(attack: 5ms, decay: 120ms, sustain: 0.4, release: 600ms)   // env[0 5ms 1 120ms 0.4 | 600ms 0]
+perc(decay: 400ms)                                              // env[0 2ms 1 400ms.exp 0]
+perc(attack: 10ms, decay: 1/4beat)                              // env[0 10ms 1 1/4beat.exp 0]
+```
+
+`adsr` takes all four, named or in order. `perc` is a one-shot attack and exponential decay, with `attack` defaulting to 2ms. Values are written out (`5ms`, `0.4`), not taken from parameters. A user opcode with one of these names is used in preference.
 
 ```
 env[0 3ms 1.2 40ms 0.8 200ms 0.6 | 100ms 0.3 2sec 0]   // multi-segment, two-stage release
@@ -447,7 +456,7 @@ One opcode per job, with variants as parameters.
 | --- | --- |
 | Oscillators | `osc` with `sine`, `saw`, `square`, `tri`, `pulse(width:)`; `osc(table:)`; `phase_mod:` for FM; `noise` (white, pink or brown) |
 | Filters | `lpf`, `hpf`, `bpf`, `notch`, `peak`, `low_shelf`, `high_shelf`; `model:` svf, ladder or biquad |
-| Envelopes and modulation | `env[...]`, `adsr`, `lfo`, `glide`, `follow`, `random`, `smooth_random` |
+| Envelopes and modulation | `env[...]`, `adsr`, `perc`, `lfo`, `glide`, `follow`, `random`, `smooth_random` |
 | Delay and reverb | `delay`, `delay_line` and `tap`, `comb`, `allpass`, `reverb` (`model:` freeverb, plate or hall) |
 | Dynamics | `compress`, `limit`, `gate` |
 | Distortion | `saturate`, `bitcrush`, `waveshape(table)` |

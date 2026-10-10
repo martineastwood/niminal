@@ -1,6 +1,6 @@
 ---
 title: Envelopes
-description: Envelope literals, sustain, curves, and ADSR.
+description: Envelope literals, sustain, curves, adsr, and perc.
 ---
 
 Envelopes use their own literal: **levels and durations alternate**.
@@ -20,7 +20,18 @@ Starts at 0, reaches 1 in 5ms, 0.4 in 120ms, holds at the sustain point (`|`), a
 - **Levels** can have any unit, as long as they all match: hz, db, or unitless.
 - **Releasing mid-segment** starts release from the current level.
 - **`.loop`** repeats the shape.
-- **`adsr(attack:, decay:, sustain:, release:)`** is a named-argument shortcut for the same idea.
+
+## Shortcuts
+
+The two shapes most instruments want have names, and each is exactly the literal beside it:
+
+```nml
+adsr(attack: 5ms, decay: 120ms, sustain: 0.4, release: 600ms)   // env[0 5ms 1 120ms 0.4 | 600ms 0]
+perc(decay: 400ms)                                              // env[0 2ms 1 400ms.exp 0]
+perc(attack: 10ms, decay: 1/4beat)                              // env[0 10ms 1 1/4beat.exp 0]
+```
+
+`adsr` takes all four, named or in order (`adsr(5ms, 120ms, 0.4, 600ms)`). `perc` is a one-shot attack and exponential decay, with `attack` defaulting to 2ms. Like the literal, the values are written out (`5ms`, `0.4`), not taken from parameters. A user opcode with one of these names is used in preference.
 
 ## Examples
 

@@ -11,7 +11,7 @@ bus space: stereo {
 }
 
 instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {
-  level = env[0 2ms 1 400ms.exp 0]
+  level = perc(decay: 400ms)
   voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * level
   out = voice.pan(azimuth: az)
   space += out.gain(-12db)

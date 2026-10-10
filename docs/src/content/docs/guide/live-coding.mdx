@@ -11,8 +11,10 @@ niminal repl
 niminal send 'chorus.start' --quantize "next 4 bars"
 ```
 
-Every input to a live session is logged by sample, so a session replays to identical audio:
+Every input to a live session is logged by sample (by default under `~/.niminal/sessions/`), so a session replays to identical audio:
 
 ```sh
-niminal render --replay ~/.niminal/sessions/<log>
+niminal render --replay ~/.niminal/sessions/<log> --out set.wav
 ```
+
+In the REPL, `:quantize next 4 bars` sets when each statement lands (`:quantize off` clears it); `:quit` exits.

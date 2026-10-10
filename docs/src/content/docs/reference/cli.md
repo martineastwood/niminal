@@ -28,4 +28,4 @@ Run `niminal <command> --help` for every flag.
 
 **Render** — `--out` is required. Live pieces without a fixed end use `--bars` or `--seconds`. Offline renders can use `--no-limiter`. Replay: `niminal render --replay <log> --out set.wav --channels 2`.
 
-**Send / REPL** — `--quantize` accepts values like `now`, `next bar`, `next 4 bars` (same as in source `@ next 4 bars`).
+**Send / REPL** — `--quantize` accepts values like `now`, `next bar`, `next 4 bars` (same as in source `@ next 4 bars`). In the REPL you can also set or clear the default with `:quantize WHEN` or `:quantize off`, and leave with `:quit`.

@@ -164,6 +164,6 @@ If a late update lands after its requested sample, its actual sample is
 acknowledged into the evaluation log so offline replay reproduces the live audio.
 The log file is rewritten when this timing is corrected. `realtime.control_drops`
 reports queued updates invalidated by a later change to a control's unit.
-MIDI and OSC can feed this same path in a subsequent milestone.
+MIDI and OSC use the same control path as `control.set` when the daemon is started with `--midi` and/or `--osc-port`.
 
 See [live_controls.nml](../../examples/live_controls.nml) for a complete patch.
