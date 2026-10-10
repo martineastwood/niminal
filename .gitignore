@@ -3,3 +3,4 @@ target/
 .DS_Store
 AGENTS.md
 *.log
+!examples/**/*.wav
