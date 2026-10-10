@@ -141,6 +141,73 @@ impl Parser {
         }
     }
 
+    /// The rest of `ctl name = midi.cc(21).range(200hz..4khz).smooth(10ms)` or
+    /// `ctl name = osc_in("/fx/width").range(0..1)`.
+    fn input_control(&mut self, name: Ident) -> Res<Item> {
+        let start = self.span();
+        let source = if self.is_keyword("midi") {
+            self.bump();
+            self.expect(&Tok::Dot)?;
+            let method = self.ident("`cc`")?;
+            if method.name != "cc" {
+                return Err(Diagnostic::new(format!("`midi.{}` isn't supported; use `midi.cc(number)`", method.name), method.span));
+            }
+            self.expect(&Tok::LParen)?;
+            let cc = self.small_number("a CC number from 0 to 127", 127)?;
+            let channel = if self.eat(&Tok::Comma) { Some(self.small_number("a channel from 1 to 16", 16)?) } else { None };
+            if channel == Some(0) {
+                return Err(Diagnostic::new("MIDI channels count from 1", start.to(self.prev_span())));
+            }
+            self.expect(&Tok::RParen)?;
+            InputSource::MidiCc { cc, channel }
+        } else {
+            self.bump();
+            self.expect(&Tok::LParen)?;
+            let Tok::Str(address) = self.peek().clone() else { return Err(self.unexpected("an OSC address such as \"/fx/width\"")) };
+            self.bump();
+            if !address.starts_with('/') {
+                return Err(Diagnostic::new("an OSC address starts with `/`", start.to(self.prev_span())));
+            }
+            self.expect(&Tok::RParen)?;
+            InputSource::Osc(address)
+        };
+        let number = |value: f64, span| Expr { kind: ExprKind::Num { value, unit: None }, span };
+        let (mut lo, mut hi, mut smooth) = (number(0.0, start), number(1.0, start), None);
+        while self.eat(&Tok::Dot) {
+            let method = self.ident("`range` or `smooth`")?;
+            self.expect(&Tok::LParen)?;
+            match method.name.as_str() {
+                "range" => {
+                    lo = self.expr()?;
+                    self.expect(&Tok::DotDot)?;
+                    hi = self.expr()?;
+                }
+                "smooth" => smooth = Some(self.expr()?),
+                other => return Err(Diagnostic::new(format!("a control input has no `.{other}`; use `.range` or `.smooth`"), method.span)),
+            }
+            self.expect(&Tok::RParen)?;
+        }
+        let value = match smooth {
+            None => lo,
+            Some(duration) => {
+                let span = lo.span.to(duration.span);
+                let args = vec![Arg { name: None, value: lo, receiver: true }, Arg { name: None, value: duration, receiver: false }];
+                Expr { kind: ExprKind::Call { name: Ident { name: "smooth".into(), span }, args }, span }
+            }
+        };
+        Ok(Item::Control { name, value, input: Some(ControlInput { source, hi }) })
+    }
+
+    fn small_number(&mut self, what: &str, max: u8) -> Res<u8> {
+        match self.peek().clone() {
+            Tok::Num { value, unit: None } if value.fract() == 0.0 && (0.0..=f64::from(max)).contains(&value) => {
+                self.bump();
+                Ok(value as u8)
+            }
+            _ => Err(self.unexpected(what)),
+        }
+    }
+
     fn is_keyword(&self, kw: &str) -> bool {
         matches!(self.peek(), Tok::Ident(s) if s == kw)
     }
@@ -152,7 +219,10 @@ impl Parser {
             self.bump();
             let name = self.ident("a control name")?;
             self.expect(&Tok::Eq)?;
-            Ok(Item::Control { name, value: self.expr()? })
+            if self.is_keyword("midi") || self.is_keyword("osc_in") {
+                return self.input_control(name);
+            }
+            Ok(Item::Control { name, value: self.expr()?, input: None })
         } else if self.is_keyword("instr") {
             let (name, params, body, span) = self.definition()?;
             Ok(Item::Instr(InstrDef { name, params, body, span }))

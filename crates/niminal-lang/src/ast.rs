@@ -9,7 +9,8 @@ pub struct Ident {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Instr(InstrDef),
-    Control { name: Ident, value: Expr },
+    /// `ctl name = value`, or `ctl name = midi.cc(21).range(200hz..4khz)` with an `input`.
+    Control { name: Ident, value: Expr, input: Option<ControlInput> },
     Opcode(OpcodeDef),
     Bus(BusDecl),
     Track(TrackDecl),
@@ -25,6 +26,22 @@ pub enum Item {
     Scene(NamedBlock),
     Command(CommandStmt),
     Note(NoteStmt),
+}
+
+/// Where a control's value comes from: a MIDI CC or an OSC address, mapped onto `value..hi`
+/// (the control's `value` is the low end).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControlInput {
+    pub source: InputSource,
+    pub hi: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputSource {
+    /// `midi.cc(number)` or `midi.cc(number, channel)`; channels count from 1.
+    MidiCc { cc: u8, channel: Option<u8> },
+    /// `osc_in("/address")`
+    Osc(String),
 }
 
 /// `tempo 124bpm`, optionally `@ next bar over 2 bars` for a change while playing.

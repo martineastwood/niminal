@@ -17,7 +17,7 @@ use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use niminal_engine::{DEFAULT_MAX_VOICES, BLOCK, MAX_CHANNELS, Master, Mixer, Transfer, VoiceId};
 use niminal_lang::{
     Action, Clip, CompileOptions, Layout, Samples, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
-    analyze, compile_with,
+    InputSource, analyze, compile_with,
 };
 use niminal_score::{Event, Time};
 
@@ -303,6 +303,14 @@ pub struct Transport {
     pub bpm: f64,
     pub voices: usize,
     pub pending: usize,
+}
+
+/// What arrived from outside to move a bound `ctl`. MIDI channels count from 1, and
+/// an OSC value is 0 to 1 (outside is clamped).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ControlSignal<'a> {
+    MidiCc { cc: u8, channel: u8, value: u8 },
+    Osc { address: &'a str, value: f64 },
 }
 
 pub struct Session {
@@ -786,6 +794,24 @@ impl Session {
             name: name.into(), value, unit: unit.map(str::to_owned), at, smooth_ms,
         } });
         Ok(at)
+    }
+
+    /// A message from a MIDI device or OSC sender. Every control bound to it moves,
+    /// exactly as if `control.set` had been called, so it is logged and replays.
+    /// Returns how many controls took it.
+    pub fn control_input(&mut self, signal: &ControlSignal) -> usize {
+        let targets: Vec<(String, f64, Option<&'static str>)> = self.program.controls.iter().filter_map(|def| {
+            let binding = def.input.as_ref()?;
+            let t = match (&binding.source, signal) {
+                (InputSource::MidiCc { cc, channel }, ControlSignal::MidiCc { cc: got, channel: on, value }) =>
+                    (cc == got && channel.is_none_or(|c| c == *on)).then(|| f64::from(*value) / 127.0)?,
+                (InputSource::Osc(address), ControlSignal::Osc { address: got, value }) =>
+                    (address == got && value.is_finite()).then_some(*value)?,
+                _ => return None,
+            };
+            Some((def.name.clone(), def.map_input(t)?, def.unit.suffix()))
+        }).collect();
+        targets.iter().filter(|(name, value, unit)| self.set_control(name, *value, *unit, None, None).is_ok()).count()
     }
 
     pub fn control_values(&self) -> Vec<(String, f32, f32, Option<&'static str>)> {

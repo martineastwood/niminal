@@ -5,6 +5,7 @@ use std::sync::Arc;
 use niminal_engine::{Graph, Mixer, TrackDef};
 use niminal_score::{Event, Tempo, Value};
 
+use crate::ast::InputSource;
 use crate::diag::closest;
 use crate::layout::Layout;
 use crate::unit::Unit;
@@ -77,9 +78,30 @@ pub struct ControlDef {
     pub unit: Unit,
     pub initial: f32,
     pub smooth_seconds: f64,
+    pub input: Option<ControlBinding>,
+}
+
+/// A control driven from outside: a message value from 0 to 1 maps onto `lo..hi`
+/// (engine units; geometric for hz and db, so sweeps are even by ear).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControlBinding {
+    pub source: InputSource,
+    pub lo: f32,
+    pub hi: f32,
 }
 
 impl ControlDef {
+    /// The control's value, in its unit's own suffix (so `convert` accepts it), for a
+    /// normalised input `t` from 0 to 1.
+    pub fn map_input(&self, t: f64) -> Option<f64> {
+        let b = self.input.as_ref()?;
+        let t = t.clamp(0.0, 1.0);
+        let (lo, hi) = (f64::from(b.lo), f64::from(b.hi));
+        let geometric = matches!(self.unit, Unit::Hz | Unit::Db) && lo > 0.0 && hi > 0.0;
+        let engine = if geometric { lo * (hi / lo).powf(t) } else { lo + (hi - lo) * t };
+        Some(if self.unit == Unit::Db { 20.0 * engine.log10() } else { engine })
+    }
+
     pub fn convert(&self, value: f64, suffix: Option<&str>, tempo: Tempo) -> Result<f32, String> {
         let suffix = suffix.or(self.unit.suffix());
         let (unit, converted) = crate::lower::literal_sig(value, suffix, tempo, crate::Span::default())

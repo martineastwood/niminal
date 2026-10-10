@@ -100,12 +100,12 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     }
 
     for item in &items {
-        let Item::Control { name, value } = item else { continue };
+        let Item::Control { name, value, input } = item else { continue };
         if names.controls.iter().any(|c| c.name == name.name) {
             errors.push(Diagnostic::new(format!("control `{}` is defined twice", name.name), name.span));
             continue;
         }
-        match crate::lower::compile_control(name, value, tempo, &registry, &names) {
+        match crate::lower::compile_control(name, value, input.as_ref(), tempo, &registry, &names) {
             Ok(control) => names.controls.push(control),
             Err(d) => errors.push(d),
         }
@@ -681,6 +681,7 @@ fn literal_value(e: &Expr) -> Res<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::InputSource;
     use crate::program::Param;
     use crate::unit::Unit;
 
@@ -704,6 +705,32 @@ mod tests {
 
     fn help(src: &str) -> Option<String> {
         first_error(src).help
+    }
+
+    #[test]
+    fn controls_can_be_driven_from_midi_and_osc() {
+        let p = ok("ctl cutoff = midi.cc(21).range(200hz..4khz).smooth(10ms)\nctl width = osc_in(\"/fx/width\").range(0..1)\nctl vol = midi.cc(7, 2).range(-60db..0db)");
+        let cutoff = &p.controls[0];
+        assert_eq!(cutoff.input.as_ref().unwrap().source, InputSource::MidiCc { cc: 21, channel: None });
+        assert_eq!(cutoff.smooth_seconds, 0.01);
+        assert!((cutoff.map_input(0.0).unwrap() - 200.0).abs() < 1e-3);
+        assert!((cutoff.map_input(1.0).unwrap() - 4000.0).abs() < 1e-2);
+        // hz sweeps are geometric: halfway is the geometric mean
+        assert!((cutoff.map_input(0.5).unwrap() - (200.0f64 * 4000.0).sqrt()).abs() < 0.1);
+        assert_eq!(p.controls[1].input.as_ref().unwrap().source, InputSource::Osc("/fx/width".into()));
+        assert!((p.controls[1].map_input(0.25).unwrap() - 0.25).abs() < 1e-6);
+        // db sweeps are even in decibels, and come back in db
+        assert!((p.controls[2].map_input(0.5).unwrap() + 30.0).abs() < 1e-3);
+        assert_eq!(p.controls[2].input.as_ref().unwrap().source, InputSource::MidiCc { cc: 7, channel: Some(2) });
+    }
+
+    #[test]
+    fn bad_control_inputs_are_explained() {
+        assert_eq!(msg("ctl a = midi.cc(200)"), "expected a CC number from 0 to 127, found a number");
+        assert_eq!(msg("ctl a = midi.note(1)"), "`midi.note` isn't supported; use `midi.cc(number)`");
+        assert_eq!(msg("ctl a = midi.cc(1).range(200hz..1)"), "the range's ends need the same unit: hz and a plain number");
+        assert_eq!(msg("ctl a = midi.cc(1).range(1..0)"), "the upper end of a range must be above the lower end");
+        assert_eq!(msg("ctl a = osc_in(\"fx\")"), "an OSC address starts with `/`");
     }
 
     const SAW_LEAD: &str = "

@@ -99,6 +99,25 @@ to disable it. Re-evaluating a control glides back to its code value; unrelated
 graph edits preserve its current target and glide. Newly started notes join the
 same control trajectory as existing notes.
 
+#### MIDI and OSC
+
+A control can be driven from a MIDI controller or an OSC sender:
+
+```niminal
+ctl cutoff = midi.cc(21).range(200hz..4khz).smooth(10ms)
+ctl volume = midi.cc(7, 2).range(-60db..0db)     // channel 2 only
+ctl width  = osc_in("/fx/width").range(0..1)
+```
+
+Start the daemon with `--midi [NAME]` (every MIDI input whose name contains `NAME`,
+or all of them) and/or `--osc-port PORT` (UDP, this machine only). A CC's 0..127
+and an OSC float or int in 0..1 (clamped) map onto the range; hz and db ranges
+sweep evenly by ear (geometric), everything else linearly. Without `.range` the
+range is `0..1`. The control's code value is the low end of its range until the
+first message arrives. Messages are logged as `control` entries, so a recorded set
+replays exactly. Not yet supported: `midi.keys`, `midi.learn`, `osc_out`, and
+other MIDI messages.
+
 The WebSocket JSON-RPC method `control.set` updates a control without compiling
 or replacing any graphs or prepared notes:
 
