@@ -93,6 +93,8 @@ enum Command {
         #[arg(long, value_name = "PORT")]
         osc_port: Option<u16>,
     },
+    /// Run the language server (LSP over stdin and stdout) for an editor.
+    Lsp,
     /// Send code to a running daemon.
     Send {
         /// The code to evaluate. With no code and no --file, it is read from the standard input.
@@ -141,6 +143,10 @@ fn main() -> ExitCode {
                 Some(dir.join(format!("{now}.log")))
             });
             run_daemon(file.as_deref(), port, channels, sample_rate, no_audio, log.as_deref(), token, listen, midi.as_deref(), osc_port)
+        }
+        Command::Lsp => {
+            let code = niminal_lsp::run(std::io::stdin().lock(), std::io::stdout().lock());
+            if code == 0 { Ok(()) } else { Err(String::new()) }
         }
         Command::Send { code, file, port, quantize, token } => {
             run_send(code, file.as_deref(), port, quantize.as_deref(), token.as_deref())

@@ -1,9 +1,11 @@
 const vscode = require("vscode");
+const { LanguageClient } = require("vscode-languageclient/node");
 const { Client } = require("./client");
 const { blockAround } = require("./blocks");
 const { trackDescription, commands: panelCommands } = require("./panel");
 
 let client = null;
+let languageServer = null;
 let status;
 let diagnostics;
 let channel;
@@ -184,6 +186,29 @@ function startDaemon() {
   terminal.show(true);
 }
 
+// Errors, completion, hover and go-to-definition come from `niminal lsp`, the same
+// binary as the daemon, so they always agree with it about the language.
+function startLanguageServer() {
+  const server = new LanguageClient(
+    "niminal",
+    "niminal language server",
+    { command: settings().path, args: ["lsp"] },
+    { documentSelector: [{ language: "niminal" }] },
+  );
+  languageServer = server;
+  server.start().catch((e) => {
+    channel.appendLine(`language server: ${e.message}`);
+    vscode.window.showWarningMessage(`niminal: can't start \`${settings().path} lsp\`. Set niminal.path to the niminal executable.`);
+  });
+}
+
+async function restartLanguageServer() {
+  const old = languageServer;
+  languageServer = null;
+  await old?.stop().catch(() => {});
+  startLanguageServer();
+}
+
 function activate(context) {
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   diagnostics = vscode.languages.createDiagnosticCollection("niminal");
@@ -202,6 +227,7 @@ function activate(context) {
     command("niminal.panic", () => simple("panic")),
     command("niminal.connect", ensureConnected),
     command("niminal.startDaemon", startDaemon),
+    command("niminal.restartLanguageServer", restartLanguageServer),
     vscode.window.registerTreeDataProvider("niminal.scenes", {
       onDidChangeTreeData: scenesChanged.event,
       getChildren: () => performance.scenes.map((name, i) => ({ name, number: i + 1 })),
@@ -236,10 +262,12 @@ function activate(context) {
   );
   // Tracks change without any evaluation when a timeline command comes due.
   refreshTimer = setInterval(refreshPerformance, 2000);
+  startLanguageServer();
 }
 
 function deactivate() {
   client?.close();
+  return languageServer?.stop();
 }
 
 module.exports = { activate, deactivate };

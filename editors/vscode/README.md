@@ -80,6 +80,20 @@ development machine the maximum 256-frame render took 0.467ms against a 5.33ms b
 late events, starvation, capacity drops, or deadline misses. Physical-device
 latency and underrun testing remain separate from this synthetic check.
 
+### Language server
+
+The extension starts `niminal lsp` (the same binary as the daemon, found through the
+`niminal.path` setting) for editing support that works without a running daemon:
+
+- errors as you type, with the compiler's own messages and help
+- completion for names in the file, built-in opcodes, methods after a `.`, named
+  arguments (`lpf(` offers `cutoff:` and `res:`), waveforms and unit suffixes
+- hover with a signature and documentation, and go-to-definition and an outline
+- a comment directly above an `instr` or `opcode` (`//` or `///`) is its documentation
+
+"Restart Language Server" in the command palette picks up a newly installed binary.
+Other editors can use it too: run `niminal lsp` as a stdio language server for `.nml` files.
+
 ### Live controls
 
 Named controls are typed signals available in instruments and track effects:
