@@ -1,0 +1,43 @@
+// A file to poke the language server with. It compiles as written; try the edits in the comments.
+config { channels: stereo }
+tempo 120bpm
+
+ctl cutoff = midi.cc(21).range(200hz..4khz)
+
+/// Soft-clips a signal; `amount` is how hard it is driven.
+/// Hover over `drive` below to see this text.
+opcode drive(x, amount = 2) {
+  tanh(x * amount)
+}
+
+// A plain saw lead.
+instr lead(freq: hz, amp: db = -12db) {
+  osc(saw, freq).lpf(cutoff: cutoff, res: 0.2).gain(amp) * env[0 2ms 1 200ms 0]
+}
+
+bus space
+
+track keys {
+  instrument = lead
+  out = it.gain(-3db)
+}
+
+play keys = [c3 e3 g3 b3]
+
+// 1. ERRORS: change `saw` above to `sawz`, or `lpf(cutoff: cutoff` to `lpf(cutof: cutoff`,
+//    or write `lpf(cutoff: 3)` (a plain number where hz is wanted). Undo clears them.
+// 2. HOVER: over `lead`, `lpf`, `drive`, `osc`, `saw`, `cutoff`, `keys`.
+// 3. DEFINITION (F12): on `lead` in `instrument = lead`, and `cutoff` in the lpf call.
+// 4. OUTLINE (Cmd+Shift+O): lists cutoff, drive, lead, space, keys, play pattern.
+// 5. COMPLETION: on a new line inside lead's body type:
+//      osc(          -> waveforms (sine saw square tri)
+//      osc(saw, 440hz).      -> methods: lpf hpf gain delay reverb pan ... and drive
+//      osc(saw, 440hz).lpf(  -> cutoff: and res:
+//      osc(saw, 440hz).lpf(cutoff: 1khz,   -> res: only (cutoff is used)
+//      osc(saw, 440hz).drive(  -> amount:
+//      800   -> unit suffixes (hz khz db ms sec beat bar deg st)
+//      lea   -> lead (an instrument you defined) next to keywords and opcodes
+// 6. HALF-TYPED CODE: add a line `track bass { instrument = ` and ask for completion
+//    after the `=`. `lead` should still be offered even though the file doesn't parse.
+// 7. DOC COMMENTS: add a `// text` line above `track keys` or edit the one above `lead`,
+//    and hover to see it update.
