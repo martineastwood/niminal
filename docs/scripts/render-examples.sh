@@ -8,6 +8,6 @@ while read -r file arrangement; do
   [ -z "$file" ] && continue
   name="${file%.nml}"
   niminal render "examples/$file" $arrangement --out "docs/public/audio/$name.wav"
-  ffmpeg -y -loglevel error -i "docs/public/audio/$name.wav" -b:a 128k "docs/public/audio/$name.mp3"
+  ffmpeg -nostdin -y -loglevel error -i "docs/public/audio/$name.wav" -b:a 128k "docs/public/audio/$name.mp3"
   rm "docs/public/audio/$name.wav"
 done < docs/scripts/examples.txt
