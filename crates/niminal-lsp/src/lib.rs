@@ -138,7 +138,14 @@ impl Server {
             ),
             Err(_) => (None, Vec::new()),
         };
-        let symbols = symbols.or(previous).unwrap_or_default();
+        let symbols = symbols
+            .or_else(|| {
+                // it doesn't parse: take the names from around the line that is wrong
+                let lenient = features::symbols_lenient(text, &text::directory_of(uri));
+                (!lenient.is_empty()).then_some(lenient)
+            })
+            .or(previous)
+            .unwrap_or_default();
         out.push(notification("textDocument/publishDiagnostics", json!({ "uri": uri, "diagnostics": diagnostics(uri, text, expanded) })));
         self.documents.insert(uri.to_string(), Document { text: text.to_string(), imports, symbols });
     }
@@ -200,12 +207,9 @@ impl Server {
     }
 
     fn rename(&self, params: &Value) -> Result<Value, String> {
-        let Some((doc, offset)) = self.document(params) else { return Err("that file isn't open".into()) };
+        let (_, offset) = self.document(params).ok_or("that file isn't open")?;
         let new = params["newName"].as_str().ok_or("no new name was given")?;
-        let places = features::rename(doc, offset, new)?;
-        let edits: Vec<Value> = places.iter().map(|&(s, e)| json!({ "range": text::range(&doc.text, s, e), "newText": new })).collect();
-        let uri = params["textDocument"]["uri"].as_str().unwrap_or_default();
-        Ok(json!({ "changes": { uri: edits } }))
+        self.rename_edit(params["textDocument"]["uri"].as_str().unwrap_or_default(), offset, new)
     }
 
     fn signature_help(&self, params: &Value) -> Value {
@@ -368,7 +372,11 @@ mod tests {
     }
 
     fn open(server: &mut Server, text: &str) -> Vec<Value> {
-        server.handle(&json!({ "method": "textDocument/didOpen", "params": { "textDocument": { "uri": URI, "text": text } } }))
+        open_at(server, URI, text)
+    }
+
+    fn open_at(server: &mut Server, uri: &str, text: &str) -> Vec<Value> {
+        server.handle(&json!({ "method": "textDocument/didOpen", "params": { "textDocument": { "uri": uri, "text": text } } }))
     }
 
     fn at(line: u32, character: u32) -> Value {
@@ -515,6 +523,97 @@ mod tests {
         // words of the language itself are left to the grammar
         assert_eq!(kind("instr", 0), None);
         assert_eq!(kind("track", 0), None);
+    }
+
+    fn rename_at(server: &mut Server, uri: &str, line: u32, character: u32, new: &str) -> Value {
+        let reply = server.handle(&json!({ "jsonrpc": "2.0", "id": 7, "method": "textDocument/rename", "params": {
+            "textDocument": { "uri": uri }, "position": { "line": line, "character": character }, "newName": new } }));
+        reply[0].clone()
+    }
+
+    #[test]
+    fn rename_leaves_alone_what_only_shares_the_spelling() {
+        let text = "instr tone(lead: hz, bright: 0..1 = 0.5) { osc(saw, lead) * bright }\ntrack lead { instrument = tone(lead: 440hz) }\nscene verse { lead: lead }\nclip riff { notes: [c4]\n bright: [0.2] }\nbright = [0.1 0.9]\nopcode drive(x) { x }\nbass = osc(saw, 100hz).drive\n";
+        let mut server = Server::new();
+        open(&mut server, text);
+        let places = |reply: &Value| -> Vec<(u64, u64)> {
+            let mut all: Vec<(u64, u64)> = reply["result"]["changes"][URI].as_array().unwrap().iter()
+                .map(|e| (e["range"]["start"]["line"].as_u64().unwrap(), e["range"]["start"]["character"].as_u64().unwrap())).collect();
+            all.sort();
+            all
+        };
+        // the track: its definition, and both words of the scene entry; not the parameter or the argument
+        let track = rename_at(&mut server, URI, 1, 7, "pad");
+        assert_eq!(places(&track), [(1, 6), (2, 14), (2, 20)], "{track}");
+        // the pattern: not the parameter (header and body), nor the lane key
+        let pattern = rename_at(&mut server, URI, 5, 1, "level");
+        assert_eq!(places(&pattern), [(5, 0)], "{pattern}");
+        // an opcode is used after a dot
+        let opcode = rename_at(&mut server, URI, 6, 8, "crush");
+        assert_eq!(places(&opcode), [(6, 7), (7, 23)], "{opcode}");
+    }
+
+    #[test]
+    fn rename_follows_a_name_into_the_files_that_use_it_as_a_module() {
+        let dir = std::env::temp_dir().canonicalize().unwrap().join(format!("niminal-lsp-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap();
+        write("rig.nml", "instr tone(freq: hz) { osc(sine, freq) }\n");
+        write("other.nml", "use rig\ntone(freq: 220hz) for 1beat\n");
+        write("alone.nml", "instr tone(freq: hz) { osc(saw, freq) }\ntone(freq: 330hz) for 1beat\n");
+        let song_uri = format!("file://{}/song.nml", dir.display());
+        let mut server = Server::new();
+        open_at(&mut server, &song_uri, "use rig as r\nr::tone(freq: 440hz) for 1beat\n");
+
+        let reply = rename_at(&mut server, &song_uri, 1, 5, "bell");
+        let changes = reply["result"]["changes"].as_object().unwrap_or_else(|| panic!("{reply}"));
+        let files: std::collections::BTreeMap<String, &Value> = changes
+            .iter()
+            .map(|(uri, edits)| (text::path_of(uri).unwrap().file_name().unwrap().to_string_lossy().into_owned(), edits))
+            .collect();
+        assert_eq!(files.keys().map(String::as_str).collect::<Vec<_>>(), ["other.nml", "rig.nml", "song.nml"], "{reply}");
+        // in the file using the alias only the name after `::` changes; the others change in place
+        assert_eq!(files["song.nml"][0]["range"]["start"], json!({ "line": 1, "character": 3 }));
+        assert_eq!(files["rig.nml"][0]["range"]["start"], json!({ "line": 0, "character": 6 }));
+        assert_eq!(files["other.nml"][0]["range"]["start"], json!({ "line": 1, "character": 0 }));
+
+        // a name that one of the users already has is refused, and says which
+        write("other.nml", "use rig\nbell = [c4]\ntone(freq: 220hz) for 1beat\n");
+        let clash = rename_at(&mut server, &song_uri, 1, 5, "bell");
+        assert!(clash["error"]["message"].as_str().unwrap().contains("other.nml"), "{clash}");
+
+        // from the module's own file the users are found too
+        let rig_uri = format!("file://{}/rig.nml", dir.display());
+        open_at(&mut server, &rig_uri, "instr tone(freq: hz) { osc(sine, freq) }\n");
+        let reply = rename_at(&mut server, &rig_uri, 0, 8, "chime");
+        let names: Vec<String> = reply["result"]["changes"].as_object().unwrap().keys().map(|u| text::path_of(u).unwrap().file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert!(names.contains(&"song.nml".to_string()) && names.contains(&"rig.nml".to_string()), "{reply}");
+        assert!(!names.contains(&"alone.nml".to_string()), "a file with its own `tone` doesn't use the module");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_line_that_does_not_read_costs_only_that_line() {
+        let mut server = Server::new();
+        let text = "instr tone(freq: hz) { osc(sine, freq) }\nx = \"never closed\ntrack lead { instrument = tone }\n";
+        open(&mut server, text);
+        let reply = request(&mut server, 1, "textDocument/semanticTokens/full", json!({ "textDocument": { "uri": URI } }));
+        let lines: Vec<u64> = {
+            let (mut line, mut seen) = (0, Vec::new());
+            for t in reply["data"].as_array().unwrap().chunks(5) {
+                line += t[0].as_u64().unwrap();
+                seen.push(line);
+            }
+            seen
+        };
+        assert!(lines.contains(&0) && lines.contains(&2), "the lines either side are still coloured: {lines:?}");
+        // typing a string in a call still shows the call
+        open(&mut server, "instr tone(freq: hz) { osc(sine, freq) }\nx = tone(freq: \"ab");
+        let help = request(&mut server, 2, "textDocument/signatureHelp", at(1, 17));
+        assert_eq!(help["signatures"][0]["label"], "instr tone(freq: hz)", "{help}");
+        // but a rename, which would have to guess at the broken line, says what is wrong first
+        let reply = rename_at(&mut server, URI, 0, 8, "bell");
+        assert!(reply["error"]["message"].as_str().unwrap().contains("doesn't read yet"), "{reply}");
     }
 
     #[test]

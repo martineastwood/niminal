@@ -83,7 +83,12 @@ pub fn file_uri(path: &std::path::Path) -> String {
 }
 /// The directory a `file://` URI is in, for finding sample files.
 pub fn directory_of(uri: &str) -> std::path::PathBuf {
-    let Some(path) = uri.strip_prefix("file://") else { return ".".into() };
+    path_of(uri).and_then(|p| p.parent().map(std::path::Path::to_path_buf)).unwrap_or_else(|| ".".into())
+}
+
+/// The file a `file://` URI names.
+pub fn path_of(uri: &str) -> Option<std::path::PathBuf> {
+    let path = uri.strip_prefix("file://")?;
     let mut bytes = Vec::new();
     let raw = path.as_bytes();
     let mut i = 0;
@@ -98,8 +103,7 @@ pub fn directory_of(uri: &str) -> std::path::PathBuf {
             i += 1;
         }
     }
-    let path = std::path::PathBuf::from(String::from_utf8_lossy(&bytes).into_owned());
-    path.parent().map_or_else(|| ".".into(), std::path::Path::to_path_buf)
+    Some(std::path::PathBuf::from(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 #[cfg(test)]
