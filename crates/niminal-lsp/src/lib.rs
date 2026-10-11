@@ -2,6 +2,7 @@
 //! compiler itself, so it can never disagree with the daemon about the language.
 
 mod complete;
+mod features;
 mod text;
 
 use std::collections::HashMap;
@@ -54,6 +55,12 @@ impl Server {
                     "hoverProvider": true,
                     "definitionProvider": true,
                     "documentSymbolProvider": true,
+                    "renameProvider": { "prepareProvider": true },
+                    "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
+                    "semanticTokensProvider": {
+                        "legend": { "tokenTypes": features::TOKEN_TYPES, "tokenModifiers": [] },
+                        "full": true,
+                    },
                 },
                 "serverInfo": { "name": "niminal", "version": env!("CARGO_PKG_VERSION") },
             })),
@@ -92,6 +99,16 @@ impl Server {
             "textDocument/hover" => Some(self.hover(params)),
             "textDocument/definition" => Some(self.definition(params)),
             "textDocument/documentSymbol" => Some(self.document_symbols(params)),
+            "textDocument/prepareRename" => Some(self.prepare_rename(params)),
+            "textDocument/rename" => match self.rename(params) {
+                Ok(edit) => Some(edit),
+                Err(message) => {
+                    out.push(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32803, "message": message } }));
+                    return out;
+                }
+            },
+            "textDocument/signatureHelp" => Some(self.signature_help(params)),
+            "textDocument/semanticTokens/full" => Some(self.semantic_tokens(params)),
             _ if id.is_some() => {
                 out.push(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("`{method}` isn't supported") } }));
                 return out;
@@ -172,6 +189,33 @@ impl Server {
             }),
             None => Value::Null,
         }
+    }
+
+    fn prepare_rename(&self, params: &Value) -> Value {
+        let Some((doc, offset)) = self.document(params) else { return Value::Null };
+        match features::prepare_rename(doc, offset) {
+            Some((start, end, name)) => json!({ "range": text::range(&doc.text, start, end), "placeholder": name }),
+            None => Value::Null,
+        }
+    }
+
+    fn rename(&self, params: &Value) -> Result<Value, String> {
+        let Some((doc, offset)) = self.document(params) else { return Err("that file isn't open".into()) };
+        let new = params["newName"].as_str().ok_or("no new name was given")?;
+        let places = features::rename(doc, offset, new)?;
+        let edits: Vec<Value> = places.iter().map(|&(s, e)| json!({ "range": text::range(&doc.text, s, e), "newText": new })).collect();
+        let uri = params["textDocument"]["uri"].as_str().unwrap_or_default();
+        Ok(json!({ "changes": { uri: edits } }))
+    }
+
+    fn signature_help(&self, params: &Value) -> Value {
+        let Some((doc, offset)) = self.document(params) else { return Value::Null };
+        features::signature_help(doc, offset)
+    }
+
+    fn semantic_tokens(&self, params: &Value) -> Value {
+        let Some(doc) = params["textDocument"]["uri"].as_str().and_then(|u| self.documents.get(u)) else { return json!({ "data": [] }) };
+        json!({ "data": features::semantic_tokens(doc) })
     }
 
     fn document_symbols(&self, params: &Value) -> Value {
@@ -378,6 +422,99 @@ mod tests {
         let completion = request(&mut server, 1, "textDocument/completion", at(5, 28));
         let labels: Vec<_> = completion["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
         assert!(labels.contains(&"tone") && labels.contains(&"lpf"), "{labels:?}");
+    }
+
+    const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\ntrack lead { instrument = tone }\nlead.play([c4])\nlead.start\n";
+
+    #[test]
+    fn rename_changes_every_use_of_a_name_and_refuses_bad_names() {
+        let mut server = Server::new();
+        open(&mut server, SONG);
+        // on the definition, and on a use
+        for position in [at(1, 7), at(2, 2)] {
+            let prepared = request(&mut server, 1, "textDocument/prepareRename", position);
+            assert_eq!(prepared["placeholder"], "lead");
+        }
+        let edit = request(&mut server, 2, "textDocument/rename", json!({ "textDocument": { "uri": URI }, "position": { "line": 1, "character": 7 }, "newName": "pad" }));
+        let edits = edit["changes"][URI].as_array().unwrap();
+        // the track's name, `lead.play`, `lead.start`; `lead` isn't touched inside `tone`
+        assert_eq!(edits.len(), 3, "{edit}");
+        assert!(edits.iter().all(|e| e["newText"] == "pad"));
+        assert_eq!(edits[0]["range"]["start"], json!({ "line": 1, "character": 6 }));
+
+        let mut error = |new: &str| {
+            let reply = server.handle(&json!({ "jsonrpc": "2.0", "id": 9, "method": "textDocument/rename",
+                "params": { "textDocument": { "uri": URI }, "position": { "line": 1, "character": 7 }, "newName": new } }));
+            reply[0]["error"]["message"].as_str().unwrap_or_default().to_string()
+        };
+        assert!(error("tone").contains("already a name in use"));
+        assert!(error("lpf").contains("already a name in use"));
+        assert!(error("if").contains("already a name in use"));
+        assert!(error("two words").contains("isn't a name"));
+        assert!(error("9lives").contains("isn't a name"));
+        // something that isn't defined here has nothing to rename
+        assert_eq!(request(&mut server, 3, "textDocument/prepareRename", at(0, 40)), Value::Null);
+    }
+
+    #[test]
+    fn signature_help_follows_the_argument_the_cursor_is_in() {
+        let mut server = Server::new();
+        let text = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800, res: 0.2) }\nx = tone(freq: 440hz, bright: 0.2)\n";
+        open(&mut server, text);
+        let help = |server: &mut Server, line: u32, character: u32| request(server, 1, "textDocument/signatureHelp", at(line, character));
+
+        // `tone(` and after the first comma
+        let h = help(&mut server, 1, 9);
+        assert_eq!(h["signatures"][0]["label"], "instr tone(freq: hz, bright: 0..1 = 0.5)");
+        assert_eq!(h["activeParameter"], 0);
+        assert_eq!(h["signatures"][0]["parameters"][1]["label"], "bright: 0..1 = 0.5");
+        assert_eq!(help(&mut server, 1, 24)["activeParameter"], 1);
+        // a named argument picks its own parameter, whatever comes first
+        let named = "x = tone(bright: 0.2, ";
+        open(&mut server, &format!("{text}{named}"));
+        assert_eq!(help(&mut server, 2, 18)["activeParameter"], 1);
+
+        // a method call: the receiver supplies the first parameter, so `cutoff` is the second
+        let h = help(&mut server, 0, 70);
+        assert!(h["signatures"][0]["label"].as_str().unwrap().starts_with("lpf(x: number, cutoff: hz"), "{h}");
+        assert_eq!(h["activeParameter"], 1);
+        assert_eq!(help(&mut server, 0, 82)["activeParameter"], 2, "after the comma it is `res`");
+        // outside any call there is nothing to show
+        assert_eq!(help(&mut server, 1, 2), Value::Null);
+        // and neither inside brackets that aren't a call
+        open(&mut server, "x = (1 + 2");
+        assert_eq!(help(&mut server, 0, 10), Value::Null);
+    }
+
+    #[test]
+    fn semantic_tokens_tell_names_apart_by_what_they_are() {
+        let mut server = Server::new();
+        open(&mut server, SONG);
+        let reply = request(&mut server, 1, "textDocument/semanticTokens/full", json!({ "textDocument": { "uri": URI } }));
+        let data: Vec<u32> = reply["data"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect();
+        assert_eq!(data.len() % 5, 0);
+        // decode back to (line, column, length, type)
+        let (mut line, mut column) = (0, 0);
+        let mut found = Vec::new();
+        for token in data.chunks(5) {
+            line += token[0];
+            column = if token[0] == 0 { column + token[1] } else { token[1] };
+            let word = &SONG.lines().nth(line as usize).unwrap()[column as usize..(column + token[2]) as usize];
+            found.push((word.to_string(), features::TOKEN_TYPES[token[3] as usize]));
+        }
+        let kind = |word: &str, nth: usize| found.iter().filter(|(w, _)| w == word).nth(nth).map(|(_, k)| *k);
+        assert_eq!(kind("tone", 0), Some("function"), "{found:?}");
+        assert_eq!(kind("freq", 0), Some("parameter"));
+        assert_eq!(kind("saw", 0), Some("enumMember"));
+        assert_eq!(kind("osc", 0), Some("function"));
+        assert_eq!(kind("lpf", 0), Some("function"));
+        assert_eq!(kind("cutoff", 0), Some("parameter"));
+        assert_eq!(kind("lead", 0), Some("class"));
+        assert_eq!(kind("lead", 1), Some("class"));
+        assert_eq!(kind("tone", 1), Some("function"), "used as the track's instrument");
+        // words of the language itself are left to the grammar
+        assert_eq!(kind("instr", 0), None);
+        assert_eq!(kind("track", 0), None);
     }
 
     #[test]

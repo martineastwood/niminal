@@ -24,6 +24,7 @@ mod unit;
 pub use analysis::{PlayInfo, Ramp, Statement, StatementKind, analyze, scene_entries};
 pub use compile::{CompileOptions, compile, compile_with};
 pub use diag::{Diagnostic, Span, closest};
+pub use lexer::{Tok, Token, lex};
 pub use ide::{OpInfo, ParamInfo, Symbol, SymbolKind, SymbolParam, builtin_ops, pattern_ops, symbols, waves};
 pub use performance::{Action, Arrangement, Clip, Keys, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled};
 pub use schedule::{ControlSet, Found, Schedule, ScheduleError, TrackState};
