@@ -192,9 +192,15 @@ fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
     let mut c = Client::connect(d.port, None).unwrap();
     c.call("subscribe", serde_json::json!({"topics": ["landed"]})).unwrap();
     // the file was evaluated at once
-    std::thread::sleep(Duration::from_millis(400));
-    let status = c.call("status", serde_json::json!({})).unwrap();
-    assert!(status["transport"]["voices"].as_u64().unwrap() >= 1);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = c.call("status", serde_json::json!({})).unwrap();
+        if status["transport"]["voices"].as_u64().unwrap() >= 1 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the file was never evaluated: {status}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
     // saving it again evaluates it again; the change waits for a boundary and lands
     std::thread::sleep(Duration::from_millis(1100)); // so the modification time differs
