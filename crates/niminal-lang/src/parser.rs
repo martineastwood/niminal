@@ -70,6 +70,12 @@ fn describe(tok: &Tok) -> String {
         Tok::Dot => "`.`".into(),
         Tok::DotDot => "`..`".into(),
         Tok::Eq => "`=`".into(),
+        Tok::EqEq => "`==`".into(),
+        Tok::NotEq => "`!=`".into(),
+        Tok::Lt => "`<`".into(),
+        Tok::Gt => "`>`".into(),
+        Tok::Le => "`<=`".into(),
+        Tok::Ge => "`>=`".into(),
         Tok::Plus => "`+`".into(),
         Tok::Minus => "`-`".into(),
         Tok::Star => "`*`".into(),
@@ -770,7 +776,55 @@ impl Parser {
     }
 
     fn expr(&mut self) -> Res<Expr> {
-        self.nested(Self::sum)
+        self.nested(Self::comparison)
+    }
+
+    /// `a < b`. Comparisons don't chain: `a < b < c` is an error.
+    fn comparison(&mut self) -> Res<Expr> {
+        let lhs = self.sum()?;
+        let op = match self.peek() {
+            Tok::Lt => CmpOp::Lt,
+            Tok::Gt => CmpOp::Gt,
+            Tok::Le => CmpOp::Le,
+            Tok::Ge => CmpOp::Ge,
+            Tok::EqEq => CmpOp::Eq,
+            Tok::NotEq => CmpOp::Ne,
+            _ => return Ok(lhs),
+        };
+        self.bump();
+        let rhs = self.sum()?;
+        if matches!(self.peek(), Tok::Lt | Tok::Gt | Tok::Le | Tok::Ge | Tok::EqEq | Tok::NotEq) {
+            return Err(Diagnostic::new("comparisons don't chain", self.span())
+                .with_help("combine two with a product: `(a < b) * (b < c)` is 1 when both hold"));
+        }
+        let span = lhs.span.to(rhs.span);
+        Ok(Expr { kind: ExprKind::Compare { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, span })
+    }
+
+    /// `if cond { a } else { b }` (or `else if ...`), after the `if`.
+    fn if_expr(&mut self) -> Res<Expr> {
+        let start = self.bump().span; // `if`
+        let cond = self.expr()?;
+        let then = self.branch()?;
+        self.skip_newlines();
+        if !self.is_keyword("else") {
+            return Err(Diagnostic::new("an `if` needs an `else`", start)
+                .with_help("it makes a value, so both ways need one: `if x > 0 { a } else { b }`"));
+        }
+        self.bump();
+        let otherwise = if self.is_keyword("if") { self.nested(Self::if_expr)? } else { self.branch()? };
+        let span = start.to(otherwise.span);
+        Ok(Expr { kind: ExprKind::If { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(otherwise) }, span })
+    }
+
+    /// `{ expr }`
+    fn branch(&mut self) -> Res<Expr> {
+        self.expect(&Tok::LBrace)?;
+        self.skip_newlines();
+        let e = self.expr()?;
+        self.skip_newlines();
+        self.expect(&Tok::RBrace)?;
+        Ok(e)
     }
 
     fn sum(&mut self) -> Res<Expr> {
@@ -870,6 +924,7 @@ impl Parser {
                 Ok(Expr { span: span.to(end), ..inner })
             }
             Tok::Ident(name) if name == "env" && self.peek_at(1) == &Tok::LBracket => self.env(),
+            Tok::Ident(name) if name == "if" => self.nested(Self::if_expr),
             Tok::Ident(name) => {
                 let ident = self.ident("a name")?;
                 if self.peek() == &Tok::LParen {

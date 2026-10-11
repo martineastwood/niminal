@@ -211,6 +211,8 @@ opcode drive(x, amount: 0..1 = 0.5) {
 out = osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz)
 ```
 
+- **Decisions:** `if cond { a } else { b }` is an expression (`else if` chains). A comparison (`< > <= >= == !=`) gives 1 or 0, and `if` takes any plain number, so two conditions combine by multiplying: `if (x > 0.2) * (x < 0.6) { a } else { b }`. Both ways are worked out every sample and one is kept, so a branch holds a single expression (no `state` changes inside). The two ways must have the same unit, and comparisons are between values of one unit.
+- **Math:** `sin cos tan tanh exp log sqrt abs sign floor ceil fract` take a plain number; `min(a, b)`, `max(a, b)` and `clamp(x, lo, hi)` take values of one unit; `pow(x, y)` takes plain numbers. The one-argument ones also work in instruments. Comparisons and `if` are not available in instruments yet.
 - **The last expression is the output.** `state` declares a variable that persists between samples, per call site and per voice.
 - **Multiple outputs** are named and come back as fields:
 

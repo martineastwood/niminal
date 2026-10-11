@@ -15,6 +15,22 @@ pub enum Fn1 {
     Tanh,
     Exp,
     Abs,
+    Tan,
+    Floor,
+    Ceil,
+    Sqrt,
+    Log,
+    Sign,
+    /// The part after the point: `x - floor(x)`.
+    Fract,
+}
+
+impl Fn1 {
+    /// Every function, for lookup by name.
+    pub const ALL: [Fn1; 12] = [
+        Fn1::Sin, Fn1::Cos, Fn1::Tanh, Fn1::Exp, Fn1::Abs, Fn1::Tan,
+        Fn1::Floor, Fn1::Ceil, Fn1::Sqrt, Fn1::Log, Fn1::Sign, Fn1::Fract,
+    ];
 }
 
 impl Fn1 {
@@ -25,6 +41,14 @@ impl Fn1 {
             Fn1::Tanh => x.tanh(),
             Fn1::Exp => x.exp(),
             Fn1::Abs => x.abs(),
+            Fn1::Tan => x.tan(),
+            Fn1::Floor => x.floor(),
+            Fn1::Ceil => x.ceil(),
+            Fn1::Sqrt => x.max(0.0).sqrt(),
+            // the natural log, kept finite for a silent or negative input
+            Fn1::Log => x.max(1e-30).ln(),
+            Fn1::Sign => if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 },
+            Fn1::Fract => x - x.floor(),
         }
     }
 
@@ -35,6 +59,13 @@ impl Fn1 {
             Fn1::Tanh => "tanh",
             Fn1::Exp => "exp",
             Fn1::Abs => "abs",
+            Fn1::Tan => "tan",
+            Fn1::Floor => "floor",
+            Fn1::Ceil => "ceil",
+            Fn1::Sqrt => "sqrt",
+            Fn1::Log => "log",
+            Fn1::Sign => "sign",
+            Fn1::Fract => "fract",
         }
     }
 }
@@ -70,6 +101,20 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Min,
+    Max,
+    Pow,
+}
+
+/// A comparison, which gives 1 when it holds and 0 when it doesn't.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cmp {
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
 }
 
 /// One step of a kernel. Every instruction writes a fresh register (`dst`), and
@@ -85,6 +130,9 @@ pub enum Instr {
     StoreState { slot: usize, src: usize },
     Bin { dst: usize, op: BinOp, a: usize, b: usize },
     Neg { dst: usize, a: usize },
+    Cmp { dst: usize, op: Cmp, a: usize, b: usize },
+    /// `a` if `cond` is not 0, otherwise `b`.
+    Select { dst: usize, cond: usize, a: usize, b: usize },
     Call { dst: usize, f: Fn1, a: usize },
 }
 
@@ -165,8 +213,24 @@ impl Opcode for Custom {
                             BinOp::Sub => x - y,
                             BinOp::Mul => x * y,
                             BinOp::Div => x / y,
+                            BinOp::Min => x.min(y),
+                            BinOp::Max => x.max(y),
+                            BinOp::Pow => x.powf(y),
                         };
                     }
+                    Instr::Cmp { dst, op, a, b } => {
+                        let (x, y) = (regs[a], regs[b]);
+                        let holds = match op {
+                            Cmp::Lt => x < y,
+                            Cmp::Gt => x > y,
+                            Cmp::Le => x <= y,
+                            Cmp::Ge => x >= y,
+                            Cmp::Eq => x == y,
+                            Cmp::Ne => x != y,
+                        };
+                        regs[dst] = if holds { 1.0 } else { 0.0 };
+                    }
+                    Instr::Select { dst, cond, a, b } => regs[dst] = if regs[cond] != 0.0 { regs[a] } else { regs[b] },
                     Instr::Neg { dst, a } => regs[dst] = -regs[a],
                     Instr::Call { dst, f, a } => regs[dst] = f.apply(regs[a]),
                 }

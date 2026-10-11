@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use niminal_engine::Port;
-use niminal_engine::ops::{BinOp as Op, Instr, Kernel};
+use niminal_engine::ops::{BinOp as Op, Cmp, Fn1, Instr, Kernel};
 use niminal_score::Tempo;
 
 use crate::ast::*;
@@ -229,6 +229,43 @@ impl Kb {
                 self.binary(*op, l, r, e.span)
             }
             ExprKind::Call { name, args } => self.call(name, args),
+            ExprKind::Compare { op, lhs, rhs } => {
+                let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
+                if l.unit != r.unit {
+                    return Err(Diagnostic::new(
+                        format!("can't compare {} and {}", l.unit.describe(), r.unit.describe()),
+                        e.span,
+                    ));
+                }
+                let op = match op {
+                    CmpOp::Lt => Cmp::Lt,
+                    CmpOp::Gt => Cmp::Gt,
+                    CmpOp::Le => Cmp::Le,
+                    CmpOp::Ge => Cmp::Ge,
+                    CmpOp::Eq => Cmp::Eq,
+                    CmpOp::Ne => Cmp::Ne,
+                };
+                Ok(Value { reg: self.emit(|dst| Instr::Cmp { dst, op, a: l.reg, b: r.reg }), unit: Unit::Num })
+            }
+            ExprKind::If { cond, then, otherwise } => {
+                let c = self.expr(cond)?;
+                if c.unit != Unit::Num {
+                    return Err(Diagnostic::new(
+                        format!("an `if` needs a plain number to decide on, but this is {}", c.unit.describe()),
+                        cond.span,
+                    )
+                    .with_help("a comparison gives 1 or 0: `if x > 0.5hz`"));
+                }
+                // both ways are worked out every sample and one is kept
+                let (a, b) = (self.expr(then)?, self.expr(otherwise)?);
+                if a.unit != b.unit {
+                    return Err(Diagnostic::new(
+                        format!("the two ways of an `if` must have the same unit: this is {}, the first was {}", b.unit.describe(), a.unit.describe()),
+                        otherwise.span,
+                    ));
+                }
+                Ok(Value { reg: self.emit(|dst| Instr::Select { dst, cond: c.reg, a: a.reg, b: b.reg }), unit: a.unit })
+            }
             ExprKind::Channels(_) => Err(channels_in_opcode(e.span)),
             ExprKind::Pattern(_) | ExprKind::Grid(_) | ExprKind::Rows(_) | ExprKind::Rest => {
                 Err(Diagnostic::new("patterns can't be used inside an opcode", e.span))
@@ -331,15 +368,57 @@ impl Kb {
         Ok(Value { reg, unit: v.unit })
     }
 
+    /// `min(a, b)`, `max(a, b)`, `pow(x, y)` and `clamp(x, lo, hi)`.
+    fn combine(&mut self, name: &Ident, args: &[Arg]) -> Res<Value> {
+        let wanted = if name.name == "clamp" { 3 } else { 2 };
+        if args.len() != wanted {
+            return Err(Diagnostic::new(format!("`{}` takes {wanted} values", name.name), name.span));
+        }
+        if let Some(n) = args.iter().find_map(|a| a.name.as_ref()) {
+            return Err(Diagnostic::new(format!("`{}` takes its values without names", name.name), n.span));
+        }
+        let mut values = Vec::with_capacity(wanted);
+        for a in args {
+            values.push((self.expr(&a.value)?, a.value.span));
+        }
+        let unit = values[0].0.unit;
+        for (v, span) in &values[1..] {
+            if v.unit != unit {
+                return Err(Diagnostic::new(
+                    format!("`{}` needs values with the same unit: this is {}, the first was {}", name.name, v.unit.describe(), unit.describe()),
+                    *span,
+                ));
+            }
+        }
+        if name.name == "pow" && unit != Unit::Num {
+            return Err(Diagnostic::new(format!("`pow` expects plain numbers, found {}", unit.describe()), args[0].value.span));
+        }
+        let reg = |v: &(Value, Span)| v.0.reg;
+        let out = match name.name.as_str() {
+            "min" => self.emit(|dst| Instr::Bin { dst, op: Op::Min, a: reg(&values[0]), b: reg(&values[1]) }),
+            "max" => self.emit(|dst| Instr::Bin { dst, op: Op::Max, a: reg(&values[0]), b: reg(&values[1]) }),
+            "pow" => self.emit(|dst| Instr::Bin { dst, op: Op::Pow, a: reg(&values[0]), b: reg(&values[1]) }),
+            // the lower bound wins if the two are the wrong way round
+            _ => {
+                let capped = self.emit(|dst| Instr::Bin { dst, op: Op::Min, a: reg(&values[0]), b: reg(&values[2]) });
+                self.emit(|dst| Instr::Bin { dst, op: Op::Max, a: capped, b: reg(&values[1]) })
+            }
+        };
+        Ok(Value { reg: out, unit })
+    }
+
     fn call(&mut self, name: &Ident, args: &[Arg]) -> Res<Value> {
         if name.name == "prev" {
             return self.prev(name, args);
         }
+        if matches!(name.name.as_str(), "min" | "max" | "pow" | "clamp") {
+            return self.combine(name, args);
+        }
         let Some(f) = math_fn(&name.name) else {
-            let math = ["sin", "cos", "tanh", "exp", "abs"];
-            let help = format!("opcodes are built from arithmetic and these functions: {}", math.join(", "));
+            let math: Vec<&str> = Fn1::ALL.iter().map(|f| f.name()).chain(["min", "max", "pow", "clamp", "prev"]).collect();
+            let help = format!("opcodes are built from arithmetic, `if`, and these functions: {}", math.join(", "));
             let mut d = Diagnostic::new(format!("`{}` can't be used inside an opcode", name.name), name.span);
-            if let Some(c) = closest(&name.name, math) {
+            if let Some(c) = closest(&name.name, math.iter().copied()) {
                 d = d.with_help(format!("did you mean `{c}`?"));
             } else {
                 d = d.with_help(help);

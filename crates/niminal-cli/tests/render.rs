@@ -215,6 +215,75 @@ opcode dc_block(x) {
         x.iter().fold(0.0, |m, s| m.max(s.abs()))
     }
 
+    /// What `body` makes of the constant `x`, with `x` fed in as a plain number for a while.
+    fn through(body: &str, x: f64) -> f32 {
+        let out = raw(&format!("opcode t(x) {{ {body} }}\ninstr a() {{ v = {x} * env[1 1sec 1]\n v.t }}\na() for 1beat"));
+        // silence at the end of a render is trimmed, so a note of zeros comes back empty
+        out.get(4800).copied().unwrap_or(0.0)
+    }
+
+    fn close(a: f32, b: f64) -> bool {
+        (f64::from(a) - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn if_picks_one_of_two_values_and_else_if_chains() {
+        let pick = "if x > 0.5 { 1 } else { 0.25 }";
+        assert!(close(through(pick, 0.8), 1.0) && close(through(pick, 0.3), 0.25));
+        let chain = "if x > 0.8 { 3 } else if x > 0.4 { 2 } else { 1 }";
+        assert!(close(through(chain, 0.9), 3.0) && close(through(chain, 0.5), 2.0) && close(through(chain, 0.1), 1.0));
+        // the branches can be written over several lines
+        let long = "if x >= 0.5 {\n 2 * x\n} else {\n -x\n}";
+        assert!(close(through(long, 0.75), 1.5) && close(through(long, 0.25), -0.25));
+    }
+
+    #[test]
+    fn comparisons_give_one_or_zero_and_combine_by_multiplying() {
+        for (body, x, want) in [
+            ("x < 0.5", 0.25, 1.0), ("x < 0.5", 0.75, 0.0), ("x <= 0.5", 0.5, 1.0), ("x >= 0.5", 0.25, 0.0),
+            ("x == 0.5", 0.5, 1.0), ("x != 0.5", 0.5, 0.0), ("(x > 0.2) * (x < 0.6)", 0.4, 1.0), ("(x > 0.2) * (x < 0.6)", 0.8, 0.0),
+        ] {
+            assert!(close(through(body, x), want), "{body} with {x}");
+        }
+        // a state can be changed by a decision, as in a peak follower
+        let held = raw("opcode hold(x) {\n state m = 0.0\n m = if x > m { x } else { m * 0.999 }\n m\n}\ninstr a() { (osc(sine, 100hz) * env[1 1sec 1]).hold }\na() for 1beat");
+        let lowest = held[10_000..20_000].iter().fold(f32::MAX, |m, v| m.min(*v));
+        assert!(lowest > 0.5, "the follower never falls back to the sine's zero crossings: {lowest}");
+    }
+
+    #[test]
+    fn the_extra_math_functions() {
+        for (body, x, want) in [
+            ("min(x, 0.5)", 0.8, 0.5), ("max(x, 0.5)", 0.2, 0.5), ("clamp(x, 0.2, 0.6)", 0.9, 0.6), ("clamp(x, 0.2, 0.6)", 0.1, 0.2),
+            ("clamp(x, 0.2, 0.6)", 0.4, 0.4), ("pow(x, 2)", 3.0, 9.0), ("floor(x)", 2.75, 2.0), ("ceil(x)", 2.25, 3.0),
+            ("sqrt(x)", 0.25, 0.5), ("log(x)", std::f64::consts::E, 1.0), ("sign(x)", -4.0, -1.0), ("fract(x)", 2.75, 0.75),
+            ("tan(x)", 0.5, 0.5f64.tan()),
+        ] {
+            assert!(close(through(body, x), want), "{body} with {x}: {}", through(body, x));
+        }
+    }
+
+    #[test]
+    fn the_new_functions_are_ordinary_instrument_opcodes_too() {
+        let floor = raw("instr a() { (2.75 * env[1 1sec 1]).floor }\na() for 1beat");
+        assert!(close(floor[4800], 2.0), "{}", floor[4800]);
+    }
+
+    #[test]
+    fn opcode_branching_mistakes_are_reported() {
+        let error = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default();
+        assert!(error("opcode t(x) { if x > 0 { 1 } }").contains("needs an `else`"));
+        assert!(error("opcode t(x, f: hz) { if x > 0 { f } else { 1 } }").contains("same unit"));
+        assert!(error("opcode t(x, f: hz) { if f { 1 } else { 0 } }").contains("plain number to decide on"));
+        assert!(error("opcode t(x) { x < 1 < 2 }").contains("don't chain"));
+        assert!(error("opcode t(x, f: hz) { x < f }").contains("can't compare"));
+        assert!(error("opcode t(x) { min(x) }").contains("takes 2 values"));
+        assert!(error("opcode t(x, f: hz) { pow(f, f) }").contains("plain numbers"));
+        assert!(error("opcode t(x, f: hz) { min(x, f) }").contains("same unit"));
+        assert!(error("instr a() { osc(sine, 1hz) * (if 1 > 0 { 1 } else { 0 }) }").contains("inside an `opcode`"));
+        assert!(error("opcode t(x) { sinn(x) }").contains("did you mean `sin`?"));
+    }
+
     #[test]
     fn a_user_lowpass_filters() {
         let bright = raw("instr a() { osc(saw, 2000hz) }\na() for 1beat");

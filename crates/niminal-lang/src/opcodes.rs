@@ -178,6 +178,13 @@ impl Registry {
             math("tanh", "Soft-clips a signal into -1..1; a classic saturator.", |_| Ok(Box::new(Func(Fn1::Tanh)))),
             math("exp", "e raised to a signal.", |_| Ok(Box::new(Func(Fn1::Exp)))),
             math("abs", "Absolute value of a signal.", |_| Ok(Box::new(Func(Fn1::Abs)))),
+            math("tan", "Tangent of a signal (radians).", |_| Ok(Box::new(Func(Fn1::Tan)))),
+            math("floor", "The whole number at or below a signal.", |_| Ok(Box::new(Func(Fn1::Floor)))),
+            math("ceil", "The whole number at or above a signal.", |_| Ok(Box::new(Func(Fn1::Ceil)))),
+            math("sqrt", "Square root of a signal (0 for a negative one).", |_| Ok(Box::new(Func(Fn1::Sqrt)))),
+            math("log", "Natural logarithm of a signal.", |_| Ok(Box::new(Func(Fn1::Log)))),
+            math("sign", "1 for a positive signal, -1 for a negative one, 0 for zero.", |_| Ok(Box::new(Func(Fn1::Sign)))),
+            math("fract", "The part of a signal after the point: `x - floor(x)`.", |_| Ok(Box::new(Func(Fn1::Fract)))),
         ];
         Registry { ops }
     }
@@ -208,5 +215,5 @@ pub fn wave(name: &str) -> Option<Wave> {
 
 /// The math functions that can be used inside an `opcode` body.
 pub fn math_fn(name: &str) -> Option<Fn1> {
-    [Fn1::Sin, Fn1::Cos, Fn1::Tanh, Fn1::Exp, Fn1::Abs].into_iter().find(|f| f.name() == name)
+    Fn1::ALL.into_iter().find(|f| f.name() == name)
 }

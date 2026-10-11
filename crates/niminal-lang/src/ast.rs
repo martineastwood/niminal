@@ -288,7 +288,21 @@ pub enum ExprKind {
     /// `[a, b]`: a comma list is a multichannel signal, one expression per channel.
     Channels(Vec<Expr>),
     Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    /// `a < b`: 1 when it holds and 0 when it doesn't.
+    Compare { op: CmpOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    /// `if cond { a } else { b }`
+    If { cond: Box<Expr>, then: Box<Expr>, otherwise: Box<Expr> },
     Env(EnvLit),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
 }
 
 #[derive(Debug, Clone, PartialEq)]

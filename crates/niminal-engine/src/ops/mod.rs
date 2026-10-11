@@ -12,7 +12,7 @@ mod reverb;
 mod sample;
 
 pub use control::Control;
-pub use custom::{BinOp, Custom, Fn1, Func, Instr, Kernel};
+pub use custom::{BinOp, Cmp, Custom, Fn1, Func, Instr, Kernel};
 pub use delay::Delay;
 pub use env::{Curve, Env, Segment, shape};
 pub use filter::{FilterMode, Svf};

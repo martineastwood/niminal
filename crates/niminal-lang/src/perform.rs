@@ -254,6 +254,9 @@ impl Perform<'_> {
             },
             ExprKind::Call { name, args } => self.op(name, args, e.span, it),
             ExprKind::Env(lit) => env_lane(lit).map(PerfValue::Env),
+            ExprKind::Compare { .. } | ExprKind::If { .. } => {
+                Err(Diagnostic::new("comparisons and `if` work inside an `opcode`", e.span))
+            }
             ExprKind::Channels(_) | ExprKind::Binary { .. } => {
                 Err(Diagnostic::new("expected a pattern, clip or scene here", e.span)
                     .with_help("write steps in brackets, as in `[c4 e4 g4]`"))

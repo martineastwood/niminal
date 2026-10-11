@@ -763,6 +763,11 @@ impl<'a> Lower<'a> {
             }
             ExprKind::Call { name, args } => self.call(name, args, e.span),
             ExprKind::Env(env) => self.env(env),
+            ExprKind::Compare { .. } | ExprKind::If { .. } => Err(Diagnostic::new(
+                "comparisons and `if` work inside an `opcode`, which runs sample by sample",
+                e.span,
+            )
+            .with_help("put the decision in an opcode and call it here")),
             ExprKind::Pattern(_) | ExprKind::Rest => Err(Diagnostic::new(
                 "a pattern can't be used inside an instrument, opcode or track",
                 e.span,

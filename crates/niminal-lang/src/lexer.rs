@@ -17,6 +17,13 @@ pub enum Tok {
     Dot,
     DotDot,
     Eq,
+    /// `==`, `!=`, `<`, `>`, `<=`, `>=`
+    EqEq,
+    NotEq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
     Plus,
     Minus,
     Star,
@@ -191,7 +198,25 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     b'@' => Tok::At,
                     b',' => Tok::Comma,
                     b':' => Tok::Colon,
+                    b'=' if bytes.get(i) == Some(&b'=') => {
+                        i += 1;
+                        Tok::EqEq
+                    }
                     b'=' => Tok::Eq,
+                    b'!' if bytes.get(i) == Some(&b'=') => {
+                        i += 1;
+                        Tok::NotEq
+                    }
+                    b'<' if bytes.get(i) == Some(&b'=') => {
+                        i += 1;
+                        Tok::Le
+                    }
+                    b'<' => Tok::Lt,
+                    b'>' if bytes.get(i) == Some(&b'=') => {
+                        i += 1;
+                        Tok::Ge
+                    }
+                    b'>' => Tok::Gt,
                     b'+' => Tok::Plus,
                     b'-' => Tok::Minus,
                     b'*' => Tok::Star,
