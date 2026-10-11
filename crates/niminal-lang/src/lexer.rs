@@ -30,6 +30,8 @@ pub enum Tok {
     Minus,
     Star,
     Slash,
+    /// `%` between two values: the remainder
+    Percent,
     Bar,
     Tilde,
     At,
@@ -227,6 +229,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     b'-' => Tok::Minus,
                     b'*' => Tok::Star,
                     b'/' => Tok::Slash,
+                    b'%' => Tok::Percent,
                     b'|' => Tok::Bar,
                     _ => {
                         let ch = src[start..].chars().next().unwrap();

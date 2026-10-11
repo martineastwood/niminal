@@ -12,11 +12,11 @@ mod reverb;
 mod sample;
 
 pub use control::Control;
-pub use custom::{BinOp, Cmp, Custom, Fn1, Func, Instr, Kernel};
+pub use custom::{BinOp, Cmp, Custom, rem, Fn1, Func, Instr, Kernel};
 pub use delay::Delay;
 pub use env::{Curve, Env, Segment, shape};
 pub use filter::{FilterMode, Svf};
-pub use math::{Add, Gain, Mul, Sub};
+pub use math::{Add, Compare, Div, Gain, Mul, Rem, Select, Sub};
 pub use osc::{Osc, Wave};
 pub use pan::{PanChannel, pan_gains};
 pub use reverb::Reverb;

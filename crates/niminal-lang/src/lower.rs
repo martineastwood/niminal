@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use niminal_engine::ops::{Add, Curve, Env, Fn1, Func, Mul, PanChannel, SampleData, Sampler, Segment, Sub};
+use niminal_engine::ops::{Add, Cmp, Compare, Curve, Div, Env, Fn1, Func, Mul, PanChannel, Rem, SampleData, Sampler, Segment, Select, Sub};
 use niminal_engine::{ChainInput, Graph, GraphBuilder, Route, Src};
 use niminal_score::{Tempo, Value};
 
@@ -765,11 +765,11 @@ impl<'a> Lower<'a> {
             }
             ExprKind::Call { name, args } => self.call(name, args, e.span),
             ExprKind::Env(env) => self.env(env),
-            ExprKind::Compare { .. } | ExprKind::If { .. } => Err(Diagnostic::new(
-                "comparisons and `if` work inside an `opcode`, which runs sample by sample",
-                e.span,
-            )
-            .with_help("put the decision in an opcode and call it here")),
+            ExprKind::Compare { op, lhs, rhs } => {
+                let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
+                self.compare(*op, l, r, e.span)
+            }
+            ExprKind::If { cond, then, otherwise } => self.if_else(cond, then, otherwise, e.span),
             ExprKind::Pattern(_) | ExprKind::Rest => Err(Diagnostic::new(
                 "a pattern can't be used inside an instrument, opcode or track",
                 e.span,
@@ -873,7 +873,7 @@ impl<'a> Lower<'a> {
         b: &Sig,
         unit: Unit,
         span: Span,
-        make: fn(&mut GraphBuilder, Src, Src) -> Src,
+        make: impl Fn(&mut GraphBuilder, Src, Src) -> Src,
     ) -> Res<Sig> {
         let n = match (a.count(), b.count()) {
             (x, y) if x == y => x,
@@ -914,6 +914,7 @@ impl<'a> Lower<'a> {
             BinOp::Sub => "subtract",
             BinOp::Mul => "multiply",
             BinOp::Div => "divide",
+            BinOp::Rem => "take the remainder of",
         };
         let (lu, ru) = (l.unit, r.unit);
         let mismatch = || Diagnostic::new(format!("can't {verb} {} and {}", lu.describe(), ru.describe()), span);
@@ -953,21 +954,90 @@ impl<'a> Lower<'a> {
                 _ => Err(mismatch()),
             },
             BinOp::Div => {
-                let Some(k) = r.konst else {
-                    return Err(Diagnostic::new("dividing by a changing signal isn't supported yet", span));
-                };
-                if k == 0.0 {
-                    return Err(Diagnostic::new("division by zero", span));
-                }
                 let unit = match (lu, ru) {
                     (Unit::Db, _) | (_, Unit::Db) => return Err(mismatch()),
                     (u, Unit::Num) => u,
                     (a, b) if a == b => Unit::Num,
                     _ => return Err(mismatch()),
                 };
+                let Some(k) = r.konst else {
+                    // a changing divisor: worked out sample by sample (0 where it is 0)
+                    return self.elementwise(&l, &r, unit, span, |g, x, y| g.add(Div, &[("a", x), ("b", y)]).expect("div ports"));
+                };
+                if k == 0.0 {
+                    return Err(Diagnostic::new("division by zero", span));
+                }
                 self.mul(&l, &Sig::constant(Unit::Num, 1.0 / k), unit, span)
             }
+            BinOp::Rem => {
+                let unit = match (lu, ru) {
+                    (Unit::Db, _) | (_, Unit::Db) => return Err(mismatch()),
+                    (u, Unit::Num) => u,
+                    (a, b) if a == b => a,
+                    _ => return Err(mismatch()),
+                };
+                if let (Some(x), Some(y)) = (l.konst, r.konst) {
+                    return Ok(Sig::constant(unit, niminal_engine::ops::rem(x, y)));
+                }
+                self.elementwise(&l, &r, unit, span, |g, x, y| g.add(Rem, &[("a", x), ("b", y)]).expect("rem ports"))
+            }
         }
+    }
+
+    /// `a < b`: 1 where it holds, 0 where it doesn't.
+    fn compare(&mut self, op: CmpOp, l: Sig, r: Sig, span: Span) -> Res<Sig> {
+        if l.unit != r.unit {
+            return Err(Diagnostic::new(format!("can't compare {} and {}", l.unit.describe(), r.unit.describe()), span));
+        }
+        let cmp = match op {
+            CmpOp::Lt => Cmp::Lt,
+            CmpOp::Gt => Cmp::Gt,
+            CmpOp::Le => Cmp::Le,
+            CmpOp::Ge => Cmp::Ge,
+            CmpOp::Eq => Cmp::Eq,
+            CmpOp::Ne => Cmp::Ne,
+        };
+        if let (Some(x), Some(y)) = (l.konst, r.konst) {
+            return Ok(Sig::constant(Unit::Num, if cmp.holds(x, y) { 1.0 } else { 0.0 }));
+        }
+        self.elementwise(&l, &r, Unit::Num, span, move |g, x, y| g.add(Compare(cmp), &[("a", x), ("b", y)]).expect("compare ports"))
+    }
+
+    /// `if cond { a } else { b }`. A condition known while compiling picks a side then and there.
+    fn if_else(&mut self, cond: &Expr, then: &Expr, otherwise: &Expr, span: Span) -> Res<Sig> {
+        let c = self.expr(cond)?;
+        if c.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                format!("an `if` needs a plain number to decide on, but this is {}", c.unit.describe()),
+                cond.span,
+            )
+            .with_help("a comparison gives 1 or 0: `if freq < 2khz`"));
+        }
+        let (a, b) = (self.expr(then)?, self.expr(otherwise)?);
+        if a.unit != b.unit {
+            return Err(Diagnostic::new(
+                format!("the two ways of an `if` must have the same unit: this is {}, the first was {}", b.unit.describe(), a.unit.describe()),
+                otherwise.span,
+            ));
+        }
+        if let Some(k) = c.konst {
+            return Ok(if k != 0.0 { a } else { b });
+        }
+        let n = [c.count(), a.count(), b.count()].into_iter().max().unwrap_or(1);
+        for s in [&c, &a, &b] {
+            if s.count() != 1 && s.count() != n {
+                return Err(Diagnostic::new(
+                    format!("can't combine a {n}-channel signal with a {}-channel one", s.count()),
+                    span,
+                )
+                .with_help("a one-channel signal can be combined with any; otherwise the counts must match"));
+            }
+        }
+        let layout = [&c, &a, &b].into_iter().find(|s| s.count() == n).map_or(Layout::Mono, |s| s.layout);
+        let srcs = (0..n)
+            .map(|k| self.g.add(Select, &[("cond", c.pick(k)), ("a", a.pick(k)), ("b", b.pick(k))]).expect("select ports"))
+            .collect();
+        Ok(Sig { srcs, layout, unit: a.unit, konst: None, outputs: Vec::new() })
     }
 
     /// `freq + 7st`: scale a frequency by 2^(st/12).

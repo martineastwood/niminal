@@ -81,6 +81,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Minus => "`-`".into(),
         Tok::Star => "`*`".into(),
         Tok::Slash => "`/`".into(),
+        Tok::Percent => "`%`".into(),
         Tok::Bar => "`|`".into(),
         Tok::Tilde => "`~`".into(),
         Tok::At => "`@`".into(),
@@ -871,6 +872,7 @@ impl Parser {
             let op = match self.peek() {
                 Tok::Star => BinOp::Mul,
                 Tok::Slash => BinOp::Div,
+                Tok::Percent => BinOp::Rem,
                 _ => return Ok(lhs),
             };
             self.bump();

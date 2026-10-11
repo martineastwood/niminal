@@ -104,6 +104,26 @@ pub enum BinOp {
     Min,
     Max,
     Pow,
+    /// The remainder, with the sign of the divisor: `-1 % 3` is 2. Zero if the divisor is 0.
+    Rem,
+}
+
+/// `x % y`.
+pub fn rem(x: f64, y: f64) -> f64 {
+    if y == 0.0 { 0.0 } else { x - y * (x / y).floor() }
+}
+
+impl Cmp {
+    pub fn holds(self, x: f64, y: f64) -> bool {
+        match self {
+            Cmp::Lt => x < y,
+            Cmp::Gt => x > y,
+            Cmp::Le => x <= y,
+            Cmp::Ge => x >= y,
+            Cmp::Eq => x == y,
+            Cmp::Ne => x != y,
+        }
+    }
 }
 
 /// A comparison, which gives 1 when it holds and 0 when it doesn't.
@@ -224,23 +244,16 @@ impl Opcode for Custom {
                             BinOp::Add => x + y,
                             BinOp::Sub => x - y,
                             BinOp::Mul => x * y,
-                            BinOp::Div => x / y,
+                            BinOp::Div => if y == 0.0 { 0.0 } else { x / y },
                             BinOp::Min => x.min(y),
                             BinOp::Max => x.max(y),
                             BinOp::Pow => x.powf(y),
+                            BinOp::Rem => rem(x, y),
                         };
                     }
                     Instr::Cmp { dst, op, a, b } => {
                         let (x, y) = (regs[a], regs[b]);
-                        let holds = match op {
-                            Cmp::Lt => x < y,
-                            Cmp::Gt => x > y,
-                            Cmp::Le => x <= y,
-                            Cmp::Ge => x >= y,
-                            Cmp::Eq => x == y,
-                            Cmp::Ne => x != y,
-                        };
-                        regs[dst] = if holds { 1.0 } else { 0.0 };
+                        regs[dst] = if op.holds(x, y) { 1.0 } else { 0.0 };
                     }
                     Instr::Select { dst, cond, a, b } => regs[dst] = if regs[cond] != 0.0 { regs[a] } else { regs[b] },
                     Instr::Neg { dst, a } => regs[dst] = -regs[a],

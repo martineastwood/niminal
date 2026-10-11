@@ -280,7 +280,11 @@ opcode dc_block(x) {
         assert!(error("opcode t(x) { min(x) }").contains("takes 2 values"));
         assert!(error("opcode t(x, f: hz) { pow(f, f) }").contains("plain numbers"));
         assert!(error("opcode t(x, f: hz) { min(x, f) }").contains("same unit"));
-        assert!(error("instr a() { osc(sine, 1hz) * (if 1 > 0 { 1 } else { 0 }) }").contains("inside an `opcode`"));
+        assert!(error("instr a(f: hz) { osc(sine, f) * if f { 1 } else { 0 } }").contains("plain number to decide on"));
+        assert!(error("instr a(f: hz) { osc(sine, f) * if f > 1 { 1 } else { 0 } }").contains("can't compare"));
+        assert!(error("instr a(f: hz) { osc(sine, f) * if f > 1hz { 1 } else { 1hz } }").contains("same unit"));
+        assert!(error("opcode t(x, f: hz) { x % f }").contains("can't take the remainder of"));
+        assert!(error("instr a(f: hz) { osc(sine, f) * (3 % f) }").contains("can't take the remainder of"));
         assert!(error("opcode t(x) { sinn(x) }").contains("did you mean `sin`?"));
     }
 
@@ -340,6 +344,38 @@ opcode split(x, cutoff: hz) -> (low, high) {
         assert!(error("opcode u(x) { x.lpf(cutoff: 1khz) }").contains("can't be used inside an opcode"));
         assert!(error(&format!("{LIB}opcode u(x) {{ x.one_pole(cutoff: 0.5) }}")).contains("expects"));
         assert!(error(&format!("{LIB}opcode u(x) {{ x.one_pole }}")).contains("needs an argument `cutoff`"));
+    }
+
+    #[test]
+    fn an_instrument_can_decide_with_if_on_what_it_is_given() {
+        let note = |freq: &str| raw(&format!("instr a(f: hz) {{ osc(sine, f) * (if f < 1khz {{ 1 }} else {{ 0.25 }}) }}\na(f: {freq}) for 1beat"));
+        assert!(peak(&note("500hz")) > 0.95);
+        let high = peak(&note("2000hz"));
+        assert!((high - 0.25).abs() < 0.01, "{high}");
+        // a decision between decibel values, as a bright note is turned down
+        let db = raw("instr a(f: hz) { osc(sine, f).gain(if f < 1khz { 0db } else { -12db }) }\na(f: 2000hz) for 1beat");
+        assert!((peak(&db) - 0.251).abs() < 0.01, "{}", peak(&db));
+        // a decision known while compiling leaves nothing in the graph to run
+        let folded = raw("instr a() { osc(sine, 440hz) * (if 2 > 1 { 0.5 } else { 0.1 }) }\na() for 1beat");
+        assert!((peak(&folded) - 0.5).abs() < 0.01);
+        // a changing condition, on a signal
+        let gated = raw("instr a() { osc(sine, 100hz) * (if osc(sine, 100hz) > 0 { 1 } else { 0 }) }\na() for 1beat");
+        assert!(gated.iter().all(|s| *s > -1e-6), "only the positive half is left");
+    }
+
+    #[test]
+    fn modulo_and_dividing_by_a_signal_in_instruments_and_opcodes() {
+        let via = |expr: &str| raw(&format!("instr a() {{ v = 1.3 * env[1 1sec 1]\n {expr} }}\na() for 1beat"))[4800];
+        assert!((via("v % 0.5") - 0.3).abs() < 1e-5);
+        assert!((via("v % 1") - 0.3).abs() < 1e-5);
+        assert!((via("1 / v") - 1.0 / 1.3).abs() < 1e-5);
+        assert!((via("7 % 3 * v") - 1.3).abs() < 1e-5, "a constant remainder is worked out while compiling");
+        assert!(close(through("x % 0.3", 1.0), 0.1));
+        assert!(close(through("x % 3", -1.0), 2.0), "the remainder takes the sign of the divisor");
+        assert!(close(through("x % 0", 1.0), 0.0), "and is 0 for a divisor of 0");
+        assert!(close(through("x / 0", 1.0), 0.0));
+        // a wrapping phase, as a sawtooth built by hand
+        assert!(close(through("(x * 3) % 1", 0.5), 0.5));
     }
 
     #[test]

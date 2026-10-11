@@ -326,6 +326,7 @@ impl Kb<'_> {
             BinOp::Sub => "subtract",
             BinOp::Mul => "multiply",
             BinOp::Div => "divide",
+            BinOp::Rem => "take the remainder of",
         };
         let mismatch = || Diagnostic::new(format!("can't {verb} {} and {}", l.unit.describe(), r.unit.describe()), span);
 
@@ -350,12 +351,19 @@ impl Kb<'_> {
                 (a, b) if a == b => Unit::Num,
                 _ => return Err(mismatch()),
             },
+            BinOp::Rem => match (l.unit, r.unit) {
+                (Unit::Db, _) | (_, Unit::Db) => return Err(mismatch()),
+                (u, Unit::Num) => u,
+                (a, b) if a == b => a,
+                _ => return Err(mismatch()),
+            },
         };
         let op = match op {
             BinOp::Add => Op::Add,
             BinOp::Sub => Op::Sub,
             BinOp::Mul => Op::Mul,
             BinOp::Div => Op::Div,
+            BinOp::Rem => Op::Rem,
         };
         Ok(Value { reg: self.emit(|dst| Instr::Bin { dst, op, a: l.reg, b: r.reg }), unit })
     }

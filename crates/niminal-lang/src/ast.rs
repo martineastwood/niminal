@@ -270,6 +270,7 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Rem,
 }
 
 #[derive(Debug, Clone, PartialEq)]
