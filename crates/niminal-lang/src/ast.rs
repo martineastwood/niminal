@@ -224,6 +224,8 @@ pub struct TrackDecl {
 pub struct OpcodeDef {
     pub name: Ident,
     pub params: Vec<ParamDef>,
+    /// `-> (low, band, high)`: the names the body defines as its results, if it has more than one.
+    pub outputs: Vec<Ident>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }

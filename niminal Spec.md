@@ -214,7 +214,7 @@ out = osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz)
 - **Decisions:** `if cond { a } else { b }` is an expression (`else if` chains). A comparison (`< > <= >= == !=`) gives 1 or 0, and `if` takes any plain number, so two conditions combine by multiplying: `if (x > 0.2) * (x < 0.6) { a } else { b }`. Both ways are worked out every sample and one is kept, so a branch holds a single expression (no `state` changes inside). The two ways must have the same unit, and comparisons are between values of one unit.
 - **Math:** `sin cos tan tanh exp log sqrt abs sign floor ceil fract` take a plain number; `min(a, b)`, `max(a, b)` and `clamp(x, lo, hi)` take values of one unit; `pow(x, y)` takes plain numbers. The one-argument ones also work in instruments. Comparisons and `if` are not available in instruments yet.
 - **The last expression is the output.** `state` declares a variable that persists between samples, per call site and per voice.
-- **Multiple outputs** are named and come back as fields:
+- **Multiple outputs** are named after `->`, the body defines each of them, and they come back as fields. (Built: each result runs the body once, so an opcode with three results costs three times as much; used on its own, the first result stands for the opcode.)
 
 ```
 opcode svf(x, cutoff: hz, res: 0..1 = 0.5) -> (low, band, high) { ... }
@@ -223,7 +223,7 @@ f = noise().svf(cutoff: 2khz)
 out = f.band
 ```
 
-- **Opcodes can call opcodes**, take trigger inputs, and declare latency, which latency compensation then uses.
+- **Opcodes can call opcodes** defined before them (built: the callee's code is copied in, with its own state per call; a callee with several results can't be called from another opcode yet; built-in graph opcodes such as `lpf` can't be called from inside an opcode). **Trigger inputs** are not a separate kind: an edge is `(x > 0.5) * (prev(x) <= 0.5)`. Declared latency is not built, since the graph has no delay compensation yet.
 - **Rust plugins** implement the same opcode trait, so built-in, niminal and plugin opcodes look identical to the user.
 
 ### Functions

@@ -50,6 +50,8 @@ pub struct BuildArgs {
     pub wave: Option<Wave>,
     /// Which channel of a multichannel signal this copy of the opcode serves.
     pub channel: usize,
+    /// Which result of an opcode with several this copy delivers.
+    pub output: usize,
     /// Arguments whose value is a compile-time constant, in engine units.
     pub consts: HashMap<String, f64>,
 }
@@ -87,7 +89,7 @@ impl OpSpec {
     pub fn instantiate(&self, args: &BuildArgs) -> Result<Option<Box<dyn Opcode>>, String> {
         match &self.build {
             Build::Builtin(f) => f(args).map(Some),
-            Build::Custom(k) => Ok(Some(Box::new(Custom::new(k.clone())))),
+            Build::Custom(k) => Ok(Some(Box::new(Custom::new(k.clone()).output(args.output)))),
             Build::Invalid | Build::Pan | Build::ToLayout => Ok(None),
         }
     }

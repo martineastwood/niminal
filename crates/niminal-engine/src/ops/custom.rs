@@ -130,6 +130,7 @@ pub enum Instr {
     StoreState { slot: usize, src: usize },
     Bin { dst: usize, op: BinOp, a: usize, b: usize },
     Neg { dst: usize, a: usize },
+    Copy { dst: usize, src: usize },
     Cmp { dst: usize, op: Cmp, a: usize, b: usize },
     /// `a` if `cond` is not 0, otherwise `b`.
     Select { dst: usize, cond: usize, a: usize, b: usize },
@@ -145,8 +146,8 @@ pub struct Kernel {
     pub registers: usize,
     /// Initial value of each state slot.
     pub state_init: Vec<f64>,
-    /// The register holding the opcode's result.
-    pub output: usize,
+    /// The registers holding the opcode's results, by name. An ordinary opcode has one.
+    pub outputs: Vec<(String, usize)>,
 }
 
 /// A running copy of a [`Kernel`], with its own state.
@@ -156,6 +157,8 @@ pub struct Custom {
     state: Vec<f64>,
     regs: Vec<f64>,
     sample_rate: f64,
+    /// Which of the kernel's outputs this copy delivers.
+    which: usize,
 }
 
 impl Custom {
@@ -165,7 +168,15 @@ impl Custom {
             regs: vec![0.0; kernel.registers],
             kernel,
             sample_rate: 48_000.0,
+            which: 0,
         }
+    }
+
+    /// Deliver the kernel's `which`th output (an opcode with several runs once for each).
+    pub fn output(mut self, which: usize) -> Self {
+        assert!(which < self.kernel.outputs.len(), "the kernel has no such output");
+        self.which = which;
+        self
     }
 }
 
@@ -180,7 +191,7 @@ impl Opcode for Custom {
 
     fn box_clone(&self) -> Box<dyn Opcode> {
         // A new copy starts from the kernel's initial state, not ours.
-        Box::new(Custom::new(self.kernel.clone()))
+        Box::new(Custom::new(self.kernel.clone()).output(self.which))
     }
 
     fn prepare(&mut self, sample_rate: f32) {
@@ -190,6 +201,7 @@ impl Opcode for Custom {
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
             && self.kernel == old.kernel
+            && self.which == old.which
         {
             self.state.copy_from_slice(&old.state);
         }
@@ -232,10 +244,11 @@ impl Opcode for Custom {
                     }
                     Instr::Select { dst, cond, a, b } => regs[dst] = if regs[cond] != 0.0 { regs[a] } else { regs[b] },
                     Instr::Neg { dst, a } => regs[dst] = -regs[a],
+                    Instr::Copy { dst, src } => regs[dst] = regs[src],
                     Instr::Call { dst, f, a } => regs[dst] = f.apply(regs[a]),
                 }
             }
-            *o = regs[k.output] as f32;
+            *o = regs[k.outputs[self.which].1] as f32;
         }
     }
 }

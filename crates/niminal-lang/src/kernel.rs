@@ -24,7 +24,8 @@ struct Value {
     unit: Unit,
 }
 
-struct Kb {
+struct Kb<'a> {
+    registry: &'a Registry,
     code: Vec<Instr>,
     registers: usize,
     scope: HashMap<String, Value>,
@@ -71,7 +72,7 @@ pub fn compile_opcode(def: &OpcodeDef, registry: &Registry, names: &Names, tempo
     }
 
     // Body.
-    let build = match compile_body(def, &ports, &units, tempo) {
+    let build = match compile_body(def, &ports, &units, tempo, registry) {
         Ok(kernel) => (Build::Custom(Arc::new(Kernel { name: name.clone(), ports, ..kernel })), None),
         Err(d) => (Build::Invalid, Some(d)),
     };
@@ -79,8 +80,9 @@ pub fn compile_opcode(def: &OpcodeDef, registry: &Registry, names: &Names, tempo
     Ok((spec, build.1))
 }
 
-fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -> Res<Kernel> {
+fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo, registry: &Registry) -> Res<Kernel> {
     let mut kb = Kb {
+        registry,
         code: Vec::new(),
         registers: 0,
         scope: HashMap::new(),
@@ -96,10 +98,12 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
         kb.scope.insert(port.name.to_string(), Value { reg, unit: *unit });
     }
 
-    let Some((last, init)) = def.body.split_last() else {
+    let multi = !def.outputs.is_empty();
+    let (init, last) = if multi { (&def.body[..], None) } else { def.body.split_last().map(|(l, i)| (i, Some(l))).unwrap_or((&[][..], None)) };
+    if def.body.is_empty() || (!multi && last.is_none()) {
         return Err(Diagnostic::new(format!("opcode `{}` is empty", def.name.name), def.name.span)
             .with_help("the last line of an opcode is the value it outputs"));
-    };
+    }
     for stmt in init {
         match stmt {
             Stmt::Bind { name, value } => kb.bind(name, value)?,
@@ -107,32 +111,51 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
             Stmt::AddAssign { name, .. } => return Err(add_assign_in_opcode(name)),
             Stmt::Destructure { value, .. } => return Err(channels_in_opcode(value.span)),
             Stmt::Expr(e) => {
-                return Err(Diagnostic::new("this value is never used", e.span)
-                    .with_help("bind it with `name = ...`, or make it the last line"));
+                return Err(Diagnostic::new("this value is never used", e.span).with_help(if multi {
+                    "bind it with `name = ...`; the opcode's results are the names after `->`"
+                } else {
+                    "bind it with `name = ...`, or make it the last line"
+                }));
             }
         }
     }
-    let Stmt::Expr(out_expr) = last else {
-        let name = match last {
-            Stmt::Bind { name, .. } | Stmt::State { name, .. } | Stmt::AddAssign { name, .. } => name,
-            Stmt::Destructure { value, .. } => return Err(channels_in_opcode(value.span)),
-            Stmt::Expr(_) => unreachable!(),
+    let mut outputs: Vec<(String, usize)> = Vec::new();
+    if multi {
+        for out in &def.outputs {
+            let Some(v) = kb.scope.get(&out.name).copied() else {
+                return Err(Diagnostic::new(format!("`{}` is a result of `{}`, but the body never defines it", out.name, def.name.name), out.span)
+                    .with_help(format!("add a line `{} = ...`", out.name)));
+            };
+            if v.unit != Unit::Num {
+                return Err(Diagnostic::new(format!("an opcode outputs plain signals, but `{}` is {}", out.name, v.unit.describe()), out.span));
+            }
+            outputs.push((out.name.clone(), v.reg));
+        }
+    }
+    if let Some(last) = last {
+        let Stmt::Expr(out_expr) = last else {
+            let name = match last {
+                Stmt::Bind { name, .. } | Stmt::State { name, .. } | Stmt::AddAssign { name, .. } => name,
+                Stmt::Destructure { value, .. } => return Err(channels_in_opcode(value.span)),
+                Stmt::Expr(_) => unreachable!(),
+            };
+            return Err(Diagnostic::new("an opcode must end with the value it outputs", name.span)
+                .with_help(format!("add a last line such as `{}`", name.name)));
         };
-        return Err(Diagnostic::new("an opcode must end with the value it outputs", name.span)
-            .with_help(format!("add a last line such as `{}`", name.name)));
-    };
-    let out = kb.expr(out_expr)?;
+        let out = kb.expr(out_expr)?;
+        if out.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                format!("an opcode outputs a plain signal, but this is {}", out.unit.describe()),
+                out_expr.span,
+            ));
+        }
+        outputs.push(("out".to_string(), out.reg));
+    }
     if let Some((name, (_, span))) = kb.forward.iter().next() {
         return Err(Diagnostic::new(format!("`prev({name})` reads `{name}`, which is never defined"), *span));
     }
     for (slot, src) in std::mem::take(&mut kb.deferred) {
         kb.code.push(Instr::StoreState { slot, src });
-    }
-    if out.unit != Unit::Num {
-        return Err(Diagnostic::new(
-            format!("an opcode outputs a plain signal, but this is {}", out.unit.describe()),
-            out_expr.span,
-        ));
     }
 
     Ok(Kernel {
@@ -141,7 +164,7 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo) -
         code: kb.code,
         registers: kb.registers,
         state_init: kb.state_init,
-        output: out.reg,
+        outputs,
     })
 }
 
@@ -155,7 +178,7 @@ fn add_assign_in_opcode(name: &Ident) -> Diagnostic {
         .with_help(format!("write `{0} = {0} + ...`", name.name))
 }
 
-impl Kb {
+impl Kb<'_> {
     fn emit(&mut self, make: impl FnOnce(usize) -> Instr) -> usize {
         let dst = self.registers;
         self.registers += 1;
@@ -368,6 +391,93 @@ impl Kb {
         Ok(Value { reg, unit: v.unit })
     }
 
+    /// A call to an opcode defined earlier: its instructions are copied in here, their registers and
+    /// state moved out of the way, with the call's arguments standing for its inputs.
+    fn inline(&mut self, name: &Ident, spec: &OpSpec, kernel: &Kernel, args: &[Arg]) -> Res<Value> {
+        if kernel.outputs.len() > 1 {
+            return Err(Diagnostic::new(
+                format!("`{}` has several outputs, which can't be used inside another opcode yet", name.name),
+                name.span,
+            ));
+        }
+        // match arguments to parameters, as a call in an instrument does
+        let mut given: Vec<Option<(Value, Span)>> = vec![None; spec.params.len()];
+        let mut next_positional = 0;
+        for arg in args {
+            let index = match &arg.name {
+                None => {
+                    let i = next_positional;
+                    next_positional += 1;
+                    if i >= spec.positional || i >= spec.params.len() {
+                        let mut d = Diagnostic::new(format!("`{}` takes its other arguments by name", name.name), arg.value.span);
+                        if let Some(p) = spec.params.get(i) {
+                            d = d.with_help(format!("write `{}: ...`", p.name));
+                        }
+                        return Err(d);
+                    }
+                    i
+                }
+                Some(n) => spec.params.iter().position(|p| p.name == n.name).ok_or_else(|| {
+                    let mut d = Diagnostic::new(format!("`{}` has no argument named `{}`", name.name, n.name), n.span);
+                    if let Some(c) = closest(&n.name, spec.params.iter().map(|p| p.name.as_str())) {
+                        d = d.with_help(format!("did you mean `{c}`?"));
+                    }
+                    d
+                })?,
+            };
+            if given[index].is_some() {
+                return Err(Diagnostic::new(
+                    format!("`{}` argument `{}` given more than once", name.name, spec.params[index].name),
+                    arg.value.span,
+                ));
+            }
+            given[index] = Some((self.expr(&arg.value)?, arg.value.span));
+        }
+        let mut inputs = Vec::with_capacity(spec.params.len());
+        for (i, param) in spec.params.iter().enumerate() {
+            let wanted = if matches!(param.kind, Kind::Gain) { Unit::Db } else if let Kind::Signal(u) = param.kind { u } else { Unit::Num };
+            match given[i] {
+                Some((v, span)) => {
+                    if v.unit != wanted {
+                        return Err(Diagnostic::new(
+                            format!("`{}` expects {} for `{}`, found {}", name.name, wanted.describe(), param.name, v.unit.describe()),
+                            span,
+                        ));
+                    }
+                    inputs.push(v.reg);
+                }
+                None => match kernel.ports.get(i).and_then(|p| p.default) {
+                    Some(value) => inputs.push(self.emit(|dst| Instr::Const { dst, value: f64::from(value) })),
+                    None => {
+                        return Err(Diagnostic::new(format!("`{}` needs an argument `{}`", name.name, param.name), name.span));
+                    }
+                },
+            }
+        }
+
+        let (base, state_base) = (self.registers, self.state_init.len());
+        self.registers += kernel.registers;
+        self.state_init.extend(&kernel.state_init);
+        for instr in &kernel.code {
+            let r = |reg: usize| reg + base;
+            let moved = match *instr {
+                Instr::Const { dst, value } => Instr::Const { dst: r(dst), value },
+                Instr::Input { dst, port } => Instr::Copy { dst: r(dst), src: inputs[port] },
+                Instr::SampleRate { dst } => Instr::SampleRate { dst: r(dst) },
+                Instr::LoadState { dst, slot } => Instr::LoadState { dst: r(dst), slot: slot + state_base },
+                Instr::StoreState { slot, src } => Instr::StoreState { slot: slot + state_base, src: r(src) },
+                Instr::Bin { dst, op, a, b } => Instr::Bin { dst: r(dst), op, a: r(a), b: r(b) },
+                Instr::Neg { dst, a } => Instr::Neg { dst: r(dst), a: r(a) },
+                Instr::Copy { dst, src } => Instr::Copy { dst: r(dst), src: r(src) },
+                Instr::Cmp { dst, op, a, b } => Instr::Cmp { dst: r(dst), op, a: r(a), b: r(b) },
+                Instr::Select { dst, cond, a, b } => Instr::Select { dst: r(dst), cond: r(cond), a: r(a), b: r(b) },
+                Instr::Call { dst, f, a } => Instr::Call { dst: r(dst), f, a: r(a) },
+            };
+            self.code.push(moved);
+        }
+        Ok(Value { reg: kernel.outputs[0].1 + base, unit: Unit::Num })
+    }
+
     /// `min(a, b)`, `max(a, b)`, `pow(x, y)` and `clamp(x, lo, hi)`.
     fn combine(&mut self, name: &Ident, args: &[Arg]) -> Res<Value> {
         let wanted = if name.name == "clamp" { 3 } else { 2 };
@@ -413,6 +523,12 @@ impl Kb {
         }
         if matches!(name.name.as_str(), "min" | "max" | "pow" | "clamp") {
             return self.combine(name, args);
+        }
+        let registry = self.registry;
+        if let Some(spec) = registry.find(&name.name)
+            && let Build::Custom(kernel) = &spec.build
+        {
+            return self.inline(name, spec, kernel, args);
         }
         let Some(f) = math_fn(&name.name) else {
             let math: Vec<&str> = Fn1::ALL.iter().map(|f| f.name()).chain(["min", "max", "pow", "clamp", "prev"]).collect();

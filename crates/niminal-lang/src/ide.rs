@@ -56,7 +56,11 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             }
             Item::Opcode(d) => {
                 param_list = params(source, &d.params);
-                (&d.name, SymbolKind::Opcode, format!("opcode {}({})", d.name.name, labels(&param_list)))
+                (&d.name, SymbolKind::Opcode, {
+                    let results = d.outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>().join(", ");
+                    let arrow = if results.is_empty() { String::new() } else { format!(" -> ({results})") };
+                    format!("opcode {}({}){arrow}", d.name.name, labels(&param_list))
+                })
             }
             Item::Control { name, .. } => (name, SymbolKind::Control, first_line()),
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),

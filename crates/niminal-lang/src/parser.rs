@@ -3,7 +3,7 @@ use crate::diag::{Diagnostic, Span};
 use crate::lexer::{Tok, Token, lex};
 
 /// A name, its parameters, its `with(...)` options, its body, and where it all is.
-type Definition = (Ident, Vec<ParamDef>, Vec<Arg>, Vec<Stmt>, Span);
+type Definition = (Ident, Vec<ParamDef>, Vec<Ident>, Vec<Arg>, Vec<Stmt>, Span);
 
 pub fn parse(src: &str) -> Result<Vec<Item>, Diagnostic> {
     parse_spanned(src).map(|items| items.into_iter().map(|(item, _)| item).collect())
@@ -70,6 +70,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Dot => "`.`".into(),
         Tok::DotDot => "`..`".into(),
         Tok::Eq => "`=`".into(),
+        Tok::Arrow => "`->`".into(),
         Tok::EqEq => "`==`".into(),
         Tok::NotEq => "`!=`".into(),
         Tok::Lt => "`<`".into(),
@@ -240,7 +241,7 @@ impl Parser {
             Ok(Item::Control { name, value: self.expr()?, input: None })
         } else if self.is_keyword("instr") || self.is_keyword("mono") {
             let mono = self.is_keyword("mono");
-            let (name, params, options, body, span) = self.definition()?;
+            let (name, params, _, options, body, span) = self.definition()?;
             Ok(Item::Instr(InstrDef { name, params, body, span, mono, options }))
         } else if self.is_keyword("bus") {
             self.bump();
@@ -315,11 +316,11 @@ impl Parser {
             let (body, end) = self.block()?;
             Ok(Item::Track(TrackDecl { name, params, body, span: start.to(end) }))
         } else if self.is_keyword("opcode") {
-            let (name, params, options, body, span) = self.definition()?;
+            let (name, params, outputs, options, body, span) = self.definition()?;
             if let Some(option) = options.first() {
                 return Err(Diagnostic::new("an opcode has no options", option.value.span));
             }
-            Ok(Item::Opcode(OpcodeDef { name, params, body, span }))
+            Ok(Item::Opcode(OpcodeDef { name, params, outputs, body, span }))
         } else if self.is_keyword("tempo") {
             let start = self.bump().span;
             let value = self.expr()?;
@@ -474,6 +475,29 @@ impl Parser {
         let what = if matches!(&keyword.tok, Tok::Ident(k) if k == "instr" || k == "mono") { "an instrument name" } else { "an opcode name" };
         let name = self.ident(what)?;
         let params = self.params()?;
+        let mut outputs = Vec::new();
+        if self.peek() == &Tok::Arrow {
+            let arrow = self.bump().span;
+            if !matches!(&keyword.tok, Tok::Ident(k) if k == "opcode") {
+                return Err(Diagnostic::new("only an opcode can have several outputs", arrow));
+            }
+            self.expect(&Tok::LParen)?;
+            loop {
+                let out = self.ident("the name of an output")?;
+                if outputs.iter().any(|o: &Ident| o.name == out.name) {
+                    return Err(Diagnostic::new(format!("output `{}` is named twice", out.name), out.span));
+                }
+                outputs.push(out);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RParen)?;
+            if outputs.len() < 2 {
+                return Err(Diagnostic::new("`->` lists at least two outputs", arrow)
+                    .with_help("an opcode with one output just ends with its value"));
+            }
+        }
         let options = if self.is_keyword("with") {
             self.bump();
             self.args()?
@@ -481,7 +505,7 @@ impl Parser {
             Vec::new()
         };
         let (body, end) = self.block()?;
-        Ok((name, params, options, body, start.to(end)))
+        Ok((name, params, outputs, options, body, start.to(end)))
     }
 
     /// `{ statements }`, returning the statements and the span of the braces.

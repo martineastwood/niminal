@@ -284,6 +284,64 @@ opcode dc_block(x) {
         assert!(error("opcode t(x) { sinn(x) }").contains("did you mean `sin`?"));
     }
 
+    const SPLIT: &str = "
+opcode split(x, cutoff: hz) -> (low, high) {
+  state y = 0.0
+  a = exp(-2 * pi * cutoff / sample_rate)
+  y = x * (1 - a) + y * a
+  low = y
+  high = x - y
+}
+";
+
+    #[test]
+    fn an_opcode_with_several_outputs_gives_each_as_a_field() {
+        let play = |body: &str| raw(&format!("{SPLIT}instr a() {{ {body} }}\na() for 1beat"));
+        let whole = play("osc(saw, 300hz)");
+        let summed = play("f = osc(saw, 300hz).split(cutoff: 500hz)\n f.low + f.high");
+        assert_eq!(whole.len(), summed.len());
+        assert!(whole.iter().zip(&summed).all(|(a, b)| (a - b).abs() < 1e-5), "the two parts add back up to the input");
+        // a 2khz sine is nearly all in the high part
+        let (low, high) = (play("osc(sine, 2000hz).split(cutoff: 500hz).low"), play("osc(sine, 2000hz).split(cutoff: 500hz).high"));
+        assert!(rms(&low) < rms(&high) / 3.0, "{} vs {}", rms(&low), rms(&high));
+        // used on its own, the first result stands for it
+        assert_eq!(play("osc(sine, 2000hz).split(cutoff: 500hz)"), low);
+    }
+
+    #[test]
+    fn several_outputs_keep_separate_state_per_channel_and_note() {
+        let one = raw(&format!("{SPLIT}instr a(f: hz) {{ osc(saw, f).split(cutoff: 500hz).high * env[1 1sec 1] }}\na(f: 200hz) for 1beat"));
+        let two = raw(&format!("{SPLIT}instr a(f: hz) {{ osc(saw, f).split(cutoff: 500hz).high * env[1 1sec 1] }}\na(f: 200hz) for 1beat\nat 100ms a(f: 330hz) for 1beat"));
+        assert_eq!(&one[..4700], &two[..4700]);
+    }
+
+    #[test]
+    fn an_opcode_can_call_an_opcode_defined_before_it() {
+        let nested = raw("opcode smooth(x, c: hz) { x.one_pole(cutoff: c).one_pole(cutoff: c) }\ninstr a() { osc(saw, 2000hz).smooth(c: 300hz) }\na() for 1beat");
+        let by_hand = raw("instr a() { osc(saw, 2000hz).one_pole(cutoff: 300hz).one_pole(cutoff: 300hz) }\na() for 1beat");
+        let near = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4);
+        assert!(near(&nested, &by_hand), "each inlined copy has its own state");
+        // defaults and later opcodes using earlier ones
+        let driven = raw("opcode hot(x) { x.drive }\nopcode hotter(x) { x.hot.hot }\ninstr a() { osc(sine, 100hz).hotter }\na() for 1beat");
+        let by_hand = raw("instr a() { osc(sine, 100hz).drive.drive }\na() for 1beat");
+        assert!(near(&driven, &by_hand));
+    }
+
+    #[test]
+    fn opcode_composition_and_output_mistakes_are_reported() {
+        let error = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default();
+        assert!(error(&format!("{SPLIT}instr a() {{ osc(sine, 1hz).split(cutoff: 1hz).mid }}")).contains("no result `mid`its results are low, high"));
+        assert!(error("opcode t(x) -> (a, b) { a = x }").contains("`b` is a result of `t`, but the body never defines it"));
+        assert!(error("opcode t(x) -> (a) { a = x }").contains("at least two outputs"));
+        assert!(error("opcode t(x) -> (a, a) { a = x }").contains("named twice"));
+        assert!(error("instr t() -> (a, b) { 1 }").contains("only an opcode"));
+        assert!(error("opcode t(x) -> (a, b) { a = x\n b = x\n x }").contains("never used"));
+        assert!(error(&format!("{SPLIT}opcode u(x) {{ x.split(cutoff: 1hz) }}")).contains("several outputs"));
+        assert!(error("opcode u(x) { x.lpf(cutoff: 1khz) }").contains("can't be used inside an opcode"));
+        assert!(error(&format!("{LIB}opcode u(x) {{ x.one_pole(cutoff: 0.5) }}")).contains("expects"));
+        assert!(error(&format!("{LIB}opcode u(x) {{ x.one_pole }}")).contains("needs an argument `cutoff`"));
+    }
+
     #[test]
     fn a_user_lowpass_filters() {
         let bright = raw("instr a() { osc(saw, 2000hz) }\na() for 1beat");
@@ -1530,6 +1588,6 @@ mod envelope_shortcuts {
     fn a_user_opcode_with_the_same_name_wins() {
         // if the shortcut won, `adsr(1)` would need four envelope parameters
         let src = "opcode adsr(x) { x }\ninstr a(freq: hz) { osc(sine, freq) * adsr(1) }\na(freq: 220hz) for 1beat";
-        assert!(compile(&src).is_ok(), "{:?}", compile(&src).err());
+        assert!(compile(src).is_ok(), "{:?}", compile(src).err());
     }
 }

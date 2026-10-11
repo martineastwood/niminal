@@ -168,20 +168,22 @@ struct Sig {
     /// Known at compile time (single channel only). Decibel values are held as
     /// linear gain factors.
     konst: Option<f64>,
+    /// The results of an opcode with several, by name; this signal is the first of them.
+    outputs: Vec<(String, Sig)>,
 }
 
 impl Sig {
     fn constant(unit: Unit, v: f64) -> Sig {
-        Sig { srcs: vec![Src::Const(v as f32)], layout: Layout::Mono, unit, konst: Some(v) }
+        Sig { srcs: vec![Src::Const(v as f32)], layout: Layout::Mono, unit, konst: Some(v), outputs: Vec::new() }
     }
 
     fn signal(src: Src, unit: Unit) -> Sig {
-        Sig { srcs: vec![src], layout: Layout::Mono, unit, konst: None }
+        Sig { srcs: vec![src], layout: Layout::Mono, unit, konst: None, outputs: Vec::new() }
     }
 
     /// A plain signal with one source per channel.
     fn channels(srcs: Vec<Src>, layout: Layout) -> Sig {
-        Sig { srcs, layout, unit: Unit::Num, konst: None }
+        Sig { srcs, layout, unit: Unit::Num, konst: None, outputs: Vec::new() }
     }
 
     fn count(&self) -> usize {
@@ -692,7 +694,7 @@ impl<'a> Lower<'a> {
             return Ok(sig.clone());
         }
         if matches!(sig.layout, Layout::Channels(_)) && sig.count() == to.channels() {
-            return Ok(Sig { layout: to, ..sig.clone() });
+            return Ok(Sig { layout: to, outputs: Vec::new(), ..sig.clone() });
         }
         let Some(matrix) = conversion(sig.layout, to) else {
             return Err(Diagnostic::new(
@@ -812,7 +814,7 @@ impl<'a> Lower<'a> {
             return Err(Diagnostic::new("too many channels", span));
         }
         let layout = Layout::from_count(srcs.len());
-        Ok(Sig { srcs, layout, unit: unit.unwrap_or(Unit::Num), konst: None })
+        Ok(Sig { srcs, layout, unit: unit.unwrap_or(Unit::Num), konst: None, outputs: Vec::new() })
     }
 
     fn name(&mut self, name: &str, span: Span) -> Res<Sig> {
@@ -839,7 +841,7 @@ impl<'a> Lower<'a> {
             }
             let src = self.g.add(niminal_engine::ops::Control::new(control.key.clone(), control.initial), &[])
                 .map_err(|e| Diagnostic::new(e.to_string(), span))?;
-            return Ok(Sig { srcs: vec![src], layout: Layout::Mono, unit: control.unit, konst: None });
+            return Ok(Sig { srcs: vec![src], layout: Layout::Mono, unit: control.unit, konst: None, outputs: Vec::new() });
         }
         if let Some(bus) = self.names.bus(name) {
             return match self.mode {
@@ -887,7 +889,7 @@ impl<'a> Lower<'a> {
         };
         let layout = if a.count() >= b.count() { a.layout } else { b.layout };
         let srcs = (0..n).map(|k| make(&mut self.g, a.pick(k), b.pick(k))).collect();
-        Ok(Sig { srcs, layout, unit, konst: None })
+        Ok(Sig { srcs, layout, unit, konst: None, outputs: Vec::new() })
     }
 
     fn mul(&mut self, a: &Sig, b: &Sig, unit: Unit, span: Span) -> Res<Sig> {
@@ -983,7 +985,7 @@ impl<'a> Lower<'a> {
             .iter()
             .map(|&s| self.g.add(Func(Fn1::Exp), &[("x", s)]).expect("exp has one port"))
             .collect();
-        let ratio = Sig { srcs, layout: exponent.layout, unit: Unit::Num, konst: None };
+        let ratio = Sig { srcs, layout: exponent.layout, unit: Unit::Num, konst: None, outputs: Vec::new() };
         self.mul(freq, &ratio, Unit::Hz, span)
     }
 
@@ -995,6 +997,22 @@ impl<'a> Lower<'a> {
     }
 
     // ---- calls ----------------------------------------------------------
+
+    /// The value of `e` if it is an opcode's several results: a name bound to them, or a call that makes them.
+    fn record(&mut self, e: &Expr) -> Res<Option<Sig>> {
+        let several = match &e.kind {
+            ExprKind::Name(n) => return Ok(self.scope.get(n).filter(|s| !s.outputs.is_empty()).cloned()),
+            ExprKind::Call { name, .. } => matches!(
+                self.registry.find(&name.name).map(|s| &s.build),
+                Some(Build::Custom(k)) if k.outputs.len() > 1
+            ),
+            _ => false,
+        };
+        if !several {
+            return Ok(None);
+        }
+        self.expr(e).map(Some)
+    }
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
         if name.name == "prev" {
@@ -1014,6 +1032,18 @@ impl<'a> Lower<'a> {
                 .with_help("for example `out = it.lpf(cutoff: 1khz).to(space)`"));
         }
         let registry = self.registry;
+        // `f.band`: one result of an opcode that has several
+        if let [receiver] = args
+            && receiver.receiver
+            && registry.find(&name.name).is_none()
+            && let Some(record) = self.record(&receiver.value)?
+        {
+            return record.outputs.iter().find(|(n, _)| *n == name.name).map(|(_, s)| s.clone()).ok_or_else(|| {
+                let names: Vec<&str> = record.outputs.iter().map(|(n, _)| n.as_str()).collect();
+                Diagnostic::new(format!("this opcode has no result `{}`", name.name), name.span)
+                    .with_help(format!("its results are {}", names.join(", ")))
+            });
+        }
         let Some(spec) = registry.find(&name.name) else {
             let mut d = Diagnostic::new(format!("unknown opcode `{}`", name.name), name.span);
             if let Some(c) = closest(&name.name, registry.names()) {
@@ -1148,25 +1178,36 @@ impl<'a> Lower<'a> {
             }
         }
 
-        let mut srcs = Vec::with_capacity(width);
-        for channel in 0..width {
-            build.channel = channel;
-            let Some(opcode) = spec.instantiate(&build).map_err(|m| Diagnostic::new(m, span))? else {
-                return Ok(Sig::constant(Unit::Num, 0.0));
-            };
-            let wired: Vec<(&str, Src)> = spec
-                .params
-                .iter()
-                .zip(vals)
-                .filter(|(p, _)| p.wired)
-                .filter_map(|(p, v)| match v {
-                    Some(Val::Sig(sig)) => Some((p.name.as_str(), sig.pick(channel))),
-                    _ => None,
-                })
-                .collect();
-            srcs.push(self.g.add(opcode, &wired).expect("ports match the opcode table"));
+        let names: Vec<String> = match &spec.build {
+            Build::Custom(k) if k.outputs.len() > 1 => k.outputs.iter().map(|(n, _)| n.clone()).collect(),
+            _ => Vec::new(),
+        };
+        let mut results: Vec<Sig> = Vec::new();
+        for output in 0..names.len().max(1) {
+            build.output = output;
+            let mut srcs = Vec::with_capacity(width);
+            for channel in 0..width {
+                build.channel = channel;
+                let Some(opcode) = spec.instantiate(&build).map_err(|m| Diagnostic::new(m, span))? else {
+                    return Ok(Sig::constant(Unit::Num, 0.0));
+                };
+                let wired: Vec<(&str, Src)> = spec
+                    .params
+                    .iter()
+                    .zip(vals)
+                    .filter(|(p, _)| p.wired)
+                    .filter_map(|(p, v)| match v {
+                        Some(Val::Sig(sig)) => Some((p.name.as_str(), sig.pick(channel))),
+                        _ => None,
+                    })
+                    .collect();
+                srcs.push(self.g.add(opcode, &wired).expect("ports match the opcode table"));
+            }
+            results.push(if width == 1 { Sig::signal(srcs[0], Unit::Num) } else { Sig::channels(srcs, layout) });
         }
-        Ok(if width == 1 { Sig::signal(srcs[0], Unit::Num) } else { Sig::channels(srcs, layout) })
+        let mut first = results[0].clone();
+        first.outputs = names.into_iter().zip(results).collect();
+        Ok(first)
     }
 
     /// `pan`: place a mono signal in the master's layout.
