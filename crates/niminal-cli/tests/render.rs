@@ -791,6 +791,10 @@ track bass { instrument = pluck(bright: 0.1) }
         // the first note is the same, the second is brighter (more of the saw gets through)
         assert_eq!(&dull[..half - 4800], &bright[..half - 4800]);
         assert!(rms(&bright[half..]) > rms(&dull[half..]) * 1.5, "{} vs {}", rms(&bright[half..]), rms(&dull[half..]));
+        // with no notes there is nothing to step on, which is said rather than ignored
+        let p = compile(&format!("{stage}clip c {{ cut: [300hz 8khz] }}\npad.play(c)"));
+        let e = p.err().expect("a lane without notes is refused");
+        assert!(e[0].message.contains("has no notes"), "{}", e[0].message);
         // a mistake in the lane's unit is reported
         let p = program(&format!("{stage}clip c {{ notes: [c5]\ncut: [0.5] }}\npad.play(c)"));
         let Err(e) = render_with(&p, &[], &RenderOptions { limiter: false, until: Some(1.0), ..Default::default() }) else { panic!("a bare number is not a frequency") };

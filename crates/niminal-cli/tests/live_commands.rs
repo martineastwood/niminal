@@ -16,8 +16,17 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// A free port that no other test in this process was just given (the system may hand a port out again as soon as it is released).
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    let mut given = GIVEN.lock().unwrap();
+    loop {
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        if !given.contains(&port) {
+            given.push(port);
+            return port;
+        }
+    }
 }
 
 /// A daemon running as a child process, killed when dropped.

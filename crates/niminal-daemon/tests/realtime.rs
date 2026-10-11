@@ -542,3 +542,32 @@ fn bend_pressure_and_the_pedal_sound_the_same_through_the_prepared_path() {
     let worst = actual.iter().zip(&expected).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
     assert!(worst < 0.05, "the live path follows the offline one: {worst}");
 }
+
+#[test]
+fn a_lane_that_sets_a_track_parameter_sounds_the_same_prepared_as_direct_and_without_heap_work() {
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }";
+    let play = |lane: &str| format!("clip c {{ notes: [c5 c5]\n{lane} }}\npad.play(c)");
+    let direct = |lane: &str| {
+        let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+        s.eval(setup, Some("now")).unwrap();
+        s.eval(&play(lane), Some("now")).unwrap();
+        s.process(96_000).remove(0)
+    };
+    let expected = direct("cut: [300hz 8khz]");
+
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(setup, Some("now")).unwrap();
+    s.eval(&play("cut: [300hz 8khz]"), Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut actual = vec![0.0; 96_000];
+    for chunk in actual.chunks_mut(256) {
+        s.prepare_realtime();
+        measured(&mut r, chunk.len(), chunk);
+    }
+    assert_eq!(actual, expected);
+
+    // and the lane did something: the second note is brighter than with the parameter left alone
+    let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+    let dull = direct("cut: [300hz]");
+    assert!(rms(&actual[48_000..]) > rms(&dull[48_000..]) * 1.5);
+}

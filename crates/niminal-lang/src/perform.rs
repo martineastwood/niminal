@@ -955,6 +955,13 @@ impl Perform<'_> {
                 return Err(Diagnostic::new(format!("the `{lane}` lane isn't supported yet"), span));
             }
             if self.cx.names.controls.iter().any(|c| c.name == format!("{}::{lane}", info.name)) {
+                if clip.lane("notes").is_none() && clip.keys.is_none() {
+                    return Err(Diagnostic::new(
+                        format!("lane `{lane}` sets a parameter of track `{}` as each note starts, but clip `{}` has no notes", info.name, clip.name),
+                        span,
+                    )
+                    .with_help("add a `notes` lane to step on, or change it as the control instead"));
+                }
                 continue;
             }
             let mut known: Vec<&str> = instrument.params.iter().map(|p| p.name.as_str()).collect();
