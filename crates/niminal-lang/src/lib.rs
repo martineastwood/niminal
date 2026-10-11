@@ -5,6 +5,7 @@ mod analysis;
 mod ast;
 mod compile;
 mod diag;
+mod env_shortcut;
 mod ide;
 mod kernel;
 mod layout;

@@ -346,6 +346,9 @@ mod tests {
         assert_eq!(l[0], "res:");
         assert!(!l.contains(&"cutoff:".to_string()));
         assert_eq!(&labels("tone(")[..1], ["freq:"]);
+        let l = labels("adsr(");
+        assert!(l.contains(&"attack:".to_string()) && l.contains(&"release:".to_string()));
+        assert!(labels("").contains(&"adsr".to_string()) && labels("").contains(&"perc".to_string()));
     }
 
     #[test]

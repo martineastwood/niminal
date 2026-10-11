@@ -192,7 +192,7 @@ pub fn pattern_ops() -> Vec<OpInfo> {
 
 pub fn builtin_ops() -> Vec<OpInfo> {
     let registry = Registry::builtin();
-    registry
+    let mut ops: Vec<OpInfo> = registry
         .names()
         .filter_map(|name| registry.find(name))
         .map(|spec| OpInfo {
@@ -219,7 +219,31 @@ pub fn builtin_ops() -> Vec<OpInfo> {
                 })
                 .collect(),
         })
-        .collect()
+        .collect();
+    ops.extend(envelope_ops());
+    ops
+}
+
+/// `adsr` and `perc`: shortcuts for envelope literals, not wired opcodes.
+fn envelope_ops() -> Vec<OpInfo> {
+    let op = |name: &str, doc: &str, params: &[(&'static str, &'static str, bool)]| OpInfo {
+        name: name.to_string(),
+        doc: doc.to_string(),
+        positional: params.len(),
+        params: params.iter().map(|&(name, ty, required)| ParamInfo { name: name.to_string(), ty, required }).collect(),
+    };
+    vec![
+        op(
+            "adsr",
+            "Attack, decay, sustain and release: the same as `env[0 attack 1 decay sustain | release 0]`.",
+            &[("attack", "time", true), ("decay", "time", true), ("sustain", "number", true), ("release", "time", true)],
+        ),
+        op(
+            "perc",
+            "A one-shot attack and exponential decay: the same as `env[0 attack 1 decay.exp 0]`. `attack` defaults to 2ms.",
+            &[("attack", "time", false), ("decay", "time", true)],
+        ),
+    ]
 }
 
 /// The waveform names `osc` accepts.

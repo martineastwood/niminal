@@ -8,6 +8,7 @@ use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
+use crate::env_shortcut;
 use crate::kernel::compile_opcode;
 use crate::layout::Layout;
 use crate::lower::{Member, Names, compile_chain, compile_instr, compile_sampler, layout_from_expr, unknown_unit};
@@ -151,7 +152,7 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
 }
 
 pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
-    let items = desugar(parser::parse(source).map_err(|d| vec![d])?);
+    let mut items = desugar(parser::parse(source).map_err(|d| vec![d])?);
     let mut errors = Vec::new();
 
     let beats_per_bar = meter_of(&items).unwrap_or_else(|d| {
@@ -212,6 +213,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Err(d) => errors.push(d),
         }
     }
+    // after user opcodes are known, so `opcode adsr` / `opcode perc` win over the shortcuts
+    errors.extend(env_shortcut::desugar(&mut items, &registry));
 
     for item in &items {
         let Item::Control { name, value, input } = item else { continue };

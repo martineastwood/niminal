@@ -1314,6 +1314,11 @@ mod envelope_shortcuts {
             raw("env[0 5ms 1 120ms 0.4 | 600ms 0]")
         );
         assert_eq!(raw("adsr(5ms, 120ms, 0.4, 600ms)"), raw("env[0 5ms 1 120ms 0.4 | 600ms 0]"));
+        // a bare value after a named one still fills the next positional slot (attack), as opcodes do
+        assert_eq!(
+            raw("adsr(decay: 120ms, 5ms, sustain: 0.4, release: 600ms)"),
+            raw("env[0 5ms 1 120ms 0.4 | 600ms 0]")
+        );
         assert_eq!(raw("perc(decay: 400ms)"), raw("env[0 2ms 1 400ms.exp 0]"));
         assert_eq!(raw("perc(attack: 10ms, decay: 1/4beat)"), raw("env[0 10ms 1 1/4beat.exp 0]"));
     }
@@ -1325,5 +1330,12 @@ mod envelope_shortcuts {
         assert!(errors("perc()").contains("`perc` needs `decay`"));
         assert!(errors("perc(decay: 1ms, decay: 2ms)").contains("`decay` is given twice"));
         assert!(errors("adsr(5ms, 120ms, 0.4hz, 600ms)").contains("same unit"));
+    }
+
+    #[test]
+    fn a_user_opcode_with_the_same_name_wins() {
+        // if the shortcut won, `adsr(1)` would need four envelope parameters
+        let src = "opcode adsr(x) { x }\ninstr a(freq: hz) { osc(sine, freq) * adsr(1) }\na(freq: 220hz) for 1beat";
+        assert!(compile(&src).is_ok(), "{:?}", compile(&src).err());
     }
 }
