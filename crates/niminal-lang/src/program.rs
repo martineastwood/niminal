@@ -118,14 +118,7 @@ impl ControlDef {
 
     /// A lane's value as the control's engine value, with the unit rules a parameter has.
     pub fn from_value(&self, value: Value, tempo: Tempo) -> Result<f32, niminal_score::UnitError> {
-        Ok(match self.unit {
-            Unit::Hz => value.as_hz()?,
-            Unit::Db => value.as_gain()?,
-            Unit::Time => value.as_time()?.to_seconds(tempo),
-            Unit::Angle => value.as_angle()?,
-            Unit::Semitones => value.as_semitones()?,
-            Unit::Num => value.as_number()?,
-        } as f32)
+        engine_value(self.unit, value, tempo).map(|v| v as f32)
     }
 
     pub fn convert(&self, value: f64, suffix: Option<&str>, tempo: Tempo) -> Result<f32, String> {
@@ -139,6 +132,18 @@ impl ControlDef {
         }
         Ok(converted)
     }
+}
+
+/// A score value in the engine's representation for a quantity of `unit`, with the strict-unit rules.
+pub fn engine_value(unit: Unit, value: Value, tempo: Tempo) -> Result<f64, niminal_score::UnitError> {
+    Ok(match unit {
+        Unit::Hz => value.as_hz()?,
+        Unit::Db => value.as_gain()?,
+        Unit::Time => value.as_time()?.to_seconds(tempo),
+        Unit::Angle => value.as_angle()?,
+        Unit::Semitones => value.as_semitones()?,
+        Unit::Num => value.as_number()?,
+    })
 }
 
 pub struct Program {

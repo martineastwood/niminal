@@ -75,6 +75,9 @@ struct Window {
     dropped: usize,
 }
 
+/// The most changes envelope lanes may make to parameters in one prepared window.
+const MAX_WINDOW_CONTROLS: usize = 2048;
+
 struct Command { at: u64, kind: Kind }
 
 enum Kind {
@@ -421,6 +424,17 @@ impl Session {
             if at >= from && at < to {
                 window.commands.push(self.reset_command(at, program, config));
             }
+        }
+        // envelope lanes moving track parameters
+        for set in found.controls.iter().take(MAX_WINDOW_CONTROLS) {
+            let Some(def) = program.controls.iter().find(|c| c.name == set.name) else { continue };
+            let at = self.samples(set.at).max(from);
+            let frames = (set.glide * f64::from(self.sample_rate)).round() as u64;
+            window.commands.push(Command { at, kind: Kind::Control { key: def.key.clone(), value: set.target as f32, frames } });
+        }
+        if found.controls.len() > MAX_WINDOW_CONTROLS {
+            let notice = "an envelope lane changes a parameter too often; the extra changes were dropped";
+            if !window.notices.iter().any(|n| n == notice) { window.notices.push(notice.into()); }
         }
         for event in found.events {
             let at = self.samples(event.at.to_seconds(program.tempo));

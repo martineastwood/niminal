@@ -1317,3 +1317,17 @@ fn new_and_the_next_piece_can_arrive_together() {
     assert!(peak(&run(&mut s, BAR)) > 1e-3);
     assert_eq!(s.tracks().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["drone"]);
 }
+
+#[test]
+fn an_envelope_lane_moves_a_track_parameter_as_the_clip_plays() {
+    let mut s = session();
+    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }", Some("now")).unwrap();
+    s.eval("clip c { notes: [c5]\ncut: env[300hz 1bar 1300hz] }\npad.play(c)", Some("now")).unwrap();
+    let cut = |s: &Session| s.control_values().into_iter().find(|v| v.0 == "pad::cut").unwrap().1;
+    run(&mut s, 1_000);
+    assert!((cut(&s) - 300.0).abs() < 20.0, "{}", cut(&s));
+    run(&mut s, BAR / 2 - 1_000);
+    assert!((cut(&s) - 800.0).abs() < 30.0, "half way up: {}", cut(&s));
+    run(&mut s, BAR);
+    assert!((cut(&s) - 1300.0).abs() < 1.0, "it holds the last level: {}", cut(&s));
+}

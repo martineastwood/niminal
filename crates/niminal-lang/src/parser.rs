@@ -910,12 +910,27 @@ impl Parser {
             let level = self.env_level()?;
             segments.push(EnvSegment { dur, curve, level });
         }
-        let end = self.expect(&Tok::RBracket)?;
+        let mut end = self.expect(&Tok::RBracket)?;
+        let looped = self.eat_loop(&mut end);
+        if looped && sustain_at.is_some() {
+            return Err(Diagnostic::new("a looping envelope can't have a sustain point `|`", start.to(end))
+                .with_help("a loop never waits for a release: take out the `|`"));
+        }
 
         Ok(Expr {
-            kind: ExprKind::Env(EnvLit { start: start_level, segments, sustain_at }),
+            kind: ExprKind::Env(EnvLit { start: start_level, segments, sustain_at, looped }),
             span: start.to(end),
         })
+    }
+
+    /// `.loop` straight after an envelope's `]`. `.loop(g: ..)` is the feedback opcode, so it is left alone.
+    fn eat_loop(&mut self, end: &mut Span) -> bool {
+        if self.peek() == &Tok::Dot && matches!(self.peek_at(1), Tok::Ident(s) if s == "loop") && self.peek_at(2) != &Tok::LParen {
+            self.bump();
+            *end = self.bump().span;
+            return true;
+        }
+        false
     }
 
     /// A signed number, with an optional unit.
@@ -1112,6 +1127,15 @@ opcode one_pole(x, cutoff: hz) {
         assert_eq!(e.start.unit.as_deref(), Some("hz"));
         let e = env_of("env[-18db 2sec -6db]");
         assert_eq!(e.start.value, -18.0);
+    }
+
+    #[test]
+    fn env_can_loop_but_not_with_a_sustain_point() {
+        assert!(!env_of("env[0 5ms 1 5ms 0]").looped);
+        let e = env_of("env[0 5ms 1 5ms 0].loop");
+        assert!(e.looped);
+        assert_eq!(e.segments.len(), 2);
+        assert!(err("instr a() { env[0 5ms 1 | 5ms 0].loop }").contains("can't have a sustain point"));
     }
 
     #[test]

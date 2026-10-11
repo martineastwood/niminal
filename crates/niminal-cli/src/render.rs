@@ -128,8 +128,23 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     let mut out: Vec<Vec<f32>> = vec![Vec::new(); n_channels];
     // Notes that have started but not yet been released, in no particular order.
     let mut held: Vec<(usize, VoiceId)> = Vec::new();
-    // each control's last glide: from, to, the sample it began, and its length
-    let mut glides: Vec<(f32, f32, usize, u64)> = program.controls.iter().map(|c| (c.initial, c.initial, 0, 0)).collect();
+    // each control's last glide
+    let mut glides: Vec<Glide> = program.controls.iter().map(|c| Glide::at_rest(c.initial)).collect();
+    // what envelope lanes do to track parameters, as (sample, control index, target, glide frames)
+    let mut moves: Vec<(usize, usize, f32, u64)> = if schedule.is_empty() {
+        Vec::new()
+    } else {
+        let until = options.until.or(schedule.end()).unwrap_or(0.0);
+        let sets = schedule.controls(0.0, until).map_err(|e| RenderError(e.to_string()))?;
+        sets.iter()
+            .filter_map(|s| {
+                let i = program.controls.iter().position(|c| c.name == s.name)?;
+                Some(((s.at * sr).round().max(0.0) as usize, i, s.target as f32, (s.glide * sr).round() as u64))
+            })
+            .collect()
+    };
+    moves.sort_by_key(|m| m.0);
+    let mut next_move = 0;
     let mut silenced_voices = 0;
     let mut next = 0;
     let mut next_panic = 0;
@@ -143,16 +158,17 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
             next_panic += 1;
         }
 
+        while moves.get(next_move).is_some_and(|m| m.0 <= pos) {
+            let (at, i, target, frames) = moves[next_move];
+            glides[i].set(&mut mixer, &program.controls[i].key, target, frames, at, pos);
+            next_move += 1;
+        }
+
         while next < notes.len() && notes[next].start == pos {
             let note = &notes[next];
             for (key, value, smooth) in &note.plan.controls {
                 if let Some(i) = program.controls.iter().position(|c| c.key == *key) {
-                    let frames = (smooth * sr).round() as u64;
-                    // glide from wherever the control is now
-                    let (from, target, at, took) = glides[i];
-                    let now = if took == 0 { target } else { from + (target - from) * (pos.saturating_sub(at) as u64).min(took) as f32 / took as f32 };
-                    mixer.set_control(key, now, *value, frames, 0);
-                    glides[i] = (now, *value, pos, frames);
+                    glides[i].set(&mut mixer, key, *value, (smooth * sr).round() as u64, pos, pos);
                 }
             }
             let graph = program.instruments[note.plan.instrument].graph.clone();
@@ -200,6 +216,9 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
         }
         if let Some(&p) = panics.get(next_panic) {
             n = n.min(p - pos);
+        }
+        if let Some(m) = moves.get(next_move) {
+            n = n.min(m.0 - pos);
         }
 
         mix_block(&mut mixer, &mut out, n);
@@ -364,4 +383,33 @@ pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: 
     out.iter_mut().for_each(|c| c.truncate(keep));
     let silenced = session.take_silenced();
     Ok(finish(out, silenced, Vec::new(), &RenderOptions { limiter, ..Default::default() }))
+}
+
+/// Where a control is heading: from `from` towards `target` over `frames` samples starting at `at`.
+struct Glide {
+    from: f32,
+    target: f32,
+    at: usize,
+    frames: u64,
+}
+
+impl Glide {
+    fn at_rest(value: f32) -> Self {
+        Glide { from: value, target: value, at: 0, frames: 0 }
+    }
+
+    fn value(&self, pos: usize) -> f32 {
+        if self.frames == 0 {
+            return self.target;
+        }
+        let done = (pos.saturating_sub(self.at) as u64).min(self.frames);
+        self.from + (self.target - self.from) * done as f32 / self.frames as f32
+    }
+
+    /// Glide to `target` from where the control was at sample `at`, told at sample `pos` (which may be later).
+    fn set(&mut self, mixer: &mut Mixer, key: &str, target: f32, frames: u64, at: usize, pos: usize) {
+        let from = self.value(at);
+        *self = Glide { from, target, at, frames };
+        mixer.set_control(key, from, target, frames, pos.saturating_sub(at) as u64);
+    }
 }

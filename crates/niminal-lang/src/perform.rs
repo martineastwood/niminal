@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use niminal_engine::ops::Curve;
 use niminal_pattern::{Hit, MAX_REPEATS, Pattern, Rational, grid, parse_with};
 use niminal_score::{Tempo, Time, Value};
 
@@ -33,6 +34,8 @@ enum PerfValue {
     Grid(Pattern<Hit>),
     Clip(Clip),
     Scene(Scene),
+    /// `env[...]`: only a lane can hold one.
+    Env(EnvLane),
     Rest,
 }
 
@@ -43,6 +46,7 @@ impl PerfValue {
             PerfValue::Grid(_) => "a grid",
             PerfValue::Clip(_) => "a clip",
             PerfValue::Scene(_) => "a scene",
+            PerfValue::Env(_) => "an envelope",
             PerfValue::Rest => "`~`",
         }
     }
@@ -160,6 +164,29 @@ fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value> {
     })
 }
 
+/// `env[300hz 1bar.exp 3khz]` as a lane. A lane has no note to release, so it has no sustain point.
+fn env_lane(lit: &EnvLit) -> Res<EnvLane> {
+    if lit.sustain_at.is_some() {
+        return Err(Diagnostic::new("a lane has no release, so its envelope can't have a sustain point `|`", lit.start.span)
+            .with_help("take out the `|`, or add `.loop` to repeat the shape"));
+    }
+    let level = |n: &EnvNum| value_of(n.value, n.unit.as_deref(), n.span);
+    let mut segments = Vec::with_capacity(lit.segments.len());
+    for seg in &lit.segments {
+        let dur = value_of(seg.dur.value, seg.dur.unit.as_deref(), seg.dur.span)?
+            .as_time()
+            .map_err(|e| Diagnostic::new(e.to_string(), seg.dur.span))?;
+        let curve = match seg.curve {
+            None => Curve::Linear,
+            Some(CurveKind::Exp) => Curve::Exp,
+            Some(CurveKind::Log) => Curve::Log,
+            Some(CurveKind::Custom(k)) => Curve::Custom(k as f32),
+        };
+        segments.push((dur, curve, level(&seg.level)?));
+    }
+    Ok(EnvLane { start: level(&lit.start)?, segments, looped: lit.looped, unit: None })
+}
+
 /// A pattern atom as a value: a note name, a number with a unit, or the name
 /// of a sample in a kit.
 fn atom_value(atom: &str, sample_names: &[String]) -> Result<Value, String> {
@@ -226,7 +253,7 @@ impl Perform<'_> {
                 other => Err(Diagnostic::new(format!("can't negate {}", other.describe()), e.span)),
             },
             ExprKind::Call { name, args } => self.op(name, args, e.span, it),
-            ExprKind::Env(_) => Err(Diagnostic::new("envelope lanes aren't supported yet", e.span)),
+            ExprKind::Env(lit) => env_lane(lit).map(PerfValue::Env),
             ExprKind::Channels(_) | ExprKind::Binary { .. } => {
                 Err(Diagnostic::new("expected a pattern, clip or scene here", e.span)
                     .with_help("write steps in brackets, as in `[c4 e4 g4]`"))
@@ -341,7 +368,7 @@ impl Perform<'_> {
         match self.eval(&receiver.value, it)? {
             // `set` gives lanes to a clip; a pattern is a clip with only its notes
             PerfValue::Pattern(p) if name.name == "set" => {
-                let clip = Clip { name: String::new(), length: Rational::ONE, endless: true, lanes: vec![("notes".to_string(), p)], keys: None };
+                let clip = Clip { name: String::new(), length: Rational::ONE, endless: true, lanes: vec![("notes".to_string(), p)], keys: None, curves: Vec::new() };
                 self.on_clip(name, rest, clip, span, it).map(PerfValue::Clip)
             }
             PerfValue::Pattern(p) => self.on_pattern(name, rest, p, span, it),
@@ -430,7 +457,7 @@ impl Perform<'_> {
             let length = length.max(Rational::new(1, 1000));
             let factor = length / clip.length;
             let lanes = clip.lanes.into_iter().map(|(lane, p)| (lane, p.slow(factor))).collect();
-            return Ok(Clip { name: clip.name, length, endless: false, lanes, keys: clip.keys });
+            return Ok(Clip { name: clip.name, length, endless: false, lanes, keys: clip.keys, curves: clip.curves });
         }
         // Pitch operations touch only the notes; time operations touch every lane.
         let notes_only = matches!(name.name.as_str(), "transpose" | "euclid" | "rhythm" | "mask");
@@ -451,7 +478,7 @@ impl Perform<'_> {
             "over" => self.cycles(self.arg(name, rest, "length", span)?)?.max(Rational::new(1, 1000)),
             _ => clip.length,
         };
-        Ok(Clip { name: clip.name, length, endless: clip.endless && name.name != "over", lanes, keys: clip.keys })
+        Ok(Clip { name: clip.name, length, endless: clip.endless && name.name != "over", lanes, keys: clip.keys, curves: clip.curves })
     }
 
     /// `riff.set(bright: 0.9, gain: [0db -6db])`: these lanes, in place of the clip's own.
@@ -465,10 +492,22 @@ impl Perform<'_> {
             }
             let pattern = match self.eval(&arg.value, it)? {
                 PerfValue::Pattern(p) => p,
+                PerfValue::Env(_) if lane.name == "notes" => {
+                    return Err(Diagnostic::new("the `notes` lane holds notes, not an envelope", arg.value.span));
+                }
+                PerfValue::Env(curve) => {
+                    clip.lanes.retain(|(n, _)| *n != lane.name);
+                    match clip.curves.iter_mut().find(|(n, _)| *n == lane.name) {
+                        Some((_, existing)) => *existing = curve,
+                        None => clip.curves.push((lane.name.clone(), curve)),
+                    }
+                    continue;
+                }
                 other => {
-                    return Err(Diagnostic::new(format!("a lane holds a pattern or a number, but this is {}", other.describe()), arg.value.span));
+                    return Err(Diagnostic::new(format!("a lane holds a pattern, a number or an envelope, but this is {}", other.describe()), arg.value.span));
                 }
             };
+            clip.curves.retain(|(n, _)| *n != lane.name);
             let pattern = pattern.slow(clip.length);
             match clip.lanes.iter_mut().find(|(n, _)| *n == lane.name) {
                 Some((_, existing)) => *existing = pattern,
@@ -636,6 +675,7 @@ impl Perform<'_> {
         let mut length = None;
         let mut keys = None;
         let mut lanes: Vec<(String, Pattern<Value>)> = Vec::new();
+        let mut curves: Vec<(String, EnvLane)> = Vec::new();
         for (key, value) in &block.entries {
             if key.name == "keys" {
                 if keys.is_some() {
@@ -652,11 +692,19 @@ impl Perform<'_> {
                 length = Some(cycles);
                 continue;
             }
-            if lanes.iter().any(|(n, _)| *n == key.name) {
+            if lanes.iter().any(|(n, _)| *n == key.name) || curves.iter().any(|(n, _)| *n == key.name) {
                 return Err(Diagnostic::new(format!("lane `{}` is given twice", key.name), key.span));
             }
             let pattern = match self.eval(value, None)? {
                 PerfValue::Pattern(p) => p,
+                PerfValue::Env(curve) => {
+                    if key.name == "notes" {
+                        return Err(Diagnostic::new("the `notes` lane holds notes, not an envelope", value.span)
+                            .with_help("an envelope moves a track's parameter: `cut: env[300hz 1bar 3khz]`"));
+                    }
+                    curves.push((key.name.clone(), curve));
+                    continue;
+                }
                 PerfValue::Rest => Pattern::silence(),
                 other => {
                     return Err(Diagnostic::new(format!("a lane holds a pattern, but this is {}", other.describe()), value.span));
@@ -668,7 +716,7 @@ impl Perform<'_> {
         if let Some(length) = length {
             lanes = lanes.into_iter().map(|(name, p)| (name, p.slow(length))).collect();
         }
-        Ok(Clip { name: block.name.name.clone(), length: length.unwrap_or(Rational::ONE), endless: length.is_none(), lanes, keys })
+        Ok(Clip { name: block.name.name.clone(), length: length.unwrap_or(Rational::ONE), endless: length.is_none(), lanes, keys, curves })
     }
 
     /// `midi.keys()` or `midi.keys(channel: 1)`
@@ -724,11 +772,14 @@ impl Perform<'_> {
                 endless: true,
                 lanes: vec![("notes".to_string(), p)],
                 keys: None,
+                curves: Vec::new(),
             }),
             PerfValue::Grid(_) => Err(Diagnostic::new("a grid has no pitches to play", span)
                 .with_help("give it notes with `.rhythm(grid[...])` on a pattern instead")),
             PerfValue::Scene(_) => Err(Diagnostic::new("a scene is launched, not played", span)
                 .with_help("write `name.start`")),
+            PerfValue::Env(_) => Err(Diagnostic::new("an envelope moves a parameter, so it goes in a lane", span)
+                .with_help("for example `clip c { notes: [c4] cut: env[300hz 1bar 3khz] }`")),
             PerfValue::Rest => Err(Diagnostic::new("`~` stops a track in a scene; to stop one, write `track.stop`", span)),
         }
     }
@@ -913,8 +964,38 @@ impl Perform<'_> {
                 }
             }
         }
+        self.bind_curves(&mut clip, track, id, span)?;
         self.check_clip(&clip, track, id, span)?;
         Ok(clip)
+    }
+
+    /// Envelope lanes move a parameter of the track: find it, and check the levels fit its unit.
+    fn bind_curves(&self, clip: &mut Clip, track: usize, id: &Ident, span: Span) -> Res<()> {
+        let info = &self.cx.tracks[track];
+        for (lane, curve) in &mut clip.curves {
+            let control = format!("{}::{lane}", info.name);
+            let Some(def) = self.cx.names.controls.iter().find(|c| c.name == control) else {
+                let params: Vec<&str> = self.cx.names.controls.iter().filter_map(|c| c.name.strip_prefix(&format!("{}::", info.name))).collect();
+                let mut d = Diagnostic::new(
+                    format!("clip `{}` has an envelope lane `{lane}`, but track `{}` has no such parameter", clip.name, id.name),
+                    span,
+                )
+                .with_help("only a track's parameters can be moved by an envelope, as in `track bass(tone: hz = 2khz)`");
+                if let Some(c) = closest(lane, params) {
+                    d = d.with_help(format!("did you mean `{c}`?"));
+                }
+                return Err(d);
+            };
+            let tempo = Tempo { bpm: 120.0, beats_per_bar: 4.0 };
+            let levels = std::iter::once(&curve.start).chain(curve.segments.iter().map(|(_, _, level)| level));
+            for level in levels {
+                crate::program::engine_value(def.unit, *level, tempo).map_err(|e| {
+                    Diagnostic::new(format!("envelope lane `{lane}` moves {}: {e}", def.name), span)
+                })?;
+            }
+            curve.unit = Some(def.unit);
+        }
+        Ok(())
     }
 
     /// Does `clip`'s notes and lanes make sense on `track`'s instrument?

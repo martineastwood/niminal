@@ -801,6 +801,72 @@ track bass { instrument = pluck(bright: 0.1) }
         assert!(e.to_string().contains("cut"), "{e}");
     }
 
+    const SWEEP_STAGE: &str = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }\n";
+
+    fn sweep(body: &str, seconds: f64) -> Vec<f32> {
+        let p = program(&format!("{SWEEP_STAGE}{body}"));
+        render_with(&p, &[], &RenderOptions { limiter: false, until: Some(seconds), ..Default::default() }).map(mono).unwrap()
+    }
+
+    fn eighths(x: &[f32]) -> Vec<f32> {
+        x.chunks(x.len() / 8).take(8).map(rms).collect()
+    }
+
+    #[test]
+    fn an_envelope_lane_sweeps_a_track_parameter_over_the_clip() {
+        let notes = "notes: [c5 c5 c5 c5 c5 c5 c5 c5]";
+        let steady = eighths(&sweep(&format!("clip c {{ {notes} }}\npad.play(c)"), 2.0));
+        let swept = eighths(&sweep(&format!("clip c {{ {notes}\ncut: env[300hz 1bar 8khz] }}\npad.play(c)"), 2.0));
+        assert!((steady[0] - steady[7]).abs() < steady[0] * 0.05, "{steady:?}");
+        assert!(swept[0] < swept[1] && swept[1] < swept[2], "{swept:?}");
+        assert!(swept[7] > steady[7] * 2.0, "{swept:?} against {steady:?}");
+    }
+
+    #[test]
+    fn the_shape_of_an_envelope_lane_is_the_envelopes_shape() {
+        let mid = |curve: &str| {
+            let x = sweep(&format!("clip c {{ notes: [c5 c5 c5 c5 c5 c5 c5 c5]\ncut: env[300hz 1bar{curve} 8khz] }}\npad.play(c)"), 2.0);
+            eighths(&x)[3]
+        };
+        // an exponential curve stays low for longer, a logarithmic one gets there early
+        assert!(mid(".exp") < mid("") && mid("") < mid(".log"), "{} {} {}", mid(".exp"), mid(""), mid(".log"));
+    }
+
+    #[test]
+    fn an_envelope_lane_needs_no_notes_and_holds_its_last_level_or_loops() {
+        // two bars of notes under a one-bar envelope that has finished by the second
+        let held = eighths(&sweep("clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\ncut: env[300hz 1/4bar 8khz] }\npad.play(c)", 2.0));
+        let steady = eighths(&sweep("clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5] }\npad.play(c)", 2.0));
+        assert!(held[7] > steady[7] * 2.0 && (held[7] - held[3]).abs() < held[7] * 0.1, "{held:?}");
+        let looped = eighths(&sweep("clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\ncut: env[300hz 1/4bar 700hz 0sec 300hz].loop }\npad.play(c)", 2.0));
+        // the lane starts over, so it keeps dipping back to the dull start
+        assert!(looped[2] < looped[1] * 0.95 && looped[4] < looped[3] * 0.95, "{looped:?} against {held:?}");
+        // a clip with only an envelope lane is allowed: it moves the parameter for notes played elsewhere
+        let p = compile(&format!("{SWEEP_STAGE}clip c {{ cut: env[300hz 1bar 8khz] }}\npad.play(c)"));
+        assert!(p.is_ok(), "{:?}", p.err());
+    }
+
+    #[test]
+    fn envelope_lane_mistakes_are_reported() {
+        let error = |body: &str| compile(&format!("{SWEEP_STAGE}{body}")).err().expect("an error").remove(0).message;
+        assert!(error("clip c { notes: [c5]\nnope: env[1 1bar 2] }\npad.play(c)").contains("no such parameter"));
+        assert!(error("clip c { notes: [c5]\ncut: env[0.5 1bar 1] }\npad.play(c)").contains("cut"), "a number is not a frequency");
+        assert!(error("clip c { notes: [c5]\ncut: env[300hz 1bar 1khz | 1bar 300hz] }\npad.play(c)").contains("sustain"));
+        assert!(error("clip c { notes: env[300hz 1bar 1khz] }").contains("holds notes"));
+    }
+
+    #[test]
+    fn a_looping_envelope_in_an_instrument_repeats() {
+        let render = |tail: &str| {
+            let p = program(&format!("tempo 120bpm\ninstr b(freq: hz) {{ osc(sine, freq) * env[0 10ms 1 10ms 0]{tail} }}\nb(freq: a4) for 200ms"));
+            render_with(&p, &[], &RenderOptions { limiter: false, ..Default::default() }).map(mono).unwrap()
+        };
+        let (once, looped) = (render(""), render(".loop"));
+        let after = |x: &[f32]| x.get(2400..9000.min(x.len())).map_or(0.0, rms);
+        assert!(after(&once) < 0.001, "a one-shot is over after 20ms");
+        assert!(after(&looped) > 0.1, "a loop keeps going");
+    }
+
     #[test]
     fn a_track_applies_its_instrument_defaults_to_played_notes() {
         let played = raw("bass.play([c2])", 1.0);

@@ -69,6 +69,7 @@ fn dummy_env(span: Span) -> EnvLit {
         start: n(0.0, None),
         segments: vec![EnvSegment { dur: n(1.0, Some("ms")), curve: None, level: n(0.0, None) }],
         sustain_at: None,
+                looped: false,
     }
 }
 
@@ -87,6 +88,7 @@ fn env_lit(name: &Ident, args: &[Arg]) -> Res<EnvLit> {
                     EnvSegment { dur: release, curve: None, level: level(0.0) },
                 ],
                 sustain_at: Some(2),
+                looped: false,
             })
         }
         "perc" => {
@@ -98,6 +100,7 @@ fn env_lit(name: &Ident, args: &[Arg]) -> Res<EnvLit> {
                     EnvSegment { dur: decay, curve: Some(CurveKind::Exp), level: level(0.0) },
                 ],
                 sustain_at: None,
+                looped: false,
             })
         }
         _ => unreachable!("not an envelope shortcut"),

@@ -104,7 +104,8 @@ Envelopes have their own literal: levels and durations alternate. `env[0 5ms 1 1
 - **Durations in any time unit, mixed freely.** Beat segments follow tempo changes.
 - **Curves are methods on the duration:** `900ms.exp`, `5ms.log`, `600ms.curve(-4)`.
 - **Levels can have any unit, as long as they all match:** hz, db or unitless.
-- **Releasing mid-segment** starts the release from the current level. `.loop` repeats the shape.
+- **Releasing mid-segment** starts the release from the current level.
+- **`.loop`** repeats the shape for as long as the note is held; after a release the pass in progress is the last. A looping envelope has no `|`. (`x.loop(g: ..)` with arguments is the feedback opcode, not this.)
 
 Shortcuts for the two shapes most instruments want (each is exactly the literal beside it):
 
@@ -486,7 +487,7 @@ The engine understands one score model, as data. Every notation and client produ
 
 - **Musical time** (beats and bars, through a tempo and meter map) or **absolute time** (seconds). Both can appear in one score.
 - **Positions** read as `bar 5 beat 3`; offsets as `1/8beat` or `250ms`.
-- **Tempo and meter are lanes** on the arrangement, so they can change and ramp over a piece. Built so far: a tempo and a meter for each section, as a list with one entry per section (a step at the section's start). Gradual change within a section (`env[...]`) and automation lanes are not built.
+- **Tempo and meter are lanes** on the arrangement, so they can change and ramp over a piece. Built so far: a tempo and a meter for each section, as a list with one entry per section (a step at the section's start). Gradual change within a section (`env[...]`) and arrangement automation lanes are not built; clip envelope lanes are.
 
 ```
 arrangement song {
@@ -731,7 +732,7 @@ scene verse { bass, lead }       // short for { bass: bass, lead: lead }
 
 - **Lane targets:** `notes` (pitch, or samples for drum clips), instrument parameters, track parameters, and universal controls. An unknown lane name is an error. Lanes target only their own part, so clips stay portable; scene and arrangement lanes can target any part.
 - **Step lanes** are read when each note starts and cycle at their own length (polymeter); `.per_note` gives the nth note the nth value instead.
-- **Envelope and signal lanes** run on the clip's timeline, restart on launch and loop with it.
+- **Envelope lanes** move a track parameter continuously: `cut: env[300hz 1bar.exp 3khz]`, the same `env` literal and curves as an instrument's. They run on the clip's timeline (bars and beats are real durations, not stretched to the clip), restart on launch and again each time a clip with a `length:` starts over, and hold their last level when they end; `.loop` repeats the shape. Levels must fit the parameter's unit. A lane has no release, so no `|`. They work with or without a `notes` lane, and curved segments are played as short straight glides that follow the curve. Where an envelope and MIDI/OSC/`ctl` input both move a parameter, the latest change wins. Signal lanes (LFOs) are not built.
 - **`length:`** makes a clip loop: it plays that long and starts over, restarting its alternations (`<a b>`, `every`). Every lane spans the length, so a 2-bar clip's `notes: [c2 ~ eb2 g1]` is four steps over two bars. Without it a clip runs freely, so its cycles keep counting.
 - **A bare pattern is a clip.** `theme = [c4 e4 g4 b4]` means `clip { notes: [c4 e4 g4 b4] }` and has no instrument, so it is material to play on a part (`lead: theme` in a scene, or `lead.play(theme)`). A section loaded from a client (`load("score/riff.nms")`) is a clip too.
 - **Lanes are fields.** `riff.set(bright: 0.9)` and `riff.set(gain: [0db -6db])` give the clip those lanes in place of its own; a number is a lane that never changes.

@@ -109,3 +109,26 @@ fn block_splitting_does_not_change_output() {
     let b = render(&g, 6000, Some(2500), 7);
     assert_eq!(a, b);
 }
+
+#[test]
+fn a_looping_envelope_starts_over_and_never_finishes() {
+    let g = env_graph(Env::new(0.0, vec![Segment::linear(0.010, 1.0), Segment::linear(0.010, 0.0)], None).looped());
+    let mut v = Voice::new(g, SR);
+    let mut buf = vec![0.0; ms(20.0) * 3];
+    for block in buf.chunks_mut(32) {
+        v.process(block);
+    }
+    // the peak comes at 10ms, 30ms and 50ms
+    for k in 0..3 {
+        let peak = buf[ms(20.0) * k + ms(10.0) - 1];
+        assert!(peak > 0.98, "pass {k}: {peak}");
+        assert!(buf[ms(20.0) * k + 2] < 0.1, "pass {k} starts low");
+    }
+    // a release lets the pass in progress finish, and that is the end
+    v.release();
+    assert!(!v.is_finished());
+    for _ in 0..ms(25.0) / 32 + 1 {
+        v.process(&mut [0.0; 32]);
+    }
+    assert!(v.is_finished(), "a loop ends with the pass after a release");
+}

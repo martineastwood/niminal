@@ -16,7 +16,7 @@ pub enum Curve {
 }
 
 impl Curve {
-    fn bend(self) -> f64 {
+    pub fn bend(self) -> f64 {
         match self {
             Curve::Linear => 0.0,
             Curve::Exp => 5.0,
@@ -45,7 +45,7 @@ impl Segment {
 }
 
 /// Position `t` (0..1) along a segment from `a` to `b`.
-fn shape(a: f32, b: f32, t: f64, k: f64) -> f32 {
+pub fn shape(a: f32, b: f32, t: f64, k: f64) -> f32 {
     if k.abs() < 1e-6 {
         return a + (b - a) * t as f32;
     }
@@ -73,6 +73,8 @@ pub struct Env {
     start: f32,
     segments: Vec<Segment>,
     sustain_at: Option<usize>,
+    /// Starts over from `start` when the last segment ends.
+    looped: bool,
     lengths: Vec<u32>,
     level: f32,
     phase: Phase,
@@ -89,12 +91,21 @@ impl Env {
             lengths: vec![0; segments.len()],
             segments,
             sustain_at,
+            looped: false,
             level: start,
             phase: Phase::Done,
             released: false,
         };
         env.reset(48_000.0);
         env
+    }
+
+    /// Start over from the first level each time the last segment ends, for as long as the note is
+    /// held: after a release the pass in progress is the last. Has no sustain point.
+    pub fn looped(mut self) -> Self {
+        assert!(self.sustain_at.is_none(), "a looping envelope has no sustain point");
+        self.looped = true;
+        self
     }
 
     /// Attack, decay, sustain, release.
@@ -126,6 +137,13 @@ impl Env {
     fn enter(&mut self, mut seg: usize, mut from: f32) {
         loop {
             if seg >= self.segments.len() {
+                // a loop starts again, unless nothing in it takes any time
+                if self.looped && !self.released && self.lengths.iter().any(|&l| l > 0) {
+                    seg = 0;
+                    from = self.start;
+                    self.level = from;
+                    continue;
+                }
                 self.phase = Phase::Done;
                 return;
             }
@@ -195,7 +213,7 @@ impl Opcode for Env {
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
             && self.start == old.start && self.segments == old.segments
-            && self.sustain_at == old.sustain_at && self.lengths == old.lengths
+            && self.sustain_at == old.sustain_at && self.looped == old.looped && self.lengths == old.lengths
         {
             self.level = old.level;
             self.phase = old.phase;

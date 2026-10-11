@@ -25,8 +25,28 @@ const WORK_PER_SECOND: f64 = 2_000.0;
 /// The most notes one search of the schedule keeps: the earliest ones.
 const MAX_EVENTS: usize = 2_048;
 
+/// The most control changes one search keeps: a looping envelope can ask for a great many.
+const MAX_CONTROL_SETS: usize = 50_000;
+
+/// A curved envelope segment is cut into this many glides at most, and at least this many.
+const MIN_PIECES: usize = 4;
+const MAX_PIECES: usize = 32;
+/// About one glide for each this many seconds of a curved segment.
+const PIECE_SECONDS: f64 = 0.02;
+
 /// How much time one search covers when asked for a long stretch.
 const CHUNK_SECONDS: f64 = 8.0;
+
+/// A track parameter moving because an envelope lane says so: from `at` seconds it glides to
+/// `target` (in the control's engine units) over `glide` seconds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControlSet {
+    pub at: f64,
+    /// The control's name, such as `bass::tone`.
+    pub name: String,
+    pub target: f64,
+    pub glide: f64,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduleError(pub String);
@@ -91,6 +111,8 @@ fn micro_cycles(micro: i64) -> Rational {
 /// What a search of the schedule found.
 pub struct Found {
     pub events: Vec<Event>,
+    /// Envelope lanes moving track parameters in the same stretch, in time order.
+    pub controls: Vec<ControlSet>,
     pub problem: Option<ScheduleError>,
     /// Tracks whose clips used up their allowance.
     pub overloaded: Vec<usize>,
@@ -262,6 +284,24 @@ impl Schedule {
         Some(Event { target: self.track_names[track].clone(), at: Time::Seconds(at), dur: Time::Seconds(0.0), args })
     }
 
+    /// Every change an envelope lane makes to a track parameter in `from..to` seconds, in time order.
+    pub fn controls(&self, from: f64, to: f64) -> Result<Vec<ControlSet>, ScheduleError> {
+        // a long stretch is searched a piece at a time, each with its own limit
+        let mut all = Vec::new();
+        let mut start = from;
+        while start < to {
+            let end = (start + CHUNK_SECONDS).min(to);
+            let mut chunk = Vec::new();
+            for segment in &self.segments {
+                self.segment_controls(segment, start, end, &mut chunk)?;
+            }
+            all.extend(chunk);
+            start = end;
+        }
+        all.sort_by(|a, b| a.at.total_cmp(&b.at));
+        Ok(all)
+    }
+
     /// Every note that starts in `from..to` seconds, in time order. A pattern
     /// that asks for more work than a clip is allowed is an error.
     pub fn events(&self, from: f64, to: f64) -> Result<Vec<Event>, ScheduleError> {
@@ -287,10 +327,14 @@ impl Schedule {
     /// searching again costs the same). Tracks in `skip` are not searched.
     pub fn events_lenient(&self, from: f64, to: f64, skip: &[usize]) -> Found {
         let mut out: Vec<(f64, Event)> = Vec::new();
+        let mut controls: Vec<ControlSet> = Vec::new();
         let mut problem = None;
         let mut overloaded = Vec::new();
         let work = BASE_WORK + (WORK_PER_SECOND * (to - from).max(0.0)) as usize;
         for segment in self.segments.iter().filter(|s| !skip.contains(&s.track)) {
+            if let Err(e) = self.segment_controls(segment, from, to, &mut controls) {
+                problem.get_or_insert(e);
+            }
             let before = out.len();
             let (result, exhausted) =
                 niminal_pattern::with_budget(work, || self.segment_events(segment, from, to, &mut out));
@@ -319,7 +363,8 @@ impl Schedule {
                 ScheduleError(format!("more than {MAX_EVENTS} notes start within {:.1} seconds; the latest are dropped", to - from))
             });
         }
-        Found { events: out.into_iter().map(|(_, e)| e).collect(), problem, overloaded }
+        controls.sort_by(|a, b| a.at.total_cmp(&b.at));
+        Found { events: out.into_iter().map(|(_, e)| e).collect(), controls, problem, overloaded }
     }
 
     fn segment_events(
@@ -367,6 +412,89 @@ impl Schedule {
                     continue;
                 }
                 out.push((onset, self.note(segment, whole, &hap.value, onset)?));
+            }
+        }
+        Ok(())
+    }
+
+    /// What `segment`'s envelope lanes do to their track's parameters in `from..to` seconds. A curved
+    /// segment becomes a few straight glides that follow the same curve an `env` in an instrument does.
+    fn segment_controls(&self, segment: &Segment, from: f64, to: f64, out: &mut Vec<ControlSet>) -> Result<(), ScheduleError> {
+        if segment.clip.curves.is_empty() {
+            return Ok(());
+        }
+        let cycle = segment.tempo.beats_per_bar * 60.0 / segment.tempo.bpm;
+        let loop_len = if segment.clip.endless { f64::INFINITY } else { segment.clip.length.to_f64() * cycle };
+        let until = segment.end.map_or(to, |e| e.min(to));
+        let window_start = from.max(segment.start);
+        if window_start >= until || loop_len <= 0.0 {
+            return Ok(());
+        }
+        let first_loop = ((window_start - segment.start) / loop_len).floor().max(0.0) as i64;
+        let last_loop = (((until - segment.start) / loop_len).ceil() as i64).max(1);
+        let name = &self.track_names[segment.track];
+        let clip = &segment.clip;
+
+        for (lane, curve) in &clip.curves {
+            let fail = |why: String| ScheduleError(format!("clip `{}` on track `{name}`, lane `{lane}`: {why}", clip.name));
+            let unit = curve.unit.ok_or_else(|| fail("the envelope was never placed on a track".into()))?;
+            let level = |v: Value| crate::program::engine_value(unit, v, segment.tempo).map_err(|e| fail(e.to_string()));
+            let start = level(curve.start)?;
+            let mut steps = Vec::with_capacity(curve.segments.len());
+            for (dur, shape, to_level) in &curve.segments {
+                steps.push((dur.to_seconds(segment.tempo).max(0.0), *shape, level(*to_level)?));
+            }
+            let pass_len: f64 = steps.iter().map(|s| s.0).sum();
+            let control = format!("{name}::{lane}");
+
+            for k in first_loop..last_loop {
+                let loop_start = if clip.endless { segment.start } else { segment.start + k as f64 * loop_len };
+                // nothing from this pass of the clip is heard after the clip starts over
+                let stop = until.min(loop_start + loop_len);
+                let (first_pass, passes) = if curve.looped && pass_len > 0.0 {
+                    let first = ((window_start - loop_start) / pass_len).floor().max(0.0);
+                    (first as u64, u64::MAX)
+                } else {
+                    (0, 1)
+                };
+                for pass in first_pass..first_pass.saturating_add(passes) {
+                    let pass_start = loop_start + pass as f64 * pass_len;
+                    if pass_start >= stop {
+                        break;
+                    }
+                    let mut push = |at: f64, target: f64, glide: f64| {
+                        if at >= window_start && at < stop {
+                            out.push(ControlSet { at, name: control.clone(), target, glide });
+                        }
+                    };
+                    push(pass_start, start, 0.0);
+                    let (mut t, mut from_level) = (pass_start, start);
+                    for &(dur, shape, to_level) in &steps {
+                        let pieces = if dur <= 0.0 || matches!(shape, niminal_engine::ops::Curve::Linear) {
+                            1
+                        } else {
+                            ((dur / PIECE_SECONDS).ceil() as usize).clamp(MIN_PIECES, MAX_PIECES)
+                        };
+                        for j in 0..pieces {
+                            let at = t + dur * j as f64 / pieces as f64;
+                            let reached = niminal_engine::ops::shape(
+                                from_level as f32, to_level as f32, (j + 1) as f64 / pieces as f64, shape.bend(),
+                            );
+                            push(at, f64::from(reached), dur / pieces as f64);
+                            if at >= stop {
+                                break;
+                            }
+                        }
+                        t += dur;
+                        from_level = to_level;
+                        if t >= stop {
+                            break;
+                        }
+                    }
+                    if out.len() > MAX_CONTROL_SETS {
+                        return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
+                    }
+                }
             }
         }
         Ok(())

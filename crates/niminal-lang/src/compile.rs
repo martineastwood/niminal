@@ -1868,7 +1868,7 @@ at bar 3 bass.unsolo"));
         );
         assert_eq!(
             msg(&stage("clip c { notes: env[0 1sec 1] }")),
-            "envelope lanes aren't supported yet"
+            "the `notes` lane holds notes, not an envelope"
         );
         assert_eq!(msg(&stage("clip c { length: 0 bars }")), "a clip needs a length above zero");
         assert_eq!(msg(&stage("clip c { notes: [c4]\nnotes: [e4] }")), "lane `notes` is given twice");

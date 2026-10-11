@@ -1243,7 +1243,9 @@ impl<'a> Lower<'a> {
             segments.push(Segment::new(dur.konst.expect("a literal") as f32, level.konst.unwrap() as f32, curve));
         }
 
+        let looped = env.looped;
         let env = Env::new(start.konst.unwrap() as f32, segments, env.sustain_at);
+        let env = if looped { env.looped() } else { env };
         let src = self.g.add(env, &[]).expect("env has no ports");
         Ok(Sig::signal(src, unit))
     }

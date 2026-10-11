@@ -571,3 +571,28 @@ fn a_lane_that_sets_a_track_parameter_sounds_the_same_prepared_as_direct_and_wit
     let dull = direct("cut: [300hz]");
     assert!(rms(&actual[48_000..]) > rms(&dull[48_000..]) * 1.5);
 }
+
+#[test]
+fn an_envelope_lane_moves_a_track_parameter_the_same_prepared_as_direct_and_without_heap_work() {
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }";
+    // a looping, curved sweep so that many short glides and restarts cross window edges
+    let play = "clip c { notes: [c5 c5 c5 c5]\ncut: env[300hz 1/4bar.exp 6khz 1/8bar.log 300hz].loop }\npad.play(c)";
+    let mut direct = Session::new(48_000.0, Layout::Mono).without_limiter();
+    direct.eval(setup, Some("now")).unwrap();
+    direct.eval(play, Some("now")).unwrap();
+    let expected = direct.process(96_000).remove(0);
+
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(setup, Some("now")).unwrap();
+    s.eval(play, Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut actual = vec![0.0; 96_000];
+    for chunk in actual.chunks_mut(256) {
+        s.prepare_realtime();
+        measured(&mut r, chunk.len(), chunk);
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(r.metrics().late_events, 0);
+    let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+    assert!(rms(&expected) > 0.1);
+}

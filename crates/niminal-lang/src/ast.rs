@@ -316,6 +316,8 @@ pub struct EnvLit {
     pub segments: Vec<EnvSegment>,
     /// Number of segments before the `|`.
     pub sustain_at: Option<usize>,
+    /// `env[...].loop`: starts over when it ends.
+    pub looped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

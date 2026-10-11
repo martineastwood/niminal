@@ -2,6 +2,7 @@
 //! commands that start, stop and mute them. Evaluating the source into this
 //! lives in `perform.rs`; turning it into notes lives in `schedule.rs`.
 
+use niminal_engine::ops::Curve;
 use niminal_pattern::{Pattern, Rational};
 use niminal_score::{Time, Value};
 
@@ -24,6 +25,21 @@ pub struct Clip {
     pub lanes: Vec<(String, Pattern<Value>)>,
     /// `keys: midi.keys(channel: 1)`: played from a keyboard instead of by `notes`.
     pub keys: Option<Keys>,
+    /// Lanes drawn as an envelope, `cut: env[300hz 1bar 3khz]`: they move a track's
+    /// parameter continuously, on the clip's timeline.
+    pub curves: Vec<(String, EnvLane)>,
+}
+
+/// An `env[...]` in a lane: a run of glides between levels, from the start of the clip.
+#[derive(Clone, Debug)]
+pub struct EnvLane {
+    pub start: Value,
+    /// How long to take, the curve, and the level reached.
+    pub segments: Vec<(Time, Curve, Value)>,
+    /// Starts over when it ends, instead of holding its last level.
+    pub looped: bool,
+    /// The unit of the parameter it moves, once it is placed on a track.
+    pub unit: Option<crate::unit::Unit>,
 }
 
 /// Where a clip's notes come from when it is played live.
@@ -34,6 +50,10 @@ pub struct Keys {
 }
 
 impl Clip {
+    pub fn curve(&self, name: &str) -> Option<&EnvLane> {
+        self.curves.iter().find(|(n, _)| n == name).map(|(_, c)| c)
+    }
+
     pub fn lane(&self, name: &str) -> Option<&Pattern<Value>> {
         self.lanes.iter().find(|(n, _)| n == name).map(|(_, p)| p)
     }

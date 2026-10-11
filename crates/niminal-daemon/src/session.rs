@@ -444,6 +444,8 @@ pub struct Session {
     /// Notes up to this sample have been taken from the schedule.
     fetched_until: u64,
     upcoming: VecDeque<Upcoming>,
+    /// Envelope lanes' changes to track parameters that are waiting for their sample, in order.
+    control_sets: VecDeque<(u64, niminal_lang::ControlSet)>,
     /// Tracks whose clips are not searched for notes because they asked for too many.
     overloaded: Vec<usize>,
     /// Sounding notes: when each is released, and the key holding it open (or `NO_KEY`).
@@ -613,6 +615,7 @@ impl Session {
             schedule,
             fetched_until: 0,
             upcoming: VecDeque::new(),
+            control_sets: VecDeque::new(),
             overloaded: Vec::new(),
             held: Vec::new(),
             next_panic: 0,
@@ -1409,6 +1412,7 @@ impl Session {
         self.overloaded.clear();
         // Notes already taken from the old schedule may no longer be right.
         self.upcoming.retain(|u| !u.scheduled);
+        self.control_sets.clear();
         self.fetched_until = self.clock;
         self.next_panic = self.schedule.panics().iter().take_while(|&&t| self.samples(t) < self.clock).count();
     }
@@ -1433,6 +1437,7 @@ impl Session {
             if let Some(limiter) = &mut self.limiter { limiter.clear(); }
             self.held.clear();
             self.upcoming.clear();
+            self.control_sets.clear();
             self.next_panic += 1;
         }
     }
@@ -1472,6 +1477,10 @@ impl Session {
             if let Some(next) = self.upcoming.iter().find(|u| u.start > self.clock) {
                 n = n.min(next.start - self.clock);
             }
+            if let Some((at, _)) = self.control_sets.iter().find(|(at, _)| *at > self.clock) {
+                n = n.min(at - self.clock);
+            }
+            self.apply_control_sets();
             self.start_due();
 
             let n = n.max(1) as usize;
@@ -1564,6 +1573,11 @@ impl Session {
             }
         }
         let (events, problem) = (found.events, found.problem);
+        for set in found.controls {
+            let at = self.samples(set.at).max(self.clock);
+            let place = self.control_sets.partition_point(|(t, _)| *t <= at);
+            self.control_sets.insert(place, (at, set));
+        }
         for event in events {
             let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
             let dur = self.samples(event.dur.to_seconds(self.program.tempo));
@@ -1573,6 +1587,18 @@ impl Session {
             self.notify(e.to_string());
         }
         self.fetched_until = horizon;
+    }
+
+    /// Move the track parameters that envelope lanes say should move by now.
+    fn apply_control_sets(&mut self) {
+        while self.control_sets.front().is_some_and(|(at, _)| *at <= self.clock) {
+            let Some((_, set)) = self.control_sets.pop_front() else { break };
+            let Some(index) = self.program.controls.iter().position(|c| c.name == set.name) else { continue };
+            let frames = (set.glide * f64::from(self.sample_rate)).round() as u64;
+            let state = &mut self.controls[index];
+            state.set(self.clock, set.target as f32, frames);
+            self.mixer.set_control(&state.key, state.start, state.target, state.frames, 0);
+        }
     }
 
     fn start_due(&mut self) {
