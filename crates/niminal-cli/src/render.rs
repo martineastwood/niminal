@@ -128,6 +128,8 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     let mut out: Vec<Vec<f32>> = vec![Vec::new(); n_channels];
     // Notes that have started but not yet been released, in no particular order.
     let mut held: Vec<(usize, VoiceId)> = Vec::new();
+    // each control's last glide: from, to, the sample it began, and its length
+    let mut glides: Vec<(f32, f32, usize, u64)> = program.controls.iter().map(|c| (c.initial, c.initial, 0, 0)).collect();
     let mut silenced_voices = 0;
     let mut next = 0;
     let mut next_panic = 0;
@@ -143,6 +145,16 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
 
         while next < notes.len() && notes[next].start == pos {
             let note = &notes[next];
+            for (key, value, smooth) in &note.plan.controls {
+                if let Some(i) = program.controls.iter().position(|c| c.key == *key) {
+                    let frames = (smooth * sr).round() as u64;
+                    // glide from wherever the control is now
+                    let (from, target, at, took) = glides[i];
+                    let now = if took == 0 { target } else { from + (target - from) * (pos.saturating_sub(at) as u64).min(took) as f32 / took as f32 };
+                    mixer.set_control(key, now, *value, frames, 0);
+                    glides[i] = (now, *value, pos, frames);
+                }
+            }
             let graph = program.instruments[note.plan.instrument].graph.clone();
             let id = mixer.note_on_with(note.plan.track, graph, &note.plan.params, note.plan.choke, note.plan.rule);
             held.push((note.off, id));

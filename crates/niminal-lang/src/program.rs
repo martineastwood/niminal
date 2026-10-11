@@ -116,6 +116,18 @@ impl ControlDef {
         Some(if self.unit == Unit::Db { 20.0 * engine.log10() } else { engine })
     }
 
+    /// A lane's value as the control's engine value, with the unit rules a parameter has.
+    pub fn from_value(&self, value: Value, tempo: Tempo) -> Result<f32, niminal_score::UnitError> {
+        Ok(match self.unit {
+            Unit::Hz => value.as_hz()?,
+            Unit::Db => value.as_gain()?,
+            Unit::Time => value.as_time()?.to_seconds(tempo),
+            Unit::Angle => value.as_angle()?,
+            Unit::Semitones => value.as_semitones()?,
+            Unit::Num => value.as_number()?,
+        } as f32)
+    }
+
     pub fn convert(&self, value: f64, suffix: Option<&str>, tempo: Tempo) -> Result<f32, String> {
         let suffix = suffix.or(self.unit.suffix());
         let (unit, converted) = crate::lower::literal_sig(value, suffix, tempo, crate::Span::default())
@@ -160,6 +172,8 @@ pub struct NotePlan {
     pub choke: Option<u32>,
     /// How many notes of the instrument may sound at once, if limited.
     pub rule: Option<niminal_engine::VoiceRule>,
+    /// Track parameters the note's clip sets as it starts: control key, value, and how long it glides.
+    pub controls: Vec<(String, f32, f64)>,
 }
 
 /// What a note's target resolves to.
@@ -228,6 +242,20 @@ impl Program {
             resolve_target(&self.instruments, &self.tracks, &event.target)?;
         let mut args = defaults.cloned().unwrap_or_default();
         args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
+        // a lane that is a parameter of the track, not of the instrument, sets that control
+        let mut controls = Vec::new();
+        if track != 0 {
+            let owner = &self.tracks[track].name;
+            let found: Vec<String> = args.keys()
+                .filter(|k| self.instruments[instrument].param(k).is_err() && self.controls.iter().any(|c| c.name == format!("{owner}::{k}")))
+                .cloned().collect();
+            for lane in found {
+                let value = args.remove(&lane).expect("just listed");
+                let def = self.controls.iter().find(|c| c.name == format!("{owner}::{lane}")).expect("just found");
+                let v = def.from_value(value, self.tempo).map_err(|e| ArgError::new(format!("argument `{lane}`: {e}")))?;
+                controls.push((def.key.clone(), v, def.smooth_seconds));
+            }
+        }
         for value in args.values_mut() {
             if let Value::Sample(id) = *value {
                 *value = Value::Num(self.kit_index(&self.instruments[instrument], id, &event.target)? as f64);
@@ -253,7 +281,7 @@ impl Program {
                 glide: this.glide.map_or(0.0, |t| t.to_seconds(self.tempo) as f32),
             })
         };
-        Ok(NotePlan { track, instrument, params, choke, rule })
+        Ok(NotePlan { track, instrument, params, choke, rule, controls })
     }
 
     /// A mixer for this program's tracks and buses.

@@ -1581,6 +1581,13 @@ impl Session {
             match self.program.plan(&note.event) {
                 Ok(plan) => {
                     let graph = self.program.instruments[plan.instrument].graph.clone();
+                    for (key, value, smooth) in &plan.controls {
+                        let frames = (smooth * f64::from(self.sample_rate)).round() as u64;
+                        if let Some(c) = self.controls.iter_mut().find(|c| c.key == *key) {
+                            c.set(self.clock, *value, frames);
+                            self.mixer.set_control(&c.key, c.start, c.target, c.frames, 0);
+                        }
+                    }
                     let id = self.mixer.note_on_with(plan.track, graph, &plan.params, plan.choke, plan.rule);
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
                     let off = if note.key.is_some() { u64::MAX } else { self.clock + note.dur };

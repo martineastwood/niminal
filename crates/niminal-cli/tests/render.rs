@@ -779,6 +779,25 @@ track bass { instrument = pluck(bright: 0.1) }
     }
 
     #[test]
+    fn a_lane_can_set_a_track_parameter_as_each_note_starts() {
+        let stage = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }\n";
+        let render = |body: &str| {
+            let p = program(&format!("{stage}{body}"));
+            render_with(&p, &[], &RenderOptions { limiter: false, until: Some(2.0), ..Default::default() }).map(mono).unwrap()
+        };
+        let dull = render("pad.play([c5 c5])");
+        let bright = render("clip c { notes: [c5 c5]\ncut: [300hz 8khz] }\npad.play(c)");
+        let half = dull.len() / 2;
+        // the first note is the same, the second is brighter (more of the saw gets through)
+        assert_eq!(&dull[..half - 4800], &bright[..half - 4800]);
+        assert!(rms(&bright[half..]) > rms(&dull[half..]) * 1.5, "{} vs {}", rms(&bright[half..]), rms(&dull[half..]));
+        // a mistake in the lane's unit is reported
+        let p = program(&format!("{stage}clip c {{ notes: [c5]\ncut: [0.5] }}\npad.play(c)"));
+        let Err(e) = render_with(&p, &[], &RenderOptions { limiter: false, until: Some(1.0), ..Default::default() }) else { panic!("a bare number is not a frequency") };
+        assert!(e.to_string().contains("cut"), "{e}");
+    }
+
+    #[test]
     fn a_track_applies_its_instrument_defaults_to_played_notes() {
         let played = raw("bass.play([c2])", 1.0);
         let written = raw("bass(freq: c2) for 4beats", 0.0);

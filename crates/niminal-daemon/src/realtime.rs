@@ -83,6 +83,8 @@ enum Kind {
     Release { key: u32 },
     /// Change a parameter (a keyboard's `bend` or `pressure`) of the notes a key is holding.
     Param { key: u32, name: &'static str, value: f32 },
+    /// A clip lane setting a track parameter: control key, value, glide in frames.
+    Control { key: String, value: f32, frames: u64 },
     Swap { mixer: Box<Mixer>, program: Arc<Program>, controls: Vec<ControlState>, transfers: Vec<Transfer> },
     Reset { mixer: Box<Mixer>, program: Arc<Program>, controls: Vec<ControlState>, epoch: u64 },
 }
@@ -278,7 +280,7 @@ impl Session {
             }
             planner.deferred = future;
             window.commands.sort_by_key(|c| (c.at, match c.kind {
-                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } | Kind::Param { .. } => 3,
+                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } | Kind::Param { .. } => 3, Kind::Control { .. } => 1,
             }));
             match planner.ready.push(Box::new(window)) {
                 Ok(()) => { planner.prepared_until = to; planner.refresh = false; },
@@ -368,7 +370,7 @@ impl Session {
         if position < to { self.plan_notes(&program, &history, &explicit, position..to, config, &mut window); }
         // Stable sorting keeps a graph swap/reset before notes at the same sample.
         window.commands.sort_by_key(|c| (c.at, match c.kind {
-                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } | Kind::Param { .. } => 3,
+                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } | Kind::Param { .. } => 3, Kind::Control { .. } => 1,
             }));
         for notice in window.notices.drain(..) { self.notify(notice); }
         *stopped = std::mem::take(&mut window.stopped);
@@ -472,6 +474,9 @@ impl Session {
             for &(i, value) in &plan.params { voice.set_param(i, value); }
             voice.set_group(plan.choke);
             voice.set_rule(plan.rule);
+            for (key, value, smooth) in &plan.controls {
+                window.commands.push(Command { at, kind: Kind::Control { key: key.clone(), value: *value, frames: (smooth * f64::from(self.sample_rate)).round() as u64 } });
+            }
             window.commands.push(Command { at, kind: Kind::Note { track: (plan.track != 0).then(|| program.tracks[plan.track].name.clone()),
                 program: program.clone(), off: if key.is_some() { u64::MAX } else { at.saturating_add(dur) },
                 key: key.unwrap_or(super::NO_KEY), voice: Some(voice) } });
@@ -603,6 +608,12 @@ impl RealtimeRenderer {
                     match &mut command.kind {
                         Kind::Release { key } => {
                             for held in self.held.iter_mut().filter(|h| h.2 == *key) { held.0 = self.clock; }
+                        }
+                        Kind::Control { key, value, frames } => {
+                            if let Some(c) = self.controls.iter_mut().find(|c| c.key == *key) {
+                                c.set(self.clock, *value, *frames);
+                                self.mixer.set_control(&c.key, c.start, c.target, c.frames, 0);
+                            }
                         }
                         Kind::Param { key, name, value } => {
                             for held in self.held.iter().filter(|h| h.2 == *key) { self.mixer.set_voice_param(held.1, name, *value); }

@@ -752,7 +752,7 @@ track bass(tone: hz = 2khz) {
 
 - **Mixer:** `gain`, `pan`, `mute`, `solo`; `with(quantize: ...)` sets launch quantization.
 - **Re-evaluating a track** carries its effects' state over, without clicks.
-- **Parameters** are controls named `bass::tone`: set them like any `ctl` (from a client, MIDI or OSC bound to it), or change the starting value in the header and re-evaluate. Clip lanes can't drive them yet, and neither can `bass.set(...)`.
+- **Parameters** are controls named `bass::tone`: set them like any `ctl` (from a client, MIDI or OSC bound to it), or change the starting value in the header and re-evaluate. A clip lane named after one sets it as each note starts (`clip riff { notes: [c2 eb2]\n tone: [400hz 3khz] }`, gliding by the control's smoothing); `bass.set(...)` can't drive them yet.
 - **Note effects:** the `notes` line changes the notes of every clip played on the track, with `it` the clip's notes: `notes = it.thin(10%)`. A clip played from keys is left as it is.
 - **Short forms:** `track bass = pluck(bright: 0.4)` is a track with just an instrument, and naming an instrument where a part goes (`pluck.start`, or in a scene) makes a track of that name playing it.
 - **Status:** the mixer's `gain`, `pan`, `mute` and `solo` lines are not built; `instrument`, `notes`, `out`, parameters and sends work.

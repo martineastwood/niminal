@@ -954,10 +954,8 @@ impl Perform<'_> {
             if matches!(lane.as_str(), "pan" | "to") {
                 return Err(Diagnostic::new(format!("the `{lane}` lane isn't supported yet"), span));
             }
-            let control = format!("{}::{lane}", info.name);
-            if self.cx.names.controls.iter().any(|c| c.name == control) {
-                return Err(Diagnostic::new(format!("`{lane}` is a parameter of track `{}`, not of a note", info.name), span)
-                    .with_help(format!("change it from outside as the control `{control}`, or by changing its starting value in the track")));
+            if self.cx.names.controls.iter().any(|c| c.name == format!("{}::{lane}", info.name)) {
+                continue;
             }
             let mut known: Vec<&str> = instrument.params.iter().map(|p| p.name.as_str()).collect();
             known.extend(UNIVERSAL_LANES);
