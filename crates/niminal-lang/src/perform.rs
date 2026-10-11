@@ -944,7 +944,22 @@ impl Perform<'_> {
             seconds += length.to_f64() * tempo.beats_per_bar * 60.0 / tempo.bpm;
         }
         actions.push(Scheduled { at: Time::Seconds(seconds), action: Action::Hush, quantize: None });
-        Ok(Arrangement { name: decl.name.name.clone(), actions, tempos })
+        let mut lanes = Vec::new();
+        for lane in &decl.lanes {
+            let (track, param) = (&lane.track, &lane.param);
+            if !self.cx.tracks.iter().skip(1).any(|t| t.name == track.name) {
+                let mut d = Diagnostic::new(format!("no track named `{}`", track.name), track.span);
+                if let Some(c) = closest(&track.name, self.cx.tracks.iter().skip(1).map(|t| t.name.as_str())) {
+                    d = d.with_help(format!("did you mean `{c}`?"));
+                }
+                return Err(d);
+            }
+            let mut curve = env_lane(&lane.value)?;
+            let who = format!("arrangement `{}` moves `{}.{}`, but track `{}`", decl.name.name, track.name, param.name, track.name);
+            self.bind_env(&mut curve, &track.name, &param.name, &who, param.span)?;
+            lanes.push((format!("{}::{}", track.name, param.name), curve));
+        }
+        Ok(Arrangement { name: decl.name.name.clone(), actions, tempos, lanes })
     }
 
     /// The clip as `track` plays it: its `notes` line, if it has one, changes the clip's notes. It also
@@ -971,30 +986,35 @@ impl Perform<'_> {
 
     /// Envelope lanes move a parameter of the track: find it, and check the levels fit its unit.
     fn bind_curves(&self, clip: &mut Clip, track: usize, id: &Ident, span: Span) -> Res<()> {
-        let info = &self.cx.tracks[track];
+        let name = &self.cx.tracks[track].name;
         for (lane, curve) in &mut clip.curves {
-            let control = format!("{}::{lane}", info.name);
-            let Some(def) = self.cx.names.controls.iter().find(|c| c.name == control) else {
-                let params: Vec<&str> = self.cx.names.controls.iter().filter_map(|c| c.name.strip_prefix(&format!("{}::", info.name))).collect();
-                let mut d = Diagnostic::new(
-                    format!("clip `{}` has an envelope lane `{lane}`, but track `{}` has no such parameter", clip.name, id.name),
-                    span,
-                )
-                .with_help("only a track's parameters can be moved by an envelope, as in `track bass(tone: hz = 2khz)`");
-                if let Some(c) = closest(lane, params) {
-                    d = d.with_help(format!("did you mean `{c}`?"));
-                }
-                return Err(d);
-            };
-            let tempo = Tempo { bpm: 120.0, beats_per_bar: 4.0 };
-            let levels = std::iter::once(&curve.start).chain(curve.segments.iter().map(|(_, _, level)| level));
-            for level in levels {
-                crate::program::engine_value(def.unit, *level, tempo).map_err(|e| {
-                    Diagnostic::new(format!("envelope lane `{lane}` moves {}: {e}", def.name), span)
-                })?;
-            }
-            curve.unit = Some(def.unit);
+            let who = format!("clip `{}` has an envelope lane `{lane}`, but track `{}`", clip.name, id.name);
+            self.bind_env(curve, name, lane, &who, span)?;
         }
+        Ok(())
+    }
+
+    /// Point `curve` at the track parameter `track::param` and check its levels fit that parameter's unit.
+    /// `who` starts the message if there is no such parameter.
+    fn bind_env(&self, curve: &mut EnvLane, track: &str, param: &str, who: &str, span: Span) -> Res<()> {
+        let control = format!("{track}::{param}");
+        let Some(def) = self.cx.names.controls.iter().find(|c| c.name == control) else {
+            let params: Vec<&str> = self.cx.names.controls.iter().filter_map(|c| c.name.strip_prefix(&format!("{track}::"))).collect();
+            let mut d = Diagnostic::new(format!("{who} has no such parameter"), span)
+                .with_help("only a track's parameters can be moved by an envelope, as in `track bass(tone: hz = 2khz)`");
+            if let Some(c) = closest(param, params) {
+                d = d.with_help(format!("did you mean `{c}`?"));
+            }
+            return Err(d);
+        };
+        let tempo = Tempo { bpm: 120.0, beats_per_bar: 4.0 };
+        let levels = std::iter::once(&curve.start).chain(curve.segments.iter().map(|(_, _, level)| level));
+        for level in levels {
+            crate::program::engine_value(def.unit, *level, tempo).map_err(|e| {
+                Diagnostic::new(format!("envelope lane `{param}` moves {}: {e}", def.name), span)
+            })?;
+        }
+        curve.unit = Some(def.unit);
         Ok(())
     }
 

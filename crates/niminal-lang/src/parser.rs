@@ -363,12 +363,31 @@ impl Parser {
         self.expect(&Tok::LBrace)?;
         let mut sections = None;
         let (mut tempos, mut meters) = (None, None);
+        let mut lanes: Vec<ArrangementLane> = Vec::new();
         loop {
             self.skip_newlines();
             if self.peek() == &Tok::RBrace {
                 break;
             }
             let key = self.ident("`sections`")?;
+            if self.peek() == &Tok::Dot {
+                self.bump();
+                let param = self.ident("a parameter name")?;
+                self.expect(&Tok::Colon)?;
+                let value = self.expr()?;
+                let ExprKind::Env(lit) = value.kind else {
+                    return Err(Diagnostic::new("an arrangement lane is an envelope", value.span)
+                        .with_help(format!("for example `{}.{}: env[0.2 8bars 1.0]`", key.name, param.name)));
+                };
+                if lanes.iter().any(|l| l.track.name == key.name && l.param.name == param.name) {
+                    return Err(Diagnostic::new(format!("lane `{}.{}` is given twice", key.name, param.name), key.span));
+                }
+                lanes.push(ArrangementLane { track: key, param, value: lit });
+                if !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
+                    return Err(self.unexpected("the end of the line"));
+                }
+                continue;
+            }
             if key.name == "tempo" || key.name == "meter" {
                 self.expect(&Tok::Colon)?;
                 let slot = if key.name == "tempo" { &mut tempos } else { &mut meters };
@@ -390,7 +409,7 @@ impl Parser {
             }
             if key.name != "sections" {
                 return Err(Diagnostic::new(format!("`{}` isn't supported in an arrangement yet", key.name), key.span)
-                    .with_help("an arrangement has `sections`, and `tempo` and `meter` for each of them; automation lanes come later"));
+                    .with_help("an arrangement has `sections`, `tempo` and `meter` for each of them, and envelope lanes such as `bass.tone: env[...]`"));
             }
             self.expect(&Tok::Colon)?;
             if sections.is_some() {
@@ -422,7 +441,7 @@ impl Parser {
             Diagnostic::new(format!("arrangement `{}` has no sections", name.name), name.span)
                 .with_help("add `sections: [scene.over(8 bars) ...]`")
         })?;
-        Ok(ArrangementDecl { name, sections, tempos, meters, span: start.to(end) })
+        Ok(ArrangementDecl { name, sections, tempos, meters, lanes, span: start.to(end) })
     }
 
     /// `instr|opcode name(params) { body }`

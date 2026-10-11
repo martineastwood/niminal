@@ -74,6 +74,7 @@ clip riff {
 }
 ```
 
+- An arrangement can carry envelope lanes on a track's parameter, `bass.tone: env[800hz 88bars 3khz]`, over the whole piece (applied when the arrangement is rendered).
 - Envelope lanes, such as `cut: env[300hz 1bar.exp 3khz]`, move a track parameter over the clip's timeline with the same literal and curves as an instrument envelope; they hold their last level, `.loop` repeats them, and they need no `|`.
 - Lane targets: `notes`, instrument parameters, track parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Clip lanes target only their track; scene/arrangement lanes can target any track.
 - **Step lanes** read at note start and cycle (polymeter); **`.per_note`** maps nth note → nth value.

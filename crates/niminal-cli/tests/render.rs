@@ -1090,6 +1090,42 @@ fn arrangement_mistakes_are_reported() {
     assert!(e.0.contains("no arrangement named `sogn`") && e.0.contains("did you mean `song`?"), "{e}");
 }
 
+const LANE_STAGE: &str = "tempo 120bpm
+instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }
+track pad(cut: hz = 300hz) { instrument = saw1
+  out = it.lpf(cutoff: cut) }
+riff = [c5 c5 c5 c5 c5 c5 c5 c5]
+scene s { pad: riff }
+";
+
+fn lane_song(lanes: &str) -> Vec<f32> {
+    let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(2 bars)]\n{lanes} }}");
+    mono(render_with(&program(&src), &[], &arrangement("song")).unwrap())
+}
+
+#[test]
+fn an_arrangement_lane_moves_a_track_parameter_over_the_whole_piece() {
+    let eighths = |x: &[f32]| x.chunks(x.len() / 8).take(8).map(rms).collect::<Vec<_>>();
+    let steady = eighths(&lane_song(""));
+    let swept = eighths(&lane_song("pad.cut: env[300hz 2bars 8khz]"));
+    assert!(swept[0] < swept[1] && swept[1] < swept[2], "{swept:?}");
+    assert!(swept[6] > steady[6] * 2.0, "{swept:?} against {steady:?}");
+}
+
+#[test]
+fn arrangement_lane_mistakes_are_reported() {
+    let err = |lane: &str| {
+        let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(1 bar)]\n{lane} }}");
+        compile(&src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default()
+    };
+    assert!(err("pd.cut: env[300hz 1bar 1khz]").contains("no track named `pd`did you mean `pad`?"));
+    assert!(err("pad.cutt: env[300hz 1bar 1khz]").contains("has no such parameterdid you mean `cut`?"), "{}", err("pad.cutt: env[300hz 1bar 1khz]"));
+    assert!(err("pad.cut: 300hz").contains("an arrangement lane is an envelope"));
+    assert!(err("pad.cut: env[0.5 1bar 1]").contains("cut"));
+    assert!(err("pad.cut: env[300hz 1bar 1khz | 1bar 300hz]").contains("sustain"));
+    assert!(err("pad.cut: env[300hz 1bar 1khz]\npad.cut: env[300hz 1bar 2khz]").contains("given twice"));
+}
+
 fn render_command(args: &[&str]) -> (std::process::Output, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("niminal-render-cmd-{}-{}", std::process::id(), args.join("_").len()));
     std::fs::create_dir_all(&dir).unwrap();

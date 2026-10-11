@@ -11,7 +11,7 @@ use std::fmt;
 use niminal_pattern::{Rational, Span as CycleSpan};
 use niminal_score::{Event, Tempo, Time, Value};
 
-use crate::performance::{Action, Clip, Scheduled};
+use crate::performance::{Action, Clip, EnvLane, Scheduled};
 use crate::program::Program;
 
 /// The pattern queries and events one clip may spend in a search: a base
@@ -124,12 +124,17 @@ pub struct Schedule {
     /// Mute and solo changes, in time order.
     gates: Vec<(f64, Gate)>,
     panics: Vec<f64>,
+    /// The tempo the piece starts in, and where its sections change it.
+    tempo: Tempo,
+    sections: Vec<(f64, Tempo)>,
+    /// Envelopes over the whole piece (an arrangement's lanes): the control they move and the shape.
+    lanes: Vec<(String, EnvLane)>,
 }
 
 impl Program {
     /// The notes this program's `play`, `launch` and related commands produce.
     pub fn schedule(&self) -> Schedule {
-        Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &self.performance, &[])
+        Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &self.performance, &[], &[])
     }
 }
 
@@ -146,7 +151,7 @@ impl Program {
                 },
             });
         };
-        Ok(Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &arrangement.actions, &arrangement.tempos))
+        Ok(Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &arrangement.actions, &arrangement.tempos, &arrangement.lanes))
     }
 }
 
@@ -155,11 +160,11 @@ impl Schedule {
     /// `track_names`. The commands' `at` times are what they are; their
     /// `quantize` is ignored (a live session has already applied it).
     pub fn from_commands(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled]) -> Schedule {
-        Schedule::new(tempo, track_names, commands, &[])
+        Schedule::new(tempo, track_names, commands, &[], &[])
     }
 
     /// `sections` says where the tempo and meter change from `tempo`, as seconds and what they become.
-    fn new(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled], sections: &[(f64, Tempo)]) -> Schedule {
+    fn new(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled], sections: &[(f64, Tempo)], lanes: &[(String, EnvLane)]) -> Schedule {
         let tempo_at = |at: f64| sections.iter().rev().find(|(start, _)| *start <= at).map_or(tempo, |(_, t)| *t);
         let mut timed: Vec<(f64, &Action)> = commands.iter().map(|c| (c.at.to_seconds(tempo), &c.action)).collect();
         // Simultaneous commands keep the order they were written in.
@@ -193,7 +198,7 @@ impl Schedule {
                 Action::Unsolo { track } => gates.push((at, Gate::Unsolo(*track))),
             }
         }
-        Schedule { track_names, segments, gates, panics }
+        Schedule { track_names, segments, gates, panics, tempo, sections: sections.to_vec(), lanes: lanes.to_vec() }
     }
 
     /// When the last clip stops, in seconds; `None` if something plays until
@@ -295,6 +300,7 @@ impl Schedule {
             for segment in &self.segments {
                 self.segment_controls(segment, start, end, &mut chunk)?;
             }
+            self.lane_controls(start, end, &mut chunk)?;
             all.extend(chunk);
             start = end;
         }
@@ -330,6 +336,9 @@ impl Schedule {
         let mut controls: Vec<ControlSet> = Vec::new();
         let mut problem = None;
         let mut overloaded = Vec::new();
+        if let Err(e) = self.lane_controls(from, to, &mut controls) {
+            problem.get_or_insert(e);
+        }
         let work = BASE_WORK + (WORK_PER_SECOND * (to - from).max(0.0)) as usize;
         for segment in self.segments.iter().filter(|s| !skip.contains(&s.track)) {
             if let Err(e) = self.segment_controls(segment, from, to, &mut controls) {
@@ -417,6 +426,50 @@ impl Schedule {
         Ok(())
     }
 
+    /// What the piece's own envelope lanes (an arrangement's) do to track parameters in `from..to`.
+    fn lane_controls(&self, from: f64, to: f64, out: &mut Vec<ControlSet>) -> Result<(), ScheduleError> {
+        for (control, lane) in &self.lanes {
+            let fail = |why: String| ScheduleError(format!("arrangement lane `{control}`: {why}"));
+            let unit = lane.unit.ok_or_else(|| fail("the envelope was never placed on a parameter".into()))?;
+            let level = |v: Value| crate::program::engine_value(unit, v, self.tempo).map_err(|e| fail(e.to_string()));
+            let start = level(lane.start)?;
+            let mut steps = Vec::with_capacity(lane.segments.len());
+            let mut at = 0.0;
+            for (dur, shape, to_level) in &lane.segments {
+                let seconds = self.seconds_from(at, *dur);
+                steps.push((seconds, *shape, level(*to_level)?));
+                at += seconds;
+            }
+            emit_envelope(control, start, &steps, lane.looped, 0.0, from.max(0.0), to, out);
+            if out.len() > MAX_CONTROL_SETS {
+                return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
+            }
+        }
+        Ok(())
+    }
+
+    /// How many seconds `dur` takes when it starts `at` seconds into the piece, following the
+    /// tempo and meter of the sections it runs through.
+    fn seconds_from(&self, at: f64, dur: Time) -> f64 {
+        let (mut left, bars) = match dur {
+            Time::Seconds(s) => return s.max(0.0),
+            Time::Beats(b) => (b.max(0.0), false),
+            Time::Bars(b) => (b.max(0.0), true),
+        };
+        let mut t = at;
+        loop {
+            let tempo = self.sections.iter().rev().find(|(start, _)| *start <= t).map_or(self.tempo, |(_, tempo)| *tempo);
+            let per_second = tempo.bpm / 60.0 / if bars { tempo.beats_per_bar } else { 1.0 };
+            match self.sections.iter().find(|(start, _)| *start > t) {
+                Some((next, _)) if left > (next - t) * per_second => {
+                    left -= (next - t) * per_second;
+                    t = *next;
+                }
+                _ => return t + left / per_second - at,
+            }
+        }
+    }
+
     /// What `segment`'s envelope lanes do to their track's parameters in `from..to` seconds. A curved
     /// segment becomes a few straight glides that follow the same curve an `env` in an instrument does.
     fn segment_controls(&self, segment: &Segment, from: f64, to: f64, out: &mut Vec<ControlSet>) -> Result<(), ScheduleError> {
@@ -444,56 +497,15 @@ impl Schedule {
             for (dur, shape, to_level) in &curve.segments {
                 steps.push((dur.to_seconds(segment.tempo).max(0.0), *shape, level(*to_level)?));
             }
-            let pass_len: f64 = steps.iter().map(|s| s.0).sum();
             let control = format!("{name}::{lane}");
 
             for k in first_loop..last_loop {
                 let loop_start = if clip.endless { segment.start } else { segment.start + k as f64 * loop_len };
                 // nothing from this pass of the clip is heard after the clip starts over
                 let stop = until.min(loop_start + loop_len);
-                let (first_pass, passes) = if curve.looped && pass_len > 0.0 {
-                    let first = ((window_start - loop_start) / pass_len).floor().max(0.0);
-                    (first as u64, u64::MAX)
-                } else {
-                    (0, 1)
-                };
-                for pass in first_pass..first_pass.saturating_add(passes) {
-                    let pass_start = loop_start + pass as f64 * pass_len;
-                    if pass_start >= stop {
-                        break;
-                    }
-                    let mut push = |at: f64, target: f64, glide: f64| {
-                        if at >= window_start && at < stop {
-                            out.push(ControlSet { at, name: control.clone(), target, glide });
-                        }
-                    };
-                    push(pass_start, start, 0.0);
-                    let (mut t, mut from_level) = (pass_start, start);
-                    for &(dur, shape, to_level) in &steps {
-                        let pieces = if dur <= 0.0 || matches!(shape, niminal_engine::ops::Curve::Linear) {
-                            1
-                        } else {
-                            ((dur / PIECE_SECONDS).ceil() as usize).clamp(MIN_PIECES, MAX_PIECES)
-                        };
-                        for j in 0..pieces {
-                            let at = t + dur * j as f64 / pieces as f64;
-                            let reached = niminal_engine::ops::shape(
-                                from_level as f32, to_level as f32, (j + 1) as f64 / pieces as f64, shape.bend(),
-                            );
-                            push(at, f64::from(reached), dur / pieces as f64);
-                            if at >= stop {
-                                break;
-                            }
-                        }
-                        t += dur;
-                        from_level = to_level;
-                        if t >= stop {
-                            break;
-                        }
-                    }
-                    if out.len() > MAX_CONTROL_SETS {
-                        return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
-                    }
+                emit_envelope(&control, start, &steps, curve.looped, loop_start, window_start, stop, out);
+                if out.len() > MAX_CONTROL_SETS {
+                    return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
                 }
             }
         }
@@ -556,6 +568,62 @@ impl Schedule {
     }
 }
 
+/// Play an envelope that starts at `origin` seconds: its first level at once, then a glide for each
+/// segment, a curved one cut into a few straight pieces that follow the curve an instrument's `env` has.
+/// Only changes from `window_start` up to `stop` are kept. A looping envelope starts over when it ends.
+#[allow(clippy::too_many_arguments)]
+fn emit_envelope(
+    control: &str,
+    start: f64,
+    steps: &[(f64, niminal_engine::ops::Curve, f64)],
+    looped: bool,
+    origin: f64,
+    window_start: f64,
+    stop: f64,
+    out: &mut Vec<ControlSet>,
+) {
+    let pass_len: f64 = steps.iter().map(|s| s.0).sum();
+    let (first_pass, passes) = if looped && pass_len > 0.0 {
+        let first = ((window_start - origin) / pass_len).floor().max(0.0);
+        (first as u64, u64::MAX)
+    } else {
+        (0, 1)
+    };
+    for pass in first_pass..first_pass.saturating_add(passes) {
+        let pass_start = origin + pass as f64 * pass_len;
+        if pass_start >= stop || out.len() > MAX_CONTROL_SETS {
+            break;
+        }
+        let mut push = |at: f64, target: f64, glide: f64| {
+            if at >= window_start && at < stop {
+                out.push(ControlSet { at, name: control.to_string(), target, glide });
+            }
+        };
+        push(pass_start, start, 0.0);
+        let (mut t, mut from_level) = (pass_start, start);
+        for &(dur, shape, to_level) in steps {
+            let pieces = if dur <= 0.0 || matches!(shape, niminal_engine::ops::Curve::Linear) {
+                1
+            } else {
+                ((dur / PIECE_SECONDS).ceil() as usize).clamp(MIN_PIECES, MAX_PIECES)
+            };
+            for j in 0..pieces {
+                let at = t + dur * j as f64 / pieces as f64;
+                let reached = niminal_engine::ops::shape(from_level as f32, to_level as f32, (j + 1) as f64 / pieces as f64, shape.bend());
+                push(at, f64::from(reached), dur / pieces as f64);
+                if at >= stop {
+                    break;
+                }
+            }
+            t += dur;
+            from_level = to_level;
+            if t >= stop {
+                break;
+            }
+        }
+    }
+}
+
 fn lane_error(clip: &Clip, track: &str, lane: &str, why: &str) -> ScheduleError {
     ScheduleError(format!("clip `{}` on track `{track}`, lane `{lane}`: {why}", clip.name))
 }
@@ -571,6 +639,21 @@ instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2
 track lead { instrument = pluck }
 track bass { instrument = pluck }
 ";
+
+    #[test]
+    fn musical_durations_follow_the_tempo_of_the_sections_they_cross() {
+        let tempo = Tempo::new(120.0);
+        let quick = Tempo { bpm: 240.0, beats_per_bar: 4.0 };
+        let waltz = Tempo { bpm: 120.0, beats_per_bar: 3.0 };
+        let s = Schedule::new(tempo, vec![], &[], &[(4.0, quick), (5.0, waltz)], &[]);
+        // two bars at 120bpm are 4s, the next bar at 240bpm is 1s
+        assert!((s.seconds_from(0.0, Time::Bars(3.0)) - 5.0).abs() < 1e-9);
+        // starting in the quick section, four beats take a second
+        assert!((s.seconds_from(4.0, Time::Beats(4.0)) - 1.0).abs() < 1e-9);
+        // a bar of 3/4 at 120bpm is 1.5s, so 2.5 bars from the start are 4s + 1s (one quick bar) + 0.5 bar of 3/4
+        assert!((s.seconds_from(0.0, Time::Bars(3.5)) - 5.75).abs() < 1e-9);
+        assert_eq!(s.seconds_from(1.0, Time::Seconds(2.5)), 2.5);
+    }
 
     fn schedule(body: &str) -> Schedule {
         let src = format!("{STAGE}{body}");

@@ -128,4 +128,6 @@ pub struct Arrangement {
     pub actions: Vec<Scheduled>,
     /// Where each section's own tempo and meter begin, in seconds. Empty if the piece has just the file's.
     pub tempos: Vec<(f64, niminal_score::Tempo)>,
+    /// Envelopes moving track parameters over the piece: the control's name (`bass::tone`) and the shape.
+    pub lanes: Vec<(String, EnvLane)>,
 }

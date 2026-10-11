@@ -162,7 +162,17 @@ pub struct ArrangementDecl {
     pub tempos: Option<Vec<Expr>>,
     /// `meter: [4/4 7/8]`: the meter of each section.
     pub meters: Option<Vec<Expr>>,
+    /// `bass.tone: env[...]`: a track's parameter, moved over the whole piece.
+    pub lanes: Vec<ArrangementLane>,
     pub span: Span,
+}
+
+/// `bass.tone: env[800hz 8bars 3khz]` in an arrangement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrangementLane {
+    pub track: Ident,
+    pub param: Ident,
+    pub value: EnvLit,
 }
 
 /// One scene in an arrangement, and how long it lasts.

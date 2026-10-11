@@ -487,14 +487,14 @@ The engine understands one score model, as data. Every notation and client produ
 
 - **Musical time** (beats and bars, through a tempo and meter map) or **absolute time** (seconds). Both can appear in one score.
 - **Positions** read as `bar 5 beat 3`; offsets as `1/8beat` or `250ms`.
-- **Tempo and meter are lanes** on the arrangement, so they can change and ramp over a piece. Built so far: a tempo and a meter for each section, as a list with one entry per section (a step at the section's start). Gradual change within a section (`env[...]`) and arrangement automation lanes are not built; clip envelope lanes are.
+- **Tempo and meter are lanes** on the arrangement, so they can change and ramp over a piece. Built so far: a tempo and a meter for each section, as a list with one entry per section (a step at the section's start). Gradual change within a section (`env[...]`) is not built. **Arrangement lanes** (`bass.tone: env[...]`) move a track's parameter over the whole piece, with the same literal and curves as a clip's envelope lane; bars and beats in them follow the tempo and meter of the sections they cross. They apply when an arrangement is rendered.
 
 ```
 arrangement song {
   sections: [dawn.over(16 bars) build.over(32 bars) theme.over(24 bars) dissolve.over(16 bars)]
-  tempo:    env[84bpm (64 bars) 84bpm (8 bars).log 96bpm]
+  tempo:    env[84bpm 64bars 84bpm 8bars.log 96bpm]   // not built: tempo changes are per section for now
   meter:    [4/4 4/4 7/8 4/4].per_section
-  space.width: env[0.2 (88 bars) 1.0]
+  bass.tone: env[800hz 88bars 3khz]                    // a parameter of `track bass(tone: hz = ..)`
 }
 ```
 
