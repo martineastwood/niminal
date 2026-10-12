@@ -151,6 +151,30 @@ pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
     compile_with(source, &CompileOptions::default())
 }
 
+/// The instruments compiled so far, and the names of ones that failed (so a second use of the name is still reported).
+#[derive(Default)]
+struct Defined<'a> {
+    instruments: Vec<Instrument>,
+    failed: Vec<&'a str>,
+}
+
+impl<'a> Defined<'a> {
+    fn add(&mut self, name: &'a Ident, errors: &mut Vec<Diagnostic>, compile: impl FnOnce() -> Result<Instrument, Diagnostic>) {
+        let name_text = name.name.as_str();
+        if self.instruments.iter().any(|i| i.name == name_text) || self.failed.contains(&name_text) {
+            errors.push(Diagnostic::new(format!("`{name_text}` is defined twice"), name.span));
+            return;
+        }
+        match compile() {
+            Ok(i) => self.instruments.push(i),
+            Err(d) => {
+                errors.push(d);
+                self.failed.push(name_text);
+            }
+        }
+    }
+}
+
 pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
     let mut items = desugar(parser::parse(source).map_err(|d| vec![d])?);
     let mut errors = Vec::new();
@@ -249,56 +273,25 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
     }
 
-    let mut instruments: Vec<Instrument> = Vec::new();
-    let mut failed: Vec<&str> = Vec::new();
+    let mut defined = Defined::default();
     let mut samples_state = SampleState::default();
     for item in &items {
         let Item::Instr(def) = item else { continue };
-        let name = def.name.name.as_str();
-        if instruments.iter().any(|i| i.name == name) || failed.contains(&name) {
-            errors.push(Diagnostic::new(format!("instrument `{name}` is defined twice"), def.name.span));
-            continue;
-        }
-        match compile_instr(def, tempo, &registry, &names).and_then(|mut i| voice_options(def, &mut i, &mut samples_state).map(|()| i)) {
-            Ok(i) => instruments.push(i),
-            Err(d) => {
-                errors.push(d);
-                failed.push(name);
-            }
-        }
+        defined.add(&def.name, &mut errors, || {
+            compile_instr(def, tempo, &registry, &names).and_then(|mut i| voice_options(def, &mut i, &mut samples_state).map(|()| i))
+        });
     }
-
     for item in &items {
         let Item::MidiOut(decl) = item else { continue };
-        let name = decl.name.name.as_str();
-        if instruments.iter().any(|i| i.name == name) || failed.contains(&name) {
-            errors.push(Diagnostic::new(format!("`{name}` is defined twice"), decl.name.span));
-            continue;
-        }
-        match crate::lower::compile_midi_out(decl, &names) {
-            Ok(i) => instruments.push(i),
-            Err(d) => {
-                errors.push(d);
-                failed.push(name);
-            }
-        }
+        defined.add(&decl.name, &mut errors, || crate::lower::compile_midi_out(decl, &names));
     }
-
     for item in &items {
         let Item::Sample(decl) = item else { continue };
-        let name = decl.name.name.as_str();
-        if instruments.iter().any(|i| i.name == name) || failed.contains(&name) {
-            errors.push(Diagnostic::new(format!("`{name}` is defined twice"), decl.name.span));
-            continue;
-        }
-        match compile_sample(decl, &options.samples, tempo, &registry, &names, &mut samples_state) {
-            Ok(i) => instruments.push(i),
-            Err(d) => {
-                errors.push(d);
-                failed.push(name);
-            }
-        }
+        defined.add(&decl.name, &mut errors, || {
+            compile_sample(decl, &options.samples, tempo, &registry, &names, &mut samples_state)
+        });
     }
+    let Defined { instruments, mut failed } = defined;
 
     // Track 0 plays bare instruments, so it may send to any bus an instrument does.
     let implicit = TrackInfo {
@@ -1130,7 +1123,7 @@ saw_lead(freq: a3) for 1beat
         assert_eq!(msg("instr a() { x = 0.5 }"), "an instrument must end with the signal it outputs");
         assert_eq!(msg("instr a() { 0.5\n0.5 }"), "this value is never used");
         assert_eq!(msg("instr a(f: hz, f: hz) { 0.5 }"), "parameter `f` is declared twice");
-        assert_eq!(msg("instr a() { 0.5 }\ninstr a() { 0.5 }"), "instrument `a` is defined twice");
+        assert_eq!(msg("instr a() { 0.5 }\ninstr a() { 0.5 }"), "`a` is defined twice");
         assert_eq!(msg("instr a(b: 0..1 = 2) { b }"), "the default for `b` is outside 0..1");
         assert_eq!(msg("instr a(b: 1..0) { b }"), "the lower bound of a range must be below the upper bound");
     }

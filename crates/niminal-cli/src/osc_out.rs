@@ -3,14 +3,14 @@
 //! asked for. Nothing here is on the audio thread or logged: a replay does not send.
 
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::Ordering;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use niminal_lang::OscTap;
 
 use crate::audio::{Shared, lock};
+use crate::worker::Worker;
 
 /// An OSC message with one float argument.
 pub fn encode_osc(address: &str, value: f32) -> Vec<u8> {
@@ -79,35 +79,20 @@ fn key(tap: &OscTap) -> (String, String, u16) {
 }
 
 /// Sends the running project's `osc_out` signals until dropped.
-pub struct OscOutput {
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
-}
+pub struct OscOutput(#[allow(dead_code)] Worker);
 
 impl OscOutput {
     pub fn start(daemon: Shared) -> Result<OscOutput, String> {
         let mut sender = OscSender::new().map_err(|e| format!("can't send OSC: {e}"))?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
-        let thread = thread::spawn(move || {
-            while !flag.load(Ordering::Relaxed) {
+        Ok(OscOutput(Worker::spawn(move |stop| {
+            while !stop.load(Ordering::Relaxed) {
                 let taps = lock(&daemon).session().program().taps.clone();
                 if !taps.is_empty() {
                     sender.poll(&taps, Instant::now());
                 }
                 thread::sleep(Duration::from_millis(4));
             }
-        });
-        Ok(OscOutput { stop, thread: Some(thread) })
-    }
-}
-
-impl Drop for OscOutput {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        })))
     }
 }
 

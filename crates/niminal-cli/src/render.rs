@@ -192,7 +192,7 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
             match notes.get(next) {
                 None => {
                     ring_out(&mut mixer, &mut out, &options.input);
-                    let stems = collect_stems(program, &mut mixer, out[0].len());
+                    let stems = name_stems(program, mixer.take_stems(), out[0].len());
                     return Ok(finish(out, silenced_voices + mixer.take_silenced(), stems, options));
                 }
                 Some(n) => {
@@ -248,7 +248,12 @@ fn mix_block(mixer: &mut Mixer, out: &mut [Vec<f32>], frames: usize, input: &[Ve
 
 /// Keep mixing after the last voice has ended, until the tracks' effects have
 /// died away, then trim the trailing silence.
-fn ring_out(mixer: &mut Mixer, out: &mut [Vec<f32>], input: &[Vec<f32>]) {
+fn ring_out(mixer: &mut Mixer, out: &mut Vec<Vec<f32>>, input: &[Vec<f32>]) {
+    ring_out_with(out, |out| mix_block(mixer, out, BLOCK, input));
+}
+
+/// [`ring_out`] for any way of mixing `more` audio onto the end of `out`.
+fn ring_out_with(out: &mut Vec<Vec<f32>>, mut more: impl FnMut(&mut Vec<Vec<f32>>)) {
     let needed = (TAIL_SILENCE * SAMPLE_RATE as f32) as usize;
     let limit = out[0].len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
     let quiet_at = |out: &[Vec<f32>], i: usize| out.iter().all(|c| c[i].abs() < TAIL_THRESHOLD);
@@ -256,8 +261,8 @@ fn ring_out(mixer: &mut Mixer, out: &mut [Vec<f32>], input: &[Vec<f32>]) {
     let mut silent = (0..out[0].len()).rev().take_while(|&i| quiet_at(out, i)).count();
     while silent < needed && out[0].len() < limit {
         let start = out[0].len();
-        mix_block(mixer, out, BLOCK, input);
-        for i in start..start + BLOCK {
+        more(out);
+        for i in start..out[0].len() {
             silent = if quiet_at(out, i) { silent + 1 } else { 0 };
         }
     }
@@ -285,12 +290,8 @@ fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, stems: Vec<Stem>,
 
 /// The captured stems, named for their track or bus and cut to `len` samples. The track that plays
 /// bare instruments is left out if it was never heard.
-fn collect_stems(program: &Program, mixer: &mut Mixer, len: usize) -> Vec<Stem> {
-    let Some(captured) = mixer.take_stems() else { return Vec::new() };
-    name_stems(program, captured, len)
-}
-
-fn name_stems(program: &Program, captured: niminal_engine::Stems, len: usize) -> Vec<Stem> {
+fn name_stems(program: &Program, captured: Option<niminal_engine::Stems>, len: usize) -> Vec<Stem> {
+    let Some(captured) = captured else { return Vec::new() };
     let named = captured.tracks.into_iter().enumerate().map(|(i, c)| (program.tracks[i].name.clone(), c))
         .chain(captured.buses.into_iter().enumerate().map(|(i, c)| (program.buses[i].clone(), c)));
     let mut stems = Vec::new();
@@ -305,12 +306,6 @@ fn name_stems(program: &Program, captured: niminal_engine::Stems, len: usize) ->
         }
     }
     stems
-}
-
-/// The stems a session kept, named and cut to `len` samples like [`collect_stems`].
-fn collect_session_stems(session: &mut Session, len: usize) -> Vec<Stem> {
-    let Some(captured) = session.take_stems() else { return Vec::new() };
-    name_stems(session.program(), captured, len)
 }
 
 /// Write the channels as an interleaved 32-bit float WAV.
@@ -392,21 +387,11 @@ pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: 
     }
     session.hush().map_err(|_| RenderError("couldn't stop the piece".into()))?;
 
-    let needed = (TAIL_SILENCE * SAMPLE_RATE as f32) as usize;
-    let limit = out[0].len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
-    let quiet_at = |out: &[Vec<f32>], i: usize| out.iter().all(|c| c[i].abs() < TAIL_THRESHOLD);
-    let mut silent = (0..out[0].len()).rev().take_while(|&i| quiet_at(&out, i)).count();
-    while silent < needed && out[0].len() < limit {
-        let start = out[0].len();
-        run(&mut session, &mut out);
-        for i in start..out[0].len() {
-            silent = if quiet_at(&out, i) { silent + 1 } else { 0 };
-        }
-    }
-    let keep = out[0].len() - silent;
-    out.iter_mut().for_each(|c| c.truncate(keep));
+    ring_out_with(&mut out, |out| run(&mut session, out));
+    let keep = out[0].len();
     let silenced = session.take_silenced();
-    let kept = collect_session_stems(&mut session, keep);
+    let captured = session.take_stems();
+    let kept = name_stems(session.program(), captured, keep);
     Ok(finish(out, silenced, kept, &RenderOptions { limiter, ..Default::default() }))
 }
 

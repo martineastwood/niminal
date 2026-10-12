@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use niminal_cli::audio::{NullClock, Output, Shared, lock};
 use niminal_cli::live::{DEFAULT_SAMPLE_RATE, layout_for, render_error, render_problems, replay};
 use niminal_cli::render::{End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav};
@@ -21,89 +21,95 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Args)]
+struct RenderArgs {
+    /// The .nml source to render.
+    #[arg(required_unless_present = "replay", conflicts_with = "replay")]
+    file: Option<PathBuf>,
+    /// An `arrangement` in the file to render, in place of its `play` and `launch` commands.
+    #[arg(requires = "file")]
+    arrangement: Option<String>,
+    /// A .nms score whose events are played on the file's instruments.
+    #[arg(long, requires = "file")]
+    score: Option<PathBuf>,
+    /// A WAV file, or with `--stems` a folder.
+    #[arg(long)]
+    out: PathBuf,
+    /// Write a file for every track and bus as well as the mix, into the folder given by `--out`.
+    #[arg(long, requires = "file", conflicts_with = "replay")]
+    stems: bool,
+    /// A WAV file for tracks that read `input(..)` to hear. The render lasts as long as it does,
+    /// unless `--bars` or `--seconds` says otherwise.
+    #[arg(long, requires = "file", conflicts_with = "replay")]
+    input: Option<PathBuf>,
+    /// Turn off the master limiter (offline renders only).
+    #[arg(long)]
+    no_limiter: bool,
+    /// Render this many bars of a piece that plays until stopped.
+    #[arg(long, conflicts_with = "seconds", requires = "file")]
+    bars: Option<f64>,
+    /// Render this many seconds of a piece that plays until stopped.
+    #[arg(long, requires = "file")]
+    seconds: Option<f64>,
+    /// Start the audio at this position, such as `bar 64` (an arrangement or timeline).
+    #[arg(long, requires = "file")]
+    from: Option<String>,
+    /// Stop starting notes at this position, such as `bar 80`. Their tails still ring out.
+    #[arg(long, requires = "file", conflicts_with_all = ["bars", "seconds"])]
+    to: Option<String>,
+    /// Re-render a live set from the log a daemon recorded with `--log`.
+    #[arg(long)]
+    replay: Option<PathBuf>,
+    /// The channels of the daemon that recorded the log.
+    #[arg(long, default_value_t = 2, requires = "replay")]
+    channels: u16,
+}
+
+#[derive(Args)]
+struct DaemonArgs {
+    /// A project to load, and to load again whenever it is saved.
+    file: Option<PathBuf>,
+    #[arg(long, default_value_t = 7400)]
+    port: u16,
+    /// Output channels: 1, 2 (stereo), 4, 6 (5.1) or 8 (7.1).
+    #[arg(long, default_value_t = 2)]
+    channels: u16,
+    #[arg(long)]
+    sample_rate: Option<u32>,
+    /// Run without a sound card, at real speed, throwing the audio away.
+    #[arg(long)]
+    no_audio: bool,
+    /// Record everything sent to the session here, to replay later. By default
+    /// it goes in `~/.niminal/sessions`.
+    #[arg(long)]
+    log: Option<PathBuf>,
+    /// Don't record the session.
+    #[arg(long, conflicts_with = "log")]
+    no_log: bool,
+    /// Require clients to give this token when they say hello.
+    #[arg(long)]
+    token: Option<String>,
+    /// The address to listen on. Only local addresses are accepted for now.
+    #[arg(long, default_value = "127.0.0.1")]
+    listen: IpAddr,
+    /// Take MIDI control changes from every input whose name contains this
+    /// (give an empty name for all inputs), for `ctl x = midi.cc(n)`.
+    #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
+    midi: Option<String>,
+    /// Take OSC over UDP on this local port, for `ctl x = osc_in("/address")`.
+    #[arg(long, value_name = "PORT")]
+    osc_port: Option<u16>,
+    /// Listen to the default audio input device, for tracks that read `input(1)`.
+    #[arg(long)]
+    audio_input: bool,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Render a niminal file to a WAV file, or replay a recorded live session.
-    Render {
-        /// The .nml source to render.
-        #[arg(required_unless_present = "replay", conflicts_with = "replay")]
-        file: Option<PathBuf>,
-        /// An `arrangement` in the file to render, in place of its `play` and `launch` commands.
-        #[arg(requires = "file")]
-        arrangement: Option<String>,
-        /// A .nms score whose events are played on the file's instruments.
-        #[arg(long, requires = "file")]
-        score: Option<PathBuf>,
-        /// A WAV file, or with `--stems` a folder.
-        #[arg(long)]
-        out: PathBuf,
-        /// Write a file for every track and bus as well as the mix, into the folder given by `--out`.
-        #[arg(long, requires = "file", conflicts_with = "replay")]
-        stems: bool,
-        /// A WAV file for tracks that read `input(..)` to hear. The render lasts as long as it does,
-        /// unless `--bars` or `--seconds` says otherwise.
-        #[arg(long, requires = "file", conflicts_with = "replay")]
-        input: Option<PathBuf>,
-        /// Turn off the master limiter (offline renders only).
-        #[arg(long)]
-        no_limiter: bool,
-        /// Render this many bars of a piece that plays until stopped.
-        #[arg(long, conflicts_with = "seconds", requires = "file")]
-        bars: Option<f64>,
-        /// Render this many seconds of a piece that plays until stopped.
-        #[arg(long, requires = "file")]
-        seconds: Option<f64>,
-        /// Start the audio at this position, such as `bar 64` (an arrangement or timeline).
-        #[arg(long, requires = "file")]
-        from: Option<String>,
-        /// Stop starting notes at this position, such as `bar 80`. Their tails still ring out.
-        #[arg(long, requires = "file", conflicts_with_all = ["bars", "seconds"])]
-        to: Option<String>,
-        /// Re-render a live set from the log a daemon recorded with `--log`.
-        #[arg(long)]
-        replay: Option<PathBuf>,
-        /// The channels of the daemon that recorded the log.
-        #[arg(long, default_value_t = 2, requires = "replay")]
-        channels: u16,
-    },
+    Render(RenderArgs),
     /// Run the live daemon: plays sound, and takes code over a WebSocket.
-    Daemon {
-        /// A project to load, and to load again whenever it is saved.
-        file: Option<PathBuf>,
-        #[arg(long, default_value_t = 7400)]
-        port: u16,
-        /// Output channels: 1, 2 (stereo), 4, 6 (5.1) or 8 (7.1).
-        #[arg(long, default_value_t = 2)]
-        channels: u16,
-        #[arg(long)]
-        sample_rate: Option<u32>,
-        /// Run without a sound card, at real speed, throwing the audio away.
-        #[arg(long)]
-        no_audio: bool,
-        /// Record everything sent to the session here, to replay later. By default
-        /// it goes in `~/.niminal/sessions`.
-        #[arg(long)]
-        log: Option<PathBuf>,
-        /// Don't record the session.
-        #[arg(long, conflicts_with = "log")]
-        no_log: bool,
-        /// Require clients to give this token when they say hello.
-        #[arg(long)]
-        token: Option<String>,
-        /// The address to listen on. Only local addresses are accepted for now.
-        #[arg(long, default_value = "127.0.0.1")]
-        listen: IpAddr,
-        /// Take MIDI control changes from every input whose name contains this
-        /// (give an empty name for all inputs), for `ctl x = midi.cc(n)`.
-        #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
-        midi: Option<String>,
-        /// Take OSC over UDP on this local port, for `ctl x = osc_in("/address")`.
-        #[arg(long, value_name = "PORT")]
-        osc_port: Option<u16>,
-        /// Listen to the default audio input device, for tracks that read `input(1)`.
-        #[arg(long)]
-        audio_input: bool,
-    },
+    Daemon(DaemonArgs),
     /// Run the language server (LSP over stdin and stdout) for an editor.
     Lsp,
     /// Print the built-in opcode reference as Markdown, for the docs site.
@@ -137,25 +143,22 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Render { file: Some(file), arrangement, score, out, stems, input, no_limiter, bars, seconds, from, to, .. } => {
-            run_render(&file, arrangement, score.as_deref(), &out, stems, input.as_deref(), no_limiter, bars, seconds, from.as_deref(), to.as_deref())
-        }
-        Command::Render { replay: Some(log), out, no_limiter, channels, .. } => {
-            run_replay(&log, &out, channels, no_limiter)
-        }
-        Command::Render { .. } => Err("error: give a file to render, or --replay a log".into()),
-        Command::Daemon { file, port, channels, sample_rate, no_audio, log, no_log, token, listen, midi, osc_port, audio_input } => {
+        Command::Render(args) => match (&args.file, &args.replay) {
+            (Some(_), _) => run_render(args),
+            (None, Some(log)) => run_replay(log, &args.out, args.channels, args.no_limiter),
+            (None, None) => Err("error: give a file to render, or --replay a log".into()),
+        },
+        Command::Daemon(mut args) => {
             install_crash_log();
-            let log = log.or_else(|| {
-                if no_log {
-                    return None;
-                }
-                let dir = state_dir()?.join("sessions");
-                prune_sessions(&dir, 20);
-                let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-                Some(dir.join(format!("{now}.log")))
-            });
-            run_daemon(file.as_deref(), port, channels, sample_rate, no_audio, log.as_deref(), token, listen, midi.as_deref(), osc_port, audio_input)
+            if args.log.is_none() && !args.no_log {
+                args.log = state_dir().map(|state| {
+                    let dir = state.join("sessions");
+                    prune_sessions(&dir, 20);
+                    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                    dir.join(format!("{now}.log"))
+                });
+            }
+            run_daemon(args)
         }
         Command::Lsp => {
             let code = niminal_lsp::run(std::io::stdin().lock(), std::io::stdout().lock());
@@ -241,20 +244,11 @@ fn position_seconds(text: &str, bar_seconds: f64) -> Result<f64, String> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_render(
-    file: &Path,
-    arrangement: Option<String>,
-    score: Option<&Path>,
-    out: &Path,
-    stems: bool,
-    input: Option<&Path>,
-    no_limiter: bool,
-    bars: Option<f64>,
-    seconds: Option<f64>,
-    from: Option<&str>,
-    to: Option<&str>,
-) -> Result<(), String> {
+fn run_render(args: RenderArgs) -> Result<(), String> {
+    let RenderArgs { file, arrangement, score, out, stems, input, no_limiter, bars, seconds, from, to, .. } = args;
+    let file = file.as_deref().expect("a file is given");
+    let (score, input, from, to) = (score.as_deref(), input.as_deref(), from.as_deref(), to.as_deref());
+    let out = out.as_path();
     let source = read(file)?;
     let name = file.display().to_string();
     let options = niminal_lang::CompileOptions {
@@ -361,20 +355,9 @@ fn run_replay(log: &Path, out: &Path, channels: u16, no_limiter: bool) -> Result
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_daemon(
-    file: Option<&Path>,
-    port: u16,
-    channels: u16,
-    sample_rate: Option<u32>,
-    no_audio: bool,
-    log: Option<&Path>,
-    token: Option<String>,
-    listen: IpAddr,
-    midi: Option<&str>,
-    osc_port: Option<u16>,
-    audio_input: bool,
-) -> Result<(), String> {
+fn run_daemon(args: DaemonArgs) -> Result<(), String> {
+    let DaemonArgs { file, port, channels, sample_rate, no_audio, log, token, listen, midi, osc_port, audio_input, .. } = args;
+    let (file, log, midi) = (file.as_deref(), log.as_deref(), midi.as_deref());
     let layout = layout_for(channels)?;
     let output = if no_audio { None } else { Some(Output::open(channels, sample_rate)?) };
     let rate = output.as_ref().map(Output::sample_rate).or(sample_rate).unwrap_or(DEFAULT_SAMPLE_RATE);

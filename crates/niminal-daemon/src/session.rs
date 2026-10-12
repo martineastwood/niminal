@@ -266,26 +266,16 @@ impl EvalJob {
         let mut deferred = Vec::new();
         let mut notices = Vec::new();
         for p in waiting {
-            match prepare_pending(&self.config, p.id, p.lands_at, &p.snippet, p.statements.clone(), &project, &playing) {
-                Ok(mut next) => {
-                    project = next.project.clone();
-                    playing = next.playing.clone();
-                    next.group = p.group;
-                    queue.push(next);
-                }
+            match prepare_next(&self.config, &p, p.lands_at, &mut project, &mut playing) {
+                Ok(next) => queue.push(next),
                 // A transaction can refer to definitions waiting for a later
                 // boundary. Keep it together and move it after those definitions.
                 Err(_) => deferred.push(p),
             }
         }
         for p in deferred {
-            match prepare_pending(&self.config, p.id, latest, &p.snippet, p.statements.clone(), &project, &playing) {
-                Ok(mut next) => {
-                    project = next.project.clone();
-                    playing = next.playing.clone();
-                    next.group = p.group;
-                    queue.push(next);
-                }
+            match prepare_next(&self.config, &p, latest, &mut project, &mut playing) {
+                Ok(next) => queue.push(next),
                 Err(problems) if is_new(p.id) => return Err(problems),
                 Err(_) => notices.push(format!("change {} was dropped: a newer pending write invalidated it", p.id)),
             }
@@ -326,14 +316,8 @@ impl CancelJob {
         let group = self.id.and_then(|id| self.waiting.iter().find(|p| p.id == id).and_then(|p| p.group).or(Some(id)));
         for p in &self.waiting {
             if self.id.is_none_or(|id| id == p.id) || (p.group.is_some() && p.group == group) { dropped += 1; continue; }
-            match prepare_pending(&self.config, p.id, p.lands_at, &p.snippet,
-                                  p.statements.clone(), &project, &playing) {
-                Ok(mut next) => {
-                    project = next.project.clone();
-                    playing = next.playing.clone();
-                    next.group = p.group;
-                    queue.push(next);
-                }
+            match prepare_next(&self.config, p, p.lands_at, &mut project, &mut playing) {
+                Ok(next) => queue.push(next),
                 Err(_) => {
                     dropped += 1;
                     notices.push(format!("change {} was dropped: it depended on a change that was cancelled", p.id));
@@ -476,6 +460,15 @@ pub struct Session {
 
 #[path = "realtime.rs"]
 pub mod realtime;
+
+/// Compile a waiting change on top of the running `project` and `playing`, which become what it leaves behind.
+fn prepare_next(cfg: &PrepareConfig, p: &Waiting, lands_at: u64, project: &mut Project, playing: &mut BTreeMap<String, Playing>) -> Result<Pending, Vec<Problem>> {
+    let mut next = prepare_pending(cfg, p.id, lands_at, &p.snippet, p.statements.clone(), project, playing)?;
+    *project = next.project.clone();
+    *playing = next.playing.clone();
+    next.group = p.group;
+    Ok(next)
+}
 
 /// Compile everything `statements` will need when they land, against the
 /// project as it will be then (`base`, with `base_playing` running). This is
@@ -729,44 +722,40 @@ impl Session {
     pub fn begin_parsed(&mut self, input: ParsedEval) -> Begin {
         self.sync_realtime();
         let ParsedEval { source, quantize, parsed, uses } = input;
-        let (statements, fallback) = match parsed {
-            Ok(parsed) => parsed,
-            Err(problems) => {
-                self.log_eval(&source, quantize.as_deref());
-                return Begin::Done(Err(problems));
+        // a compile job logs itself when it finishes; one settled here is logged now
+        let settled = match parsed {
+            Err(problems) => Err(problems),
+            Ok((statements, _)) if statements.is_empty() => {
+                Ok(Accepted { id: None, lands_at: self.clock, position: self.grid().position(self.clock), changes: vec![] })
             }
+            Ok((mut statements, fallback)) => match self.expand_ramp(&mut statements) {
+                Ok(ramp) => return Begin::Job(self.job(source, uses, quantize, fallback, statements, ramp)),
+                Err(problems) => Err(problems),
+            },
         };
-        if statements.is_empty() {
-            let nothing = Accepted { id: None, lands_at: self.clock, position: self.grid().position(self.clock), changes: vec![] };
-            self.log_eval(&source, quantize.as_deref());
-            return Begin::Done(Ok(nothing));
-        }
-        let mut statements = statements;
-        let ramp = match self.expand_ramp(&mut statements) {
-            Ok(ramp) => ramp,
-            Err(problems) => {
-                self.log_eval(&source, quantize.as_deref());
-                return Begin::Done(Err(problems));
-            }
-        };
+        self.log_eval(&source, quantize.as_deref());
+        Begin::Done(settled)
+    }
+
+    /// An evaluation to compile against the session as it is now.
+    fn job(&self, source: String, uses: Option<Arc<Uses>>, quantize: Option<String>, fallback: Option<Quantize>,
+           statements: Vec<Statement>, ramp: Vec<(u64, Statement)>) -> Box<EvalJob> {
         let (base, playing) = self.projected();
-        Begin::Job(Box::new(EvalJob {
-            source,
-            uses,
-            quantize,
-            fallback,
-            statements: statements.clone(),
-            ramp,
-            base,
-            playing,
+        Box::new(EvalJob {
+            lands_at: self.landing(&statements, fallback),
+            source, uses, quantize, fallback, statements, ramp, base, playing,
             version: self.version,
             config: self.prepare_config(),
             committed: self.project.clone(),
             committed_playing: self.playing.clone(),
-            waiting: self.pending.iter().map(|p| Waiting { id: p.id, group: p.group, lands_at: p.lands_at,
-                snippet: p.snippet.clone(), statements: p.statements.clone() }).collect(),
-            lands_at: self.landing(&statements, fallback),
-        }))
+            waiting: self.waiting(),
+        })
+    }
+
+    /// The evaluations waiting to land, as a compile job sees them.
+    fn waiting(&self) -> Vec<Waiting> {
+        self.pending.iter().map(|p| Waiting { id: p.id, group: p.group, lands_at: p.lands_at,
+            snippet: p.snippet.clone(), statements: p.statements.clone() }).collect()
     }
 
     /// `tempo 124bpm @ next bar over 8 bars` becomes a tempo for each quarter beat on the way:
@@ -816,16 +805,8 @@ impl Session {
     pub fn retry_eval(&self, done: &EvalDone) -> Option<Box<EvalJob>> {
         let job = &done.job;
         if job.version == self.version { return None; }
-        let (base, playing) = self.projected();
-        Some(Box::new(EvalJob {
-            source: job.source.clone(), uses: job.uses.clone(), quantize: job.quantize.clone(), fallback: job.fallback,
-            statements: job.statements.clone(), ramp: job.ramp.clone(), base, playing, version: self.version,
-            config: self.prepare_config(), committed: self.project.clone(),
-            committed_playing: self.playing.clone(),
-            waiting: self.pending.iter().map(|p| Waiting { id: p.id, group: p.group, lands_at: p.lands_at,
-                snippet: p.snippet.clone(), statements: p.statements.clone() }).collect(),
-            lands_at: self.landing(&job.statements, job.fallback),
-        }))
+        Some(self.job(job.source.clone(), job.uses.clone(), job.quantize.clone(), job.fallback,
+            job.statements.clone(), job.ramp.clone()))
     }
 
     /// Queue a compiled transaction. The synchronous API retries inline;
@@ -899,9 +880,7 @@ impl Session {
 
     pub fn begin_cancel(&self, id: Option<u64>) -> Box<CancelJob> {
         Box::new(CancelJob { id, version: self.version, config: self.prepare_config(),
-            project: self.project.clone(), playing: self.playing.clone(),
-            waiting: self.pending.iter().map(|p| Waiting { id: p.id, group: p.group, lands_at: p.lands_at,
-                snippet: p.snippet.clone(), statements: p.statements.clone() }).collect() })
+            project: self.project.clone(), playing: self.playing.clone(), waiting: self.waiting() })
     }
 
     pub fn retry_cancel(&self, done: &CancelDone) -> Option<Box<CancelJob>> {

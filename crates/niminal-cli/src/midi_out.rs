@@ -4,13 +4,15 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 use std::time::Duration;
 
 use midir::{MidiOutput as Midir, MidiOutputConnection};
 use niminal_daemon::MidiEvent;
 use rtrb::Consumer;
+
+use crate::worker::Worker;
 
 /// Somewhere a MIDI message can be sent: a port, found by part of its name.
 pub trait Ports {
@@ -95,34 +97,19 @@ impl Ports for Devices {
 }
 
 /// Sends the notes of `midi_out` instruments until dropped.
-pub struct MidiOutput {
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
-}
+pub struct MidiOutput(#[allow(dead_code)] Worker);
 
 impl MidiOutput {
     /// `played` counts the samples the sound card has played; `incoming` brings the events.
     pub fn start(played: Arc<AtomicU64>, mut incoming: Consumer<MidiEvent>) -> MidiOutput {
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
-        let thread = thread::spawn(move || {
+        MidiOutput(Worker::spawn(move |stop| {
             let (mut pump, mut devices) = (Pump::default(), Devices::default());
-            while !flag.load(Ordering::Relaxed) {
+            while !stop.load(Ordering::Relaxed) {
                 pump.run(played.load(Ordering::Acquire), &mut incoming, &mut devices);
                 thread::sleep(Duration::from_millis(1));
             }
             pump.all_off(&mut devices);
-        });
-        MidiOutput { stop, thread: Some(thread) }
-    }
-}
-
-impl Drop for MidiOutput {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        }))
     }
 }
 

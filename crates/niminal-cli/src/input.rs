@@ -2,15 +2,14 @@
 //! Each message goes to the session as a logged control change, so a set replays.
 
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use midir::{MidiInput, MidiInputConnection};
 use niminal_daemon::ControlSignal;
 
 use crate::audio::{Shared, lock};
+use crate::worker::Worker;
 
 /// A control change (`1011nnnn 0ccccccc 0vvvvvvv`) or a key going down (`1001nnnn`) or up (`1000nnnn`).
 /// A key down with velocity 0 is a key up.
@@ -74,8 +73,7 @@ fn padded_string(bytes: &[u8]) -> Option<(&str, &[u8])> {
 /// Listens for OSC over UDP on this machine until dropped.
 pub struct OscInput {
     port: u16,
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    _worker: Worker,
 }
 
 impl OscInput {
@@ -84,12 +82,10 @@ impl OscInput {
             .map_err(|e| format!("can't listen for OSC on 127.0.0.1:{port}: {e}"))?;
         socket.set_read_timeout(Some(Duration::from_millis(100))).map_err(|e| e.to_string())?;
         let port = socket.local_addr().map_err(|e| e.to_string())?.port();
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
-        let thread = thread::spawn(move || {
+        let worker = Worker::spawn(move |stop| {
             let mut buffer = vec![0u8; 65_536];
             let mut messages = Vec::new();
-            while !flag.load(Ordering::Relaxed) {
+            while !stop.load(Ordering::Relaxed) {
                 let Ok(length) = socket.recv(&mut buffer) else { continue };
                 messages.clear();
                 parse_osc(&buffer[..length], &mut messages);
@@ -100,20 +96,11 @@ impl OscInput {
                 }
             }
         });
-        Ok(OscInput { port, stop, thread: Some(thread) })
+        Ok(OscInput { port, _worker: worker })
     }
 
     pub fn port(&self) -> u16 {
         self.port
-    }
-}
-
-impl Drop for OscInput {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
     }
 }
 
