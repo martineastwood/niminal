@@ -15,7 +15,7 @@ Mini-notation, grids, and envelopes share:
 | Comma | At the same time (chords, parallel parts, channels) |
 | `~` | Rest or note off |
 | `.` | Hold — notes sustain, values stay |
-| `x*2` | Repeat within the step |
+| `x*2`, `x/2` | Play the step twice as fast, or half as fast |
 | `[a [b c]]` | Nested brackets subdivide a step |
 | `<a b>` | Alternate one value per cycle |
 | `440hz`, `-6db` | Values carry units |
@@ -23,6 +23,19 @@ Mini-notation, grids, and envelopes share:
 ## Mini-notation
 
 Steps divide one cycle evenly (one bar by default). `[c2 g2 bb2 f2]` is four steps per cycle; `.over(2 bars)` stretches a cycle.
+
+| Write | Meaning |
+| --- | --- |
+| `a*2`, `a/2` | Twice as fast, half as fast. A number or a pattern: `a*<2 3>`, `a*[2 4]` |
+| `a!3`, `a!`, `a b !` | Repeat a step (`a!` is `a a`; a lone `!` repeats the step before it) |
+| `a@3` | Make a step three steps long: `[a@3 b]` gives `a` three quarters |
+| `a(3,8)`, `a(3,8,2)` | Spread hits Euclidean-style, with an optional rotation. The numbers can be patterns: `a(<3 5>,8)`. A negative count swaps hits and rests |
+| `a?`, `a?0.3` | Drop the step at random (half the time, or that chance). Each `?` chooses differently, the same way every time |
+| `[a \| b \| c]` | Pick one each cycle, at random |
+| `<a b, c d e>` | Several alternations at once |
+| `<a@2 b>`, `<a!2 b>` | A step can last, or repeat, over cycles |
+| `{a b c}%4` | Polymeter: read the list four steps a cycle, carrying on where it left off (`%` is optional: the first list sets the pace). `{a b, x y z}` squeezes each list to that pace; `%` can be a pattern |
+| `~` | A rest, which can take `@` and `!` too |
 
 ## Grids
 
@@ -77,31 +90,59 @@ Every event accepts:
 
 ## Pattern operations
 
+Numbers in `fast`, `slow`, `every`, `repeat_each`, `euclid` and `rotate` can be patterns: `fast([<1 2>])`, `euclid(hits: [<3 5>], steps: 8)`. A pattern in an argument is written in brackets.
+
 | Tidal | niminal | What it does |
 | --- | --- | --- |
 | `fast`, `slow` | `fast(2)`, `slow(2)` | Change speed |
 | `rev` | `reverse` | Play each cycle backwards |
 | `<~`, `~>` | `shift(1/8 beat)` | Move earlier or later |
 | `every` | `every(4, it.reverse)` | Change every nth cycle |
-| `sometimesBy` | `sometimes(chance: 25%, it.fast(2))` | Random changes |
+| `sometimesBy` | `sometimes(25%, it.fast(2))` | Change a random share of the notes |
 | `degradeBy` | `thin(20%)` | Randomly drop events |
 | `euclid` | `euclid(hits: 5, steps: 8)` | Evenly spaced hits |
 | `superimpose`, `off` | `layer(after: 1/8 beat, it.transpose(+12st))` | Delayed copy |
-| `jux` | `left_right(it.reverse)` | Original L, changed R |
 | `struct` | `rhythm(grid[x..x ..x.])` | Values to a rhythm |
 | `ply` | `repeat_each(2)` | Repeat every event |
-| `swingBy` | `swing(amount: 20%, every: 1/8 beat)` | Swing |
-| `within` | `within(0%..50%, it.fast(2))` | Change part of cycle |
-| `shuffle`, `scramble` | `shuffle(4)`, `pick_random(4)` | Rearrange |
-| `iter` | `rotate(4)` | Rotate start each cycle |
-| `chunk` | `in_turn(4, it.fast(2))` | Change each part in turn |
+| `swingBy` | `swing(amount: 20%, every: 1/8)` | Delay every other slot by a share of the slot |
+| `within` | `within(0%, 50%, it.fast(2))` | Change the part of the cycle between two points |
+| `shuffle` | `shuffle(4)` | Play the four parts in a new order each cycle, each once |
+| `scramble` | `pick_random(4)` | Fill each of four slots with a random part |
+| `iter` | `rotate(4)` | Start a quarter later each cycle |
+| `chunk` | `in_turn(4, it.fast(2))` | Change one quarter per cycle, in turn |
 | `mask` | `mask(grid[x.x. xxxx])` | Silence where mask empty |
-| `fix` | `where(it.freq < c3, it.gain(-6db))` | Change matching events |
-| `segment` | `to_steps(16)` | Signal → steps |
-| `chop`, `striate` | `chop(16)`, `interleave_chops(16)` | Cut sample events |
-| `linger` | `repeat_start(25%)` | Loop start of cycle |
-| `inv` | `invert` | Swap hits and rests |
+| `segment` | `to_steps(16)` | Read a signal 16 times a cycle |
+| `linger` | `repeat_start(25%)` | Loop the start of the cycle |
+| `inv` | `grid[x.x.].invert` | Swap hits and rests in a grid |
+| `palindrome` | `palindrome` | Forwards one cycle, backwards the next |
+| (none) | `set(bright: 0.9)` | Give a clip lanes in place of its own |
+
+Random operations take an optional `seed`, as in `thin(20%, seed: 2)`; a different seed chooses differently.
+
+Not built yet: `left_right` (`jux`; there is no pan lane), `where` (`fix`; clips have no per-note expressions), and `chop` / `interleave_chops` (cutting a sample event needs start and end points on sample playback).
+
+## Signals
+
+`sine`, `saw`, `tri`, `square`, `rand` and `perlin` are patterns with no events of their own: they have a value at every moment, from 0 to 1. Scale them with `range`, and use them as a clip lane (the value at each note's start) or cut them into steps with `to_steps`:
+
+```nml
+lead.play([c3 e3 g3 b3].set(bright: sine.range(0.2, 0.9)))
+cutoffs = saw.range(300hz, 3khz).to_steps(8)
+```
 
 ## Composition tools
 
-`in_scale`, `chord`, `arpeggiate`, `voice_lead`, `invert_melody`, `retrograde`, `markov`, `random_walk`, `palindrome`, and similar. Randomness is **seeded per cycle** so live and offline renders match.
+These work on note patterns. All randomness is **seeded per cycle**, so live and offline renders match.
+
+| Operation | What it does |
+| --- | --- |
+| `in_scale(minor, root: c3)` | Turn scale degrees (`0 1 2`, negatives and values past the octave too) into notes. Scales: `major`, `minor`, `harmonic_minor`, `melodic_minor`, `dorian`, `phrygian`, `lydian`, `mixolydian`, `locrian`, `major_pentatonic`, `minor_pentatonic`, `blues`, `whole_tone`, `chromatic` |
+| `chord(minor7)` | Turn each note into a chord: `major`, `minor`, `dim`, `aug`, `sus2`, `sus4`, `power`, `major6`, `minor6`, `major7`, `minor7`, `dom7`, `dim7`, `half_dim7`, `major9`, `minor9` |
+| `arpeggiate(up)` | Play a chord one note at a time over its length: `up`, `down`, `updown`, `downup`, `converge`, `diverge` |
+| `voice_lead` | Move each chord by octaves to sit as close as possible to the one before |
+| `invert_melody(around: c4)` | Mirror the notes around a note |
+| `markov` | Play the notes in a new order each cycle, each following what followed it in the original |
+| `random_walk(step: 2st)` | Wander from the first note, each up to `step` from the last |
+| `range(300hz, 3khz)` | Scale a 0 to 1 pattern or signal to a range |
+
+A reverse of a whole passage is `reverse`, so there is no separate `retrograde`.

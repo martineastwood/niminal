@@ -573,6 +573,8 @@ Mini-notation, grids and envelopes share these symbols, and the example clients 
 
 Steps divide one cycle evenly (one bar by default). `[c2 g2 bb2 f2]` is four steps per cycle; `.over(2 bars)` stretches a cycle.
 
+Beyond the shared symbols: `a*2` and `a/2` change a step's speed (a number or a pattern, `a*<2 3>`); `a!3` repeats a step and `a@3` makes it three steps long; `a(3,8,2)` spreads hits Euclidean-style (negative counts swap hits and rests); `a?` and `a?0.3` drop a step at random; `[a | b]` picks one at random each cycle; `<a b, c d e>` runs several alternations at once; `{a b c}%4` is polymeter, lists of different lengths read at a shared step rate. Randomness is seeded, so the same code always plays the same way.
+
 ### Grids
 
 Each character is one step; spaces group steps for readability. `x` hit, `X` accent, `o` ghost, `.` rest.
@@ -633,15 +635,15 @@ Naming rules: say what it does; keep the accepted term when there is one; one na
 | `rev` | `reverse` | Play each cycle backwards |
 | `<~`, `~>` | `shift(1/8 beat)` | Move earlier or later |
 | `every` | `every(4, it.reverse)` | Change every nth cycle |
-| `sometimesBy` | `sometimes(chance: 25%, it.fast(2))` | Change random events |
+| `sometimesBy` | `sometimes(25%, it.fast(2))` | Change a random share of the notes |
 | `degradeBy` | `thin(20%)` | Randomly drop events |
 | `euclid` | `euclid(hits: 5, steps: 8)` | Spread hits evenly |
 | `superimpose`, `off` | `layer(after: 1/8 beat, it.transpose(+12st))` | Add a (delayed) transformed copy |
 | `jux` | `left_right(it.reverse)` | Original left, changed copy right |
 | `struct` | `rhythm(grid[x..x ..x.])` | Play values to a rhythm |
 | `ply` | `repeat_each(2)` | Repeat every event |
-| `swingBy` | `swing(amount: 20%, every: 1/8 beat)` | Delay every other subdivision |
-| `within` | `within(0%..50%, it.fast(2))` | Change part of the cycle |
+| `swingBy` | `swing(amount: 20%, every: 1/8)` | Delay every other slot by a share of the slot |
+| `within` | `within(0%, 50%, it.fast(2))` | Change part of the cycle |
 | `shuffle`, `scramble` | `shuffle(4)`, `pick_random(4)` | Rearrange parts |
 | `iter` | `rotate(4)` | Start one part later each cycle |
 | `chunk` | `in_turn(4, it.fast(2))` | Change each part in turn |
@@ -650,12 +652,12 @@ Naming rules: say what it does; keep the accepted term when there is one; one na
 | `segment` | `to_steps(16)` | Turn a signal into steps |
 | `chop`, `striate` | `chop(16)`, `interleave_chops(16)` | Cut sample events |
 | `linger` | `repeat_start(25%)` | Loop the start of each cycle |
-| `inv` | `invert` | Swap hits and rests |
+| `inv` | `grid[x.x.].invert` | Swap hits and rests in a grid |
 | (none) | `set(bright: 0.9)` | Give a clip lanes in place of its own |
 
 ### Composition tools
 
-Deliberate tools for writing, not random generators: `in_scale(minor, root: c3)`, `chord(minor7)`, `arpeggiate(up)`, `voice_lead(...)`, `invert_melody`, `retrograde`, `markov(...)`, `random_walk(...)`, `palindrome`. All randomness is seeded per cycle, so renders are reproducible and code sounds the same live and offline.
+Deliberate tools for writing, not random generators: `in_scale(minor, root: c3)`, `chord(minor7)`, `arpeggiate(up)`, `voice_lead`, `invert_melody(around: c4)`, `markov`, `random_walk(step: 2st)`, `palindrome` (reversing a passage is `reverse`). Signals (`sine`, `saw`, `tri`, `square`, `rand`, `perlin`) have a value at every moment; `range` scales them and `to_steps` cuts them into steps. Not built yet: `left_right` (needs a pan lane), `where` (needs per-note expressions in clips) and `chop`/`interleave_chops` (need start and end points on sample playback). All randomness is seeded per cycle, so renders are reproducible and code sounds the same live and offline.
 
 ### Example clients
 

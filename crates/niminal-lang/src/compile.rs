@@ -1587,6 +1587,88 @@ track pad { instrument = pluck }
         Value::Note(m)
     }
 
+    fn values_of(src: &str, cycles: i64) -> Vec<Value> {
+        notes_of(src, cycles).into_iter().map(|e| e.1).collect()
+    }
+
+    #[test]
+    fn mini_notation_has_weights_repeats_polymeter_and_euclid() {
+        assert_eq!(values_of("lead.play([c4!2 e4])", 1), [midi(60), midi(60), midi(64)]);
+        assert_eq!(notes_of("lead.play([c4@3 e4])", 1)[1].0, r(3, 4));
+        assert_eq!(notes_of("lead.play([c4(3,8)])", 1).len(), 3);
+        assert_eq!(values_of("lead.play([{c4 e4 g4}%2])", 2), [midi(60), midi(64), midi(67), midi(60)]);
+        assert_eq!(notes_of("lead.play([c4/2 e4])", 2).len(), 3);
+    }
+
+    #[test]
+    fn numeric_arguments_can_be_patterns() {
+        assert_eq!(notes_of("lead.play([c4 e4].fast([<1 2>]))", 2).len(), 2 + 4);
+        assert_eq!(notes_of("lead.play([c4].euclid(hits: [<3 5>], steps: 8))", 2).len(), 8);
+        assert_eq!(notes_of("lead.play([c4 e4].every([<1 2>], it.fast(2)))", 2).len(), 4 + 2);
+        assert_eq!(notes_of("lead.play([c4].repeat_each([1 2]))", 1).len(), 2);
+    }
+
+    #[test]
+    fn new_pattern_operations() {
+        assert!(notes_of("lead.play([c4*8].sometimes(50%, it.fast(2)))", 8).len() > 64);
+        assert_eq!(values_of("lead.play([c4 e4 g4 b4].rotate(4))", 2)[4..], [midi(64), midi(67), midi(71), midi(60)]);
+        assert_eq!(values_of("lead.play([c4 e4 g4 b4].repeat_start(50%))", 1), [midi(60), midi(64), midi(60), midi(64)]);
+        assert_eq!(values_of("lead.play([c4 e4].palindrome)", 2), [midi(60), midi(64), midi(64), midi(60)]);
+        assert_eq!(notes_of("lead.play([c4 e4 g4 b4].within(0%, 50%, it.fast(2)))", 1).len(), 6);
+        let mut swung = notes_of("lead.play([c4*8].swing(amount: 25%, every: 1/4))", 1);
+        swung.sort_by_key(|e| e.0);
+        assert_eq!(swung[1].0, r(3, 16), "the second eighth of each quarter waits a quarter of a quarter");
+        let mut shuffled = values_of("lead.play([c4 e4 g4 b4].shuffle(4))", 1);
+        shuffled.sort_by(|a, b| format!("{a}").cmp(&format!("{b}")));
+        assert_eq!(shuffled.len(), 4);
+        assert_eq!(notes_of("lead.play([c4 e4 g4 b4].in_turn(4, it.fast(2)))", 1).len(), 5);
+        assert_eq!(notes_of("lead.play([c4 e4 g4 b4].pick_random(4))", 1).len(), 4);
+    }
+
+    #[test]
+    fn grids_invert() {
+        let hits = notes_of("lead.play([c4].rhythm(grid[x.x. x...].invert))", 1);
+        assert_eq!(hits.iter().map(|e| e.0).collect::<Vec<_>>(), [r(1, 8), r(3, 8), r(5, 8), r(3, 4), r(7, 8)]);
+        assert!(msg(&stage("lead.play([c4].invert)")).contains("`invert` works on grids"));
+    }
+
+    #[test]
+    fn signals_scale_and_sample_into_values() {
+        let v = notes_of("lead.play(saw.range(100hz, 200hz).to_steps(4))", 1);
+        assert_eq!(v.len(), 4);
+        let Value::Hz(h) = v[0].1 else { panic!() };
+        assert!((h - 112.5).abs() < 1e-9, "{h}");
+        let Value::Hz(h) = v[3].1 else { panic!() };
+        assert!((h - 187.5).abs() < 1e-9, "{h}");
+        assert!(msg(&stage("lead.play(sine.range(1hz, 2db))")).contains("same unit"));
+    }
+
+    #[test]
+    fn composition_tools() {
+        assert_eq!(values_of("lead.play([0 1 2 7].in_scale(minor, root: c3))", 1), [midi(48), midi(50), midi(51), midi(60)]);
+        assert_eq!(values_of("lead.play([-1].in_scale(major, root: c4))", 1), [midi(59)]);
+        let chord = notes_of("lead.play([c4].chord(minor7))", 1);
+        assert_eq!(chord.iter().map(|e| e.1).collect::<Vec<_>>().len(), 4);
+        assert!(chord.iter().all(|e| e.0 == r(0, 1)));
+        assert_eq!(values_of("lead.play([c4].chord(major).arpeggiate(up))", 1), [midi(60), midi(64), midi(67)]);
+        assert_eq!(values_of("lead.play([c4].chord(major).arpeggiate(updown))", 1), [midi(60), midi(64), midi(67), midi(64)]);
+        assert_eq!(values_of("lead.play([c4].chord(major).arpeggiate(converge))", 1), [midi(60), midi(67), midi(64)]);
+        assert_eq!(values_of("lead.play([c4 e4 g4].invert_melody(around: c4))", 1), [midi(60), midi(56), midi(53)]);
+        // the second chord is moved to sit by the first
+        let led = values_of("lead.play([[c4,e4,g4] [f4,a4,c5]].voice_lead)", 1);
+        assert_eq!(led.iter().filter(|v| matches!(v, Value::Note(m) if *m >= 72)).count(), 0, "{led:?}");
+        // markov and random_walk keep the rhythm and start where the source does
+        let m = notes_of("lead.play([c4 e4 g4 e4].markov)", 4);
+        assert_eq!(m.len(), 16);
+        assert_eq!(m[4].1, midi(60));
+        let w = values_of("lead.play([c4*8].random_walk(step: 2st))", 3);
+        assert_eq!(w[0], midi(60));
+        assert!(w.iter().all(|v| matches!(v, Value::Note(m) if (m - 60).abs() <= 24)));
+        assert!(w.iter().any(|v| *v != midi(60)));
+        assert!(msg(&stage("lead.play([0].in_scale(nonsense))")).contains("isn't a scale"));
+        assert!(msg(&stage("lead.play([c4].chord(nonsense))")).contains("isn't a chord"));
+    }
+
     #[test]
     fn a_pattern_of_notes_plays_on_a_track() {
         let p = ok(&stage("riff = [c4 ~ e4 g4]\nlead.play(riff)"));

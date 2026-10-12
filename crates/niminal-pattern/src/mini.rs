@@ -3,11 +3,14 @@
 //! Steps divide a cycle evenly. `~` is a rest, a lone `.` holds the previous
 //! step for another step's worth of time, `[a b]` squeezes a sequence into one
 //! step, a comma plays sequences at once (chords, parallel parts), `<a b>`
-//! plays one alternative per cycle, and `x*2` plays a step twice as fast.
+//! plays one alternative per cycle, `x*2` plays a step twice as fast and `x/2`
+//! half as fast, `x!3` repeats it, `x@3` makes it three steps long, `x(3,8)`
+//! spreads it Euclidean-style, `x?` drops it at random, `[a | b]` picks one
+//! each cycle and `{a b c}%4` reads lists of different lengths at four steps.
 
 use std::fmt;
 
-use crate::{Pattern, Rational};
+use crate::{Param, Pattern, Rational};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MiniError {
@@ -45,7 +48,8 @@ pub fn parse_with<T: Clone + Send + Sync + 'static>(
     convert: impl Fn(&str) -> Result<T, String>,
 ) -> Res<Pattern<T>> {
     let convert: &dyn Fn(&str) -> Result<T, String> = &convert;
-    let mut p = Parser { src, chars: src.char_indices().collect(), i: 0, depth: 0, convert };
+    let chars: Vec<(usize, char)> = src.char_indices().collect();
+    let mut p = Parser { src, chars: &chars, i: 0, depth: 0, seed: 0, convert };
     let pattern = p.stack(None)?;
     p.skip_space();
     match p.peek() {
@@ -56,12 +60,17 @@ pub fn parse_with<T: Clone + Send + Sync + 'static>(
 
 struct Parser<'a, T> {
     src: &'a str,
-    chars: Vec<(usize, char)>,
+    chars: &'a [(usize, char)],
     i: usize,
     /// How many brackets deep the parser is.
     depth: usize,
+    /// Counts the random choices (`?`, `|`) so each one chooses differently.
+    seed: u64,
     convert: &'a dyn Fn(&str) -> Result<T, String>,
 }
+
+/// Characters that end an atom.
+const ATOM_END: [char; 15] = ['[', ']', '<', '>', '{', '}', '(', ')', ',', '*', '?', '!', '@', '|', '/'];
 
 impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     fn peek(&self) -> Option<char> {
@@ -95,28 +104,56 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
         }
     }
 
-    /// Sequences separated by commas, played together, up to `close`.
-    fn stack(&mut self, close: Option<char>) -> Res<Pattern<T>> {
-        let mut layers = vec![self.sequence(close)?];
-        while self.peek() == Some(',') {
-            self.i += 1;
-            layers.push(self.sequence(close)?);
-        }
-        Ok(if layers.len() == 1 { layers.remove(0) } else { Pattern::stack(layers) })
+    fn next_seed(&mut self) -> u64 {
+        self.seed += 1;
+        0x4D49_4E49_0000 + self.seed
     }
 
-    /// Steps, one after another, until a comma, `close` or the end.
+    /// Sequences separated by commas (played together) or bars (one chosen at
+    /// random each cycle), up to `close`.
+    fn stack(&mut self, close: Option<char>) -> Res<Pattern<T>> {
+        let first = self.sequence(close)?;
+        match self.peek() {
+            Some(',') => {
+                let mut layers = vec![first];
+                while self.peek() == Some(',') {
+                    self.i += 1;
+                    layers.push(self.sequence(close)?);
+                }
+                if self.peek() == Some('|') {
+                    return Err(self.error("`,` and `|` can't be mixed here; put one inside brackets"));
+                }
+                Ok(Pattern::stack(layers))
+            }
+            Some('|') => {
+                let mut options = vec![first];
+                while self.peek() == Some('|') {
+                    self.i += 1;
+                    options.push(self.sequence(close)?);
+                }
+                if self.peek() == Some(',') {
+                    return Err(self.error("`,` and `|` can't be mixed here; put one inside brackets"));
+                }
+                let seed = self.next_seed();
+                Ok(Pattern::randcat(options, seed))
+            }
+            _ => Ok(first),
+        }
+    }
+
+    /// Steps, one after another, until a comma, bar, `close` or the end.
     fn sequence(&mut self, close: Option<char>) -> Res<Pattern<T>> {
+        Ok(Pattern::timecat(self.steps(close)?))
+    }
+
+    /// The steps of a sequence with the weight of each.
+    fn steps(&mut self, close: Option<char>) -> Res<Vec<(Rational, Pattern<T>)>> {
         let mut steps: Vec<(Rational, Pattern<T>)> = Vec::new();
         loop {
             self.skip_space();
             match self.peek() {
-                None | Some(',') => break,
+                None | Some(',' | '|') => break,
                 Some(c) if Some(c) == close => break,
-                Some('~') if self.ends_token(1) => {
-                    self.i += 1;
-                    steps.push((Rational::ONE, Pattern::silence()));
-                }
                 Some('.') if self.ends_token(1) => {
                     let Some(last) = steps.last_mut() else {
                         return Err(self.error("a `.` holds the step before it, but there isn't one"));
@@ -124,18 +161,56 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                     last.0 = last.0 + Rational::ONE;
                     self.i += 1;
                 }
+                Some('!') if self.ends_token(1) => {
+                    let Some(last) = steps.last().cloned() else {
+                        return Err(self.error("a `!` repeats the step before it, but there isn't one"));
+                    };
+                    steps.push(last);
+                    self.i += 1;
+                }
                 Some(_) => {
                     let term = self.term()?;
-                    steps.push((Rational::ONE, term));
+                    let mut weight = Rational::ONE;
+                    let mut copies = 1;
+                    loop {
+                        match self.peek() {
+                            Some('@') => {
+                                self.i += 1;
+                                let at = self.offset();
+                                let text = self.literal();
+                                weight = parse_factor(&text).filter(|w| *w > Rational::ZERO).ok_or(MiniError {
+                                    message: format!("`@` needs a number above 0, found `{text}`"),
+                                    offset: at,
+                                })?;
+                            }
+                            Some('!') => {
+                                self.i += 1;
+                                let at = self.offset();
+                                let text = self.literal();
+                                copies = if text.is_empty() {
+                                    copies + 1
+                                } else {
+                                    text.parse::<i64>().ok().filter(|n| (1..=MAX_REPEAT).contains(n)).ok_or(MiniError {
+                                        message: format!("`!` needs a whole number from 1 to {MAX_REPEAT}, found `{text}`"),
+                                        offset: at,
+                                    })?
+                                };
+                            }
+                            _ => break,
+                        }
+                    }
+                    for _ in 0..copies {
+                        steps.push((weight, term.clone()));
+                    }
                 }
             }
         }
-        Ok(Pattern::timecat(steps))
+        Ok(steps)
     }
 
     /// Does the token starting `n` characters ago end here?
     fn ends_token(&self, n: usize) -> bool {
-        self.peek_at(n).is_none_or(|c| c.is_whitespace() || matches!(c, ',' | ']' | '>'))
+        self.peek_at(n).is_none_or(|c| c.is_whitespace() || ATOM_END.contains(&c))
     }
 
     fn term(&mut self) -> Res<Pattern<T>> {
@@ -160,60 +235,181 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                 self.i += 1;
                 self.alternatives()?
             }
+            Some('{') => {
+                self.i += 1;
+                self.polymeter()?
+            }
+            Some('~') if self.ends_token(1) => {
+                self.i += 1;
+                Pattern::silence()
+            }
             Some('(') => self.grouped_atom()?,
-            Some(c @ (']' | '>')) => return Err(self.error(format!("unexpected `{c}`"))),
+            Some(c @ (']' | '>' | '}' | ')')) => return Err(self.error(format!("unexpected `{c}`"))),
             _ => self.atom()?,
         };
 
-        if self.peek() == Some('*') {
-            self.i += 1;
-            let start = self.offset();
-            let mut text = String::new();
-            while let Some(c) = self.peek().filter(|c| c.is_ascii_digit() || matches!(c, '.' | '/')) {
-                text.push(c);
-                self.i += 1;
+        loop {
+            match self.peek() {
+                Some(op @ ('*' | '/')) => {
+                    self.i += 1;
+                    let factor = self.number(op)?;
+                    term = factor.apply(&term, move |p, f| if op == '*' { p.fast(f) } else { p.slow(f) });
+                }
+                Some('(') => {
+                    self.i += 1;
+                    let mut args = Vec::new();
+                    loop {
+                        self.skip_space();
+                        args.push(self.number('(')?);
+                        self.skip_space();
+                        if self.peek() == Some(',') {
+                            self.i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(')').map_err(|_| self.error("this `(` is never closed"))?;
+                    if !(2..=3).contains(&args.len()) {
+                        return Err(self.error("a Euclidean rhythm is `(hits, steps)` or `(hits, steps, rotation)`"));
+                    }
+                    let rotation = args.get(2).cloned().unwrap_or(Param::Const(Rational::ZERO));
+                    term = term.rhythm(&Pattern::<bool>::euclid_with(&args[0], &args[1], &rotation));
+                }
+                Some('?') => {
+                    self.i += 1;
+                    let at = self.offset();
+                    let text = self.literal();
+                    let drop = if text.is_empty() {
+                        0.5
+                    } else {
+                        parse_factor(&text).map(|r| r.to_f64()).filter(|d| (0.0..=1.0).contains(d)).ok_or(MiniError {
+                            message: format!("`?` takes a chance from 0 to 1, found `{text}`"),
+                            offset: at,
+                        })?
+                    };
+                    let seed = self.next_seed();
+                    term = term.thin(drop, seed);
+                }
+                _ => break,
             }
-            let factor = parse_factor(&text)
-                .filter(|f| *f > Rational::ZERO && *f <= Rational::int(MAX_REPEAT))
-                .ok_or(MiniError {
-                    message: format!("`*` needs a number from above 0 to {MAX_REPEAT}, found `{text}`"),
-                    offset: start,
-                })?;
-            term = term.fast(factor);
         }
         Ok(term)
     }
 
-    /// `<a b c>`: one alternative per cycle.
+    /// The text of a number: digits, a point, a slash, a leading minus.
+    fn literal(&mut self) -> String {
+        let mut text = String::new();
+        if self.peek() == Some('-') {
+            text.push('-');
+            self.i += 1;
+        }
+        while let Some(c) = self.peek().filter(|c| c.is_ascii_digit() || matches!(c, '.' | '/')) {
+            text.push(c);
+            self.i += 1;
+        }
+        text
+    }
+
+    /// A number after `op`: written out (`2`, `3/2`) or a pattern (`<2 4>`).
+    fn number(&mut self, op: char) -> Res<Param<Rational>> {
+        if matches!(self.peek(), Some('<' | '[')) {
+            let convert = |a: &str| parse_factor(a).ok_or_else(|| format!("`{a}` isn't a number"));
+            let mut sub = Parser { src: self.src, chars: self.chars, i: self.i, depth: self.depth, seed: self.seed, convert: &convert };
+            let pattern = sub.term()?;
+            (self.i, self.seed) = (sub.i, sub.seed);
+            return Ok(Param::Pat(pattern));
+        }
+        let start = self.offset();
+        let text = self.literal();
+        let value = parse_factor(&text);
+        match op {
+            '*' | '/' => value
+                .filter(|f| *f > Rational::ZERO && *f <= Rational::int(MAX_REPEAT))
+                .map(Param::Const)
+                .ok_or(MiniError {
+                    message: format!("`{op}` needs a number from above 0 to {MAX_REPEAT}, found `{text}`"),
+                    offset: start,
+                }),
+            _ => value
+                .map(Param::Const)
+                .ok_or(MiniError { message: format!("expected a number, found `{text}`"), offset: start }),
+        }
+    }
+
+    /// `<a b c>`: one alternative per cycle; `<a b, c d e>` runs several at once.
     fn alternatives(&mut self) -> Res<Pattern<T>> {
-        let mut options = Vec::new();
+        let mut layers = Vec::new();
         loop {
-            self.skip_space();
+            let open = self.offset();
+            let steps = self.steps(Some('>'))?;
+            if steps.is_empty() {
+                return Err(MiniError { message: "`< >` needs at least one alternative".into(), offset: open });
+            }
+            let total = steps.iter().fold(Rational::ZERO, |t, (w, _)| t + *w);
+            layers.push(if steps.iter().all(|(w, _)| *w == Rational::ONE) {
+                Pattern::slowcat(steps.into_iter().map(|(_, p)| p).collect())
+            } else {
+                Pattern::timecat(steps).slow(total)
+            });
             match self.peek() {
+                Some(',') => self.i += 1,
                 Some('>') => {
                     self.i += 1;
                     break;
                 }
-                None => return Err(self.error("this `<` is never closed")),
-                Some(',') => return Err(self.error("commas aren't supported inside `< >`")),
-                Some('~') if self.ends_token(1) => {
-                    self.i += 1;
-                    options.push(Pattern::silence());
-                }
-                Some(_) => options.push(self.term()?),
+                Some('|') => return Err(self.error("`|` isn't supported inside `< >`")),
+                _ => return Err(self.error("this `<` is never closed")),
             }
         }
-        if options.is_empty() {
-            return Err(self.error("`< >` needs at least one alternative"));
+        Ok(if layers.len() == 1 { layers.remove(0) } else { Pattern::stack(layers) })
+    }
+
+    /// `{a b c, d e}%4`: lists that each keep their own length, read at four
+    /// steps a cycle (the first list's length if there is no `%`).
+    fn polymeter(&mut self) -> Res<Pattern<T>> {
+        let open = self.offset() - 1;
+        let mut lists = Vec::new();
+        loop {
+            let steps = self.steps(Some('}'))?;
+            let total = steps.iter().fold(Rational::ZERO, |t, (w, _)| t + *w);
+            lists.push((total, Pattern::timecat(steps)));
+            match self.peek() {
+                Some(',') => self.i += 1,
+                Some('}') => {
+                    self.i += 1;
+                    break;
+                }
+                _ => return Err(MiniError { message: "this `{` is never closed".into(), offset: open }),
+            }
         }
-        Ok(Pattern::slowcat(options))
+        let per_cycle = if self.peek() == Some('%') {
+            self.i += 1;
+            self.number('%')?
+        } else if lists[0].0.is_zero() {
+            return Err(MiniError { message: "`{ }` needs at least one step".into(), offset: open });
+        } else {
+            Param::Const(lists[0].0)
+        };
+        let layers = lists
+            .into_iter()
+            .filter(|(total, _)| !total.is_zero())
+            .map(|(total, p)| per_cycle.apply(&p, move |p, n| p.fast(n / total)))
+            .collect();
+        Ok(Pattern::stack(layers))
     }
 
     fn atom(&mut self) -> Res<Pattern<T>> {
         let start = self.offset();
         let mut text = String::new();
         while let Some(c) = self.peek() {
-            if c.is_whitespace() || matches!(c, '[' | ']' | '<' | '>' | ',' | '*') {
+            if c.is_whitespace() || ATOM_END.contains(&c) {
+                // a fraction such as `1/8beat` is one atom; `bd/2` slows `bd`
+                let number = text.trim_start_matches(['+', '-']).starts_with(|d: char| d.is_ascii_digit() || d == '.');
+                if c == '/' && number {
+                    text.push(c);
+                    self.i += 1;
+                    continue;
+                }
                 break;
             }
             text.push(c);

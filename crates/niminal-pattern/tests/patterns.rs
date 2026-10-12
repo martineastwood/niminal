@@ -1,4 +1,4 @@
-use niminal_pattern::{Hap, Hit, Pattern, Rational, Span, euclid_steps, grid, parse, parse_with};
+use niminal_pattern::{Hap, Hit, Param, Pattern, Rational, Span, euclid_steps, grid, parse, parse_with};
 
 fn r(n: i64, d: i64) -> Rational {
     Rational::new(n, d)
@@ -130,7 +130,12 @@ fn mini_notation_errors_point_at_the_problem() {
     assert_eq!(err("<>").message, "`< >` needs at least one alternative");
     assert_eq!(err("a*x").message, "`*` needs a number from above 0 to 1024, found ``");
     assert_eq!(err("a*0").message, "`*` needs a number from above 0 to 1024, found `0`");
-    assert_eq!(err("<a, b>").message, "commas aren't supported inside `< >`");
+    assert_eq!(err("<a | b>").message, "`|` isn't supported inside `< >`");
+    assert_eq!(err("a@0").message, "`@` needs a number above 0, found `0`");
+    assert_eq!(err("{a b").message, "this `{` is never closed");
+    assert_eq!(err("a(3)").message, "a Euclidean rhythm is `(hits, steps)` or `(hits, steps, rotation)`");
+    assert_eq!(err("[a, b | c]").message, "`,` and `|` can't be mixed here; put one inside brackets");
+    assert_eq!(err("! a").message, "a `!` repeats the step before it, but there isn't one");
     assert_eq!(err("(a b").message, "this `(` is never closed");
     assert!(parse("").is_ok(), "an empty pattern is silence");
     assert!(onsets(&parse("").unwrap(), cycles(0, 4)).is_empty());
@@ -321,4 +326,223 @@ fn atoms_are_converted_as_they_are_read_and_bad_ones_are_located() {
     // and in parenthesised groups
     let err = parse_with("(1 q)", |a| a.parse::<i32>().map_err(|_| "bad".to_string())).err().unwrap();
     assert_eq!(err.offset, 0);
+}
+
+#[test]
+fn slash_slows_a_step() {
+    let e = words("a/2 b", cycles(0, 2));
+    assert_eq!(e.iter().map(|e| e.2.as_str()).collect::<Vec<_>>(), ["a", "b", "b"], "a lasts the first half, plus a half beyond");
+    assert_eq!(words("[a b]/2", cycles(0, 2)).len(), 2);
+    // a fraction in a number is still one atom
+    assert_eq!(values("1/8beat a", cycles(0, 1)), ["1/8beat", "a"]);
+}
+
+#[test]
+fn bang_repeats_and_at_weights() {
+    assert_eq!(values("a!3 b", cycles(0, 1)), ["a", "a", "a", "b"]);
+    assert_eq!(values("a! b", cycles(0, 1)), ["a", "a", "b"]);
+    assert_eq!(values("a b ! !", cycles(0, 1)), ["a", "b", "b", "b"]);
+    let e = words("a@3 b", cycles(0, 1));
+    assert_eq!((e[0].1, e[1].0), (r(3, 4), r(3, 4)));
+    let e = words("a ~@2 b", cycles(0, 1));
+    assert_eq!(e[1].0, r(3, 4));
+    // inside alternation they stretch over cycles
+    assert_eq!(values("<a@2 b>", cycles(0, 3)), ["a", "b"]);
+    assert_eq!(values("<a!2 b>", cycles(0, 3)), ["a", "a", "b"]);
+}
+
+#[test]
+fn euclid_in_the_notation() {
+    let e = words("a(3,8)", cycles(0, 1));
+    assert_eq!(e.iter().map(|e| e.0).collect::<Vec<_>>(), [r(0, 1), r(3, 8), r(3, 4)]);
+    let e = words("a(3,8,2)", cycles(0, 1));
+    assert_eq!(e[0].0, r(1, 8));
+    assert_eq!(words("a(-3,8)", cycles(0, 1)).len(), 5, "a negative count swaps hits and rests");
+    // the numbers can be patterns
+    assert_eq!(words("a(<3 5>,8)", cycles(0, 2)).len(), 8);
+    assert_eq!(words("[a b](2,4)", cycles(0, 1)).len(), 2);
+}
+
+#[test]
+fn question_mark_drops_events_the_same_way_every_time() {
+    let n = |src: &str| words(src, cycles(0, 40)).len();
+    let kept = n("a*8?");
+    assert!((100..220).contains(&kept), "{kept}");
+    assert_eq!(kept, n("a*8?"));
+    assert_eq!(n("a*8?0"), 320);
+    assert_eq!(n("a*8?1"), 0);
+    // two question marks drop different events
+    let both: Vec<_> = words("a*8? a*8?", cycles(0, 1)).iter().map(|e| e.0 * Rational::int(2)).collect();
+    assert!(both.len() < 16);
+}
+
+#[test]
+fn a_bar_picks_one_each_cycle() {
+    let v = values("[a | b | c]", cycles(0, 60));
+    assert_eq!(v.len(), 60);
+    for x in ["a", "b", "c"] {
+        assert!(v.iter().any(|y| y == x), "{x} never chosen");
+    }
+    assert_eq!(v, values("[a | b | c]", cycles(0, 60)), "reproducible");
+    assert!(words("a b | c", cycles(0, 1)).len() <= 2);
+}
+
+#[test]
+fn polymeter_reads_lists_at_a_shared_step_rate() {
+    // three steps a cycle taken from a five-step list wrap around over cycles
+    assert_eq!(values("{a b c d e}%3", cycles(0, 2)), ["a", "b", "c", "d", "e", "a"][..6].iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    // two lists: the first sets the pace
+    let e = words("{a b, x y z}", cycles(0, 1));
+    assert_eq!(e.len(), 2 + 2, "the second list is squeezed to two steps a cycle");
+    // without a %, the first list's length is the pace and it plays as written
+    assert_eq!(values("{a b c}", cycles(0, 1)), ["a", "b", "c"]);
+    assert_eq!(values("{a b c}%<2 4>", cycles(0, 2)).len(), 2 + 4);
+}
+
+#[test]
+fn commas_inside_angle_brackets_run_alternations_together() {
+    let e = words("<a b, c d e>", cycles(0, 3));
+    assert_eq!(e.iter().map(|e| e.2.as_str()).collect::<Vec<_>>().len(), 6);
+    let mut cs: Vec<_> = e.iter().filter(|x| x.2 == "e").collect();
+    assert_eq!(cs.pop().map(|x| x.0), Some(Rational::int(2)));
+}
+
+#[test]
+fn star_and_slash_take_patterns() {
+    assert_eq!(words("a*<2 3>", cycles(0, 2)).len(), 5);
+    assert_eq!(words("a*[2 4]", cycles(0, 1)).len(), 3);
+}
+
+#[test]
+fn within_changes_part_of_the_cycle() {
+    let p = parse("a b c d").unwrap().within(Rational::ZERO, r(1, 2), |p| p.fast(Rational::int(2)));
+    let e = onsets(&p, cycles(0, 1));
+    assert_eq!(e.len(), 6, "the first two events are doubled up, the rest untouched");
+    assert!(e.iter().filter(|x| x.0 >= r(1, 2)).count() == 2);
+}
+
+#[test]
+fn swing_delays_every_other_slot() {
+    let p = parse("a*8").unwrap().swing(r(1, 3), Rational::int(4));
+    let starts: Vec<_> = onsets(&p, cycles(0, 1)).iter().map(|e| e.0).collect();
+    // the second event of each pair of eighths moves a third of a quarter later
+    assert_eq!(starts[0], Rational::ZERO);
+    assert_eq!(starts[1], r(1, 8) + r(1, 12));
+}
+
+#[test]
+fn rotate_starts_one_part_later_each_cycle() {
+    let p = parse("a b c d").unwrap().rotate(4);
+    assert_eq!(values_of(&p, cycles(0, 2)), ["a", "b", "c", "d", "b", "c", "d", "a"]);
+}
+
+#[test]
+fn in_turn_changes_each_part_in_turn() {
+    let p = parse("a b c d").unwrap().in_turn(4, |p| p.fast(Rational::int(2)));
+    assert_eq!(onsets(&p, cycles(0, 1)).len(), 5, "the first quarter holds a twice-as-fast cycle, so a and the start of b");
+    assert_eq!(onsets(&p, cycles(1, 2)).len(), 5);
+}
+
+#[test]
+fn shuffle_plays_every_part_once_and_scramble_may_repeat() {
+    let p = parse("a b c d").unwrap();
+    for c in 0..20 {
+        let mut v = values_of(&p.shuffle(4, 1), cycles(c, c + 1));
+        v.sort();
+        assert_eq!(v, ["a", "b", "c", "d"]);
+    }
+    let orders: std::collections::HashSet<_> = (0..20).map(|c| values_of(&p.shuffle(4, 1), cycles(c, c + 1))).collect();
+    assert!(orders.len() > 3);
+    let repeats = (0..40).any(|c| {
+        let mut v = values_of(&p.pick_random(4, 1), cycles(c, c + 1));
+        v.sort();
+        v.dedup();
+        v.len() < 4
+    });
+    assert!(repeats);
+    assert_eq!(values_of(&p.shuffle(4, 1), cycles(3, 4)), values_of(&p.shuffle(4, 1), cycles(3, 4)));
+}
+
+#[test]
+fn repeat_start_loops_the_front_of_the_cycle() {
+    let p = parse("a b c d").unwrap().repeat_start(r(1, 2));
+    assert_eq!(values_of(&p, cycles(0, 1)), ["a", "b", "a", "b"]);
+    let p = parse("a b c d").unwrap().repeat_start(r(1, 4));
+    assert_eq!(values_of(&p, cycles(0, 1)), ["a", "a", "a", "a"]);
+}
+
+#[test]
+fn invert_swaps_hits_and_rests() {
+    let g = grid("x.x. x...").unwrap();
+    let e = onsets(&g.invert(Hit::Normal), cycles(0, 1));
+    assert_eq!(e.iter().map(|x| x.0).collect::<Vec<_>>(), [r(1, 8), r(3, 8), r(5, 8), r(6, 8), r(7, 8)]);
+    assert_eq!(onsets(&Pattern::<Hit>::silence().invert(Hit::Normal), cycles(0, 1)).len(), 1);
+}
+
+#[test]
+fn palindrome_goes_there_and_back() {
+    let p = parse("a b c").unwrap().palindrome();
+    assert_eq!(values_of(&p, cycles(0, 2)), ["a", "b", "c", "c", "b", "a"]);
+}
+
+#[test]
+fn sometimes_changes_a_random_share_of_events() {
+    let p = parse("a*8").unwrap().sometimes(0.5, 3, |p| p.fast(Rational::int(2)));
+    let n = onsets(&p, cycles(0, 40)).len();
+    assert!(n > 320 && n < 640, "{n}");
+    assert_eq!(onsets(&parse("a*8").unwrap().sometimes(0.0, 3, |p| p.fast(Rational::int(2))), cycles(0, 1)).len(), 8);
+}
+
+#[test]
+fn signals_have_no_events_but_a_value_at_every_moment() {
+    let sine = Pattern::<f64>::sine();
+    let at = |p: &Pattern<f64>, t: Rational| p.query(Span::new(t, t))[0].value;
+    assert!((at(&sine, Rational::ZERO) - 0.5).abs() < 1e-9);
+    assert!((at(&sine, r(1, 4)) - 1.0).abs() < 1e-9);
+    assert!((at(&Pattern::<f64>::saw(), r(3, 4)) - 0.75).abs() < 1e-9);
+    assert!((at(&Pattern::<f64>::tri(), r(1, 2)) - 1.0).abs() < 1e-9);
+    assert_eq!(at(&Pattern::<f64>::square(), r(3, 4)), 1.0);
+    let rand = Pattern::<f64>::rand();
+    assert_eq!(at(&rand, r(1, 3)), at(&rand, r(1, 3)));
+    assert_ne!(at(&rand, r(1, 3)), at(&rand, r(2, 3)));
+    let perlin = Pattern::<f64>::perlin();
+    assert!((at(&perlin, r(5, 7)) - at(&perlin, r(5, 7) + r(1, 1000))).abs() < 0.05, "smooth");
+    // sampling a signal into steps gives events
+    let steps = sine.rhythm(&Pattern::pure(true).fast(Rational::int(4)));
+    assert_eq!(onsets(&steps, cycles(0, 1)).len(), 4);
+}
+
+#[test]
+fn expand_and_spread_make_chords_and_arpeggios() {
+    let chord = parse("c").unwrap().expand(|s| vec![s.clone(), format!("{s}3"), format!("{s}5")]);
+    assert_eq!(onsets(&chord, cycles(0, 1)).len(), 3);
+    let arp = chord.spread(|mut v| {
+        v.sort();
+        v
+    });
+    let e = onsets(&arp, cycles(0, 1));
+    assert_eq!(e.iter().map(|x| (x.0, x.2.as_str())).collect::<Vec<_>>(), [(r(0, 1), "c"), (r(1, 3), "c3"), (r(2, 3), "c5")]);
+}
+
+#[test]
+fn params_can_be_patterns_or_numbers() {
+    let p = parse("a b").unwrap();
+    let fixed = Param::Const(Rational::int(2)).apply(&p, |p, f| p.fast(f));
+    assert_eq!(onsets(&fixed, cycles(0, 1)).len(), 4);
+    let varying = Param::Pat(parse_with("<1 2>", |a| a.parse::<i64>().map(Rational::int).map_err(|e| e.to_string())).unwrap()).apply(&p, |p, f| p.fast(f));
+    assert_eq!(onsets(&varying, cycles(0, 2)).len(), 2 + 4);
+}
+
+#[test]
+fn rewrite_cycles_sees_each_cycles_events_in_order() {
+    let p = parse("a b c").unwrap().rewrite_cycles(|events, cycle| events.iter().enumerate().map(|(i, e)| format!("{}{i}{cycle}", e.value)).collect());
+    assert_eq!(values_of(&p, cycles(1, 2)), ["a01", "b11", "c21"]);
+}
+
+#[test]
+fn euclid_with_pattern_arguments() {
+    let hits = Param::Pat(parse_with("<3 5>", |a| a.parse::<i64>().map(Rational::int).map_err(|e| e.to_string())).unwrap());
+    let p = Pattern::<bool>::euclid_with(&hits, &Param::Const(Rational::int(8)), &Param::Const(Rational::ZERO));
+    assert_eq!(onsets(&p, cycles(0, 1)).len(), 3);
+    assert_eq!(onsets(&p, cycles(1, 2)).len(), 5);
 }

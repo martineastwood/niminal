@@ -45,7 +45,8 @@ const SNIPPETS: [&str; 40] = [
     "bars", "ms", "hz", "db", "st", "bpm", "launch", "play", "[c4]*100000", "[a b c d e f g h]*64",
 ];
 
-const WORDS: [&str; 24] = [
+const WORDS: [&str; 34] = [
+    "sometimes", "within", "swing", "rotate", "shuffle", "chord", "arpeggiate", "markov", "sine", "range",
     "fast", "slow", "every", "thin", "euclid", "transpose", "shift", "over", "reverse", "rhythm", "reverb", "delay",
     "pan", "lpf", "gain", "env", "osc", "slices", "fit", "choke", "tempo", "meter", "state", "out",
 ];
@@ -172,7 +173,7 @@ track lead { instrument = tone }
 
 /// Programs that are legal but ask for far more than any machine can play.
 /// None may take long to accept, and the session must keep rendering audio.
-const GREEDY: [&str; 10] = [
+const GREEDY: [&str; 17] = [
     "lead.play([c4*1024])",
     "lead.play([[c4*1024]*1024])",
     "lead.play([[[c4*1024]*1024]*1024])",
@@ -183,6 +184,13 @@ const GREEDY: [&str; 10] = [
     "lead.play([c4*64, e4*64, g4*64, b4*64, c5*64, e5*64, g5*64, b5*64])",
     "clip huge { length: 100000bars\n notes: [c4*512] }\nlead.play(huge)",
     "lead.play([c4].every(1, it.fast(1000)).fast(1000))",
+    "lead.play([c4!1024 e4!1024]!1024)",
+    "lead.play([[c4(1000,1000)]*1024](1000,1000))",
+    "lead.play([c4*[1000 1000 1000]/[1000 1000]])",
+    "lead.play([{c4 e4 g4}%1000000])",
+    "lead.play([c4 e4 g4 b4].shuffle(1000).pick_random(1000).rotate(1000))",
+    "lead.play([c4 e4 g4 b4].repeat_start(1/1000).in_turn(1000, it.fast(1000)))",
+    "lead.play(saw.to_steps(1000000))",
 ];
 
 #[test]
