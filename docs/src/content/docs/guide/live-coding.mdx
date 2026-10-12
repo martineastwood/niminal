@@ -63,6 +63,41 @@ ctl pan    = osc_in("/fx/pan").range(-60deg..60deg)
 
 `midi.learn` waits for the next control change and binds to it (the editor can rewrite the line). A clip with `keys: midi.keys(...)` plays from a MIDI keyboard. Details: [Performance](/reference/language/performance/).
 
+## Sending MIDI and OSC out
+
+A `midi_out` is an instrument that plays external gear. Its notes go to a MIDI output port instead of making sound here: a note's `freq` is the key that is pressed (a note name works) and its `gain` the velocity (0db the loudest, -30db the softest), and the note ends when its step does.
+
+```nml
+midi_out drums(port: "IAC Driver", channel: 10)
+track beat { instrument = drums }
+beat.play([c2 ~ d2 c2])
+```
+
+`port` is part of the name of an output; if no output matches, the daemon makes one of that name for other software to listen to. `channel` is from 1 to 16 (1 if left out). The notes go out when the sound card plays them, so the gear stays with the sound here. A render has no sound from a `midi_out` and says so.
+
+A track's signal can be sent over OSC too. `osc_out` passes the signal through and sends its value to an address, as a float:
+
+```nml
+track bass {
+  instrument = pluck
+  out = it.osc_out("/vj/bass", port: 9000)               // this computer, 30 times a second
+}
+ctl k = 0.5
+track knob { out = k.osc_out("/vj/knob", host: "192.168.1.20", port: 9000, rate: 10hz) }
+```
+
+A message is sent when the value has changed and `rate` allows it; the first value goes at once. Sending happens whenever the daemon runs, and is not logged, so a replay does not send.
+
+## Audio input
+
+A track can read the sound card's input with `input(1)`, or `input(1..2)` for two channels:
+
+```nml
+track voice { out = input(1).lpf(cutoff: 3khz) }
+```
+
+Start the daemon with `--audio-input` to listen to the default input device (at the output's sample rate). `niminal render file.nml --input take.wav` plays a WAV file into those tracks instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
+
 ## Editor
 
 With the [VS Code / Cursor extension](/reference/editor/) connected to a daemon: **Cmd/Ctrl+Enter** evaluates the block around the cursor, **Cmd/Ctrl+Shift+Enter** the whole file, **Cmd/Ctrl+.** hushes, and the sidebar lists scenes and tracks.

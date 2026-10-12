@@ -40,6 +40,10 @@ enum Command {
         /// Write a file for every track and bus as well as the mix, into the folder given by `--out`.
         #[arg(long, requires = "file", conflicts_with = "replay")]
         stems: bool,
+        /// A WAV file for tracks that read `input(..)` to hear. The render lasts as long as it does,
+        /// unless `--bars` or `--seconds` says otherwise.
+        #[arg(long, requires = "file", conflicts_with = "replay")]
+        input: Option<PathBuf>,
         /// Turn off the master limiter (offline renders only).
         #[arg(long)]
         no_limiter: bool,
@@ -96,6 +100,9 @@ enum Command {
         /// Take OSC over UDP on this local port, for `ctl x = osc_in("/address")`.
         #[arg(long, value_name = "PORT")]
         osc_port: Option<u16>,
+        /// Listen to the default audio input device, for tracks that read `input(1)`.
+        #[arg(long)]
+        audio_input: bool,
     },
     /// Run the language server (LSP over stdin and stdout) for an editor.
     Lsp,
@@ -130,14 +137,14 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Render { file: Some(file), arrangement, score, out, stems, no_limiter, bars, seconds, from, to, .. } => {
-            run_render(&file, arrangement, score.as_deref(), &out, stems, no_limiter, bars, seconds, from.as_deref(), to.as_deref())
+        Command::Render { file: Some(file), arrangement, score, out, stems, input, no_limiter, bars, seconds, from, to, .. } => {
+            run_render(&file, arrangement, score.as_deref(), &out, stems, input.as_deref(), no_limiter, bars, seconds, from.as_deref(), to.as_deref())
         }
         Command::Render { replay: Some(log), out, no_limiter, channels, .. } => {
             run_replay(&log, &out, channels, no_limiter)
         }
         Command::Render { .. } => Err("error: give a file to render, or --replay a log".into()),
-        Command::Daemon { file, port, channels, sample_rate, no_audio, log, no_log, token, listen, midi, osc_port } => {
+        Command::Daemon { file, port, channels, sample_rate, no_audio, log, no_log, token, listen, midi, osc_port, audio_input } => {
             install_crash_log();
             let log = log.or_else(|| {
                 if no_log {
@@ -148,7 +155,7 @@ fn main() -> ExitCode {
                 let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
                 Some(dir.join(format!("{now}.log")))
             });
-            run_daemon(file.as_deref(), port, channels, sample_rate, no_audio, log.as_deref(), token, listen, midi.as_deref(), osc_port)
+            run_daemon(file.as_deref(), port, channels, sample_rate, no_audio, log.as_deref(), token, listen, midi.as_deref(), osc_port, audio_input)
         }
         Command::Lsp => {
             let code = niminal_lsp::run(std::io::stdin().lock(), std::io::stdout().lock());
@@ -241,6 +248,7 @@ fn run_render(
     score: Option<&Path>,
     out: &Path,
     stems: bool,
+    input: Option<&Path>,
     no_limiter: bool,
     bars: Option<f64>,
     seconds: Option<f64>,
@@ -261,6 +269,22 @@ fn run_render(
         errors.into_iter().map(|d| expanded.locate(d).render(&name, &source)).collect::<Vec<_>>().join("\n")
     })?;
 
+    for instrument in program.instruments.iter().filter(|i| i.midi.is_some()) {
+        eprintln!("warning: `{}` sends MIDI to a port, so a render has no sound from it", instrument.name);
+    }
+    // audio for tracks that read `input(..)`
+    let audio = match input {
+        None => Vec::new(),
+        Some(path) => {
+            let data = niminal_lang::Samples::new(path.parent().unwrap_or(Path::new(".")))
+                .load(&path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()))
+                .map_err(|e| format!("error: {e}"))?;
+            if (data.sample_rate - SAMPLE_RATE as f32).abs() > 0.5 {
+                return Err(format!("error: {} is {} Hz, but niminal renders at {SAMPLE_RATE} Hz; convert it first", path.display(), data.sample_rate));
+            }
+            data.channels.clone()
+        }
+    };
     let bar_seconds = program.tempo.beats_per_bar * 60.0 / program.tempo.bpm;
     let until = match (bars, seconds, to) {
         (_, _, Some(to)) => Some(position_seconds(to, bar_seconds)?),
@@ -269,12 +293,14 @@ fn run_render(
         (None, None, None) => None,
         _ => return Err("error: --bars and --seconds must be above zero".into()),
     };
+    // an input with no length given plays through to its end
+    let until = until.or_else(|| audio.first().map(|c| c.len() as f64 / f64::from(SAMPLE_RATE)));
     let from_seconds = from.map(|f| position_seconds(f, bar_seconds)).transpose()?.unwrap_or(0.0);
-    let options = RenderOptions { limiter: !no_limiter, until, arrangement, stems };
+    let options = RenderOptions { limiter: !no_limiter, until, arrangement, stems, input: audio.clone() };
 
     if !ramps.is_empty() {
-        if stems || options.arrangement.is_some() || score.is_some() || from.is_some() || to.is_some() {
-            return Err("error: a file with a tempo ramp renders as it is played: --stems, --arrangement, --score, --from and --to aren't available for it".into());
+        if options.arrangement.is_some() || score.is_some() || from.is_some() || to.is_some() {
+            return Err("error: a file with a tempo ramp renders as it is played: --arrangement, --score, --from and --to aren't available for it".into());
         }
         let end = match (bars, seconds) {
             (Some(b), _) if b > 0.0 => End::Bars(b),
@@ -282,10 +308,8 @@ fn run_render(
             _ => return Err("error: a file with a tempo ramp renders by the clock: say how long with `--bars 16` or `--seconds 30`".into()),
         };
         let dir = file.parent().unwrap_or(Path::new("."));
-        let rendered = render_session(&expanded.text, dir, program.master, end, !no_limiter).map_err(|e| format!("error: {e}"))?;
-        write_wav(out, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
-        println!("wrote {} ({:.2}s, {} channel{})", out.display(), rendered.len() as f64 / f64::from(SAMPLE_RATE), rendered.channels.len(), plural(rendered.channels.len()));
-        return Ok(());
+        let rendered = render_session(&expanded.text, dir, program.master, end, !no_limiter, stems, audio).map_err(|e| format!("error: {e}"))?;
+        return write_output(&rendered, out, stems);
     }
 
     let events = match score {
@@ -314,36 +338,8 @@ fn run_render(
         channel.drain(..skip);
     }
 
-    let peak = rendered.peak();
-    if peak > 1.0 {
-        eprintln!("warning: output peaks at {peak:.2}, which will clip (the limiter is off)");
-    }
-    if stems {
-        std::fs::create_dir_all(out).map_err(|e| format!("error: can't make {}: {e}", out.display()))?;
-        let mix = out.join("mix.wav");
-        write_wav(&mix, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", mix.display()))?;
-        for stem in &rendered.stems {
-            let path = out.join(format!("{}.wav", stem.name));
-            write_wav(&path, &stem.channels).map_err(|e| format!("error: can't write {}: {e}", path.display()))?;
-        }
-        println!(
-            "wrote {} files into {} ({:.2}s): mix{}",
-            rendered.stems.len() + 1,
-            out.display(),
-            rendered.len() as f64 / f64::from(SAMPLE_RATE),
-            rendered.stems.iter().map(|s| format!(", {}", s.name)).collect::<String>()
-        );
-        return Ok(());
-    }
-    write_wav(out, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
-    println!(
-        "wrote {} ({:.2}s, {} channel{})",
-        out.display(),
-        rendered.len() as f64 / f64::from(SAMPLE_RATE),
-        rendered.channels.len(),
-        plural(rendered.channels.len())
-    );
-    Ok(())
+    write_output(&rendered, out, stems)
+
 }
 
 fn run_replay(log: &Path, out: &Path, channels: u16, no_limiter: bool) -> Result<(), String> {
@@ -377,6 +373,7 @@ fn run_daemon(
     listen: IpAddr,
     midi: Option<&str>,
     osc_port: Option<u16>,
+    audio_input: bool,
 ) -> Result<(), String> {
     let layout = layout_for(channels)?;
     let output = if no_audio { None } else { Some(Output::open(channels, sample_rate)?) };
@@ -385,8 +382,21 @@ fn run_daemon(
 
     let daemon: Shared = Arc::new(Mutex::new(Daemon::new(Session::new(rate as f32, layout))));
     let health = output.as_ref().map(Output::health);
-    let _audio = match output {
-        Some(o) => Some(o.start(daemon.clone())?),
+    // the default input device, if asked for, feeds tracks that read `input(..)`
+    let (mut listening, mut input) = (None, None);
+    if audio_input {
+        if no_audio {
+            return Err("error: --audio-input needs audio output; leave out --no-audio".into());
+        }
+        let (device, ring) = niminal_cli::audio::Listening::open(rate, usize::try_from(rate).unwrap_or(48_000) / 4, health.clone().unwrap_or_default())
+            .map_err(|e| format!("error: {e}"))?;
+        println!("audio input from {} ({} channel{})", device.name(), device.channels(), plural(device.channels()));
+        listening = Some(device);
+        input = Some(ring);
+    }
+    let _ = &listening;
+    let mut audio = match output {
+        Some(o) => Some(o.start(daemon.clone(), input)?),
         None => None,
     };
     let _clock = no_audio.then(|| NullClock::start(daemon.clone(), 1.0));
@@ -409,25 +419,46 @@ fn run_daemon(
         None => None,
     };
 
+    // signals the project sends over OSC (`osc_out`) go out whenever the daemon runs
+    let _osc_out = niminal_cli::osc_out::OscOutput::start(daemon.clone())?;
+
     let mut watched = None;
     if let Some(path) = file {
         watched = Some(load(&daemon, path, Some("now")));
     }
     let mut written = (0, 0);
-    let mut reported = (0, 0, 0);
+    let mut reported = (0, 0, 0, 0, 0);
+    let mut last_reopen = std::time::Instant::now();
     let mut last_report = std::time::Instant::now();
     loop {
         std::thread::sleep(Duration::from_millis(250));
+        // the output device went away or failed: look for it again every couple of seconds
+        if let Some(running) = &mut audio
+            && running.device_lost()
+            && last_reopen.elapsed() >= Duration::from_secs(2)
+        {
+            last_reopen = std::time::Instant::now();
+            match running.reopen() {
+                Ok(name) => eprintln!("audio: back on {name}"),
+                Err(e) => eprintln!("audio: the output device is gone ({e}); trying again"),
+            }
+        }
         if let Some(h) = &health
             && last_report.elapsed() >= Duration::from_secs(2)
         {
             use std::sync::atomic::Ordering::Relaxed;
-            let now = (h.panics.load(Relaxed), h.errors.load(Relaxed), h.underruns.load(Relaxed));
+            let now = (h.panics.load(Relaxed), h.errors.load(Relaxed), h.underruns.load(Relaxed), h.planner_panics.load(Relaxed), h.input_errors.load(Relaxed));
             if now.0 > reported.0 {
                 eprintln!("audio: the engine failed on {} buffer(s) and was silenced for them; see the crash log", now.0 - reported.0);
             }
             if now.1 > reported.1 {
                 eprintln!("audio: {} device problem(s); check the output device", now.1 - reported.1);
+            }
+            if now.3 > reported.3 {
+                eprintln!("audio: event preparation failed {} time(s) and was restarted; see the crash log", now.3 - reported.3);
+            }
+            if now.4 > reported.4 {
+                eprintln!("audio: {} input device problem(s)", now.4 - reported.4);
             }
             if now.2 > reported.2 {
                 eprintln!("audio: {} output buffer(s) ran dry and were silenced", now.2 - reported.2);
@@ -634,4 +665,38 @@ fn opcode_reference() -> String {
         out.push_str(&format!("## {}\n\n{}\n\n```niminal\n{}\n```\n\n", op.name, op.doc, op.signature()));
     }
     out
+}
+
+/// Write a finished render: one WAV, or with `stems` a folder of them.
+fn write_output(rendered: &niminal_cli::render::RenderOutput, out: &Path, stems: bool) -> Result<(), String> {
+    let peak = rendered.peak();
+    if peak > 1.0 {
+        eprintln!("warning: output peaks at {peak:.2}, which will clip (the limiter is off)");
+    }
+    if stems {
+        std::fs::create_dir_all(out).map_err(|e| format!("error: can't make {}: {e}", out.display()))?;
+        let mix = out.join("mix.wav");
+        write_wav(&mix, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", mix.display()))?;
+        for stem in &rendered.stems {
+            let path = out.join(format!("{}.wav", stem.name));
+            write_wav(&path, &stem.channels).map_err(|e| format!("error: can't write {}: {e}", path.display()))?;
+        }
+        println!(
+            "wrote {} files into {} ({:.2}s): mix{}",
+            rendered.stems.len() + 1,
+            out.display(),
+            rendered.len() as f64 / f64::from(SAMPLE_RATE),
+            rendered.stems.iter().map(|s| format!(", {}", s.name)).collect::<String>()
+        );
+        return Ok(());
+    }
+    write_wav(out, &rendered.channels).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
+    println!(
+        "wrote {} ({:.2}s, {} channel{})",
+        out.display(),
+        rendered.len() as f64 / f64::from(SAMPLE_RATE),
+        rendered.channels.len(),
+        plural(rendered.channels.len())
+    );
+    Ok(())
 }

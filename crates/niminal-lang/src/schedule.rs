@@ -37,6 +37,9 @@ const PIECE_SECONDS: f64 = 0.02;
 /// How much time one search covers when asked for a long stretch.
 const CHUNK_SECONDS: f64 = 8.0;
 
+/// How often a signal lane is read, in seconds: the parameter glides from one reading to the next.
+const SIGNAL_STEP: f64 = 0.02;
+
 /// A track parameter moving because an envelope lane says so: from `at` seconds it glides to
 /// `target` (in the control's engine units) over `glide` seconds.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,10 +62,43 @@ impl fmt::Display for ScheduleError {
 
 impl std::error::Error for ScheduleError {}
 
+/// How a clip's cycles (bars) line up with seconds. The tempo may change while the clip plays, as
+/// it does in a gradual change over an arrangement, so this is a run of stretches, each with its own
+/// cycle length.
+struct Clock {
+    /// Where each stretch starts in seconds and in cycles since the clip started, and how long a cycle is in it.
+    pieces: Vec<(f64, f64, f64)>,
+}
+
+impl Clock {
+    /// A clip starting at `start` in `tempo`, with the tempo changing to those of `later` (seconds, tempo)
+    /// as time goes on.
+    fn new(start: f64, tempo: Tempo, later: &[(f64, Tempo)]) -> Clock {
+        let cycle = |t: Tempo| t.beats_per_bar * 60.0 / t.bpm;
+        let mut pieces = vec![(start, 0.0, cycle(tempo))];
+        for (t, tempo) in later.iter().filter(|(t, _)| *t > start) {
+            let &(t0, c0, spc) = pieces.last().expect("one piece to begin with");
+            pieces.push((*t, c0 + (t - t0) / spc, cycle(*tempo)));
+        }
+        Clock { pieces }
+    }
+
+    fn cycles_at(&self, seconds: f64) -> f64 {
+        let &(t0, c0, spc) = self.pieces.iter().rev().find(|p| p.0 <= seconds).unwrap_or(&self.pieces[0]);
+        c0 + (seconds - t0) / spc
+    }
+
+    fn seconds_at(&self, cycles: f64) -> f64 {
+        let &(t0, c0, spc) = self.pieces.iter().rev().find(|p| p.1 <= cycles).unwrap_or(&self.pieces[0]);
+        t0 + (cycles - c0) * spc
+    }
+}
+
 /// A clip playing on a track from `start` until `end` (seconds).
 struct Segment {
-    /// The tempo and meter it plays in, which set how long a cycle is.
+    /// The tempo and meter it plays in when it starts.
     tempo: Tempo,
+    clock: Clock,
     track: usize,
     clip: Clip,
     start: f64,
@@ -84,6 +120,9 @@ pub struct TrackState {
     pub muted: bool,
     pub soloed: bool,
 }
+
+/// How close to the end of a clip a note may start and still count as after it, in seconds.
+const END_SLACK: f64 = 1e-9;
 
 /// Padding, in cycles, around the part of a clip that a search looks at.
 const PAD_CYCLES: f64 = 1e-4;
@@ -184,7 +223,7 @@ impl Schedule {
             match action {
                 Action::Play { track, clip } => {
                     close(&mut segments, Some(*track), at);
-                    segments.push(Segment { track: *track, clip: clip.clone(), start: at, end: None, tempo: tempo_at(at) });
+                    segments.push(Segment { track: *track, clip: clip.clone(), start: at, end: None, tempo: tempo_at(at), clock: Clock::new(at, tempo_at(at), sections) });
                 }
                 Action::Stop { track } => close(&mut segments, Some(*track), at),
                 Action::Hush | Action::Reset => close(&mut segments, None, at),
@@ -265,19 +304,24 @@ impl Schedule {
         }
     }
 
+    /// Is a clip played from an MPE keyboard playing on any track at `at` seconds?
+    pub fn plays_mpe(&self, at: f64) -> bool {
+        self.segments.iter().any(|s| s.start <= at && s.end.is_none_or(|e| at < e) && s.clip.keys.is_some_and(|k| k.mpe))
+    }
+
     /// The note a key press plays on `track` at `at` seconds, if a clip played from a keyboard is
     /// playing there, on this MIDI channel, and the track is audible. `note` is the MIDI note
     /// number and `gain` how loud, in db. The clip's other lanes give the note their value at the
     /// start of a cycle.
     pub fn key_event(&self, track: usize, at: f64, channel: u8, note: i32, gain: f64) -> Option<Event> {
         let segment = self.segments.iter().rev().find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e))?;
-        segment.clip.keys.filter(|k| k.channel.is_none_or(|c| c == channel))?;
+        segment.clip.keys.filter(|k| k.accepts(channel))?;
         if !self.audible(track, at) {
             return None;
         }
         let mut args = std::collections::BTreeMap::new();
         for (lane, pattern) in &segment.clip.lanes {
-            if matches!(lane.as_str(), "dur" | "nudge") {
+            if matches!(lane.as_str(), "dur" | "nudge") || segment.clip.signals.iter().any(|(l, _)| l == lane) {
                 continue;
             }
             if let Some(hap) = pattern.query(CycleSpan::new(Rational::ZERO, Rational::ZERO)).into_iter().next() {
@@ -384,25 +428,28 @@ impl Schedule {
         out: &mut Vec<(f64, Event)>,
     ) -> Result<(), ScheduleError> {
         let Some(notes) = segment.clip.lane("notes") else { return Ok(()) };
-        let cycle = segment.tempo.beats_per_bar * 60.0 / segment.tempo.bpm;
-        let loop_len = if segment.clip.endless { f64::INFINITY } else { segment.clip.length.to_f64() * cycle };
+        let clock = &segment.clock;
+        let length = segment.clip.length.to_f64();
         let until = segment.end.map_or(to, |e| e.min(to));
         let window_start = from.max(segment.start);
-        if window_start >= until || loop_len <= 0.0 {
+        if window_start >= until || length <= 0.0 {
             return Ok(());
         }
 
-        // The loops of the clip that overlap the window.
-        let first_loop = ((window_start - segment.start) / loop_len).floor().max(0.0) as i64;
-        let last_loop = (((until - segment.start) / loop_len).ceil() as i64).max(1);
+        // The window in cycles since the clip started, and the loops of the clip that overlap it.
+        let (first_cycle, last_cycle) = (clock.cycles_at(window_start), clock.cycles_at(until));
+        let (first_loop, last_loop) = if segment.clip.endless {
+            (0, 1)
+        } else {
+            ((first_cycle / length).floor().max(0.0) as i64, ((last_cycle / length).ceil() as i64).max(1))
+        };
 
         for k in first_loop..last_loop {
-            let loop_start = if segment.clip.endless { segment.start } else { segment.start + k as f64 * loop_len };
+            let base = if segment.clip.endless { 0.0 } else { k as f64 * length };
             // Only the part of the loop inside the window, padded a little so that
             // rounding can't lose a note on an edge; the check below decides.
-            let to_cycles = |seconds: f64| seconds / cycle;
-            let a = to_cycles((window_start - loop_start).max(0.0)) - PAD_CYCLES;
-            let b = to_cycles((until - loop_start).min(loop_len)) + PAD_CYCLES;
+            let a = (first_cycle - base).max(0.0) - PAD_CYCLES;
+            let b = if segment.clip.endless { last_cycle - base } else { (last_cycle - base).min(length) } + PAD_CYCLES;
             let span = CycleSpan::new(
                 micro_cycles(a.floor_to_micro()).max(Rational::ZERO),
                 if segment.clip.endless { micro_cycles(b.ceil_to_micro()) } else { micro_cycles(b.ceil_to_micro()).min(segment.clip.length) },
@@ -412,15 +459,20 @@ impl Schedule {
             }
             for hap in notes.onsets(span) {
                 let whole = hap.whole.expect("notes have a duration");
-                let onset = loop_start + whole.start.to_f64() * cycle;
+                let onset = clock.seconds_at(base + whole.start.to_f64());
                 if onset < window_start || onset >= until {
+                    continue;
+                }
+                // a note meant for the first instant after the clip ends can land a hair early, when the
+                // end was found by adding up the steps of a gradual tempo change
+                if segment.end.is_some_and(|end| onset >= end - END_SLACK) {
                     continue;
                 }
                 let track = segment.track;
                 if !self.audible(track, onset) {
                     continue;
                 }
-                out.push((onset, self.note(segment, whole, &hap.value, onset)?));
+                out.push((onset, self.note(segment, whole, base, &hap.value, onset)?));
             }
         }
         Ok(())
@@ -473,20 +525,49 @@ impl Schedule {
     /// What `segment`'s envelope lanes do to their track's parameters in `from..to` seconds. A curved
     /// segment becomes a few straight glides that follow the same curve an `env` in an instrument does.
     fn segment_controls(&self, segment: &Segment, from: f64, to: f64, out: &mut Vec<ControlSet>) -> Result<(), ScheduleError> {
-        if segment.clip.curves.is_empty() {
+        if segment.clip.curves.is_empty() && segment.clip.signals.is_empty() {
             return Ok(());
         }
-        let cycle = segment.tempo.beats_per_bar * 60.0 / segment.tempo.bpm;
-        let loop_len = if segment.clip.endless { f64::INFINITY } else { segment.clip.length.to_f64() * cycle };
+        let clock = &segment.clock;
+        let length = segment.clip.length.to_f64();
         let until = segment.end.map_or(to, |e| e.min(to));
         let window_start = from.max(segment.start);
-        if window_start >= until || loop_len <= 0.0 {
+        if window_start >= until || length <= 0.0 {
             return Ok(());
         }
-        let first_loop = ((window_start - segment.start) / loop_len).floor().max(0.0) as i64;
-        let last_loop = (((until - segment.start) / loop_len).ceil() as i64).max(1);
+        let (first_cycle, last_cycle) = (clock.cycles_at(window_start), clock.cycles_at(until));
+        let (first_loop, last_loop) = if segment.clip.endless {
+            (0, 1)
+        } else {
+            ((first_cycle / length).floor().max(0.0) as i64, ((last_cycle / length).ceil() as i64).max(1))
+        };
         let name = &self.track_names[segment.track];
         let clip = &segment.clip;
+
+        // signal lanes: the parameter follows the signal, read every SIGNAL_STEP seconds
+        for (lane, unit) in &clip.signals {
+            let Some(pattern) = clip.lane(lane) else { continue };
+            let fail = |why: String| ScheduleError(format!("clip `{}` on track `{name}`, lane `{lane}`: {why}", clip.name));
+            let control = format!("{name}::{lane}");
+            let first = ((window_start / SIGNAL_STEP).floor() * SIGNAL_STEP).max(segment.start);
+            let mut at = first;
+            while at < until {
+                if at >= window_start {
+                    // where this moment falls in the clip, which starts over if it has a length
+                    let into = clock.cycles_at(at);
+                    let in_loop = if clip.endless { into } else { into.rem_euclid(length) };
+                    let place = Rational::from_f64(in_loop);
+                    if let Some(hap) = pattern.query(CycleSpan::new(place, place)).into_iter().next() {
+                        let target = crate::program::engine_value(*unit, hap.value.value, segment.tempo).map_err(|e| fail(e.to_string()))?;
+                        out.push(ControlSet { at, name: control.clone(), target, glide: SIGNAL_STEP });
+                    }
+                    if out.len() > MAX_CONTROL_SETS {
+                        return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
+                    }
+                }
+                at += SIGNAL_STEP;
+            }
+        }
 
         for (lane, curve) in &clip.curves {
             let fail = |why: String| ScheduleError(format!("clip `{}` on track `{name}`, lane `{lane}`: {why}", clip.name));
@@ -500,9 +581,9 @@ impl Schedule {
             let control = format!("{name}::{lane}");
 
             for k in first_loop..last_loop {
-                let loop_start = if clip.endless { segment.start } else { segment.start + k as f64 * loop_len };
+                let loop_start = if clip.endless { segment.start } else { clock.seconds_at(k as f64 * length) };
                 // nothing from this pass of the clip is heard after the clip starts over
-                let stop = until.min(loop_start + loop_len);
+                let stop = if clip.endless { until } else { until.min(clock.seconds_at((k + 1) as f64 * length)) };
                 emit_envelope(&control, start, &steps, curve.looped, loop_start, window_start, stop, out);
                 if out.len() > MAX_CONTROL_SETS {
                     return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
@@ -518,11 +599,11 @@ impl Schedule {
         &self,
         segment: &Segment,
         whole: CycleSpan,
+        base: f64,
         step: &Step,
         onset: f64,
     ) -> Result<Event, ScheduleError> {
         let pitch = &step.value;
-        let cycle = segment.tempo.beats_per_bar * 60.0 / segment.tempo.bpm;
         let name = &self.track_names[segment.track];
         let clip = &segment.clip;
 
@@ -537,11 +618,11 @@ impl Schedule {
                 )));
             }
         };
-        let mut dur = Time::Seconds((whole.end - whole.start).to_f64() * cycle);
+        let mut dur = Time::Seconds(segment.clock.seconds_at(base + whole.end.to_f64()) - onset);
         let mut at = onset;
 
         for (lane, pattern) in &clip.lanes {
-            if lane == "notes" {
+            if lane == "notes" || clip.signals.iter().any(|(l, _)| l == lane) {
                 continue;
             }
             // The value in force at the moment the note starts.
@@ -684,6 +765,53 @@ track bass { instrument = pluck }
 
     fn times(s: &Schedule, from: f64, to: f64) -> Vec<f64> {
         s.events(from, to).unwrap().into_iter().map(|e| e.at.to_seconds(Tempo::new(120.0))).collect()
+    }
+
+    fn song(body: &str) -> Schedule {
+        let src = format!("{STAGE}scene s {{ lead: [c4 c4 c4 c4] }}\n{body}");
+        compile(&src)
+            .unwrap_or_else(|e| panic!("{}", e.iter().map(|d| d.render("t", &src)).collect::<String>()))
+            .arrangement_schedule("song")
+            .unwrap()
+    }
+
+    #[test]
+    fn a_gradual_tempo_change_speeds_up_the_notes_of_the_clip_playing_through_it() {
+        // 4 notes a bar, for 8 bars, the tempo rising evenly from 60bpm to 240bpm
+        let s = song("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60bpm 8bars 240bpm] }");
+        let at: Vec<f64> = s.events(0.0, 60.0).unwrap().iter().map(|e| e.at.to_seconds(Tempo::new(120.0))).collect();
+        assert_eq!(at.len(), 32, "4 notes in each of 8 bars");
+        let gaps: Vec<f64> = at.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(gaps.windows(2).all(|g| g[1] <= g[0] + 1e-9), "each gap is no longer than the one before: {gaps:?}");
+        assert!((gaps[0] - 1.0).abs() < 0.05, "a beat at 60bpm is a second: {}", gaps[0]);
+        assert!(*gaps.last().unwrap() < 0.3, "and at the end it is near a quarter of that: {}", gaps.last().unwrap());
+        // 240 / (60 + 22.5 bar) summed over the bars: about 14.8 seconds in all
+        let last = *at.last().unwrap();
+        assert!(last > 13.0 && last < 14.8, "{last}");
+        assert!(s.end().unwrap() > 14.0 && s.end().unwrap() < 15.5, "{:?}", s.end());
+    }
+
+    #[test]
+    fn a_tempo_that_holds_and_then_changes_only_changes_where_it_is_written() {
+        // steady for 4 bars at 120bpm (2s a bar), then a rise to 240bpm over the next 4
+        let s = song("arrangement song { sections: [s.over(8 bars)]\n tempo: env[120bpm 4bars 120bpm 4bars 240bpm] }");
+        let at: Vec<f64> = s.events(0.0, 60.0).unwrap().iter().map(|e| e.at.to_seconds(Tempo::new(120.0))).collect();
+        assert_eq!(at[0], 0.0);
+        assert!((at[16] - 8.0).abs() < 1e-6, "four bars of 2 seconds: {}", at[16]);
+        assert!((at[1] - at[0] - 0.5).abs() < 1e-9 && (at[15] - at[14] - 0.5).abs() < 1e-9, "a steady half second");
+        assert!(at[31] - at[30] < 0.4);
+    }
+
+    #[test]
+    fn a_tempo_envelope_is_checked() {
+        let error = |body: &str| {
+            let src = format!("{STAGE}scene s {{ lead: [c4] }}\n{body}");
+            compile(&src).err().map(|e| e.iter().map(|d| d.message.clone()).collect::<String>()).unwrap_or_default()
+        };
+        assert!(error("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60 8bars 240bpm] }").contains("positive number of bpm"));
+        assert!(error("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60bpm 8sec 240bpm] }").contains("lengths in bars"));
+        assert!(error("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60bpm 8bars 240bpm].loop }").contains("runs once"));
+        assert!(error("arrangement song { sections: [s.over(8 bars)]\n tempo: [60bpm]\n tempo: env[60bpm 8bars 240bpm] }").contains("given twice"));
     }
 
     #[test]

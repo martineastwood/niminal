@@ -11,16 +11,18 @@
 //! deterministic: the same inputs at the same samples give the same audio,
 //! however the audio is divided into blocks.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
-use niminal_engine::{DEFAULT_MAX_VOICES, BLOCK, MAX_CHANNELS, Master, Mixer, Transfer, VoiceId};
+use niminal_engine::{DEFAULT_MAX_VOICES, BLOCK, MAX_CHANNELS, Master, Mixer, Transfer};
 use niminal_lang::{
     Action, Clip, CompileOptions, Layout, Samples, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
     Expanded, InputSource, analyze, compile_with,
 };
 use niminal_score::{Event, Tempo, Time, Value};
 
+use crate::keyboard::Keyboard;
+use crate::sounding::Sounding;
 use crate::log::{Expression, LogEntry, LogInput};
 use crate::project::{Entry, Located, Origin, Piece, Problem, Project};
 use crate::quantize::{Grid, QuantizeDefaults};
@@ -63,6 +65,10 @@ struct HistoryEntry {
 
 /// How far a keyboard's pitch bend goes each way, in semitones.
 const BEND_RANGE: f64 = 2.0;
+/// The most MIDI messages kept waiting to be taken.
+const MAX_MIDI_QUEUE: usize = 65_536;
+/// How far an MPE note's own pitch bend goes, each way, in semitones.
+const MPE_BEND_RANGE: f64 = 48.0;
 
 /// A tempo ramp changes the tempo this many times a beat.
 const RAMP_STEPS_PER_BEAT: f64 = 4.0;
@@ -414,17 +420,14 @@ pub struct Session {
     learned: BTreeMap<String, u8>,
     learned_out: Vec<(String, String)>,
     /// The notes each held key started, by channel and note, and the keys let go of lately.
-    keys_down: BTreeMap<(u8, u8), Vec<u32>>,
+    keyboard: Keyboard,
     key_offs: Vec<(u32, u64)>,
     /// Changes of a held key's bend or pressure: `(key, parameter, value, when)`.
     key_params: Vec<(u32, &'static str, f32, u64)>,
-    /// Keys let go of while the sustain pedal was down, by channel and note, until it comes up.
-    sustained: Vec<(u8, u8, u32)>,
-    pedals: BTreeSet<u8>,
-    /// What each channel's bend (semitones) and pressure are now, for the keys that come next.
-    bends: BTreeMap<u8, f64>,
-    pressures: BTreeMap<u8, f64>,
-    next_key: u32,
+    /// Audio for tracks that read `input(..)`, from a file being rendered: a buffer for each channel, from sample 0.
+    audio_input: Vec<Vec<f32>>,
+    /// Notes sent to `midi_out` instruments and not yet taken, and those still held: when they end and the key that holds them.
+    midi_out: Vec<crate::MidiEvent>,
     sample_rate: f32,
     layout: Layout,
     panic_epoch: Arc<AtomicU64>,
@@ -449,7 +452,7 @@ pub struct Session {
     /// Tracks whose clips are not searched for notes because they asked for too many.
     overloaded: Vec<usize>,
     /// Sounding notes: when each is released, and the key holding it open (or `NO_KEY`).
-    held: Vec<(u64, VoiceId, u32)>,
+    sounding: Sounding,
     next_panic: usize,
 
     pending: Vec<Pending>,
@@ -602,8 +605,8 @@ impl Session {
             panic_epoch: Arc::new(AtomicU64::new(0)),
             samples: Samples::default(),
             controls: Vec::new(), control_changes: Vec::new(), next_control: 0, learned: BTreeMap::new(), learned_out: Vec::new(),
-            keys_down: BTreeMap::new(), key_offs: Vec::new(), next_key: 0,
-            key_params: Vec::new(), sustained: Vec::new(), pedals: BTreeSet::new(), bends: BTreeMap::new(), pressures: BTreeMap::new(),
+            keyboard: Keyboard::default(), key_offs: Vec::new(),
+            key_params: Vec::new(), audio_input: Vec::new(), midi_out: Vec::new(),
             sample_dirs: Vec::new(),
             defaults: QuantizeDefaults::default(),
             clock: 0,
@@ -617,7 +620,7 @@ impl Session {
             upcoming: VecDeque::new(),
             control_sets: VecDeque::new(),
             overloaded: Vec::new(),
-            held: Vec::new(),
+            sounding: Sounding::default(),
             next_panic: 0,
             pending: Vec::new(),
             next_id: 1,
@@ -797,9 +800,14 @@ impl Session {
         Ok(extras)
     }
 
+    /// When each kind of change lands: the session's defaults, then what the running project's `config` says.
+    fn quantums(&self) -> QuantizeDefaults {
+        self.defaults.with_project(&self.program.quantize)
+    }
+
     fn landing(&self, statements: &[Statement], fallback: Option<Quantize>) -> u64 {
         let grid = self.grid();
-        statements.iter().map(|s| grid.landing(self.defaults.for_statement(s, fallback), self.clock))
+        statements.iter().map(|s| grid.landing(self.quantums().for_statement(s, fallback), self.clock))
             .max().expect("an evaluation has statements")
     }
 
@@ -833,10 +841,11 @@ impl Session {
         // A compile that missed its grid waits for the next one. `now` lands
         // when compilation completes, rather than at its original clock sample.
         pending.lands_at = pending.lands_at.max(landing);
-        pending.id = self.next_id;
+        let id = self.next_id;
+        pending.id = id;
         self.next_id += 1;
         let first_at = pending.lands_at;
-        let accepted = Accepted { id: Some(pending.id), lands_at: pending.lands_at,
+        let accepted = Accepted { id: Some(id), lands_at: pending.lands_at,
             position: self.grid().position(pending.lands_at), changes: pending.summary.clone() };
         // Preserve chronological snapshots if a compile crossed a boundary.
         // Existing transactions already prepared against this one cannot land
@@ -849,20 +858,20 @@ impl Session {
             self.next_id += 1;
         }
         if !job.ramp.is_empty()
-            && let Some(first) = queue.iter_mut().find(|p| p.id == accepted.id.unwrap())
+            && let Some(first) = queue.iter_mut().find(|p| p.id == id)
         {
             first.group = accepted.id;
         }
-        let new_index = queue.iter().position(|p| p.id == accepted.id.unwrap()).unwrap();
+        let new_index = queue.iter().position(|p| p.id == id).expect("the new transaction is queued");
         let mut at = queue[new_index].lands_at;
         for p in &mut queue[new_index + 1..] { p.lands_at = p.lands_at.max(at); at = p.lands_at; }
         self.pending = queue;
         self.invalidate_live();
         if accepted.lands_at > job.lands_at && self.clock > job.lands_at
-            && job.statements.iter().any(|s| self.defaults.for_statement(s, job.fallback).unit != niminal_lang::QuantizeUnit::Now)
+            && job.statements.iter().any(|s| self.quantums().for_statement(s, job.fallback).unit != niminal_lang::QuantizeUnit::Now)
         {
             self.notify(format!("change {} missed its boundary while compiling; moved to bar {} beat {:.2}",
-                accepted.id.unwrap(), accepted.position.0, accepted.position.1));
+                id, accepted.position.0, accepted.position.1));
         }
         for notice in notices { self.notify(notice); }
         self.version += 1;
@@ -996,12 +1005,19 @@ impl Session {
     pub fn control_input(&mut self, signal: &ControlSignal) -> usize {
         match signal {
             ControlSignal::MidiNote { note, channel, velocity } => return self.key_input(*channel, *note, *velocity),
-            // a bend of 2 semitones each way
-            ControlSignal::MidiBend { channel, value } =>
-                return self.expression_input(*channel, Expression::Bend, (f64::from(*value) - 8192.0) / 8192.0 * BEND_RANGE, None),
+            // a bend of 2 semitones each way, or 48 for a note of its own on an MPE keyboard
+            ControlSignal::MidiBend { channel, value } => {
+                let range = if *channel != 1 && self.plays_mpe() { MPE_BEND_RANGE } else { BEND_RANGE };
+                let semitones = (f64::from(*value) - 8192.0) / 8192.0 * range;
+                return self.on_channels(*channel, |s, c| s.expression_input(c, Expression::Bend, semitones, None));
+            }
             ControlSignal::MidiPressure { channel, note, value } =>
-                return self.expression_input(*channel, Expression::Pressure, f64::from(*value) / 127.0, *note),
-            ControlSignal::MidiCc { cc: 64, channel, value } => { self.expression_input(*channel, Expression::Sustain, f64::from(*value) / 127.0, None); }
+                return self.on_channels(*channel, |s, c| s.expression_input(c, Expression::Pressure, f64::from(*value) / 127.0, *note)),
+            ControlSignal::MidiCc { cc: 74, channel, value } if self.plays_mpe() =>
+                return self.on_channels(*channel, |s, c| s.expression_input(c, Expression::Slide, f64::from(*value) / 127.0, None)),
+            ControlSignal::MidiCc { cc: 64, channel, value } => {
+                self.on_channels(*channel, |s, c| s.expression_input(c, Expression::Sustain, f64::from(*value) / 127.0, None));
+            }
             _ => {}
         }
         self.learn(signal);
@@ -1022,6 +1038,20 @@ impl Session {
         targets.iter().filter(|(name, value, unit)| self.set_control(name, *value, *unit, None, None).is_ok()).count()
     }
 
+    /// Is a clip played from an MPE keyboard playing?
+    fn plays_mpe(&self) -> bool {
+        self.schedule.plays_mpe(self.seconds(self.clock))
+    }
+
+    /// Run `f` for `channel`. On an MPE keyboard the master channel (1) speaks for every note's channel.
+    fn on_channels(&mut self, channel: u8, mut f: impl FnMut(&mut Self, u8) -> usize) -> usize {
+        if channel == 1 && self.plays_mpe() {
+            (2..=16).map(|c| f(self, c)).sum()
+        } else {
+            f(self, channel)
+        }
+    }
+
     /// A key pressed (`velocity` from 1) or let go (0) on a MIDI keyboard. Every part whose clip is
     /// played from keys on this channel (`keys: midi.keys(channel: 1)`) plays the note until the key
     /// comes up. Returns how many parts took it. It is logged, so a set replays.
@@ -1038,31 +1068,20 @@ impl Session {
     pub fn expression_input(&mut self, channel: u8, what: Expression, value: f64, note: Option<u8>) -> usize {
         self.sync_realtime();
         self.log.push(LogEntry { sample: self.clock, input: LogInput::Expression { channel, what, value, note } });
-        let keys_of = |s: &Self| -> Vec<u32> {
-            let down = s.keys_down.iter().filter(|((c, n), _)| *c == channel && note.is_none_or(|k| k == *n)).flat_map(|(_, keys)| keys.iter().copied());
-            let held = s.sustained.iter().filter(|(c, n, _)| *c == channel && note.is_none_or(|k| k == *n)).map(|s| s.2);
-            down.chain(held).collect()
-        };
         match what {
-            Expression::Sustain if value >= 0.5 => {
-                self.pedals.insert(channel);
-                0
-            }
             Expression::Sustain => {
-                self.pedals.remove(&channel);
-                let (up, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sustained).into_iter().partition(|s| s.0 == channel);
-                self.sustained = kept;
-                for (_, _, key) in &up {
-                    self.release_key(*key);
+                let released = self.keyboard.pedal(channel, value >= 0.5);
+                for &key in &released {
+                    self.release_key(key);
                 }
-                up.len()
+                released.len()
             }
-            Expression::Bend | Expression::Pressure => {
-                let (name, map) = if what == Expression::Bend { ("bend", &mut self.bends) } else { ("pressure", &mut self.pressures) };
+            Expression::Bend | Expression::Pressure | Expression::Slide => {
+                let name = match what { Expression::Bend => "bend", Expression::Pressure => "pressure", _ => "slide" };
                 if note.is_none() {
-                    map.insert(channel, value);
+                    self.keyboard.set_level(what, channel, value);
                 }
-                let keys = keys_of(self);
+                let keys = self.keyboard.keys_of(channel, note);
                 for &key in &keys {
                     self.key_param(key, name, value as f32);
                 }
@@ -1076,7 +1095,7 @@ impl Session {
         let stale = self.clock.saturating_sub(self.samples(2.0));
         self.key_params.retain(|p| p.3 > stale);
         self.key_params.push((key, name, value, self.clock));
-        for held in self.held.iter().filter(|h| h.2 == key) {
+        for held in self.sounding.held.iter().filter(|h| h.2 == key) {
             self.mixer.set_voice_param(held.1, name, value);
         }
         self.invalidate_live();
@@ -1084,23 +1103,14 @@ impl Session {
 
     fn key_event(&mut self, channel: u8, note: u8, velocity: u8) -> usize {
         if velocity == 0 {
-            let keys = self.keys_down.remove(&(channel, note)).unwrap_or_default();
-            for &key in &keys {
-                if self.pedals.contains(&channel) {
-                    self.sustained.push((channel, note, key));
-                } else {
-                    self.release_key(key);
-                }
+            let (released, total) = self.keyboard.lift(channel, note);
+            for key in released {
+                self.release_key(key);
             }
-            return keys.len();
+            return total;
         }
         // pressing a key that is still down, or held by the pedal, lets the first one go
-        for key in self.keys_down.remove(&(channel, note)).unwrap_or_default() {
-            self.release_key(key);
-        }
-        let (again, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sustained).into_iter().partition(|s| s.0 == channel && s.1 == note);
-        self.sustained = kept;
-        for (_, _, key) in again {
+        for key in self.keyboard.restrike(channel, note) {
             self.release_key(key);
         }
         let now = self.seconds(self.clock);
@@ -1119,23 +1129,19 @@ impl Session {
             };
             // a note starts with the bend and pressure the channel is at
             let params = &self.program.instruments[plan.instrument].params;
-            if let Some(&bend) = self.bends.get(&channel).filter(|b| **b != 0.0 && params.iter().any(|p| p.name == "bend")) {
-                event.args.insert("bend".into(), Value::Semitones(bend));
+            for (name, level) in self.keyboard.starting(channel) {
+                if let Some(level) = level.filter(|_| params.iter().any(|p| p.name == name)) {
+                    event.args.insert(name.into(), if name == "bend" { Value::Semitones(level) } else { Value::Num(level) });
+                }
             }
-            if let Some(&pressure) = self.pressures.get(&channel).filter(|p| **p != 0.0 && params.iter().any(|p| p.name == "pressure")) {
-                event.args.insert("pressure".into(), Value::Num(pressure));
-            }
-            let key = self.next_key;
-            self.next_key = self.next_key.wrapping_add(1) % NO_KEY;
+            let key = self.keyboard.new_key();
             let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
             self.insert_upcoming(Upcoming { start, dur: 0, event, key: Some(key), scheduled: false });
             keys.push(key);
         }
         self.invalidate_live();
         let taken = keys.len();
-        if taken > 0 {
-            self.keys_down.insert((channel, note), keys);
-        }
+        self.keyboard.hold(channel, note, keys);
         taken
     }
 
@@ -1144,9 +1150,7 @@ impl Session {
         let stale = self.clock.saturating_sub(self.samples(2.0));
         self.key_offs.retain(|&(_, at)| at > stale);
         self.key_offs.push((key, self.clock));
-        for held in self.held.iter_mut().filter(|h| h.2 == key) {
-            held.0 = self.clock;
-        }
+        self.sounding.release_key(key, self.clock);
         // a note that has not started yet is played as a blip, long enough to hear
         let blip = self.samples(0.01);
         for note in self.upcoming.iter_mut().filter(|u| u.key == Some(key)) {
@@ -1276,6 +1280,23 @@ impl Session {
         std::mem::take(&mut self.notices)
     }
 
+    /// The audio that tracks reading `input(..)` hear, a buffer for each channel starting at sample 0 of the
+    /// session. For rendering a file; a live session listens to a device instead.
+    pub fn set_audio_input(&mut self, channels: Vec<Vec<f32>>) {
+        self.audio_input = channels;
+    }
+
+    /// Start keeping what each track and bus puts out, for an offline render's stems. Only for renders:
+    /// it grows without bound.
+    pub fn capture_stems(&mut self) {
+        self.mixer.capture_stems();
+    }
+
+    /// The stems kept so far, no longer kept after this.
+    pub fn take_stems(&mut self) -> Option<niminal_engine::Stems> {
+        self.mixer.take_stems()
+    }
+
     /// Voices silenced for producing NaN or infinity since this was last called.
     pub fn take_silenced(&mut self) -> usize {
         std::mem::take(&mut self.silenced)
@@ -1354,30 +1375,13 @@ impl Session {
                 .filter(|&j| self.program.bus_layouts[i] == program.bus_layouts[j])
         }).collect();
         self.mixer.remap_buses(&mapping);
-        let transfers = self.plan_transfers(&project, &program);
+        let mut transfers = Vec::new();
+        plan_transfers(&self.program, &program, &mut transfers);
         mixer.adopt(&mut self.mixer, &transfers);
         crate::controls::sync_mixer(&self.controls, &mut mixer, self.clock);
         self.mixer = mixer;
         self.program = program;
         self.project = project;
-    }
-
-    /// Which running voices and effect chains the new program's tracks take over.
-    fn plan_transfers(&self, _next: &Project, program: &Program) -> Vec<Transfer> {
-        let old = &self.program;
-
-        program
-            .tracks
-            .iter()
-            .enumerate()
-            .map(|(i, track)| {
-                let from = if i == 0 { Some(0) } else { old.track_index(&track.name) };
-                Transfer {
-                    voices_from: from,
-                    chain_from: from.filter(|_| i > 0),
-                }
-            })
-            .collect()
     }
 
     /// Carry out one `play`, `mute`, note... statement that has landed. It was
@@ -1404,7 +1408,7 @@ impl Session {
     /// Whether a pending change waits for a bar line, not a beat.
     fn landing_unit_is_bar(&self, p: &Pending) -> bool {
         use niminal_lang::QuantizeUnit;
-        p.statements.iter().any(|s| matches!(self.defaults.for_statement(s, None).unit, QuantizeUnit::Bar | QuantizeUnit::Cycle))
+        p.statements.iter().any(|s| matches!(self.quantums().for_statement(s, None).unit, QuantizeUnit::Bar | QuantizeUnit::Cycle))
     }
 
     fn rebuild_schedule(&mut self) {
@@ -1435,7 +1439,12 @@ impl Session {
                 crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
             }
             if let Some(limiter) = &mut self.limiter { limiter.clear(); }
-            self.held.clear();
+            self.sounding.held.clear();
+            for (_, _, note) in std::mem::take(&mut self.sounding.midi) {
+                if self.midi_out.len() < MAX_MIDI_QUEUE {
+                    self.midi_out.push(crate::MidiEvent { at: self.clock, on: false, port: note.port, channel: note.channel, note: note.note, velocity: note.velocity });
+                }
+            }
             self.upcoming.clear();
             self.control_sets.clear();
             self.next_panic += 1;
@@ -1464,9 +1473,7 @@ impl Session {
             if let Some(change) = self.control_changes.first() {
                 n = n.min(change.at.saturating_sub(self.clock).max(1));
             }
-            for &(off, _, _) in &self.held {
-                n = n.min(off.saturating_sub(self.clock).max(1));
-            }
+            n = self.sounding.limit(self.clock, n);
             if let Some(&t) = self.schedule.panics().get(self.next_panic) {
                 n = n.min(self.samples(t).saturating_sub(self.clock).max(1));
             }
@@ -1484,6 +1491,10 @@ impl Session {
             self.start_due();
 
             let n = n.max(1) as usize;
+            for (c, samples) in self.audio_input.iter().enumerate().take(niminal_engine::MAX_CHANNELS) {
+                let from = (self.clock as usize).min(samples.len());
+                self.mixer.set_audio_input(c, &samples[from..(from + n).min(samples.len())]);
+            }
             self.mixer.process(&mut block[..channels], n);
             self.silenced += self.mixer.take_silenced();
             if let Some(limiter) = &mut self.limiter {
@@ -1618,7 +1629,11 @@ impl Session {
                     self.mixer.set_voice_pan(id, plan.pan);
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
                     let off = if note.key.is_some() { u64::MAX } else { self.clock + note.dur };
-                    self.held.push((off, id, note.key.unwrap_or(NO_KEY)));
+                    self.sounding.held.push((off, id, note.key.unwrap_or(NO_KEY)));
+                    if let Some(midi) = plan.midi {
+                        self.send_midi(true, &midi, self.clock);
+                        self.sounding.midi.push((off, note.key.unwrap_or(NO_KEY), midi));
+                    }
                     if self.mixer.take_stolen() > 0 {
                         self.notify(format!("too many notes at once: the oldest are ended early to keep to {} voices", DEFAULT_MAX_VOICES));
                     }
@@ -1628,10 +1643,26 @@ impl Session {
         }
     }
 
+    fn send_midi(&mut self, on: bool, note: &niminal_lang::MidiNote, at: u64) {
+        if self.midi_out.len() < MAX_MIDI_QUEUE {
+            self.midi_out.push(crate::MidiEvent { at, on, port: note.port.clone(), channel: note.channel, note: note.note, velocity: note.velocity });
+        }
+    }
+
+    /// The notes that went to `midi_out` instruments since this was last called, in order.
+    pub fn take_midi(&mut self) -> Vec<crate::MidiEvent> {
+        std::mem::take(&mut self.midi_out)
+    }
+
     fn release_due(&mut self) {
         let now = self.clock;
+        let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sounding.midi).into_iter().partition(|h| h.0 <= now);
+        self.sounding.midi = kept;
+        for (_, _, note) in &ended {
+            self.send_midi(false, note, now);
+        }
         let mixer = &mut self.mixer;
-        self.held.retain(|&(off, id, _)| {
+        self.sounding.held.retain(|&(off, id, _)| {
             if off <= now {
                 mixer.release(id);
             }
@@ -1653,6 +1684,15 @@ pub(super) fn landing_factor(by_bar: bool, old: Tempo, new: Tempo) -> f64 {
 }
 
 /// Whether a pending change sets the tempo or meter.
+/// Which running voices and effect chains the new program's tracks take over from the old one's.
+pub(super) fn plan_transfers(old: &Program, new: &Program, out: &mut Vec<Transfer>) {
+    out.clear();
+    for (i, track) in new.tracks.iter().enumerate() {
+        let from = if i == 0 { Some(0) } else { old.track_index(&track.name) };
+        out.push(Transfer { voices_from: from, chain_from: from.filter(|_| i > 0) });
+    }
+}
+
 fn is_timing(p: &Pending) -> bool {
     p.statements.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")))
 }

@@ -313,6 +313,43 @@ opcode split(x, cutoff: hz) -> (low, high) {
     }
 
     #[test]
+    fn an_opcode_can_use_the_several_results_of_another() {
+        let nested = raw(&format!(
+            "{SPLIT}opcode band(x, lo: hz, hi: hz) {{ top = x.split(cutoff: hi)\n mid = top.low.split(cutoff: lo)\n mid.high }}\ninstr a() {{ osc(saw, 300hz).band(lo: 200hz, hi: 900hz) }}\na() for 1beat"
+        ));
+        let by_hand = raw(&format!(
+            "{SPLIT}instr a() {{ top = osc(saw, 300hz).split(cutoff: 900hz)\n mid = top.low.split(cutoff: 200hz)\n mid.high }}\na() for 1beat"
+        ));
+        assert!(rms(&nested) > 0.01);
+        assert!(nested.iter().zip(&by_hand).all(|(a, b)| (a - b).abs() < 1e-5), "the same as writing it out");
+        // a call on its own inside an opcode gives its first result, as in an instrument
+        let first = raw(&format!("{SPLIT}opcode u(x) {{ x.split(cutoff: 500hz) }}\ninstr a() {{ osc(saw, 300hz).u }}\na() for 1beat"));
+        let direct = raw(&format!("{SPLIT}instr a() {{ osc(saw, 300hz).split(cutoff: 500hz).low }}\na() for 1beat"));
+        assert!(first.iter().zip(&direct).all(|(a, b)| (a - b).abs() < 1e-6));
+    }
+
+    #[test]
+    fn an_opcode_can_use_built_in_opcodes() {
+        let near = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5);
+        // a filter, and the arguments it is given, inside an opcode
+        let wrapped = raw("opcode dull(x, c: hz) { x.lpf(cutoff: c * 2, res: 0.3) * 0.5 }\ninstr a() { osc(saw, 220hz).dull(c: 1khz) }\na() for 1beat");
+        let by_hand = raw("instr a() { osc(saw, 220hz).lpf(cutoff: 1khz * 2, res: 0.3) * 0.5 }\na() for 1beat");
+        assert!(rms(&wrapped) > 0.01);
+        assert!(near(&wrapped, &by_hand), "the same as writing it out");
+        // an oscillator, with a waveform, as an LFO that moves the filter
+        let lfo = raw("opcode wah(x) { x.lpf(cutoff: 1khz + osc(sine, 3hz) * 800hz) }\ninstr a() { osc(saw, 220hz).wah }\na() for 1beat");
+        let lfo_by_hand = raw("instr a() { osc(saw, 220hz).lpf(cutoff: 1khz + osc(sine, 3hz) * 800hz) }\na() for 1beat");
+        assert!(near(&lfo, &lfo_by_hand));
+        // each use has its own state: two calls are two filters
+        let twice = raw("opcode dull(x) { x.lpf(cutoff: 500hz) }\ninstr a() { osc(saw, 220hz).dull.dull }\na() for 1beat");
+        let twice_by_hand = raw("instr a() { osc(saw, 220hz).lpf(cutoff: 500hz).lpf(cutoff: 500hz) }\na() for 1beat");
+        assert!(near(&twice, &twice_by_hand));
+        // a delay needs its longest time as a constant, as it does in an instrument
+        let echo = raw("opcode echo(x) { x + x.delay(time: 100ms, feedback: 0.3, max: 200ms) * 0.5 }\ninstr a() { osc(sine, 440hz) * env[1 | 10ms 0] }\ninstr b() { osc(sine, 440hz) * env[1 | 10ms 0].echo }\nb() for 1beat");
+        assert!(rms(&echo) > 0.001);
+    }
+
+    #[test]
     fn several_outputs_keep_separate_state_per_channel_and_note() {
         let one = raw(&format!("{SPLIT}instr a(f: hz) {{ osc(saw, f).split(cutoff: 500hz).high * env[1 1sec 1] }}\na(f: 200hz) for 1beat"));
         let two = raw(&format!("{SPLIT}instr a(f: hz) {{ osc(saw, f).split(cutoff: 500hz).high * env[1 1sec 1] }}\na(f: 200hz) for 1beat\nat 100ms a(f: 330hz) for 1beat"));
@@ -340,8 +377,11 @@ opcode split(x, cutoff: hz) -> (low, high) {
         assert!(error("opcode t(x) -> (a, a) { a = x }").contains("named twice"));
         assert!(error("instr t() -> (a, b) { 1 }").contains("only an opcode"));
         assert!(error("opcode t(x) -> (a, b) { a = x\n b = x\n x }").contains("never used"));
-        assert!(error(&format!("{SPLIT}opcode u(x) {{ x.split(cutoff: 1hz) }}")).contains("several outputs"));
-        assert!(error("opcode u(x) { x.lpf(cutoff: 1khz) }").contains("can't be used inside an opcode"));
+        assert!(error(&format!("{SPLIT}opcode u(x) {{ f = x.split(cutoff: 1hz)\n f.mid }}")).contains("no result `mid`"));
+        assert!(error("opcode u(x) { x.nonsense(cutoff: 1khz) }").contains("can't be used inside an opcode"));
+        assert!(error("opcode u(x) { x.lpf(cutoff: 1) }").contains("expects"));
+        assert!(error("opcode u(x) { x.lpf }").contains("needs an argument `cutoff`"));
+        assert!(error("opcode u(x) { to_layout(x, stereo) }").contains("can't be used inside an opcode"));
         assert!(error(&format!("{LIB}opcode u(x) {{ x.one_pole(cutoff: 0.5) }}")).contains("expects"));
         assert!(error(&format!("{LIB}opcode u(x) {{ x.one_pole }}")).contains("needs an argument `cutoff`"));
     }
@@ -720,6 +760,28 @@ mod channels {
         let second = (1.0 * SR) as usize + 500; // past the first note's release
         assert!(peak(&each[0][..first]) > 0.9 && peak(&each[1][..first]) < 1e-6);
         assert!(peak(&each[1][second..second + first]) > 0.9 && peak(&each[0][second..second + first]) < 1e-6);
+    }
+
+    /// A stereo render of a track with these extra lines, playing one middle C.
+    fn mixed(lines: &str) -> Vec<Vec<f32>> {
+        let src = format!(
+            "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\ntrack lead {{\n  instrument = tone\n  {lines}\n}}\nlead.play([c4])"
+        );
+        render_with(&program(&src), &[], &RenderOptions { limiter: false, until: Some(1.9), ..Default::default() }).unwrap().channels
+    }
+
+    #[test]
+    fn a_tracks_mixer_lines_set_its_level_and_place() {
+        let plain = mixed("");
+        let quiet = mixed("gain = -6db");
+        let ratio = peak(&quiet[0][..2000]) / peak(&plain[0][..2000]);
+        assert!((ratio - 0.5012).abs() < 0.01, "-6db: {ratio}");
+        let left = mixed("pan = -30deg");
+        assert!(peak(&left[0][..2000]) > 0.99 && peak(&left[1][..2000]) < 1e-6, "hard left, and as loud as the centred mono voice would be per channel");
+        let centre = mixed("pan = 0deg");
+        assert!((peak(&centre[0][..2000]) - peak(&plain[0][..2000])).abs() < 0.01, "a centred pan changes nothing");
+        let both = mixed("gain = -6db\n  pan = 30deg");
+        assert!(peak(&both[1][..2000]) > 0.49 && peak(&both[0][..2000]) < 1e-6);
     }
 
     #[test]
@@ -1262,6 +1324,15 @@ fn sections_can_have_their_own_tempo_and_meter() {
 }
 
 #[test]
+fn an_arrangement_tempo_can_change_gradually_through_a_section() {
+    let src = format!("{SONG}\narrangement ramp {{ sections: [two.over(8 bars)]\n tempo: env[60bpm 8bars 240bpm] }}");
+    let out = mono(render_with(&program(&src), &[], &arrangement("ramp")).unwrap());
+    // 240 / (60 + 22.5 bar) summed over 8 bars: about 14.8 seconds, between the 32s at 60bpm and 8s at 240bpm
+    let secs = out.len() as f64 / SR;
+    assert!(secs > 14.0 && secs < 15.6, "{secs}");
+}
+
+#[test]
 fn render_with_an_arrangement_ignores_the_files_own_timeline() {
     let src = format!("{SONG}\na.play([c6])");
     let p = program(&src);
@@ -1610,13 +1681,112 @@ mod tempo_ramps {
         let rendered = |src: &str| {
             let (rest, _) = split_ramps(src).unwrap();
             let layout = compile(&rest).unwrap().master;
-            render_session(src, std::path::Path::new("."), layout, End::Bars(4.0), true).unwrap().len() as f64 / SR
+            render_session(src, std::path::Path::new("."), layout, End::Bars(4.0), true, false, Vec::new()).unwrap().len() as f64 / SR
         };
         let ramped = rendered(FILE);
         // four bars at 120bpm last 8s and at 240bpm 4s; the first bar is slow and the rest speed up
         assert!(ramped > 4.5 && ramped < 7.0, "{ramped}");
         let steady = rendered(&FILE.replace("tempo 240bpm @ next bar over 2 bars\n", ""));
         assert!(steady > 7.9 && ramped < steady - 1.0, "{steady} vs {ramped}");
+    }
+
+    #[test]
+    fn a_ramped_render_keeps_stems_through_the_tempo_changes() {
+        let (rest, _) = split_ramps(FILE).unwrap();
+        let layout = compile(&rest).unwrap().master;
+        let out = render_session(FILE, std::path::Path::new("."), layout, End::Bars(4.0), false, true, Vec::new()).unwrap();
+        let track = out.stems.iter().find(|s| s.name == "t").expect("the track's stem");
+        assert_eq!(track.channels[0].len(), out.channels[0].len(), "a stem is as long as the mix");
+        assert!(rms(&track.channels[0]) > 0.01);
+        // the whole piece is on the stem, not just the stretch after the last tempo step
+        let third = track.channels[0].len() / 3;
+        assert!(rms(&track.channels[0][..third]) > 0.01 && rms(&track.channels[0][2 * third..]) > 0.01);
+        // the track is the only sound, so the stem is the mix
+        let diff = track.channels[0].iter().zip(&out.channels[0]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(diff < 1e-4, "{diff}");
+    }
+}
+
+mod audio_input {
+    use super::*;
+
+    fn heard(src: &str, input: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+        render_with(&program(src), &[], &RenderOptions { limiter: false, input, ..Default::default() }).unwrap().channels
+    }
+
+    fn ramp(len: usize) -> Vec<f32> {
+        (0..len).map(|i| (i as f32 / len as f32) * 0.5).collect()
+    }
+
+    #[test]
+    fn a_track_hears_the_input_and_processes_it() {
+        let input = ramp(9_600);
+        let out = heard("tempo 120bpm\ntrack mic { out = input(1) * 0.5 }", vec![input.clone()]);
+        assert_eq!(out[0].len(), input.len(), "it lasts as long as the input");
+        assert!(out[0].iter().zip(&input).all(|(o, i)| (o - i * 0.5).abs() < 1e-6));
+        // a filter on it, the same as on the input written out
+        let filtered = heard("tempo 120bpm\ntrack mic { out = input(1).lpf(cutoff: 2khz) }", vec![ramp(9_600)]);
+        assert!(filtered[0].iter().any(|v| v.abs() > 0.01));
+    }
+
+    #[test]
+    fn channels_are_picked_and_mixed_to_the_masters_layout() {
+        let (left, right) = (vec![0.25; 4_800], vec![0.5; 4_800]);
+        let stereo = heard("tempo 120bpm\nconfig { channels: stereo }\ntrack mic { out = input(1..2) }", vec![left.clone(), right.clone()]);
+        assert_eq!((stereo[0][100], stereo[1][100]), (0.25, 0.5));
+        let second = heard("tempo 120bpm\nconfig { channels: stereo }\ntrack mic { out = [input(2), input(1)] }", vec![left.clone(), right.clone()]);
+        assert_eq!((second[0][100], second[1][100]), (0.5, 0.25));
+        // a mono input is spread to both sides of a stereo master
+        let mono = heard("tempo 120bpm\nconfig { channels: stereo }\ntrack mic { out = input(2) }", vec![left, right]);
+        assert!((mono[0][100] - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5 && mono[0][100] == mono[1][100]);
+    }
+
+    #[test]
+    fn input_is_silent_when_there_is_none_and_a_mistake_is_reported() {
+        let out = render_with(&program("tempo 120bpm\ninstr a() { osc(sine, 220hz) }\ntrack mic { out = input(1) }\na() for 1beat"), &[], &RenderOptions { limiter: false, ..Default::default() }).unwrap();
+        assert!(out.channels[0].iter().all(|v| *v == 0.0 || v.abs() > 0.0), "renders without an input");
+        let error = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone()).collect::<String>()).unwrap_or_default();
+        assert_eq!(error("instr a() { input(1) }"), "`input` is read in a track");
+        assert!(error("track m { out = input(0) }").contains("whole number from 1 to 16"));
+        assert!(error("track m { out = input(2..1) }").contains("comes first"));
+        assert!(error("track m { out = input() }").contains("takes a channel"));
+    }
+}
+
+mod range_at_the_use_site {
+    use super::*;
+
+    fn raw(src: &str) -> Vec<f32> {
+        mono(render_with(&program(src), &[], &RenderOptions { limiter: false, until: None, ..Default::default() }).unwrap())
+    }
+
+    fn near(a: &[f32], b: &[f32]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4)
+    }
+
+    #[test]
+    fn a_control_from_zero_to_one_is_mapped_where_it_is_used() {
+        let mapped = raw("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz..4khz)) }\na() for 1beat");
+        let by_hand = raw("instr a() { osc(saw, 220hz).lpf(cutoff: 2100hz) }\na() for 1beat");
+        assert!(rms(&mapped) > 0.01);
+        assert!(near(&mapped, &by_hand));
+        // the ends can be written as two arguments too
+        assert!(near(&mapped, &raw("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz, 4khz)) }\na() for 1beat")));
+    }
+
+    #[test]
+    fn decibels_move_evenly_in_db() {
+        let mapped = raw("ctl v = 0.5\ninstr a() { osc(saw, 220hz) * v.range(-60db..0db) }\na() for 1beat");
+        let by_hand = raw("instr a() { osc(saw, 220hz).gain(-30db) }\na() for 1beat");
+        assert!(near(&mapped, &by_hand));
+    }
+
+    #[test]
+    fn range_mistakes_are_reported() {
+        let error = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone()).collect::<String>()).unwrap_or_default();
+        assert!(error("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz..4)) }").contains("same unit"));
+        assert!(error("ctl k = 0.5hz\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz..4khz)) }").contains("plain signal from 0 to 1"));
+        assert!(error("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz)) }").contains("two ends"));
     }
 }
 

@@ -1,6 +1,6 @@
 //! When changes land: the musical boundary a change waits for.
 
-use niminal_lang::{Quantize, QuantizeRelation, QuantizeUnit, Statement, StatementKind};
+use niminal_lang::{Quantize, QuantizeConfig, QuantizeRelation, QuantizeUnit, Statement, StatementKind};
 
 /// The quantum each kind of change uses when it doesn't say.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -11,6 +11,8 @@ pub struct QuantizeDefaults {
     pub instrument: Quantize,
     pub track: Quantize,
     pub tempo: Quantize,
+    /// Defining a `ctl`; the default if none.
+    pub control: Option<Quantize>,
 }
 
 fn every(count: f64, unit: QuantizeUnit) -> Quantize {
@@ -25,15 +27,29 @@ impl Default for QuantizeDefaults {
             instrument: every(1.0, QuantizeUnit::Beat),
             track: every(1.0, QuantizeUnit::Bar),
             tempo: every(1.0, QuantizeUnit::Bar),
+            control: None,
         }
     }
 }
 
 impl QuantizeDefaults {
+    /// These, with what a project's `config { quantize: { ... } }` says in their place.
+    pub fn with_project(&self, config: &QuantizeConfig) -> QuantizeDefaults {
+        QuantizeDefaults {
+            default: config.default.unwrap_or(self.default),
+            play: config.play.unwrap_or(self.play),
+            instrument: config.instrument.unwrap_or(self.instrument),
+            track: config.track.unwrap_or(self.track),
+            tempo: config.tempo.unwrap_or(self.tempo),
+            control: config.control.or(self.control),
+        }
+    }
+
     /// The quantum for a statement: its own `@`, else `fallback` (an override
-    /// for the whole evaluation), else the default for its kind.
+    /// for the whole evaluation), else its definition's `with(quantize: ...)`, else the
+    /// default for its kind.
     pub fn for_statement(&self, s: &Statement, fallback: Option<Quantize>) -> Quantize {
-        if let Some(q) = s.quantize.or(fallback) {
+        if let Some(q) = s.quantize.or(fallback).or(s.definition_quantize) {
             return q;
         }
         match s.kind {
@@ -44,6 +60,7 @@ impl QuantizeDefaults {
                 Some("instr") => self.instrument,
                 Some("track") => self.track,
                 Some("tempo") => self.tempo,
+                Some("ctl") => self.control.unwrap_or(self.default),
                 _ => self.default,
             },
         }

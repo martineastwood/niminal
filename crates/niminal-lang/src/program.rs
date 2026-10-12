@@ -34,6 +34,26 @@ pub struct Instrument {
     pub priority: niminal_engine::Priority,
     /// `with(glide: 80ms)`: how long a change of pitch takes.
     pub glide: Option<niminal_score::Time>,
+    /// `midi_out`: notes are sent to external gear instead of sounding here.
+    pub midi: Option<MidiTarget>,
+}
+
+/// Where a `midi_out` instrument sends its notes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MidiTarget {
+    /// Part of the name of a MIDI output port; if no port matches, a virtual one of this name is made.
+    pub port: std::sync::Arc<str>,
+    /// From 1 to 16.
+    pub channel: u8,
+}
+
+/// A note ready to send to external gear.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MidiNote {
+    pub port: std::sync::Arc<str>,
+    pub channel: u8,
+    pub note: u8,
+    pub velocity: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,8 +91,22 @@ impl ArgError {
     }
 }
 
+/// A signal sent out over OSC: `x.osc_out("/vj/level", port: 9000)`. The audio thread keeps `value`
+/// up to date; whoever sends it reads it `rate` times a second.
+#[derive(Clone, Debug)]
+pub struct OscTap {
+    pub address: String,
+    pub host: String,
+    pub port: u16,
+    /// Messages a second at most.
+    pub rate: f64,
+    pub value: std::sync::Arc<niminal_engine::ops::Tap>,
+}
+
 /// A track as the mixer sees it, plus what the language knows about it.
 pub struct TrackInfo {
+    /// Its signals sent over OSC.
+    pub taps: Vec<OscTap>,
     /// Empty for the implicit track that plays bare instruments.
     pub name: String,
     /// Index into `Program::instruments`.
@@ -146,7 +180,21 @@ pub fn engine_value(unit: Unit, value: Value, tempo: Tempo) -> Result<f64, nimin
     })
 }
 
+/// `config { quantize: { ... } }`: when each kind of change lands, where the project says.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct QuantizeConfig {
+    pub default: Option<crate::performance::Quantize>,
+    pub play: Option<crate::performance::Quantize>,
+    pub instrument: Option<crate::performance::Quantize>,
+    pub track: Option<crate::performance::Quantize>,
+    pub control: Option<crate::performance::Quantize>,
+    pub tempo: Option<crate::performance::Quantize>,
+}
+
 pub struct Program {
+    pub quantize: QuantizeConfig,
+    /// Every signal the project sends over OSC.
+    pub taps: Vec<OscTap>,
     pub controls: Vec<ControlDef>,
     pub tempo: Tempo,
     /// The layout of the output, and of every voice and track.
@@ -181,6 +229,8 @@ pub struct NotePlan {
     pub controls: Vec<(String, f32, f64)>,
     /// How the note is spread over the master's speakers, if it has a pan of its own.
     pub pan: Option<[f32; niminal_engine::MAX_CHANNELS]>,
+    /// The note to send, if its instrument is a `midi_out`.
+    pub midi: Option<MidiNote>,
 }
 
 /// What a note's target resolves to.
@@ -296,7 +346,23 @@ impl Program {
                 glide: this.glide.map_or(0.0, |t| t.to_seconds(self.tempo) as f32),
             })
         };
-        Ok(NotePlan { track, instrument, params, choke, rule, controls, pan })
+        let midi = self.instruments[instrument].midi.as_ref().map(|target| {
+            let this = &self.instruments[instrument];
+            let value = |name: &str| {
+                let i = this.params.iter().position(|p| p.name == name)?;
+                params.iter().find(|(index, _)| *index == i).map(|&(_, v)| v).or(this.params[i].default)
+            };
+            let hz = f64::from(value("freq").unwrap_or(440.0)).max(1.0);
+            let db = 20.0 * f64::from(value(crate::lower::GAIN_PARAM).unwrap_or(1.0)).max(1e-6).log10();
+            MidiNote {
+                port: target.port.clone(),
+                channel: target.channel,
+                note: (69.0 + 12.0 * (hz / 440.0).log2()).round().clamp(0.0, 127.0) as u8,
+                // 0db is the loudest, -30db the softest: the same scale a keyboard's velocity is read on
+                velocity: ((db + 30.0) / 30.0 * 126.0 + 1.0).round().clamp(1.0, 127.0) as u8,
+            }
+        });
+        Ok(NotePlan { track, instrument, params, choke, rule, controls, pan, midi })
     }
 
     /// A mixer for this program's tracks and buses.

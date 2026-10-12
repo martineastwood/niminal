@@ -28,11 +28,13 @@ pub struct RenderOptions {
     pub arrangement: Option<String>,
     /// Also keep what each track put out and what each bus carried.
     pub stems: bool,
+    /// What tracks that read `input(..)` hear: a buffer for each channel, from the start.
+    pub input: Vec<Vec<f32>>,
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        RenderOptions { limiter: true, until: None, arrangement: None, stems: false }
+        RenderOptions { limiter: true, until: None, arrangement: None, stems: false, input: Vec::new() }
     }
 }
 
@@ -184,10 +186,12 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
             off > pos
         });
 
-        if mixer.active_voices() == 0 {
+        // while there is input to hear, the tracks that read it go on sounding
+        let input_len = options.input.iter().map(Vec::len).max().unwrap_or(0);
+        if mixer.active_voices() == 0 && pos >= input_len {
             match notes.get(next) {
                 None => {
-                    ring_out(&mut mixer, &mut out);
+                    ring_out(&mut mixer, &mut out, &options.input);
                     let stems = collect_stems(program, &mut mixer, out[0].len());
                     return Ok(finish(out, silenced_voices + mixer.take_silenced(), stems, options));
                 }
@@ -222,15 +226,20 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
             n = n.min(m.0 - pos);
         }
 
-        mix_block(&mut mixer, &mut out, n);
+        mix_block(&mut mixer, &mut out, n, &options.input);
         silenced_voices += mixer.take_silenced();
         pos += n;
     }
 }
 
 /// Mix `frames` more samples onto the end of every channel.
-fn mix_block(mixer: &mut Mixer, out: &mut [Vec<f32>], frames: usize) {
+fn mix_block(mixer: &mut Mixer, out: &mut [Vec<f32>], frames: usize, input: &[Vec<f32>]) {
     let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];
+    let at = out[0].len();
+    for (c, samples) in input.iter().enumerate().take(MAX_CHANNELS) {
+        let from = at.min(samples.len());
+        mixer.set_audio_input(c, &samples[from..(at + frames).min(samples.len())]);
+    }
     mixer.process(&mut block[..out.len()], frames);
     for (channel, mixed) in out.iter_mut().zip(&block) {
         channel.extend_from_slice(&mixed[..frames]);
@@ -239,7 +248,7 @@ fn mix_block(mixer: &mut Mixer, out: &mut [Vec<f32>], frames: usize) {
 
 /// Keep mixing after the last voice has ended, until the tracks' effects have
 /// died away, then trim the trailing silence.
-fn ring_out(mixer: &mut Mixer, out: &mut [Vec<f32>]) {
+fn ring_out(mixer: &mut Mixer, out: &mut [Vec<f32>], input: &[Vec<f32>]) {
     let needed = (TAIL_SILENCE * SAMPLE_RATE as f32) as usize;
     let limit = out[0].len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
     let quiet_at = |out: &[Vec<f32>], i: usize| out.iter().all(|c| c[i].abs() < TAIL_THRESHOLD);
@@ -247,7 +256,7 @@ fn ring_out(mixer: &mut Mixer, out: &mut [Vec<f32>]) {
     let mut silent = (0..out[0].len()).rev().take_while(|&i| quiet_at(out, i)).count();
     while silent < needed && out[0].len() < limit {
         let start = out[0].len();
-        mix_block(mixer, out, BLOCK);
+        mix_block(mixer, out, BLOCK, input);
         for i in start..start + BLOCK {
             silent = if quiet_at(out, i) { silent + 1 } else { 0 };
         }
@@ -278,6 +287,10 @@ fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, stems: Vec<Stem>,
 /// bare instruments is left out if it was never heard.
 fn collect_stems(program: &Program, mixer: &mut Mixer, len: usize) -> Vec<Stem> {
     let Some(captured) = mixer.take_stems() else { return Vec::new() };
+    name_stems(program, captured, len)
+}
+
+fn name_stems(program: &Program, captured: niminal_engine::Stems, len: usize) -> Vec<Stem> {
     let named = captured.tracks.into_iter().enumerate().map(|(i, c)| (program.tracks[i].name.clone(), c))
         .chain(captured.buses.into_iter().enumerate().map(|(i, c)| (program.buses[i].clone(), c)));
     let mut stems = Vec::new();
@@ -292,6 +305,12 @@ fn collect_stems(program: &Program, mixer: &mut Mixer, len: usize) -> Vec<Stem> 
         }
     }
     stems
+}
+
+/// The stems a session kept, named and cut to `len` samples like [`collect_stems`].
+fn collect_session_stems(session: &mut Session, len: usize) -> Vec<Stem> {
+    let Some(captured) = session.take_stems() else { return Vec::new() };
+    name_stems(session.program(), captured, len)
 }
 
 /// Write the channels as an interleaved 32-bit float WAV.
@@ -339,7 +358,7 @@ pub enum End {
 ///
 /// `source` has its `use` lines already joined in. The file's own `tempo` stays the starting tempo; each
 /// ramp is sent after the rest, so it sets off from there at the boundary it names.
-pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: End, limiter: bool) -> Result<RenderOutput, RenderError> {
+pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: End, limiter: bool, stems: bool, input: Vec<Vec<f32>>) -> Result<RenderOutput, RenderError> {
     const STEP: usize = BLOCK * 8;
     let problems = |ps: Vec<niminal_daemon::Problem>| RenderError(ps.iter().map(|p| p.message.clone()).collect::<Vec<_>>().join("\n"));
     let (rest, ramps) = split_ramps(source).map_err(|d| RenderError(d.message))?;
@@ -349,6 +368,10 @@ pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: 
     for ramp in &ramps {
         session.eval(ramp, Some("now")).map_err(problems)?;
     }
+    if stems {
+        session.capture_stems();
+    }
+    session.set_audio_input(input);
 
     let mut out: Vec<Vec<f32>> = vec![Vec::new(); layout.channels()];
     let run = |session: &mut Session, out: &mut Vec<Vec<f32>>| {
@@ -383,7 +406,8 @@ pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: 
     let keep = out[0].len() - silent;
     out.iter_mut().for_each(|c| c.truncate(keep));
     let silenced = session.take_silenced();
-    Ok(finish(out, silenced, Vec::new(), &RenderOptions { limiter, ..Default::default() }))
+    let kept = collect_session_stems(&mut session, keep);
+    Ok(finish(out, silenced, kept, &RenderOptions { limiter, ..Default::default() }))
 }
 
 /// Where a control is heading: from `from` towards `target` over `frames` samples starting at `at`.

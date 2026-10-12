@@ -4,6 +4,7 @@
 
 use super::*;
 use niminal_engine::Voice;
+use crate::sounding::Sounding;
 use crate::controls::{self, Change, State as ControlState, Applied};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::atomic::{AtomicU32, AtomicUsize};
@@ -30,6 +31,7 @@ pub struct RenderMetrics {
     pub control_drops: usize,
     pub retire_pressure: usize,
     pub deadline_misses: usize,
+    pub planner_panics: usize,
     pub max_render_micros: u64,
 }
 
@@ -46,6 +48,7 @@ pub(super) struct State {
     control_drops: AtomicUsize,
     retire_pressure: AtomicUsize,
     deadline_misses: AtomicUsize,
+    planner_panics: AtomicUsize,
     max_render_micros: AtomicU64,
     pub(super) latency: usize,
     /// The thread that plans ahead, woken when something changes that it must act on at once.
@@ -61,6 +64,7 @@ impl State {
             control_drops: self.control_drops.load(Ordering::Relaxed),
             retire_pressure: self.retire_pressure.load(Ordering::Relaxed),
             deadline_misses: self.deadline_misses.load(Ordering::Relaxed),
+            planner_panics: self.planner_panics.load(Ordering::Relaxed),
             max_render_micros: self.max_render_micros.load(Ordering::Relaxed),
         }
     }
@@ -75,13 +79,35 @@ struct Window {
     dropped: usize,
 }
 
+impl Window {
+    /// Say something once per window, however many notes it applies to.
+    fn notice(&mut self, text: &str) {
+        if !self.notices.iter().any(|n| n == text) { self.notices.push(text.into()); }
+    }
+}
+
 /// The most changes envelope lanes may make to parameters in one prepared window.
 const MAX_WINDOW_CONTROLS: usize = 2048;
 
 struct Command { at: u64, kind: Kind }
 
+impl Command {
+    /// Commands at one sample go in this order: a reset or swap of the graph before the notes it applies to.
+    fn order(&self) -> (u64, u8) {
+        (self.at, match self.kind {
+            Kind::Reset { .. } => 0,
+            Kind::Swap { .. } | Kind::Control { .. } => 1,
+            Kind::Note { .. } => 2,
+            Kind::Release { .. } | Kind::Param { .. } => 3,
+        })
+    }
+}
+
+// A command lives in a window made ahead of time, so its size costs nothing at play time; boxing the note would
+// mean freeing it on the audio thread.
+#[allow(clippy::large_enum_variant)]
 enum Kind {
-    Note { track: Option<String>, program: Arc<Program>, off: u64, key: u32, voice: Option<Voice> },
+    Note { track: Option<String>, program: Arc<Program>, off: u64, key: u32, voice: Option<Voice>, midi: Option<niminal_lang::MidiNote> },
     /// Let go of the notes a key is holding open.
     Release { key: u32 },
     /// Change a parameter (a keyboard's `bend` or `pressure`) of the notes a key is holding.
@@ -90,6 +116,13 @@ enum Kind {
     Control { key: String, value: f32, frames: u64 },
     Swap { mixer: Box<Mixer>, program: Arc<Program>, controls: Vec<ControlState>, transfers: Vec<Transfer> },
     Reset { mixer: Box<Mixer>, program: Arc<Program>, controls: Vec<ControlState>, epoch: u64 },
+}
+
+/// A `midi_out` note on or off, if anyone is listening. Allocates nothing.
+fn send_midi(tx: &mut Option<Producer<crate::MidiEvent>>, at: u64, on: bool, note: &niminal_lang::MidiNote) {
+    if let Some(tx) = tx {
+        let _ = tx.push(crate::MidiEvent { at, on, port: note.port.clone(), channel: note.channel, note: note.note, velocity: note.velocity });
+    }
 }
 
 enum Retired {
@@ -138,9 +171,13 @@ pub struct RealtimeRenderer {
     clock: u64,
     current: Option<Box<Window>>,
     cursor: usize,
-    held: Vec<(u64, VoiceId, u32)>,
+    sounding: Sounding,
     finished: Vec<Voice>,
     config: RealtimeConfig,
+    /// Audio from a device, for tracks that read `input(..)`.
+    audio_in: Option<crate::AudioInput>,
+    /// Where notes for `midi_out` instruments go, and those still sounding: when they end and the key that holds them.
+    midi_tx: Option<Producer<crate::MidiEvent>>,
 }
 
 impl Session {
@@ -160,21 +197,22 @@ impl Session {
             reset_epoch: AtomicU64::new(self.panic_epoch.load(Ordering::Acquire)),
             voices: AtomicUsize::new(self.mixer.active_voices()), peaks: std::array::from_fn(|_| AtomicU32::new(0)),
             silenced: AtomicUsize::new(0), late_events: AtomicUsize::new(0), starved_frames: AtomicUsize::new(0),
-            capacity_drops: AtomicUsize::new(0), control_drops: AtomicUsize::new(0), retire_pressure: AtomicUsize::new(0), deadline_misses: AtomicUsize::new(0), max_render_micros: AtomicU64::new(0), latency: self.latency(),
+            capacity_drops: AtomicUsize::new(0), control_drops: AtomicUsize::new(0), retire_pressure: AtomicUsize::new(0), deadline_misses: AtomicUsize::new(0), planner_panics: AtomicUsize::new(0), max_render_micros: AtomicU64::new(0), latency: self.latency(),
             planner_thread: std::sync::Mutex::new(None),
         });
         assert!(self.mixer.active_voices() <= config.max_voices * 2, "existing voices exceed realtime capacity");
         let mut mixer = std::mem::replace(&mut self.mixer, self.program.mixer(self.sample_rate));
         mixer.prepare_realtime(config.max_voices * 2);
         mixer.set_max_voices(config.max_voices);
-        let mut held = std::mem::take(&mut self.held);
-        held.reserve(config.max_voices * 2);
+        let mut sounding = std::mem::take(&mut self.sounding);
+        sounding.held.reserve(config.max_voices * 2);
+        sounding.midi.reserve(config.max_voices);
         let mut renderer = RealtimeRenderer {
             ready: ready_rx, control_rx, control_applied: applied_tx,
             control_pending: self.control_changes.clone(), controls: self.controls.clone(), retired: retired_tx, state: state.clone(), panic_epoch: self.panic_epoch.clone(),
             seen_panic: self.panic_epoch.load(Ordering::Acquire), mixer: Box::new(mixer), program: self.program.clone(),
             limiter: self.limiter.take(), channels: self.channels(), sample_rate: self.sample_rate, clock: self.clock,
-            current: None, cursor: 0, held, finished: Vec::with_capacity(config.max_voices * 2), config,
+            current: None, cursor: 0, sounding, finished: Vec::with_capacity(config.max_voices * 2), config, audio_in: None, midi_tx: None,
         };
         renderer.control_pending.reserve(controls::CAPACITY);
         self.live = Some(Planner { ready: ready_tx, control_tx, control_applied: applied_rx, retired: retired_rx, state, config,
@@ -234,7 +272,7 @@ impl Session {
         self.land_due();
         self.apply_panics();
         self.apply_controls();
-        let planner = self.live.as_ref().unwrap();
+        let Some(planner) = &self.live else { return };
         if planner.revision == planner.state.revision.load(Ordering::Acquire) {
             let consumed = self.clock.min(planner.prepared_until);
             self.upcoming.retain(|n| n.start >= consumed);
@@ -244,8 +282,14 @@ impl Session {
     /// Plan separate from audio buffering. Every window owns constructed voices
     /// and ready mixers, including changes that land inside the lookahead.
     pub fn prepare_realtime(&mut self) {
+        self.prepare_realtime_step(usize::MAX);
+    }
+
+    /// Like [`Session::prepare_realtime`], but plans at most `max_windows`. Returns whether more is waiting
+    /// to be planned, so that a thread sharing the session can let others in between.
+    pub fn prepare_realtime_step(&mut self, max_windows: usize) -> bool {
         self.sync_realtime();
-        let Some(mut planner) = self.live.take() else { return };
+        let Some(mut planner) = self.live.take() else { return false };
         while let Ok(retired) = planner.retired.pop() {
             match retired { Retired::Window(window) => drop(window), Retired::Voice(voice) => drop(voice) }
         }
@@ -258,8 +302,54 @@ impl Session {
             planner.prepared_until = self.clock;
         }
         planner.prepared_until = planner.prepared_until.max(self.clock);
+        // The planner must survive a panic in planning, or the renderer starves for good: start clean instead.
+        let planned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.plan_ahead(&mut planner, revision, max_windows)));
+        let more = planned.as_ref().is_ok_and(|more| *more);
+        if planned.is_err() {
+            planner.state.planner_panics.fetch_add(1, Ordering::Relaxed);
+            self.restart_realtime();
+        }
+        let metrics = planner.state.metrics();
+        if metrics.late_events > planner.reported.late_events {
+            self.notify(format!("{} prepared changes arrived after their sample deadline", metrics.late_events - planner.reported.late_events));
+        }
+        if metrics.starved_frames > planner.reported.starved_frames {
+            self.notify(format!("event preparation fell behind for {} frames", metrics.starved_frames - planner.reported.starved_frames));
+        }
+        if metrics.capacity_drops > planner.reported.capacity_drops {
+            self.notify(format!("{} notes exceeded the reserved live voice capacity", metrics.capacity_drops - planner.reported.capacity_drops));
+        }
+        if metrics.control_drops > planner.reported.control_drops {
+            self.notify("queued control updates were dropped after their definitions changed".into());
+        }
+        if metrics.retire_pressure > planner.reported.retire_pressure {
+            self.notify("the retirement queue is full; prepared changes are waiting".into());
+        }
+        if metrics.deadline_misses > planner.reported.deadline_misses {
+            self.notify(format!("DSP missed {} render deadlines", metrics.deadline_misses - planner.reported.deadline_misses));
+        }
+        if metrics.planner_panics > planner.reported.planner_panics {
+            self.notify("event preparation failed and was restarted; the sound was reset".into());
+        }
+        planner.reported = metrics;
+        self.live = Some(planner);
+        more
+    }
+
+    /// Ask the renderer to drop what it is playing and take a clean mixer from the next window.
+    pub fn restart_realtime(&self) {
+        self.panic_epoch.fetch_add(1, Ordering::Release);
+        self.invalidate_live();
+    }
+
+    /// Prepare windows until the lookahead is full, the queue is, or `max_windows` are made.
+    /// Returns whether it stopped for the last reason with more to do.
+    fn plan_ahead(&mut self, planner: &mut Planner, revision: u64, max_windows: usize) -> bool {
         let horizon = self.clock.saturating_add(planner.config.lookahead_frames);
+        let mut made = 0;
         while planner.prepared_until < horizon && planner.ready.slots() > 0 {
+            if made == max_windows { return true; }
+            made += 1;
             let from = planner.prepared_until;
             let to = (from + planner.config.window_frames as u64).min(horizon);
             let reset = from == self.clock
@@ -282,35 +372,13 @@ impl Session {
                 }
             }
             planner.deferred = future;
-            window.commands.sort_by_key(|c| (c.at, match c.kind {
-                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } | Kind::Param { .. } => 3, Kind::Control { .. } => 1,
-            }));
+            window.commands.sort_by_key(Command::order);
             match planner.ready.push(Box::new(window)) {
                 Ok(()) => { planner.prepared_until = to; planner.refresh = false; },
                 Err(PushError::Full(window)) => { drop(window); break; }
             }
         }
-        let metrics = planner.state.metrics();
-        if metrics.late_events > planner.reported.late_events {
-            self.notify(format!("{} prepared changes arrived after their sample deadline", metrics.late_events - planner.reported.late_events));
-        }
-        if metrics.starved_frames > planner.reported.starved_frames {
-            self.notify(format!("event preparation fell behind for {} frames", metrics.starved_frames - planner.reported.starved_frames));
-        }
-        if metrics.capacity_drops > planner.reported.capacity_drops {
-            self.notify(format!("{} notes exceeded the reserved live voice capacity", metrics.capacity_drops - planner.reported.capacity_drops));
-        }
-        if metrics.control_drops > planner.reported.control_drops {
-            self.notify("queued control updates were dropped after their definitions changed".into());
-        }
-        if metrics.retire_pressure > planner.reported.retire_pressure {
-            self.notify("the retirement queue is full; prepared changes are waiting".into());
-        }
-        if metrics.deadline_misses > planner.reported.deadline_misses {
-            self.notify(format!("DSP missed {} render deadlines", metrics.deadline_misses - planner.reported.deadline_misses));
-        }
-        planner.reported = metrics;
-        self.live = Some(planner);
+        false
     }
 
     pub fn realtime_metrics(&self) -> Option<RenderMetrics> {
@@ -327,7 +395,7 @@ impl Session {
         let mut program = self.program.clone();
         let mut history = self.history.clone();
         let mut explicit: Vec<Explicit> = self.upcoming.iter()
-            .filter(|n| !n.scheduled).map(|n| (n.start.max(self.clock), n.dur.saturating_sub(self.clock.saturating_sub(n.start)), n.event.clone(), self.clock, n.key)).collect();
+            .filter(|n| !n.scheduled).map(|n| Explicit { start: n.start.max(self.clock), dur: n.dur.saturating_sub(self.clock.saturating_sub(n.start)), event: n.event.clone(), created: self.clock, key: n.key }).collect();
         let mut position = from;
         if reset { window.commands.push(self.reset_command(from, &program, config)); }
         else if refresh { window.commands.push(self.swap_command(from, &program, config)); }
@@ -372,20 +440,24 @@ impl Session {
         }
         if position < to { self.plan_notes(&program, &history, &explicit, position..to, config, &mut window); }
         // Stable sorting keeps a graph swap/reset before notes at the same sample.
-        window.commands.sort_by_key(|c| (c.at, match c.kind {
-                Kind::Reset { .. } => 0, Kind::Swap { .. } => 1, Kind::Note { .. } => 2, Kind::Release { .. } | Kind::Param { .. } => 3, Kind::Control { .. } => 1,
-            }));
+        window.commands.sort_by_key(Command::order);
         for notice in window.notices.drain(..) { self.notify(notice); }
         *stopped = std::mem::take(&mut window.stopped);
         window
     }
 
-    fn swap_command(&self, at: u64, program: &Arc<Program>, config: RealtimeConfig) -> Command {
+    /// A mixer for `program`, built here so that the render thread need only swap it in.
+    fn fresh_mixer(&self, program: &Program, config: RealtimeConfig) -> Box<Mixer> {
         let mut mixer = program.mixer(self.sample_rate);
         mixer.prepare_realtime(config.max_voices * 2);
         mixer.set_max_voices(config.max_voices);
+        Box::new(mixer)
+    }
+
+    fn swap_command(&self, at: u64, program: &Arc<Program>, config: RealtimeConfig) -> Command {
+        let mixer = self.fresh_mixer(program, config);
         let states = self.control_states(program);
-        Command { at, kind: Kind::Swap { mixer: Box::new(mixer), program: program.clone(),
+        Command { at, kind: Kind::Swap { mixer, program: program.clone(),
             controls: states, transfers: Vec::with_capacity(program.tracks.len()) } }
     }
 
@@ -402,10 +474,8 @@ impl Session {
     }
 
     fn reset_command(&self, at: u64, program: &Arc<Program>, config: RealtimeConfig) -> Command {
-        let mut mixer = program.mixer(self.sample_rate);
-        mixer.prepare_realtime(config.max_voices * 2);
-        mixer.set_max_voices(config.max_voices);
-        Command { at, kind: Kind::Reset { mixer: Box::new(mixer), program: program.clone(), controls: self.control_states(program), epoch: self.panic_epoch.load(Ordering::Acquire) } }
+        let mixer = self.fresh_mixer(program, config);
+        Command { at, kind: Kind::Reset { mixer, program: program.clone(), controls: self.control_states(program), epoch: self.panic_epoch.load(Ordering::Acquire) } }
     }
 
     fn plan_notes(&self, program: &Arc<Program>, history: &[HistoryEntry], explicit: &[Explicit],
@@ -433,18 +503,17 @@ impl Session {
             window.commands.push(Command { at, kind: Kind::Control { key: def.key.clone(), value: set.target as f32, frames } });
         }
         if found.controls.len() > MAX_WINDOW_CONTROLS {
-            let notice = "an envelope lane changes a parameter too often; the extra changes were dropped";
-            if !window.notices.iter().any(|n| n == notice) { window.notices.push(notice.into()); }
+            window.notice("an envelope lane changes a parameter too often; the extra changes were dropped");
         }
         for event in found.events {
             let at = self.samples(event.at.to_seconds(program.tempo));
             let dur = self.samples(event.dur.to_seconds(program.tempo));
             self.prepare_note(program, &event, Hold { at: at.max(from), dur, key: None }, config, window);
         }
-        for (at, dur, event, created, key) in explicit {
-            let panic = schedule.panics().iter().map(|&at| self.samples(at)).find(|&at| at >= *created);
-            if *at >= from && *at < to && panic.is_none_or(|p| *at < p) {
-                self.prepare_note(program, event, Hold { at: *at, dur: *dur, key: *key }, config, window);
+        for note in explicit {
+            let panic = schedule.panics().iter().map(|&at| self.samples(at)).find(|&at| at >= note.created);
+            if note.start >= from && note.start < to && panic.is_none_or(|p| note.start < p) {
+                self.prepare_note(program, &note.event, Hold { at: note.start, dur: note.dur, key: note.key }, config, window);
             }
         }
         // a key's bend and pressure: those from this window as they were, and for each the latest from
@@ -475,8 +544,7 @@ impl Session {
         let Hold { at, dur, key } = when;
         if window.commands.len() >= config.max_voices * 4 {
             window.dropped += 1;
-            let notice = "prepared event window reached capacity; extra notes were dropped";
-            if !window.notices.iter().any(|n| n == notice) { window.notices.push(notice.into()); }
+            window.notice("prepared event window reached capacity; extra notes were dropped");
             return;
         }
         let plan = match program.plan(event) {
@@ -494,7 +562,7 @@ impl Session {
             }
             window.commands.push(Command { at, kind: Kind::Note { track: (plan.track != 0).then(|| program.tracks[plan.track].name.clone()),
                 program: program.clone(), off: if key.is_some() { u64::MAX } else { at.saturating_add(dur) },
-                key: key.unwrap_or(super::NO_KEY), voice: Some(voice) } });
+                key: key.unwrap_or(super::NO_KEY), voice: Some(voice), midi: plan.midi } });
         }
     }
 }
@@ -506,8 +574,8 @@ struct Hold {
     key: Option<u32>,
 }
 
-/// A note the session was handed directly: when, how long, what, the clock it was handed at, and the key holding it open.
-type Explicit = (u64, u64, Event, u64, Option<u32>);
+/// A note the session was handed directly: when and how long, what, the clock it was handed at, and the key holding it open.
+struct Explicit { start: u64, dur: u64, event: Event, created: u64, key: Option<u32> }
 
 fn preview_action(action: &Compiled, at: u64, sample_rate: f32, history: &mut Vec<HistoryEntry>, explicit: &mut Vec<Explicit>) {
     let sample = |sec: f64| (sec * f64::from(sample_rate)).round().max(0.0) as u64;
@@ -515,7 +583,7 @@ fn preview_action(action: &Compiled, at: u64, sample_rate: f32, history: &mut Ve
     for event in &action.program.notes {
         let offset = event.at.to_seconds(action.program.tempo);
         let start = if action.statement.has_at { sample(origin + offset).max(at) } else { at + sample(offset) };
-        explicit.push((start, sample(event.dur.to_seconds(action.program.tempo)), event.clone(), at, None));
+        explicit.push(Explicit { start, dur: sample(event.dur.to_seconds(action.program.tempo)), event: event.clone(), created: at, key: None });
     }
     for scheduled in &action.program.performance {
         let after = scheduled.at.to_seconds(action.program.tempo);
@@ -546,6 +614,36 @@ pub(super) fn schedule_for(program: &Program, history: &[HistoryEntry]) -> Sched
 }
 
 impl RealtimeRenderer {
+    /// Send the notes of `midi_out` instruments down `tx`, stamped with the sample they belong to.
+    pub fn set_midi_output(&mut self, tx: Producer<crate::MidiEvent>) {
+        self.midi_tx = Some(tx);
+    }
+
+    /// Every sounding `midi_out` note off, as `panic` and a reset do.
+    fn all_midi_off(&mut self) {
+        for (_, _, note) in self.sounding.midi.drain(..) {
+            send_midi(&mut self.midi_tx, self.clock, false, &note);
+        }
+    }
+
+    /// The `midi_out` notes whose time is up go off.
+    fn release_midi_due(&mut self) {
+        let mut i = 0;
+        while i < self.sounding.midi.len() {
+            if self.sounding.midi[i].0 <= self.clock {
+                let (_, _, note) = self.sounding.midi.swap_remove(i);
+                send_midi(&mut self.midi_tx, self.clock, false, &note);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Feed tracks that read `input(..)` from this device audio from now on.
+    pub fn set_audio_input(&mut self, input: crate::AudioInput) {
+        self.audio_in = Some(input);
+    }
+
     pub fn clock(&self) -> u64 { self.clock }
     pub fn metrics(&self) -> RenderMetrics { self.state.metrics() }
     pub fn channels(&self) -> usize { self.channels }
@@ -579,6 +677,78 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Carry out one prepared command at the current sample.
+    fn apply(&mut self, kind: &mut Kind) {
+match kind {
+    Kind::Release { key } => {
+        self.sounding.release_key(*key, self.clock);
+    }
+    Kind::Control { key, value, frames } => {
+        if let Some(c) = self.controls.iter_mut().find(|c| c.key == *key) {
+            c.set(self.clock, *value, *frames);
+            self.mixer.set_control(&c.key, c.start, c.target, c.frames, 0);
+        }
+    }
+    Kind::Param { key, name, value } => {
+        for held in self.sounding.held.iter().filter(|h| h.2 == *key) { self.mixer.set_voice_param(held.1, name, *value); }
+    }
+    Kind::Note { track, program, off, key, voice, midi } => {
+        if let Some(note) = midi.take()
+            && *off > self.clock && self.sounding.midi.len() < self.sounding.midi.capacity()
+        {
+            send_midi(&mut self.midi_tx, self.clock, true, &note);
+            self.sounding.midi.push((*off, *key, note));
+        }
+        let target = track.as_ref().map_or(Some(0), |name| self.program.track_index(name));
+        if let Some(target) = target
+            && *off > self.clock && self.sounding.held.len() < self.sounding.held.capacity()
+            && self.mixer.active_voices() < self.config.max_voices * 2
+            && let Some(mut prepared) = voice.take()
+        {
+            prepared.remap_buses_with(&mut |i| {
+                program.buses.get(i).and_then(|name| self.program.buses.iter().position(|n| n == name))
+                    .filter(|&j| program.bus_layouts[i] == self.program.bus_layouts[j])
+            });
+            controls::sync_voice(&self.controls, &mut prepared, self.clock);
+            if let Some(id) = self.mixer.merge_legato(target, &prepared) {
+                // the note took over a sounding voice; the spare goes back to be freed off this thread
+                self.sounding.held.push((*off, id, *key));
+                *voice = Some(prepared);
+            } else {
+                match self.mixer.note_prepared(target, prepared) {
+                    Ok(id) => self.sounding.held.push((*off, id, *key)),
+                    Err(rejected) => { *voice = Some(rejected); self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
+                }
+            }
+        } else { self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
+    }
+    Kind::Swap { mixer, program, controls, transfers } => {
+        super::plan_transfers(&self.program, program, transfers);
+        self.mixer.remap_buses_with(&mut |i| {
+            self.program.buses.get(i).and_then(|name| program.buses.iter().position(|n| n == name))
+                .filter(|&j| self.program.bus_layouts[i] == program.bus_layouts[j])
+        });
+        mixer.adopt(&mut self.mixer, transfers);
+        crate::controls::adopt(controls, &self.controls, program, self.clock, self.sample_rate);
+        crate::controls::sync_mixer(controls, mixer, self.clock);
+        std::mem::swap(&mut self.controls, controls);
+        std::mem::swap(&mut self.mixer, mixer);
+        std::mem::swap(&mut self.program, program);
+    }
+    Kind::Reset { mixer, program, controls, epoch } => {
+        crate::controls::adopt(controls, &self.controls, program, self.clock, self.sample_rate);
+        crate::controls::sync_mixer(controls, mixer, self.clock);
+        std::mem::swap(&mut self.controls, controls);
+        std::mem::swap(&mut self.mixer, mixer);
+        std::mem::swap(&mut self.program, program);
+        if let Some(limiter) = &mut self.limiter { limiter.clear(); }
+        self.sounding.held.clear();
+        for (_, _, note) in self.sounding.midi.drain(..) { send_midi(&mut self.midi_tx, self.clock, false, &note); }
+        self.state.reset_epoch.store(*epoch, Ordering::Release);
+    }
+}
+    }
+
     /// This entire path is bounded, lock-free, allocation-free and free of
     /// heap destruction, including voice completion, edits and panic.
     pub fn render(&mut self, frames: usize, sink: &mut dyn FnMut(&[[f32; BLOCK]], usize)) {
@@ -588,17 +758,23 @@ impl RealtimeRenderer {
         let mut stale_budget = self.config.queued_windows;
         while self.clock < end {
             self.return_voices();
+            // a note that ends where another begins ends first
+            self.release_midi_due();
+            let waiting = self.control_pending.len();
             while self.control_pending.len() < controls::CAPACITY {
                 let Ok(change) = self.control_rx.pop() else { break };
                 self.control_pending.push(change);
             }
-            self.control_pending.sort_unstable_by_key(|c| (c.at, c.serial));
+            if self.control_pending.len() > waiting {
+                self.control_pending.sort_unstable_by_key(|c| (c.at, c.serial));
+            }
             let panic = self.panic_epoch.load(Ordering::Acquire);
             if panic != self.seen_panic {
                 self.seen_panic = panic;
                 self.mixer.silence();
                 if let Some(limiter) = &mut self.limiter { limiter.clear(); }
-                self.held.clear();
+                self.sounding.held.clear();
+                self.all_midi_off();
             }
             let revision = self.state.revision.load(Ordering::Acquire);
             loop {
@@ -617,75 +793,15 @@ impl RealtimeRenderer {
             let ready = self.current.as_ref().is_some_and(|w| w.revision == revision
                 && (w.end > self.clock || self.cursor < w.commands.len()));
             if ready {
-                while let Some(command) = self.current.as_mut().and_then(|w| w.commands.get_mut(self.cursor)) {
+                // taken out while its commands run, so that they can change the renderer
+                if let Some(mut window) = self.current.take() {
+                while let Some(command) = window.commands.get_mut(self.cursor) {
                     if command.at > self.clock { break; }
                     if command.at < self.clock { self.state.late_events.fetch_add(1, Ordering::Relaxed); }
-                    match &mut command.kind {
-                        Kind::Release { key } => {
-                            for held in self.held.iter_mut().filter(|h| h.2 == *key) { held.0 = self.clock; }
-                        }
-                        Kind::Control { key, value, frames } => {
-                            if let Some(c) = self.controls.iter_mut().find(|c| c.key == *key) {
-                                c.set(self.clock, *value, *frames);
-                                self.mixer.set_control(&c.key, c.start, c.target, c.frames, 0);
-                            }
-                        }
-                        Kind::Param { key, name, value } => {
-                            for held in self.held.iter().filter(|h| h.2 == *key) { self.mixer.set_voice_param(held.1, name, *value); }
-                        }
-                        Kind::Note { track, program, off, key, voice } => {
-                            let target = track.as_ref().map_or(Some(0), |name| self.program.track_index(name));
-                            if let Some(target) = target
-                                && *off > self.clock && self.held.len() < self.held.capacity()
-                                && self.mixer.active_voices() < self.config.max_voices * 2
-                                && let Some(mut prepared) = voice.take()
-                            {
-                                prepared.remap_buses_with(&mut |i| {
-                                    program.buses.get(i).and_then(|name| self.program.buses.iter().position(|n| n == name))
-                                        .filter(|&j| program.bus_layouts[i] == self.program.bus_layouts[j])
-                                });
-                                controls::sync_voice(&self.controls, &mut prepared, self.clock);
-                                if let Some(id) = self.mixer.merge_legato(target, &prepared) {
-                                    // the note took over a sounding voice; the spare goes back to be freed off this thread
-                                    self.held.push((*off, id, *key));
-                                    *voice = Some(prepared);
-                                } else {
-                                    match self.mixer.note_prepared(target, prepared) {
-                                        Ok(id) => self.held.push((*off, id, *key)),
-                                        Err(rejected) => { *voice = Some(rejected); self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
-                                    }
-                                }
-                            } else { self.state.capacity_drops.fetch_add(1, Ordering::Relaxed); }
-                        }
-                        Kind::Swap { mixer, program, controls, transfers } => {
-                            transfers.clear();
-                            for (i, track) in program.tracks.iter().enumerate() {
-                                let old = if i == 0 { Some(0) } else { self.program.track_index(&track.name) };
-                                transfers.push(Transfer { voices_from: old, chain_from: old.filter(|_| i > 0) });
-                            }
-                            self.mixer.remap_buses_with(&mut |i| {
-                                self.program.buses.get(i).and_then(|name| program.buses.iter().position(|n| n == name))
-                                    .filter(|&j| self.program.bus_layouts[i] == program.bus_layouts[j])
-                            });
-                            mixer.adopt(&mut self.mixer, transfers);
-                            crate::controls::adopt(controls, &self.controls, program, self.clock, self.sample_rate);
-                            crate::controls::sync_mixer(controls, mixer, self.clock);
-                            std::mem::swap(&mut self.controls, controls);
-                            std::mem::swap(&mut self.mixer, mixer);
-                            std::mem::swap(&mut self.program, program);
-                        }
-                        Kind::Reset { mixer, program, controls, epoch } => {
-                            crate::controls::adopt(controls, &self.controls, program, self.clock, self.sample_rate);
-                            crate::controls::sync_mixer(controls, mixer, self.clock);
-                            std::mem::swap(&mut self.controls, controls);
-                            std::mem::swap(&mut self.mixer, mixer);
-                            std::mem::swap(&mut self.program, program);
-                            if let Some(limiter) = &mut self.limiter { limiter.clear(); }
-                            self.held.clear();
-                            self.state.reset_epoch.store(*epoch, Ordering::Release);
-                        }
-                    }
+                    self.apply(&mut command.kind);
                     self.cursor += 1;
+                }
+                self.current = Some(window);
                 }
             }
             while self.control_applied.slots() > 0 && self.control_pending.first().is_some_and(|c| c.at <= self.clock) {
@@ -703,7 +819,8 @@ impl RealtimeRenderer {
                     self.mixer.set_control(&control.key, control.start, control.target, control.frames, 0);
                 } else { self.state.control_drops.fetch_add(1, Ordering::Relaxed); }
             }
-            self.held.retain(|&(off, id, _)| { if off <= self.clock { self.mixer.release(id); false } else { true } });
+            self.sounding.held.retain(|&(off, id, _)| { if off <= self.clock { self.mixer.release(id); false } else { true } });
+            self.release_midi_due();
             let mut n = (end - self.clock).min(BLOCK as u64);
             if ready && let Some(window) = &self.current {
                 if let Some(command) = window.commands.get(self.cursor) { n = n.min(command.at.saturating_sub(self.clock).max(1)); }
@@ -714,9 +831,14 @@ impl RealtimeRenderer {
             {
                 n = n.min(change.at - self.clock);
             }
-            for &(off, _, _) in &self.held { n = n.min(off.saturating_sub(self.clock).max(1)); }
+            n = self.sounding.limit(self.clock, n);
             let n = n.max(1) as usize;
             if !ready { self.state.starved_frames.fetch_add(n, Ordering::Relaxed); }
+            if let Some(input) = &mut self.audio_in {
+                let mut heard = [[0.0; BLOCK]; MAX_CHANNELS];
+                input.read(n, &mut heard);
+                for (c, samples) in heard.iter().enumerate().take(input.channels()) { self.mixer.set_audio_input(c, &samples[..n]); }
+            }
             self.mixer.process_retained(&mut block[..self.channels], n, &mut self.finished);
             self.state.silenced.fetch_add(self.mixer.take_silenced(), Ordering::Relaxed);
             if let Some(limiter) = &mut self.limiter { limiter.process_block(&mut block[..self.channels], n); }

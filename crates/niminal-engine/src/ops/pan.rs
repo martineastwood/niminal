@@ -12,14 +12,19 @@ use crate::opcode::{Opcode, Port, ProcessCtx};
 /// all speakers equally.
 pub fn pan_gains(speakers: &[Option<f32>], azimuth: f32, spread: f32) -> [f32; crate::mixer::MAX_CHANNELS] {
     let mut gains = [0.0f32; crate::mixer::MAX_CHANNELS];
-    let mut ring: Vec<(f32, usize)> = speakers
-        .iter()
-        .enumerate()
-        .filter_map(|(i, a)| a.map(|a| (a.rem_euclid(360.0), i)))
-        .collect();
-    if ring.is_empty() {
+    // the speakers that can be panned to, by angle (no allocation: this runs for every sample of a pan)
+    let mut slots = [(0.0f32, 0usize); crate::mixer::MAX_CHANNELS];
+    let mut count = 0;
+    for (i, a) in speakers.iter().enumerate().take(slots.len()) {
+        if let Some(a) = a {
+            slots[count] = (a.rem_euclid(360.0), i);
+            count += 1;
+        }
+    }
+    if count == 0 {
         return gains;
     }
+    let ring = &mut slots[..count];
     ring.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let az = azimuth.rem_euclid(360.0);
@@ -46,7 +51,7 @@ pub fn pan_gains(speakers: &[Option<f32>], azimuth: f32, spread: f32) -> [f32; c
     let spread = spread.clamp(0.0, 1.0);
     if spread > 0.0 {
         let uniform = 1.0 / (ring.len() as f32).sqrt();
-        for &(_, i) in &ring {
+        for &(_, i) in ring.iter() {
             gains[i] = ((1.0 - spread) * gains[i] * gains[i] + spread * uniform * uniform).sqrt();
         }
     }

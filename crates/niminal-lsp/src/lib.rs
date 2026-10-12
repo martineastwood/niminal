@@ -50,7 +50,7 @@ impl Server {
         let result = match method {
             "initialize" => Some(json!({
                 "capabilities": {
-                    "textDocumentSync": 1,
+                    "textDocumentSync": 2,
                     "completionProvider": { "triggerCharacters": ["."] },
                     "hoverProvider": true,
                     "definitionProvider": true,
@@ -81,10 +81,23 @@ impl Server {
             }
             "textDocument/didChange" => {
                 let uri = params["textDocument"]["uri"].as_str();
-                // full-document sync: the last change is the whole text
-                let text = params["contentChanges"].as_array().and_then(|c| c.last()).and_then(|c| c["text"].as_str());
-                if let (Some(uri), Some(text)) = (uri, text) {
-                    self.update(uri, text, &mut out);
+                // incremental sync: each change replaces a range of the text (or all of it, with no range),
+                // one after the other
+                if let (Some(uri), Some(changes)) = (uri, params["contentChanges"].as_array())
+                    && let Some(mut text) = self.documents.get(uri).map(|d| d.text.clone()).or_else(|| changes.iter().any(|c| c.get("range").is_none()).then(String::new))
+                {
+                    for change in changes {
+                        let Some(new) = change["text"].as_str() else { continue };
+                        match change.get("range").filter(|r| r.is_object()) {
+                            None => text = new.to_string(),
+                            Some(range) => {
+                                let start = text::offset(&text, &range["start"]);
+                                let end = text::offset(&text, &range["end"]).max(start);
+                                text.replace_range(start..end, new);
+                            }
+                        }
+                    }
+                    self.update(uri, &text, &mut out);
                 }
                 None
             }
@@ -396,6 +409,34 @@ mod tests {
         let out = server.handle(&json!({ "method": "textDocument/didChange", "params": {
             "textDocument": { "uri": URI }, "contentChanges": [{ "text": "instr tone(freq: hz) { osc(sine, freq) }" }] } }));
         assert_eq!(out[0]["params"]["diagnostics"], json!([]));
+    }
+
+    #[test]
+    fn edits_arrive_as_ranges_and_are_applied_in_order() {
+        let mut server = Server::new();
+        open(&mut server, "instr tone(freq: hz) { osc(sinee, freq) }\n// done\n");
+        let mut change = |changes: Value| {
+            server.handle(&json!({ "method": "textDocument/didChange", "params": {
+                "textDocument": { "uri": URI }, "contentChanges": changes } }))
+        };
+        // fix the wave: `sinee` is columns 27 to 32
+        let out = change(json!([{ "range": { "start": { "line": 0, "character": 27 }, "end": { "line": 0, "character": 32 } }, "text": "sine" }]));
+        assert_eq!(out[0]["params"]["diagnostics"], json!([]), "{out:?}");
+        // two edits in one message: the second sees the first (add a line, then a word on it)
+        let out = change(json!([
+            { "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 0 } }, "text": "x = [c4 e4]\n" },
+            { "range": { "start": { "line": 1, "character": 5 }, "end": { "line": 1, "character": 6 } }, "text": "[c4 zz" },
+        ]));
+        let diagnostics = out[0]["params"]["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{out:?}");
+        assert_eq!(diagnostics[0]["range"]["start"]["line"], 1);
+        // a change without a range is the whole text again
+        let out = change(json!([{ "text": "instr tone(freq: hz) { osc(sine, freq) }" }]));
+        assert_eq!(out[0]["params"]["diagnostics"], json!([]));
+        // multibyte characters count in UTF-16 units
+        let out = change(json!([{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "text": "// é😀\n" },
+            { "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 5 } }, "text": "instr" }]));
+        assert_eq!(out[0]["params"]["diagnostics"], json!([]), "{out:?}");
     }
 
     #[test]

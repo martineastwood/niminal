@@ -430,6 +430,7 @@ impl Perform<'_> {
             },
             ExprKind::Call { name, args } => self.op(name, args, e.span, it),
             ExprKind::Env(lit) => env_lane(lit).map(PerfValue::Env),
+            ExprKind::Str(_) => Err(Diagnostic::new("text can only be an argument that asks for it", e.span)),
             ExprKind::Compare { .. } | ExprKind::If { .. } => {
                 Err(Diagnostic::new("comparisons and `if` work in instruments, tracks and opcodes, not in clips and scenes", e.span))
             }
@@ -550,7 +551,7 @@ impl Perform<'_> {
         match self.eval(&receiver.value, it)? {
             // `set` gives lanes to a clip; a pattern is a clip with only its notes
             PerfValue::Pattern(p) if name.name == "set" => {
-                let clip = Clip { name: String::new(), length: Rational::ONE, endless: true, lanes: vec![("notes".to_string(), p)], keys: None, curves: Vec::new() };
+                let clip = Clip { name: String::new(), length: Rational::ONE, endless: true, lanes: vec![("notes".to_string(), p)], keys: None, curves: Vec::new(), signals: Vec::new() };
                 self.on_clip(name, rest, clip, span, it).map(PerfValue::Clip)
             }
             PerfValue::Pattern(p) => self.on_pattern(name, rest, p, span, it),
@@ -846,7 +847,7 @@ impl Perform<'_> {
             let length = length.max(Rational::new(1, 1000));
             let factor = length / clip.length;
             let lanes = clip.lanes.into_iter().map(|(lane, p)| (lane, p.slow(factor))).collect();
-            return Ok(Clip { name: clip.name, length, endless: false, lanes, keys: clip.keys, curves: clip.curves });
+            return Ok(Clip { name: clip.name, length, endless: false, lanes, keys: clip.keys, curves: clip.curves, signals: Vec::new() });
         }
         // Pitch operations touch only the notes; time operations touch every lane.
         let notes_only = matches!(
@@ -875,7 +876,7 @@ impl Perform<'_> {
             "over" => self.cycles(self.arg(name, rest, "length", span)?)?.max(Rational::new(1, 1000)),
             _ => clip.length,
         };
-        Ok(Clip { name: clip.name, length, endless: clip.endless && name.name != "over", lanes, keys: clip.keys, curves: clip.curves })
+        Ok(Clip { name: clip.name, length, endless: clip.endless && name.name != "over", lanes, keys: clip.keys, curves: clip.curves, signals: Vec::new() })
     }
 
     /// `riff.set(bright: 0.9, gain: [0db -6db])`: these lanes, in place of the clip's own.
@@ -1277,7 +1278,7 @@ impl Perform<'_> {
         if let Some(length) = length {
             lanes = lanes.into_iter().map(|(name, p)| (name, p.slow(length))).collect();
         }
-        Ok(Clip { name: block.name.name.clone(), length: length.unwrap_or(Rational::ONE), endless: length.is_none(), lanes, keys, curves })
+        Ok(Clip { name: block.name.name.clone(), length: length.unwrap_or(Rational::ONE), endless: length.is_none(), lanes, keys, curves , signals: Vec::new() })
     }
 
     /// `midi.keys()` or `midi.keys(channel: 1)`
@@ -1288,8 +1289,14 @@ impl Perform<'_> {
             return Err(self.keys_error(e.span));
         }
         let mut channel = None;
+        let mut mpe = false;
         for arg in &args[1..] {
             match arg.name.as_ref().map(|n| n.name.as_str()) {
+                Some("mpe") => match &arg.value.kind {
+                    ExprKind::Name(n) if n == "true" => mpe = true,
+                    ExprKind::Name(n) if n == "false" => mpe = false,
+                    _ => return Err(Diagnostic::new("`mpe` is `true` or `false`", arg.value.span)),
+                },
                 Some("channel") => {
                     let n = self.plain(&arg.value)?;
                     if !n.is_integer() || n < Rational::ONE || n > Rational::int(16) {
@@ -1297,10 +1304,13 @@ impl Perform<'_> {
                     }
                     channel = Some(n.numer() as u8);
                 }
-                _ => return Err(Diagnostic::new("`midi.keys` takes `channel:`", arg.value.span)),
+                _ => return Err(Diagnostic::new("`midi.keys` takes `channel:` or `mpe:`", arg.value.span)),
             }
         }
-        Ok(Keys { channel })
+        if mpe && channel.is_some() {
+            return Err(Diagnostic::new("`mpe: true` plays from every member channel, so it takes no `channel:`", e.span));
+        }
+        Ok(Keys { channel, mpe })
     }
 
     fn keys_error(&self, span: Span) -> Diagnostic {
@@ -1334,6 +1344,7 @@ impl Perform<'_> {
                 lanes: vec![("notes".to_string(), p)],
                 keys: None,
                 curves: Vec::new(),
+                signals: Vec::new(),
             }),
             PerfValue::Grid(_) => Err(Diagnostic::new("a grid has no pitches to play", span)
                 .with_help("give it notes with `.rhythm(grid[...])` on a pattern instead")),
@@ -1481,10 +1492,12 @@ impl Perform<'_> {
                 .with_help(format!("give `{name}` one for each section")));
             }
         }
-        let own = decl.tempos.is_some() || decl.meters.is_some();
+        let ramp = decl.tempo_env.as_ref().map(tempo_curve).transpose()?;
+        let own = decl.tempos.is_some() || decl.meters.is_some() || ramp.is_some();
         let mut seconds = 0.0;
+        let mut bars_so_far = 0.0;
         let mut actions = Vec::new();
-        let mut tempos = Vec::new();
+        let mut tempos: Vec<(f64, Tempo)> = Vec::new();
         for (i, section) in decl.sections.iter().enumerate() {
             let mut tempo = self.cx.tempo;
             if let Some(e) = decl.tempos.as_ref().map(|l| &l[i]) {
@@ -1499,10 +1512,29 @@ impl Perform<'_> {
             }
             let at = Time::Seconds(seconds);
             actions.extend(self.launch(&section.scene, &|action| Scheduled { at, action, quantize: None })?);
-            if own {
-                tempos.push((seconds, tempo));
+            let bars = length.to_f64();
+            match &ramp {
+                None => {
+                    if own {
+                        tempos.push((seconds, tempo));
+                    }
+                    seconds += bars * tempo.beats_per_bar * 60.0 / tempo.bpm;
+                }
+                Some(curve) => {
+                    // the tempo changes gradually: a run of short steps, each at the tempo of its middle
+                    let steps = (bars / RAMP_STEP_BARS).ceil().max(1.0) as usize;
+                    for j in 0..steps {
+                        let from = j as f64 * RAMP_STEP_BARS;
+                        let width = (bars - from).min(RAMP_STEP_BARS);
+                        let step = Tempo { bpm: curve.bpm_at(bars_so_far + from + width / 2.0), beats_per_bar: tempo.beats_per_bar };
+                        if tempos.last().is_none_or(|(_, t)| *t != step) {
+                            tempos.push((seconds, step));
+                        }
+                        seconds += width * step.beats_per_bar * 60.0 / step.bpm;
+                    }
+                }
             }
-            seconds += length.to_f64() * tempo.beats_per_bar * 60.0 / tempo.bpm;
+            bars_so_far += bars;
         }
         actions.push(Scheduled { at: Time::Seconds(seconds), action: Action::Hush, quantize: None });
         let mut lanes = Vec::new();
@@ -1551,6 +1583,16 @@ impl Perform<'_> {
         for (lane, curve) in &mut clip.curves {
             let who = format!("clip `{}` has an envelope lane `{lane}`, but track `{}`", clip.name, id.name);
             self.bind_env(curve, name, lane, &who, span)?;
+        }
+        // a lane that is a signal and named after a parameter of the track moves it continuously
+        clip.signals.clear();
+        let probe = niminal_pattern::Span::new(Rational::ZERO, Rational::ZERO);
+        for (lane, pattern) in &clip.lanes {
+            let is_signal = pattern.query(probe).first().is_some_and(|h| h.whole.is_none());
+            let control = format!("{name}::{lane}");
+            if let Some(def) = self.cx.names.controls.iter().find(|c| c.name == control).filter(|_| is_signal) {
+                clip.signals.push((lane.clone(), def.unit));
+            }
         }
         Ok(())
     }
@@ -1617,7 +1659,7 @@ impl Perform<'_> {
                 return Err(Diagnostic::new(format!("the `{lane}` lane isn't supported yet"), span));
             }
             if self.cx.names.controls.iter().any(|c| c.name == format!("{}::{lane}", info.name)) {
-                if clip.lane("notes").is_none() && clip.keys.is_none() {
+                if clip.lane("notes").is_none() && clip.keys.is_none() && !clip.signals.iter().any(|(l, _)| l == lane) {
                     return Err(Diagnostic::new(
                         format!("lane `{lane}` sets a parameter of track `{}` as each note starts, but clip `{}` has no notes", info.name, clip.name),
                         span,
@@ -1639,6 +1681,47 @@ impl Perform<'_> {
         }
         Ok(())
     }
+}
+
+/// When a kind of change lands, as written in `config` and `with(quantize: ...)`: `1 beat`, `4 bars`,
+/// `cycle`, `now`, `bar`.
+pub(crate) fn quantum_of(e: &Expr) -> Res<Quantize> {
+    let on_grid = |count: f64, unit| Ok(Quantize { relation: QuantizeRelation::OnGrid, count, unit });
+    match &e.kind {
+        ExprKind::Num { value, unit: Some(u) } if *value > 0.0 => match u.as_str() {
+            "beat" | "beats" => on_grid(*value, QuantizeUnit::Beat),
+            "bar" | "bars" => on_grid(*value, QuantizeUnit::Bar),
+            _ => Err(quantum_error(e.span)),
+        },
+        ExprKind::Name(n) => match n.as_str() {
+            "now" => on_grid(1.0, QuantizeUnit::Now),
+            "beat" => on_grid(1.0, QuantizeUnit::Beat),
+            "bar" => on_grid(1.0, QuantizeUnit::Bar),
+            "cycle" => on_grid(1.0, QuantizeUnit::Cycle),
+            _ => Err(quantum_error(e.span)),
+        },
+        _ => Err(quantum_error(e.span)),
+    }
+}
+
+fn quantum_error(span: Span) -> Diagnostic {
+    Diagnostic::new("expected when a change lands", span).with_help("for example `now`, `beat`, `bar`, `cycle`, `1 beat` or `4 bars`")
+}
+
+/// The one option a clip, scene or track takes after its body: `with(quantize: 1 bar)`.
+pub(crate) fn definition_quantum(options: &[Arg]) -> Res<Option<Quantize>> {
+    let mut found = None;
+    for arg in options {
+        match arg.name.as_ref().map(|n| n.name.as_str()) {
+            Some("quantize") => found = Some(quantum_of(&arg.value)?),
+            Some(other) => {
+                return Err(Diagnostic::new(format!("there is no option `{other}` here"), arg.name.as_ref().map_or(arg.value.span, |n| n.span))
+                    .with_help("the option is `quantize`, as in `with(quantize: 1 bar)`"));
+            }
+            None => return Err(Diagnostic::new("an option is a name and a value, as in `quantize: 1 bar`", arg.value.span)),
+        }
+    }
+    Ok(found)
 }
 
 pub(crate) fn convert_quantize(q: QuantizeSpec) -> Quantize {
@@ -1676,6 +1759,57 @@ fn at_offset(message: String, token: Span, offset: usize) -> Diagnostic {
     // the token's text starts after its opening bracket
     let at = token.start + 1 + offset;
     Diagnostic::new(message, Span::new(at, (at + 1).min(token.end)))
+}
+
+/// How long, in bars, each step of a gradual tempo change is.
+const RAMP_STEP_BARS: f64 = 1.0 / 8.0;
+
+/// A tempo over the piece, in bars of music: `env[84bpm 64bars 84bpm 8bars.log 96bpm]`.
+struct TempoCurve {
+    start: f64,
+    /// For each stretch: how many bars it takes, its shape, and the tempo it reaches.
+    segments: Vec<(f64, Curve, f64)>,
+}
+
+impl TempoCurve {
+    /// The tempo `bar` bars into the piece, holding the last level after the end.
+    fn bpm_at(&self, bar: f64) -> f64 {
+        let (mut from, mut at) = (self.start, 0.0);
+        for &(len, shape, to) in &self.segments {
+            if bar < at + len {
+                let t = ((bar - at) / len).clamp(0.0, 1.0);
+                return f64::from(niminal_engine::ops::shape(from as f32, to as f32, t, shape.bend()));
+            }
+            (from, at) = (to, at + len);
+        }
+        from
+    }
+}
+
+fn tempo_curve(lit: &EnvLit) -> Res<TempoCurve> {
+    let bpm = |n: &EnvNum| match (n.unit.as_deref(), n.value) {
+        (Some("bpm"), v) if v > 0.0 => Ok(v),
+        _ => Err(Diagnostic::new("a tempo level is a positive number of bpm", n.span).with_help("for example `env[84bpm 8bars 96bpm]`")),
+    };
+    if lit.sustain_at.is_some() || lit.looped {
+        return Err(Diagnostic::new("a tempo envelope runs once over the piece", lit.start.span)
+            .with_help("take out the `|` or `.loop`"));
+    }
+    let mut segments = Vec::with_capacity(lit.segments.len());
+    for seg in &lit.segments {
+        let len = match (seg.dur.unit.as_deref(), seg.dur.value) {
+            (Some("bar" | "bars"), v) if v > 0.0 => v,
+            _ => return Err(Diagnostic::new("the times in a tempo envelope are lengths in bars", seg.dur.span).with_help("for example `8bars`")),
+        };
+        let curve = match seg.curve {
+            None => Curve::Linear,
+            Some(CurveKind::Exp) => Curve::Exp,
+            Some(CurveKind::Log) => Curve::Log,
+            Some(CurveKind::Custom(k)) => Curve::Custom(k as f32),
+        };
+        segments.push((len, curve, bpm(&seg.level)?));
+    }
+    Ok(TempoCurve { start: bpm(&lit.start)?, segments })
 }
 
 fn negate(v: Value) -> Value {

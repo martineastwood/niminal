@@ -4,7 +4,7 @@ use niminal_lang::{OpInfo, Symbol, SymbolKind, builtin_ops, pattern_ops, waves};
 use serde_json::{Value, json};
 
 const KEYWORDS: &[&str] = &[
-    "instr", "mono", "opcode", "bus", "sample", "kit", "ctl", "track", "clip", "scene", "arrangement", "config", "tempo", "meter",
+    "instr", "mono", "opcode", "bus", "sample", "kit", "midi_out", "ctl", "track", "clip", "scene", "arrangement", "config", "tempo", "meter",
     "unsolo", "hush", "panic", "reset", "new", "at", "for", "over", "next", "now",
 ];
 const UNITS: &[(&str, &str)] = &[

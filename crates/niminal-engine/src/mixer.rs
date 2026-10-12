@@ -116,6 +116,8 @@ pub enum ChainInput {
     It { channel: usize },
     /// One channel of a bus.
     Bus { bus: usize, channel: usize },
+    /// One channel of the audio input (a microphone, a line in, a file being rendered).
+    Audio { channel: usize },
 }
 
 #[derive(Clone)]
@@ -135,7 +137,7 @@ impl TrackDef {
             .iter()
             .filter_map(|i| match i {
                 ChainInput::Bus { bus, .. } => Some(*bus),
-                ChainInput::It { .. } => None,
+                ChainInput::It { .. } | ChainInput::Audio { .. } => None,
             })
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -207,7 +209,7 @@ pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VoiceId {
     track: usize,
     serial: u64,
@@ -242,6 +244,8 @@ pub struct Stems {
 
 pub struct Mixer {
     stems: Option<Stems>,
+    /// The audio input for the block being mixed, one buffer per channel.
+    audio_in: Vec<[f32; BLOCK]>,
     buses: Buses,
     tracks: Vec<Track>,
     order: Vec<usize>,
@@ -286,6 +290,7 @@ impl Mixer {
             .collect();
         Ok(Mixer {
             stems: None,
+            audio_in: vec![[0.0; BLOCK]; MAX_CHANNELS],
             buses: Buses::new(&bus_channels),
             tracks,
             order,
@@ -298,6 +303,16 @@ impl Mixer {
             stolen: 0,
             muted: false,
         })
+    }
+
+    /// The audio input for the next block: `samples` is channel `channel` of it. A channel nobody sets
+    /// is silent, and what is set stays until it is set again.
+    pub fn set_audio_input(&mut self, channel: usize, samples: &[f32]) {
+        if let Some(buffer) = self.audio_in.get_mut(channel) {
+            let n = samples.len().min(BLOCK);
+            buffer[..n].copy_from_slice(&samples[..n]);
+            buffer[n..].fill(0.0);
+        }
     }
 
     /// Reserve bounded voice storage before handing the mixer to rendering.
@@ -608,6 +623,7 @@ impl Mixer {
                     for (i, input) in track.def.inputs.iter().enumerate() {
                         match *input {
                             ChainInput::It { channel } => chain.set_input(i, &summed[channel][..frames]),
+                            ChainInput::Audio { channel } => chain.set_input(i, &self.audio_in[channel][..frames]),
                             ChainInput::Bus { bus, channel } => {
                                 chain.set_input(i, self.buses.get(bus, channel, frames));
                             }
@@ -689,6 +705,10 @@ impl Mixer {
         }
         self.next_serial = self.next_serial.max(old.next_serial);
         self.silenced += std::mem::take(&mut old.silenced);
+        // stems being kept carry on, if the new mixer has the same tracks and buses
+        if let Some(stems) = old.stems.take_if(|s| s.tracks.len() == self.tracks.len() && s.buses.len() == self.bus_channels.len()) {
+            self.stems = Some(stems);
+        }
     }
 
     /// The channel count of each bus.

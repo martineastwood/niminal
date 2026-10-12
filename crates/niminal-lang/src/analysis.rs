@@ -45,6 +45,8 @@ pub struct Statement {
     pub text: String,
     /// The `@ ...` written after the statement, if any.
     pub quantize: Option<Quantize>,
+    /// The `with(quantize: ...)` of a definition, which stands in for its kind's usual quantum.
+    pub definition_quantize: Option<Quantize>,
     pub plays: Option<PlayInfo>,
     /// A tempo that is reached gradually rather than at once.
     pub ramp: Option<Ramp>,
@@ -95,6 +97,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             binding: None,
             text,
             quantize: None,
+            definition_quantize: None,
             plays: None,
             ramp: None,
             edit: None,
@@ -105,12 +108,19 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
         };
         match &item {
             Item::Control { name, .. } => s.key = Some(format!("ctl:{}", name.name)),
-            Item::Instr(d) => s.key = Some(format!("instr:{}", d.name.name)),
+            Item::Instr(d) => {
+                s.key = Some(format!("instr:{}", d.name.name));
+                s.definition_quantize = d.options.iter().find(|a| a.name.as_ref().is_some_and(|n| n.name == "quantize")).and_then(|a| crate::perform::quantum_of(&a.value).ok());
+            }
             Item::Opcode(d) => s.key = Some(format!("opcode:{}", d.name.name)),
+            Item::MidiOut(d) => s.key = Some(format!("instr:{}", d.name.name)),
             Item::Sample(d) => s.key = Some(format!("{}:{}", if d.is_kit { "kit" } else { "sample" }, d.name.name)),
             Item::Arrangement(d) => s.key = Some(format!("arrangement:{}", d.name.name)),
             Item::Bus(d) => s.key = Some(format!("bus:{}", d.name.name)),
-            Item::Track(d) => s.key = Some(format!("track:{}", d.name.name)),
+            Item::Track(d) => {
+                s.key = Some(format!("track:{}", d.name.name));
+                s.definition_quantize = crate::perform::definition_quantum(&d.options).ok().flatten();
+            }
             Item::Config(_) => s.key = Some("config".into()),
             Item::Meter(_) => s.key = Some("meter".into()),
             Item::Tempo(t) => {
@@ -136,10 +146,12 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Clip(b) => {
                 s.key = Some(format!("clip:{}", b.name.name));
                 s.binding = Some(b.name.name.clone());
+                s.definition_quantize = crate::perform::definition_quantum(&b.options).ok().flatten();
             }
             Item::Scene(b) => {
                 s.key = Some(format!("scene:{}", b.name.name));
                 s.binding = Some(b.name.name.clone());
+                s.definition_quantize = crate::perform::definition_quantum(&b.options).ok().flatten();
             }
             Item::Command(c) => {
                 s.kind = StatementKind::Command;

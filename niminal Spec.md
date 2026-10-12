@@ -188,7 +188,7 @@ Options go in `with(...)`:
 | `quantize: 1 beat` | When redefinitions land |
 
 - **Lifetimes:** a voice ends naturally (released and envelopes finished) or forcibly (choked, stolen, replaced), always with a short global fade so it never clicks.
-- **Parameters are signals.** In a legato `mono`, a new note updates parameters on the running voice, which is what carries `glide`. The same mechanism will give per-note expression (MPE, aftertouch), which is not built.
+- **Parameters are signals.** In a legato `mono`, a new note updates parameters on the running voice, which is what carries `glide`. The same mechanism gives per-note expression (MPE, aftertouch).
 - **Pitch:** the parameter named `freq` is the pitch by convention. This is what `same_note`, mono priority, `keys.note` and an unqualified `transpose` act on.
 - **No voice limits by default.** A global emergency brake (`config { max_voices: 512 }`) steals the quietest voices and warns. Voice pools grow on a background thread.
 
@@ -224,7 +224,7 @@ f = noise().svf(cutoff: 2khz)
 out = f.band
 ```
 
-- **Opcodes can call opcodes** defined before them (built: the callee's code is copied in, with its own state per call; a callee with several results can't be called from another opcode yet; built-in graph opcodes such as `lpf` can't be called from inside an opcode). **Trigger inputs** are not a separate kind: an edge is `(x > 0.5) * (prev(x) <= 0.5)`. Declared latency is not built, since the graph has no delay compensation yet.
+- **Opcodes can call opcodes**, user-defined ones defined before them and built-in ones such as `lpf`, `osc` and `delay`. A user-defined callee's code is copied in, with its own state per call; one with several results is bound to a name and read as `f.band`, as in an instrument. A built-in is run a sample at a time, with state of its own for each call, and takes its arguments as it does in an instrument (`delay` still needs `max:` as a constant); `pan` and `to_layout` work on channels, so they stay out. **Trigger inputs** are not a separate kind: an edge is `(x > 0.5) * (prev(x) <= 0.5)`. Declared latency is not built: no opcode looks ahead, so none has latency to declare.
 - **Rust plugins** implement the same opcode trait, so built-in, niminal and plugin opcodes look identical to the user.
 
 ### Functions
@@ -490,12 +490,12 @@ The engine understands one score model, as data. Every notation and client produ
 
 - **Musical time** (beats and bars, through a tempo and meter map) or **absolute time** (seconds). Both can appear in one score.
 - **Positions** read as `bar 5 beat 3`; offsets as `1/8beat` or `250ms`.
-- **Tempo and meter are lanes** on the arrangement, so they can change and ramp over a piece. Built so far: a tempo and a meter for each section, as a list with one entry per section (a step at the section's start). Gradual change within a section (`env[...]`) is not built. **Arrangement lanes** (`bass.tone: env[...]`) move a track's parameter over the whole piece, with the same literal and curves as a clip's envelope lane; bars and beats in them follow the tempo and meter of the sections they cross. They apply when an arrangement is rendered.
+- **Tempo and meter are lanes** on the arrangement, so they can change and ramp over a piece. Built so far: a tempo and a meter for each section, as a list with one entry per section (a step at the section's start). A tempo can also change gradually: `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` is an envelope over the whole piece in bars of music (levels in bpm, times in bars, the same curves as other envelopes), in place of the list. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. A `meter` list still works beside it. **Arrangement lanes** (`bass.tone: env[...]`) move a track's parameter over the whole piece, with the same literal and curves as a clip's envelope lane; bars and beats in them follow the tempo and meter of the sections they cross. They apply when an arrangement is rendered.
 
 ```
 arrangement song {
   sections: [dawn.over(16 bars) build.over(32 bars) theme.over(24 bars) dissolve.over(16 bars)]
-  tempo:    env[84bpm 64bars 84bpm 8bars.log 96bpm]   // not built: tempo changes are per section for now
+  tempo:    env[84bpm 64bars 84bpm 8bars.log 96bpm]   // over the whole piece, in bars
   meter:    [4/4 4/4 7/8 4/4].per_section
   bass.tone: env[800hz 88bars 3khz]                    // a parameter of `track bass(tone: hz = ..)`
 }
@@ -737,7 +737,7 @@ scene verse { bass, lead }       // short for { bass: bass, lead: lead }
 
 - **Lane targets:** `notes` (pitch, or samples for drum clips), instrument parameters, track parameters, and universal controls. An unknown lane name is an error. Lanes target only their own part, so clips stay portable; scene and arrangement lanes can target any part.
 - **Step lanes** are read when each note starts and cycle at their own length (polymeter); `.per_note` gives the nth note the nth value instead.
-- **Envelope lanes** move a track parameter continuously: `cut: env[300hz 1bar.exp 3khz]`, the same `env` literal and curves as an instrument's. They run on the clip's timeline (bars and beats are real durations, not stretched to the clip), restart on launch and again each time a clip with a `length:` starts over, and hold their last level when they end; `.loop` repeats the shape. Levels must fit the parameter's unit. A lane has no release, so no `|`. They work with or without a `notes` lane, and curved segments are played as short straight glides that follow the curve. Where an envelope and MIDI/OSC/`ctl` input both move a parameter, the latest change wins. Signal lanes (LFOs) are not built.
+- **Envelope lanes** move a track parameter continuously: `cut: env[300hz 1bar.exp 3khz]`, the same `env` literal and curves as an instrument's. They run on the clip's timeline (bars and beats are real durations, not stretched to the clip), restart on launch and again each time a clip with a `length:` starts over, and hold their last level when they end; `.loop` repeats the shape. Levels must fit the parameter's unit. A lane has no release, so no `|`. They work with or without a `notes` lane, and curved segments are played as short straight glides that follow the curve. Where an envelope and MIDI/OSC/`ctl` input both move a parameter, the latest change wins. **Signal lanes** (LFOs) do the same with a signal: `cut: sine.range(300hz, 3khz)` (or `saw`, `tri`, `square`, `rand`, `perlin`) moves the parameter continuously, read 50 times a second, one cycle per clip length (a bar if the clip has none). They work without a `notes` lane too.
 - **`length:`** makes a clip loop: it plays that long and starts over, restarting its alternations (`<a b>`, `every`). Every lane spans the length, so a 2-bar clip's `notes: [c2 ~ eb2 g1]` is four steps over two bars. Without it a clip runs freely, so its cycles keep counting.
 - **A bare pattern is a clip.** `theme = [c4 e4 g4 b4]` means `clip { notes: [c4 e4 g4 b4] }` and has no instrument, so it is material to play on a part (`lead: theme` in a scene, or `lead.play(theme)`). A section loaded from a client (`load("score/riff.nms")`) is a clip too.
 - **Lanes are fields.** `riff.set(bright: 0.9)` and `riff.set(gain: [0db -6db])` give the clip those lanes in place of its own; a number is a lane that never changes.
@@ -756,12 +756,11 @@ track bass(tone: hz = 2khz) {
 }
 ```
 
-- **Mixer:** `gain`, `pan`, `mute`, `solo`; `with(quantize: ...)` sets launch quantization.
+- **Mixer:** `gain = -3db` and `pan = 20deg` are the track's fader and placement, applied last, after `out`. Each can be any signal, so `gain = level` follows a track parameter or a `ctl`. A pan places one signal, so a stereo or wider track is mixed down first (as loud as one of its channels) and then placed. Sends read `out` before the fader. `mute` and `solo` are commands (`bass.mute`, `bass.solo`), not lines.
 - **Re-evaluating a track** carries its effects' state over, without clicks.
-- **Parameters** are controls named `bass::tone`: set them like any `ctl` (from a client, MIDI or OSC bound to it), or change the starting value in the header and re-evaluate. A clip lane named after one sets it as each note starts (`clip riff { notes: [c2 eb2]\n tone: [400hz 3khz] }`, gliding by the control's smoothing); `bass.set(...)` can't drive them yet.
+- **Parameters** are controls named `bass::tone`: set them like any `ctl` (from a client, MIDI or OSC bound to it), or change the starting value in the header and re-evaluate. A clip lane named after one sets it as each note starts (`clip riff { notes: [c2 eb2]\n tone: [400hz 3khz] }`, gliding by the control's smoothing). `bass.set(tone: 900hz)` and `bass.set(tone: sine.range(300hz, 3khz))` drive them too.
 - **Note effects:** the `notes` line changes the notes of every clip played on the track, with `it` the clip's notes: `notes = it.thin(10%)`. A clip played from keys is left as it is.
 - **Short forms:** `track bass = pluck(bright: 0.4)` is a track with just an instrument, and naming an instrument where a part goes (`pluck.start`, or in a scene) makes a track of that name playing it.
-- **Status:** the mixer's `gain`, `pan`, `mute` and `solo` lines are not built; `instrument`, `notes`, `out`, parameters and sends work.
 
 ### Scenes
 
@@ -833,7 +832,7 @@ config {
 tempo 124bpm @ next bar over 2 bars
 ```
 
-A tempo ramp is a run of ordinary tempo changes, four to a beat, queued when the line is evaluated, and a new tempo keeps every running clip where it is in its bar. A file starts at the tempo it names; the ramp is for live sets.
+The settings in `config` take effect once the `config` itself has landed. A tempo ramp is a run of ordinary tempo changes, four to a beat, queued when the line is evaluated, and a new tempo keeps every running clip where it is in its bar. A file starts at the tempo it names; the ramp is for live sets.
 
 - **Boundaries:** `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. `@ next 4 bars` aligns to the 4-bar grid; `@ in 4 bars` counts from now.
 - **One evaluation is one transaction:** all its changes land together, at the coarsest boundary among them.
@@ -860,8 +859,9 @@ ctl drive  = 0.3                                  // set from code; re-evaluatin
 track bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
 ```
 
+- **`x.range(lo..hi)`** maps a plain 0 to 1 signal (a `ctl` with no range of its own, an LFO) to a range where it is used, as in `filth.range(200hz..4khz)`; the ends may also be written `range(lo, hi)`. Decibels move evenly in db, other units evenly in their own.
 - **Units come from the mapping;** hardware controls are lightly smoothed by default (`.smooth(0ms)` turns it off); `midi.learn` binds to the next control moved and rewrites itself to the actual CC.
-- **Keyboards** play a part live. A clip with `keys:` in place of `notes:` is played from a MIDI keyboard; each key plays the instrument's pitch from the note number, with the velocity as `gain`, and holds the note until the key comes up. Other lanes give every note their value. The keyboard's pitch bend (two semitones each way) and pressure (channel or per-key aftertouch) reach an instrument that has `bend: st` and `pressure: 0..1` parameters, and the sustain pedal (CC 64) holds notes after their keys come up. MPE (a channel per note) is not built:
+- **Keyboards** play a part live. A clip with `keys:` in place of `notes:` is played from a MIDI keyboard; each key plays the instrument's pitch from the note number, with the velocity as `gain`, and holds the note until the key comes up. Other lanes give every note their value. The keyboard's pitch bend (two semitones each way) and pressure (channel or per-key aftertouch) reach an instrument that has `bend: st` and `pressure: 0..1` parameters, and the sustain pedal (CC 64) holds notes after their keys come up. **MPE** (a channel per note) is `keys: midi.keys(mpe: true)`: every member channel (2 to 16) plays notes, each note takes the pitch bend (48 semitones each way), pressure and slide (CC 74, 0 to 1) of its own channel, and the master channel (1) speaks for every note: its bend (2 semitones), pressure, slide and pedal reach all of them. An instrument reads slide as a `slide: 0..1` parameter beside `bend` and `pressure`.
 
 ```
 clip pad {
@@ -872,8 +872,8 @@ clip pad {
 pad.start
 ```
 
-- **Triggers:** `key("r")` from a connected client, MIDI notes and `osc_in` messages.
-- **Audio inputs:** `input(1)` or `input(1..2)`; layout follows the channel count.
+- **Triggers:** MIDI notes and `osc_in` messages move controls; a `key("r")` trigger from a connected client is not built (it waits on live recording).
+- **Audio inputs:** `input(1)` or `input(1..2)` in a track; the layout follows the channel count. The daemon listens to the default input device with `--audio-input`; `niminal render --input take.wav` plays a file into them. Live recording into buffers (`take.record(...)`, and the `key("r")` trigger it waits on) is not built.
 - **Live clients** (Python or anything else) play by streaming timestamped events slightly ahead of the daemon's clock.
 
 ## Engine and architecture
@@ -967,7 +967,7 @@ Always on, because live mistakes shouldn't hurt ears or speakers.
 
 ### Sync and output
 
-Ableton Link and MIDI clock in and out; `midi_out(port:, channel:)` is an instrument that plays external gear; `osc_out(...)` sends values.
+Ableton Link and MIDI clock in and out; `midi_out drums(port: "IAC Driver", channel: 10)` declares an instrument that plays external gear (a note's `freq` is the key and its `gain` the velocity, sent as the sound card plays it; a render has no sound from it), and `x.osc_out("/vj/level", port: 9000)` in a track passes a signal through and sends its value as an OSC float, 30 times a second unless `rate:` says otherwise. Link and MIDI clock are not built.
 
 ### First client: VS Code
 

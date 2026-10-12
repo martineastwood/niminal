@@ -52,7 +52,7 @@ Options follow the parameters: `instr pad(freq: hz) with(max: 8, same_note: rele
 | `glide: 80ms` (mono) | A change of pitch slides to the new note in this time, evenly in semitones | yes |
 | `pitch: name` | Which parameter is pitch (default `freq`) | no |
 | `compensate: false` | Opt out of latency compensation | no |
-| `quantize: 1 beat` | When redefinitions land | no |
+| `quantize: 1 beat` | When redefinitions land | yes |
 
 An option that isn't built is rejected with a message, not ignored. `mono` is `max: 1`: the previous note fades out over a few milliseconds as the new one starts. Voices are counted per part, so two parts playing the same `mono` instrument each keep their own.
 
@@ -74,7 +74,7 @@ With keys from `midi.keys()` this plays like a mono synth: hold a note, roll a s
 
 **Lifetimes:** a voice ends naturally (released, envelopes done) or forcibly (choked, stolen, replaced), always with a short global fade.
 
-**Parameters are signals.** With `legato: true` a new note updates parameters on the running voice, which is what carries `glide`. A keyboard's pitch bend and pressure set the `bend` and `pressure` parameters of the notes it holds (see [Performance](/reference/language/performance/)). MPE is not built.
+**Parameters are signals.** With `legato: true` a new note updates parameters on the running voice, which is what carries `glide`. A keyboard's pitch bend and pressure set the `bend` and `pressure` parameters of the notes it holds (see [Performance](/reference/language/performance/)). MPE works the same way: `keys: midi.keys(mpe: true)` gives each note its own bend, pressure and a `slide: 0..1` parameter.
 
 **Pitch:** parameter `freq` is pitch by convention — used by `same_note`, mono priority, `keys.note`, and unqualified `transpose`.
 

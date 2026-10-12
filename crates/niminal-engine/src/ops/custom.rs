@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::opcode::{Opcode, Port, ProcessCtx};
+use crate::opcode::{MAX_INPUTS, Opcode, Port, ProcessCtx};
 
 /// Scalar math functions, usable inside kernels and as the [`Func`] opcode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +155,41 @@ pub enum Instr {
     /// `a` if `cond` is not 0, otherwise `b`.
     Select { dst: usize, cond: usize, a: usize, b: usize },
     Call { dst: usize, f: Fn1, a: usize },
+    /// One sample of the kernel's `index`th built-in opcode.
+    Native { dst: usize, index: usize },
+}
+
+/// Where a built-in opcode called inside a kernel gets one of its inputs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NativeInput {
+    Reg(usize),
+    Const(f64),
+}
+
+/// A built-in opcode (a filter, an oscillator...) called from inside a kernel, which runs it one
+/// sample at a time. Each running copy of the kernel makes its own copy, with its own state.
+pub struct Native {
+    pub op: Box<dyn Opcode>,
+    /// One for each of the opcode's ports.
+    pub inputs: Vec<NativeInput>,
+}
+
+impl Clone for Native {
+    fn clone(&self) -> Self {
+        Native { op: self.op.box_clone(), inputs: self.inputs.clone() }
+    }
+}
+
+impl std::fmt::Debug for Native {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Native({}, {:?})", self.op.name(), self.inputs)
+    }
+}
+
+impl PartialEq for Native {
+    fn eq(&self, other: &Self) -> bool {
+        self.op.name() == other.op.name() && self.inputs == other.inputs
+    }
 }
 
 /// A compiled `opcode` body.
@@ -168,10 +203,11 @@ pub struct Kernel {
     pub state_init: Vec<f64>,
     /// The registers holding the opcode's results, by name. An ordinary opcode has one.
     pub outputs: Vec<(String, usize)>,
+    /// Built-in opcodes the body calls.
+    pub natives: Vec<Native>,
 }
 
 /// A running copy of a [`Kernel`], with its own state.
-#[derive(Clone)]
 pub struct Custom {
     kernel: Arc<Kernel>,
     state: Vec<f64>,
@@ -179,6 +215,21 @@ pub struct Custom {
     sample_rate: f64,
     /// Which of the kernel's outputs this copy delivers.
     which: usize,
+    /// This copy's own built-in opcodes, with their state.
+    natives: Vec<Box<dyn Opcode>>,
+}
+
+impl Clone for Custom {
+    fn clone(&self) -> Self {
+        Custom {
+            kernel: self.kernel.clone(),
+            state: self.state.clone(),
+            regs: self.regs.clone(),
+            sample_rate: self.sample_rate,
+            which: self.which,
+            natives: self.natives.iter().map(|n| n.box_clone()).collect(),
+        }
+    }
 }
 
 impl Custom {
@@ -186,6 +237,7 @@ impl Custom {
         Custom {
             state: kernel.state_init.clone(),
             regs: vec![0.0; kernel.registers],
+            natives: kernel.natives.iter().map(|n| n.op.box_clone()).collect(),
             kernel,
             sample_rate: 48_000.0,
             which: 0,
@@ -216,6 +268,15 @@ impl Opcode for Custom {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = f64::from(sample_rate);
+        self.natives.iter_mut().for_each(|n| n.prepare(sample_rate));
+    }
+
+    fn is_active(&self) -> bool {
+        self.natives.iter().any(|n| n.is_active())
+    }
+
+    fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
+        self.natives.iter_mut().for_each(|n| n.set_control(key, start, target, frames, elapsed));
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -224,10 +285,13 @@ impl Opcode for Custom {
             && self.which == old.which
         {
             self.state.copy_from_slice(&old.state);
+            for (new, old) in self.natives.iter_mut().zip(&mut old.natives) {
+                new.carry_state(&mut **old);
+            }
         }
     }
 
-    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+    fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         let k = &*self.kernel;
         let (regs, state) = (&mut self.regs, &mut self.state);
         for (i, o) in out.iter_mut().enumerate() {
@@ -259,6 +323,23 @@ impl Opcode for Custom {
                     Instr::Neg { dst, a } => regs[dst] = -regs[a],
                     Instr::Copy { dst, src } => regs[dst] = regs[src],
                     Instr::Call { dst, f, a } => regs[dst] = f.apply(regs[a]),
+                    Instr::Native { dst, index } => {
+                        let call = &k.natives[index];
+                        let mut values = [[0.0f32; 1]; MAX_INPUTS];
+                        for (value, input) in values.iter_mut().zip(&call.inputs) {
+                            value[0] = match *input {
+                                NativeInput::Reg(r) => regs[r] as f32,
+                                NativeInput::Const(c) => c as f32,
+                            };
+                        }
+                        let mut slices: [&[f32]; MAX_INPUTS] = [&[]; MAX_INPUTS];
+                        for (slice, value) in slices.iter_mut().zip(&values).take(call.inputs.len()) {
+                            *slice = value;
+                        }
+                        let mut y = [0.0f32; 1];
+                        self.natives[index].process(ctx, &slices[..call.inputs.len()], &mut y);
+                        regs[dst] = f64::from(y[0]);
+                    }
                 }
             }
             *o = regs[k.outputs[self.which].1] as f32;

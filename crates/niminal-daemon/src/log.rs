@@ -50,6 +50,8 @@ pub enum LogInput {
 pub enum Expression {
     Bend,
     Pressure,
+    /// MPE's third dimension (CC 74), 0 to 1.
+    Slide,
     /// Down for a value of 0.5 or more.
     Sustain,
 }

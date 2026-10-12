@@ -10,9 +10,10 @@ mod osc;
 mod pan;
 mod reverb;
 mod sample;
+mod tap;
 
 pub use control::Control;
-pub use custom::{BinOp, Cmp, Custom, rem, Fn1, Func, Instr, Kernel};
+pub use custom::{BinOp, Cmp, Custom, rem, Fn1, Func, Instr, Kernel, Native, NativeInput};
 pub use delay::Delay;
 pub use env::{Curve, Env, Segment, shape};
 pub use filter::{FilterMode, Svf};
@@ -21,3 +22,4 @@ pub use osc::{Osc, Wave};
 pub use pan::{PanChannel, pan_gains};
 pub use reverb::Reverb;
 pub use sample::{SampleData, Sampler};
+pub use tap::{Tap, TapOut};

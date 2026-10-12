@@ -15,6 +15,7 @@ pub enum Item {
     Bus(BusDecl),
     Track(TrackDecl),
     Sample(SampleDecl),
+    MidiOut(MidiOutDecl),
     Arrangement(ArrangementDecl),
     Config(ConfigDecl),
     Tempo(TempoStmt),
@@ -60,6 +61,8 @@ pub struct TempoStmt {
 pub struct NamedBlock {
     pub name: Ident,
     pub entries: Vec<(Ident, Expr)>,
+    /// `with(quantize: 1 bar)` after the block.
+    pub options: Vec<Arg>,
     pub span: Span,
 }
 
@@ -153,6 +156,14 @@ pub struct SampleDecl {
     pub span: Span,
 }
 
+/// `midi_out drums(port: "IAC Driver", channel: 10)`: an instrument that plays external gear.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MidiOutDecl {
+    pub name: Ident,
+    pub args: Vec<Arg>,
+    pub span: Span,
+}
+
 /// `arrangement song { sections: [verse.over(8 bars) chorus.over(8 bars)] }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrangementDecl {
@@ -160,6 +171,8 @@ pub struct ArrangementDecl {
     pub sections: Vec<SectionRef>,
     /// `tempo: [84bpm 96bpm]`: the tempo of each section, if it has its own.
     pub tempos: Option<Vec<Expr>>,
+    /// `tempo: env[84bpm 64bars 96bpm]`: the tempo over the whole piece, in bars of music.
+    pub tempo_env: Option<EnvLit>,
     /// `meter: [4/4 7/8]`: the meter of each section.
     pub meters: Option<Vec<Expr>>,
     /// `bass.tone: env[...]`: a track's parameter, moved over the whole piece.
@@ -206,6 +219,8 @@ pub struct BusDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigDecl {
     pub entries: Vec<(Ident, Expr)>,
+    /// `quantize: { default: 1 bar  play: cycle }`: when each kind of change lands.
+    pub quantize: Vec<(Ident, Expr)>,
     pub span: Span,
 }
 
@@ -217,6 +232,8 @@ pub struct TrackDecl {
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,
+    /// `with(quantize: 1 bar)` after the body.
+    pub options: Vec<Arg>,
 }
 
 /// `opcode name(x, cutoff: hz) { ... }`
@@ -296,6 +313,8 @@ pub enum ExprKind {
     /// `if cond { a } else { b }`
     If { cond: Box<Expr>, then: Box<Expr>, otherwise: Box<Expr> },
     Env(EnvLit),
+    /// `"/fx/width"`: text, as an argument such as an OSC address.
+    Str(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

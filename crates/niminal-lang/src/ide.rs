@@ -65,6 +65,7 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Control { name, .. } => (name, SymbolKind::Control, first_line()),
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
             Item::Track(d) => (&d.name, SymbolKind::Track, format!("track {}", d.name.name)),
+            Item::MidiOut(d) => (&d.name, SymbolKind::Instrument, first_line()),
             Item::Sample(d) => (&d.name, if d.is_kit { SymbolKind::Kit } else { SymbolKind::Sample }, first_line()),
             Item::Clip(b) => {
                 param_list = clip_lanes(source, b, &items);
@@ -336,6 +337,21 @@ fn envelope_ops() -> Vec<OpInfo> {
             "perc",
             "A one-shot attack and exponential decay: the same as `env[0 attack 1 decay.exp 0]`. `attack` defaults to 2ms.",
             &[("attack", "time", false), ("decay", "time", true)],
+        ),
+        op(
+            "range",
+            "Map a plain signal from 0 to 1 to a range, evenly (decibels evenly in db): `knob.range(200hz..4khz)`.",
+            &[("x", "number", true), ("from", "value", true), ("to", "value", true)],
+        ),
+        op(
+            "osc_out",
+            "Pass a track's signal through and send its value over OSC: `out.osc_out(\"/vj/level\", port: 9000)`. `host` is this computer unless given; `rate` is 30hz unless given.",
+            &[("x", "number", true), ("address", "text", true), ("port", "number", true), ("host", "text", false), ("rate", "hz", false)],
+        ),
+        op(
+            "input",
+            "Channels of the audio input, in a track: `input(1)` or `input(1..2)`.",
+            &[("first", "number", true), ("last", "number", false)],
         ),
     ]
 }

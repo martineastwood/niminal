@@ -40,6 +40,9 @@ pub fn parse_spanned(src: &str) -> Result<Vec<(Item, Span)>, Diagnostic> {
     }
 }
 
+/// The settings of a `config`, the `quantize` table within it, and where it ends.
+type ConfigEntries = (Vec<(Ident, Expr)>, Vec<(Ident, Expr)>, Span);
+
 type Res<T> = Result<T, Diagnostic>;
 
 /// The most source and tokens one evaluation may hold, and how deeply
@@ -250,6 +253,11 @@ impl Parser {
             let layout = self.eat(&Tok::Colon).then(|| self.expr()).transpose()?;
             let body = if self.peek() == &Tok::LBrace { Some(self.block()?.0) } else { None };
             Ok(Item::Bus(BusDecl { name, layout, body }))
+        } else if self.is_keyword("midi_out") {
+            let start = self.bump().span;
+            let name = self.ident("a name for the MIDI output")?;
+            let args = if self.peek() == &Tok::LParen { self.args()? } else { Vec::new() };
+            Ok(Item::MidiOut(MidiOutDecl { name, args, span: start.to(self.prev_span()) }))
         } else if self.is_keyword("sample") || self.is_keyword("kit") {
             let is_kit = self.is_keyword("kit");
             let start = self.bump().span;
@@ -297,8 +305,8 @@ impl Parser {
             self.arrangement(name, start).map(Item::Arrangement)
         } else if self.is_keyword("config") {
             let start = self.bump().span;
-            let (entries, end) = self.entries(false)?;
-            Ok(Item::Config(ConfigDecl { entries, span: start.to(end) }))
+            let (entries, quantize, end) = self.config_entries()?;
+            Ok(Item::Config(ConfigDecl { entries, quantize, span: start.to(end) }))
         } else if self.is_keyword("track") {
             let start = self.bump().span;
             let name = self.ident("a track name")?;
@@ -307,7 +315,7 @@ impl Parser {
                 let value = self.expr()?;
                 let end = self.prev_span();
                 let key = Ident { name: "instrument".into(), span: start };
-                return Ok(Item::Track(TrackDecl { name, params: Vec::new(), body: vec![Stmt::Bind { name: key, value }], span: start.to(end) }));
+                return Ok(Item::Track(TrackDecl { name, params: Vec::new(), body: vec![Stmt::Bind { name: key, value }], options: Vec::new(), span: start.to(end) }));
             }
             let params = if self.peek() == &Tok::LParen { self.params()? } else { Vec::new() };
             if let Some(p) = params.iter().find(|p| p.default.is_none()) {
@@ -315,7 +323,8 @@ impl Parser {
                     .with_help("for example `track bass(tone: hz = 2khz)`"));
             }
             let (body, end) = self.block()?;
-            Ok(Item::Track(TrackDecl { name, params, body, span: start.to(end) }))
+            let options = self.with_options()?;
+            Ok(Item::Track(TrackDecl { name, params, body, options, span: start.to(end) }))
         } else if self.is_keyword("opcode") {
             let (name, params, outputs, options, body, span) = self.definition()?;
             if let Some(option) = options.first() {
@@ -341,7 +350,8 @@ impl Parser {
             let start = self.bump().span;
             let name = self.ident(if is_clip { "a clip name" } else { "a scene name" })?;
             let (entries, end) = self.entries(!is_clip)?;
-            let block = NamedBlock { name, entries, span: start.to(end) };
+            let options = self.with_options()?;
+            let block = NamedBlock { name, entries, options, span: start.to(end) };
             Ok(if is_clip { Item::Clip(block) } else { Item::Scene(block) })
         } else if self.is_keyword("at") {
             self.bump();
@@ -371,6 +381,7 @@ impl Parser {
         self.expect(&Tok::LBrace)?;
         let mut sections = None;
         let (mut tempos, mut meters) = (None, None);
+        let mut tempo_env: Option<EnvLit> = None;
         let mut lanes: Vec<ArrangementLane> = Vec::new();
         loop {
             self.skip_newlines();
@@ -399,8 +410,17 @@ impl Parser {
             if key.name == "tempo" || key.name == "meter" {
                 self.expect(&Tok::Colon)?;
                 let slot = if key.name == "tempo" { &mut tempos } else { &mut meters };
-                if slot.is_some() {
+                if slot.is_some() || (key.name == "tempo" && tempo_env.is_some()) {
                     return Err(Diagnostic::new(format!("`{}` is given twice", key.name), key.span));
+                }
+                if key.name == "tempo" && self.is_keyword("env") {
+                    let value = self.expr()?;
+                    let ExprKind::Env(lit) = value.kind else { unreachable!("`env` starts an envelope") };
+                    tempo_env = Some(lit);
+                    if !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
+                        return Err(self.unexpected("the end of the line"));
+                    }
+                    continue;
                 }
                 self.expect(&Tok::LBracket)?;
                 let mut list = Vec::new();
@@ -449,7 +469,7 @@ impl Parser {
             Diagnostic::new(format!("arrangement `{}` has no sections", name.name), name.span)
                 .with_help("add `sections: [scene.over(8 bars) ...]`")
         })?;
-        Ok(ArrangementDecl { name, sections, tempos, meters, lanes, span: start.to(end) })
+        Ok(ArrangementDecl { name, sections, tempos, tempo_env, meters, lanes, span: start.to(end) })
     }
 
     /// `instr|opcode name(params) { body }`
@@ -634,6 +654,43 @@ impl Parser {
         }
         let end = self.expect(&Tok::RBrace)?;
         Ok((entries, end))
+    }
+
+    /// `with(name: value, ...)` after a definition, if there is one.
+    fn with_options(&mut self) -> Res<Vec<Arg>> {
+        if self.is_keyword("with") {
+            self.bump();
+            self.args()
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// `{ channels: stereo  quantize: { default: 1 bar  play: cycle } }`
+    fn config_entries(&mut self) -> Res<ConfigEntries> {
+        self.expect(&Tok::LBrace)?;
+        let (mut entries, mut quantize) = (Vec::new(), Vec::new());
+        loop {
+            self.skip_newlines();
+            if self.peek() == &Tok::RBrace {
+                break;
+            }
+            let key = self.ident("a name")?;
+            self.expect(&Tok::Colon)?;
+            if key.name == "quantize" && self.peek() == &Tok::LBrace {
+                if !quantize.is_empty() {
+                    return Err(Diagnostic::new("`quantize` is given twice", key.span));
+                }
+                quantize = self.entries(false)?.0;
+            } else {
+                entries.push((key, self.expr()?));
+            }
+            if !self.eat(&Tok::Comma) && !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
+                return Err(self.unexpected("the end of the entry"));
+            }
+        }
+        let end = self.expect(&Tok::RBrace)?;
+        Ok((entries, quantize, end))
     }
 
     /// A time, or `bar 5 beat 3`.
@@ -918,6 +975,10 @@ impl Parser {
                 self.bump();
                 Ok(Expr { kind: ExprKind::Num { value, unit }, span })
             }
+            Tok::Str(text) => {
+                self.bump();
+                Ok(Expr { kind: ExprKind::Str(text), span })
+            }
             Tok::Pattern(raw) => {
                 self.bump();
                 Ok(Expr { kind: ExprKind::Pattern(raw), span })
@@ -976,7 +1037,12 @@ impl Parser {
             } else {
                 None
             };
-            args.push(Arg { name, value: self.expr()?, receiver: false });
+            let value = self.expr()?;
+            args.push(Arg { name: name.clone(), value, receiver: false });
+            // `range(200hz..4khz)` is `range(200hz, 4khz)`
+            if name.is_none() && self.eat(&Tok::DotDot) {
+                args.push(Arg { name: None, value: self.expr()?, receiver: false });
+            }
             if !self.eat(&Tok::Comma) {
                 break;
             }

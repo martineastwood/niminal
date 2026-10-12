@@ -7,13 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use niminal_engine::Port;
-use niminal_engine::ops::{BinOp as Op, Cmp, Fn1, Instr, Kernel};
+use niminal_engine::ops::{BinOp as Op, Cmp, Fn1, Instr, Kernel, Native, NativeInput};
 use niminal_score::Tempo;
 
 use crate::ast::*;
 use crate::lower::{Lower, Names, literal_sig, param_type, unknown_name};
 use crate::diag::{Diagnostic, Span, closest};
-use crate::opcodes::{Build, Kind, OpSpec, ParamSpec, Registry, math_fn};
+use crate::opcodes::{Build, BuildArgs, Kind, OpSpec, ParamSpec, Registry, math_fn};
 use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
@@ -36,6 +36,12 @@ struct Kb<'a> {
     forward: HashMap<String, (usize, Span)>,
     /// `prev(expr)`: the state to store the value in at the end of the sample.
     deferred: Vec<(usize, usize)>,
+    /// Built-in opcodes the body calls, run a sample at a time.
+    natives: Vec<Native>,
+    /// Registers that hold a constant, and what it is (a built-in may need one, like a delay's `max`).
+    constants: HashMap<usize, f64>,
+    /// Names bound to a call of an opcode with several results (`f = svf(x)`), and those results.
+    records: HashMap<String, Vec<(String, Value)>>,
     tempo: Tempo,
 }
 
@@ -90,6 +96,9 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo, r
         state_init: Vec::new(),
         forward: HashMap::new(),
         deferred: Vec::new(),
+        records: HashMap::new(),
+        natives: Vec::new(),
+        constants: HashMap::new(),
         tempo,
     };
 
@@ -165,7 +174,45 @@ fn compile_body(def: &OpcodeDef, ports: &[Port], units: &[Unit], tempo: Tempo, r
         registers: kb.registers,
         state_init: kb.state_init,
         outputs,
+        natives: kb.natives,
     })
+}
+
+/// Which argument goes with each parameter of `spec`, by position and by name.
+fn bind_args<'a>(name: &Ident, spec: &OpSpec, args: &'a [Arg]) -> Res<Vec<Option<&'a Arg>>> {
+    let mut bound: Vec<Option<&Arg>> = vec![None; spec.params.len()];
+    let mut next_positional = 0;
+    for arg in args {
+        let index = match &arg.name {
+            None => {
+                let i = next_positional;
+                next_positional += 1;
+                if i >= spec.positional || i >= spec.params.len() {
+                    let mut d = Diagnostic::new(format!("`{}` takes its other arguments by name", name.name), arg.value.span);
+                    if let Some(p) = spec.params.get(i) {
+                        d = d.with_help(format!("write `{}: ...`", p.name));
+                    }
+                    return Err(d);
+                }
+                i
+            }
+            Some(n) => spec.params.iter().position(|p| p.name == n.name).ok_or_else(|| {
+                let mut d = Diagnostic::new(format!("`{}` has no argument named `{}`", name.name, n.name), n.span);
+                if let Some(c) = closest(&n.name, spec.params.iter().map(|p| p.name.as_str())) {
+                    d = d.with_help(format!("did you mean `{c}`?"));
+                }
+                d
+            })?,
+        };
+        if bound[index].is_some() {
+            return Err(Diagnostic::new(
+                format!("`{}` argument `{}` given more than once", name.name, spec.params[index].name),
+                arg.value.span,
+            ));
+        }
+        bound[index] = Some(arg);
+    }
+    Ok(bound)
 }
 
 fn channels_in_opcode(span: Span) -> Diagnostic {
@@ -210,6 +257,18 @@ impl Kb<'_> {
     }
 
     fn bind(&mut self, name: &Ident, value: &Expr) -> Res<()> {
+        // `f = svf(x)` of an opcode with several results keeps them all, to be read as `f.band`
+        if let ExprKind::Call { name: callee, args } = &value.kind {
+            let registry = self.registry;
+            if let Some(spec) = registry.find(&callee.name)
+                && let Build::Custom(kernel) = &spec.build
+                && kernel.outputs.len() > 1
+            {
+                let results = self.inline_all(callee, spec, kernel, args)?;
+                self.records.insert(name.name.clone(), results);
+                return Ok(());
+            }
+        }
         let v = self.expr(value)?;
         if let Some((slot, _)) = self.forward.remove(&name.name) {
             if v.unit != Unit::Num {
@@ -237,7 +296,9 @@ impl Kb<'_> {
         match &e.kind {
             ExprKind::Num { value, unit } => {
                 let (unit, value) = literal_sig(*value, unit.as_deref(), self.tempo, e.span)?;
-                Ok(Value { reg: self.emit(|dst| Instr::Const { dst, value }), unit })
+                let reg = self.emit(|dst| Instr::Const { dst, value });
+                self.constants.insert(reg, value);
+                Ok(Value { reg, unit })
             }
             ExprKind::Name(name) => self.name(name, e.span),
             ExprKind::Neg(inner) => {
@@ -245,7 +306,11 @@ impl Kb<'_> {
                 if v.unit == Unit::Db {
                     return Err(Diagnostic::new("negating a db value isn't supported inside opcodes yet", e.span));
                 }
-                Ok(Value { reg: self.emit(|dst| Instr::Neg { dst, a: v.reg }), unit: v.unit })
+                let reg = self.emit(|dst| Instr::Neg { dst, a: v.reg });
+                if let Some(c) = self.constants.get(&v.reg).copied() {
+                    self.constants.insert(reg, -c);
+                }
+                Ok(Value { reg, unit: v.unit })
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
@@ -293,6 +358,7 @@ impl Kb<'_> {
             ExprKind::Pattern(_) | ExprKind::Grid(_) | ExprKind::Rows(_) | ExprKind::Rest => {
                 Err(Diagnostic::new("patterns can't be used inside an opcode", e.span))
             }
+            ExprKind::Str(_) => Err(Diagnostic::new("text can't be used inside an opcode", e.span)),
             ExprKind::Env(_) => Err(Diagnostic::new("envelopes can't be used inside an opcode", e.span)
                 .with_help("compute the envelope in the instrument and pass it in as an argument")),
         }
@@ -402,44 +468,20 @@ impl Kb<'_> {
     /// A call to an opcode defined earlier: its instructions are copied in here, their registers and
     /// state moved out of the way, with the call's arguments standing for its inputs.
     fn inline(&mut self, name: &Ident, spec: &OpSpec, kernel: &Kernel, args: &[Arg]) -> Res<Value> {
-        if kernel.outputs.len() > 1 {
-            return Err(Diagnostic::new(
-                format!("`{}` has several outputs, which can't be used inside another opcode yet", name.name),
-                name.span,
-            ));
-        }
+        // used on its own, the first result stands for the call, as in an instrument
+        Ok(self.inline_all(name, spec, kernel, args)?.remove(0).1)
+    }
+
+    /// Like [`Kb::inline`], giving every result of the callee, named.
+    fn inline_all(&mut self, name: &Ident, spec: &OpSpec, kernel: &Kernel, args: &[Arg]) -> Res<Vec<(String, Value)>> {
         // match arguments to parameters, as a call in an instrument does
-        let mut given: Vec<Option<(Value, Span)>> = vec![None; spec.params.len()];
-        let mut next_positional = 0;
-        for arg in args {
-            let index = match &arg.name {
-                None => {
-                    let i = next_positional;
-                    next_positional += 1;
-                    if i >= spec.positional || i >= spec.params.len() {
-                        let mut d = Diagnostic::new(format!("`{}` takes its other arguments by name", name.name), arg.value.span);
-                        if let Some(p) = spec.params.get(i) {
-                            d = d.with_help(format!("write `{}: ...`", p.name));
-                        }
-                        return Err(d);
-                    }
-                    i
-                }
-                Some(n) => spec.params.iter().position(|p| p.name == n.name).ok_or_else(|| {
-                    let mut d = Diagnostic::new(format!("`{}` has no argument named `{}`", name.name, n.name), n.span);
-                    if let Some(c) = closest(&n.name, spec.params.iter().map(|p| p.name.as_str())) {
-                        d = d.with_help(format!("did you mean `{c}`?"));
-                    }
-                    d
-                })?,
-            };
-            if given[index].is_some() {
-                return Err(Diagnostic::new(
-                    format!("`{}` argument `{}` given more than once", name.name, spec.params[index].name),
-                    arg.value.span,
-                ));
-            }
-            given[index] = Some((self.expr(&arg.value)?, arg.value.span));
+        let bound = bind_args(name, spec, args)?;
+        let mut given: Vec<Option<(Value, Span)>> = Vec::with_capacity(spec.params.len());
+        for arg in bound {
+            given.push(match arg {
+                Some(arg) => Some((self.expr(&arg.value)?, arg.value.span)),
+                None => None,
+            });
         }
         let mut inputs = Vec::with_capacity(spec.params.len());
         for (i, param) in spec.params.iter().enumerate() {
@@ -463,8 +505,19 @@ impl Kb<'_> {
             }
         }
 
-        let (base, state_base) = (self.registers, self.state_init.len());
+        let (base, state_base, native_base) = (self.registers, self.state_init.len(), self.natives.len());
         self.registers += kernel.registers;
+        for native in &kernel.natives {
+            let inputs = native
+                .inputs
+                .iter()
+                .map(|i| match *i {
+                    NativeInput::Reg(r) => NativeInput::Reg(r + base),
+                    NativeInput::Const(c) => NativeInput::Const(c),
+                })
+                .collect();
+            self.natives.push(Native { op: native.op.box_clone(), inputs });
+        }
         self.state_init.extend(&kernel.state_init);
         for instr in &kernel.code {
             let r = |reg: usize| reg + base;
@@ -480,10 +533,77 @@ impl Kb<'_> {
                 Instr::Cmp { dst, op, a, b } => Instr::Cmp { dst: r(dst), op, a: r(a), b: r(b) },
                 Instr::Select { dst, cond, a, b } => Instr::Select { dst: r(dst), cond: r(cond), a: r(a), b: r(b) },
                 Instr::Call { dst, f, a } => Instr::Call { dst: r(dst), f, a: r(a) },
+                Instr::Native { dst, index } => Instr::Native { dst: r(dst), index: index + native_base },
             };
             self.code.push(moved);
         }
-        Ok(Value { reg: kernel.outputs[0].1 + base, unit: Unit::Num })
+        Ok(kernel.outputs.iter().map(|(n, reg)| (n.clone(), Value { reg: reg + base, unit: Unit::Num })).collect())
+    }
+
+    /// A call of a built-in opcode such as `lpf` or `osc`: it is run a sample at a time, with state of its
+    /// own for each call.
+    fn native(&mut self, name: &Ident, spec: &OpSpec, args: &[Arg]) -> Res<Value> {
+        let bound = bind_args(name, spec, args)?;
+        let mut build = BuildArgs::default();
+        let mut inputs: Vec<(usize, NativeInput)> = Vec::new();
+        for (index, (param, arg)) in spec.params.iter().zip(bound).enumerate() {
+            let Some(arg) = arg else {
+                if param.required {
+                    return Err(Diagnostic::new(format!("`{}` needs an argument `{}`", name.name, param.name), name.span));
+                }
+                continue;
+            };
+            match param.kind {
+                Kind::Wave => {
+                    let found = match &arg.value.kind {
+                        ExprKind::Name(n) => crate::opcodes::wave(n),
+                        _ => None,
+                    };
+                    let Some(w) = found else {
+                        let waves: Vec<_> = crate::opcodes::WAVES.iter().map(|(n, _)| *n).collect();
+                        return Err(Diagnostic::new("expected a waveform", arg.value.span).with_help(format!("one of {}", waves.join(", "))));
+                    };
+                    build.wave = Some(w);
+                }
+                Kind::Layout => {
+                    return Err(Diagnostic::new(format!("`{}` can't be used inside an opcode", name.name), name.span));
+                }
+                Kind::Signal(_) | Kind::Gain => {
+                    let wanted = if let Kind::Signal(u) = param.kind { u } else { Unit::Db };
+                    let v = self.expr(&arg.value)?;
+                    let fits = v.unit == wanted || (wanted == Unit::Db && v.unit == Unit::Num);
+                    if !fits {
+                        return Err(Diagnostic::new(
+                            format!("`{}` expects {} for `{}`, found {}", name.name, wanted.describe(), param.name, v.unit.describe()),
+                            arg.value.span,
+                        ));
+                    }
+                    if let Some(c) = self.constants.get(&v.reg) {
+                        build.consts.insert(param.name.clone(), *c);
+                    }
+                    inputs.push((index, NativeInput::Reg(v.reg)));
+                }
+            }
+        }
+        let op = spec
+            .instantiate(&build)
+            .map_err(|e| Diagnostic::new(e, name.span))?
+            .ok_or_else(|| Diagnostic::new(format!("`{}` can't be used inside an opcode", name.name), name.span))?;
+        // one input for each of the opcode's ports, from an argument or the port's default
+        let mut wired = Vec::with_capacity(op.ports().len());
+        for port in op.ports() {
+            let given = spec.params.iter().position(|p| p.name == port.name).and_then(|i| inputs.iter().find(|(k, _)| *k == i));
+            wired.push(match (given, port.default) {
+                (Some((_, input)), _) => *input,
+                (None, Some(default)) => NativeInput::Const(f64::from(default)),
+                (None, None) => {
+                    return Err(Diagnostic::new(format!("`{}` needs an argument `{}`", name.name, port.name), name.span));
+                }
+            });
+        }
+        let index = self.natives.len();
+        self.natives.push(Native { op, inputs: wired });
+        Ok(Value { reg: self.emit(|dst| Instr::Native { dst, index }), unit: Unit::Num })
     }
 
     /// `min(a, b)`, `max(a, b)`, `pow(x, y)` and `clamp(x, lo, hi)`.
@@ -537,6 +657,24 @@ impl Kb<'_> {
             && let Build::Custom(kernel) = &spec.build
         {
             return self.inline(name, spec, kernel, args);
+        }
+        // `f.band`: one result of an earlier call with several
+        if let [receiver] = args
+            && receiver.receiver
+            && let ExprKind::Name(record) = &receiver.value.kind
+            && let Some(results) = self.records.get(record)
+        {
+            return results.iter().find(|(n, _)| *n == name.name).map(|(_, v)| *v).ok_or_else(|| {
+                let names: Vec<&str> = results.iter().map(|(n, _)| n.as_str()).collect();
+                Diagnostic::new(format!("this opcode has no result `{}`", name.name), name.span)
+                    .with_help(format!("its results are {}", names.join(", ")))
+            });
+        }
+        if math_fn(&name.name).is_none()
+            && let Some(spec) = registry.find(&name.name)
+            && let Build::Builtin(_) = &spec.build
+        {
+            return self.native(name, spec, args);
         }
         let Some(f) = math_fn(&name.name) else {
             let math: Vec<&str> = Fn1::ALL.iter().map(|f| f.name()).chain(["min", "max", "pow", "clamp", "prev"]).collect();

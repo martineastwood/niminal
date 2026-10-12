@@ -30,7 +30,7 @@ pub use performance::{Action, Arrangement, Clip, Keys, Quantize, QuantizeRelatio
 pub use schedule::{ControlSet, Found, Schedule, ScheduleError, TrackState};
 pub use ast::{ControlInput, InputSource};
 pub use performance::EnvLane;
-pub use program::{ControlBinding, ControlDef, ArgError, Instrument, NotePlan, Param, Program, TrackInfo};
+pub use program::{ArgError, ControlBinding, ControlDef, Instrument, MidiNote, MidiTarget, NotePlan, OscTap, Param, Program, QuantizeConfig, TrackInfo};
 pub use layout::Layout;
 pub use modules::{Expanded, expand};
 pub use sample::Samples;

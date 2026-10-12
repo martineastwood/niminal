@@ -596,3 +596,136 @@ fn an_envelope_lane_moves_a_track_parameter_the_same_prepared_as_direct_and_with
     let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
     assert!(rms(&expected) > 0.1);
 }
+
+#[test]
+fn a_signal_lane_moves_a_track_parameter_the_same_prepared_as_direct_and_without_heap_work() {
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }";
+    // an LFO across a bar, with no notes of its own to step on, under a held pad
+    let play = "clip c { notes: [c5 c5 c5 c5]\ncut: sine.range(300hz, 6khz) }\npad.play(c)";
+    let mut direct = Session::new(48_000.0, Layout::Mono).without_limiter();
+    direct.eval(setup, Some("now")).unwrap();
+    direct.eval(play, Some("now")).unwrap();
+    let expected = direct.process(96_000).remove(0);
+
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(setup, Some("now")).unwrap();
+    s.eval(play, Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut actual = vec![0.0; 96_000];
+    for chunk in actual.chunks_mut(256) {
+        s.prepare_realtime();
+        measured(&mut r, chunk.len(), chunk);
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(r.metrics().late_events, 0);
+    let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+    assert!(rms(&expected) > 0.05);
+}
+
+#[test]
+fn a_device_input_reaches_a_track_that_reads_it_through_the_prepared_path() {
+    let code = "tempo 120bpm\ntrack mic { out = input(1) * 0.5 }";
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(code, Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let (mut tx, ring) = niminal_daemon::AudioInput::ring(1, 8192);
+    r.set_audio_input(ring);
+    let heard: Vec<f32> = (0..6000).map(|i| (i as f32 / 6000.0) * 0.8).collect();
+    for sample in &heard {
+        tx.push(*sample).unwrap();
+    }
+    let mut out = vec![0.0; 6000 + 512];
+    for chunk in out.chunks_mut(256) {
+        s.prepare_realtime();
+        measured(&mut r, chunk.len(), chunk);
+    }
+    assert!(out[..6000].iter().zip(&heard).all(|(o, i)| (o - i * 0.5).abs() < 1e-6), "what comes in goes out, halved");
+    assert!(out[6000..].iter().all(|v| *v == 0.0), "and silence when the device has nothing more");
+}
+
+#[test]
+fn midi_out_notes_leave_the_prepared_path_at_the_samples_they_belong_to() {
+    let code = "tempo 120bpm\nmidi_out synth(port: \"IAC\", channel: 2)\ntrack lead { instrument = synth }\nlead.play([c4 e4 ~ g4])";
+    let mut direct = Session::new(48_000.0, Layout::Mono).without_limiter();
+    direct.eval(code, Some("now")).unwrap();
+    direct.process(100_000);
+    let expected = direct.take_midi();
+    assert_eq!(expected.len(), 7, "three notes and their ends in the first bar, then the clip starts over");
+
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(code, Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let (tx, mut rx) = rtrb::RingBuffer::new(64);
+    r.set_midi_output(tx);
+    let mut out = vec![0.0; 100_000];
+    for chunk in out.chunks_mut(256) {
+        s.prepare_realtime();
+        measured(&mut r, chunk.len(), chunk);
+    }
+    let mut got = Vec::new();
+    while let Ok(event) = rx.pop() {
+        got.push(event);
+    }
+    assert_eq!(got, expected, "the same notes at the same samples as the direct path");
+    assert!(out.iter().all(|v| *v == 0.0));
+}
+
+/// A small deterministic generator, so a failure names the seed that found it.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self, below: usize) -> usize {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.0 >> 33) as usize) % below
+    }
+}
+
+const TWO_TRACKS: &str = "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\n\
+    track lead { instrument = tone }\ntrack bass { instrument = tone }";
+
+/// The direct path is the oracle for the prepared one: whatever edits arrive and whenever they land,
+/// the two must make the same audio. This is what stops them drifting apart.
+#[test]
+fn random_live_edits_sound_the_same_prepared_as_direct() {
+    const EDITS: [&str; 14] = [
+        "lead.play([c4 e4 g4 b4].fast(16))",
+        "lead.play([c4 [e4 g4]].fast(8))",
+        "bass.play([c2 g2 c3].fast(4))",
+        "lead.mute", "lead.unmute", "bass.mute", "bass.unmute",
+        "lead.stop", "bass.stop", "hush",
+        "tone(freq: 330hz) for 1beat",
+        "instr tone(freq: hz) { osc(saw, freq) * 0.5 * env[1 | 20ms 0] }",
+        "bass.solo", "bass.unsolo",
+    ];
+    const WHEN: [&str; 4] = ["now", "next beat", "next bar", "now"];
+    let mut audible = 0;
+    for seed in 1..=12u64 {
+        let mut rng = Lcg(seed);
+        let mut direct = Session::new(48_000.0, Layout::Mono).without_limiter();
+        let mut live = Session::new(48_000.0, Layout::Mono).without_limiter();
+        for s in [&mut direct, &mut live] { s.eval(TWO_TRACKS, Some("now")).unwrap(); }
+        let mut r = live.start_realtime(RealtimeConfig::default());
+        let (mut expected, mut actual) = (Vec::new(), Vec::new());
+        for step in 0..40 {
+            if rng.next(3) == 0 {
+                let (edit, when) = (EDITS[rng.next(EDITS.len())], WHEN[rng.next(WHEN.len())]);
+                let a = direct.eval(edit, Some(when)).map(|a| a.lands_at);
+                let b = live.eval(edit, Some(when)).map(|a| a.lands_at);
+                assert_eq!(a.is_ok(), b.is_ok(), "seed {seed} step {step}: `{edit}` @ {when}");
+                if let (Ok(a), Ok(b)) = (a, b) { assert_eq!(a, b, "seed {seed} step {step}: `{edit}` @ {when} lands differently"); }
+            }
+            expected.extend(direct.process(2048).remove(0));
+            let mut chunk = vec![0.0; 2048];
+            for part in chunk.chunks_mut(256) {
+                // odd seeds plan a window at a time, as the planner thread does when others are waiting
+                if seed % 2 == 1 { while live.prepare_realtime_step(1) {} } else { live.prepare_realtime(); }
+                measured(&mut r, part.len(), part);
+            }
+            actual.extend(chunk);
+        }
+        let first = expected.iter().zip(&actual).position(|(e, a)| e != a);
+        assert!(first.is_none(), "seed {seed}: audio differs from sample {first:?}");
+        assert_eq!(r.metrics().late_events, 0, "seed {seed}");
+        audible += usize::from(actual.iter().any(|v| v.abs() > 0.05));
+    }
+    assert!(audible >= 8, "only {audible} of 12 seeds made sound, so the comparison proves little");
+}

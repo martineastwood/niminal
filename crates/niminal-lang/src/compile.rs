@@ -11,7 +11,7 @@ use crate::diag::{Diagnostic, Span, closest};
 use crate::env_shortcut;
 use crate::kernel::compile_opcode;
 use crate::layout::Layout;
-use crate::lower::{Member, Names, compile_chain, compile_instr, compile_sampler, layout_from_expr, unknown_unit};
+use crate::lower::{Member, Mixer, Names, compile_chain, compile_instr, compile_sampler, layout_from_expr, unknown_unit};
 use crate::opcodes::Registry;
 use crate::perform::{Context, compile_performance};
 use crate::sample::Samples;
@@ -47,7 +47,7 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
                 if let Some(at) = block.entries.iter().position(|(key, _)| key.name == "instrument") {
                     let (key, value) = block.entries.remove(at);
                     let body = vec![Stmt::Bind { name: key, value }];
-                    out.push(Item::Track(TrackDecl { name: block.name.clone(), params: Vec::new(), body, span: block.span }));
+                    out.push(Item::Track(TrackDecl { name: block.name.clone(), params: Vec::new(), body, options: block.options.clone(), span: block.span }));
                 }
             }
             Item::Bus(bus) => {
@@ -63,7 +63,7 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
                     }
                     // a name no one can type, so it never meets a track of the user's
                     let name = Ident { name: format!("{}.fx", bus.name.name), span: bus.name.span };
-                    out.push(Item::Track(TrackDecl { name, params: Vec::new(), body, span: bus.name.span }));
+                    out.push(Item::Track(TrackDecl { name, params: Vec::new(), body, options: Vec::new(), span: bus.name.span }));
                 }
             }
             Item::Track(track) => {
@@ -116,7 +116,7 @@ fn add_implicit_tracks(items: &mut Vec<Item>) {
         if is_instrument && !taken {
             let value = Expr { kind: ExprKind::Name(name.name.clone()), span: name.span };
             let body = vec![Stmt::Bind { name: Ident { name: "instrument".into(), span: name.span }, value }];
-            items.push(Item::Track(TrackDecl { name: name.clone(), params: Vec::new(), body, span: name.span }));
+            items.push(Item::Track(TrackDecl { name: name.clone(), params: Vec::new(), body, options: Vec::new(), span: name.span }));
         }
     }
 }
@@ -171,6 +171,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         let (ident, kind) = match item {
             Item::Control { name, .. } => (name, "control"),
             Item::Instr(d) => (&d.name, "instrument"),
+            Item::MidiOut(d) => (&d.name, "instrument"),
             Item::Opcode(d) => (&d.name, "opcode"),
             Item::Bus(d) => (&d.name, "bus"),
             // a clip with an `instrument:` is a track of its own name; the clip may share it
@@ -268,6 +269,22 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     }
 
     for item in &items {
+        let Item::MidiOut(decl) = item else { continue };
+        let name = decl.name.name.as_str();
+        if instruments.iter().any(|i| i.name == name) || failed.contains(&name) {
+            errors.push(Diagnostic::new(format!("`{name}` is defined twice"), decl.name.span));
+            continue;
+        }
+        match crate::lower::compile_midi_out(decl, &names) {
+            Ok(i) => instruments.push(i),
+            Err(d) => {
+                errors.push(d);
+                failed.push(name);
+            }
+        }
+    }
+
+    for item in &items {
         let Item::Sample(decl) = item else { continue };
         let name = decl.name.name.as_str();
         if instruments.iter().any(|i| i.name == name) || failed.contains(&name) {
@@ -285,6 +302,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
 
     // Track 0 plays bare instruments, so it may send to any bus an instrument does.
     let implicit = TrackInfo {
+        taps: Vec::new(),
         name: String::new(),
         instrument: None,
         defaults: BTreeMap::new(),
@@ -340,6 +358,10 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         failed: &failed,
         sample_names: &samples_state.names,
     };
+    let quantize = quantize_config(&items).unwrap_or_else(|d| {
+        errors.push(d);
+        Default::default()
+    });
     let (performance, arrangements) = match compile_performance(&items, &cx) {
         Ok(compiled) => (compiled.actions, compiled.arrangements),
         Err(mut found) => {
@@ -362,6 +384,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
 
     if errors.is_empty() {
         Ok(Program {
+            quantize,
+            taps: tracks.iter().flat_map(|t| t.taps.clone()).collect(),
             controls: names.controls,
             tempo,
             master: names.master,
@@ -392,9 +416,17 @@ fn compile_track(
 ) -> Res<Option<TrackInfo>> {
     let mut instrument_line: Option<&Expr> = None;
     let mut notes_line: Option<&Expr> = None;
+    let mut mixer = Mixer::default();
     let mut rest: Vec<&Stmt> = Vec::new();
     for stmt in &decl.body {
         match stmt {
+            Stmt::Bind { name, value } if matches!(name.name.as_str(), "gain" | "pan") => {
+                let line = if name.name == "gain" { &mut mixer.gain } else { &mut mixer.pan };
+                if line.is_some() {
+                    return Err(Diagnostic::new(format!("a track has only one `{}` line", name.name), name.span));
+                }
+                *line = Some(value);
+            }
             Stmt::Bind { name, value } if name.name == "notes" => {
                 if notes_line.is_some() {
                     return Err(Diagnostic::new("a track has only one `notes` line", name.span));
@@ -436,9 +468,10 @@ fn compile_track(
         instrument = Some(index);
     }
 
-    let chain = compile_chain(&decl.name, &rest, instrument.is_some(), tempo, registry, names)?;
+    let chain = compile_chain(&decl.name, &rest, instrument.is_some(), &mixer, tempo, registry, names)?;
     let voice_sends = instrument.map(|i| instruments[i].graph.send_buses()).unwrap_or_default();
     Ok(Some(TrackInfo {
+        taps: chain.taps.clone(),
         name: decl.name.name.clone(),
         instrument,
         defaults,
@@ -509,6 +542,9 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
                 };
                 mono_option = Some(option);
             }
+            "quantize" => {
+                crate::perform::quantum_of(value)?;
+            }
             "glide" => {
                 if !def.mono { return Err(mono_only(option)); }
                 instrument.glide = Some(literal_time(value)?);
@@ -516,9 +552,9 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
             }
             other => {
                 let mut d = Diagnostic::new(format!("an instrument has no option `{other}`"), option.span);
-                d = match closest(other, ["max", "steal", "same_note", "choke", "legato", "priority", "glide"]) {
+                d = match closest(other, ["max", "steal", "same_note", "choke", "legato", "priority", "glide", "quantize"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
-                    None => d.with_help("the options are `max`, `steal`, `same_note`, `choke`, and for `mono` instruments `legato`, `priority` and `glide`"),
+                    None => d.with_help("the options are `max`, `steal`, `same_note`, `choke`, `quantize`, and for `mono` instruments `legato`, `priority` and `glide`"),
                 };
                 return Err(d);
             }
@@ -714,6 +750,44 @@ fn compile_sample(
 const DEFAULT_ROOT_HZ: f32 = 261.625_56;
 
 // ---- program-level statements -------------------------------------------
+
+/// `config { quantize: { default: 1 bar  play: cycle } }`, and the `with(quantize: ...)` of definitions checked.
+fn quantize_config(items: &[Item]) -> Res<crate::program::QuantizeConfig> {
+    let mut config = crate::program::QuantizeConfig::default();
+    for item in items {
+        match item {
+            Item::Config(c) => {
+                for (key, value) in &c.quantize {
+                    let slot = match key.name.as_str() {
+                        "default" => &mut config.default,
+                        "play" => &mut config.play,
+                        "instr" => &mut config.instrument,
+                        "track" => &mut config.track,
+                        "ctl" => &mut config.control,
+                        "tempo" => &mut config.tempo,
+                        other => {
+                            let mut d = Diagnostic::new(format!("unknown kind of change `{other}`"), key.span);
+                            d = d.with_help("the kinds are: default, play, instr, track, ctl, tempo");
+                            return Err(d);
+                        }
+                    };
+                    if slot.is_some() {
+                        return Err(Diagnostic::new(format!("`{}` is given twice", key.name), key.span));
+                    }
+                    *slot = Some(crate::perform::quantum_of(value)?);
+                }
+            }
+            Item::Clip(b) | Item::Scene(b) => {
+                crate::perform::definition_quantum(&b.options)?;
+            }
+            Item::Track(t) => {
+                crate::perform::definition_quantum(&t.options)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(config)
+}
 
 /// The master layout from the project's `config`, mono if there is none.
 fn master_layout(items: &[Item], default: Layout) -> Res<Layout> {
@@ -1147,7 +1221,8 @@ a(freq: 110hz) for 1beat"
         assert_eq!(msg(&body("exp(cutoff)")), "`exp` expects a plain number, found hz");
         assert_eq!(msg(&body("x + cutoff")), "can't add a plain number and hz");
         assert_eq!(msg(&body("cutoff")), "an opcode outputs a plain signal, but this is hz");
-        assert_eq!(msg(&body("x.lpf(cutoff: 100hz)")), "`lpf` can't be used inside an opcode");
+        ok(&body("x.lpf(cutoff: 100hz)"));
+        assert_eq!(msg(&body("x.pan(azimuth: 10deg)")), "`pan` can't be used inside an opcode");
         assert_eq!(msg(&body("x.exxp")), "`exxp` can't be used inside an opcode");
         assert_eq!(help(&body("x.exxp")).as_deref(), Some("did you mean `exp`?"));
         assert_eq!(msg(&body("exp(x, x)")), "`exp` takes one argument");
@@ -1623,6 +1698,66 @@ track pad { instrument = pluck }
         assert_eq!(shuffled.len(), 4);
         assert_eq!(notes_of("lead.play([c4 e4 g4 b4].in_turn(4, it.fast(2)))", 1).len(), 5);
         assert_eq!(notes_of("lead.play([c4 e4 g4 b4].pick_random(4))", 1).len(), 4);
+    }
+
+    #[test]
+    fn osc_out_sends_a_tracks_signal() {
+        let track = |body: &str| format!("tempo 120bpm\ninstr pluck(freq: hz) {{ osc(saw, freq) }}\ntrack lead {{\n instrument = pluck\n {body}\n}}\n");
+        let p = ok(&track("out = it.osc_out(\"/vj/level\", port: 9000)"));
+        assert_eq!(p.taps.len(), 1);
+        assert_eq!((p.taps[0].address.as_str(), p.taps[0].host.as_str(), p.taps[0].port, p.taps[0].rate), ("/vj/level", "127.0.0.1", 9000, 30.0));
+        let p = ok(&track("out = it.osc_out(\"/a\", host: \"10.0.0.2\", port: 9001, rate: 5hz).osc_out(\"/b\", port: 9001)"));
+        assert_eq!(p.taps.iter().map(|t| (t.address.as_str(), t.host.as_str(), t.rate)).collect::<Vec<_>>(), [("/a", "10.0.0.2", 5.0), ("/b", "127.0.0.1", 30.0)]);
+        assert_eq!(msg(&track("out = it.osc_out(\"vj\", port: 9000)")), "an OSC address starts with `/`");
+        assert_eq!(msg(&track("out = it.osc_out(\"/a\")")), "`osc_out` needs a `port:`");
+        assert_eq!(msg(&track("out = it.osc_out(port: 9000)")), "`osc_out` needs an address");
+        assert_eq!(msg(&track("out = it.osc_out(\"/a\", port: 0)")), "a port is a whole number from 1 to 65535");
+        assert_eq!(msg(&track("out = it.osc_out(\"/a\", port: 9000, rate: 900hz)")), "`rate` is from 0.5hz to 200hz");
+        assert_eq!(msg(&track("out = it.osc_out(\"/a\", prot: 9000)")), "`osc_out` has no argument named `prot`");
+        assert_eq!(msg(&track("out = it.osc_out(5, port: 9000)")), "an OSC address is text in quotes");
+        assert_eq!(
+            msg("instr a(f: hz) { osc(saw, f).osc_out(\"/a\", port: 9000) }"),
+            "`osc_out` sends a track's signal, so it is used in a track"
+        );
+        assert_eq!(msg("opcode a(x) { x.osc_out(\"/a\", port: 9000) }"), "`osc_out` can't be used inside an opcode");
+    }
+
+    #[test]
+    fn midi_out_is_an_instrument_that_sends_notes() {
+        let src = "tempo 120bpm\nmidi_out drums(port: \"IAC\", channel: 10)\ntrack beat { instrument = drums }\nbeat.play([c4 g4])";
+        let p = ok(src);
+        let instrument = p.instrument("drums").expect("it is an instrument");
+        let target = instrument.midi.as_ref().expect("it goes to a port");
+        assert_eq!((&*target.port, target.channel), ("IAC", 10));
+        let events = p.schedule().events(0.0, 2.0).unwrap();
+        let plans: Vec<_> = events.iter().map(|e| p.plan(e).unwrap().midi.unwrap()).collect();
+        assert_eq!(plans.iter().map(|m| (m.note, m.channel)).collect::<Vec<_>>(), [(60, 10), (67, 10)]);
+        // a gain sets the velocity: 0db is the loudest, -30db the softest
+        let loud = p.plan(&niminal_score::Event { target: "drums".into(), at: Time::Seconds(0.0), dur: Time::Seconds(1.0),
+            args: [("freq".to_string(), Value::Note(60)), ("gain".to_string(), Value::Db(0.0))].into() }).unwrap().midi.unwrap();
+        let soft = p.plan(&niminal_score::Event { target: "drums".into(), at: Time::Seconds(0.0), dur: Time::Seconds(1.0),
+            args: [("freq".to_string(), Value::Note(60)), ("gain".to_string(), Value::Db(-30.0))].into() }).unwrap().midi.unwrap();
+        assert_eq!((loud.velocity, soft.velocity), (127, 1));
+        // the channel defaults to 1
+        let p = ok("midi_out synth(port: \"x\")");
+        assert_eq!(p.instrument("synth").unwrap().midi.as_ref().unwrap().channel, 1);
+        assert_eq!(msg("midi_out a()"), "`a` needs a `port:`");
+        assert_eq!(msg("midi_out a(port: 3)"), "the port is the name of a MIDI output, in quotes");
+        assert_eq!(msg("midi_out a(port: \"x\", channel: 17)"), "a MIDI channel is a whole number from 1 to 16");
+        assert_eq!(msg("midi_out a(port: \"x\", chanel: 2)"), "`midi_out` has no argument `chanel`");
+        assert_eq!(msg("midi_out a(port: \"x\")\ninstr a(f: hz) { osc(sine, f) }"), "`a` is defined twice");
+    }
+
+    #[test]
+    fn mixer_lines_are_checked() {
+        let tracks = |body: &str| format!("tempo 120bpm\ninstr pluck(freq: hz) {{ osc(saw, freq) }}\ntrack lead {{\n instrument = pluck\n {body}\n}}\n");
+        ok(&tracks("gain = -3db\n pan = 20deg"));
+        ok(&tracks("out = it.lpf(cutoff: 2khz)\n gain = -3db"));
+        assert_eq!(msg(&tracks("gain = -3db\n gain = -1db")), "a track has only one `gain` line");
+        assert!(msg(&tracks("gain = 20deg")).contains("expects"));
+        assert!(msg(&tracks("pan = 20")).contains("azimuth"));
+        // there is nothing to mix without a sound
+        assert_eq!(msg("track fx {\n gain = -3db\n}"), "track `fx` never sets `out`");
     }
 
     #[test]

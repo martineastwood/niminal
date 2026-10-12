@@ -54,6 +54,9 @@ pub struct Clip {
     /// Lanes drawn as an envelope, `cut: env[300hz 1bar 3khz]`: they move a track's
     /// parameter continuously, on the clip's timeline.
     pub curves: Vec<(String, EnvLane)>,
+    /// Lanes that are signals (`cut: sine.range(300hz, 3khz)`), once placed on a track: the
+    /// parameter's unit. They move the parameter continuously instead of stepping it at each note.
+    pub signals: Vec<(String, crate::unit::Unit)>,
 }
 
 /// An `env[...]` in a lane: a run of glides between levels, from the start of the clip.
@@ -73,6 +76,20 @@ pub struct EnvLane {
 pub struct Keys {
     /// The MIDI channel, from 1; any channel if none.
     pub channel: Option<u8>,
+    /// MPE: each note on a channel of its own (2 to 16), with its own bend, pressure and slide, and a
+    /// master channel (1) for what applies to all of them.
+    pub mpe: bool,
+}
+
+impl Keys {
+    /// Does a key on `channel` play this clip?
+    pub fn accepts(&self, channel: u8) -> bool {
+        if self.mpe {
+            (2..=16).contains(&channel)
+        } else {
+            self.channel.is_none_or(|c| c == channel)
+        }
+    }
 }
 
 impl Clip {

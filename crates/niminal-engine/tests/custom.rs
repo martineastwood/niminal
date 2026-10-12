@@ -22,6 +22,7 @@ fn one_pole() -> Arc<Kernel> {
         registers: 7,
         state_init: vec![0.0],
         outputs: vec![("out".to_string(), 6)],
+        natives: Vec::new(),
     })
 }
 

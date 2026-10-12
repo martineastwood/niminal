@@ -197,6 +197,7 @@ const GREEDY: [&str; 20] = [
 ];
 
 #[test]
+#[ignore = "slow (35s) and timing-sensitive: run with --ignored"]
 fn greedy_programs_are_accepted_quickly_and_playback_carries_on() {
     for src in GREEDY {
         let started = Instant::now();

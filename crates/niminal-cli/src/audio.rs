@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use niminal_daemon::{Daemon, RealtimeConfig, RealtimeRenderer};
+use niminal_daemon::{AudioInput, Daemon, RealtimeConfig, RealtimeRenderer};
 use niminal_engine::{BLOCK, MAX_CHANNELS};
 use rtrb::{Consumer, Producer, RingBuffer};
 
@@ -39,6 +39,12 @@ pub struct Health {
     pub errors: AtomicUsize,
     /// Device callbacks that exhausted the render queue.
     pub underruns: AtomicUsize,
+    /// Times event preparation panicked and was restarted.
+    pub planner_panics: AtomicUsize,
+    /// Errors the audio input device reported.
+    pub input_errors: AtomicUsize,
+    /// Set when the output stream reported an error: the device may be gone.
+    pub lost: AtomicBool,
 }
 
 impl Output {
@@ -79,27 +85,113 @@ impl Output {
     }
 
     /// Start playing the daemon's session. Audio stops when the result is dropped.
-    pub fn start(self, daemon: Shared) -> Result<Running, String> {
+    pub fn start(self, daemon: Shared, input: Option<AudioInput>) -> Result<Running, String> {
         let channels = usize::from(self.config.channels);
-        let device_health = self.health.clone();
-        let (mut playback, worker) = RenderWorker::start(daemon, channels, self.queue_frames, self.health.clone())?;
-        let stream = self
-            .device
-            .build_output_stream::<f32, _, _>(
-                self.config,
-                move |data: &mut [f32], _| playback.read(data),
-                move |_e| { device_health.errors.fetch_add(1, Ordering::Relaxed); },
+        let (playback, worker) = RenderWorker::start(daemon, channels, self.queue_frames, self.health.clone(), input)?;
+        let playback = Arc::new(Mutex::new(playback));
+        let stream = build_stream(&self.device, self.config, &playback, &self.health)?;
+        Ok(Running { stream: Some(stream), playback, health: self.health, channels: self.config.channels, sample_rate: self.config.sample_rate, _worker: worker })
+    }
+}
+
+/// The output stream, reading from `playback` and flagging the device as lost when it reports an error.
+fn build_stream(device: &cpal::Device, config: cpal::StreamConfig, playback: &Arc<Mutex<Playback>>, health: &Arc<Health>) -> Result<cpal::Stream, String> {
+    let (playback, lost) = (playback.clone(), health.clone());
+    let stream = device
+        .build_output_stream::<f32, _, _>(
+            config,
+            move |data: &mut [f32], _| {
+                // only this callback takes the lock, so it is never contended; a failed try is silence
+                match playback.try_lock() {
+                    Ok(mut playback) => playback.read(data),
+                    Err(_) => data.fill(0.0),
+                }
+            },
+            move |_e| {
+                lost.errors.fetch_add(1, Ordering::Relaxed);
+                lost.lost.store(true, Ordering::Release);
+            },
+            None,
+        )
+        .map_err(|e| format!("can't open the audio stream: {e}"))?;
+    stream.play().map_err(|e| format!("can't start the audio stream: {e}"))?;
+    Ok(stream)
+}
+
+/// The default input device, listened to for tracks that read `input(..)`.
+pub struct Listening {
+    _stream: cpal::Stream,
+    channels: usize,
+    name: String,
+}
+
+impl Listening {
+    /// Open the default input device at `sample_rate`. What it hears is put in the ring that is returned
+    /// with it, which holds `ring_frames` frames of as many channels as the device has (at most
+    /// [`MAX_CHANNELS`]).
+    pub fn open(sample_rate: u32, ring_frames: usize, health: Arc<Health>) -> Result<(Listening, AudioInput), String> {
+        let host = cpal::default_host();
+        let device = host.default_input_device().ok_or("there is no audio input device")?;
+        let default = device.default_input_config().map_err(|e| format!("can't query the audio input: {e}"))?;
+        let all = usize::from(default.channels());
+        let kept = all.min(MAX_CHANNELS);
+        let (mut producer, ring) = AudioInput::ring(kept, ring_frames);
+        let config = cpal::StreamConfig { channels: default.channels(), sample_rate, buffer_size: cpal::BufferSize::Default };
+        let stream = device
+            .build_input_stream::<f32, _, _>(
+                config,
+                move |data: &[f32], _| {
+                    for frame in data.chunks_exact(all) {
+                        // a full ring means the render side is behind: drop the frame whole
+                        if producer.slots() >= kept {
+                            for sample in &frame[..kept] {
+                                let _ = producer.push(*sample);
+                            }
+                        }
+                    }
+                },
+                move |_e| { health.input_errors.fetch_add(1, Ordering::Relaxed); },
                 None,
             )
-            .map_err(|e| format!("can't open the audio stream: {e}"))?;
-        stream.play().map_err(|e| format!("can't start the audio stream: {e}"))?;
-        Ok(Running { _stream: stream, _worker: worker })
+            .map_err(|e| format!("can't open the audio input at {sample_rate} Hz: {e}"))?;
+        stream.play().map_err(|e| format!("can't start the audio input: {e}"))?;
+        Ok((Listening { _stream: stream, channels: kept, name: device.to_string() }, ring))
+    }
+
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
 pub struct Running {
-    _stream: cpal::Stream,
+    stream: Option<cpal::Stream>,
+    playback: Arc<Mutex<Playback>>,
+    health: Arc<Health>,
+    channels: u16,
+    sample_rate: u32,
     _worker: RenderWorker,
+}
+
+impl Running {
+    /// Whether the output stream has reported an error since it was last opened.
+    pub fn device_lost(&self) -> bool {
+        self.health.lost.load(Ordering::Acquire)
+    }
+
+    /// Open the default output device again, at the rate the session runs at, and carry on playing from
+    /// the same queue. The session's clock waits while there is no device.
+    pub fn reopen(&mut self) -> Result<String, String> {
+        self.stream = None;
+        let output = Output::open(self.channels, Some(self.sample_rate))?;
+        let stream = build_stream(&output.device, output.config, &self.playback, &self.health)?;
+        self.health.lost.store(false, Ordering::Release);
+        self.stream = Some(stream);
+        Ok(output.name)
+    }
 }
 
 /// About 43ms at 48kHz. This bounds control latency and lets the worker run
@@ -170,46 +262,75 @@ struct RenderWorker {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     planner: Option<JoinHandle<()>>,
+    /// Sends the notes of `midi_out` instruments as the sound card plays them.
+    _midi: Option<crate::midi_out::MidiOutput>,
 }
 
-fn start_planner(daemon: Shared, stop: Arc<AtomicBool>) -> std::io::Result<JoinHandle<()>> {
+/// How many windows the planner makes while it holds the daemon, so that a change after a big edit
+/// (when every window is made again) waits for a few windows rather than for all of them.
+const PLAN_STEP: usize = 2;
+
+fn start_planner(daemon: Shared, stop: Arc<AtomicBool>, health: Arc<Health>) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new().name("niminal-plan".into()).spawn(move || {
         if let Ok(d) = daemon.lock() {
             d.session().set_planner_thread(thread::current());
         }
         while !stop.load(Ordering::Relaxed) {
-            match daemon.try_lock() {
-                Ok(mut d) => {
-                    d.session_mut().prepare_realtime();
-                    // A window is about 10ms of sound and the plan reaches 170ms ahead, so there is no
-                    // hurry. A change that lands wakes this thread at once.
+            let locked = match daemon.try_lock() {
+                Ok(d) => Some(d),
+                // a panic elsewhere must not end preparation
+                Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => None,
+            };
+            match locked {
+                Some(mut d) => {
+                    // A panic here must not end preparation, or the music stops without a word: the
+                    // renderer is told to start clean and the next round plans again from the session.
+                    let planned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| d.session_mut().prepare_realtime_step(PLAN_STEP)));
+                    if planned.is_err() {
+                        health.planner_panics.fetch_add(1, Ordering::Relaxed);
+                        d.session().restart_realtime();
+                    }
                     drop(d);
-                    thread::park_timeout(Duration::from_millis(8));
+                    if planned.is_ok_and(|more| more) {
+                        // Some windows are still to plan, but whoever is waiting for the daemon goes first.
+                        thread::sleep(Duration::from_micros(100));
+                    } else {
+                        // A window is about 10ms of sound and the plan reaches 170ms ahead, so there is no
+                        // hurry. A change that lands wakes this thread at once.
+                        thread::park_timeout(Duration::from_millis(8));
+                    }
                 }
                 // someone is evaluating: look again in a moment
-                Err(_) => thread::sleep(Duration::from_micros(200)),
+                None => thread::sleep(Duration::from_micros(200)),
             }
         }
     })
 }
 
 impl RenderWorker {
-    fn start(daemon: Shared, channels: usize, queue_frames: usize, health: Arc<Health>) -> Result<(Playback, Self), String> {
+    fn start(daemon: Shared, channels: usize, queue_frames: usize, health: Arc<Health>, input: Option<AudioInput>) -> Result<(Playback, Self), String> {
         let (producer, consumer) = RingBuffer::new(queue_frames);
         let (next, epoch, mut renderer, rate) = {
             let mut d = lock(&daemon);
             let next = d.session().clock();
             let epoch = d.session().panic_epoch();
             let rate = f64::from(d.session().sample_rate());
-            let renderer = d.session_mut().start_realtime(RealtimeConfig::default());
+            let mut renderer = d.session_mut().start_realtime(RealtimeConfig::default());
+            if let Some(input) = input {
+                renderer.set_audio_input(input);
+            }
             (next, epoch, renderer, rate)
         };
         let clock = Arc::new(AtomicU64::new(next));
+        let (midi_tx, midi_rx) = RingBuffer::new(1024);
+        renderer.set_midi_output(midi_tx);
+        let midi = crate::midi_out::MidiOutput::start(clock.clone(), midi_rx);
         let playback = Playback { queue: consumer, channels, clock: clock.clone(), epoch: epoch.clone(),
             health: health.clone(), next, waiting: None, queue_frames };
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let planner = start_planner(daemon, stop.clone()).map_err(|e| format!("can't start event preparation: {e}"))?;
+        let planner = start_planner(daemon, stop.clone(), health.clone()).map_err(|e| format!("can't start event preparation: {e}"))?;
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let thread = thread::Builder::new().name("niminal-render".into()).spawn(move || {
             let mut producer = producer;
@@ -236,7 +357,7 @@ impl RenderWorker {
                 return Err(format!("can't start the audio render worker: {error}"));
             }
         };
-        let worker = Self { stop, thread: Some(thread), planner: Some(planner) };
+        let worker = Self { stop, thread: Some(thread), planner: Some(planner), _midi: Some(midi) };
         ready_rx.recv().map_err(|_| "the audio render worker stopped before starting".to_string())?;
         Ok((playback, worker))
     }
@@ -302,7 +423,7 @@ impl NullClock {
             let mut d = lock(&daemon);
             (f64::from(d.session().sample_rate()), d.session_mut().start_realtime(RealtimeConfig::default()))
         };
-        let planner = start_planner(daemon, stop.clone()).expect("start event preparation");
+        let planner = start_planner(daemon, stop.clone(), Arc::default()).expect("start event preparation");
         let thread = thread::spawn(move || {
             let started = Instant::now();
             let initial = renderer.clock();
@@ -409,6 +530,26 @@ mod tests {
     }
 
     #[test]
+    fn preparation_carries_on_after_another_thread_panics_holding_the_daemon() {
+        let mut session = niminal_daemon::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
+        session.eval("instr tone(freq: hz) { osc(sine, freq) }\ntone(freq: 440hz) for 1beat", Some("now")).unwrap();
+        let daemon: Shared = Arc::new(Mutex::new(Daemon::new(session)));
+        let poisoner = daemon.clone();
+        let _ = thread::spawn(move || { let _guard = poisoner.lock().unwrap(); panic!("a client thread failed"); }).join();
+        assert!(daemon.is_poisoned());
+        let (mut playback, _worker) = RenderWorker::start(daemon, 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
+        // the planner keeps feeding the renderer, so the tone is still heard
+        let mut heard = false;
+        for _ in 0..50 {
+            thread::sleep(Duration::from_millis(20));
+            let mut audio = vec![0.0; 512];
+            playback.read(&mut audio);
+            heard |= audio.iter().any(|s| *s != 0.0);
+        }
+        assert!(heard);
+    }
+
+    #[test]
     fn a_control_lock_cannot_block_the_callback_or_change_its_audio() {
         let mut session = niminal_daemon::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
         session.eval("instr tone(freq: hz) { osc(sine, freq) }\ntone(freq: 440hz) for 1beat", Some("now")).unwrap();
@@ -416,7 +557,7 @@ mod tests {
         reference.eval("instr tone(freq: hz) { osc(sine, freq) }\ntone(freq: 440hz) for 1beat", Some("now")).unwrap();
         let expected = reference.process(QUEUE_FRAMES * 4);
         let daemon = Arc::new(Mutex::new(Daemon::new(session)));
-        let (mut playback, worker) = RenderWorker::start(daemon.clone(), 2, QUEUE_FRAMES, Arc::default()).unwrap();
+        let (mut playback, worker) = RenderWorker::start(daemon.clone(), 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
         let guard = lock(&daemon);
         let mut audio = vec![0.0; QUEUE_FRAMES * 2];
         for batch in 0..4 {
