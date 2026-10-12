@@ -1,11 +1,56 @@
 //! What an editor wants to know about code: the names it defines and the
 //! opcodes it can call.
 
+use std::sync::OnceLock;
+
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
 use crate::opcodes::{Kind, Registry, WAVES};
 use crate::parser::parse_spanned;
 use crate::unit::Unit;
+
+/// Names that mean something to the language itself: reserved for rename checks,
+/// and offered as keyword completions in the editor.
+pub const RESERVED_WORDS: &[&str] = &[
+    "arrangement",
+    "as",
+    "at",
+    "buffer",
+    "bus",
+    "clip",
+    "config",
+    "ctl",
+    "else",
+    "env",
+    "fn",
+    "for",
+    "hush",
+    "if",
+    "in",
+    "instr",
+    "it",
+    "kit",
+    "meter",
+    "midi_out",
+    "mono",
+    "new",
+    "next",
+    "now",
+    "opcode",
+    "out",
+    "over",
+    "panic",
+    "reset",
+    "sample",
+    "scene",
+    "state",
+    "table",
+    "tempo",
+    "track",
+    "unsolo",
+    "use",
+    "with",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
@@ -47,18 +92,38 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
     let mut out = Vec::new();
     let items = parse_spanned(source)?;
     for (item, span) in items.iter().map(|(item, span)| (item.clone(), *span)) {
-        let first_line = || source[span.start..span.end].lines().next().unwrap_or_default().trim().to_string();
+        let first_line = || {
+            source[span.start..span.end]
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
         let mut param_list = Vec::new();
         let (name, kind, detail) = match &item {
             Item::Instr(d) => {
                 param_list = params(source, &d.params);
-                (&d.name, SymbolKind::Instrument, format!("instr {}({})", d.name.name, labels(&param_list)))
+                (
+                    &d.name,
+                    SymbolKind::Instrument,
+                    format!("instr {}({})", d.name.name, labels(&param_list)),
+                )
             }
             Item::Opcode(d) => {
                 param_list = params(source, &d.params);
                 (&d.name, SymbolKind::Opcode, {
-                    let results = d.outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>().join(", ");
-                    let arrow = if results.is_empty() { String::new() } else { format!(" -> ({results})") };
+                    let results = d
+                        .outputs
+                        .iter()
+                        .map(|o| o.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let arrow = if results.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" -> ({results})")
+                    };
                     format!("opcode {}({}){arrow}", d.name.name, labels(&param_list))
                 })
             }
@@ -66,24 +131,49 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
             Item::Track(d) => (&d.name, SymbolKind::Track, format!("track {}", d.name.name)),
             Item::MidiOut(d) => (&d.name, SymbolKind::Instrument, first_line()),
-            Item::Sample(d) => (&d.name, if d.is_kit { SymbolKind::Kit } else { SymbolKind::Sample }, first_line()),
+            Item::Sample(d) => (
+                &d.name,
+                if d.is_kit {
+                    SymbolKind::Kit
+                } else {
+                    SymbolKind::Sample
+                },
+                first_line(),
+            ),
             Item::Clip(b) => {
                 param_list = clip_lanes(source, b, &items);
                 (&b.name, SymbolKind::Clip, format!("clip {}", b.name.name))
             }
             Item::Scene(b) => (&b.name, SymbolKind::Scene, format!("scene {}", b.name.name)),
-            Item::Arrangement(d) => (&d.name, SymbolKind::Arrangement, format!("arrangement {}", d.name.name)),
+            Item::Arrangement(d) => (
+                &d.name,
+                SymbolKind::Arrangement,
+                format!("arrangement {}", d.name.name),
+            ),
             Item::Bind { name, .. } => (name, SymbolKind::Pattern, first_line()),
             _ => continue,
         };
-        out.push(Symbol { name: name.name.clone(), kind, name_span: name.span, span, detail, params: param_list });
+        out.push(Symbol {
+            name: name.name.clone(),
+            kind,
+            name_span: name.span,
+            span,
+            detail,
+            params: param_list,
+        });
     }
     Ok(out)
 }
 
 /// The lanes a clip with an `instrument:` can be given: the instrument's parameters, and the lanes every note has.
 fn clip_lanes(source: &str, clip: &NamedBlock, items: &[(Item, Span)]) -> Vec<SymbolParam> {
-    let Some((_, instrument)) = clip.entries.iter().find(|(key, _)| key.name == "instrument") else { return Vec::new() };
+    let Some((_, instrument)) = clip
+        .entries
+        .iter()
+        .find(|(key, _)| key.name == "instrument")
+    else {
+        return Vec::new();
+    };
     let name = match &instrument.kind {
         ExprKind::Call { name, .. } => name.name.as_str(),
         ExprKind::Name(name) => name.as_str(),
@@ -95,8 +185,14 @@ fn clip_lanes(source: &str, clip: &NamedBlock, items: &[(Item, Span)]) -> Vec<Sy
     }) else {
         return Vec::new();
     };
-    let mut lanes: Vec<SymbolParam> = params(source, &def.params).into_iter().filter(|p| p.name != "freq").collect();
-    lanes.extend(crate::perform::UNIVERSAL_LANES.iter().map(|l| SymbolParam { name: (*l).to_string(), label: (*l).to_string() }));
+    let mut lanes: Vec<SymbolParam> = params(source, &def.params)
+        .into_iter()
+        .filter(|p| p.name != "freq")
+        .collect();
+    lanes.extend(crate::perform::UNIVERSAL_LANES.iter().map(|l| SymbolParam {
+        name: (*l).to_string(),
+        label: (*l).to_string(),
+    }));
     lanes
 }
 
@@ -113,13 +209,20 @@ fn params(source: &str, params: &[ParamDef]) -> Vec<SymbolParam> {
             if let Some(default) = &p.default {
                 label += &format!(" = {}", &source[default.span.start..default.span.end]);
             }
-            SymbolParam { name: p.name.name.clone(), label }
+            SymbolParam {
+                name: p.name.name.clone(),
+                label,
+            }
         })
         .collect()
 }
 
 fn labels(params: &[SymbolParam]) -> String {
-    params.iter().map(|p| p.label.as_str()).collect::<Vec<_>>().join(", ")
+    params
+        .iter()
+        .map(|p| p.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A built-in opcode, as an editor shows it.
@@ -152,16 +255,34 @@ impl OpInfo {
     }
 }
 
+fn op_info(
+    name: &str,
+    doc: &str,
+    receiver: bool,
+    params: &[(&'static str, &'static str, bool)],
+) -> OpInfo {
+    OpInfo {
+        name: name.to_string(),
+        doc: doc.to_string(),
+        positional: usize::from(receiver) + params.len(),
+        params: params
+            .iter()
+            .map(|&(name, ty, required)| ParamInfo {
+                name: name.to_string(),
+                ty,
+                required,
+            })
+            .collect(),
+    }
+}
+
 /// The operations on patterns, clips and grids, written after one: `riff.every(2, it.reverse)`.
 /// The pattern itself is the receiver, so it is not among the parameters.
 pub fn pattern_ops() -> Vec<OpInfo> {
-    let op = |name: &str, doc: &str, params: &[(&'static str, &'static str, bool)]| OpInfo {
-        name: name.to_string(),
-        doc: doc.to_string(),
-        positional: 1 + params.len(),
-        params: params.iter().map(|&(name, ty, required)| ParamInfo { name: name.to_string(), ty, required }).collect(),
-    };
-    vec![
+    static OPS: OnceLock<Vec<OpInfo>> = OnceLock::new();
+    OPS.get_or_init(|| {
+        let op = |name, doc, params| op_info(name, doc, true, params);
+        vec![
         op("fast", "Play it this many times faster.", &[("by", "number", true)]),
         op("slow", "Play it this many times slower.", &[("by", "number", true)]),
         op("over", "Stretch it to fill this long, as in `over(4 bars)`.", &[("length", "bars", true)]),
@@ -282,56 +403,66 @@ pub fn pattern_ops() -> Vec<OpInfo> {
             "Give the clip these lanes instead of its own, a number or a pattern each: `set(bright: 0.9)`, `set(gain: [0db -6db])`.",
             &[("lane", "value", true)],
         ),
-    ]
+        ]
+    })
+    .clone()
+}
+
+fn kind_ty(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Wave => "wave",
+        Kind::Gain => "gain",
+        Kind::Layout => "layout",
+        Kind::Signal(Unit::Num) => "number",
+        Kind::Signal(Unit::Hz) => "hz",
+        Kind::Signal(Unit::Db) => "db",
+        Kind::Signal(Unit::Time) => "time",
+        Kind::Signal(Unit::Angle) => "angle",
+        Kind::Signal(Unit::Semitones) => "semitones",
+    }
 }
 
 pub fn builtin_ops() -> Vec<OpInfo> {
-    let registry = Registry::builtin();
-    let mut ops: Vec<OpInfo> = registry
-        .names()
-        .filter_map(|name| registry.find(name))
-        .map(|spec| OpInfo {
-            name: spec.name.clone(),
-            doc: spec.doc.clone(),
-            positional: spec.positional,
-            params: spec
-                .params
-                .iter()
-                .map(|p| ParamInfo {
-                    name: p.name.clone(),
-                    ty: match p.kind {
-                        Kind::Wave => "wave",
-                        Kind::Gain => "gain",
-                        Kind::Layout => "layout",
-                        Kind::Signal(Unit::Num) => "number",
-                        Kind::Signal(Unit::Hz) => "hz",
-                        Kind::Signal(Unit::Db) => "db",
-                        Kind::Signal(Unit::Time) => "time",
-                        Kind::Signal(Unit::Angle) => "angle",
-                        Kind::Signal(Unit::Semitones) => "semitones",
-                    },
-                    required: p.required,
-                })
-                .collect(),
-        })
-        .collect();
-    ops.extend(envelope_ops());
-    ops
+    static OPS: OnceLock<Vec<OpInfo>> = OnceLock::new();
+    OPS.get_or_init(|| {
+        let registry = Registry::builtin();
+        let mut ops: Vec<OpInfo> = registry
+            .names()
+            .filter_map(|name| registry.find(name))
+            .map(|spec| OpInfo {
+                name: spec.name.clone(),
+                doc: spec.doc.clone(),
+                positional: spec.positional,
+                params: spec
+                    .params
+                    .iter()
+                    .map(|p| ParamInfo {
+                        name: p.name.clone(),
+                        ty: kind_ty(p.kind),
+                        required: p.required,
+                    })
+                    .collect(),
+            })
+            .collect();
+        ops.extend(envelope_ops());
+        ops
+    })
+    .clone()
 }
 
 /// `adsr` and `perc`: shortcuts for envelope literals, not wired opcodes.
 fn envelope_ops() -> Vec<OpInfo> {
-    let op = |name: &str, doc: &str, params: &[(&'static str, &'static str, bool)]| OpInfo {
-        name: name.to_string(),
-        doc: doc.to_string(),
-        positional: params.len(),
-        params: params.iter().map(|&(name, ty, required)| ParamInfo { name: name.to_string(), ty, required }).collect(),
-    };
+    let op = |name, doc, params| op_info(name, doc, false, params);
     vec![
         op(
             "adsr",
             "Attack, decay, sustain and release: the same as `env[0 attack 1 decay sustain | release 0]`.",
-            &[("attack", "time", true), ("decay", "time", true), ("sustain", "number", true), ("release", "time", true)],
+            &[
+                ("attack", "time", true),
+                ("decay", "time", true),
+                ("sustain", "number", true),
+                ("release", "time", true),
+            ],
         ),
         op(
             "perc",
@@ -341,12 +472,22 @@ fn envelope_ops() -> Vec<OpInfo> {
         op(
             "range",
             "Map a plain signal from 0 to 1 to a range, evenly (decibels evenly in db): `knob.range(200hz..4khz)`.",
-            &[("x", "number", true), ("from", "value", true), ("to", "value", true)],
+            &[
+                ("x", "number", true),
+                ("from", "value", true),
+                ("to", "value", true),
+            ],
         ),
         op(
             "osc_out",
             "Pass a track's signal through and send its value over OSC: `out.osc_out(\"/vj/level\", port: 9000)`. `host` is this computer unless given; `rate` is 30hz unless given.",
-            &[("x", "number", true), ("address", "text", true), ("port", "number", true), ("host", "text", false), ("rate", "hz", false)],
+            &[
+                ("x", "number", true),
+                ("address", "text", true),
+                ("port", "number", true),
+                ("host", "text", false),
+                ("rate", "hz", false),
+            ],
         ),
         op(
             "input",
@@ -370,7 +511,15 @@ mod tests {
         let src = "ctl cutoff = 1khz\ninstr tone(freq: hz, amp: db = -6db) { osc(sine, freq) }\ntrack lead { instrument = tone }\nriff = [c4 e4]";
         let s = symbols(src).unwrap();
         let names: Vec<_> = s.iter().map(|s| (s.name.as_str(), s.kind)).collect();
-        assert_eq!(names, [("cutoff", SymbolKind::Control), ("tone", SymbolKind::Instrument), ("lead", SymbolKind::Track), ("riff", SymbolKind::Pattern)]);
+        assert_eq!(
+            names,
+            [
+                ("cutoff", SymbolKind::Control),
+                ("tone", SymbolKind::Instrument),
+                ("lead", SymbolKind::Track),
+                ("riff", SymbolKind::Pattern)
+            ]
+        );
         assert_eq!(s[1].detail, "instr tone(freq: hz, amp: db = -6db)");
         assert_eq!(&src[s[1].name_span.start..s[1].name_span.end], "tone");
         assert!(symbols("instr (").is_err());
@@ -380,7 +529,14 @@ mod tests {
     fn builtin_opcodes_are_documented() {
         let ops = builtin_ops();
         assert!(ops.len() >= 10);
-        assert!(ops.iter().all(|o| !o.doc.is_empty()), "{:?}", ops.iter().filter(|o| o.doc.is_empty()).map(|o| &o.name).collect::<Vec<_>>());
+        assert!(
+            ops.iter().all(|o| !o.doc.is_empty()),
+            "{:?}",
+            ops.iter()
+                .filter(|o| o.doc.is_empty())
+                .map(|o| &o.name)
+                .collect::<Vec<_>>()
+        );
         let lpf = ops.iter().find(|o| o.name == "lpf").unwrap();
         assert_eq!(lpf.signature(), "lpf(x: number, cutoff: hz, res?: number)");
     }

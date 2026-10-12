@@ -84,12 +84,22 @@ impl Clock {
     }
 
     fn cycles_at(&self, seconds: f64) -> f64 {
-        let &(t0, c0, spc) = self.pieces.iter().rev().find(|p| p.0 <= seconds).unwrap_or(&self.pieces[0]);
+        let &(t0, c0, spc) = self
+            .pieces
+            .iter()
+            .rev()
+            .find(|p| p.0 <= seconds)
+            .unwrap_or(&self.pieces[0]);
         c0 + (seconds - t0) / spc
     }
 
     fn seconds_at(&self, cycles: f64) -> f64 {
-        let &(t0, c0, spc) = self.pieces.iter().rev().find(|p| p.1 <= cycles).unwrap_or(&self.pieces[0]);
+        let &(t0, c0, spc) = self
+            .pieces
+            .iter()
+            .rev()
+            .find(|p| p.1 <= cycles)
+            .unwrap_or(&self.pieces[0]);
         t0 + (cycles - c0) * spc
     }
 }
@@ -173,7 +183,13 @@ pub struct Schedule {
 impl Program {
     /// The notes this program's `play`, `launch` and related commands produce.
     pub fn schedule(&self) -> Schedule {
-        Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &self.performance, &[], &[])
+        Schedule::new(
+            self.tempo,
+            self.tracks.iter().map(|t| t.name.clone()).collect(),
+            &self.performance,
+            &[],
+            &[],
+        )
     }
 }
 
@@ -183,14 +199,25 @@ impl Program {
         let Some(arrangement) = self.arrangements.iter().find(|a| a.name == name) else {
             return Err(crate::program::ArgError {
                 message: format!("no arrangement named `{name}`"),
-                help: match crate::diag::closest(name, self.arrangements.iter().map(|a| a.name.as_str())) {
+                help: match crate::diag::closest(
+                    name,
+                    self.arrangements.iter().map(|a| a.name.as_str()),
+                ) {
                     Some(c) => Some(format!("did you mean `{c}`?")),
-                    None if self.arrangements.is_empty() => Some("this file has no `arrangement`".into()),
+                    None if self.arrangements.is_empty() => {
+                        Some("this file has no `arrangement`".into())
+                    }
                     None => None,
                 },
             });
         };
-        Ok(Schedule::new(self.tempo, self.tracks.iter().map(|t| t.name.clone()).collect(), &arrangement.actions, &arrangement.tempos, &arrangement.lanes))
+        Ok(Schedule::new(
+            self.tempo,
+            self.tracks.iter().map(|t| t.name.clone()).collect(),
+            &arrangement.actions,
+            &arrangement.tempos,
+            &arrangement.lanes,
+        ))
     }
 }
 
@@ -198,14 +225,33 @@ impl Schedule {
     /// A schedule from commands directly. Track indices in `commands` index
     /// `track_names`. The commands' `at` times are what they are; their
     /// `quantize` is ignored (a live session has already applied it).
-    pub fn from_commands(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled]) -> Schedule {
+    pub fn from_commands(
+        tempo: Tempo,
+        track_names: Vec<String>,
+        commands: &[Scheduled],
+    ) -> Schedule {
         Schedule::new(tempo, track_names, commands, &[], &[])
     }
 
     /// `sections` says where the tempo and meter change from `tempo`, as seconds and what they become.
-    fn new(tempo: Tempo, track_names: Vec<String>, commands: &[Scheduled], sections: &[(f64, Tempo)], lanes: &[(String, EnvLane)]) -> Schedule {
-        let tempo_at = |at: f64| sections.iter().rev().find(|(start, _)| *start <= at).map_or(tempo, |(_, t)| *t);
-        let mut timed: Vec<(f64, &Action)> = commands.iter().map(|c| (c.at.to_seconds(tempo), &c.action)).collect();
+    fn new(
+        tempo: Tempo,
+        track_names: Vec<String>,
+        commands: &[Scheduled],
+        sections: &[(f64, Tempo)],
+        lanes: &[(String, EnvLane)],
+    ) -> Schedule {
+        let tempo_at = |at: f64| {
+            sections
+                .iter()
+                .rev()
+                .find(|(start, _)| *start <= at)
+                .map_or(tempo, |(_, t)| *t)
+        };
+        let mut timed: Vec<(f64, &Action)> = commands
+            .iter()
+            .map(|c| (c.at.to_seconds(tempo), &c.action))
+            .collect();
         // Simultaneous commands keep the order they were written in.
         timed.sort_by(|a, b| a.0.total_cmp(&b.0));
 
@@ -214,7 +260,10 @@ impl Schedule {
         let mut panics = Vec::new();
 
         let close = |segments: &mut Vec<Segment>, track: Option<usize>, at: f64| {
-            for s in segments.iter_mut().filter(|s| s.end.is_none() && track.is_none_or(|t| t == s.track)) {
+            for s in segments
+                .iter_mut()
+                .filter(|s| s.end.is_none() && track.is_none_or(|t| t == s.track))
+            {
                 s.end = Some(at.max(s.start));
             }
         };
@@ -223,7 +272,14 @@ impl Schedule {
             match action {
                 Action::Play { track, clip } => {
                     close(&mut segments, Some(*track), at);
-                    segments.push(Segment { track: *track, clip: clip.clone(), start: at, end: None, tempo: tempo_at(at), clock: Clock::new(at, tempo_at(at), sections) });
+                    segments.push(Segment {
+                        track: *track,
+                        clip: clip.clone(),
+                        start: at,
+                        end: None,
+                        tempo: tempo_at(at),
+                        clock: Clock::new(at, tempo_at(at), sections),
+                    });
                 }
                 Action::Stop { track } => close(&mut segments, Some(*track), at),
                 Action::Hush | Action::Reset => close(&mut segments, None, at),
@@ -237,7 +293,15 @@ impl Schedule {
                 Action::Unsolo { track } => gates.push((at, Gate::Unsolo(*track))),
             }
         }
-        Schedule { track_names, segments, gates, panics, tempo, sections: sections.to_vec(), lanes: lanes.to_vec() }
+        Schedule {
+            track_names,
+            segments,
+            gates,
+            panics,
+            tempo,
+            sections: sections.to_vec(),
+            lanes: lanes.to_vec(),
+        }
     }
 
     /// When the last clip stops, in seconds; `None` if something plays until
@@ -296,7 +360,11 @@ impl Schedule {
     /// whether it was muted or soloed.
     pub fn track_state(&self, track: usize, at: f64) -> TrackState {
         let (muted, soloed) = self.gate_state(at);
-        let playing = self.segments.iter().rev().find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e));
+        let playing = self
+            .segments
+            .iter()
+            .rev()
+            .find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e));
         TrackState {
             clip: playing.map(|s| s.clip.name.clone()),
             muted: muted.contains(&track),
@@ -306,31 +374,55 @@ impl Schedule {
 
     /// Is a clip played from an MPE keyboard playing on any track at `at` seconds?
     pub fn plays_mpe(&self, at: f64) -> bool {
-        self.segments.iter().any(|s| s.start <= at && s.end.is_none_or(|e| at < e) && s.clip.keys.is_some_and(|k| k.mpe))
+        self.segments.iter().any(|s| {
+            s.start <= at && s.end.is_none_or(|e| at < e) && s.clip.keys.is_some_and(|k| k.mpe)
+        })
     }
 
     /// The note a key press plays on `track` at `at` seconds, if a clip played from a keyboard is
     /// playing there, on this MIDI channel, and the track is audible. `note` is the MIDI note
     /// number and `gain` how loud, in db. The clip's other lanes give the note their value at the
     /// start of a cycle.
-    pub fn key_event(&self, track: usize, at: f64, channel: u8, note: i32, gain: f64) -> Option<Event> {
-        let segment = self.segments.iter().rev().find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e))?;
+    pub fn key_event(
+        &self,
+        track: usize,
+        at: f64,
+        channel: u8,
+        note: i32,
+        gain: f64,
+    ) -> Option<Event> {
+        let segment = self
+            .segments
+            .iter()
+            .rev()
+            .find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e))?;
         segment.clip.keys.filter(|k| k.accepts(channel))?;
         if !self.audible(track, at) {
             return None;
         }
         let mut args = std::collections::BTreeMap::new();
         for (lane, pattern) in &segment.clip.lanes {
-            if matches!(lane.as_str(), "dur" | "nudge") || segment.clip.signals.iter().any(|(l, _)| l == lane) {
+            if matches!(lane.as_str(), "dur" | "nudge")
+                || segment.clip.signals.iter().any(|(l, _)| l == lane)
+            {
                 continue;
             }
-            if let Some(hap) = pattern.query(CycleSpan::new(Rational::ZERO, Rational::ZERO)).into_iter().next() {
+            if let Some(hap) = pattern
+                .query(CycleSpan::new(Rational::ZERO, Rational::ZERO))
+                .into_iter()
+                .next()
+            {
                 args.insert(lane.clone(), hap.value.value);
             }
         }
         args.insert(crate::perform::PITCH_PARAM.to_string(), Value::Note(note));
         args.insert(crate::lower::GAIN_PARAM.to_string(), Value::Db(gain));
-        Some(Event { target: self.track_names[track].clone(), at: Time::Seconds(at), dur: Time::Seconds(0.0), args })
+        Some(Event {
+            target: self.track_names[track].clone(),
+            at: Time::Seconds(at),
+            dur: Time::Seconds(0.0),
+            args,
+        })
     }
 
     /// Every change an envelope lane makes to a track parameter in `from..to` seconds, in time order.
@@ -389,8 +481,9 @@ impl Schedule {
                 problem.get_or_insert(e);
             }
             let before = out.len();
-            let (result, exhausted) =
-                niminal_pattern::with_budget(work, || self.segment_events(segment, from, to, &mut out));
+            let (result, exhausted) = niminal_pattern::with_budget(work, || {
+                self.segment_events(segment, from, to, &mut out)
+            });
             if let Err(e) = result {
                 problem.get_or_insert(e);
             }
@@ -417,7 +510,12 @@ impl Schedule {
             });
         }
         controls.sort_by(|a, b| a.at.total_cmp(&b.at));
-        Found { events: out.into_iter().map(|(_, e)| e).collect(), controls, problem, overloaded }
+        Found {
+            events: out.into_iter().map(|(_, e)| e).collect(),
+            controls,
+            problem,
+            overloaded,
+        }
     }
 
     fn segment_events(
@@ -427,7 +525,9 @@ impl Schedule {
         to: f64,
         out: &mut Vec<(f64, Event)>,
     ) -> Result<(), ScheduleError> {
-        let Some(notes) = segment.clip.lane("notes") else { return Ok(()) };
+        let Some(notes) = segment.clip.lane("notes") else {
+            return Ok(());
+        };
         let clock = &segment.clock;
         let length = segment.clip.length.to_f64();
         let until = segment.end.map_or(to, |e| e.min(to));
@@ -441,18 +541,33 @@ impl Schedule {
         let (first_loop, last_loop) = if segment.clip.endless {
             (0, 1)
         } else {
-            ((first_cycle / length).floor().max(0.0) as i64, ((last_cycle / length).ceil() as i64).max(1))
+            (
+                (first_cycle / length).floor().max(0.0) as i64,
+                ((last_cycle / length).ceil() as i64).max(1),
+            )
         };
 
         for k in first_loop..last_loop {
-            let base = if segment.clip.endless { 0.0 } else { k as f64 * length };
+            let base = if segment.clip.endless {
+                0.0
+            } else {
+                k as f64 * length
+            };
             // Only the part of the loop inside the window, padded a little so that
             // rounding can't lose a note on an edge; the check below decides.
             let a = (first_cycle - base).max(0.0) - PAD_CYCLES;
-            let b = if segment.clip.endless { last_cycle - base } else { (last_cycle - base).min(length) } + PAD_CYCLES;
+            let b = if segment.clip.endless {
+                last_cycle - base
+            } else {
+                (last_cycle - base).min(length)
+            } + PAD_CYCLES;
             let span = CycleSpan::new(
                 micro_cycles(a.floor_to_micro()).max(Rational::ZERO),
-                if segment.clip.endless { micro_cycles(b.ceil_to_micro()) } else { micro_cycles(b.ceil_to_micro()).min(segment.clip.length) },
+                if segment.clip.endless {
+                    micro_cycles(b.ceil_to_micro())
+                } else {
+                    micro_cycles(b.ceil_to_micro()).min(segment.clip.length)
+                },
             );
             if span.start >= span.end {
                 continue;
@@ -479,11 +594,20 @@ impl Schedule {
     }
 
     /// What the piece's own envelope lanes (an arrangement's) do to track parameters in `from..to`.
-    fn lane_controls(&self, from: f64, to: f64, out: &mut Vec<ControlSet>) -> Result<(), ScheduleError> {
+    fn lane_controls(
+        &self,
+        from: f64,
+        to: f64,
+        out: &mut Vec<ControlSet>,
+    ) -> Result<(), ScheduleError> {
         for (control, lane) in &self.lanes {
             let fail = |why: String| ScheduleError(format!("arrangement lane `{control}`: {why}"));
-            let unit = lane.unit.ok_or_else(|| fail("the envelope was never placed on a parameter".into()))?;
-            let level = |v: Value| crate::program::engine_value(unit, v, self.tempo).map_err(|e| fail(e.to_string()));
+            let unit = lane
+                .unit
+                .ok_or_else(|| fail("the envelope was never placed on a parameter".into()))?;
+            let level = |v: Value| {
+                crate::program::engine_value(unit, v, self.tempo).map_err(|e| fail(e.to_string()))
+            };
             let start = level(lane.start)?;
             let mut steps = Vec::with_capacity(lane.segments.len());
             let mut at = 0.0;
@@ -492,9 +616,21 @@ impl Schedule {
                 steps.push((seconds, *shape, level(*to_level)?));
                 at += seconds;
             }
-            emit_envelope(control, start, &steps, lane.looped, 0.0, from.max(0.0), to, out);
+            emit_envelope(
+                control,
+                start,
+                &steps,
+                lane.looped,
+                0.0,
+                from.max(0.0),
+                to,
+                out,
+            );
             if out.len() > MAX_CONTROL_SETS {
-                return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
+                return Err(fail(format!(
+                    "it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds",
+                    to - from
+                )));
             }
         }
         Ok(())
@@ -510,7 +646,12 @@ impl Schedule {
         };
         let mut t = at;
         loop {
-            let tempo = self.sections.iter().rev().find(|(start, _)| *start <= t).map_or(self.tempo, |(_, tempo)| *tempo);
+            let tempo = self
+                .sections
+                .iter()
+                .rev()
+                .find(|(start, _)| *start <= t)
+                .map_or(self.tempo, |(_, tempo)| *tempo);
             let per_second = tempo.bpm / 60.0 / if bars { tempo.beats_per_bar } else { 1.0 };
             match self.sections.iter().find(|(start, _)| *start > t) {
                 Some((next, _)) if left > (next - t) * per_second => {
@@ -524,7 +665,13 @@ impl Schedule {
 
     /// What `segment`'s envelope lanes do to their track's parameters in `from..to` seconds. A curved
     /// segment becomes a few straight glides that follow the same curve an `env` in an instrument does.
-    fn segment_controls(&self, segment: &Segment, from: f64, to: f64, out: &mut Vec<ControlSet>) -> Result<(), ScheduleError> {
+    fn segment_controls(
+        &self,
+        segment: &Segment,
+        from: f64,
+        to: f64,
+        out: &mut Vec<ControlSet>,
+    ) -> Result<(), ScheduleError> {
         if segment.clip.curves.is_empty() && segment.clip.signals.is_empty() {
             return Ok(());
         }
@@ -539,15 +686,25 @@ impl Schedule {
         let (first_loop, last_loop) = if segment.clip.endless {
             (0, 1)
         } else {
-            ((first_cycle / length).floor().max(0.0) as i64, ((last_cycle / length).ceil() as i64).max(1))
+            (
+                (first_cycle / length).floor().max(0.0) as i64,
+                ((last_cycle / length).ceil() as i64).max(1),
+            )
         };
         let name = &self.track_names[segment.track];
         let clip = &segment.clip;
 
         // signal lanes: the parameter follows the signal, read every SIGNAL_STEP seconds
         for (lane, unit) in &clip.signals {
-            let Some(pattern) = clip.lane(lane) else { continue };
-            let fail = |why: String| ScheduleError(format!("clip `{}` on track `{name}`, lane `{lane}`: {why}", clip.name));
+            let Some(pattern) = clip.lane(lane) else {
+                continue;
+            };
+            let fail = |why: String| {
+                ScheduleError(format!(
+                    "clip `{}` on track `{name}`, lane `{lane}`: {why}",
+                    clip.name
+                ))
+            };
             let control = format!("{name}::{lane}");
             let first = ((window_start / SIGNAL_STEP).floor() * SIGNAL_STEP).max(segment.start);
             let mut at = first;
@@ -555,14 +712,32 @@ impl Schedule {
                 if at >= window_start {
                     // where this moment falls in the clip, which starts over if it has a length
                     let into = clock.cycles_at(at);
-                    let in_loop = if clip.endless { into } else { into.rem_euclid(length) };
+                    let in_loop = if clip.endless {
+                        into
+                    } else {
+                        into.rem_euclid(length)
+                    };
                     let place = Rational::from_f64(in_loop);
-                    if let Some(hap) = pattern.query(CycleSpan::new(place, place)).into_iter().next() {
-                        let target = crate::program::engine_value(*unit, hap.value.value, segment.tempo).map_err(|e| fail(e.to_string()))?;
-                        out.push(ControlSet { at, name: control.clone(), target, glide: SIGNAL_STEP });
+                    if let Some(hap) = pattern
+                        .query(CycleSpan::new(place, place))
+                        .into_iter()
+                        .next()
+                    {
+                        let target =
+                            crate::program::engine_value(*unit, hap.value.value, segment.tempo)
+                                .map_err(|e| fail(e.to_string()))?;
+                        out.push(ControlSet {
+                            at,
+                            name: control.clone(),
+                            target,
+                            glide: SIGNAL_STEP,
+                        });
                     }
                     if out.len() > MAX_CONTROL_SETS {
-                        return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
+                        return Err(fail(format!(
+                            "it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds",
+                            to - from
+                        )));
                     }
                 }
                 at += SIGNAL_STEP;
@@ -570,23 +745,57 @@ impl Schedule {
         }
 
         for (lane, curve) in &clip.curves {
-            let fail = |why: String| ScheduleError(format!("clip `{}` on track `{name}`, lane `{lane}`: {why}", clip.name));
-            let unit = curve.unit.ok_or_else(|| fail("the envelope was never placed on a track".into()))?;
-            let level = |v: Value| crate::program::engine_value(unit, v, segment.tempo).map_err(|e| fail(e.to_string()));
+            let fail = |why: String| {
+                ScheduleError(format!(
+                    "clip `{}` on track `{name}`, lane `{lane}`: {why}",
+                    clip.name
+                ))
+            };
+            let unit = curve
+                .unit
+                .ok_or_else(|| fail("the envelope was never placed on a track".into()))?;
+            let level = |v: Value| {
+                crate::program::engine_value(unit, v, segment.tempo)
+                    .map_err(|e| fail(e.to_string()))
+            };
             let start = level(curve.start)?;
             let mut steps = Vec::with_capacity(curve.segments.len());
             for (dur, shape, to_level) in &curve.segments {
-                steps.push((dur.to_seconds(segment.tempo).max(0.0), *shape, level(*to_level)?));
+                steps.push((
+                    dur.to_seconds(segment.tempo).max(0.0),
+                    *shape,
+                    level(*to_level)?,
+                ));
             }
             let control = format!("{name}::{lane}");
 
             for k in first_loop..last_loop {
-                let loop_start = if clip.endless { segment.start } else { clock.seconds_at(k as f64 * length) };
+                let loop_start = if clip.endless {
+                    segment.start
+                } else {
+                    clock.seconds_at(k as f64 * length)
+                };
                 // nothing from this pass of the clip is heard after the clip starts over
-                let stop = if clip.endless { until } else { until.min(clock.seconds_at((k + 1) as f64 * length)) };
-                emit_envelope(&control, start, &steps, curve.looped, loop_start, window_start, stop, out);
+                let stop = if clip.endless {
+                    until
+                } else {
+                    until.min(clock.seconds_at((k + 1) as f64 * length))
+                };
+                emit_envelope(
+                    &control,
+                    start,
+                    &steps,
+                    curve.looped,
+                    loop_start,
+                    window_start,
+                    stop,
+                    out,
+                );
                 if out.len() > MAX_CONTROL_SETS {
-                    return Err(fail(format!("it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds", to - from)));
+                    return Err(fail(format!(
+                        "it changes the parameter more than {MAX_CONTROL_SETS} times in {:.1} seconds",
+                        to - from
+                    )));
                 }
             }
         }
@@ -609,7 +818,9 @@ impl Schedule {
 
         let mut args = std::collections::BTreeMap::new();
         match pitch {
-            Value::Note(_) | Value::Hz(_) => args.insert(crate::perform::PITCH_PARAM.to_string(), *pitch),
+            Value::Note(_) | Value::Hz(_) => {
+                args.insert(crate::perform::PITCH_PARAM.to_string(), *pitch)
+            }
             Value::Sample(_) => args.insert("sample".to_string(), *pitch),
             other => {
                 return Err(ScheduleError(format!(
@@ -626,15 +837,23 @@ impl Schedule {
                 continue;
             }
             // The value in force at the moment the note starts.
-            let Some(hap) = pattern.query(CycleSpan::new(whole.start, whole.start)).into_iter().next() else {
+            let Some(hap) = pattern
+                .query(CycleSpan::new(whole.start, whole.start))
+                .into_iter()
+                .next()
+            else {
                 continue;
             };
             match (lane.as_str(), hap.value.value) {
                 ("dur", v) => {
-                    dur = v.as_time().map_err(|e| lane_error(clip, name, lane, &e.to_string()))?;
+                    dur = v
+                        .as_time()
+                        .map_err(|e| lane_error(clip, name, lane, &e.to_string()))?;
                 }
                 ("nudge", v) => {
-                    let nudge = v.as_time().map_err(|e| lane_error(clip, name, lane, &e.to_string()))?;
+                    let nudge = v
+                        .as_time()
+                        .map_err(|e| lane_error(clip, name, lane, &e.to_string()))?;
                     at = (at + nudge.to_seconds(segment.tempo)).max(0.0);
                 }
                 (_, v) => {
@@ -652,7 +871,12 @@ impl Schedule {
         if let Some(share) = step.begin {
             args.insert("begin".to_string(), Value::Num(share));
         }
-        Ok(Event { target: name.clone(), at: Time::Seconds(at), dur, args })
+        Ok(Event {
+            target: name.clone(),
+            at: Time::Seconds(at),
+            dur,
+            args,
+        })
     }
 }
 
@@ -684,7 +908,12 @@ fn emit_envelope(
         }
         let mut push = |at: f64, target: f64, glide: f64| {
             if at >= window_start && at < stop {
-                out.push(ControlSet { at, name: control.to_string(), target, glide });
+                out.push(ControlSet {
+                    at,
+                    name: control.to_string(),
+                    target,
+                    glide,
+                });
             }
         };
         push(pass_start, start, 0.0);
@@ -697,7 +926,12 @@ fn emit_envelope(
             };
             for j in 0..pieces {
                 let at = t + dur * j as f64 / pieces as f64;
-                let reached = niminal_engine::ops::shape(from_level as f32, to_level as f32, (j + 1) as f64 / pieces as f64, shape.bend());
+                let reached = niminal_engine::ops::shape(
+                    from_level as f32,
+                    to_level as f32,
+                    (j + 1) as f64 / pieces as f64,
+                    shape.bend(),
+                );
                 push(at, f64::from(reached), dur / pieces as f64);
                 if at >= stop {
                     break;
@@ -713,7 +947,10 @@ fn emit_envelope(
 }
 
 fn lane_error(clip: &Clip, track: &str, lane: &str, why: &str) -> ScheduleError {
-    ScheduleError(format!("clip `{}` on track `{track}`, lane `{lane}`: {why}", clip.name))
+    ScheduleError(format!(
+        "clip `{}` on track `{track}`, lane `{lane}`: {why}",
+        clip.name
+    ))
 }
 
 #[cfg(test)]
@@ -731,8 +968,14 @@ track bass { instrument = pluck }
     #[test]
     fn musical_durations_follow_the_tempo_of_the_sections_they_cross() {
         let tempo = Tempo::new(120.0);
-        let quick = Tempo { bpm: 240.0, beats_per_bar: 4.0 };
-        let waltz = Tempo { bpm: 120.0, beats_per_bar: 3.0 };
+        let quick = Tempo {
+            bpm: 240.0,
+            beats_per_bar: 4.0,
+        };
+        let waltz = Tempo {
+            bpm: 120.0,
+            beats_per_bar: 3.0,
+        };
         let s = Schedule::new(tempo, vec![], &[], &[(4.0, quick), (5.0, waltz)], &[]);
         // two bars at 120bpm are 4s, the next bar at 240bpm is 1s
         assert!((s.seconds_from(0.0, Time::Bars(3.0)) - 5.0).abs() < 1e-9);
@@ -746,7 +989,12 @@ track bass { instrument = pluck }
     fn schedule(body: &str) -> Schedule {
         let src = format!("{STAGE}{body}");
         compile(&src)
-            .unwrap_or_else(|e| panic!("{}", e.iter().map(|d| d.render("t", &src)).collect::<String>()))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{}",
+                    e.iter().map(|d| d.render("t", &src)).collect::<String>()
+                )
+            })
             .schedule()
     }
 
@@ -756,21 +1004,34 @@ track bass { instrument = pluck }
             .unwrap()
             .into_iter()
             .map(|e| {
-                let Time::Seconds(at) = e.at else { panic!("scheduled notes are in seconds") };
-                let Value::Note(m) = e.args["freq"] else { panic!("pitch is a note") };
+                let Time::Seconds(at) = e.at else {
+                    panic!("scheduled notes are in seconds")
+                };
+                let Value::Note(m) = e.args["freq"] else {
+                    panic!("pitch is a note")
+                };
                 (at, e.target, m)
             })
             .collect()
     }
 
     fn times(s: &Schedule, from: f64, to: f64) -> Vec<f64> {
-        s.events(from, to).unwrap().into_iter().map(|e| e.at.to_seconds(Tempo::new(120.0))).collect()
+        s.events(from, to)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.at.to_seconds(Tempo::new(120.0)))
+            .collect()
     }
 
     fn song(body: &str) -> Schedule {
         let src = format!("{STAGE}scene s {{ lead: [c4 c4 c4 c4] }}\n{body}");
         compile(&src)
-            .unwrap_or_else(|e| panic!("{}", e.iter().map(|d| d.render("t", &src)).collect::<String>()))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{}",
+                    e.iter().map(|d| d.render("t", &src)).collect::<String>()
+                )
+            })
             .arrangement_schedule("song")
             .unwrap()
     }
@@ -778,27 +1039,63 @@ track bass { instrument = pluck }
     #[test]
     fn a_gradual_tempo_change_speeds_up_the_notes_of_the_clip_playing_through_it() {
         // 4 notes a bar, for 8 bars, the tempo rising evenly from 60bpm to 240bpm
-        let s = song("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60bpm 8bars 240bpm] }");
-        let at: Vec<f64> = s.events(0.0, 60.0).unwrap().iter().map(|e| e.at.to_seconds(Tempo::new(120.0))).collect();
+        let s = song(
+            "arrangement song { sections: [s.over(8 bars)]\n tempo: env[60bpm 8bars 240bpm] }",
+        );
+        let at: Vec<f64> = s
+            .events(0.0, 60.0)
+            .unwrap()
+            .iter()
+            .map(|e| e.at.to_seconds(Tempo::new(120.0)))
+            .collect();
         assert_eq!(at.len(), 32, "4 notes in each of 8 bars");
         let gaps: Vec<f64> = at.windows(2).map(|w| w[1] - w[0]).collect();
-        assert!(gaps.windows(2).all(|g| g[1] <= g[0] + 1e-9), "each gap is no longer than the one before: {gaps:?}");
-        assert!((gaps[0] - 1.0).abs() < 0.05, "a beat at 60bpm is a second: {}", gaps[0]);
-        assert!(*gaps.last().unwrap() < 0.3, "and at the end it is near a quarter of that: {}", gaps.last().unwrap());
+        assert!(
+            gaps.windows(2).all(|g| g[1] <= g[0] + 1e-9),
+            "each gap is no longer than the one before: {gaps:?}"
+        );
+        assert!(
+            (gaps[0] - 1.0).abs() < 0.05,
+            "a beat at 60bpm is a second: {}",
+            gaps[0]
+        );
+        assert!(
+            *gaps.last().unwrap() < 0.3,
+            "and at the end it is near a quarter of that: {}",
+            gaps.last().unwrap()
+        );
         // 240 / (60 + 22.5 bar) summed over the bars: about 14.8 seconds in all
         let last = *at.last().unwrap();
         assert!(last > 13.0 && last < 14.8, "{last}");
-        assert!(s.end().unwrap() > 14.0 && s.end().unwrap() < 15.5, "{:?}", s.end());
+        assert!(
+            s.end().unwrap() > 14.0 && s.end().unwrap() < 15.5,
+            "{:?}",
+            s.end()
+        );
     }
 
     #[test]
     fn a_tempo_that_holds_and_then_changes_only_changes_where_it_is_written() {
         // steady for 4 bars at 120bpm (2s a bar), then a rise to 240bpm over the next 4
-        let s = song("arrangement song { sections: [s.over(8 bars)]\n tempo: env[120bpm 4bars 120bpm 4bars 240bpm] }");
-        let at: Vec<f64> = s.events(0.0, 60.0).unwrap().iter().map(|e| e.at.to_seconds(Tempo::new(120.0))).collect();
+        let s = song(
+            "arrangement song { sections: [s.over(8 bars)]\n tempo: env[120bpm 4bars 120bpm 4bars 240bpm] }",
+        );
+        let at: Vec<f64> = s
+            .events(0.0, 60.0)
+            .unwrap()
+            .iter()
+            .map(|e| e.at.to_seconds(Tempo::new(120.0)))
+            .collect();
         assert_eq!(at[0], 0.0);
-        assert!((at[16] - 8.0).abs() < 1e-6, "four bars of 2 seconds: {}", at[16]);
-        assert!((at[1] - at[0] - 0.5).abs() < 1e-9 && (at[15] - at[14] - 0.5).abs() < 1e-9, "a steady half second");
+        assert!(
+            (at[16] - 8.0).abs() < 1e-6,
+            "four bars of 2 seconds: {}",
+            at[16]
+        );
+        assert!(
+            (at[1] - at[0] - 0.5).abs() < 1e-9 && (at[15] - at[14] - 0.5).abs() < 1e-9,
+            "a steady half second"
+        );
         assert!(at[31] - at[30] < 0.4);
     }
 
@@ -806,10 +1103,21 @@ track bass { instrument = pluck }
     fn a_tempo_envelope_is_checked() {
         let error = |body: &str| {
             let src = format!("{STAGE}scene s {{ lead: [c4] }}\n{body}");
-            compile(&src).err().map(|e| e.iter().map(|d| d.message.clone()).collect::<String>()).unwrap_or_default()
+            compile(&src)
+                .err()
+                .map(|e| e.iter().map(|d| d.message.clone()).collect::<String>())
+                .unwrap_or_default()
         };
-        assert!(error("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60 8bars 240bpm] }").contains("positive number of bpm"));
-        assert!(error("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60bpm 8sec 240bpm] }").contains("lengths in bars"));
+        assert!(
+            error("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60 8bars 240bpm] }")
+                .contains("positive number of bpm")
+        );
+        assert!(
+            error(
+                "arrangement song { sections: [s.over(8 bars)]\n tempo: env[60bpm 8sec 240bpm] }"
+            )
+            .contains("lengths in bars")
+        );
         assert!(error("arrangement song { sections: [s.over(8 bars)]\n tempo: env[60bpm 8bars 240bpm].loop }").contains("runs once"));
         assert!(error("arrangement song { sections: [s.over(8 bars)]\n tempo: [60bpm]\n tempo: env[60bpm 8bars 240bpm] }").contains("given twice"));
     }
@@ -861,37 +1169,92 @@ track bass { instrument = pluck }
 
     #[test]
     fn lanes_span_a_longer_clip_and_line_up() {
-        let s = schedule("clip c { length: 2 bars\nnotes: [c4 e4 g4 b4]\ngain: [0db -6db -12db -18db] }\nlead.play(c)");
+        let s = schedule(
+            "clip c { length: 2 bars\nnotes: [c4 e4 g4 b4]\ngain: [0db -6db -12db -18db] }\nlead.play(c)",
+        );
         // four notes spread over the two bars (4s), then the clip starts again
-        assert_eq!(times(&s, 0.0, 8.0), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
-        let gains: Vec<Value> = s.events(0.0, 4.0).unwrap().into_iter().map(|e| e.args["gain"]).collect();
-        assert_eq!(gains, [Value::Db(0.0), Value::Db(-6.0), Value::Db(-12.0), Value::Db(-18.0)]);
+        assert_eq!(
+            times(&s, 0.0, 8.0),
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+        );
+        let gains: Vec<Value> = s
+            .events(0.0, 4.0)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.args["gain"])
+            .collect();
+        assert_eq!(
+            gains,
+            [
+                Value::Db(0.0),
+                Value::Db(-6.0),
+                Value::Db(-12.0),
+                Value::Db(-18.0)
+            ]
+        );
     }
 
     #[test]
     fn a_clip_keeps_counting_cycles_until_it_is_given_a_length() {
-        let order = |s: &Schedule| notes(s, 0.0, 8.0).into_iter().map(|e| e.2).collect::<Vec<_>>();
+        let order = |s: &Schedule| {
+            notes(s, 0.0, 8.0)
+                .into_iter()
+                .map(|e| e.2)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(order(&schedule("lead.play([<c4 e4>])")), [60, 64, 60, 64]);
-        assert_eq!(order(&schedule("lead.play([c4 e4].every(2, it.reverse))")), [64, 60, 60, 64, 64, 60, 60, 64]);
-        assert_eq!(order(&schedule("clip c { notes: [<c4 e4>] }\nlead.play(c)")), [60, 64, 60, 64]);
-        assert_eq!(order(&schedule("clip c { length: 1 bar\nnotes: [<c4 e4>] }\nlead.play(c)")), [60, 60, 60, 60]);
+        assert_eq!(
+            order(&schedule("lead.play([c4 e4].every(2, it.reverse))")),
+            [64, 60, 60, 64, 64, 60, 60, 64]
+        );
+        assert_eq!(
+            order(&schedule("clip c { notes: [<c4 e4>] }\nlead.play(c)")),
+            [60, 64, 60, 64]
+        );
+        assert_eq!(
+            order(&schedule(
+                "clip c { length: 1 bar\nnotes: [<c4 e4>] }\nlead.play(c)"
+            )),
+            [60, 60, 60, 60]
+        );
     }
 
     #[test]
     fn launching_a_scene_stops_the_tracks_it_does_not_name() {
-        let s = schedule("scene a { lead: [c4], bass: [c2] }\nscene b { lead: [e4] }\na.start\nat +2 bars b.start");
-        let tracks = |from, to| notes(&s, from, to).into_iter().map(|e| e.1).collect::<Vec<_>>();
+        let s = schedule(
+            "scene a { lead: [c4], bass: [c2] }\nscene b { lead: [e4] }\na.start\nat +2 bars b.start",
+        );
+        let tracks = |from, to| {
+            notes(&s, from, to)
+                .into_iter()
+                .map(|e| e.1)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(tracks(0.0, 2.0), ["lead", "bass"]);
         assert_eq!(tracks(4.0, 6.0), ["lead"], "bass was not in scene b");
     }
 
     #[test]
     fn set_gives_a_clip_or_a_pattern_lanes_in_place_of_its_own() {
-        let bright = |s: &Schedule| -> Vec<Value> { s.events(0.0, 4.0).unwrap().iter().map(|e| e.args["bright"]).collect() };
+        let bright = |s: &Schedule| -> Vec<Value> {
+            s.events(0.0, 4.0)
+                .unwrap()
+                .iter()
+                .map(|e| e.args["bright"])
+                .collect()
+        };
         let s = schedule("clip c { notes: [c4 e4]\nbright: [0.2] }\nlead.play(c.set(bright: 0.9))");
-        assert_eq!(bright(&s)[..2], [Value::Num(0.9), Value::Num(0.9)], "replaced");
+        assert_eq!(
+            bright(&s)[..2],
+            [Value::Num(0.9), Value::Num(0.9)],
+            "replaced"
+        );
         let s = schedule("lead.play([c4 e4].set(bright: [0.1 0.7]))");
-        assert_eq!(bright(&s)[..2], [Value::Num(0.1), Value::Num(0.7)], "added to a bare pattern");
+        assert_eq!(
+            bright(&s)[..2],
+            [Value::Num(0.1), Value::Num(0.7)],
+            "added to a bare pattern"
+        );
         let s = schedule("lead.play([c4].reverse.set(gain: -6db))");
         assert_eq!(s.events(0.0, 1.0).unwrap()[0].args["gain"], Value::Db(-6.0));
     }
@@ -901,18 +1264,30 @@ track bass { instrument = pluck }
         let s = schedule("clip c { notes: [c4 e4 g4 b4]\nbright: [0.2 0.8] }\nlead.play(c)");
         let e = s.events(0.0, 2.0).unwrap();
         let brights: Vec<_> = e.iter().map(|e| e.args["bright"]).collect();
-        assert_eq!(brights, [Value::Num(0.2), Value::Num(0.2), Value::Num(0.8), Value::Num(0.8)]);
+        assert_eq!(
+            brights,
+            [
+                Value::Num(0.2),
+                Value::Num(0.2),
+                Value::Num(0.8),
+                Value::Num(0.8)
+            ]
+        );
         assert!(e.iter().all(|e| e.args.contains_key("freq")));
     }
 
     #[test]
     fn dur_and_nudge_lanes_shape_each_note() {
-        let s = schedule("clip c { notes: [c4 e4]\ndur: [1/4beat]\nnudge: [0ms 100ms] }\nlead.play(c)");
+        let s =
+            schedule("clip c { notes: [c4 e4]\ndur: [1/4beat]\nnudge: [0ms 100ms] }\nlead.play(c)");
         let e = s.events(0.0, 2.0).unwrap();
         assert_eq!(e[0].dur, Time::Beats(0.25));
         assert_eq!(e[0].at, Time::Seconds(0.0));
         assert_eq!(e[1].at, Time::Seconds(1.1), "100ms late");
-        assert!(!e[0].args.contains_key("dur") && !e[0].args.contains_key("nudge"), "they aren't instrument arguments");
+        assert!(
+            !e[0].args.contains_key("dur") && !e[0].args.contains_key("nudge"),
+            "they aren't instrument arguments"
+        );
         // a nudge never pushes a note before the start
         let early = schedule("clip c { notes: [c4]\nnudge: [-50ms] }\nlead.play(c)");
         assert_eq!(early.events(0.0, 1.0).unwrap()[0].at, Time::Seconds(0.0));
@@ -920,10 +1295,12 @@ track bass { instrument = pluck }
 
     #[test]
     fn commands_start_replace_and_stop_clips() {
-        let s = schedule("
+        let s = schedule(
+            "
 lead.play([c4])
 at 2 bars lead.play([e4])
-at 3 bars lead.stop");
+at 3 bars lead.stop",
+        );
         // bar = 2s: c4 for the first 4s, e4 for 4s..6s, then silence
         let n = notes(&s, 0.0, 20.0);
         assert_eq!(n.iter().map(|e| e.2).collect::<Vec<_>>(), [60, 60, 64]);
@@ -951,18 +1328,47 @@ at 3 bars lead.stop");
 
     #[test]
     fn mute_and_solo_silence_tracks_without_stopping_them() {
-        let s = schedule("lead.play([c4])\nbass.play([c2])\nat 1 bar lead.mute\nat 3 bars lead.unmute");
-        let lead: Vec<f64> = notes(&s, 0.0, 10.0).into_iter().filter(|e| e.1 == "lead").map(|e| e.0).collect();
-        assert_eq!(lead, [0.0, 6.0, 8.0], "silent between 2s and 6s; the clip kept its place");
-        assert_eq!(notes(&s, 0.0, 10.0).iter().filter(|e| e.1 == "bass").count(), 5);
+        let s =
+            schedule("lead.play([c4])\nbass.play([c2])\nat 1 bar lead.mute\nat 3 bars lead.unmute");
+        let lead: Vec<f64> = notes(&s, 0.0, 10.0)
+            .into_iter()
+            .filter(|e| e.1 == "lead")
+            .map(|e| e.0)
+            .collect();
+        assert_eq!(
+            lead,
+            [0.0, 6.0, 8.0],
+            "silent between 2s and 6s; the clip kept its place"
+        );
+        assert_eq!(
+            notes(&s, 0.0, 10.0)
+                .iter()
+                .filter(|e| e.1 == "bass")
+                .count(),
+            5
+        );
 
-        let solo = schedule("lead.play([c4])\nbass.play([c2])\nat 1 bar bass.solo\nat 2 bars unsolo");
-        let who = |t0, t1| notes(&solo, t0, t1).into_iter().map(|e| e.1).collect::<Vec<_>>();
+        let solo =
+            schedule("lead.play([c4])\nbass.play([c2])\nat 1 bar bass.solo\nat 2 bars unsolo");
+        let who = |t0, t1| {
+            notes(&solo, t0, t1)
+                .into_iter()
+                .map(|e| e.1)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(who(0.0, 2.0), ["lead", "bass"]);
         assert_eq!(who(2.0, 4.0), ["bass"], "only the soloed track");
         assert_eq!(who(4.0, 6.0), ["lead", "bass"]);
-        let one = schedule("lead.play([c4])\nbass.play([c2])\nlead.solo\nbass.solo\nat 1 bar bass.unsolo");
-        assert_eq!(notes(&one, 2.0, 4.0).iter().map(|e| e.1.as_str()).collect::<Vec<_>>(), ["lead"]);
+        let one = schedule(
+            "lead.play([c4])\nbass.play([c2])\nlead.solo\nbass.solo\nat 1 bar bass.unsolo",
+        );
+        assert_eq!(
+            notes(&one, 2.0, 4.0)
+                .iter()
+                .map(|e| e.1.as_str())
+                .collect::<Vec<_>>(),
+            ["lead"]
+        );
     }
 
     #[test]
@@ -975,12 +1381,14 @@ at 3 bars lead.stop");
 
     #[test]
     fn scenes_launch_whole_sets_of_clips() {
-        let s = schedule("
+        let s = schedule(
+            "
 clip riff { notes: [c2 g2] }
 scene verse { bass: riff, lead: [c4] }
 scene bridge { bass: ~, lead: [e4] }
 verse.start
-at 2 bars bridge.start");
+at 2 bars bridge.start",
+        );
         let n = notes(&s, 0.0, 8.0);
         let bass = n.iter().filter(|e| e.1 == "bass").count();
         assert_eq!(bass, 4, "two bars of two notes, then stopped");

@@ -66,11 +66,17 @@ pub struct LogEntry {
 
 /// Write a log as one JSON object per line.
 pub fn to_lines(log: &[LogEntry]) -> String {
-    log.iter().map(|e| serde_json::to_string(e).expect("log entries serialize")).collect::<Vec<_>>().join("\n")
+    log.iter()
+        .map(|e| serde_json::to_string(e).expect("log entries serialize"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn from_lines(text: &str) -> Result<Vec<LogEntry>, serde_json::Error> {
-    text.lines().filter(|l| !l.trim().is_empty()).map(serde_json::from_str).collect()
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect()
 }
 
 #[cfg(test)]
@@ -80,9 +86,21 @@ mod tests {
     #[test]
     fn logs_round_trip_as_lines() {
         let log = vec![
-            LogEntry { sample: 0, input: LogInput::Eval { source: "hush".into(), quantize: Some("now".into()) } },
-            LogEntry { sample: 96_000, input: LogInput::Panic },
-            LogEntry { sample: 96_001, input: LogInput::Cancel { id: None } },
+            LogEntry {
+                sample: 0,
+                input: LogInput::Eval {
+                    source: "hush".into(),
+                    quantize: Some("now".into()),
+                },
+            },
+            LogEntry {
+                sample: 96_000,
+                input: LogInput::Panic,
+            },
+            LogEntry {
+                sample: 96_001,
+                input: LogInput::Cancel { id: None },
+            },
         ];
         let text = to_lines(&log);
         assert_eq!(text.lines().count(), 3);

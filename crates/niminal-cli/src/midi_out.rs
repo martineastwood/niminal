@@ -97,19 +97,23 @@ impl Ports for Devices {
 }
 
 /// Sends the notes of `midi_out` instruments until dropped.
-pub struct MidiOutput(#[allow(dead_code)] Worker);
+pub struct MidiOutput {
+    _worker: Worker,
+}
 
 impl MidiOutput {
     /// `played` counts the samples the sound card has played; `incoming` brings the events.
     pub fn start(played: Arc<AtomicU64>, mut incoming: Consumer<MidiEvent>) -> MidiOutput {
-        MidiOutput(Worker::spawn(move |stop| {
-            let (mut pump, mut devices) = (Pump::default(), Devices::default());
-            while !stop.load(Ordering::Relaxed) {
-                pump.run(played.load(Ordering::Acquire), &mut incoming, &mut devices);
-                thread::sleep(Duration::from_millis(1));
-            }
-            pump.all_off(&mut devices);
-        }))
+        MidiOutput {
+            _worker: Worker::spawn(move |stop| {
+                let (mut pump, mut devices) = (Pump::default(), Devices::default());
+                while !stop.load(Ordering::Relaxed) {
+                    pump.run(played.load(Ordering::Acquire), &mut incoming, &mut devices);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                pump.all_off(&mut devices);
+            }),
+        }
     }
 }
 

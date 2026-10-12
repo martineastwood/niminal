@@ -21,7 +21,12 @@ pub struct Step {
 
 impl From<Value> for Step {
     fn from(value: Value) -> Step {
-        Step { value, gain: None, pan: None, begin: None }
+        Step {
+            value,
+            gain: None,
+            pan: None,
+            begin: None,
+        }
     }
 }
 
@@ -112,13 +117,26 @@ pub struct Scene {
 /// What a command does. Tracks are indices into `Program::tracks`.
 #[derive(Clone)]
 pub enum Action {
-    Play { track: usize, clip: Clip },
-    Stop { track: usize },
-    Mute { track: usize },
-    Unmute { track: usize },
-    Solo { track: usize },
+    Play {
+        track: usize,
+        clip: Clip,
+    },
+    Stop {
+        track: usize,
+    },
+    Mute {
+        track: usize,
+    },
+    Unmute {
+        track: usize,
+    },
+    Solo {
+        track: usize,
+    },
     /// Clear all solos, or just this track's.
-    Unsolo { track: Option<usize> },
+    Unsolo {
+        track: Option<usize>,
+    },
     /// Stop every track, letting notes ring out.
     Hush,
     /// Stop everything at once.

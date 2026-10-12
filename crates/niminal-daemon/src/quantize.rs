@@ -1,6 +1,8 @@
 //! When changes land: the musical boundary a change waits for.
 
-use niminal_lang::{Quantize, QuantizeConfig, QuantizeRelation, QuantizeUnit, Statement, StatementKind};
+use niminal_lang::{
+    Quantize, QuantizeConfig, QuantizeRelation, QuantizeUnit, Statement, StatementKind,
+};
 
 /// The quantum each kind of change uses when it doesn't say.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -16,7 +18,11 @@ pub struct QuantizeDefaults {
 }
 
 fn every(count: f64, unit: QuantizeUnit) -> Quantize {
-    Quantize { relation: QuantizeRelation::OnGrid, count, unit }
+    Quantize {
+        relation: QuantizeRelation::OnGrid,
+        count,
+        unit,
+    }
 }
 
 impl Default for QuantizeDefaults {
@@ -49,14 +55,14 @@ impl QuantizeDefaults {
     /// for the whole evaluation), else its definition's `with(quantize: ...)`, else the
     /// default for its kind.
     pub fn for_statement(&self, s: &Statement, fallback: Option<Quantize>) -> Quantize {
-        if let Some(q) = s.quantize.or(fallback).or(s.definition_quantize) {
+        if let Some(q) = s.quantize.or(fallback).or(s.definition_quantize()) {
             return q;
         }
-        match s.kind {
+        match s.kind() {
             StatementKind::Note => every(1.0, QuantizeUnit::Now),
-            StatementKind::Command if s.plays.is_some() => self.play,
+            StatementKind::Command if s.plays().is_some() => self.play,
             StatementKind::Command => self.default,
-            StatementKind::Definition => match s.key.as_deref().and_then(|k| k.split(':').next()) {
+            StatementKind::Definition => match s.key().and_then(|k| k.split(':').next()) {
                 Some("instr") => self.instrument,
                 Some("track") => self.track,
                 Some("tempo") => self.tempo,
@@ -122,11 +128,18 @@ mod tests {
 
     fn grid() -> Grid {
         // 120bpm in 4/4: a bar is 2 seconds, 96000 samples
-        Grid { sample_rate: 48_000.0, bpm: 120.0, beats_per_bar: 4.0, origin: 0 }
+        Grid {
+            sample_rate: 48_000.0,
+            bpm: 120.0,
+            beats_per_bar: 4.0,
+            origin: 0,
+        }
     }
 
     fn q(text: &str) -> Quantize {
-        analyze(&format!("hush @ {text}")).unwrap()[0].quantize.unwrap()
+        analyze(&format!("hush @ {text}")).unwrap()[0]
+            .quantize
+            .unwrap()
     }
 
     #[test]
@@ -139,8 +152,16 @@ mod tests {
     fn next_lands_strictly_after_now_and_on_grid_at_or_after() {
         let g = grid();
         assert_eq!(g.landing(q("next bar"), 10_000), 96_000);
-        assert_eq!(g.landing(q("next bar"), 96_000), 192_000, "already on the line: the following one");
-        assert_eq!(g.landing(q("bar"), 96_000), 96_000, "plain `bar` may land right now");
+        assert_eq!(
+            g.landing(q("next bar"), 96_000),
+            192_000,
+            "already on the line: the following one"
+        );
+        assert_eq!(
+            g.landing(q("bar"), 96_000),
+            96_000,
+            "plain `bar` may land right now"
+        );
         assert_eq!(g.landing(q("bar"), 96_001), 192_000);
         assert_eq!(g.landing(q("next 4 bars"), 10_000), 384_000);
         assert_eq!(g.landing(q("next 4 bars"), 400_000), 768_000);
@@ -159,7 +180,10 @@ mod tests {
 
     #[test]
     fn a_reset_moves_the_bar_lines() {
-        let g = Grid { origin: 100_000, ..grid() };
+        let g = Grid {
+            origin: 100_000,
+            ..grid()
+        };
         assert_eq!(g.position(100_000), (1, 1.0));
         assert_eq!(g.position(196_000), (2, 1.0));
         assert_eq!(g.landing(q("next bar"), 110_000), 196_000);
@@ -175,7 +199,10 @@ mod tests {
         assert_eq!(g.position(96_000), (2, 1.0));
         let (bar, beat) = g.position(96_000 * 3 + 36_000);
         assert_eq!((bar, beat), (4, 2.5));
-        let waltz = Grid { beats_per_bar: 3.0, ..g };
+        let waltz = Grid {
+            beats_per_bar: 3.0,
+            ..g
+        };
         assert_eq!(waltz.position(72_000), (2, 1.0));
     }
 
@@ -194,6 +221,9 @@ mod tests {
         let own = first("t.mute @ next beat");
         let over = Some(q("now"));
         assert_eq!(d.for_statement(&own, over).unit, QuantizeUnit::Beat);
-        assert_eq!(d.for_statement(&first("t.mute"), over).unit, QuantizeUnit::Now);
+        assert_eq!(
+            d.for_statement(&first("t.mute"), over).unit,
+            QuantizeUnit::Now
+        );
     }
 }

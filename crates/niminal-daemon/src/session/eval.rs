@@ -48,7 +48,10 @@ pub(super) struct Uses {
 
 impl Uses {
     pub(super) fn locate(&self, problems: Vec<Problem>) -> Vec<Problem> {
-        problems.into_iter().map(|p| p.in_module(&self.expanded, &self.sent)).collect()
+        problems
+            .into_iter()
+            .map(|p| p.in_module(&self.expanded, &self.sent))
+            .collect()
     }
 }
 
@@ -60,26 +63,44 @@ impl ParsedEval {
     /// Code sent from `dir`, whose `use` lines are joined in. The log keeps the
     /// joined text, so a replay needs no files.
     pub fn from_dir(sent: &str, dir: &std::path::Path, quantize: Option<&str>) -> Self {
-        match crate::project::expand_uses(sent, dir) {
+        match niminal_lang::expand(sent, dir) {
             Ok(expanded) => {
                 let text = expanded.text.clone();
-                let uses = Arc::new(Uses { expanded, sent: sent.to_string() });
+                let uses = Arc::new(Uses {
+                    expanded,
+                    sent: sent.to_string(),
+                });
                 Self::from_text(&text, quantize, Some(uses))
             }
-            Err(problems) => Self { source: sent.to_string(), quantize: quantize.map(str::to_string), parsed: Err(problems), uses: None },
+            Err(d) => {
+                let problems = vec![Problem::from_diagnostic(&d, sent, Located::Snippet(d.span))];
+                Self {
+                    source: sent.to_string(),
+                    quantize: quantize.map(str::to_string),
+                    parsed: Err(problems),
+                    uses: None,
+                }
+            }
         }
     }
 
     /// The module files that were joined in.
     pub fn module_files(&self) -> Vec<std::path::PathBuf> {
-        self.uses.iter().flat_map(|u| u.expanded.files().map(std::path::Path::to_path_buf)).collect()
+        self.uses
+            .iter()
+            .flat_map(|u| u.expanded.files().map(std::path::Path::to_path_buf))
+            .collect()
     }
 
     pub(super) fn from_text(source: &str, quantize: Option<&str>, uses: Option<Arc<Uses>>) -> Self {
         let parsed = (|| {
             let fallback = quantize.map(parse_quantum).transpose()?;
             let statements = analyze(source).map_err(|d| {
-                let problems = vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))];
+                let problems = vec![Problem::from_diagnostic(
+                    &d,
+                    source,
+                    Located::Snippet(d.span),
+                )];
                 match &uses {
                     Some(u) => u.locate(problems),
                     None => problems,
@@ -87,7 +108,12 @@ impl ParsedEval {
             })?;
             Ok((statements, fallback))
         })();
-        Self { source: source.to_string(), quantize: quantize.map(str::to_string), parsed, uses }
+        Self {
+            source: source.to_string(),
+            quantize: quantize.map(str::to_string),
+            parsed,
+            uses,
+        }
     }
 }
 
@@ -135,21 +161,52 @@ impl EvalJob {
 
     pub(super) fn prepare_all(&self) -> Result<Prepared, Vec<Problem>> {
         // Validate the complete transaction before superseding anything.
-        prepare_pending(&self.config, 0, self.lands_at, &self.source,
-            self.statements.clone(), &self.base, &self.playing)?;
-        let writes: Vec<&str> = self.statements.iter().filter_map(|s| s.write_key.as_deref()).collect();
+        prepare_pending(
+            &self.config,
+            0,
+            self.lands_at,
+            &self.source,
+            self.statements.clone(),
+            &self.base,
+            &self.playing,
+        )?;
+        let writes: Vec<&str> = self
+            .statements
+            .iter()
+            .filter_map(|s| s.write_key.as_deref())
+            .collect();
         let mut waiting = self.waiting.clone();
         for p in &mut waiting {
-            p.statements.retain(|s| s.write_key.as_deref().is_none_or(|key| !writes.contains(&key)));
+            p.statements.retain(|s| {
+                s.write_key
+                    .as_deref()
+                    .is_none_or(|key| !writes.contains(&key))
+            });
         }
         waiting.retain(|p| !p.statements.is_empty());
-        waiting.push(Waiting { id: 0, group: None, lands_at: self.lands_at, snippet: self.source.clone(), statements: self.statements.clone() });
+        waiting.push(Waiting {
+            id: 0,
+            group: None,
+            lands_at: self.lands_at,
+            snippet: self.source.clone(),
+            statements: self.statements.clone(),
+        });
         for (k, (after, statement)) in self.ramp.iter().enumerate() {
-            waiting.push(Waiting { id: NEW_BASE + k as u64, group: None, lands_at: self.lands_at + after, snippet: self.source.clone(), statements: vec![statement.clone()] });
+            waiting.push(Waiting {
+                id: NEW_BASE + k as u64,
+                group: None,
+                lands_at: self.lands_at + after,
+                snippet: self.source.clone(),
+                statements: vec![statement.clone()],
+            });
         }
         waiting.sort_by_key(|p| (p.lands_at, !is_new(p.id), p.id));
 
-        let latest = waiting.iter().map(|p| p.lands_at).max().unwrap_or(self.lands_at);
+        let latest = waiting
+            .iter()
+            .map(|p| p.lands_at)
+            .max()
+            .unwrap_or(self.lands_at);
         let (mut project, mut playing) = (self.committed.clone(), self.committed_playing.clone());
         let mut queue = Vec::new();
         let mut deferred = Vec::new();
@@ -166,12 +223,14 @@ impl EvalJob {
             match prepare_next(&self.config, &p, latest, &mut project, &mut playing) {
                 Ok(next) => queue.push(next),
                 Err(problems) if is_new(p.id) => return Err(problems),
-                Err(_) => notices.push(format!("change {} was dropped: a newer pending write invalidated it", p.id)),
+                Err(_) => notices.push(format!(
+                    "change {} was dropped: a newer pending write invalidated it",
+                    p.id
+                )),
             }
         }
         Ok(Prepared { queue, notices })
     }
-
 }
 
 /// A compiled evaluation, ready for [`Session::finish_eval`].
@@ -202,24 +261,54 @@ impl CancelJob {
         let mut notices = Vec::new();
         let mut dropped = 0;
         // a step of a ramp goes with the rest of it
-        let group = self.id.and_then(|id| self.waiting.iter().find(|p| p.id == id).and_then(|p| p.group).or(Some(id)));
+        let group = self.id.and_then(|id| {
+            self.waiting
+                .iter()
+                .find(|p| p.id == id)
+                .and_then(|p| p.group)
+                .or(Some(id))
+        });
         for p in &self.waiting {
-            if self.id.is_none_or(|id| id == p.id) || (p.group.is_some() && p.group == group) { dropped += 1; continue; }
+            if self.id.is_none_or(|id| id == p.id) || (p.group.is_some() && p.group == group) {
+                dropped += 1;
+                continue;
+            }
             match prepare_next(&self.config, p, p.lands_at, &mut project, &mut playing) {
                 Ok(next) => queue.push(next),
                 Err(_) => {
                     dropped += 1;
-                    notices.push(format!("change {} was dropped: it depended on a change that was cancelled", p.id));
+                    notices.push(format!(
+                        "change {} was dropped: it depended on a change that was cancelled",
+                        p.id
+                    ));
                 }
             }
         }
-        CancelDone { job: self, prepared: Prepared { queue, notices }, dropped }
+        CancelDone {
+            job: self,
+            prepared: Prepared { queue, notices },
+            dropped,
+        }
     }
 }
 
 /// Compile a waiting change on top of the running `project` and `playing`, which become what it leaves behind.
-pub(super) fn prepare_next(cfg: &PrepareConfig, p: &Waiting, lands_at: u64, project: &mut Project, playing: &mut BTreeMap<String, Playing>) -> Result<Pending, Vec<Problem>> {
-    let mut next = prepare_pending(cfg, p.id, lands_at, &p.snippet, p.statements.clone(), project, playing)?;
+pub(super) fn prepare_next(
+    cfg: &PrepareConfig,
+    p: &Waiting,
+    lands_at: u64,
+    project: &mut Project,
+    playing: &mut BTreeMap<String, Playing>,
+) -> Result<Pending, Vec<Problem>> {
+    let mut next = prepare_pending(
+        cfg,
+        p.id,
+        lands_at,
+        &p.snippet,
+        p.statements.clone(),
+        project,
+        playing,
+    )?;
     *project = next.project.clone();
     *playing = next.playing.clone();
     next.group = p.group;
@@ -238,20 +327,43 @@ pub(super) fn prepare_pending(
     base: &Project,
     base_playing: &BTreeMap<String, Playing>,
 ) -> Result<Pending, Vec<Problem>> {
-    let definitions: Vec<&Statement> =
-        statements.iter().filter(|s| s.kind == StatementKind::Definition).collect();
+    let definitions: Vec<&Statement> = statements
+        .iter()
+        .filter(|s| s.kind() == StatementKind::Definition)
+        .collect();
     let delta: Vec<Entry> = definitions
         .iter()
-        .map(|s| Entry { key: s.key.clone().expect("definitions have keys"), text: s.text.clone() })
+        .map(|s| Entry {
+            key: s.key().expect("definitions have keys").to_string(),
+            text: s.text.clone(),
+        })
         .collect();
-    let from_snippet: HashMap<String, usize> =
-        definitions.iter().map(|s| (s.key.clone().expect("definitions have keys"), s.offset)).collect();
+    let from_snippet: HashMap<String, usize> = definitions
+        .iter()
+        .map(|s| {
+            (
+                s.key().expect("definitions have keys").to_string(),
+                s.offset,
+            )
+        })
+        .collect();
 
     // `new` forgets everything sent before this snippet; the output layout stays, since it
     // can only be chosen when the daemon starts.
-    let clears = statements.iter().any(|s| s.clears);
-    let fresh = Project { entries: base.entries.iter().filter(|e| e.key == "config").cloned().collect() };
-    let (base, base_playing) = if clears { (&fresh, &BTreeMap::new()) } else { (base, base_playing) };
+    let clears = statements.iter().any(|s| s.clears());
+    let fresh = Project {
+        entries: base
+            .entries
+            .iter()
+            .filter(|e| e.key == "config")
+            .cloned()
+            .collect(),
+    };
+    let (base, base_playing) = if clears {
+        (&fresh, &BTreeMap::new())
+    } else {
+        (base, base_playing)
+    };
 
     let mut project = base.clone();
     project.apply(&delta);
@@ -276,39 +388,62 @@ pub(super) fn prepare_pending(
     // The commands run in order, each seeing what the ones before it left playing.
     let mut playing = base_playing.clone();
     let mut actions = Vec::new();
-    for s in statements.iter().filter(|s| s.kind != StatementKind::Definition) {
+    for s in statements
+        .iter()
+        .filter(|s| s.kind() != StatementKind::Definition)
+    {
         for (s, edited) in join_edit(s, &playing, &project)? {
-            let piece = Piece { text: s.text.clone(), origin: Origin::Snippet { offset: s.offset } };
+            let piece = Piece {
+                text: s.text.clone(),
+                origin: Origin::Snippet { offset: s.offset },
+            };
             let program = check(&[piece])?;
             // A command for later (`at +4 bars chorus.start`) is not what is playing now.
-            let later = program.performance.iter().any(|p| p.at.to_seconds(program.tempo) > 0.0);
+            let later = program
+                .performance
+                .iter()
+                .any(|p| p.at.to_seconds(program.tempo) > 0.0);
             if !later {
                 apply_to_playing(&mut playing, &program, &s);
-                if let Some(scene) = &s.launch {
+                if let Some(scene) = s.launch() {
                     apply_launch(&mut playing, &program, &project, scene);
                 }
                 if let Some((track, edited)) = edited {
                     playing.insert(track, edited);
                 }
             }
-            actions.push(Compiled { statement: s, program });
+            actions.push(Compiled {
+                statement: s,
+                program,
+            });
         }
     }
 
-    let changed: Vec<String> = definitions.iter().filter_map(|s| s.binding.clone()).collect();
+    let changed: Vec<String> = definitions
+        .iter()
+        .filter_map(|s| s.binding().map(str::to_string))
+        .collect();
     // Tracks that play something this change touches start it over, unless the commands
     // here already start them.
-    let relaunched = actions.iter().any(|a| a.statement.launch.is_some());
+    let relaunched = actions.iter().any(|a| a.statement.launch().is_some());
     let mut replays = Vec::new();
     for (track, now) in playing.clone() {
-        let started = relaunched || actions.iter().any(|a| a.statement.plays.as_ref().is_some_and(|p| p.track == track));
+        let started = relaunched
+            || actions
+                .iter()
+                .any(|a| a.statement.plays().is_some_and(|p| p.track == track));
         let what = now.text();
         if started || !mentions_any(&what, &changed) {
             continue;
         }
         let text = format!("{track}.play({what})");
-        let Some(statement) = analyze(&text).ok().and_then(|mut s| s.pop()) else { continue };
-        let piece = Piece { text: text.clone(), origin: Origin::Snippet { offset: 0 } };
+        let Some(statement) = analyze(&text).ok().and_then(|mut s| s.pop()) else {
+            continue;
+        };
+        let piece = Piece {
+            text: text.clone(),
+            origin: Origin::Snippet { offset: 0 },
+        };
         // If the new version no longer works for the track, leave it playing as it was.
         if let Ok(program) = check(&[piece]) {
             replays.push(Compiled { statement, program });
@@ -334,7 +469,10 @@ pub(super) fn prepare_pending(
 }
 
 pub(super) fn options(layout: Layout, samples: &Samples) -> CompileOptions {
-    CompileOptions { default_layout: layout, samples: samples.clone() }
+    CompileOptions {
+        default_layout: layout,
+        samples: samples.clone(),
+    }
 }
 
 /// `@ next 4 bars` as text, for an override.
@@ -375,15 +513,25 @@ impl Session {
 
     pub fn begin_parsed(&mut self, input: ParsedEval) -> Begin {
         self.sync_realtime();
-        let ParsedEval { source, quantize, parsed, uses } = input;
+        let ParsedEval {
+            source,
+            quantize,
+            parsed,
+            uses,
+        } = input;
         // a compile job logs itself when it finishes; one settled here is logged now
         let settled = match parsed {
             Err(problems) => Err(problems),
-            Ok((statements, _)) if statements.is_empty() => {
-                Ok(Accepted { id: None, lands_at: self.clock, position: self.grid().position(self.clock), changes: vec![] })
-            }
+            Ok((statements, _)) if statements.is_empty() => Ok(Accepted {
+                id: None,
+                lands_at: self.clock,
+                position: self.grid().position(self.clock),
+                changes: vec![],
+            }),
             Ok((mut statements, fallback)) => match self.expand_ramp(&mut statements) {
-                Ok(ramp) => return Begin::Job(self.job(source, uses, quantize, fallback, statements, ramp)),
+                Ok(ramp) => {
+                    return Begin::Job(self.job(source, uses, quantize, fallback, statements, ramp));
+                }
                 Err(problems) => Err(problems),
             },
         };
@@ -392,12 +540,26 @@ impl Session {
     }
 
     /// An evaluation to compile against the session as it is now.
-    pub(super) fn job(&self, source: String, uses: Option<Arc<Uses>>, quantize: Option<String>, fallback: Option<Quantize>,
-           statements: Vec<Statement>, ramp: Vec<(u64, Statement)>) -> Box<EvalJob> {
+    pub(super) fn job(
+        &self,
+        source: String,
+        uses: Option<Arc<Uses>>,
+        quantize: Option<String>,
+        fallback: Option<Quantize>,
+        statements: Vec<Statement>,
+        ramp: Vec<(u64, Statement)>,
+    ) -> Box<EvalJob> {
         let (base, playing) = self.projected();
         Box::new(EvalJob {
             lands_at: self.landing(&statements, fallback),
-            source, uses, quantize, fallback, statements, ramp, base, playing,
+            source,
+            uses,
+            quantize,
+            fallback,
+            statements,
+            ramp,
+            base,
+            playing,
             version: self.version,
             config: self.prepare_config(),
             committed: self.project.clone(),
@@ -408,21 +570,37 @@ impl Session {
 
     /// The evaluations waiting to land, as a compile job sees them.
     pub(super) fn waiting(&self) -> Vec<Waiting> {
-        self.pending.iter().map(|p| Waiting { id: p.id, group: p.group, lands_at: p.lands_at,
-            snippet: p.snippet.clone(), statements: p.statements.clone() }).collect()
+        self.pending
+            .iter()
+            .map(|p| Waiting {
+                id: p.id,
+                group: p.group,
+                lands_at: p.lands_at,
+                snippet: p.snippet.clone(),
+                statements: p.statements.clone(),
+            })
+            .collect()
     }
 
     /// `tempo 124bpm @ next bar over 8 bars` becomes a tempo for each quarter beat on the way:
     /// the first replaces the statement, and the rest are returned with how long after it each lands.
-    pub(super) fn expand_ramp(&self, statements: &mut [Statement]) -> Result<Vec<(u64, Statement)>, Vec<Problem>> {
-        let Some(index) = statements.iter().position(|s| s.ramp.is_some()) else { return Ok(Vec::new()) };
-        let Some(ramp) = statements[index].ramp.take() else { return Ok(Vec::new()) };
+    pub(super) fn expand_ramp(
+        &self,
+        statements: &mut [Statement],
+    ) -> Result<Vec<(u64, Statement)>, Vec<Problem>> {
+        let Some(index) = statements.iter().position(|s| s.ramp().is_some()) else {
+            return Ok(Vec::new());
+        };
+        let Some(ramp) = statements[index].take_ramp() else {
+            return Ok(Vec::new());
+        };
         let tempo = self.program.tempo;
         let beats = ramp.over.to_seconds(tempo) * tempo.bpm / 60.0;
         let steps = (beats * RAMP_STEPS_PER_BEAT).ceil();
         if !(1.0..=MAX_RAMP_STEPS).contains(&steps) {
             return Err(vec![Problem::plain(format!(
-                "a tempo ramp takes from a quarter of a beat up to {} beats", MAX_RAMP_STEPS / RAMP_STEPS_PER_BEAT
+                "a tempo ramp takes from a quarter of a beat up to {} beats",
+                MAX_RAMP_STEPS / RAMP_STEPS_PER_BEAT
             ))]);
         }
         let steps = steps as usize;
@@ -450,29 +628,45 @@ impl Session {
 
     pub(super) fn landing(&self, statements: &[Statement], fallback: Option<Quantize>) -> u64 {
         let grid = self.grid();
-        statements.iter().map(|s| grid.landing(self.quantums().for_statement(s, fallback), self.clock))
-            .max().expect("an evaluation has statements")
+        statements
+            .iter()
+            .map(|s| grid.landing(self.quantums().for_statement(s, fallback), self.clock))
+            .max()
+            .expect("an evaluation has statements")
     }
 
     /// Return a fresh compilation job when the project changed while compiling.
     /// Servers run this job outside their control lock.
     pub fn retry_eval(&self, done: &EvalDone) -> Option<Box<EvalJob>> {
         let job = &done.job;
-        if job.version == self.version { return None; }
-        Some(self.job(job.source.clone(), job.uses.clone(), job.quantize.clone(), job.fallback,
-            job.statements.clone(), job.ramp.clone()))
+        if job.version == self.version {
+            return None;
+        }
+        Some(self.job(
+            job.source.clone(),
+            job.uses.clone(),
+            job.quantize.clone(),
+            job.fallback,
+            job.statements.clone(),
+            job.ramp.clone(),
+        ))
     }
 
     /// Queue a compiled transaction. The synchronous API retries inline;
     /// servers use `retry_eval` to do that compilation outside their lock.
     pub fn finish_eval(&mut self, mut done: EvalDone) -> Result<Accepted, Vec<Problem>> {
         self.sync_realtime();
-        while let Some(job) = self.retry_eval(&done) { done = job.compile(); }
+        while let Some(job) = self.retry_eval(&done) {
+            done = job.compile();
+        }
         let EvalDone { job, result } = done;
         self.log_eval(&job.source, job.quantize.as_deref());
         let Prepared { mut queue, notices } = result?;
         let landing = self.landing(&job.statements, job.fallback);
-        let pending = queue.iter_mut().find(|p| p.id == 0).expect("the new transaction is queued");
+        let pending = queue
+            .iter_mut()
+            .find(|p| p.id == 0)
+            .expect("the new transaction is queued");
         // A compile that missed its grid waits for the next one. `now` lands
         // when compilation completes, rather than at its original clock sample.
         pending.lands_at = pending.lands_at.max(landing);
@@ -480,8 +674,12 @@ impl Session {
         pending.id = id;
         self.next_id += 1;
         let first_at = pending.lands_at;
-        let accepted = Accepted { id: Some(id), lands_at: pending.lands_at,
-            position: self.grid().position(pending.lands_at), changes: pending.summary.clone() };
+        let accepted = Accepted {
+            id: Some(id),
+            lands_at: pending.lands_at,
+            position: self.grid().position(pending.lands_at),
+            changes: pending.summary.clone(),
+        };
         // Preserve chronological snapshots if a compile crossed a boundary.
         // Existing transactions already prepared against this one cannot land
         // before it. Their original order remains deterministic.
@@ -497,18 +695,32 @@ impl Session {
         {
             first.group = accepted.id;
         }
-        let new_index = queue.iter().position(|p| p.id == id).expect("the new transaction is queued");
+        let new_index = queue
+            .iter()
+            .position(|p| p.id == id)
+            .expect("the new transaction is queued");
         let mut at = queue[new_index].lands_at;
-        for p in &mut queue[new_index + 1..] { p.lands_at = p.lands_at.max(at); at = p.lands_at; }
+        for p in &mut queue[new_index + 1..] {
+            p.lands_at = p.lands_at.max(at);
+            at = p.lands_at;
+        }
         self.pending = queue;
         self.invalidate_live();
-        if accepted.lands_at > job.lands_at && self.clock > job.lands_at
-            && job.statements.iter().any(|s| self.quantums().for_statement(s, job.fallback).unit != niminal_lang::QuantizeUnit::Now)
+        if accepted.lands_at > job.lands_at
+            && self.clock > job.lands_at
+            && job.statements.iter().any(|s| {
+                self.quantums().for_statement(s, job.fallback).unit
+                    != niminal_lang::QuantizeUnit::Now
+            })
         {
-            self.notify(format!("change {} missed its boundary while compiling; moved to bar {} beat {:.2}",
-                id, accepted.position.0, accepted.position.1));
+            self.notify(format!(
+                "change {} missed its boundary while compiling; moved to bar {} beat {:.2}",
+                id, accepted.position.0, accepted.position.1
+            ));
         }
-        for notice in notices { self.notify(notice); }
+        for notice in notices {
+            self.notify(notice);
+        }
         self.version += 1;
         self.land_due();
         Ok(accepted)
@@ -517,12 +729,19 @@ impl Session {
     pub(super) fn log_eval(&mut self, source: &str, quantize: Option<&str>) {
         self.log.push(LogEntry {
             sample: self.clock,
-            input: LogInput::Eval { source: source.to_string(), quantize: quantize.map(str::to_string) },
+            input: LogInput::Eval {
+                source: source.to_string(),
+                quantize: quantize.map(str::to_string),
+            },
         });
     }
 
     pub(super) fn prepare_config(&self) -> PrepareConfig {
-        PrepareConfig { layout: self.layout, samples: self.samples.clone(), sample_rate: self.sample_rate }
+        PrepareConfig {
+            layout: self.layout,
+            samples: self.samples.clone(),
+            sample_rate: self.sample_rate,
+        }
     }
 
     /// Cancel a waiting evaluation, or all of them. Returns how many. What is
@@ -533,8 +752,14 @@ impl Session {
     }
 
     pub fn begin_cancel(&self, id: Option<u64>) -> Box<CancelJob> {
-        Box::new(CancelJob { id, version: self.version, config: self.prepare_config(),
-            project: self.project.clone(), playing: self.playing.clone(), waiting: self.waiting() })
+        Box::new(CancelJob {
+            id,
+            version: self.version,
+            config: self.prepare_config(),
+            project: self.project.clone(),
+            playing: self.playing.clone(),
+            waiting: self.waiting(),
+        })
     }
 
     pub fn retry_cancel(&self, done: &CancelDone) -> Option<Box<CancelJob>> {
@@ -543,13 +768,19 @@ impl Session {
 
     pub fn finish_cancel(&mut self, mut done: CancelDone) -> usize {
         self.sync_realtime();
-        while let Some(job) = self.retry_cancel(&done) { done = job.compile(); }
-        self.log.push(LogEntry { sample: self.clock, input: LogInput::Cancel { id: done.job.id } });
+        while let Some(job) = self.retry_cancel(&done) {
+            done = job.compile();
+        }
+        self.log.push(LogEntry {
+            sample: self.clock,
+            input: LogInput::Cancel { id: done.job.id },
+        });
         self.pending = done.prepared.queue;
         self.invalidate_live();
-        for notice in done.prepared.notices { self.notify(notice); }
+        for notice in done.prepared.notices {
+            self.notify(notice);
+        }
         self.version += 1;
         done.dropped
     }
 }
-

@@ -29,7 +29,10 @@ impl Project {
     }
 
     pub fn text_of(&self, key: &str) -> Option<&str> {
-        self.entries.iter().find(|e| e.key == key).map(|e| e.text.as_str())
+        self.entries
+            .iter()
+            .find(|e| e.key == key)
+            .map(|e| e.text.as_str())
     }
 
     /// The source for compiling, plus `extra` statements (actions) after it. The
@@ -39,7 +42,11 @@ impl Project {
     /// `from_snippet` gives the offset in the user's snippet of each definition
     /// that came from it; those are attributed to the snippet, the rest to the
     /// earlier definitions they are.
-    pub fn source(&self, from_snippet: &std::collections::HashMap<String, usize>, extra: &[Piece]) -> (String, SourceMap) {
+    pub fn source(
+        &self,
+        from_snippet: &std::collections::HashMap<String, usize>,
+        extra: &[Piece],
+    ) -> (String, SourceMap) {
         let mut text = String::new();
         let mut map = SourceMap::default();
         for e in &self.entries {
@@ -139,11 +146,6 @@ pub struct Problem {
     pub in_definition: Option<String>,
 }
 
-/// Resolve the `use` lines of code sent from `dir`.
-pub fn expand_uses(source: &str, dir: &std::path::Path) -> Result<Expanded, Vec<Problem>> {
-    niminal_lang::expand(source, dir).map_err(|d| vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))])
-}
-
 impl Problem {
     /// A problem found in a module, as a problem with the `use` line in `original`.
     pub fn in_module(self, expanded: &Expanded, original: &str) -> Problem {
@@ -157,7 +159,14 @@ impl Problem {
     }
 
     pub fn plain(message: impl Into<String>) -> Problem {
-        Problem { message: message.into(), help: None, line: None, column: None, span: None, in_definition: None }
+        Problem {
+            message: message.into(),
+            help: None,
+            line: None,
+            column: None,
+            span: None,
+            in_definition: None,
+        }
     }
 
     pub fn from_diagnostic(d: &Diagnostic, snippet: &str, located: Located) -> Problem {
@@ -182,7 +191,10 @@ mod tests {
     use super::*;
 
     fn entry(key: &str, text: &str) -> Entry {
-        Entry { key: key.into(), text: text.into() }
+        Entry {
+            key: key.into(),
+            text: text.into(),
+        }
     }
 
     #[test]
@@ -190,7 +202,11 @@ mod tests {
         let mut p = Project::default();
         p.apply(&[entry("a", "A1"), entry("b", "B1"), entry("c", "C1")]);
         p.apply(&[entry("b", "B2"), entry("d", "D1")]);
-        let keys: Vec<_> = p.entries.iter().map(|e| (e.key.as_str(), e.text.as_str())).collect();
+        let keys: Vec<_> = p
+            .entries
+            .iter()
+            .map(|e| (e.key.as_str(), e.text.as_str()))
+            .collect();
         assert_eq!(keys, [("a", "A1"), ("b", "B2"), ("c", "C1"), ("d", "D1")]);
         assert_eq!(p.text_of("b"), Some("B2"));
         assert_eq!(p.text_of("zz"), None);
@@ -201,14 +217,26 @@ mod tests {
         let mut p = Project::default();
         p.apply(&[entry("instr:a", "instr a() { osc(sine, 100hz) }")]);
         let snippet = "\n\nlead.play(nope)";
-        let extra = [Piece { text: "lead.play(nope)".into(), origin: Origin::Snippet { offset: 2 } }];
+        let extra = [Piece {
+            text: "lead.play(nope)".into(),
+            origin: Origin::Snippet { offset: 2 },
+        }];
         let (text, map) = p.source(&std::collections::HashMap::new(), &extra);
         let at = text.find("nope").unwrap();
         let located = map.locate(Span::new(at, at + 4));
-        assert_eq!(located, Located::Snippet(Span::new(2 + "lead.play(".len(), 2 + "lead.play(nope".len())));
+        assert_eq!(
+            located,
+            Located::Snippet(Span::new(
+                2 + "lead.play(".len(),
+                2 + "lead.play(nope".len()
+            ))
+        );
 
         let d = Diagnostic::new("x", Span::new(0, 1));
-        assert_eq!(map.locate(Span::new(0, 5)), Located::Earlier("instr:a".into()));
+        assert_eq!(
+            map.locate(Span::new(0, 5)),
+            Located::Earlier("instr:a".into())
+        );
         let problem = Problem::from_diagnostic(&d, snippet, Located::Snippet(Span::new(14, 18)));
         assert_eq!((problem.line, problem.column), (Some(3), Some(13)));
     }
@@ -224,7 +252,9 @@ mod tests {
             entry("track:t", "track t { out = it }"),
         ]);
         let env = p.environment();
-        assert!(env.contains("channels: stereo") && env.contains("bus s") && env.contains("opcode o"));
+        assert!(
+            env.contains("channels: stereo") && env.contains("bus s") && env.contains("opcode o")
+        );
         assert!(!env.contains("instr a") && !env.contains("track t"));
     }
 }

@@ -40,15 +40,83 @@ const SEEDS: [&str; 6] = [
 ];
 
 const SNIPPETS: [&str; 40] = [
-    "[", "]", "{", "}", "(", ")", "~", ".", ",", ":", "=", "+=", "..", "@", "*", "/", "-", "+", "<", ">", "|",
-    "0", "1", "-1", "0.0000001", "1e308", "99999999999999999999", "4294967296", "1000000", "0/0",
-    "bars", "ms", "hz", "db", "st", "bpm", "launch", "play", "[c4]*100000", "[a b c d e f g h]*64",
+    "[",
+    "]",
+    "{",
+    "}",
+    "(",
+    ")",
+    "~",
+    ".",
+    ",",
+    ":",
+    "=",
+    "+=",
+    "..",
+    "@",
+    "*",
+    "/",
+    "-",
+    "+",
+    "<",
+    ">",
+    "|",
+    "0",
+    "1",
+    "-1",
+    "0.0000001",
+    "1e308",
+    "99999999999999999999",
+    "4294967296",
+    "1000000",
+    "0/0",
+    "bars",
+    "ms",
+    "hz",
+    "db",
+    "st",
+    "bpm",
+    "launch",
+    "play",
+    "[c4]*100000",
+    "[a b c d e f g h]*64",
 ];
 
 const WORDS: [&str; 34] = [
-    "sometimes", "within", "swing", "rotate", "shuffle", "chord", "arpeggiate", "markov", "sine", "range",
-    "fast", "slow", "every", "thin", "euclid", "transpose", "shift", "over", "reverse", "rhythm", "reverb", "delay",
-    "pan", "lpf", "gain", "env", "osc", "slices", "fit", "choke", "tempo", "meter", "state", "out",
+    "sometimes",
+    "within",
+    "swing",
+    "rotate",
+    "shuffle",
+    "chord",
+    "arpeggiate",
+    "markov",
+    "sine",
+    "range",
+    "fast",
+    "slow",
+    "every",
+    "thin",
+    "euclid",
+    "transpose",
+    "shift",
+    "over",
+    "reverse",
+    "rhythm",
+    "reverb",
+    "delay",
+    "pan",
+    "lpf",
+    "gain",
+    "env",
+    "osc",
+    "slices",
+    "fit",
+    "choke",
+    "tempo",
+    "meter",
+    "state",
+    "out",
 ];
 
 fn mutate(rng: &mut Rng, source: &str) -> String {
@@ -82,8 +150,18 @@ fn mutate(rng: &mut Rng, source: &str) -> String {
             4 => {
                 // replace a number with an extreme one
                 if let Some(start) = (at..text.len()).find(|&i| text[i].is_ascii_digit()) {
-                    let end = (start..text.len()).find(|&i| !text[i].is_ascii_digit() && text[i] != '.').unwrap_or(text.len());
-                    let n = *rng.pick(&["0", "-1", "1e308", "123456789012", "0.000001", "65536", "255"]);
+                    let end = (start..text.len())
+                        .find(|&i| !text[i].is_ascii_digit() && text[i] != '.')
+                        .unwrap_or(text.len());
+                    let n = *rng.pick(&[
+                        "0",
+                        "-1",
+                        "1e308",
+                        "123456789012",
+                        "0.000001",
+                        "65536",
+                        "255",
+                    ]);
                     text.splice(start..end, n.chars());
                 }
             }
@@ -93,14 +171,20 @@ fn mutate(rng: &mut Rng, source: &str) -> String {
                 let nest: String = std::iter::repeat_n(open, depth).collect();
                 text.splice(at..at, nest.chars());
             }
-            _ => text[at] = *rng.pick(&['\n', ' ', '"', '\'', '#', '$', '\\', '\u{0}', 'é', '→', '9']),
+            _ => {
+                text[at] =
+                    *rng.pick(&['\n', ' ', '"', '\'', '#', '$', '\\', '\u{0}', 'é', '→', '9'])
+            }
         }
     }
     text.into_iter().collect()
 }
 
 fn cases() -> usize {
-    std::env::var("NIMINAL_FUZZ_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(if cfg!(debug_assertions) { 150 } else { 1500 })
+    std::env::var("NIMINAL_FUZZ_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(if cfg!(debug_assertions) { 150 } else { 1500 })
 }
 
 /// Run one source through a fresh session. Returns a description of what went wrong.
@@ -124,7 +208,8 @@ fn run(source: &str, layout: Layout, accepted: &mut usize) -> Option<String> {
         }
         Ok(ok) => {
             *accepted += usize::from(ok);
-            (started.elapsed() > Duration::from_secs(10)).then(|| format!("took {:?}", started.elapsed()))
+            (started.elapsed() > Duration::from_secs(10))
+                .then(|| format!("took {:?}", started.elapsed()))
         }
     }
 }
@@ -141,7 +226,11 @@ fn damaged_programs_never_crash_or_hang_a_session() {
         if let Ok(path) = std::env::var("NIMINAL_FUZZ_TRACE") {
             let _ = std::fs::write(path, &source);
         }
-        let layout = if case % 3 == 0 { Layout::Mono } else { Layout::Stereo };
+        let layout = if case % 3 == 0 {
+            Layout::Mono
+        } else {
+            Layout::Stereo
+        };
         if let Some(why) = run(&source, layout, &mut accepted)
             && !failures.iter().any(|(w, _)| *w == why)
         {
@@ -150,7 +239,10 @@ fn damaged_programs_never_crash_or_hang_a_session() {
     }
     let _ = std::panic::take_hook();
     eprintln!("{accepted} of {} damaged programs still compiled", cases());
-    assert!(accepted * 20 >= cases(), "the damage is too heavy to test anything past the parser");
+    assert!(
+        accepted * 20 >= cases(),
+        "the damage is too heavy to test anything past the parser"
+    );
     if !failures.is_empty() {
         let mut report = String::new();
         for (why, source) in &failures {
@@ -207,10 +299,22 @@ fn greedy_programs_are_accepted_quickly_and_playback_carries_on() {
         let evaluated = started.elapsed();
         let out = s.process(48_000 * 4);
         let total = started.elapsed();
-        eprintln!("{src:?}: {} in {evaluated:?}, played in {total:?}", if accepted { "accepted" } else { "rejected" });
-        assert!(evaluated < Duration::from_secs(2), "{src}: took {evaluated:?} to accept");
-        assert!(total < Duration::from_secs(12), "{src}: took {total:?} to play 4 seconds");
+        eprintln!(
+            "{src:?}: {} in {evaluated:?}, played in {total:?}",
+            if accepted { "accepted" } else { "rejected" }
+        );
+        assert!(
+            evaluated < Duration::from_secs(2),
+            "{src}: took {evaluated:?} to accept"
+        );
+        assert!(
+            total < Duration::from_secs(12),
+            "{src}: took {total:?} to play 4 seconds"
+        );
         assert!(out[0].iter().all(|v| v.is_finite()), "{src}");
-        assert!(out[0].iter().all(|v| v.abs() <= 1.0), "{src}: the limiter must hold");
+        assert!(
+            out[0].iter().all(|v| v.abs() <= 1.0),
+            "{src}: the limiter must hold"
+        );
     }
 }

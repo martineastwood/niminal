@@ -12,7 +12,10 @@ impl Span {
     }
 
     pub fn to(self, other: Span) -> Span {
-        Span { start: self.start, end: other.end }
+        Span {
+            start: self.start,
+            end: other.end,
+        }
     }
 }
 
@@ -25,7 +28,11 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn new(message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { message: message.into(), span, help: None }
+        Diagnostic {
+            message: message.into(),
+            span,
+            help: None,
+        }
     }
 
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
@@ -37,15 +44,24 @@ impl Diagnostic {
     pub fn render(&self, file: &str, source: &str) -> String {
         let start = self.span.start.min(source.len());
         let line_start = source[..start].rfind('\n').map_or(0, |i| i + 1);
-        let line_end = source[start..].find('\n').map_or(source.len(), |i| start + i);
+        let line_end = source[start..]
+            .find('\n')
+            .map_or(source.len(), |i| start + i);
         let line = &source[line_start..line_end];
         let line_no = source[..line_start].matches('\n').count() + 1;
         let col = source[line_start..start].chars().count();
-        let width = source[start..self.span.end.clamp(start, line_end)].chars().count().max(1);
+        let width = source[start..self.span.end.clamp(start, line_end)]
+            .chars()
+            .count()
+            .max(1);
 
         let gutter = line_no.to_string();
         let pad = " ".repeat(gutter.len());
-        let mut out = format!("error: {}\n{pad}--> {file}:{line_no}:{}\n{pad} |\n", self.message, col + 1);
+        let mut out = format!(
+            "error: {}\n{pad}--> {file}:{line_no}:{}\n{pad} |\n",
+            self.message,
+            col + 1
+        );
         let _ = writeln!(out, "{gutter} | {line}");
         let _ = writeln!(out, "{pad} | {}{}", " ".repeat(col), "^".repeat(width));
         if let Some(help) = &self.help {
@@ -79,7 +95,9 @@ fn edit_distance(a: &str, b: &str) -> usize {
     for i in 1..=a.len() {
         for j in 1..=b.len() {
             let cost = usize::from(a[i - 1] != b[j - 1]);
-            d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            d[i][j] = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
                 d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
             }

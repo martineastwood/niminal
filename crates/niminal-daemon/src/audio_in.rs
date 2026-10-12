@@ -28,7 +28,11 @@ impl AudioInput {
         for i in 0..n.min(BLOCK) {
             let ready = self.rx.slots() >= self.channels;
             for channel in out.iter_mut().take(self.channels) {
-                channel[i] = if ready { self.rx.pop().unwrap_or(0.0) } else { 0.0 };
+                channel[i] = if ready {
+                    self.rx.pop().unwrap_or(0.0)
+                } else {
+                    0.0
+                };
             }
         }
     }

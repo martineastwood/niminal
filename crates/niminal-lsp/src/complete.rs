@@ -1,12 +1,7 @@
 //! What to offer at the cursor.
 
-use niminal_lang::{OpInfo, Symbol, SymbolKind, builtin_ops, pattern_ops, waves};
+use niminal_lang::{OpInfo, RESERVED_WORDS, Symbol, SymbolKind, builtin_ops, pattern_ops, waves};
 use serde_json::{Value, json};
-
-const KEYWORDS: &[&str] = &[
-    "instr", "mono", "opcode", "bus", "sample", "kit", "midi_out", "ctl", "track", "clip", "scene", "arrangement", "config", "tempo", "meter",
-    "unsolo", "hush", "panic", "reset", "new", "at", "for", "over", "next", "now",
-];
 const UNITS: &[(&str, &str)] = &[
     ("hz", "frequency"), ("khz", "frequency, in thousands of hz"), ("db", "gain in decibels"), ("ms", "milliseconds"),
     ("sec", "seconds"), ("beat", "beats, at the tempo"), ("beats", "beats, at the tempo"), ("bar", "bars, at the tempo and meter"),
@@ -312,7 +307,7 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
 
     out.extend(symbols.iter().map(symbol_item));
     out.extend(ops.iter().map(op_item));
-    out.extend(KEYWORDS.iter().map(|k| item(k, KEYWORD, "", "")));
+    out.extend(RESERVED_WORDS.iter().map(|k| item(k, KEYWORD, "", "")));
     out
 }
 

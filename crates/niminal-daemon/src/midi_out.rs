@@ -19,7 +19,15 @@ impl MidiEvent {
     /// The message as it goes down a cable: a status byte with the channel in it, the key, the velocity.
     pub fn bytes(&self) -> [u8; 3] {
         let status = if self.on { 0x90 } else { 0x80 };
-        [status | (self.channel.clamp(1, 16) - 1), self.note.min(127), if self.on { self.velocity.clamp(1, 127) } else { 0 }]
+        [
+            status | (self.channel.clamp(1, 16) - 1),
+            self.note.min(127),
+            if self.on {
+                self.velocity.clamp(1, 127)
+            } else {
+                0
+            },
+        ]
     }
 }
 
@@ -29,9 +37,20 @@ mod tests {
 
     #[test]
     fn a_note_is_three_bytes_with_the_channel_in_the_first() {
-        let on = MidiEvent { at: 0, on: true, port: "x".into(), channel: 10, note: 36, velocity: 100 };
+        let on = MidiEvent {
+            at: 0,
+            on: true,
+            port: "x".into(),
+            channel: 10,
+            note: 36,
+            velocity: 100,
+        };
         assert_eq!(on.bytes(), [0x99, 36, 100]);
-        let off = MidiEvent { on: false, channel: 1, ..on };
+        let off = MidiEvent {
+            on: false,
+            channel: 1,
+            ..on
+        };
         assert_eq!(off.bytes(), [0x80, 36, 0]);
     }
 }

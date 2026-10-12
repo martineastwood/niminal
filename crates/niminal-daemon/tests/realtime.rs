@@ -13,20 +13,34 @@ thread_local! {
 static ALLOCATOR: Allocator = Allocator;
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: AllocLayout) -> *mut u8 {
-        MEASURE.with(|on| if on.get() { ALLOCS.with(|n| n.set(n.get() + 1)); });
+        MEASURE.with(|on| {
+            if on.get() {
+                ALLOCS.with(|n| n.set(n.get() + 1));
+            }
+        });
         unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: AllocLayout) {
-        MEASURE.with(|on| if on.get() { FREES.with(|n| n.set(n.get() + 1)); });
+        MEASURE.with(|on| {
+            if on.get() {
+                FREES.with(|n| n.set(n.get() + 1));
+            }
+        });
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: AllocLayout, size: usize) -> *mut u8 {
-        MEASURE.with(|on| if on.get() { ALLOCS.with(|n| n.set(n.get() + 1)); FREES.with(|n| n.set(n.get() + 1)); });
+        MEASURE.with(|on| {
+            if on.get() {
+                ALLOCS.with(|n| n.set(n.get() + 1));
+                FREES.with(|n| n.set(n.get() + 1));
+            }
+        });
         unsafe { System.realloc(ptr, layout, size) }
     }
 }
 
-const SETUP: &str = "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ntrack lead { instrument = tone }";
+const SETUP: &str =
+    "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ntrack lead { instrument = tone }";
 fn session() -> Session {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(SETUP, Some("now")).unwrap();
@@ -37,7 +51,10 @@ fn measured(r: &mut RealtimeRenderer, n: usize, out: &mut [f32]) {
     FREES.with(|v| v.set(0));
     MEASURE.with(|v| v.set(true));
     let mut pos = 0;
-    r.render(n, &mut |b, n| { out[pos..pos+n].copy_from_slice(&b[0][..n]); pos += n; });
+    r.render(n, &mut |b, n| {
+        out[pos..pos + n].copy_from_slice(&b[0][..n]);
+        pos += n;
+    });
     MEASURE.with(|v| v.set(false));
     assert_eq!(ALLOCS.with(Cell::get), 0, "render allocated");
     assert_eq!(FREES.with(Cell::get), 0, "render destroyed heap storage");
@@ -69,8 +86,12 @@ fn live_graph_edits_and_panic_do_no_heap_work() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     measured(&mut r, 256, &mut out);
-    s.eval("track lead { instrument = tone
- out = it.lpf(cutoff: 2000hz) }", Some("now")).unwrap();
+    s.eval(
+        "track lead { instrument = tone
+ out = it.lpf(cutoff: 2000hz) }",
+        Some("now"),
+    )
+    .unwrap();
     s.prepare_realtime();
     measured(&mut r, 256, &mut out);
     s.prepare_realtime();
@@ -87,7 +108,8 @@ fn live_graph_edits_and_panic_do_no_heap_work() {
 #[test]
 fn notes_wait_for_the_exact_sample_and_future_preparation_is_separate() {
     let mut s = session();
-    s.eval("at 10ms lead(freq: 440hz) for 20ms", Some("now")).unwrap();
+    s.eval("at 10ms lead(freq: 440hz) for 20ms", Some("now"))
+        .unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     assert_eq!(s.prepared_until(), 8192);
     assert_eq!(r.clock(), 0);
@@ -120,7 +142,10 @@ fn delayed_notes_do_not_hold_up_earlier_notes_in_later_windows() {
 fn empty_event_queue_keeps_dsp_running_and_reports_starvation() {
     let mut s = session();
     s.eval("lead(freq: 440hz) for 1beat", Some("now")).unwrap();
-    let mut r = s.start_realtime(RealtimeConfig { lookahead_frames: 512, ..RealtimeConfig::default() });
+    let mut r = s.start_realtime(RealtimeConfig {
+        lookahead_frames: 512,
+        ..RealtimeConfig::default()
+    });
     let mut out = [0.0; 4096];
     measured(&mut r, 4096, &mut out);
     assert!(out[512..].iter().any(|v| v.abs() > 0.1));
@@ -132,7 +157,11 @@ fn empty_event_queue_keeps_dsp_running_and_reports_starvation() {
 #[test]
 fn revisions_are_not_lost_when_the_ready_queue_is_full() {
     let mut s = session();
-    let mut r = s.start_realtime(RealtimeConfig { queued_windows: 1, lookahead_frames: 512, ..RealtimeConfig::default() });
+    let mut r = s.start_realtime(RealtimeConfig {
+        queued_windows: 1,
+        lookahead_frames: 512,
+        ..RealtimeConfig::default()
+    });
     s.eval("lead(freq: 440hz) for 1beat", Some("now")).unwrap();
     s.prepare_realtime(); // Stale window still occupies the sole slot.
     let mut out = [0.0; 128];
@@ -171,7 +200,7 @@ fn quantized_definitions_and_notes_land_inside_prepared_windows() {
     while pos < out.len() {
         s.prepare_realtime();
         let n = 256.min(out.len() - pos);
-        measured(&mut r, n, &mut out[pos..pos+n]);
+        measured(&mut r, n, &mut out[pos..pos + n]);
         pos += n;
     }
     assert_eq!(out[..24_000], vec![0.0; 24_000]);
@@ -194,11 +223,15 @@ fn compatible_effect_memory_survives_a_prepared_swap() {
     let mut pos = 0;
     while pos < actual.len() {
         if pos == 4096 {
-            s.eval("track hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }", Some("now")).unwrap();
+            s.eval(
+                "track hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }",
+                Some("now"),
+            )
+            .unwrap();
         }
         s.prepare_realtime();
         let n = 256.min(actual.len() - pos);
-        measured(&mut r, n, &mut actual[pos..pos+n]);
+        measured(&mut r, n, &mut actual[pos..pos + n]);
         pos += n;
     }
     assert_eq!(actual, expected);
@@ -207,9 +240,17 @@ fn compatible_effect_memory_survives_a_prepared_swap() {
 #[test]
 fn overload_is_bounded_and_does_no_heap_work_during_rendering() {
     let mut s = session();
-    s.eval(&"lead(freq: 440hz) for 1beat
-".repeat(32), Some("now")).unwrap();
-    let mut r = s.start_realtime(RealtimeConfig { max_voices: 2, ..RealtimeConfig::default() });
+    s.eval(
+        &"lead(freq: 440hz) for 1beat
+"
+        .repeat(32),
+        Some("now"),
+    )
+    .unwrap();
+    let mut r = s.start_realtime(RealtimeConfig {
+        max_voices: 2,
+        ..RealtimeConfig::default()
+    });
     let mut out = [0.0; 256];
     for _ in 0..100 {
         s.prepare_realtime();
@@ -222,12 +263,20 @@ fn overload_is_bounded_and_does_no_heap_work_during_rendering() {
 #[test]
 fn repeated_edits_keep_audio_finite_and_render_without_heap_work() {
     let mut s = session();
-    s.eval("lead.play([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
+    s.eval("lead.play([c4 e4 g4 b4].fast(32))", Some("now"))
+        .unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     for i in 0..100 {
         if i % 5 == 0 {
-            s.eval(&format!("track lead {{ instrument = tone\n out = it.lpf(cutoff: {}hz) }}", 1000 + i * 20), Some("now")).unwrap();
+            s.eval(
+                &format!(
+                    "track lead {{ instrument = tone\n out = it.lpf(cutoff: {}hz) }}",
+                    1000 + i * 20
+                ),
+                Some("now"),
+            )
+            .unwrap();
         }
         s.prepare_realtime();
         measured(&mut r, 256, &mut out);
@@ -243,18 +292,29 @@ fn repeated_edits_keep_audio_finite_and_render_without_heap_work() {
 fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
     let dir = std::env::temp_dir().join(format!("niminal-prepared-samples-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("kit")).unwrap();
-    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 48_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
     let mut wav = hound::WavWriter::create(dir.join("kit/kick.wav"), spec).unwrap();
-    for _ in 0..4800 { wav.write_sample(32i16).unwrap(); }
+    for _ in 0..4800 {
+        wav.write_sample(32i16).unwrap();
+    }
     wav.finalize().unwrap();
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     s.set_sample_dir(&dir);
-    let mut source = String::from("ctl level = 1.0\nkit k = \"kit\"\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n");
+    let mut source = String::from(
+        "ctl level = 1.0\nkit k = \"kit\"\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n",
+    );
     for i in 0..8 {
         source.push_str(&format!("track lead{i} {{ instrument = poly\n out = it.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\nlead{i}.play([c4 e4 g4 b4].fast(64))\n"));
     }
     for i in 0..4 {
-        source.push_str(&format!("track drums{i} {{ instrument = k }}\ndrums{i}.play([kick].fast(128))\n"));
+        source.push_str(&format!(
+            "track drums{i} {{ instrument = k }}\ndrums{i}.play([kick].fast(128))\n"
+        ));
     }
     source.push_str(&"poly(freq: 220hz) for 2beats\n".repeat(128));
     s.eval(&source, Some("now")).unwrap();
@@ -262,7 +322,8 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
     let mut out = [0.0; 256];
     for i in 0..400 {
         if i % 5 == 0 {
-            s.set_control("level", 0.8 + (i % 20) as f64 / 100.0, None, None, None).unwrap();
+            s.set_control("level", 0.8 + (i % 20) as f64 / 100.0, None, None, None)
+                .unwrap();
         }
         if i % 50 == 0 {
             s.eval(&format!("track lead0 {{ instrument = poly\n out = it.lpf(cutoff: {}hz).reverb(room: 0.5, damp: 0.5) }}", 2000 + i), Some("next beat")).unwrap();
@@ -272,7 +333,9 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
         assert!(out.iter().all(|v| v.is_finite()));
     }
     let metrics = r.metrics();
-    eprintln!("12 tracks, samples, 128 held voices, control automation and quantized edit stress: {metrics:?}");
+    eprintln!(
+        "12 tracks, samples, 128 held voices, control automation and quantized edit stress: {metrics:?}"
+    );
     assert_eq!(metrics.capacity_drops, 0);
     assert_eq!(metrics.late_events, 0);
     assert_eq!(metrics.starved_frames, 0);
@@ -284,11 +347,15 @@ fn retirement_backpressure_retains_resources_until_the_planner_returns() {
     let mut s = session();
     s.eval("lead.play([c4 e4].fast(128))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig {
-        lookahead_frames: 16_384, max_voices: 1, ..RealtimeConfig::default()
+        lookahead_frames: 16_384,
+        max_voices: 1,
+        ..RealtimeConfig::default()
     });
     let mut out = [0.0; 256];
     // Consume the whole lookahead without the planner draining retired storage.
-    for _ in 0..64 { measured(&mut r, 256, &mut out); }
+    for _ in 0..64 {
+        measured(&mut r, 256, &mut out);
+    }
     assert!(r.metrics().retire_pressure > 0);
     s.prepare_realtime();
     for _ in 0..8 {
@@ -322,9 +389,15 @@ fn timestamped_controls_match_offline_audio_and_do_no_heap_work() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let horizon = s.prepared_until();
     for session in [&mut s, &mut direct] {
-        session.set_control("level", 1.0, None, Some(37), Some(2.0)).unwrap();
-        session.set_control("other", 0.5, None, Some(80), Some(1.0)).unwrap();
-        session.set_control("level", 0.2, None, Some(160), Some(1.0)).unwrap();
+        session
+            .set_control("level", 1.0, None, Some(37), Some(2.0))
+            .unwrap();
+        session
+            .set_control("other", 0.5, None, Some(80), Some(1.0))
+            .unwrap();
+        session
+            .set_control("level", 0.2, None, Some(160), Some(1.0))
+            .unwrap();
     }
     assert_eq!(s.prepared_until(), horizon);
     let expected = direct.process(512).remove(0);
@@ -333,7 +406,14 @@ fn timestamped_controls_match_offline_audio_and_do_no_heap_work() {
     assert_eq!(out.as_slice(), expected);
     assert_eq!(r.metrics().late_events, 0);
     s.sync_realtime();
-    let replay = Session::replay(48_000.0, Layout::Mono, Default::default(), s.log(), 512, false);
+    let replay = Session::replay(
+        48_000.0,
+        Layout::Mono,
+        Default::default(),
+        s.log(),
+        512,
+        false,
+    );
     assert_eq!(replay[0], out);
 }
 
@@ -345,7 +425,8 @@ fn turning_controls_does_not_invalidate_prepared_notes_or_allocate_in_render() {
     let mut out = [0.0; 256];
     for i in 0..100 {
         let horizon = s.prepared_until();
-        s.set_control("cutoff", 500.0 + i as f64 * 20.0, None, None, None).unwrap();
+        s.set_control("cutoff", 500.0 + i as f64 * 20.0, None, None, None)
+            .unwrap();
         assert_eq!(s.prepared_until(), horizon);
         measured(&mut r, 256, &mut out);
         s.prepare_realtime();
@@ -358,7 +439,11 @@ fn turning_controls_does_not_invalidate_prepared_notes_or_allocate_in_render() {
 #[test]
 fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
-    s.eval("ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nflat() for 1beat", Some("now")).unwrap();
+    s.eval(
+        "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nflat() for 1beat",
+        Some("now"),
+    )
+    .unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (resume_tx, resume_rx) = std::sync::mpsc::channel();
@@ -366,7 +451,7 @@ fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
         let mut out = vec![0.0; 128];
         let mut pos = 0;
         r.render(128, &mut |block, n| {
-            out[pos..pos+n].copy_from_slice(&block[0][..n]);
+            out[pos..pos + n].copy_from_slice(&block[0][..n]);
             if pos == 0 {
                 ready_tx.send(()).unwrap();
                 resume_rx.recv().unwrap();
@@ -382,8 +467,18 @@ fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
     let (r, out) = thread.join().unwrap();
     s.sync_realtime();
     assert_eq!(r.metrics().late_events, 1);
-    assert!(matches!(s.log().last().unwrap().input, niminal_daemon::LogInput::Control { at: 32, .. }));
-    let replay = Session::replay(48_000.0, Layout::Mono, Default::default(), s.log(), 128, false);
+    assert!(matches!(
+        s.log().last().unwrap().input,
+        niminal_daemon::LogInput::Control { at: 32, .. }
+    ));
+    let replay = Session::replay(
+        48_000.0,
+        Layout::Mono,
+        Default::default(),
+        s.log(),
+        128,
+        false,
+    );
     assert_eq!(out, replay[0]);
 }
 
@@ -391,7 +486,11 @@ fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
 fn quantized_control_redeclarations_restore_code_values_even_when_text_is_unchanged() {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     const DECL: &str = "ctl level = 0.0.smooth(0ms)";
-    s.eval(&format!("{DECL}\ninstr flat() {{ level }}\nflat() for 2beats"), Some("now")).unwrap();
+    s.eval(
+        &format!("{DECL}\ninstr flat() {{ level }}\nflat() for 2beats"),
+        Some("now"),
+    )
+    .unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     s.set_control("level", 0.5, None, None, None).unwrap();
     let mut out = [0.0; 256];
@@ -413,8 +512,16 @@ fn quantized_control_redeclarations_restore_code_values_even_when_text_is_unchan
 #[test]
 fn a_control_update_waits_for_its_new_declaration_to_reach_dsp() {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
-    let mut r = s.start_realtime(RealtimeConfig { queued_windows: 1, lookahead_frames: 512, ..Default::default() });
-    s.eval("ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nflat() for 1beat", Some("now")).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig {
+        queued_windows: 1,
+        lookahead_frames: 512,
+        ..Default::default()
+    });
+    s.eval(
+        "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nflat() for 1beat",
+        Some("now"),
+    )
+    .unwrap();
     s.set_control("level", 0.5, None, None, None).unwrap();
     s.prepare_realtime(); // The old window occupies the only queue slot.
     let mut out = [0.0; 256];
@@ -437,7 +544,10 @@ fn a_held_key_sounds_through_the_prepared_path_until_it_is_let_go() {
         for chunk in out.chunks_mut(256) {
             s.prepare_realtime();
             let mut pos = 0;
-            r.render(chunk.len(), &mut |b, n| { chunk[pos..pos + n].copy_from_slice(&b[0][..n]); pos += n; });
+            r.render(chunk.len(), &mut |b, n| {
+                chunk[pos..pos + n].copy_from_slice(&b[0][..n]);
+                pos += n;
+            });
         }
         out
     };
@@ -445,7 +555,10 @@ fn a_held_key_sounds_through_the_prepared_path_until_it_is_let_go() {
     assert_eq!(peak(&render(&mut s, &mut r, 2048)), 0.0);
     assert_eq!(s.key_input(1, 69, 127), 1);
     let held = render(&mut s, &mut r, 48_000);
-    assert!(peak(&held[4096..]) > 0.5, "sounding a second after the key went down");
+    assert!(
+        peak(&held[4096..]) > 0.5,
+        "sounding a second after the key went down"
+    );
     s.key_input(1, 69, 0);
     render(&mut s, &mut r, 4096);
     assert!(peak(&render(&mut s, &mut r, 8192)) < 1e-3, "released");
@@ -477,7 +590,10 @@ fn a_tempo_ramp_sounds_the_same_through_the_prepared_path() {
         }
         s.prepare_realtime();
         let mut pos = 0;
-        r.render(chunk.len(), &mut |b, n| { chunk[pos..pos + n].copy_from_slice(&b[0][..n]); pos += n; });
+        r.render(chunk.len(), &mut |b, n| {
+            chunk[pos..pos + n].copy_from_slice(&b[0][..n]);
+            pos += n;
+        });
     }
     assert!(first.iter().any(|v| v.abs() > 0.1));
     assert_eq!(actual, first, "the same notes in the same places");
@@ -534,13 +650,23 @@ fn bend_pressure_and_the_pedal_sound_the_same_through_the_prepared_path() {
         for chunk in out.chunks_mut(256) {
             s.prepare_realtime();
             let mut pos = 0;
-            r.render(chunk.len(), &mut |b, n| { chunk[pos..pos + n].copy_from_slice(&b[0][..n]); pos += n; });
+            r.render(chunk.len(), &mut |b, n| {
+                chunk[pos..pos + n].copy_from_slice(&b[0][..n]);
+                pos += n;
+            });
         }
         out
     });
     assert_eq!(actual.len(), expected.len());
-    let worst = actual.iter().zip(&expected).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
-    assert!(worst < 0.05, "the live path follows the offline one: {worst}");
+    let worst = actual
+        .iter()
+        .zip(&expected)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        worst < 0.05,
+        "the live path follows the offline one: {worst}"
+    );
 }
 
 #[test]
@@ -639,8 +765,17 @@ fn a_device_input_reaches_a_track_that_reads_it_through_the_prepared_path() {
         s.prepare_realtime();
         measured(&mut r, chunk.len(), chunk);
     }
-    assert!(out[..6000].iter().zip(&heard).all(|(o, i)| (o - i * 0.5).abs() < 1e-6), "what comes in goes out, halved");
-    assert!(out[6000..].iter().all(|v| *v == 0.0), "and silence when the device has nothing more");
+    assert!(
+        out[..6000]
+            .iter()
+            .zip(&heard)
+            .all(|(o, i)| (o - i * 0.5).abs() < 1e-6),
+        "what comes in goes out, halved"
+    );
+    assert!(
+        out[6000..].iter().all(|v| *v == 0.0),
+        "and silence when the device has nothing more"
+    );
 }
 
 #[test]
@@ -650,7 +785,11 @@ fn midi_out_notes_leave_the_prepared_path_at_the_samples_they_belong_to() {
     direct.eval(code, Some("now")).unwrap();
     direct.process(100_000);
     let expected = direct.take_midi();
-    assert_eq!(expected.len(), 7, "three notes and their ends in the first bar, then the clip starts over");
+    assert_eq!(
+        expected.len(),
+        7,
+        "three notes and their ends in the first bar, then the clip starts over"
+    );
 
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(code, Some("now")).unwrap();
@@ -666,7 +805,10 @@ fn midi_out_notes_leave_the_prepared_path_at_the_samples_they_belong_to() {
     while let Ok(event) = rx.pop() {
         got.push(event);
     }
-    assert_eq!(got, expected, "the same notes at the same samples as the direct path");
+    assert_eq!(
+        got, expected,
+        "the same notes at the same samples as the direct path"
+    );
     assert!(out.iter().all(|v| *v == 0.0));
 }
 
@@ -674,7 +816,10 @@ fn midi_out_notes_leave_the_prepared_path_at_the_samples_they_belong_to() {
 struct Lcg(u64);
 impl Lcg {
     fn next(&mut self, below: usize) -> usize {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((self.0 >> 33) as usize) % below
     }
 }
@@ -690,11 +835,17 @@ fn random_live_edits_sound_the_same_prepared_as_direct() {
         "lead.play([c4 e4 g4 b4].fast(16))",
         "lead.play([c4 [e4 g4]].fast(8))",
         "bass.play([c2 g2 c3].fast(4))",
-        "lead.mute", "lead.unmute", "bass.mute", "bass.unmute",
-        "lead.stop", "bass.stop", "hush",
+        "lead.mute",
+        "lead.unmute",
+        "bass.mute",
+        "bass.unmute",
+        "lead.stop",
+        "bass.stop",
+        "hush",
         "tone(freq: 330hz) for 1beat",
         "instr tone(freq: hz) { osc(saw, freq) * 0.5 * env[1 | 20ms 0] }",
-        "bass.solo", "bass.unsolo",
+        "bass.solo",
+        "bass.unsolo",
     ];
     const WHEN: [&str; 4] = ["now", "next beat", "next bar", "now"];
     let mut audible = 0;
@@ -702,7 +853,9 @@ fn random_live_edits_sound_the_same_prepared_as_direct() {
         let mut rng = Lcg(seed);
         let mut direct = Session::new(48_000.0, Layout::Mono).without_limiter();
         let mut live = Session::new(48_000.0, Layout::Mono).without_limiter();
-        for s in [&mut direct, &mut live] { s.eval(TWO_TRACKS, Some("now")).unwrap(); }
+        for s in [&mut direct, &mut live] {
+            s.eval(TWO_TRACKS, Some("now")).unwrap();
+        }
         let mut r = live.start_realtime(RealtimeConfig::default());
         let (mut expected, mut actual) = (Vec::new(), Vec::new());
         for step in 0..40 {
@@ -710,22 +863,41 @@ fn random_live_edits_sound_the_same_prepared_as_direct() {
                 let (edit, when) = (EDITS[rng.next(EDITS.len())], WHEN[rng.next(WHEN.len())]);
                 let a = direct.eval(edit, Some(when)).map(|a| a.lands_at);
                 let b = live.eval(edit, Some(when)).map(|a| a.lands_at);
-                assert_eq!(a.is_ok(), b.is_ok(), "seed {seed} step {step}: `{edit}` @ {when}");
-                if let (Ok(a), Ok(b)) = (a, b) { assert_eq!(a, b, "seed {seed} step {step}: `{edit}` @ {when} lands differently"); }
+                assert_eq!(
+                    a.is_ok(),
+                    b.is_ok(),
+                    "seed {seed} step {step}: `{edit}` @ {when}"
+                );
+                if let (Ok(a), Ok(b)) = (a, b) {
+                    assert_eq!(
+                        a, b,
+                        "seed {seed} step {step}: `{edit}` @ {when} lands differently"
+                    );
+                }
             }
             expected.extend(direct.process(2048).remove(0));
             let mut chunk = vec![0.0; 2048];
             for part in chunk.chunks_mut(256) {
                 // odd seeds plan a window at a time, as the planner thread does when others are waiting
-                if seed % 2 == 1 { while live.prepare_realtime_step(1) {} } else { live.prepare_realtime(); }
+                if seed % 2 == 1 {
+                    while live.prepare_realtime_step(1) {}
+                } else {
+                    live.prepare_realtime();
+                }
                 measured(&mut r, part.len(), part);
             }
             actual.extend(chunk);
         }
         let first = expected.iter().zip(&actual).position(|(e, a)| e != a);
-        assert!(first.is_none(), "seed {seed}: audio differs from sample {first:?}");
+        assert!(
+            first.is_none(),
+            "seed {seed}: audio differs from sample {first:?}"
+        );
         assert_eq!(r.metrics().late_events, 0, "seed {seed}");
         audible += usize::from(actual.iter().any(|v| v.abs() > 0.05));
     }
-    assert!(audible >= 8, "only {audible} of 12 seeds made sound, so the comparison proves little");
+    assert!(
+        audible >= 8,
+        "only {audible} of 12 seeds made sound, so the comparison proves little"
+    );
 }

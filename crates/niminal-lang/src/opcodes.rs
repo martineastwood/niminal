@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use niminal_engine::ops::{Custom, Delay, Fn1, FilterMode, Func, Gain, Kernel, Osc, Reverb, Svf};
-pub use niminal_engine::ops::Wave;
 use niminal_engine::Opcode;
+pub use niminal_engine::ops::Wave;
+use niminal_engine::ops::{Custom, Delay, FilterMode, Fn1, Func, Gain, Kernel, Osc, Reverb, Svf};
 
 use crate::unit::Unit;
 
@@ -33,15 +33,30 @@ pub struct ParamSpec {
 }
 
 fn req(name: &str, kind: Kind) -> ParamSpec {
-    ParamSpec { name: name.into(), kind, required: true, wired: true }
+    ParamSpec {
+        name: name.into(),
+        kind,
+        required: true,
+        wired: true,
+    }
 }
 
 fn opt(name: &str, kind: Kind) -> ParamSpec {
-    ParamSpec { name: name.into(), kind, required: false, wired: true }
+    ParamSpec {
+        name: name.into(),
+        kind,
+        required: false,
+        wired: true,
+    }
 }
 
 fn setting(name: &str, kind: Kind) -> ParamSpec {
-    ParamSpec { name: name.into(), kind, required: false, wired: false }
+    ParamSpec {
+        name: name.into(),
+        kind,
+        required: false,
+        wired: false,
+    }
 }
 
 /// What is known at compile time when an opcode is built.
@@ -98,15 +113,31 @@ impl OpSpec {
 const SIGNAL: Kind = Kind::Signal(Unit::Num);
 
 fn filter_params() -> Vec<ParamSpec> {
-    vec![req("x", SIGNAL), req("cutoff", Kind::Signal(Unit::Hz)), opt("res", SIGNAL)]
+    vec![
+        req("x", SIGNAL),
+        req("cutoff", Kind::Signal(Unit::Hz)),
+        opt("res", SIGNAL),
+    ]
 }
 
 fn filter(name: &str, doc: &str, build: BuildFn) -> OpSpec {
-    OpSpec { name: name.into(), doc: doc.into(), params: filter_params(), positional: 1, build: Build::Builtin(build) }
+    OpSpec {
+        name: name.into(),
+        doc: doc.into(),
+        params: filter_params(),
+        positional: 1,
+        build: Build::Builtin(build),
+    }
 }
 
 fn math(name: &str, doc: &str, build: BuildFn) -> OpSpec {
-    OpSpec { name: name.into(), doc: doc.into(), params: vec![req("x", SIGNAL)], positional: 1, build: Build::Builtin(build) }
+    OpSpec {
+        name: name.into(),
+        doc: doc.into(),
+        params: vec![req("x", SIGNAL)],
+        positional: 1,
+        build: Build::Builtin(build),
+    }
 }
 
 pub struct Registry {

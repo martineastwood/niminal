@@ -26,7 +26,8 @@ impl Keyboard {
         let keys = self.down.remove(&(channel, note)).unwrap_or_default();
         let total = keys.len();
         if self.pedals.contains(&channel) {
-            self.sustained.extend(keys.iter().map(|&key| (channel, note, key)));
+            self.sustained
+                .extend(keys.iter().map(|&key| (channel, note, key)));
             return (Vec::new(), total);
         }
         (keys, total)
@@ -37,7 +38,9 @@ impl Keyboard {
         let mut keys = self.down.remove(&(channel, note)).unwrap_or_default();
         self.sustained.retain(|&(c, n, key)| {
             let same = c == channel && n == note;
-            if same { keys.push(key); }
+            if same {
+                keys.push(key);
+            }
             !same
         });
         keys
@@ -66,7 +69,9 @@ impl Keyboard {
         self.pedals.remove(&channel);
         let mut released = Vec::new();
         self.sustained.retain(|&(c, _, key)| {
-            if c == channel { released.push(key); }
+            if c == channel {
+                released.push(key);
+            }
             c != channel
         });
         released
@@ -74,8 +79,16 @@ impl Keyboard {
 
     /// Notes on `channel` (only those of MIDI note `note`, if given) that are down or held by the pedal.
     pub fn keys_of(&self, channel: u8, note: Option<u8>) -> Vec<u32> {
-        let down = self.down.iter().filter(|((c, n), _)| *c == channel && note.is_none_or(|k| k == *n)).flat_map(|(_, keys)| keys.iter().copied());
-        let held = self.sustained.iter().filter(|(c, n, _)| *c == channel && note.is_none_or(|k| k == *n)).map(|s| s.2);
+        let down = self
+            .down
+            .iter()
+            .filter(|((c, n), _)| *c == channel && note.is_none_or(|k| k == *n))
+            .flat_map(|(_, keys)| keys.iter().copied());
+        let held = self
+            .sustained
+            .iter()
+            .filter(|(c, n, _)| *c == channel && note.is_none_or(|k| k == *n))
+            .map(|s| s.2);
         down.chain(held).collect()
     }
 
@@ -92,7 +105,11 @@ impl Keyboard {
     /// The bend, pressure and slide a key pressed now starts with, where they are not at rest.
     pub fn starting(&self, channel: u8) -> [(&'static str, Option<f64>); 3] {
         let at = |map: &BTreeMap<u8, f64>| map.get(&channel).copied().filter(|v| *v != 0.0);
-        [("bend", at(&self.bends)), ("pressure", at(&self.pressures)), ("slide", at(&self.slides))]
+        [
+            ("bend", at(&self.bends)),
+            ("pressure", at(&self.pressures)),
+            ("slide", at(&self.slides)),
+        ]
     }
 }
 

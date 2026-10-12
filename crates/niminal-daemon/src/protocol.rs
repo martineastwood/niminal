@@ -11,7 +11,10 @@ use niminal_score::Event;
 use serde_json::{Value, json};
 
 use crate::project::Problem;
-use crate::session::{Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, PendingInfo, ParsedEval, Session, Transport};
+use crate::session::{
+    Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo,
+    Session, Transport,
+};
 
 /// The protocol version a client must say it speaks.
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -29,7 +32,14 @@ const PROTOCOL_ERROR: i64 = -32000;
 const REJECTED: i64 = -32001;
 
 /// What a client can subscribe to.
-pub const TOPICS: [&str; 6] = ["landed", "pending", "transport", "meters", "notices", "learned"];
+pub const TOPICS: [&str; 6] = [
+    "landed",
+    "pending",
+    "transport",
+    "meters",
+    "notices",
+    "learned",
+];
 
 #[derive(Default)]
 struct Client {
@@ -87,7 +97,14 @@ impl Daemon {
         self.session.sync_realtime();
         let request: Value = match serde_json::from_str(text) {
             Ok(v) => v,
-            Err(e) => return vec![error_reply(Value::Null, PARSE_ERROR, &format!("parse error: {e}"), None)],
+            Err(e) => {
+                return vec![error_reply(
+                    Value::Null,
+                    PARSE_ERROR,
+                    &format!("parse error: {e}"),
+                    None,
+                )];
+            }
         };
         let id = request.get("id").cloned();
         let reply_to = id.clone().unwrap_or(Value::Null);
@@ -102,8 +119,10 @@ impl Daemon {
         let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
 
         // A bug in handling one request must not take the whole session down.
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(client, method, &params)))
-            .unwrap_or_else(|_| Err(internal_error()));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.dispatch(client, method, &params)
+        }))
+        .unwrap_or_else(|_| Err(internal_error()));
         self.respond(id, outcome)
     }
 
@@ -111,7 +130,9 @@ impl Daemon {
         self.queue_changes();
         match (id, outcome) {
             (None, _) => Vec::new(), // a notification from the client gets no reply
-            (Some(id), Ok(result)) => vec![json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()],
+            (Some(id), Ok(result)) => {
+                vec![json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()]
+            }
             (Some(id), Err(e)) => vec![error_reply(id, e.code, &e.message, e.data)],
         }
     }
@@ -131,14 +152,23 @@ impl Daemon {
             "eval" => {
                 let params = &request["params"];
                 let dir = params["dir"].as_str().unwrap_or(".");
-                Some(ParsedEval::from_dir(params["source"].as_str()?, std::path::Path::new(dir), params["quantize"].as_str()))
+                Some(ParsedEval::from_dir(
+                    params["source"].as_str()?,
+                    std::path::Path::new(dir),
+                    params["quantize"].as_str(),
+                ))
             }
             "hush" => Some(ParsedEval::new("hush", Some("now"))),
             _ => None,
         }
     }
 
-    pub fn begin_prepared(&mut self, client: ClientId, text: &str, prepared: Option<ParsedEval>) -> Request {
+    pub fn begin_prepared(
+        &mut self,
+        client: ClientId,
+        text: &str,
+        prepared: Option<ParsedEval>,
+    ) -> Request {
         let parsed: Option<Value> = serde_json::from_str(text).ok();
         if let Some(request) = parsed.as_ref().filter(|r| {
             r.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
@@ -153,8 +183,10 @@ impl Daemon {
                 }
                 Some("cancel") => {
                     if let Ok(id) = optional_u64(&request["params"], "id") {
-                        return Request::Compile(Box::new(CompileTicket { id: request.get("id").cloned(),
-                            job: Job::Cancel(self.session.begin_cancel(id)) }));
+                        return Request::Compile(Box::new(CompileTicket {
+                            id: request.get("id").cloned(),
+                            job: Job::Cancel(self.session.begin_cancel(id)),
+                        }));
                     }
                 }
                 _ => {}
@@ -166,7 +198,9 @@ impl Daemon {
                 && r["params"].get("source").is_some_and(Value::is_string)
                 && self.clients.get(&client).is_some_and(|c| c.greeted)
         });
-        let Some(request) = eval else { return Request::Replies(self.handle(client, text)) };
+        let Some(request) = eval else {
+            return Request::Replies(self.handle(client, text));
+        };
 
         let id = request.get("id").cloned();
         let params = &request["params"];
@@ -180,7 +214,10 @@ impl Daemon {
             None => self.session.begin_eval(source, quantize),
         }));
         match begun {
-            Ok(Begin::Job(job)) => Request::Compile(Box::new(CompileTicket { id, job: Job::Eval(job) })),
+            Ok(Begin::Job(job)) => Request::Compile(Box::new(CompileTicket {
+                id,
+                job: Job::Eval(job),
+            })),
             Ok(Begin::Done(result)) => {
                 let outcome = self.eval_outcome(result);
                 Request::Replies(self.respond(id, outcome))
@@ -197,7 +234,10 @@ impl Daemon {
             Done::Eval(done) => Job::Eval(self.session.retry_eval(done)?),
             Done::Cancel(done) => Job::Cancel(self.session.retry_cancel(done)?),
         };
-        Some(CompileTicket { id: ticket.id.clone(), job })
+        Some(CompileTicket {
+            id: ticket.id.clone(),
+            job,
+        })
     }
 
     /// Reply to work compiled away from the session. The server checks `retry`
@@ -206,16 +246,20 @@ impl Daemon {
         let CompiledTicket { id, done } = ticket;
         let outcome = match done {
             None => Err(internal_error()),
-            Some(done) => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match done {
-                Done::Eval(done) => {
-                    let result = self.session.finish_eval(done);
-                    self.eval_outcome(result)
+            Some(done) => {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match done {
+                    Done::Eval(done) => {
+                        let result = self.session.finish_eval(done);
+                        self.eval_outcome(result)
+                    }
+                    Done::Cancel(done) => {
+                        Ok(json!({ "cancelled": self.session.finish_cancel(done) }))
+                    }
+                })) {
+                    Ok(result) => result,
+                    Err(_) => Err(internal_error()),
                 }
-                Done::Cancel(done) => Ok(json!({ "cancelled": self.session.finish_cancel(done) })),
-            })) {
-                Ok(result) => result,
-                Err(_) => Err(internal_error()),
-            },
+            }
         };
         self.respond(id, outcome)
     }
@@ -227,12 +271,20 @@ impl Daemon {
         }
     }
 
-    fn dispatch(&mut self, client: ClientId, method: &str, params: &Value) -> Result<Value, RpcError> {
+    fn dispatch(
+        &mut self,
+        client: ClientId,
+        method: &str,
+        params: &Value,
+    ) -> Result<Value, RpcError> {
         if method == "hello" {
             return self.hello(client, params);
         }
         if !self.clients.get(&client).is_some_and(|c| c.greeted) {
-            return Err(RpcError::new(PROTOCOL_ERROR, "say hello first, with the protocol version"));
+            return Err(RpcError::new(
+                PROTOCOL_ERROR,
+                "say hello first, with the protocol version",
+            ));
         }
         match method {
             "eval" => self.eval(params),
@@ -252,7 +304,10 @@ impl Daemon {
             "control.set" => self.control(params),
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
             "status" => Ok(status_json(&self.session)),
-            other => Err(RpcError::new(METHOD_NOT_FOUND, &format!("no method `{other}`"))),
+            other => Err(RpcError::new(
+                METHOD_NOT_FOUND,
+                &format!("no method `{other}`"),
+            )),
         }
     }
 
@@ -261,7 +316,9 @@ impl Daemon {
         if version != Some(PROTOCOL_VERSION) {
             return Err(RpcError::new(
                 PROTOCOL_ERROR,
-                &format!("this daemon speaks protocol {PROTOCOL_VERSION}, the client said {version:?}"),
+                &format!(
+                    "this daemon speaks protocol {PROTOCOL_VERSION}, the client said {version:?}"
+                ),
             ));
         }
         if let Some(c) = self.clients.get_mut(&client) {
@@ -281,29 +338,50 @@ impl Daemon {
             .and_then(Value::as_str)
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`eval` needs a string `source`"))?;
         let quantize = params.get("quantize").and_then(Value::as_str);
-        let dir = params.get("dir").and_then(Value::as_str).map(std::path::Path::new);
+        let dir = params
+            .get("dir")
+            .and_then(Value::as_str)
+            .map(std::path::Path::new);
         if let Some(dir) = dir {
             self.session.set_sample_dir(dir);
         }
-        let result = self.session.eval_parsed(ParsedEval::from_dir(source, dir.unwrap_or(std::path::Path::new(".")), quantize));
+        let result = self.session.eval_parsed(ParsedEval::from_dir(
+            source,
+            dir.unwrap_or(std::path::Path::new(".")),
+            quantize,
+        ));
         self.eval_outcome(result)
     }
 
     fn control(&mut self, params: &Value) -> Result<Value, RpcError> {
-        let name = params.get("name").and_then(Value::as_str)
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`control.set` needs a string `name`"))?;
-        let value = params.get("value").and_then(Value::as_f64)
+        let value = params
+            .get("value")
+            .and_then(Value::as_f64)
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`control.set` needs a number `value`"))?;
         let unit = match params.get("unit") {
             None => None,
-            Some(value) => Some(value.as_str().ok_or_else(|| RpcError::new(INVALID_PARAMS, "`unit` must be a string"))?),
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`unit` must be a string"))?,
+            ),
         };
-        let smooth = match params.get("smooth_ms") {
-            None => None,
-            Some(value) => Some(value.as_f64().ok_or_else(|| RpcError::new(INVALID_PARAMS, "`smooth_ms` must be a number"))?),
-        };
+        let smooth =
+            match params.get("smooth_ms") {
+                None => None,
+                Some(value) => Some(value.as_f64().ok_or_else(|| {
+                    RpcError::new(INVALID_PARAMS, "`smooth_ms` must be a number")
+                })?),
+            };
         let at = optional_u64(params, "at")?;
-        let at = self.session.set_control(name, value, unit, at, smooth).map_err(|p| rejected(&p))?;
+        let at = self
+            .session
+            .set_control(name, value, unit, at, smooth)
+            .map_err(|p| rejected(&p))?;
         Ok(json!({ "at": at }))
     }
 
@@ -312,8 +390,13 @@ impl Daemon {
             .get("events")
             .cloned()
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`event.stream` needs `events`"))
-            .and_then(|v| serde_json::from_value(v).map_err(|e| RpcError::new(INVALID_PARAMS, &format!("bad events: {e}"))))?;
-        self.session.stream_events(events).map_err(|problems| rejected(&problems))?;
+            .and_then(|v| {
+                serde_json::from_value(v)
+                    .map_err(|e| RpcError::new(INVALID_PARAMS, &format!("bad events: {e}")))
+            })?;
+        self.session
+            .stream_events(events)
+            .map_err(|problems| rejected(&problems))?;
         Ok(json!({}))
     }
 
@@ -321,11 +404,18 @@ impl Daemon {
         let topics: Vec<String> = params
             .get("topics")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect()
+            })
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`topics` should be a list of names"))?;
         for t in &topics {
             if !TOPICS.contains(&t.as_str()) {
-                return Err(RpcError::new(INVALID_PARAMS, &format!("no topic `{t}`; the topics are {}", TOPICS.join(", "))));
+                return Err(RpcError::new(
+                    INVALID_PARAMS,
+                    &format!("no topic `{t}`; the topics are {}", TOPICS.join(", ")),
+                ));
             }
         }
         let state = self.clients.get_mut(&client).expect("a connected client");
@@ -342,7 +432,9 @@ impl Daemon {
     // ---- notifications -------------------------------------------------------------
 
     fn has_subscribers(&self, topic: &str) -> bool {
-        self.clients.values().any(|c| c.greeted && c.topics.contains(topic))
+        self.clients
+            .values()
+            .any(|c| c.greeted && c.topics.contains(topic))
     }
 
     fn send_to_subscribers(&mut self, topic: &str, method: &str, params: Value) {
@@ -360,7 +452,11 @@ impl Daemon {
         let now: Vec<(u64, u64)> = pending.iter().map(|p| (p.id, p.lands_at)).collect();
         if now != self.announced {
             self.announced = now;
-            self.send_to_subscribers("pending", "pending", json!({ "changes": pending.iter().map(pending_json).collect::<Vec<_>>() }));
+            self.send_to_subscribers(
+                "pending",
+                "pending",
+                json!({ "changes": pending.iter().map(pending_json).collect::<Vec<_>>() }),
+            );
         }
     }
 
@@ -374,7 +470,11 @@ impl Daemon {
             self.send_to_subscribers("landed", "landed", landed_json(&landed));
         }
         for (control, source) in self.session.take_learned() {
-            self.send_to_subscribers("learned", "learned", json!({ "control": control, "source": source }));
+            self.send_to_subscribers(
+                "learned",
+                "learned",
+                json!({ "control": control, "source": source }),
+            );
         }
         for notice in self.session.take_notices() {
             self.send_to_subscribers("notices", "notice", json!({ "message": notice }));
@@ -390,9 +490,16 @@ impl Daemon {
         self.queue_changes();
 
         let now = self.session.clock();
-        if self.last_transport.is_none_or(|t| now >= t + self.transport_every) {
+        if self
+            .last_transport
+            .is_none_or(|t| now >= t + self.transport_every)
+        {
             self.last_transport = Some(now);
-            self.send_to_subscribers("transport", "transport", transport_json(&self.session.transport()));
+            self.send_to_subscribers(
+                "transport",
+                "transport",
+                transport_json(&self.session.transport()),
+            );
             // reading the meters resets them, so only do it for someone listening
             if self.has_subscribers("meters") {
                 let peaks = self.session.take_peaks();
@@ -404,7 +511,10 @@ impl Daemon {
 }
 
 fn internal_error() -> RpcError {
-    RpcError::new(INTERNAL_ERROR, "niminal hit an internal error handling that; the session carries on")
+    RpcError::new(
+        INTERNAL_ERROR,
+        "niminal hit an internal error handling that; the session carries on",
+    )
 }
 
 /// What [`Daemon::begin`] makes of a message.
@@ -439,7 +549,8 @@ impl CompileTicket {
         let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
             Job::Eval(job) => Done::Eval(job.compile()),
             Job::Cancel(job) => Done::Cancel(job.compile()),
-        })).ok();
+        }))
+        .ok();
         CompiledTicket { id, done }
     }
 }
@@ -457,12 +568,18 @@ struct RpcError {
 
 impl RpcError {
     fn new(code: i64, message: &str) -> RpcError {
-        RpcError { code, message: message.to_string(), data: None }
+        RpcError {
+            code,
+            message: message.to_string(),
+            data: None,
+        }
     }
 }
 
 fn rejected(problems: &[Problem]) -> RpcError {
-    let first = problems.first().map_or("the code did not compile", |p| p.message.as_str());
+    let first = problems
+        .first()
+        .map_or("the code did not compile", |p| p.message.as_str());
     RpcError {
         code: REJECTED,
         message: first.to_string(),
@@ -473,7 +590,9 @@ fn rejected(problems: &[Problem]) -> RpcError {
 fn optional_u64(params: &Value, key: &str) -> Result<Option<u64>, RpcError> {
     match params.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => v.as_u64().map(Some).ok_or_else(|| RpcError::new(INVALID_PARAMS, &format!("`{key}` should be a whole number"))),
+        Some(v) => v.as_u64().map(Some).ok_or_else(|| {
+            RpcError::new(INVALID_PARAMS, &format!("`{key}` should be a whole number"))
+        }),
     }
 }
 

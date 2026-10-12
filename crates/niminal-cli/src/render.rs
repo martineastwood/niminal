@@ -1,6 +1,6 @@
 use std::fmt;
 
-use niminal_engine::{BLOCK, Master};
+use niminal_engine::{BLOCK, DEFAULT_CEILING, Master};
 use niminal_daemon::Session;
 use niminal_lang::{Layout, Program};
 use niminal_score::Event;
@@ -9,9 +9,6 @@ pub const SAMPLE_RATE: u32 = 48_000;
 
 /// How much a session is asked for at a time.
 const STEP: usize = BLOCK * 8;
-
-/// The master limiter's ceiling: -0.3db.
-const CEILING: f32 = 0.966_051;
 
 /// Once nothing is playing, rendering carries on until the output has stayed
 /// quieter than this (-90db) for [`TAIL_SILENCE`] seconds, so echoes and reverb
@@ -186,7 +183,7 @@ fn ring_out(out: &mut Vec<Vec<f32>>, mut more: impl FnMut(&mut Vec<Vec<f32>>)) {
 /// still land exactly where they were scheduled.
 fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, stems: Vec<Stem>, limiter: bool) -> RenderOutput {
     if limiter {
-        let mut master = Master::with_channels(SAMPLE_RATE as f32, CEILING, channels.len());
+        let mut master = Master::with_channels(SAMPLE_RATE as f32, DEFAULT_CEILING, channels.len());
         let latency = master.latency();
         for c in &mut channels {
             c.extend(std::iter::repeat_n(0.0, latency));
@@ -244,7 +241,7 @@ pub fn split_ramps(source: &str) -> Result<(String, Vec<String>), niminal_lang::
     let statements = niminal_lang::analyze(source)?;
     let mut rest = source.to_string();
     let mut ramps = Vec::new();
-    for ramp in statements.iter().filter(|s| s.ramp.is_some()) {
+    for ramp in statements.iter().filter(|s| s.ramp().is_some()) {
         let blank: String = ramp.text.chars().map(|c| if c == '\n' { '\n' } else { ' ' }).collect();
         rest.replace_range(ramp.offset..ramp.offset + ramp.text.len(), &blank);
         ramps.push(ramp.text.clone());

@@ -29,30 +29,46 @@ impl Default for Samples {
 
 impl Samples {
     pub fn new(base: impl Into<PathBuf>) -> Self {
-        Samples { bases: vec![base.into()], cache: Arc::default() }
+        Samples {
+            bases: vec![base.into()],
+            cache: Arc::default(),
+        }
     }
 
     /// The same cache, with paths looked for in `bases`, first match wins.
     pub fn with_bases(&self, bases: Vec<PathBuf>) -> Self {
-        Samples { bases, cache: self.cache.clone() }
+        Samples {
+            bases,
+            cache: self.cache.clone(),
+        }
     }
 
     /// Where `path` is, or where it was first looked for if it isn't anywhere.
     fn resolve(&self, path: &str) -> PathBuf {
         let found = self.bases.iter().map(|b| b.join(path)).find(|p| p.exists());
-        found.unwrap_or_else(|| self.bases.first().map_or_else(|| PathBuf::from(path), |b| b.join(path)))
+        found.unwrap_or_else(|| {
+            self.bases
+                .first()
+                .map_or_else(|| PathBuf::from(path), |b| b.join(path))
+        })
     }
 
     /// Read the files `source` declares into the cache, ignoring any problems
     /// (compiling reports them). A live daemon does this before it takes the
     /// lock that the audio thread needs, so reading a big file can't stall it.
     pub fn warm(&self, source: &str) {
-        let Ok(items) = crate::parser::parse(source) else { return };
+        let Ok(items) = crate::parser::parse(source) else {
+            return;
+        };
         for item in items {
             if let crate::ast::Item::Sample(decl) = item
                 && let crate::ast::SampleSource::Path(path) = &decl.source
             {
-                let _ = if decl.is_kit { self.load_kit(path).map(drop) } else { self.load(path).map(drop) };
+                let _ = if decl.is_kit {
+                    self.load_kit(path).map(drop)
+                } else {
+                    self.load(path).map(drop)
+                };
             }
         }
     }
@@ -77,7 +93,8 @@ impl Samples {
     /// Every WAV file in a folder, by name without the extension, in name order.
     pub fn load_kit(&self, path: &str) -> Result<Vec<(String, Arc<SampleData>)>, String> {
         let dir = self.resolve(path);
-        let entries = std::fs::read_dir(&dir).map_err(|e| format!("can't read the folder {}: {e}", dir.display()))?;
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| format!("can't read the folder {}: {e}", dir.display()))?;
         let mut files: Vec<PathBuf> = entries
             .filter_map(Result::ok)
             .map(|e| e.path())
@@ -90,7 +107,11 @@ impl Samples {
         files
             .iter()
             .map(|file| {
-                let name = file.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+                let name = file
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string();
                 Ok((name, self.load_file(file)?))
             })
             .collect()
@@ -103,7 +124,10 @@ fn read_wav(path: &Path) -> Result<SampleData, String> {
     let spec = reader.spec();
     let channels = usize::from(spec.channels);
     let interleaved: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>().map_err(|e| fail(&e))?,
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<Result<_, _>>()
+            .map_err(|e| fail(&e))?,
         hound::SampleFormat::Int => {
             let scale = 1.0 / (1_u64 << (spec.bits_per_sample - 1)) as f32;
             reader
@@ -122,7 +146,10 @@ fn read_wav(path: &Path) -> Result<SampleData, String> {
             buffer.push(x);
         }
     }
-    Ok(SampleData { channels: buffers, sample_rate: spec.sample_rate as f32 })
+    Ok(SampleData {
+        channels: buffers,
+        sample_rate: spec.sample_rate as f32,
+    })
 }
 
 #[cfg(test)]
@@ -133,7 +160,12 @@ mod tests {
     fn warming_reads_each_declared_file_once_and_ignores_problems() {
         let dir = std::env::temp_dir().join(format!("niminal-warm-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
         let mut w = hound::WavWriter::create(dir.join("a.wav"), spec).unwrap();
         w.write_sample(1000_i16).unwrap();
         w.finalize().unwrap();

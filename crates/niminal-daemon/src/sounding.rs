@@ -13,14 +13,24 @@ pub(crate) struct Sounding {
 impl Sounding {
     /// Let go of the notes a key is holding, as of `now`.
     pub fn release_key(&mut self, key: u32, now: u64) {
-        for held in self.held.iter_mut().filter(|h| h.2 == key) { held.0 = now; }
-        for held in self.midi.iter_mut().filter(|h| h.1 == key) { held.0 = now; }
+        for held in self.held.iter_mut().filter(|h| h.2 == key) {
+            held.0 = now;
+        }
+        for held in self.midi.iter_mut().filter(|h| h.1 == key) {
+            held.0 = now;
+        }
     }
 
     /// `n` frames from `clock`, cut short where a note comes to an end.
     pub fn limit(&self, clock: u64, mut n: u64) -> u64 {
-        let ends = self.held.iter().map(|h| h.0).chain(self.midi.iter().map(|h| h.0));
-        for off in ends { n = n.min(off.saturating_sub(clock).max(1)); }
+        let ends = self
+            .held
+            .iter()
+            .map(|h| h.0)
+            .chain(self.midi.iter().map(|h| h.0));
+        for off in ends {
+            n = n.min(off.saturating_sub(clock).max(1));
+        }
         n
     }
 }

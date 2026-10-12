@@ -1,7 +1,7 @@
 //! Rename, signature help and semantic tokens. They read the compiler's own tokens, so what they
 //! see as a name is what the compiler sees.
 
-use niminal_lang::{OpInfo, Symbol, SymbolKind, Tok, Token, builtin_ops, lex, pattern_ops, symbols, waves};
+use niminal_lang::{OpInfo, RESERVED_WORDS, Symbol, SymbolKind, Tok, Token, builtin_ops, lex, pattern_ops, symbols, waves};
 use serde_json::{Value, json};
 
 use crate::{Document, text};
@@ -14,13 +14,6 @@ const VARIABLE: u32 = 2;
 const PARAMETER: u32 = 3;
 const ENUM_MEMBER: u32 = 4;
 const NAMESPACE: u32 = 5;
-
-/// Names that mean something to the language itself, which no definition may take.
-const KEYWORDS: [&str; 33] = [
-    "instr", "mono", "opcode", "fn", "state", "bus", "buffer", "table", "sample", "kit", "ctl", "track", "clip", "scene",
-    "arrangement", "config", "use", "as", "with", "if", "else", "for", "in", "out", "it", "tempo", "meter", "at", "env",
-    "hush", "panic", "reset", "unsolo",
-];
 
 fn is_name(s: &str) -> bool {
     let mut chars = s.chars();
@@ -222,7 +215,7 @@ fn check_new_name(old: &str, new: &str, symbols: &[Symbol]) -> Result<(), String
         || builtin_ops().iter().any(|o| o.name == new)
         || pattern_ops().iter().any(|o| o.name == new)
         || waves().any(|w| w == new)
-        || KEYWORDS.contains(&new);
+        || RESERVED_WORDS.contains(&new);
     if taken && new != old {
         return Err(format!("`{new}` is already a name in use"));
     }
@@ -459,7 +452,7 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
         let Tok::Ident(name) = &t.tok else { continue };
         let before = i.checked_sub(1).map(|i| &tokens[i].tok);
         let after = tokens.get(i + 1).map(|t| &t.tok);
-        let kind = if KEYWORDS.contains(&name.as_str()) {
+        let kind = if RESERVED_WORDS.contains(&name.as_str()) {
             None
         } else if let Some((symbol, ..)) = doc.find(name) {
             Some(match symbol.kind {

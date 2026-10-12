@@ -12,29 +12,35 @@
 //! however the audio is divided into blocks.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
-use niminal_engine::{DEFAULT_MAX_VOICES, BLOCK, MAX_CHANNELS, Master, Mixer, Transfer};
+use niminal_engine::{
+    BLOCK, DEFAULT_CEILING, DEFAULT_MAX_VOICES, MAX_CHANNELS, Master, Mixer, Transfer,
+};
 use niminal_lang::{
-    Action, Clip, CompileOptions, Layout, Samples, Program, Quantize, Schedule, Scheduled, Statement, StatementKind,
-    Expanded, InputSource, analyze, compile_with,
+    Action, Clip, CommandAction, CompileOptions, Expanded, InputSource, Layout, PlayInfo, Program,
+    Quantize, Samples, Schedule, Scheduled, Statement, StatementData, StatementKind, analyze,
+    compile_with,
 };
 use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::keyboard::Keyboard;
-use crate::sounding::Sounding;
 use crate::log::{Expression, LogEntry, LogInput};
 use crate::project::{Entry, Located, Origin, Piece, Problem, Project};
 use crate::quantize::{Grid, QuantizeDefaults};
-
-/// The master limiter's ceiling: -0.3db.
-const CEILING: f32 = 0.966_051;
+use crate::sounding::Sounding;
 
 /// A command that has happened, by track name so that it survives the
 /// program being replaced.
 #[derive(Clone)]
 enum NamedAction {
-    Play { track: String, clip: Clip },
+    Play {
+        track: String,
+        clip: Clip,
+    },
     Stop(String),
     Mute(String),
     Unmute(String),
@@ -171,14 +177,32 @@ pub struct Transport {
 /// an OSC value is 0 to 1 (outside is clamped).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControlSignal<'a> {
-    MidiCc { cc: u8, channel: u8, value: u8 },
+    MidiCc {
+        cc: u8,
+        channel: u8,
+        value: u8,
+    },
     /// A key pressed (`velocity` from 1) or let go (`velocity` 0), on a MIDI channel from 1.
-    MidiNote { note: u8, channel: u8, velocity: u8 },
+    MidiNote {
+        note: u8,
+        channel: u8,
+        velocity: u8,
+    },
     /// Pitch bend on a channel, 0 to 16383 with 8192 in the middle.
-    MidiBend { channel: u8, value: u16 },
+    MidiBend {
+        channel: u8,
+        value: u16,
+    },
     /// Pressure on a channel, or on one key (`note`), 0 to 127.
-    MidiPressure { channel: u8, note: Option<u8>, value: u8 },
-    Osc { address: &'a str, value: f64 },
+    MidiPressure {
+        channel: u8,
+        note: Option<u8>,
+        value: u8,
+    },
+    Osc {
+        address: &'a str,
+        value: f64,
+    },
 }
 
 pub struct Session {
@@ -243,13 +267,13 @@ pub struct Session {
     detached: bool,
 }
 
-pub mod realtime;
 mod eval;
 mod input;
 mod playing;
+pub mod realtime;
 
-pub use eval::{Begin, CancelDone, CancelJob, EvalDone, EvalJob, ParsedEval};
 use eval::options;
+pub use eval::{Begin, CancelDone, CancelJob, EvalDone, EvalJob, ParsedEval};
 use playing::{Playing, apply_launch, apply_to_playing, join_edit, mentions_any};
 
 /// The most notices that wait to be collected, and how long before the same one is said again.
@@ -259,7 +283,8 @@ const NOTICE_REPEAT_SECONDS: u64 = 10;
 impl Session {
     /// A session that outputs `layout` at `sample_rate`, with the limiter on.
     pub fn new(sample_rate: f32, layout: Layout) -> Session {
-        let program = compile_with("", &options(layout, &Samples::default())).expect("an empty project compiles");
+        let program = compile_with("", &options(layout, &Samples::default()))
+            .expect("an empty project compiles");
         let mixer = program.mixer(sample_rate);
         let schedule = program.schedule();
         Session {
@@ -267,17 +292,31 @@ impl Session {
             layout,
             panic_epoch: Arc::new(AtomicU64::new(0)),
             samples: Samples::default(),
-            controls: Vec::new(), control_changes: Vec::new(), next_control: 0, learned: BTreeMap::new(), learned_out: Vec::new(),
-            keyboard: Keyboard::default(), key_offs: Vec::new(),
-            key_params: Vec::new(), audio_input: Vec::new(), midi_out: Vec::new(),
+            controls: Vec::new(),
+            control_changes: Vec::new(),
+            next_control: 0,
+            learned: BTreeMap::new(),
+            learned_out: Vec::new(),
+            keyboard: Keyboard::default(),
+            key_offs: Vec::new(),
+            key_params: Vec::new(),
+            audio_input: Vec::new(),
+            midi_out: Vec::new(),
             sample_dirs: Vec::new(),
             defaults: QuantizeDefaults::default(),
             clock: 0,
             project: Project::default(),
             program: Arc::new(program),
             mixer,
-            limiter: Some(Master::with_channels(sample_rate, CEILING, layout.channels())),
-            history: vec![HistoryEntry { at: 0.0, action: NamedAction::Origin }],
+            limiter: Some(Master::with_channels(
+                sample_rate,
+                DEFAULT_CEILING,
+                layout.channels(),
+            )),
+            history: vec![HistoryEntry {
+                at: 0.0,
+                action: NamedAction::Origin,
+            }],
             schedule,
             fetched_until: 0,
             upcoming: VecDeque::new(),
@@ -312,7 +351,13 @@ impl Session {
         for event in &program.notes {
             let start = session.samples(event.at.to_seconds(program.tempo));
             let dur = session.samples(event.dur.to_seconds(program.tempo));
-            session.insert_upcoming(Upcoming { start, dur, event: event.clone(), key: None, scheduled: false });
+            session.insert_upcoming(Upcoming {
+                start,
+                dur,
+                event: event.clone(),
+                key: None,
+                scheduled: false,
+            });
         }
         session.program = Arc::new(program);
         session
@@ -356,7 +401,10 @@ impl Session {
 
     /// Samples of delay the limiter adds to the output.
     pub fn latency(&self) -> usize {
-        self.limiter.as_ref().map(Master::latency).unwrap_or_else(|| self.live.as_ref().map_or(0, |p| p.state.latency))
+        self.limiter
+            .as_ref()
+            .map(Master::latency)
+            .unwrap_or_else(|| self.live.as_ref().map_or(0, |p| p.state.latency))
     }
 
     pub fn channels(&self) -> usize {
@@ -405,9 +453,15 @@ impl Session {
         self.sync_realtime();
         self.panic_epoch.fetch_add(1, Ordering::Release);
         self.invalidate_live();
-        self.log.push(LogEntry { sample: self.clock, input: LogInput::Panic });
+        self.log.push(LogEntry {
+            sample: self.clock,
+            input: LogInput::Panic,
+        });
         let at = self.seconds(self.clock);
-        self.history.push(HistoryEntry { at, action: NamedAction::Panic });
+        self.history.push(HistoryEntry {
+            at,
+            action: NamedAction::Panic,
+        });
         self.playing.clear();
         self.rebuild_schedule();
         self.apply_panics();
@@ -419,8 +473,19 @@ impl Session {
     }
 
     pub fn control_values(&self) -> Vec<(String, f32, f32, Option<&'static str>)> {
-        self.program.controls.iter().zip(&self.controls)
-            .map(|(def, state)| (def.name.clone(), state.value(self.clock), state.target, def.unit.suffix())).collect()
+        self.program
+            .controls
+            .iter()
+            .zip(&self.controls)
+            .map(|(def, state)| {
+                (
+                    def.name.clone(),
+                    state.value(self.clock),
+                    state.target,
+                    def.unit.suffix(),
+                )
+            })
+            .collect()
     }
 
     // ---- state ----------------------------------------------------------------
@@ -448,7 +513,10 @@ impl Session {
             bar,
             beat,
             bpm: grid.bpm,
-            voices: self.live.as_ref().map_or_else(|| self.mixer.active_voices(), |p| p.state.voices.load(Ordering::Relaxed)),
+            voices: self.live.as_ref().map_or_else(
+                || self.mixer.active_voices(),
+                |p| p.state.voices.load(Ordering::Relaxed),
+            ),
             pending: self.pending.len(),
         }
     }
@@ -470,7 +538,11 @@ impl Session {
                     clip: state.clip,
                     muted: state.muted,
                     soloed: state.soloed,
-                    edits: self.playing.get(&t.name).map(|p| p.edits.clone()).unwrap_or_default(),
+                    edits: self
+                        .playing
+                        .get(&t.name)
+                        .map(|p| p.edits.clone())
+                        .unwrap_or_default(),
                 }
             })
             .collect()
@@ -479,7 +551,12 @@ impl Session {
     /// The names of the project's definitions of one kind (`scene`, `clip`...), in order.
     pub fn defined(&self, kind: &str) -> Vec<String> {
         let prefix = format!("{kind}:");
-        self.project.entries.iter().filter_map(|e| e.key.strip_prefix(&prefix)).map(str::to_string).collect()
+        self.project
+            .entries
+            .iter()
+            .filter_map(|e| e.key.strip_prefix(&prefix))
+            .map(str::to_string)
+            .collect()
     }
 
     /// Changes that have landed since this was last called.
@@ -491,8 +568,11 @@ impl Session {
     /// recurs every fraction of a second must not bury everything else.
     fn notify(&mut self, notice: String) {
         let quiet_until = u64::from(self.sample_rate as u32) * NOTICE_REPEAT_SECONDS;
-        self.recent_notices.retain(|(_, at)| self.clock.saturating_sub(*at) < quiet_until);
-        if self.notices.len() < MAX_NOTICES && !self.recent_notices.iter().any(|(n, _)| *n == notice) {
+        self.recent_notices
+            .retain(|(_, at)| self.clock.saturating_sub(*at) < quiet_until);
+        if self.notices.len() < MAX_NOTICES
+            && !self.recent_notices.iter().any(|(n, _)| *n == notice)
+        {
             self.recent_notices.push((notice.clone(), self.clock));
             self.notices.push(notice);
         }
@@ -533,7 +613,9 @@ impl Session {
     }
 
     /// Changes when entries are appended or actual control timing is acknowledged.
-    pub fn log_version(&self) -> (usize, u64) { (self.log.len(), self.log_corrections) }
+    pub fn log_version(&self) -> (usize, u64) {
+        (self.log.len(), self.log_corrections)
+    }
 
     /// Everything that has been sent to the session, with when.
     pub fn log(&self) -> &[LogEntry] {
@@ -554,7 +636,11 @@ impl Session {
     // ---- landing ------------------------------------------------------------------------
 
     fn land_due(&mut self) {
-        while self.pending.first().is_some_and(|p| p.lands_at <= self.clock) {
+        while self
+            .pending
+            .first()
+            .is_some_and(|p| p.lands_at <= self.clock)
+        {
             let pending = self.pending.remove(0);
             self.land(pending);
         }
@@ -563,7 +649,18 @@ impl Session {
     fn land(&mut self, p: Pending) {
         self.version += 1;
         let at = self.clock;
-        let Pending { id, statements, summary, project, program, mixer, actions, replays, playing, .. } = p;
+        let Pending {
+            id,
+            statements,
+            summary,
+            project,
+            program,
+            mixer,
+            actions,
+            replays,
+            playing,
+            ..
+        } = p;
 
         if let (Some(program), Some(mixer)) = (program, mixer) {
             let now = self.seconds(at);
@@ -580,24 +677,51 @@ impl Session {
         self.playing = playing;
 
         self.rebuild_schedule();
-        self.landed.push(Landed { id, at, position: self.grid().position(at), changes: summary });
+        self.landed.push(Landed {
+            id,
+            at,
+            position: self.grid().position(at),
+            changes: summary,
+        });
     }
 
     /// Replace the running program, keeping what is sounding.
-    fn swap_program(&mut self, project: Project, program: Arc<Program>, mut mixer: Mixer, statements: &[Statement], revision: u64) {
+    fn swap_program(
+        &mut self,
+        project: Project,
+        program: Arc<Program>,
+        mut mixer: Mixer,
+        statements: &[Statement],
+        revision: u64,
+    ) {
         let mut controls = crate::controls::build(&program);
         crate::controls::mark(&mut controls, &program, statements, revision);
-        crate::controls::adopt(&mut controls, &self.controls, &program, self.clock, self.sample_rate);
+        crate::controls::adopt(
+            &mut controls,
+            &self.controls,
+            &program,
+            self.clock,
+            self.sample_rate,
+        );
         self.controls = controls;
         if self.detached {
             self.program = program;
             self.project = project;
             return;
         }
-        let mapping: Vec<Option<usize>> = self.program.buses.iter().enumerate().map(|(i, name)| {
-            program.buses.iter().position(|n| n == name)
-                .filter(|&j| self.program.bus_layouts[i] == program.bus_layouts[j])
-        }).collect();
+        let mapping: Vec<Option<usize>> = self
+            .program
+            .buses
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                program
+                    .buses
+                    .iter()
+                    .position(|n| n == name)
+                    .filter(|&j| self.program.bus_layouts[i] == program.bus_layouts[j])
+            })
+            .collect();
         self.mixer.remap_buses(&mapping);
         let mut transfers = Vec::new();
         plan_transfers(&self.program, &program, &mut transfers);
@@ -618,21 +742,43 @@ impl Session {
 
         for event in &program.notes {
             let offset = event.at.to_seconds(tempo);
-            let start = if statement.has_at { self.samples(origin + offset) } else { at + self.samples(offset) };
+            let start = if statement.has_at() {
+                self.samples(origin + offset)
+            } else {
+                at + self.samples(offset)
+            };
             let dur = self.samples(event.dur.to_seconds(tempo));
-            self.insert_upcoming(Upcoming { start: start.max(at), dur, event: event.clone(), key: None, scheduled: false });
+            self.insert_upcoming(Upcoming {
+                start: start.max(at),
+                dur,
+                event: event.clone(),
+                key: None,
+                scheduled: false,
+            });
         }
         for scheduled in &program.performance {
             let after = scheduled.at.to_seconds(tempo);
-            let when = if statement.has_at { origin + after } else { landing_seconds + after };
-            self.history.push(HistoryEntry { at: when, action: name_action(program, &scheduled.action) });
+            let when = if statement.has_at() {
+                origin + after
+            } else {
+                landing_seconds + after
+            };
+            self.history.push(HistoryEntry {
+                at: when,
+                action: name_action(program, &scheduled.action),
+            });
         }
     }
 
     /// Whether a pending change waits for a bar line, not a beat.
     fn landing_unit_is_bar(&self, p: &Pending) -> bool {
         use niminal_lang::QuantizeUnit;
-        p.statements.iter().any(|s| matches!(self.quantums().for_statement(s, None).unit, QuantizeUnit::Bar | QuantizeUnit::Cycle))
+        p.statements.iter().any(|s| {
+            matches!(
+                self.quantums().for_statement(s, None).unit,
+                QuantizeUnit::Bar | QuantizeUnit::Cycle
+            )
+        })
     }
 
     fn rebuild_schedule(&mut self) {
@@ -642,7 +788,12 @@ impl Session {
         self.upcoming.retain(|u| !u.scheduled);
         self.control_sets.clear();
         self.fetched_until = self.clock;
-        self.next_panic = self.schedule.panics().iter().take_while(|&&t| self.samples(t) < self.clock).count();
+        self.next_panic = self
+            .schedule
+            .panics()
+            .iter()
+            .take_while(|&&t| self.samples(t) < self.clock)
+            .count();
     }
 
     // ---- running ---------------------------------------------------------------------------
@@ -662,11 +813,20 @@ impl Session {
                 self.mixer.panic();
                 crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
             }
-            if let Some(limiter) = &mut self.limiter { limiter.clear(); }
+            if let Some(limiter) = &mut self.limiter {
+                limiter.clear();
+            }
             self.sounding.held.clear();
             for (_, _, note) in std::mem::take(&mut self.sounding.midi) {
                 if self.midi_out.len() < MAX_MIDI_QUEUE {
-                    self.midi_out.push(crate::MidiEvent { at: self.clock, on: false, port: note.port, channel: note.channel, note: note.note, velocity: note.velocity });
+                    self.midi_out.push(crate::MidiEvent {
+                        at: self.clock,
+                        on: false,
+                        port: note.port,
+                        channel: note.channel,
+                        note: note.note,
+                        velocity: note.velocity,
+                    });
                 }
             }
             self.upcoming.clear();
@@ -678,7 +838,10 @@ impl Session {
     /// Mix `frames` samples, calling `sink` with each piece (a block per
     /// channel and how many of its samples are valid).
     pub fn render(&mut self, frames: usize, sink: &mut dyn FnMut(&[[f32; BLOCK]], usize)) {
-        assert!(!self.detached, "a detached session is driven by its renderer");
+        assert!(
+            !self.detached,
+            "a detached session is driven by its renderer"
+        );
         let end = self.clock + frames as u64;
         let channels = self.layout.channels();
         let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];
@@ -715,9 +878,15 @@ impl Session {
             self.start_due();
 
             let n = n.max(1) as usize;
-            for (c, samples) in self.audio_input.iter().enumerate().take(niminal_engine::MAX_CHANNELS) {
+            for (c, samples) in self
+                .audio_input
+                .iter()
+                .enumerate()
+                .take(niminal_engine::MAX_CHANNELS)
+            {
                 let from = (self.clock as usize).min(samples.len());
-                self.mixer.set_audio_input(c, &samples[from..(from + n).min(samples.len())]);
+                self.mixer
+                    .set_audio_input(c, &samples[from..(from + n).min(samples.len())]);
             }
             self.mixer.process(&mut block[..channels], n);
             self.silenced += self.mixer.take_silenced();
@@ -767,16 +936,32 @@ impl Session {
                     session.cancel(*id);
                 }
                 LogInput::Panic => session.panic(),
-                LogInput::Control { name, value, unit, at, smooth_ms } => {
-                    let _ = session.set_control(name, *value, unit.as_deref(), Some(*at), *smooth_ms);
+                LogInput::Control {
+                    name,
+                    value,
+                    unit,
+                    at,
+                    smooth_ms,
+                } => {
+                    let _ =
+                        session.set_control(name, *value, unit.as_deref(), Some(*at), *smooth_ms);
                 }
                 LogInput::Events { events } => {
                     let _ = session.stream_events(events.clone());
                 }
-                LogInput::Key { channel, note, velocity } => {
+                LogInput::Key {
+                    channel,
+                    note,
+                    velocity,
+                } => {
                     session.key_input(*channel, *note, *velocity);
                 }
-                LogInput::Expression { channel, what, value, note } => {
+                LogInput::Expression {
+                    channel,
+                    what,
+                    value,
+                    note,
+                } => {
                     session.expression_input(*channel, *what, *value, *note);
                 }
             }
@@ -814,9 +999,17 @@ impl Session {
             self.control_sets.insert(place, (at, set));
         }
         for event in events {
-            let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
+            let start = self
+                .samples(event.at.to_seconds(self.program.tempo))
+                .max(self.clock);
             let dur = self.samples(event.dur.to_seconds(self.program.tempo));
-            self.insert_upcoming(Upcoming { start, dur, event, key: None, scheduled: true });
+            self.insert_upcoming(Upcoming {
+                start,
+                dur,
+                event,
+                key: None,
+                scheduled: true,
+            });
         }
         if let Some(e) = problem {
             self.notify(e.to_string());
@@ -826,19 +1019,35 @@ impl Session {
 
     /// Move the track parameters that envelope lanes say should move by now.
     fn apply_control_sets(&mut self) {
-        while self.control_sets.front().is_some_and(|(at, _)| *at <= self.clock) {
-            let Some((_, set)) = self.control_sets.pop_front() else { break };
-            let Some(index) = self.program.controls.iter().position(|c| c.name == set.name) else { continue };
+        while self
+            .control_sets
+            .front()
+            .is_some_and(|(at, _)| *at <= self.clock)
+        {
+            let Some((_, set)) = self.control_sets.pop_front() else {
+                break;
+            };
+            let Some(index) = self
+                .program
+                .controls
+                .iter()
+                .position(|c| c.name == set.name)
+            else {
+                continue;
+            };
             let frames = (set.glide * f64::from(self.sample_rate)).round() as u64;
             let state = &mut self.controls[index];
             state.set(self.clock, set.target as f32, frames);
-            self.mixer.set_control(&state.key, state.start, state.target, state.frames, 0);
+            self.mixer
+                .set_control(&state.key, state.start, state.target, state.frames, 0);
         }
     }
 
     fn start_due(&mut self) {
         while self.upcoming.front().is_some_and(|u| u.start <= self.clock) {
-            let Some(note) = self.upcoming.pop_front() else { break };
+            let Some(note) = self.upcoming.pop_front() else {
+                break;
+            };
             match self.program.plan(&note.event) {
                 Ok(plan) => {
                     let graph = self.program.instruments[plan.instrument].graph.clone();
@@ -846,30 +1055,55 @@ impl Session {
                         let frames = (smooth * f64::from(self.sample_rate)).round() as u64;
                         if let Some(c) = self.controls.iter_mut().find(|c| c.key == *key) {
                             c.set(self.clock, *value, frames);
-                            self.mixer.set_control(&c.key, c.start, c.target, c.frames, 0);
+                            self.mixer
+                                .set_control(&c.key, c.start, c.target, c.frames, 0);
                         }
                     }
-                    let id = self.mixer.note_on_with(plan.track, graph, &plan.params, plan.choke, plan.rule);
+                    let id = self.mixer.note_on_with(
+                        plan.track,
+                        graph,
+                        &plan.params,
+                        plan.choke,
+                        plan.rule,
+                    );
                     self.mixer.set_voice_pan(id, plan.pan);
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
-                    let off = if note.key.is_some() { u64::MAX } else { self.clock + note.dur };
-                    self.sounding.held.push((off, id, note.key.unwrap_or(NO_KEY)));
+                    let off = if note.key.is_some() {
+                        u64::MAX
+                    } else {
+                        self.clock + note.dur
+                    };
+                    self.sounding
+                        .held
+                        .push((off, id, note.key.unwrap_or(NO_KEY)));
                     if let Some(midi) = plan.midi {
                         self.send_midi(true, &midi, self.clock);
-                        self.sounding.midi.push((off, note.key.unwrap_or(NO_KEY), midi));
+                        self.sounding
+                            .midi
+                            .push((off, note.key.unwrap_or(NO_KEY), midi));
                     }
                     if self.mixer.take_stolen() > 0 {
                         self.notify(format!("too many notes at once: the oldest are ended early to keep to {} voices", DEFAULT_MAX_VOICES));
                     }
                 }
-                Err(e) => self.notify(format!("note for `{}` could not play: {e}", note.event.target)),
+                Err(e) => self.notify(format!(
+                    "note for `{}` could not play: {e}",
+                    note.event.target
+                )),
             }
         }
     }
 
     fn send_midi(&mut self, on: bool, note: &niminal_lang::MidiNote, at: u64) {
         if self.midi_out.len() < MAX_MIDI_QUEUE {
-            self.midi_out.push(crate::MidiEvent { at, on, port: note.port.clone(), channel: note.channel, note: note.note, velocity: note.velocity });
+            self.midi_out.push(crate::MidiEvent {
+                at,
+                on,
+                port: note.port.clone(),
+                channel: note.channel,
+                note: note.note,
+                velocity: note.velocity,
+            });
         }
     }
 
@@ -880,7 +1114,9 @@ impl Session {
 
     fn release_due(&mut self) {
         let now = self.clock;
-        let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sounding.midi).into_iter().partition(|h| h.0 <= now);
+        let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sounding.midi)
+            .into_iter()
+            .partition(|h| h.0 <= now);
         self.sounding.midi = kept;
         for (_, _, note) in &ended {
             self.send_midi(false, note, now);
@@ -904,7 +1140,11 @@ pub(super) fn rescale_landing(lands_at: u64, now: u64, factor: f64) -> u64 {
 
 /// How much longer a bar (`by_bar`) or a beat gets when the tempo or meter changes from `old` to `new`.
 pub(super) fn landing_factor(by_bar: bool, old: Tempo, new: Tempo) -> f64 {
-    if by_bar { (new.beats_per_bar / new.bpm) / (old.beats_per_bar / old.bpm) } else { old.bpm / new.bpm }
+    if by_bar {
+        (new.beats_per_bar / new.bpm) / (old.beats_per_bar / old.bpm)
+    } else {
+        old.bpm / new.bpm
+    }
 }
 
 /// Whether a pending change sets the tempo or meter.
@@ -912,17 +1152,34 @@ pub(super) fn landing_factor(by_bar: bool, old: Tempo, new: Tempo) -> f64 {
 pub(super) fn plan_transfers(old: &Program, new: &Program, out: &mut Vec<Transfer>) {
     out.clear();
     for (i, track) in new.tracks.iter().enumerate() {
-        let from = if i == 0 { Some(0) } else { old.track_index(&track.name) };
-        out.push(Transfer { voices_from: from, chain_from: from.filter(|_| i > 0) });
+        let from = if i == 0 {
+            Some(0)
+        } else {
+            old.track_index(&track.name)
+        };
+        out.push(Transfer {
+            voices_from: from,
+            chain_from: from.filter(|_| i > 0),
+        });
     }
 }
 
 fn is_timing(p: &Pending) -> bool {
-    p.statements.iter().any(|s| matches!(s.key.as_deref(), Some("tempo" | "meter")))
+    p.statements
+        .iter()
+        .any(|s| matches!(s.key(), Some("tempo" | "meter")))
 }
 
-fn rescale_pending(pending: &mut [Pending], now: u64, old: Tempo, new: Tempo, by_bar: impl Fn(&Pending) -> bool) {
-    if old == new { return; }
+fn rescale_pending(
+    pending: &mut [Pending],
+    now: u64,
+    old: Tempo,
+    new: Tempo,
+    by_bar: impl Fn(&Pending) -> bool,
+) {
+    if old == new {
+        return;
+    }
     for p in pending.iter_mut().filter(|p| !is_timing(p)) {
         p.lands_at = rescale_landing(p.lands_at, now, landing_factor(by_bar(p), old, new));
     }
@@ -945,13 +1202,20 @@ fn retime(history: &mut [HistoryEntry], now: f64, old: Tempo, new: Tempo) {
 
 /// When bar 1 is, in session seconds: where the last `reset` landed.
 fn origin_of(history: &[HistoryEntry]) -> f64 {
-    history.iter().rev().find(|h| matches!(h.action, NamedAction::Reset | NamedAction::Origin)).map_or(0.0, |h| h.at)
+    history
+        .iter()
+        .rev()
+        .find(|h| matches!(h.action, NamedAction::Reset | NamedAction::Origin))
+        .map_or(0.0, |h| h.at)
 }
 
 fn name_action(program: &Program, action: &Action) -> NamedAction {
     let name = |t: &usize| program.tracks[*t].name.clone();
     match action {
-        Action::Play { track, clip } => NamedAction::Play { track: name(track), clip: clip.clone() },
+        Action::Play { track, clip } => NamedAction::Play {
+            track: name(track),
+            clip: clip.clone(),
+        },
         Action::Stop { track } => NamedAction::Stop(name(track)),
         Action::Mute { track } => NamedAction::Mute(name(track)),
         Action::Unmute { track } => NamedAction::Unmute(name(track)),
@@ -965,7 +1229,11 @@ fn name_action(program: &Program, action: &Action) -> NamedAction {
 
 fn first_line(text: &str) -> String {
     let line = text.lines().next().unwrap_or("").trim();
-    if line.chars().count() > 60 { format!("{}...", line.chars().take(57).collect::<String>()) } else { line.to_string() }
+    if line.chars().count() > 60 {
+        format!("{}...", line.chars().take(57).collect::<String>())
+    } else {
+        line.to_string()
+    }
 }
 
 fn summarize(s: &Statement) -> String {
@@ -974,4 +1242,3 @@ fn summarize(s: &Statement) -> String {
 
 /// A statement to compile, and for a change to a track, what the track is playing after it.
 type Edited = (Statement, Option<(String, Playing)>);
-

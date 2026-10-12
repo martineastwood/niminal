@@ -5,7 +5,10 @@ pub enum Tok {
     Ident(String),
     /// A number with an optional unit suffix attached directly (`800hz`,
     /// `1/8beat`). Rationals only lex as one literal when a unit follows.
-    Num { value: f64, unit: Option<String> },
+    Num {
+        value: f64,
+        unit: Option<String>,
+    },
     LParen,
     RParen,
     LBrace,
@@ -91,7 +94,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 let (mut tok, mut end) = lex_number(src, i);
                 // `4 bars`: a space before a unit word is fine outside brackets,
                 // where a space separates steps instead.
-                if let Tok::Num { unit: unit @ None, .. } = &mut tok
+                if let Tok::Num {
+                    unit: unit @ None, ..
+                } = &mut tok
                     && brackets.last() != Some(&b'[')
                     && let Some((word, after)) = spaced_unit(src, end)
                 {
@@ -103,7 +108,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                 let mut end = i;
-                while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                while end < bytes.len()
+                    && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
+                {
                     end += 1;
                 }
                 // Sharp note names such as `c#4`.
@@ -119,10 +126,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 // `alias::name` is one identifier.
                 if src[end..].starts_with("::")
-                    && bytes.get(end + 2).is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+                    && bytes
+                        .get(end + 2)
+                        .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
                 {
                     end += 2;
-                    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                    while end < bytes.len()
+                        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
+                    {
                         end += 1;
                     }
                 }
@@ -131,9 +142,13 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 tok
             }
             b'[' if is_raw_bracket(&tokens, braces.last().copied().unwrap_or(false)) => {
-                let is_grid = matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid");
+                let is_grid =
+                    matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid");
                 let Some(close) = matching_bracket(bytes, i) else {
-                    return Err(Diagnostic::new("this `[` is never closed", Span::new(i, i + 1)));
+                    return Err(Diagnostic::new(
+                        "this `[` is never closed",
+                        Span::new(i, i + 1),
+                    ));
                 };
                 let text = src[i + 1..close].to_string();
                 i = close + 1;
@@ -145,9 +160,13 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     Tok::Pattern(text)
                 }
             }
-            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid") => {
+            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid") =>
+            {
                 let Some(len) = src[i + 1..].find('}') else {
-                    return Err(Diagnostic::new("this `{` is never closed", Span::new(i, i + 1)));
+                    return Err(Diagnostic::new(
+                        "this `{` is never closed",
+                        Span::new(i, i + 1),
+                    ));
                 };
                 let text = src[i + 1..i + 1 + len].to_string();
                 start = tokens.pop().map_or(start, |t| t.span.start);
@@ -155,8 +174,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 Tok::Rows(text)
             }
             b'"' => {
-                let Some(len) = src[i + 1..].find(['"', '\n']).filter(|&n| bytes[i + 1 + n] == b'"') else {
-                    return Err(Diagnostic::new("this string is never closed", Span::new(i, i + 1)));
+                let Some(len) = src[i + 1..]
+                    .find(['"', '\n'])
+                    .filter(|&n| bytes[i + 1 + n] == b'"')
+                else {
+                    return Err(Diagnostic::new(
+                        "this string is never closed",
+                        Span::new(i, i + 1),
+                    ));
                 };
                 let text = src[i + 1..i + 1 + len].to_string();
                 i += len + 2;
@@ -178,7 +203,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                         brackets.push(c);
                         if c == b'{' {
                             let inherited = braces.last().copied().unwrap_or(false);
-                            let signal = matches!(statement_keyword.as_deref(), Some("instr" | "mono" | "opcode" | "track" | "arrangement" | "bus"));
+                            let signal = matches!(
+                                statement_keyword.as_deref(),
+                                Some("instr" | "mono" | "opcode" | "track" | "arrangement" | "bus")
+                            );
                             braces.push(inherited || signal);
                         }
                         match c {
@@ -252,10 +280,16 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
             }
             _ => statement_start = false,
         }
-        tokens.push(Token { tok, span: Span::new(start, i) });
+        tokens.push(Token {
+            tok,
+            span: Span::new(start, i),
+        });
     }
 
-    tokens.push(Token { tok: Tok::Eof, span: Span::new(src.len(), src.len()) });
+    tokens.push(Token {
+        tok: Tok::Eof,
+        span: Span::new(src.len(), src.len()),
+    });
     Ok(tidy_newlines(tokens))
 }
 
@@ -281,8 +315,14 @@ fn tidy_newlines(tokens: Vec<Token>) -> Vec<Token> {
 /// Is a `[` here a raw pattern (or grid) rather than ordinary tokens?
 fn is_raw_bracket(tokens: &[Token], in_signal: bool) -> bool {
     match tokens.last() {
-        Some(Token { tok: Tok::Ident(name), .. }) if name == "env" => false,
-        Some(Token { tok: Tok::Ident(name), .. }) if name == "grid" => true,
+        Some(Token {
+            tok: Tok::Ident(name),
+            ..
+        }) if name == "env" => false,
+        Some(Token {
+            tok: Tok::Ident(name),
+            ..
+        }) if name == "grid" => true,
         _ => !in_signal,
     }
 }
@@ -305,7 +345,9 @@ fn matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
     None
 }
 
-const UNIT_WORDS: [&str; 12] = ["hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "bpm", "deg", "st"];
+const UNIT_WORDS: [&str; 12] = [
+    "hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "bpm", "deg", "st",
+];
 
 /// A unit word after some spaces (not a newline): its text and where it ends.
 fn spaced_unit(src: &str, from: usize) -> Option<(&str, usize)> {
@@ -322,7 +364,9 @@ fn spaced_unit(src: &str, from: usize) -> Option<(&str, usize)> {
         i += 1;
     }
     let word = &src[start..i];
-    let ends_word = bytes.get(i).is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
+    let ends_word = bytes
+        .get(i)
+        .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
     (ends_word && UNIT_WORDS.contains(&word)).then_some((word, i))
 }
 
@@ -352,7 +396,13 @@ fn lex_number(src: &str, start: usize) -> (Tok, usize) {
 
     let unit_start = end;
     if bytes.get(end) == Some(&b'%') {
-        return (Tok::Num { value, unit: Some("%".into()) }, end + 1);
+        return (
+            Tok::Num {
+                value,
+                unit: Some("%".into()),
+            },
+            end + 1,
+        );
     }
     while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
         end += 1;
@@ -370,7 +420,10 @@ mod tests {
     }
 
     fn num(value: f64, unit: Option<&str>) -> Tok {
-        Tok::Num { value, unit: unit.map(String::from) }
+        Tok::Num {
+            value,
+            unit: unit.map(String::from),
+        }
     }
 
     #[test]
@@ -378,22 +431,38 @@ mod tests {
         assert_eq!(toks("800hz")[0], num(800.0, Some("hz")));
         assert_eq!(toks("0.5")[0], num(0.5, None));
         assert_eq!(toks("1/8beat")[0], num(0.125, Some("beat")));
-        assert_eq!(toks("600ms.exp")[..3], [num(600.0, Some("ms")), Tok::Dot, Tok::Ident("exp".into())]);
+        assert_eq!(
+            toks("600ms.exp")[..3],
+            [num(600.0, Some("ms")), Tok::Dot, Tok::Ident("exp".into())]
+        );
     }
 
     #[test]
     fn rational_without_unit_stays_a_division() {
-        assert_eq!(toks("3/4")[..3], [num(3.0, None), Tok::Slash, num(4.0, None)]);
+        assert_eq!(
+            toks("3/4")[..3],
+            [num(3.0, None), Tok::Slash, num(4.0, None)]
+        );
     }
 
     #[test]
     fn ranges_do_not_eat_the_dot() {
-        assert_eq!(toks("0..1")[..3], [num(0.0, None), Tok::DotDot, num(1.0, None)]);
+        assert_eq!(
+            toks("0..1")[..3],
+            [num(0.0, None), Tok::DotDot, num(1.0, None)]
+        );
     }
 
     #[test]
     fn note_names_are_identifiers() {
-        assert_eq!(toks("a3 c#4 bb2")[..3], [Tok::Ident("a3".into()), Tok::Ident("c#4".into()), Tok::Ident("bb2".into())]);
+        assert_eq!(
+            toks("a3 c#4 bb2")[..3],
+            [
+                Tok::Ident("a3".into()),
+                Tok::Ident("c#4".into()),
+                Tok::Ident("bb2".into())
+            ]
+        );
     }
 
     #[test]
@@ -406,11 +475,17 @@ mod tests {
     #[test]
     fn brackets_are_patterns_outside_signal_bodies_and_tokens_inside_them() {
         // top level: raw text, including characters the lexer would reject
-        assert_eq!(toks("riff = [c2 ~ <a b>*2 . x]")[2], Tok::Pattern("c2 ~ <a b>*2 . x".into()));
+        assert_eq!(
+            toks("riff = [c2 ~ <a b>*2 . x]")[2],
+            Tok::Pattern("c2 ~ <a b>*2 . x".into())
+        );
         // nested brackets stay inside one pattern
         assert_eq!(toks("x = [a [b c] d]")[2], Tok::Pattern("a [b c] d".into()));
         // clip and scene bodies are not signal contexts
-        assert_eq!(toks("clip c { notes: [a b] }")[5], Tok::Pattern("a b".into()));
+        assert_eq!(
+            toks("clip c { notes: [a b] }")[5],
+            Tok::Pattern("a b".into())
+        );
         // instruments, opcodes and tracks are
         for head in ["instr a(f: hz)", "opcode o(x)", "track t"] {
             let t = toks(&format!("{head} {{ [x, y] }}"));
@@ -420,8 +495,14 @@ mod tests {
         // env literals are always tokens
         assert!(toks("x = env[0 1sec 1]").contains(&Tok::LBracket));
         // grids are raw
-        assert_eq!(toks("g = grid[x.x. xXo.]")[2], Tok::Grid("x.x. xXo.".into()));
-        assert_eq!(lex("x = [a b").unwrap_err().message, "this `[` is never closed");
+        assert_eq!(
+            toks("g = grid[x.x. xXo.]")[2],
+            Tok::Grid("x.x. xXo.".into())
+        );
+        assert_eq!(
+            lex("x = [a b").unwrap_err().message,
+            "this `[` is never closed"
+        );
     }
 
     #[test]
@@ -429,13 +510,28 @@ mod tests {
         assert_eq!(toks("30%")[0], num(30.0, Some("%")));
         assert_eq!(toks("2 bars")[0], num(2.0, Some("bars")));
         assert_eq!(toks("120 bpm")[0], num(120.0, Some("bpm")));
-        assert_eq!(toks("1/2 beat")[0], Tok::Num { value: 1.0, unit: None }, "a lone fraction isn't a literal");
+        assert_eq!(
+            toks("1/2 beat")[0],
+            Tok::Num {
+                value: 1.0,
+                unit: None
+            },
+            "a lone fraction isn't a literal"
+        );
         assert_eq!(toks("3 x")[0], num(3.0, None), "only unit words merge");
         assert_eq!(toks("3 barn")[0], num(3.0, None), "and only whole words");
         assert_eq!(toks("2\nbars")[0], num(2.0, None), "never across a line");
         // inside env brackets a space separates steps
         assert_eq!(toks("env[0 5ms 1 2 beats]")[3], num(5.0, Some("ms")));
-        assert_eq!(&toks("@ next 4 bars ~")[..4], [Tok::At, Tok::Ident("next".into()), num(4.0, Some("bars")), Tok::Tilde]);
+        assert_eq!(
+            &toks("@ next 4 bars ~")[..4],
+            [
+                Tok::At,
+                Tok::Ident("next".into()),
+                num(4.0, Some("bars")),
+                Tok::Tilde
+            ]
+        );
     }
 
     #[test]

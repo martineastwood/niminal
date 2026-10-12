@@ -79,20 +79,24 @@ fn key(tap: &OscTap) -> (String, String, u16) {
 }
 
 /// Sends the running project's `osc_out` signals until dropped.
-pub struct OscOutput(#[allow(dead_code)] Worker);
+pub struct OscOutput {
+    _worker: Worker,
+}
 
 impl OscOutput {
     pub fn start(daemon: Shared) -> Result<OscOutput, String> {
         let mut sender = OscSender::new().map_err(|e| format!("can't send OSC: {e}"))?;
-        Ok(OscOutput(Worker::spawn(move |stop| {
-            while !stop.load(Ordering::Relaxed) {
-                let taps = lock(&daemon).session().program().taps.clone();
-                if !taps.is_empty() {
-                    sender.poll(&taps, Instant::now());
+        Ok(OscOutput {
+            _worker: Worker::spawn(move |stop| {
+                while !stop.load(Ordering::Relaxed) {
+                    let taps = lock(&daemon).session().program().taps.clone();
+                    if !taps.is_empty() {
+                        sender.poll(&taps, Instant::now());
+                    }
+                    thread::sleep(Duration::from_millis(4));
                 }
-                thread::sleep(Duration::from_millis(4));
-            }
-        })))
+            }),
+        })
     }
 }
 

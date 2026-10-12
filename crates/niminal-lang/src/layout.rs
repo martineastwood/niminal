@@ -51,7 +51,14 @@ impl Layout {
             Layout::Mono => vec![Some(0.0)],
             Layout::Stereo => vec![Some(-30.0), Some(30.0)],
             Layout::Quad => vec![Some(-45.0), Some(45.0), Some(-135.0), Some(135.0)],
-            Layout::Surround51 => vec![Some(-30.0), Some(30.0), Some(0.0), None, Some(-110.0), Some(110.0)],
+            Layout::Surround51 => vec![
+                Some(-30.0),
+                Some(30.0),
+                Some(0.0),
+                None,
+                Some(-110.0),
+                Some(110.0),
+            ],
             Layout::Surround71 => vec![
                 Some(-30.0),
                 Some(30.0),
@@ -133,12 +140,16 @@ pub fn conversion(from: Layout, to: Layout) -> Option<Matrix> {
         }
         // The front pair of a bigger layout.
         (Layout::Stereo, _) => {
-            let (Some(l), Some(r), _) = to.front() else { return None };
+            let (Some(l), Some(r), _) = to.front() else {
+                return None;
+            };
             m[l][0] = 1.0;
             m[r][1] = 1.0;
         }
         (_, Layout::Stereo) => {
-            let (Some(l), Some(r), c) = from.front() else { return None };
+            let (Some(l), Some(r), c) = from.front() else {
+                return None;
+            };
             m[0][l] = 1.0;
             m[1][r] = 1.0;
             if let Some(c) = c {
@@ -160,7 +171,9 @@ pub fn conversion(from: Layout, to: Layout) -> Option<Matrix> {
 }
 
 fn identity(n: usize) -> Matrix {
-    (0..n).map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect()).collect()
+    (0..n)
+        .map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -168,7 +181,9 @@ mod tests {
     use super::*;
 
     fn apply(m: &Matrix, input: &[f64]) -> Vec<f64> {
-        m.iter().map(|row| row.iter().zip(input).map(|(c, x)| c * x).sum()).collect()
+        m.iter()
+            .map(|row| row.iter().zip(input).map(|(c, x)| c * x).sum())
+            .collect()
     }
 
     #[test]
@@ -179,7 +194,11 @@ mod tests {
         assert_eq!(Layout::Surround51.to_string(), "surround(5.1)");
         assert_eq!(Layout::from_count(2), Layout::Stereo);
         assert_eq!(Layout::Surround51.speaker_angles().len(), 6);
-        assert_eq!(Layout::Surround51.speaker_angles()[3], None, "no panning to the LFE");
+        assert_eq!(
+            Layout::Surround51.speaker_angles()[3],
+            None,
+            "no panning to the LFE"
+        );
     }
 
     #[test]
@@ -209,7 +228,10 @@ mod tests {
         let surround = apply(&m, &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0]);
         assert!((surround[0] - MINUS_3DB).abs() < 1e-12 && (surround[1] - MINUS_3DB).abs() < 1e-12);
 
-        let quad = apply(&conversion(Layout::Quad, Layout::Stereo).unwrap(), &[1.0, 1.0, 1.0, 1.0]);
+        let quad = apply(
+            &conversion(Layout::Quad, Layout::Stereo).unwrap(),
+            &[1.0, 1.0, 1.0, 1.0],
+        );
         assert!((quad[0] - (1.0 + MINUS_3DB)).abs() < 1e-12);
     }
 
@@ -217,7 +239,14 @@ mod tests {
     fn anything_folds_to_mono_by_averaging() {
         let m = conversion(Layout::Stereo, Layout::Mono).unwrap();
         assert_eq!(apply(&m, &[1.0, 0.0]), [0.5]);
-        assert!((apply(&conversion(Layout::Surround51, Layout::Mono).unwrap(), &[1.0; 6])[0] - 1.0).abs() < 1e-12);
+        assert!(
+            (apply(
+                &conversion(Layout::Surround51, Layout::Mono).unwrap(),
+                &[1.0; 6]
+            )[0] - 1.0)
+                .abs()
+                < 1e-12
+        );
     }
 
     #[test]

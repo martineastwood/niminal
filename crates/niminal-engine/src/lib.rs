@@ -12,7 +12,7 @@ mod opcode;
 pub mod ops;
 mod voice;
 
-pub use master::Master;
+pub use master::{DEFAULT_CEILING, Master};
 pub use mixer::{Buses, DEFAULT_MAX_VOICES, ChainInput, MAX_CHANNELS, Mixer, Route, Stems, TrackDef, Transfer, VoiceId, execution_order};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
 pub use opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};

@@ -1,4 +1,5 @@
 use crate::diag::Span;
+use crate::performance::Quantize;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ident {
@@ -10,7 +11,11 @@ pub struct Ident {
 pub enum Item {
     Instr(InstrDef),
     /// `ctl name = value`, or `ctl name = midi.cc(21).range(200hz..4khz)` with an `input`.
-    Control { name: Ident, value: Expr, input: Option<ControlInput> },
+    Control {
+        name: Ident,
+        value: Expr,
+        input: Option<ControlInput>,
+    },
     Opcode(OpcodeDef),
     Bus(BusDecl),
     Track(TrackDecl),
@@ -22,7 +27,10 @@ pub enum Item {
     /// `meter 3/4`
     Meter(Expr),
     /// `name = expr` at the top level: a pattern, clip or scene value.
-    Bind { name: Ident, value: Expr },
+    Bind {
+        name: Ident,
+        value: Expr,
+    },
     Clip(NamedBlock),
     Scene(NamedBlock),
     Command(CommandStmt),
@@ -51,7 +59,7 @@ pub enum InputSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TempoStmt {
     pub value: Expr,
-    pub quantize: Option<QuantizeSpec>,
+    pub quantize: Option<Quantize>,
     pub over: Option<Expr>,
     pub span: Span,
 }
@@ -71,14 +79,20 @@ pub struct NamedBlock {
 pub enum AtPos {
     Time(Expr),
     /// Bars and beats count from 1.
-    Bar { bar: Expr, beat: Option<Expr> },
+    Bar {
+        bar: Expr,
+        beat: Option<Expr>,
+    },
     /// `+4 bars`: that long after the code lands.
     After(Expr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    Play { track: Ident, what: Expr },
+    Play {
+        track: Ident,
+        what: Expr,
+    },
     Stop(Ident),
     Mute(Ident),
     Unmute(Ident),
@@ -93,43 +107,22 @@ pub enum Command {
     New,
     /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its track.
     /// `verb` is the `start`.
-    Start { name: Ident, verb: Span },
+    Start {
+        name: Ident,
+        verb: Span,
+    },
     /// `bass.reverse`: change what a track is playing. `change` is `reverse`, in the source.
-    Edit { track: Ident, change: Span },
+    Edit {
+        track: Ident,
+        change: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandStmt {
     pub at: Option<AtPos>,
     pub command: Command,
-    pub quantize: Option<QuantizeSpec>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Relation {
-    /// Land on the grid: `@ bar`, `@ 4 bars`.
-    OnGrid,
-    /// The next line of the grid: `@ next 4 bars`.
-    Next,
-    /// Counted from now: `@ in 4 bars`.
-    In,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuantUnit {
-    Now,
-    Beat,
-    Bar,
-    Cycle,
-}
-
-/// When a change should land, relative to a musical grid.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct QuantizeSpec {
-    pub relation: Relation,
-    pub count: f64,
-    pub unit: QuantUnit,
+    pub quantize: Option<Quantize>,
     pub span: Span,
 }
 
@@ -265,13 +258,25 @@ pub enum TypeSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Bind { name: Ident, value: Expr },
+    Bind {
+        name: Ident,
+        value: Expr,
+    },
     /// `state y = 0.0`, only inside an opcode.
-    State { name: Ident, init: Expr },
+    State {
+        name: Ident,
+        init: Expr,
+    },
     /// `[l, r] = src` names the channels of a multichannel signal.
-    Destructure { names: Vec<Ident>, value: Expr },
+    Destructure {
+        names: Vec<Ident>,
+        value: Expr,
+    },
     /// `out += expr` layers a signal; `space += expr` sends to a bus.
-    AddAssign { name: Ident, value: Expr },
+    AddAssign {
+        name: Ident,
+        value: Expr,
+    },
     Expr(Expr),
 }
 
@@ -292,10 +297,16 @@ pub enum BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
-    Num { value: f64, unit: Option<String> },
+    Num {
+        value: f64,
+        unit: Option<String>,
+    },
     Name(String),
     /// `f(a, b)`. `x.f(a)` is parsed as `f(x, a)` with `x` marked as the receiver.
-    Call { name: Ident, args: Vec<Arg> },
+    Call {
+        name: Ident,
+        args: Vec<Arg>,
+    },
     Neg(Box<Expr>),
     /// A mini-notation pattern: the raw text between the brackets.
     Pattern(String),
@@ -307,11 +318,23 @@ pub enum ExprKind {
     Rest,
     /// `[a, b]`: a comma list is a multichannel signal, one expression per channel.
     Channels(Vec<Expr>),
-    Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     /// `a < b`: 1 when it holds and 0 when it doesn't.
-    Compare { op: CmpOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    Compare {
+        op: CmpOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     /// `if cond { a } else { b }`
-    If { cond: Box<Expr>, then: Box<Expr>, otherwise: Box<Expr> },
+    If {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        otherwise: Box<Expr>,
+    },
     Env(EnvLit),
     /// `"/fx/width"`: text, as an argument such as an OSC address.
     Str(String),

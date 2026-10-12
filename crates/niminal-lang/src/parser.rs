@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
 use crate::lexer::{Tok, Token, lex};
+use crate::performance::{Quantize, QuantizeRelation, QuantizeUnit};
 
 /// A name, its parameters, its `with(...)` options, its body, and where it all is.
 type Definition = (Ident, Vec<ParamDef>, Vec<Ident>, Vec<Arg>, Vec<Stmt>, Span);
@@ -13,18 +14,29 @@ pub fn parse(src: &str) -> Result<Vec<Item>, Diagnostic> {
 pub fn parse_spanned(src: &str) -> Result<Vec<(Item, Span)>, Diagnostic> {
     if src.len() > MAX_SOURCE {
         return Err(Diagnostic::new(
-            format!("this is {} KB of code; niminal takes at most {} KB at a time", src.len() / 1024, MAX_SOURCE / 1024),
+            format!(
+                "this is {} KB of code; niminal takes at most {} KB at a time",
+                src.len() / 1024,
+                MAX_SOURCE / 1024
+            ),
             Span::new(0, 0),
         ));
     }
     let tokens = lex(src)?;
     if tokens.len() > MAX_TOKENS {
         return Err(Diagnostic::new(
-            format!("this has {} tokens; niminal takes at most {MAX_TOKENS} at a time", tokens.len()),
+            format!(
+                "this has {} tokens; niminal takes at most {MAX_TOKENS} at a time",
+                tokens.len()
+            ),
             tokens[MAX_TOKENS].span,
         ));
     }
-    let mut p = Parser { tokens, pos: 0, depth: 0 };
+    let mut p = Parser {
+        tokens,
+        pos: 0,
+        depth: 0,
+    };
     let mut items = Vec::new();
     loop {
         p.skip_newlines();
@@ -138,7 +150,10 @@ impl Parser {
     }
 
     fn unexpected(&self, expected: &str) -> Diagnostic {
-        Diagnostic::new(format!("expected {expected}, found {}", describe(self.peek())), self.span())
+        Diagnostic::new(
+            format!("expected {expected}, found {}", describe(self.peek())),
+            self.span(),
+        )
     }
 
     fn expect(&mut self, tok: &Tok) -> Res<Span> {
@@ -151,7 +166,10 @@ impl Parser {
 
     fn ident(&mut self, what: &str) -> Res<Ident> {
         match self.peek().clone() {
-            Tok::Ident(name) => Ok(Ident { name, span: self.bump().span }),
+            Tok::Ident(name) => Ok(Ident {
+                name,
+                span: self.bump().span,
+            }),
             _ => Err(self.unexpected(what)),
         }
     }
@@ -169,29 +187,49 @@ impl Parser {
                 "cc" => {
                     self.expect(&Tok::LParen)?;
                     let cc = self.small_number("a CC number from 0 to 127", 127)?;
-                    let channel = if self.eat(&Tok::Comma) { Some(self.small_number("a channel from 1 to 16", 16)?) } else { None };
+                    let channel = if self.eat(&Tok::Comma) {
+                        Some(self.small_number("a channel from 1 to 16", 16)?)
+                    } else {
+                        None
+                    };
                     if channel == Some(0) {
-                        return Err(Diagnostic::new("MIDI channels count from 1", start.to(self.prev_span())));
+                        return Err(Diagnostic::new(
+                            "MIDI channels count from 1",
+                            start.to(self.prev_span()),
+                        ));
                     }
                     self.expect(&Tok::RParen)?;
                     InputSource::MidiCc { cc, channel }
                 }
                 other => {
-                    return Err(Diagnostic::new(format!("`midi.{other}` isn't supported; use `midi.cc(number)` or `midi.learn`"), method.span));
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`midi.{other}` isn't supported; use `midi.cc(number)` or `midi.learn`"
+                        ),
+                        method.span,
+                    ));
                 }
             }
         } else {
             self.bump();
             self.expect(&Tok::LParen)?;
-            let Tok::Str(address) = self.peek().clone() else { return Err(self.unexpected("an OSC address such as \"/fx/width\"")) };
+            let Tok::Str(address) = self.peek().clone() else {
+                return Err(self.unexpected("an OSC address such as \"/fx/width\""));
+            };
             self.bump();
             if !address.starts_with('/') {
-                return Err(Diagnostic::new("an OSC address starts with `/`", start.to(self.prev_span())));
+                return Err(Diagnostic::new(
+                    "an OSC address starts with `/`",
+                    start.to(self.prev_span()),
+                ));
             }
             self.expect(&Tok::RParen)?;
             InputSource::Osc(address)
         };
-        let number = |value: f64, span| Expr { kind: ExprKind::Num { value, unit: None }, span };
+        let number = |value: f64, span| Expr {
+            kind: ExprKind::Num { value, unit: None },
+            span,
+        };
         let (mut lo, mut hi, mut smooth) = (number(0.0, start), number(1.0, start), None);
         while self.eat(&Tok::Dot) {
             let method = self.ident("`range` or `smooth`")?;
@@ -203,7 +241,12 @@ impl Parser {
                     hi = self.expr()?;
                 }
                 "smooth" => smooth = Some(self.expr()?),
-                other => return Err(Diagnostic::new(format!("a control input has no `.{other}`; use `.range` or `.smooth`"), method.span)),
+                other => {
+                    return Err(Diagnostic::new(
+                        format!("a control input has no `.{other}`; use `.range` or `.smooth`"),
+                        method.span,
+                    ));
+                }
             }
             self.expect(&Tok::RParen)?;
         }
@@ -211,16 +254,42 @@ impl Parser {
             None => lo,
             Some(duration) => {
                 let span = lo.span.to(duration.span);
-                let args = vec![Arg { name: None, value: lo, receiver: true }, Arg { name: None, value: duration, receiver: false }];
-                Expr { kind: ExprKind::Call { name: Ident { name: "smooth".into(), span }, args }, span }
+                let args = vec![
+                    Arg {
+                        name: None,
+                        value: lo,
+                        receiver: true,
+                    },
+                    Arg {
+                        name: None,
+                        value: duration,
+                        receiver: false,
+                    },
+                ];
+                Expr {
+                    kind: ExprKind::Call {
+                        name: Ident {
+                            name: "smooth".into(),
+                            span,
+                        },
+                        args,
+                    },
+                    span,
+                }
             }
         };
-        Ok(Item::Control { name, value, input: Some(ControlInput { source, hi }) })
+        Ok(Item::Control {
+            name,
+            value,
+            input: Some(ControlInput { source, hi }),
+        })
     }
 
     fn small_number(&mut self, what: &str, max: u8) -> Res<u8> {
         match self.peek().clone() {
-            Tok::Num { value, unit: None } if value.fract() == 0.0 && (0.0..=f64::from(max)).contains(&value) => {
+            Tok::Num { value, unit: None }
+                if value.fract() == 0.0 && (0.0..=f64::from(max)).contains(&value) =>
+            {
                 self.bump();
                 Ok(value as u8)
             }
@@ -242,26 +311,53 @@ impl Parser {
             if self.is_keyword("midi") || self.is_keyword("osc_in") {
                 return self.input_control(name);
             }
-            Ok(Item::Control { name, value: self.expr()?, input: None })
+            Ok(Item::Control {
+                name,
+                value: self.expr()?,
+                input: None,
+            })
         } else if self.is_keyword("instr") || self.is_keyword("mono") {
             let mono = self.is_keyword("mono");
             let (name, params, _, options, body, span) = self.definition()?;
-            Ok(Item::Instr(InstrDef { name, params, body, span, mono, options }))
+            Ok(Item::Instr(InstrDef {
+                name,
+                params,
+                body,
+                span,
+                mono,
+                options,
+            }))
         } else if self.is_keyword("bus") {
             self.bump();
             let name = self.ident("a bus name")?;
             let layout = self.eat(&Tok::Colon).then(|| self.expr()).transpose()?;
-            let body = if self.peek() == &Tok::LBrace { Some(self.block()?.0) } else { None };
+            let body = if self.peek() == &Tok::LBrace {
+                Some(self.block()?.0)
+            } else {
+                None
+            };
             Ok(Item::Bus(BusDecl { name, layout, body }))
         } else if self.is_keyword("midi_out") {
             let start = self.bump().span;
             let name = self.ident("a name for the MIDI output")?;
-            let args = if self.peek() == &Tok::LParen { self.args()? } else { Vec::new() };
-            Ok(Item::MidiOut(MidiOutDecl { name, args, span: start.to(self.prev_span()) }))
+            let args = if self.peek() == &Tok::LParen {
+                self.args()?
+            } else {
+                Vec::new()
+            };
+            Ok(Item::MidiOut(MidiOutDecl {
+                name,
+                args,
+                span: start.to(self.prev_span()),
+            }))
         } else if self.is_keyword("sample") || self.is_keyword("kit") {
             let is_kit = self.is_keyword("kit");
             let start = self.bump().span;
-            let name = self.ident(if is_kit { "a kit name" } else { "a sample name" })?;
+            let name = self.ident(if is_kit {
+                "a kit name"
+            } else {
+                "a sample name"
+            })?;
             self.expect(&Tok::Eq)?;
             let source_span = self.span();
             let source = match self.peek().clone() {
@@ -274,11 +370,18 @@ impl Parser {
                     self.bump();
                     let method = self.ident("`slices`")?;
                     if method.name != "slices" {
-                        return Err(Diagnostic::new(format!("a sample has no `{}`", method.name), method.span)
-                            .with_help("the only thing to make from a sample is `.slices(n)`"));
+                        return Err(Diagnostic::new(
+                            format!("a sample has no `{}`", method.name),
+                            method.span,
+                        )
+                        .with_help("the only thing to make from a sample is `.slices(n)`"));
                     }
                     self.expect(&Tok::LParen)?;
-                    let Tok::Num { value: count, unit: None } = self.peek().clone() else {
+                    let Tok::Num {
+                        value: count,
+                        unit: None,
+                    } = self.peek().clone()
+                    else {
                         return Err(self.unexpected("how many slices, such as `16`"));
                     };
                     self.bump();
@@ -298,7 +401,14 @@ impl Parser {
                 self.bump();
                 options = self.args()?;
             }
-            Ok(Item::Sample(SampleDecl { is_kit, name, source, source_span, options, span: start.to(self.prev_span()) }))
+            Ok(Item::Sample(SampleDecl {
+                is_kit,
+                name,
+                source,
+                source_span,
+                options,
+                span: start.to(self.prev_span()),
+            }))
         } else if self.is_keyword("arrangement") {
             let start = self.bump().span;
             let name = self.ident("an arrangement name")?;
@@ -306,7 +416,11 @@ impl Parser {
         } else if self.is_keyword("config") {
             let start = self.bump().span;
             let (entries, quantize, end) = self.config_entries()?;
-            Ok(Item::Config(ConfigDecl { entries, quantize, span: start.to(end) }))
+            Ok(Item::Config(ConfigDecl {
+                entries,
+                quantize,
+                span: start.to(end),
+            }))
         } else if self.is_keyword("track") {
             let start = self.bump().span;
             let name = self.ident("a track name")?;
@@ -314,23 +428,54 @@ impl Parser {
             if self.eat(&Tok::Eq) {
                 let value = self.expr()?;
                 let end = self.prev_span();
-                let key = Ident { name: "instrument".into(), span: start };
-                return Ok(Item::Track(TrackDecl { name, params: Vec::new(), body: vec![Stmt::Bind { name: key, value }], options: Vec::new(), span: start.to(end) }));
+                let key = Ident {
+                    name: "instrument".into(),
+                    span: start,
+                };
+                return Ok(Item::Track(TrackDecl {
+                    name,
+                    params: Vec::new(),
+                    body: vec![Stmt::Bind { name: key, value }],
+                    options: Vec::new(),
+                    span: start.to(end),
+                }));
             }
-            let params = if self.peek() == &Tok::LParen { self.params()? } else { Vec::new() };
+            let params = if self.peek() == &Tok::LParen {
+                self.params()?
+            } else {
+                Vec::new()
+            };
             if let Some(p) = params.iter().find(|p| p.default.is_none()) {
-                return Err(Diagnostic::new(format!("track parameter `{}` needs a starting value", p.name.name), p.name.span)
-                    .with_help("for example `track bass(tone: hz = 2khz)`"));
+                return Err(Diagnostic::new(
+                    format!("track parameter `{}` needs a starting value", p.name.name),
+                    p.name.span,
+                )
+                .with_help("for example `track bass(tone: hz = 2khz)`"));
             }
             let (body, end) = self.block()?;
             let options = self.with_options()?;
-            Ok(Item::Track(TrackDecl { name, params, body, options, span: start.to(end) }))
+            Ok(Item::Track(TrackDecl {
+                name,
+                params,
+                body,
+                options,
+                span: start.to(end),
+            }))
         } else if self.is_keyword("opcode") {
             let (name, params, outputs, options, body, span) = self.definition()?;
             if let Some(option) = options.first() {
-                return Err(Diagnostic::new("an opcode has no options", option.value.span));
+                return Err(Diagnostic::new(
+                    "an opcode has no options",
+                    option.value.span,
+                ));
             }
-            Ok(Item::Opcode(OpcodeDef { name, params, outputs, body, span }))
+            Ok(Item::Opcode(OpcodeDef {
+                name,
+                params,
+                outputs,
+                body,
+                span,
+            }))
         } else if self.is_keyword("tempo") {
             let start = self.bump().span;
             let value = self.expr()?;
@@ -341,18 +486,36 @@ impl Parser {
             } else {
                 None
             };
-            Ok(Item::Tempo(TempoStmt { value, quantize, over, span: start.to(self.prev_span()) }))
+            Ok(Item::Tempo(TempoStmt {
+                value,
+                quantize,
+                over,
+                span: start.to(self.prev_span()),
+            }))
         } else if self.is_keyword("meter") {
             self.bump();
             Ok(Item::Meter(self.expr()?))
         } else if self.is_keyword("clip") || self.is_keyword("scene") {
             let is_clip = self.is_keyword("clip");
             let start = self.bump().span;
-            let name = self.ident(if is_clip { "a clip name" } else { "a scene name" })?;
+            let name = self.ident(if is_clip {
+                "a clip name"
+            } else {
+                "a scene name"
+            })?;
             let (entries, end) = self.entries(!is_clip)?;
             let options = self.with_options()?;
-            let block = NamedBlock { name, entries, options, span: start.to(end) };
-            Ok(if is_clip { Item::Clip(block) } else { Item::Scene(block) })
+            let block = NamedBlock {
+                name,
+                entries,
+                options,
+                span: start.to(end),
+            };
+            Ok(if is_clip {
+                Item::Clip(block)
+            } else {
+                Item::Scene(block)
+            })
         } else if self.is_keyword("at") {
             self.bump();
             let at = self.at_pos()?;
@@ -370,7 +533,10 @@ impl Parser {
         } else if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
             let name = self.ident("a name")?;
             self.bump();
-            Ok(Item::Bind { name, value: self.expr()? })
+            Ok(Item::Bind {
+                name,
+                value: self.expr()?,
+            })
         } else {
             self.note(None).map(Item::Note)
         }
@@ -395,13 +561,28 @@ impl Parser {
                 self.expect(&Tok::Colon)?;
                 let value = self.expr()?;
                 let ExprKind::Env(lit) = value.kind else {
-                    return Err(Diagnostic::new("an arrangement lane is an envelope", value.span)
-                        .with_help(format!("for example `{}.{}: env[0.2 8bars 1.0]`", key.name, param.name)));
+                    return Err(
+                        Diagnostic::new("an arrangement lane is an envelope", value.span)
+                            .with_help(format!(
+                                "for example `{}.{}: env[0.2 8bars 1.0]`",
+                                key.name, param.name
+                            )),
+                    );
                 };
-                if lanes.iter().any(|l| l.track.name == key.name && l.param.name == param.name) {
-                    return Err(Diagnostic::new(format!("lane `{}.{}` is given twice", key.name, param.name), key.span));
+                if lanes
+                    .iter()
+                    .any(|l| l.track.name == key.name && l.param.name == param.name)
+                {
+                    return Err(Diagnostic::new(
+                        format!("lane `{}.{}` is given twice", key.name, param.name),
+                        key.span,
+                    ));
                 }
-                lanes.push(ArrangementLane { track: key, param, value: lit });
+                lanes.push(ArrangementLane {
+                    track: key,
+                    param,
+                    value: lit,
+                });
                 if !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
                     return Err(self.unexpected("the end of the line"));
                 }
@@ -409,13 +590,22 @@ impl Parser {
             }
             if key.name == "tempo" || key.name == "meter" {
                 self.expect(&Tok::Colon)?;
-                let slot = if key.name == "tempo" { &mut tempos } else { &mut meters };
+                let slot = if key.name == "tempo" {
+                    &mut tempos
+                } else {
+                    &mut meters
+                };
                 if slot.is_some() || (key.name == "tempo" && tempo_env.is_some()) {
-                    return Err(Diagnostic::new(format!("`{}` is given twice", key.name), key.span));
+                    return Err(Diagnostic::new(
+                        format!("`{}` is given twice", key.name),
+                        key.span,
+                    ));
                 }
                 if key.name == "tempo" && self.is_keyword("env") {
                     let value = self.expr()?;
-                    let ExprKind::Env(lit) = value.kind else { unreachable!("`env` starts an envelope") };
+                    let ExprKind::Env(lit) = value.kind else {
+                        unreachable!("`env` starts an envelope")
+                    };
                     tempo_env = Some(lit);
                     if !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
                         return Err(self.unexpected("the end of the line"));
@@ -448,8 +638,11 @@ impl Parser {
             while self.peek() != &Tok::RBracket {
                 let scene = self.ident("a scene name")?;
                 if !(self.eat(&Tok::Dot) && self.is_keyword("over")) {
-                    return Err(Diagnostic::new(format!("`{}` needs a length", scene.name), scene.span)
-                        .with_help(format!("for example `{}.over(8 bars)`", scene.name)));
+                    return Err(Diagnostic::new(
+                        format!("`{}` needs a length", scene.name),
+                        scene.span,
+                    )
+                    .with_help(format!("for example `{}.over(8 bars)`", scene.name)));
                 }
                 self.bump();
                 self.expect(&Tok::LParen)?;
@@ -466,10 +659,21 @@ impl Parser {
         }
         let end = self.expect(&Tok::RBrace)?;
         let sections = sections.ok_or_else(|| {
-            Diagnostic::new(format!("arrangement `{}` has no sections", name.name), name.span)
-                .with_help("add `sections: [scene.over(8 bars) ...]`")
+            Diagnostic::new(
+                format!("arrangement `{}` has no sections", name.name),
+                name.span,
+            )
+            .with_help("add `sections: [scene.over(8 bars) ...]`")
         })?;
-        Ok(ArrangementDecl { name, sections, tempos, tempo_env, meters, lanes, span: start.to(end) })
+        Ok(ArrangementDecl {
+            name,
+            sections,
+            tempos,
+            tempo_env,
+            meters,
+            lanes,
+            span: start.to(end),
+        })
     }
 
     /// `instr|opcode name(params) { body }`
@@ -479,9 +683,16 @@ impl Parser {
         let mut params = Vec::new();
         while self.peek() != &Tok::RParen {
             let pname = self.ident("a parameter name")?;
-            let ty = self.eat(&Tok::Colon).then(|| self.type_spec()).transpose()?;
+            let ty = self
+                .eat(&Tok::Colon)
+                .then(|| self.type_spec())
+                .transpose()?;
             let default = self.eat(&Tok::Eq).then(|| self.expr()).transpose()?;
-            params.push(ParamDef { name: pname, ty, default });
+            params.push(ParamDef {
+                name: pname,
+                ty,
+                default,
+            });
             if !self.eat(&Tok::Comma) {
                 break;
             }
@@ -493,20 +704,30 @@ impl Parser {
     fn definition(&mut self) -> Res<Definition> {
         let keyword = self.bump();
         let start = keyword.span;
-        let what = if matches!(&keyword.tok, Tok::Ident(k) if k == "instr" || k == "mono") { "an instrument name" } else { "an opcode name" };
+        let what = if matches!(&keyword.tok, Tok::Ident(k) if k == "instr" || k == "mono") {
+            "an instrument name"
+        } else {
+            "an opcode name"
+        };
         let name = self.ident(what)?;
         let params = self.params()?;
         let mut outputs = Vec::new();
         if self.peek() == &Tok::Arrow {
             let arrow = self.bump().span;
             if !matches!(&keyword.tok, Tok::Ident(k) if k == "opcode") {
-                return Err(Diagnostic::new("only an opcode can have several outputs", arrow));
+                return Err(Diagnostic::new(
+                    "only an opcode can have several outputs",
+                    arrow,
+                ));
             }
             self.expect(&Tok::LParen)?;
             loop {
                 let out = self.ident("the name of an output")?;
                 if outputs.iter().any(|o: &Ident| o.name == out.name) {
-                    return Err(Diagnostic::new(format!("output `{}` is named twice", out.name), out.span));
+                    return Err(Diagnostic::new(
+                        format!("output `{}` is named twice", out.name),
+                        out.span,
+                    ));
                 }
                 outputs.push(out);
                 if !self.eat(&Tok::Comma) {
@@ -548,18 +769,31 @@ impl Parser {
     }
 
     fn type_spec(&mut self) -> Res<TypeSpec> {
-        if let Tok::Num { value: lo, unit: None } = self.peek().clone() {
+        if let Tok::Num {
+            value: lo,
+            unit: None,
+        } = self.peek().clone()
+        {
             let start = self.bump().span;
             self.expect(&Tok::DotDot)?;
             match self.peek().clone() {
-                Tok::Num { value: hi, unit: None } => {
+                Tok::Num {
+                    value: hi,
+                    unit: None,
+                } => {
                     let end = self.bump().span;
-                    Ok(TypeSpec::Range { lo, hi, span: start.to(end) })
+                    Ok(TypeSpec::Range {
+                        lo,
+                        hi,
+                        span: start.to(end),
+                    })
                 }
                 _ => Err(self.unexpected("the upper bound of the range")),
             }
         } else {
-            Ok(TypeSpec::Unit(self.ident("a unit such as `hz`, or a range such as `0..1`")?))
+            Ok(TypeSpec::Unit(
+                self.ident("a unit such as `hz`, or a range such as `0..1`")?,
+            ))
         }
     }
 
@@ -590,24 +824,39 @@ impl Parser {
             }
             self.expect(&Tok::RBracket)?;
             self.expect(&Tok::Eq)?;
-            return Ok(Stmt::Destructure { names, value: self.expr()? });
+            return Ok(Stmt::Destructure {
+                names,
+                value: self.expr()?,
+            });
         }
         if self.is_keyword("state") && matches!(self.peek_at(1), Tok::Ident(_)) {
             self.bump();
             let name = self.ident("a name for the state")?;
             self.expect(&Tok::Eq)?;
-            return Ok(Stmt::State { name, init: self.expr()? });
+            return Ok(Stmt::State {
+                name,
+                init: self.expr()?,
+            });
         }
-        if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Plus && self.peek_at(2) == &Tok::Eq {
+        if matches!(self.peek(), Tok::Ident(_))
+            && self.peek_at(1) == &Tok::Plus
+            && self.peek_at(2) == &Tok::Eq
+        {
             let name = self.ident("a name")?;
             self.bump();
             self.bump();
-            return Ok(Stmt::AddAssign { name, value: self.expr()? });
+            return Ok(Stmt::AddAssign {
+                name,
+                value: self.expr()?,
+            });
         }
         if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
             let name = self.ident("a name")?;
             self.bump();
-            Ok(Stmt::Bind { name, value: self.expr()? })
+            Ok(Stmt::Bind {
+                name,
+                value: self.expr()?,
+            })
         } else {
             Ok(Stmt::Expr(self.expr()?))
         }
@@ -627,7 +876,13 @@ impl Parser {
         self.bump();
         let dur = self.expr()?;
         let span = start.to(self.prev_span());
-        Ok(NoteStmt { at, target, args, dur, span })
+        Ok(NoteStmt {
+            at,
+            target,
+            args,
+            dur,
+            span,
+        })
     }
 
     /// `{ key: value, key: value }`, separated by commas or lines.
@@ -642,7 +897,10 @@ impl Parser {
             }
             let key = self.ident("a name")?;
             if bare && matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::RBrace) {
-                let value = Expr { kind: ExprKind::Name(key.name.clone()), span: key.span };
+                let value = Expr {
+                    kind: ExprKind::Name(key.name.clone()),
+                    span: key.span,
+                };
                 entries.push((key, value));
             } else {
                 self.expect(&Tok::Colon)?;
@@ -708,7 +966,10 @@ impl Parser {
             match p.peek().clone() {
                 Tok::Num { value, unit: None } => {
                     p.bump();
-                    Ok(Expr { kind: ExprKind::Num { value, unit: None }, span })
+                    Ok(Expr {
+                        kind: ExprKind::Num { value, unit: None },
+                        span,
+                    })
                 }
                 _ => Err(p.unexpected("a number")),
             }
@@ -716,14 +977,26 @@ impl Parser {
         let span = self.span();
         match self.peek().clone() {
             // `bar 5 beat 3` lexes as `bar`, `5 beat`, `3`.
-            Tok::Num { value, unit: Some(u) } if u == "beat" || u == "beats" => {
+            Tok::Num {
+                value,
+                unit: Some(u),
+            } if u == "beat" || u == "beats" => {
                 self.bump();
-                let bar = Expr { kind: ExprKind::Num { value, unit: None }, span };
-                Ok(AtPos::Bar { bar, beat: Some(number(self)?) })
+                let bar = Expr {
+                    kind: ExprKind::Num { value, unit: None },
+                    span,
+                };
+                Ok(AtPos::Bar {
+                    bar,
+                    beat: Some(number(self)?),
+                })
             }
             Tok::Num { value, unit: None } => {
                 self.bump();
-                let bar = Expr { kind: ExprKind::Num { value, unit: None }, span };
+                let bar = Expr {
+                    kind: ExprKind::Num { value, unit: None },
+                    span,
+                };
                 let beat = if self.is_keyword("beat") {
                     self.bump();
                     Some(number(self)?)
@@ -751,7 +1024,10 @@ impl Parser {
             && !matches!(self.peek_at(1), Tok::LParen | Tok::Dot)
         {
             let command = match verb.as_str() {
-                "start" => Some(Command::Start { name: track.clone(), verb: first }),
+                "start" => Some(Command::Start {
+                    name: track.clone(),
+                    verb: first,
+                }),
                 "stop" => Some(Command::Stop(track.clone())),
                 "mute" => Some(Command::Mute(track.clone())),
                 "unmute" => Some(Command::Unmute(track.clone())),
@@ -762,7 +1038,12 @@ impl Parser {
             if let Some(command) = command {
                 self.bump();
                 let quantize = self.quantize()?;
-                return Ok(CommandStmt { at, command, quantize, span: start.to(self.prev_span()) });
+                return Ok(CommandStmt {
+                    at,
+                    command,
+                    quantize,
+                    span: start.to(self.prev_span()),
+                });
             }
         }
         // `lead.play(answer)`: put this on the part
@@ -775,11 +1056,24 @@ impl Parser {
             let what = self.expr()?;
             self.expect(&Tok::RParen)?;
             let quantize = self.quantize()?;
-            return Ok(CommandStmt { at, command: Command::Play { track, what }, quantize, span: start.to(self.prev_span()) });
+            return Ok(CommandStmt {
+                at,
+                command: Command::Play { track, what },
+                quantize,
+                span: start.to(self.prev_span()),
+            });
         }
         let change = self.expr()?;
         let quantize = self.quantize()?;
-        Ok(CommandStmt { at, command: Command::Edit { track, change: first.to(change.span) }, quantize, span: start.to(self.prev_span()) })
+        Ok(CommandStmt {
+            at,
+            command: Command::Edit {
+                track,
+                change: first.to(change.span),
+            },
+            quantize,
+            span: start.to(self.prev_span()),
+        })
     }
 
     fn at_command(&self) -> bool {
@@ -790,7 +1084,9 @@ impl Parser {
 
     fn command(&mut self, at: Option<AtPos>) -> Res<CommandStmt> {
         let start = self.span();
-        let Tok::Ident(keyword) = self.bump().tok else { unreachable!("checked by at_command") };
+        let Tok::Ident(keyword) = self.bump().tok else {
+            unreachable!("checked by at_command")
+        };
         let command = match keyword.as_str() {
             "hush" => Command::Hush,
             "panic" => Command::Panic,
@@ -800,29 +1096,37 @@ impl Parser {
             _ => unreachable!("checked by at_command"),
         };
         let quantize = self.quantize()?;
-        Ok(CommandStmt { at, command, quantize, span: start.to(self.prev_span()) })
+        Ok(CommandStmt {
+            at,
+            command,
+            quantize,
+            span: start.to(self.prev_span()),
+        })
     }
 
     /// `@ next 4 bars`, `@ in 2 beats`, `@ bar`, `@ now`: when a change lands.
-    fn quantize(&mut self) -> Res<Option<QuantizeSpec>> {
+    fn quantize(&mut self) -> Res<Option<Quantize>> {
         if self.peek() != &Tok::At {
             return Ok(None);
         }
-        let start = self.bump().span;
+        self.bump();
         let relation = if self.is_keyword("next") {
             self.bump();
-            Relation::Next
+            QuantizeRelation::Next
         } else if self.is_keyword("in") {
             self.bump();
-            Relation::In
+            QuantizeRelation::In
         } else {
-            Relation::OnGrid
+            QuantizeRelation::OnGrid
         };
         let (count, unit) = match self.peek().clone() {
-            Tok::Num { value, unit: Some(u) } => {
+            Tok::Num {
+                value,
+                unit: Some(u),
+            } => {
                 let unit = match u.as_str() {
-                    "beat" | "beats" => QuantUnit::Beat,
-                    "bar" | "bars" => QuantUnit::Bar,
+                    "beat" | "beats" => QuantizeUnit::Beat,
+                    "bar" | "bars" => QuantizeUnit::Bar,
                     _ => return Err(self.unexpected("`beats` or `bars`")),
                 };
                 self.bump();
@@ -830,18 +1134,26 @@ impl Parser {
             }
             Tok::Ident(word) => {
                 let unit = match word.as_str() {
-                    "now" => QuantUnit::Now,
-                    "beat" => QuantUnit::Beat,
-                    "bar" => QuantUnit::Bar,
-                    "cycle" => QuantUnit::Cycle,
-                    _ => return Err(self.unexpected("`now`, `beat`, `bar`, `cycle`, or a count such as `4 bars`")),
+                    "now" => QuantizeUnit::Now,
+                    "beat" => QuantizeUnit::Beat,
+                    "bar" => QuantizeUnit::Bar,
+                    "cycle" => QuantizeUnit::Cycle,
+                    _ => {
+                        return Err(self.unexpected(
+                            "`now`, `beat`, `bar`, `cycle`, or a count such as `4 bars`",
+                        ));
+                    }
                 };
                 self.bump();
                 (1.0, unit)
             }
             _ => return Err(self.unexpected("when it should land, such as `bar` or `4 bars`")),
         };
-        Ok(Some(QuantizeSpec { relation, count, unit, span: start.to(self.prev_span()) }))
+        Ok(Some(Quantize {
+            relation,
+            count,
+            unit,
+        }))
     }
 
     // ---- expressions -------------------------------------------------
@@ -849,7 +1161,10 @@ impl Parser {
     /// Run `f` one level deeper, refusing to go too deep.
     fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Res<T>) -> Res<T> {
         if self.depth >= MAX_DEPTH {
-            return Err(Diagnostic::new(format!("this is nested more than {MAX_DEPTH} levels deep"), self.span()));
+            return Err(Diagnostic::new(
+                format!("this is nested more than {MAX_DEPTH} levels deep"),
+                self.span(),
+            ));
         }
         self.depth += 1;
         let result = f(self);
@@ -875,12 +1190,22 @@ impl Parser {
         };
         self.bump();
         let rhs = self.sum()?;
-        if matches!(self.peek(), Tok::Lt | Tok::Gt | Tok::Le | Tok::Ge | Tok::EqEq | Tok::NotEq) {
+        if matches!(
+            self.peek(),
+            Tok::Lt | Tok::Gt | Tok::Le | Tok::Ge | Tok::EqEq | Tok::NotEq
+        ) {
             return Err(Diagnostic::new("comparisons don't chain", self.span())
                 .with_help("combine two with a product: `(a < b) * (b < c)` is 1 when both hold"));
         }
         let span = lhs.span.to(rhs.span);
-        Ok(Expr { kind: ExprKind::Compare { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, span })
+        Ok(Expr {
+            kind: ExprKind::Compare {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            span,
+        })
     }
 
     /// `if cond { a } else { b }` (or `else if ...`), after the `if`.
@@ -890,13 +1215,25 @@ impl Parser {
         let then = self.branch()?;
         self.skip_newlines();
         if !self.is_keyword("else") {
-            return Err(Diagnostic::new("an `if` needs an `else`", start)
-                .with_help("it makes a value, so both ways need one: `if x > 0 { a } else { b }`"));
+            return Err(Diagnostic::new("an `if` needs an `else`", start).with_help(
+                "it makes a value, so both ways need one: `if x > 0 { a } else { b }`",
+            ));
         }
         self.bump();
-        let otherwise = if self.is_keyword("if") { self.nested(Self::if_expr)? } else { self.branch()? };
+        let otherwise = if self.is_keyword("if") {
+            self.nested(Self::if_expr)?
+        } else {
+            self.branch()?
+        };
         let span = start.to(otherwise.span);
-        Ok(Expr { kind: ExprKind::If { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(otherwise) }, span })
+        Ok(Expr {
+            kind: ExprKind::If {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                otherwise: Box::new(otherwise),
+            },
+            span,
+        })
     }
 
     /// `{ expr }`
@@ -948,7 +1285,10 @@ impl Parser {
             let start = self.bump().span;
             let inner = self.nested(Self::unary)?;
             let span = start.to(inner.span);
-            return Ok(Expr { kind: ExprKind::Neg(Box::new(inner)), span });
+            return Ok(Expr {
+                kind: ExprKind::Neg(Box::new(inner)),
+                span,
+            });
         }
         self.postfix()
     }
@@ -958,12 +1298,19 @@ impl Parser {
         while self.peek() == &Tok::Dot {
             self.bump();
             let name = self.ident("a method name after `.`")?;
-            let mut args = vec![Arg { name: None, value: e.clone(), receiver: true }];
+            let mut args = vec![Arg {
+                name: None,
+                value: e.clone(),
+                receiver: true,
+            }];
             if self.peek() == &Tok::LParen {
                 args.extend(self.args()?);
             }
             let span = e.span.to(self.prev_span());
-            e = Expr { kind: ExprKind::Call { name, args }, span };
+            e = Expr {
+                kind: ExprKind::Call { name, args },
+                span,
+            };
         }
         Ok(e)
     }
@@ -973,27 +1320,45 @@ impl Parser {
         match self.peek().clone() {
             Tok::Num { value, unit } => {
                 self.bump();
-                Ok(Expr { kind: ExprKind::Num { value, unit }, span })
+                Ok(Expr {
+                    kind: ExprKind::Num { value, unit },
+                    span,
+                })
             }
             Tok::Str(text) => {
                 self.bump();
-                Ok(Expr { kind: ExprKind::Str(text), span })
+                Ok(Expr {
+                    kind: ExprKind::Str(text),
+                    span,
+                })
             }
             Tok::Pattern(raw) => {
                 self.bump();
-                Ok(Expr { kind: ExprKind::Pattern(raw), span })
+                Ok(Expr {
+                    kind: ExprKind::Pattern(raw),
+                    span,
+                })
             }
             Tok::Grid(raw) => {
                 self.bump();
-                Ok(Expr { kind: ExprKind::Grid(raw), span })
+                Ok(Expr {
+                    kind: ExprKind::Grid(raw),
+                    span,
+                })
             }
             Tok::Rows(raw) => {
                 self.bump();
-                Ok(Expr { kind: ExprKind::Rows(raw), span })
+                Ok(Expr {
+                    kind: ExprKind::Rows(raw),
+                    span,
+                })
             }
             Tok::Tilde => {
                 self.bump();
-                Ok(Expr { kind: ExprKind::Rest, span })
+                Ok(Expr {
+                    kind: ExprKind::Rest,
+                    span,
+                })
             }
             Tok::LBracket => {
                 self.bump();
@@ -1002,13 +1367,19 @@ impl Parser {
                     items.push(self.expr()?);
                 }
                 let end = self.expect(&Tok::RBracket)?;
-                Ok(Expr { kind: ExprKind::Channels(items), span: span.to(end) })
+                Ok(Expr {
+                    kind: ExprKind::Channels(items),
+                    span: span.to(end),
+                })
             }
             Tok::LParen => {
                 self.bump();
                 let inner = self.expr()?;
                 let end = self.expect(&Tok::RParen)?;
-                Ok(Expr { span: span.to(end), ..inner })
+                Ok(Expr {
+                    span: span.to(end),
+                    ..inner
+                })
             }
             Tok::Ident(name) if name == "env" && self.peek_at(1) == &Tok::LBracket => self.env(),
             Tok::Ident(name) if name == "if" => self.nested(Self::if_expr),
@@ -1017,9 +1388,15 @@ impl Parser {
                 if self.peek() == &Tok::LParen {
                     let args = self.args()?;
                     let span = span.to(self.prev_span());
-                    Ok(Expr { kind: ExprKind::Call { name: ident, args }, span })
+                    Ok(Expr {
+                        kind: ExprKind::Call { name: ident, args },
+                        span,
+                    })
                 } else {
-                    Ok(Expr { kind: ExprKind::Name(name), span })
+                    Ok(Expr {
+                        kind: ExprKind::Name(name),
+                        span,
+                    })
                 }
             }
             _ => Err(self.unexpected("a value")),
@@ -1038,10 +1415,18 @@ impl Parser {
                 None
             };
             let value = self.expr()?;
-            args.push(Arg { name: name.clone(), value, receiver: false });
+            args.push(Arg {
+                name: name.clone(),
+                value,
+                receiver: false,
+            });
             // `range(200hz..4khz)` is `range(200hz, 4khz)`
             if name.is_none() && self.eat(&Tok::DotDot) {
-                args.push(Arg { name: None, value: self.expr()?, receiver: false });
+                args.push(Arg {
+                    name: None,
+                    value: self.expr()?,
+                    receiver: false,
+                });
             }
             if !self.eat(&Tok::Comma) {
                 break;
@@ -1065,7 +1450,10 @@ impl Parser {
             if self.peek() == &Tok::Bar {
                 let bar = self.bump().span;
                 if sustain_at.is_some() {
-                    return Err(Diagnostic::new("an envelope can have only one sustain point `|`", bar));
+                    return Err(Diagnostic::new(
+                        "an envelope can have only one sustain point `|`",
+                        bar,
+                    ));
                 }
                 sustain_at = Some(segments.len());
             }
@@ -1079,19 +1467,30 @@ impl Parser {
         let mut end = self.expect(&Tok::RBracket)?;
         let looped = self.eat_loop(&mut end);
         if looped && sustain_at.is_some() {
-            return Err(Diagnostic::new("a looping envelope can't have a sustain point `|`", start.to(end))
-                .with_help("a loop never waits for a release: take out the `|`"));
+            return Err(Diagnostic::new(
+                "a looping envelope can't have a sustain point `|`",
+                start.to(end),
+            )
+            .with_help("a loop never waits for a release: take out the `|`"));
         }
 
         Ok(Expr {
-            kind: ExprKind::Env(EnvLit { start: start_level, segments, sustain_at, looped }),
+            kind: ExprKind::Env(EnvLit {
+                start: start_level,
+                segments,
+                sustain_at,
+                looped,
+            }),
             span: start.to(end),
         })
     }
 
     /// `.loop` straight after an envelope's `]`. `.loop(g: ..)` is the feedback opcode, so it is left alone.
     fn eat_loop(&mut self, end: &mut Span) -> bool {
-        if self.peek() == &Tok::Dot && matches!(self.peek_at(1), Tok::Ident(s) if s == "loop") && self.peek_at(2) != &Tok::LParen {
+        if self.peek() == &Tok::Dot
+            && matches!(self.peek_at(1), Tok::Ident(s) if s == "loop")
+            && self.peek_at(2) != &Tok::LParen
+        {
             self.bump();
             *end = self.bump().span;
             return true;
@@ -1109,23 +1508,34 @@ impl Parser {
         match self.peek().clone() {
             Tok::Num { value, unit } => {
                 let end = self.bump().span;
-                Ok(EnvNum { value: if negative { -value } else { value }, unit, span: start.to(end) })
+                Ok(EnvNum {
+                    value: if negative { -value } else { value },
+                    unit,
+                    span: start.to(end),
+                })
             }
             _ => Err(self.unexpected("a number")),
         }
     }
 
     fn env_level(&mut self) -> Res<EnvNum> {
-        let n = self.env_number().map_err(|_| self.env_expected("a level, such as `0` or `-6db`"))?;
+        let n = self
+            .env_number()
+            .map_err(|_| self.env_expected("a level, such as `0` or `-6db`"))?;
         if n.unit.as_deref().is_some_and(is_time_unit) {
-            return Err(Diagnostic::new("expected a level here, found a duration", n.span)
-                .with_help("levels and durations alternate: two durations in a row is an error"));
+            return Err(
+                Diagnostic::new("expected a level here, found a duration", n.span).with_help(
+                    "levels and durations alternate: two durations in a row is an error",
+                ),
+            );
         }
         Ok(n)
     }
 
     fn env_duration(&mut self) -> Res<(EnvNum, Option<CurveKind>)> {
-        let n = self.env_number().map_err(|_| self.env_expected("a duration, such as `5ms`"))?;
+        let n = self
+            .env_number()
+            .map_err(|_| self.env_expected("a duration, such as `5ms`"))?;
         if !n.unit.as_deref().is_some_and(is_time_unit) {
             let help = match &n.unit {
                 None => "levels and durations alternate: two levels in a row is an error; durations need a time unit such as `ms`, `sec` or `beats`".to_string(),
@@ -1133,7 +1543,11 @@ impl Parser {
             };
             return Err(Diagnostic::new("expected a duration here", n.span).with_help(help));
         }
-        let curve = if self.peek() == &Tok::Dot { Some(self.curve()?) } else { None };
+        let curve = if self.peek() == &Tok::Dot {
+            Some(self.curve()?)
+        } else {
+            None
+        };
         Ok((n, curve))
     }
 
@@ -1157,15 +1571,24 @@ impl Parser {
                 self.expect(&Tok::RParen)?;
                 Ok(CurveKind::Custom(if neg { -value } else { value }))
             }
-            other => Err(Diagnostic::new(format!("unknown curve `{other}`"), name.span)
-                .with_help("curves are `exp`, `log` and `curve(k)`")),
+            other => Err(
+                Diagnostic::new(format!("unknown curve `{other}`"), name.span)
+                    .with_help("curves are `exp`, `log` and `curve(k)`"),
+            ),
         }
     }
 }
 
 fn binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
     let span = lhs.span.to(rhs.span);
-    Expr { kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, span }
+    Expr {
+        kind: ExprKind::Binary {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        },
+        span,
+    }
 }
 
 #[cfg(test)]
@@ -1218,7 +1641,9 @@ saw_lead(freq: a3) for 1beat
     fn ufcs_desugars_to_calls_with_a_receiver() {
         let i = only_instr("instr a(f: hz) { osc(saw, f).lpf(cutoff: 1khz) }");
         let Stmt::Expr(e) = &i.body[0] else { panic!() };
-        let ExprKind::Call { name, args } = &e.kind else { panic!() };
+        let ExprKind::Call { name, args } = &e.kind else {
+            panic!()
+        };
         assert_eq!(name.name, "lpf");
         assert!(args[0].receiver);
         assert!(matches!(&args[0].value.kind, ExprKind::Call { name, .. } if name.name == "osc"));
@@ -1229,7 +1654,9 @@ saw_lead(freq: a3) for 1beat
     fn paren_less_method_calls_work() {
         let i = only_instr("instr a(f: hz) { f.neg }");
         let Stmt::Expr(e) = &i.body[0] else { panic!() };
-        let ExprKind::Call { args, .. } = &e.kind else { panic!() };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!()
+        };
         assert_eq!(args.len(), 1);
     }
 
@@ -1238,26 +1665,44 @@ saw_lead(freq: a3) for 1beat
         let i = only_instr("instr a(f: hz) { 1 + 2 * 3 - 4 }");
         let Stmt::Expr(e) = &i.body[0] else { panic!() };
         // (1 + (2*3)) - 4
-        let ExprKind::Binary { op: BinOp::Sub, lhs, .. } = &e.kind else { panic!("{e:?}") };
-        let ExprKind::Binary { op: BinOp::Add, rhs, .. } = &lhs.kind else { panic!() };
+        let ExprKind::Binary {
+            op: BinOp::Sub,
+            lhs,
+            ..
+        } = &e.kind
+        else {
+            panic!("{e:?}")
+        };
+        let ExprKind::Binary {
+            op: BinOp::Add,
+            rhs,
+            ..
+        } = &lhs.kind
+        else {
+            panic!()
+        };
         assert!(matches!(rhs.kind, ExprKind::Binary { op: BinOp::Mul, .. }));
     }
 
     #[test]
     fn range_typed_parameters() {
         let i = only_instr("instr a(bright: 0..1 = 0.5) { bright }");
-        assert!(matches!(i.params[0].ty, Some(TypeSpec::Range { lo, hi, .. }) if lo == 0.0 && hi == 1.0));
+        assert!(
+            matches!(i.params[0].ty, Some(TypeSpec::Range { lo, hi, .. }) if lo == 0.0 && hi == 1.0)
+        );
     }
 
     #[test]
     fn opcode_definitions_with_state_and_untyped_parameters() {
-        let items = parse_ok("
+        let items = parse_ok(
+            "
 opcode one_pole(x, cutoff: hz) {
   state y = 0.0
   a = exp(-2 * pi * cutoff / sample_rate)
   y = x * (1 - a) + y * a
   y
-}");
+}",
+        );
         let Item::Opcode(o) = &items[0] else { panic!() };
         assert_eq!(o.name.name, "one_pole");
         assert!(o.params[0].ty.is_none());
@@ -1270,7 +1715,10 @@ opcode one_pole(x, cutoff: hz) {
     fn env_of(src: &str) -> EnvLit {
         let i = only_instr(&format!("instr a() {{ {src} }}"));
         match &i.body[0] {
-            Stmt::Expr(Expr { kind: ExprKind::Env(e), .. }) => e.clone(),
+            Stmt::Expr(Expr {
+                kind: ExprKind::Env(e),
+                ..
+            }) => e.clone(),
             other => panic!("{other:?}"),
         }
     }
@@ -1301,16 +1749,24 @@ opcode one_pole(x, cutoff: hz) {
         let e = env_of("env[0 5ms 1 5ms 0].loop");
         assert!(e.looped);
         assert_eq!(e.segments.len(), 2);
-        assert!(err("instr a() { env[0 5ms 1 | 5ms 0].loop }").contains("can't have a sustain point"));
+        assert!(
+            err("instr a() { env[0 5ms 1 | 5ms 0].loop }").contains("can't have a sustain point")
+        );
     }
 
     #[test]
     fn env_alternation_errors() {
         assert_eq!(err("instr a() { env[0 1 1] }"), "expected a duration here");
-        assert_eq!(err("instr a() { env[0 5ms 10ms 1] }"), "expected a level here, found a duration");
+        assert_eq!(
+            err("instr a() { env[0 5ms 10ms 1] }"),
+            "expected a level here, found a duration"
+        );
         assert!(err("instr a() { env[0 5ms 1 | 5ms 0 | 5ms 0] }").contains("only one sustain"));
         assert!(err("instr a() { env[0 5ms] }").starts_with("expected a level"));
-        assert_eq!(err("instr a() { env[0 5ms.wobble 1] }"), "unknown curve `wobble`");
+        assert_eq!(
+            err("instr a() { env[0 5ms.wobble 1] }"),
+            "unknown curve `wobble`"
+        );
     }
 
     #[test]
@@ -1323,14 +1779,16 @@ opcode one_pole(x, cutoff: hz) {
 
     #[test]
     fn buses_tracks_and_add_assign() {
-        let items = parse_ok("
+        let items = parse_ok(
+            "
 bus space
 bus hall: stereo
 track lead {
   instrument = pluck(bright: 0.6)
   out = it.lpf(cutoff: 1khz)
   space += out.gain(-12db)
-}");
+}",
+        );
         let Item::Bus(b) = &items[0] else { panic!() };
         assert_eq!((b.name.name.as_str(), b.layout.is_none()), ("space", true));
         let Item::Bus(b) = &items[1] else { panic!() };
@@ -1343,22 +1801,29 @@ track lead {
 
     #[test]
     fn channel_lists_destructuring_and_config() {
-        let items = parse_ok("
+        let items = parse_ok(
+            "
 config { channels: surround(5.1) }
 instr a(f: hz) {
   [l, r] = osc(saw, f).pan(azimuth: 20deg)
   mid = (l + r) * 0.5
   [mid + l, mid - r]
-}");
+}",
+        );
         let Item::Config(c) = &items[0] else { panic!() };
         assert_eq!(c.entries[0].0.name, "channels");
-        assert!(matches!(&c.entries[0].1.kind, ExprKind::Call { name, .. } if name.name == "surround"));
+        assert!(
+            matches!(&c.entries[0].1.kind, ExprKind::Call { name, .. } if name.name == "surround")
+        );
         let Item::Instr(i) = &items[1] else { panic!() };
         assert!(matches!(&i.body[0], Stmt::Destructure { names, .. } if names.len() == 2));
         let Stmt::Expr(e) = &i.body[2] else { panic!() };
         assert!(matches!(&e.kind, ExprKind::Channels(items) if items.len() == 2));
         // a bracketed expression that is not followed by `=` is a value, not a pattern
-        assert!(matches!(parse_ok("config { a: 1, b: 2 }")[0], Item::Config(_)));
+        assert!(matches!(
+            parse_ok("config { a: 1, b: 2 }")[0],
+            Item::Config(_)
+        ));
     }
 
     #[test]
@@ -1368,8 +1833,14 @@ instr a(f: hz) {
 
     #[test]
     fn syntax_errors_say_what_was_expected() {
-        assert_eq!(err("instr (a) {}"), "expected an instrument name, found `(`");
-        assert_eq!(err("lead(freq: c4)"), "expected `for` and a duration, such as `for 1beat`, found the end of the file");
+        assert_eq!(
+            err("instr (a) {}"),
+            "expected an instrument name, found `(`"
+        );
+        assert_eq!(
+            err("lead(freq: c4)"),
+            "expected `for` and a duration, such as `for 1beat`, found the end of the file"
+        );
         assert_eq!(err("instr a() { 1 + }"), "expected a value, found `}`");
         assert_eq!(err("instr a() { f(1 2) }"), "expected `)`, found a number");
     }

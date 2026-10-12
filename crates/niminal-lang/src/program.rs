@@ -88,7 +88,10 @@ impl std::error::Error for ArgError {}
 
 impl ArgError {
     fn new(message: String) -> Self {
-        ArgError { message, help: None }
+        ArgError {
+            message,
+            help: None,
+        }
     }
 }
 
@@ -148,8 +151,16 @@ impl ControlDef {
         let t = t.clamp(0.0, 1.0);
         let (lo, hi) = (f64::from(b.lo), f64::from(b.hi));
         let geometric = matches!(self.unit, Unit::Hz | Unit::Db) && lo > 0.0 && hi > 0.0;
-        let engine = if geometric { lo * (hi / lo).powf(t) } else { lo + (hi - lo) * t };
-        Some(if self.unit == Unit::Db { 20.0 * engine.log10() } else { engine })
+        let engine = if geometric {
+            lo * (hi / lo).powf(t)
+        } else {
+            lo + (hi - lo) * t
+        };
+        Some(if self.unit == Unit::Db {
+            20.0 * engine.log10()
+        } else {
+            engine
+        })
     }
 
     /// A lane's value as the control's engine value, with the unit rules a parameter has.
@@ -159,9 +170,16 @@ impl ControlDef {
 
     pub fn convert(&self, value: f64, suffix: Option<&str>, tempo: Tempo) -> Result<f32, String> {
         let suffix = suffix.or(self.unit.suffix());
-        let (unit, converted) = crate::lower::literal_sig(value, suffix, tempo, crate::Span::default())
-            .map_err(|d| d.message)?;
-        if unit != self.unit { return Err(format!("control `{}` expects {}", self.name, self.unit.describe())); }
+        let (unit, converted) =
+            crate::lower::literal_sig(value, suffix, tempo, crate::Span::default())
+                .map_err(|d| d.message)?;
+        if unit != self.unit {
+            return Err(format!(
+                "control `{}` expects {}",
+                self.name,
+                self.unit.describe()
+            ));
+        }
         let converted = converted as f32;
         if !value.is_finite() || !converted.is_finite() || (unit == Unit::Db && converted <= 0.0) {
             return Err("control values must be finite and representable".into());
@@ -171,7 +189,11 @@ impl ControlDef {
 }
 
 /// A score value in the engine's representation for a quantity of `unit`, with the strict-unit rules.
-pub fn engine_value(unit: Unit, value: Value, tempo: Tempo) -> Result<f64, niminal_score::UnitError> {
+pub fn engine_value(
+    unit: Unit,
+    value: Value,
+    tempo: Tempo,
+) -> Result<f64, niminal_score::UnitError> {
     Ok(match unit {
         Unit::Hz => value.as_hz()?,
         Unit::Db => value.as_gain()?,
@@ -254,7 +276,11 @@ pub(crate) fn resolve_target<'a>(
     if let Some(t) = tracks.iter().skip(1).position(|t| t.name == target) {
         let track = &tracks[t + 1];
         return match track.instrument {
-            Some(i) => Ok(Target { track: t + 1, instrument: i, defaults: Some(&track.defaults) }),
+            Some(i) => Ok(Target {
+                track: t + 1,
+                instrument: i,
+                defaults: Some(&track.defaults),
+            }),
             None => Err(ArgError {
                 message: format!("track `{target}` has no instrument to play"),
                 help: Some("add `instrument = ...` to the track".into()),
@@ -262,9 +288,16 @@ pub(crate) fn resolve_target<'a>(
         };
     }
     if let Some(i) = instruments.iter().position(|i| i.name == target) {
-        return Ok(Target { track: 0, instrument: i, defaults: None });
+        return Ok(Target {
+            track: 0,
+            instrument: i,
+            defaults: None,
+        });
     }
-    let known = instruments.iter().map(|i| i.name.as_str()).chain(tracks.iter().skip(1).map(|t| t.name.as_str()));
+    let known = instruments
+        .iter()
+        .map(|i| i.name.as_str())
+        .chain(tracks.iter().skip(1).map(|t| t.name.as_str()));
     Err(ArgError {
         message: format!("no instrument or track named `{target}`"),
         help: closest(target, known).map(|c| format!("did you mean `{c}`?")),
@@ -274,22 +307,37 @@ pub(crate) fn resolve_target<'a>(
 impl Program {
     /// The index of the track called `name`.
     pub fn track_index(&self, name: &str) -> Option<usize> {
-        self.tracks.iter().skip(1).position(|t| t.name == name).map(|i| i + 1)
+        self.tracks
+            .iter()
+            .skip(1)
+            .position(|t| t.name == name)
+            .map(|i| i + 1)
     }
 
     /// Where the kit sample `id` sits in `instrument`.
     fn kit_index(&self, instrument: &Instrument, id: u32, target: &str) -> Result<usize, ArgError> {
-        let name = self.sample_names.get(id as usize).map_or("?", String::as_str);
+        let name = self
+            .sample_names
+            .get(id as usize)
+            .map_or("?", String::as_str);
         if instrument.members.is_empty() {
             return Err(ArgError {
-                message: format!("`{name}` is a kit sample, but `{target}` plays `{}`, which isn't a kit", instrument.name),
+                message: format!(
+                    "`{name}` is a kit sample, but `{target}` plays `{}`, which isn't a kit",
+                    instrument.name
+                ),
                 help: None,
             });
         }
-        instrument.members.iter().position(|m| m == name).ok_or_else(|| ArgError {
-            message: format!("`{name}` isn't in the kit `{}`", instrument.name),
-            help: closest(name, instrument.members.iter().map(String::as_str)).map(|c| format!("did you mean `{c}`?")),
-        })
+        instrument
+            .members
+            .iter()
+            .position(|m| m == name)
+            .ok_or_else(|| ArgError {
+                message: format!("`{name}` isn't in the kit `{}`", instrument.name),
+                help: closest(name, instrument.members.iter().map(String::as_str))
+                    .map(|c| format!("did you mean `{c}`?")),
+            })
     }
 
     pub fn instrument(&self, name: &str) -> Option<&Instrument> {
@@ -298,74 +346,136 @@ impl Program {
 
     /// Check an event against its target and resolve it to a note to play.
     pub fn plan(&self, event: &Event) -> Result<NotePlan, ArgError> {
-        let Target { track, instrument, defaults } =
-            resolve_target(&self.instruments, &self.tracks, &event.target)?;
+        let Target {
+            track,
+            instrument,
+            defaults,
+        } = resolve_target(&self.instruments, &self.tracks, &event.target)?;
         let mut args = defaults.cloned().unwrap_or_default();
         args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
         // a lane that is a parameter of the track, not of the instrument, sets that control
         let mut controls = Vec::new();
         if track != 0 {
             let owner = &self.tracks[track].name;
-            let found: Vec<String> = args.keys()
-                .filter(|k| self.instruments[instrument].param(k).is_err() && self.controls.iter().any(|c| c.name == format!("{owner}::{k}")))
-                .cloned().collect();
+            let found: Vec<String> = args
+                .keys()
+                .filter(|k| {
+                    self.instruments[instrument].param(k).is_err()
+                        && self
+                            .controls
+                            .iter()
+                            .any(|c| c.name == format!("{owner}::{k}"))
+                })
+                .cloned()
+                .collect();
             for lane in found {
                 let value = args.remove(&lane).expect("just listed");
-                let def = self.controls.iter().find(|c| c.name == format!("{owner}::{lane}")).expect("just found");
-                let v = def.from_value(value, self.tempo).map_err(|e| ArgError::new(format!("argument `{lane}`: {e}")))?;
+                let def = self
+                    .controls
+                    .iter()
+                    .find(|c| c.name == format!("{owner}::{lane}"))
+                    .expect("just found");
+                let v = def
+                    .from_value(value, self.tempo)
+                    .map_err(|e| ArgError::new(format!("argument `{lane}`: {e}")))?;
                 controls.push((def.key.clone(), v, def.smooth_seconds));
             }
         }
         // a pan belongs to the note, not to its instrument
         let pan = match args.remove("pan") {
             Some(value) => {
-                let azimuth = value.as_angle().map_err(|e| ArgError::new(format!("argument `pan`: {e}")))?;
-                Some(niminal_engine::ops::pan_gains(&self.master.speaker_angles(), azimuth as f32, 0.0))
+                let azimuth = value
+                    .as_angle()
+                    .map_err(|e| ArgError::new(format!("argument `pan`: {e}")))?;
+                Some(niminal_engine::ops::pan_gains(
+                    &self.master.speaker_angles(),
+                    azimuth as f32,
+                    0.0,
+                ))
             }
             None => None,
         };
         for value in args.values_mut() {
             if let Value::Sample(id) = *value {
-                *value = Value::Num(self.kit_index(&self.instruments[instrument], id, &event.target)? as f64);
+                *value =
+                    Value::Num(
+                        self.kit_index(&self.instruments[instrument], id, &event.target)? as f64,
+                    );
             }
         }
         let params = self.instruments[instrument].bind_args(&args, self.tempo)?;
-        let picked = args.get("sample").and_then(|v| v.as_number().ok()).unwrap_or(0.0) as usize;
-        let choke = self.instruments[instrument].chokes.get(picked).copied().flatten();
+        let picked = args
+            .get("sample")
+            .and_then(|v| v.as_number().ok())
+            .unwrap_or(0.0) as usize;
+        let choke = self.instruments[instrument]
+            .chokes
+            .get(picked)
+            .copied()
+            .flatten();
         let rule = {
             let this = &self.instruments[instrument];
-            let pitch_param = this.params.iter().position(|p| p.name == crate::perform::PITCH_PARAM);
-            (this.max_voices.is_some() || this.release_same_note).then(|| niminal_engine::VoiceRule {
-                instrument: instrument as u32,
-                max: this.max_voices.unwrap_or(usize::MAX),
-                steal_quietest: this.steal_quietest,
-                release_same_pitch: this.release_same_note,
-                pitch: pitch_param
-                    .and_then(|i| params.iter().find(|(index, _)| *index == i).map(|&(_, v)| v).or(this.params[i].default))
-                    .unwrap_or(0.0),
-                pitch_param,
-                legato: this.legato,
-                priority: this.priority,
-                glide: this.glide.map_or(0.0, |t| t.to_seconds(self.tempo) as f32),
+            let pitch_param = this
+                .params
+                .iter()
+                .position(|p| p.name == crate::perform::PITCH_PARAM);
+            (this.max_voices.is_some() || this.release_same_note).then(|| {
+                niminal_engine::VoiceRule {
+                    instrument: instrument as u32,
+                    max: this.max_voices.unwrap_or(usize::MAX),
+                    steal_quietest: this.steal_quietest,
+                    release_same_pitch: this.release_same_note,
+                    pitch: pitch_param
+                        .and_then(|i| {
+                            params
+                                .iter()
+                                .find(|(index, _)| *index == i)
+                                .map(|&(_, v)| v)
+                                .or(this.params[i].default)
+                        })
+                        .unwrap_or(0.0),
+                    pitch_param,
+                    legato: this.legato,
+                    priority: this.priority,
+                    glide: this.glide.map_or(0.0, |t| t.to_seconds(self.tempo) as f32),
+                }
             })
         };
         let midi = self.instruments[instrument].midi.as_ref().map(|target| {
             let this = &self.instruments[instrument];
             let value = |name: &str| {
                 let i = this.params.iter().position(|p| p.name == name)?;
-                params.iter().find(|(index, _)| *index == i).map(|&(_, v)| v).or(this.params[i].default)
+                params
+                    .iter()
+                    .find(|(index, _)| *index == i)
+                    .map(|&(_, v)| v)
+                    .or(this.params[i].default)
             };
             let hz = f64::from(value("freq").unwrap_or(440.0)).max(1.0);
-            let db = 20.0 * f64::from(value(crate::lower::GAIN_PARAM).unwrap_or(1.0)).max(1e-6).log10();
+            let db = 20.0
+                * f64::from(value(crate::lower::GAIN_PARAM).unwrap_or(1.0))
+                    .max(1e-6)
+                    .log10();
             MidiNote {
                 port: target.port.clone(),
                 channel: target.channel,
-                note: (69.0 + 12.0 * (hz / 440.0).log2()).round().clamp(0.0, 127.0) as u8,
+                note: (69.0 + 12.0 * (hz / 440.0).log2())
+                    .round()
+                    .clamp(0.0, 127.0) as u8,
                 // 0db is the loudest, -30db the softest: the same scale a keyboard's velocity is read on
                 velocity: ((db + 30.0) / 30.0 * 126.0 + 1.0).round().clamp(1.0, 127.0) as u8,
             }
         });
-        Ok(NotePlan { track, instrument, params, choke, rule, controls, pan, midi })
+        Ok(NotePlan {
+            track,
+            instrument,
+            params,
+            choke,
+            rule,
+            controls,
+            pan,
+            midi,
+        })
     }
 
     /// A mixer for this program's tracks and buses.
@@ -398,31 +508,31 @@ impl Instrument {
                 (Value::Num(n), Some(suffix)) => Some(format!("did you mean `{n}{suffix}`?")),
                 _ => None,
             };
-            ArgError { message: format!("argument `{name}`: {e}"), help }
-        };
-
-        let v = match param.unit {
-            Unit::Hz => value.as_hz().map_err(unit_err)?,
-            Unit::Db => value.as_gain().map_err(unit_err)?,
-            Unit::Time => value.as_time().map_err(unit_err)?.to_seconds(tempo),
-            Unit::Angle => value.as_angle().map_err(unit_err)?,
-            Unit::Semitones => value.as_semitones().map_err(unit_err)?,
-            Unit::Num => {
-                let n = value.as_number().map_err(unit_err)?;
-                if let Some((lo, hi)) = param.range
-                    && !(lo..=hi).contains(&n)
-                {
-                    return Err(ArgError::new(format!("argument `{name}` must be between {lo} and {hi}, got {n}")));
-                }
-                n
+            ArgError {
+                message: format!("argument `{name}`: {e}"),
+                help,
             }
         };
+
+        let v = engine_value(param.unit, value, tempo).map_err(unit_err)?;
+        if param.unit == Unit::Num
+            && let Some((lo, hi)) = param.range
+            && !(lo..=hi).contains(&v)
+        {
+            return Err(ArgError::new(format!(
+                "argument `{name}` must be between {lo} and {hi}, got {v}"
+            )));
+        }
         Ok(v as f32)
     }
 
     /// Check a note's arguments and turn them into `(parameter index, value)`
     /// pairs ready for a voice. Every parameter without a default must be given.
-    pub fn bind_args(&self, args: &BTreeMap<String, Value>, tempo: Tempo) -> Result<Vec<(usize, f32)>, ArgError> {
+    pub fn bind_args(
+        &self,
+        args: &BTreeMap<String, Value>,
+        tempo: Tempo,
+    ) -> Result<Vec<(usize, f32)>, ArgError> {
         let mut bound = Vec::with_capacity(args.len());
         for (name, value) in args {
             let (index, param) = self.param(name)?;
@@ -430,7 +540,10 @@ impl Instrument {
         }
         for param in self.params.iter().filter(|p| p.default.is_none()) {
             if !args.contains_key(&param.name) {
-                return Err(ArgError::new(format!("`{}` needs an argument `{}`", self.name, param.name)));
+                return Err(ArgError::new(format!(
+                    "`{}` needs an argument `{}`",
+                    self.name, param.name
+                )));
             }
         }
         Ok(bound)

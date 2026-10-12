@@ -17,6 +17,9 @@ const LOOKAHEAD_SECONDS: f32 = 0.001;
 const RELEASE_SECONDS: f64 = 0.05;
 const DC_CUTOFF_HZ: f64 = 5.0;
 
+/// Default limiter ceiling (~−0.3 dB). Shared by live and offline renders.
+pub const DEFAULT_CEILING: f32 = 0.966_051;
+
 /// The interpolator that finds peaks between samples looks at this many samples, centred on the
 /// stretch between the two `HALF` and `HALF - 1` samples ago.
 const TAPS: usize = 24;

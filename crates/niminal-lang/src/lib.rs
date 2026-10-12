@@ -21,17 +21,27 @@ mod sample;
 mod schedule;
 mod unit;
 
-pub use analysis::{PlayInfo, Ramp, Statement, StatementKind, analyze, scene_entries};
+pub use analysis::{
+    CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_entries,
+};
+pub use ast::{ControlInput, InputSource};
 pub use compile::{CompileOptions, compile, compile_with};
 pub use diag::{Diagnostic, Span, closest};
-pub use lexer::{Tok, Token, lex};
-pub use ide::{OpInfo, ParamInfo, Symbol, SymbolKind, SymbolParam, builtin_ops, pattern_ops, symbols, waves};
-pub use performance::{Action, Arrangement, Clip, Keys, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled};
-pub use schedule::{ControlSet, Found, Schedule, ScheduleError, TrackState};
-pub use ast::{ControlInput, InputSource};
-pub use performance::EnvLane;
-pub use program::{ArgError, ControlBinding, ControlDef, Instrument, MidiNote, MidiTarget, NotePlan, OscTap, Param, Program, QuantizeConfig, TrackInfo};
+pub use ide::{
+    OpInfo, ParamInfo, RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, builtin_ops, pattern_ops,
+    symbols, waves,
+};
 pub use layout::Layout;
+pub use lexer::{Tok, Token, lex};
 pub use modules::{Expanded, expand};
+pub use performance::EnvLane;
+pub use performance::{
+    Action, Arrangement, Clip, Keys, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled,
+};
+pub use program::{
+    ArgError, ControlBinding, ControlDef, Instrument, MidiNote, MidiTarget, NotePlan, OscTap,
+    Param, Program, QuantizeConfig, TrackInfo,
+};
 pub use sample::Samples;
+pub use schedule::{ControlSet, Found, Schedule, ScheduleError, TrackState};
 pub use unit::Unit;
