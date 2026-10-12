@@ -275,12 +275,6 @@ enum Val {
     Sig(Sig),
 }
 
-/// Lowering a bus send: `prev` marks the send as delayed by one block.
-enum SendCtx {
-    Immediate,
-    Delayed,
-}
-
 pub(crate) struct Lower<'a> {
     registry: &'a Registry,
     names: &'a Names,
@@ -291,8 +285,8 @@ pub(crate) struct Lower<'a> {
     /// The value of `out` so far.
     out: Option<Sig>,
     sends: usize,
-    /// Set while the value of a send to a bus is lowered: `prev(x)` is `x` there, and marks the send late.
-    in_send: Option<SendCtx>,
+    /// Set while lowering a bus send. `Some(true)` means `prev` marked it one block late.
+    in_send: Option<bool>,
     /// In a track: what feeds each external input, and the bundles made so far.
     chain_inputs: Vec<ChainInput>,
     input_sigs: HashMap<String, Sig>,
@@ -523,20 +517,11 @@ pub(crate) fn compile_instr(
     // Every voice leaves the instrument in the master's layout.
     let result = lower.convert(&result, names.master, span)?;
     let result = lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, span)?;
-    Ok(Instrument {
-        name: def.name.name.clone(),
-        graph: Arc::new(lower.g.build_channels(&result.srcs)),
+    Ok(Instrument::new(
+        def.name.name.clone(),
+        Arc::new(lower.g.build_channels(&result.srcs)),
         params,
-        members: Vec::new(),
-        chokes: Vec::new(),
-        max_voices: None,
-        release_same_note: false,
-        steal_quietest: false,
-        legato: false,
-        priority: Default::default(),
-        glide: None,
-        midi: None,
-    })
+    ))
 }
 
 /// One sample of a sampler instrument.
@@ -647,24 +632,15 @@ pub(crate) fn compile_sampler(
     }
     let result = mix.expect("a sample or kit has at least one sample");
     let result = lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, name.span)?;
-    Ok(Instrument {
-        name: name.name.clone(),
-        graph: Arc::new(lower.g.build_channels(&result.srcs)),
+    let mut instrument = Instrument::new(
+        name.name.clone(),
+        Arc::new(lower.g.build_channels(&result.srcs)),
         params,
-        members: if is_kit {
-            members.iter().map(|m| m.name.clone()).collect()
-        } else {
-            Vec::new()
-        },
-        chokes: Vec::new(),
-        max_voices: None,
-        release_same_note: false,
-        steal_quietest: false,
-        legato: false,
-        priority: Default::default(),
-        glide: None,
-        midi: None,
-    })
+    );
+    if is_kit {
+        instrument.members = members.iter().map(|m| m.name.clone()).collect();
+    }
+    Ok(instrument)
 }
 
 /// `midi_out drums(port: "IAC Driver", channel: 10)`: an instrument whose notes go to external gear.
@@ -722,10 +698,10 @@ pub(crate) fn compile_midi_out(decl: &MidiOutDecl, names: &Names) -> Res<Instrum
     g.param("freq", 440.0).expect("a fresh graph");
     g.param(GAIN_PARAM, 1.0).expect("a fresh graph");
     let silence = vec![Src::Const(0.0); names.master.channels()];
-    Ok(Instrument {
-        name: decl.name.name.clone(),
-        graph: Arc::new(g.build_channels(&silence)),
-        params: vec![
+    let mut instrument = Instrument::new(
+        decl.name.name.clone(),
+        Arc::new(g.build_channels(&silence)),
+        vec![
             Param {
                 name: "freq".into(),
                 unit: Unit::Hz,
@@ -739,22 +715,25 @@ pub(crate) fn compile_midi_out(decl: &MidiOutDecl, names: &Names) -> Res<Instrum
                 default: Some(1.0),
             },
         ],
-        members: Vec::new(),
-        chokes: Vec::new(),
-        max_voices: None,
-        release_same_note: false,
-        steal_quietest: false,
-        legato: false,
-        priority: Default::default(),
-        glide: None,
-        midi: Some(MidiTarget {
-            port: port.into(),
-            channel,
-        }),
-    })
+    );
+    instrument.midi = Some(MidiTarget {
+        port: port.into(),
+        channel,
+    });
+    Ok(instrument)
 }
 
 const MAX_SAMPLE_CHANNELS: usize = 16;
+
+/// Envelope curve written in source → engine curve.
+pub(crate) fn curve_of(kind: Option<CurveKind>) -> Curve {
+    match kind {
+        None => Curve::Linear,
+        Some(CurveKind::Exp) => Curve::Exp,
+        Some(CurveKind::Log) => Curve::Log,
+        Some(CurveKind::Custom(k)) => Curve::Custom(k as f32),
+    }
+}
 
 /// A compiled track: its processing, what feeds that processing, and where
 /// the result goes.
@@ -1037,9 +1016,9 @@ impl<'a> Lower<'a> {
             return Ok(());
         }
         if let Some(bus) = self.names.bus(&name.name) {
-            self.in_send = Some(SendCtx::Immediate);
+            self.in_send = Some(false);
             let sig = self.expr(value);
-            let delayed = matches!(self.in_send.take(), Some(SendCtx::Delayed));
+            let delayed = self.in_send.take() == Some(true);
             let sig = sig?;
             self.require_signal(&name.name, &sig, value.span)?;
             let sig = self.convert(&sig, self.names.bus_layouts[bus], value.span)?;
@@ -1954,7 +1933,7 @@ impl<'a> Lower<'a> {
                 return Err(Diagnostic::new("`prev` is only available when sending to a bus", name.span)
                     .with_help("for example `echo += prev(out).gain(-20db)`; inside an opcode, `prev(x)` is the value one sample ago"));
             };
-            *ctx = SendCtx::Delayed;
+            *ctx = true;
             return self.expr(&arg.value);
         }
         if name.name == "range" && self.registry.find("range").is_none() {
@@ -2280,12 +2259,7 @@ impl<'a> Lower<'a> {
                 ));
             }
             let dur = self.literal(seg.dur.value, seg.dur.unit.as_deref(), seg.dur.span)?;
-            let curve = match seg.curve {
-                None => Curve::Linear,
-                Some(CurveKind::Exp) => Curve::Exp,
-                Some(CurveKind::Log) => Curve::Log,
-                Some(CurveKind::Custom(k)) => Curve::Custom(k as f32),
-            };
+            let curve = curve_of(seg.curve);
             segments.push(Segment::new(
                 dur.konst.expect("a literal") as f32,
                 level.konst.unwrap() as f32,

@@ -153,13 +153,10 @@ impl EvalJob {
     }
 
     pub(super) fn prepare(&self) -> Result<Prepared, Vec<Problem>> {
-        self.prepare_all().map_err(|problems| match &self.uses {
+        let locate = |problems| match &self.uses {
             Some(u) => u.locate(problems),
             None => problems,
-        })
-    }
-
-    pub(super) fn prepare_all(&self) -> Result<Prepared, Vec<Problem>> {
+        };
         // Validate the complete transaction before superseding anything.
         prepare_pending(
             &self.config,
@@ -169,7 +166,8 @@ impl EvalJob {
             self.statements.clone(),
             &self.base,
             &self.playing,
-        )?;
+        )
+        .map_err(locate)?;
         let writes: Vec<&str> = self
             .statements
             .iter()
@@ -222,7 +220,7 @@ impl EvalJob {
         for p in deferred {
             match prepare_next(&self.config, &p, latest, &mut project, &mut playing) {
                 Ok(next) => queue.push(next),
-                Err(problems) if is_new(p.id) => return Err(problems),
+                Err(problems) if is_new(p.id) => return Err(locate(problems)),
                 Err(_) => notices.push(format!(
                     "change {} was dropped: a newer pending write invalidated it",
                     p.id
@@ -457,7 +455,7 @@ pub(super) fn prepare_pending(
         group: None,
         lands_at,
         snippet: snippet.to_string(),
-        summary: statements.iter().map(summarize).collect(),
+        summary: statements.iter().map(|s| first_line(&s.text)).collect(),
         statements,
         project,
         program: has_definitions.then(|| Arc::new(program)),

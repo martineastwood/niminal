@@ -1299,33 +1299,18 @@ fn literal_value(e: &Expr) -> Res<Value> {
             .with_help("for example `440hz`, `-6db`, `0.5` or `a3`")
     };
     match &e.kind {
+        // Note args don't take `%`; value_of does (for pattern atoms).
         ExprKind::Num { value, unit } => match unit.as_deref() {
-            None => Ok(Value::Num(*value)),
-            Some("hz") => Ok(Value::Hz(*value)),
-            Some("khz") => Ok(Value::Hz(value * 1000.0)),
-            Some("db") => Ok(Value::Db(*value)),
-            Some("sec") => Ok(Value::Seconds(*value)),
-            Some("ms") => Ok(Value::Seconds(value / 1000.0)),
-            Some("beat" | "beats") => Ok(Value::Beats(*value)),
-            Some("bar" | "bars") => Ok(Value::Bars(*value)),
-            Some("st") => Ok(Value::Semitones(*value)),
-            Some("deg") => Ok(Value::Degrees(*value)),
-            Some(u) => Err(unknown_unit(u, e.span)),
+            Some("%") => Err(unknown_unit("%", e.span)),
+            _ => crate::perform::value_of(*value, unit.as_deref(), e.span),
         },
         ExprKind::Name(n) => match n.parse::<Value>() {
             Ok(v @ Value::Note(_)) => Ok(v),
             _ => Err(bad()),
         },
         ExprKind::Neg(inner) => match literal_value(inner)? {
-            Value::Num(n) => Ok(Value::Num(-n)),
-            Value::Hz(n) => Ok(Value::Hz(-n)),
-            Value::Db(n) => Ok(Value::Db(-n)),
-            Value::Seconds(n) => Ok(Value::Seconds(-n)),
-            Value::Beats(n) => Ok(Value::Beats(-n)),
-            Value::Bars(n) => Ok(Value::Bars(-n)),
-            Value::Semitones(n) => Ok(Value::Semitones(-n)),
-            Value::Degrees(n) => Ok(Value::Degrees(-n)),
             Value::Note(_) | Value::Sample(_) => Err(bad()),
+            v => Ok(crate::perform::negate(v)),
         },
         _ => Err(bad()),
     }

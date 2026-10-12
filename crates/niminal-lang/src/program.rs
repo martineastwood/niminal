@@ -488,6 +488,24 @@ impl Program {
 }
 
 impl Instrument {
+    /// A silent-by-default voice instrument; callers set kit members, MIDI, or voice options.
+    pub(crate) fn new(name: String, graph: Arc<Graph>, params: Vec<Param>) -> Self {
+        Self {
+            name,
+            graph,
+            params,
+            members: Vec::new(),
+            chokes: Vec::new(),
+            max_voices: None,
+            release_same_note: false,
+            steal_quietest: false,
+            legato: false,
+            priority: Default::default(),
+            glide: None,
+            midi: None,
+        }
+    }
+
     pub fn param(&self, name: &str) -> Result<(usize, &Param), ArgError> {
         match self.params.iter().enumerate().find(|(_, p)| p.name == name) {
             Some(found) => Ok(found),

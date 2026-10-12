@@ -1236,9 +1236,5 @@ fn first_line(text: &str) -> String {
     }
 }
 
-fn summarize(s: &Statement) -> String {
-    first_line(&s.text)
-}
-
 /// A statement to compile, and for a change to a track, what the track is playing after it.
 type Edited = (Statement, Option<(String, Playing)>);

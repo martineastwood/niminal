@@ -9,7 +9,7 @@ use niminal_score::{Tempo, Time, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
-use crate::lower::{GAIN_PARAM, Names};
+use crate::lower::{GAIN_PARAM, Names, curve_of};
 use crate::performance::*;
 use crate::program::{Instrument, TrackInfo};
 use crate::unit::Unit;
@@ -169,7 +169,7 @@ pub(crate) fn compile_performance(
     }
 }
 
-fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value> {
+pub(crate) fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value> {
     Ok(match unit {
         None => Value::Num(value),
         Some("hz") => Value::Hz(value),
@@ -182,7 +182,7 @@ fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value> {
         Some("deg") => Value::Degrees(value),
         Some("st") => Value::Semitones(value),
         Some("%") => Value::Num(value / 100.0),
-        Some(u) => return Err(Diagnostic::new(format!("unknown unit `{u}`"), span)),
+        Some(u) => return Err(crate::lower::unknown_unit(u, span)),
     })
 }
 
@@ -201,13 +201,7 @@ fn env_lane(lit: &EnvLit) -> Res<EnvLane> {
         let dur = value_of(seg.dur.value, seg.dur.unit.as_deref(), seg.dur.span)?
             .as_time()
             .map_err(|e| Diagnostic::new(e.to_string(), seg.dur.span))?;
-        let curve = match seg.curve {
-            None => Curve::Linear,
-            Some(CurveKind::Exp) => Curve::Exp,
-            Some(CurveKind::Log) => Curve::Log,
-            Some(CurveKind::Custom(k)) => Curve::Custom(k as f32),
-        };
-        segments.push((dur, curve, level(&seg.level)?));
+        segments.push((dur, curve_of(seg.curve), level(&seg.level)?));
     }
     Ok(EnvLane {
         start: level(&lit.start)?,
@@ -1211,17 +1205,6 @@ impl Perform<'_> {
                 Ok(r)
             }
         };
-        let whole = |e: &Expr, what: &str, low: i64| -> Res<i64> {
-            let n = self.plain(e)?;
-            if n.is_integer() && n >= Rational::int(low) && n <= Rational::int(max) {
-                Ok(n.numer())
-            } else {
-                Err(Diagnostic::new(
-                    format!("`{what}` takes a whole number from {low} to {max}"),
-                    e.span,
-                ))
-            }
-        };
         Ok(Some(match name.name.as_str() {
             "fast" | "slow" => {
                 let e = self.arg(name, rest, "by", span)?;
@@ -1312,16 +1295,16 @@ impl Perform<'_> {
                 times.apply(&p, |p, n| p.rotate(n.floor().min(MAX_REPEATS)))
             }
             "in_turn" => {
-                let n = whole(self.arg(name, rest, "parts", span)?, "in_turn", 1)?;
+                let n = self.whole(self.arg(name, rest, "parts", span)?, "in_turn")?;
                 let change = self.transformer::<T>(self.arg(name, rest, "change", span)?, &p)?;
                 p.in_turn(n, change)
             }
             "shuffle" => {
-                let n = whole(self.arg(name, rest, "parts", span)?, "shuffle", 1)?;
+                let n = self.whole(self.arg(name, rest, "parts", span)?, "shuffle")?;
                 p.shuffle(n, self.seed(name, rest, 0)?)
             }
             "pick_random" => {
-                let n = whole(self.arg(name, rest, "parts", span)?, "pick_random", 1)?;
+                let n = self.whole(self.arg(name, rest, "parts", span)?, "pick_random")?;
                 p.pick_random(n, self.seed(name, rest, 0)?)
             }
             "repeat_start" => {
@@ -1481,52 +1464,16 @@ impl Perform<'_> {
     }
 
     fn unknown_op(&self, name: &str, span: Span) -> Diagnostic {
-        const OPS: [&str; 42] = [
-            "fast",
-            "slow",
-            "over",
-            "reverse",
-            "shift",
-            "repeat_each",
-            "thin",
-            "every",
-            "layer",
-            "transpose",
-            "euclid",
-            "rhythm",
-            "mask",
-            "set",
-            "play",
-            "launch",
-            "sometimes",
-            "within",
-            "swing",
-            "rotate",
-            "in_turn",
-            "shuffle",
-            "pick_random",
-            "repeat_start",
-            "palindrome",
-            "to_steps",
-            "invert",
-            "range",
-            "in_scale",
-            "chord",
-            "arpeggiate",
-            "voice_lead",
-            "invert_melody",
-            "markov",
-            "random_walk",
-            "where",
-            "gain",
-            "pan",
-            "begin",
-            "left_right",
-            "chop",
-            "interleave_chops",
-        ];
+        use std::sync::OnceLock;
+        static NAMES: OnceLock<Vec<String>> = OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            crate::ide::pattern_ops()
+                .into_iter()
+                .map(|o| o.name)
+                .collect()
+        });
         let mut d = Diagnostic::new(format!("unknown pattern operation `{name}`"), span);
-        if let Some(c) = closest(name, OPS) {
+        if let Some(c) = closest(name, names.iter().map(String::as_str)) {
             d = d.with_help(format!("did you mean `{c}`?"));
         }
         d
@@ -2421,13 +2368,7 @@ fn tempo_curve(lit: &EnvLit) -> Res<TempoCurve> {
                 .with_help("for example `8bars`"));
             }
         };
-        let curve = match seg.curve {
-            None => Curve::Linear,
-            Some(CurveKind::Exp) => Curve::Exp,
-            Some(CurveKind::Log) => Curve::Log,
-            Some(CurveKind::Custom(k)) => Curve::Custom(k as f32),
-        };
-        segments.push((len, curve, bpm(&seg.level)?));
+        segments.push((len, curve_of(seg.curve), bpm(&seg.level)?));
     }
     Ok(TempoCurve {
         start: bpm(&lit.start)?,
@@ -2435,7 +2376,7 @@ fn tempo_curve(lit: &EnvLit) -> Res<TempoCurve> {
     })
 }
 
-fn negate(v: Value) -> Value {
+pub(crate) fn negate(v: Value) -> Value {
     match v {
         Value::Num(n) => Value::Num(-n),
         Value::Hz(n) => Value::Hz(-n),

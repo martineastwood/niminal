@@ -17,6 +17,14 @@ pub struct RealtimeConfig {
     pub max_voices: usize,
 }
 
+/// How the first sample of a prepared window relates to the live mixer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlanMode {
+    Advance,
+    Refresh,
+    Reset,
+}
+
 impl Default for RealtimeConfig {
     fn default() -> Self {
         Self {
@@ -492,15 +500,21 @@ impl Session {
             made += 1;
             let from = planner.prepared_until;
             let to = (from + planner.config.window_frames as u64).min(horizon);
-            let reset = from == self.clock
+            let mode = if from == self.clock
                 && planner.state.reset_epoch.load(Ordering::Acquire)
-                    != self.panic_epoch.load(Ordering::Acquire);
+                    != self.panic_epoch.load(Ordering::Acquire)
+            {
+                PlanMode::Reset
+            } else if planner.refresh {
+                PlanMode::Refresh
+            } else {
+                PlanMode::Advance
+            };
             let mut window = self.plan_window(
                 from..to,
                 revision,
                 planner.config,
-                reset,
-                planner.refresh,
+                mode,
                 &mut planner.stopped,
             );
 
@@ -563,8 +577,7 @@ impl Session {
         range: std::ops::Range<u64>,
         revision: u64,
         config: RealtimeConfig,
-        reset: bool,
-        refresh: bool,
+        mode: PlanMode,
         stopped: &mut Vec<String>,
     ) -> Window {
         let (from, to) = (range.start, range.end);
@@ -578,6 +591,7 @@ impl Session {
         };
         let mut program = self.program.clone();
         let mut history = self.history.clone();
+        let mut schedule = schedule_for(&program, &history);
         let mut explicit: Vec<Explicit> = self
             .upcoming
             .iter()
@@ -591,14 +605,18 @@ impl Session {
             })
             .collect();
         let mut position = from;
-        if reset {
-            window
-                .commands
-                .push(self.reset_command(from, &program, config));
-        } else if refresh {
-            window
-                .commands
-                .push(self.swap_command(from, &program, config));
+        match mode {
+            PlanMode::Reset => {
+                window
+                    .commands
+                    .push(self.reset_command(from, &program, config));
+            }
+            PlanMode::Refresh => {
+                window
+                    .commands
+                    .push(self.swap_command(from, &program, config));
+            }
+            PlanMode::Advance => {}
         }
         // Pending transactions are previewed without committing control state.
         // Window boundaries and note times remain sample positions, independent
@@ -617,7 +635,7 @@ impl Session {
             if position < boundary {
                 self.plan_notes(
                     &program,
-                    &history,
+                    &schedule,
                     &explicit,
                     position..boundary,
                     config,
@@ -662,11 +680,13 @@ impl Session {
                     &mut explicit,
                 );
             }
+            // Pending landings change the program and/or history the next slice plans against.
+            schedule = schedule_for(&program, &history);
         }
         if position < to {
             self.plan_notes(
                 &program,
-                &history,
+                &schedule,
                 &explicit,
                 position..to,
                 config,
@@ -732,14 +752,13 @@ impl Session {
     fn plan_notes(
         &self,
         program: &Arc<Program>,
-        history: &[HistoryEntry],
+        schedule: &Schedule,
         explicit: &[Explicit],
         range: std::ops::Range<u64>,
         config: RealtimeConfig,
         window: &mut Window,
     ) {
         let (from, to) = (range.start, range.end);
-        let schedule = schedule_for(program, history);
         let skip: Vec<_> = window
             .stopped
             .iter()
