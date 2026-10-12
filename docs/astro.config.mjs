@@ -45,7 +45,7 @@ export default defineConfig({
             { slug: 'reference/language/instruments' },
             { slug: 'reference/language/opcodes' },
             { slug: 'reference/language/routing' },
-            { slug: 'reference/language/samples' },
+            { slug: 'reference/language/samples', label: 'Samples' },
             { slug: 'reference/language/patterns' },
             { slug: 'reference/language/performance' },
             { slug: 'reference/language/modules' },

@@ -393,6 +393,8 @@ pub(crate) fn compile_sampler(
     let pitch = declare(&mut lower, "pitch", Unit::Semitones, 0.0);
     let rate = declare(&mut lower, "rate", Unit::Num, 1.0);
     let start = declare(&mut lower, "start", Unit::Time, 0.0);
+    // where in the sample to start, as a share of its length (a note's `begin`, set by `chop`)
+    let begin = declare(&mut lower, "begin", Unit::Num, 0.0);
     let pick = is_kit.then(|| declare(&mut lower, "sample", Unit::Num, 0.0));
     let gain = declare(&mut lower, GAIN_PARAM, Unit::Db, 1.0);
 
@@ -408,7 +410,13 @@ pub(crate) fn compile_sampler(
         }
         let mut srcs = Vec::with_capacity(channels);
         for c in 0..channels {
-            let mut wires = vec![("freq", freq), ("pitch", pitch), ("rate", rate), ("start", start)];
+            let frames = member.slice.map_or(data.len(), |(from, to)| to - from);
+            let offset = lower
+                .g
+                .add(Mul, &[("a", begin), ("b", Src::Const(frames as f32 / data.sample_rate))])
+                .expect("mul ports");
+            let from = lower.g.add(Add, &[("a", start), ("b", offset)]).expect("add ports");
+            let mut wires = vec![("freq", freq), ("pitch", pitch), ("rate", rate), ("start", from)];
             wires.extend(pick.map(|p| ("sample", p)));
             let mut player = Sampler::new(data.clone(), c, root_hz, is_kit.then_some(i)).with_speed(member.speed);
             if let Some((start, end)) = member.slice {

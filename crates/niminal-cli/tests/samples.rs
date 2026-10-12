@@ -418,3 +418,29 @@ fn the_song_example_renders_its_arrangement() {
     assert!((34.9..45.0).contains(&secs), "{secs}");
     assert!(out.peak() > 0.1 && out.peak() <= 1.0);
 }
+
+#[test]
+fn begin_starts_a_note_part_way_into_the_sample() {
+    let dir = scratch("begin");
+    let audio = ramp(4000);
+    write_wav(&dir.join("s.wav"), std::slice::from_ref(&audio));
+    let out = play(&dir, &format!("{TRACK}t.play([c4].begin(50%))"));
+    // the ramp climbs to 0.5, so half way in it is at 0.25, and the second half is what plays
+    assert!((out[0][0] - 0.25).abs() < 1e-3, "{}", out[0][0]);
+    assert!((out[0][1000] - audio[3000]).abs() < 1e-3);
+    assert!(out[0][2000..].iter().all(|v| v.abs() < 1e-6), "it stops at the end of the sample");
+}
+
+#[test]
+fn chop_plays_the_next_part_of_the_sample_for_each_piece() {
+    let dir = scratch("chop");
+    // four equal blocks at different levels
+    let audio: Vec<f32> = [0.1, 0.2, 0.3, 0.4].iter().flat_map(|&l| vec![l; 4800]).collect();
+    write_wav(&dir.join("s.wav"), std::slice::from_ref(&audio));
+    let out = play(&dir, &format!("{TRACK}t.play([c4].chop(4))"));
+    // a bar is two seconds, so a piece starts every half second
+    for (i, level) in [0.1, 0.2, 0.3, 0.4].iter().enumerate() {
+        let at = i * SR / 2 + 100;
+        assert!((out[0][at] - level).abs() < 1e-3, "piece {i}: {} vs {level}", out[0][at]);
+    }
+}

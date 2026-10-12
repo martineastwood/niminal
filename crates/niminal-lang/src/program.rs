@@ -179,6 +179,8 @@ pub struct NotePlan {
     pub rule: Option<niminal_engine::VoiceRule>,
     /// Track parameters the note's clip sets as it starts: control key, value, and how long it glides.
     pub controls: Vec<(String, f32, f64)>,
+    /// How the note is spread over the master's speakers, if it has a pan of its own.
+    pub pan: Option<[f32; niminal_engine::MAX_CHANNELS]>,
 }
 
 /// What a note's target resolves to.
@@ -261,6 +263,14 @@ impl Program {
                 controls.push((def.key.clone(), v, def.smooth_seconds));
             }
         }
+        // a pan belongs to the note, not to its instrument
+        let pan = match args.remove("pan") {
+            Some(value) => {
+                let azimuth = value.as_angle().map_err(|e| ArgError::new(format!("argument `pan`: {e}")))?;
+                Some(niminal_engine::ops::pan_gains(&self.master.speaker_angles(), azimuth as f32, 0.0))
+            }
+            None => None,
+        };
         for value in args.values_mut() {
             if let Value::Sample(id) = *value {
                 *value = Value::Num(self.kit_index(&self.instruments[instrument], id, &event.target)? as f64);
@@ -286,7 +296,7 @@ impl Program {
                 glide: this.glide.map_or(0.0, |t| t.to_seconds(self.tempo) as f32),
             })
         };
-        Ok(NotePlan { track, instrument, params, choke, rule, controls })
+        Ok(NotePlan { track, instrument, params, choke, rule, controls, pan })
     }
 
     /// A mixer for this program's tracks and buses.

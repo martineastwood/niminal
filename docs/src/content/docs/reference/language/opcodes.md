@@ -1,6 +1,6 @@
 ---
-title: Opcodes and functions
-description: User-defined opcodes, fn, state, scheduling, and Rust plugins.
+title: Opcodes
+description: User-defined opcodes, state, and chaining.
 ---
 
 ## User-defined opcodes
@@ -22,43 +22,24 @@ opcode drive(x, amount: 0..1 = 0.5) {
 out = osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz)
 ```
 
-- The **last expression** is the output.
-- **`prev(x)`** is `x` one sample ago, so feedback is explicit and sample-accurate: `y = x + prev(y) * 0.5` reads `y` before it is defined. `prev` of a name that is never defined is an error. (Between buses, `prev` works differently: it sends a block late. See [Routing](/reference/language/routing/).)
+- The **last expression** is the output (or use `out` the same way as in an instrument).
+- **`prev(x)`** is `x` one sample ago, so feedback is explicit: `y = x + prev(y) * 0.5` reads `y` before it is defined. `prev` of a name that is never defined is an error. (Between buses, `prev` works differently: it sends a block late. See [Routing](/reference/language/routing/).)
 - **`state`** declares a variable that persists between samples, per call site and per voice.
+- Inside opcodes, **`pi`** and **`sample_rate`** are available.
 - **Multiple outputs** are named and returned as fields:
 
 ```nml
-opcode svf(x, cutoff: hz, res: 0..1 = 0.5) -> (low, band, high) { ... }
-
-f = noise().svf(cutoff: 2khz)
-out = f.band
-```
-
-Opcodes can call opcodes, take trigger inputs, and declare latency (for compensation). **Rust plugins** implement the same opcode trait — built-in, niminal, and plugin opcodes look identical at the call site.
-
-## Functions
-
-`fn` runs at compile or load time: structure, helpers, score material. No audio state.
-
-```nml
-fn fifths(root: note, count: n) {
-  for i in 0..count { root + (7st * i) }
+opcode split(x, cutoff: hz) -> (low, high) {
+  low  = x.lpf(cutoff: cutoff)
+  high = x.hpf(cutoff: cutoff)
 }
+
+bands = sig.split(cutoff: 1khz)
+out = bands.low + bands.high.gain(-6db)
 ```
 
-Anonymous functions: `fn(a, b) { a * b }`. **`it`** covers the one-argument case.
+Opcodes can call other opcodes. A comment (`//` or `///`) directly above an `opcode` or `instr` is its hover documentation in the editor.
 
-## Scheduling from instruments
+## Built-ins
 
-An instrument can schedule other notes with `schedule`:
-
-```nml
-instr echo_note(freq: hz, depth: n = 4) {
-  out = pluck(freq: freq)
-  if depth > 0 {
-    schedule(echo_note(freq: freq * 3/2, depth: depth - 1), in: 1/8 beat)
-  }
-}
-```
-
-Scheduled notes go through the score model — logged, replayable, quantized like any other event.
+Core opcodes (`osc`, filters, `gain`, `delay`, `reverb`, `pan`, math, …) are listed under [Built-in opcodes](/reference/opcodes/). That page is generated from the compiler, so it stays in sync with the binary.

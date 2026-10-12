@@ -78,7 +78,7 @@ With keys from `midi.keys()` this plays like a mono synth: hold a note, roll a s
 
 **Pitch:** parameter `freq` is pitch by convention — used by `same_note`, mono priority, `keys.note`, and unqualified `transpose`.
 
-No voice limits by default. `config { max_voices: 512 }` steals quietest voices and warns.
+No project-wide voice cap in `config` today. Per-instrument limits use `with(max: n, steal: …)` above.
 
 ## What you pass is what you get
 
@@ -86,26 +86,17 @@ No voice limits by default. `config { max_voices: 512 }` steals quietest voices 
 | --- | --- | --- |
 | Constant | Stays constant | `amp: -6db` |
 | Pattern | Each note gets its own value, fixed at note start | `amp: [-6db -12db -9db]` |
-| Signal | Stays live; running notes follow it | `amp: lfo(2 beats).range(-12db..0db)` |
+| Control / live signal | Stays live; running notes follow it | `amp: volume` where `ctl volume = …` |
 
-## Multichannel and branching
+## Multichannel
 
-1. **Multichannel expansion:** comma list in an argument: `src.lpf(cutoff: [800hz, 1200hz])`.
-2. **`split` with `it`** for asymmetric processing; `it` alone is pass-through.
-3. **Destructuring** for anything more complex.
+A comma list of signals builds multichannel audio. Destructure when you need the channels separately:
 
 ```nml
-out = src.split(
-  left:  it.lpf(cutoff: 800hz),
-  right: it.delay(time: 3/16 beat).hpf(cutoff: 200hz),
-)
-
-out = drums.split(dry: it, wet: it.compress(ratio: 8, threshold: -30db)).sum
-
 [l, r] = src
 mid  = (l + r) * 0.5
 side = ((l - r) * 0.5).gain(+3db)
 out  = [mid + side, mid - side]
 ```
 
-A comma list of signals builds multichannel audio. The compiler warns when layout doesn’t match the destination.
+The compiler warns when a layout doesn’t match the destination. Use `.to_layout(...)` or `pan` when crossing layouts — see [Routing](/reference/language/routing/).

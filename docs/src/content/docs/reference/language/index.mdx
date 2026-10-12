@@ -3,9 +3,9 @@ title: Language overview
 description: The niminal orchestra language — syntax, instruments, routing, patterns and performance.
 ---
 
-The **orchestra** is niminal’s DSP and composition language: typed parameters, named arguments, opcodes you can chain, and a score model any client can write.
+The **orchestra** is niminal’s DSP and composition language: typed parameters, named arguments, opcodes you can chain, and a score you can also drive from outside.
 
-This reference follows the [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md). Read it in order, or jump to what you need:
+niminal is in alpha. This reference describes what works today. The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) is the longer-term design; where the two disagree, trust the docs and the compiler.
 
 | Section | Topics |
 | --- | --- |
@@ -13,14 +13,15 @@ This reference follows the [language spec](https://github.com/martineastwood/nim
 | [Units and rates](/reference/language/units-and-rates/) | Hz, dB, beats; init, control and audio |
 | [Envelopes](/reference/language/envelopes/) | `env[...]`, sustain, curves, `adsr`, `perc` |
 | [Instruments](/reference/language/instruments/) | `instr`, `mono`, voices, `out`, parameters |
-| [Opcodes and functions](/reference/language/opcodes/) | User opcodes, `fn`, scheduling |
-| [Routing](/reference/language/routing/) | Buses, execution order, delay, latency, layouts |
-| [Samples and spectral](/reference/language/samples/) | Tables, kits, playback, FFT |
+| [Opcodes and functions](/reference/language/opcodes/) | User opcodes, `state`, chaining |
+| [Routing](/reference/language/routing/) | Buses, execution order, delay, layouts |
+| [Samples](/reference/language/samples/) | WAV samples, kits, slices, grids |
 | [Patterns](/reference/language/patterns/) | Mini-notation, grids, pattern transforms |
 | [Performance](/reference/language/performance/) | Tracks, clips, scenes, live commands |
-| [Score model](/reference/score-model/) | Events, lanes, sections (wire format) |
+| [Modules](/reference/language/modules/) | `use`, packages, reloading |
+| [Score model](/reference/score-model/) | Events and `.nms` files |
 | [Reserved words](/reference/reserved-words/) | Names the language keeps |
-| [Built-in opcodes](/reference/opcodes/) | Core opcode library (v1) |
+| [Built-in opcodes](/reference/opcodes/) | Core opcode library |
 
 A minimal instrument:
 
@@ -28,7 +29,7 @@ A minimal instrument:
 instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {
   level = env[0 2ms 1 600ms.exp 0]
   osc(saw, freq)
-    .lpf(cutoff: freq * (2 + bright * 6), res: 0.3, model: ladder)
+    .lpf(cutoff: freq * (2 + bright * 6), res: 0.3)
     .gain(amp) * level
 }
 ```

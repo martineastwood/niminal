@@ -154,7 +154,7 @@ Invalid name, unit, value, or full queue → **-32001** or **-32602**.
 
 ### `event.stream`
 
-Inject score-model **events** from an external client (Python, tracker, etc.) without niminal source.
+Inject score-model **events** from an external client without niminal source.
 
 **Params**
 

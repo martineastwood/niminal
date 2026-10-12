@@ -1,86 +1,74 @@
 ---
-title: Samples and spectral
-description: Tables, samples, kits, playback, FFT, triggers, and stutter.
+title: Samples
+description: WAV samples, kits, slices, and playing them from patterns.
 ---
 
-## Tables, samples, kits, buffers
+## Samples and kits
 
-| Declaration | What it is | Callable |
-| --- | --- | --- |
-| `table` | Immutable data: wavetables, curves, IRs | No |
-| `sample` | Playable audio + metadata; or multisampled instrument | Yes |
-| `kit` | Folder of samples by name | Its samples are |
-| `buffer` | Writable data; audio buffers play like samples | Audio buffers are |
+| Declaration | What it is |
+| --- | --- |
+| `sample` | A playable WAV file, or a sliced break |
+| `kit` | A folder of WAVs by name, or the slices of a sample |
 
 ```nml
-table saw8   = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
-table shaper = curve([0 0.2 0.7 1], size: 1024)
-table hall   = file("irs/hall.wav")
-
-sample kick  = "drums/kick.wav"
-sample hh    = "drums/hh_open.wav" with(choke: hats)
-sample amen  = "breaks/amen.wav" with(beats: 4)
-sample piano = sfz("keys/piano.sfz")
-kit drums    = "drums/808"
+sample kick = "drums/kick.wav"
+sample amen = "breaks/amen.wav" with(beats: 4, fit: rate)
+kit drums   = "drums/808"
+kit chops   = amen.slices(16)          // s0 .. s15
 ```
 
-`kick.data` exposes the underlying table. Kit folders support indexed or patterned variations (`snare.2`, variation lanes on clips).
+Paths are resolved relative to the file that declares them (and the project when the daemon evaluates).
 
-## Playing samples
+### Options on a sample
 
-Parameters are playback settings:
+| Option | Effect |
+| --- | --- |
+| `beats: N` | The loop is N beats long (needed for tempo sync) |
+| `fit: rate` | Speed the loop up or down so those beats match the current tempo |
+| `choke: group` | On a kit sample: starting this sample ends others in the group |
 
-- **`rate:`** or **`pitch:`** (not both); **`start:`** / **`end:`** in time, `%`, or beats; **`reverse:`**; **`interp:`**.
-- **Loops:** `loop: 1.2sec..2.8sec`, `loop_mode:`, `crossfade:`; `loop: from_file` reads metadata.
-- **Tempo-synced:** `fit: rate`, `stretch`, or `slice` with `align: bar`.
-- **`amen.slices(16)`** — callable, patternable slices. Chop a break with a grid, a row per slice: `grid { s0: x... .... s4: .... x... }`.
-- **SFZ** chooses zone from pitch and layer from gain.
+`fit: stretch` and `fit: slice` are not supported yet. Only `fit: rate` is.
+
+### Playing samples
+
+A sample or kit is an instrument. Call it with playback settings, or put it on a track and play note/sample patterns:
 
 ```nml
 kick(pitch: -2st)
-snare(pitch: +2st).hpf(cutoff: 200hz)
-out = amen(fit: slice, align: bar)
-piano(freq: c4, gain: -9db)
+snare(pitch: +2st)
+track drums { instrument = chops }
+drums.play([s0 s1 s2 s3 s4 s5 s6 s7])
 ```
 
-Samples load off the audio thread; evaluation waits until loaded. **`with(stream: true)`** streams long files. Files are watched and reloaded.
+Parameters you can set on a hit:
 
-**Live recording:** buffers — `take.record(input(1..2), when: key("r"), align: bar)`, then `take(loop: forever, align: bar)`.
+| Parameter | Meaning |
+| --- | --- |
+| `pitch:` or `rate:` or `freq:` | Playback pitch / speed (not more than one of these) |
+| `start:` | Start offset into the file |
+| `gain:` | Level (as for any instrument) |
 
-## Spectral processing
-
-FFT yields a **`spectrum`** stream (`spectrum[2048, 512]`). Only spectral opcodes accept it; **`.ifft`** returns to audio.
+Chop a break with a grid — a row per slice, columns are steps. `X` accents, `o` ghosts:
 
 ```nml
-instr shimmer(freq: hz) {
-  out = osc(saw, freq)
-    .fft(size: 2048, hop: 512, window: hann)
-    .pitch_shift(+12st)
-    .blur(time: 300ms)
-    .ifft
-}
-
-out = src.fft(size: 2048)
-  .map_bins(it.gain(if it.freq < 2khz { 0db } else { -14db }))
-  .ifft
+drums.play(grid {
+  s0:  x... .... x... ....
+  s4:  .... x... .... x..x
+  s2:  ..x. ..o. ..X. ....
+})
 ```
 
-Built-ins include `pitch_shift`, `freeze`, `blur`, `spectral_gate`, `morph`, `cross`, `spectral_mask`, `map_bins` (bins have `freq`, `mag`, `phase`, `index`).
+See `examples/drums.nml` and `examples/breakbeat.nml`.
 
-Fixed-length **`array[f32, N]`** with element-wise ops, `.map`, `.sum`, indexing. Commas stack channels; spaces sequence steps in bin data.
+### Choke groups
 
-## Triggers and stutter
-
-Patterns become sample-accurate triggers with **`.trig`**.
+On a kit, name groups so one hit cuts off another (open/closed hats, overlapping slices):
 
 ```nml
-fills = grid[.... .... ..xx xxxx]
-
-out = drums.stutter(
-  on:    fills.trig,
-  size:  [(1/16 beat) (1/32 beat) (1/64 beat) (1/128 beat)],
-  pitch: env[0st 1beat +12st],
-)
+kit drums = "drums" with(choke: hats(hat_open, hat_closed))
+kit chops = brk.slices(16) with(choke: g(s4, s12))
 ```
 
-See [Built-in opcodes](/reference/opcodes/) for the full v1 list.
+## Built-in DSP
+
+For filters, delay, reverb, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Spectral processing, SFZ multisamples, and live recording buffers are not in the language yet.

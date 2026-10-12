@@ -546,3 +546,22 @@ fn euclid_with_pattern_arguments() {
     assert_eq!(onsets(&p, cycles(0, 1)).len(), 3);
     assert_eq!(onsets(&p, cycles(1, 2)).len(), 5);
 }
+
+#[test]
+fn pieces_cut_events_up_and_say_which_piece_each_is() {
+    let p = parse("a b").unwrap().pieces(2, |v, i, n| format!("{v}{i}/{n}"));
+    let e = onsets(&p, cycles(0, 1));
+    assert_eq!(e.iter().map(|x| (x.0, x.2.as_str())).collect::<Vec<_>>(), [(r(0, 1), "a0/2"), (r(1, 4), "a1/2"), (r(1, 2), "b0/2"), (r(3, 4), "b1/2")]);
+    assert!(onsets(&parse("a").unwrap().pieces(0, |v, _, _| v.clone()), cycles(0, 1)).is_empty());
+}
+
+#[test]
+fn set_from_takes_a_value_where_each_event_starts() {
+    let notes = parse("a b c d").unwrap();
+    let levels = parse("1 2").unwrap();
+    let p = notes.set_from(&levels, |v, l| format!("{v}{l}"));
+    assert_eq!(values_of(&p, cycles(0, 1)), ["a1", "b1", "c2", "d2"]);
+    // where the other pattern is silent, the event is left alone
+    let sparse = parse("1 ~").unwrap();
+    assert_eq!(values_of(&notes.set_from(&sparse, |v, l| format!("{v}{l}")), cycles(0, 1)), ["a1", "b1", "c", "d"]);
+}

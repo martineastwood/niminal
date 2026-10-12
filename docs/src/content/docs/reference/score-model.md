@@ -1,70 +1,52 @@
 ---
 title: Score model
-description: Events, lanes, sections, time, and the JSON wire format.
+description: Events, sections, and the .nms JSON format.
 ---
 
-The engine understands one **score model** as data. niminal notation, Python, a tracker, or MIDI all produce it — separate from the orchestra, so any tool can write music for the same instruments.
+The engine can play **score events** that do not come from niminal source: a `.nms` file on the command line, or `event.stream` on a live daemon. The orchestra still defines the instruments; the score only times and names the notes.
 
 ## Elements
 
 | Element | Contents |
 | --- | --- |
-| **Event** | Target (instrument or track), start, duration, named arguments with units, optional id |
-| **Lane** | Curve over time for one parameter, or a pattern |
-| **Section** | Named finite container of events and lanes; reusable and launchable |
-| **Arrangement** | Sections over time plus song-level lanes (tempo, meter, automation) |
+| **Event** | Target (instrument or track), start, duration, named arguments with units |
+| **Section** | Named finite list of events with a length (a `.nms` file is one section) |
+| **Arrangement** | Scenes over time in niminal source (see [Performance](/reference/language/performance/)) — not part of the `.nms` file format |
+
+Endless patterns (mini-notation, grids) stay in niminal and are evaluated by the daemon; they are not stored as finite score events until they play.
 
 ## Time
 
-Musical time (beats/bars via tempo and meter map) or absolute seconds — both in one score.
+Positions and durations use the same unit strings as the language: `0beat`, `1/4beat`, `250ms`, `1bar`, and so on. Tempo and meter come from the `.nml` file you render against (or the running session).
 
-- Positions: `bar 5 beat 3`; offsets: `1/8beat`, `250ms`.
-- Tempo and meter are **lanes** on the arrangement.
+## Wire format (`.nms`)
 
-```nml
-arrangement song {
-  sections: [dawn.over(16 bars) build.over(32 bars) theme.over(24 bars)]
-  tempo:    env[84bpm (64 bars) 84bpm (8 bars).log 96bpm]
-  meter:    [4/4 4/4 7/8 4/4].per_section
-}
-```
-
-## Validation
-
-Every event is checked against its target’s signature with the same type and unit checker as orchestra code.
-
-## Updating running notes
-
-Events can carry an **id** so later updates reach the running voice:
-
-```nml
-n = pad(freq: c3) for 8beats
-at beat 4  n.set(freq: d3)
-```
-
-Ids are scoped per section launch; updates to ended voices are ignored with a warning.
-
-## Finite vs endless material
-
-- The score model holds **finite** material (known lengths).
-- **Endless patterns** are niminal values the daemon evaluates, emitting events over time.
-- External clients can stream timestamped events slightly ahead of the clock.
-
-## Wire format
-
-JSON over the protocol (MessagePack later for huge scores). Saved as **`.nms`** files. Values keep units as strings. Format version on every file — no separate text score; human notations belong to clients.
+JSON. Values keep units as strings. Every file has a format **`version`**.
 
 ```json
 {
-  "section": "phi", "length": "16bars",
+  "version": 1,
+  "section": "phi",
+  "length": "4beats",
   "events": [
-    { "at": "0beat", "dur": "1/4beat", "track": "lead", "args": { "freq": "e4", "gain": "-6db" } }
-  ],
-  "lanes": [
-    { "target": "bass.tone",
-      "points": [ { "at": "0beat", "value": "300hz" }, { "at": "4beats", "value": "1.2khz", "curve": "exp" } ] }
+    { "at": "0beat", "dur": "1/2beat", "target": "saw_lead", "args": { "freq": "e5", "amp": "-12db" } },
+    { "at": "1/2beat", "dur": "1/2beat", "target": "saw_lead", "args": { "freq": "g5", "amp": "-12db" } }
   ]
 }
 ```
 
-Example clients (Python, tracker `.nmt`, line `.line`, MIDI import) ship with the project; each owns its notation and produces sections for `load(...)` or the protocol.
+| Field | Meaning |
+| --- | --- |
+| `target` | Instrument or track name in the `.nml` file / session |
+| `at`, `dur` | Start and hold time, with units |
+| `args` | Named parameters; strings with units or numbers, checked like orchestra code |
+
+Example in the repo: `examples/phi.nms`, played with:
+
+```sh
+niminal render examples/saw_lead.nml --score examples/phi.nms --out phi.wav
+```
+
+Live: send the same events with **`event.stream`** ([Daemon protocol](/reference/protocol/)).
+
+Arrangements, clip lanes, and tempo maps are written in `.nml`, not in `.nms` today.

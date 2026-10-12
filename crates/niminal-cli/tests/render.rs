@@ -694,6 +694,44 @@ mod channels {
         assert!(peak(&mid[1]) > peak(&mid[0]), "12 degrees is right of centre");
     }
 
+    /// A stereo render of a pattern played on a tone.
+    fn played(pattern: &str) -> Vec<Vec<f32>> {
+        let src = format!(
+            "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\ntrack lead {{ instrument = tone }}\nlead.play({pattern})"
+        );
+        render_with(&program(&src), &[], &RenderOptions { limiter: false, until: Some(1.9), ..Default::default() }).unwrap().channels
+    }
+
+    #[test]
+    fn a_note_can_have_a_pan_of_its_own() {
+        let first = 2000;
+        let left = played("[c4].pan(-30deg)");
+        assert!(peak(&left[0][..first]) > 0.9 && peak(&left[1][..first]) < 1e-6, "left");
+        let right = played("[c4].pan(30deg)");
+        assert!(peak(&right[1][..first]) > 0.9 && peak(&right[0][..first]) < 1e-6, "right");
+        // no pan of its own: centred as ever
+        let centred = played("[c4]");
+        assert_eq!(centred[0][..first], centred[1][..first]);
+        // the lane form works the same way
+        let lane = played("[c4].set(pan: 30deg)");
+        assert!(peak(&lane[1][..first]) > 0.9 && peak(&lane[0][..first]) < 1e-6, "right from a lane");
+        // each note its own: the first step left, the second right
+        let each = played("[c4 c4].pan([-30deg 30deg])");
+        let second = (1.0 * SR) as usize + 500; // past the first note's release
+        assert!(peak(&each[0][..first]) > 0.9 && peak(&each[1][..first]) < 1e-6);
+        assert!(peak(&each[1][second..second + first]) > 0.9 && peak(&each[0][second..second + first]) < 1e-6);
+    }
+
+    #[test]
+    fn left_right_plays_the_original_and_its_change_in_different_speakers() {
+        // left plays low then high; right plays the reverse: high then low
+        let out = played("[c3 c5].left_right(it.reverse)");
+        let (l, r) = (&out[0], &out[1]);
+        let (first, second) = (0..(0.5 * SR) as usize, (1.0 * SR) as usize..(1.5 * SR) as usize);
+        assert!(crossings(&l[first.clone()]) < crossings(&l[second.clone()]), "left rises");
+        assert!(crossings(&r[first]) > crossings(&r[second]), "right falls");
+    }
+
     #[test]
     fn surround_pan_uses_the_right_speakers() {
         let at = |az: &str| {

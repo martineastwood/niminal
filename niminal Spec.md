@@ -648,7 +648,7 @@ Naming rules: say what it does; keep the accepted term when there is one; one na
 | `iter` | `rotate(4)` | Start one part later each cycle |
 | `chunk` | `in_turn(4, it.fast(2))` | Change each part in turn |
 | `mask` | `mask(grid[x.x. xxxx])` | Silence where the mask is empty |
-| `fix` | `where(it.freq < c3, it.gain(-6db))` | Change matching events |
+| `fix` | `where(it < c3, it.transpose(+12st))` | Change the notes that pass a test on `it` (or `it.freq`) |
 | `segment` | `to_steps(16)` | Turn a signal into steps |
 | `chop`, `striate` | `chop(16)`, `interleave_chops(16)` | Cut sample events |
 | `linger` | `repeat_start(25%)` | Loop the start of each cycle |
@@ -657,7 +657,7 @@ Naming rules: say what it does; keep the accepted term when there is one; one na
 
 ### Composition tools
 
-Deliberate tools for writing, not random generators: `in_scale(minor, root: c3)`, `chord(minor7)`, `arpeggiate(up)`, `voice_lead`, `invert_melody(around: c4)`, `markov`, `random_walk(step: 2st)`, `palindrome` (reversing a passage is `reverse`). Signals (`sine`, `saw`, `tri`, `square`, `rand`, `perlin`) have a value at every moment; `range` scales them and `to_steps` cuts them into steps. Not built yet: `left_right` (needs a pan lane), `where` (needs per-note expressions in clips) and `chop`/`interleave_chops` (need start and end points on sample playback). All randomness is seeded per cycle, so renders are reproducible and code sounds the same live and offline.
+Deliberate tools for writing, not random generators: `in_scale(minor, root: c3)`, `chord(minor7)`, `arpeggiate(up)`, `voice_lead`, `invert_melody(around: c4)`, `markov`, `random_walk(step: 2st)`, `palindrome` (reversing a passage is `reverse`). Signals (`sine`, `saw`, `tri`, `square`, `rand`, `perlin`) have a value at every moment; `range` scales them and `to_steps` cuts them into steps. A note can carry its own controls (`gain`, `pan`, `begin`) that stay with it through every other operation, unlike a lane, which is read where a note starts; `left_right` and `chop`/`interleave_chops` are built on them. All randomness is seeded per cycle, so renders are reproducible and code sounds the same live and offline.
 
 ### Example clients
 

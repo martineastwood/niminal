@@ -416,6 +416,12 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
 
     /// Repeat every event `n` times within its own length.
     pub fn repeat_each(&self, n: i64) -> Pattern<T> {
+        self.pieces(n, |value, _, _| value.clone())
+    }
+
+    /// Cut every event into `n` equal pieces, one after another. `f` makes each
+    /// piece's value from the event's, the piece's number and `n`.
+    pub fn pieces(&self, n: i64, f: impl Fn(&T, i64, i64) -> T + Send + Sync + 'static) -> Pattern<T> {
         if n < 1 {
             return Pattern::silence();
         }
@@ -433,11 +439,33 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                     let start = whole.start + step * Rational::int(i);
                     let piece = Span::new(start, start + step);
                     if let Some(part) = h.part.intersection(piece) {
-                        out.push(Hap { whole: Some(piece), part, value: h.value.clone() });
+                        out.push(Hap { whole: Some(piece), part, value: f(&h.value, i, n) });
                     }
                 }
             }
             out
+        })
+    }
+
+    /// Change each event with the value `other` has where the event starts
+    /// (events keep their own timing; where `other` has nothing they stay as they are).
+    pub fn set_from<U: Clone + Send + Sync + 'static>(
+        &self,
+        other: &Pattern<U>,
+        f: impl Fn(&T, &U) -> T + Send + Sync + 'static,
+    ) -> Pattern<T> {
+        let (p, other) = (self.clone(), other.clone());
+        Pattern::new(move |span| {
+            p.query(span)
+                .into_iter()
+                .map(|h| {
+                    let at = h.whole.map_or(h.part.start, |w| w.start);
+                    match other.query(Span::new(at, at)).into_iter().next() {
+                        Some(o) => Hap { whole: h.whole, part: h.part, value: f(&h.value, &o.value) },
+                        None => h,
+                    }
+                })
+                .collect()
         })
     }
 

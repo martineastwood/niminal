@@ -6,6 +6,32 @@ use niminal_engine::ops::Curve;
 use niminal_pattern::{Pattern, Rational};
 use niminal_score::{Time, Value};
 
+/// One step of a pattern: a value, and the controls that belong to this note alone
+/// (a lane is read once, where a note starts; these travel with the note itself).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Step {
+    pub value: Value,
+    /// How loud, in db.
+    pub gain: Option<f64>,
+    /// Where it sits among the speakers, in degrees: 0 is straight ahead and positive is right.
+    pub pan: Option<f64>,
+    /// Where in a sample it starts, as a share of its length.
+    pub begin: Option<f64>,
+}
+
+impl From<Value> for Step {
+    fn from(value: Value) -> Step {
+        Step { value, gain: None, pan: None, begin: None }
+    }
+}
+
+impl Step {
+    /// The same note and controls with a different value.
+    pub fn with(self, value: Value) -> Step {
+        Step { value, ..self }
+    }
+}
+
 /// A clip: lanes of patterns sharing one timeline.
 ///
 /// One pattern cycle is one bar. A clip plays `length` cycles and then starts
@@ -22,7 +48,7 @@ pub struct Clip {
     pub endless: bool,
     /// `notes` is the pitch lane; other lanes set parameters or universal
     /// controls note by note.
-    pub lanes: Vec<(String, Pattern<Value>)>,
+    pub lanes: Vec<(String, Pattern<Step>)>,
     /// `keys: midi.keys(channel: 1)`: played from a keyboard instead of by `notes`.
     pub keys: Option<Keys>,
     /// Lanes drawn as an envelope, `cut: env[300hz 1bar 3khz]`: they move a track's
@@ -54,7 +80,7 @@ impl Clip {
         self.curves.iter().find(|(n, _)| n == name).map(|(_, c)| c)
     }
 
-    pub fn lane(&self, name: &str) -> Option<&Pattern<Value>> {
+    pub fn lane(&self, name: &str) -> Option<&Pattern<Step>> {
         self.lanes.iter().find(|(n, _)| n == name).map(|(_, p)| p)
     }
 }

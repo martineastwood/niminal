@@ -11,7 +11,7 @@ use std::fmt;
 use niminal_pattern::{Rational, Span as CycleSpan};
 use niminal_score::{Event, Tempo, Time, Value};
 
-use crate::performance::{Action, Clip, EnvLane, Scheduled};
+use crate::performance::{Action, Clip, EnvLane, Scheduled, Step};
 use crate::program::Program;
 
 /// The pattern queries and events one clip may spend in a search: a base
@@ -281,7 +281,7 @@ impl Schedule {
                 continue;
             }
             if let Some(hap) = pattern.query(CycleSpan::new(Rational::ZERO, Rational::ZERO)).into_iter().next() {
-                args.insert(lane.clone(), hap.value);
+                args.insert(lane.clone(), hap.value.value);
             }
         }
         args.insert(crate::perform::PITCH_PARAM.to_string(), Value::Note(note));
@@ -518,9 +518,10 @@ impl Schedule {
         &self,
         segment: &Segment,
         whole: CycleSpan,
-        pitch: &Value,
+        step: &Step,
         onset: f64,
     ) -> Result<Event, ScheduleError> {
+        let pitch = &step.value;
         let cycle = segment.tempo.beats_per_bar * 60.0 / segment.tempo.bpm;
         let name = &self.track_names[segment.track];
         let clip = &segment.clip;
@@ -529,10 +530,6 @@ impl Schedule {
         match pitch {
             Value::Note(_) | Value::Hz(_) => args.insert(crate::perform::PITCH_PARAM.to_string(), *pitch),
             Value::Sample(_) => args.insert("sample".to_string(), *pitch),
-            Value::SampleGain(id, db) => {
-                args.insert(crate::lower::GAIN_PARAM.to_string(), Value::Db(*db));
-                args.insert("sample".to_string(), Value::Sample(*id))
-            }
             other => {
                 return Err(ScheduleError(format!(
                     "clip `{}` on track `{name}`: a note must be a note name or a frequency, found `{other}`",
@@ -551,7 +548,7 @@ impl Schedule {
             let Some(hap) = pattern.query(CycleSpan::new(whole.start, whole.start)).into_iter().next() else {
                 continue;
             };
-            match (lane.as_str(), hap.value) {
+            match (lane.as_str(), hap.value.value) {
                 ("dur", v) => {
                     dur = v.as_time().map_err(|e| lane_error(clip, name, lane, &e.to_string()))?;
                 }
@@ -563,6 +560,16 @@ impl Schedule {
                     args.insert(lane.clone(), v);
                 }
             }
+        }
+        // controls that belong to this note alone win over the lanes
+        if let Some(db) = step.gain {
+            args.insert(crate::lower::GAIN_PARAM.to_string(), Value::Db(db));
+        }
+        if let Some(degrees) = step.pan {
+            args.insert("pan".to_string(), Value::Degrees(degrees));
+        }
+        if let Some(share) = step.begin {
+            args.insert("begin".to_string(), Value::Num(share));
         }
         Ok(Event { target: name.clone(), at: Time::Seconds(at), dur, args })
     }

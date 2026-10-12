@@ -488,6 +488,7 @@ impl Session {
             for &(i, value) in &plan.params { voice.set_param(i, value); }
             voice.set_group(plan.choke);
             voice.set_rule(plan.rule);
+            voice.set_pan(plan.pan);
             for (key, value, smooth) in &plan.controls {
                 window.commands.push(Command { at, kind: Kind::Control { key: key.clone(), value: *value, frames: (smooth * f64::from(self.sample_rate)).round() as u64 } });
             }

@@ -21,7 +21,7 @@ description: Comments, blocks, bindings, calls and control flow in the orchestra
 
 - **Named arguments** by default. An obvious first argument may be positional: `osc(saw, freq)`.
 - **UFCS:** `x.f(a)` is `f(x, a)`. Opcodes stay freestanding; the dot is left-to-right wiring.
-- **Paren-less calls only after a dot:** `sig.ifft`, `riff.reverse`. A bare name is a reference, never a call.
+- **Paren-less calls only after a dot:** `riff.reverse`, `sig.tanh`. A bare name is a reference, never a call.
 - **After a dot**, resolution order is: field on the value’s type, then unit, then opcode. Ambiguity is an error.
 - **Line continuation:** a line starting with `.` continues the previous expression.
 - **No bit-shift operators:** use `shl(x, n)` and `shr(x, n)`.
@@ -36,7 +36,7 @@ description: Comments, blocks, bindings, calls and control flow in the orchestra
 The language has exactly two implicit names: **`out`** and **`it`**.
 
 - **`out`:** instrument, opcode, or `fn` result (see [Instruments](/reference/language/instruments/)).
-- **`it`:** the current value in a one-argument context (e.g. `split`, anonymous `fn`, pattern transforms).
+- **`it`:** the current value in a one-argument context (e.g. pattern transforms, a bus body, a track’s `out` / `notes` line).
 
 ## Control flow
 

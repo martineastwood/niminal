@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::graph::Graph;
-use crate::mixer::Buses;
+use crate::mixer::{Buses, MAX_CHANNELS};
 use crate::opcode::{BLOCK, MAX_INPUTS, Opcode, ProcessCtx};
 
 /// One running note: a private copy of every opcode's state plus the signal
@@ -27,6 +27,8 @@ pub struct Voice {
     held: Option<Box<Held>>,
     /// The loudest sample of the last block, or the largest value before the voice has sounded.
     level: f32,
+    /// Gains that place the voice's mix among the master's speakers, if this note has its own pan.
+    pan: Option<Box<[f32; MAX_CHANNELS]>>,
 }
 
 /// Which held note a legato voice sounds.
@@ -148,7 +150,7 @@ impl Voice {
         }
 
         let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0)).map(Some).collect();
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX }
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None }
     }
 
     /// Keep memory at matching call sites while retaining the new graph's
@@ -220,6 +222,12 @@ impl Voice {
 
     pub fn group(&self) -> Option<u32> {
         self.group
+    }
+
+    /// Place this note among the speakers: its channels are mixed down and
+    /// spread with `gains` (one per output channel; see `pan_gains`).
+    pub fn set_pan(&mut self, gains: Option<[f32; MAX_CHANNELS]>) {
+        self.pan = gains.map(Box::new);
     }
 
     pub fn set_rule(&mut self, rule: Option<VoiceRule>) {
@@ -417,6 +425,18 @@ impl Voice {
             if let Some(g) = &fade {
                 channel[..frames].iter_mut().zip(g).for_each(|(y, g)| *y *= g);
             }
+        }
+        if let Some(gains) = self.pan.as_deref()
+            && out.len() > 1
+        {
+            // the mix of every channel, as loud as one channel of a mono voice, placed with the gains
+            let share = 1.0 / (out.len() as f32).sqrt();
+            for n in 0..frames {
+                let mix = out.iter().map(|c| c[n]).sum::<f32>() * share;
+                out.iter_mut().zip(gains).for_each(|(c, g)| c[n] = mix * g);
+            }
+        }
+        for channel in out.iter() {
             level = channel[..frames].iter().fold(level, |l, y| l.max(y.abs()));
         }
         self.level = level;

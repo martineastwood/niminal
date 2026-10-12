@@ -25,7 +25,7 @@ Trigger character for completion: `.`
 
 After installing a new `niminal` binary, run **Restart Language Server** in the command palette (VS Code) or restart your editor’s LSP client.
 
-## VS Code extension
+## VS Code / Cursor extension
 
 From the repo root:
 
@@ -62,6 +62,10 @@ The **niminal** sidebar lists scenes and tracks (mute, solo, stop). Compile erro
 | `niminal.port` | Daemon WebSocket port (default `7400`) |
 | `niminal.token` | Token if the daemon was started with `--token` |
 | `niminal.quantize` | Default land time for evaluation (e.g. `next 4 bars`) |
+
+### MIDI learn
+
+With the daemon started with `--midi`, a control written as `midi.learn` waits for the next CC. When one arrives, the extension can rewrite the line to the bound `midi.cc(...)`. See [Performance](/reference/language/performance/) and [Live coding](/guide/live-coding/).
 
 ## Daemon vs LSP
 

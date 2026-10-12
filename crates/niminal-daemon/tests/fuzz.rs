@@ -173,7 +173,7 @@ track lead { instrument = tone }
 
 /// Programs that are legal but ask for far more than any machine can play.
 /// None may take long to accept, and the session must keep rendering audio.
-const GREEDY: [&str; 17] = [
+const GREEDY: [&str; 20] = [
     "lead.play([c4*1024])",
     "lead.play([[c4*1024]*1024])",
     "lead.play([[[c4*1024]*1024]*1024])",
@@ -191,6 +191,9 @@ const GREEDY: [&str; 17] = [
     "lead.play([c4 e4 g4 b4].shuffle(1000).pick_random(1000).rotate(1000))",
     "lead.play([c4 e4 g4 b4].repeat_start(1/1000).in_turn(1000, it.fast(1000)))",
     "lead.play(saw.to_steps(1000000))",
+    "lead.play([c4*1024].chop(1024).chop(1024))",
+    "lead.play([c4*1024].interleave_chops(1024))",
+    "lead.play([c4*64].left_right(it.chop(64).left_right(it.fast(64))))",
 ];
 
 #[test]

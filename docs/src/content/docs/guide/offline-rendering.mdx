@@ -5,6 +5,14 @@ description: Turn a file or an arrangement into audio.
 
 import Example from '../../../components/Example.astro';
 
+Render any `.nml` file to WAV:
+
+```sh
+niminal render examples/saw_lead.nml --out saw_lead.wav
+```
+
+## Arrangements
+
 An `arrangement` plays scenes in order. Render it by name, or just a passage of it:
 
 <Example file="song.nml" />
@@ -13,6 +21,17 @@ An `arrangement` plays scenes in order. Render it by name, or just a passage of 
 niminal render examples/song.nml song --out song.wav
 niminal render examples/song.nml song --from "bar 5" --to "bar 9" --out passage.wav
 ```
+
+## Live pieces and duration
+
+Files that start clips or scenes and never stop (like `examples/groove.nml` when you strip the timed `hush`) need an end time:
+
+```sh
+niminal render examples/breakbeat.nml --out breakbeat.wav --bars 4
+niminal render piece.nml --out piece.wav --seconds 30
+```
+
+A file with a tempo ramp (`tempo … @ next … over …`) is played through a session the same way; say how long with `--bars` or `--seconds`. `--stems`, arrangement name, `--score`, `--from` and `--to` aren't available for that path.
 
 ## Stems
 
@@ -24,3 +43,23 @@ niminal render examples/groove.nml --stems --out stems/
 ```
 
 Each stem is what that track put out after its own effects and before the master stage, so it has no limiter on it. The stems of the tracks that go to the master add up to the mix, and all files are the same length, so they line up in a mixer. A bus's file is the sum of what was sent to it; the channel that processes a bus (`space.fx` for `bus space { … }`) has its own. Parts that play bare instruments with no part of their own are in `direct.wav`.
+
+## External scores
+
+Play events from a `.nms` JSON score on the instruments in a file:
+
+```sh
+niminal render examples/saw_lead.nml --score examples/phi.nms --out phi.wav
+```
+
+See [Score model](/reference/score-model/) for the format. Live sessions can also inject events with the daemon's `event.stream` method ([protocol](/reference/protocol/)).
+
+## Limiter and replay
+
+Offline renders use a master limiter by default; pass `--no-limiter` to turn it off.
+
+To re-render a live set from its log:
+
+```sh
+niminal render --replay ~/.niminal/sessions/<log> --out set.wav --channels 2
+```

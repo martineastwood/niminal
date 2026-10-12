@@ -1615,6 +1615,7 @@ impl Session {
                         }
                     }
                     let id = self.mixer.note_on_with(plan.track, graph, &plan.params, plan.choke, plan.rule);
+                    self.mixer.set_voice_pan(id, plan.pan);
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
                     let off = if note.key.is_some() { u64::MAX } else { self.clock + note.dur };
                     self.held.push((off, id, note.key.unwrap_or(NO_KEY)));

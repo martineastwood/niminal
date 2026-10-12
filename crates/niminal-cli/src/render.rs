@@ -173,6 +173,7 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
             }
             let graph = program.instruments[note.plan.instrument].graph.clone();
             let id = mixer.note_on_with(note.plan.track, graph, &note.plan.params, note.plan.choke, note.plan.rule);
+            mixer.set_voice_pan(id, note.plan.pan);
             held.push((note.off, id));
             next += 1;
         }

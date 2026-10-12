@@ -49,7 +49,7 @@ Sessions are logged sample-accurately, so you can replay them:
 niminal render --replay ~/.niminal/sessions/<log> --out set.wav
 ```
 
-Use `niminal <command> --help` for flags (`render`, `daemon`, `repl`, `send`, `lsp`).
+For MIDI / OSC controls, start the daemon with `--midi` and/or `--osc-port` (see `examples/midi_osc.nml`). Use `niminal <command> --help` for flags (`render`, `daemon`, `repl`, `send`, `lsp`).
 
 ## Editor
 

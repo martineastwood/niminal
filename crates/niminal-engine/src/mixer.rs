@@ -428,6 +428,15 @@ impl Mixer {
         }
     }
 
+    /// Place a sounding note among the speakers; see [`Voice::set_pan`].
+    pub fn set_voice_pan(&mut self, id: VoiceId, gains: Option<[f32; MAX_CHANNELS]>) {
+        if let Some(track) = self.tracks.get_mut(id.track)
+            && let Some((_, voice)) = track.voices.iter_mut().find(|(serial, _)| *serial == id.serial)
+        {
+            voice.set_pan(gains);
+        }
+    }
+
     pub fn set_voice_control(&mut self, id: VoiceId, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
         if let Some(track) = self.tracks.get_mut(id.track)
             && let Some((_, voice)) = track.voices.iter_mut().find(|(serial, _)| *serial == id.serial)

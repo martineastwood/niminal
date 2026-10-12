@@ -3,7 +3,7 @@ title: Performance
 description: Tracks, clips, scenes, live commands, quantization, and control.
 ---
 
-The performance layer is session-view style: **clips** carry their instrument and are started and stopped by name, **scenes** start sets of clips, and **tracks** are there when you need a mixer channel with effects. Arrangements sequence the same structures for offline renders.
+The performance layer is built around **clips**, **scenes**, and **tracks**: clips carry their instrument and are started and stopped by name, scenes start sets of clips, and tracks are there when you need a mixer channel with effects. Arrangements sequence the same structures for offline renders.
 
 ## Parts: clips with an instrument
 
@@ -53,7 +53,7 @@ track bass(tone: hz = 2khz) {
 }
 ```
 
-- Tracks with an instrument play plain note patterns (MIDI-clip style).
+- Tracks with an instrument play plain note patterns.
 - **Parameters** (`tone: hz = 2khz`) are controls named `bass::tone`, which the track's lines read by their short name. Set one from outside like any `ctl` (a client, or MIDI or OSC bound to it), or change its starting value in the header and re-evaluate: it glides there. A clip lane can't drive one yet, and says so if you try.
 - **`notes`** changes the notes of every clip played on the track, with `it` the clip's notes. `notes = it.thin(10%)` drops a tenth of them whatever is playing. A clip played from keys is left as it is. A mistake in it is reported where a clip is played on the track.
 - **Short forms:** `track bass = pluck(bright: 0.4)` is a track with only an instrument. Naming an instrument where a part goes, as in `pluck.start` or a scene's `{ pluck: riff }`, makes a track of that name playing it.
@@ -79,7 +79,7 @@ clip riff {
 - Lane targets: `notes`, instrument parameters, track parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Clip lanes target only their track; scene/arrangement lanes can target any track.
 - **Step lanes** read at note start and cycle (polymeter); **`.per_note`** maps nth note → nth value.
 - Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip.
-- Shorthand: `[c2 ~ eb2]` → `clip { notes: [...] }`. **`load("...nms")`** is also a clip.
+- Shorthand: `[c2 ~ eb2]` → `clip { notes: [...] }`.
 - **`riff.set(bright: [0.9])`** — lanes are fields.
 - **Longer than a bar:** with `length: 2 bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`). Without a `length:` a lane's cycle is one bar. `riff.over(4 bars)` stretches the whole clip, and `riff.set(...)` lanes span it too.
 
@@ -161,24 +161,20 @@ at +12 bars hush
 
 ## Quantized changes
 
-Code compiles immediately; changes **land** on a musical boundary. Quantum (most specific first): per evaluation (`@ next 4 bars`), per definition (`with(quantize:)`), per kind in `config`, global default.
+Code compiles immediately; changes **land** on a musical boundary. Most specific wins:
+
+1. `@ next 4 bars` (or similar) on the statement
+2. `--quantize` / REPL `:quantize` for that evaluation
+3. Built-in defaults by kind: plays on the next **cycle**, instrument redefinitions on the next **beat**, tempo and most other changes on the next **bar**
 
 ```nml
-config {
-  quantize: {
-    default: 1 bar
-    play:    cycle
-    instr:   1 beat
-    track:   1 bar
-    ctl:     now
-    tempo:   1 bar
-  }
-}
-
 tempo 124bpm @ next bar over 2 bars
+bass.reverse @ next 4 bars
 ```
 
 Boundaries: `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. One evaluation is one transaction. Last write wins for pending changes.
+
+`config { quantize: … }` and `with(quantize:)` on definitions are not settings yet — use `@` or the client flag instead. `config` today only accepts `channels` (see [Routing](/reference/language/routing/)).
 
 ### Tempo and meter
 
@@ -258,16 +254,8 @@ instr organ(freq: hz, bend: st = 0st, pressure: 0..1 = 0) {
 
 All three are logged, so a set with them replays exactly.
 
-**Triggers:** `key("r")` and `osc_in`. **Inputs:** `input(1)` or `input(1..2)`.
+**OSC on controls:** `ctl x = osc_in("/address")` (start the daemon with `--osc-port`). See [Live coding](/guide/live-coding/).
 
 ## Modules
 
-A module is a file. `use rig` loads `rig.nml` (neighbor, project library, packages). Core library is always in scope. One **`config`** per project. Circular `use` is an error.
-
-```nml
-use rig
-use score/verse
-use acme_verbs as av
-
-out = sig.av::shimmer(size: 0.9)
-```
+Split a project across files with `use` — see [Modules](/reference/language/modules/).

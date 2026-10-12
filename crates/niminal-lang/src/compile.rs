@@ -892,7 +892,7 @@ fn literal_value(e: &Expr) -> Res<Value> {
             Value::Bars(n) => Ok(Value::Bars(-n)),
             Value::Semitones(n) => Ok(Value::Semitones(-n)),
             Value::Degrees(n) => Ok(Value::Degrees(-n)),
-            Value::Note(_) | Value::Sample(_) | Value::SampleGain(..) => Err(bad()),
+            Value::Note(_) | Value::Sample(_) => Err(bad()),
         },
         _ => Err(bad()),
     }
@@ -1561,11 +1561,11 @@ track pad { instrument = pluck }
     }
 
     /// (start in cycles, value) of every event beginning in the first `cycles` cycles.
-    fn events(p: &Pattern<Value>, cycles: i64) -> Vec<(Rational, Value)> {
+    fn events(p: &Pattern<crate::performance::Step>, cycles: i64) -> Vec<(Rational, Value)> {
         let mut v: Vec<_> = p
             .onsets(CycleSpan::new(Rational::ZERO, Rational::int(cycles)))
             .into_iter()
-            .map(|h| (h.whole.unwrap().start, h.value))
+            .map(|h| (h.whole.unwrap().start, h.value.value))
             .collect();
         v.sort_by_key(|e| e.0);
         v
@@ -1623,6 +1623,70 @@ track pad { instrument = pluck }
         assert_eq!(shuffled.len(), 4);
         assert_eq!(notes_of("lead.play([c4 e4 g4 b4].in_turn(4, it.fast(2)))", 1).len(), 5);
         assert_eq!(notes_of("lead.play([c4 e4 g4 b4].pick_random(4))", 1).len(), 4);
+    }
+
+    #[test]
+    fn where_changes_only_the_notes_that_pass() {
+        assert_eq!(
+            values_of("lead.play([c3 e4 g2 c5].where(it < c4, it.transpose(+12st)))", 1),
+            [midi(60), midi(64), midi(55), midi(72)]
+        );
+        assert_eq!(values_of("lead.play([c3 e4].where(it.freq >= e4, it.transpose(-12st)))", 1), [midi(48), midi(52)]);
+        assert!(msg(&stage("lead.play([c3].where(c3, it))")).contains("takes a test on the note"));
+    }
+
+    /// The notes of a clip with the controls each carries, in time order.
+    fn steps_of(src: &str, cycles: i64) -> Vec<(Rational, crate::performance::Step)> {
+        let clip = played(src);
+        let mut v: Vec<_> = clip
+            .lane("notes")
+            .unwrap()
+            .onsets(CycleSpan::new(Rational::ZERO, Rational::int(cycles)))
+            .into_iter()
+            .map(|h| (h.whole.unwrap().start, h.value))
+            .collect();
+        v.sort_by_key(|e| e.0);
+        v
+    }
+
+    #[test]
+    fn notes_carry_their_own_controls() {
+        let s = steps_of("lead.play([c4 e4].gain([-6db -12db]).pan(-30deg))", 1);
+        assert_eq!((s[0].1.gain, s[1].1.gain), (Some(-6.0), Some(-12.0)));
+        assert_eq!((s[0].1.pan, s[1].1.pan), (Some(-30.0), Some(-30.0)));
+        // a control keeps the structure of the notes, not of its own pattern
+        let s = steps_of("lead.play([c4 e4 g4 b4].pan([-30deg 30deg]))", 1);
+        assert_eq!(s.iter().map(|e| e.1.pan.unwrap()).collect::<Vec<_>>(), [-30.0, -30.0, 30.0, 30.0]);
+        // and survives other changes to the notes
+        let s = steps_of("lead.play([c4 e4].pan(20deg).transpose(+12st).reverse)", 1);
+        assert_eq!((s[0].1.value, s[0].1.pan), (midi(76), Some(20.0)));
+        assert_eq!(steps_of("lead.play([c4].gain(0.5))", 1)[0].1.gain.map(|g| (g * 10.0).round()), Some(-60.0));
+        assert!(msg(&stage("lead.play([c4].pan(3hz))")).contains("`pan` takes a direction in degrees"));
+        assert!(msg(&stage("lead.play([c4].begin(2))")).contains("`begin` takes a share of the sample"));
+    }
+
+    #[test]
+    fn left_right_places_the_original_and_the_change_apart() {
+        let s = steps_of("lead.play([c4 e4].left_right(it.reverse))", 1);
+        assert_eq!(s.len(), 4);
+        let left: Vec<_> = s.iter().filter(|e| e.1.pan == Some(-30.0)).map(|e| e.1.value).collect();
+        let right: Vec<_> = s.iter().filter(|e| e.1.pan == Some(30.0)).map(|e| e.1.value).collect();
+        assert_eq!(left, [midi(60), midi(64)]);
+        assert_eq!(right, [midi(64), midi(60)]);
+        let wide = steps_of("lead.play([c4].left_right(it, angle: 60deg))", 1);
+        assert!(wide.iter().any(|e| e.1.pan == Some(60.0)));
+    }
+
+    #[test]
+    fn chop_walks_through_the_sample() {
+        let s = steps_of("lead.play([c4 e4].chop(4))", 1);
+        assert_eq!(s.len(), 8);
+        assert_eq!(s.iter().map(|e| e.1.begin.unwrap()).collect::<Vec<_>>(), [0.0, 0.25, 0.5, 0.75, 0.0, 0.25, 0.5, 0.75]);
+        assert_eq!(s[1].0, r(1, 8), "each piece takes its share of the note");
+        let s = steps_of("lead.play([c4 e4].interleave_chops(2))", 1);
+        assert_eq!(s.iter().map(|e| (e.0, e.1.begin.unwrap())).collect::<Vec<_>>(), [(r(0, 1), 0.0), (r(1, 4), 0.0), (r(1, 2), 0.5), (r(3, 4), 0.5)]);
+        let s = steps_of("lead.play([c4].begin(50%).chop(2))", 1);
+        assert_eq!(s.iter().map(|e| e.1.begin.unwrap()).collect::<Vec<_>>(), [0.5, 0.75], "pieces divide what is left of the sample");
     }
 
     #[test]
@@ -1888,9 +1952,10 @@ at bar 3 bass.unsolo"));
         let d = first_error(&stage("clip c { notes: [c4]\nbrigth: [0.1] }\nlead.play(c)"));
         assert_eq!(d.help.as_deref(), Some("did you mean `bright`?"));
         ok(&stage("clip c { notes: [c4]\nbright: [0.1]\ngain: [-3db]\ndur: [1/4beat]\nnudge: [10ms] }\nlead.play(c)"));
+        ok(&stage("clip c { notes: [c4]\npan: [-30deg 30deg] }\nlead.play(c)"));
         assert_eq!(
-            msg(&stage("clip c { notes: [c4]\npan: [0deg] }\nlead.play(c)")),
-            "the `pan` lane isn't supported yet"
+            msg(&stage("clip c { notes: [c4]\nto: [0deg] }\nlead.play(c)")),
+            "the `to` lane isn't supported yet"
         );
 
         let no_pitch = "instr drone(amp: db) { osc(sine, 100hz) }\ntrack t { instrument = drone }\nt.play([c4])";

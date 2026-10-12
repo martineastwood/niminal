@@ -3,7 +3,7 @@ title: Live coding
 description: Run the daemon and send code to it.
 ---
 
-Start the daemon, then send code to it from the REPL, the CLI or the [VS Code extension](/reference/editor/). Syntax help and completion come from [`niminal lsp`](/reference/editor/) and work without a daemon.
+Start the daemon, then send code from the REPL, the CLI, or the [editor](/reference/editor/). Syntax help and completion come from [`niminal lsp`](/reference/editor/) and work without a daemon.
 
 ```sh
 niminal daemon examples/groove.nml
@@ -11,10 +11,58 @@ niminal repl
 niminal send 'chorus.start' --quantize "next 4 bars"
 ```
 
+With a file argument, the daemon watches that file and every module it `use`s, and reloads when you save.
+
+## REPL
+
+In the REPL, `:quantize next 4 bars` sets when each statement lands (`:quantize off` clears it); `:quit` exits.
+
+Useful live commands once a scene is running (see [Performance](/reference/language/performance/)):
+
+```nml
+verse.start
+bass.reverse
+lead.transpose(+5st)
+bass.set(bright: 0.9)
+bass.undo
+hush
+```
+
+## When changes land
+
+Code compiles immediately; sound changes land on a musical boundary. Pass `--quantize` to `send` / `repl`, set `:quantize` in the REPL, or write `@ next 4 bars` after a command in source.
+
+Defaults when you omit a quantum: plays on the next cycle, instrument redefinitions on the next beat, most other changes on the next bar. `now` lands as soon as possible.
+
+## Session replay
+
 Every input to a live session is logged by sample (by default under `~/.niminal/sessions/`), so a session replays to identical audio:
 
 ```sh
 niminal render --replay ~/.niminal/sessions/<log> --out set.wav
 ```
 
-In the REPL, `:quantize next 4 bars` sets when each statement lands (`:quantize off` clears it); `:quit` exits.
+Use `--no-log` on the daemon to skip recording, or `--log PATH` to choose the file. The newest 20 session logs are kept.
+
+## MIDI and OSC
+
+Drive named controls from a controller or OSC sender:
+
+```sh
+niminal daemon examples/midi_osc.nml --midi --osc-port 9000
+```
+
+```nml
+ctl cutoff = midi.cc(21).range(200hz..4khz).smooth(10ms)
+ctl volume = midi.cc(7).range(-60db..0db)
+ctl pan    = osc_in("/fx/pan").range(-60deg..60deg)
+```
+
+- `--midi [NAME]` — every MIDI input whose name contains `NAME`, or all inputs if you omit the name.
+- `--osc-port PORT` — OSC over UDP on this machine only.
+
+`midi.learn` waits for the next control change and binds to it (the editor can rewrite the line). A clip with `keys: midi.keys(...)` plays from a MIDI keyboard. Details: [Performance](/reference/language/performance/).
+
+## Editor
+
+With the [VS Code / Cursor extension](/reference/editor/) connected to a daemon: **Cmd/Ctrl+Enter** evaluates the block around the cursor, **Cmd/Ctrl+Shift+Enter** the whole file, **Cmd/Ctrl+.** hushes, and the sidebar lists scenes and tracks.

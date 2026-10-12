@@ -1,6 +1,6 @@
 ---
 title: Routing
-description: Buses, execution order, delay lines, latency, and channel layouts.
+description: Buses, execution order, delay, and channel layouts.
 ---
 
 ## Buses
@@ -16,13 +16,16 @@ instr pluck(freq: hz) {
 }
 
 track room {
-  out = space.reverb(room: 0.8, model: plate)
+  out = space.reverb(room: 0.8, damp: 0.4)
 }
 ```
 
 - **`bus += x`** sends a copy; original routing is unchanged.
 - **`.to(bus)`** routes output to a bus instead of master.
 - A track’s **`out`** goes to master unless routed with `.to(bus)`.
+- A bus can process what it collects: `bus space: stereo { out = it.reverb(...) }` — `it` is the sum of sends.
+
+Declaration order does not matter; see `examples/room.nml`.
 
 ## Execution order
 
@@ -39,38 +42,20 @@ track room {
 
 Inside a single voice or opcode, `prev(x)` is one sample.
 
-## Delay lines
+## Delay
 
-- **Opcode:** `sig.delay(time: 3/16 beat, feedback: 0.4)` — beat times follow tempo.
-- **Delay lines as values** (write with `+=`, read with taps):
-
-```nml
-line = delay_line(max: 2sec)
-tap1 = line.tap(3/16 beat)
-tap2 = line.tap(5/16 beat, interp: cubic)
-
-line += sig + tap1.lpf(cutoff: 3khz).gain(-6db)
-out = sig + [tap1, tap2]
-```
-
-Buffer size is known up front (`max:` when time is modulated). Short feedback loops (flangers, Karplus–Strong) run per sample automatically. When modulating read position, set **`interp:`** `none`, `linear`, `cubic`, or `allpass`.
-
-## Latency compensation
-
-Opcodes with lookahead declare latency; parallel paths are delayed to stay aligned. Automatic unless `with(compensate: false)`.
+Use the **`delay`** opcode. Beat times follow tempo. A changing `time` needs **`max:`** to size the line (at most 30 seconds):
 
 ```nml
-out = drums.split(dry: it, wet: it.limit(ceiling: -1db, lookahead: 5ms)).sum
+out = sig.delay(time: 3/16 beat, feedback: 0.4)
+out = sig.delay(time: oscillated, feedback: 0.3, max: 2sec)   // changing time needs max:
 ```
-
 ## Channel layouts
 
-Signals carry a layout in their type: `mono`, `stereo`, `quad`, `surround(5.1)`, `surround(7.1.4)`, `ambi(order: 3)`, `ch[N]`.
+Signals carry a layout in their type: `mono`, `stereo`, `quad`, `surround(5.1)`, `surround(7.1)`, or `channels(N)` (1–16).
 
-- **`split`** must cover every channel or provide `rest:`.
-- **`.each(...)`** processes every channel of any layout.
-- Prefer **`pan(azimuth:, spread:)`** over hard-coded channel names so the same code works on stereo, 5.1, or headphones.
-- Master layout: `config { channels: surround(5.1) }`.
-- Ambisonics: `config { mix: ambi(order: 3) }` — buses carry the sound field; decoded at master.
+- Prefer **`pan(azimuth:, spread:)`** over hard-coded channel counts so the same code works on stereo or surround.
+- Master layout: `config { channels: surround(5.1) }` (or `stereo`, `quad`, `surround(7.1)`, `mono`, `channels(N)`). A project has only one `config`; `channels` is the only setting today.
+- Convert explicitly with **`.to_layout(stereo)`** (and other layouts) when a send or instrument layout must match a bus.
 
-Mismatch overrides: `config { upmix: ... }` or `.to_layout(...)`.
+The daemon’s `--channels` flag must match the layout you intend to hear (1, 2, 4, 6 for 5.1, or 8 for 7.1).
