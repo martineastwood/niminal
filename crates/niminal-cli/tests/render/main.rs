@@ -1,0 +1,17 @@
+mod common;
+mod basics;
+mod opcodes;
+mod routing;
+mod effects;
+mod channels;
+mod pitch;
+mod performance;
+mod command_line;
+mod stems;
+mod prev_feedback;
+mod prev_in_opcodes;
+mod mono_voices;
+mod tempo_ramps;
+mod audio_input;
+mod range_at_the_use_site;
+mod envelope_shortcuts;

@@ -1,11 +1,14 @@
 use std::fmt;
 
-use niminal_engine::{BLOCK, MAX_CHANNELS, Master, Mixer, VoiceId};
+use niminal_engine::{BLOCK, Master};
 use niminal_daemon::Session;
-use niminal_lang::{Layout, NotePlan, Program};
+use niminal_lang::{Layout, Program};
 use niminal_score::Event;
 
 pub const SAMPLE_RATE: u32 = 48_000;
+
+/// How much a session is asked for at a time.
+const STEP: usize = BLOCK * 8;
 
 /// The master limiter's ceiling: -0.3db.
 const CEILING: f32 = 0.966_051;
@@ -80,180 +83,89 @@ impl fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-struct Note {
-    start: usize,
-    off: usize,
-    plan: NotePlan,
-}
-
 /// Render the program's own notes plus `extra` events (for example from a
 /// `.nms` score). Voices run until their envelopes finish, and effect tails
 /// ring out, so the result includes every release.
 pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Result<RenderOutput, RenderError> {
     let sr = f64::from(SAMPLE_RATE);
+    let error = |e: &dyn fmt::Display| RenderError(e.to_string());
 
     // Notes from `play` and `launch` commands.
     let schedule = match &options.arrangement {
-        Some(name) => program.arrangement_schedule(name).map_err(|e| RenderError(e.to_string()))?,
+        Some(name) => program.arrangement_schedule(name).map_err(|e| error(&e))?,
         None => program.schedule(),
     };
-    let performed = if schedule.is_empty() {
-        Vec::new()
-    } else {
-        let Some(until) = options.until.or(schedule.end()) else {
+    let until = options.until.or(schedule.end());
+    let mut performed = Vec::new();
+    if !schedule.is_empty() {
+        let Some(until) = until else {
             return Err(RenderError(
                 "this file plays until it is stopped: say how long to render, for example with `--bars 16`".into(),
             ));
         };
-        schedule.events(0.0, until).map_err(|e| RenderError(e.to_string()))?
-    };
-    let mut panics: Vec<usize> = schedule.panics().iter().map(|t| (t * sr).round() as usize).collect();
-    panics.sort_unstable();
-
-    let mut notes = Vec::new();
-    for event in program.notes.iter().chain(extra).chain(&performed) {
-        let plan = program
-            .plan(event)
-            .map_err(|e| RenderError(format!("note for `{}`: {e}", event.target)))?;
-
-        let start = (event.at.to_seconds(program.tempo) * sr).round().max(0.0) as usize;
-        let dur = (event.dur.to_seconds(program.tempo) * sr).round().max(0.0) as usize;
-        notes.push(Note { start, off: start + dur, plan });
+        performed = schedule.events(0.0, until).map_err(|e| error(&e))?;
     }
-    notes.sort_by_key(|n| n.start);
+    // mistakes in a note are reported before anything is rendered
+    for event in program.notes.iter().chain(&performed) {
+        program.plan(event).map_err(|e| RenderError(format!("note for `{}`: {e}", event.target)))?;
+    }
 
-    let mut mixer = program.mixer(SAMPLE_RATE as f32);
+    // the notes written out in the file and sent in count towards how long it plays, as the schedule does
+    let note_end = program.notes.iter().chain(extra)
+        .map(|e| (e.at.to_seconds(program.tempo) + e.dur.to_seconds(program.tempo)) * sr)
+        .fold(0.0, f64::max);
+    let input_len = options.input.iter().map(Vec::len).max().unwrap_or(0);
+    let stop = ((until.unwrap_or(0.0) * sr).max(note_end).round() as usize).max(input_len) as u64;
+
+    let mut session = Session::playing(program.clone(), schedule, SAMPLE_RATE as f32);
+    session.stream_events(extra.to_vec()).map_err(|ps| problems(&ps))?;
     if options.stems {
-        mixer.capture_stems();
+        session.capture_stems();
     }
-    let n_channels = mixer.channels();
-    let mut out: Vec<Vec<f32>> = vec![Vec::new(); n_channels];
-    // Notes that have started but not yet been released, in no particular order.
-    let mut held: Vec<(usize, VoiceId)> = Vec::new();
-    // each control's last glide
-    let mut glides: Vec<Glide> = program.controls.iter().map(|c| Glide::at_rest(c.initial)).collect();
-    // what envelope lanes do to track parameters, as (sample, control index, target, glide frames)
-    let mut moves: Vec<(usize, usize, f32, u64)> = if schedule.is_empty() {
-        Vec::new()
-    } else {
-        let until = options.until.or(schedule.end()).unwrap_or(0.0);
-        let sets = schedule.controls(0.0, until).map_err(|e| RenderError(e.to_string()))?;
-        sets.iter()
-            .filter_map(|s| {
-                let i = program.controls.iter().position(|c| c.name == s.name)?;
-                Some(((s.at * sr).round().max(0.0) as usize, i, s.target as f32, (s.glide * sr).round() as u64))
-            })
-            .collect()
-    };
-    moves.sort_by_key(|m| m.0);
-    let mut next_move = 0;
-    let mut silenced_voices = 0;
-    let mut next = 0;
-    let mut next_panic = 0;
-    let mut pos = 0;
+    session.set_audio_input(options.input.clone());
+    let mut out = vec![Vec::new(); session.channels()];
+    // exactly to `stop`, so that no note starts after it
+    while session.clock() < stop {
+        let frames = ((stop - session.clock()) as usize).min(STEP);
+        run(&mut session, &mut out, frames);
+    }
+    session.end_schedule();
+    Ok(collect(session, out, options.limiter))
+}
 
+fn problems(ps: &[niminal_daemon::Problem]) -> RenderError {
+    RenderError(ps.iter().map(|p| p.message.clone()).collect::<Vec<_>>().join("\n"))
+}
+
+/// Play `session` on, adding to `out`, until `done`.
+fn run_until(session: &mut Session, out: &mut [Vec<f32>], mut done: impl FnMut(&Session) -> bool) {
     loop {
-        // `panic` silences everything at once.
-        while panics.get(next_panic).is_some_and(|&p| p <= pos) {
-            mixer.panic();
-            held.clear();
-            next_panic += 1;
+        run(session, out, STEP);
+        if done(session) {
+            return;
         }
-
-        while moves.get(next_move).is_some_and(|m| m.0 <= pos) {
-            let (at, i, target, frames) = moves[next_move];
-            glides[i].set(&mut mixer, &program.controls[i].key, target, frames, at, pos);
-            next_move += 1;
-        }
-
-        while next < notes.len() && notes[next].start == pos {
-            let note = &notes[next];
-            for (key, value, smooth) in &note.plan.controls {
-                if let Some(i) = program.controls.iter().position(|c| c.key == *key) {
-                    glides[i].set(&mut mixer, key, *value, (smooth * sr).round() as u64, pos, pos);
-                }
-            }
-            let graph = program.instruments[note.plan.instrument].graph.clone();
-            let id = mixer.note_on_with(note.plan.track, graph, &note.plan.params, note.plan.choke, note.plan.rule);
-            mixer.set_voice_pan(id, note.plan.pan);
-            held.push((note.off, id));
-            next += 1;
-        }
-        held.retain(|&(off, id)| {
-            if off <= pos {
-                mixer.release(id);
-            }
-            off > pos
-        });
-
-        // while there is input to hear, the tracks that read it go on sounding
-        let input_len = options.input.iter().map(Vec::len).max().unwrap_or(0);
-        if mixer.active_voices() == 0 && pos >= input_len {
-            match notes.get(next) {
-                None => {
-                    ring_out(&mut mixer, &mut out, &options.input);
-                    let stems = name_stems(program, mixer.take_stems(), out[0].len());
-                    return Ok(finish(out, silenced_voices + mixer.take_silenced(), stems, options));
-                }
-                Some(n) => {
-                    // Nothing sounding: skip the silence, applying any panics on the way
-                    // (they still clear effect tails).
-                    while panics.get(next_panic).is_some_and(|&p| p <= n.start) {
-                        mixer.panic();
-                        next_panic += 1;
-                    }
-                    out.iter_mut().for_each(|c| c.resize(n.start, 0.0));
-                    mixer.pad_stems(n.start);
-                    pos = n.start;
-                    continue;
-                }
-            }
-        }
-
-        // Run to the next block edge, note start or note end, whichever is first,
-        // so that every note starts and stops on exactly the right sample.
-        let mut n = BLOCK;
-        if let Some(note) = notes.get(next) {
-            n = n.min(note.start - pos);
-        }
-        for &(off, _) in &held {
-            n = n.min(off - pos);
-        }
-        if let Some(&p) = panics.get(next_panic) {
-            n = n.min(p - pos);
-        }
-        if let Some(m) = moves.get(next_move) {
-            n = n.min(m.0 - pos);
-        }
-
-        mix_block(&mut mixer, &mut out, n, &options.input);
-        silenced_voices += mixer.take_silenced();
-        pos += n;
     }
 }
 
-/// Mix `frames` more samples onto the end of every channel.
-fn mix_block(mixer: &mut Mixer, out: &mut [Vec<f32>], frames: usize, input: &[Vec<f32>]) {
-    let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];
-    let at = out[0].len();
-    for (c, samples) in input.iter().enumerate().take(MAX_CHANNELS) {
-        let from = at.min(samples.len());
-        mixer.set_audio_input(c, &samples[from..(at + frames).min(samples.len())]);
+fn run(session: &mut Session, out: &mut [Vec<f32>], frames: usize) {
+    for (o, block) in out.iter_mut().zip(session.process(frames)) {
+        o.extend(block);
     }
-    mixer.process(&mut block[..out.len()], frames);
-    for (channel, mixed) in out.iter_mut().zip(&block) {
-        channel.extend_from_slice(&mixed[..frames]);
-    }
+}
+
+/// Let what is still sounding ring out, then name the stems and apply the master stage.
+fn collect(mut session: Session, mut out: Vec<Vec<f32>>, limiter: bool) -> RenderOutput {
+    ring_out(&mut out, |out| run(&mut session, out, STEP));
+    let len = out[0].len();
+    let silenced = session.take_silenced();
+    let captured = session.take_stems();
+    let stems = name_stems(session.program(), captured, len);
+    finish(out, silenced, stems, limiter)
 }
 
 /// Keep mixing after the last voice has ended, until the tracks' effects have
-/// died away, then trim the trailing silence.
-fn ring_out(mixer: &mut Mixer, out: &mut Vec<Vec<f32>>, input: &[Vec<f32>]) {
-    ring_out_with(out, |out| mix_block(mixer, out, BLOCK, input));
-}
-
-/// [`ring_out`] for any way of mixing `more` audio onto the end of `out`.
-fn ring_out_with(out: &mut Vec<Vec<f32>>, mut more: impl FnMut(&mut Vec<Vec<f32>>)) {
+/// died away, then trim the trailing silence. `more` adds audio to the end of `out`.
+fn ring_out(out: &mut Vec<Vec<f32>>, mut more: impl FnMut(&mut Vec<Vec<f32>>)) {
     let needed = (TAIL_SILENCE * SAMPLE_RATE as f32) as usize;
     let limit = out[0].len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
     let quiet_at = |out: &[Vec<f32>], i: usize| out.iter().all(|c| c[i].abs() < TAIL_THRESHOLD);
@@ -272,8 +184,8 @@ fn ring_out_with(out: &mut Vec<Vec<f32>>, mut more: impl FnMut(&mut Vec<Vec<f32>
 
 /// Apply the master stage, removing the limiter's lookahead delay so notes
 /// still land exactly where they were scheduled.
-fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, stems: Vec<Stem>, options: &RenderOptions) -> RenderOutput {
-    if options.limiter {
+fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, stems: Vec<Stem>, limiter: bool) -> RenderOutput {
+    if limiter {
         let mut master = Master::with_channels(SAMPLE_RATE as f32, CEILING, channels.len());
         let latency = master.latency();
         for c in &mut channels {
@@ -354,14 +266,12 @@ pub enum End {
 /// `source` has its `use` lines already joined in. The file's own `tempo` stays the starting tempo; each
 /// ramp is sent after the rest, so it sets off from there at the boundary it names.
 pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: End, limiter: bool, stems: bool, input: Vec<Vec<f32>>) -> Result<RenderOutput, RenderError> {
-    const STEP: usize = BLOCK * 8;
-    let problems = |ps: Vec<niminal_daemon::Problem>| RenderError(ps.iter().map(|p| p.message.clone()).collect::<Vec<_>>().join("\n"));
     let (rest, ramps) = split_ramps(source).map_err(|d| RenderError(d.message))?;
     let mut session = Session::new(SAMPLE_RATE as f32, layout).without_limiter();
     session.set_sample_dir(dir);
-    session.eval(&rest, Some("now")).map_err(problems)?;
+    session.eval(&rest, Some("now")).map_err(|ps| problems(&ps))?;
     for ramp in &ramps {
-        session.eval(ramp, Some("now")).map_err(problems)?;
+        session.eval(ramp, Some("now")).map_err(|ps| problems(&ps))?;
     }
     if stems {
         session.capture_stems();
@@ -369,57 +279,13 @@ pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: 
     session.set_audio_input(input);
 
     let mut out: Vec<Vec<f32>> = vec![Vec::new(); layout.channels()];
-    let run = |session: &mut Session, out: &mut Vec<Vec<f32>>| {
-        for (o, block) in out.iter_mut().zip(session.process(STEP)) {
-            o.extend(block);
-        }
-    };
-    loop {
-        run(&mut session, &mut out);
+    run_until(&mut session, &mut out, |session| {
         let t = session.transport();
-        let done = match end {
+        match end {
             End::Bars(bars) => (t.bar - 1) as f64 + (t.beat - 1.0) / session.program().tempo.beats_per_bar >= bars,
             End::Seconds(s) => t.seconds >= s,
-        };
-        if done {
-            break;
         }
-    }
+    });
     session.hush().map_err(|_| RenderError("couldn't stop the piece".into()))?;
-
-    ring_out_with(&mut out, |out| run(&mut session, out));
-    let keep = out[0].len();
-    let silenced = session.take_silenced();
-    let captured = session.take_stems();
-    let kept = name_stems(session.program(), captured, keep);
-    Ok(finish(out, silenced, kept, &RenderOptions { limiter, ..Default::default() }))
-}
-
-/// Where a control is heading: from `from` towards `target` over `frames` samples starting at `at`.
-struct Glide {
-    from: f32,
-    target: f32,
-    at: usize,
-    frames: u64,
-}
-
-impl Glide {
-    fn at_rest(value: f32) -> Self {
-        Glide { from: value, target: value, at: 0, frames: 0 }
-    }
-
-    fn value(&self, pos: usize) -> f32 {
-        if self.frames == 0 {
-            return self.target;
-        }
-        let done = (pos.saturating_sub(self.at) as u64).min(self.frames);
-        self.from + (self.target - self.from) * done as f32 / self.frames as f32
-    }
-
-    /// Glide to `target` from where the control was at sample `at`, told at sample `pos` (which may be later).
-    fn set(&mut self, mixer: &mut Mixer, key: &str, target: f32, frames: u64, at: usize, pos: usize) {
-        let from = self.value(at);
-        *self = Glide { from, target, at, frames };
-        mixer.set_control(key, from, target, frames, pos.saturating_sub(at) as u64);
-    }
+    Ok(collect(session, out, limiter))
 }

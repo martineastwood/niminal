@@ -12,6 +12,7 @@ use crate::unit::Unit;
 
 /// A compiled instrument: an engine graph plus the typed signature that
 /// notes are checked against.
+#[derive(Clone)]
 pub struct Instrument {
     pub name: String,
     pub graph: Arc<Graph>,
@@ -104,6 +105,7 @@ pub struct OscTap {
 }
 
 /// A track as the mixer sees it, plus what the language knows about it.
+#[derive(Clone)]
 pub struct TrackInfo {
     /// Its signals sent over OSC.
     pub taps: Vec<OscTap>,
@@ -191,6 +193,7 @@ pub struct QuantizeConfig {
     pub tempo: Option<crate::performance::Quantize>,
 }
 
+#[derive(Clone)]
 pub struct Program {
     pub quantize: QuantizeConfig,
     /// Every signal the project sends over OSC.
