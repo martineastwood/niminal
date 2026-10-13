@@ -15,3 +15,4 @@ mod tempo_ramps;
 mod audio_input;
 mod range_at_the_use_site;
 mod envelope_shortcuts;
+mod functions;

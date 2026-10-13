@@ -3,13 +3,13 @@
   "name": "niminal",
   "patterns": [
     { "name": "comment.line.double-slash.niminal", "match": "//.*$" },
-    { "name": "keyword.control.niminal", "match": "\\b(instr|mono|opcode|bus|ctl|track|config|clip|scene|arrangement|sample|kit|midi_out|with|sections|over|meter|tempo|state|let|use|notes|unsolo|hush|panic|reset|new|at|next|now)\\b" },
+    { "name": "keyword.control.niminal", "match": "\\b(instr|mono|fn|const|bus|ctl|track|config|clip|scene|arrangement|sample|kit|midi_out|with|sections|over|meter|tempo|state|use|notes|unsolo|hush|panic|reset|new|at|next|now|if|else|for|in|and|or|not|init|control)\\b" },
     { "name": "keyword.control.command.niminal", "match": "(?<=\\.)(start|stop|mute|unmute|solo|unsolo|undo|clear)\\b" },
     { "name": "constant.numeric.unit.niminal", "match": "[+-]?\\b\\d+(\\.\\d+)?(hz|khz|db|bpm|sec|ms|beats?|bars?|deg|st|s|%)(?![A-Za-z0-9_])" },
     { "name": "constant.numeric.niminal", "match": "[+-]?\\b\\d+(\\.\\d+)?\\b" },
     { "name": "constant.language.note.niminal", "match": "\\b[a-g](#|b)?-?\\d\\b" },
-    { "name": "constant.language.wave.niminal", "match": "\\b(sine|saw|square|tri|triangle|noise|stereo|mono|quad)\\b" },
-    { "name": "keyword.operator.niminal", "match": "\\+=|\\.\\.|=|[-+*/<>]|~" },
+    { "name": "constant.language.wave.niminal", "match": "\\b(sine|saw|square|tri|stereo|mono|quad|true|false|pi|sample_rate)\\b" },
+    { "name": "keyword.operator.niminal", "match": "\\+=|\\.\\.<?|->|==|!=|<=|>=|=|[-+*/<>]|~" },
     { "name": "support.function.niminal", "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\()" },
     { "name": "entity.name.function.method.niminal", "match": "(?<=\\.)[A-Za-z_][A-Za-z0-9_]*" },
     { "name": "variable.parameter.niminal", "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=:)" }

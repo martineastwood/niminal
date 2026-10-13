@@ -44,7 +44,7 @@ track a { instrument = tone }
 track b { instrument = tone }
 scene one { a: [c4], b: ~ }
 scene two { a: [e4], b: [g4] }
-arrangement song { sections: [one.over(2 bars) two.over(1 bar)] }
+arrangement song { sections: [one.over(2bars) two.over(1bar)] }
 ";
 
 pub fn arrangement(name: &str) -> RenderOptions {
@@ -60,7 +60,7 @@ scene s { pad: riff }
 ";
 
 pub fn lane_song(lanes: &str) -> Vec<f32> {
-    let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(2 bars)]\n{lanes} }}");
+    let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(2bars)]\n{lanes} }}");
     mono(render_with(&program(&src), &[], &arrangement("song")).unwrap())
 }
 

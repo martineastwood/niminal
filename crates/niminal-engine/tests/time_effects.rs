@@ -24,6 +24,10 @@ impl Opcode for Impulse {
             self.0 = true;
         }
     }
+    /// A one-shot source, like a percussive envelope: its voice ends when what it fed has rung out.
+    fn is_envelope(&self) -> bool {
+        true
+    }
 }
 
 fn delay_graph(max: f32, time: f32, feedback: f32) -> Arc<Graph> {
@@ -180,7 +184,9 @@ mod tails {
     #[test]
     fn a_silent_delay_or_reverb_does_not_hold_a_voice() {
         let mut g = GraphBuilder::new();
-        let d = g.add(Delay::new(2.0), &[("x", Src::Const(0.0)), ("time", Src::Const(1.0))]).unwrap();
+        let i = g.add(Impulse(true), &[]).unwrap();
+        let silent = g.add(niminal_engine::ops::Mul, &[("a", i), ("b", Src::Const(0.0))]).unwrap();
+        let d = g.add(Delay::new(2.0), &[("x", silent), ("time", Src::Const(1.0))]).unwrap();
         let (n, _) = samples_until_finished(Arc::new(g.build(d)));
         assert!(n <= 64, "{n}");
     }

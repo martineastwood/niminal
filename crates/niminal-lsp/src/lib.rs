@@ -243,7 +243,7 @@ impl Server {
                 "name": s.name,
                 "detail": s.detail,
                 "kind": match s.kind {
-                    SymbolKind::Instrument | SymbolKind::Opcode => 12, // Function
+                    SymbolKind::Instrument | SymbolKind::Function => 12, // Function
                     SymbolKind::Control => 13,                          // Variable
                     SymbolKind::Bus | SymbolKind::Track => 5,           // Class
                     SymbolKind::Sample | SymbolKind::Kit => 19,         // Object
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn rename_leaves_alone_what_only_shares_the_spelling() {
-        let text = "instr tone(lead: hz, bright: 0..1 = 0.5) { osc(saw, lead) * bright }\ntrack lead { instrument = tone(lead: 440hz) }\nscene verse { lead: lead }\nclip riff { notes: [c4]\n bright: [0.2] }\nbright = [0.1 0.9]\nopcode drive(x) { x }\nbass = osc(saw, 100hz).drive\n";
+        let text = "instr tone(lead: hz, bright: 0..1 = 0.5) { osc(saw, lead) * bright }\ntrack lead { instrument = tone(lead: 440hz) }\nscene verse { lead: lead }\nclip riff { notes: [c4]\n bright: [0.2] }\nbright = [0.1 0.9]\nfn drive(x) { x }\nbass = osc(saw, 100hz).drive\n";
         let mut server = Server::new();
         open(&mut server, text);
         let places = |reply: &Value| -> Vec<(u64, u64)> {
@@ -589,9 +589,9 @@ mod tests {
         // the pattern: not the parameter (header and body), nor the lane key
         let pattern = rename_at(&mut server, URI, 5, 1, "level");
         assert_eq!(places(&pattern), [(5, 0)], "{pattern}");
-        // an opcode is used after a dot
-        let opcode = rename_at(&mut server, URI, 6, 8, "crush");
-        assert_eq!(places(&opcode), [(6, 7), (7, 23)], "{opcode}");
+        // a function is used after a dot
+        let function = rename_at(&mut server, URI, 6, 4, "crush");
+        assert_eq!(places(&function), [(6, 3), (7, 23)], "{function}");
     }
 
     #[test]

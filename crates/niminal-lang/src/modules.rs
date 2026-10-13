@@ -295,7 +295,7 @@ fn rename(source: &str, module: &str, alias: Option<&str>) -> String {
         // `x.name` calls an opcode, and `name:` is an argument unless it is a track in a scene
         let after_dot = i > 0 && tokens[i - 1].tok == Tok::Dot;
         let before_colon = tokens.get(i + 1).is_some_and(|n| n.tok == Tok::Colon);
-        if (after_dot && def.kind != SymbolKind::Opcode)
+        if (after_dot && def.kind != SymbolKind::Function)
             || (before_colon && def.kind != SymbolKind::Track)
         {
             continue;
@@ -382,14 +382,14 @@ mod tests {
         assert_eq!(e.locate(own.clone()), own);
     }
 
-    const RIG: &str = "opcode shimmer(x, size: 0..1 = 0.5) { x }\ninstr tone(freq: hz) { osc(sine, freq).shimmer(size: 0.2) }\ntrack lead { instrument = tone }\nscene a { lead: riff }\nriff = [c4]\n_secret = [d4]\n";
+    const RIG: &str = "fn shimmer(x, size: 0..1 = 0.5) { x }\ninstr tone(freq: hz) { osc(sine, freq).shimmer(size: 0.2) }\ntrack lead { instrument = tone }\nscene a { lead: riff }\nriff = [c4]\n_secret = [d4]\n";
 
     #[test]
     fn an_alias_renames_what_the_module_defines() {
         let dir = project(&[("rig.nml", RIG)]);
         let e = expand_here("use rig as r\nosc(saw, 1hz).r::shimmer(size: 0.1)\n", &dir).unwrap();
         let module = &e.text[e.root_len..];
-        assert!(module.contains("opcode r::shimmer(x, size:"), "{module}");
+        assert!(module.contains("fn r::shimmer(x, size:"), "{module}");
         assert!(module.contains(".r::shimmer(size: 0.2)"), "{module}");
         assert!(
             module.contains("instr r::tone(freq: hz)") && module.contains("instrument = r::tone"),
@@ -407,7 +407,7 @@ mod tests {
         assert!(module.contains("size: 0.2") && module.contains("(freq: hz)"));
         let imports: Vec<_> = e.imports().collect();
         assert_eq!(imports[0].alias, Some("r"));
-        assert!(imports[0].source.contains("opcode shimmer"));
+        assert!(imports[0].source.contains("fn shimmer"));
     }
 
     #[test]
@@ -416,7 +416,7 @@ mod tests {
         let e = expand_here("use rig\n", &dir).unwrap();
         let module = &e.text[e.root_len..];
         assert!(
-            module.contains("opcode shimmer(") && module.contains("rig::_secret"),
+            module.contains("fn shimmer(") && module.contains("rig::_secret"),
             "{module}"
         );
     }

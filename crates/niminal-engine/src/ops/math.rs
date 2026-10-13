@@ -106,3 +106,227 @@ binary_op!(
     /// graph is built.
     Gain, "gain", "x", "gain", Port::optional("gain", 1.0), |x, g| x * g
 );
+
+binary_op!(
+    /// The smaller of `a` and `b`
+    Min, "min", "a", "b", Port::required("b"), |a, b| a.min(b)
+);
+binary_op!(
+    /// The larger of `a` and `b`
+    Max, "max", "a", "b", Port::required("b"), |a, b| a.max(b)
+);
+binary_op!(
+    /// `a` raised to `b`
+    Pow, "pow", "a", "b", Port::required("b"), |a, b| a.powf(b)
+);
+
+/// `x.init`: the value `x` had when the note started, held for the whole note.
+#[derive(Clone, Default)]
+pub struct Hold {
+    value: Option<f32>,
+}
+
+impl Opcode for Hold {
+    fn name(&self) -> &'static str {
+        "hold"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        const PORTS: &[Port] = &[Port::required("x")];
+        PORTS
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(Hold::default())
+    }
+
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
+            self.value = old.value;
+        }
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        if out.is_empty() {
+            return;
+        }
+        let v = *self.value.get_or_insert(inputs[0][0]);
+        out.fill(v);
+    }
+}
+
+/// `x.control`: `x` read at the start of each block and held through it.
+#[derive(Clone, Default)]
+pub struct BlockHold;
+
+impl Opcode for BlockHold {
+    fn name(&self) -> &'static str {
+        "block_hold"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        const PORTS: &[Port] = &[Port::required("x")];
+        PORTS
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(BlockHold)
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        if let Some(&v) = inputs[0].first() {
+            out.fill(v);
+        }
+    }
+}
+
+/// `prev(x)`: what `x` was one sample earlier.
+#[derive(Clone, Default)]
+pub struct Delay1 {
+    last: f32,
+}
+
+impl Opcode for Delay1 {
+    fn name(&self) -> &'static str {
+        "prev"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        const PORTS: &[Port] = &[Port::required("x")];
+        PORTS
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(Delay1::default())
+    }
+
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
+            self.last = old.last;
+        }
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        for (o, x) in out.iter_mut().zip(inputs[0]) {
+            *o = self.last;
+            self.last = *x;
+        }
+    }
+}
+
+/// A table read at a position: whole entries with `Interp::None`, or between them. Wraps.
+#[derive(Clone)]
+pub struct TableRead {
+    data: std::sync::Arc<[f64]>,
+    interp: super::custom::Interp,
+}
+
+impl TableRead {
+    pub fn new(data: std::sync::Arc<[f64]>, interp: super::custom::Interp) -> Self {
+        assert!(!data.is_empty(), "a table has at least one entry");
+        TableRead { data, interp }
+    }
+}
+
+impl Opcode for TableRead {
+    fn name(&self) -> &'static str {
+        "table"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        const PORTS: &[Port] = &[Port::required("pos")];
+        PORTS
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(self.clone())
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        for (o, p) in out.iter_mut().zip(inputs[0]) {
+            *o = super::custom::read_at(&self.data, f64::from(*p), self.interp) as f32;
+        }
+    }
+}
+
+/// Seconds since the note started.
+#[derive(Clone, Default)]
+pub struct NoteTime {
+    samples: u64,
+    sample_rate: f32,
+}
+
+impl Opcode for NoteTime {
+    fn name(&self) -> &'static str {
+        "note_time"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        &[]
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(NoteTime::default())
+    }
+
+    fn prepare(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+    }
+
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
+            self.samples = old.samples;
+        }
+    }
+
+    fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
+        for o in out.iter_mut() {
+            *o = (self.samples as f64 / f64::from(ctx.sample_rate)) as f32;
+            self.samples += 1;
+        }
+    }
+}
+
+/// 0 while the note is held, 1 once it has been released.
+#[derive(Clone, Default)]
+pub struct Released;
+
+impl Opcode for Released {
+    fn name(&self) -> &'static str {
+        "released"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        &[]
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(Released)
+    }
+
+    fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
+        out.fill(if ctx.gate { 0.0 } else { 1.0 });
+    }
+}
+
+/// The sample rate, in hz.
+#[derive(Clone, Default)]
+pub struct SampleRate;
+
+impl Opcode for SampleRate {
+    fn name(&self) -> &'static str {
+        "sample_rate"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        &[]
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(SampleRate)
+    }
+
+    fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
+        out.fill(ctx.sample_rate);
+    }
+}

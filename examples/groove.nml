@@ -40,10 +40,10 @@ scene chorus { bass: bass.transpose(+5st), lead: answer }
 scene outro  { lead: spread }
 
 verse.start
-at +4 bars chorus.start
-at +8 bars bass.mute
-at +10 bars bass.unmute
-at +12 bars outro.start
-at +14 bars hush
+at +4bars chorus.start
+at +8bars bass.mute
+at +10bars bass.unmute
+at +12bars outro.start
+at +14bars hush
 
 

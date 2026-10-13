@@ -8,14 +8,14 @@ Start the daemon, then send code from the REPL, the CLI, or the [editor](/refere
 ```sh
 niminal daemon examples/groove.nml
 niminal repl
-niminal send 'chorus.start' --quantize "next 4 bars"
+niminal send 'chorus.start' --quantize "next 4bars"
 ```
 
 With a file argument, the daemon watches that file and every module it `use`s, and reloads when you save.
 
 ## REPL
 
-In the REPL, `:quantize next 4 bars` sets when each statement lands (`:quantize off` clears it); `:quit` exits.
+In the REPL, `:quantize next 4bars` sets when each statement lands (`:quantize off` clears it); `:quit` exits.
 
 Useful live commands once a scene is running (see [Performance](/reference/language/performance/)):
 
@@ -30,7 +30,7 @@ hush
 
 ## When changes land
 
-Code compiles immediately; sound changes land on a musical boundary. Pass `--quantize` to `send` / `repl`, set `:quantize` in the REPL, or write `@ next 4 bars` after a command in source.
+Code compiles immediately; sound changes land on a musical boundary. Pass `--quantize` to `send` / `repl`, set `:quantize` in the REPL, or write `@ next 4bars` after a command in source.
 
 Defaults when you omit a quantum: plays on the next cycle, instrument redefinitions on the next beat, most other changes on the next bar. `now` lands as soon as possible.
 

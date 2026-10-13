@@ -9,27 +9,36 @@ Strict units, free rates: anything can be patched into anything; the scale facto
 
 - **Rates never block a connection.** Audio into a control parameter upgrades it to audio rate.
 - **Raw signals are unitless** (oscillators, noise, envelopes, LFOs). Unitless × hz = hz; hz + hz = hz; hz + db is an error.
-- **Unit suffixes are unit methods:** `800hz` is `800.hz`; `sig.abs.hz` attaches a unit.
 - **Related units convert:** note names to hz, db to linear gain, beats to seconds at the current tempo, semitones applied to a frequency.
 - **Unrelated units are an error.** Strip with `.num` to reinterpret deliberately: `(-6db).num.hz`.
+- **Unit methods** give a plain value a unit: `osc(sine, 2hz).abs.hz * 8000`, `(n * 2).bars`.
 - **Bare literals in unit slots are errors** with a quick fix (`cutoff: 800` → did you mean `800hz`?). **Exception:** gain parameters accept unitless linear factors (`0.5`) as well as decibels.
 - **Unit names** (reserved, at least two characters): `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`/`beats`, `bar`/`bars`, plus `%`.
-- **Attaching units:** on literals (`440hz`, `4bars`), including rationals (`1/8beat`). Outside brackets, a space is fine (`4 bars`). Inside pattern and envelope brackets, a space separates steps — attach the unit or parenthesize: `(1/8 beat)`.
-- **Ranges** use `..`: `20hz..20khz`. A range as a parameter type (`bright: 0..1`) declares a bounded unitless parameter.
+- **Units are always attached** to a literal: `440hz`, `4bars`, `1/8beat`. Never after a space: inside brackets a space separates steps, and outside them `3/16 beat` would divide by `16beat`.
+- **Ranges** use `..` (end included) or `..<` (end left out): `20hz..20khz`, `0..<8`. A range as a parameter type (`bright: 0..1`) declares a bounded parameter.
 
 ```nml
 lpf(cutoff: 800hz + osc(sine, 110hz) * 600hz)           // audio-rate modulation
 ctl cut = midi.cc(21).range(200hz..4khz)                // map a control into hz
 lpf(cutoff: (-6db).num.hz * 8000)                       // strip and reattach a unit
 ```
+
 ## Rates
 
-Signals run at **init** (once per note), **control** (once per block), or **audio** (every sample) rate. The compiler infers rates.
+Every value has a rate, inferred as the fastest among its inputs:
 
-Force a rate with a method: `x.init`, `x.control`, `x.audio`.
+| Rate | Changes | Typical uses |
+| --- | --- | --- |
+| `const` | Never: known while compiling | List sizes, loop counts, a delay's `max`, choices, tables |
+| `init` | Once, at note start | A plucked string's length |
+| `control` | Once per block | Slow modulation |
+| `audio` | Every sample | Signals |
 
-A parameter fixed at note start declares init before its type:
+Each value is worked out at its own rate: in a function with state, `exp(-2 * pi * cutoff / sample_rate)` runs once per note if `cutoff` only changes per note.
 
-```nml
-length: init sec
-```
+To read a value more slowly, use a method:
+
+- **`x.init`** is the value `x` had at note start.
+- **`x.control`** reads `x` once per block and holds it.
+
+Parameters say which rate they need: `freq: init hz`, `cutoff: control hz`, `size: const int`. See [Functions](/reference/language/functions/).

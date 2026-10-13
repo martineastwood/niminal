@@ -109,7 +109,7 @@ fn a_transaction_lands_together_at_the_coarsest_boundary() {
     s.eval("bass.mute", Some("now")).unwrap();
     let accepted = s
         .eval(
-            "bass.unmute @ next beat\nlead.play([c4]) @ next 4 bars",
+            "bass.unmute @ next beat\nlead.play([c4]) @ next 4bars",
             None,
         )
         .unwrap();
@@ -121,7 +121,7 @@ fn a_transaction_lands_together_at_the_coarsest_boundary() {
 #[test]
 fn independent_changes_land_at_their_own_boundaries() {
     let mut s = ready();
-    let first = s.eval("lead.play([c4]) @ next 4 bars", None).unwrap();
+    let first = s.eval("lead.play([c4]) @ next 4bars", None).unwrap();
     // This write is independent of the play, so it keeps its nearer boundary.
     let second = s.eval("lead.mute @ next beat", None).unwrap();
     assert!(second.lands_at < first.lands_at);
@@ -133,7 +133,7 @@ fn independent_changes_land_at_their_own_boundaries() {
 #[test]
 fn a_later_evaluation_sees_what_is_still_waiting() {
     let mut s = ready();
-    s.eval("riff = [c4]", Some("next 4 bars")).unwrap();
+    s.eval("riff = [c4]", Some("next 4bars")).unwrap();
     // `riff` is not defined yet, but it will be by the time this lands
     let ok = s.eval("lead.play(riff)", None);
     assert!(ok.is_ok(), "{ok:?}");
@@ -222,7 +222,7 @@ fn written_notes_play_when_evaluated() {
     s.eval("lead(freq: a4) for 1beat", None).unwrap();
     let out = run(&mut s, 24_000 + 2000);
     assert!(rms(&out[500..23_000]) > 0.1);
-    // 1 beat at 120bpm is 0.5s: the 440hz sine ran for 220 cycles
+    // 1beat at 120bpm is 0.5s: the 440hz sine ran for 220 cycles
     assert!((crossings(&out[..24_000]) as i32 - 220).abs() <= 2);
     assert!(peak(&out[24_000 + 1000..]) < 0.05, "and then it stopped");
 }

@@ -29,6 +29,11 @@ pub struct Voice {
     level: f32,
     /// Gains that place the voice's mix among the master's speakers, if this note has its own pan.
     pan: Option<Box<[f32; MAX_CHANNELS]>>,
+    /// Whether an envelope or a sample decides when the voice ends. Without one, it ends at its
+    /// release, after the graph's tail.
+    shaped: bool,
+    /// Samples of tail left after the release, for a voice that isn't shaped.
+    tail_left: usize,
 }
 
 /// Which held note a legato voice sounds.
@@ -141,7 +146,7 @@ impl Voice {
             op.prepare(sample_rate);
         }
 
-        let mut slots = vec![[0.0; BLOCK]; graph.node_slot_base() + ops.len()];
+        let mut slots = vec![[0.0; BLOCK]; graph.node_slot_base() + graph.results];
         for (i, p) in graph.params.iter().enumerate() {
             slots[i] = [p.default; BLOCK];
         }
@@ -150,7 +155,9 @@ impl Voice {
         }
 
         let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0)).map(Some).collect();
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None }
+        let shaped = ops.iter().any(|op| op.is_envelope());
+        let tail_left = (graph.tail * sample_rate) as usize;
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None, shaped, tail_left }
     }
 
     /// Keep memory at matching call sites while retaining the new graph's
@@ -333,9 +340,18 @@ impl Voice {
     }
 
     /// A voice lives until it has been released and every envelope has
-    /// finished, which may be well after the scheduled note length.
+    /// finished (and anything they fed, such as a delay, has rung out), which may
+    /// be well after the scheduled note length. A tail keeps it sounding that long
+    /// after its release, then it fades out. A voice with no envelope fades out at
+    /// its release, or after its tail.
     pub fn is_finished(&self) -> bool {
-        self.poisoned || self.choke_left == Some(0) || (self.released && self.choke_left.is_none() && !self.ops.iter().any(|op| op.is_active()))
+        self.poisoned
+            || self.choke_left == Some(0)
+            || (self.released
+                && self.shaped
+                && self.graph.tail == 0.0
+                && self.choke_left.is_none()
+                && !self.ops.iter().any(|op| op.is_active()))
     }
 
     /// True once the voice produced NaN or infinity. It is silenced from then
@@ -379,6 +395,20 @@ impl Voice {
             out.iter_mut().for_each(|c| c[..frames].fill(0.0));
             return;
         }
+        // after its release a voice rings for its tail, then fades out: without an envelope once the
+        // tail is over, with one once its envelopes are done as well
+        if self.released && self.choke_left.is_none() {
+            let over = self.tail_left == 0;
+            self.tail_left = self.tail_left.saturating_sub(frames);
+            let done = if self.shaped {
+                over && self.graph.tail > 0.0 && !self.ops.iter().any(|op| op.is_envelope() && op.is_active())
+            } else {
+                over
+            };
+            if done {
+                self.choke();
+            }
+        }
         let ctx = ProcessCtx { sample_rate: self.sample_rate, gate: !self.released };
 
         if let Some(param) = self.rule.and_then(|r| r.pitch_param)
@@ -391,14 +421,18 @@ impl Voice {
 
         let base = self.graph.node_slot_base();
         for (i, op) in self.ops.iter_mut().enumerate() {
-            let inputs = &self.graph.nodes[i].inputs;
-            let (before, after) = self.slots.split_at_mut(base + i);
+            let node = &self.graph.nodes[i];
+            let (before, after) = self.slots.split_at_mut(base + node.first);
 
             let mut ins: [&[f32]; MAX_INPUTS] = [&[]; MAX_INPUTS];
-            for (k, &slot) in inputs.iter().enumerate() {
+            for (k, &slot) in node.inputs.iter().enumerate() {
                 ins[k] = &before[slot][..frames];
             }
-            op.process(&ctx, &ins[..inputs.len()], &mut after[0][..frames]);
+            if node.outputs == 1 {
+                op.process(&ctx, &ins[..node.inputs.len()], &mut after[0][..frames]);
+            } else {
+                op.process_outputs(&ctx, &ins[..node.inputs.len()], &mut after[..node.outputs], frames);
+            }
         }
 
         let finite = |slot: usize| self.slots[slot][..frames].iter().all(|s| s.is_finite());

@@ -43,7 +43,7 @@ export default defineConfig({
             { slug: 'reference/language/units-and-rates' },
             { slug: 'reference/language/envelopes' },
             { slug: 'reference/language/instruments' },
-            { slug: 'reference/language/opcodes' },
+            { slug: 'reference/language/functions' },
             { slug: 'reference/language/routing' },
             { slug: 'reference/language/samples', label: 'Samples' },
             { slug: 'reference/language/patterns' },

@@ -25,7 +25,7 @@ mono acid(freq: hz, cutoff: hz = 400hz, envmod: hz = 2khz, res: 0..1 = 0.9, acce
 // the next note and slides into it.
 clip line {
   instrument: acid
-  length: 2 bars
+  length: 2bars
   // a line per beat, four sixteenths each: the first four lines are bar 1, the last four bar 2
   notes: [a1        a1        a2        a1
           ~         a1        c2        a1

@@ -26,7 +26,7 @@ fn item(label: &str, kind: u32, detail: &str, doc: &str) -> Value {
 
 fn symbol_kind(kind: SymbolKind) -> u32 {
     match kind {
-        SymbolKind::Instrument | SymbolKind::Opcode => FUNCTION,
+        SymbolKind::Instrument | SymbolKind::Function => FUNCTION,
         _ => VARIABLE,
     }
 }
@@ -255,7 +255,7 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
             Receiver::Signal => {}
         }
         let mut out: Vec<Value> = ops.iter().filter(|o| o.positional >= 1 && o.params.first().is_some_and(|p| p.ty != "wave")).map(op_item).collect();
-        out.extend(symbols.iter().filter(|s| s.kind == SymbolKind::Opcode).map(symbol_item));
+        out.extend(symbols.iter().filter(|s| s.kind == SymbolKind::Function).map(symbol_item));
         return out;
     }
 
@@ -278,7 +278,7 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
             op.params.iter().enumerate().map(|(i, p)| (p.name.clone(), p.ty, i + 1)).collect()
         } else if let Some(op) = ops.iter().find(|o| o.name == call.name) {
             op.params.iter().enumerate().map(|(i, p)| (p.name.clone(), p.ty, i)).collect()
-        } else if let Some(s) = symbols.iter().find(|s| s.name == call.name && matches!(s.kind, SymbolKind::Opcode | SymbolKind::Instrument)) {
+        } else if let Some(s) = symbols.iter().find(|s| s.name == call.name && matches!(s.kind, SymbolKind::Function | SymbolKind::Instrument)) {
             s.params.iter().enumerate().map(|(i, p)| (p.name.clone(), "", i)).collect()
         } else {
             Vec::new()
@@ -316,7 +316,7 @@ mod tests {
     use super::*;
 
     fn labels(before: &str) -> Vec<String> {
-        let symbols = niminal_lang::symbols("opcode wobble(x, rate: hz = 2hz) { x }\ninstr tone(freq: hz) { freq }").unwrap();
+        let symbols = niminal_lang::symbols("fn wobble(x, rate: hz = 2hz) { x }\ninstr tone(freq: hz) { freq }").unwrap();
         items(before, &symbols, &|_| String::new()).iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
     }
 
@@ -364,7 +364,7 @@ mod tests {
         items(before, &symbols, &|_| String::new()).iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
     }
 
-    const SONG: &str = "opcode wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\ninstr pluck(freq: hz) { freq }\ntrack bass { instrument = pluck }\n";
+    const SONG: &str = "fn wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\ninstr pluck(freq: hz) { freq }\ntrack bass { instrument = pluck }\n";
 
     #[test]
     fn a_dot_after_a_pattern_offers_pattern_operations_only() {
@@ -384,7 +384,7 @@ mod tests {
         let l = labels_in(SONG, "bass.");
         assert_eq!(&l[..3], ["start", "stop", "mute"]);
         assert!(l.contains(&"undo".to_string()) && l.contains(&"every".to_string()));
-        assert!(labels_in(SONG, "at +2 bars c.").contains(&"mute".to_string()));
+        assert!(labels_in(SONG, "at +2bars c.").contains(&"mute".to_string()));
         assert_eq!(labels_in(SONG, "verse."), ["start", "stop"]);
         // inside an expression the same names are values
         assert!(!labels_in(SONG, "x = c.").contains(&"mute".to_string()));

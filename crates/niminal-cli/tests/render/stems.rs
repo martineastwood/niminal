@@ -17,7 +17,7 @@ clip lead {
 }
 scene verse { bass, lead }
 verse.start
-at +1 bars hush
+at +1bars hush
 ";
 
 fn stems_of(src: &str) -> (Vec<f32>, Vec<niminal_cli::render::Stem>) {

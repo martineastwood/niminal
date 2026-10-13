@@ -298,7 +298,7 @@ mod quantize_settings {
     fn a_projects_config_sets_when_each_kind_of_change_lands() {
         let mut s = ready();
         s.eval(
-            "config { quantize: { play: beat\n tempo: 2 bars\n default: 4 beats } }",
+            "config { quantize: { play: beat\n tempo: 2bars\n default: 4beats } }",
             Some("now"),
         )
         .unwrap();
@@ -329,12 +329,12 @@ mod quantize_settings {
             .unwrap();
         assert_eq!(now.lands_at, 10_000, "it says now");
         let beat = s
-            .eval("clip riff { notes: [c4] } with(quantize: 1 beat)", None)
+            .eval("clip riff { notes: [c4] } with(quantize: 1beat)", None)
             .unwrap();
         assert_eq!(beat.lands_at, 24_000);
         let instr = s
             .eval(
-                "instr organ(freq: hz) with(quantize: 2 beats) { osc(sine, freq) }",
+                "instr organ(freq: hz) with(quantize: 2beats) { osc(sine, freq) }",
                 None,
             )
             .unwrap();
@@ -343,7 +343,7 @@ mod quantize_settings {
         let over = s
             .eval(
                 "track fx4 { instrument = pluck } with(quantize: now)",
-                Some("next 4 bars"),
+                Some("next 4bars"),
             )
             .unwrap();
         assert_eq!(over.lands_at, 4 * BAR as u64);
@@ -369,7 +369,7 @@ mod quantize_settings {
         assert_eq!(
             message(
                 &mut s,
-                "track t2 { instrument = pluck } with(quantize: 2 hz)"
+                "track t2 { instrument = pluck } with(quantize: 2hz)"
             ),
             "expected when a change lands"
         );

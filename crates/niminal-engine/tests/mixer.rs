@@ -41,6 +41,13 @@ fn block(m: &mut Mixer) -> Vec<f32> {
     out[0].to_vec()
 }
 
+/// Enough blocks for a released voice with no envelope to fade out and end.
+fn fade(m: &mut Mixer) {
+    for _ in 0..16 {
+        block(m);
+    }
+}
+
 #[test]
 fn voices_sum_to_the_master() {
     let mut m = Mixer::new(vec![master_track(), master_track()], vec![], 1, SR).unwrap();
@@ -80,8 +87,8 @@ fn buses_are_cleared_every_block() {
     let id = m.note_on(0, source(0.0, Some((0, 1.0))), &[], None);
     assert!(block(&mut m).iter().all(|s| *s == 1.0));
     m.release(id);
-    // the voice is gone (no envelope), so nothing is written and nothing lingers
-    let _ = block(&mut m);
+    // the voice fades out and is gone (no envelope), so nothing is written and nothing lingers
+    fade(&mut m);
     assert!(block(&mut m).iter().all(|s| *s == 0.0));
 }
 
@@ -170,7 +177,7 @@ fn releasing_a_finished_voice_is_harmless() {
     let mut m = Mixer::new(vec![master_track()], vec![], 1, SR).unwrap();
     let id = m.note_on(0, source(0.5, None), &[], None);
     m.release(id);
-    block(&mut m);
+    fade(&mut m);
     assert_eq!(m.active_voices(), 0);
     m.release(id);
 }
@@ -349,7 +356,7 @@ mod adopting {
 
         // releasing by the old id still finds it
         new.release(id);
-        block(&mut new);
+        fade(&mut new);
         assert_eq!(new.active_voices(), 0);
     }
 
@@ -390,7 +397,7 @@ mod adopting {
         let b = new.note_on(0, source(0.1, None), &[], None);
         assert_ne!(a, b);
         new.release(a);
-        block(&mut new);
+        fade(&mut new);
         assert_eq!(new.active_voices(), 1, "releasing the first left the second");
     }
 }

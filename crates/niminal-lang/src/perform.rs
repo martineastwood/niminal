@@ -187,20 +187,33 @@ pub(crate) fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value>
 }
 
 /// `env[300hz 1bar.exp 3khz]` as a lane. A lane has no note to release, so it has no sustain point.
+/// A step of an envelope that must be written as a number: lanes and tempo curves have no note to read
+/// values from.
+fn lit_step(v: &EnvValue) -> Res<&EnvNum> {
+    v.lit().ok_or_else(|| {
+        Diagnostic::new("this envelope's steps are written as numbers", v.span())
+            .with_help("only an instrument's envelopes can read names, at note start")
+    })
+}
+
 fn env_lane(lit: &EnvLit) -> Res<EnvLane> {
     if lit.sustain_at.is_some() {
         return Err(Diagnostic::new(
             "a lane has no release, so its envelope can't have a sustain point `|`",
-            lit.start.span,
+            lit.start.span(),
         )
         .with_help("take out the `|`, or add `.loop` to repeat the shape"));
     }
-    let level = |n: &EnvNum| value_of(n.value, n.unit.as_deref(), n.span);
+    let level = |v: &EnvValue| {
+        let n = lit_step(v)?;
+        value_of(n.value, n.unit.as_deref(), n.span)
+    };
     let mut segments = Vec::with_capacity(lit.segments.len());
     for seg in &lit.segments {
-        let dur = value_of(seg.dur.value, seg.dur.unit.as_deref(), seg.dur.span)?
+        let d = lit_step(&seg.dur)?;
+        let dur = value_of(d.value, d.unit.as_deref(), d.span)?
             .as_time()
-            .map_err(|e| Diagnostic::new(e.to_string(), seg.dur.span))?;
+            .map_err(|e| Diagnostic::new(e.to_string(), d.span))?;
         segments.push((dur, curve_of(seg.curve), level(&seg.level)?));
     }
     Ok(EnvLane {
@@ -497,8 +510,12 @@ impl Perform<'_> {
                 "text can only be an argument that asks for it",
                 e.span,
             )),
-            ExprKind::Compare { .. } | ExprKind::If { .. } => Err(Diagnostic::new(
-                "comparisons and `if` work in instruments, tracks and opcodes, not in clips and scenes",
+            ExprKind::Compare { .. }
+            | ExprKind::If { .. }
+            | ExprKind::Logic { .. }
+            | ExprKind::Not(_)
+            | ExprKind::For { .. } => Err(Diagnostic::new(
+                "comparisons, logic, `if` and `for` work in instruments, functions and tracks, not in clips and scenes",
                 e.span,
             )),
             ExprKind::Channels(_)
@@ -576,7 +593,7 @@ impl Perform<'_> {
 
     // ---- numbers -----------------------------------------------------------
 
-    /// A constant number with an optional unit, evaluated exactly: `1/8 beat`, `-5st`.
+    /// A constant number with an optional unit, evaluated exactly: `1/8beat`, `-5st`.
     fn quantity(&self, e: &Expr) -> Res<(Rational, Option<String>)> {
         match &e.kind {
             ExprKind::Num { value, unit } => Ok((Rational::from_f64(*value), unit.clone())),
@@ -596,7 +613,7 @@ impl Perform<'_> {
                 }
             }
             _ => Err(Diagnostic::new("expected a number", e.span)
-                .with_help("for example `2`, `3/2` or `1/8 beat`")),
+                .with_help("for example `2`, `3/2` or `1/8beat`")),
         }
     }
 
@@ -1288,7 +1305,7 @@ impl Perform<'_> {
                 let every = self.cycles(e)?;
                 if every <= Rational::ZERO || every > Rational::ONE {
                     return Err(Diagnostic::new(
-                        "`swing` needs `every` to be a share of a bar, such as `1/8 beat`",
+                        "`swing` needs `every` to be a share of a bar, such as `1/8beat`",
                         e.span,
                     ));
                 }
@@ -1362,7 +1379,7 @@ impl Perform<'_> {
         }
     }
 
-    /// A share of a cycle: `25%`, `1/4`, or a length such as `2 beats`.
+    /// A share of a cycle: `25%`, `1/4`, or a length such as `2beats`.
     fn fraction(&self, e: &Expr) -> Res<Rational> {
         match self.quantity(e)? {
             (r, Some(u)) if u == "%" => Ok(r / Rational::int(100)),
@@ -2236,7 +2253,7 @@ impl Perform<'_> {
     }
 }
 
-/// When a kind of change lands, as written in `config` and `with(quantize: ...)`: `1 beat`, `4 bars`,
+/// When a kind of change lands, as written in `config` and `with(quantize: ...)`: `1beat`, `4bars`,
 /// `cycle`, `now`, `bar`.
 pub(crate) fn quantum_of(e: &Expr) -> Res<Quantize> {
     let on_grid = |count: f64, unit| {
@@ -2268,10 +2285,10 @@ pub(crate) fn quantum_of(e: &Expr) -> Res<Quantize> {
 
 fn quantum_error(span: Span) -> Diagnostic {
     Diagnostic::new("expected when a change lands", span)
-        .with_help("for example `now`, `beat`, `bar`, `cycle`, `1 beat` or `4 bars`")
+        .with_help("for example `now`, `beat`, `bar`, `cycle`, `1beat` or `4bars`")
 }
 
-/// The one option a clip, scene or track takes after its body: `with(quantize: 1 bar)`.
+/// The one option a clip, scene or track takes after its body: `with(quantize: 1bar)`.
 pub(crate) fn definition_quantum(options: &[Arg]) -> Res<Option<Quantize>> {
     let mut found = None;
     for arg in options {
@@ -2282,11 +2299,11 @@ pub(crate) fn definition_quantum(options: &[Arg]) -> Res<Option<Quantize>> {
                     format!("there is no option `{other}` here"),
                     arg.name.as_ref().map_or(arg.value.span, |n| n.span),
                 )
-                .with_help("the option is `quantize`, as in `with(quantize: 1 bar)`"));
+                .with_help("the option is `quantize`, as in `with(quantize: 1bar)`"));
             }
             None => {
                 return Err(Diagnostic::new(
-                    "an option is a name and a value, as in `quantize: 1 bar`",
+                    "an option is a name and a value, as in `quantize: 1bar`",
                     arg.value.span,
                 ));
             }
@@ -2295,7 +2312,7 @@ pub(crate) fn definition_quantum(options: &[Arg]) -> Res<Option<Quantize>> {
     Ok(found)
 }
 
-/// A time written in source: `2beats`, `1/2 beat`, `4 bars`, `250ms`.
+/// A time written in source: `2beats`, `1/2beat`, `4bars`, `250ms`.
 fn time_of(e: &Expr, p: &Perform) -> Res<Time> {
     let (r, unit) = p.quantity(e)?;
     let v = r.to_f64();
@@ -2305,7 +2322,7 @@ fn time_of(e: &Expr, p: &Perform) -> Res<Time> {
         Some("beat" | "beats") => Ok(Time::Beats(v)),
         Some("bar" | "bars") => Ok(Time::Bars(v)),
         _ => Err(Diagnostic::new("expected a time", e.span)
-            .with_help("for example `2beats`, `4 bars` or `250ms`, or `bar 5 beat 3`")),
+            .with_help("for example `2beats`, `4bars` or `250ms`, or `bar 5 beat 3`")),
     }
 }
 
@@ -2347,27 +2364,31 @@ impl TempoCurve {
 }
 
 fn tempo_curve(lit: &EnvLit) -> Res<TempoCurve> {
-    let bpm = |n: &EnvNum| match (n.unit.as_deref(), n.value) {
-        (Some("bpm"), v) if v > 0.0 => Ok(v),
-        _ => Err(
-            Diagnostic::new("a tempo level is a positive number of bpm", n.span)
-                .with_help("for example `env[84bpm 8bars 96bpm]`"),
-        ),
+    let bpm = |v: &EnvValue| {
+        let n = lit_step(v)?;
+        match (n.unit.as_deref(), n.value) {
+            (Some("bpm"), v) if v > 0.0 => Ok(v),
+            _ => Err(
+                Diagnostic::new("a tempo level is a positive number of bpm", n.span)
+                    .with_help("for example `env[84bpm 8bars 96bpm]`"),
+            ),
+        }
     };
     if lit.sustain_at.is_some() || lit.looped {
         return Err(
-            Diagnostic::new("a tempo envelope runs once over the piece", lit.start.span)
+            Diagnostic::new("a tempo envelope runs once over the piece", lit.start.span())
                 .with_help("take out the `|` or `.loop`"),
         );
     }
     let mut segments = Vec::with_capacity(lit.segments.len());
     for seg in &lit.segments {
-        let len = match (seg.dur.unit.as_deref(), seg.dur.value) {
+        let d = lit_step(&seg.dur)?;
+        let len = match (d.unit.as_deref(), d.value) {
             (Some("bar" | "bars"), v) if v > 0.0 => v,
             _ => {
                 return Err(Diagnostic::new(
                     "the times in a tempo envelope are lengths in bars",
-                    seg.dur.span,
+                    d.span,
                 )
                 .with_help("for example `8bars`"));
             }

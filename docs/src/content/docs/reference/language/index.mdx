@@ -3,7 +3,7 @@ title: Language overview
 description: The niminal orchestra language — syntax, instruments, routing, patterns and performance.
 ---
 
-The **orchestra** is niminal’s DSP and composition language: typed parameters, named arguments, opcodes you can chain, and a score you can also drive from outside.
+The **orchestra** is niminal’s DSP and composition language: typed parameters, named arguments, functions and opcodes you can chain, and a score you can also drive from outside.
 
 niminal is in alpha. This reference describes what works today. The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) is the longer-term design; where the two disagree, trust the docs and the compiler.
 
@@ -13,7 +13,7 @@ niminal is in alpha. This reference describes what works today. The [language sp
 | [Units and rates](/reference/language/units-and-rates/) | Hz, dB, beats; init, control and audio |
 | [Envelopes](/reference/language/envelopes/) | `env[...]`, sustain, curves, `adsr`, `perc` |
 | [Instruments](/reference/language/instruments/) | `instr`, `mono`, voices, `out`, parameters |
-| [Opcodes and functions](/reference/language/opcodes/) | User opcodes, `state`, chaining |
+| [Functions](/reference/language/functions/) | `fn`, `state`, lists, rates and chaining |
 | [Routing](/reference/language/routing/) | Buses, execution order, delay, layouts |
 | [Samples](/reference/language/samples/) | WAV samples, kits, slices, grids |
 | [Patterns](/reference/language/patterns/) | Mini-notation, grids, pattern transforms |

@@ -40,14 +40,14 @@ track room {
 }
 ```
 
-Inside a single voice or opcode, `prev(x)` is one sample.
+Inside a voice or a function, `prev(x)` is one sample.
 
 ## Delay
 
 Use the **`delay`** opcode. Beat times follow tempo. A changing `time` needs **`max:`** to size the line (at most 30 seconds):
 
 ```nml
-out = sig.delay(time: 3/16 beat, feedback: 0.4)
+out = sig.delay(time: 3/16beat, feedback: 0.4)
 out = sig.delay(time: oscillated, feedback: 0.3, max: 2sec)   // changing time needs max:
 ```
 ## Channel layouts

@@ -38,6 +38,6 @@ fn shortcut_mistakes_are_reported() {
 #[test]
 fn a_user_opcode_with_the_same_name_wins() {
     // if the shortcut won, `adsr(1)` would need four envelope parameters
-    let src = "opcode adsr(x) { x }\ninstr a(freq: hz) { osc(sine, freq) * adsr(1) }\na(freq: 220hz) for 1beat";
+    let src = "fn adsr(x) { x }\ninstr a(freq: hz) { osc(sine, freq) * adsr(1) }\na(freq: 220hz) for 1beat";
     assert!(compile(src).is_ok(), "{:?}", compile(src).err());
 }

@@ -573,7 +573,7 @@ fn a_held_key_sounds_through_the_prepared_path_until_it_is_let_go() {
 #[test]
 fn a_tempo_ramp_sounds_the_same_through_the_prepared_path() {
     let code = "lead.play([c4 e4 g4 b4].fast(2))";
-    let ramp = "tempo 180bpm @ now over 1 bar";
+    let ramp = "tempo 180bpm @ now over 1bar";
     let mut expected = session();
     expected.eval(code, Some("now")).unwrap();
     let mut first = expected.process(10_240).remove(0);

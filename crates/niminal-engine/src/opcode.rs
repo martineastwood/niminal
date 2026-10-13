@@ -8,7 +8,7 @@ pub const TAIL_LEVEL: f32 = 3.162_277_7e-5;
 pub const BLOCK: usize = 32;
 
 /// The most input ports an opcode may declare.
-pub const MAX_INPUTS: usize = 8;
+pub const MAX_INPUTS: usize = 16;
 
 /// A named input of an opcode. `default: None` means the port must be wired.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,9 +60,25 @@ pub trait Opcode: Send + Sync + std::any::Any {
     /// slice has the same length as `out` (at most [`BLOCK`]).
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]);
 
+    /// How many results the opcode delivers. Most deliver one.
+    fn outputs(&self) -> usize {
+        1
+    }
+
+    /// Fill the first `frames` samples of one block per result. Only opcodes with several results
+    /// need this.
+    fn process_outputs(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outs: &mut [[f32; BLOCK]], frames: usize) {
+        self.process(ctx, inputs, &mut outs[0][..frames]);
+    }
+
     /// True while this opcode still has sound to produce after the note ends
-    /// (an envelope that has not finished). A voice lives until none are active.
+    /// (an envelope that has not finished, or a delay still ringing).
     fn is_active(&self) -> bool {
+        false
+    }
+
+    /// True for an envelope with a release, which decides when its voice ends.
+    fn is_envelope(&self) -> bool {
         false
     }
 
@@ -105,8 +121,20 @@ impl Opcode for Box<dyn Opcode> {
         (**self).process(ctx, inputs, out);
     }
 
+    fn outputs(&self) -> usize {
+        (**self).outputs()
+    }
+
+    fn process_outputs(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outs: &mut [[f32; BLOCK]], frames: usize) {
+        (**self).process_outputs(ctx, inputs, outs, frames);
+    }
+
     fn is_active(&self) -> bool {
         (**self).is_active()
+    }
+
+    fn is_envelope(&self) -> bool {
+        (**self).is_envelope()
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {

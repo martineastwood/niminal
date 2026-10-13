@@ -29,5 +29,5 @@ scene chorus { bass: bassline.transpose(+5st), beat: groove, hats: [hat hat hat 
 scene outro  { bass: bassline }
 
 arrangement song {
-  sections: [intro.over(2 bars) verse.over(4 bars) chorus.over(4 bars) verse.over(4 bars) outro.over(2 bars)]
+  sections: [intro.over(2bars) verse.over(4bars) chorus.over(4bars) verse.over(4bars) outro.over(2bars)]
 }

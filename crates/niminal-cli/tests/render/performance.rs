@@ -9,7 +9,7 @@ track bass { instrument = pluck(bright: 0.1) }
 
 fn render_with_bars(body: &str, bars: Option<f64>) -> Result<Vec<f32>, niminal_cli::render::RenderError> {
     let p = program(&format!("{STAGE}{body}"));
-    let until = bars.map(|b| b * 2.0); // a 4/4 bar at 120bpm is two seconds
+    let until = bars.map(|b| b * 2.0); // a 4/4bar at 120bpm is two seconds
     render_with(&p, &[], &RenderOptions { limiter: false, until, ..Default::default() }).map(mono)
 }
 
@@ -142,7 +142,7 @@ fn an_open_ended_piece_needs_a_length() {
     let err = render_with_bars("lead.play([c4])", None).unwrap_err();
     assert!(err.0.contains("plays until it is stopped") && err.0.contains("--bars"), "{err}");
     // but one that ends itself doesn't
-    let out = render_with_bars("lead.play([c4])\nat 2 bars hush", None).unwrap();
+    let out = render_with_bars("lead.play([c4])\nat 2bars hush", None).unwrap();
     assert!(out.len() > (3.9 * SR) as usize && out.len() < (4.5 * SR) as usize, "{}", out.len() as f64 / SR);
 }
 
@@ -157,7 +157,7 @@ fn the_notes_after_the_length_are_not_started_but_ringing_ones_finish() {
 
 #[test]
 fn muting_silences_a_track_for_a_while() {
-    let out = raw("lead.play([c4])\nat 1 bar lead.mute\nat 3 bars lead.unmute", 4.0);
+    let out = raw("lead.play([c4])\nat 1bar lead.mute\nat 3bars lead.unmute", 4.0);
     let loud = |s: f64| rms(&out[(s * SR) as usize..((s + 1.0) * SR) as usize]) > 0.05;
     assert!(loud(0.2), "before the mute");
     assert!(!loud(2.4), "muted (the note from 0s has rung out by 2.4s)");
@@ -184,7 +184,7 @@ track src { instrument = ping }
 src.play([c4*2])
 ";
     let ringing = raw(base, 2.0);
-    let cut = raw(&format!("{base}at 1 bar panic"), 2.0);
+    let cut = raw(&format!("{base}at 1bar panic"), 2.0);
     assert!(ringing.len() > (4.0 * SR) as usize, "the echoes run on: {}", ringing.len() as f64 / SR);
     // panic at 2s: nothing is heard after it (the echo of the last ping is gone)
     assert!(cut.len() < (2.05 * SR) as usize, "{}", cut.len() as f64 / SR);
@@ -199,7 +199,7 @@ clip b { notes: [c2] }
 scene one { lead: a }
 scene two { lead: b }
 one.start
-at 1 bar two.start", 2.0);
+at 1bar two.start", 2.0);
     let written = raw("lead(freq: c4) for 4beats\nat 4beats lead(freq: c2) for 4beats", 0.0);
     assert_eq!(out, written);
 }

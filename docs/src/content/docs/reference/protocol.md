@@ -81,7 +81,7 @@ Compile and queue niminal source. Failed compile returns **-32001** with **`erro
 | Field | Type | Description |
 | --- | --- | --- |
 | `source` | string | **Required.** One evaluation unit (block, file, or line). |
-| `quantize` | string | When it lands: `now`, `beat`, `bar`, `next bar`, `next 4 bars`, `cycle`, etc. Omitted uses session defaults. |
+| `quantize` | string | When it lands: `now`, `beat`, `bar`, `next bar`, `next 4bars`, `cycle`, etc. Omitted uses session defaults. |
 | `dir` | string | Optional sample search path for this eval (project-relative). |
 
 **Result** (accepted)

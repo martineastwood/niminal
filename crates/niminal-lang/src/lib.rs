@@ -6,6 +6,7 @@ mod ast;
 mod compile;
 mod diag;
 mod env_shortcut;
+mod funcs;
 mod ide;
 mod kernel;
 mod layout;

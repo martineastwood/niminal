@@ -66,11 +66,11 @@ A clip is a section for one track: **lanes** on one timeline.
 
 ```nml
 clip riff {
-  length: 2 bars
+  length: 2bars
   notes:  [c2 ~ eb2 g1 ~ c2 bb1 ~]
   gain:   [0db -6db -3db -9db]
   bright: [0.2 0.5 0.8]
-  tone:   env[400hz (2 bars).exp 3khz]
+  tone:   env[400hz 2bars.exp 3khz]
 }
 ```
 
@@ -81,7 +81,7 @@ clip riff {
 - Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip. A signal lane is a signal named after a track parameter, as in `cut: sine.range(300hz, 3khz)`: the parameter follows it continuously (50 readings a second), one cycle per clip length, with or without notes.
 - Shorthand: `[c2 ~ eb2]` → `clip { notes: [...] }`.
 - **`riff.set(bright: [0.9])`** — lanes are fields.
-- **Longer than a bar:** with `length: 2 bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`). Without a `length:` a lane's cycle is one bar. `riff.over(4 bars)` stretches the whole clip, and `riff.set(...)` lanes span it too.
+- **Longer than a bar:** with `length: 2bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`). Without a `length:` a lane's cycle is one bar. `riff.over(4bars)` stretches the whole clip, and `riff.set(...)` lanes span it too.
 
 ## Scenes and arrangement
 
@@ -89,7 +89,7 @@ clip riff {
 scene verse  { bass: riff, drums: groove, keys: ~ }
 scene chorus { bass: riff.transpose(+5st), drums: groove, keys: chords }
 
-chorus.start @ next 4 bars
+chorus.start @ next 4bars
 ```
 
 A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only a `notes` lane, and everything below works the same on both. A clip with no `length:` runs freely: its cycles keep counting, so `<a b>` and `every` alternate. Give it a `length:` and its lanes span that length and it loops, starting over each time.
@@ -100,13 +100,13 @@ An `arrangement` plays scenes in order, each for a length, and sections can have
 
 ```nml
 arrangement song {
-  sections: [dawn.over(16 bars) build.over(32 bars) theme.over(24 bars)]
+  sections: [dawn.over(16bars) build.over(32bars) theme.over(24bars)]
   tempo:    [84bpm 96bpm 96bpm]
   meter:    [4/4 4/4 7/8]
 }
 ```
 
-A section's bars are its own: `over(8 bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move a track's parameter over the whole piece (`bass.tone: env[800hz 88bars 3khz]`). Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
+A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move a track's parameter over the whole piece (`bass.tone: env[800hz 88bars 3khz]`). Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
 
 See [Score model](/reference/score-model/) for arrangement-level lanes.
 
@@ -143,14 +143,14 @@ bass.clear              // takes off all of them
 
 Two small pieces of syntax say *when*, and they answer different questions:
 
-- **`@ next 4 bars`, written after a command, is when the change lands.** It is a musical boundary, counted from now. Use it live: `bass.reverse @ next 4 bars`.
-- **`at +4 bars`, written before a command, is when in the timeline it happens,** counted from when the code lands. Use it to lay out a section; the times line up down the left of the file.
+- **`@ next 4bars`, written after a command, is when the change lands.** It is a musical boundary, counted from now. Use it live: `bass.reverse @ next 4bars`.
+- **`at +4bars`, written before a command, is when in the timeline it happens,** counted from when the code lands. Use it to lay out a section; the times line up down the left of the file.
 
 ```nml
 verse.start
-at +4 bars chorus.start
-at +8 bars bass.mute
-at +12 bars hush
+at +4bars chorus.start
+at +8bars bass.mute
+at +12bars hush
 ```
 
 `at bar 5 chorus.start` is at bar 5 on the session's clock, which keeps counting while the daemon runs, so submitting it again after bar 5 does nothing. Prefer `at +N` in anything you will submit more than once.
@@ -163,15 +163,15 @@ at +12 bars hush
 
 Code compiles immediately; changes **land** on a musical boundary. Most specific wins:
 
-1. `@ next 4 bars` (or similar) on the statement
+1. `@ next 4bars` (or similar) on the statement
 2. `--quantize` / REPL `:quantize` for that evaluation
-3. `with(quantize: 1 beat)` after a definition (`clip`, `scene`, `track`, `instr`)
+3. `with(quantize: 1beat)` after a definition (`clip`, `scene`, `track`, `instr`)
 4. `config { quantize: { ... } }` for a whole kind of change
 5. Built-in defaults by kind: plays on the next **cycle**, instrument redefinitions on the next **beat**, tempo and most other changes on the next **bar**
 
 ```nml
-tempo 124bpm @ next bar over 2 bars
-bass.reverse @ next 4 bars
+tempo 124bpm @ next bar over 2bars
+bass.reverse @ next 4bars
 ```
 
 Boundaries: `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. One evaluation is one transaction. Last write wins for pending changes.
@@ -181,30 +181,30 @@ A project sets the quantum of a kind of change in `config`, and one definition c
 ```nml
 config {
   quantize: {
-    default: 1 bar     // commands and everything not named below
+    default: 1bar     // commands and everything not named below
     play:    cycle     // starting a clip
-    instr:   1 beat    // instrument redefinitions
-    track:   1 bar
+    instr:   1beat    // instrument redefinitions
+    track:   1bar
     ctl:     now
-    tempo:   1 bar
+    tempo:   1bar
   }
 }
 
-clip fill { notes: [c4 e4 g4 b4] } with(quantize: 1 beat)
+clip fill { notes: [c4 e4 g4 b4] } with(quantize: 1beat)
 ```
 
-Each quantum is `now`, `beat`, `bar`, `cycle`, `1 beat` or `4 bars`; a kind left out keeps its built-in one. The settings take effect once the `config` has landed (they are changes like any other), and `config` also takes `channels` (see [Routing](/reference/language/routing/)).
+Each quantum is `now`, `beat`, `bar`, `cycle`, `1beat` or `4bars`; a kind left out keeps its built-in one. The settings take effect once the `config` has landed (they are changes like any other), and `config` also takes `channels` (see [Routing](/reference/language/routing/)).
 
 ### Tempo and meter
 
-A new tempo keeps every running clip where it is in its bar: a bar that was three eighths played is still three eighths played, only shorter or longer. Commands set for later (`at +8 bars …`, `at bar 9 …`) keep their place in the music too, and so do the bar lines: if it was bar 4, beat 2.5, it still is.
+A new tempo keeps every running clip where it is in its bar: a bar that was three eighths played is still three eighths played, only shorter or longer. Commands set for later (`at +8bars …`, `at bar 9 …`) keep their place in the music too, and so do the bar lines: if it was bar 4, beat 2.5, it still is.
 
 A new `meter` does the same. Going from `4/4` to `3/4` halfway through a bar leaves you halfway through a bar that is now three beats long, and the clips carry on from there with their cycles squeezed into it. Nothing restarts. (A `meter` and a `tempo` that change together keep the bar the same length, so nothing needs to move.)
 
 `over` makes the change gradual:
 
 ```nml
-tempo 140bpm @ next bar over 8 bars     // from where it is now, a quarter of a beat at a time
+tempo 140bpm @ next bar over 8bars     // from where it is now, a quarter of a beat at a time
 ```
 
 A ramp is a run of ordinary tempo changes, four to a beat, queued at once. They show up in the pending list, and a later `tempo` cancels the ones still waiting. Cancelling the id the ramp gave back (or any one of its steps) cancels the rest of it; `cancel` without an id drops every pending change.
@@ -213,7 +213,7 @@ A file can have a ramp too. Keep the starting `tempo` and add the ramp, which se
 
 ```nml
 tempo 100bpm
-tempo 140bpm @ next 4 bars over 8 bars
+tempo 140bpm @ next 4bars over 8bars
 ```
 
 `niminal render` plays a file like that through a session, as the daemon would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.

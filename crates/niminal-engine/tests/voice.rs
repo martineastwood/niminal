@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 use niminal_engine::ops::{Env, FilterMode, Gain, Mul, Osc, Svf, Wave};
-use niminal_engine::{GraphBuilder, Src};
+use niminal_engine::{GraphBuilder, Src, Voice};
 use std::sync::Arc;
 
 /// The spec's first example, wired by hand:
@@ -85,4 +85,36 @@ mod poison {
         v.process(&mut buf);
         assert!(buf.iter().all(|s| *s == 0.0));
     }
+}
+
+#[test]
+fn a_voice_without_an_envelope_fades_out_after_its_tail() {
+    use niminal_engine::ops::{Delay, Osc, Wave};
+    // an endless oscillator into a delay: the delay always has something in it
+    let graph = |tail: f32| {
+        let mut g = GraphBuilder::new();
+        g.set_tail(tail);
+        let o = g.add(Osc::new(Wave::Saw), &[("freq", Src::Const(200.0))]).unwrap();
+        let d = g.add(Delay::new(1.0), &[("x", o), ("time", Src::Const(0.1))]).unwrap();
+        Arc::new(g.build(d))
+    };
+    let blocks_until_done = |tail: f32| {
+        let mut v = Voice::new(graph(tail), SR);
+        let mut out = [0.0; 32];
+        v.process(&mut out);
+        v.release();
+        let mut n = 0;
+        while !v.is_finished() {
+            v.process(&mut out);
+            n += 1;
+            assert!(n < 100_000, "the voice never ends");
+        }
+        n
+    };
+    let none = blocks_until_done(0.0);
+    assert!(none <= 10, "ends after a short fade: {none} blocks");
+    // the tail is how long it sounds after the release, whatever is in it
+    let half = blocks_until_done(0.5);
+    let expected = (0.5 * SR / 32.0) as usize;
+    assert!(half >= expected && half <= expected + 10, "{half} blocks");
 }

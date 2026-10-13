@@ -589,7 +589,7 @@ fn cancellation_compiles_outside_the_session_and_retries_if_it_became_stale() {
         c,
         3,
         "eval",
-        json!({"source": "lead.play([c4])", "quantize": "next 4 bars"}),
+        json!({"source": "lead.play([c4])", "quantize": "next 4bars"}),
     );
     let request = json!({"jsonrpc": "2.0", "id": 4, "method": "cancel", "params": {"id": first["result"]["id"]}}).to_string();
     let Request::Compile(ticket) = d.begin(c, &request) else {
@@ -601,7 +601,7 @@ fn cancellation_compiles_outside_the_session_and_retries_if_it_became_stale() {
         c,
         5,
         "eval",
-        json!({"source": "lead.mute", "quantize": "next 4 bars"}),
+        json!({"source": "lead.mute", "quantize": "next 4bars"}),
     );
     let retry = d.retry(&done).expect("the pending queue changed");
     let done = retry.compile();

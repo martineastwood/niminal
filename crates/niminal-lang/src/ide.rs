@@ -1,5 +1,5 @@
 //! What an editor wants to know about code: the names it defines and the
-//! opcodes it can call.
+//! built-in functions it can call.
 
 use std::sync::OnceLock;
 
@@ -12,6 +12,7 @@ use crate::unit::Unit;
 /// Names that mean something to the language itself: reserved for rename checks,
 /// and offered as keyword completions in the editor.
 pub const RESERVED_WORDS: &[&str] = &[
+    "and",
     "arrangement",
     "as",
     "at",
@@ -19,14 +20,18 @@ pub const RESERVED_WORDS: &[&str] = &[
     "bus",
     "clip",
     "config",
+    "const",
+    "control",
     "ctl",
     "else",
     "env",
+    "false",
     "fn",
     "for",
     "hush",
     "if",
     "in",
+    "init",
     "instr",
     "it",
     "kit",
@@ -35,8 +40,10 @@ pub const RESERVED_WORDS: &[&str] = &[
     "mono",
     "new",
     "next",
+    "not",
+    "note",
     "now",
-    "opcode",
+    "or",
     "out",
     "over",
     "panic",
@@ -44,9 +51,9 @@ pub const RESERVED_WORDS: &[&str] = &[
     "sample",
     "scene",
     "state",
-    "table",
     "tempo",
     "track",
+    "true",
     "unsolo",
     "use",
     "with",
@@ -55,7 +62,7 @@ pub const RESERVED_WORDS: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Instrument,
-    Opcode,
+    Function,
     Control,
     Bus,
     Track,
@@ -77,7 +84,7 @@ pub struct Symbol {
     pub span: Span,
     /// A signature or the first line of the definition.
     pub detail: String,
-    /// For an instrument or opcode, its parameters as written (`amp: db = -6db`).
+    /// For an instrument or function, its parameters as written (`amp: db = -6db`).
     pub params: Vec<SymbolParam>,
 }
 
@@ -110,23 +117,21 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
                     format!("instr {}({})", d.name.name, labels(&param_list)),
                 )
             }
-            Item::Opcode(d) => {
+            Item::Fn(d) => {
                 param_list = params(source, &d.params);
-                (&d.name, SymbolKind::Opcode, {
-                    let results = d
-                        .outputs
-                        .iter()
-                        .map(|o| o.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let arrow = if results.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" -> ({results})")
+                (&d.name, SymbolKind::Function, {
+                    let arrow = match &d.result {
+                        FnResult::Inferred => String::new(),
+                        FnResult::Unit(u) => format!(" -> {}", u.name),
+                        FnResult::Named(outputs) => format!(
+                            " -> ({})",
+                            outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>().join(", ")
+                        ),
                     };
-                    format!("opcode {}({}){arrow}", d.name.name, labels(&param_list))
+                    format!("fn {}({}){arrow}", d.name.name, labels(&param_list))
                 })
             }
+            Item::Const { name, .. } => (name, SymbolKind::Pattern, first_line()),
             Item::Control { name, .. } => (name, SymbolKind::Control, first_line()),
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
             Item::Track(d) => (&d.name, SymbolKind::Track, format!("track {}", d.name.name)),
@@ -201,10 +206,23 @@ fn params(source: &str, params: &[ParamDef]) -> Vec<SymbolParam> {
         .iter()
         .map(|p| {
             let mut label = p.name.name.clone();
-            match &p.ty {
-                Some(TypeSpec::Unit(unit)) => label += &format!(": {}", unit.name),
-                Some(TypeSpec::Range { lo, hi, .. }) => label += &format!(": {lo}..{hi}"),
-                None => {}
+            if p.rate.is_some() || p.ty.is_some() {
+                label += ":";
+            }
+            if let Some((rate, _)) = p.rate {
+                label += &format!(" {}", rate.keyword());
+            }
+            if let Some(ty) = &p.ty {
+                let span = match ty {
+                    TypeSpec::Unit(u) => u.span,
+                    TypeSpec::Range { span, .. } | TypeSpec::List(_, span) => *span,
+                    TypeSpec::Choice(names) => names[0].span.to(names[names.len() - 1].span),
+                };
+                let text = &source[span.start..span.end];
+                label += &match ty {
+                    TypeSpec::Choice(_) => format!(" ({text})"),
+                    _ => format!(" {text}"),
+                };
             }
             if let Some(default) = &p.default {
                 label += &format!(" = {}", &source[default.span.start..default.span.end]);
@@ -285,7 +303,7 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         vec![
         op("fast", "Play it this many times faster.", &[("by", "number", true)]),
         op("slow", "Play it this many times slower.", &[("by", "number", true)]),
-        op("over", "Stretch it to fill this long, as in `over(4 bars)`.", &[("length", "bars", true)]),
+        op("over", "Stretch it to fill this long, as in `over(4bars)`.", &[("length", "bars", true)]),
         op("reverse", "Play each cycle backwards.", &[]),
         op("shift", "Move it later by this many bars (earlier if negative).", &[("by", "bars", true)]),
         op("repeat_each", "Play each note this many times within its own length.", &[("times", "number", true)]),
@@ -306,7 +324,7 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         ),
         op(
             "swing",
-            "Delay every other slot: `swing(amount: 20%, every: 1/8 beat)`.",
+            "Delay every other slot: `swing(amount: 20%, every: 1/8beat)`.",
             &[("amount", "percent", true), ("every", "bars", true)],
         ),
         op(

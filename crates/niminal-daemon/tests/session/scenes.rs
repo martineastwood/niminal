@@ -57,7 +57,7 @@ fn a_problem_in_a_used_module_points_at_the_use_line() {
 fn at_plus_counts_from_where_the_code_lands() {
     let mut s = ready();
     run(&mut s, 3 * BAR + 1000);
-    s.eval("at +2 bars lead.play([c4])", Some("now")).unwrap();
+    s.eval("at +2bars lead.play([c4])", Some("now")).unwrap();
     let before = run(&mut s, 2 * BAR - 1000);
     let after = run(&mut s, BAR);
     assert!(peak(&before) < 1e-6, "nothing before bar 6");
@@ -79,7 +79,7 @@ fn reset_makes_the_next_bar_line_bar_one() {
     let after = run(&mut s, BAR);
     assert!(
         peak(&before) < 1e-6 && peak(&after) > 0.1,
-        "bar 3 is two bars after the reset, not 3 bars after the start"
+        "bar 3 is two bars after the reset, not 3bars after the start"
     );
 }
 
@@ -231,7 +231,7 @@ fn thin_drops_the_same_notes_wherever_it_is_written() {
 #[test]
 fn changes_work_on_a_project_that_has_timed_commands_in_it() {
     let mut s = ready();
-    s.eval("riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nscene chorus { lead: riff }\nverse.start\nat +4 bars chorus.start\nat +8 bars hush", Some("now")).unwrap();
+    s.eval("riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nscene chorus { lead: riff }\nverse.start\nat +4bars chorus.start\nat +8bars hush", Some("now")).unwrap();
     run(&mut s, BAR);
     s.eval("lead.reverse", Some("now")).unwrap();
     assert!(

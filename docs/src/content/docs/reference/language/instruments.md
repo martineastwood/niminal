@@ -3,11 +3,11 @@ title: Instruments
 description: instr and mono, voices, out, parameters, and multichannel.
 ---
 
-Instruments are templates; each note is a **voice**. An instrument declares typed, named parameters with defaults.
+Instruments are templates; each note is a **voice**. An instrument is a function the score can call: everything in [Functions](/reference/language/functions/) applies, and its parameters are set by notes.
 
 ## Result: last expression or `out`
 
-The result is the **last expression**, or **`out`** if the body uses `out`: `out` starts as silence and can be assigned or added to. Using both in one body is an error. The same rule applies to `opcode` and `fn`.
+The result is the **last expression**, or **`out`** if the body uses `out`: `out` starts as silence and can be assigned or added to. Using both in one body is an error. The same rule applies to `fn`.
 
 ```nml
 instr saw_lead(freq: hz, amp: db = -6db) {
@@ -24,9 +24,24 @@ instr pad(freq: hz, amp: db = -3db) {
 
 - Each `out +=` line is a layer; commenting one out mutes it.
 - Instruments return `out` rather than writing to speakers — the caller decides routing.
-- Calling an instrument inside another gives its audio as a sub-voice.
-- A voice lives until its envelopes finish, even past its scheduled duration.
-- The compiler warns if an instrument never writes to `out` or a bus.
+- **Calling an instrument inside another** plays its body as part of this voice; `gain:` is applied after it, as for any note: `click(freq: freq) + click(freq: freq * 1.5, gain: -6db)`.
+- **`y = x + prev(y) * 0.5`** is a feedback loop one sample long, as in a function; `prev(x)` of a name already defined is `x` a sample ago.
+
+## Parameters
+
+- Each needs a type or a default. They can't be `const` (notes set them while playing), a choice or a list.
+- **Without a rate** a parameter stays live: lanes, glides, MPE and `n.set(...)` move it on the running voice. **`init`** fixes it at note start: `instr pluck(freq: init hz)`.
+- **`gain`** is a control every note has, applied after the instrument. An instrument may declare its own `gain: db = 0db` to take it over and use it as it likes; then it isn't applied for it.
+
+## The running voice
+
+`note.time` is the time since the voice started (in sec) and `note.released` is 0 while held and 1 after the release. Functions don't see `note`: pass these in as arguments.
+
+## When a voice ends
+
+- With an envelope (or a sample), it lives until it is released and every envelope has finished, and anything they fed, such as a delay, has rung out.
+- Without one, it fades out at its release.
+- **`with(tail: 2sec)`** keeps it sounding that long after its release (and after its envelopes are done), then it fades: what a plucked string or an endless oscillator into a delay needs.
 
 ## `instr` and `mono`
 
@@ -52,7 +67,8 @@ Options follow the parameters: `instr pad(freq: hz) with(max: 8, same_note: rele
 | `glide: 80ms` (mono) | A change of pitch slides to the new note in this time, evenly in semitones | yes |
 | `pitch: name` | Which parameter is pitch (default `freq`) | no |
 | `compensate: false` | Opt out of latency compensation | no |
-| `quantize: 1 beat` | When redefinitions land | yes |
+| `tail: 2sec` | How long the voice keeps sounding after its release | yes |
+| `quantize: 1beat` | When redefinitions land | yes |
 
 An option that isn't built is rejected with a message, not ignored. `mono` is `max: 1`: the previous note fades out over a few milliseconds as the new one starts. Voices are counted per part, so two parts playing the same `mono` instrument each keep their own.
 
@@ -72,7 +88,7 @@ mono bass(freq: hz, amp: db = -6db) with(legato: true, glide: 60ms, priority: lo
 
 With keys from `midi.keys()` this plays like a mono synth: hold a note, roll a second one over it, let go of it, and the first comes back.
 
-**Lifetimes:** a voice ends naturally (released, envelopes done) or forcibly (choked, stolen, replaced), always with a short global fade.
+**Lifetimes:** a voice ends naturally (released, envelopes and tail done) or forcibly (choked, stolen, replaced), always with a short global fade.
 
 **Parameters are signals.** With `legato: true` a new note updates parameters on the running voice, which is what carries `glide`. A keyboard's pitch bend and pressure set the `bend` and `pressure` parameters of the notes it holds (see [Performance](/reference/language/performance/)). MPE works the same way: `keys: midi.keys(mpe: true)` gives each note its own bend, pressure and a `slide: 0..1` parameter.
 
@@ -90,7 +106,7 @@ No project-wide voice cap in `config` today. Per-instrument limits use `with(max
 
 ## Multichannel
 
-A comma list of signals builds multichannel audio. Destructure when you need the channels separately:
+A comma list of signals builds multichannel audio, and a list given where one signal is expected becomes channels (`osc(saw, [f, f * 1.01])`). `.channels` gives a signal's channels as a list, and `.sum` mixes them down. Destructure when you need the channels separately:
 
 ```nml
 [l, r] = src

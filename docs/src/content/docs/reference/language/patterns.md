@@ -22,7 +22,7 @@ Mini-notation, grids, and envelopes share:
 
 ## Mini-notation
 
-Steps divide one cycle evenly (one bar by default). `[c2 g2 bb2 f2]` is four steps per cycle; `.over(2 bars)` stretches a cycle.
+Steps divide one cycle evenly (one bar by default). `[c2 g2 bb2 f2]` is four steps per cycle; `.over(2bars)` stretches a cycle.
 
 | Write | Meaning |
 | --- | --- |
@@ -80,12 +80,12 @@ Numbers in `fast`, `slow`, `every`, `repeat_each`, `euclid` and `rotate` can be 
 | --- | --- |
 | `fast(2)`, `slow(2)` | Change speed |
 | `reverse` | Play each cycle backwards |
-| `shift(1/8 beat)` | Move earlier or later |
+| `shift(1/8beat)` | Move earlier or later |
 | `every(4, it.reverse)` | Change every nth cycle |
 | `sometimes(25%, it.fast(2))` | Change a random share of the notes |
 | `thin(20%)` | Randomly drop events |
 | `euclid(hits: 5, steps: 8)` | Evenly spaced hits |
-| `layer(after: 1/8 beat, it.transpose(+12st))` | Delayed copy |
+| `layer(after: 1/8beat, it.transpose(+12st))` | Delayed copy |
 | `rhythm(grid[x..x ..x.])` | Values to a rhythm |
 | `repeat_each(2)` | Repeat every event |
 | `swing(amount: 20%, every: 1/8)` | Delay every other slot by a share of the slot |

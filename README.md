@@ -40,7 +40,7 @@ Start the engine with an initial file, then send more code from the REPL or CLI:
 niminal daemon examples/groove.nml
 niminal repl
 # in another terminal:
-niminal send 'chorus.start' --quantize "next 4 bars"
+niminal send 'chorus.start' --quantize "next 4bars"
 ```
 
 Sessions are logged sample-accurately, so you can replay them:
@@ -62,7 +62,7 @@ The language server (`niminal lsp`) works without a daemon for hover, completion
 - **Live** — WebSocket daemon, REPL, `send`, and editor integration; quantize changes to musical time.
 - **Offline** — Same `.nml` files render to audio; session logs replay to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
-- **Extensible** — Define opcodes and instruments in the language with the same tooling as built-ins.
+- **Extensible** — Write functions (down to the sample, with state) and instruments in the language, with the same tooling as built-ins.
 
 ## Repository layout
 

@@ -144,6 +144,11 @@ impl Opcode for Sampler {
     fn is_active(&self) -> bool {
         !self.done
     }
+
+    /// A sample plays out, so like an envelope it decides when its voice ends.
+    fn is_envelope(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

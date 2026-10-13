@@ -1,34 +1,30 @@
 # niminal language: functions and instruments
 
-Draft for review · Oct 13, 2026
+Built · Oct 13, 2026
 
-This document defines the core of the niminal language: values, functions (`fn`) and instruments (`instr`, `mono`). It is the base that every opcode will be built on, so it comes before growing the opcode library. Once agreed, it replaces the "Orchestra" sections of `niminal Spec.md` that cover syntax, opcodes, functions and instruments. Tracks, clips, scenes, patterns and the score model are out of scope here; they keep their own sections and reuse the statement and expression rules below.
+This document defines the core of the niminal language: values, functions (`fn`) and instruments (`instr`, `mono`). It is the base that every opcode is built on, so it came before growing the opcode library. It replaces the "Orchestra" sections of `niminal Spec.md` that cover syntax, opcodes, functions and instruments. Tracks, clips, scenes, patterns and the score model are out of scope here; they keep their own sections and reuse the statement and expression rules below.
 
-Markers show how each rule relates to the current implementation:
-
-- **[built]** works today as described.
-- **[change]** exists today but behaves differently; this document wins.
-- **[new]** not built yet.
+Everything here is built unless it is marked **[not built]**. Section 11 lists what changed from the first draft while it was built, and why.
 
 ## 1. Principles
 
 1. **One way to say a thing.** Each concept has one spelling. When two forms compete, one goes.
 2. **Concise for the stage, readable at length.** Short where it is typed live (`sig.lpf(800hz)`), explicit where it is read later (named arguments, units).
 3. **Inferred by default, declared at the boundaries.** Units, rates and shapes are inferred inside a body. Parameters say what a function needs.
-4. **Nothing on the audio thread can fail.** No allocation, no unbounded loops, no out-of-bounds reads, no division errors.
+4. **Nothing on the audio thread can fail.** No unbounded loops, no out-of-bounds reads, no division errors.
 5. **Braces, never indentation.** Any selected block can be evaluated on its own.
-6. **Built-ins and user code look the same.** A built-in opcode is a `fn` written in Rust. Users can't tell the two apart when calling them.
+6. **Built-ins and user code look the same.** Calls, named arguments, units and errors work the same for both.
 
 ## 2. Lexical structure
 
-- **Comments:** `//` to the end of the line. **Doc comments:** `///` before a `fn`, `instr` or parameter. They are shown on hover and in completion. **[new]**
-- **Statements** end at a newline. Newlines inside `( )` and `[ ]` are ignored. A line starting with `.` continues the previous expression. **[built]**
-- **Blocks** are `{ ... }`. Indentation never matters. **[built]**
-- **Names** are `snake_case`. A top-level name starting with `_` is private to its module. **[built]**
-- **Numbers:** `0.5`, `440`, `-3`, and rationals with an attached unit (`1/8beat`). **[built]**
-- **Units attach directly** to a literal (`440hz`, `-6db`, `5ms`). Outside brackets, a space is also allowed (`4 bars`). **[built]**
-- **Strings:** `"drums/kick.wav"`. They are used only for paths and addresses. **[built]**
-- **Brackets in a body** (`fn`, `instr`, track or bus) are lists. Patterns (`[c2 ~ eb2]`) belong to the performance layer. **[built]**
+- **Comments:** `//` to the end of the line. A `//` or `///` comment directly above a `fn` or `instr` is its documentation, shown on hover.
+- **Statements** end at a newline. Newlines inside `( )` and `[ ]` are ignored. A line starting with `.` continues the previous expression.
+- **Blocks** are `{ ... }`. Indentation never matters.
+- **Names** are `snake_case`. A top-level name starting with `_` is private to its module.
+- **Numbers:** `0.5`, `440`, `-3`, and rationals with an attached unit (`1/8beat`).
+- **Units attach directly** to a literal (`440hz`, `-6db`, `5ms`). Never after a space: inside brackets a space separates steps, and outside them `3/16 beat` would divide by `16beat`. To give an expression a unit, use the unit method: `(n * 2).bars`.
+- **Strings:** `"drums/kick.wav"`. They are used only for paths and addresses.
+- **Brackets** in a body (`fn`, `instr`, track or bus), in a signature, or after `const` are lists. Elsewhere at the top level they are patterns (`[c2 ~ eb2]`), which belong to the performance layer.
 
 ## 3. Values
 
@@ -42,15 +38,13 @@ Every value has three properties, all inferred:
 
 ### 3.1 Units
 
-The unit rules of `niminal Spec.md` stay as they are **[built]**. A short summary:
-
-- Plain numbers (`num`) are unitless. Oscillators, noise, envelopes and LFOs produce `num`.
+- Plain numbers (`num`) are unitless. Oscillators, envelopes and LFOs produce `num`.
 - `num × hz = hz`, `hz + hz = hz`, `hz / hz = num`. Adding values of different units is an error.
 - Related units convert: note names to hz (`c4`), semitones applied to a frequency (`freq + 7st`), beats to seconds at the current tempo, and db as a gain.
-- `x.num` strips a unit and `x.hz` (or `.db`, `.sec` and so on) attaches one to a plain value. **[new]**
+- `x.num` strips a unit and `x.hz` (or `.khz`, `.db`, `.sec`, `.ms`, `.beats`, `.bars`, `.st`, `.deg`) gives a plain value one.
 - A bare number where a unit is expected is an error with a quick fix (`cutoff: 800` → "did you mean `800hz`?"). Gain parameters also accept a plain linear factor.
-- **`int`** is a `num` that must be a whole number. It is used for sizes, counts and indices. **[new]**
-- **`true` and `false`** are `1` and `0`. **[new]**
+- **`int`** is a `num` that must be a whole number. It is used for sizes, counts and indices.
+- **`true` and `false`** are `1` and `0`.
 
 ### 3.2 Rates
 
@@ -58,40 +52,38 @@ A rate says how often a value can change. There are four, from slowest to fastes
 
 | Rate | Csound | Changes | Typical uses |
 | --- | --- | --- | --- |
-| `const` | (orchestra load) | Never: known while compiling | List sizes, loop counts, a delay's `max`, FFT size, `mode:` choices, tables |
+| `const` | (orchestra load) | Never: known while compiling | List sizes, loop counts, a delay's `max`, `mode:` choices, tables |
 | `init` | i-rate | Once, at note start | A plucked string's length, a random seed per note |
-| `control` | k-rate | Once per block (32 samples by default) | Slow modulation, filter coefficients when CPU matters |
+| `control` | k-rate | Once per block (32 samples) | Slow modulation, filter coefficients when CPU matters |
 | `audio` | a-rate | Every sample | Signals, audio-rate modulation |
 
-**Inference.** A value's rate is the fastest rate among its inputs **[new]**:
+**Inference.** A value's rate is the fastest rate among its inputs:
 
-- Literals, `pi`, `sample_rate` and tables are `const`.
-- A note's parameters are `audio` unless declared otherwise (§5.2), because lanes, glides and MPE can move them.
+- Literals, `pi` and tables are `const`; `sample_rate` is `init`.
+- A note's parameters are `audio` unless declared otherwise (§8.2), because lanes, glides and MPE can move them. Controls (`ctl`) are `control`.
 - Oscillators, envelopes and state are `audio`.
 - `freq * 2` has the rate of `freq`. `exp(-2 * pi * cutoff / sample_rate)` has the rate of `cutoff`.
 
-**Hoisting.** Every expression is computed at its own rate. If `cutoff` only changes per note, the `exp(...)` above runs once per note, even inside a function that otherwise runs every sample. This is what Csound's i/k/a prefixes were for, and it needs no syntax. **[new]**
+**Each value is worked out at its own rate.** In a function with state, if `cutoff` only changes per note, the `exp(...)` above runs once per note, though the function otherwise runs every sample. This is what Csound's i/k/a prefixes were for, and it needs no syntax. Outside functions with state, everything runs once per block of samples anyway.
 
-**Changing a rate explicitly.** A value never needs to be made faster: an `init` value feeds an audio input as is. To make a value slower, use a method:
+**Reading a value more slowly.** A value never needs to be made faster: an `init` value feeds an audio input as is. To make one slower, use a method:
 
 | Method | Gives |
 | --- | --- |
 | `x.init` | The value `x` had at note start (Csound's `i(k)`) |
-| `x.control` | `x` read once per block and held |
+| `x.control` | `x` read at the start of each block and held |
 
-These are the only two rate methods. `.audio` is not needed. **[new]**
-
-**Rate requirements are checked.** Passing a value that changes per note where `const` is needed is an error that names the cause, for example: "`size` must be known while compiling, but `len` is set at each note start". **[new]**
+**Rate requirements are checked.** Passing a value that changes where `const` is needed is an error: "`size` must be known while compiling".
 
 #### Why bindings carry no rate or type annotations
 
 Writing `init x = 0.5` or `control y = 5hz` would add a third way to state a rate, after parameter types and the `.init` and `.control` methods. Most of the time it would only repeat what is already known: `0.5` and `5hz` are literals, so they are already `const`.
 
-A local's rate is decided entirely by its inputs. The two reasons to change it are both covered by methods, which also work inline:
+A local's rate is decided by its inputs. The two reasons to change it are both covered by methods, which also work inline:
 
 ```
 start = freq.init                       // freeze at note start
-wobble = lfo(5hz).control               // cheaper: once per block
+wobble = osc(sine, 5hz).control         // cheaper: once per block
 osc(sine, freq.init)                    // inline, no binding needed
 ```
 
@@ -100,21 +92,21 @@ Parameters are where annotations earn their place, because they are the contract
 ### 3.3 Shapes: values, lists and channels
 
 - **A value** is one number or one signal.
-- **A list** has a length known while compiling. Its entries can be anything, including signals and other lists (§7). **[built]**
-- **A multichannel signal** is a list of signals that carries a channel layout (`stereo`, `surround(5.1)`, …). A list becomes channels where it reaches `out`, a bus, or a parameter that takes channels. **[built]**
+- **A list** has a length known while compiling. Its entries can be anything, including signals and other lists (§7).
+- **A multichannel signal** is a set of signals that carries a channel layout (`stereo`, `surround(5.1)`, …). A list becomes channels where it reaches `out`, a bus, or a built-in that expects one signal.
 
 ## 4. Ranges
 
-A range is a value with two ends, written with `..` **[change]**:
+A range is a value with two ends, written with `..`:
 
 | Form | Meaning |
 | --- | --- |
 | `a..b` | From `a` to `b`, **including** `b` |
-| `a..<b` | From `a` up to, not including, `b` **[new]** |
+| `a..<b` | From `a` up to, not including, `b` |
 
 - **Ranges carry units:** `20hz..20khz`, `-12db..0db`, `0..1`. Both ends must have the same unit.
 - **Ranges are values:** `sweep = 200hz..4khz` can be passed around and reused.
-- **Integer ranges iterate:** `for n in 1..8` runs eight times and `for i in 0..<n` runs `n` times. `(0..1).step(0.25)` gives `0, 0.25, 0.5, 0.75, 1`.
+- **Whole-number ranges iterate:** `for n in 1..8` runs eight times and `for i in 0..<n` runs `n` times.
 - **One spelling everywhere.** Every function that needs two ends takes a range, never a `lo, hi` pair:
 
 | Use | Example |
@@ -122,14 +114,15 @@ A range is a value with two ends, written with `..` **[change]**:
 | Bounded parameter type | `bright: 0..1`, `cutoff: 20hz..20khz` |
 | Loop | `for i in 0..<8 { ... }` |
 | Slice | `buf[0..<16]` |
-| Map a 0..1 signal | `lfo(2hz).range(200hz..4khz)` |
+| Map a 0..1 signal | `knob.range(200hz..4khz)` |
 | Clamp | `cut.clamp(20hz..18khz)` |
+| Audio input channels | `input(1..2)` |
 
-`range(lo, hi)` and `clamp(x, lo, hi)` are removed. **[change]**
+**[not built]** `(0..1).step(0.25)` for ranges that aren't whole numbers.
 
 ## 5. Functions
 
-`fn` is the only way to define reusable code. The current `opcode` keyword is removed. **[change]**
+`fn` is the only way to define reusable code. There is no `opcode` keyword.
 
 ### 5.1 Declaration
 
@@ -144,26 +137,30 @@ fn one_pole(x, cutoff: hz) {
 ```
 
 ```
-fn name(parameters) -> results with(options) { body }
+fn name(parameters) -> results { body }
 ```
 
-`-> results` and `with(...)` are both optional.
+`-> results` is optional.
 
 **Pure and stateful.** What a function becomes depends on its body, not on a keyword:
 
-- A function **without state** is pure. It works at any rate: while compiling (building a table, a parameter default, score material), at note start, per block or per sample.
-- A function **with state** (a `state` binding, `prev`, or a call to a stateful function) is a unit generator. Each call site has its own state, per voice. It can only be called where a voice or a track is running, never while compiling.
+- A function **without state** is pure. It works at any rate: while compiling (a table, a constant), at note start, per block or per sample. Where it is called its body becomes part of the caller.
+- A function **with state** (a `state` line, `prev`, a write to a state list, or a call to a function that has one) is a unit generator. Each call has its own state, per voice, and runs sample by sample. It can't run while compiling.
+
+Each call is compiled for the units and rates it is given, so one function serves many purposes:
 
 ```
-fn mtof(note: num) -> hz { 440hz * pow(2, (note - 69) / 12) }
+fn mtof(n: num) -> hz { 440hz * pow(2, (n - 69) / 12) }
 
-table_freq = mtof(60)                    // while compiling: 261.6hz
-instr lead(note: num) { osc(saw, mtof(note)) }   // per note, or per sample if note glides
+const low_c = mtof(36)                           // while compiling: 65.4hz
+instr keys(key: num) { osc(tri, mtof(key)) }      // follows the note, gliding if it glides
 ```
 
-**Definition order does not matter.** Functions may call functions defined later in the file. Recursion, direct or indirect, is an error that names the cycle. **[change]**
+**Definition order does not matter.** Functions may call functions defined later in the file. A function that calls itself, directly or through others, is an error that names the cycle.
 
-**Functions have no side effects** other than their own state. Sending to a bus (`space += ...`) is only allowed in instruments, tracks and buses. This keeps every function reusable anywhere. **[new]**
+**Functions have no side effects** other than their own state. Sending to a bus, `osc_out`, `input` and `note` are only for instruments, tracks and buses. This keeps every function reusable anywhere.
+
+**Mistakes are found where a function is defined**, even if nothing calls it. A function with untyped parameters is checked with a guess at their units (and list parameters at their lengths); a mistake that could come from the guess is only reported where the function is called.
 
 ### 5.2 Parameters
 
@@ -171,7 +168,7 @@ instr lead(note: num) { osc(saw, mtof(note)) }   // per note, or per sample if n
 name                        // any unit, any rate (generic)
 name: type                  // required
 name: type = default        // optional
-name = default              // optional; type taken from the default
+name = default              // optional; type from the default
 ```
 
 A **type** is an optional rate followed by what the value is:
@@ -184,12 +181,12 @@ kind  = unit | range | choice | list
 
 | Kind | Example | Accepts |
 | --- | --- | --- |
-| Unit | `cutoff: hz` | A value of that unit |
-| Range | `res: 0..1`, `cutoff: 20hz..20khz` | A value of the range's unit. Values outside the range are clamped, with a warning the first time |
-| Choice | `mode: (low \| band \| high) = low` | One of the listed names; always `const` **[new]** |
-| List | `coeffs: [num]`, `table: [num]` | A list whose entries have that kind; its length becomes `const` inside the body **[new]** |
+| Unit | `cutoff: hz` | A value of that unit: `num`, `int`, `hz`, `db`, `sec`, `st`, `deg` |
+| Range | `res: 0..1`, `cutoff: 20hz..20khz` | A value of the range's unit. A value known while compiling must be inside it; one that changes is clamped |
+| Choice | `mode: (low \| band \| high) = low` | One of the listed names; always `const`. Inside the body each name stands for its choice, so `mode == low` picks a branch while compiling |
+| List | `coeffs: [num]`, `table: [num]` | A list whose entries have that kind; its length is `const` inside the body. A multichannel signal passed here is the list of its channels |
 
-**Rate qualifiers** say what the function needs from the caller **[new]**:
+**Rate qualifiers** say what the function needs from the caller:
 
 | Written | Inside the body, the parameter is | When the caller passes something faster |
 | --- | --- | --- |
@@ -202,11 +199,13 @@ kind  = unit | range | choice | list
 fn string(x, freq: init hz, size: const int = 4096) { ... }
 ```
 
-**Untyped parameters are generic.** `fn twice(x) { x * 2 }` works on `num`, `hz` or `db`, at any rate, and the result's unit follows. Every call is compiled for the units and rates it is given. **[change]** (today an untyped parameter must be a plain number)
+A rate may be written without a kind: `rate: control = 10hz`.
 
-**Defaults** may use earlier parameters and must not be faster than their parameter's rate: `fn f(freq: hz, cutoff: hz = freq * 4)`. **[new]**
+**Untyped parameters are generic.** `fn twice(x) { x * 2 }` works on `num`, `hz` or `db`, at any rate, and the result's unit follows.
 
-**Multichannel arguments.** A multichannel signal passed to a single-value parameter runs the function once per channel. A list parameter (`x: [num]`) receives the channels as a list instead, which is how a function processes stereo as a whole (mid/side, ping-pong):
+**Defaults** may use earlier parameters: `fn f(freq: hz, cutoff: hz = freq * 4)`.
+
+**Multichannel arguments.** A list parameter (`x: [num]`) receives a signal's channels as a list, which is how a function processes stereo as a whole:
 
 ```
 fn mid_side(x: [num], width: 0..2 = 1) {
@@ -217,12 +216,14 @@ fn mid_side(x: [num], width: 0..2 = 1) {
 }
 ```
 
+A multichannel signal passed to a function with state where one value is expected runs one copy of it per channel. A function without state works on all the channels at once, as arithmetic does.
+
 ### 5.3 Results
 
-- **The last expression** is the result. **[built]**
-- **Or `out`:** a body may instead build `out` with `out = ...` and `out += ...`. `out` starts as silence. Using both forms in one body is an error. **[built]**
-- **Result unit** is inferred. `-> hz` declares it and is checked. Results can have any unit. **[change]** (today an opcode can only output plain numbers)
-- **Several results** are named after `->`. The body binds each name, and the caller reads them as fields. The body runs **once** for all results. **[change]** (today it runs once per result)
+- **The last expression** is the result.
+- **Or `out`:** a body may instead build `out` with `out = ...` and `out += ...`. `out` starts as silence. Using both forms in one body is an error.
+- **The result's unit** is inferred. `-> hz` declares it, and it is checked.
+- **Several results** are named after `->`. The body binds each name, and the caller reads them as fields. The body runs **once** for all of them.
 
 ```
 /// A state-variable filter with all three outputs.
@@ -235,11 +236,11 @@ fn svf(x, cutoff: hz, res: 0..1 = 0.5) -> (low, band, high) {
   low = low + f * band
 }
 
-f = noise().svf(cutoff: 2khz)
+f = osc(saw, 110hz).svf(cutoff: 2khz)
 out = f.band
 ```
 
-Used where a single value is expected, a function with several results gives its first one. **[built]**
+Used where a single value is expected, a function with several results gives its first one.
 
 ### 5.4 State
 
@@ -247,13 +248,14 @@ Used where a single value is expected, a function with several results gives its
 state name = initial
 ```
 
-- **Persists between samples,** per call site and per voice. **[built]**
-- **The initial value** may be any `init` expression, including parameters: `state level = start`. **[change]** (today only a literal)
-- **The unit** comes from what is assigned to it. A plain initial value such as `0` takes that unit. **[change]**
-- **Reading and writing follow line order.** A read above an assignment in the body sees the previous sample's value. A read below it sees the new value. **[built]**
-- **A state list** holds a buffer: `state buf = zeros(4096)`. Its length must be `const`. Entries are written with `buf[i] = value` (§7.3). **[new]**
+- **Persists between samples,** per call and per voice.
+- **The initial value** is worked out at note start and may use the parameters: `state y = x` starts at the input's first sample.
+- **The unit** is the initial value's unit: `state y = 0` holds plain numbers, `state y = 0hz` frequencies, and `state y = x` whatever `x` is. Assigning a value of another unit is an error.
+- **Reading and writing follow line order.** A read above an assignment in the body sees the previous sample's value. A read below it sees the new value.
+- **A state list** holds a buffer: `state buf = zeros(4096)` or `state taps = [0, 0, 0, 0]`. Its length must be `const`. Entries are written with `buf[i] = value` (§7.3).
+- **State is declared at the top of a function,** not inside a block.
 
-**`prev(x)`** is the value `x` had one sample ago. `prev(y)` may appear before `y` is bound, which is how feedback is written:
+**`prev(x)`** is the value `x` had one sample ago. `prev(y)` may appear before `y` is bound, which is how feedback is written; the value read that way is a plain number:
 
 ```
 fn comb(x, g: 0..1 = 0.5) {
@@ -262,7 +264,7 @@ fn comb(x, g: 0..1 = 0.5) {
 }
 ```
 
-`prev` means one sample everywhere inside a function or an instrument. An instrument that uses it is run sample by sample, like a function with state. **[change]** (today `prev` in an instrument is only allowed in a bus send, where it means one block)
+`prev` means one sample everywhere inside a function or an instrument. In an instrument, `y = ... prev(y) ...` on one line becomes a small function with state whose inputs are the names the line reads. A loop through several lines needs a `fn`. In a bus send, `prev` keeps its old meaning: the send arrives a block late (see open question 2).
 
 ## 6. Statements and expressions
 
@@ -280,9 +282,9 @@ fn comb(x, g: 0..1 = 0.5) {
 | `for x in xs { }` | Repeated statements (§6.5) |
 | `expr` | Only as the last line, where it is the result |
 
-- **Reading an unbound name** is an error. A binding that is never read is a warning. **[built]**
-- **A local can't reuse the name** of a top-level declaration (bus, instrument, function, table and so on). **[built]**
-- **Scoping in blocks:** a block can read every name above it. Assigning to a name from outside the block updates that name. A name first bound inside a block stays inside it. **[new]**
+- **Reading an unbound name** is an error.
+- **A local can't reuse the name** of a top-level declaration (bus, instrument, function, constant and so on). Inside a function only the names it could read count: buses, controls, functions and constants.
+- **Scoping in blocks:** a block can read every name above it. Assigning to a name from outside the block updates that name. A name first bound inside a block stays inside it.
 
 ### 6.2 Operators, by precedence
 
@@ -296,23 +298,25 @@ From the tightest-binding to the loosest:
 | 4 | `+`, `-` | |
 | 5 | `..`, `..<` | Ranges |
 | 6 | `<`, `>`, `<=`, `>=`, `==`, `!=` | Give `1` or `0`; no chaining (`a < b < c` is an error) |
-| 7 | `and` | **[new]** |
-| 8 | `or` | **[new]** |
+| 7 | `and` | |
+| 8 | `or` | |
 
-- **Remainder is `x.mod(y)`.** The `%` operator is removed, so `%` only means percent and spacing never changes meaning. `mod` takes the sign of the divisor and gives 0 for a divisor of 0. **[change]**
+- **Remainder is `x.mod(y)`.** There is no `%` operator, so `%` only means percent and spacing never changes meaning. `mod` takes the sign of the divisor and gives 0 for a divisor of 0.
 - **There is no power operator.** Use `pow(x, y)`.
-- **`and`, `or` and `not`** treat any non-zero value as true and give `1` or `0`. Both sides are always computed, because they may be signals. **[new]**
+- **`and`, `or` and `not`** treat any non-zero value as true and give `1` or `0`. Both sides are always worked out, because they may be signals.
 - **Comparisons** need both sides to have the same unit. Choice values compare with `==` and `!=`.
 
 ### 6.3 Math
 
-These work everywhere: in instruments, functions, while compiling, and at any rate **[change]** (today `min`, `max`, `clamp` and `pow` only work inside opcodes):
+These work everywhere: in instruments, functions, while compiling, and at any rate:
 
 - **One argument, plain numbers:** `sin cos tan tanh exp log sqrt abs sign floor ceil fract`.
 - **Two values of one unit:** `min(a, b)`, `max(a, b)`.
 - **Plain numbers:** `pow(x, y)`.
 - **Ranges:** `x.clamp(range)`.
 - **Constants:** `pi` and `sample_rate` (in hz).
+
+A call whose arguments are known while compiling is worked out then.
 
 ### 6.4 `if`
 
@@ -329,26 +333,26 @@ shaped = if drive > 0.5 {
 }
 ```
 
-**As a statement,** the `else` is optional. A branch can rebind outer names and write state. A name that only one branch assigns keeps its old value on the other branch:
+**As a statement,** the `else` is optional. A branch can rebind outer names, `out` and state. A name that only one branch assigns keeps its old value on the other branch:
 
 ```
 fn hold(x, trig) {
   state h = 0
-  if trig > prev(trig) { h = x }        // sample and hold, on a rising edge
+  if trig > 0 and prev(trig) <= 0 { h = x }     // sample and hold, on a rising edge
   h
 }
 ```
 
-**How it runs** **[change]** (today a branch must be one expression):
+**How it runs:**
 
 - A condition known while compiling picks its branch while compiling. The other branch is never built. This is how choice parameters work.
-- A condition known at note start picks its branch at note start.
-- Otherwise both branches are computed and the result is selected every sample. Writes to state and to state lists only happen on the taken branch.
+- Otherwise both branches are worked out and the result is selected every sample. In a function with state, writes to state and to state lists only happen on the taken branch, including the state of functions called inside the branch.
 - Both branches must give the same unit.
+- A bus send inside an `if` that changes while playing is an error, because it would always be made: send the `if` instead.
 
 ### 6.5 `for`
 
-`for` repeats a body a number of times known while compiling. It iterates over a range or a list. **[change]** (today `for` is an expression only)
+`for` repeats a body a number of times known while compiling. It iterates over a range, a list or a table.
 
 **As an expression,** it gives a list of each pass's value:
 
@@ -363,15 +367,15 @@ partials.sum
 for n in 1..8 { out += osc(sine, freq * n).gain(-3db * (n - 1)) }
 
 acc = 0
-for i in 0..<taps.len { acc = acc + taps[i] * hist[pos - i] }
+for i in taps.indices { acc = acc + taps[i] * hist[pos - i] }
 ```
 
-There are no `while` or `loop` statements, so nothing can loop forever on the audio thread. A loop over signals builds one branch of the graph per pass. A loop over list entries inside a stateful function may be compiled as a real loop instead. Both behave the same.
+There are no `while` or `loop` statements, so nothing can loop forever on the audio thread. A loop builds one copy of its body per pass.
 
 ### 6.6 Calls
 
-- **Named arguments:** `lpf(x, cutoff: 800hz, res: 0.3)`. **[built]**
-- **Positional arguments** fill a function's leading **required** parameters in order. Parameters with defaults are always named. **[change]** (today a user function takes only its first argument by position, while built-ins vary)
+- **Named arguments:** `lpf(x, cutoff: 800hz, res: 0.3)`.
+- **Positional arguments** fill a callee's leading **required** parameters in order (and always the first, the receiver of a method call). Parameters with defaults are named. This holds for built-ins and user functions alike:
 
   ```
   osc(saw, 440hz)                 // wave, freq: both required
@@ -380,21 +384,23 @@ There are no `while` or `loop` statements, so nothing can loop forever on the au
   adsr(5ms, 120ms, 0.4, 600ms)    // all four required
   ```
 
-- **Method calls:** `x.f(a)` is `f(x, a)`. Calls chain from left to right. **[built]**
-- **No parentheses** are needed after a dot when there are no further arguments: `x.tanh`, `xs.sum`. A bare name is always a reference, never a call. **[built]**
-- **After a dot,** a name resolves to a result field (`f.band`) first, then a function. If both fit, it is an error. **[built]**
-- **A list passed where a single value is expected** maps the call over its entries and gives a list: `osc(saw, freq * [1, 1.01, 0.99])` is three oscillators. **[built]**
+- **Method calls:** `x.f(a)` is `f(x, a)`. Calls chain from left to right.
+- **No parentheses** are needed after a dot when there are no further arguments: `x.tanh`, `xs.sum`. A bare name is always a reference, never a call.
+- **After a dot,** a name resolves to a result field (`f.band`) first, then a function.
+- **A list given to a built-in** where one signal is expected becomes channels, and the built-in runs once per channel: `osc(saw, freq * [1, 1.01])` is two oscillators. `.sum` mixes a signal's channels down. A list given to a user function where one value is expected stays a list, and the body works on it entry by entry.
 
 ### 6.7 Anonymous functions
 
-`fn(a, b) { a * b }` is a function value. It is used as an argument (`.map`) and is always `const`. **[built]** for one parameter.
+`fn(a) { ... }` is a function value. It is given to `.map`, and its body is a block.
 
-`it` is a shorthand for one-parameter functions: an argument that mentions `it`, passed where a function is expected, is a function of `it`. **[new]**
+`it` is a shorthand for one-parameter functions: an expression passed to `.map` that isn't a `fn(...)` is a function of `it`.
 
 ```
 ratios = (1..8).map(fn(n) { 1 / n })
 ratios = (1..8).map(1 / it)
 ```
+
+**[not built]** Functions as parameters of user functions (open question 4).
 
 ## 7. Lists, state lists and tables
 
@@ -402,42 +408,44 @@ There is one list type. Where it lives decides what you can do with it.
 
 ### 7.1 Lists
 
-- **Written as** `[a, b, c]` or produced by a range, `for` or `.map`. **[built]**
+- **Written as** `[a, b, c]` or produced by a range, `for` or `.map`.
 - **The length** is always `const`. Entries can be anything: numbers, signals, ranges, other lists.
-- **Arithmetic** works entry by entry (`[1, 2, 3] * 2`). Two lists combined this way must have the same length. **[built]**
-- **Methods:** `.len`, `.sum`, `.map(f)`, `.indices` (the same as `0..<xs.len`), `.min`, `.max`. **[built]** for `len`, `sum` and `map`.
-- **Indexing** counts from 0 and wraps: `xs[-1]` is the last entry and `xs[xs.len]` is the first. Indexing can never fail. **[change]**
+- **Arithmetic** works entry by entry (`[1, 2, 3] * 2`). Two lists combined this way must have the same length.
+- **Methods:** `.len`, `.sum`, `.min`, `.max`, `.map(f)`, `.indices` (the same as `0..<xs.len`), and `.channels` on a signal for a list of its channels.
+- **Indexing** counts from 0 and wraps: `xs[-1]` is the last entry and `xs[xs.len]` is the first. Indexing can never fail.
   - A `const` index picks an entry while compiling. The entries can be anything.
-  - A changing index reads an entry while running. The entries must share a unit. A list of signals indexed by a changing value is a switch between them:
+  - A changing index reads an entry while running. The entries must share a unit. A list of numbers is read as a table; a list of signals indexed by a changing value is a switch between them:
 
     ```
     wave = [osc(saw, f), osc(square, f), osc(tri, f)][step]   // all three run; one is heard
     ```
 
-- **Reading between entries:** `xs.at(pos, interp: linear)` reads at a fractional position, wrapping. `interp:` is `none`, `linear` or `cubic`. **[new]**
-- **Slices:** `xs[0..<16]` takes entries with `const` bounds. **[new]**
-- **Channels:** a list of single-channel signals becomes a multichannel signal where it reaches `out`, a bus or a channel parameter (at most 16 channels). `sig.channels` turns a signal back into a list of its channels. **[change]** (today this is `.split`, a name the spec also uses for `split(left: ..., right: ...)`)
+- **Reading between entries:** `xs.at(pos, interp: linear)` reads a list of numbers at a fractional position, wrapping. `interp:` is `none`, `linear` (the default) or `cubic`.
+- **Slices:** `xs[0..<16]` takes entries with `const` bounds.
 
 ### 7.2 Tables
 
-A top-level binding of a pure expression is computed once, when the code loads, and shared by every voice. A list bound this way is a table. The `table` keyword is removed. **[change]**
+`const name = expr` works out a value while compiling, once, and every voice shares it. A list of numbers defined this way is a table.
 
 ```
-saw8   = harmonics([1, -1/2, 1/3, -1/4], size: 4096)       // built-in constructor
-sine1k = (0..<1024).map(sin(2 * pi * it / 1024))           // built in the language
-hall   = file("irs/hall.wav")                              // a list of channels, each a list of samples
+const saw8   = harmonics([1, -1/2, 1/3, -1/4], size: 4096)    // one cycle, loudest point 1
+const sine1k = (0..<1024).map(sin(2 * pi * it / 1024))        // built in the language
+const taps   = [0.25, 0.5, 0.25]
+const a4     = mtof(69)                                       // a number
 ```
+
+A `const` can use numbers, ranges, lists and functions without state; anything that changes while playing is an error. **[not built]** `file("irs/hall.wav")` as a table.
 
 ### 7.3 State lists
 
-`state` in front of a list makes it writable, per call site and per voice. It is how a function keeps a buffer **[new]**:
+`state` in front of a list makes it writable, per call and per voice. It is how a function keeps a buffer:
 
 ```
 state buf = zeros(size)          // size must be const
 buf[pos] = y                     // writes wrap like reads
 ```
 
-`zeros(n)` makes a list of `n` zeros. Any `const` list can also be the initial value (`state taps = [0, 0, 0, 0]`). State lists are allocated before the voice starts, never on the audio thread.
+`zeros(n)` makes a list of `n` zeros. Any `const` list of numbers can also be the starting value (`state taps = [0, 0, 0, 0]`). A state list is copied for each voice when the voice starts.
 
 ## 8. Instruments
 
@@ -457,52 +465,52 @@ An instrument is a function that the score can call: each note creates a voice t
 
 | Keyword | A new note… |
 | --- | --- |
-| `instr` | Starts a new voice (polyphonic) **[built]** |
-| `mono` | Ends the voice before it and starts its own; with `legato: true`, updates the running voice **[built]** |
+| `instr` | Starts a new voice (polyphonic) |
+| `mono` | Ends the voice before it and starts its own; with `legato: true`, updates the running voice |
 
 ### 8.2 Parameters
 
-- Parameters follow §5.2, but **each needs a type or a default**, so the score can be checked against them. Parameters can't be generic. **[built]**
-- **`const` isn't allowed,** because notes supply values while running. For a structural setting, write a `fn` and call it with a constant.
+- Parameters follow §5.2, but **each needs a type or a default**, so the score can be checked against them. Parameters can't be generic.
+- **`const` isn't allowed,** because notes supply values while playing. Choices and lists aren't either. For a structural setting, write a `fn` and call it with a constant.
 - **Without a rate,** a parameter stays live: lanes, glides, MPE and `n.set(...)` move it on the running voice.
-- **`init`** fixes the parameter at note start, which is what a plucked string's length or a per-note random seed needs. **[new]**
-- **`gain` is a universal control,** applied after the instrument. An instrument may declare its own `gain` parameter to take it over, for example to drive the filter harder on louder notes. The `amp` convention in the examples goes away. **[change]** (today declaring `gain` is an error)
-- **`freq` is the pitch** by convention. `with(pitch: name)` changes it. **[built]**
+- **`init`** fixes the parameter at note start, which is what a plucked string's length or a per-note random seed needs.
+- **`gain` is a universal control,** applied after the instrument. An instrument may declare its own `gain: db` parameter to take it over, for example to drive the filter harder on louder notes; it is then not applied for it.
+- **`freq` is the pitch** by convention. **[not built]** `with(pitch: name)` to change it.
 
 ### 8.3 Body and result
 
-- **The result** is the last expression or `out` (§5.3). It must be a plain signal. It is converted to the master's channel layout. **[built]**
-- **Sends:** `space += out.gain(-12db)` sends a copy to a bus. An instrument that only sends needs no result. **[built]**
-- **Calling another instrument** gives its audio as a sub-voice of this voice: `out = pluck(freq: freq) + pluck(freq: freq * 1.5)`. **[new]**
-- **Scheduling:** `schedule(echo(freq: freq * 1.5), in: 1/8 beat)` schedules a note through the score model. **[new]**
+- **The result** is the last expression or `out` (§5.3). It must be a plain signal. It is converted to the master's channel layout.
+- **Sends:** `space += out.gain(-12db)` sends a copy to a bus. An instrument that only sends needs no result.
+- **Calling another instrument** plays its body as part of this voice: `out = click(freq: freq) + click(freq: freq * 1.5, gain: -6db)`. Its `gain:` is applied after it, as for a note.
+- **[not built]** `schedule(echo(freq: freq * 1.5), in: 1/8beat)`, which schedules a note through the score model.
 
 ### 8.4 Note context
 
-Inside an instrument body, `note` describes the running voice **[new]**:
+Inside an instrument body, `note` describes the running voice:
 
 | Name | Unit, rate | Meaning |
 | --- | --- | --- |
 | `note.time` | sec, audio | Time since the voice started |
-| `note.dur` | sec, init | Scheduled duration; 0 for a note held from a keyboard |
 | `note.released` | num, audio | 0 while held, 1 after release |
+| `note.dur` | sec, init | Scheduled duration **[not built]** |
 
-Functions don't see `note`. An instrument passes these values in as arguments, which keeps functions reusable.
+Functions don't see `note`. An instrument passes these values in as arguments, which keeps functions reusable. `note` is reserved, so it can't be a parameter or local name.
 
 ### 8.5 Envelopes
 
-`env[...]`, `adsr` and `perc` work as described in `niminal Spec.md` **[built]**. One change: steps may be names or parenthesised expressions, not only literals, so envelopes can follow parameters **[change]**:
+`env[...]`, `adsr` and `perc` work as described in `niminal Spec.md`. Steps may also be names or parenthesised expressions, so envelopes can follow parameters:
 
 ```
 instr pad(freq: hz, attack: sec = 400ms, release: sec = 2sec) {
-  osc(saw, freq) * env[0 attack 1 | release 0]
+  osc(saw, freq) * env[0 attack 1 | (release * 2).exp 0]
 }
 ```
 
-Envelope steps are read at note start (`init`). A step that changes after that is held at its starting value.
+Steps that aren't numbers are read at note start. Up to 16 steps of one envelope can be names or expressions. `adsr` and `perc` take them too: `adsr(5ms, 120ms, 0.4, release)`. Lane and tempo envelopes stay numbers only, since they have no note to read from.
 
 ### 8.6 Options
 
-Options go in `with(...)`, right after the parameters, for every declaration that has them. **[built]** for instruments; tracks and clips move theirs to the same place.
+Options go in `with(...)`, right after the parameters.
 
 | Option | Effect |
 | --- | --- |
@@ -512,21 +520,20 @@ Options go in `with(...)`, right after the parameters, for every declaration tha
 | `legato: true` (mono) | Overlapping notes update the running voice |
 | `priority: last \| lowest \| highest` (mono) | Which held note sounds |
 | `glide: 80ms` (mono) | Pitch changes slide over this time |
-| `pitch: name` | Which parameter is the pitch |
-| `tail: 2sec` | How long the voice may ring after release with no release envelope **[new]** |
-| `quantize: 1 beat` | When a redefinition lands |
+| `tail: 2sec` | How long the voice keeps sounding after its release (§8.7) |
+| `quantize: 1beat` | When a redefinition lands |
 
 ### 8.7 Voice lifetime
 
-A voice ends when:
+A voice ends:
 
-- it has been released and every envelope with a release has finished; or
-- it has no release envelope, its `tail:` (default 0) has passed since release, and a short fade has finished; or
-- it is choked, stolen or replaced. A short fade always prevents clicks.
-
-**[change]** Today a voice without an envelope that runs through a delay never ends: it rendered 60 seconds instead of 0.5. Ringing effects belong on a track or bus, or need an explicit `tail:`.
+- **with an envelope or a sample in it:** once it has been released, every envelope has finished and anything they fed (a delay, a reverb) has rung out. With a `tail:`, it keeps sounding until its envelopes are done and the tail has passed since the release, then fades out. A plucked string, whose envelope is only a short burst of noise, needs one;
+- **with neither:** at its release, after its `tail:` (default 0), with a short fade;
+- **when it is choked, stolen or replaced.** A short fade always prevents clicks.
 
 ## 9. Worked examples
+
+These are in `examples/functions.nml`, which also plays them.
 
 ### A user-written filter with a mode switch
 
@@ -546,6 +553,13 @@ instr bass(freq: hz) {
 ### Karplus-Strong from scratch
 
 ```
+/// White noise: each call has its own.
+fn noise() {
+  state s = 22222
+  s = (s * 16807).mod(2147483647)
+  s / 2147483647 * 2 - 1
+}
+
 /// A plucked string: a delay line fed back through an averaging low-pass.
 fn string(x, freq: init hz, decay: 0..1 = 0.996, size: const int = 4096) {
   state buf = zeros(size)
@@ -566,7 +580,7 @@ instr pluck(freq: init hz, decay: 0..1 = 0.996) with(tail: 3sec) {
 ### A wavetable oscillator from a table
 
 ```
-saw8 = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
+const saw8 = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
 
 fn phasor(freq: hz) {
   state p = 0
@@ -603,10 +617,10 @@ instr organ(freq: hz) {
 ### A pure helper used at every rate
 
 ```
-fn mtof(note: num) -> hz { 440hz * pow(2, (note - 69) / 12) }
+fn mtof(n: num) -> hz { 440hz * pow(2, (n - 69) / 12) }
 
-low_c = mtof(36)                                  // const: computed while compiling
-instr keys(note: num) { osc(tri, mtof(note)) }    // follows the note, gliding if it glides
+const low_c = mtof(36)                            // const: worked out while compiling
+instr keys(key: num) { osc(tri, mtof(key)) }      // follows the note, gliding if it glides
 ```
 
 ### An FIR filter
@@ -622,7 +636,7 @@ fn fir(x, taps: [num]) {
   acc
 }
 
-smooth = [0.25, 0.5, 0.25]
+const smooth = [0.25, 0.5, 0.25]
 instr soft(freq: hz) { osc(square, freq).fir(smooth) }
 ```
 
@@ -632,7 +646,7 @@ Only the words used by this part of the language are listed here. The full list 
 
 | Kind | Words |
 | --- | --- |
-| Declarations | `fn`, `instr`, `mono`, `state`, `with` |
+| Declarations | `fn`, `const`, `instr`, `mono`, `state`, `with` |
 | Control flow | `if`, `else`, `for`, `in` |
 | Logic | `and`, `or`, `not`, `true`, `false` |
 | Rates | `const`, `init`, `control` |
@@ -640,45 +654,59 @@ Only the words used by this part of the language are listed here. The full list 
 | Constants | `pi`, `sample_rate` |
 | Units | `num`, `int`, `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
 
-`opcode` and `table` are no longer reserved.
+`opcode` and `table` are no longer keywords.
 
-## 11. Summary of changes from the current implementation
+## 11. What changed
 
-| Area | Today | This spec |
+### From the language before this spec
+
+| Area | Before | Now |
 | --- | --- | --- |
 | Keywords | `opcode` and `fn` | `fn` only; state makes it a unit generator |
 | Untyped parameters | Plain numbers | Generic: any unit, any rate |
-| Positional arguments | First only (user); varies (built-ins) | Leading required parameters, for everything |
+| Positional arguments | First only (user); varied (built-ins) | Leading required parameters, for everything |
 | Results | Plain numbers only | Any unit; `-> hz` |
-| Several results | Body runs once per result | Body runs once |
-| Definition order | Opcodes must come before their callers | Any order; recursion is an error |
-| State initial value | A literal | Any `init` expression |
-| Ranges | `..` includes the end in types, excludes it in lists | `..` includes the end everywhere; `..<` excludes it |
-| `clamp`, `range` | Two spellings | Take a range only |
+| Several results | Body ran once per result | Body runs once |
+| Definition order | Opcodes before their callers | Any order; recursion is an error |
+| State initial value | A literal | Anything known at note start |
+| Ranges | `..` included the end in types, excluded it in lists | `..` includes the end everywhere; `..<` excludes it |
+| `clamp`, `range` | Two spellings | A range only |
 | Remainder | `%` operator, sensitive to spacing | `x.mod(y)` |
 | Logic | Multiply comparisons together | `and`, `or`, `not` |
 | `if` | One expression per branch | Blocks; statement form; state writes |
 | `for` | Expression only | Also a statement; carries assignments between passes |
-| Math | `min`, `max`, `clamp`, `pow` only in opcodes | Everywhere |
+| Math | `min`, `max`, `clamp`, `pow` only in opcodes | Everywhere, worked out while compiling where it can be |
 | `prev` | One sample in opcodes; bus sends only in instruments | One sample everywhere inside a voice |
 | Lists | Compile-time only | Indexing while running, wrapping, `.at`, slices, state lists |
-| Tables | `table` keyword (not built) | Top-level bindings |
-| Rates | Not available | `const`, `init`, `control` on parameters; `.init`, `.control`; hoisting |
+| Tables | `table` keyword (not built) | `const` definitions |
+| Rates | Not available | `const`, `init`, `control` on parameters; `.init`, `.control`; work at its own rate in functions with state |
 | Choice parameters | Built-ins only (`wave`) | `mode: (a \| b \| c)` for user functions |
 | Envelope steps | Literals only | Names and expressions, read at note start |
-| `gain` | Reserved; instruments use `amp` | Universal; an instrument may take it over |
-| Note context | None | `note.time`, `note.dur`, `note.released` |
+| `gain` | Reserved; instruments used `amp` | Universal; an instrument may take it over |
+| Note context | None | `note.time`, `note.released` |
 | Channels to list | `.split` | `.channels` |
-| Voice lifetime | No envelope plus a delay never ends | `tail:` option; ends after release |
-| Docs | None for user code | `///` doc comments |
+| Units after a space | `4 bars` allowed outside brackets | Always attached: `4bars` |
+| Voice lifetime | No envelope plus a delay never ended | Ends at release, or after `tail:` |
+| Calling an instrument | Not built | Plays its body as part of the voice |
 
-**Implementation note.** Today two compilers handle instruments (`lower.rs`, a block graph) and opcodes (`kernel.rs`, per-sample code). They duplicate argument binding, unit checks, `if` and comparisons, which is why some features only exist on one side. This spec assumes a single front end that infers the unit, rate and shape of every value. Two back ends would follow from it: a block graph for stateless chains, and fused per-sample code wherever there is state or feedback.
+### From the first draft of this spec, while building it
+
+- **Tables are `const` definitions,** not any top-level binding. At the top level a bare bracket is a pattern (`riff = [c4 e4]`), and `[0.25, 0.5]` is a chord there, so a keyword tells the two apart.
+- **A state's unit is its starting value's unit,** rather than inferred from what is assigned later: explicit, and it needs no unit inference across lines. `state y = x` covers a generic function.
+- **A list given to a built-in becomes channels** (the multichannel expansion of `niminal Spec.md`), and `.sum` mixes a signal's channels down. Mapping built-in calls over lists broke channel pairing, such as a stereo signal with `cutoff: [800hz, 1200hz]`.
+- **`tail:` also applies to voices with envelopes:** a plucked string's envelope is only its excitation.
+- **Calling an instrument plays its body in this voice** rather than starting a sub-voice; the envelopes start and release with it.
+- **`note` is reserved,** like `out` and `it`; the examples use `key: num` for a MIDI note number.
+
+**Implementation note.** Two compilers remain: one builds the block graph for instruments, tracks and functions without state (`lower.rs`), the other the per-sample kernel for functions with state (`kernel.rs`). They share signatures, argument binding, unit rules and the AST walk, and both compile a function for each call, so the rules above hold in both. Merging them into one front end with two back ends is still worth doing if they drift.
 
 ## 12. Open questions
 
-1. **Positional arguments.** "Leading required parameters" relaxes the main spec's "positional only for an obvious first argument". It makes built-ins and user functions consistent, and it is shorter live (`sig.lpf(800hz)`). The alternative is to keep the first-only rule and change `osc` and `adsr` to match.
-2. **Bus feedback.** Inside a voice, `prev` is now one sample. Feedback between buses (`echo += prev(out)`) is still one block, because buses run in blocks. Should the bus form get its own name, such as `out.late`, so that `prev` always means one sample?
+1. **Positional arguments.** "Leading required parameters" relaxes the main spec's "positional only for an obvious first argument". It makes built-ins and user functions consistent, and it is shorter live (`sig.lpf(800hz)`).
+2. **Bus feedback.** Inside a voice, `prev` is one sample. Feedback between buses (`echo += prev(out)`) is still one block, because buses run in blocks. Should the bus form get its own name, such as `out.late`, so that `prev` always means one sample?
 3. **Functions that build score material.** Brackets in a body are lists, so a `fn` can't write a pattern (`[c2 ~ eb2]`). Score functions (`fn verse(...)` in the main spec) need one. Options include a pattern prefix inside bodies (`p[c2 ~ eb2]`) or letting the expected type decide.
 4. **Functions as parameters.** Should a `fn` take a function argument (`fn layer(n: const int, make: fn) { ... }`)? It is cheap to add because functions are `const`.
 5. **`match`.** `if mode == low { } else if ...` works for choices. A `match mode { low: ..., band: ... }` would read better once choices have more than three options.
 6. **Annotations on bindings** (§3.2). They are left out for now and could be added with the parameter syntax if dogfooding asks for them.
+7. **Feedback across several lines in an instrument.** One-line loops work (§5.4); longer loops need a `fn`. Is that the right line to draw?
+8. **Checking generic functions where they are defined** is a guess at their units (§5.1). Full unit inference would find more mistakes earlier, at the cost of a more complex checker.

@@ -35,7 +35,7 @@ fn bars_bound_a_piece_that_plays_until_stopped() {
     let said = String::from_utf8_lossy(&ok.stdout);
     assert!(said.contains("1 channel"), "{said}");
     let reader = hound::WavReader::open(&wav).unwrap();
-    // 2 bars at the default 120bpm is 4 seconds, plus the last note's release
+    // 2bars at the default 120bpm is 4 seconds, plus the last note's release
     let seconds = reader.duration() as f64 / 48_000.0;
     assert!((3.9..5.0).contains(&seconds), "{seconds}");
 

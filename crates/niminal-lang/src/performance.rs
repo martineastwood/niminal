@@ -149,11 +149,11 @@ pub enum Action {
 /// Which grid a change waits for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantizeRelation {
-    /// Land on the grid: `@ bar`, `@ 4 bars`.
+    /// Land on the grid: `@ bar`, `@ 4bars`.
     OnGrid,
-    /// The next line of the grid: `@ next 4 bars`.
+    /// The next line of the grid: `@ next 4bars`.
     Next,
-    /// Counted from now: `@ in 4 bars`.
+    /// Counted from now: `@ in 4bars`.
     In,
 }
 

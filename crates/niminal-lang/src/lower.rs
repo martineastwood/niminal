@@ -11,8 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use niminal_engine::ops::{
-    Add, Cmp, Compare, Curve, Div, Env, Fn1, Func, Mul, PanChannel, Rem, SampleData, Sampler,
-    Segment, Select, Sub,
+    Add, BlockHold, Cmp, Compare, Curve, Custom, Delay1, Div, Env, EnvField, Fn1, Func, Hold, Interp,
+    Max, Min, Mul, NoteTime, PanChannel, Pow, Released, Rem, SampleData, SampleRate, Sampler, Segment,
+    Select, Sub, TableRead,
 };
 use niminal_engine::{ChainInput, Graph, GraphBuilder, Route, Src};
 use niminal_score::{Tempo, Value};
@@ -20,6 +21,8 @@ use niminal_score::{Tempo, Value};
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::layout::{Layout, conversion};
+use crate::funcs::{self, Kind as PKind, Param as PParam};
+use crate::kernel::{Body, KArg, cmp_op, compile_kernel, ends_with_value, interp_of, lambda_of, range_numbers};
 use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
 use crate::program::MidiTarget;
 use crate::program::{ControlBinding, ControlDef, Instrument, Param};
@@ -141,6 +144,14 @@ pub(crate) fn layout_from_expr(e: &Expr) -> Res<Layout> {
 /// layouts that tracks and buses use.
 pub(crate) struct Names {
     pub controls: Vec<ControlDef>,
+    /// Functions, by name.
+    pub fns: HashMap<String, FnDef>,
+    /// Instruments, by name, so one can be played inside another.
+    pub instrs: HashMap<String, InstrDef>,
+    /// `const` definitions, worked out.
+    pub consts: HashMap<String, Datum>,
+    /// Functions whose definitions have mistakes, already reported: calls to them stay quiet.
+    pub failed_fns: Vec<String>,
     entries: Vec<(String, &'static str)>,
     pub buses: Vec<String>,
     pub bus_layouts: Vec<Layout>,
@@ -152,6 +163,10 @@ impl Default for Names {
     fn default() -> Self {
         Names {
             controls: Vec::new(),
+            fns: HashMap::new(),
+            instrs: HashMap::new(),
+            consts: HashMap::new(),
+            failed_fns: Vec::new(),
             entries: Vec::new(),
             buses: Vec::new(),
             bus_layouts: Vec::new(),
@@ -182,16 +197,28 @@ impl Names {
 
     /// An error if a local may not be called `name`.
     fn check_local(&self, name: &Ident) -> Res<()> {
-        if let Some(kind) = self.kind_of(&name.name) {
+        self.check_local_in(name, false)
+    }
+
+    /// Like [`Names::check_local`]. Inside a function only the names its body could read are taken:
+    /// buses, controls, functions and constants.
+    pub(crate) fn check_local_in(&self, name: &Ident, in_fn: bool) -> Res<()> {
+        if let Some(kind) = self.kind_of(&name.name)
+            && (!in_fn || matches!(kind, "bus" | "control" | "function" | "constant"))
+        {
+            let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
             return Err(Diagnostic::new(
                 format!(
-                    "`{}` is already the name of a {kind}, so it can't be used for a local",
+                    "`{}` is already the name of {article} {kind}, so it can't be used for a local",
                     name.name
                 ),
                 name.span,
             ));
         }
-        if matches!(name.name.as_str(), "out" | "it" | "instrument" | "state") {
+        if matches!(
+            name.name.as_str(),
+            "out" | "it" | "instrument" | "state" | "note" | "true" | "false" | "pi" | "sample_rate"
+        ) {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
                 name.span,
@@ -211,7 +238,7 @@ enum Mode {
 
 /// A value in the graph: one source per channel.
 #[derive(Clone)]
-struct Sig {
+pub(crate) struct Sig {
     srcs: Vec<Src>,
     layout: Layout,
     unit: Unit,
@@ -258,6 +285,15 @@ impl Sig {
         self.srcs.len()
     }
 
+    /// The value, if it is known while compiling.
+    pub(crate) fn konst(&self) -> Option<f64> {
+        self.konst
+    }
+
+    pub(crate) fn unit(&self) -> Unit {
+        self.unit
+    }
+
     /// The source for channel `k`; a one-channel signal feeds every channel.
     fn pick(&self, k: usize) -> Src {
         if self.srcs.len() == 1 {
@@ -268,15 +304,18 @@ impl Sig {
     }
 }
 
-/// What an expression makes: a signal, or a list of values. A list exists while compiling only; it becomes a
-/// multichannel signal where a signal is needed.
+/// What an expression makes: a signal, a list of values, or a range. A list exists while compiling only; it
+/// becomes a multichannel signal where a signal is needed.
 #[derive(Clone)]
-enum Datum {
+pub(crate) enum Datum {
     Sig(Sig),
     List(Vec<Datum>),
+    /// `lo..hi`, or `lo..<hi`.
+    Range { lo: Sig, hi: Sig, inclusive: bool },
 }
 
 /// A call's evaluated argument.
+#[derive(Clone)]
 enum Val {
     Wave(opcodes::Wave),
     Layout(Layout),
@@ -301,6 +340,14 @@ pub(crate) struct Lower<'a> {
     route: Route,
     /// In a track: the signals sent over OSC.
     taps: Vec<crate::program::OscTap>,
+    /// The rate of each node result that is slower than audio.
+    rates: HashMap<usize, Rate>,
+    /// The rate of each graph parameter, by index.
+    param_rates: Vec<Rate>,
+    /// Functions being lowered, outermost first, to catch recursion.
+    fn_stack: Vec<String>,
+    /// Set while lowering a function's body, which can't send to a bus or read `note`.
+    in_fn: bool,
 }
 
 pub(crate) fn compile_control(
@@ -426,22 +473,40 @@ pub(crate) fn compile_instr(
     lower.mode = Mode::Instrument;
     let mut params: Vec<Param> = Vec::new();
 
-    for p in &def.params {
-        if params.iter().any(|q| q.name == p.name.name) {
-            return Err(Diagnostic::new(
-                format!("parameter `{}` is declared twice", p.name.name),
-                p.name.span,
-            ));
-        }
+    let signature = funcs::signature(&def.params, tempo)?;
+    for p in &signature {
         names.check_local(&p.name)?;
-        let Some(ty) = &p.ty else {
+        let (unit, range) = match &p.kind {
+            PKind::Unit { unit, .. } => (*unit, None),
+            PKind::Range { unit, lo, hi } => (*unit, Some((*lo, *hi))),
+            PKind::Any => match &p.default {
+                Some(e) => (lower.expr(e)?.unit, None),
+                None => {
+                    return Err(Diagnostic::new(
+                        format!("parameter `{}` needs a type", p.name.name),
+                        p.name.span,
+                    )
+                    .with_help(format!("for example `{}: hz`", p.name.name)));
+                }
+            },
+            PKind::Choice(_) | PKind::List(_) => {
+                return Err(Diagnostic::new(
+                    format!(
+                        "an instrument's parameters are set by notes, so `{}` can't be a choice or a list",
+                        p.name.name
+                    ),
+                    p.name.span,
+                )
+                .with_help("write a `fn` for that, and call it from the instrument"));
+            }
+        };
+        if p.rate == Some(Rate::Const) {
             return Err(Diagnostic::new(
-                format!("parameter `{}` needs a type", p.name.name),
+                format!("notes set `{}` while playing, so it can't be `const`", p.name.name),
                 p.name.span,
             )
-            .with_help(format!("for example `{}: hz`", p.name.name)));
-        };
-        let (unit, range) = param_type(ty)?;
+            .with_help("use `init` to fix it at note start"));
+        }
         let default = match &p.default {
             None => None,
             Some(e) => Some(lower.param_default(e, unit, range, &p.name.name)?),
@@ -450,9 +515,11 @@ pub(crate) fn compile_instr(
             .g
             .param(&p.name.name, default.unwrap_or(0.0))
             .expect("duplicates checked above");
+        lower.param_rates.push(Rate::Audio);
+        let sig = lower.at_rate(Sig::signal(src, unit), p.rate);
         lower
             .scope
-            .insert(p.name.name.clone(), Datum::Sig(Sig::signal(src, unit)));
+            .insert(p.name.name.clone(), Datum::Sig(sig));
         params.push(Param {
             name: p.name.name.clone(),
             unit,
@@ -460,21 +527,45 @@ pub(crate) fn compile_instr(
             default,
         });
     }
-
-    // Every note accepts a `gain` control, applied after the instrument.
-    if let Some(p) = def.params.iter().find(|p| p.name.name == GAIN_PARAM) {
-        return Err(Diagnostic::new(
-            format!("`{GAIN_PARAM}` is reserved: every note already has a `{GAIN_PARAM}` control"),
-            p.name.span,
-        ));
+    if let Some(tail) = def.options.iter().find(|o| o.name.as_ref().is_some_and(|n| n.name == "tail")) {
+        let t = lower.expr(&tail.value)?;
+        match (t.unit, t.konst) {
+            (Unit::Time, Some(seconds)) if (0.0..=600.0).contains(&seconds) => lower.g.set_tail(seconds as f32),
+            _ => {
+                return Err(Diagnostic::new(
+                    "`tail` is a time from 0 to 600sec, such as `2sec`",
+                    tail.value.span,
+                ));
+            }
+        }
     }
-    let gain = lower.g.param(GAIN_PARAM, 1.0).expect("name checked above");
-    params.push(Param {
-        name: GAIN_PARAM.to_string(),
-        unit: Unit::Db,
-        range: None,
-        default: Some(1.0),
-    });
+
+    // Every note accepts a `gain` control, applied after the instrument, unless the instrument takes it
+    // over by declaring its own.
+    let own_gain = params.iter().find(|p| p.name == GAIN_PARAM);
+    if let Some(p) = own_gain
+        && p.unit != Unit::Db
+    {
+        let span = def.params.iter().find(|q| q.name.name == GAIN_PARAM).map_or(def.name.span, |q| q.name.span);
+        return Err(Diagnostic::new(
+            format!("an instrument's own `{GAIN_PARAM}` is in db, like the one every note has"),
+            span,
+        )
+        .with_help(format!("`{GAIN_PARAM}: db = 0db`")));
+    }
+    let gain = if own_gain.is_none() {
+        let gain = lower.g.param(GAIN_PARAM, 1.0).expect("name checked above");
+        lower.param_rates.push(Rate::Audio);
+        params.push(Param {
+            name: GAIN_PARAM.to_string(),
+            unit: Unit::Db,
+            range: None,
+            default: Some(1.0),
+        });
+        Some(gain)
+    } else {
+        None
+    };
 
     if def.body.is_empty() {
         return Err(Diagnostic::new(
@@ -524,7 +615,10 @@ pub(crate) fn compile_instr(
 
     // Every voice leaves the instrument in the master's layout.
     let result = lower.convert(&result, names.master, span)?;
-    let result = lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, span)?;
+    let result = match gain {
+        Some(gain) => lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, span)?,
+        None => result,
+    };
     Ok(Instrument::new(
         def.name.name.clone(),
         Arc::new(lower.g.build_channels(&result.srcs)),
@@ -940,34 +1034,45 @@ fn address_span(args: &[Arg]) -> Span {
         .map_or(Span::new(0, 0), |a| a.value.span)
 }
 
-fn state_outside_opcode(name: &Ident) -> Diagnostic {
-    Diagnostic::new("`state` can only be used inside an `opcode`", name.span)
-        .with_help("an instrument's filters and delays keep their own state")
+fn state_outside_fn(name: &Ident) -> Diagnostic {
+    Diagnostic::new("`state` can only be used inside a `fn`", name.span)
+        .with_help("an instrument's filters and delays keep their own state; write a `fn` for state of your own")
 }
 
-pub(crate) fn param_type(ty: &TypeSpec) -> Res<(Unit, Option<(f64, f64)>)> {
-    match ty {
-        TypeSpec::Range { lo, hi, span } => {
-            if lo >= hi {
-                return Err(Diagnostic::new(
-                    "the lower bound of a range must be below the upper bound",
-                    *span,
-                ));
-            }
-            Ok((Unit::Num, Some((*lo, *hi))))
+/// Whether `e` reads `prev(name)`.
+fn reads_prev_of(e: &Expr, name: &str) -> bool {
+    if let ExprKind::Call { name: callee, args } = &e.kind
+        && callee.name == "prev"
+        && matches!(args.as_slice(), [a] if matches!(&a.value.kind, ExprKind::Name(n) if n == name))
+    {
+        return true;
+    }
+    let mut found = false;
+    e.for_each_child(&mut |c| found = found || reads_prev_of(c, name));
+    found
+}
+
+/// The names `e` reads, in order, once each.
+fn names_read(e: &Expr, out: &mut Vec<String>) {
+    if let ExprKind::Name(n) = &e.kind
+        && !out.contains(n)
+    {
+        out.push(n.clone());
+    }
+    e.for_each_child(&mut |c| names_read(c, out));
+}
+
+/// Whether two values are the same, for names a branch didn't change.
+fn same_datum(a: &Datum, b: &Datum) -> bool {
+    match (a, b) {
+        (Datum::Sig(x), Datum::Sig(y)) => x.srcs == y.srcs && x.unit == y.unit,
+        (Datum::List(x), Datum::List(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_datum(p, q))
         }
-        TypeSpec::Unit(id) => match id.name.as_str() {
-            "hz" => Ok((Unit::Hz, None)),
-            "db" => Ok((Unit::Db, None)),
-            "sec" => Ok((Unit::Time, None)),
-            "deg" => Ok((Unit::Angle, None)),
-            "st" => Ok((Unit::Semitones, None)),
-            other => Err(
-                Diagnostic::new(format!("unknown parameter type `{other}`"), id.span).with_help(
-                    "use a unit (`hz`, `db`, `sec`, `deg`, `st`) or a range such as `0..1`",
-                ),
-            ),
-        },
+        (Datum::Range { lo: a, hi: b, .. }, Datum::Range { lo: c, hi: d, .. }) => {
+            a.srcs == c.srcs && b.srcs == d.srcs
+        }
+        _ => false,
     }
 }
 
@@ -987,30 +1092,222 @@ impl<'a> Lower<'a> {
             input_sigs: HashMap::new(),
             route: Route::Master,
             taps: Vec::new(),
+            rates: HashMap::new(),
+            param_rates: Vec::new(),
+            fn_stack: Vec::new(),
+            in_fn: false,
         }
     }
 
-    /// Run a body's statements, returning its trailing bare expression, if any.
+    /// Run a body's statements, returning its trailing value as a signal, if there is one.
     fn run_body(&mut self, body: &[&Stmt]) -> Res<Option<(Sig, Span)>> {
+        match self.run_body_value(body)? {
+            Some((d, span)) => Ok(Some((self.signal_of(d, span)?, span))),
+            None => Ok(None),
+        }
+    }
+
+    /// Run a body's statements, returning its trailing value, if there is one.
+    fn run_body_value(&mut self, body: &[&Stmt]) -> Res<Option<(Datum, Span)>> {
+        let n = body.len();
         let mut tail = None;
         for (i, stmt) in body.iter().enumerate() {
-            match stmt {
-                Stmt::State { name, .. } => return Err(state_outside_opcode(name)),
-                Stmt::Bind { name, value } => self.assign(name, value)?,
-                Stmt::Destructure { names, value } => self.destructure(names, value)?,
-                Stmt::AddAssign { name, value } => self.add_assign(name, value)?,
-                Stmt::Expr(e) if self.mode == Mode::Track => {
-                    return Err(Diagnostic::new("a track makes sound through `out`", e.span)
-                        .with_help("write `out = ...`"));
-                }
-                Stmt::Expr(e) if i + 1 == body.len() => tail = Some((self.expr(e)?, e.span)),
-                Stmt::Expr(e) => {
-                    return Err(Diagnostic::new("this value is never used", e.span)
-                        .with_help("bind it with `name = ...`, or make it the last line"));
-                }
+            if let Some(v) = self.stmt(stmt, i + 1 == n)? {
+                tail = Some(v);
             }
         }
         Ok(tail)
+    }
+
+    /// Run one statement. The value of a trailing expression, if `last`.
+    fn stmt(&mut self, stmt: &Stmt, last: bool) -> Res<Option<(Datum, Span)>> {
+        match stmt {
+            Stmt::State { name, .. } => Err(state_outside_fn(name)),
+            Stmt::IndexAssign { name, .. } => Err(Diagnostic::new(
+                format!("only a state list can be written, and `{}` isn't one", name.name),
+                name.span,
+            )
+            .with_help("state lists belong to a `fn`: `state buf = zeros(64)`, then `buf[i] = x`")),
+            Stmt::Bind { name, value } => self.assign(name, value).map(|()| None),
+            Stmt::Destructure { names, value } => self.destructure(names, value).map(|()| None),
+            Stmt::AddAssign { name, value } => self.add_assign(name, value).map(|()| None),
+            Stmt::Expr(e) => match &e.kind {
+                ExprKind::If {
+                    then,
+                    otherwise: None,
+                    ..
+                } if last && ends_with_value(then) => Err(Diagnostic::new(
+                    "an `if` used as a value needs an `else`",
+                    e.span,
+                )
+                .with_help("it makes a value, so both ways need one: `if x > 0 { a } else { b }`")),
+                ExprKind::If { then, otherwise, .. }
+                    if !(last && otherwise.is_some() && ends_with_value(then)) =>
+                {
+                    self.if_stmt(e).map(|()| None)
+                }
+                ExprKind::For { body, .. } if !(last && ends_with_value(body)) => {
+                    self.for_stmt(e).map(|()| None)
+                }
+                _ if self.mode == Mode::Track => {
+                    Err(Diagnostic::new("a track makes sound through `out`", e.span)
+                        .with_help("write `out = ...`"))
+                }
+                _ if last => Ok(Some((self.value(e)?, e.span))),
+                _ => Err(Diagnostic::new("this value is never used", e.span)
+                    .with_help("bind it with `name = ...`, or make it the last line")),
+            },
+        }
+    }
+
+    /// Run a block's statements. Names first bound inside it stay inside it. The trailing value,
+    /// if `value` is asked for.
+    fn block(&mut self, stmts: &[Stmt], value: bool, span: Span) -> Res<Option<Datum>> {
+        let outer: Vec<String> = self.scope.keys().cloned().collect();
+        let mut tail = None;
+        let n = stmts.len();
+        for (i, s) in stmts.iter().enumerate() {
+            if let Some((v, _)) = self.stmt(s, value && i + 1 == n)? {
+                tail = Some(v);
+            }
+        }
+        self.scope.retain(|k, _| outer.contains(k));
+        if value && tail.is_none() {
+            return Err(Diagnostic::new("this block must end with a value", span));
+        }
+        Ok(tail)
+    }
+
+    /// The condition of an `if`, as a plain signal.
+    fn condition(&mut self, cond: &Expr) -> Res<Sig> {
+        let c = self.expr(cond)?;
+        if c.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                format!(
+                    "an `if` needs a plain number to decide on, but this is {}",
+                    c.unit.describe()
+                ),
+                cond.span,
+            )
+            .with_help("a comparison gives 1 or 0: `if freq < 2khz`"));
+        }
+        Ok(c)
+    }
+
+    /// `if cond { ... } else { ... }` as a statement: each name a branch changes takes the value of the
+    /// branch that is taken.
+    fn if_stmt(&mut self, e: &Expr) -> Res<()> {
+        let ExprKind::If {
+            cond,
+            then,
+            otherwise,
+        } = &e.kind
+        else {
+            unreachable!()
+        };
+        let c = self.condition(cond)?;
+        if let Some(k) = c.konst {
+            let taken = if k != 0.0 { Some(then) } else { otherwise.as_ref() };
+            if let Some(stmts) = taken {
+                self.block(stmts, false, e.span)?;
+            }
+            return Ok(());
+        }
+        let sends = self.sends;
+        let saved_scope = self.scope.clone();
+        let saved_out = self.out.clone();
+        self.block(then, false, e.span)?;
+        let then_scope = std::mem::replace(&mut self.scope, saved_scope.clone());
+        let then_out = std::mem::replace(&mut self.out, saved_out.clone());
+        if let Some(stmts) = otherwise {
+            self.block(stmts, false, e.span)?;
+        }
+        let else_scope = std::mem::replace(&mut self.scope, saved_scope);
+        let else_out = std::mem::replace(&mut self.out, saved_out);
+        if self.sends != sends {
+            return Err(Diagnostic::new(
+                "a send inside an `if` that changes while playing would always be made",
+                e.span,
+            )
+            .with_help("send the `if` instead: `space += if c { a } else { b }`"));
+        }
+        let names: Vec<String> = self.scope.keys().cloned().collect();
+        for name in names {
+            let (a, b) = (then_scope[&name].clone(), else_scope[&name].clone());
+            if same_datum(&a, &b) {
+                continue;
+            }
+            let merged = match (a, b) {
+                (Datum::Sig(a), Datum::Sig(b)) => Datum::Sig(self.select_sig(&c, a, b, e.span)?),
+                _ => {
+                    return Err(Diagnostic::new(
+                        format!("only signals can change inside a branch, not `{name}`"),
+                        e.span,
+                    ));
+                }
+            };
+            self.scope.insert(name, merged);
+        }
+        self.out = match (then_out, else_out) {
+            (Some(a), Some(b)) => Some(self.select_sig(&c, a, b, e.span)?),
+            (Some(a), None) => {
+                let zero = Sig::constant(a.unit, 0.0);
+                Some(self.select_sig(&c, a, zero, e.span)?)
+            }
+            (None, Some(b)) => {
+                let zero = Sig::constant(b.unit, 0.0);
+                Some(self.select_sig(&c, zero, b, e.span)?)
+            }
+            (None, None) => None,
+        };
+        Ok(())
+    }
+
+    /// The entries of a list or range, for `for`, `map` and the like.
+    fn entries(&mut self, d: Datum, span: Span) -> Res<Vec<Datum>> {
+        match d {
+            Datum::List(items) => Ok(items),
+            Datum::Range { lo, hi, inclusive } => {
+                let (Some(a), Some(b)) = (lo.konst, hi.konst) else {
+                    return Err(Diagnostic::new(
+                        "the ends of a range must be known while compiling",
+                        span,
+                    ));
+                };
+                Ok(range_numbers(a, b, inclusive, span)?
+                    .into_iter()
+                    .map(|k| Datum::Sig(Sig::constant(lo.unit, k)))
+                    .collect())
+            }
+            Datum::Sig(_) => Err(Diagnostic::new("expected a list or a range here", span)
+                .with_help("`.channels` gives the channels of a signal as a list")),
+        }
+    }
+
+    fn for_stmt(&mut self, e: &Expr) -> Res<()> {
+        let ExprKind::For { var, iter, body } = &e.kind else {
+            unreachable!()
+        };
+        self.check_loop_name(var)?;
+        let d = self.value(iter)?;
+        for entry in self.entries(d, iter.span)? {
+            self.scope.insert(var.name.clone(), entry);
+            let r = self.block(body, false, e.span);
+            self.scope.remove(&var.name);
+            r?;
+        }
+        Ok(())
+    }
+
+    fn check_loop_name(&self, var: &Ident) -> Res<()> {
+        self.names.check_local_in(var, self.in_fn)?;
+        if self.scope.contains_key(&var.name) {
+            return Err(Diagnostic::new(
+                format!("`{}` is already in use", var.name),
+                var.span,
+            ));
+        }
+        Ok(())
     }
 
     fn assign(&mut self, name: &Ident, value: &Expr) -> Res<()> {
@@ -1028,17 +1325,80 @@ impl<'a> Lower<'a> {
                 name.span,
             )),
             _ => {
-                self.names.check_local(name)?;
-                let v = self.value(value)?;
+                self.names.check_local_in(name, self.in_fn)?;
+                let v = if reads_prev_of(value, &name.name) && self.in_send.is_none() {
+                    self.feedback(name, value)?
+                } else {
+                    self.value(value)?
+                };
                 self.scope.insert(name.name.clone(), v);
                 Ok(())
             }
         }
     }
 
+    /// `y = x + prev(y) * 0.5`: a loop one sample long, compiled as a function with state whose
+    /// inputs are the names the line reads.
+    fn feedback(&mut self, name: &Ident, value: &Expr) -> Res<Datum> {
+        let mut read = Vec::new();
+        names_read(value, &mut read);
+        let inputs: Vec<String> = read
+            .into_iter()
+            .filter(|n| *n != name.name && self.scope.contains_key(n))
+            .collect();
+        let span = value.span;
+        let def = FnDef {
+            name: name.clone(),
+            params: inputs
+                .iter()
+                .map(|n| ParamDef {
+                    name: Ident {
+                        name: n.clone(),
+                        span,
+                    },
+                    rate: None,
+                    ty: None,
+                    default: None,
+                })
+                .collect(),
+            result: FnResult::Inferred,
+            body: vec![
+                Stmt::Bind {
+                    name: name.clone(),
+                    value: value.clone(),
+                },
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Name(name.name.clone()),
+                    span,
+                }),
+            ],
+            span,
+        };
+        let params = funcs::signature(&def.params, self.tempo)?;
+        let given = inputs
+            .iter()
+            .map(|n| {
+                Some((
+                    self.scope[n].clone(),
+                    Expr {
+                        kind: ExprKind::Name(n.clone()),
+                        span,
+                    },
+                ))
+            })
+            .collect();
+        self.call_kernel(&def, name, &params, given, span)
+    }
+
     /// `[l, r] = src`: one name per channel, or per entry of a list.
     fn destructure(&mut self, names: &[Ident], value: &Expr) -> Res<()> {
         let entries = match self.value(value)? {
+            Datum::Range { .. } => {
+                return Err(Diagnostic::new(
+                    "a range can't be taken apart with `[a, b] = ...`",
+                    value.span,
+                ));
+            }
             Datum::List(items) => {
                 if items.len() != names.len() {
                     return Err(Diagnostic::new(
@@ -1068,7 +1428,7 @@ impl<'a> Lower<'a> {
             }
         };
         for (name, entry) in names.iter().zip(entries) {
-            self.names.check_local(name)?;
+            self.names.check_local_in(name, self.in_fn)?;
             self.scope.insert(name.name.clone(), entry);
         }
         Ok(())
@@ -1086,6 +1446,13 @@ impl<'a> Lower<'a> {
             return Ok(());
         }
         if let Some(bus) = self.names.bus(&name.name) {
+            if self.in_fn {
+                return Err(Diagnostic::new(
+                    format!("a function can't send to the bus `{}`", name.name),
+                    name.span,
+                )
+                .with_help("send from the instrument that calls it"));
+            }
             self.in_send = Some(false);
             let sig = self.expr(value);
             let delayed = self.in_send.take() == Some(true);
@@ -1292,19 +1659,39 @@ impl<'a> Lower<'a> {
         self.signal_of(v, e.span)
     }
 
-    /// A signal, or a list of values.
+    /// A signal, a list of values, or a range.
     fn value(&mut self, e: &Expr) -> Res<Datum> {
         match &e.kind {
             ExprKind::Name(name) => match self.scope.get(name) {
                 Some(v) => Ok(v.clone()),
-                None => self.name(name, e.span).map(Datum::Sig),
+                None => match self.names.consts.get(name) {
+                    Some(v) => Ok(v.clone()),
+                    None => self.name(name, e.span).map(Datum::Sig),
+                },
             },
             ExprKind::Channels(items) => items
                 .iter()
                 .map(|i| self.value(i))
                 .collect::<Res<_>>()
                 .map(Datum::List),
-            ExprKind::Range { lo, hi } => self.range_list(lo, hi, e.span),
+            ExprKind::Range { lo, hi, inclusive } => {
+                let (l, h) = (self.expr(lo)?, self.expr(hi)?);
+                if l.unit != h.unit {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "the ends of a range need the same unit: {} and {}",
+                            l.unit.describe(),
+                            h.unit.describe()
+                        ),
+                        e.span,
+                    ));
+                }
+                Ok(Datum::Range {
+                    lo: l,
+                    hi: h,
+                    inclusive: *inclusive,
+                })
+            }
             ExprKind::Index { list, index } => self.index(list, index, e.span),
             ExprKind::Neg(inner) => {
                 let v = self.value(inner)?;
@@ -1314,26 +1701,71 @@ impl<'a> Lower<'a> {
                 let (l, r) = (self.value(lhs)?, self.value(rhs)?);
                 self.binary_value(*op, l, r, e.span)
             }
-            ExprKind::Call { name, args }
-                if matches!(name.name.as_str(), "map" | "sum" | "len" | "split")
-                    && self.registry.find(&name.name).is_none() =>
-            {
-                self.list_call(name, args, e.span)
+            ExprKind::Logic { op, lhs, rhs } => {
+                let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
+                let (l, r) = (self.truthy(l, lhs.span)?, self.truthy(r, rhs.span)?);
+                Ok(Datum::Sig(match op {
+                    LogicOp::And => self.mul(&l, &r, Unit::Num, e.span)?,
+                    LogicOp::Or => self.max_sig(&l, &r, e.span)?,
+                }))
             }
+            ExprKind::Not(inner) => {
+                let v = self.expr(inner)?;
+                let zero = Sig::constant(v.unit, 0.0);
+                self.compare(CmpOp::Eq, v, zero, e.span).map(Datum::Sig)
+            }
+            ExprKind::If { .. } => self.if_value(e),
+            ExprKind::For { var, iter, body } => {
+                self.check_loop_name(var)?;
+                let d = self.value(iter)?;
+                let mut results = Vec::new();
+                for entry in self.entries(d, iter.span)? {
+                    self.scope.insert(var.name.clone(), entry);
+                    let v = self.block(body, true, e.span);
+                    self.scope.remove(&var.name);
+                    results.push(v?.expect("a value"));
+                }
+                Ok(Datum::List(results))
+            }
+            ExprKind::Call { name, args } => self.call(name, args, e.span),
             ExprKind::Lambda { .. } => Err(Diagnostic::new(
-                "a function can only be the argument of `map`",
+                "a function value can only be given to `map`",
                 e.span,
             )
-            .with_help("for example `(0..4).map(fn(i) { osc(saw, freq * (1 + i * 0.01)) }).sum`")),
+            .with_help("for example `(0..<4).map(fn(i) { osc(saw, freq * (1 + i * 0.01)) }).sum`")),
             _ => self.signal(e).map(Datum::Sig),
         }
+    }
+
+    /// 1 where `s` is not 0, 0 where it is.
+    fn truthy(&mut self, s: Sig, span: Span) -> Res<Sig> {
+        let zero = Sig::constant(s.unit, 0.0);
+        self.compare(CmpOp::Ne, s, zero, span)
+    }
+
+    fn max_sig(&mut self, a: &Sig, b: &Sig, span: Span) -> Res<Sig> {
+        if let (Some(x), Some(y)) = (a.konst, b.konst) {
+            return Ok(Sig::constant(a.unit, x.max(y)));
+        }
+        self.elementwise(a, b, a.unit, span, |g, x, y| {
+            g.add(Max, &[("a", x), ("b", y)]).expect("max ports")
+        })
+    }
+
+    fn min_sig(&mut self, a: &Sig, b: &Sig, span: Span) -> Res<Sig> {
+        if let (Some(x), Some(y)) = (a.konst, b.konst) {
+            return Ok(Sig::constant(a.unit, x.min(y)));
+        }
+        self.elementwise(a, b, a.unit, span, |g, x, y| {
+            g.add(Min, &[("a", x), ("b", y)]).expect("min ports")
+        })
     }
 
     /// An expression that makes a signal directly: not a list, and not arithmetic on one.
     fn signal(&mut self, e: &Expr) -> Res<Sig> {
         match &e.kind {
             ExprKind::Num { value, unit } => self.literal(*value, unit.as_deref(), e.span),
-            ExprKind::Call { name, args } => self.call(name, args, e.span),
+            ExprKind::Call { .. } => unreachable!("`value` handles calls"),
             ExprKind::Env(env) => self.env(env),
             ExprKind::Str(_) => Err(Diagnostic::new(
                 "text can only be an argument that asks for it",
@@ -1343,13 +1775,8 @@ impl<'a> Lower<'a> {
                 let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
                 self.compare(*op, l, r, e.span)
             }
-            ExprKind::If {
-                cond,
-                then,
-                otherwise,
-            } => self.if_else(cond, then, otherwise, e.span),
             ExprKind::Pattern(_) | ExprKind::Rest => Err(Diagnostic::new(
-                "a pattern can't be used inside an instrument, opcode or track",
+                "a pattern can't be used inside an instrument, function or track",
                 e.span,
             )
             .with_help(
@@ -1362,6 +1789,10 @@ impl<'a> Lower<'a> {
             ExprKind::Name(_)
             | ExprKind::Neg(_)
             | ExprKind::Binary { .. }
+            | ExprKind::Logic { .. }
+            | ExprKind::Not(_)
+            | ExprKind::If { .. }
+            | ExprKind::For { .. }
             | ExprKind::Channels(_)
             | ExprKind::Range { .. }
             | ExprKind::Index { .. }
@@ -1383,53 +1814,187 @@ impl<'a> Lower<'a> {
                             return Err(Diagnostic::new("a list of lists can't be used as a signal", span)
                                 .with_help("sum the inner lists, or index into them"));
                         }
+                        Datum::Range { .. } => {
+                            return Err(Diagnostic::new("a list of ranges can't be used as a signal", span));
+                        }
                     }
                 }
                 join_channels(&entries, span)
             }
+            Datum::Range { .. } => Err(Diagnostic::new("a range isn't a signal", span).with_help(
+                "use it in `.range(...)`, `.clamp(...)`, a `for` loop or a slice such as `xs[0..<4]`",
+            )),
         }
     }
 
-    /// `(lo..hi)`: the whole numbers from `lo` up to `hi`. Both ends are known while compiling.
-    fn range_list(&mut self, lo: &Expr, hi: &Expr, span: Span) -> Res<Datum> {
-        let end = |this: &mut Self, e: &Expr| match this.expr(e)? {
-            Sig { konst: Some(v), unit: Unit::Num, .. } if v.fract() == 0.0 => Ok(v),
-            _ => Err(Diagnostic::new("the ends of a range must be whole numbers known while compiling", e.span)),
-        };
-        let (lo, hi) = (end(self, lo)?, end(self, hi)?);
-        let count = hi - lo;
-        if count < 1.0 {
-            return Err(Diagnostic::new("this range is empty", span));
-        }
-        Ok(Datum::List(
-            (0..count as usize)
-                .map(|i| Datum::Sig(Sig::constant(Unit::Num, lo + i as f64)))
-                .collect(),
-        ))
-    }
-
-    /// `list[i]`: `i` counts from 0 and is known while compiling.
+    /// `list[i]`, counting from 0 and wrapping at both ends, or `list[a..<b]`.
     fn index(&mut self, list: &Expr, index: &Expr, span: Span) -> Res<Datum> {
-        let Datum::List(items) = self.value(list)? else {
-            return Err(Diagnostic::new("only a list can be indexed", list.span)
-                .with_help("`.split` gives the channels of a signal as a list"));
-        };
-        let i = match self.expr(index)? {
-            Sig { konst: Some(v), unit: Unit::Num, .. } if v.fract() == 0.0 && v >= 0.0 => v as usize,
-            _ => {
-                return Err(Diagnostic::new(
-                    "an index must be a whole number, 0 or more, known while compiling",
-                    index.span,
-                ));
+        let l = self.value(list)?;
+        let items = match l {
+            Datum::Sig(_) => {
+                return Err(Diagnostic::new("only a list can be indexed", list.span)
+                    .with_help("`.channels` gives the channels of a signal as a list"));
             }
+            other => self.entries(other, list.span)?,
         };
-        items.get(i).cloned().ok_or_else(|| {
-            Diagnostic::new(
-                format!("index {i} is out of range for a list of {}", items.len()),
+        if items.is_empty() {
+            return Err(Diagnostic::new("this list is empty", span));
+        }
+        let n = items.len();
+        if let ExprKind::Range { .. } = index.kind {
+            let picks = self.value(index)?;
+            let picks = self.entries(picks, index.span)?;
+            let mut out = Vec::with_capacity(picks.len());
+            for p in picks {
+                let Datum::Sig(Sig { konst: Some(k), .. }) = p else {
+                    unreachable!("a range gives numbers")
+                };
+                out.push(items[k.rem_euclid(n as f64) as usize].clone());
+            }
+            return Ok(Datum::List(out));
+        }
+        let i = self.expr(index)?;
+        if i.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                format!("an index is a plain number, found {}", i.unit.describe()),
+                index.span,
+            ));
+        }
+        if let Some(k) = i.konst {
+            return Ok(items[k.floor().rem_euclid(n as f64) as usize].clone());
+        }
+        // an index that changes: a table read, or a switch between signals
+        let mut sigs = Vec::with_capacity(n);
+        for item in items {
+            match item {
+                Datum::Sig(s) if s.count() == 1 => sigs.push(s),
+                _ => {
+                    return Err(Diagnostic::new(
+                        "an index that changes can only pick among one-channel signals or numbers",
+                        index.span,
+                    ));
+                }
+            }
+        }
+        if sigs.iter().any(|s| s.unit != sigs[0].unit) {
+            return Err(Diagnostic::new(
+                "an index that changes needs entries with the same unit",
                 span,
-            )
-            .with_help("the first entry is 0")
+            ));
+        }
+        let unit = sigs[0].unit;
+        if sigs.iter().all(|s| s.konst.is_some()) {
+            let data: Arc<[f64]> = sigs.iter().map(|s| s.konst.unwrap()).collect();
+            return self.table_read(data, unit, &i, Interp::None, span).map(Datum::Sig);
+        }
+        let floor = self.func(Fn1::Floor, &i);
+        let count = Sig::constant(Unit::Num, n as f64);
+        let wrapped = self.elementwise(&floor, &count, Unit::Num, span, |g, x, y| {
+            g.add(Rem, &[("a", x), ("b", y)]).expect("rem ports")
+        })?;
+        let mut result = sigs[n - 1].clone();
+        for k in (0..n - 1).rev() {
+            let hit = self.compare(CmpOp::Eq, wrapped.clone(), Sig::constant(Unit::Num, k as f64), span)?;
+            result = self.select_sig(&hit, sigs[k].clone(), result, span)?;
+        }
+        Ok(Datum::Sig(result))
+    }
+
+    /// A table read at `pos`, wrapping, one read per channel of `pos`.
+    fn table_read(&mut self, data: Arc<[f64]>, unit: Unit, pos: &Sig, interp: Interp, _span: Span) -> Res<Sig> {
+        let srcs = pos
+            .srcs
+            .iter()
+            .map(|&p| {
+                self.g
+                    .add(TableRead::new(data.clone(), interp), &[("pos", p)])
+                    .expect("table ports")
+            })
+            .collect();
+        Ok(Sig {
+            srcs,
+            layout: pos.layout,
+            unit,
+            konst: None,
+            outputs: Vec::new(),
         })
+    }
+
+    /// `f(x)` on every channel, worked out while compiling where `x` is known.
+    fn func(&mut self, f: Fn1, x: &Sig) -> Sig {
+        if let Some(k) = x.konst {
+            return Sig::constant(Unit::Num, f.apply(k));
+        }
+        let rate = self.sig_rate(x);
+        let srcs = x
+            .srcs
+            .iter()
+            .map(|&s| {
+                let out = self.g.add(Func(f), &[("x", s)]).expect("func ports");
+                self.note_rate(out, rate);
+                out
+            })
+            .collect();
+        Sig {
+            srcs,
+            layout: x.layout,
+            unit: Unit::Num,
+            konst: None,
+            outputs: Vec::new(),
+        }
+    }
+
+    /// How often a source can change.
+    fn src_rate(&self, src: Src) -> Rate {
+        match src {
+            Src::Const(_) => Rate::Const,
+            Src::Param(i) => self.param_rates.get(i).copied().unwrap_or(Rate::Audio),
+            Src::Node(i) => self.rates.get(&i).copied().unwrap_or(Rate::Audio),
+            Src::Input(_) => Rate::Audio,
+        }
+    }
+
+    fn sig_rate(&self, s: &Sig) -> Rate {
+        if s.konst.is_some() {
+            return Rate::Const;
+        }
+        s.srcs.iter().map(|&x| self.src_rate(x)).max().unwrap_or(Rate::Const)
+    }
+
+    fn note_rate(&mut self, src: Src, rate: Rate) {
+        if let Src::Node(i) = src
+            && rate < Rate::Audio
+        {
+            self.rates.insert(i, rate);
+        }
+    }
+
+    /// A signal seen at a slower rate: `init` holds its value from note start, `control` reads it
+    /// once per block.
+    fn at_rate(&mut self, s: Sig, rate: Option<Rate>) -> Sig {
+        let Some(rate) = rate else { return s };
+        if self.sig_rate(&s) <= rate || rate == Rate::Const {
+            return s;
+        }
+        let srcs = s
+            .srcs
+            .iter()
+            .map(|&x| {
+                let out = match rate {
+                    Rate::Init => self.g.add(Hold::default(), &[("x", x)]),
+                    _ => self.g.add(BlockHold, &[("x", x)]),
+                }
+                .expect("hold ports");
+                self.note_rate(out, rate);
+                out
+            })
+            .collect();
+        Sig {
+            srcs,
+            konst: None,
+            outputs: Vec::new(),
+            ..s
+        }
     }
 
     /// Channel `k` of a signal, with its value known if it was.
@@ -1443,6 +2008,7 @@ impl<'a> Lower<'a> {
     fn negate_value(&mut self, v: Datum, span: Span) -> Res<Datum> {
         match v {
             Datum::Sig(s) => self.negate(s, span).map(Datum::Sig),
+            Datum::Range { .. } => Err(Diagnostic::new("a range can't be negated", span)),
             Datum::List(items) => items
                 .into_iter()
                 .map(|i| self.negate_value(i, span))
@@ -1454,6 +2020,10 @@ impl<'a> Lower<'a> {
     /// Arithmetic on lists goes entry by entry. A single value applies to every entry, and two lists must be the same length.
     fn binary_value(&mut self, op: BinOp, l: Datum, r: Datum, span: Span) -> Res<Datum> {
         match (l, r) {
+            (Datum::Range { .. }, _) | (_, Datum::Range { .. }) => Err(Diagnostic::new(
+                "arithmetic doesn't work on ranges",
+                span,
+            )),
             (Datum::Sig(l), Datum::Sig(r)) => self.binary(op, l, r, span).map(Datum::Sig),
             (Datum::List(a), Datum::List(b)) => {
                 if a.len() != b.len() {
@@ -1490,7 +2060,8 @@ impl<'a> Lower<'a> {
         }
     }
 
-    /// `list.map(fn)`, `list.sum`, `list.len` and `signal.split`.
+    /// `list.map(f)`, `list.sum`, `list.len`, `list.indices`, `list.min`, `list.max`, `list.at(pos)`
+    /// and `signal.channels`.
     fn list_call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
         let Some(receiver) = args.first().filter(|a| a.receiver) else {
             return Err(Diagnostic::new(
@@ -1500,80 +2071,170 @@ impl<'a> Lower<'a> {
             .with_help(format!("for example `[1, 2, 3].{}`", name.name)));
         };
         let value = self.value(&receiver.value)?;
-        if name.name == "split" {
-            return match (value, args.len()) {
-                (_, n) if n > 1 => Err(Diagnostic::new("`split` takes no arguments", name.span)),
-                (list @ Datum::List(_), _) => Ok(list),
-                (Datum::Sig(sig), _) => Ok(Datum::List(
+        let no_args = |what: &str| -> Res<()> {
+            if args.len() > 1 {
+                return Err(Diagnostic::new(format!("`{what}` takes no arguments"), name.span));
+            }
+            Ok(())
+        };
+        if name.name == "channels" {
+            no_args("channels")?;
+            return match value {
+                list @ Datum::List(_) => Ok(list),
+                Datum::Sig(sig) => Ok(Datum::List(
                     (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect(),
                 )),
+                Datum::Range { .. } => Err(Diagnostic::new("a range has no channels", receiver.value.span)),
             };
         }
-        let Datum::List(items) = value else {
-            return Err(Diagnostic::new(
-                format!("`{}` works on a list", name.name),
-                receiver.value.span,
-            )
-            .with_help("`.split` gives the channels of a signal as a list"));
+        let value = match value {
+            // a signal's channels: `.sum` mixes them down
+            Datum::Sig(sig) if matches!(name.name.as_str(), "sum" | "len" | "min" | "max") => Datum::List(
+                (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect(),
+            ),
+            Datum::Sig(_) => {
+                return Err(Diagnostic::new(
+                    format!("`{}` works on a list", name.name),
+                    receiver.value.span,
+                )
+                .with_help("`.channels` gives the channels of a signal as a list"));
+            }
+            other => other,
         };
+        if name.name == "at" {
+            return self.at(name, args, value, receiver.value.span).map(Datum::Sig);
+        }
+        let items = self.entries(value, receiver.value.span)?;
         match name.name.as_str() {
             "len" => {
-                if args.len() > 1 {
-                    return Err(Diagnostic::new("`len` takes no arguments", name.span));
-                }
+                no_args("len")?;
                 Ok(Datum::Sig(Sig::constant(Unit::Num, items.len() as f64)))
             }
-            "sum" => {
-                if args.len() > 1 {
-                    return Err(Diagnostic::new("`sum` takes no arguments", name.span));
-                }
+            "indices" => {
+                no_args("indices")?;
+                Ok(Datum::Range {
+                    lo: Sig::constant(Unit::Num, 0.0),
+                    hi: Sig::constant(Unit::Num, items.len() as f64),
+                    inclusive: false,
+                })
+            }
+            "sum" | "min" | "max" => {
+                no_args(&name.name)?;
                 let mut total: Option<Sig> = None;
                 for item in items {
                     let sig = self.signal_of(item, receiver.value.span)?;
                     total = Some(match total {
                         None => sig,
-                        Some(t) => self.binary(BinOp::Add, t, sig, span)?,
+                        Some(t) => match name.name.as_str() {
+                            "sum" => self.binary(BinOp::Add, t, sig, span)?,
+                            "min" => {
+                                self.same_unit(&t, &sig, &name.name, span)?;
+                                self.min_sig(&t, &sig, span)?
+                            }
+                            _ => {
+                                self.same_unit(&t, &sig, &name.name, span)?;
+                                self.max_sig(&t, &sig, span)?
+                            }
+                        },
                     });
                 }
-                Ok(Datum::Sig(total.expect("a list is never empty")))
+                Ok(Datum::Sig(total.ok_or_else(|| Diagnostic::new("this list is empty", span))?))
             }
             _ => self.map(name, args, items),
         }
+    }
+
+    fn same_unit(&self, a: &Sig, b: &Sig, what: &str, span: Span) -> Res<()> {
+        if a.unit != b.unit {
+            return Err(Diagnostic::new(
+                format!(
+                    "`{what}` needs values with the same unit: {} and {}",
+                    a.unit.describe(),
+                    b.unit.describe()
+                ),
+                span,
+            ));
+        }
+        Ok(())
+    }
+
+    /// `table.at(pos, interp: linear)`: a list of numbers read at a fractional position, wrapping.
+    fn at(&mut self, name: &Ident, args: &[Arg], list: Datum, span: Span) -> Res<Sig> {
+        let items = self.entries(list, span)?;
+        let mut unit = None;
+        let mut data = Vec::with_capacity(items.len());
+        for item in &items {
+            match item {
+                Datum::Sig(Sig { konst: Some(k), unit: u, .. }) if unit.is_none_or(|x| x == *u) => {
+                    unit = Some(*u);
+                    data.push(*k);
+                }
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`at` reads a list of numbers known while compiling, with one unit",
+                        span,
+                    ));
+                }
+            }
+        }
+        let mut pos = None;
+        let mut interp = Interp::Linear;
+        for a in &args[1..] {
+            match a.name.as_ref().map(|n| n.name.as_str()) {
+                None if pos.is_none() => pos = Some(self.expr(&a.value)?),
+                Some("interp") => interp = interp_of(&a.value)?,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`at` takes a position and `interp:`",
+                        a.value.span,
+                    ));
+                }
+            }
+        }
+        let Some(pos) = pos else {
+            return Err(Diagnostic::new("`at` takes a position", name.span));
+        };
+        if pos.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                format!("a position is a plain number, found {}", pos.unit.describe()),
+                name.span,
+            ));
+        }
+        self.table_read(data.into(), unit.unwrap_or(Unit::Num), &pos, interp, span)
     }
 
     /// The function runs once for each entry, while compiling, and the results are the new list.
     fn map(&mut self, name: &Ident, args: &[Arg], items: Vec<Datum>) -> Res<Datum> {
         let [_, f] = args else {
             return Err(Diagnostic::new("`map` takes a function", name.span)
-                .with_help("for example `[1, 2, 3].map(fn(x) { x * 2 })`"));
+                .with_help("for example `[1, 2, 3].map(fn(x) { x * 2 })` or `.map(it * 2)`"));
         };
-        let ExprKind::Lambda { params, body } = &f.value.kind else {
-            return Err(Diagnostic::new("`map` takes a function", f.value.span)
-                .with_help("write `fn(x) { ... }`"));
-        };
-        let [param] = params.as_slice() else {
-            return Err(Diagnostic::new("the function given to `map` takes one parameter", f.value.span));
-        };
-        self.names.check_local(param)?;
-        if self.scope.contains_key(&param.name) {
+        let (param, body) = lambda_of(&f.value)?;
+        if param != "it" {
+            self.names.check_local_in(
+                &Ident {
+                    name: param.clone(),
+                    span: f.value.span,
+                },
+                self.in_fn,
+            )?;
+        }
+        if self.scope.contains_key(&param) {
             return Err(Diagnostic::new(
-                format!("`{}` is already in use, so it can't be this function's parameter", param.name),
-                param.span,
+                format!("`{param}` is already in use, so it can't be this function's parameter"),
+                f.value.span,
             ));
         }
-        let saved = self.scope.clone();
         let mut results = Vec::with_capacity(items.len());
         for item in items {
-            self.scope.insert(param.name.clone(), item);
-            match self.value(body) {
-                Ok(v) => results.push(v),
-                Err(e) => {
-                    self.scope = saved;
-                    return Err(e);
-                }
-            }
+            self.scope.insert(param.clone(), item);
+            let v = match &body {
+                Body::Block(stmts) => self.block(stmts, true, f.value.span).map(|v| v.expect("a value")),
+                Body::Expr(e) => self.value(e),
+            };
+            self.scope.remove(&param);
+            results.push(v?);
         }
-        self.scope = saved;
         Ok(Datum::List(results))
     }
 
@@ -1592,10 +2253,30 @@ impl<'a> Lower<'a> {
                 return match self.mode {
                     Mode::Track => Ok(self.it()),
                     _ => Err(Diagnostic::new(
-                        "`it` is only available inside a track",
+                        "`it` is only available inside a track, or a function given to `map`",
                         span,
                     )),
                 };
+            }
+            "pi" => return Ok(Sig::constant(Unit::Num, std::f64::consts::PI)),
+            "true" => return Ok(Sig::constant(Unit::Num, 1.0)),
+            "false" => return Ok(Sig::constant(Unit::Num, 0.0)),
+            "sample_rate" => {
+                if self.mode == Mode::Plain {
+                    return Err(Diagnostic::new(
+                        "the sample rate isn't known while compiling",
+                        span,
+                    ));
+                }
+                let src = self.g.add(SampleRate, &[]).expect("no ports");
+                self.note_rate(src, Rate::Init);
+                return Ok(Sig::signal(src, Unit::Hz));
+            }
+            "note" => {
+                return Err(Diagnostic::new(
+                    "`note` describes the running voice: `note.time` or `note.released`",
+                    span,
+                ));
             }
             _ => {}
         }
@@ -1613,6 +2294,7 @@ impl<'a> Lower<'a> {
                     &[],
                 )
                 .map_err(|e| Diagnostic::new(e.to_string(), span))?;
+            self.note_rate(src, Rate::Control);
             return Ok(Sig {
                 srcs: vec![src],
                 layout: Layout::Mono,
@@ -1638,6 +2320,12 @@ impl<'a> Lower<'a> {
             return Ok(Sig::constant(
                 Unit::Hz,
                 note.as_hz().expect("a note is a frequency"),
+            ));
+        }
+        if self.names.fns.contains_key(name) {
+            return Err(Diagnostic::new(
+                format!("`{name}` is a function: call it with `{name}(...)`"),
+                span,
             ));
         }
         if opcodes::wave(name).is_some() {
@@ -1682,9 +2370,13 @@ impl<'a> Lower<'a> {
         } else {
             b.layout
         };
-        let srcs = (0..n)
+        let rate = self.sig_rate(a).max(self.sig_rate(b));
+        let srcs: Vec<Src> = (0..n)
             .map(|k| make(&mut self.g, a.pick(k), b.pick(k)))
             .collect();
+        for &src in &srcs {
+            self.note_rate(src, rate);
+        }
         Ok(Sig {
             srcs,
             layout,
@@ -1721,7 +2413,6 @@ impl<'a> Lower<'a> {
             BinOp::Sub => "subtract",
             BinOp::Mul => "multiply",
             BinOp::Div => "divide",
-            BinOp::Rem => "take the remainder of",
         };
         let (lu, ru) = (l.unit, r.unit);
         let mismatch = || {
@@ -1779,20 +2470,31 @@ impl<'a> Lower<'a> {
                     });
                 };
                 if k == 0.0 {
-                    return Err(Diagnostic::new("division by zero", span));
+                    return Ok(Sig::constant(unit, 0.0));
                 }
                 self.mul(&l, &Sig::constant(Unit::Num, 1.0 / k), unit, span)
             }
-            BinOp::Rem => {
-                let unit = crate::unit::rem_unit(lu, ru).ok_or_else(mismatch)?;
-                if let (Some(x), Some(y)) = (l.konst, r.konst) {
-                    return Ok(Sig::constant(unit, niminal_engine::ops::rem(x, y)));
-                }
-                self.elementwise(&l, &r, unit, span, |g, x, y| {
-                    g.add(Rem, &[("a", x), ("b", y)]).expect("rem ports")
-                })
-            }
         }
+    }
+
+    /// `a.mod(b)`: the remainder, with the sign of `b`.
+    fn rem(&mut self, l: Sig, r: Sig, span: Span) -> Res<Sig> {
+        let unit = crate::unit::rem_unit(l.unit, r.unit).ok_or_else(|| {
+            Diagnostic::new(
+                format!(
+                    "can't take the remainder of {} and {}",
+                    l.unit.describe(),
+                    r.unit.describe()
+                ),
+                span,
+            )
+        })?;
+        if let (Some(x), Some(y)) = (l.konst, r.konst) {
+            return Ok(Sig::constant(unit, niminal_engine::ops::rem(x, y)));
+        }
+        self.elementwise(&l, &r, unit, span, |g, x, y| {
+            g.add(Rem, &[("a", x), ("b", y)]).expect("rem ports")
+        })
     }
 
     /// `a < b`: 1 where it holds, 0 where it doesn't.
@@ -1807,14 +2509,7 @@ impl<'a> Lower<'a> {
                 span,
             ));
         }
-        let cmp = match op {
-            CmpOp::Lt => Cmp::Lt,
-            CmpOp::Gt => Cmp::Gt,
-            CmpOp::Le => Cmp::Le,
-            CmpOp::Ge => Cmp::Ge,
-            CmpOp::Eq => Cmp::Eq,
-            CmpOp::Ne => Cmp::Ne,
-        };
+        let cmp: Cmp = cmp_op(op);
         if let (Some(x), Some(y)) = (l.konst, r.konst) {
             return Ok(Sig::constant(
                 Unit::Num,
@@ -1827,28 +2522,49 @@ impl<'a> Lower<'a> {
         })
     }
 
-    /// `if cond { a } else { b }`. A condition known while compiling picks a side then and there.
-    fn if_else(&mut self, cond: &Expr, then: &Expr, otherwise: &Expr, span: Span) -> Res<Sig> {
-        let c = self.expr(cond)?;
-        if c.unit != Unit::Num {
-            return Err(Diagnostic::new(
-                format!(
-                    "an `if` needs a plain number to decide on, but this is {}",
-                    c.unit.describe()
-                ),
-                cond.span,
-            )
-            .with_help("a comparison gives 1 or 0: `if freq < 2khz`"));
+    /// `if cond { a } else { b }` as a value. A condition known while compiling picks a side then and
+    /// there; otherwise both are worked out and one is kept, sample by sample.
+    fn if_value(&mut self, e: &Expr) -> Res<Datum> {
+        let ExprKind::If {
+            cond,
+            then,
+            otherwise,
+        } = &e.kind
+        else {
+            unreachable!()
+        };
+        let Some(otherwise) = otherwise else {
+            return Err(Diagnostic::new("an `if` used as a value needs an `else`", e.span)
+                .with_help("it makes a value, so both ways need one: `if x > 0 { a } else { b }`"));
+        };
+        let c = self.condition(cond)?;
+        if let Some(k) = c.konst {
+            let taken = if k != 0.0 { then } else { otherwise };
+            return Ok(self.block(taken, true, e.span)?.expect("a value"));
         }
-        let (a, b) = (self.expr(then)?, self.expr(otherwise)?);
+        let sends = self.sends;
+        let a = self.block(then, true, e.span)?.expect("a value");
+        let b = self.block(otherwise, true, e.span)?.expect("a value");
+        if self.sends != sends {
+            return Err(Diagnostic::new(
+                "a send inside an `if` that changes while playing would always be made",
+                e.span,
+            ));
+        }
+        let (a, b) = (self.signal_of(a, e.span)?, self.signal_of(b, e.span)?);
+        self.select_sig(&c, a, b, e.span).map(Datum::Sig)
+    }
+
+    /// `a` where `c` is not 0, `b` elsewhere, channel by channel.
+    fn select_sig(&mut self, c: &Sig, a: Sig, b: Sig, span: Span) -> Res<Sig> {
         if a.unit != b.unit {
             return Err(Diagnostic::new(
                 format!(
-                    "the two ways of an `if` must have the same unit: this is {}, the first was {}",
-                    b.unit.describe(),
-                    a.unit.describe()
+                    "the two ways of an `if` must have the same unit: one is {}, the other {}",
+                    a.unit.describe(),
+                    b.unit.describe()
                 ),
-                otherwise.span,
+                span,
             ));
         }
         if let Some(k) = c.konst {
@@ -1858,7 +2574,7 @@ impl<'a> Lower<'a> {
             .into_iter()
             .max()
             .unwrap_or(1);
-        for s in [&c, &a, &b] {
+        for s in [c, &a, &b] {
             if s.count() != 1 && s.count() != n {
                 return Err(Diagnostic::new(
                     format!("can't combine a {n}-channel signal with a {}-channel one", s.count()),
@@ -1867,11 +2583,12 @@ impl<'a> Lower<'a> {
                 .with_help("a one-channel signal can be combined with any; otherwise the counts must match"));
             }
         }
-        let layout = [&c, &a, &b]
+        let layout = [c, &a, &b]
             .into_iter()
             .find(|s| s.count() == n)
             .map_or(Layout::Mono, |s| s.layout);
-        let srcs = (0..n)
+        let rate = self.sig_rate(c).max(self.sig_rate(&a)).max(self.sig_rate(&b));
+        let srcs: Vec<Src> = (0..n)
             .map(|k| {
                 self.g
                     .add(
@@ -1881,6 +2598,9 @@ impl<'a> Lower<'a> {
                     .expect("select ports")
             })
             .collect();
+        for &src in &srcs {
+            self.note_rate(src, rate);
+        }
         Ok(Sig {
             srcs,
             layout,
@@ -1940,10 +2660,11 @@ impl<'a> Lower<'a> {
                     _ => None,
                 });
             }
-            ExprKind::Call { name, .. } => matches!(
-                self.registry.find(&name.name).map(|s| &s.build),
-                Some(Build::Custom(k)) if k.outputs.len() > 1
-            ),
+            ExprKind::Call { name, .. } => self
+                .names
+                .fns
+                .get(&name.name)
+                .is_some_and(|d| matches!(d.result, FnResult::Named(_))),
             _ => false,
         };
         if !several {
@@ -1954,6 +2675,10 @@ impl<'a> Lower<'a> {
 
     /// `input(1)` or `input(1..2)`: channels of the audio input, as a signal with as many channels.
     fn audio_input(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
+        if self.in_fn {
+            return Err(Diagnostic::new("`input` can't be used inside a function", name.span)
+                .with_help("read it in the track, and pass it in as an argument"));
+        }
         if self.mode != Mode::Track {
             return Err(Diagnostic::new("`input` is read in a track", name.span)
                 .with_help("for example `track voice { out = input(1).lpf(cutoff: 2khz) }`"));
@@ -1973,9 +2698,28 @@ impl<'a> Lower<'a> {
                 )),
             }
         };
+        let ends = |arg: &Arg| -> Option<(Arg, Arg)> {
+            let ExprKind::Range {
+                lo,
+                hi,
+                inclusive: true,
+            } = &arg.value.kind
+            else {
+                return None;
+            };
+            let wrap = |e: &Expr| Arg {
+                name: None,
+                value: e.clone(),
+                receiver: false,
+            };
+            Some((wrap(lo), wrap(hi)))
+        };
         let (first, last) = match args {
+            [a] if ends(a).is_some() => {
+                let (lo, hi) = ends(a).unwrap();
+                (channel(&lo)?, channel(&hi)?)
+            }
             [a] => (channel(a)?, channel(a)?),
-            [a, b] => (channel(a)?, channel(b)?),
             _ => {
                 return Err(Diagnostic::new(
                     "`input` takes a channel, or a range of them",
@@ -2004,6 +2748,10 @@ impl<'a> Lower<'a> {
     /// 30 times a second unless `rate:` says otherwise, to `host:` (this computer if none).
     fn osc_out(&mut self, name: &Ident, args: &[Arg]) -> Res<Sig> {
         use niminal_engine::ops::{Tap, TapOut};
+        if self.in_fn {
+            return Err(Diagnostic::new("`osc_out` can't be used inside a function", name.span)
+                .with_help("send from the track that calls it"));
+        }
         if self.mode != Mode::Track {
             return Err(Diagnostic::new(
                 "`osc_out` sends a track's signal, so it is used in a track",
@@ -2133,18 +2881,30 @@ impl<'a> Lower<'a> {
     /// `x.range(200hz..4khz)`: a plain signal from 0 to 1 (a control, a knob) mapped to a range. Decibels
     /// move evenly in db, everything else evenly in its own unit.
     fn range(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
-        let [x, lo, hi] = args else {
+        let [x, range] = args else {
             return Err(
-                Diagnostic::new("`range` takes the two ends of the range", name.span)
+                Diagnostic::new("`range` takes a range", name.span)
                     .with_help("for example `knob.range(200hz..4khz)`"),
             );
         };
-        if let Some(n) = args.iter().find_map(|a| a.name.as_ref()) {
-            return Err(Diagnostic::new(
-                "`range` takes its ends without names",
-                n.span,
-            ));
+        if let Some(n) = &range.name {
+            return Err(Diagnostic::new("`range` takes its range without a name", n.span));
         }
+        let ExprKind::Range { lo, hi, .. } = &range.value.kind else {
+            return Err(Diagnostic::new("`range` takes a range, such as `200hz..4khz`", range.value.span));
+        };
+        let (lo, hi) = (
+            Arg {
+                name: None,
+                value: (**lo).clone(),
+                receiver: false,
+            },
+            Arg {
+                name: None,
+                value: (**hi).clone(),
+                receiver: false,
+            },
+        );
         let x_sig = self.expr(&x.value)?;
         if x_sig.unit != Unit::Num {
             return Err(Diagnostic::new(
@@ -2200,27 +2960,109 @@ impl<'a> Lower<'a> {
         self.binary(BinOp::Add, scaled, lo_sig, span)
     }
 
-    fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
+    fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
+        let n = name.name.as_str();
+        // `f.band`: one result of a function that has several
+        if let [receiver] = args
+            && receiver.receiver
+            && !self.names.fns.contains_key(n)
+            && let Some(record) = self.record(&receiver.value)?
+        {
+            return record
+                .outputs
+                .iter()
+                .find(|(o, _)| o == n)
+                .map(|(_, s)| Datum::Sig(s.clone()))
+                .ok_or_else(|| {
+                    let names: Vec<&str> = record.outputs.iter().map(|(o, _)| o.as_str()).collect();
+                    Diagnostic::new(format!("this has no result `{n}`"), name.span)
+                        .with_help(format!("its results are {}", names.join(", ")))
+                });
+        }
+        // `note.time`: the running voice
+        if let [receiver] = args
+            && receiver.receiver
+            && matches!(&receiver.value.kind, ExprKind::Name(r) if r == "note" && !self.scope.contains_key("note"))
+        {
+            return self.note_context(name).map(Datum::Sig);
+        }
+        if self.names.failed_fns.iter().any(|f| f == n) {
+            // already reported where it is defined; this stops the caller without a second report
+            return Err(Diagnostic::quiet(name.span));
+        }
+        if let Some(def) = self.names.fns.get(n) {
+            let def = def.clone();
+            return self.call_fn(&def, name, args, span, false);
+        }
+        if let Some(def) = self.names.instrs.get(n) {
+            let def = def.clone();
+            return self.call_instr(&def, name, args, span);
+        }
+        match n {
+            "map" | "sum" | "len" | "channels" | "indices" | "at" => {
+                return self.list_call(name, args, span);
+            }
+            "min" | "max" if args.len() == 1 && args[0].receiver => return self.list_call(name, args, span),
+            "split" if args.len() == 1 && args[0].receiver => {
+                return Err(Diagnostic::new("`split` without arguments is now `channels`", name.span)
+                    .with_help("write `signal.channels` for a list of its channels"));
+            }
+            "min" | "max" | "pow" | "mod" => return self.combine(name, args).map(Datum::Sig),
+            "clamp" => return self.clamp(name, args).map(Datum::Sig),
+            "init" | "control" if args.len() == 1 && args[0].receiver => {
+                let v = self.expr(&args[0].value)?;
+                let rate = if n == "init" { Rate::Init } else { Rate::Control };
+                return Ok(Datum::Sig(self.at_rate(v, Some(rate))));
+            }
+            "zeros" => return self.zeros(name, args),
+            "harmonics" => return self.harmonics(name, args),
+            _ => {}
+        }
+        if let Some(v) = self.unit_method(name, args)? {
+            return Ok(Datum::Sig(v));
+        }
+        self.call_builtin(name, args, span)
+    }
+
+    fn call_builtin(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
         if name.name == "prev" {
-            // `echo += prev(out).gain(-20db)`: the send arrives a block late, which breaks a loop through buses
+            return self.prev(name, args).map(Datum::Sig);
+        }
+        if let Some(f) = opcodes::math_fn(&name.name) {
             let [arg] = args else {
-                return Err(Diagnostic::new("`prev` takes one value", name.span));
+                return Err(Diagnostic::new(
+                    format!("`{}` takes one value", name.name),
+                    name.span,
+                ));
             };
-            let Some(ctx) = &mut self.in_send else {
-                return Err(Diagnostic::new("`prev` is only available when sending to a bus", name.span)
-                    .with_help("for example `echo += prev(out).gain(-20db)`; inside an opcode, `prev(x)` is the value one sample ago"));
+            if let Some(n) = &arg.name {
+                return Err(Diagnostic::new(
+                    format!("`{}` takes its value without a name", name.name),
+                    n.span,
+                ));
+            }
+            let unit_check = |x: &Sig| -> Res<()> {
+                if x.unit != Unit::Num {
+                    return Err(Diagnostic::new(
+                        format!("`{}` expects a plain number, found {}", name.name, x.unit.describe()),
+                        arg.value.span,
+                    )
+                    .with_help("divide by a value with the same unit to get a plain ratio"));
+                }
+                Ok(())
             };
-            *ctx = true;
-            return self.expr(&arg.value);
+            let x = self.expr(&arg.value)?;
+            unit_check(&x)?;
+            return Ok(Datum::Sig(self.func(f, &x)));
         }
         if name.name == "range" && self.registry.find("range").is_none() {
-            return self.range(name, args, span);
+            return self.range(name, args, span).map(Datum::Sig);
         }
         if name.name == "input" && self.registry.find("input").is_none() {
-            return self.audio_input(name, args, span);
+            return self.audio_input(name, args, span).map(Datum::Sig);
         }
         if name.name == "osc_out" && self.registry.find("osc_out").is_none() {
-            return self.osc_out(name, args);
+            return self.osc_out(name, args).map(Datum::Sig);
         }
         if name.name == "to" {
             return Err(Diagnostic::new(
@@ -2230,29 +3072,15 @@ impl<'a> Lower<'a> {
             .with_help("for example `out = it.lpf(cutoff: 1khz).to(space)`"));
         }
         let registry = self.registry;
-        // `f.band`: one result of an opcode that has several
-        if let [receiver] = args
-            && receiver.receiver
-            && registry.find(&name.name).is_none()
-            && let Some(record) = self.record(&receiver.value)?
-        {
-            return record
-                .outputs
-                .iter()
-                .find(|(n, _)| *n == name.name)
-                .map(|(_, s)| s.clone())
-                .ok_or_else(|| {
-                    let names: Vec<&str> = record.outputs.iter().map(|(n, _)| n.as_str()).collect();
-                    Diagnostic::new(
-                        format!("this opcode has no result `{}`", name.name),
-                        name.span,
-                    )
-                    .with_help(format!("its results are {}", names.join(", ")))
-                });
-        }
         let Some(spec) = registry.find(&name.name) else {
-            let mut d = Diagnostic::new(format!("unknown opcode `{}`", name.name), name.span);
-            if let Some(c) = closest(&name.name, registry.names()) {
+            let known: Vec<&str> = registry
+                .names()
+                .chain(self.names.fns.keys().map(String::as_str))
+                .chain(self.names.instrs.keys().map(String::as_str))
+                .chain(["min", "max", "pow", "mod", "clamp", "prev", "range", "zeros", "harmonics"])
+                .collect();
+            let mut d = Diagnostic::new(format!("unknown function `{}`", name.name), name.span);
+            if let Some(c) = closest(&name.name, known) {
                 d = d.with_help(format!("did you mean `{c}`?"));
             }
             return Err(d);
@@ -2260,52 +3088,8 @@ impl<'a> Lower<'a> {
         let op = spec.name.as_str();
 
         // Match arguments to parameters.
-        let mut bound: Vec<Option<&Arg>> = vec![None; spec.params.len()];
-        let mut next_positional = 0;
-        for arg in args {
-            let index = match &arg.name {
-                None => {
-                    let i = next_positional;
-                    next_positional += 1;
-                    if i >= spec.positional || i >= spec.params.len() {
-                        let mut d = Diagnostic::new(
-                            format!("`{op}` takes its other arguments by name"),
-                            arg.value.span,
-                        );
-                        if let Some(p) = spec.params.get(i) {
-                            d = d.with_help(format!("write `{}: ...`", p.name));
-                        }
-                        return Err(d);
-                    }
-                    i
-                }
-                Some(n) => match spec.params.iter().position(|p| p.name == n.name) {
-                    Some(i) => i,
-                    None => {
-                        let mut d = Diagnostic::new(
-                            format!("`{op}` has no argument named `{}`", n.name),
-                            n.span,
-                        );
-                        if let Some(c) =
-                            closest(&n.name, spec.params.iter().map(|p| p.name.as_str()))
-                        {
-                            d = d.with_help(format!("did you mean `{c}`?"));
-                        }
-                        return Err(d);
-                    }
-                },
-            };
-            if bound[index].is_some() {
-                return Err(Diagnostic::new(
-                    format!(
-                        "`{op}` argument `{}` given more than once",
-                        spec.params[index].name
-                    ),
-                    arg.value.span,
-                ));
-            }
-            bound[index] = Some(arg);
-        }
+        let names: Vec<&str> = spec.params.iter().map(|p| p.name.as_str()).collect();
+        let bound = funcs::bind(op, name.span, &names, spec.positional, args)?;
 
         // Evaluate each argument according to what the parameter wants.
         let mut vals: Vec<Option<Val>> = Vec::with_capacity(spec.params.len());
@@ -2334,45 +3118,46 @@ impl<'a> Lower<'a> {
                     Val::Wave(w)
                 }
                 Kind::Layout => Val::Layout(layout_from_expr(&arg.value)?),
-                Kind::Signal(expected) => {
+                Kind::Signal(_) | Kind::Gain => {
+                    let check = |this: &Self, sig: &Sig| -> Res<()> {
+                        match param.kind {
+                            Kind::Signal(expected) if sig.unit != expected => Err(this.unit_mismatch(
+                                &param.name,
+                                expected,
+                                sig.unit,
+                                &arg.value,
+                            )),
+                            Kind::Gain if !matches!(sig.unit, Unit::Db | Unit::Num) => Err(Diagnostic::new(
+                                format!(
+                                    "`{}` expects db or a plain factor, found {}",
+                                    param.name,
+                                    sig.unit.describe()
+                                ),
+                                arg.value.span,
+                            )),
+                            _ => Ok(()),
+                        }
+                    };
                     let sig = self.expr(&arg.value)?;
-                    if sig.unit != expected {
-                        return Err(self.unit_mismatch(
-                            &param.name,
-                            expected,
-                            sig.unit,
-                            &arg.value,
-                        ));
-                    }
-                    Val::Sig(sig)
-                }
-                Kind::Gain => {
-                    let sig = self.expr(&arg.value)?;
-                    if !matches!(sig.unit, Unit::Db | Unit::Num) {
-                        return Err(Diagnostic::new(
-                            format!(
-                                "`{}` expects db or a plain factor, found {}",
-                                param.name,
-                                sig.unit.describe()
-                            ),
-                            arg.value.span,
-                        ));
-                    }
+                    check(self, &sig)?;
                     Val::Sig(sig)
                 }
             }));
         }
 
+        self.dispatch(spec, &vals, span).map(Datum::Sig)
+    }
+
+    fn dispatch(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Sig> {
         match spec.build {
-            Build::Invalid => Ok(Sig::constant(Unit::Num, 0.0)), // already reported
-            Build::Pan => self.pan(spec, &vals, span),
+            Build::Pan => self.pan(spec, vals, span),
             Build::ToLayout => {
                 let (Some(Val::Sig(x)), Some(Val::Layout(layout))) = (&vals[0], &vals[1]) else {
                     unreachable!("to_layout has a signal and a layout")
                 };
                 self.convert(x, *layout, span)
             }
-            _ => self.expand(spec, &vals, span),
+            _ => self.expand(spec, vals, span),
         }
     }
 
@@ -2407,49 +3192,34 @@ impl<'a> Lower<'a> {
             }
         }
 
-        let names: Vec<String> = match &spec.build {
-            Build::Custom(k) if k.outputs.len() > 1 => {
-                k.outputs.iter().map(|(n, _)| n.clone()).collect()
-            }
-            _ => Vec::new(),
-        };
-        let mut results: Vec<Sig> = Vec::new();
-        for output in 0..names.len().max(1) {
-            build.output = output;
-            let mut srcs = Vec::with_capacity(width);
-            for channel in 0..width {
-                build.channel = channel;
-                let Some(opcode) = spec
-                    .instantiate(&build)
-                    .map_err(|m| Diagnostic::new(m, span))?
-                else {
-                    return Ok(Sig::constant(Unit::Num, 0.0));
-                };
-                let wired: Vec<(&str, Src)> = spec
-                    .params
-                    .iter()
-                    .zip(vals)
-                    .filter(|(p, _)| p.wired)
-                    .filter_map(|(p, v)| match v {
-                        Some(Val::Sig(sig)) => Some((p.name.as_str(), sig.pick(channel))),
-                        _ => None,
-                    })
-                    .collect();
-                srcs.push(
-                    self.g
-                        .add(opcode, &wired)
-                        .expect("ports match the opcode table"),
-                );
-            }
-            results.push(if width == 1 {
-                Sig::signal(srcs[0], Unit::Num)
-            } else {
-                Sig::channels(srcs, layout)
-            });
+        let mut srcs = Vec::with_capacity(width);
+        for channel in 0..width {
+            build.channel = channel;
+            let opcode = spec
+                .instantiate(&build)
+                .map_err(|m| Diagnostic::new(m, span))?
+                .expect("only built-in opcodes are expanded");
+            let wired: Vec<(&str, Src)> = spec
+                .params
+                .iter()
+                .zip(vals)
+                .filter(|(p, _)| p.wired)
+                .filter_map(|(p, v)| match v {
+                    Some(Val::Sig(sig)) => Some((p.name.as_str(), sig.pick(channel))),
+                    _ => None,
+                })
+                .collect();
+            srcs.push(
+                self.g
+                    .add(opcode, &wired)
+                    .expect("ports match the opcode table"),
+            );
         }
-        let mut first = results[0].clone();
-        first.outputs = names.into_iter().zip(results).collect();
-        Ok(first)
+        Ok(if width == 1 {
+            Sig::signal(srcs[0], Unit::Num)
+        } else {
+            Sig::channels(srcs, layout)
+        })
     }
 
     /// `pan`: place a mono signal in the master's layout.
@@ -2519,12 +3289,17 @@ impl<'a> Lower<'a> {
     // ---- envelopes -------------------------------------------------------
 
     fn env(&mut self, env: &EnvLit) -> Res<Sig> {
-        let start = self.env_level(&env.start)?;
+        // each step: its value now, and the signal it is read from at note start if it isn't known yet
+        let mut inputs: Vec<(EnvField, Src)> = Vec::new();
+        let start = self.env_step(&env.start, false)?;
         let unit = start.unit;
+        if start.konst.is_none() {
+            inputs.push((EnvField::Start, start.srcs[0]));
+        }
 
         let mut segments = Vec::with_capacity(env.segments.len());
-        for seg in &env.segments {
-            let level = self.env_level(&seg.level)?;
+        for (k, seg) in env.segments.iter().enumerate() {
+            let level = self.env_step(&seg.level, false)?;
             if level.unit != unit {
                 return Err(Diagnostic::new(
                     format!(
@@ -2532,33 +3307,907 @@ impl<'a> Lower<'a> {
                         level.unit.describe(),
                         unit.describe()
                     ),
-                    seg.level.span,
+                    seg.level.span(),
                 ));
             }
-            let dur = self.literal(seg.dur.value, seg.dur.unit.as_deref(), seg.dur.span)?;
-            let curve = curve_of(seg.curve);
+            let dur = self.env_step(&seg.dur, true)?;
+            if dur.konst.is_none() {
+                inputs.push((EnvField::Dur(k), dur.srcs[0]));
+            }
+            if level.konst.is_none() {
+                inputs.push((EnvField::Level(k), level.srcs[0]));
+            }
             segments.push(Segment::new(
-                dur.konst.expect("a literal") as f32,
-                level.konst.unwrap() as f32,
-                curve,
+                dur.konst.unwrap_or(0.0) as f32,
+                level.konst.unwrap_or(0.0) as f32,
+                curve_of(seg.curve),
+            ));
+        }
+        if inputs.len() > niminal_engine::MAX_INPUTS {
+            return Err(Diagnostic::new(
+                format!(
+                    "an envelope can take at most {} of its steps from names; write the others as numbers",
+                    niminal_engine::MAX_INPUTS
+                ),
+                env.start.span(),
             ));
         }
 
         let looped = env.looped;
-        let env = Env::new(start.konst.unwrap() as f32, segments, env.sustain_at);
-        let env = if looped { env.looped() } else { env };
-        let src = self.g.add(env, &[]).expect("env has no ports");
+        let mut op = Env::new(start.konst.unwrap_or(0.0) as f32, segments, env.sustain_at);
+        if looped {
+            op = op.looped();
+        }
+        let (fields, srcs): (Vec<EnvField>, Vec<Src>) = inputs.into_iter().unzip();
+        let ports: Vec<String> = (0..srcs.len()).map(|i| format!("v{i}")).collect();
+        let wired: Vec<(&str, Src)> = ports.iter().map(String::as_str).zip(srcs).collect();
+        let src = self
+            .g
+            .add(op.with_inputs(fields), &wired)
+            .expect("one port per step read at note start");
         Ok(Sig::signal(src, unit))
     }
 
-    fn env_level(&self, n: &EnvNum) -> Res<Sig> {
-        let sig = self.literal(n.value, n.unit.as_deref(), n.span)?;
-        if sig.unit == Unit::Db {
+    /// One step of an envelope: a duration in seconds, or a level.
+    fn env_step(&mut self, v: &EnvValue, duration: bool) -> Res<Sig> {
+        let sig = match v {
+            EnvValue::Lit(n) => self.literal(n.value, n.unit.as_deref(), n.span)?,
+            EnvValue::Expr(e) => self.expr(e)?,
+        };
+        let span = v.span();
+        if sig.count() != 1 {
             return Err(Diagnostic::new(
-                "db levels in envelopes aren't supported yet",
-                n.span,
+                "an envelope step is one value, not several channels",
+                span,
             ));
+        }
+        if duration && sig.unit != Unit::Time {
+            return Err(Diagnostic::new(
+                format!("expected a duration here, found {}", sig.unit.describe()),
+                span,
+            )
+            .with_help("levels and durations alternate; durations use `ms`, `sec` or `beats`"));
+        }
+        if !duration && sig.unit == Unit::Time {
+            return Err(Diagnostic::new(
+                "expected a level here, found a duration",
+                span,
+            )
+            .with_help("levels and durations alternate: two durations in a row is an error"));
+        }
+        if !duration && sig.unit == Unit::Db {
+            return Err(Diagnostic::new("db levels in envelopes aren't supported yet", span));
         }
         Ok(sig)
     }
+}
+
+impl Lower<'_> {
+    // ---- functions -----------------------------------------------------
+
+    /// Check a value against a parameter, and fit it to the parameter's range.
+    fn check_param(&mut self, callee: &str, p: &PParam, v: Datum, arg: &Expr) -> Res<Datum> {
+        let name = &p.name.name;
+        let span = arg.span;
+        let mismatch = |found: &str| {
+            Diagnostic::new(format!("`{name}` expects {}, found {found}", p.kind.describe()), span)
+                .with_help(format!("in the call of `{callee}`"))
+        };
+        let sig = match (&p.kind, v) {
+            (PKind::List(_), Datum::List(items)) => return Ok(Datum::List(items)),
+            (PKind::List(_), r @ Datum::Range { .. }) => return Ok(Datum::List(self.entries(r, span)?)),
+            (PKind::List(_), Datum::Sig(s)) if s.count() > 1 => {
+                return Ok(Datum::List(
+                    (0..s.count()).map(|k| Datum::Sig(Self::element(&s, k))).collect(),
+                ));
+            }
+            (PKind::List(_), Datum::Sig(_)) => return Err(mismatch("a single value")),
+            (PKind::Any, d @ (Datum::List(_) | Datum::Range { .. })) => return Ok(d),
+            (_, Datum::Range { .. }) => return Err(mismatch("a range")),
+            (_, Datum::List(items)) => {
+                // a list where one value is expected: each entry is checked
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.check_param(callee, p, item, arg)?);
+                }
+                return Ok(Datum::List(out));
+            }
+            (_, Datum::Sig(s)) => s,
+        };
+        if let Some(unit) = p.kind.unit() {
+            let fits = sig.unit == unit || (unit == Unit::Db && sig.unit == Unit::Num);
+            if !fits {
+                return Err(self.unit_mismatch(name, unit, sig.unit, arg));
+            }
+        }
+        if p.rate() == Some(Rate::Const) && sig.konst.is_none() {
+            return Err(Diagnostic::new(
+                format!("`{name}` must be known while compiling"),
+                span,
+            ));
+        }
+        if let (PKind::Unit { whole: true, .. }, Some(k)) = (&p.kind, sig.konst)
+            && k.fract() != 0.0
+        {
+            return Err(mismatch(&format!("{k}")));
+        }
+        let mut sig = sig;
+        if let PKind::Range { lo, hi, .. } = p.kind {
+            match sig.konst {
+                Some(k) if !(lo..=hi).contains(&k) => {
+                    return Err(Diagnostic::new(
+                        format!("`{name}` is between {lo} and {hi}, but this is {k}"),
+                        span,
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    let low = Sig::constant(sig.unit, lo);
+                    let high = Sig::constant(sig.unit, hi);
+                    sig = self.max_sig(&sig, &low, span)?;
+                    sig = self.min_sig(&sig, &high, span)?;
+                }
+            }
+        }
+        Ok(Datum::Sig(self.at_rate(sig, p.rate())))
+    }
+
+    /// The arguments of a call to a user function, worked out in the caller's scope. A choice's name
+    /// is its index.
+    fn fn_args(
+        &mut self,
+        callee: &Ident,
+        params: &[PParam],
+        args: &[Arg],
+    ) -> Res<Vec<Option<(Datum, Expr)>>> {
+        let names: Vec<&str> = params.iter().map(|p| p.name.name.as_str()).collect();
+        let positional = funcs::positional(params.iter().map(PParam::required));
+        let bound = funcs::bind(&callee.name, callee.span, &names, positional, args)?;
+        let mut given = Vec::with_capacity(params.len());
+        for (p, arg) in params.iter().zip(bound) {
+            let Some(arg) = arg else {
+                given.push(None);
+                continue;
+            };
+            let v = if let PKind::Choice(options) = &p.kind {
+                match &arg.value.kind {
+                    ExprKind::Name(n) if options.contains(n) => {
+                        let i = options.iter().position(|o| o == n).unwrap();
+                        Datum::Sig(Sig::constant(Unit::Num, i as f64))
+                    }
+                    _ => {
+                        return Err(Diagnostic::new(
+                            format!("`{}` is one of {}", p.name.name, options.join(", ")),
+                            arg.value.span,
+                        ));
+                    }
+                }
+            } else {
+                self.value(&arg.value)?
+            };
+            given.push(Some((v, arg.value.clone())));
+        }
+        Ok(given)
+    }
+
+    /// A call of a user function. One without state is lowered in place, its parameters standing for
+    /// the arguments; one with state becomes a kernel, compiled for this call.
+    fn call_fn(&mut self, def: &FnDef, name: &Ident, args: &[Arg], span: Span, instrument: bool) -> Res<Datum> {
+        if self.fn_stack.contains(&def.name.name) {
+            let mut path = self.fn_stack.clone();
+            path.push(def.name.name.clone());
+            return Err(Diagnostic::new(
+                format!("functions can't call themselves: {}", path.join(" -> ")),
+                name.span,
+            ));
+        }
+        let params = funcs::signature(&def.params, self.tempo)?;
+        let given = self.fn_args(name, &params, args)?;
+        if !instrument && funcs::has_state(def, &self.names.fns) {
+            return self.call_kernel(def, name, &params, given, span);
+        }
+        let saved_scope = std::mem::take(&mut self.scope);
+        let saved_out = self.out.take();
+        let saved_in_fn = std::mem::replace(&mut self.in_fn, !instrument);
+        self.fn_stack.push(def.name.name.clone());
+        let result = self.fn_body(def, name, &params, given);
+        self.fn_stack.pop();
+        self.scope = saved_scope;
+        self.out = saved_out;
+        self.in_fn = saved_in_fn;
+        result
+    }
+
+    fn fn_body(
+        &mut self,
+        def: &FnDef,
+        name: &Ident,
+        params: &[PParam],
+        given: Vec<Option<(Datum, Expr)>>,
+    ) -> Res<Datum> {
+        for (p, g) in params.iter().zip(given) {
+            let (v, arg) = match g {
+                Some(g) => g,
+                None => match &p.default {
+                    Some(d) => {
+                        let v = if let PKind::Choice(options) = &p.kind {
+                            let ExprKind::Name(n) = &d.kind else { unreachable!("checked") };
+                            let i = options.iter().position(|o| o == n).unwrap();
+                            Datum::Sig(Sig::constant(Unit::Num, i as f64))
+                        } else {
+                            self.value(d)?
+                        };
+                        (v, d.clone())
+                    }
+                    None => {
+                        return Err(Diagnostic::new(
+                            format!("`{}` needs an argument `{}`", name.name, p.name.name),
+                            name.span,
+                        ));
+                    }
+                },
+            };
+            let v = self.check_param(&name.name, p, v, &arg)?;
+            if let PKind::Choice(options) = &p.kind {
+                for (i, o) in options.iter().enumerate() {
+                    self.scope.insert(o.clone(), Datum::Sig(Sig::constant(Unit::Num, i as f64)));
+                }
+            }
+            self.scope.insert(p.name.name.clone(), v);
+        }
+        let body: Vec<&Stmt> = def.body.iter().collect();
+        let named = matches!(def.result, FnResult::Named(_));
+        let tail = if named {
+            for stmt in &body {
+                self.stmt(stmt, false)?;
+            }
+            None
+        } else {
+            self.run_body_value(&body)?
+        };
+        if let FnResult::Named(outputs) = &def.result {
+            let mut results = Vec::with_capacity(outputs.len());
+            for out in outputs {
+                let Some(v) = self.scope.get(&out.name).cloned() else {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`{}` is a result of `{}`, but the body never defines it",
+                            out.name, def.name.name
+                        ),
+                        out.span,
+                    )
+                    .with_help(format!("add a line `{} = ...`", out.name)));
+                };
+                results.push((out.name.clone(), self.signal_of(v, out.span)?));
+            }
+            let mut first = results[0].1.clone();
+            first.outputs = results;
+            return Ok(Datum::Sig(first));
+        }
+        let (value, span) = match (tail, self.out.take()) {
+            (Some(_), Some(_)) => {
+                return Err(Diagnostic::new(
+                    format!("`{}` sets `out`, so its last line can't also be a value", def.name.name),
+                    def.name.span,
+                )
+                .with_help("assign it to `out`, or remove the `out` lines"));
+            }
+            (Some(t), None) => t,
+            (None, Some(out)) => (Datum::Sig(out), def.name.span),
+            (None, None) if self.sends > 0 && !self.in_fn => {
+                (Datum::Sig(Sig::constant(Unit::Num, 0.0)), def.name.span)
+            }
+            (None, None) => {
+                return Err(Diagnostic::new(
+                    format!("`{}` must end with the value it gives", def.name.name),
+                    def.name.span,
+                )
+                .with_help("the last line of a function is its result"));
+            }
+        };
+        if let Some(unit) = funcs::result_unit(&def.result)? {
+            let found = self.signal_of(value.clone(), span)?.unit;
+            if found != unit {
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` gives {}, but its result is declared as {}",
+                        def.name.name,
+                        found.describe(),
+                        unit.describe()
+                    ),
+                    span,
+                ));
+            }
+        }
+        Ok(value)
+    }
+
+    /// A function with state, compiled to a kernel for this call: one copy per channel of its widest
+    /// signal argument, each delivering all of the function's results.
+    fn call_kernel(
+        &mut self,
+        def: &FnDef,
+        name: &Ident,
+        params: &[PParam],
+        given: Vec<Option<(Datum, Expr)>>,
+        span: Span,
+    ) -> Res<Datum> {
+        if self.mode == Mode::Plain {
+            return Err(Diagnostic::new(
+                format!("`{}` has state, so it runs while playing, not while compiling", name.name),
+                name.span,
+            ));
+        }
+        let mut kargs = Vec::with_capacity(params.len());
+        let mut wires: Vec<(String, Sig)> = Vec::new();
+        let mut width = 1;
+        let mut layout = Layout::Mono;
+        for (p, g) in params.iter().zip(given) {
+            let Some((v, arg)) = g else {
+                kargs.push(KArg::Missing);
+                continue;
+            };
+            let at = arg.span;
+            let v = self.check_param(&name.name, p, v, &arg)?;
+            kargs.push(match v {
+                Datum::Sig(s) if s.konst.is_some() => KArg::Const {
+                    unit: s.unit,
+                    value: s.konst.unwrap(),
+                },
+                Datum::Sig(s) => {
+                    if s.count() > 1 {
+                        if width > 1 && s.count() != width {
+                            return Err(Diagnostic::new(
+                                format!(
+                                    "`{}`'s arguments have {width} and {} channels, which can't be combined",
+                                    name.name,
+                                    s.count()
+                                ),
+                                at,
+                            ));
+                        }
+                        width = s.count();
+                        layout = s.layout;
+                    }
+                    let karg = KArg::Port {
+                        unit: s.unit,
+                        rate: self.sig_rate(&s),
+                    };
+                    wires.push((p.name.name.clone(), s));
+                    karg
+                }
+                Datum::Range { lo, hi, inclusive } => match (lo.konst, hi.konst) {
+                    (Some(a), Some(b)) => KArg::Range {
+                        unit: lo.unit,
+                        lo: a,
+                        hi: b,
+                        inclusive,
+                    },
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "a range given to a function with state must be known while compiling",
+                            at,
+                        ));
+                    }
+                },
+                Datum::List(items) => {
+                    let mut unit = None;
+                    let mut values = Vec::with_capacity(items.len());
+                    for item in &items {
+                        match item {
+                            Datum::Sig(Sig { konst: Some(k), unit: u, .. })
+                                if unit.is_none_or(|x| x == *u) =>
+                            {
+                                unit = Some(*u);
+                                values.push(*k);
+                            }
+                            _ => {
+                                return Err(Diagnostic::new(
+                                    "a list given to a function with state holds numbers known while compiling, with one unit",
+                                    at,
+                                ));
+                            }
+                        }
+                    }
+                    if values.is_empty() {
+                        return Err(Diagnostic::new("this list is empty", at));
+                    }
+                    KArg::Table {
+                        unit: unit.unwrap_or(Unit::Num),
+                        values: values.into(),
+                    }
+                }
+            });
+        }
+        let (kernel, units) = compile_kernel(def, &kargs, self.registry, self.names, self.tempo)?;
+        let kernel = Arc::new(kernel);
+        let outputs = kernel.outputs.len();
+        let mut per_output: Vec<Vec<Src>> = vec![Vec::with_capacity(width); outputs];
+        for channel in 0..width {
+            let wired: Vec<(&str, Src)> = wires
+                .iter()
+                .map(|(n, s)| (n.as_str(), s.pick(channel)))
+                .collect();
+            let results = self
+                .g
+                .add_outputs(Custom::new(kernel.clone()), &wired)
+                .map_err(|e| Diagnostic::new(e.to_string(), span))?;
+            for (k, src) in results.into_iter().enumerate() {
+                per_output[k].push(src);
+            }
+        }
+        let sigs: Vec<Sig> = per_output
+            .into_iter()
+            .zip(&units)
+            .map(|(srcs, unit)| Sig {
+                layout: if width == 1 { Layout::Mono } else { layout },
+                srcs,
+                unit: *unit,
+                konst: None,
+                outputs: Vec::new(),
+            })
+            .collect();
+        let mut first = sigs[0].clone();
+        if let FnResult::Named(_) = def.result {
+            first.outputs = kernel
+                .outputs
+                .iter()
+                .map(|(n, _)| n.clone())
+                .zip(sigs)
+                .collect();
+        }
+        Ok(Datum::Sig(first))
+    }
+
+    /// An instrument played inside another: its body runs as part of this voice. `gain:` is the
+    /// note's gain, applied after it, as for any note.
+    fn call_instr(&mut self, def: &InstrDef, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
+        if self.mode != Mode::Instrument || self.in_fn {
+            return Err(Diagnostic::new(
+                format!("`{}` is an instrument, so it can only be played inside another instrument", name.name),
+                name.span,
+            ));
+        }
+        let declares_gain = def.params.iter().any(|p| p.name.name == GAIN_PARAM);
+        let (gain, rest): (Vec<&Arg>, Vec<&Arg>) = args
+            .iter()
+            .partition(|a| !declares_gain && a.name.as_ref().is_some_and(|n| n.name == GAIN_PARAM));
+        let rest: Vec<Arg> = rest.into_iter().cloned().collect();
+        let as_fn = FnDef {
+            name: def.name.clone(),
+            params: def.params.clone(),
+            result: FnResult::Inferred,
+            body: def.body.clone(),
+            span: def.span,
+        };
+        let result = self.call_fn(&as_fn, name, &rest, span, true)?;
+        let sig = self.signal_of(result, span)?;
+        match gain.first() {
+            Some(g) => {
+                let gain = self.expr(&g.value)?;
+                if !matches!(gain.unit, Unit::Db | Unit::Num) {
+                    return Err(Diagnostic::new(
+                        format!("`gain` expects db or a plain factor, found {}", gain.unit.describe()),
+                        g.value.span,
+                    ));
+                }
+                self.mul(&sig, &gain, Unit::Num, span).map(Datum::Sig)
+            }
+            None => Ok(Datum::Sig(sig)),
+        }
+    }
+
+    // ---- built-in functions ----------------------------------------------
+
+    /// The values of a call such as `min(a, b)` or `a.mod(b)`, without names.
+    fn plain_args(&mut self, name: &Ident, args: &[Arg], count: usize) -> Res<Vec<(Sig, Span)>> {
+        if args.len() != count {
+            return Err(Diagnostic::new(
+                format!("`{}` takes {count} values", name.name),
+                name.span,
+            ));
+        }
+        if let Some(n) = args.iter().find_map(|a| a.name.as_ref()) {
+            return Err(Diagnostic::new(
+                format!("`{}` takes its values without names", name.name),
+                n.span,
+            ));
+        }
+        let mut values = Vec::with_capacity(count);
+        for a in args {
+            values.push((self.expr(&a.value)?, a.value.span));
+        }
+        Ok(values)
+    }
+
+    /// `min(a, b)`, `max(a, b)`, `pow(x, y)` and `a.mod(b)`.
+    fn combine(&mut self, name: &Ident, args: &[Arg]) -> Res<Sig> {
+        let mut values = self.plain_args(name, args, 2)?;
+        let (b, b_span) = values.pop().unwrap();
+        let (a, _) = values.pop().unwrap();
+        match name.name.as_str() {
+            "mod" => self.rem(a, b, b_span),
+            "pow" => {
+                if a.unit != Unit::Num || b.unit != Unit::Num {
+                    return Err(Diagnostic::new("`pow` expects plain numbers", b_span));
+                }
+                if let (Some(x), Some(y)) = (a.konst, b.konst) {
+                    return Ok(Sig::constant(Unit::Num, x.powf(y)));
+                }
+                self.elementwise(&a, &b, Unit::Num, b_span, |g, x, y| {
+                    g.add(Pow, &[("a", x), ("b", y)]).expect("pow ports")
+                })
+            }
+            m => {
+                self.same_unit(&a, &b, m, b_span)?;
+                if m == "min" {
+                    self.min_sig(&a, &b, b_span)
+                } else {
+                    self.max_sig(&a, &b, b_span)
+                }
+            }
+        }
+    }
+
+    /// `x.clamp(lo..hi)`
+    fn clamp(&mut self, name: &Ident, args: &[Arg]) -> Res<Sig> {
+        let [x, range] = args else {
+            return Err(Diagnostic::new("`clamp` takes a range", name.span)
+                .with_help("for example `cutoff.clamp(20hz..18khz)`"));
+        };
+        let v = self.expr(&x.value)?;
+        let Datum::Range { lo, hi, .. } = self.value(&range.value)? else {
+            return Err(Diagnostic::new(
+                "`clamp` takes a range, such as `20hz..18khz`",
+                range.value.span,
+            ));
+        };
+        if lo.unit != v.unit {
+            return Err(Diagnostic::new(
+                format!(
+                    "the range is {}, but the value is {}",
+                    lo.unit.describe(),
+                    v.unit.describe()
+                ),
+                range.value.span,
+            ));
+        }
+        let up = self.max_sig(&v, &lo, name.span)?;
+        self.min_sig(&up, &hi, name.span)
+    }
+
+    /// `zeros(n)`: a list of `n` zeros.
+    fn zeros(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let [count] = args else {
+            return Err(Diagnostic::new("`zeros` takes a count", name.span));
+        };
+        let n = self.whole_number(&count.value, 1 << 22)?;
+        Ok(Datum::List(vec![Datum::Sig(Sig::constant(Unit::Num, 0.0)); n]))
+    }
+
+    /// A whole number from 1 to `max`, known while compiling.
+    fn whole_number(&mut self, e: &Expr, max: usize) -> Res<usize> {
+        match self.expr(e)? {
+            Sig {
+                konst: Some(k),
+                unit: Unit::Num,
+                ..
+            } if k.fract() == 0.0 && k >= 1.0 && k <= max as f64 => Ok(k as usize),
+            _ => Err(Diagnostic::new(
+                format!("expected a whole number from 1 to {max}, known while compiling"),
+                e.span,
+            )),
+        }
+    }
+
+    /// `harmonics([1, -1/2, 1/3], size: 4096)`: one cycle of a wave made of these harmonics, as a table
+    /// whose loudest point is 1.
+    fn harmonics(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["amps", "size"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(amps) = bound[0] else {
+            return Err(Diagnostic::new("`harmonics` takes a list of amplitudes", name.span));
+        };
+        let size = match bound[1] {
+            Some(a) => self.whole_number(&a.value, 1 << 20)?,
+            None => 2048,
+        };
+        let list = self.value(&amps.value)?;
+        let mut weights = Vec::new();
+        for item in self.entries(list, amps.value.span)? {
+            match item {
+                Datum::Sig(Sig {
+                    konst: Some(k),
+                    unit: Unit::Num,
+                    ..
+                }) => weights.push(k),
+                _ => {
+                    return Err(Diagnostic::new(
+                        "the amplitudes are plain numbers known while compiling",
+                        amps.value.span,
+                    ));
+                }
+            }
+        }
+        let mut table: Vec<f64> = (0..size)
+            .map(|i| {
+                let t = std::f64::consts::TAU * i as f64 / size as f64;
+                weights
+                    .iter()
+                    .enumerate()
+                    .map(|(h, w)| w * (t * (h + 1) as f64).sin())
+                    .sum()
+            })
+            .collect();
+        let peak = table.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        if peak > 0.0 {
+            table.iter_mut().for_each(|v| *v /= peak);
+        }
+        Ok(Datum::List(
+            table
+                .into_iter()
+                .map(|v| Datum::Sig(Sig::constant(Unit::Num, v)))
+                .collect(),
+        ))
+    }
+
+    /// `x.hz`, `n.ms`, `(-6db).num`...: give a plain value a unit, or take it away.
+    fn unit_method(&mut self, name: &Ident, args: &[Arg]) -> Res<Option<Sig>> {
+        let units = [
+            "num", "hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "deg", "st",
+        ];
+        if !units.contains(&name.name.as_str()) || !(args.len() == 1 && args[0].receiver) {
+            return Ok(None);
+        }
+        let v = self.expr(&args[0].value)?;
+        let span = args[0].value.span;
+        if name.name == "num" {
+            if v.unit == Unit::Db {
+                // a db value is held as a gain factor
+                let ln = self.func(Fn1::Log, &Sig { unit: Unit::Num, ..v });
+                let k = Sig::constant(Unit::Num, 20.0 / std::f64::consts::LN_10);
+                return self.mul(&ln, &k, Unit::Num, span).map(Some);
+            }
+            return Ok(Some(Sig { unit: Unit::Num, outputs: Vec::new(), ..v }));
+        }
+        if v.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                format!(
+                    "`.{}` gives a plain number a unit, but this is {}",
+                    name.name,
+                    v.unit.describe()
+                ),
+                span,
+            )
+            .with_help("take the unit away first with `.num`"));
+        }
+        let (unit, factor) = literal_sig(1.0, Some(&name.name), self.tempo, name.span)?;
+        if unit == Unit::Db {
+            let k = Sig::constant(Unit::Num, std::f64::consts::LN_10 / 20.0);
+            let e = self.mul(&v, &k, Unit::Num, span)?;
+            let g = self.func(Fn1::Exp, &e);
+            return Ok(Some(Sig { unit: Unit::Db, ..g }));
+        }
+        self.mul(&v, &Sig::constant(Unit::Num, factor), unit, span).map(Some)
+    }
+
+    /// `note.time` and `note.released`: the running voice.
+    fn note_context(&mut self, name: &Ident) -> Res<Sig> {
+        if self.mode != Mode::Instrument || self.in_fn {
+            return Err(Diagnostic::new("`note` is only available in an instrument", name.span)
+                .with_help("pass `note.time` or `note.released` to a function as an argument"));
+        }
+        match name.name.as_str() {
+            "time" => Ok(Sig::signal(self.g.add(NoteTime::default(), &[]).expect("no ports"), Unit::Time)),
+            "released" => Ok(Sig::signal(self.g.add(Released, &[]).expect("no ports"), Unit::Num)),
+            "dur" => Err(Diagnostic::new("`note.dur` isn't built yet", name.span)),
+            other => {
+                let mut d = Diagnostic::new(format!("`note` has no `{other}`"), name.span)
+                    .with_help("it has `time` and `released`");
+                if let Some(c) = closest(other, ["time", "released"]) {
+                    d = d.with_help(format!("did you mean `{c}`?"));
+                }
+                Err(d)
+            }
+        }
+    }
+
+    /// `prev(x)`: what `x` was one sample ago. In a bus send it is a block late instead, which breaks a
+    /// loop through buses.
+    fn prev(&mut self, name: &Ident, args: &[Arg]) -> Res<Sig> {
+        let [arg] = args else {
+            return Err(Diagnostic::new("`prev` takes one value", name.span));
+        };
+        if let Some(ctx) = &mut self.in_send {
+            *ctx = true;
+            return self.expr(&arg.value);
+        }
+        if let ExprKind::Name(n) = &arg.value.kind
+            && !self.scope.contains_key(n)
+            && self.names.controls.iter().all(|c| c.name != *n)
+            && self.names.bus(n).is_none()
+            && !self.names.consts.contains_key(n)
+        {
+            return Err(Diagnostic::new(
+                format!("`prev({n})` reads `{n}`, which isn't defined here"),
+                arg.value.span,
+            )
+            .with_help(format!("a loop is written on one line: `{n} = x + prev({n}) * 0.5`")));
+        }
+        let x = self.expr(&arg.value)?;
+        let srcs = x
+            .srcs
+            .iter()
+            .map(|&s| self.g.add(Delay1::default(), &[("x", s)]).expect("prev ports"))
+            .collect();
+        Ok(Sig {
+            srcs,
+            konst: None,
+            outputs: Vec::new(),
+            ..x
+        })
+    }
+}
+
+/// Work out a `const` definition while compiling.
+pub(crate) fn compile_const(value: &Expr, tempo: Tempo, registry: &Registry, names: &Names) -> Res<Datum> {
+    let mut lower = Lower::new(registry, names, tempo);
+    let v = lower.value(value)?;
+    fn known(d: &Datum) -> bool {
+        match d {
+            Datum::Sig(s) => s.konst.is_some(),
+            Datum::List(items) => items.iter().all(known),
+            Datum::Range { lo, hi, .. } => lo.konst.is_some() && hi.konst.is_some(),
+        }
+    }
+    if !known(&v) {
+        return Err(Diagnostic::new(
+            "a `const` must be known while compiling",
+            value.span,
+        )
+        .with_help("use numbers, ranges, lists and functions without state"));
+    }
+    Ok(v)
+}
+
+/// Check a function where it is defined, so mistakes in its body are found even if nothing calls it.
+/// Untyped parameters take their units from each call, so with one of those only mistakes in names are
+/// reported here; the rest are found where it is called.
+pub(crate) fn check_fn(def: &FnDef, tempo: Tempo, registry: &Registry, names: &Names) -> Res<()> {
+    // an untyped parameter takes its unit from each call, and a list parameter its length: the body is
+    // checked with two guesses, and a mistake that could come from the guess only counts if both make it
+    match check_fn_with(def, tempo, registry, names, Unit::Num, 2) {
+        Ok(()) => Ok(()),
+        Err((d, true)) if from_a_guess(&d) && reads_untyped(def, d.span) => {
+            match check_fn_with(def, tempo, registry, names, Unit::Hz, 3) {
+                Err((again, _)) if again.message == d.message && again.span == d.span => Err(d),
+                _ => Ok(()),
+            }
+        }
+        Err((d, _)) => Err(d),
+    }
+}
+
+/// Whether a mistake could come from guessing a unit or a list's length: one about units, or about how
+/// many entries a list has.
+fn from_a_guess(d: &Diagnostic) -> bool {
+    let m = d.message.as_str();
+    m.starts_with("can't ")
+        || m.contains(" expects ")
+        || m.contains("same unit")
+        || m.contains(" holds ")
+        || m.contains(" gives ")
+        || m.contains("plain signal")
+        || m.contains(" entries")
+        || m.contains("a list of ")
+}
+
+/// Whether the body reads an untyped parameter inside `span`.
+fn reads_untyped(def: &FnDef, span: Span) -> bool {
+    let untyped: Vec<&str> = def
+        .params
+        .iter()
+        .filter(|p| p.default.is_none() && matches!(p.ty, None | Some(TypeSpec::List(..))))
+        .map(|p| p.name.name.as_str())
+        .collect();
+    fn visit(e: &Expr, names: &[&str], span: Span, found: &mut bool) {
+        if let ExprKind::Name(n) = &e.kind
+            && names.contains(&n.as_str())
+            && e.span.start >= span.start
+            && e.span.end <= span.end
+        {
+            *found = true;
+        }
+        e.for_each_child(&mut |c| visit(c, names, span, found));
+    }
+    let mut found = false;
+    for s in &def.body {
+        for e in s.exprs() {
+            visit(e, &untyped, span, &mut found);
+        }
+    }
+    found
+}
+
+
+/// The error, and whether an untyped parameter was given a signal of unit `guess`, or a list parameter
+/// a list of `length` entries, to check the body with.
+fn check_fn_with(
+    def: &FnDef,
+    tempo: Tempo,
+    registry: &Registry,
+    names: &Names,
+    guess: Unit,
+    length: usize,
+) -> Result<(), (Diagnostic, bool)> {
+    let params = funcs::signature(&def.params, tempo).map_err(|d| (d, false))?;
+    funcs::result_unit(&def.result).map_err(|d| (d, false))?;
+    let mut lower = Lower::new(registry, names, tempo);
+    lower.mode = Mode::Instrument;
+    let mut given = Vec::with_capacity(params.len());
+    let mut guessed = false;
+    for p in &params {
+        if p.default.is_some() {
+            given.push(None);
+            continue;
+        }
+        let kind = match &p.kind {
+            PKind::Any => {
+                guessed = true;
+                PKind::Unit {
+                    unit: guess,
+                    whole: false,
+                }
+            }
+            k => k.clone(),
+        };
+        if p.rate() == Some(Rate::Const)
+            && let Some(unit) = kind.unit()
+        {
+            let v = Datum::Sig(Sig::constant(unit, 1.0));
+            given.push(Some((
+                v,
+                Expr {
+                    kind: ExprKind::Name(p.name.name.clone()),
+                    span: p.name.span,
+                },
+            )));
+            continue;
+        }
+        let v = match &kind {
+            PKind::Unit { unit, .. } | PKind::Range { unit, .. } => {
+                let src = lower
+                    .g
+                    .param(&p.name.name, 0.0)
+                    .map_err(|e| (Diagnostic::new(e.to_string(), p.name.span), false))?;
+                lower.param_rates.push(Rate::Audio);
+                Some(Datum::Sig(Sig::signal(src, *unit)))
+            }
+            PKind::Choice(_) => Some(Datum::Sig(Sig::constant(Unit::Num, 0.0))),
+            PKind::List(inner) => {
+                guessed = true;
+                let unit = inner.unit().unwrap_or(guess);
+                Some(Datum::List(vec![Datum::Sig(Sig::constant(unit, 0.0)); length]))
+            }
+            PKind::Any => None,
+        };
+        given.push(v.map(|v| {
+            (
+                v,
+                Expr {
+                    kind: ExprKind::Name(p.name.name.clone()),
+                    span: p.name.span,
+                },
+            )
+        }));
+    }
+    let name = def.name.clone();
+    let result = if funcs::has_state(def, &names.fns) {
+        lower.call_kernel(def, &name, &params, given, def.span).map(|_| ())
+    } else {
+        lower.in_fn = true;
+        lower.fn_stack.push(def.name.name.clone());
+        lower.fn_body(def, &name, &params, given).map(|_| ())
+    };
+    result.map_err(|d| (d, guessed))
 }

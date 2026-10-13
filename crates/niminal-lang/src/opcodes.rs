@@ -1,13 +1,12 @@
-//! The language's view of opcodes, built-in and user-defined: names, argument
-//! order, and the unit each argument expects. Argument names match the engine's
-//! port names.
+//! The language's view of built-in opcodes: names, argument order, and the unit
+//! each argument expects. Argument names match the engine's port names. User
+//! functions are compiled where they are called (see `lower` and `kernel`).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
-use niminal_engine::ops::{Custom, Delay, FilterMode, Fn1, Func, Gain, Kernel, Osc, Reverb, Svf};
+use niminal_engine::ops::{Delay, FilterMode, Fn1, Func, Gain, Osc, Reverb, Svf};
 
 use crate::unit::Unit;
 
@@ -65,8 +64,6 @@ pub struct BuildArgs {
     pub wave: Option<Wave>,
     /// Which channel of a multichannel signal this copy of the opcode serves.
     pub channel: usize,
-    /// Which result of an opcode with several this copy delivers.
-    pub output: usize,
     /// Arguments whose value is a compile-time constant, in engine units.
     pub consts: HashMap<String, f64>,
 }
@@ -78,34 +75,39 @@ const MAX_DELAY_SECONDS: f64 = 30.0;
 
 pub enum Build {
     Builtin(BuildFn),
-    Custom(Arc<Kernel>),
     /// `pan`: one output per speaker of the master layout.
     Pan,
     /// `to_layout`: converts between layouts.
     ToLayout,
-    /// A user-defined opcode whose body had errors. Calls to it are still
-    /// checked against its signature, so one mistake isn't reported twice.
-    Invalid,
 }
 
 pub struct OpSpec {
     pub name: String,
-    /// What the opcode does, for hover and completion. Empty for user-defined opcodes.
+    /// What the opcode does, for hover and completion.
     pub doc: String,
     pub params: Vec<ParamSpec>,
-    /// How many leading arguments may be given without a name. The receiver of
-    /// a method call counts as the first.
+    /// How many leading arguments may be given without a name: the leading
+    /// required ones. The receiver of a method call counts as the first.
     pub positional: usize,
     pub build: Build,
 }
 
 impl OpSpec {
-    /// `Ok(None)` for an invalid opcode, which has nothing to run.
+    fn new(name: &str, doc: &str, params: Vec<ParamSpec>, build: Build) -> Self {
+        OpSpec {
+            name: name.into(),
+            doc: doc.into(),
+            positional: crate::funcs::positional(params.iter().map(|p| p.required)),
+            params,
+            build,
+        }
+    }
+
+    /// `Ok(None)` for an opcode that isn't a node of its own (`pan`, `to_layout`).
     pub fn instantiate(&self, args: &BuildArgs) -> Result<Option<Box<dyn Opcode>>, String> {
         match &self.build {
             Build::Builtin(f) => f(args).map(Some),
-            Build::Custom(k) => Ok(Some(Box::new(Custom::new(k.clone()).output(args.output)))),
-            Build::Invalid | Build::Pan | Build::ToLayout => Ok(None),
+            Build::Pan | Build::ToLayout => Ok(None),
         }
     }
 }
@@ -121,23 +123,11 @@ fn filter_params() -> Vec<ParamSpec> {
 }
 
 fn filter(name: &str, doc: &str, build: BuildFn) -> OpSpec {
-    OpSpec {
-        name: name.into(),
-        doc: doc.into(),
-        params: filter_params(),
-        positional: 1,
-        build: Build::Builtin(build),
-    }
+    OpSpec::new(name, doc, filter_params(), Build::Builtin(build))
 }
 
 fn math(name: &str, doc: &str, build: BuildFn) -> OpSpec {
-    OpSpec {
-        name: name.into(),
-        doc: doc.into(),
-        params: vec![req("x", SIGNAL)],
-        positional: 1,
-        build: Build::Builtin(build),
-    }
+    OpSpec::new(name, doc, vec![req("x", SIGNAL)], Build::Builtin(build))
 }
 
 pub struct Registry {
@@ -147,35 +137,32 @@ pub struct Registry {
 impl Registry {
     pub fn builtin() -> Self {
         let ops = vec![
-            OpSpec {
-                name: "osc".into(),
-                doc: "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri; `phase_mod` bends the phase for FM.".into(),
-                params: vec![req("wave", Kind::Wave), req("freq", Kind::Signal(Unit::Hz)), opt("phase_mod", SIGNAL)],
-                positional: 2,
-                build: Build::Builtin(|a| Ok(Box::new(Osc::new(a.wave.expect("osc has a wave"))))),
-            },
+            OpSpec::new(
+                "osc",
+                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri; `phase_mod` bends the phase for FM.",
+                vec![req("wave", Kind::Wave), req("freq", Kind::Signal(Unit::Hz)), opt("phase_mod", SIGNAL)],
+                Build::Builtin(|a| Ok(Box::new(Osc::new(a.wave.expect("osc has a wave"))))),
+            ),
             filter("lpf", "A low-pass filter: lets frequencies below `cutoff` through. `res` adds resonance.", |_| Ok(Box::new(Svf::new(FilterMode::Low)))),
             filter("hpf", "A high-pass filter: lets frequencies above `cutoff` through. `res` adds resonance.", |_| Ok(Box::new(Svf::new(FilterMode::High)))),
             filter("bpf", "A band-pass filter: lets frequencies around `cutoff` through. `res` narrows the band.", |_| Ok(Box::new(Svf::new(FilterMode::Band)))),
             filter("notch", "A notch filter: removes frequencies around `cutoff`. `res` narrows the notch.", |_| Ok(Box::new(Svf::new(FilterMode::Notch)))),
-            OpSpec {
-                name: "gain".into(),
-                doc: "Scales a signal by a gain in db or a plain factor.".into(),
-                params: vec![req("x", SIGNAL), req("gain", Kind::Gain)],
-                positional: 2,
-                build: Build::Builtin(|_| Ok(Box::new(Gain))),
-            },
-            OpSpec {
-                name: "delay".into(),
-                doc: "A delay line. `time` is how long to wait, `feedback` feeds the output back in. A changing `time` needs `max:` to size the line (at most 30 seconds).".into(),
-                params: vec![
+            OpSpec::new(
+                "gain",
+                "Scales a signal by a gain in db or a plain factor.",
+                vec![req("x", SIGNAL), req("gain", Kind::Gain)],
+                Build::Builtin(|_| Ok(Box::new(Gain))),
+            ),
+            OpSpec::new(
+                "delay",
+                "A delay line. `time` is how long to wait, `feedback` feeds the output back in. A changing `time` needs `max:` to size the line (at most 30 seconds).",
+                vec![
                     req("x", SIGNAL),
                     req("time", Kind::Signal(Unit::Time)),
                     opt("feedback", SIGNAL),
                     setting("max", Kind::Signal(Unit::Time)),
                 ],
-                positional: 1,
-                build: Build::Builtin(|a| {
+                Build::Builtin(|a| {
                     let max = a.consts.get("max").or_else(|| a.consts.get("time")).copied().ok_or_else(|| {
                         "`delay` needs a constant `time`, or a `max:` that bounds a changing one".to_string()
                     })?;
@@ -184,28 +171,25 @@ impl Registry {
                     }
                     Ok(Box::new(Delay::new(max.max(0.0) as f32)))
                 }),
-            },
-            OpSpec {
-                name: "reverb".into(),
-                doc: "A reverb: `room` sets its size and `damp` how quickly the highs die away.".into(),
-                params: vec![req("x", SIGNAL), opt("room", SIGNAL), opt("damp", SIGNAL)],
-                positional: 1,
-                build: Build::Builtin(|a| Ok(Box::new(Reverb::for_channel(a.channel)))),
-            },
-            OpSpec {
-                name: "pan".into(),
-                doc: "Places a signal in the master layout. `azimuth` is in degrees (0 is straight ahead, positive is right); `spread` widens it.".into(),
-                params: vec![req("x", SIGNAL), opt("azimuth", Kind::Signal(Unit::Angle)), opt("spread", SIGNAL)],
-                positional: 1,
-                build: Build::Pan,
-            },
-            OpSpec {
-                name: "to_layout".into(),
-                doc: "Converts a signal to a channel layout such as `stereo`.".into(),
-                params: vec![req("x", SIGNAL), req("layout", Kind::Layout)],
-                positional: 2,
-                build: Build::ToLayout,
-            },
+            ),
+            OpSpec::new(
+                "reverb",
+                "A reverb: `room` sets its size and `damp` how quickly the highs die away.",
+                vec![req("x", SIGNAL), opt("room", SIGNAL), opt("damp", SIGNAL)],
+                Build::Builtin(|a| Ok(Box::new(Reverb::for_channel(a.channel)))),
+            ),
+            OpSpec::new(
+                "pan",
+                "Places a signal in the master layout. `azimuth` is in degrees (0 is straight ahead, positive is right); `spread` widens it.",
+                vec![req("x", SIGNAL), opt("azimuth", Kind::Signal(Unit::Angle)), opt("spread", SIGNAL)],
+                Build::Pan,
+            ),
+            OpSpec::new(
+                "to_layout",
+                "Converts a signal to a channel layout such as `stereo`.",
+                vec![req("x", SIGNAL), req("layout", Kind::Layout)],
+                Build::ToLayout,
+            ),
             math("sin", "Sine of a signal (radians).", |_| Ok(Box::new(Func(Fn1::Sin)))),
             math("cos", "Cosine of a signal (radians).", |_| Ok(Box::new(Func(Fn1::Cos)))),
             math("tanh", "Soft-clips a signal into -1..1; a classic saturator.", |_| Ok(Box::new(Func(Fn1::Tanh)))),
@@ -226,10 +210,6 @@ impl Registry {
         self.ops.iter().find(|o| o.name == name)
     }
 
-    pub fn add(&mut self, spec: OpSpec) {
-        self.ops.push(spec);
-    }
-
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.ops.iter().map(|o| o.name.as_str())
     }
@@ -246,7 +226,7 @@ pub fn wave(name: &str) -> Option<Wave> {
     WAVES.iter().find(|(n, _)| *n == name).map(|(_, w)| *w)
 }
 
-/// The math functions that can be used inside an `opcode` body.
+/// The one-argument math functions.
 pub fn math_fn(name: &str) -> Option<Fn1> {
     Fn1::ALL.into_iter().find(|f| f.name() == name)
 }

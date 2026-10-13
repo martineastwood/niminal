@@ -3,7 +3,7 @@ use crate::common::*;
 #[test]
 fn a_note_sounds_for_its_length_then_rings_out_its_release() {
     let out = render(&program(ONE_NOTE), &[]).unwrap();
-    // 1 beat at 120bpm is 0.5s; the 300ms release follows.
+    // 1beat at 120bpm is 0.5s; the 300ms release follows.
     let secs = out.len() as f64 / SR;
     assert!((0.79..0.81).contains(&secs), "{secs}");
     assert!(rms(&out[(0.3 * SR) as usize..(0.5 * SR) as usize]) > 0.05);
@@ -163,14 +163,14 @@ fn an_arrangement_plays_its_scenes_in_order_and_then_stops() {
 
 #[test]
 fn sections_can_have_their_own_tempo_and_meter() {
-    let song = |lanes: &str| format!("{SONG}\narrangement fast {{ sections: [one.over(2 bars) two.over(1 bar)]\n{lanes} }}");
+    let song = |lanes: &str| format!("{SONG}\narrangement fast {{ sections: [one.over(2bars) two.over(1bar)]\n{lanes} }}");
     let secs = |lanes: &str| mono(render_with(&program(&song(lanes)), &[], &arrangement("fast")).unwrap()).len() as f64 / SR;
     let plain = secs("");
     assert!((plain - 6.0).abs() < 0.2, "{plain}");
     // the second section at twice the speed lasts half as long
     let faster = secs("tempo: [120bpm 240bpm]");
     assert!((faster - 5.0).abs() < 0.2, "4s and 1s: {faster}");
-    // and in 3/4 a bar is three beats: two bars of 3/4 at 120bpm are 3s, one bar of 7/8 (3.5 beats) is 1.75s
+    // and in 3/4 a bar is three beats: two bars of 3/4 at 120bpm are 3s, one bar of 7/8 (3.5beats) is 1.75s
     let meters = secs("meter: [3/4 7/8]");
     assert!((meters - 4.75).abs() < 0.2, "{meters}");
     // a section's clip cycles with its bar, so the notes of a faster section come faster
@@ -181,9 +181,9 @@ fn sections_can_have_their_own_tempo_and_meter() {
 
 #[test]
 fn an_arrangement_tempo_can_change_gradually_through_a_section() {
-    let src = format!("{SONG}\narrangement ramp {{ sections: [two.over(8 bars)]\n tempo: env[60bpm 8bars 240bpm] }}");
+    let src = format!("{SONG}\narrangement ramp {{ sections: [two.over(8bars)]\n tempo: env[60bpm 8bars 240bpm] }}");
     let out = mono(render_with(&program(&src), &[], &arrangement("ramp")).unwrap());
-    // 240 / (60 + 22.5 bar) summed over 8 bars: about 14.8 seconds, between the 32s at 60bpm and 8s at 240bpm
+    // 240 / (60 + 22.5bar) summed over 8bars: about 14.8 seconds, between the 32s at 60bpm and 8s at 240bpm
     let secs = out.len() as f64 / SR;
     assert!(secs > 14.0 && secs < 15.6, "{secs}");
 }
@@ -203,17 +203,17 @@ fn render_with_an_arrangement_ignores_the_files_own_timeline() {
 fn arrangement_mistakes_are_reported() {
     let err = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default();
     let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\ntrack a { instrument = t }\nscene one { a: [c4] }\n";
-    assert!(err(&format!("{base}arrangement s {{ sections: [on.over(1 bar)] }}")).contains("no scene named `on`did you mean `one`?"));
-    assert!(err(&format!("{base}arrangement s {{ sections: [one] }}")).contains("`one` needs a lengthfor example `one.over(8 bars)`"));
+    assert!(err(&format!("{base}arrangement s {{ sections: [on.over(1bar)] }}")).contains("no scene named `on`did you mean `one`?"));
+    assert!(err(&format!("{base}arrangement s {{ sections: [one] }}")).contains("`one` needs a lengthfor example `one.over(8bars)`"));
     assert!(err(&format!("{base}arrangement s {{ volume: [1] }}")).contains("`volume` isn't supported in an arrangement yet"));
-    let two = "sections: [one.over(1 bar) one.over(1 bar)]";
+    let two = "sections: [one.over(1bar) one.over(1bar)]";
     assert!(err(&format!("{base}arrangement s {{ {two}\n tempo: [100bpm] }}")).contains("`tempo` has 1 where there are 2 sectionsgive `tempo` one for each section"));
     assert!(err(&format!("{base}arrangement s {{ {two}\n meter: [4/4 4] }}")).contains("meter is a fraction of whole numbers"));
     assert!(err(&format!("{base}arrangement s {{ {two}\n tempo: [100bpm 0bpm] }}")).contains("positive number of bpm"));
-    assert!(err(&format!("{base}arrangement s {{ sections: [one.over(0 bars)] }}")).contains("above zero"));
-    assert!(err(&format!("{base}arrangement s {{ sections: [one.over(1 bar)] }}\narrangement s {{ sections: [one.over(1 bar)] }}")).contains("defined twice"));
+    assert!(err(&format!("{base}arrangement s {{ sections: [one.over(0bars)] }}")).contains("above zero"));
+    assert!(err(&format!("{base}arrangement s {{ sections: [one.over(1bar)] }}\narrangement s {{ sections: [one.over(1bar)] }}")).contains("defined twice"));
 
-    let p = program(&format!("{base}arrangement song {{ sections: [one.over(1 bar)] }}"));
+    let p = program(&format!("{base}arrangement song {{ sections: [one.over(1bar)] }}"));
     let Err(e) = render_with(&p, &[], &arrangement("sogn")) else { panic!("expected an error") };
     assert!(e.0.contains("no arrangement named `sogn`") && e.0.contains("did you mean `song`?"), "{e}");
 }
@@ -230,7 +230,7 @@ fn an_arrangement_lane_moves_a_track_parameter_over_the_whole_piece() {
 #[test]
 fn arrangement_lane_mistakes_are_reported() {
     let err = |lane: &str| {
-        let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(1 bar)]\n{lane} }}");
+        let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(1bar)]\n{lane} }}");
         compile(&src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default()
     };
     assert!(err("pd.cut: env[300hz 1bar 1khz]").contains("no track named `pd`did you mean `pad`?"));

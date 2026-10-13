@@ -163,17 +163,17 @@ mod tests {
             "plain `bar` may land right now"
         );
         assert_eq!(g.landing(q("bar"), 96_001), 192_000);
-        assert_eq!(g.landing(q("next 4 bars"), 10_000), 384_000);
-        assert_eq!(g.landing(q("next 4 bars"), 400_000), 768_000);
+        assert_eq!(g.landing(q("next 4bars"), 10_000), 384_000);
+        assert_eq!(g.landing(q("next 4bars"), 400_000), 768_000);
         assert_eq!(g.landing(q("next beat"), 10_000), 24_000);
-        assert_eq!(g.landing(q("4 bars"), 100_000), 384_000);
+        assert_eq!(g.landing(q("4bars"), 100_000), 384_000);
     }
 
     #[test]
     fn in_counts_from_now_and_now_is_now() {
         let g = grid();
-        assert_eq!(g.landing(q("in 4 bars"), 10_000), 394_000);
-        assert_eq!(g.landing(q("in 2 beats"), 5), 48_005);
+        assert_eq!(g.landing(q("in 4bars"), 10_000), 394_000);
+        assert_eq!(g.landing(q("in 2beats"), 5), 48_005);
         assert_eq!(g.landing(q("now"), 12_345), 12_345);
         assert_eq!(g.landing(q("cycle"), 1), 96_000);
     }
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(g.position(100_000), (1, 1.0));
         assert_eq!(g.position(196_000), (2, 1.0));
         assert_eq!(g.landing(q("next bar"), 110_000), 196_000);
-        assert_eq!(g.landing(q("next 4 bars"), 110_000), 484_000);
+        assert_eq!(g.landing(q("next 4bars"), 110_000), 484_000);
         assert_eq!(g.landing(q("now"), 110_000), 110_000);
     }
 

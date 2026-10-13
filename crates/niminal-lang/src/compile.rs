@@ -1,4 +1,4 @@
-//! Program-level compilation: tempo, opcodes, instruments and notes.
+//! Program-level compilation: tempo, functions, instruments and notes.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -9,11 +9,10 @@ use niminal_score::{Event, Tempo, Time, Value};
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::env_shortcut;
-use crate::kernel::compile_opcode;
 use crate::layout::Layout;
 use crate::lower::{
-    Member, Mixer, Names, compile_chain, compile_instr, compile_sampler, layout_from_expr,
-    unknown_unit,
+    Member, Mixer, Names, check_fn, compile_chain, compile_const, compile_instr, compile_sampler,
+    layout_from_expr, unknown_unit,
 };
 use crate::opcodes::Registry;
 use crate::parser;
@@ -69,14 +68,8 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
             Item::Bus(bus) => {
                 if let Some(mut body) = bus.body.take() {
                     for stmt in &mut body {
-                        match stmt {
-                            Stmt::Bind { value, .. }
-                            | Stmt::AddAssign { value, .. }
-                            | Stmt::Destructure { value, .. } => {
-                                rename(value, "it", &bus.name.name);
-                            }
-                            Stmt::Expr(e) => rename(e, "it", &bus.name.name),
-                            Stmt::State { .. } => {}
+                        for e in stmt.exprs_mut() {
+                            rename(e, "it", &bus.name.name);
                         }
                     }
                     // a name no one can type, so it never meets a track of the user's
@@ -101,14 +94,8 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
                     };
                     let long = format!("{}::{}", track.name.name, param.name.name);
                     for stmt in &mut track.body {
-                        match stmt {
-                            Stmt::Bind { value, .. }
-                            | Stmt::AddAssign { value, .. }
-                            | Stmt::Destructure { value, .. } => {
-                                rename(value, &param.name.name, &long)
-                            }
-                            Stmt::Expr(e) => rename(e, &param.name.name, &long),
-                            Stmt::State { .. } => {}
+                        for e in stmt.exprs_mut() {
+                            rename(e, &param.name.name, &long);
                         }
                     }
                     out.push(Item::Control {
@@ -192,26 +179,12 @@ fn plays_its_namesake(track: &TrackDecl) -> bool {
 
 /// Every use of the name `from` in `e` becomes `to`.
 fn rename(e: &mut Expr, from: &str, to: &str) {
-    match &mut e.kind {
-        ExprKind::Name(name) if name == from => *name = to.to_string(),
-        ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| rename(&mut a.value, from, to)),
-        ExprKind::Neg(inner) => rename(inner, from, to),
-        ExprKind::Channels(items) => items.iter_mut().for_each(|i| rename(i, from, to)),
-        ExprKind::Index { list, index } => {
-            rename(list, from, to);
-            rename(index, from, to);
-        }
-        ExprKind::Lambda { body, .. } => rename(body, from, to),
-        ExprKind::Range { lo, hi } => {
-            rename(lo, from, to);
-            rename(hi, from, to);
-        }
-        ExprKind::Binary { lhs, rhs, .. } => {
-            rename(lhs, from, to);
-            rename(rhs, from, to);
-        }
-        _ => {}
+    if let ExprKind::Name(name) = &mut e.kind
+        && name == from
+    {
+        *name = to.to_string();
     }
+    e.for_each_child_mut(&mut |c| rename(c, from, to));
 }
 
 pub fn compile(source: &str) -> Result<Program, Vec<Diagnostic>> {
@@ -284,7 +257,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Item::Control { name, .. } => (name, "control"),
             Item::Instr(d) => (&d.name, "instrument"),
             Item::MidiOut(d) => (&d.name, "instrument"),
-            Item::Opcode(d) => (&d.name, "opcode"),
+            Item::Fn(d) => (&d.name, "function"),
+            Item::Const { name, .. } => (name, "constant"),
             Item::Bus(d) => (&d.name, "bus"),
             // a clip with an `instrument:` is a track of its own name; the clip may share it
             Item::Track(d) => (
@@ -312,7 +286,11 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Some("instrument") if matches!(item, Item::Track(t) if plays_its_namesake(t)) => {}
             Some(existing) if existing != kind => {
                 errors.push(Diagnostic::new(
-                    format!("`{}` is already the name of a {existing}", ident.name),
+                    format!(
+                        "`{}` is already the name of {} {existing}",
+                        ident.name,
+                        if existing.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" }
+                    ),
                     ident.span,
                 ));
             }
@@ -325,19 +303,42 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         Err(d) => errors.push(d),
     }
 
-    let mut registry = Registry::builtin();
+    let registry = Registry::builtin();
+    let mut fns: HashMap<String, FnDef> = HashMap::new();
     for item in &items {
-        let Item::Opcode(def) = item else { continue };
-        match compile_opcode(def, &registry, &names, tempo) {
-            Ok((spec, body_error)) => {
-                errors.extend(body_error);
-                registry.add(spec);
-            }
-            Err(d) => errors.push(d),
+        let Item::Fn(def) = item else { continue };
+        if registry.find(&def.name.name).is_some() {
+            errors.push(Diagnostic::new(
+                format!("`{}` is a built-in function, so it can't be defined again", def.name.name),
+                def.name.span,
+            ));
+        } else if fns.insert(def.name.name.clone(), def.clone()).is_some() {
+            errors.push(Diagnostic::new(
+                format!("`{}` is defined twice", def.name.name),
+                def.name.span,
+            ));
         }
     }
-    // after user opcodes are known, so `opcode adsr` / `opcode perc` win over the shortcuts
-    errors.extend(env_shortcut::desugar(&mut items, &registry));
+    // after user functions are known, so `fn adsr` / `fn perc` win over the shortcuts
+    errors.extend(env_shortcut::desugar(&mut items, &fns));
+    for item in &items {
+        match item {
+            Item::Fn(def) => {
+                names.fns.insert(def.name.name.clone(), def.clone());
+            }
+            Item::Instr(def) => {
+                names.instrs.insert(def.name.name.clone(), def.clone());
+            }
+            _ => {}
+        }
+    }
+    for item in &items {
+        let Item::Fn(def) = item else { continue };
+        if let Err(d) = check_fn(def, tempo, &registry, &names) {
+            errors.push(d);
+            names.failed_fns.push(def.name.name.clone());
+        }
+    }
 
     for item in &items {
         let Item::Control { name, value, input } = item else {
@@ -352,6 +353,25 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
         match crate::lower::compile_control(name, value, input.as_ref(), tempo, &registry, &names) {
             Ok(control) => names.controls.push(control),
+            Err(d) => errors.push(d),
+        }
+    }
+
+    for item in &items {
+        let Item::Const { name, value } = item else {
+            continue;
+        };
+        if names.consts.contains_key(&name.name) {
+            errors.push(Diagnostic::new(
+                format!("`{}` is defined twice", name.name),
+                name.span,
+            ));
+            continue;
+        }
+        match compile_const(value, tempo, &registry, &names) {
+            Ok(v) => {
+                names.consts.insert(name.name.clone(), v);
+            }
             Err(d) => errors.push(d),
         }
     }
@@ -504,6 +524,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
     }
 
+    errors.retain(|d| !d.is_quiet());
     if errors.is_empty() {
         Ok(Program {
             quantize,
@@ -740,6 +761,8 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
             "quantize" => {
                 crate::perform::quantum_of(value)?;
             }
+            // read while the instrument is compiled
+            "tail" => {}
             "glide" => {
                 if !def.mono {
                     return Err(mono_only(option));
@@ -752,9 +775,9 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
                     format!("an instrument has no option `{other}`"),
                     option.span,
                 );
-                d = match closest(other, ["max", "steal", "same_note", "choke", "legato", "priority", "glide", "quantize"]) {
+                d = match closest(other, ["max", "steal", "same_note", "choke", "legato", "priority", "glide", "quantize", "tail"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
-                    None => d.with_help("the options are `max`, `steal`, `same_note`, `choke`, `quantize`, and for `mono` instruments `legato`, `priority` and `glide`"),
+                    None => d.with_help("the options are `max`, `steal`, `same_note`, `choke`, `tail`, `quantize`, and for `mono` instruments `legato`, `priority` and `glide`"),
                 };
                 return Err(d);
             }
@@ -1056,7 +1079,7 @@ const DEFAULT_ROOT_HZ: f32 = 261.625_56;
 
 // ---- program-level statements -------------------------------------------
 
-/// `config { quantize: { default: 1 bar  play: cycle } }`, and the `with(quantize: ...)` of definitions checked.
+/// `config { quantize: { default: 1bar  play: cycle } }`, and the `with(quantize: ...)` of definitions checked.
 fn quantize_config(items: &[Item]) -> Res<crate::program::QuantizeConfig> {
     let mut config = crate::program::QuantizeConfig::default();
     for item in items {
@@ -1188,7 +1211,7 @@ fn tempo_of(items: &[Item], beats_per_bar: f64) -> Res<Tempo> {
         if tempo.is_some() {
             return Err(Diagnostic::new("tempo is set more than once", stmt.span));
         }
-        // `@ next bar` and `over 2 bars` say how a live session gets there; a file starts at the tempo.
+        // `@ next bar` and `over 2bars` say how a live session gets there; a file starts at the tempo.
         tempo = Some(Tempo {
             bpm: bpm_of(&stmt.value)?,
             beats_per_bar,
@@ -1530,10 +1553,8 @@ saw_lead(freq: a3) for 1beat
             msg("instr a(f: hz) { osc(saw, f).gain(f * 2db) }"),
             "can't multiply hz and db"
         );
-        assert_eq!(
-            msg("instr a(f: hz) { osc(saw, f / 0) }"),
-            "division by zero"
-        );
+        // dividing by zero gives 0, as it does while playing
+        ok("instr a(f: hz) { osc(saw, f / 0) }");
     }
 
     #[test]
@@ -1551,7 +1572,7 @@ saw_lead(freq: a3) for 1beat
         );
         assert_eq!(
             msg("instr a(f: hz) { osc(saw, f).wobble() }"),
-            "unknown opcode `wobble`"
+            "unknown function `wobble`"
         );
         assert_eq!(
             msg("instr a(f: hz) { saw }"),
@@ -1563,7 +1584,7 @@ saw_lead(freq: a3) for 1beat
         );
         assert_eq!(
             msg("instr a(f: hertz) { osc(saw, f) }"),
-            "unknown parameter type `hertz`"
+            "unknown type `hertz`"
         );
         assert_eq!(
             msg("instr a(f: hz) { osc(saw, 440herz) }"),
@@ -1573,9 +1594,11 @@ saw_lead(freq: a3) for 1beat
 
     #[test]
     fn argument_binding_rules() {
-        let d = first_error("instr a(f: hz) { osc(saw, f).lpf(2khz) }");
+        // leading required parameters may be given in order; the rest are named
+        ok("instr a(f: hz) { osc(saw, f).lpf(2khz) }");
+        let d = first_error("instr a(f: hz) { osc(saw, f).lpf(2khz, 0.3) }");
         assert_eq!(d.message, "`lpf` takes its other arguments by name");
-        assert_eq!(d.help.as_deref(), Some("write `cutoff: ...`"));
+        assert_eq!(d.help.as_deref(), Some("write `res: ...`"));
         assert_eq!(
             msg("instr a(f: hz) { osc(saw, f).lpf(res: 0.1) }"),
             "`lpf` needs an argument `cutoff`"
@@ -1625,7 +1648,7 @@ saw_lead(freq: a3) for 1beat
         );
         assert_eq!(
             msg("instr a(b: 1..0) { b }"),
-            "the lower bound of a range must be below the upper bound"
+            "the lower end of a range must be below the upper end"
         );
     }
 
@@ -1694,18 +1717,18 @@ saw_lead(freq: a3) for 1beat
     }
 
     const SPEC_OPCODES: &str = "
-opcode one_pole(x, cutoff: hz) {
+fn one_pole(x, cutoff: hz) {
   state y = 0.0
   a = exp(-2 * pi * cutoff / sample_rate)
   y = x * (1 - a) + y * a
   y
 }
 
-opcode drive(x, amount: 0..1 = 0.5) {
+fn drive(x, amount: 0..1 = 0.5) {
   (x * (1 + amount * 9)).tanh
 }
 
-opcode dc_block(x) {
+fn dc_block(x) {
   state x1 = 0.0
   state y1 = 0.0
   y = x - x1 + 0.995 * y1
@@ -1714,13 +1737,13 @@ opcode dc_block(x) {
   y
 }
 
-opcode fold(x, amount: 0..1 = 0.5) {
+fn fold(x, amount: 0..1 = 0.5) {
   (x * (1 + amount * 8)).sin
 }
 ";
 
     #[test]
-    fn the_specs_example_opcodes_compile_and_can_be_used() {
+    fn the_specs_example_functions_compile_and_can_be_used() {
         ok(&format!(
             "{SPEC_OPCODES}
 instr a(freq: hz) {{ osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz) }}
@@ -1731,7 +1754,7 @@ a(freq: 110hz) for 1beat"
     }
 
     #[test]
-    fn opcode_arguments_are_checked_like_any_other() {
+    fn function_arguments_are_checked_like_any_other() {
         let with = |call: &str| format!("{SPEC_OPCODES}\ninstr a(freq: hz) {{ {call} }}");
         assert_eq!(
             msg(&with("osc(saw, freq).one_pole(cutoff: 800)")),
@@ -1754,12 +1777,14 @@ a(freq: 110hz) for 1beat"
             "`drive` takes its other arguments by name"
         );
         ok(&with("osc(saw, freq).drive"));
+        ok(&with("osc(saw, freq).one_pole(800hz)"));
     }
 
     #[test]
-    fn opcode_body_errors() {
+    fn function_body_errors() {
         let body =
-            |b: &str| format!("opcode f(x, amount: 0..1 = 0.5, cutoff: hz = 100hz) {{ {b} }}");
+            |b: &str| format!("fn f(x: num, amount: 0..1 = 0.5, cutoff: hz = 100hz) {{ {b} }}");
+        let state = |b: &str| body(&format!("state s = 0.0\n{b}"));
         assert_eq!(
             msg(&body("x * undefined_thing")),
             "`undefined_thing` is not defined"
@@ -1769,71 +1794,58 @@ a(freq: 110hz) for 1beat"
             "`exp` expects a plain number, found hz"
         );
         assert_eq!(msg(&body("x + cutoff")), "can't add a plain number and hz");
+        // a function can give any unit
+        ok(&body("cutoff"));
+        ok(&state("x.lpf(cutoff: 100hz) + s"));
         assert_eq!(
-            msg(&body("cutoff")),
-            "an opcode outputs a plain signal, but this is hz"
+            msg(&state("x.pan(azimuth: 10deg) + s")),
+            "`pan` can't be used inside a function with state"
         );
-        ok(&body("x.lpf(cutoff: 100hz)"));
+        assert_eq!(msg(&state("x.exxp + s")), "unknown function `exxp`");
+        assert_eq!(help(&state("x.exxp + s")).as_deref(), Some("did you mean `exp`?"));
+        assert_eq!(msg(&state("exp(x, x) + s")), "`exp` takes one value");
         assert_eq!(
-            msg(&body("x.pan(azimuth: 10deg)")),
-            "`pan` can't be used inside an opcode"
+            msg(&state("env[0 1sec 1] + s")),
+            "envelopes can't be used inside a function with state"
         );
+        assert_eq!(msg(&body("")), "`f` must end with the value it gives");
+        // a state starts at a value known at note start, here the input's first sample
+        ok(&body("state s = x\ns"));
         assert_eq!(
-            msg(&body("x.exxp")),
-            "`exxp` can't be used inside an opcode"
-        );
-        assert_eq!(
-            help(&body("x.exxp")).as_deref(),
-            Some("did you mean `exp`?")
-        );
-        assert_eq!(msg(&body("exp(x, x)")), "`exp` takes one argument");
-        assert_eq!(
-            msg(&body("env[0 1sec 1]")),
-            "envelopes can't be used inside an opcode"
-        );
-        assert_eq!(msg(&body("")), "opcode `f` is empty");
-        assert_eq!(
-            msg(&body("state s = x\ns")),
-            "the starting value of a state must be a number"
-        );
-        assert_eq!(
-            msg(&body("state s = 0.0\ns = cutoff\ns")),
+            msg(&state("s = cutoff\ns")),
             "`s` holds a plain number, but this is hz"
         );
         assert_eq!(msg(&body("state x = 0.0\nx")), "`x` is already defined");
-        assert_eq!(
-            msg(&body("x = 1")),
-            "an opcode must end with the value it outputs"
-        );
+        assert_eq!(msg(&state("y = 1")), "`f` must end with the value it gives");
         assert_eq!(msg(&body("x\nx")), "this value is never used");
+        ok("fn f(x) -> hz { x * 2 }\ninstr a(freq: hz) { osc(sine, f(freq * 0.5)) }");
+        assert_eq!(
+            msg("fn f(x) -> hz { x * 2 }\ninstr a(freq: hz) { osc(sine, freq * f(0.5)) }"),
+            "`f` gives a plain number, but its result is declared as hz"
+        );
     }
 
     #[test]
-    fn opcode_signature_errors() {
-        assert_eq!(msg("opcode lpf(x) { x }"), "`lpf` is already an opcode");
+    fn function_signature_errors() {
         assert_eq!(
-            msg("opcode f(x) { x }\nopcode f(x) { x }"),
-            "`f` is already an opcode"
+            msg("fn lpf(x) { x }"),
+            "`lpf` is a built-in function, so it can't be defined again"
         );
+        assert_eq!(msg("fn f(x) { x }\nfn f(x) { x }"), "`f` is defined twice");
+        assert_eq!(msg("fn f(x, x) { x }"), "parameter `x` is declared twice");
         assert_eq!(
-            msg("opcode f(x, x) { x }"),
-            "parameter `x` is declared twice"
+            msg("fn f(x: num, a: 0..1 = 3) { x }\ninstr i(freq: hz) { osc(saw, freq).f }"),
+            "`a` is between 0 and 1, but this is 3"
         );
-        assert_eq!(
-            msg("opcode f(x, a: 0..1 = 3) { x }"),
-            "the default for `a` is outside 0..1"
-        );
-        assert_eq!(
-            msg("opcode f(x, a: furlongs) { x }"),
-            "unknown parameter type `furlongs`"
-        );
+        assert_eq!(msg("fn f(x, a: furlongs) { x }"), "unknown type `furlongs`");
+        assert_eq!(msg("opcode f(x) { x }"), "`opcode` is now `fn`");
     }
 
     #[test]
     fn state_and_untyped_parameters_belong_to_the_right_definitions() {
         assert_eq!(
             msg("instr a() { state y = 0.0\n0.5 }"),
-            "`state` can only be used inside an `opcode`"
+            "`state` can only be used inside a `fn`"
         );
         assert_eq!(
             msg("instr a(freq) { osc(saw, freq) }"),
@@ -1842,22 +1854,114 @@ a(freq: 110hz) for 1beat"
     }
 
     #[test]
-    fn a_broken_opcode_is_reported_once_even_if_it_is_used() {
+    fn a_broken_function_is_reported_once_even_if_it_is_used() {
         let errs = errors(
             "
-opcode bad(x) { x + undefined_thing }
+fn bad(x) { x + undefined_thing }
 instr a(f: hz) { osc(saw, f).bad }
 a(f: 100hz) for 1beat
 ",
         );
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert_eq!(errs[0].message, "`undefined_thing` is not defined");
+        // even when nothing calls it
+        assert_eq!(msg("fn bad(x) { x + undefined_thing }"), "`undefined_thing` is not defined");
+    }
+
+    #[test]
+    fn rates_on_parameters_are_checked() {
+        // `const` needs a value known while compiling
+        ok("fn rep(x, n: const int = 2) { (for i in 0..<n { x }).sum }\ninstr a(f: hz) { osc(saw, f).rep(n: 3) }");
+        assert_eq!(
+            msg("fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: f / 1hz) }"),
+            "`n` must be known while compiling"
+        );
+        assert_eq!(
+            msg("fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: 2.5) }"),
+            "`n` expects a whole number, found 2.5"
+        );
+        // notes set an instrument's parameters while playing
+        assert_eq!(
+            msg("instr a(f: const hz) { osc(saw, f) }"),
+            "notes set `f` while playing, so it can't be `const`"
+        );
+        ok("instr a(f: init hz, cut: control hz = 1khz) { osc(saw, f).lpf(cut) }");
+        assert_eq!(
+            msg("fn f(mode: init (a | b) = a) { 1 }"),
+            "a choice is always known while compiling"
+        );
+    }
+
+    #[test]
+    fn choices_and_lists_belong_to_functions() {
+        assert_eq!(
+            msg("instr a(mode: (x | y) = x) { 0.5 }"),
+            "an instrument's parameters are set by notes, so `mode` can't be a choice or a list"
+        );
+        assert_eq!(msg("fn f(m: (a | b) = c) { 1 }"), "the default for `m` is one of a, b");
+        assert_eq!(msg("fn f(m: (a) = a) { 1 }"), "a choice lists at least two names");
+        ok("fn f(xs: [num]) { xs.sum }\ninstr a() { f([0.1, 0.2]) * osc(sine, 100hz) }");
+        assert_eq!(
+            msg("fn f(xs: [num]) { xs.sum }\ninstr a() { f(0.5) * osc(sine, 100hz) }"),
+            "`xs` expects a list of a plain number, found a single value"
+        );
+    }
+
+    #[test]
+    fn functions_have_no_side_effects() {
+        assert_eq!(
+            msg("bus b\nfn f(x) { b += x\n x }\ninstr a(f: hz) { osc(saw, f).f }"),
+            "a function can't send to the bus `b`"
+        );
+        assert_eq!(
+            msg("fn f(x: num) { x * note.time.num }"),
+            "`note` is only available in an instrument"
+        );
+        // a function's locals may share a name with an instrument, which it can't read
+        ok("instr y(f: hz) { osc(saw, f) }\nfn g(x) {\n y = x * 2\n y\n}\ninstr a(f: hz) { osc(saw, f).g }");
+    }
+
+    #[test]
+    fn statements_in_blocks() {
+        ok("instr a(f: hz) {\n g = 1\n if f > 1khz { g = 0.5 }\n osc(saw, f) * g\n}");
+        ok("instr a(f: hz) {\n if f > 1khz { out = osc(saw, f) } else { out = osc(sine, f) }\n}");
+        assert_eq!(
+            msg("bus b\ninstr a(f: hz) {\n if f > 1khz { b += osc(saw, f) }\n osc(saw, f)\n}"),
+            "a send inside an `if` that changes while playing would always be made"
+        );
+        // a name first bound in a block stays in it
+        assert!(msg("instr a(f: hz) {\n if f > 1khz { g = 0.5 }\n osc(saw, f) * g\n}").contains("`g` is not defined"));
+        assert_eq!(
+            msg("fn f(x) {\n if x > 0 { state s = 0 }\n x\n}\ninstr a(f: hz) { osc(saw, f).f }"),
+            "state is declared at the top of a function, not inside a block"
+        );
+        assert_eq!(msg("instr a() { if 1 > 0 { 0.5 } }"), "an `if` used as a value needs an `else`");
+    }
+
+    #[test]
+    fn a_tail_is_a_time() {
+        ok("instr a(f: hz) with(tail: 2sec) { osc(saw, f) }");
+        assert_eq!(
+            msg("instr a(f: hz) with(tail: 2) { osc(saw, f) }"),
+            "`tail` is a time from 0 to 600sec, such as `2sec`"
+        );
+    }
+
+    #[test]
+    fn constants() {
+        let p = ok("const k = 2\nconst ratios = (1..3).map(it * k)\ninstr a(f: hz) { osc(saw, f * ratios).sum * 0.1 }");
+        assert_eq!(p.instruments[0].graph.channels(), 1);
+        assert_eq!(msg("const k = 1\nconst k = 2"), "`k` is defined twice");
+        assert_eq!(
+            msg("const k = 1\ninstr a(f: hz) { k = 2\n osc(saw, f) }"),
+            "`k` is already the name of a constant, so it can't be used for a local"
+        );
     }
 
     #[test]
     fn db_gains_apply_to_plain_values() {
         ok("instr a(f: hz, amp: db = -6db) { osc(saw, f) * amp }");
-        ok("opcode g(x, amp: db = -6db) { x * amp }\ninstr a(f: hz) { osc(saw, f).g(amp: -3db) }");
+        ok("fn g(x, amp: db = -6db) { x * amp }\ninstr a(f: hz) { osc(saw, f).g(amp: -3db) }");
     }
 
     const ROUTING: &str = "
@@ -1956,7 +2060,7 @@ a(f: 100hz) for 1beat");
         );
         assert_eq!(
             msg("instr a(f: hz) { osc(saw, it) }"),
-            "`it` is only available inside a track"
+            "`it` is only available inside a track, or a function given to `map`"
         );
         assert_eq!(
             msg("instr a(f: hz) { it = 1 }"),
@@ -2020,7 +2124,7 @@ a(f: 100hz) for 1beat");
         );
         assert_eq!(
             msg(&with("instr a(other: hz) { osc(saw, other) }")),
-            "`other` is already the name of a instrument, so it can't be used for a local"
+            "`other` is already the name of an instrument, so it can't be used for a local"
         );
         assert_eq!(
             msg(&with("instr a(f: hz) { space = 1 }")),
@@ -2104,8 +2208,8 @@ track b { out = y.lpf(cutoff: 1khz).to(x) }
         ok(
             "bus x\nbus y\ntrack a { out = x.lpf(cutoff: 1khz).to(y) }\ntrack b { out = y\n x += prev(out) }",
         );
-        let d = first_error("bus x\ntrack a { out = prev(x) }");
-        assert_eq!(d.message, "`prev` is only available when sending to a bus");
+        // outside a send, `prev` is one sample earlier
+        ok("bus x\ntrack a { out = prev(x) }");
         let d = first_error("bus x\ntrack a { out = x.to(x) }");
         assert_eq!(d.message, "tracks feed back through buses: a -> a");
     }
@@ -2309,20 +2413,20 @@ bad() for 1beat
         let p = ok("config { channels: stereo }\ninstr a(f: hz) { [1, 1.01].map(fn(r) { osc(saw, f * r) }) }");
         assert_eq!(p.instruments[0].graph.channels(), 2);
 
-        assert_eq!(msg(&mono("(3..3).map(fn(i) { osc(saw, f) }).sum")), "this range is empty");
+        assert_eq!(msg(&mono("(3..<3).map(fn(i) { osc(saw, f) }).sum")), "this range is empty");
+        // `..` includes its end
+        ok(&mono("(1..8).map(fn(n) { osc(sine, f * n) / n }).sum"));
         // a list is not limited by the channel count until it becomes a signal
         ok(&mono("(0..40).map(fn(i) { osc(saw, f * (1 + i * 0.001)) }).sum"));
         assert_eq!(
             msg(&mono("(0..17).map(fn(i) { osc(saw, f) })")),
             "a list holds at most 16 entries"
         );
-        assert_eq!(
-            msg(&mono("[1, 2].map(osc(saw, f))")),
-            "`map` takes a function"
-        );
+        // an expression of `it` is a function of one parameter
+        ok(&mono("[1, 2].map(osc(saw, f * it)).sum"));
         assert_eq!(
             msg(&mono("fn(x) { x }")),
-            "a function can only be the argument of `map`"
+            "a function value can only be given to `map`"
         );
         assert_eq!(
             msg(&mono("[1, 2].map(fn(f) { osc(saw, f) }).sum")),
@@ -2330,11 +2434,8 @@ bad() for 1beat
         );
         // the parameter is not visible after the map
         assert!(msg(&mono("[1].map(fn(x) { x }).sum + x")).contains("x"));
-        // opcodes stay scalar
-        assert_eq!(
-            msg("opcode o(x) { x * (0..3) }"),
-            "lists and functions can't be used inside an opcode"
-        );
+        // functions take and give lists
+        ok("fn spread(f, n: const int = 3) { for i in 0..<n { f * (1 + i * 0.01) } }\ninstr a(f: hz) { osc(saw, spread(f)).sum }");
     }
 
     #[test]
@@ -2352,18 +2453,17 @@ bad() for 1beat
         // a unit survives an index
         ok(&mono("osc(saw, [f, f * 2][1])"));
 
-        assert_eq!(
-            msg(&mono("[osc(saw, f), osc(sine, f)][2]")),
-            "index 2 is out of range for a list of 2"
-        );
+        // indexes wrap, so they never fail
+        ok(&mono("[osc(saw, f), osc(sine, f)][2]"));
+        ok(&mono("[osc(saw, f), osc(sine, f)][-1]"));
+        // an index that changes switches between the entries
+        ok(&mono("[osc(saw, f), osc(sine, f)][osc(square, 2hz).abs]"));
+        ok(&mono("osc(saw, [100hz, 200hz, 300hz][osc(saw, 1hz) * 3])"));
         assert_eq!(
             msg(&mono("[osc(saw, f)][f]")),
-            "an index must be a whole number, 0 or more, known while compiling"
+            "an index is a plain number, found hz"
         );
-        assert_eq!(
-            msg("opcode o(x) { x[0] }"),
-            "lists and functions can't be used inside an opcode"
-        );
+        assert_eq!(msg("fn o(x: num) { x[0] }"), "only a list can be indexed");
     }
 
     #[test]
@@ -2376,8 +2476,8 @@ bad() for 1beat
         ok(&mono("([1, 2, 3] * 2).sum * 0.1 + osc(saw, f)"));
         // a list holds entries of different units; only a signal needs one
         ok(&mono("pair = [f, 0.5]\nosc(saw, pair[0]) * pair[1]"));
-        // `split` makes a list of a signal's channels
-        let p = ok("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan.split.map(fn(c) { c * 0.5 }) }");
+        // `channels` makes a list of a signal's channels
+        let p = ok("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan.channels.map(fn(c) { c * 0.5 }) }");
         assert_eq!(p.instruments[0].graph.channels(), 2);
         ok("config { channels: stereo }\ninstr a(f: hz) { [l, r] = [osc(saw, f), osc(sine, f)]\n[r, l] }");
 
@@ -2669,8 +2769,8 @@ track pad { instrument = pluck }
             "`osc_out` sends a track's signal, so it is used in a track"
         );
         assert_eq!(
-            msg("opcode a(x) { x.osc_out(\"/a\", port: 9000) }"),
-            "`osc_out` can't be used inside an opcode"
+            msg("fn a(x) { x.osc_out(\"/a\", port: 9000) }"),
+            "`osc_out` can't be used inside a function"
         );
     }
 
@@ -3019,9 +3119,9 @@ track pad { instrument = pluck }
             [r(1, 4), r(3, 4)]
         );
         // beats are a share of a bar: a quarter of 4/4 is a quarter cycle
-        let by_beat = notes_of("lead.play([c4 e4].shift(1 beat))", 1);
+        let by_beat = notes_of("lead.play([c4 e4].shift(1beat))", 1);
         assert_eq!(by_beat[0].0, r(1, 4));
-        let over = notes_of("lead.play([c4 e4].over(2 bars))", 2);
+        let over = notes_of("lead.play([c4 e4].over(2bars))", 2);
         assert_eq!(over.len(), 2);
         assert_eq!(over[1].0, r(1, 1));
     }
@@ -3093,7 +3193,7 @@ track pad { instrument = pluck }
         let p = ok(&stage(
             "
 clip riff {
-  length: 2 bars
+  length: 2bars
   notes: [c2 ~ eb2 g1]
   bright: [0.2 0.8]
   gain: [0db -6db]
@@ -3113,7 +3213,7 @@ bass.play(riff)",
         );
         // length in beats is a share of a bar
         assert_eq!(
-            played("clip c { length: 6 beats\nnotes: [c4] }\nlead.play(c)").length,
+            played("clip c { length: 6beats\nnotes: [c4] }\nlead.play(c)").length,
             r(3, 2)
         );
     }
@@ -3121,7 +3221,7 @@ bass.play(riff)",
     #[test]
     fn operations_apply_to_whole_clips() {
         let sped = played(
-            "clip c { length: 2 bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.fast(2))",
+            "clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.fast(2))",
         );
         assert_eq!(sped.length, Rational::ONE, "fast shortens the clip");
         assert_eq!(
@@ -3136,7 +3236,7 @@ bass.play(riff)",
         );
 
         let stretched = played(
-            "clip c { length: 2 bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.over(4 bars))",
+            "clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.over(4bars))",
         );
         assert_eq!(stretched.length, Rational::int(4));
         assert_eq!(
@@ -3183,11 +3283,11 @@ intro.start",
 tempo 120bpm
 clip riff { notes: [c2] }
 bass.play(riff)
-at 4 bars lead.play(riff)
+at 4bars lead.play(riff)
 at bar 5 beat 3 bass.stop
 at 2beats lead.mute @ next bar
-lead.unmute @ in 2 bars
-bass.solo @ 4 bars
+lead.unmute @ in 2bars
+bass.solo @ 4bars
 hush @ now
 panic
 unsolo
@@ -3198,7 +3298,7 @@ at bar 3 bass.unsolo",
         assert_eq!(
             acts[2].at,
             Time::Beats(18.0),
-            "bar 5 beat 3 in 4/4 is 4 bars and 2 beats in"
+            "bar 5 beat 3 in 4/4 is 4bars and 2beats in"
         );
         assert_eq!(acts[3].at, Time::Beats(2.0));
         let q = acts[3].quantize.unwrap();
@@ -3227,7 +3327,7 @@ at bar 3 bass.unsolo",
     #[test]
     fn meter_changes_what_a_bar_is() {
         let p = ok(&stage(
-            "meter 3/4\nclip c { notes: [c4] }\nat bar 3 lead.play(c)\nat 1 bar lead.mute",
+            "meter 3/4\nclip c { notes: [c4] }\nat bar 3 lead.play(c)\nat 1bar lead.mute",
         ));
         assert_eq!(p.tempo.beats_per_bar, 3.0);
         assert_eq!(p.performance[0].at, Time::Beats(6.0));
@@ -3238,7 +3338,7 @@ at bar 3 bass.unsolo",
         assert_eq!(msg("meter 3"), "meter is a fraction of whole numbers");
         assert_eq!(msg("meter 3/4\nmeter 4/4"), "meter is set more than once");
         // a beat is a quarter of a bar in 4/4 and a third of one in 3/4
-        let pat = played("meter 3/4\nlead.play([c4 e4].shift(1 beat))");
+        let pat = played("meter 3/4\nlead.play([c4 e4].shift(1beat))");
         assert_eq!(events(pat.lane("notes").unwrap(), 1)[0].0, r(1, 3));
     }
 
@@ -3254,9 +3354,12 @@ at bar 3 bass.unsolo",
         assert!(p.notes.is_empty());
         let note = ok(&stage("lead(freq: c4, gain: -6db) for 1beat"));
         assert_eq!(note.notes[0].args["gain"], Value::Db(-6.0));
+        // an instrument can take the note's gain over, and use it as it likes
+        let p = ok("instr a(freq: hz, gain: db = 0db) { osc(saw, freq).lpf(freq * 4).gain(gain) }");
+        assert_eq!(p.instruments[0].params.iter().filter(|q| q.name == "gain").count(), 1);
         assert_eq!(
-            msg("instr a(gain: db) { osc(sine, 100hz) }"),
-            "`gain` is reserved: every note already has a `gain` control"
+            msg("instr a(gain: hz) { osc(sine, 100hz) }"),
+            "an instrument's own `gain` is in db, like the one every note has"
         );
     }
 
@@ -3386,7 +3489,7 @@ at bar 3 bass.unsolo",
             "the `notes` lane holds notes, not an envelope"
         );
         assert_eq!(
-            msg(&stage("clip c { length: 0 bars }")),
+            msg(&stage("clip c { length: 0bars }")),
             "a clip needs a length above zero"
         );
         assert_eq!(
@@ -3411,7 +3514,7 @@ at bar 3 bass.unsolo",
         assert_eq!(msg("at bar 0 hush"), "bars and beats count from 1");
         // a file starts at its tempo; how a live session gets there is not the compiler's concern
         assert_eq!(
-            ok(&stage("tempo 90bpm @ next bar over 2 bars")).tempo.bpm,
+            ok(&stage("tempo 90bpm @ next bar over 2bars")).tempo.bpm,
             90.0
         );
     }

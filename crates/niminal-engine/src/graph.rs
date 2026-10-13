@@ -8,7 +8,8 @@ pub enum Src {
     Const(f32),
     /// A voice parameter, by index (see [`GraphBuilder::param`]).
     Param(usize),
-    /// The output of another node.
+    /// A result of another node. Nodes' results are numbered in order, so a node with
+    /// several results takes several numbers.
     Node(usize),
     /// An external input filled by the host each block (see [`GraphBuilder::input`]).
     Input(usize),
@@ -45,6 +46,9 @@ pub(crate) struct NodeDef {
     pub(crate) op: Box<dyn Opcode>,
     /// Slot index feeding each port.
     pub(crate) inputs: Vec<usize>,
+    /// The number of this node's first result, and how many it has.
+    pub(crate) first: usize,
+    pub(crate) outputs: usize,
 }
 
 pub(crate) struct ParamDef {
@@ -59,9 +63,12 @@ pub struct GraphBuilder {
     params: Vec<ParamDef>,
     consts: Vec<f32>,
     nodes: Vec<NodeDef>,
+    /// Results of all nodes so far.
+    results: usize,
     n_inputs: usize,
     /// (bus, channel, encoded slot)
     sends: Vec<(usize, usize, usize, bool)>,
+    tail: f32,
 }
 
 impl GraphBuilder {
@@ -76,6 +83,12 @@ impl GraphBuilder {
         }
         self.params.push(ParamDef { name: name.to_string(), default });
         Ok(Src::Param(self.params.len() - 1))
+    }
+
+    /// How long a voice of this graph may ring after its release when nothing in it (an envelope or
+    /// a sample) decides when it ends.
+    pub fn set_tail(&mut self, seconds: f32) {
+        self.tail = seconds.max(0.0);
     }
 
     /// Declare an external input. The host fills it before each block, for
@@ -105,8 +118,14 @@ impl GraphBuilder {
     }
 
     /// Add an opcode, wiring its ports by name. Ports left out take their
-    /// default; a port with no default must be given.
+    /// default; a port with no default must be given. For an opcode with several
+    /// results, this is the first; see [`GraphBuilder::add_outputs`].
     pub fn add(&mut self, op: impl Opcode + 'static, args: &[(&str, Src)]) -> Result<Src, GraphError> {
+        Ok(self.add_outputs(op, args)?[0])
+    }
+
+    /// Like [`GraphBuilder::add`], giving every result of the opcode.
+    pub fn add_outputs(&mut self, op: impl Opcode + 'static, args: &[(&str, Src)]) -> Result<Vec<Src>, GraphError> {
         let ports = op.ports().to_vec();
         assert!(ports.len() <= MAX_INPUTS, "`{}` declares too many ports", op.name());
 
@@ -136,8 +155,11 @@ impl GraphBuilder {
             inputs.push(self.slot_for(src));
         }
 
-        self.nodes.push(NodeDef { op: Box::new(op), inputs });
-        Ok(Src::Node(self.nodes.len() - 1))
+        let outputs = op.outputs().max(1);
+        let first = self.results;
+        self.results += outputs;
+        self.nodes.push(NodeDef { op: Box::new(op), inputs, first, outputs });
+        Ok((first..first + outputs).map(Src::Node).collect())
     }
 
     // Slot layout, fixed once `build` knows the counts: params, then consts,
@@ -156,7 +178,7 @@ impl GraphBuilder {
                 CONST_BASE + i
             }
             Src::Node(i) => {
-                assert!(i < self.nodes.len(), "node {i} does not exist yet");
+                assert!(i < self.results, "node result {i} does not exist yet");
                 NODE_BASE + i
             }
             Src::Input(i) => {
@@ -208,6 +230,8 @@ impl GraphBuilder {
             state_keys: Vec::new(),
             params: self.params,
             consts: self.consts,
+            results: self.results,
+            tail: self.tail,
             nodes,
             n_inputs,
             sends,
@@ -228,6 +252,10 @@ pub struct Graph {
     pub(crate) params: Vec<ParamDef>,
     pub(crate) consts: Vec<f32>,
     pub(crate) nodes: Vec<NodeDef>,
+    /// How many results the nodes have between them.
+    pub(crate) results: usize,
+    /// Seconds a voice without an envelope rings after its release.
+    pub(crate) tail: f32,
     pub(crate) n_inputs: usize,
     /// (bus, channel, slot) triples added to buses after every block.
     /// Bus, channel, the slot sent, and whether it arrives a block late.
@@ -242,6 +270,11 @@ impl Graph {
         use std::hash::{Hash, Hasher};
         let mut keys: Vec<u64> = Vec::with_capacity(self.nodes.len());
         let base = self.node_slot_base();
+        // which node, and which of its results, each result slot is
+        let mut owner = Vec::with_capacity(self.results);
+        for (n, node) in self.nodes.iter().enumerate() {
+            owner.extend((0..node.outputs).map(|k| (n, k)));
+        }
         for node in &self.nodes {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             node.op.name().hash(&mut h);
@@ -256,7 +289,9 @@ impl Graph {
                     (slot - self.input_slot_base()).hash(&mut h);
                 } else {
                     3u8.hash(&mut h);
-                    keys[slot - base].hash(&mut h);
+                    let (n, k) = owner[slot - base];
+                    keys[n].hash(&mut h);
+                    k.hash(&mut h);
                 }
             }
             keys.push(h.finish());

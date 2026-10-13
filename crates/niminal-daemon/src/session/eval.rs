@@ -396,7 +396,7 @@ pub(super) fn prepare_pending(
                 origin: Origin::Snippet { offset: s.offset },
             };
             let program = check(&[piece])?;
-            // A command for later (`at +4 bars chorus.start`) is not what is playing now.
+            // A command for later (`at +4bars chorus.start`) is not what is playing now.
             let later = program
                 .performance
                 .iter()
@@ -473,7 +473,7 @@ pub(super) fn options(layout: Layout, samples: &Samples) -> CompileOptions {
     }
 }
 
-/// `@ next 4 bars` as text, for an override.
+/// `@ next 4bars` as text, for an override.
 pub(super) fn parse_quantum(text: &str) -> Result<Quantize, Vec<Problem>> {
     analyze(&format!("hush @ {text}"))
         .ok()
@@ -481,7 +481,7 @@ pub(super) fn parse_quantum(text: &str) -> Result<Quantize, Vec<Problem>> {
         .and_then(|s| s.quantize)
         .ok_or_else(|| {
             vec![Problem::plain(format!(
-                "`{text}` isn't a quantum: use `now`, `beat`, `bar`, `cycle`, `next 4 bars`, `in 2 beats`..."
+                "`{text}` isn't a quantum: use `now`, `beat`, `bar`, `cycle`, `next 4bars`, `in 2beats`..."
             ))]
         })
 }
@@ -580,7 +580,7 @@ impl Session {
             .collect()
     }
 
-    /// `tempo 124bpm @ next bar over 8 bars` becomes a tempo for each quarter beat on the way:
+    /// `tempo 124bpm @ next bar over 8bars` becomes a tempo for each quarter beat on the way:
     /// the first replaces the statement, and the rest are returned with how long after it each lands.
     pub(super) fn expand_ramp(
         &self,

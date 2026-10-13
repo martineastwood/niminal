@@ -95,7 +95,7 @@ fn a_chains_filter_state_persists_across_notes() {
     // starts, the filter still holds charge from the first, so its output
     // starts well above where the first note's did.
     let src = "
-opcode one_pole(x, cutoff: hz) {
+fn one_pole(x, cutoff: hz) {
   state y = 0.0
   a = exp(-2 * pi * cutoff / sample_rate)
   y = x * (1 - a) + y * a
@@ -107,7 +107,7 @@ lead(f: 1hz) for 1/8beat
 at 1/4beat lead(f: 1hz) for 1/8beat
 ";
     let out = raw(src);
-    let second_start = (0.125 * SR) as usize; // 1/4 beat at 120bpm
+    let second_start = (0.125 * SR) as usize; // 1/4beat at 120bpm
     assert!(out[1] < 0.01, "the filter starts empty: {}", out[1]);
     assert!(out[second_start + 1] > 0.1, "and still holds charge later: {}", out[second_start + 1]);
 }

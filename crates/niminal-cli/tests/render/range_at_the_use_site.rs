@@ -14,8 +14,7 @@ fn a_control_from_zero_to_one_is_mapped_where_it_is_used() {
     let by_hand = raw("instr a() { osc(saw, 220hz).lpf(cutoff: 2100hz) }\na() for 1beat");
     assert!(rms(&mapped) > 0.01);
     assert!(near(&mapped, &by_hand));
-    // the ends can be written as two arguments too
-    assert!(near(&mapped, &raw("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz, 4khz)) }\na() for 1beat")));
+
 }
 
 #[test]
@@ -30,5 +29,7 @@ fn range_mistakes_are_reported() {
     let error = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone()).collect::<String>()).unwrap_or_default();
     assert!(error("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz..4)) }").contains("same unit"));
     assert!(error("ctl k = 0.5hz\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz..4khz)) }").contains("plain signal from 0 to 1"));
-    assert!(error("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz)) }").contains("two ends"));
+    assert!(error("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz)) }").contains("takes a range"));
+    // one spelling: a range, never two ends
+    assert!(error("ctl k = 0.5\ninstr a() { osc(saw, 220hz).lpf(cutoff: k.range(200hz, 4khz)) }").contains("takes a range"));
 }

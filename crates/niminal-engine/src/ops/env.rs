@@ -79,6 +79,22 @@ pub struct Env {
     level: f32,
     phase: Phase,
     released: bool,
+    /// Values read from the inputs when the note starts, one per port.
+    fields: Vec<EnvField>,
+    ports: Vec<Port>,
+    sample_rate: f32,
+    /// Whether the inputs have been read for this note.
+    read: bool,
+}
+
+/// A part of an envelope that can come from an input.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EnvField {
+    Start,
+    /// The duration of a segment, in seconds.
+    Dur(usize),
+    /// The level a segment ends at.
+    Level(usize),
 }
 
 impl Env {
@@ -95,9 +111,22 @@ impl Env {
             level: start,
             phase: Phase::Done,
             released: false,
+            fields: Vec::new(),
+            ports: Vec::new(),
+            sample_rate: 48_000.0,
+            read: true,
         };
         env.reset(48_000.0);
         env
+    }
+
+    /// Take these parts of the envelope from inputs, read once when the note starts. The ports are
+    /// named `v0`, `v1`... in the order given.
+    pub fn with_inputs(mut self, fields: Vec<EnvField>) -> Self {
+        self.ports = (0..fields.len()).map(|i| Port::named(format!("v{i}"), None)).collect();
+        self.read = fields.is_empty();
+        self.fields = fields;
+        self
     }
 
     /// Start over from the first level each time the last segment ends, for as long as the note is
@@ -122,6 +151,8 @@ impl Env {
     }
 
     fn reset(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        self.read = self.fields.is_empty();
         self.lengths = self
             .segments
             .iter()
@@ -196,8 +227,8 @@ impl Opcode for Env {
         "env"
     }
 
-    fn ports(&self) -> &'static [Port] {
-        &[]
+    fn ports(&self) -> &[Port] {
+        &self.ports
     }
 
     fn box_clone(&self) -> Box<dyn Opcode> {
@@ -221,7 +252,21 @@ impl Opcode for Env {
         }
     }
 
-    fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
+    fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        if !self.read && !out.is_empty() {
+            for (field, input) in self.fields.iter().zip(inputs) {
+                let v = input[0];
+                match *field {
+                    EnvField::Start => self.start = v,
+                    EnvField::Dur(k) => self.segments[k].dur = v,
+                    EnvField::Level(k) => self.segments[k].target = v,
+                }
+            }
+            let fields = std::mem::take(&mut self.fields);
+            self.reset(self.sample_rate);
+            self.fields = fields;
+            self.read = true;
+        }
         if !ctx.gate && !self.released {
             self.release();
         }
@@ -233,5 +278,9 @@ impl Opcode for Env {
 
     fn is_active(&self) -> bool {
         !matches!(self.phase, Phase::Done)
+    }
+
+    fn is_envelope(&self) -> bool {
+        true
     }
 }

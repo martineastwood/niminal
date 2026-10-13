@@ -19,6 +19,8 @@ pub enum Tok {
     Colon,
     Dot,
     DotDot,
+    /// `..<`: a range that stops before its end.
+    DotDotLt,
     Eq,
     /// `->`
     Arrow,
@@ -62,7 +64,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut tokens: Vec<Token> = Vec::new();
     // Newlines separate statements, except inside ( ) and [ ].
     let mut brackets: Vec<u8> = Vec::new();
-    // Whether each open brace is a signal context (an instrument, opcode or
+    // Whether each open brace is a signal context (an instrument, function or
     // track body), where a bracket is a channel list or envelope.
     let mut braces: Vec<bool> = Vec::new();
     let mut statement_start = true;
@@ -91,18 +93,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 continue;
             }
             b'0'..=b'9' => {
-                let (mut tok, mut end) = lex_number(src, i);
-                // `4 bars`: a space before a unit word is fine outside brackets,
-                // where a space separates steps instead.
-                if let Tok::Num {
-                    unit: unit @ None, ..
-                } = &mut tok
-                    && brackets.last() != Some(&b'[')
-                    && let Some((word, after)) = spaced_unit(src, end)
-                {
-                    *unit = Some(word.to_string());
-                    end = after;
-                }
+                let (tok, end) = lex_number(src, i);
                 i = end;
                 tok
             }
@@ -141,7 +132,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 i = end;
                 tok
             }
-            b'[' if is_raw_bracket(&tokens, braces.last().copied().unwrap_or(false)) => {
+            b'[' if is_raw_bracket(
+                &tokens,
+                braces.last().copied().unwrap_or(false)
+                    || matches!(statement_keyword.as_deref(), Some("const" | "fn" | "instr" | "mono")),
+            ) =>
+            {
                 let is_grid =
                     matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid");
                 let Some(close) = matching_bracket(bytes, i) else {
@@ -188,7 +184,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 Tok::Str(text)
             }
             b'.' => {
-                if bytes.get(i + 1) == Some(&b'.') {
+                if bytes.get(i + 1) == Some(&b'.') && bytes.get(i + 2) == Some(&b'<') {
+                    i += 3;
+                    Tok::DotDotLt
+                } else if bytes.get(i + 1) == Some(&b'.') {
                     i += 2;
                     Tok::DotDot
                 } else {
@@ -205,7 +204,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                             let inherited = braces.last().copied().unwrap_or(false);
                             let signal = matches!(
                                 statement_keyword.as_deref(),
-                                Some("instr" | "mono" | "opcode" | "track" | "arrangement" | "bus")
+                                Some("instr" | "mono" | "fn" | "const" | "track" | "arrangement" | "bus")
                             );
                             braces.push(inherited || signal);
                         }
@@ -345,31 +344,6 @@ fn matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
     None
 }
 
-const UNIT_WORDS: [&str; 12] = [
-    "hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "bpm", "deg", "st",
-];
-
-/// A unit word after some spaces (not a newline): its text and where it ends.
-fn spaced_unit(src: &str, from: usize) -> Option<(&str, usize)> {
-    let bytes = src.as_bytes();
-    let mut i = from;
-    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-        i += 1;
-    }
-    if i == from {
-        return None; // no space: not this case
-    }
-    let start = i;
-    while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-        i += 1;
-    }
-    let word = &src[start..i];
-    let ends_word = bytes
-        .get(i)
-        .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
-    (ends_word && UNIT_WORDS.contains(&word)).then_some((word, i))
-}
-
 fn lex_number(src: &str, start: usize) -> (Tok, usize) {
     let bytes = src.as_bytes();
     let digits = |mut i: usize| {
@@ -486,8 +460,8 @@ mod tests {
             toks("clip c { notes: [a b] }")[5],
             Tok::Pattern("a b".into())
         );
-        // instruments, opcodes and tracks are
-        for head in ["instr a(f: hz)", "opcode o(x)", "track t"] {
+        // instruments, functions and tracks are
+        for head in ["instr a(f: hz)", "fn o(x)", "track t"] {
             let t = toks(&format!("{head} {{ [x, y] }}"));
             assert!(t.contains(&Tok::LBracket), "{head}: {t:?}");
             assert!(!t.iter().any(|t| matches!(t, Tok::Pattern(_))), "{head}");
@@ -506,10 +480,11 @@ mod tests {
     }
 
     #[test]
-    fn percent_at_tilde_and_spaced_units() {
+    fn percent_and_units_that_never_follow_a_space() {
         assert_eq!(toks("30%")[0], num(30.0, Some("%")));
-        assert_eq!(toks("2 bars")[0], num(2.0, Some("bars")));
-        assert_eq!(toks("120 bpm")[0], num(120.0, Some("bpm")));
+        assert_eq!(toks("2bars")[0], num(2.0, Some("bars")));
+        assert_eq!(toks("2 bars")[0], num(2.0, None), "a unit is attached or it is a name");
+        assert_eq!(toks("2 bars")[1], Tok::Ident("bars".into()));
         assert_eq!(
             toks("1/2 beat")[0],
             Tok::Num {
@@ -518,20 +493,21 @@ mod tests {
             },
             "a lone fraction isn't a literal"
         );
-        assert_eq!(toks("3 x")[0], num(3.0, None), "only unit words merge");
-        assert_eq!(toks("3 barn")[0], num(3.0, None), "and only whole words");
-        assert_eq!(toks("2\nbars")[0], num(2.0, None), "never across a line");
-        // inside env brackets a space separates steps
-        assert_eq!(toks("env[0 5ms 1 2 beats]")[3], num(5.0, Some("ms")));
+        assert_eq!(toks("env[0 5ms 1 2beats]")[3], num(5.0, Some("ms")));
+    }
+
+    #[test]
+    fn ranges_that_stop_before_their_end() {
         assert_eq!(
-            &toks("@ next 4 bars ~")[..4],
-            [
-                Tok::At,
-                Tok::Ident("next".into()),
-                num(4.0, Some("bars")),
-                Tok::Tilde
-            ]
+            toks("0..<8")[..3],
+            [num(0.0, None), Tok::DotDotLt, num(8.0, None)]
         );
+    }
+
+    #[test]
+    fn brackets_after_const_are_lists() {
+        let t = toks("const taps = [0.25, 0.5]");
+        assert!(t.contains(&Tok::LBracket), "{t:?}");
     }
 
     #[test]

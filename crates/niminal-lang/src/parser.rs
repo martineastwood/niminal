@@ -4,7 +4,7 @@ use crate::lexer::{Tok, Token, lex};
 use crate::performance::{Quantize, QuantizeRelation, QuantizeUnit};
 
 /// A name, its parameters, its `with(...)` options, its body, and where it all is.
-type Definition = (Ident, Vec<ParamDef>, Vec<Ident>, Vec<Arg>, Vec<Stmt>, Span);
+type Definition = (Ident, Vec<ParamDef>, Vec<Arg>, Vec<Stmt>, Span);
 
 pub fn parse(src: &str) -> Result<Vec<Item>, Diagnostic> {
     parse_spanned(src).map(|items| items.into_iter().map(|(item, _)| item).collect())
@@ -84,6 +84,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Colon => "`:`".into(),
         Tok::Dot => "`.`".into(),
         Tok::DotDot => "`..`".into(),
+        Tok::DotDotLt => "`..<`".into(),
         Tok::Eq => "`=`".into(),
         Tok::Arrow => "`->`".into(),
         Tok::EqEq => "`==`".into(),
@@ -236,9 +237,20 @@ impl Parser {
             self.expect(&Tok::LParen)?;
             match method.name.as_str() {
                 "range" => {
-                    lo = self.expr()?;
-                    self.expect(&Tok::DotDot)?;
-                    hi = self.expr()?;
+                    let range = self.expr()?;
+                    let ExprKind::Range {
+                        lo: l,
+                        hi: h,
+                        inclusive: true,
+                    } = range.kind
+                    else {
+                        return Err(Diagnostic::new(
+                            "`range` takes a range, such as `200hz..4khz`",
+                            range.span,
+                        ));
+                    };
+                    lo = *l;
+                    hi = *h;
                 }
                 "smooth" => smooth = Some(self.expr()?),
                 other => {
@@ -318,7 +330,7 @@ impl Parser {
             })
         } else if self.is_keyword("instr") || self.is_keyword("mono") {
             let mono = self.is_keyword("mono");
-            let (name, params, _, options, body, span) = self.definition()?;
+            let (name, params, options, body, span) = self.definition()?;
             Ok(Item::Instr(InstrDef {
                 name,
                 params,
@@ -461,21 +473,23 @@ impl Parser {
                 options,
                 span: start.to(end),
             }))
-        } else if self.is_keyword("opcode") {
-            let (name, params, outputs, options, body, span) = self.definition()?;
-            if let Some(option) = options.first() {
-                return Err(Diagnostic::new(
-                    "an opcode has no options",
-                    option.value.span,
-                ));
+        } else if self.is_keyword("fn") {
+            if !matches!(self.peek_at(1), Tok::Ident(_)) {
+                self.bump();
+                return Err(self.unexpected("a function name"));
             }
-            Ok(Item::Opcode(OpcodeDef {
+            self.function().map(Item::Fn)
+        } else if self.is_keyword("opcode") {
+            Err(Diagnostic::new("`opcode` is now `fn`", self.span())
+                .with_help("write `fn name(x, ...) { ... }`; a function with `state` is a unit generator"))
+        } else if self.is_keyword("const") {
+            self.bump();
+            let name = self.ident("a name for the constant")?;
+            self.expect(&Tok::Eq)?;
+            Ok(Item::Const {
                 name,
-                params,
-                outputs,
-                body,
-                span,
-            }))
+                value: self.expr()?,
+            })
         } else if self.is_keyword("tempo") {
             let start = self.bump().span;
             let value = self.expr()?;
@@ -542,7 +556,7 @@ impl Parser {
         }
     }
 
-    /// The body of `arrangement name { sections: [scene.over(8 bars) ...] }`.
+    /// The body of `arrangement name { sections: [scene.over(8bars) ...] }`.
     fn arrangement(&mut self, name: Ident, start: Span) -> Res<ArrangementDecl> {
         self.expect(&Tok::LBrace)?;
         let mut sections = None;
@@ -642,7 +656,7 @@ impl Parser {
                         format!("`{}` needs a length", scene.name),
                         scene.span,
                     )
-                    .with_help(format!("for example `{}.over(8 bars)`", scene.name)));
+                    .with_help(format!("for example `{}.over(8bars)`", scene.name)));
                 }
                 self.bump();
                 self.expect(&Tok::LParen)?;
@@ -663,7 +677,7 @@ impl Parser {
                 format!("arrangement `{}` has no sections", name.name),
                 name.span,
             )
-            .with_help("add `sections: [scene.over(8 bars) ...]`")
+            .with_help("add `sections: [scene.over(8bars) ...]`")
         })?;
         Ok(ArrangementDecl {
             name,
@@ -676,20 +690,33 @@ impl Parser {
         })
     }
 
-    /// `instr|opcode name(params) { body }`
-    /// `(a: hz = 1khz, b)`
+    /// `(a: hz = 1khz, b, size: const int = 4096)`
     fn params(&mut self) -> Res<Vec<ParamDef>> {
         self.expect(&Tok::LParen)?;
         let mut params = Vec::new();
         while self.peek() != &Tok::RParen {
             let pname = self.ident("a parameter name")?;
-            let ty = self
-                .eat(&Tok::Colon)
-                .then(|| self.type_spec())
-                .transpose()?;
+            let (mut rate, mut ty) = (None, None);
+            if self.eat(&Tok::Colon) {
+                if let Tok::Ident(word) = self.peek().clone() {
+                    let r = match word.as_str() {
+                        "const" => Some(Rate::Const),
+                        "init" => Some(Rate::Init),
+                        "control" => Some(Rate::Control),
+                        _ => None,
+                    };
+                    if let Some(r) = r {
+                        rate = Some((r, self.bump().span));
+                    }
+                }
+                if rate.is_none() || !matches!(self.peek(), Tok::Eq | Tok::Comma | Tok::RParen) {
+                    ty = Some(self.type_spec()?);
+                }
+            }
             let default = self.eat(&Tok::Eq).then(|| self.expr()).transpose()?;
             params.push(ParamDef {
                 name: pname,
+                rate,
                 ty,
                 default,
             });
@@ -701,53 +728,65 @@ impl Parser {
         Ok(params)
     }
 
+    /// `instr name(params) with(options) { body }`
     fn definition(&mut self) -> Res<Definition> {
-        let keyword = self.bump();
-        let start = keyword.span;
-        let what = if matches!(&keyword.tok, Tok::Ident(k) if k == "instr" || k == "mono") {
-            "an instrument name"
-        } else {
-            "an opcode name"
-        };
-        let name = self.ident(what)?;
+        let start = self.bump().span;
+        let name = self.ident("an instrument name")?;
         let params = self.params()?;
-        let mut outputs = Vec::new();
+        if self.peek() == &Tok::Arrow {
+            return Err(Diagnostic::new("an instrument's result is a signal, so it has no `->`", self.span())
+                .with_help("functions name their results with `->`"));
+        }
+        let options = self.with_options()?;
+        let (body, end) = self.block()?;
+        Ok((name, params, options, body, start.to(end)))
+    }
+
+    /// `fn name(params) -> result { body }`
+    fn function(&mut self) -> Res<FnDef> {
+        let start = self.bump().span; // `fn`
+        let name = self.ident("a function name")?;
+        let params = self.params()?;
+        let mut result = FnResult::Inferred;
         if self.peek() == &Tok::Arrow {
             let arrow = self.bump().span;
-            if !matches!(&keyword.tok, Tok::Ident(k) if k == "opcode") {
-                return Err(Diagnostic::new(
-                    "only an opcode can have several outputs",
-                    arrow,
-                ));
-            }
-            self.expect(&Tok::LParen)?;
-            loop {
-                let out = self.ident("the name of an output")?;
-                if outputs.iter().any(|o: &Ident| o.name == out.name) {
-                    return Err(Diagnostic::new(
-                        format!("output `{}` is named twice", out.name),
-                        out.span,
-                    ));
+            if self.peek() == &Tok::LParen {
+                self.bump();
+                let mut outputs: Vec<Ident> = Vec::new();
+                loop {
+                    let out = self.ident("the name of a result")?;
+                    if outputs.iter().any(|o| o.name == out.name) {
+                        return Err(Diagnostic::new(
+                            format!("result `{}` is named twice", out.name),
+                            out.span,
+                        ));
+                    }
+                    outputs.push(out);
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
                 }
-                outputs.push(out);
-                if !self.eat(&Tok::Comma) {
-                    break;
+                self.expect(&Tok::RParen)?;
+                if outputs.len() < 2 {
+                    return Err(Diagnostic::new("`->` lists at least two results", arrow)
+                        .with_help("a function with one result writes its unit, such as `-> hz`, or nothing"));
                 }
-            }
-            self.expect(&Tok::RParen)?;
-            if outputs.len() < 2 {
-                return Err(Diagnostic::new("`->` lists at least two outputs", arrow)
-                    .with_help("an opcode with one output just ends with its value"));
+                result = FnResult::Named(outputs);
+            } else {
+                result = FnResult::Unit(self.ident("a unit such as `hz`, or `(a, b)` for several results")?);
             }
         }
-        let options = if self.is_keyword("with") {
-            self.bump();
-            self.args()?
-        } else {
-            Vec::new()
-        };
+        if self.is_keyword("with") {
+            return Err(Diagnostic::new("a function has no options", self.span()));
+        }
         let (body, end) = self.block()?;
-        Ok((name, params, outputs, options, body, start.to(end)))
+        Ok(FnDef {
+            name,
+            params,
+            result,
+            body,
+            span: start.to(end),
+        })
     }
 
     /// `{ statements }`, returning the statements and the span of the braces.
@@ -769,31 +808,40 @@ impl Parser {
     }
 
     fn type_spec(&mut self) -> Res<TypeSpec> {
-        if let Tok::Num {
-            value: lo,
-            unit: None,
-        } = self.peek().clone()
-        {
-            let start = self.bump().span;
-            self.expect(&Tok::DotDot)?;
-            match self.peek().clone() {
-                Tok::Num {
-                    value: hi,
-                    unit: None,
-                } => {
-                    let end = self.bump().span;
-                    Ok(TypeSpec::Range {
-                        lo,
-                        hi,
-                        span: start.to(end),
-                    })
-                }
-                _ => Err(self.unexpected("the upper bound of the range")),
+        let start = self.span();
+        match self.peek().clone() {
+            Tok::LBracket => {
+                self.bump();
+                let inner = self.type_spec()?;
+                let end = self.expect(&Tok::RBracket)?;
+                Ok(TypeSpec::List(Box::new(inner), start.to(end)))
             }
-        } else {
-            Ok(TypeSpec::Unit(
-                self.ident("a unit such as `hz`, or a range such as `0..1`")?,
-            ))
+            Tok::LParen => {
+                self.bump();
+                let mut names = vec![self.ident("a name for a choice")?];
+                while self.eat(&Tok::Bar) {
+                    names.push(self.ident("a name for a choice")?);
+                }
+                self.expect(&Tok::RParen)?;
+                if names.len() < 2 {
+                    return Err(Diagnostic::new("a choice lists at least two names", start)
+                        .with_help("for example `mode: (low | band | high) = low`"));
+                }
+                Ok(TypeSpec::Choice(names))
+            }
+            Tok::Num { .. } | Tok::Minus => {
+                let lo = self.sum()?;
+                if !matches!(self.peek(), Tok::DotDot) {
+                    return Err(self.unexpected("`..` and the upper bound, as in `0..1`"));
+                }
+                self.bump();
+                let hi = self.sum()?;
+                let span = lo.span.to(hi.span);
+                Ok(TypeSpec::Range { lo, hi, span })
+            }
+            _ => Ok(TypeSpec::Unit(self.ident(
+                "a unit such as `hz`, a range such as `0..1`, a choice or a list type",
+            )?)),
         }
     }
 
@@ -815,6 +863,30 @@ impl Parser {
         }
     }
 
+    /// Is the next thing `name[...] =`? The position of the `]` if so.
+    fn at_index_assign(&self) -> Option<usize> {
+        if !matches!(self.peek(), Tok::Ident(_)) || self.peek_at(1) != &Tok::LBracket {
+            return None;
+        }
+        let mut depth = 0;
+        let mut i = self.pos + 1;
+        while i < self.tokens.len() {
+            match self.tokens[i].tok {
+                Tok::LBracket | Tok::LParen => depth += 1,
+                Tok::RBracket | Tok::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return (self.tokens.get(i + 1).map(|t| &t.tok) == Some(&Tok::Eq)).then_some(i);
+                    }
+                }
+                Tok::Newline | Tok::Eof | Tok::LBrace | Tok::RBrace => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
     fn stmt(&mut self) -> Res<Stmt> {
         if self.at_destructure() {
             self.bump();
@@ -826,6 +898,21 @@ impl Parser {
             self.expect(&Tok::Eq)?;
             return Ok(Stmt::Destructure {
                 names,
+                value: self.expr()?,
+            });
+        }
+        if let Some(close) = self.at_index_assign() {
+            let name = self.ident("a name")?;
+            self.bump(); // `[`
+            let index = self.expr()?;
+            if self.pos != close {
+                return Err(self.unexpected("`]`"));
+            }
+            self.bump(); // `]`
+            self.bump(); // `=`
+            return Ok(Stmt::IndexAssign {
+                name,
+                index,
                 value: self.expr()?,
             });
         }
@@ -924,7 +1011,7 @@ impl Parser {
         }
     }
 
-    /// `{ channels: stereo  quantize: { default: 1 bar  play: cycle } }`
+    /// `{ channels: stereo  quantize: { default: 1bar  play: cycle } }`
     fn config_entries(&mut self) -> Res<ConfigEntries> {
         self.expect(&Tok::LBrace)?;
         let (mut entries, mut quantize) = (Vec::new(), Vec::new());
@@ -976,7 +1063,7 @@ impl Parser {
         };
         let span = self.span();
         match self.peek().clone() {
-            // `bar 5 beat 3` lexes as `bar`, `5 beat`, `3`.
+            // `bar 5 beat 3` lexes as `bar`, `5beat`, `3`.
             Tok::Num {
                 value,
                 unit: Some(u),
@@ -1104,7 +1191,7 @@ impl Parser {
         })
     }
 
-    /// `@ next 4 bars`, `@ in 2 beats`, `@ bar`, `@ now`: when a change lands.
+    /// `@ next 4bars`, `@ in 2beats`, `@ bar`, `@ now`: when a change lands.
     fn quantize(&mut self) -> Res<Option<Quantize>> {
         if self.peek() != &Tok::At {
             return Ok(None);
@@ -1140,14 +1227,14 @@ impl Parser {
                     "cycle" => QuantizeUnit::Cycle,
                     _ => {
                         return Err(self.unexpected(
-                            "`now`, `beat`, `bar`, `cycle`, or a count such as `4 bars`",
+                            "`now`, `beat`, `bar`, `cycle`, or a count such as `4bars`",
                         ));
                     }
                 };
                 self.bump();
                 (1.0, unit)
             }
-            _ => return Err(self.unexpected("when it should land, such as `bar` or `4 bars`")),
+            _ => return Err(self.unexpected("when it should land, such as `bar` or `4bars`")),
         };
         Ok(Some(Quantize {
             relation,
@@ -1173,12 +1260,32 @@ impl Parser {
     }
 
     fn expr(&mut self) -> Res<Expr> {
-        self.nested(Self::comparison)
+        self.nested(Self::or_expr)
+    }
+
+    fn or_expr(&mut self) -> Res<Expr> {
+        let mut lhs = self.and_expr()?;
+        while self.is_keyword("or") {
+            self.bump();
+            let rhs = self.and_expr()?;
+            lhs = logic(LogicOp::Or, lhs, rhs);
+        }
+        Ok(lhs)
+    }
+
+    fn and_expr(&mut self) -> Res<Expr> {
+        let mut lhs = self.comparison()?;
+        while self.is_keyword("and") {
+            self.bump();
+            let rhs = self.comparison()?;
+            lhs = logic(LogicOp::And, lhs, rhs);
+        }
+        Ok(lhs)
     }
 
     /// `a < b`. Comparisons don't chain: `a < b < c` is an error.
     fn comparison(&mut self) -> Res<Expr> {
-        let lhs = self.sum()?;
+        let lhs = self.range()?;
         let op = match self.peek() {
             Tok::Lt => CmpOp::Lt,
             Tok::Gt => CmpOp::Gt,
@@ -1189,13 +1296,13 @@ impl Parser {
             _ => return Ok(lhs),
         };
         self.bump();
-        let rhs = self.sum()?;
+        let rhs = self.range()?;
         if matches!(
             self.peek(),
             Tok::Lt | Tok::Gt | Tok::Le | Tok::Ge | Tok::EqEq | Tok::NotEq
         ) {
             return Err(Diagnostic::new("comparisons don't chain", self.span())
-                .with_help("combine two with a product: `(a < b) * (b < c)` is 1 when both hold"));
+                .with_help("combine two with `and`: `a < b and b < c`"));
         }
         let span = lhs.span.to(rhs.span);
         Ok(Expr {
@@ -1208,90 +1315,82 @@ impl Parser {
         })
     }
 
-    /// `if cond { a } else { b }` (or `else if ...`), after the `if`.
+    /// `lo..hi` or `lo..<hi`.
+    fn range(&mut self) -> Res<Expr> {
+        let lo = self.sum()?;
+        let inclusive = match self.peek() {
+            Tok::DotDot => true,
+            Tok::DotDotLt => false,
+            _ => return Ok(lo),
+        };
+        self.bump();
+        let hi = self.sum()?;
+        let span = lo.span.to(hi.span);
+        Ok(Expr {
+            kind: ExprKind::Range {
+                lo: Box::new(lo),
+                hi: Box::new(hi),
+                inclusive,
+            },
+            span,
+        })
+    }
+
+    /// Is the next token, past any newlines, `else`?
+    fn else_follows(&self) -> bool {
+        let mut i = 0;
+        while self.peek_at(i) == &Tok::Newline {
+            i += 1;
+        }
+        matches!(self.peek_at(i), Tok::Ident(k) if k == "else")
+    }
+
+    /// `if cond { ... } else { ... }` (or `else if ...`), after the `if`. The `else` is optional;
+    /// without one the `if` can only be a statement.
     fn if_expr(&mut self) -> Res<Expr> {
         let start = self.bump().span; // `if`
         let cond = self.expr()?;
-        let then = self.branch()?;
-        self.skip_newlines();
-        if !self.is_keyword("else") {
-            return Err(Diagnostic::new("an `if` needs an `else`", start).with_help(
-                "it makes a value, so both ways need one: `if x > 0 { a } else { b }`",
-            ));
-        }
-        self.bump();
-        let otherwise = if self.is_keyword("if") {
-            self.nested(Self::if_expr)?
+        let (then, mut end) = self.block()?;
+        let otherwise = if self.else_follows() {
+            self.skip_newlines();
+            self.bump(); // `else`
+            if self.is_keyword("if") {
+                let inner = self.nested(Self::if_expr)?;
+                end = inner.span;
+                Some(vec![Stmt::Expr(inner)])
+            } else {
+                let (block, e) = self.block()?;
+                end = e;
+                Some(block)
+            }
         } else {
-            self.branch()?
+            None
         };
-        let span = start.to(otherwise.span);
         Ok(Expr {
             kind: ExprKind::If {
                 cond: Box::new(cond),
-                then: Box::new(then),
-                otherwise: Box::new(otherwise),
+                then,
+                otherwise,
             },
-            span,
+            span: start.to(end),
         })
     }
 
-    /// `for i in 0..8 { expr }`, after seeing `for i in`: the same as `(0..8).map(fn(i) { expr })`.
+    /// `for i in 0..8 { ... }`, after seeing `for i in`.
     fn for_expr(&mut self) -> Res<Expr> {
         let start = self.bump().span; // `for`
-        let param = self.ident("a name for each entry")?;
+        let var = self.ident("a name for each entry")?;
         self.bump(); // `in`
-        let mut list = self.expr()?;
-        if self.eat(&Tok::DotDot) {
-            let hi = self.expr()?;
-            let span = list.span.to(hi.span);
-            list = Expr {
-                kind: ExprKind::Range {
-                    lo: Box::new(list),
-                    hi: Box::new(hi),
-                },
-                span,
-            };
-        }
-        let body = self.branch()?;
-        let span = start.to(self.prev_span());
-        let lambda = Expr {
-            kind: ExprKind::Lambda {
-                params: vec![param],
-                body: Box::new(body),
-            },
-            span,
-        };
-        let receiver = Arg {
-            name: None,
-            value: list,
-            receiver: true,
-        };
-        let function = Arg {
-            name: None,
-            value: lambda,
-            receiver: false,
-        };
+        let iter = self.expr()?;
+        let (body, end) = self.block()?;
         Ok(Expr {
-            kind: ExprKind::Call {
-                name: Ident {
-                    name: "map".to_string(),
-                    span: start,
-                },
-                args: vec![receiver, function],
+            kind: ExprKind::For {
+                var,
+                iter: Box::new(iter),
+                body,
             },
-            span,
+            span: start.to(end),
         })
-    }
-
-    /// `{ expr }`
-    fn branch(&mut self) -> Res<Expr> {
-        self.expect(&Tok::LBrace)?;
-        self.skip_newlines();
-        let e = self.expr()?;
-        self.skip_newlines();
-        self.expect(&Tok::RBrace)?;
-        Ok(e)
     }
 
     fn sum(&mut self) -> Res<Expr> {
@@ -1314,7 +1413,10 @@ impl Parser {
             let op = match self.peek() {
                 Tok::Star => BinOp::Mul,
                 Tok::Slash => BinOp::Div,
-                Tok::Percent => BinOp::Rem,
+                Tok::Percent => {
+                    return Err(Diagnostic::new("`%` only means percent", self.span())
+                        .with_help("for the remainder write `x.mod(y)`"));
+                }
                 _ => return Ok(lhs),
             };
             self.bump();
@@ -1324,6 +1426,15 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Res<Expr> {
+        if self.is_keyword("not") {
+            let start = self.bump().span;
+            let inner = self.nested(Self::unary)?;
+            let span = start.to(inner.span);
+            return Ok(Expr {
+                kind: ExprKind::Not(Box::new(inner)),
+                span,
+            });
+        }
         // a leading `+`, as in `+5st`, changes nothing
         if self.peek() == &Tok::Plus {
             self.bump();
@@ -1440,17 +1551,6 @@ impl Parser {
             Tok::LParen => {
                 self.bump();
                 let inner = self.expr()?;
-                if self.eat(&Tok::DotDot) {
-                    let hi = self.expr()?;
-                    let end = self.expect(&Tok::RParen)?;
-                    return Ok(Expr {
-                        kind: ExprKind::Range {
-                            lo: Box::new(inner),
-                            hi: Box::new(hi),
-                        },
-                        span: span.to(end),
-                    });
-                }
                 let end = self.expect(&Tok::RParen)?;
                 Ok(Expr {
                     span: span.to(end),
@@ -1475,13 +1575,10 @@ impl Parser {
                     }
                 }
                 self.expect(&Tok::RParen)?;
-                let body = self.branch()?;
+                let (body, end) = self.block()?;
                 Ok(Expr {
-                    span: span.to(self.prev_span()),
-                    kind: ExprKind::Lambda {
-                        params,
-                        body: Box::new(body),
-                    },
+                    span: span.to(end),
+                    kind: ExprKind::Lambda { params, body },
                 })
             }
             Tok::Ident(name) if name == "env" && self.peek_at(1) == &Tok::LBracket => self.env(),
@@ -1519,18 +1616,10 @@ impl Parser {
             };
             let value = self.expr()?;
             args.push(Arg {
-                name: name.clone(),
+                name,
                 value,
                 receiver: false,
             });
-            // `range(200hz..4khz)` is `range(200hz, 4khz)`
-            if name.is_none() && self.eat(&Tok::DotDot) {
-                args.push(Arg {
-                    name: None,
-                    value: self.expr()?,
-                    receiver: false,
-                });
-            }
             if !self.eat(&Tok::Comma) {
                 break;
             }
@@ -1621,25 +1710,51 @@ impl Parser {
         }
     }
 
-    fn env_level(&mut self) -> Res<EnvNum> {
-        let n = self
-            .env_number()
-            .map_err(|_| self.env_expected("a level, such as `0` or `-6db`"))?;
-        if n.unit.as_deref().is_some_and(is_time_unit) {
+    /// A literal, a name, or a `(expression)`.
+    fn env_value(&mut self, what: &str) -> Res<EnvValue> {
+        match self.peek() {
+            Tok::Ident(_) => {
+                let id = self.ident(what)?;
+                Ok(EnvValue::Expr(Box::new(Expr {
+                    kind: ExprKind::Name(id.name),
+                    span: id.span,
+                })))
+            }
+            Tok::LParen => {
+                let start = self.bump().span;
+                let inner = self.expr()?;
+                let end = self.expect(&Tok::RParen)?;
+                Ok(EnvValue::Expr(Box::new(Expr {
+                    span: start.to(end),
+                    ..inner
+                })))
+            }
+            _ => self
+                .env_number()
+                .map(EnvValue::Lit)
+                .map_err(|_| self.env_expected(what)),
+        }
+    }
+
+    fn env_level(&mut self) -> Res<EnvValue> {
+        let v = self.env_value("a level, such as `0` or `-6db`")?;
+        if let EnvValue::Lit(n) = &v
+            && n.unit.as_deref().is_some_and(is_time_unit)
+        {
             return Err(
                 Diagnostic::new("expected a level here, found a duration", n.span).with_help(
                     "levels and durations alternate: two durations in a row is an error",
                 ),
             );
         }
-        Ok(n)
+        Ok(v)
     }
 
-    fn env_duration(&mut self) -> Res<(EnvNum, Option<CurveKind>)> {
-        let n = self
-            .env_number()
-            .map_err(|_| self.env_expected("a duration, such as `5ms`"))?;
-        if !n.unit.as_deref().is_some_and(is_time_unit) {
+    fn env_duration(&mut self) -> Res<(EnvValue, Option<CurveKind>)> {
+        let v = self.env_value("a duration, such as `5ms`")?;
+        if let EnvValue::Lit(n) = &v
+            && !n.unit.as_deref().is_some_and(is_time_unit)
+        {
             let help = match &n.unit {
                 None => "levels and durations alternate: two levels in a row is an error; durations need a time unit such as `ms`, `sec` or `beats`".to_string(),
                 Some(u) => format!("`{u}` is not a time unit; durations use `ms`, `sec` or `beats`"),
@@ -1651,7 +1766,7 @@ impl Parser {
         } else {
             None
         };
-        Ok((n, curve))
+        Ok((v, curve))
     }
 
     fn env_expected(&self, what: &str) -> Diagnostic {
@@ -1679,6 +1794,18 @@ impl Parser {
                     .with_help("curves are `exp`, `log` and `curve(k)`"),
             ),
         }
+    }
+}
+
+fn logic(op: LogicOp, lhs: Expr, rhs: Expr) -> Expr {
+    let span = lhs.span.to(rhs.span);
+    Expr {
+        kind: ExprKind::Logic {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        },
+        span,
     }
 }
 
@@ -1789,30 +1916,87 @@ saw_lead(freq: a3) for 1beat
 
     #[test]
     fn range_typed_parameters() {
-        let i = only_instr("instr a(bright: 0..1 = 0.5) { bright }");
-        assert!(
-            matches!(i.params[0].ty, Some(TypeSpec::Range { lo, hi, .. }) if lo == 0.0 && hi == 1.0)
-        );
+        let i = only_instr("instr a(bright: 0..1 = 0.5, cut: 20hz..20khz) { bright }");
+        assert!(matches!(i.params[0].ty, Some(TypeSpec::Range { .. })));
+        assert!(matches!(i.params[1].ty, Some(TypeSpec::Range { .. })));
     }
 
     #[test]
-    fn opcode_definitions_with_state_and_untyped_parameters() {
+    fn functions_with_state_untyped_parameters_and_results() {
         let items = parse_ok(
             "
-opcode one_pole(x, cutoff: hz) {
+fn one_pole(x, cutoff: hz) {
   state y = 0.0
   a = exp(-2 * pi * cutoff / sample_rate)
   y = x * (1 - a) + y * a
   y
 }",
         );
-        let Item::Opcode(o) = &items[0] else { panic!() };
-        assert_eq!(o.name.name, "one_pole");
-        assert!(o.params[0].ty.is_none());
-        assert!(o.params[1].ty.is_some());
-        assert!(matches!(o.body[0], Stmt::State { .. }));
-        assert_eq!(o.body.len(), 4);
-        assert_eq!(err("opcode (x) {}"), "expected an opcode name, found `(`");
+        let Item::Fn(f) = &items[0] else { panic!() };
+        assert_eq!(f.name.name, "one_pole");
+        assert!(f.params[0].ty.is_none());
+        assert!(f.params[1].ty.is_some());
+        assert!(matches!(f.body[0], Stmt::State { .. }));
+        assert_eq!(f.body.len(), 4);
+        assert_eq!(f.result, FnResult::Inferred);
+        let Item::Fn(f) = &parse_ok("fn mtof(n: num) -> hz { 440hz }")[0] else { panic!() };
+        assert!(matches!(&f.result, FnResult::Unit(u) if u.name == "hz"));
+        let Item::Fn(f) = &parse_ok("fn s(x) -> (low, high) { low = x\n high = x }")[0] else { panic!() };
+        assert!(matches!(&f.result, FnResult::Named(n) if n.len() == 2));
+        assert_eq!(err("fn (x) {}"), "expected a function name, found `(`");
+        assert_eq!(err("opcode o(x) { x }"), "`opcode` is now `fn`");
+    }
+
+    #[test]
+    fn rates_choices_and_list_types() {
+        let Item::Fn(f) = &parse_ok(
+            "fn f(a: init hz, b: control = 1, size: const int = 8, mode: (low | high) = low, taps: [num]) { a }",
+        )[0] else {
+            panic!()
+        };
+        assert_eq!(f.params[0].rate.map(|r| r.0), Some(Rate::Init));
+        assert!(matches!(&f.params[0].ty, Some(TypeSpec::Unit(u)) if u.name == "hz"));
+        assert_eq!(f.params[1].rate.map(|r| r.0), Some(Rate::Control));
+        assert!(f.params[1].ty.is_none());
+        assert_eq!(f.params[2].rate.map(|r| r.0), Some(Rate::Const));
+        assert!(matches!(&f.params[3].ty, Some(TypeSpec::Choice(n)) if n.len() == 2));
+        assert!(matches!(&f.params[4].ty, Some(TypeSpec::List(..))));
+    }
+
+    #[test]
+    fn ranges_logic_and_remainder() {
+        let i = only_instr("instr a() { x = 0..<8\n y = 1..8\n z = a > 1 and not b or c\n z }");
+        assert!(matches!(&i.body[0], Stmt::Bind { value: Expr { kind: ExprKind::Range { inclusive: false, .. }, .. }, .. }));
+        assert!(matches!(&i.body[1], Stmt::Bind { value: Expr { kind: ExprKind::Range { inclusive: true, .. }, .. }, .. }));
+        // `or` binds loosest
+        assert!(matches!(&i.body[2], Stmt::Bind { value: Expr { kind: ExprKind::Logic { op: LogicOp::Or, .. }, .. }, .. }));
+        assert_eq!(err("instr a() { 3 % 2 }"), "`%` only means percent");
+    }
+
+    #[test]
+    fn blocks_in_if_and_for_and_index_writes() {
+        let i = only_instr(
+            "instr a() {
+  if x > 0 {
+    y = 1
+    z = 2
+  }
+  for n in 1..8 { out += n }
+  buf[i + 1] = 3
+  v = if c { 1 } else if d { 2 } else { 3 }
+  v
+}",
+        );
+        assert!(matches!(&i.body[0], Stmt::Expr(Expr { kind: ExprKind::If { otherwise: None, then, .. }, .. }) if then.len() == 2));
+        assert!(matches!(&i.body[1], Stmt::Expr(Expr { kind: ExprKind::For { .. }, .. })));
+        assert!(matches!(&i.body[2], Stmt::IndexAssign { .. }));
+        assert!(matches!(&i.body[3], Stmt::Bind { value: Expr { kind: ExprKind::If { otherwise: Some(o), .. }, .. }, .. } if o.len() == 1));
+    }
+
+    #[test]
+    fn constants_are_lists_not_patterns() {
+        let items = parse_ok("const taps = [0.25, 0.5, 0.25]");
+        assert!(matches!(&items[0], Item::Const { value: Expr { kind: ExprKind::Channels(v), .. }, .. } if v.len() == 3));
     }
 
     fn env_of(src: &str) -> EnvLit {
@@ -1833,17 +2017,25 @@ opcode one_pole(x, cutoff: hz) {
         assert_eq!(e.sustain_at, Some(2));
         assert_eq!(e.segments[1].curve, Some(CurveKind::Exp));
         assert_eq!(e.segments[2].curve, Some(CurveKind::Custom(-4.0)));
-        assert_eq!(e.segments[2].level.value, 0.0);
+        assert_eq!(e.segments[2].level.lit().unwrap().value, 0.0);
     }
 
     #[test]
     fn env_without_sustain_and_with_units_and_fractions() {
         let e = env_of("env[200hz 10ms 6khz 1/8beat.log 900hz]");
         assert_eq!(e.sustain_at, None);
-        assert_eq!(e.segments[1].dur.value, 0.125);
-        assert_eq!(e.start.unit.as_deref(), Some("hz"));
+        assert_eq!(e.segments[1].dur.lit().unwrap().value, 0.125);
+        assert_eq!(e.start.lit().unwrap().unit.as_deref(), Some("hz"));
         let e = env_of("env[-18db 2sec -6db]");
-        assert_eq!(e.start.value, -18.0);
+        assert_eq!(e.start.lit().unwrap().value, -18.0);
+    }
+
+    #[test]
+    fn env_steps_from_names_and_expressions() {
+        let e = env_of("env[0 attack 1 | (release * 2).exp 0]");
+        assert!(matches!(&e.segments[0].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Name(_))));
+        assert!(matches!(&e.segments[1].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Binary { .. })));
+        assert_eq!(e.segments[1].curve, Some(CurveKind::Exp));
     }
 
     #[test]

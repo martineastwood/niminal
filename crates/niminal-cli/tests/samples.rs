@@ -413,7 +413,7 @@ fn the_song_example_renders_its_arrangement() {
     let program = compile_in(&dir, &source).unwrap_or_else(|e| panic!("{e}"));
     let options = RenderOptions { arrangement: Some("song".into()), ..Default::default() };
     let out = render(&program, &[], &options).unwrap();
-    // 16 bars at 110bpm is 34.9s, plus the reverb's tail
+    // 16bars at 110bpm is 34.9s, plus the reverb's tail
     let secs = out.len() as f64 / SR as f64;
     assert!((34.9..45.0).contains(&secs), "{secs}");
     assert!(out.peak() > 0.1 && out.peak() <= 1.0);

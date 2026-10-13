@@ -31,7 +31,7 @@ Keep: instruments as templates with one instance per note, opcodes as composable
 | Csound | Problem | niminal |
 | --- | --- | --- |
 | Positional args (`vco2 kamp, kcps, imode…`) | Must memorize argument order | Named args; positional only for an obvious first argument |
-| `i`/`k`/`a` variable prefixes | Rate baked into names | Rates inferred; `.init`, `.control`, `.audio` when you need to force one |
+| `i`/`k`/`a` variable prefixes | Rate baked into names | Rates inferred; `init`, `control` and `const` on parameters, `.init` and `.control` on values |
 | p-fields (`p4`, `p5`) | Anonymous parameters | Typed, named parameters with defaults and units |
 | Globals cleared by hand (`gaRev = 0`) | Easy to forget | Buses that clear themselves every block |
 | GEN routines by number | Cryptic | Named table constructors such as `harmonics([...])` |
@@ -43,7 +43,7 @@ Keep: instruments as templates with one instance per note, opcodes as composable
 
 ## Orchestra: syntax and units
 
-The orchestra is written in the niminal language. It looks a little like Nim and Swift, with Csound's model underneath.
+The orchestra is written in the niminal language. It looks a little like Nim and Swift, with Csound's model underneath. The full rules for functions, instruments, statements, lists and rates are in `language_spec.md`; this section is the overview.
 
 ```
 instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {
@@ -63,7 +63,8 @@ instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {
 - **Typos are caught by usage:** reading an unbound name is an error; a binding that is never read is a warning.
 - **No shadowing of globals:** a local can't share a name with a bus, instrument, track, sample or other top-level declaration.
 - **Buses are written only with `+=`.** `out` is the one name that also allows `=`.
-- **Named arguments** by default; an obvious first argument may be positional (`osc(saw, freq)`).
+- **Named arguments** by default; a callee's leading required parameters may be given in order (`osc(saw, freq)`, `sig.lpf(800hz)`).
+- **Operators:** `+ - * /`, comparisons (1 or 0), `and`, `or`, `not`, ranges `..` (end included) and `..<` (end left out). The remainder is `x.mod(y)`; `%` only means percent.
 - **Method chaining via UFCS:** `x.f(a)` is `f(x, a)`. Opcodes stay freestanding units; the dot is left-to-right wiring.
 - **Paren-less calls only after a dot:** `sig.ifft`, `riff.reverse`. A bare name is a reference, never a call.
 - **Name resolution after a dot:** a field of the value's type first, then a unit, then an opcode; ambiguity is a compile error.
@@ -77,23 +78,23 @@ Strict units, free rates: anything can be patched into anything, and the scale f
 
 - **Rates never block a connection.** Audio into a control parameter upgrades it to audio rate.
 - **Raw signals are unitless** (oscillators, noise, envelopes, LFOs). Unitless × hz = hz; hz + hz = hz; hz + db is an error.
-- **Unit suffixes are unit methods:** `800hz` is `800.hz`, and `noise().abs.hz` attaches a unit.
+- **Unit suffixes are unit methods:** `800hz` is `800.hz`, and `osc(sine, 2hz).abs.hz` attaches a unit.
 - **Related units convert:** note names to hz, db to linear gain, beats to seconds at the current tempo, semitones applied to a frequency.
 - **Unrelated units are an error.** Strip with `.num` to reinterpret deliberately: `(-6db).num.hz`.
 - **Bare literals in unit slots are errors** with a quick fix (`cutoff: 800` → "did you mean `800hz`?"). The one exception: gain parameters accept unitless linear factors (`0.5`) as well as decibels, since multiplying by a number is gain.
 - **Unit names** are at least two characters and reserved: `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`/`beats`, `bar`/`bars`, plus `%`.
-- **Attaching units:** directly to a literal (`440hz`, `4bars`), including rationals (`1/8beat`). Outside brackets a space is fine (`4 bars`). Inside pattern, envelope, line and tracker brackets a space separates steps, so attach the unit or parenthesize: `(1/8 beat)`.
-- **Ranges** use `..`: `20hz..20khz`. A range as a parameter type (`bright: 0..1`) declares a bounded unitless parameter.
+- **Attaching units:** directly to a literal (`440hz`, `4bars`), including rationals (`1/8beat`). Always attached, never after a space: inside brackets a space separates steps, and outside them `3/16 beat` would divide by `16beat`. To give an expression a unit, use the unit method: `(n * 2).bars`.
+- **Ranges** use `..` (end included) or `..<` (end left out): `20hz..20khz`, `0..<8`. A range as a parameter type (`bright: 0..1`, `cut: 20hz..20khz`) declares a bounded parameter.
 
 ```
 lpf(cutoff: 800hz + osc(sine, 110hz) * 600hz)    // audio-rate modulation
-lpf(cutoff: lfo(1/4 beat).range(200hz..4khz))    // mapped range
-lpf(cutoff: noise().abs.hz * 8000)               // attach a unit
+lpf(cutoff: lfo(1/4beat).range(200hz..4khz))    // mapped range
+lpf(cutoff: osc(sine, 2hz).abs.hz * 8000)        // attach a unit
 ```
 
 ### Rates
 
-Signals run at init (once per note), control (once per block), audio (every sample) or spectral (once per FFT frame) rate. The compiler infers rates. To force one, use a rate method: `x.init`, `x.control`, `x.audio`. A parameter that must be fixed at note start declares it before its type: `length: init sec`.
+Values are known while compiling (`const`), at note start (`init`), once per block (`control`), every sample (`audio`) or once per FFT frame (spectral). The compiler infers rates, and works each value out at its own rate. To read a value more slowly, use `x.init` (its value at note start) or `x.control` (once per block). A parameter declares what it needs before its type: `length: init sec`, `size: const int`.
 
 ### Envelopes
 
@@ -115,35 +116,35 @@ perc(decay: 400ms)                                              // env[0 2ms 1 4
 perc(attack: 10ms, decay: 1/4beat)                              // env[0 10ms 1 1/4beat.exp 0]
 ```
 
-`adsr` takes all four, named or in order. `perc` is a one-shot attack and exponential decay, with `attack` defaulting to 2ms. Values are written out (`5ms`, `0.4`), not taken from parameters. A user opcode with one of these names is used in preference.
+`adsr` takes all four, named or in order. `perc` is a one-shot attack and exponential decay, with `attack` defaulting to 2ms. A step can be a number, a name or a `(expression)`, read at note start, so an envelope can follow parameters: `env[0 attack 1 | release 0]`, `adsr(5ms, 120ms, 0.4, release)`. A user function with one of these names is used in preference.
 
 ```
 env[0 3ms 1.2 40ms 0.8 200ms 0.6 | 100ms 0.3 2sec 0]   // multi-segment, two-stage release
 env[0 4beats.log 1 | 2beats 0]                        // tempo-synced swell
 cut = env[200hz 10ms 6khz 300ms.exp 900hz | 400ms 200hz]
-wob = env[0 (1/8 beat) 1 (3/8 beat) 0].loop
+wob = env[0 1/8beat 1 3/8beat 0].loop
 ```
 
 ### Control flow
 
-- **`if`/`else` is an expression:** `if it.freq < 2khz { 0db } else { -14db }`.
+- **`if`/`else` is an expression or a statement:** `if it.freq < 2khz { 0db } else { -14db }`. Each branch is a block.
 - **`for` loops run at compile time**, building graph structure or score material. There are no unbounded loops on the audio thread.
 
 ```
 instr organ(freq: hz) {
   for n in 1..8 {
-    out += osc(sine, freq * n).gain(-3db * n)
+    out += osc(sine, freq * n).gain(-3db * (n - 1))
   }
 }
 ```
 
 ## Orchestra: instruments, voices and opcodes
 
-Instruments are templates; each note is a voice. Opcodes are the unit generators voices are built from, and you can write your own.
+Instruments are templates; each note is a voice. Opcodes are the unit generators voices are built from, and functions let you write your own.
 
 ### Instruments and `out`
 
-An instrument declares typed, named parameters with defaults. Its result is its **last expression**, or **`out`** if the body uses `out`, as with Nim's `result`: `out` starts as silence and can be assigned or added to. Using both in one body is an error. The same rule applies to `opcode` and `fn`. The language has exactly two implicit names: `out` and `it`.
+An instrument declares typed, named parameters with defaults. Its result is its **last expression**, or **`out`** if the body uses `out`, as with Nim's `result`: `out` starts as silence and can be assigned or added to. Using both in one body is an error. The same rule applies to `fn`. The language has three implicit names: `out`, `it` and `note` (the running voice: `note.time`, `note.released`).
 
 ```
 instr saw_lead(freq: hz, amp: db = -6db) {
@@ -160,8 +161,8 @@ instr pad(freq: hz, amp: db = -3db) {
 ```
 
 - **Each `out +=` line is a layer;** commenting one out mutes it.
-- **Instruments return `out`** rather than writing to speakers, so the caller decides where it goes. Calling an instrument or sample inside another instrument gives its audio, as a sub-voice of the enclosing voice.
-- **A voice lives until its envelopes finish,** even past its scheduled duration.
+- **Instruments return `out`** rather than writing to speakers, so the caller decides where it goes. Calling an instrument inside another plays its body as part of the voice.
+- **A voice lives until its envelopes finish,** even past its scheduled duration, and for its `tail:` after its release.
 - **The compiler warns** if an instrument never writes to `out` or a bus.
 
 ### Instrument kinds and voices
@@ -185,71 +186,57 @@ Options go in `with(...)`:
 | `glide: 80ms` (mono) | A change of pitch slides over this long |
 | `pitch: name` | Which parameter is the pitch (default `freq`) |
 | `compensate: false` | Opts out of latency compensation |
-| `quantize: 1 beat` | When redefinitions land |
+| `tail: 2sec` | How long the voice keeps sounding after its release |
+| `quantize: 1beat` | When redefinitions land |
 
 - **Lifetimes:** a voice ends naturally (released and envelopes finished) or forcibly (choked, stolen, replaced), always with a short global fade so it never clicks.
 - **Parameters are signals.** In a legato `mono`, a new note updates parameters on the running voice, which is what carries `glide`. The same mechanism gives per-note expression (MPE, aftertouch).
 - **Pitch:** the parameter named `freq` is the pitch by convention. This is what `same_note`, mono priority, `keys.note` and an unqualified `transpose` act on.
 - **No voice limits by default.** A global emergency brake (`config { max_voices: 512 }`) steals the quietest voices and warns. Voice pools grow on a background thread.
 
-### Opcodes (user-defined)
+### Functions
 
-`opcode` defines a unit generator in niminal: it runs in the audio graph, can hold per-voice state between samples, and chains like any built-in. Stateful opcodes run sample by sample, fused into the graph like Csound UDOs with `setksmps 1`, or Faust.
+`fn` defines reusable code: a function without state works at any rate, even while compiling; one with `state` or `prev` is a unit generator that runs sample by sample, with its own state for each call and voice, like a Csound UDO with `setksmps 1`, or Faust. Work that only depends on note-start or per-block values runs at that rate. See `language_spec.md` for the full rules.
 
 ```
-opcode one_pole(x, cutoff: hz) {
-  state y = 0.0
-  a = exp(-2 * pi * cutoff / sample_rate)
+fn one_pole(x, cutoff: hz) {
+  state y = 0
+  a = exp(-2 * pi * cutoff / sample_rate)       // worked out once per note when cutoff is fixed
   y = x * (1 - a) + y * a
   y
 }
 
-opcode drive(x, amount: 0..1 = 0.5) {
+fn drive(x, amount: 0..1 = 0.5) {
   (x * (1 + amount * 9)).tanh
 }
 
-out = osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz)
+out = osc(saw, freq).drive(amount: 0.3).one_pole(800hz)
 ```
 
-- **Decisions:** `if cond { a } else { b }` is an expression (`else if` chains). A comparison (`< > <= >= == !=`) gives 1 or 0, and `if` takes any plain number, so two conditions combine by multiplying: `if (x > 0.2) * (x < 0.6) { a } else { b }`. Both ways are worked out every sample and one is kept, so a branch holds a single expression (no `state` changes inside). The two ways must have the same unit, and comparisons are between values of one unit.
-- **Math:** `sin cos tan tanh exp log sqrt abs sign floor ceil fract` take a plain number; `min(a, b)`, `max(a, b)` and `clamp(x, lo, hi)` take values of one unit; `pow(x, y)` takes plain numbers. The one-argument ones also work in instruments. **`%`** is the remainder (with the sign of the divisor, 0 for a divisor of 0): write spaces around it, since `3%2` reads as a percentage. A zero divisor in `/` also gives 0 rather than infinity.
-- **Instruments** can use `if`, comparisons, `%` and division by a changing signal too, as nodes in the graph: `.gain(if f < 1khz { 0db } else { -12db })`. A condition known while compiling picks its side then and there.
-- **The last expression is the output.** `state` declares a variable that persists between samples, per call site and per voice.
-- **Multiple outputs** are named after `->`, the body defines each of them, and they come back as fields. (Built: each result runs the body once, so an opcode with three results costs three times as much; used on its own, the first result stands for the opcode.)
+- **Parameters** have a unit, a range (`0..1`), a choice (`mode: (low | band | high)`) or a list type (`taps: [num]`), and a rate (`init`, `control`, `const`) when the function needs one. An untyped parameter takes the unit of each call.
+- **Results:** the last expression, or `out`; `-> hz` declares the unit; several results are named after `->` and read as fields. The body runs once for all of them.
 
 ```
-opcode svf(x, cutoff: hz, res: 0..1 = 0.5) -> (low, band, high) { ... }
+fn svf(x, cutoff: hz, res: 0..1 = 0.5) -> (low, band, high) { ... }
 
-f = noise().svf(cutoff: 2khz)
+f = osc(saw, 110hz).svf(cutoff: 2khz)
 out = f.band
 ```
 
-- **Opcodes can call opcodes**, user-defined ones defined before them and built-in ones such as `lpf`, `osc` and `delay`. A user-defined callee's code is copied in, with its own state per call; one with several results is bound to a name and read as `f.band`, as in an instrument. A built-in is run a sample at a time, with state of its own for each call, and takes its arguments as it does in an instrument (`delay` still needs `max:` as a constant); `pan` and `to_layout` work on channels, so they stay out. **Trigger inputs** are not a separate kind: an edge is `(x > 0.5) * (prev(x) <= 0.5)`. Declared latency is not built: no opcode looks ahead, so none has latency to declare.
+- **State:** `state y = 0` persists between samples; `prev(x)` is `x` one sample ago, so `y = x + prev(y) * 0.5` is a loop on one line. `state buf = zeros(4096)` is a buffer, written with `buf[i] = y` and read with `buf.at(pos)`.
+- **Functions call functions,** in any order, and built-in opcodes, each with state of its own. A function has no side effects: it doesn't send to buses.
+- **Lists** (`[a, b, c]`, ranges, `for`, `.map`) exist while compiling; indexes wrap; `const` defines a table shared by every voice.
 - **Rust plugins** implement the same opcode trait, so built-in, niminal and plugin opcodes look identical to the user.
-
-### Functions
-
-`fn` is a plain function that runs at compile or load time: for building structure, helpers and generating score material. It has no audio state.
-
-```
-fn fifths(root: note, count: n) {
-  for i in 0..count { root + (7st * i) }
-}
-```
-
-Anonymous functions are `fn(a, b) { a * b }`; `it` covers the one-argument case.
-
-**Lists in instruments (built):** a list is its own compile-time value, not a set of channels. `[a, b, c]` and `(0..8)` (whole numbers, end excluded) make lists, entries can be anything including other lists, and a list has no length limit. Arithmetic goes entry by entry (`[1, 2, 3] * 2`; two lists must be the same length). `list.map(fn(x) { ... })` or `for x in list { ... }` runs the body once per entry while compiling, so each entry becomes its own branch of the graph; `list.sum` adds the entries into one signal, `list.len` counts them, `list[i]` picks one (from 0, the index known while compiling), and `[l, r] = list` names entries. A list becomes a multichannel signal wherever a signal is needed (an `out`, an argument such as `osc(saw, [f, f * 2])`), one channel per entry, which is where the 16-channel limit applies; the entries then share a unit and must be one channel each. `signal.split` goes the other way, making a list of a signal's channels. Example: `(for i in 0..7 { osc(saw, f * (1 + (i - 3) * 0.004)) }).sum`. The function takes one parameter, which can't reuse a name already in scope. Opcodes take no lists yet. Not built: named `fn` items, `it` as the parameter, multi-statement function bodies.
 
 ### Scheduling from instruments
 
-An instrument can schedule other notes, the basis of generative writing, as with Csound's `schedule`:
+An instrument can schedule other notes, the basis of generative writing, as with Csound's `schedule` (not built yet):
 
 ```
 instr echo_note(freq: hz, depth: n = 4) {
   out = pluck(freq: freq)
   if depth > 0 {
-    schedule(echo_note(freq: freq * 3/2, depth: depth - 1), in: 1/8 beat)
+    schedule(echo_note(freq: freq * 3/2, depth: depth - 1), in: 1/8beat)
   }
 }
 ```
@@ -262,7 +249,7 @@ Scheduled notes go through the score model like any other event, so they are log
 | --- | --- | --- |
 | Constant | Stays constant | `amp: -6db` |
 | Pattern | Each note gets its own value, fixed at note start | `amp: [-6db -12db -9db]` |
-| Signal | Stays live; running notes follow it | `amp: lfo(2 beats).range(-12db..0db)` |
+| Signal | Stays live; running notes follow it | `amp: lfo(2beats).range(-12db..0db)` |
 
 ### Branching and multichannel
 
@@ -275,7 +262,7 @@ From simplest to most general:
 ```
 out = src.split(
   left:  it.lpf(cutoff: 800hz),
-  right: it.delay(time: 3/16 beat).hpf(cutoff: 200hz),
+  right: it.delay(time: 3/16beat).hpf(cutoff: 200hz),
 )
 
 out = drums.split(dry: it, wet: it.compress(ratio: 8, threshold: -30db)).sum
@@ -314,7 +301,7 @@ bus space: stereo {
 
 The compiler builds a dependency graph from bus reads and writes, and sorts it: all writers to a bus run before anything that reads it, within the same block. Buses add no latency, file order is irrelevant, and redefining anything re-sorts the graph. This replaces Csound's numeric instrument order.
 
-**Feedback between buses** has no valid order, so the compiler rejects it and names the loop. Break it explicitly with `prev`, which costs one block (32 samples by default, under 1 ms):
+**Feedback between buses** has no valid order, so the compiler rejects it and names the loop. Break it explicitly with `prev`, which costs one block (32 samples by default, under 1ms):
 
 ```
 track room {
@@ -323,17 +310,17 @@ track room {
 }
 ```
 
-Inside a single voice or opcode, feedback can be sample-accurate: `prev(x)` is exactly one sample there.
+Inside a voice or a function, feedback is sample-accurate: `prev(x)` is exactly one sample there.
 
 ### Delay lines
 
-- **Simple opcode:** `sig.delay(time: 3/16 beat, feedback: 0.4)`. Beat-based times follow tempo changes.
+- **Simple opcode:** `sig.delay(time: 3/16beat, feedback: 0.4)`. Beat-based times follow tempo changes.
 - **Delay lines as values** replace Csound's `delayr`/`deltap`/`delayw`. A delay line is a bus that remembers: written with `+=`, read with taps.
 
 ```
 line = delay_line(max: 2sec)
-tap1 = line.tap(3/16 beat)
-tap2 = line.tap(5/16 beat, interp: cubic)
+tap1 = line.tap(3/16beat)
+tap2 = line.tap(5/16beat, interp: cubic)
 
 line += sig + tap1.lpf(cutoff: 3khz).gain(-6db)   // filtered feedback
 out = sig + [tap1, tap2]
@@ -378,15 +365,15 @@ All samples are tables, but not all tables are samples, so each has a surface de
 
 | Declaration | What it is | Callable |
 | --- | --- | --- |
-| `table` | Generic, immutable data: wavetables, lookup tables, control curves, impulse responses | No |
+| `const` | Generic, immutable data: wavetables, lookup tables, control curves, impulse responses | No |
 | `sample` | Playable audio: a table plus channel layout, loop points, length in beats or BPM, choke group; or a multisampled instrument | Yes, as an instrument |
 | `kit` | A folder of samples, addressed by name | Its samples are |
 | `buffer` | Writable data; audio buffers play like samples | Audio buffers are |
 
 ```
-table saw8   = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
-table shaper = curve([0 0.2 0.7 1], size: 1024)
-table hall   = file("irs/hall.wav")
+const saw8   = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
+const shaper = curve([0, 0.2, 0.7, 1], size: 1024)         // not built yet
+const hall   = file("irs/hall.wav")                       // not built yet
 
 sample kick  = "drums/kick.wav"
 sample hh    = "drums/hh_open.wav" with(choke: hats)
@@ -449,7 +436,7 @@ fills = grid[.... .... ..xx xxxx]
 
 out = drums.stutter(
   on:    fills.trig,
-  size:  [(1/16 beat) (1/32 beat) (1/64 beat) (1/128 beat)],
+  size:  [1/16beat 1/32beat 1/64beat 1/128beat],
   pitch: env[0st 1beat +12st],
 )
 ```
@@ -472,7 +459,7 @@ One opcode per job, with variants as parameters.
 | Spectral | `fft`, `ifft`, `pitch_shift`, `freeze`, `blur`, `spectral_gate`, `morph`, `cross`, `spectral_mask`, `map_bins` |
 
 ```
-out = piano_take.grains(density: 40, size: 80ms, position: lfo(8 beats).range(0..1), spread: 0.3)
+out = piano_take.grains(density: 40, size: 80ms, position: lfo(8beats).range(0..1), spread: 0.3)
 ```
 
 ## Score model
@@ -496,7 +483,7 @@ The engine understands one score model, as data. Every notation and client produ
 
 ```
 arrangement song {
-  sections: [dawn.over(16 bars) build.over(32 bars) theme.over(24 bars) dissolve.over(16 bars)]
+  sections: [dawn.over(16bars) build.over(32bars) theme.over(24bars) dissolve.over(16bars)]
   tempo:    env[84bpm 64bars 84bpm 8bars.log 96bpm]   // over the whole piece, in bars
   meter:    [4/4 4/4 7/8 4/4].per_section
   bass.tone: env[800hz 88bars 3khz]                    // a parameter of `track bass(tone: hz = ..)`
@@ -573,7 +560,7 @@ Mini-notation, grids and envelopes share these symbols, and the example clients 
 
 ### Mini-notation
 
-Steps divide one cycle evenly (one bar by default). `[c2 g2 bb2 f2]` is four steps per cycle; `.over(2 bars)` stretches a cycle.
+Steps divide one cycle evenly (one bar by default). `[c2 g2 bb2 f2]` is four steps per cycle; `.over(2bars)` stretches a cycle.
 
 Beyond the shared symbols: `a*2` and `a/2` change a step's speed (a number or a pattern, `a*<2 3>`); `a!3` repeats a step and `a@3` makes it three steps long; `a(3,8,2)` spreads hits Euclidean-style (negative counts swap hits and rests); `a?` and `a?0.3` drop a step at random; `[a | b]` picks one at random each cycle; `<a b, c d e>` runs several alternations at once; `{a b c}%4` is polymeter, lists of different lengths read at a shared step rate. Randomness is seeded, so the same code always plays the same way.
 
@@ -635,12 +622,12 @@ Naming rules: say what it does; keep the accepted term when there is one; one na
 | --- | --- | --- |
 | `fast`, `slow` | `fast(2)`, `slow(2)` | Change speed |
 | `rev` | `reverse` | Play each cycle backwards |
-| `<~`, `~>` | `shift(1/8 beat)` | Move earlier or later |
+| `<~`, `~>` | `shift(1/8beat)` | Move earlier or later |
 | `every` | `every(4, it.reverse)` | Change every nth cycle |
 | `sometimesBy` | `sometimes(25%, it.fast(2))` | Change a random share of the notes |
 | `degradeBy` | `thin(20%)` | Randomly drop events |
 | `euclid` | `euclid(hits: 5, steps: 8)` | Spread hits evenly |
-| `superimpose`, `off` | `layer(after: 1/8 beat, it.transpose(+12st))` | Add a (delayed) transformed copy |
+| `superimpose`, `off` | `layer(after: 1/8beat, it.transpose(+12st))` | Add a (delayed) transformed copy |
 | `jux` | `left_right(it.reverse)` | Original left, changed copy right |
 | `struct` | `rhythm(grid[x..x ..x.])` | Play values to a rhythm |
 | `ply` | `repeat_each(2)` | Repeat every event |
@@ -705,9 +692,9 @@ step: 1/4beat
 ```
 // theme.line
 track: keys
-e4 1beat   g4 (1/2 beat)   a4 (1/2 beat)   b4 2beats
+e4 1beat   g4 1/2beat   a4 1/2beat   b4 2beats
 ~ 1beat    [e4, g4, b4] 3beats
-d5 (3/2 beat)   c5 (1/2 beat)   b4 4beats
+d5 3/2beat   c5 1/2beat   b4 4beats
 gain: env[-18db 6beats -6db 6beats -12db]
 ```
 
@@ -774,7 +761,7 @@ scene chorus { bass: bass.transpose(+5st), lead: answer }
 scene outro  { lead: spread }
 
 verse.start
-chorus.start @ next 4 bars
+chorus.start @ next 4bars
 ```
 
 - **A scene is the whole picture.** Starting one starts the clips it lists and stops every other part, so leaving a part out silences it. `~` still names a part as silent. To add a fill for a bar, put it on a part with `lead.play(fill)`.
@@ -812,31 +799,31 @@ bass.clear                       // takes off all of them
 - **Starting the part fresh clears them:** `bass.start`, `bass.play(...)` or starting a scene that has it.
 - **Bindings are reactive:** re-evaluating `riff = ...` updates every part playing it, each at its own quantize point, and keeps the changes made to the part.
 - **`thin` is stable:** the same amount drops the same notes wherever it is written, so undoing another change does not shuffle which notes go.
-- **Timing.** A trailing `@ next 4 bars` says when the change lands. A leading `at +4 bars` says when in the timeline a command happens, counted from when the code lands, so a section reads as a timeline and can be submitted again at any time. `at bar 5` is bar 5 on the session's clock.
+- **Timing.** A trailing `@ next 4bars` says when the change lands. A leading `at +4bars` says when in the timeline a command happens, counted from when the code lands, so a section reads as a timeline and can be submitted again at any time. `at bar 5` is bar 5 on the session's clock.
 - **Live only.** In a file the stack commands do nothing, so a scratch file can sit next to the song; write the change into the clip to make it part of the piece.
 
 ### Quantized changes
 
-Every change lands on a musical boundary. Code compiles immediately; the result waits. The quantum is set at four levels, most specific first: per evaluation (`@ next 4 bars`, or the editor's "now" shortcut), per definition (`with(quantize: 1 beat)`), per kind in `config`, and a global default.
+Every change lands on a musical boundary. Code compiles immediately; the result waits. The quantum is set at four levels, most specific first: per evaluation (`@ next 4bars`, or the editor's "now" shortcut), per definition (`with(quantize: 1beat)`), per kind in `config`, and a global default.
 
 ```
 config {
   quantize: {
-    default: 1 bar
+    default: 1bar
     play:    cycle      // each track's clip cycle
-    instr:   1 beat     // instrument redefinitions
-    track:   1 bar      // track redefinitions
+    instr:   1beat     // instrument redefinitions
+    track:   1bar      // track redefinitions
     ctl:     now
-    tempo:   1 bar
+    tempo:   1bar
   }
 }
 
-tempo 124bpm @ next bar over 2 bars
+tempo 124bpm @ next bar over 2bars
 ```
 
 The settings in `config` take effect once the `config` itself has landed. A tempo ramp is a run of ordinary tempo changes, four to a beat, queued when the line is evaluated, and a new tempo keeps every running clip where it is in its bar. A file starts at the tempo it names; the ramp is for live sets.
 
-- **Boundaries:** `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. `@ next 4 bars` aligns to the 4-bar grid; `@ in 4 bars` counts from now.
+- **Boundaries:** `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. `@ next 4bars` aligns to the 4-bar grid; `@ in 4bars` counts from now.
 - **One evaluation is one transaction:** all its changes land together, at the coarsest boundary among them.
 - **Last write wins** for pending changes; the editor can cancel them and shows a countdown.
 - **Missed boundaries** (slow compile or sample loading) land on the next one, and the editor says so.
@@ -981,12 +968,13 @@ None of these can be used as a name.
 
 | Kind | Names |
 | --- | --- |
-| Declarations | `instr`, `mono`, `opcode`, `fn`, `state`, `bus`, `buffer`, `table`, `sample`, `kit`, `ctl`, `track`, `clip`, `scene`, `arrangement`, `config`, `use`, `as`, `with` |
+| Declarations | `instr`, `mono`, `fn`, `const`, `state`, `bus`, `buffer`, `sample`, `kit`, `ctl`, `track`, `clip`, `scene`, `arrangement`, `config`, `use`, `as`, `with` |
 | Performance and score | `start`, `stop`, `play`, `mute`, `unmute`, `solo`, `unsolo`, `undo`, `clear`, `set`, `hush`, `panic`, `reset`, `new`, `freeze`, `unfreeze`, `tempo`, `meter`, `at`, `for`, `over`, `next`, `now`, `cycle` |
 | Control flow | `if`, `else`, `for`, `in` |
+| Logic and rates | `and`, `or`, `not`, `true`, `false`, `init`, `control` |
 | Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }` |
 | Units | `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
-| Implicit names | `out`, `it` |
+| Implicit names | `out`, `it`, `note` |
 | Universal controls | `pan`, `gain`, `to`, `dur`, `nudge` |
 
 ## Examples
@@ -1021,10 +1009,10 @@ instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {
 }
 ```
 
-### Opcodes from scratch
+### Functions from scratch
 
 ```
-opcode dc_block(x) {
+fn dc_block(x) {
   state x1 = 0.0
   state y1 = 0.0
   y = x - x1 + 0.995 * y1
@@ -1033,7 +1021,7 @@ opcode dc_block(x) {
   y
 }
 
-opcode fold(x, amount: 0..1 = 0.5) {
+fn fold(x, amount: 0..1 = 0.5) {
   (x * (1 + amount * 8)).sin
 }
 
@@ -1069,7 +1057,7 @@ clip bass {
   instrument: pluck
   notes: [c2 ~ c2 eb2 ~ g1 bb1 ~]
   gain:  [0db -6db -3db]
-  tone:  env[400hz (1 bar).exp 2khz]
+  tone:  env[400hz 1bar.exp 2khz]
 }
 
 groove = grid {
@@ -1084,10 +1072,10 @@ perc.play(groove.every(4, it.thin(30%)))
 // later, one line at a time
 bass.set(notes: [c2 c2 eb2 g2].fast(2))
 perc.mute @ next bar
-perc.unmute @ next 4 bars
+perc.unmute @ next 4bars
 bass.reverse
 bass.undo
-tempo 128bpm @ next bar over 8 bars
+tempo 128bpm @ next bar over 8bars
 ```
 
 ### A passage from a client
@@ -1117,14 +1105,14 @@ track room { out = hall.reverb(room: 0.9, model: hall) }
 
 track keys {
   instrument = piano
-  out = it.pan(azimuth: lfo(16 beats).range(-120deg..120deg), spread: 0.4)
+  out = it.pan(azimuth: lfo(16beats).range(-120deg..120deg), spread: 0.4)
   hall += out.gain(-10db)
 }
 
 track cloud(level: db = -60db) {
   out = piano_take
-    .grains(density: 30, size: 120ms, position: lfo(32 beats).range(0..1), spread: 0.6)
-    .pan(azimuth: lfo(24 beats).range(0deg..360deg))
+    .grains(density: 30, size: 120ms, position: lfo(32beats).range(0..1), spread: 0.6)
+    .pan(azimuth: lfo(24beats).range(0deg..360deg))
     .gain(level)
   hall += out.gain(-6db)
 }
@@ -1134,7 +1122,7 @@ fills = grid[.... .... .... ..xx]
 track beat {
   out = it.stutter(
     on:    fills.trig,
-    size:  [(1/16 beat) (1/32 beat) (1/64 beat) (1/128 beat)],
+    size:  [1/16beat 1/32beat 1/64beat 1/128beat],
     pitch: env[0st 1beat +12st],
   )
 }
@@ -1146,9 +1134,9 @@ scene awakening { keys: theme, beat: groove }
 scene dissolve  { keys: theme.retrograde.slow(4), beat: groove.thin(60%) }
 
 arrangement binary {
-  sections:    [dawn.over(16 bars) awakening.over(32 bars) dissolve.over(16 bars)]
-  tempo:       env[84bpm (40 bars) 84bpm (8 bars).log 92bpm]
-  cloud.level: env[-60db (16 bars) -12db (32 bars) -12db (16 bars) -60db]
+  sections:    [dawn.over(16bars) awakening.over(32bars) dissolve.over(16bars)]
+  tempo:       env[84bpm 40bars 84bpm 8bars.log 92bpm]
+  cloud.level: env[-60db 16bars -12db 32bars -12db 16bars -60db]
 }
 ```
 
@@ -1186,5 +1174,5 @@ The design history and earlier decisions live in the v1 doc. These are new to v2
 - [x] **Numbered sample variations:** decided. Field syntax (`snare.2`) on kit entries that are folders, plus a `variation` lane on clips.
 - [x] **Browser playground:** decided. After v1, with a WebAssembly engine build in CI from day one.
 - [x] **Parts instead of required tracks:** decided. A clip with an `instrument:` is a part, with a track of its own name made for it. Tracks remain for effects, sends and bus-only channels. A scene starts its clips and stops every other part. The commands are `thing.verb`; the older statement forms (`launch`, `play t = x`, `mute t`) are gone.
-- [x] **Timing syntax:** decided. Keep two prefixes with two jobs: a trailing `@ next 4 bars` says when a change lands, and a leading `at +4 bars` says when in the timeline a command happens. Not a `.bars(4)` chain, because dots after a part already mean "change what it plays".
+- [x] **Timing syntax:** decided. Keep two prefixes with two jobs: a trailing `@ next 4bars` says when a change lands, and a leading `at +4bars` says when in the timeline a command happens. Not a `.bars(4)` chain, because dots after a part already mean "change what it plays".
 - [x] **Live changes:** decided. They stack in the order made on the part, with `undo` and `clear`, and starting the part fresh clears them. Removing one change by name (`undo(reverse)`) and changes addressed by clip name for clips that are not parts are left until dogfooding asks for them.

@@ -6,7 +6,7 @@ ctl cutoff = midi.cc(21).range(200hz..4khz)
 
 /// Soft-clips a signal; `amount` is how hard it is driven.
 /// Hover over `drive` below to see this text.
-opcode drive(x, amount = 2) {
+fn drive(x, amount = 2) {
   tanh(x * amount)
 }
 
@@ -36,7 +36,7 @@ keys.play([c3 e3 g3 b3])
 //      osc(saw, 440hz).lpf(cutoff: 1khz,   -> res: only (cutoff is used)
 //      osc(saw, 440hz).drive(  -> amount:
 //      800   -> unit suffixes (hz khz db ms sec beat bar deg st)
-//      lea   -> lead (an instrument you defined) next to keywords and opcodes
+//      lea   -> lead (an instrument you defined) next to keywords and functions
 // 6. HALF-TYPED CODE: add a line `track bass { instrument = ` and ask for completion
 //    after the `=`. `lead` should still be offered even though the file doesn't parse.
 // 7. DOC COMMENTS: add a `// text` line above `track keys` or edit the one above `lead`,

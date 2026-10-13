@@ -18,7 +18,7 @@ const song = example('song.nml').split('\n').filter((l) => !l.startsWith('//')).
 const features = [
   ['01', 'Live', 'Send code to a running daemon from VS Code, the REPL or a socket. Changes land on the beat you choose, and every input is logged by sample.'],
   ['02', 'Offline', 'The same file renders to audio with one command. Sessions replay from their log to identical samples.'],
-  ['03', 'Extensible', 'Write opcodes and instruments in the language. They get types, units, hover docs and diagnostics like the built-ins.'],
+  ['03', 'Extensible', 'Write functions and instruments in the language, down to the sample. They get types, units, hover docs and diagnostics like the built-ins.'],
   ['04', 'Musical', 'Rational time, mini-notation, clips, scenes and arrangements. One pattern cycle is one bar.'],
 ];
 ---
@@ -169,7 +169,7 @@ const features = [
 <span class="p">$</span> niminal daemon examples/groove.nml --midi
 
 <span class="c"># change the music, landing four bars from now</span>
-<span class="p">$</span> niminal send 'chorus.start' --quantize "next 4 bars"
+<span class="p">$</span> niminal send 'chorus.start' --quantize "next 4bars"
 
 <span class="c"># later: replay the whole session, sample for sample</span>
 <span class="p">$</span> niminal render --replay ~/.niminal/sessions/1760112000.log --out set.wav</code></pre>

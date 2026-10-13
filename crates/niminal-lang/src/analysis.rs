@@ -16,7 +16,7 @@ pub enum StatementKind {
     Note,
 }
 
-/// `tempo 124bpm @ next bar over 8 bars`: the tempo to reach and how long to take.
+/// `tempo 124bpm @ next bar over 8bars`: the tempo to reach and how long to take.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ramp {
     pub bpm: f64,
@@ -56,7 +56,7 @@ pub enum StatementData {
     },
     Command {
         /// Whether the statement says when it happens (`at bar 5 ...`).
-        /// At a fixed time on the session's clock. `at +2 bars` is not: it is after the code lands.
+        /// At a fixed time on the session's clock. `at +2bars` is not: it is after the code lands.
         has_at: bool,
         /// `new`: a live session forgets what it was sent before this statement.
         clears: bool,
@@ -314,7 +314,8 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                     },
                 )
             }
-            Item::Opcode(d) => simple_def(text, offset, format!("opcode:{}", d.name.name)),
+            Item::Fn(d) => simple_def(text, offset, format!("fn:{}", d.name.name)),
+            Item::Const { name, .. } => simple_def(text, offset, format!("const:{}", name.name)),
             Item::MidiOut(d) => simple_def(text, offset, format!("instr:{}", d.name.name)),
             Item::Sample(d) => simple_def(
                 text,
@@ -431,7 +432,7 @@ tempo 120bpm @ next bar
 instr a(f: hz) { osc(sine, f) }
 riff = [c4 e4]
 clip c { notes: [c4] }
-lead.play(riff.fast(2)) @ next 4 bars
+lead.play(riff.fast(2)) @ next 4bars
 lead.mute
 a(f: 440hz) for 1beat
 ";
@@ -460,8 +461,8 @@ a(f: 440hz) for 1beat
         assert!(s[5].plays().is_none());
         assert_eq!(s[6].kind(), StatementKind::Note);
         assert!(!s[6].has_at());
-        assert!(analyze("at 2 bars lead.mute").unwrap()[0].has_at());
-        let later = &analyze("at +2 bars unsolo").unwrap()[0];
+        assert!(analyze("at 2bars lead.mute").unwrap()[0].has_at());
+        let later = &analyze("at +2bars unsolo").unwrap()[0];
         assert!(!later.has_at(), "relative to when the code lands");
         assert_eq!(later.kind(), StatementKind::Command);
         assert!(analyze("at 1beat a(f: 1hz) for 1beat").unwrap()[0].has_at());

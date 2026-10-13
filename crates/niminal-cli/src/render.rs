@@ -257,7 +257,7 @@ pub enum End {
 }
 
 /// Render a file the way the daemon would play it: sent to a session all at once, then run for `end`.
-/// This is how a tempo ramp (`tempo 140bpm @ next bar over 8 bars`) is heard, since a ramp is a run of
+/// This is how a tempo ramp (`tempo 140bpm @ next bar over 8bars`) is heard, since a ramp is a run of
 /// changes made as the music goes. Everything still sounding when the time is up rings out.
 ///
 /// `source` has its `use` lines already joined in. The file's own `tempo` stays the starting tempo; each

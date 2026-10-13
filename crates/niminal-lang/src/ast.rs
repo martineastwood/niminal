@@ -16,7 +16,12 @@ pub enum Item {
         value: Expr,
         input: Option<ControlInput>,
     },
-    Opcode(OpcodeDef),
+    Fn(FnDef),
+    /// `const name = expr`: a value known while compiling, such as a number, a range or a table.
+    Const {
+        name: Ident,
+        value: Expr,
+    },
     Bus(BusDecl),
     Track(TrackDecl),
     Sample(SampleDecl),
@@ -55,7 +60,7 @@ pub enum InputSource {
     Osc(String),
 }
 
-/// `tempo 124bpm`, optionally `@ next bar over 2 bars` for a change while playing.
+/// `tempo 124bpm`, optionally `@ next bar over 2bars` for a change while playing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TempoStmt {
     pub value: Expr,
@@ -69,7 +74,7 @@ pub struct TempoStmt {
 pub struct NamedBlock {
     pub name: Ident,
     pub entries: Vec<(Ident, Expr)>,
-    /// `with(quantize: 1 bar)` after the block.
+    /// `with(quantize: 1bar)` after the block.
     pub options: Vec<Arg>,
     pub span: Span,
 }
@@ -83,7 +88,7 @@ pub enum AtPos {
         bar: Expr,
         beat: Option<Expr>,
     },
-    /// `+4 bars`: that long after the code lands.
+    /// `+4bars`: that long after the code lands.
     After(Expr),
 }
 
@@ -157,7 +162,7 @@ pub struct MidiOutDecl {
     pub span: Span,
 }
 
-/// `arrangement song { sections: [verse.over(8 bars) chorus.over(8 bars)] }`
+/// `arrangement song { sections: [verse.over(8bars) chorus.over(8bars)] }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrangementDecl {
     pub name: Ident,
@@ -212,7 +217,7 @@ pub struct BusDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigDecl {
     pub entries: Vec<(Ident, Expr)>,
-    /// `quantize: { default: 1 bar  play: cycle }`: when each kind of change lands.
+    /// `quantize: { default: 1bar  play: cycle }`: when each kind of change lands.
     pub quantize: Vec<(Ident, Expr)>,
     pub span: Span,
 }
@@ -225,35 +230,75 @@ pub struct TrackDecl {
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,
-    /// `with(quantize: 1 bar)` after the body.
+    /// `with(quantize: 1bar)` after the body.
     pub options: Vec<Arg>,
 }
 
-/// `opcode name(x, cutoff: hz) { ... }`
+/// `fn name(x, cutoff: hz) -> hz { ... }`
 #[derive(Debug, Clone, PartialEq)]
-pub struct OpcodeDef {
+pub struct FnDef {
     pub name: Ident,
     pub params: Vec<ParamDef>,
-    /// `-> (low, band, high)`: the names the body defines as its results, if it has more than one.
-    pub outputs: Vec<Ident>,
+    pub result: FnResult,
     pub body: Vec<Stmt>,
     pub span: Span,
+}
+
+/// What follows `->` in a function's signature.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FnResult {
+    /// No `->`: the unit is whatever the body gives.
+    Inferred,
+    /// `-> hz`
+    Unit(Ident),
+    /// `-> (low, band, high)`: the names the body binds as its results.
+    Named(Vec<Ident>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamDef {
     pub name: Ident,
-    /// Optional in an opcode, where an untyped parameter is a plain signal.
+    /// `init`, `control` or `const`, before the type.
+    pub rate: Option<(Rate, Span)>,
+    /// `None` in a function means any unit (generic).
     pub ty: Option<TypeSpec>,
     pub default: Option<Expr>,
 }
 
+/// How often a value may change, slowest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Rate {
+    /// Known while compiling.
+    Const,
+    /// Fixed at note start.
+    Init,
+    /// Once per block.
+    Control,
+    /// Every sample.
+    Audio,
+}
+
+impl Rate {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Rate::Const => "const",
+            Rate::Init => "init",
+            Rate::Control => "control",
+            Rate::Audio => "audio",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeSpec {
-    /// `hz`, `db`, `sec`
+    /// `hz`, `db`, `sec`, `num`, `int`
     Unit(Ident),
-    /// `0..1`: a bounded unitless parameter.
-    Range { lo: f64, hi: f64, span: Span },
+    /// `0..1` or `20hz..20khz`: a bounded value.
+    Range { lo: Expr, hi: Expr, span: Span },
+    /// `(low | band | high)`: one of these names, known while compiling.
+    Choice(Vec<Ident>),
+    /// `[num]`: a list whose entries have this type.
+    List(Box<TypeSpec>, Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,7 +307,7 @@ pub enum Stmt {
         name: Ident,
         value: Expr,
     },
-    /// `state y = 0.0`, only inside an opcode.
+    /// `state y = 0.0`, only inside a function.
     State {
         name: Ident,
         init: Expr,
@@ -277,7 +322,38 @@ pub enum Stmt {
         name: Ident,
         value: Expr,
     },
+    /// `buf[i] = expr` writes an entry of a state list.
+    IndexAssign {
+        name: Ident,
+        index: Expr,
+        value: Expr,
+    },
     Expr(Expr),
+}
+
+impl Stmt {
+    /// The expressions directly inside this statement.
+    pub fn exprs_mut(&mut self) -> Vec<&mut Expr> {
+        match self {
+            Stmt::Bind { value, .. }
+            | Stmt::Destructure { value, .. }
+            | Stmt::AddAssign { value, .. }
+            | Stmt::Expr(value) => vec![value],
+            Stmt::State { init, .. } => vec![init],
+            Stmt::IndexAssign { index, value, .. } => vec![index, value],
+        }
+    }
+
+    pub fn exprs(&self) -> Vec<&Expr> {
+        match self {
+            Stmt::Bind { value, .. }
+            | Stmt::Destructure { value, .. }
+            | Stmt::AddAssign { value, .. }
+            | Stmt::Expr(value) => vec![value],
+            Stmt::State { init, .. } => vec![init],
+            Stmt::IndexAssign { index, value, .. } => vec![index, value],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -292,7 +368,13 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
-    Rem,
+}
+
+/// `and` / `or`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicOp {
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -329,30 +411,168 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
-    /// `if cond { a } else { b }`
+    /// `a and b`, `a or b`: 1 or 0.
+    Logic {
+        op: LogicOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    /// `not a`
+    Not(Box<Expr>),
+    /// `if cond { ... } else { ... }`. As a value, both blocks end with an expression; as a
+    /// statement the `else` is optional. `else if` is an `otherwise` holding one `if`.
     If {
         cond: Box<Expr>,
-        then: Box<Expr>,
-        otherwise: Box<Expr>,
+        then: Vec<Stmt>,
+        otherwise: Option<Vec<Stmt>>,
+    },
+    /// `for x in xs { ... }`: as a value, the list of what each pass ends with.
+    For {
+        var: Ident,
+        iter: Box<Expr>,
+        body: Vec<Stmt>,
     },
     Env(EnvLit),
-    /// `(0..8)`: the whole numbers from `lo` up to, not including, `hi`, as a list.
+    /// `lo..hi`, or `lo..<hi` when it stops before `hi`.
     Range {
         lo: Box<Expr>,
         hi: Box<Expr>,
+        inclusive: bool,
     },
     /// `list[2]`: one entry of a list, by a whole number known while compiling.
     Index {
         list: Box<Expr>,
         index: Box<Expr>,
     },
-    /// `fn(r) { osc(saw, freq * r) }`: only as the argument of `map`.
+    /// `fn(r) { osc(saw, freq * r) }`, passed where a function is expected.
     Lambda {
         params: Vec<Ident>,
-        body: Box<Expr>,
+        body: Vec<Stmt>,
     },
     /// `"/fx/width"`: text, as an argument such as an OSC address.
     Str(String),
+}
+
+impl Expr {
+    /// Call `f` on each expression directly inside this one, including those in nested blocks.
+    pub fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Expr)) {
+        let block = |stmts: &mut Vec<Stmt>, f: &mut dyn FnMut(&mut Expr)| {
+            for s in stmts {
+                for e in s.exprs_mut() {
+                    f(e);
+                }
+            }
+        };
+        match &mut self.kind {
+            ExprKind::Num { .. }
+            | ExprKind::Name(_)
+            | ExprKind::Pattern(_)
+            | ExprKind::Grid(_)
+            | ExprKind::Rows(_)
+            | ExprKind::Rest
+            | ExprKind::Str(_) => {}
+            ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| f(&mut a.value)),
+            ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
+            ExprKind::Channels(items) => items.iter_mut().for_each(&mut *f),
+            ExprKind::Binary { lhs, rhs, .. }
+            | ExprKind::Compare { lhs, rhs, .. }
+            | ExprKind::Logic { lhs, rhs, .. } => {
+                f(lhs);
+                f(rhs);
+            }
+            ExprKind::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                f(cond);
+                block(then, f);
+                if let Some(o) = otherwise {
+                    block(o, f);
+                }
+            }
+            ExprKind::For { iter, body, .. } => {
+                f(iter);
+                block(body, f);
+            }
+            ExprKind::Env(env) => {
+                for v in env.values_mut() {
+                    if let EnvValue::Expr(e) = v {
+                        f(e);
+                    }
+                }
+            }
+            ExprKind::Range { lo, hi, .. } => {
+                f(lo);
+                f(hi);
+            }
+            ExprKind::Index { list, index } => {
+                f(list);
+                f(index);
+            }
+            ExprKind::Lambda { body, .. } => block(body, f),
+        }
+    }
+
+    /// Like [`Expr::for_each_child_mut`], read-only.
+    pub fn for_each_child(&self, f: &mut dyn FnMut(&Expr)) {
+        let block = |stmts: &Vec<Stmt>, f: &mut dyn FnMut(&Expr)| {
+            for s in stmts {
+                for e in s.exprs() {
+                    f(e);
+                }
+            }
+        };
+        match &self.kind {
+            ExprKind::Num { .. }
+            | ExprKind::Name(_)
+            | ExprKind::Pattern(_)
+            | ExprKind::Grid(_)
+            | ExprKind::Rows(_)
+            | ExprKind::Rest
+            | ExprKind::Str(_) => {}
+            ExprKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
+            ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
+            ExprKind::Channels(items) => items.iter().for_each(&mut *f),
+            ExprKind::Binary { lhs, rhs, .. }
+            | ExprKind::Compare { lhs, rhs, .. }
+            | ExprKind::Logic { lhs, rhs, .. } => {
+                f(lhs);
+                f(rhs);
+            }
+            ExprKind::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                f(cond);
+                block(then, f);
+                if let Some(o) = otherwise {
+                    block(o, f);
+                }
+            }
+            ExprKind::For { iter, body, .. } => {
+                f(iter);
+                block(body, f);
+            }
+            ExprKind::Env(env) => {
+                for v in env.values() {
+                    if let EnvValue::Expr(e) = v {
+                        f(e);
+                    }
+                }
+            }
+            ExprKind::Range { lo, hi, .. } => {
+                f(lo);
+                f(hi);
+            }
+            ExprKind::Index { list, index } => {
+                f(list);
+                f(index);
+            }
+            ExprKind::Lambda { body, .. } => block(body, f),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -386,22 +606,66 @@ pub struct EnvNum {
     pub span: Span,
 }
 
+/// One step of an envelope: a literal, or a name or `(expression)` read at note start.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnvValue {
+    Lit(EnvNum),
+    Expr(Box<Expr>),
+}
+
+impl EnvValue {
+    pub fn span(&self) -> Span {
+        match self {
+            EnvValue::Lit(n) => n.span,
+            EnvValue::Expr(e) => e.span,
+        }
+    }
+
+    /// The literal, if this step is one.
+    pub fn lit(&self) -> Option<&EnvNum> {
+        match self {
+            EnvValue::Lit(n) => Some(n),
+            EnvValue::Expr(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnvSegment {
-    pub dur: EnvNum,
+    pub dur: EnvValue,
     pub curve: Option<CurveKind>,
-    pub level: EnvNum,
+    pub level: EnvValue,
 }
 
 /// `env[0 5ms 1 120ms 0.4 | 600ms 0]`
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnvLit {
-    pub start: EnvNum,
+    pub start: EnvValue,
     pub segments: Vec<EnvSegment>,
     /// Number of segments before the `|`.
     pub sustain_at: Option<usize>,
     /// `env[...].loop`: starts over when it ends.
     pub looped: bool,
+}
+
+impl EnvLit {
+    pub fn values(&self) -> Vec<&EnvValue> {
+        let mut v = vec![&self.start];
+        for s in &self.segments {
+            v.push(&s.dur);
+            v.push(&s.level);
+        }
+        v
+    }
+
+    pub fn values_mut(&mut self) -> Vec<&mut EnvValue> {
+        let mut v = vec![&mut self.start];
+        for s in &mut self.segments {
+            v.push(&mut s.dur);
+            v.push(&mut s.level);
+        }
+        v
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

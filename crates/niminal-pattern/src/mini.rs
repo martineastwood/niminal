@@ -428,7 +428,7 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
         }
     }
 
-    /// `(1/8 beat)`: parentheses make one atom out of text with spaces in it.
+    /// `1/8beat`: parentheses make one atom out of text with spaces in it.
     fn grouped_atom(&mut self) -> Res<Pattern<T>> {
         let open = self.offset();
         self.i += 1;

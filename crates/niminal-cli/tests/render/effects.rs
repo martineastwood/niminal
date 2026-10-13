@@ -21,7 +21,7 @@ click() for 1/8beat
 fn echoes_land_on_the_beat_and_decay() {
     let out = raw(ECHO);
     let window = |n: usize| peak(&out[n..n + 200]);
-    // 1/4 beat at 120bpm is 6000 samples
+    // 1/4beat at 120bpm is 6000 samples
     let (first, second, third) = (window(6000), window(12_000), window(18_000));
     assert!(first > 0.5, "{first}");
     assert!((second / first - 0.5).abs() < 0.05, "{second} vs {first}");
@@ -85,7 +85,7 @@ fn a_delay_inside_an_instrument_is_not_cut_off_at_note_end() {
 tempo 120bpm
 instr click() { out = (osc(sine, 1000hz) * env[1 0.5ms 0]).delay(time: 1/2beat, feedback: 0.5) }
 click() for 1/16beat");
-    // the note ends after 1/16 beat (~31ms); echoes at 250ms intervals still sound
+    // the note ends after 1/16beat (~31ms); echoes at 250ms intervals still sound
     let at = |n: usize| peak(&out[n..n + 200]);
     assert!(at(12_000) > 0.5, "first echo {}", at(12_000));
     assert!(at(24_000) > 0.2, "second echo {}", at(24_000));

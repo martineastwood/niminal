@@ -26,7 +26,7 @@ The **niminal** side bar lists your scenes (click one, or press Cmd+1 to Cmd+9 f
 
 Compile errors appear as squiggles at the right place, the status bar shows the bar, beat, tempo, voices and changes waiting to land, and `niminal: Panic` is in the command palette.
 
-Settings: `niminal.port`, `niminal.token`, `niminal.quantize` (for example `next 4 bars`), `niminal.path`.
+Settings: `niminal.port`, `niminal.token`, `niminal.quantize` (for example `next 4bars`), `niminal.path`.
 
 ## Language server
 
@@ -35,7 +35,7 @@ The extension starts `niminal lsp` (the same binary as the daemon, found through
 - errors as you type, with the compiler's own messages and help
 - completion for names in the file, built-in opcodes, methods after a `.`, named arguments, waveforms and unit suffixes
 - hover with a signature and documentation, and go-to-definition and an outline
-- a comment directly above an `instr` or `opcode` (`//` or `///`) is its documentation
+- a comment directly above an `instr` or `fn` (`//` or `///`) is its documentation
 
 "Restart Language Server" in the command palette picks up a newly installed binary.
 Other editors can use it too: run `niminal lsp` as a stdio language server for `.nml` files.

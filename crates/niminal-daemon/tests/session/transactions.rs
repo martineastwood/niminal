@@ -15,7 +15,7 @@ fn performance(block: usize) -> Session {
         (
             210_000,
             "instr pluck(freq: hz) { osc(saw, freq) * env[1 | 30ms 0] }",
-            Some("next 2 beats"),
+            Some("next 2beats"),
         ),
         (330_000, "hush", Some("next bar")),
     ];
@@ -210,7 +210,7 @@ fn a_rejected_evaluation_through_the_two_step_path_changes_nothing() {
 fn a_new_play_replaces_a_pending_play_for_the_same_track() {
     let mut s = ready();
     run(&mut s, 1000);
-    let old = s.eval("lead.play([c4]) @ next 4 bars", None).unwrap();
+    let old = s.eval("lead.play([c4]) @ next 4bars", None).unwrap();
     let new = s.eval("lead.play([a4]) @ next beat", None).unwrap();
     assert!(new.lands_at < old.lands_at);
     assert_eq!(s.pending().len(), 1);
@@ -231,7 +231,7 @@ fn replacing_one_write_preserves_the_rest_of_an_older_transaction() {
         .eval(
             "lead.play([c4])
 bass.play([c2])",
-            Some("next 4 bars"),
+            Some("next 4bars"),
         )
         .unwrap();
     s.eval("lead.play([a4])", Some("now")).unwrap();
@@ -242,7 +242,7 @@ bass.play([c2])",
     run(&mut reference, 1000);
     reference.eval("lead.play([a4])", Some("now")).unwrap();
     reference
-        .eval("bass.play([c2])", Some("next 4 bars"))
+        .eval("bass.play([c2])", Some("next 4bars"))
         .unwrap();
     assert_eq!(run(&mut s, 5 * BAR), run(&mut reference, 5 * BAR));
 }
@@ -254,7 +254,7 @@ fn a_later_definition_snapshot_cannot_revert_a_newer_write() {
     s.eval(
         "instr pluck(freq: hz) { osc(sine, freq) * 0.1 }
 clip extra { notes: [c4] }",
-        Some("next 4 bars"),
+        Some("next 4bars"),
     )
     .unwrap();
     s.eval(
@@ -339,7 +339,7 @@ fn replacing_a_pending_definition_moves_its_dependent_play_to_the_new_boundary()
     run(&mut s, 1000);
     s.eval("riff = [c4]", Some("next beat")).unwrap();
     s.eval("lead.play(riff)", Some("next bar")).unwrap();
-    let replacement = s.eval("riff = [a4]", Some("next 4 bars")).unwrap();
+    let replacement = s.eval("riff = [a4]", Some("next 4bars")).unwrap();
     assert_eq!(s.pending().len(), 2);
     assert!(
         s.pending()
@@ -352,7 +352,7 @@ fn replacing_a_pending_definition_moves_its_dependent_play_to_the_new_boundary()
         .eval(
             "riff = [a4]
 lead.play(riff)",
-            Some("next 4 bars"),
+            Some("next 4bars"),
         )
         .unwrap();
     assert_eq!(run(&mut s, 5 * BAR), run(&mut reference, 5 * BAR));
@@ -383,7 +383,7 @@ fn superseded_pending_changes_replay_to_the_same_audio() {
     s.eval(
         "riff = [c4]
 bass.play([c2])",
-        Some("next 4 bars"),
+        Some("next 4bars"),
     )
     .unwrap();
     s.eval(

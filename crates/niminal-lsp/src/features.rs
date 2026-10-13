@@ -165,7 +165,7 @@ fn references(tokens: &[Token], name: &str, kind: SymbolKind, defs: &[Symbol]) -
 
     // the stretches where `name` is something else: inside a definition that has a local of that name
     let mut shadowed: Vec<(usize, usize)> = Vec::new();
-    for def in defs.iter().filter(|d| matches!(d.kind, SymbolKind::Instrument | SymbolKind::Opcode | SymbolKind::Track | SymbolKind::Bus)) {
+    for def in defs.iter().filter(|d| matches!(d.kind, SymbolKind::Instrument | SymbolKind::Function | SymbolKind::Track | SymbolKind::Bus)) {
         let (first, last) = (index_at(def.name_span.end), index_at(def.span.end));
         if locals(tokens, &within, first, last).iter().any(|n| n == name) {
             shadowed.push((def.name_span.end, def.span.end));
@@ -181,7 +181,7 @@ fn references(tokens: &[Token], name: &str, kind: SymbolKind, defs: &[Symbol]) -
         let before = i.checked_sub(1).map(|i| &tokens[i].tok);
         let after = tokens.get(i + 1).map(|t| &t.tok);
         // `x.name` is a use of an opcode, and otherwise a word that only follows a dot
-        if before == Some(&Tok::Dot) && kind != SymbolKind::Opcode {
+        if before == Some(&Tok::Dot) && kind != SymbolKind::Function {
             continue;
         }
         if after == Some(&Tok::Colon) {
@@ -369,7 +369,7 @@ fn symbol_signature(doc: &Document, symbol: &Symbol, method: bool) -> Signature 
         label: symbol.detail.clone(),
         documentation: doc.comment_of(symbol),
         parameters: symbol.params.iter().map(|p| p.label.clone()).collect(),
-        receiver: usize::from(method && symbol.kind == SymbolKind::Opcode),
+        receiver: usize::from(method && symbol.kind == SymbolKind::Function),
     }
 }
 
@@ -416,7 +416,7 @@ pub fn signature_help(doc: &Document, offset: usize) -> Value {
 
     let signature = doc
         .find(callee)
-        .filter(|(s, ..)| matches!(s.kind, SymbolKind::Instrument | SymbolKind::Opcode))
+        .filter(|(s, ..)| matches!(s.kind, SymbolKind::Instrument | SymbolKind::Function))
         .map(|(s, ..)| symbol_signature(doc, s, method))
         .or_else(|| method.then(|| pattern_ops().into_iter().find(|o| o.name == *callee)).flatten().map(|o| op_signature(&o, 0)))
         .or_else(|| builtin_ops().into_iter().find(|o| o.name == *callee).map(|o| op_signature(&o, usize::from(method))));
@@ -456,7 +456,7 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
             None
         } else if let Some((symbol, ..)) = doc.find(name) {
             Some(match symbol.kind {
-                SymbolKind::Instrument | SymbolKind::Opcode => FUNCTION,
+                SymbolKind::Instrument | SymbolKind::Function => FUNCTION,
                 SymbolKind::Track | SymbolKind::Bus | SymbolKind::Sample | SymbolKind::Kit => CLASS,
                 SymbolKind::Control | SymbolKind::Pattern => VARIABLE,
                 SymbolKind::Clip | SymbolKind::Scene | SymbolKind::Arrangement => NAMESPACE,

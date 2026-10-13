@@ -19,7 +19,7 @@ The VS Code extension starts the same binary automatically (see settings below).
 - **Completion** for names in the file, built-in opcodes, methods after `.`, named arguments (`lpf(` → `cutoff:`, `res:`), waveforms, unit suffixes
 - **Hover** with signatures and documentation
 - **Go to definition** and **document outline**
-- A `//` or `///` comment directly above an `instr` or `opcode` is its documentation
+- A `//` or `///` comment directly above an `instr` or `fn` is its documentation
 
 Trigger character for completion: `.`
 
@@ -61,7 +61,7 @@ The **niminal** sidebar lists scenes and tracks (mute, solo, stop). Compile erro
 | `niminal.path` | Path to the `niminal` binary (daemon + LSP) |
 | `niminal.port` | Daemon WebSocket port (default `7400`) |
 | `niminal.token` | Token if the daemon was started with `--token` |
-| `niminal.quantize` | Default land time for evaluation (e.g. `next 4 bars`) |
+| `niminal.quantize` | Default land time for evaluation (e.g. `next 4bars`) |
 
 ### MIDI learn
 

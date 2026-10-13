@@ -116,7 +116,7 @@ fn a_dot_holds_the_previous_step() {
 #[test]
 fn atoms_can_carry_units_and_note_names() {
     assert_eq!(values("c#4 -6db 440hz 1/8beat 0.5", cycles(0, 1)), ["c#4", "-6db", "440hz", "1/8beat", "0.5"]);
-    assert_eq!(values("(1/8 beat) x", cycles(0, 1)), ["1/8beat", "x"]);
+    assert_eq!(values("1/8beat x", cycles(0, 1)), ["1/8beat", "x"]);
 }
 
 #[test]

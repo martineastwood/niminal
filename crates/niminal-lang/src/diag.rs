@@ -35,6 +35,16 @@ impl Diagnostic {
         }
     }
 
+    /// A mistake already reported elsewhere: it stops what it is part of, and is dropped before
+    /// errors are shown.
+    pub(crate) fn quiet(span: Span) -> Self {
+        Diagnostic::new("", span)
+    }
+
+    pub(crate) fn is_quiet(&self) -> bool {
+        self.message.is_empty()
+    }
+
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
