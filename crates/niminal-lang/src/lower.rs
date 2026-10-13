@@ -268,6 +268,14 @@ impl Sig {
     }
 }
 
+/// What an expression makes: a signal, or a list of values. A list exists while compiling only; it becomes a
+/// multichannel signal where a signal is needed.
+#[derive(Clone)]
+enum Datum {
+    Sig(Sig),
+    List(Vec<Datum>),
+}
+
 /// A call's evaluated argument.
 enum Val {
     Wave(opcodes::Wave),
@@ -281,7 +289,7 @@ pub(crate) struct Lower<'a> {
     mode: Mode,
     g: GraphBuilder,
     tempo: Tempo,
-    scope: HashMap<String, Sig>,
+    scope: HashMap<String, Datum>,
     /// The value of `out` so far.
     out: Option<Sig>,
     sends: usize,
@@ -444,7 +452,7 @@ pub(crate) fn compile_instr(
             .expect("duplicates checked above");
         lower
             .scope
-            .insert(p.name.name.clone(), Sig::signal(src, unit));
+            .insert(p.name.name.clone(), Datum::Sig(Sig::signal(src, unit)));
         params.push(Param {
             name: p.name.name.clone(),
             unit,
@@ -880,6 +888,52 @@ pub(crate) fn compile_chain(
 }
 
 /// The span of the first argument that is not the receiver, for a problem with its value.
+/// Entries of one channel each, joined into a list. They share a unit, so `[800hz, 1200hz]` is a two-channel frequency.
+fn join_channels(entries: &[(Sig, Span)], span: Span) -> Res<Sig> {
+    let mut srcs = Vec::with_capacity(entries.len());
+    let mut unit = None;
+    for (sig, at) in entries {
+        if sig.count() != 1 {
+            return Err(Diagnostic::new(
+                format!(
+                    "a channel list takes one channel per entry, but this has {}",
+                    sig.count()
+                ),
+                *at,
+            ));
+        }
+        match unit {
+            None => unit = Some(sig.unit),
+            Some(u) if u != sig.unit => {
+                return Err(Diagnostic::new(
+                    format!(
+                        "the entries of a channel list must have the same unit: this is {}, the first was {}",
+                        sig.unit.describe(),
+                        u.describe()
+                    ),
+                    *at,
+                ));
+            }
+            Some(_) => {}
+        }
+        srcs.push(sig.srcs[0]);
+    }
+    if srcs.len() > niminal_engine::MAX_CHANNELS {
+        return Err(Diagnostic::new(
+            format!("a list holds at most {} entries", niminal_engine::MAX_CHANNELS),
+            span,
+        ));
+    }
+    let layout = Layout::from_count(srcs.len());
+    Ok(Sig {
+        srcs,
+        layout,
+        unit: unit.unwrap_or(Unit::Num),
+        konst: None,
+        outputs: Vec::new(),
+    })
+}
+
 fn address_span(args: &[Arg]) -> Span {
     args.iter()
         .find(|a| !a.receiver && a.name.is_none())
@@ -975,31 +1029,47 @@ impl<'a> Lower<'a> {
             )),
             _ => {
                 self.names.check_local(name)?;
-                let sig = self.expr(value)?;
-                self.scope.insert(name.name.clone(), sig);
+                let v = self.value(value)?;
+                self.scope.insert(name.name.clone(), v);
                 Ok(())
             }
         }
     }
 
-    /// `[l, r] = src`: one name per channel.
+    /// `[l, r] = src`: one name per channel, or per entry of a list.
     fn destructure(&mut self, names: &[Ident], value: &Expr) -> Res<()> {
-        let sig = self.expr(value)?;
-        self.require_signal("a channel", &sig, value.span)?;
-        if sig.count() != names.len() {
-            return Err(Diagnostic::new(
-                format!(
-                    "this signal has {} channel(s), but {} name(s) are given",
-                    sig.count(),
-                    names.len()
-                ),
-                value.span,
-            ));
-        }
-        for (name, src) in names.iter().zip(&sig.srcs) {
+        let entries = match self.value(value)? {
+            Datum::List(items) => {
+                if items.len() != names.len() {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "this list has {} entries, but {} name(s) are given",
+                            items.len(),
+                            names.len()
+                        ),
+                        value.span,
+                    ));
+                }
+                items
+            }
+            Datum::Sig(sig) => {
+                self.require_signal("a channel", &sig, value.span)?;
+                if sig.count() != names.len() {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "this signal has {} channel(s), but {} name(s) are given",
+                            sig.count(),
+                            names.len()
+                        ),
+                        value.span,
+                    ));
+                }
+                (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect()
+            }
+        };
+        for (name, entry) in names.iter().zip(entries) {
             self.names.check_local(name)?;
-            self.scope
-                .insert(name.name.clone(), Sig::signal(*src, Unit::Num));
+            self.scope.insert(name.name.clone(), entry);
         }
         Ok(())
     }
@@ -1216,19 +1286,53 @@ impl<'a> Lower<'a> {
         literal_sig(value, unit, self.tempo, span).map(|(unit, v)| Sig::constant(unit, v))
     }
 
+    /// The signal an expression makes. A list becomes a multichannel signal, one channel per entry.
     fn expr(&mut self, e: &Expr) -> Res<Sig> {
+        let v = self.value(e)?;
+        self.signal_of(v, e.span)
+    }
+
+    /// A signal, or a list of values.
+    fn value(&mut self, e: &Expr) -> Res<Datum> {
+        match &e.kind {
+            ExprKind::Name(name) => match self.scope.get(name) {
+                Some(v) => Ok(v.clone()),
+                None => self.name(name, e.span).map(Datum::Sig),
+            },
+            ExprKind::Channels(items) => items
+                .iter()
+                .map(|i| self.value(i))
+                .collect::<Res<_>>()
+                .map(Datum::List),
+            ExprKind::Range { lo, hi } => self.range_list(lo, hi, e.span),
+            ExprKind::Index { list, index } => self.index(list, index, e.span),
+            ExprKind::Neg(inner) => {
+                let v = self.value(inner)?;
+                self.negate_value(v, e.span)
+            }
+            ExprKind::Binary { op, lhs, rhs } => {
+                let (l, r) = (self.value(lhs)?, self.value(rhs)?);
+                self.binary_value(*op, l, r, e.span)
+            }
+            ExprKind::Call { name, args }
+                if matches!(name.name.as_str(), "map" | "sum" | "len" | "split")
+                    && self.registry.find(&name.name).is_none() =>
+            {
+                self.list_call(name, args, e.span)
+            }
+            ExprKind::Lambda { .. } => Err(Diagnostic::new(
+                "a function can only be the argument of `map`",
+                e.span,
+            )
+            .with_help("for example `(0..4).map(fn(i) { osc(saw, freq * (1 + i * 0.01)) }).sum`")),
+            _ => self.signal(e).map(Datum::Sig),
+        }
+    }
+
+    /// An expression that makes a signal directly: not a list, and not arithmetic on one.
+    fn signal(&mut self, e: &Expr) -> Res<Sig> {
         match &e.kind {
             ExprKind::Num { value, unit } => self.literal(*value, unit.as_deref(), e.span),
-            ExprKind::Name(name) => self.name(name, e.span),
-            ExprKind::Neg(inner) => {
-                let s = self.expr(inner)?;
-                self.negate(s, e.span)
-            }
-            ExprKind::Channels(items) => self.channel_list(items, e.span),
-            ExprKind::Binary { op, lhs, rhs } => {
-                let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
-                self.binary(*op, l, r, e.span)
-            }
             ExprKind::Call { name, args } => self.call(name, args, e.span),
             ExprKind::Env(env) => self.env(env),
             ExprKind::Str(_) => Err(Diagnostic::new(
@@ -1255,57 +1359,227 @@ impl<'a> Lower<'a> {
                 "grids as trigger signals aren't supported yet",
                 e.span,
             )),
+            ExprKind::Name(_)
+            | ExprKind::Neg(_)
+            | ExprKind::Binary { .. }
+            | ExprKind::Channels(_)
+            | ExprKind::Range { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::Lambda { .. } => unreachable!("`value` handles these"),
         }
     }
 
-    /// `[a, b, c]`: one single-channel entry per channel. Entries share a unit,
-    /// so `[800hz, 1200hz]` is a two-channel frequency.
-    fn channel_list(&mut self, items: &[Expr], span: Span) -> Res<Sig> {
-        let mut srcs = Vec::with_capacity(items.len());
-        let mut unit = None;
-        for item in items {
-            let sig = self.expr(item)?;
-            if sig.count() != 1 {
+    /// A list as a signal, one channel per entry. The entries share a unit, so `[800hz, 1200hz]` is a
+    /// two-channel frequency.
+    fn signal_of(&self, v: Datum, span: Span) -> Res<Sig> {
+        match v {
+            Datum::Sig(sig) => Ok(sig),
+            Datum::List(items) => {
+                let mut entries = Vec::with_capacity(items.len());
+                for item in items {
+                    match item {
+                        Datum::Sig(sig) => entries.push((sig, span)),
+                        Datum::List(_) => {
+                            return Err(Diagnostic::new("a list of lists can't be used as a signal", span)
+                                .with_help("sum the inner lists, or index into them"));
+                        }
+                    }
+                }
+                join_channels(&entries, span)
+            }
+        }
+    }
+
+    /// `(lo..hi)`: the whole numbers from `lo` up to `hi`. Both ends are known while compiling.
+    fn range_list(&mut self, lo: &Expr, hi: &Expr, span: Span) -> Res<Datum> {
+        let end = |this: &mut Self, e: &Expr| match this.expr(e)? {
+            Sig { konst: Some(v), unit: Unit::Num, .. } if v.fract() == 0.0 => Ok(v),
+            _ => Err(Diagnostic::new("the ends of a range must be whole numbers known while compiling", e.span)),
+        };
+        let (lo, hi) = (end(self, lo)?, end(self, hi)?);
+        let count = hi - lo;
+        if count < 1.0 {
+            return Err(Diagnostic::new("this range is empty", span));
+        }
+        Ok(Datum::List(
+            (0..count as usize)
+                .map(|i| Datum::Sig(Sig::constant(Unit::Num, lo + i as f64)))
+                .collect(),
+        ))
+    }
+
+    /// `list[i]`: `i` counts from 0 and is known while compiling.
+    fn index(&mut self, list: &Expr, index: &Expr, span: Span) -> Res<Datum> {
+        let Datum::List(items) = self.value(list)? else {
+            return Err(Diagnostic::new("only a list can be indexed", list.span)
+                .with_help("`.split` gives the channels of a signal as a list"));
+        };
+        let i = match self.expr(index)? {
+            Sig { konst: Some(v), unit: Unit::Num, .. } if v.fract() == 0.0 && v >= 0.0 => v as usize,
+            _ => {
                 return Err(Diagnostic::new(
-                    format!(
-                        "a channel list takes one channel per entry, but this has {}",
-                        sig.count()
-                    ),
-                    item.span,
+                    "an index must be a whole number, 0 or more, known while compiling",
+                    index.span,
                 ));
             }
-            match unit {
-                None => unit = Some(sig.unit),
-                Some(u) if u != sig.unit => {
-                    return Err(Diagnostic::new(
-                        format!(
-                            "the entries of a channel list must have the same unit: this is {}, the first was {}",
-                            sig.unit.describe(),
-                            u.describe()
-                        ),
-                        item.span,
-                    ));
-                }
-                Some(_) => {}
-            }
-            srcs.push(sig.srcs[0]);
-        }
-        if srcs.len() > niminal_engine::MAX_CHANNELS {
-            return Err(Diagnostic::new("too many channels", span));
-        }
-        let layout = Layout::from_count(srcs.len());
-        Ok(Sig {
-            srcs,
-            layout,
-            unit: unit.unwrap_or(Unit::Num),
-            konst: None,
-            outputs: Vec::new(),
+        };
+        items.get(i).cloned().ok_or_else(|| {
+            Diagnostic::new(
+                format!("index {i} is out of range for a list of {}", items.len()),
+                span,
+            )
+            .with_help("the first entry is 0")
         })
     }
 
+    /// Channel `k` of a signal, with its value known if it was.
+    fn element(sig: &Sig, k: usize) -> Sig {
+        match sig.srcs[k] {
+            Src::Const(v) => Sig::constant(sig.unit, f64::from(v)),
+            src => Sig::signal(src, sig.unit),
+        }
+    }
+
+    fn negate_value(&mut self, v: Datum, span: Span) -> Res<Datum> {
+        match v {
+            Datum::Sig(s) => self.negate(s, span).map(Datum::Sig),
+            Datum::List(items) => items
+                .into_iter()
+                .map(|i| self.negate_value(i, span))
+                .collect::<Res<_>>()
+                .map(Datum::List),
+        }
+    }
+
+    /// Arithmetic on lists goes entry by entry. A single value applies to every entry, and two lists must be the same length.
+    fn binary_value(&mut self, op: BinOp, l: Datum, r: Datum, span: Span) -> Res<Datum> {
+        match (l, r) {
+            (Datum::Sig(l), Datum::Sig(r)) => self.binary(op, l, r, span).map(Datum::Sig),
+            (Datum::List(a), Datum::List(b)) => {
+                if a.len() != b.len() {
+                    return Err(Diagnostic::new(
+                        format!("can't combine a list of {} with a list of {}", a.len(), b.len()),
+                        span,
+                    ));
+                }
+                a.into_iter()
+                    .zip(b)
+                    .map(|(x, y)| self.binary_value(op, x, y, span))
+                    .collect::<Res<_>>()
+                    .map(Datum::List)
+            }
+            // a multichannel signal against a list is channel arithmetic
+            (Datum::List(a), Datum::Sig(r)) if r.count() > 1 => {
+                let l = self.signal_of(Datum::List(a), span)?;
+                self.binary(op, l, r, span).map(Datum::Sig)
+            }
+            (Datum::Sig(l), Datum::List(b)) if l.count() > 1 => {
+                let r = self.signal_of(Datum::List(b), span)?;
+                self.binary(op, l, r, span).map(Datum::Sig)
+            }
+            (Datum::List(a), r) => a
+                .into_iter()
+                .map(|x| self.binary_value(op, x, r.clone(), span))
+                .collect::<Res<_>>()
+                .map(Datum::List),
+            (l, Datum::List(b)) => b
+                .into_iter()
+                .map(|y| self.binary_value(op, l.clone(), y, span))
+                .collect::<Res<_>>()
+                .map(Datum::List),
+        }
+    }
+
+    /// `list.map(fn)`, `list.sum`, `list.len` and `signal.split`.
+    fn list_call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
+        let Some(receiver) = args.first().filter(|a| a.receiver) else {
+            return Err(Diagnostic::new(
+                format!("`{}` is called on a list", name.name),
+                name.span,
+            )
+            .with_help(format!("for example `[1, 2, 3].{}`", name.name)));
+        };
+        let value = self.value(&receiver.value)?;
+        if name.name == "split" {
+            return match (value, args.len()) {
+                (_, n) if n > 1 => Err(Diagnostic::new("`split` takes no arguments", name.span)),
+                (list @ Datum::List(_), _) => Ok(list),
+                (Datum::Sig(sig), _) => Ok(Datum::List(
+                    (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect(),
+                )),
+            };
+        }
+        let Datum::List(items) = value else {
+            return Err(Diagnostic::new(
+                format!("`{}` works on a list", name.name),
+                receiver.value.span,
+            )
+            .with_help("`.split` gives the channels of a signal as a list"));
+        };
+        match name.name.as_str() {
+            "len" => {
+                if args.len() > 1 {
+                    return Err(Diagnostic::new("`len` takes no arguments", name.span));
+                }
+                Ok(Datum::Sig(Sig::constant(Unit::Num, items.len() as f64)))
+            }
+            "sum" => {
+                if args.len() > 1 {
+                    return Err(Diagnostic::new("`sum` takes no arguments", name.span));
+                }
+                let mut total: Option<Sig> = None;
+                for item in items {
+                    let sig = self.signal_of(item, receiver.value.span)?;
+                    total = Some(match total {
+                        None => sig,
+                        Some(t) => self.binary(BinOp::Add, t, sig, span)?,
+                    });
+                }
+                Ok(Datum::Sig(total.expect("a list is never empty")))
+            }
+            _ => self.map(name, args, items),
+        }
+    }
+
+    /// The function runs once for each entry, while compiling, and the results are the new list.
+    fn map(&mut self, name: &Ident, args: &[Arg], items: Vec<Datum>) -> Res<Datum> {
+        let [_, f] = args else {
+            return Err(Diagnostic::new("`map` takes a function", name.span)
+                .with_help("for example `[1, 2, 3].map(fn(x) { x * 2 })`"));
+        };
+        let ExprKind::Lambda { params, body } = &f.value.kind else {
+            return Err(Diagnostic::new("`map` takes a function", f.value.span)
+                .with_help("write `fn(x) { ... }`"));
+        };
+        let [param] = params.as_slice() else {
+            return Err(Diagnostic::new("the function given to `map` takes one parameter", f.value.span));
+        };
+        self.names.check_local(param)?;
+        if self.scope.contains_key(&param.name) {
+            return Err(Diagnostic::new(
+                format!("`{}` is already in use, so it can't be this function's parameter", param.name),
+                param.span,
+            ));
+        }
+        let saved = self.scope.clone();
+        let mut results = Vec::with_capacity(items.len());
+        for item in items {
+            self.scope.insert(param.name.clone(), item);
+            match self.value(body) {
+                Ok(v) => results.push(v),
+                Err(e) => {
+                    self.scope = saved;
+                    return Err(e);
+                }
+            }
+        }
+        self.scope = saved;
+        Ok(Datum::List(results))
+    }
+
     fn name(&mut self, name: &str, span: Span) -> Res<Sig> {
-        if let Some(s) = self.scope.get(name) {
-            return Ok(s.clone());
+        if let Some(v) = self.scope.get(name) {
+            return self.signal_of(v.clone(), span);
         }
         match name {
             "out" => {
@@ -1661,7 +1935,10 @@ impl<'a> Lower<'a> {
     fn record(&mut self, e: &Expr) -> Res<Option<Sig>> {
         let several = match &e.kind {
             ExprKind::Name(n) => {
-                return Ok(self.scope.get(n).filter(|s| !s.outputs.is_empty()).cloned());
+                return Ok(match self.scope.get(n) {
+                    Some(Datum::Sig(s)) if !s.outputs.is_empty() => Some(s.clone()),
+                    _ => None,
+                });
             }
             ExprKind::Call { name, .. } => matches!(
                 self.registry.find(&name.name).map(|s| &s.build),

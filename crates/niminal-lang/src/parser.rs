@@ -1236,6 +1236,54 @@ impl Parser {
         })
     }
 
+    /// `for i in 0..8 { expr }`, after seeing `for i in`: the same as `(0..8).map(fn(i) { expr })`.
+    fn for_expr(&mut self) -> Res<Expr> {
+        let start = self.bump().span; // `for`
+        let param = self.ident("a name for each entry")?;
+        self.bump(); // `in`
+        let mut list = self.expr()?;
+        if self.eat(&Tok::DotDot) {
+            let hi = self.expr()?;
+            let span = list.span.to(hi.span);
+            list = Expr {
+                kind: ExprKind::Range {
+                    lo: Box::new(list),
+                    hi: Box::new(hi),
+                },
+                span,
+            };
+        }
+        let body = self.branch()?;
+        let span = start.to(self.prev_span());
+        let lambda = Expr {
+            kind: ExprKind::Lambda {
+                params: vec![param],
+                body: Box::new(body),
+            },
+            span,
+        };
+        let receiver = Arg {
+            name: None,
+            value: list,
+            receiver: true,
+        };
+        let function = Arg {
+            name: None,
+            value: lambda,
+            receiver: false,
+        };
+        Ok(Expr {
+            kind: ExprKind::Call {
+                name: Ident {
+                    name: "map".to_string(),
+                    span: start,
+                },
+                args: vec![receiver, function],
+            },
+            span,
+        })
+    }
+
     /// `{ expr }`
     fn branch(&mut self) -> Res<Expr> {
         self.expect(&Tok::LBrace)?;
@@ -1295,7 +1343,24 @@ impl Parser {
 
     fn postfix(&mut self) -> Res<Expr> {
         let mut e = self.primary()?;
-        while self.peek() == &Tok::Dot {
+        loop {
+            if self.peek() == &Tok::LBracket {
+                self.bump();
+                let index = self.expr()?;
+                let end = self.expect(&Tok::RBracket)?;
+                let span = e.span.to(end);
+                e = Expr {
+                    kind: ExprKind::Index {
+                        list: Box::new(e),
+                        index: Box::new(index),
+                    },
+                    span,
+                };
+                continue;
+            }
+            if self.peek() != &Tok::Dot {
+                break;
+            }
             self.bump();
             let name = self.ident("a method name after `.`")?;
             let mut args = vec![Arg {
@@ -1375,10 +1440,48 @@ impl Parser {
             Tok::LParen => {
                 self.bump();
                 let inner = self.expr()?;
+                if self.eat(&Tok::DotDot) {
+                    let hi = self.expr()?;
+                    let end = self.expect(&Tok::RParen)?;
+                    return Ok(Expr {
+                        kind: ExprKind::Range {
+                            lo: Box::new(inner),
+                            hi: Box::new(hi),
+                        },
+                        span: span.to(end),
+                    });
+                }
                 let end = self.expect(&Tok::RParen)?;
                 Ok(Expr {
                     span: span.to(end),
                     ..inner
+                })
+            }
+            Tok::Ident(name)
+                if name == "for"
+                    && matches!(self.peek_at(1), Tok::Ident(_))
+                    && matches!(self.peek_at(2), Tok::Ident(k) if k == "in") =>
+            {
+                self.nested(Self::for_expr)
+            }
+            Tok::Ident(name) if name == "fn" && self.peek_at(1) == &Tok::LParen => {
+                self.bump();
+                self.bump();
+                let mut params = Vec::new();
+                while self.peek() != &Tok::RParen {
+                    params.push(self.ident("a parameter name")?);
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&Tok::RParen)?;
+                let body = self.branch()?;
+                Ok(Expr {
+                    span: span.to(self.prev_span()),
+                    kind: ExprKind::Lambda {
+                        params,
+                        body: Box::new(body),
+                    },
                 })
             }
             Tok::Ident(name) if name == "env" && self.peek_at(1) == &Tok::LBracket => self.env(),

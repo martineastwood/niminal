@@ -197,6 +197,15 @@ fn rename(e: &mut Expr, from: &str, to: &str) {
         ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| rename(&mut a.value, from, to)),
         ExprKind::Neg(inner) => rename(inner, from, to),
         ExprKind::Channels(items) => items.iter_mut().for_each(|i| rename(i, from, to)),
+        ExprKind::Index { list, index } => {
+            rename(list, from, to);
+            rename(index, from, to);
+        }
+        ExprKind::Lambda { body, .. } => rename(body, from, to),
+        ExprKind::Range { lo, hi } => {
+            rename(lo, from, to);
+            rename(hi, from, to);
+        }
         ExprKind::Binary { lhs, rhs, .. } => {
             rename(lhs, from, to);
             rename(rhs, from, to);
@@ -2274,7 +2283,7 @@ bad() for 1beat
             msg(&stereo(
                 "[osc(saw, f), osc(saw, f)] + [osc(saw, f), osc(saw, f), osc(saw, f)]"
             )),
-            "can't combine a 2-channel signal with a 3-channel one"
+            "can't combine a list of 2 with a list of 3"
         );
         assert_eq!(
             msg(&stereo("osc(saw, [f, f]).lpf(cutoff: [1khz, 2khz, 3khz])")),
@@ -2283,6 +2292,107 @@ bad() for 1beat
         assert_eq!(
             msg(&stereo("[l, r] = osc(saw, f)\nl")),
             "this signal has 1 channel(s), but 2 name(s) are given"
+        );
+    }
+
+    #[test]
+    fn lists_map_and_sum() {
+        let mono = |body: &str| format!("instr a(f: hz) {{ {body} }}");
+        // a supersaw: seven detuned oscillators added into one signal
+        let p = ok(&mono(
+            "(0..7).map(fn(i) { osc(saw, f * (1 + (i - 3) * 0.004)) }).sum * 0.2",
+        ));
+        assert_eq!(p.instruments[0].graph.channels(), 1);
+        // a list literal maps too, and the parameter can be used in a unit
+        ok(&mono("[1, 2, 3].map(fn(h) { osc(sine, f * h) * (1 / h) }).sum"));
+        // mapping to a list keeps it a list
+        let p = ok("config { channels: stereo }\ninstr a(f: hz) { [1, 1.01].map(fn(r) { osc(saw, f * r) }) }");
+        assert_eq!(p.instruments[0].graph.channels(), 2);
+
+        assert_eq!(msg(&mono("(3..3).map(fn(i) { osc(saw, f) }).sum")), "this range is empty");
+        // a list is not limited by the channel count until it becomes a signal
+        ok(&mono("(0..40).map(fn(i) { osc(saw, f * (1 + i * 0.001)) }).sum"));
+        assert_eq!(
+            msg(&mono("(0..17).map(fn(i) { osc(saw, f) })")),
+            "a list holds at most 16 entries"
+        );
+        assert_eq!(
+            msg(&mono("[1, 2].map(osc(saw, f))")),
+            "`map` takes a function"
+        );
+        assert_eq!(
+            msg(&mono("fn(x) { x }")),
+            "a function can only be the argument of `map`"
+        );
+        assert_eq!(
+            msg(&mono("[1, 2].map(fn(f) { osc(saw, f) }).sum")),
+            "`f` is already in use, so it can't be this function's parameter"
+        );
+        // the parameter is not visible after the map
+        assert!(msg(&mono("[1].map(fn(x) { x }).sum + x")).contains("x"));
+        // opcodes stay scalar
+        assert_eq!(
+            msg("opcode o(x) { x * (0..3) }"),
+            "lists and functions can't be used inside an opcode"
+        );
+    }
+
+    #[test]
+    fn indexing_and_for_loops() {
+        let mono = |body: &str| format!("instr a(f: hz) {{ {body} }}");
+        // `for` is `map` with the function written inline
+        let p = ok(&mono(
+            "(for i in 0..7 { osc(saw, f * (1 + (i - 3) * 0.004)) }).sum * 0.2",
+        ));
+        assert_eq!(p.instruments[0].graph.channels(), 1);
+        ok(&mono("for h in [1, 2, 3] { osc(sine, f * h) }.sum"));
+        // indexing picks one entry; the index can come from a loop
+        ok(&mono("bank = [osc(saw, f), osc(sine, f)]\nbank[1] * 0.5"));
+        ok(&mono("bank = [osc(saw, f), osc(sine, f)]\n(for i in 0..2 { bank[i] * (i + 1) }).sum"));
+        // a unit survives an index
+        ok(&mono("osc(saw, [f, f * 2][1])"));
+
+        assert_eq!(
+            msg(&mono("[osc(saw, f), osc(sine, f)][2]")),
+            "index 2 is out of range for a list of 2"
+        );
+        assert_eq!(
+            msg(&mono("[osc(saw, f)][f]")),
+            "an index must be a whole number, 0 or more, known while compiling"
+        );
+        assert_eq!(
+            msg("opcode o(x) { x[0] }"),
+            "lists and functions can't be used inside an opcode"
+        );
+    }
+
+    #[test]
+    fn lists_are_their_own_values() {
+        let mono = |body: &str| format!("instr a(f: hz) {{ {body} }}");
+        // lists of lists, `len`, and arithmetic on lists
+        ok(&mono(
+            "rows = for r in 0..3 { for c in 0..4 { osc(saw, f * (1 + (r * 4 + c) * 0.001)) } }\nrows[1][2] + rows[2].sum * (1 / rows.len)",
+        ));
+        ok(&mono("([1, 2, 3] * 2).sum * 0.1 + osc(saw, f)"));
+        // a list holds entries of different units; only a signal needs one
+        ok(&mono("pair = [f, 0.5]\nosc(saw, pair[0]) * pair[1]"));
+        // `split` makes a list of a signal's channels
+        let p = ok("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan.split.map(fn(c) { c * 0.5 }) }");
+        assert_eq!(p.instruments[0].graph.channels(), 2);
+        ok("config { channels: stereo }\ninstr a(f: hz) { [l, r] = [osc(saw, f), osc(sine, f)]\n[r, l] }");
+
+        assert_eq!(
+            msg(&mono("osc(saw, f).pan.map(fn(c) { c })")),
+            "`map` works on a list"
+        );
+        assert_eq!(msg(&mono("osc(saw, f)[0]")), "only a list can be indexed");
+        assert_eq!(
+            msg(&mono("[[osc(saw, f), osc(saw, f)], [osc(saw, f), osc(saw, f)]]")),
+            "a list of lists can't be used as a signal"
+        );
+        assert_eq!(
+            msg(&mono("[l, r, c] = [osc(saw, f), osc(sine, f)]\nl")),
+            "this list has 2 entries, but 3 name(s) are given"
         );
     }
 

@@ -239,6 +239,8 @@ fn fifths(root: note, count: n) {
 
 Anonymous functions are `fn(a, b) { a * b }`; `it` covers the one-argument case.
 
+**Lists in instruments (built):** a list is its own compile-time value, not a set of channels. `[a, b, c]` and `(0..8)` (whole numbers, end excluded) make lists, entries can be anything including other lists, and a list has no length limit. Arithmetic goes entry by entry (`[1, 2, 3] * 2`; two lists must be the same length). `list.map(fn(x) { ... })` or `for x in list { ... }` runs the body once per entry while compiling, so each entry becomes its own branch of the graph; `list.sum` adds the entries into one signal, `list.len` counts them, `list[i]` picks one (from 0, the index known while compiling), and `[l, r] = list` names entries. A list becomes a multichannel signal wherever a signal is needed (an `out`, an argument such as `osc(saw, [f, f * 2])`), one channel per entry, which is where the 16-channel limit applies; the entries then share a unit and must be one channel each. `signal.split` goes the other way, making a list of a signal's channels. Example: `(for i in 0..7 { osc(saw, f * (1 + (i - 3) * 0.004)) }).sum`. The function takes one parameter, which can't reuse a name already in scope. Opcodes take no lists yet. Not built: named `fn` items, `it` as the parameter, multi-statement function bodies.
+
 ### Scheduling from instruments
 
 An instrument can schedule other notes, the basis of generative writing, as with Csound's `schedule`:

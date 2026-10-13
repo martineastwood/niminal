@@ -64,6 +64,15 @@ fn rewrite_expr(e: &mut Expr, registry: &Registry, errors: &mut Vec<Diagnostic>)
             };
         }
         ExprKind::Neg(inner) => rewrite_expr(inner, registry, errors),
+        ExprKind::Index { list, index } => {
+            rewrite_expr(list, registry, errors);
+            rewrite_expr(index, registry, errors);
+        }
+        ExprKind::Lambda { body, .. } => rewrite_expr(body, registry, errors),
+        ExprKind::Range { lo, hi } => {
+            rewrite_expr(lo, registry, errors);
+            rewrite_expr(hi, registry, errors);
+        }
         ExprKind::Channels(items) => items
             .iter_mut()
             .for_each(|i| rewrite_expr(i, registry, errors)),

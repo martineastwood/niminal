@@ -336,6 +336,21 @@ pub enum ExprKind {
         otherwise: Box<Expr>,
     },
     Env(EnvLit),
+    /// `(0..8)`: the whole numbers from `lo` up to, not including, `hi`, as a list.
+    Range {
+        lo: Box<Expr>,
+        hi: Box<Expr>,
+    },
+    /// `list[2]`: one entry of a list, by a whole number known while compiling.
+    Index {
+        list: Box<Expr>,
+        index: Box<Expr>,
+    },
+    /// `fn(r) { osc(saw, freq * r) }`: only as the argument of `map`.
+    Lambda {
+        params: Vec<Ident>,
+        body: Box<Expr>,
+    },
     /// `"/fx/width"`: text, as an argument such as an OSC address.
     Str(String),
 }

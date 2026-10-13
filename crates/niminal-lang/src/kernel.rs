@@ -491,6 +491,11 @@ impl Kb<'_> {
                 })
             }
             ExprKind::Channels(_) => Err(channels_in_opcode(e.span)),
+            ExprKind::Range { .. } | ExprKind::Lambda { .. } | ExprKind::Index { .. } => Err(Diagnostic::new(
+                "lists and functions can't be used inside an opcode",
+                e.span,
+            )
+            .with_help("an opcode works on one sample at a time; build lists in an instrument")),
             ExprKind::Pattern(_) | ExprKind::Grid(_) | ExprKind::Rows(_) | ExprKind::Rest => Err(
                 Diagnostic::new("patterns can't be used inside an opcode", e.span),
             ),

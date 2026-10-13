@@ -501,7 +501,11 @@ impl Perform<'_> {
                 "comparisons and `if` work in instruments, tracks and opcodes, not in clips and scenes",
                 e.span,
             )),
-            ExprKind::Channels(_) | ExprKind::Binary { .. } => Err(Diagnostic::new(
+            ExprKind::Channels(_)
+            | ExprKind::Binary { .. }
+            | ExprKind::Range { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::Lambda { .. } => Err(Diagnostic::new(
                 "expected a pattern, clip or scene here",
                 e.span,
             )
