@@ -518,7 +518,7 @@ impl Perform<'_> {
                 "comparisons, logic, `if` and `for` work in instruments, functions and tracks, not in clips and scenes",
                 e.span,
             )),
-            ExprKind::Channels(_)
+            ExprKind::Array(_)
             | ExprKind::Binary { .. }
             | ExprKind::Range { .. }
             | ExprKind::Index { .. }

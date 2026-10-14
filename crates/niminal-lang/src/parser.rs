@@ -814,7 +814,7 @@ impl Parser {
                 self.bump();
                 let inner = self.type_spec()?;
                 let end = self.expect(&Tok::RBracket)?;
-                Ok(TypeSpec::List(Box::new(inner), start.to(end)))
+                Ok(TypeSpec::Array(Box::new(inner), start.to(end)))
             }
             Tok::LParen => {
                 self.bump();
@@ -1538,13 +1538,16 @@ impl Parser {
             }
             Tok::LBracket => {
                 self.bump();
-                let mut items = vec![self.expr()?];
-                while self.eat(&Tok::Comma) {
+                let mut items = Vec::new();
+                if self.peek() != &Tok::RBracket {
                     items.push(self.expr()?);
+                    while self.eat(&Tok::Comma) && self.peek() != &Tok::RBracket {
+                        items.push(self.expr()?);
+                    }
                 }
                 let end = self.expect(&Tok::RBracket)?;
                 Ok(Expr {
-                    kind: ExprKind::Channels(items),
+                    kind: ExprKind::Array(items),
                     span: span.to(end),
                 })
             }
@@ -1960,7 +1963,7 @@ fn one_pole(x, cutoff: hz) {
         assert!(f.params[1].ty.is_none());
         assert_eq!(f.params[2].rate.map(|r| r.0), Some(Rate::Const));
         assert!(matches!(&f.params[3].ty, Some(TypeSpec::Choice(n)) if n.len() == 2));
-        assert!(matches!(&f.params[4].ty, Some(TypeSpec::List(..))));
+        assert!(matches!(&f.params[4].ty, Some(TypeSpec::Array(..))));
     }
 
     #[test]
@@ -1996,7 +1999,7 @@ fn one_pole(x, cutoff: hz) {
     #[test]
     fn constants_are_lists_not_patterns() {
         let items = parse_ok("const taps = [0.25, 0.5, 0.25]");
-        assert!(matches!(&items[0], Item::Const { value: Expr { kind: ExprKind::Channels(v), .. }, .. } if v.len() == 3));
+        assert!(matches!(&items[0], Item::Const { value: Expr { kind: ExprKind::Array(v), .. }, .. } if v.len() == 3));
     }
 
     fn env_of(src: &str) -> EnvLit {
@@ -2113,7 +2116,7 @@ instr a(f: hz) {
         let Item::Instr(i) = &items[1] else { panic!() };
         assert!(matches!(&i.body[0], Stmt::Destructure { names, .. } if names.len() == 2));
         let Stmt::Expr(e) = &i.body[2] else { panic!() };
-        assert!(matches!(&e.kind, ExprKind::Channels(items) if items.len() == 2));
+        assert!(matches!(&e.kind, ExprKind::Array(items) if items.len() == 2));
         // a bracketed expression that is not followed by `=` is a value, not a pattern
         assert!(matches!(
             parse_ok("config { a: 1, b: 2 }")[0],

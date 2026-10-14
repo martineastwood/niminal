@@ -89,11 +89,11 @@ osc(sine, freq.init)                    // inline, no binding needed
 
 Parameters are where annotations earn their place, because they are the contract with the caller (§5.2). If dogfooding shows that local annotations help readability, the parameter syntax can be allowed on bindings later (`cut: hz = ...`). Until then, bindings stay `name = expr`.
 
-### 3.3 Shapes: values, lists and channels
+### 3.3 Shapes: values, arrays and channels
 
 - **A value** is one number or one signal.
-- **A list** has a length known while compiling. Its entries can be anything, including signals and other lists (§7).
-- **A multichannel signal** is a set of signals that carries a channel layout (`stereo`, `surround(5.1)`, …). A list becomes channels where it reaches `out`, a bus, or a built-in that expects one signal.
+- **An array** has a length known while compiling. Elements can be constants, changing values or nested arrays (§7). Tables and writable buffers specialize its storage.
+- **A multichannel signal** specializes an array of channels with a rate, a unit and a channel layout (`stereo`, `surround(5.1)`, …). Arrays become audio channels at `out`, a bus, `pan` or layout conversion. Signals support array operations directly; array sizes are independent of channel limits.
 
 ## 4. Ranges
 
@@ -387,7 +387,7 @@ There are no `while` or `loop` statements, so nothing can loop forever on the au
 - **Method calls:** `x.f(a)` is `f(x, a)`. Calls chain from left to right.
 - **No parentheses** are needed after a dot when there are no further arguments: `x.tanh`, `xs.sum`. A bare name is always a reference, never a call.
 - **After a dot,** a name resolves to a result field (`f.band`) first, then a function.
-- **A list given to a built-in** where one signal is expected becomes channels, and the built-in runs once per channel: `osc(saw, freq * [1, 1.01])` is two oscillators. `.sum` mixes a signal's channels down. A list given to a user function where one value is expected stays a list, and the body works on it entry by entry.
+- **An array given to a built-in** expands the built-in element by element and returns an array: `osc(saw, freq * [1, 1.01])` is two oscillators. `.sum` mixes a signal's channels down. A list given to a user function where one value is expected stays a list, and the body works on it entry by entry.
 
 ### 6.7 Anonymous functions
 
@@ -402,50 +402,44 @@ ratios = (1..8).map(1 / it)
 
 **[not built]** Functions as parameters of user functions (open question 4).
 
-## 7. Lists, state lists and tables
+## 7. Arrays, tables and state buffers
 
-There is one list type. Where it lives decides what you can do with it.
+There is one fixed-length array model. Tables, computed arrays and writable buffers share its operations; storage does not determine which operations are available.
 
-### 7.1 Lists
+### 7.1 Arrays
 
-- **Written as** `[a, b, c]` or produced by a range, `for` or `.map`.
-- **The length** is always `const`. Entries can be anything: numbers, signals, ranges, other lists.
-- **Arithmetic** works entry by entry (`[1, 2, 3] * 2`). Two lists combined this way must have the same length.
-- **Methods:** `.len`, `.sum`, `.min`, `.max`, `.map(f)`, `.indices` (the same as `0..<xs.len`), and `.channels` on a signal for a list of its channels.
-- **Indexing** counts from 0 and wraps: `xs[-1]` is the last entry and `xs[xs.len]` is the first. Indexing can never fail.
-  - A `const` index picks an entry while compiling. The entries can be anything.
-  - A changing index reads an entry while running. The entries must share a unit. A list of numbers is read as a table; a list of signals indexed by a changing value is a switch between them:
+- `[a, b]`, `for` and `.map` make arrays. Values may be constant, changing, or nested arrays. Function parameter types such as `[num]`, `[hz]` and `[[num]]` check their elements.
+- Arithmetic, comparisons, math, `.range`, `.clamp` and unit conversion apply element by element. Scalars broadcast; arrays must have matching shapes. Built-in DSP operations expand over arrays and return arrays, without imposing channel limits.
+- `.len`, `.sum`, `.min`, `.max`, `.map(f)`, `.indices` and slicing work for every storage type. Nested reductions combine corresponding elements of the rows.
+- `xs[i]` counts from zero, floors fractional indices and wraps in both directions. Changing indices require matching element shapes and units. `xs[a..<b]` copies selected values into an array.
+- `xs.at(pos, interp: linear)` interpolates a one-dimensional numeric array, whether its values come from a table, a computed frame or a state buffer. Interpolation is `none`, `linear` (default) or `cubic`.
+- Empty arrays (`[]`, `zeros(0)`, empty ranges and slices) support length, mapping and iteration. Indexing, interpolation and reductions on them are compile errors.
+- Signals offer array operations directly (`signal[0]`, `signal.map(it * 0.5)`, `signal.sum`). Mapping and element-wise operations preserve channel layout. `.channels` gives an ordinary array of channels.
+- Array arguments and results preserve their shape across pure and stateful functions, including arrays larger than the audio channel limit and named array results. `pan`, layout conversion and audio outputs consume channels and enforce channel constraints.
 
-    ```
-    wave = [osc(saw, f), osc(square, f), osc(tri, f)][step]   // all three run; one is heard
-    ```
+### 7.2 Constant tables
 
-- **Reading between entries:** `xs.at(pos, interp: linear)` reads a list of numbers at a fractional position, wrapping. `interp:` is `none`, `linear` (the default) or `cubic`.
-- **Slices:** `xs[0..<16]` takes entries with `const` bounds.
+`const name = expr` evaluates an array while compiling. Numeric table storage is shared by voices. Constants may use array arithmetic, mapping, reductions, slicing, indexing and interpolation, plus functions without state.
 
-### 7.2 Tables
-
-`const name = expr` works out a value while compiling, once, and every voice shares it. A list of numbers defined this way is a table.
-
-```
-const saw8   = harmonics([1, -1/2, 1/3, -1/4], size: 4096)    // one cycle, loudest point 1
-const sine1k = (0..<1024).map(sin(2 * pi * it / 1024))        // built in the language
-const taps   = [0.25, 0.5, 0.25]
-const a4     = mtof(69)                                       // a number
+```nml
+const saw8 = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
+const sine1k = (0..<1024).map(sin(2 * pi * it / 1024))
+const taps = [0.25, 0.5, 0.25]
 ```
 
-A `const` can use numbers, ranges, lists and functions without state; anything that changes while playing is an error. **[not built]** `file("irs/hall.wav")` as a table.
+**[not built]** `file("irs/hall.wav")` as a table.
 
-### 7.3 State lists
+### 7.3 State arrays
 
-`state` in front of a list makes it writable, per call and per voice. It is how a function keeps a buffer:
+`state` declares a fixed-length writable numeric buffer, per call and per voice. It may start from constants or note-start values:
 
+```nml
+state buf = zeros(size)
+state initial = [x, x * 2]
+buf[pos] = y
 ```
-state buf = zeros(size)          // size must be const
-buf[pos] = y                     // writes wrap like reads
-```
 
-`zeros(n)` makes a list of `n` zeros. Any `const` list of numbers can also be the starting value (`state taps = [0, 0, 0, 0]`). A state list is copied for each voice when the voice starts.
+Writes wrap like reads. Reads after a write see the new value. Mapping, slicing, passing and returning a state buffer read snapshots of its current elements. Ordinary array values and function arguments cannot be written. Array storage is allocated before audio processing and never resized while running.
 
 ## 8. Instruments
 
@@ -693,7 +687,7 @@ Only the words used by this part of the language are listed here. The full list 
 
 - **Tables are `const` definitions,** not any top-level binding. At the top level a bare bracket is a pattern (`riff = [c4 e4]`), and `[0.25, 0.5]` is a chord there, so a keyword tells the two apart.
 - **A state's unit is its starting value's unit,** rather than inferred from what is assigned later: explicit, and it needs no unit inference across lines. `state y = x` covers a generic function.
-- **A list given to a built-in becomes channels** (the multichannel expansion of `niminal Spec.md`), and `.sum` mixes a signal's channels down. Mapping built-in calls over lists broke channel pairing, such as a stereo signal with `cutoff: [800hz, 1200hz]`.
+- **Built-ins expand over arrays** while signals retain channel layout metadata. A stereo signal with `cutoff: [800hz, 1200hz]` pairs each cutoff with its channel. Tables, buffers and computed arrays share fixed-length storage and operations; channel limits apply when converting arrays into audio.
 - **`tail:` also applies to voices with envelopes:** a plucked string's envelope is only its excitation.
 - **Calling an instrument plays its body in this voice** rather than starting a sub-voice; the envelopes start and release with it.
 - **`note` is reserved,** like `out` and `it`; the examples use `key: num` for a MIDI note number.

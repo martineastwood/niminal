@@ -44,7 +44,7 @@ From the tightest to the loosest:
 - **UFCS:** `x.f(a)` is `f(x, a)`. The dot is left-to-right wiring.
 - **Paren-less calls only after a dot:** `riff.reverse`, `sig.tanh`. A bare name is a reference, never a call.
 - **After a dot**, a result field (`f.band`) comes first, then a function. Ambiguity is an error.
-- **A list given to a built-in** where one signal is expected becomes channels: `osc(saw, [f, f * 1.01])` is two oscillators, and `.sum` mixes a signal's channels down.
+- **Arrays expand built-ins element by element:** `osc(saw, [f, f * 1.01])` is an array of two oscillators. It becomes audio channels at an output or layout conversion; `.sum` adds its elements. Array lengths are independent of the audio channel limit.
 
 ## Buses and `out`
 

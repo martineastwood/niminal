@@ -22,7 +22,7 @@ pub(crate) enum Kind {
     /// One of these names, known while compiling. Inside the body each name is its index.
     Choice(Vec<String>),
     /// A list whose entries have this kind.
-    List(Box<Kind>),
+    Array(Box<Kind>),
 }
 
 impl Kind {
@@ -31,7 +31,7 @@ impl Kind {
         match self {
             Kind::Unit { unit, .. } | Kind::Range { unit, .. } => Some(*unit),
             Kind::Choice(_) => Some(Unit::Num),
-            Kind::Any | Kind::List(_) => None,
+            Kind::Any | Kind::Array(_) => None,
         }
     }
 
@@ -42,7 +42,7 @@ impl Kind {
             Kind::Unit { unit, .. } => unit.describe().into(),
             Kind::Range { unit, .. } => unit.describe().into(),
             Kind::Choice(names) => format!("one of {}", names.join(", ")),
-            Kind::List(inner) => format!("a list of {}", inner.describe()),
+            Kind::Array(inner) => format!("an array of {}", inner.describe()),
         }
     }
 }
@@ -149,7 +149,7 @@ pub(crate) fn kind_of(ty: &TypeSpec, tempo: Tempo) -> Res<Kind> {
             }
             Kind::Choice(names.iter().map(|n| n.name.clone()).collect())
         }
-        TypeSpec::List(inner, _) => Kind::List(Box::new(kind_of(inner, tempo)?)),
+        TypeSpec::Array(inner, _) => Kind::Array(Box::new(kind_of(inner, tempo)?)),
     })
 }
 

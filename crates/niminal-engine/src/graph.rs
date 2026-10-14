@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::opcode::{MAX_INPUTS, Opcode};
+use crate::opcode::Opcode;
 
 /// Where a node input comes from.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -127,7 +127,7 @@ impl GraphBuilder {
     /// Like [`GraphBuilder::add`], giving every result of the opcode.
     pub fn add_outputs(&mut self, op: impl Opcode + 'static, args: &[(&str, Src)]) -> Result<Vec<Src>, GraphError> {
         let ports = op.ports().to_vec();
-        assert!(ports.len() <= MAX_INPUTS, "`{}` declares too many ports", op.name());
+        assert!(ports.len() <= op.max_inputs(), "`{}` declares too many ports for its processing adapter", op.name());
 
         let mut wired: Vec<Option<Src>> = vec![None; ports.len()];
         for &(name, src) in args {
@@ -198,6 +198,41 @@ impl GraphBuilder {
         assert!(!outputs.is_empty(), "a graph needs at least one output channel");
         // interns constant outputs
         let output_enc: Vec<usize> = outputs.iter().map(|&o| self.slot_for(o)).collect();
+        // Nodes are topologically ordered, so one backwards pass retains
+        // exactly the dependencies of outputs, sends and observable effects.
+        let mut used = vec![false; self.results];
+        let mut constants = vec![false; self.consts.len()];
+        let mark = |slot: usize, used: &mut [bool], constants: &mut [bool]| {
+            if (NODE_BASE..INPUT_BASE).contains(&slot) { used[slot - NODE_BASE] = true; }
+            else if (CONST_BASE..NODE_BASE).contains(&slot) { constants[slot - CONST_BASE] = true; }
+        };
+        for &slot in &output_enc { mark(slot, &mut used, &mut constants); }
+        for &(_, _, slot, _) in &self.sends { mark(slot, &mut used, &mut constants); }
+        let mut keep = vec![false; self.nodes.len()];
+        for (i, node) in self.nodes.iter().enumerate().rev() {
+            if node.op.has_side_effects() || used[node.first..node.first + node.outputs].iter().any(|v| *v) {
+                keep[i] = true;
+                for &slot in &node.inputs { mark(slot, &mut used, &mut constants); }
+            }
+        }
+        let mut result_map = vec![usize::MAX; self.results];
+        let mut results = 0;
+        self.nodes = self.nodes.into_iter().zip(keep).filter_map(|(mut node, keep)| {
+            if !keep { return None; }
+            for k in 0..node.outputs { result_map[node.first + k] = results + k; }
+            node.first = results;
+            results += node.outputs;
+            Some(node)
+        }).collect();
+        self.results = results;
+        let mut constant_map = vec![usize::MAX; self.consts.len()];
+        let mut count = 0;
+        self.consts = self.consts.into_iter().enumerate().filter_map(|(i, value)| {
+            if !constants[i] { return None; }
+            constant_map[i] = count;
+            count += 1;
+            Some(value)
+        }).collect();
         let n_params = self.params.len();
         let n_consts = self.consts.len();
         let n_inputs = self.n_inputs;
@@ -206,9 +241,9 @@ impl GraphBuilder {
             if slot >= INPUT_BASE {
                 n_params + n_consts + (slot - INPUT_BASE)
             } else if slot >= NODE_BASE {
-                n_fixed + (slot - NODE_BASE)
+                n_fixed + result_map[slot - NODE_BASE]
             } else if slot >= CONST_BASE {
-                n_params + (slot - CONST_BASE)
+                n_params + constant_map[slot - CONST_BASE]
             } else {
                 slot
             }
@@ -310,6 +345,9 @@ impl Graph {
     pub fn param_names(&self) -> impl Iterator<Item = &str> {
         self.params.iter().map(|p| p.name.as_str())
     }
+
+    /// Number of DSP nodes that contribute audio or observable effects.
+    pub fn node_count(&self) -> usize { self.nodes.len() }
 
     /// Number of output channels.
     pub fn channels(&self) -> usize {

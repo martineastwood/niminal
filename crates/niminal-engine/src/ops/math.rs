@@ -217,12 +217,12 @@ impl Opcode for Delay1 {
 /// A table read at a position: whole entries with `Interp::None`, or between them. Wraps.
 #[derive(Clone)]
 pub struct TableRead {
-    data: std::sync::Arc<[f64]>,
+    data: std::sync::Arc<crate::Array<f64>>,
     interp: super::custom::Interp,
 }
 
 impl TableRead {
-    pub fn new(data: std::sync::Arc<[f64]>, interp: super::custom::Interp) -> Self {
+    pub fn new(data: std::sync::Arc<crate::Array<f64>>, interp: super::custom::Interp) -> Self {
         assert!(!data.is_empty(), "a table has at least one entry");
         TableRead { data, interp }
     }
@@ -328,5 +328,42 @@ impl Opcode for SampleRate {
 
     fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
         out.fill(ctx.sample_rate);
+    }
+}
+
+/// A numeric array of computed values, read by position without a linear
+/// chain of switches. Graph slots already hold the elements.
+#[derive(Clone)]
+pub struct ArrayRead {
+    ports: Vec<Port>,
+    interp: super::custom::Interp,
+}
+
+impl ArrayRead {
+    pub fn new(len: usize, interp: super::custom::Interp) -> Self {
+        assert!(len > 0);
+        let ports = std::iter::once(Port::named("pos", None))
+            .chain((0..len).map(|i| Port::named(format!("e{i}"), None))).collect();
+        Self { ports, interp }
+    }
+}
+
+impl Opcode for ArrayRead {
+    fn name(&self) -> &str { "array_read" }
+    fn ports(&self) -> &[Port] { &self.ports }
+    fn box_clone(&self) -> Box<dyn Opcode> { Box::new(self.clone()) }
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        for (i, value) in out.iter_mut().enumerate() {
+            *value = super::custom::read_array(inputs.len() - 1, f64::from(inputs[0][i]), self.interp,
+                |k| f64::from(inputs[k + 1][i])) as f32;
+        }
+    }
+    fn max_inputs(&self) -> usize { self.ports().len() }
+
+    fn process_slots(&mut self, _ctx: &ProcessCtx, slots: &[[f32; crate::BLOCK]], indices: &[usize], outs: &mut [[f32; crate::BLOCK]], frames: usize) {
+        for i in 0..frames {
+            outs[0][i] = super::custom::read_array(indices.len() - 1, f64::from(slots[indices[0]][i]), self.interp,
+                |k| f64::from(slots[indices[k + 1]][i])) as f32;
+        }
     }
 }

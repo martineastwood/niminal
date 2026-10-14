@@ -106,7 +106,7 @@ No project-wide voice cap in `config` today. Per-instrument limits use `with(max
 
 ## Multichannel
 
-A comma list of signals builds multichannel audio, and a list given where one signal is expected becomes channels (`osc(saw, [f, f * 1.01])`). `.channels` gives a signal's channels as a list, and `.sum` mixes them down. Destructure when you need the channels separately:
+An array of signals becomes multichannel audio when it reaches an output. Built-ins expand over arrays (`osc(saw, [f, f * 1.01])` produces two oscillators). Signals are arrays of channels with layout metadata: they support indexing, mapping and reductions directly. `.channels` gives an ordinary array of the channels, and `.sum` mixes them down. Destructure when you need the channels separately:
 
 ```nml
 [l, r] = src

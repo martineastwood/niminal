@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use crate::{Array, wrapped_index};
 use crate::opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx};
 
 /// Scalar math functions, usable inside kernels and as the [`Func`] opcode.
@@ -173,18 +174,20 @@ pub enum Instr {
     /// One sample of the kernel's `index`th built-in opcode.
     Native { dst: usize, index: usize },
     /// Entry `idx` of a list, wrapping at both ends.
-    Read { dst: usize, list: List, idx: usize },
+    Read { dst: usize, list: ArraySource, idx: usize },
     /// A list read at a fractional position, wrapping.
-    ReadAt { dst: usize, list: List, pos: usize, interp: Interp },
+    ReadAt { dst: usize, list: ArraySource, pos: usize, interp: Interp },
     /// Write entry `idx` (wrapping) of state list `list`, if `cond` is absent or not 0.
     Write { list: usize, idx: usize, src: usize, cond: Option<usize> },
 }
 
 /// Which list an instruction reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum List {
+pub enum ArraySource {
     /// A table shared by every voice.
     Table(usize),
+    /// An immutable array of computed register values.
+    Values(usize),
     /// A state list, written by this copy of the kernel.
     State(usize),
 }
@@ -246,9 +249,11 @@ pub struct Kernel {
     /// Initial value of each state slot, before `init` runs.
     pub state_init: Vec<f64>,
     /// Starting contents of each state list.
-    pub lists: Vec<Vec<f64>>,
+    pub buffers: Vec<Array<f64>>,
     /// Lists every voice reads and none writes.
-    pub tables: Vec<Arc<[f64]>>,
+    pub tables: Vec<Arc<Array<f64>>>,
+    /// Register indices of computed arrays, built once by the compiler.
+    pub values: Vec<Array<usize>>,
     /// The registers holding the results, by name. Most kernels have one.
     pub outputs: Vec<(String, usize)>,
     /// Built-in opcodes the body calls.
@@ -259,7 +264,7 @@ pub struct Kernel {
 pub struct Custom {
     kernel: Arc<Kernel>,
     state: Vec<f64>,
-    lists: Vec<Vec<f64>>,
+    buffers: Vec<Array<f64>>,
     regs: Vec<f64>,
     sample_rate: f64,
     /// Whether the note-start section has run.
@@ -274,7 +279,7 @@ impl Custom {
     pub fn new(kernel: Arc<Kernel>) -> Self {
         Custom {
             state: kernel.state_init.clone(),
-            lists: kernel.lists.clone(),
+            buffers: kernel.buffers.clone(),
             regs: vec![0.0; kernel.registers],
             natives: kernel.natives.iter().map(|n| n.op.box_clone()).collect(),
             kernel,
@@ -284,18 +289,18 @@ impl Custom {
         }
     }
 
-    fn run(&mut self, section: Section, ctx: &ProcessCtx, inputs: &[&[f32]], i: usize) {
+    fn run(&mut self, section: Section, ctx: &ProcessCtx, input: &impl Fn(usize, usize) -> f32, i: usize) {
         let k = &*self.kernel;
         let code = match section {
             Section::Init => &k.init,
             Section::Block => &k.block,
             Section::Sample => &k.code,
         };
-        let (regs, state, lists) = (&mut self.regs, &mut self.state, &mut self.lists);
+        let (regs, state, buffers) = (&mut self.regs, &mut self.state, &mut self.buffers);
         for instr in code {
             match *instr {
                 Instr::Const { dst, value } => regs[dst] = value,
-                Instr::Input { dst, port } => regs[dst] = f64::from(inputs[port][i]),
+                Instr::Input { dst, port } => regs[dst] = f64::from(input(port, i)),
                 Instr::SampleRate { dst } => regs[dst] = self.sample_rate,
                 Instr::LoadState { dst, slot } => regs[dst] = state[slot],
                 Instr::StoreState { slot, src } => {
@@ -330,30 +335,40 @@ impl Custom {
                     self.natives[index].process(ctx, &slices[..call.inputs.len()], &mut y);
                     regs[dst] = f64::from(y[0]);
                 }
-                Instr::Read { dst, list, idx } => {
-                    let data: &[f64] = match list {
-                        List::Table(t) => &k.tables[t],
-                        List::State(s) => &lists[s],
+                Instr::Read { dst, list, idx } | Instr::ReadAt { dst, list, pos: idx, .. } => {
+                    let interp = match *instr { Instr::ReadAt { interp, .. } => interp, _ => Interp::None };
+                    let value = match list {
+                        ArraySource::Table(t) => read_at(&k.tables[t], regs[idx], interp),
+                        ArraySource::State(s) => read_at(&buffers[s], regs[idx], interp),
+                        ArraySource::Values(a) => read_array(k.values[a].len(), regs[idx], interp, |i| regs[k.values[a][i]]),
                     };
-                    regs[dst] = data[wrap(regs[idx].floor(), data.len())];
-                }
-                Instr::ReadAt { dst, list, pos, interp } => {
-                    let data: &[f64] = match list {
-                        List::Table(t) => &k.tables[t],
-                        List::State(s) => &lists[s],
-                    };
-                    regs[dst] = read_at(data, regs[pos], interp);
+                    regs[dst] = value;
                 }
                 Instr::Write { list, idx, src, cond } => {
-                    if cond.is_none_or(|c| regs[c] != 0.0) {
-                        let data = &mut lists[list];
+                    if !(section == Section::Init && self.carried) && cond.is_none_or(|c| regs[c] != 0.0) {
+                        let data = &mut buffers[list];
                         let n = data.len();
-                        data[wrap(regs[idx].floor(), n)] = regs[src];
+                        data[wrapped_index(regs[idx], n)] = regs[src];
                     }
                 }
             }
         }
     }
+    fn process_with(&mut self, ctx: &ProcessCtx, input: impl Fn(usize, usize) -> f32, outs: &mut [[f32; BLOCK]], frames: usize) {
+        if frames == 0 { return; }
+        if !self.started {
+            self.run(Section::Init, ctx, &input, 0);
+            self.started = true;
+        }
+        self.run(Section::Block, ctx, &input, 0);
+        for i in 0..frames {
+            self.run(Section::Sample, ctx, &input, i);
+            for (out, (_, reg)) in outs.iter_mut().zip(&self.kernel.outputs) {
+                out[i] = self.regs[*reg] as f32;
+            }
+        }
+    }
+
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -363,28 +378,19 @@ enum Section {
     Sample,
 }
 
-/// An index into a list of `len` entries, counting from either end.
-fn wrap(i: f64, len: usize) -> usize {
-    if !i.is_finite() {
-        return 0;
-    }
-    i.rem_euclid(len as f64) as usize % len
-}
-
-/// The value of a list at a fractional position, wrapping.
-pub fn read_at(data: &[f64], pos: f64, interp: Interp) -> f64 {
-    let n = data.len();
-    if !pos.is_finite() {
-        return data[0];
-    }
+/// Read a numeric array through its storage-independent element accessor.
+/// This lets tables, buffers and computed arrays share interpolation without
+/// gathering their elements or allocating on the audio thread.
+pub fn read_array(len: usize, pos: f64, interp: Interp, element: impl Fn(usize) -> f64) -> f64 {
+    assert!(len > 0, "cannot read an empty array");
+    if !pos.is_finite() { return element(0); }
     let base = pos.floor();
     let t = pos - base;
-    let at = |k: f64| data[wrap(base + k, n)];
+    let at = |k: f64| element(wrapped_index(base + k, len));
     match interp {
         Interp::None => at(0.0),
         Interp::Linear => at(0.0) + (at(1.0) - at(0.0)) * t,
         Interp::Cubic => {
-            // Catmull-Rom through the four entries around the position
             let (y0, y1, y2, y3) = (at(-1.0), at(0.0), at(1.0), at(2.0));
             let a = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
             let b = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
@@ -392,6 +398,10 @@ pub fn read_at(data: &[f64], pos: f64, interp: Interp) -> f64 {
             ((a * t + b) * t + c) * t + y1
         }
     }
+}
+
+pub fn read_at(data: &[f64], pos: f64, interp: Interp) -> f64 {
+    read_array(data.len(), pos, interp, |i| data[i])
 }
 
 impl Opcode for Custom {
@@ -417,6 +427,10 @@ impl Opcode for Custom {
         self.natives.iter_mut().for_each(|n| n.prepare(sample_rate));
     }
 
+    fn has_side_effects(&self) -> bool {
+        self.kernel.natives.iter().any(|n| n.op.has_side_effects())
+    }
+
     fn is_active(&self) -> bool {
         self.natives.iter().any(|n| n.is_active())
     }
@@ -430,7 +444,7 @@ impl Opcode for Custom {
             && self.kernel == old.kernel
         {
             self.state.copy_from_slice(&old.state);
-            for (new, old) in self.lists.iter_mut().zip(&old.lists) {
+            for (new, old) in self.buffers.iter_mut().zip(&old.buffers) {
                 new.copy_from_slice(old);
             }
             self.carried = true;
@@ -448,19 +462,12 @@ impl Opcode for Custom {
     }
 
     fn process_outputs(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outs: &mut [[f32; BLOCK]], frames: usize) {
-        if frames == 0 {
-            return;
-        }
-        if !self.started {
-            self.run(Section::Init, ctx, inputs, 0);
-            self.started = true;
-        }
-        self.run(Section::Block, ctx, inputs, 0);
-        for i in 0..frames {
-            self.run(Section::Sample, ctx, inputs, i);
-            for (out, (_, reg)) in outs.iter_mut().zip(&self.kernel.outputs) {
-                out[i] = self.regs[*reg] as f32;
-            }
-        }
+        self.process_with(ctx, |port, i| inputs[port][i], outs, frames);
+    }
+
+    fn max_inputs(&self) -> usize { self.ports().len() }
+
+    fn process_slots(&mut self, ctx: &ProcessCtx, slots: &[[f32; BLOCK]], indices: &[usize], outs: &mut [[f32; BLOCK]], frames: usize) {
+        self.process_with(ctx, |port, i| slots[indices[port]][i], outs, frames);
     }
 }

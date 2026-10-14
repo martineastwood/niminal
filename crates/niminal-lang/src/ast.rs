@@ -298,7 +298,7 @@ pub enum TypeSpec {
     /// `(low | band | high)`: one of these names, known while compiling.
     Choice(Vec<Ident>),
     /// `[num]`: a list whose entries have this type.
-    List(Box<TypeSpec>, Span),
+    Array(Box<TypeSpec>, Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -398,8 +398,8 @@ pub enum ExprKind {
     Rows(String),
     /// `~`: nothing, or stop.
     Rest,
-    /// `[a, b]`: a comma list is a multichannel signal, one expression per channel.
-    Channels(Vec<Expr>),
+    /// `[a, b]`: a fixed-length array. Audio output interprets its elements as channels.
+    Array(Vec<Expr>),
     Binary {
         op: BinOp,
         lhs: Box<Expr>,
@@ -473,7 +473,7 @@ impl Expr {
             | ExprKind::Str(_) => {}
             ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| f(&mut a.value)),
             ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
-            ExprKind::Channels(items) => items.iter_mut().for_each(&mut *f),
+            ExprKind::Array(items) => items.iter_mut().for_each(&mut *f),
             ExprKind::Binary { lhs, rhs, .. }
             | ExprKind::Compare { lhs, rhs, .. }
             | ExprKind::Logic { lhs, rhs, .. } => {
@@ -533,7 +533,7 @@ impl Expr {
             | ExprKind::Str(_) => {}
             ExprKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
             ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
-            ExprKind::Channels(items) => items.iter().for_each(&mut *f),
+            ExprKind::Array(items) => items.iter().for_each(&mut *f),
             ExprKind::Binary { lhs, rhs, .. }
             | ExprKind::Compare { lhs, rhs, .. }
             | ExprKind::Logic { lhs, rhs, .. } => {

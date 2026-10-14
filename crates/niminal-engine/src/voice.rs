@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::graph::Graph;
 use crate::mixer::{Buses, MAX_CHANNELS};
-use crate::opcode::{BLOCK, MAX_INPUTS, Opcode, ProcessCtx};
+use crate::opcode::{BLOCK, Opcode, ProcessCtx};
 
 /// One running note: a private copy of every opcode's state plus the signal
 /// buffers that connect them.
@@ -424,15 +424,7 @@ impl Voice {
             let node = &self.graph.nodes[i];
             let (before, after) = self.slots.split_at_mut(base + node.first);
 
-            let mut ins: [&[f32]; MAX_INPUTS] = [&[]; MAX_INPUTS];
-            for (k, &slot) in node.inputs.iter().enumerate() {
-                ins[k] = &before[slot][..frames];
-            }
-            if node.outputs == 1 {
-                op.process(&ctx, &ins[..node.inputs.len()], &mut after[0][..frames]);
-            } else {
-                op.process_outputs(&ctx, &ins[..node.inputs.len()], &mut after[..node.outputs], frames);
-            }
+            op.process_slots(&ctx, before, &node.inputs, &mut after[..node.outputs], frames);
         }
 
         let finite = |slot: usize| self.slots[slot][..frames].iter().all(|s| s.is_finite());

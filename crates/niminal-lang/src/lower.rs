@@ -13,16 +13,16 @@ use std::sync::Arc;
 use niminal_engine::ops::{
     Add, BlockHold, Cmp, Compare, Curve, Custom, Delay1, Div, Env, EnvField, Fn1, Func, Hold, Interp,
     Max, Min, Mul, NoteTime, PanChannel, Pow, Released, Rem, SampleData, SampleRate, Sampler, Segment,
-    Select, Sub, TableRead,
+    Select, Sub, ArrayRead, TableRead,
 };
-use niminal_engine::{ChainInput, Graph, GraphBuilder, Route, Src};
+use niminal_engine::{Array, ChainInput, Graph, GraphBuilder, Route, Src};
 use niminal_score::{Tempo, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::layout::{Layout, conversion};
 use crate::funcs::{self, Kind as PKind, Param as PParam};
-use crate::kernel::{Body, KArg, cmp_op, compile_kernel, ends_with_value, interp_of, lambda_of, range_numbers};
+use crate::kernel::{Body, KArg, KernelResult, cmp_op, compile_kernel, ends_with_value, interp_of, lambda_of, range_numbers};
 use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
 use crate::program::MidiTarget;
 use crate::program::{ControlBinding, ControlDef, Instrument, Param};
@@ -239,45 +239,44 @@ enum Mode {
 /// A value in the graph: one source per channel.
 #[derive(Clone)]
 pub(crate) struct Sig {
-    srcs: Vec<Src>,
+    srcs: Array<Src>,
     layout: Layout,
     unit: Unit,
     /// Known at compile time (single channel only). Decibel values are held as
     /// linear gain factors.
     konst: Option<f64>,
-    /// The results of an opcode with several, by name; this signal is the first of them.
-    outputs: Vec<(String, Sig)>,
+}
+
+impl Datum {
+    fn array(items: Vec<Datum>) -> Self { Self::Array(items.into()) }
 }
 
 impl Sig {
     fn constant(unit: Unit, v: f64) -> Sig {
         Sig {
-            srcs: vec![Src::Const(v as f32)],
+            srcs: vec![Src::Const(v as f32)].into(),
             layout: Layout::Mono,
             unit,
             konst: Some(v),
-            outputs: Vec::new(),
         }
     }
 
     fn signal(src: Src, unit: Unit) -> Sig {
         Sig {
-            srcs: vec![src],
+            srcs: vec![src].into(),
             layout: Layout::Mono,
             unit,
             konst: None,
-            outputs: Vec::new(),
         }
     }
 
     /// A plain signal with one source per channel.
-    fn channels(srcs: Vec<Src>, layout: Layout) -> Sig {
+    fn channels(srcs: impl Into<Array<Src>>, layout: Layout) -> Sig {
         Sig {
-            srcs,
+            srcs: srcs.into(),
             layout,
             unit: Unit::Num,
             konst: None,
-            outputs: Vec::new(),
         }
     }
 
@@ -304,12 +303,13 @@ impl Sig {
     }
 }
 
-/// What an expression makes: a signal, a list of values, or a range. A list exists while compiling only; it
-/// becomes a multichannel signal where a signal is needed.
+/// Arrays are general values. Signals specialize arrays with a rate, unit and channel layout;
+/// conversion to an audio layout happens where audio is consumed.
 #[derive(Clone)]
 pub(crate) enum Datum {
     Sig(Sig),
-    List(Vec<Datum>),
+    Array(Array<Datum>),
+    Record(Vec<(String, Datum)>),
     /// `lo..hi`, or `lo..<hi`.
     Range { lo: Sig, hi: Sig, inclusive: bool },
 }
@@ -320,6 +320,7 @@ enum Val {
     Wave(opcodes::Wave),
     Layout(Layout),
     Sig(Sig),
+    Array(Array<Val>),
 }
 
 pub(crate) struct Lower<'a> {
@@ -489,10 +490,10 @@ pub(crate) fn compile_instr(
                     .with_help(format!("for example `{}: hz`", p.name.name)));
                 }
             },
-            PKind::Choice(_) | PKind::List(_) => {
+            PKind::Choice(_) | PKind::Array(_) => {
                 return Err(Diagnostic::new(
                     format!(
-                        "an instrument's parameters are set by notes, so `{}` can't be a choice or a list",
+                        "an instrument's parameters are set by notes, so `{}` can't be a choice or an array",
                         p.name.name
                     ),
                     p.name.span,
@@ -984,13 +985,14 @@ pub(crate) fn compile_chain(
 /// The span of the first argument that is not the receiver, for a problem with its value.
 /// Entries of one channel each, joined into a list. They share a unit, so `[800hz, 1200hz]` is a two-channel frequency.
 fn join_channels(entries: &[(Sig, Span)], span: Span) -> Res<Sig> {
+    if entries.is_empty() { return Err(Diagnostic::new("audio output needs at least one channel", span)); }
     let mut srcs = Vec::with_capacity(entries.len());
     let mut unit = None;
     for (sig, at) in entries {
         if sig.count() != 1 {
             return Err(Diagnostic::new(
                 format!(
-                    "a channel list takes one channel per entry, but this has {}",
+                    "a channel array takes one channel per entry, but this has {}",
                     sig.count()
                 ),
                 *at,
@@ -1001,7 +1003,7 @@ fn join_channels(entries: &[(Sig, Span)], span: Span) -> Res<Sig> {
             Some(u) if u != sig.unit => {
                 return Err(Diagnostic::new(
                     format!(
-                        "the entries of a channel list must have the same unit: this is {}, the first was {}",
+                        "the entries of a channel array must have the same unit: this is {}, the first was {}",
                         sig.unit.describe(),
                         u.describe()
                     ),
@@ -1014,17 +1016,16 @@ fn join_channels(entries: &[(Sig, Span)], span: Span) -> Res<Sig> {
     }
     if srcs.len() > niminal_engine::MAX_CHANNELS {
         return Err(Diagnostic::new(
-            format!("a list holds at most {} entries", niminal_engine::MAX_CHANNELS),
+            format!("audio output supports at most {} channels", niminal_engine::MAX_CHANNELS),
             span,
         ));
     }
     let layout = Layout::from_count(srcs.len());
     Ok(Sig {
-        srcs,
+        srcs: srcs.into(),
         layout,
         unit: unit.unwrap_or(Unit::Num),
         konst: None,
-        outputs: Vec::new(),
     })
 }
 
@@ -1066,7 +1067,8 @@ fn names_read(e: &Expr, out: &mut Vec<String>) {
 fn same_datum(a: &Datum, b: &Datum) -> bool {
     match (a, b) {
         (Datum::Sig(x), Datum::Sig(y)) => x.srcs == y.srcs && x.unit == y.unit,
-        (Datum::List(x), Datum::List(y)) => {
+        (Datum::Record(x), Datum::Record(y)) => x.len() == y.len() && x.iter().zip(y).all(|((xn, xv), (yn, yv))| xn == yn && same_datum(xv, yv)),
+        (Datum::Array(x), Datum::Array(y)) => {
             x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_datum(p, q))
         }
         (Datum::Range { lo: a, hi: b, .. }, Datum::Range { lo: c, hi: d, .. }) => {
@@ -1124,10 +1126,10 @@ impl<'a> Lower<'a> {
         match stmt {
             Stmt::State { name, .. } => Err(state_outside_fn(name)),
             Stmt::IndexAssign { name, .. } => Err(Diagnostic::new(
-                format!("only a state list can be written, and `{}` isn't one", name.name),
+                format!("only a state array can be written, and `{}` isn't one", name.name),
                 name.span,
             )
-            .with_help("state lists belong to a `fn`: `state buf = zeros(64)`, then `buf[i] = x`")),
+            .with_help("state arrays belong to a `fn`: `state buf = zeros(64)`, then `buf[i] = x`")),
             Stmt::Bind { name, value } => self.assign(name, value).map(|()| None),
             Stmt::Destructure { names, value } => self.destructure(names, value).map(|()| None),
             Stmt::AddAssign { name, value } => self.add_assign(name, value).map(|()| None),
@@ -1237,15 +1239,7 @@ impl<'a> Lower<'a> {
             if same_datum(&a, &b) {
                 continue;
             }
-            let merged = match (a, b) {
-                (Datum::Sig(a), Datum::Sig(b)) => Datum::Sig(self.select_sig(&c, a, b, e.span)?),
-                _ => {
-                    return Err(Diagnostic::new(
-                        format!("only signals can change inside a branch, not `{name}`"),
-                        e.span,
-                    ));
-                }
-            };
+            let merged = self.select_value(&c, a, b, e.span)?;
             self.scope.insert(name, merged);
         }
         self.out = match (then_out, else_out) {
@@ -1266,7 +1260,8 @@ impl<'a> Lower<'a> {
     /// The entries of a list or range, for `for`, `map` and the like.
     fn entries(&mut self, d: Datum, span: Span) -> Res<Vec<Datum>> {
         match d {
-            Datum::List(items) => Ok(items),
+            Datum::Record(fields) => self.entries(fields[0].1.clone(), span),
+            Datum::Array(items) => Ok(items.into_vec()),
             Datum::Range { lo, hi, inclusive } => {
                 let (Some(a), Some(b)) = (lo.konst, hi.konst) else {
                     return Err(Diagnostic::new(
@@ -1279,8 +1274,7 @@ impl<'a> Lower<'a> {
                     .map(|k| Datum::Sig(Sig::constant(lo.unit, k)))
                     .collect())
             }
-            Datum::Sig(_) => Err(Diagnostic::new("expected a list or a range here", span)
-                .with_help("`.channels` gives the channels of a signal as a list")),
+            Datum::Sig(sig) => Ok((0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect()),
         }
     }
 
@@ -1393,17 +1387,18 @@ impl<'a> Lower<'a> {
     /// `[l, r] = src`: one name per channel, or per entry of a list.
     fn destructure(&mut self, names: &[Ident], value: &Expr) -> Res<()> {
         let entries = match self.value(value)? {
+            Datum::Record(fields) => fields.into_iter().map(|(_, v)| v).collect(),
             Datum::Range { .. } => {
                 return Err(Diagnostic::new(
                     "a range can't be taken apart with `[a, b] = ...`",
                     value.span,
                 ));
             }
-            Datum::List(items) => {
+            Datum::Array(items) => {
                 if items.len() != names.len() {
                     return Err(Diagnostic::new(
                         format!(
-                            "this list has {} entries, but {} name(s) are given",
+                            "this array has {} entries, but {} name(s) are given",
                             items.len(),
                             names.len()
                         ),
@@ -1427,6 +1422,9 @@ impl<'a> Lower<'a> {
                 (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect()
             }
         };
+        if entries.len() != names.len() {
+            return Err(Diagnostic::new(format!("this array has {} entries, but {} name(s) are given", entries.len(), names.len()), value.span));
+        }
         for (name, entry) in names.iter().zip(entries) {
             self.names.check_local_in(name, self.in_fn)?;
             self.scope.insert(name.name.clone(), entry);
@@ -1547,7 +1545,7 @@ impl<'a> Lower<'a> {
         if let Some(sig) = self.input_sigs.get(key) {
             return sig.clone();
         }
-        let srcs = (0..layout.channels())
+        let srcs: Array<Src> = (0..layout.channels())
             .map(|c| {
                 self.chain_inputs.push(source(c));
                 self.g.input()
@@ -1575,8 +1573,7 @@ impl<'a> Lower<'a> {
         if matches!(sig.layout, Layout::Channels(_)) && sig.count() == to.channels() {
             return Ok(Sig {
                 layout: to,
-                outputs: Vec::new(),
-                ..sig.clone()
+                    ..sig.clone()
             });
         }
         let Some(matrix) = conversion(sig.layout, to) else {
@@ -1669,11 +1666,11 @@ impl<'a> Lower<'a> {
                     None => self.name(name, e.span).map(Datum::Sig),
                 },
             },
-            ExprKind::Channels(items) => items
+            ExprKind::Array(items) => items
                 .iter()
                 .map(|i| self.value(i))
                 .collect::<Res<_>>()
-                .map(Datum::List),
+                .map(|items: Vec<_>| Datum::array(items)),
             ExprKind::Range { lo, hi, inclusive } => {
                 let (l, h) = (self.expr(lo)?, self.expr(hi)?);
                 if l.unit != h.unit {
@@ -1696,6 +1693,10 @@ impl<'a> Lower<'a> {
             ExprKind::Neg(inner) => {
                 let v = self.value(inner)?;
                 self.negate_value(v, e.span)
+            }
+            ExprKind::Compare { op, lhs, rhs } => {
+                let (a, b) = (self.value(lhs)?, self.value(rhs)?);
+                self.zip_values(a, b, e.span, |this, a, b| this.compare(*op, a, b, e.span))
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 let (l, r) = (self.value(lhs)?, self.value(rhs)?);
@@ -1725,7 +1726,7 @@ impl<'a> Lower<'a> {
                     self.scope.remove(&var.name);
                     results.push(v?.expect("a value"));
                 }
-                Ok(Datum::List(results))
+                Ok(Datum::array(results))
             }
             ExprKind::Call { name, args } => self.call(name, args, e.span),
             ExprKind::Lambda { .. } => Err(Diagnostic::new(
@@ -1780,7 +1781,7 @@ impl<'a> Lower<'a> {
                 e.span,
             )
             .with_help(
-                "patterns go in `clip`, `scene` and `play`; use `[a, b]` here for a channel list",
+                "patterns go in `clip`, `scene` and `play`; use `[a, b]` here for a channel array",
             )),
             ExprKind::Grid(_) | ExprKind::Rows(_) => Err(Diagnostic::new(
                 "grids as trigger signals aren't supported yet",
@@ -1793,7 +1794,7 @@ impl<'a> Lower<'a> {
             | ExprKind::Not(_)
             | ExprKind::If { .. }
             | ExprKind::For { .. }
-            | ExprKind::Channels(_)
+            | ExprKind::Array(_)
             | ExprKind::Range { .. }
             | ExprKind::Index { .. }
             | ExprKind::Lambda { .. } => unreachable!("`value` handles these"),
@@ -1805,17 +1806,19 @@ impl<'a> Lower<'a> {
     fn signal_of(&self, v: Datum, span: Span) -> Res<Sig> {
         match v {
             Datum::Sig(sig) => Ok(sig),
-            Datum::List(items) => {
+            Datum::Record(fields) => self.signal_of(fields[0].1.clone(), span),
+            Datum::Array(items) => {
                 let mut entries = Vec::with_capacity(items.len());
                 for item in items {
                     match item {
+                        Datum::Record(fields) => entries.push((self.signal_of(fields[0].1.clone(), span)?, span)),
                         Datum::Sig(sig) => entries.push((sig, span)),
-                        Datum::List(_) => {
-                            return Err(Diagnostic::new("a list of lists can't be used as a signal", span)
-                                .with_help("sum the inner lists, or index into them"));
+                        Datum::Array(_) => {
+                            return Err(Diagnostic::new("an array of arrays can't be used as a signal", span)
+                                .with_help("sum the inner arrays, or index into them"));
                         }
                         Datum::Range { .. } => {
-                            return Err(Diagnostic::new("a list of ranges can't be used as a signal", span));
+                            return Err(Diagnostic::new("an array of ranges can't be used as a signal", span));
                         }
                     }
                 }
@@ -1830,29 +1833,22 @@ impl<'a> Lower<'a> {
     /// `list[i]`, counting from 0 and wrapping at both ends, or `list[a..<b]`.
     fn index(&mut self, list: &Expr, index: &Expr, span: Span) -> Res<Datum> {
         let l = self.value(list)?;
-        let items = match l {
-            Datum::Sig(_) => {
-                return Err(Diagnostic::new("only a list can be indexed", list.span)
-                    .with_help("`.channels` gives the channels of a signal as a list"));
-            }
-            other => self.entries(other, list.span)?,
-        };
-        if items.is_empty() {
-            return Err(Diagnostic::new("this list is empty", span));
-        }
+        let items = self.entries(l, list.span)?;
         let n = items.len();
         if let ExprKind::Range { .. } = index.kind {
             let picks = self.value(index)?;
             let picks = self.entries(picks, index.span)?;
+            if n == 0 && !picks.is_empty() { return Err(Diagnostic::new("this array is empty", span)); }
             let mut out = Vec::with_capacity(picks.len());
             for p in picks {
                 let Datum::Sig(Sig { konst: Some(k), .. }) = p else {
                     unreachable!("a range gives numbers")
                 };
-                out.push(items[k.rem_euclid(n as f64) as usize].clone());
+                out.push(items[niminal_engine::wrapped_index(k, n)].clone());
             }
-            return Ok(Datum::List(out));
+            return Ok(Datum::array(out));
         }
+        if n == 0 { return Err(Diagnostic::new("this array is empty", span)); }
         let i = self.expr(index)?;
         if i.unit != Unit::Num {
             return Err(Diagnostic::new(
@@ -1861,54 +1857,83 @@ impl<'a> Lower<'a> {
             ));
         }
         if let Some(k) = i.konst {
-            return Ok(items[k.floor().rem_euclid(n as f64) as usize].clone());
+            return Ok(items[niminal_engine::wrapped_index(k, n)].clone());
         }
-        // an index that changes: a table read, or a switch between signals
-        let mut sigs = Vec::with_capacity(n);
-        for item in items {
-            match item {
-                Datum::Sig(s) if s.count() == 1 => sigs.push(s),
-                _ => {
-                    return Err(Diagnostic::new(
-                        "an index that changes can only pick among one-channel signals or numbers",
-                        index.span,
-                    ));
-                }
+        self.index_values(items, &i, span)
+    }
+
+    /// Transpose nested values into scalar reads. Each read shares the same
+    /// wrapping rules and takes constant time, regardless of array length.
+    fn index_values(&mut self, items: Vec<Datum>, index: &Sig, span: Span) -> Res<Datum> {
+        let Some(first) = items.first() else { return Err(Diagnostic::new("this array is empty", span)); };
+        match first {
+            Datum::Sig(first) => {
+                let width = first.count();
+                let layout = first.layout;
+                let unit = first.unit;
+                let signals = items.into_iter().map(|v| match v {
+                    Datum::Sig(s) if s.count() == width && s.unit == unit => Ok(s),
+                    _ => Err(Diagnostic::new("an index that changes needs matching element shapes and units", span)),
+                }).collect::<Res<Vec<_>>>()?;
+                if width == 1 { return self.read_values(signals, index, Interp::None, span).map(Datum::Sig); }
+                if index.count() != 1 { return Err(Diagnostic::new("indexing channel arrays needs one index", span)); }
+                let srcs = (0..width).map(|channel| {
+                    let elements = signals.iter().map(|s| Self::element(s, channel)).collect();
+                    self.read_values(elements, index, Interp::None, span).map(|s| s.srcs[0])
+                }).collect::<Res<_>>()?;
+                Ok(Datum::Sig(Sig { srcs, layout, unit, konst: None }))
             }
+            Datum::Array(first) => {
+                let width = first.len();
+                let rows = items.into_iter().map(|v| match v {
+                    Datum::Array(row) if row.len() == width => Ok(row),
+                    _ => Err(Diagnostic::new("an index that changes needs matching element shapes", span)),
+                }).collect::<Res<Vec<_>>>()?;
+                Ok(Datum::Array((0..width).map(|column| {
+                    let elements = rows.iter().map(|row| row[column].clone()).collect();
+                    self.index_values(elements, index, span)
+                }).collect::<Res<_>>()?))
+            }
+            _ => Err(Diagnostic::new("an index that changes needs numeric elements or nested arrays", span)),
         }
-        if sigs.iter().any(|s| s.unit != sigs[0].unit) {
-            return Err(Diagnostic::new(
-                "an index that changes needs entries with the same unit",
-                span,
-            ));
+    }
+
+    fn read_values(&mut self, sigs: Vec<Sig>, pos: &Sig, interp: Interp, span: Span) -> Res<Sig> {
+        let Some(first) = sigs.first() else { return Err(Diagnostic::new("this array is empty", span)); };
+        let unit = first.unit;
+        if sigs.iter().any(|s| s.count() != 1 || s.unit != unit) {
+            return Err(Diagnostic::new("this operation needs a one-dimensional array with one unit", span));
         }
-        let unit = sigs[0].unit;
         if sigs.iter().all(|s| s.konst.is_some()) {
-            let data: Arc<[f64]> = sigs.iter().map(|s| s.konst.unwrap()).collect();
-            return self.table_read(data, unit, &i, Interp::None, span).map(Datum::Sig);
+            let data = Arc::new(sigs.iter().map(|s| s.konst.unwrap()).collect());
+            return self.table_read(data, unit, pos, interp, span);
         }
-        let floor = self.func(Fn1::Floor, &i);
-        let count = Sig::constant(Unit::Num, n as f64);
-        let wrapped = self.elementwise(&floor, &count, Unit::Num, span, |g, x, y| {
-            g.add(Rem, &[("a", x), ("b", y)]).expect("rem ports")
-        })?;
-        let mut result = sigs[n - 1].clone();
-        for k in (0..n - 1).rev() {
-            let hit = self.compare(CmpOp::Eq, wrapped.clone(), Sig::constant(Unit::Num, k as f64), span)?;
-            result = self.select_sig(&hit, sigs[k].clone(), result, span)?;
-        }
-        Ok(Datum::Sig(result))
+        let op = ArrayRead::new(sigs.len(), interp);
+        let names: Vec<_> = (0..sigs.len()).map(|i| format!("e{i}")).collect();
+        let rate = sigs.iter().fold(self.sig_rate(pos), |rate, sig| rate.max(self.sig_rate(sig)));
+        let srcs = pos.srcs.iter().map(|&pos| {
+            let mut wires = vec![("pos", pos)];
+            wires.extend(names.iter().zip(&sigs).map(|(name, sig)| (name.as_str(), sig.srcs[0])));
+            let src = self.g.add(op.clone(), &wires).expect("one port per array element");
+            self.note_rate(src, rate);
+            src
+        }).collect();
+        Ok(Sig { srcs, unit, layout: pos.layout, konst: None })
     }
 
     /// A table read at `pos`, wrapping, one read per channel of `pos`.
-    fn table_read(&mut self, data: Arc<[f64]>, unit: Unit, pos: &Sig, interp: Interp, _span: Span) -> Res<Sig> {
-        let srcs = pos
+    fn table_read(&mut self, data: Arc<Array<f64>>, unit: Unit, pos: &Sig, interp: Interp, _span: Span) -> Res<Sig> {
+        if let Some(position) = pos.konst {
+            return Ok(Sig::constant(unit, niminal_engine::ops::read_at(&data, position, interp)));
+        }
+        let rate = self.sig_rate(pos);
+        let srcs: Array<Src> = pos
             .srcs
             .iter()
             .map(|&p| {
-                self.g
-                    .add(TableRead::new(data.clone(), interp), &[("pos", p)])
-                    .expect("table ports")
+                let src = self.g.add(TableRead::new(data.clone(), interp), &[("pos", p)]).expect("table ports");
+                self.note_rate(src, rate);
+                src
             })
             .collect();
         Ok(Sig {
@@ -1916,7 +1941,6 @@ impl<'a> Lower<'a> {
             layout: pos.layout,
             unit,
             konst: None,
-            outputs: Vec::new(),
         })
     }
 
@@ -1926,7 +1950,7 @@ impl<'a> Lower<'a> {
             return Sig::constant(Unit::Num, f.apply(k));
         }
         let rate = self.sig_rate(x);
-        let srcs = x
+        let srcs: Array<Src> = x
             .srcs
             .iter()
             .map(|&s| {
@@ -1940,7 +1964,6 @@ impl<'a> Lower<'a> {
             layout: x.layout,
             unit: Unit::Num,
             konst: None,
-            outputs: Vec::new(),
         }
     }
 
@@ -1976,7 +1999,7 @@ impl<'a> Lower<'a> {
         if self.sig_rate(&s) <= rate || rate == Rate::Const {
             return s;
         }
-        let srcs = s
+        let srcs: Array<Src> = s
             .srcs
             .iter()
             .map(|&x| {
@@ -1992,7 +2015,6 @@ impl<'a> Lower<'a> {
         Sig {
             srcs,
             konst: None,
-            outputs: Vec::new(),
             ..s
         }
     }
@@ -2005,72 +2027,90 @@ impl<'a> Lower<'a> {
         }
     }
 
-    fn negate_value(&mut self, v: Datum, span: Span) -> Res<Datum> {
-        match v {
-            Datum::Sig(s) => self.negate(s, span).map(Datum::Sig),
-            Datum::Range { .. } => Err(Diagnostic::new("a range can't be negated", span)),
-            Datum::List(items) => items
-                .into_iter()
-                .map(|i| self.negate_value(i, span))
-                .collect::<Res<_>>()
-                .map(Datum::List),
-        }
+    fn extreme_value(&mut self, a: Datum, b: Datum, minimum: bool, span: Span) -> Res<Datum> {
+        self.zip_values(a, b, span, |this, a, b| {
+            this.same_unit(&a, &b, if minimum { "min" } else { "max" }, span)?;
+            if minimum { this.min_sig(&a, &b, span) } else { this.max_sig(&a, &b, span) }
+        })
+    }
+
+    fn math_value(&mut self, f: Fn1, value: Datum, span: Span) -> Res<Datum> {
+        self.map_value(value, span, |this, value| {
+            if value.unit != Unit::Num { return Err(Diagnostic::new(format!("`{}` expects a plain number, found {}", f.name(), value.unit.describe()), span)); }
+            Ok(this.func(f, &value))
+        })
+    }
+
+    fn negate_value(&mut self, value: Datum, span: Span) -> Res<Datum> {
+        self.map_value(value, span, |this, value| this.negate(value, span))
     }
 
     /// Arithmetic on lists goes entry by entry. A single value applies to every entry, and two lists must be the same length.
     fn binary_value(&mut self, op: BinOp, l: Datum, r: Datum, span: Span) -> Res<Datum> {
-        match (l, r) {
-            (Datum::Range { .. }, _) | (_, Datum::Range { .. }) => Err(Diagnostic::new(
-                "arithmetic doesn't work on ranges",
-                span,
-            )),
-            (Datum::Sig(l), Datum::Sig(r)) => self.binary(op, l, r, span).map(Datum::Sig),
-            (Datum::List(a), Datum::List(b)) => {
-                if a.len() != b.len() {
-                    return Err(Diagnostic::new(
-                        format!("can't combine a list of {} with a list of {}", a.len(), b.len()),
-                        span,
-                    ));
-                }
-                a.into_iter()
-                    .zip(b)
-                    .map(|(x, y)| self.binary_value(op, x, y, span))
-                    .collect::<Res<_>>()
-                    .map(Datum::List)
+        self.zip_values(l, r, span, |this, a, b| this.binary(op, a, b, span))
+    }
+
+    fn zip_values(&mut self, a: Datum, b: Datum, span: Span, operation: impl Fn(&mut Self, Sig, Sig) -> Res<Sig> + Copy) -> Res<Datum> {
+        match (a, b) {
+            (Datum::Record(fields), b) => self.zip_values(fields[0].1.clone(), b, span, operation),
+            (a, Datum::Record(fields)) => self.zip_values(a, fields[0].1.clone(), span, operation),
+            (Datum::Sig(a), Datum::Sig(b)) => operation(self, a, b).map(Datum::Sig),
+            (Datum::Array(a), Datum::Array(b)) => {
+                if a.len() != b.len() { return Err(Diagnostic::new(format!("can't combine an array of {} with an array of {}", a.len(), b.len()), span)); }
+                Ok(Datum::Array(a.into_iter().zip(b).map(|(a,b)| self.zip_values(a,b,span,operation)).collect::<Res<_>>()?))
             }
-            // a multichannel signal against a list is channel arithmetic
-            (Datum::List(a), Datum::Sig(r)) if r.count() > 1 => {
-                let l = self.signal_of(Datum::List(a), span)?;
-                self.binary(op, l, r, span).map(Datum::Sig)
+            (Datum::Array(a), Datum::Sig(b)) if b.count() > 1 => {
+                let layout = b.layout;
+                let b = (0..b.count()).map(|i| Datum::Sig(Self::element(&b, i))).collect();
+                let result = self.zip_values(Datum::Array(a), Datum::Array(b), span, operation)?;
+                Self::signal_array(result, layout, span)
             }
-            (Datum::Sig(l), Datum::List(b)) if l.count() > 1 => {
-                let r = self.signal_of(Datum::List(b), span)?;
-                self.binary(op, l, r, span).map(Datum::Sig)
+            (Datum::Sig(a), Datum::Array(b)) if a.count() > 1 => {
+                let layout = a.layout;
+                let a = (0..a.count()).map(|i| Datum::Sig(Self::element(&a, i))).collect();
+                let result = self.zip_values(Datum::Array(a), Datum::Array(b), span, operation)?;
+                Self::signal_array(result, layout, span)
             }
-            (Datum::List(a), r) => a
-                .into_iter()
-                .map(|x| self.binary_value(op, x, r.clone(), span))
-                .collect::<Res<_>>()
-                .map(Datum::List),
-            (l, Datum::List(b)) => b
-                .into_iter()
-                .map(|y| self.binary_value(op, l.clone(), y, span))
-                .collect::<Res<_>>()
-                .map(Datum::List),
+            (Datum::Array(a), b @ Datum::Sig(_)) => Ok(Datum::Array(a.into_iter().map(|a| self.zip_values(a,b.clone(),span,operation)).collect::<Res<_>>()?)),
+            (a @ Datum::Sig(_), Datum::Array(b)) => Ok(Datum::Array(b.into_iter().map(|b| self.zip_values(a.clone(),b,span,operation)).collect::<Res<_>>()?)),
+            _ => Err(Diagnostic::new("arithmetic doesn't work on ranges", span)),
+        }
+    }
+
+    fn signal_array(value: Datum, layout: Layout, span: Span) -> Res<Datum> {
+        if let Datum::Array(items) = &value
+            && items.len() == layout.channels()
+            && items.iter().all(|v| matches!(v, Datum::Sig(sig) if sig.count() == 1))
+        {
+            let entries = items.iter().map(|v| match v { Datum::Sig(sig) => (sig.clone(), span), _ => unreachable!() }).collect::<Vec<_>>();
+            let mut signal = join_channels(&entries, span)?;
+            signal.layout = layout;
+            return Ok(Datum::Sig(signal));
+        }
+        Ok(value)
+    }
+
+    fn map_value(&mut self, value: Datum, span: Span, operation: impl Fn(&mut Self, Sig) -> Res<Sig> + Copy) -> Res<Datum> {
+        match value {
+            Datum::Sig(value) => operation(self, value).map(Datum::Sig),
+            Datum::Array(items) => Ok(Datum::Array(items.into_iter().map(|v| self.map_value(v, span, operation)).collect::<Res<_>>()?)),
+            Datum::Record(fields) => self.map_value(fields[0].1.clone(), span, operation),
+            _ => Err(Diagnostic::new("this operation needs a number or an array", span)),
         }
     }
 
     /// `list.map(f)`, `list.sum`, `list.len`, `list.indices`, `list.min`, `list.max`, `list.at(pos)`
     /// and `signal.channels`.
-    fn list_call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
+    fn array_call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
         let Some(receiver) = args.first().filter(|a| a.receiver) else {
             return Err(Diagnostic::new(
-                format!("`{}` is called on a list", name.name),
+                format!("`{}` is called on an array", name.name),
                 name.span,
             )
             .with_help(format!("for example `[1, 2, 3].{}`", name.name)));
         };
         let value = self.value(&receiver.value)?;
+        let layout = match &value { Datum::Sig(signal) => Some(signal.layout), _ => None };
         let no_args = |what: &str| -> Res<()> {
             if args.len() > 1 {
                 return Err(Diagnostic::new(format!("`{what}` takes no arguments"), name.span));
@@ -2080,27 +2120,14 @@ impl<'a> Lower<'a> {
         if name.name == "channels" {
             no_args("channels")?;
             return match value {
-                list @ Datum::List(_) => Ok(list),
-                Datum::Sig(sig) => Ok(Datum::List(
+                list @ Datum::Array(_) => Ok(list),
+                Datum::Sig(sig) => Ok(Datum::Array(
                     (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect(),
                 )),
+                Datum::Record(fields) => Ok(Datum::array(self.entries(fields[0].1.clone(), span)?)),
                 Datum::Range { .. } => Err(Diagnostic::new("a range has no channels", receiver.value.span)),
             };
         }
-        let value = match value {
-            // a signal's channels: `.sum` mixes them down
-            Datum::Sig(sig) if matches!(name.name.as_str(), "sum" | "len" | "min" | "max") => Datum::List(
-                (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect(),
-            ),
-            Datum::Sig(_) => {
-                return Err(Diagnostic::new(
-                    format!("`{}` works on a list", name.name),
-                    receiver.value.span,
-                )
-                .with_help("`.channels` gives the channels of a signal as a list"));
-            }
-            other => other,
-        };
         if name.name == "at" {
             return self.at(name, args, value, receiver.value.span).map(Datum::Sig);
         }
@@ -2120,27 +2147,20 @@ impl<'a> Lower<'a> {
             }
             "sum" | "min" | "max" => {
                 no_args(&name.name)?;
-                let mut total: Option<Sig> = None;
+                let mut total: Option<Datum> = None;
                 for item in items {
-                    let sig = self.signal_of(item, receiver.value.span)?;
                     total = Some(match total {
-                        None => sig,
-                        Some(t) => match name.name.as_str() {
-                            "sum" => self.binary(BinOp::Add, t, sig, span)?,
-                            "min" => {
-                                self.same_unit(&t, &sig, &name.name, span)?;
-                                self.min_sig(&t, &sig, span)?
-                            }
-                            _ => {
-                                self.same_unit(&t, &sig, &name.name, span)?;
-                                self.max_sig(&t, &sig, span)?
-                            }
-                        },
+                        None => item,
+                        Some(t) if name.name == "sum" => self.binary_value(BinOp::Add, t, item, span)?,
+                        Some(t) => self.extreme_value(t, item, name.name == "min", span)?,
                     });
                 }
-                Ok(Datum::Sig(total.ok_or_else(|| Diagnostic::new("this list is empty", span))?))
+                total.ok_or_else(|| Diagnostic::new("this array is empty", span))
             }
-            _ => self.map(name, args, items),
+            _ => {
+                let result = self.map(name, args, items)?;
+                match layout { Some(layout) => Self::signal_array(result, layout, span), None => Ok(result) }
+            },
         }
     }
 
@@ -2161,22 +2181,10 @@ impl<'a> Lower<'a> {
     /// `table.at(pos, interp: linear)`: a list of numbers read at a fractional position, wrapping.
     fn at(&mut self, name: &Ident, args: &[Arg], list: Datum, span: Span) -> Res<Sig> {
         let items = self.entries(list, span)?;
-        let mut unit = None;
-        let mut data = Vec::with_capacity(items.len());
-        for item in &items {
-            match item {
-                Datum::Sig(Sig { konst: Some(k), unit: u, .. }) if unit.is_none_or(|x| x == *u) => {
-                    unit = Some(*u);
-                    data.push(*k);
-                }
-                _ => {
-                    return Err(Diagnostic::new(
-                        "`at` reads a list of numbers known while compiling, with one unit",
-                        span,
-                    ));
-                }
-            }
-        }
+        let sigs = items.into_iter().map(|item| match item {
+            Datum::Sig(sig) if sig.count() == 1 => Ok(sig),
+            _ => Err(Diagnostic::new("`at` reads a one-dimensional numeric array", span)),
+        }).collect::<Res<Vec<_>>>()?;
         let mut pos = None;
         let mut interp = Interp::Linear;
         for a in &args[1..] {
@@ -2200,7 +2208,7 @@ impl<'a> Lower<'a> {
                 name.span,
             ));
         }
-        self.table_read(data.into(), unit.unwrap_or(Unit::Num), &pos, interp, span)
+        self.read_values(sigs, &pos, interp, span)
     }
 
     /// The function runs once for each entry, while compiling, and the results are the new list.
@@ -2235,7 +2243,7 @@ impl<'a> Lower<'a> {
             self.scope.remove(&param);
             results.push(v?);
         }
-        Ok(Datum::List(results))
+        Ok(Datum::array(results))
     }
 
     fn name(&mut self, name: &str, span: Span) -> Res<Sig> {
@@ -2296,12 +2304,11 @@ impl<'a> Lower<'a> {
                 .map_err(|e| Diagnostic::new(e.to_string(), span))?;
             self.note_rate(src, Rate::Control);
             return Ok(Sig {
-                srcs: vec![src],
+                srcs: vec![src].into(),
                 layout: Layout::Mono,
                 unit: control.unit,
                 konst: None,
-                outputs: Vec::new(),
-            });
+                });
         }
         if let Some(bus) = self.names.bus(name) {
             return match self.mode {
@@ -2378,11 +2385,10 @@ impl<'a> Lower<'a> {
             self.note_rate(src, rate);
         }
         Ok(Sig {
-            srcs,
+            srcs: srcs.into(),
             layout,
             unit,
             konst: None,
-            outputs: Vec::new(),
         })
     }
 
@@ -2551,8 +2557,18 @@ impl<'a> Lower<'a> {
                 e.span,
             ));
         }
-        let (a, b) = (self.signal_of(a, e.span)?, self.signal_of(b, e.span)?);
-        self.select_sig(&c, a, b, e.span).map(Datum::Sig)
+        self.select_value(&c, a, b, e.span)
+    }
+
+    fn select_value(&mut self, condition: &Sig, a: Datum, b: Datum, span: Span) -> Res<Datum> {
+        match (a, b) {
+            (Datum::Sig(a), Datum::Sig(b)) => self.select_sig(condition, a, b, span).map(Datum::Sig),
+            (Datum::Array(a), Datum::Array(b)) => {
+                if a.len() != b.len() { return Err(Diagnostic::new("both branches need the same array shape", span)); }
+                Ok(Datum::Array(a.into_iter().zip(b).map(|(a, b)| self.select_value(condition, a, b, span)).collect::<Res<_>>()?))
+            }
+            _ => Err(Diagnostic::new("both branches need matching numbers or array shapes", span)),
+        }
     }
 
     /// `a` where `c` is not 0, `b` elsewhere, channel by channel.
@@ -2602,11 +2618,10 @@ impl<'a> Lower<'a> {
             self.note_rate(src, rate);
         }
         Ok(Sig {
-            srcs,
+            srcs: srcs.into(),
             layout,
             unit: a.unit,
             konst: None,
-            outputs: Vec::new(),
         })
     }
 
@@ -2620,7 +2635,7 @@ impl<'a> Lower<'a> {
         // Changing intervals go through exp: 2^x = e^(x ln 2).
         let scale = Sig::constant(Unit::Num, direction * std::f64::consts::LN_2 / 12.0);
         let exponent = self.mul(interval, &scale, Unit::Num, span)?;
-        let srcs = exponent
+        let srcs: Array<Src> = exponent
             .srcs
             .iter()
             .map(|&s| {
@@ -2634,7 +2649,6 @@ impl<'a> Lower<'a> {
             layout: exponent.layout,
             unit: Unit::Num,
             konst: None,
-            outputs: Vec::new(),
         };
         self.mul(freq, &ratio, Unit::Hz, span)
     }
@@ -2652,28 +2666,21 @@ impl<'a> Lower<'a> {
     // ---- calls ----------------------------------------------------------
 
     /// The value of `e` if it is an opcode's several results: a name bound to them, or a call that makes them.
-    fn record(&mut self, e: &Expr) -> Res<Option<Sig>> {
-        let several = match &e.kind {
-            ExprKind::Name(n) => {
-                return Ok(match self.scope.get(n) {
-                    Some(Datum::Sig(s)) if !s.outputs.is_empty() => Some(s.clone()),
-                    _ => None,
-                });
-            }
-            ExprKind::Call { name, .. } => self
-                .names
-                .fns
-                .get(&name.name)
-                .is_some_and(|d| matches!(d.result, FnResult::Named(_))),
-            _ => false,
-        };
-        if !several {
-            return Ok(None);
+    fn record(&mut self, e: &Expr) -> Res<Option<Vec<(String, Datum)>>> {
+        if let ExprKind::Name(name) = &e.kind {
+            return Ok(match self.scope.get(name) {
+                Some(Datum::Record(fields)) => Some(fields.clone()),
+                _ => None,
+            });
         }
-        self.expr(e).map(Some)
+        if let ExprKind::Call { name, .. } = &e.kind
+            && self.names.fns.get(&name.name).is_some_and(|def| matches!(def.result, FnResult::Named(_)))
+        {
+            return Ok(match self.value(e)? { Datum::Record(fields) => Some(fields), _ => None });
+        }
+        Ok(None)
     }
 
-    /// `input(1)` or `input(1..2)`: channels of the audio input, as a signal with as many channels.
     fn audio_input(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
         if self.in_fn {
             return Err(Diagnostic::new("`input` can't be used inside a function", name.span)
@@ -2872,7 +2879,7 @@ impl<'a> Lower<'a> {
             value: tap,
         });
         Ok(Sig {
-            srcs: vec![src],
+            srcs: vec![src].into(),
             konst: None,
             ..sig
         })
@@ -2880,84 +2887,23 @@ impl<'a> Lower<'a> {
 
     /// `x.range(200hz..4khz)`: a plain signal from 0 to 1 (a control, a knob) mapped to a range. Decibels
     /// move evenly in db, everything else evenly in its own unit.
-    fn range(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Sig> {
-        let [x, range] = args else {
-            return Err(
-                Diagnostic::new("`range` takes a range", name.span)
-                    .with_help("for example `knob.range(200hz..4khz)`"),
-            );
-        };
-        if let Some(n) = &range.name {
-            return Err(Diagnostic::new("`range` takes its range without a name", n.span));
-        }
-        let ExprKind::Range { lo, hi, .. } = &range.value.kind else {
-            return Err(Diagnostic::new("`range` takes a range, such as `200hz..4khz`", range.value.span));
-        };
-        let (lo, hi) = (
-            Arg {
-                name: None,
-                value: (**lo).clone(),
-                receiver: false,
-            },
-            Arg {
-                name: None,
-                value: (**hi).clone(),
-                receiver: false,
-            },
-        );
-        let x_sig = self.expr(&x.value)?;
-        if x_sig.unit != Unit::Num {
-            return Err(Diagnostic::new(
-                format!(
-                    "`range` maps a plain signal from 0 to 1, but this is {}",
-                    x_sig.unit.describe()
-                ),
-                x.value.span,
-            ));
-        }
-        let (lo_sig, hi_sig) = (self.expr(&lo.value)?, self.expr(&hi.value)?);
-        if lo_sig.unit != hi_sig.unit {
-            return Err(Diagnostic::new(
-                format!(
-                    "the ends of a range need the same unit: {} and {}",
-                    lo_sig.unit.describe(),
-                    hi_sig.unit.describe()
-                ),
-                hi.value.span,
-            ));
-        }
-        if lo_sig.unit == Unit::Db {
-            let (Some(a), Some(b)) = (lo_sig.konst, hi_sig.konst) else {
-                return Err(Diagnostic::new(
-                    "the ends of a db range must be constants",
-                    span,
-                ));
-            };
-            let exponent = self.mul(
-                &x_sig,
-                &Sig::constant(Unit::Num, (b / a).ln()),
-                Unit::Num,
-                span,
-            )?;
-            let srcs: Vec<Src> = exponent
-                .srcs
-                .iter()
-                .map(|s| {
-                    self.g
-                        .add(Func(Fn1::Exp), &[("x", *s)])
-                        .expect("func ports")
-                })
-                .collect();
-            let grown = Sig {
-                srcs,
-                konst: None,
-                ..exponent
-            };
-            return self.mul(&grown, &Sig::constant(Unit::Num, a), Unit::Db, span);
-        }
-        let width = self.binary(BinOp::Sub, hi_sig, lo_sig.clone(), span)?;
-        let scaled = self.binary(BinOp::Mul, x_sig, width, span)?;
-        self.binary(BinOp::Add, scaled, lo_sig, span)
+    fn range(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
+        let [x, range] = args else { return Err(Diagnostic::new("`range` takes a range", name.span)); };
+        if range.name.is_some() { return Err(Diagnostic::new("`range` takes its range without a name", range.value.span)); }
+        let value = self.value(&x.value)?;
+        let Datum::Range { lo, hi, .. } = self.value(&range.value)? else { return Err(Diagnostic::new("`range` takes a range, such as `200hz..4khz`", range.value.span)); };
+        self.map_value(value, span, |this, x| {
+            if x.unit != Unit::Num { return Err(Diagnostic::new(format!("`range` maps a plain signal from 0 to 1, but this is {}", x.unit.describe()), span)); }
+            if lo.unit == Unit::Db {
+                let (Some(a), Some(b)) = (lo.konst, hi.konst) else { return Err(Diagnostic::new("the ends of a db range must be constants", span)); };
+                let exponent = this.mul(&x, &Sig::constant(Unit::Num, (b / a).ln()), Unit::Num, span)?;
+                let grown = this.func(Fn1::Exp, &exponent);
+                return this.mul(&grown, &Sig::constant(Unit::Num, a), Unit::Db, span);
+            }
+            let width = this.binary(BinOp::Sub, hi.clone(), lo.clone(), span)?;
+            let scaled = this.binary(BinOp::Mul, x, width, span)?;
+            this.binary(BinOp::Add, scaled, lo.clone(), span)
+        })
     }
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
@@ -2969,12 +2915,11 @@ impl<'a> Lower<'a> {
             && let Some(record) = self.record(&receiver.value)?
         {
             return record
-                .outputs
                 .iter()
                 .find(|(o, _)| o == n)
-                .map(|(_, s)| Datum::Sig(s.clone()))
+                .map(|(_, v)| v.clone())
                 .ok_or_else(|| {
-                    let names: Vec<&str> = record.outputs.iter().map(|(o, _)| o.as_str()).collect();
+                    let names: Vec<&str> = record.iter().map(|(o, _)| o.as_str()).collect();
                     Diagnostic::new(format!("this has no result `{n}`"), name.span)
                         .with_help(format!("its results are {}", names.join(", ")))
                 });
@@ -2998,28 +2943,34 @@ impl<'a> Lower<'a> {
             let def = def.clone();
             return self.call_instr(&def, name, args, span);
         }
+        if let Some(f) = opcodes::math_fn(n) {
+            let [arg] = args else { return Err(Diagnostic::new(format!("`{n}` takes one value"), name.span)); };
+            if arg.name.is_some() { return Err(Diagnostic::new(format!("`{n}` takes its value without a name"), arg.value.span)); }
+            let value = self.value(&arg.value)?;
+            return self.math_value(f, value, arg.value.span);
+        }
         match n {
             "map" | "sum" | "len" | "channels" | "indices" | "at" => {
-                return self.list_call(name, args, span);
+                return self.array_call(name, args, span);
             }
-            "min" | "max" if args.len() == 1 && args[0].receiver => return self.list_call(name, args, span),
+            "min" | "max" if args.len() == 1 && args[0].receiver => return self.array_call(name, args, span),
             "split" if args.len() == 1 && args[0].receiver => {
                 return Err(Diagnostic::new("`split` without arguments is now `channels`", name.span)
-                    .with_help("write `signal.channels` for a list of its channels"));
+                    .with_help("write `signal.channels` for an array of its channels"));
             }
-            "min" | "max" | "pow" | "mod" => return self.combine(name, args).map(Datum::Sig),
-            "clamp" => return self.clamp(name, args).map(Datum::Sig),
+            "min" | "max" | "pow" | "mod" => return self.combine(name, args),
+            "clamp" => return self.clamp(name, args),
             "init" | "control" if args.len() == 1 && args[0].receiver => {
-                let v = self.expr(&args[0].value)?;
+                let value = self.value(&args[0].value)?;
                 let rate = if n == "init" { Rate::Init } else { Rate::Control };
-                return Ok(Datum::Sig(self.at_rate(v, Some(rate))));
+                return self.map_value(value, span, |this, v| Ok(this.at_rate(v, Some(rate))));
             }
             "zeros" => return self.zeros(name, args),
             "harmonics" => return self.harmonics(name, args),
             _ => {}
         }
         if let Some(v) = self.unit_method(name, args)? {
-            return Ok(Datum::Sig(v));
+            return Ok(v);
         }
         self.call_builtin(name, args, span)
     }
@@ -3028,35 +2979,8 @@ impl<'a> Lower<'a> {
         if name.name == "prev" {
             return self.prev(name, args).map(Datum::Sig);
         }
-        if let Some(f) = opcodes::math_fn(&name.name) {
-            let [arg] = args else {
-                return Err(Diagnostic::new(
-                    format!("`{}` takes one value", name.name),
-                    name.span,
-                ));
-            };
-            if let Some(n) = &arg.name {
-                return Err(Diagnostic::new(
-                    format!("`{}` takes its value without a name", name.name),
-                    n.span,
-                ));
-            }
-            let unit_check = |x: &Sig| -> Res<()> {
-                if x.unit != Unit::Num {
-                    return Err(Diagnostic::new(
-                        format!("`{}` expects a plain number, found {}", name.name, x.unit.describe()),
-                        arg.value.span,
-                    )
-                    .with_help("divide by a value with the same unit to get a plain ratio"));
-                }
-                Ok(())
-            };
-            let x = self.expr(&arg.value)?;
-            unit_check(&x)?;
-            return Ok(Datum::Sig(self.func(f, &x)));
-        }
         if name.name == "range" && self.registry.find("range").is_none() {
-            return self.range(name, args, span).map(Datum::Sig);
+            return self.range(name, args, span);
         }
         if name.name == "input" && self.registry.find("input").is_none() {
             return self.audio_input(name, args, span).map(Datum::Sig);
@@ -3119,33 +3043,66 @@ impl<'a> Lower<'a> {
                 }
                 Kind::Layout => Val::Layout(layout_from_expr(&arg.value)?),
                 Kind::Signal(_) | Kind::Gain => {
-                    let check = |this: &Self, sig: &Sig| -> Res<()> {
-                        match param.kind {
-                            Kind::Signal(expected) if sig.unit != expected => Err(this.unit_mismatch(
-                                &param.name,
-                                expected,
-                                sig.unit,
-                                &arg.value,
-                            )),
-                            Kind::Gain if !matches!(sig.unit, Unit::Db | Unit::Num) => Err(Diagnostic::new(
-                                format!(
-                                    "`{}` expects db or a plain factor, found {}",
-                                    param.name,
-                                    sig.unit.describe()
-                                ),
-                                arg.value.span,
-                            )),
-                            _ => Ok(()),
-                        }
-                    };
-                    let sig = self.expr(&arg.value)?;
-                    check(self, &sig)?;
-                    Val::Sig(sig)
+                    let value = self.value(&arg.value)?;
+                    self.builtin_value(value, param, &arg.value)?
                 }
             }));
         }
 
-        self.dispatch(spec, &vals, span).map(Datum::Sig)
+        self.dispatch_arrays(spec, &vals, span)
+    }
+
+    fn builtin_value(&self, value: Datum, param: &opcodes::ParamSpec, arg: &Expr) -> Res<Val> {
+        match value {
+            Datum::Array(items) => Ok(Val::Array(items.into_iter().map(|v| self.builtin_value(v, param, arg)).collect::<Res<_>>()?)),
+            Datum::Record(fields) => self.builtin_value(fields[0].1.clone(), param, arg),
+            Datum::Sig(sig) => {
+                match param.kind {
+                    Kind::Signal(expected) if sig.unit != expected => return Err(self.unit_mismatch(&param.name, expected, sig.unit, arg)),
+                    Kind::Gain if !matches!(sig.unit, Unit::Db | Unit::Num) => return Err(Diagnostic::new(format!("`{}` expects db or a plain factor, found {}", param.name, sig.unit.describe()), arg.span)),
+                    _ => {}
+                }
+                Ok(Val::Sig(sig))
+            }
+            Datum::Range { .. } => Err(Diagnostic::new("a range isn't a numeric array", arg.span)),
+        }
+    }
+
+    fn dispatch_arrays(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Datum> {
+        if !vals.iter().any(|v| matches!(v, Some(Val::Array(_)))) {
+            return self.dispatch(spec, vals, span).map(Datum::Sig);
+        }
+        // These operations consume audio channel layouts, rather than mapping
+        // a scalar DSP operation over the array.
+        if matches!(spec.build, Build::Pan | Build::ToLayout) {
+            let vals = vals.iter().map(|v| match v {
+                Some(Val::Array(items)) => {
+                    let entries = items.iter().map(|item| match item {
+                        Val::Sig(sig) => Ok((sig.clone(), span)),
+                        _ => Err(Diagnostic::new("audio channels must be a one-dimensional numeric array", span)),
+                    }).collect::<Res<Vec<_>>>()?;
+                    Ok(Some(Val::Sig(join_channels(&entries, span)?)))
+                }
+                other => Ok(other.clone()),
+            }).collect::<Res<Vec<_>>>()?;
+            return self.dispatch(spec, &vals, span).map(Datum::Sig);
+        }
+        let layout = vals.iter().find_map(|v| match v { Some(Val::Sig(signal)) if signal.count() > 1 => Some(signal.layout), _ => None });
+        let vals: Vec<_> = vals.iter().map(|v| match v {
+            Some(Val::Sig(sig)) if sig.count() > 1 => Some(Val::Array((0..sig.count()).map(|i| Val::Sig(Self::element(sig, i))).collect())),
+            other => other.clone(),
+        }).collect();
+        let lengths: Vec<_> = vals.iter().filter_map(|v| match v { Some(Val::Array(items)) => Some(items.len()), _ => None }).collect();
+        let count = lengths[0];
+        if lengths.iter().any(|&n| n != count) { return Err(Diagnostic::new("opcode array arguments must have matching shapes", span)); }
+        let items = (0..count).map(|i| {
+            let row: Vec<_> = vals.iter().map(|v| match v {
+                Some(Val::Array(items)) => Some(items[i].clone()), other => other.clone(),
+            }).collect();
+            self.dispatch_arrays(spec, &row, span)
+        }).collect::<Res<_>>()?;
+        let result = Datum::Array(items);
+        match layout { Some(layout) => Self::signal_array(result, layout, span), None => Ok(result) }
     }
 
     fn dispatch(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Sig> {
@@ -3170,6 +3127,7 @@ impl<'a> Lower<'a> {
             match val {
                 Some(Val::Wave(w)) => build.wave = Some(*w),
                 Some(Val::Layout(_)) | None => {}
+                Some(Val::Array(_)) => unreachable!("array expansion runs before signal expansion"),
                 Some(Val::Sig(sig)) => {
                     if let Some(k) = sig.konst {
                         build.consts.insert(param.name.clone(), k);
@@ -3243,7 +3201,7 @@ impl<'a> Lower<'a> {
 
         let master = self.names.master;
         let angles: Arc<[Option<f32>]> = master.speaker_angles().into();
-        let srcs = (0..master.channels())
+        let srcs: Vec<Src> = (0..master.channels())
             .map(|k| {
                 self.g
                     .add(PanChannel::new(angles.clone(), k), &wired)
@@ -3394,23 +3352,21 @@ impl Lower<'_> {
                 .with_help(format!("in the call of `{callee}`"))
         };
         let sig = match (&p.kind, v) {
-            (PKind::List(_), Datum::List(items)) => return Ok(Datum::List(items)),
-            (PKind::List(_), r @ Datum::Range { .. }) => return Ok(Datum::List(self.entries(r, span)?)),
-            (PKind::List(_), Datum::Sig(s)) if s.count() > 1 => {
-                return Ok(Datum::List(
-                    (0..s.count()).map(|k| Datum::Sig(Self::element(&s, k))).collect(),
-                ));
+            (_, Datum::Record(fields)) => return self.check_param(callee, p, fields[0].1.clone(), arg),
+            (PKind::Array(inner), value) => {
+                let elements = self.entries(value, span)?;
+                let element_param = PParam { kind: *inner.clone(), ..p.clone() };
+                return Ok(Datum::Array(elements.into_iter().map(|v| self.check_param(callee, &element_param, v, arg)).collect::<Res<_>>()?));
             }
-            (PKind::List(_), Datum::Sig(_)) => return Err(mismatch("a single value")),
-            (PKind::Any, d @ (Datum::List(_) | Datum::Range { .. })) => return Ok(d),
+            (PKind::Any, d @ (Datum::Array(_) | Datum::Range { .. })) => return Ok(d),
             (_, Datum::Range { .. }) => return Err(mismatch("a range")),
-            (_, Datum::List(items)) => {
+            (_, Datum::Array(items)) => {
                 // a list where one value is expected: each entry is checked
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
                     out.push(self.check_param(callee, p, item, arg)?);
                 }
-                return Ok(Datum::List(out));
+                return Ok(Datum::array(out));
             }
             (_, Datum::Sig(s)) => s,
         };
@@ -3578,11 +3534,9 @@ impl Lower<'_> {
                     )
                     .with_help(format!("add a line `{} = ...`", out.name)));
                 };
-                results.push((out.name.clone(), self.signal_of(v, out.span)?));
+                results.push((out.name.clone(), v));
             }
-            let mut first = results[0].1.clone();
-            first.outputs = results;
-            return Ok(Datum::Sig(first));
+            return Ok(Datum::Record(results));
         }
         let (value, span) = match (tail, self.out.take()) {
             (Some(_), Some(_)) => {
@@ -3649,77 +3603,9 @@ impl Lower<'_> {
             };
             let at = arg.span;
             let v = self.check_param(&name.name, p, v, &arg)?;
-            kargs.push(match v {
-                Datum::Sig(s) if s.konst.is_some() => KArg::Const {
-                    unit: s.unit,
-                    value: s.konst.unwrap(),
-                },
-                Datum::Sig(s) => {
-                    if s.count() > 1 {
-                        if width > 1 && s.count() != width {
-                            return Err(Diagnostic::new(
-                                format!(
-                                    "`{}`'s arguments have {width} and {} channels, which can't be combined",
-                                    name.name,
-                                    s.count()
-                                ),
-                                at,
-                            ));
-                        }
-                        width = s.count();
-                        layout = s.layout;
-                    }
-                    let karg = KArg::Port {
-                        unit: s.unit,
-                        rate: self.sig_rate(&s),
-                    };
-                    wires.push((p.name.name.clone(), s));
-                    karg
-                }
-                Datum::Range { lo, hi, inclusive } => match (lo.konst, hi.konst) {
-                    (Some(a), Some(b)) => KArg::Range {
-                        unit: lo.unit,
-                        lo: a,
-                        hi: b,
-                        inclusive,
-                    },
-                    _ => {
-                        return Err(Diagnostic::new(
-                            "a range given to a function with state must be known while compiling",
-                            at,
-                        ));
-                    }
-                },
-                Datum::List(items) => {
-                    let mut unit = None;
-                    let mut values = Vec::with_capacity(items.len());
-                    for item in &items {
-                        match item {
-                            Datum::Sig(Sig { konst: Some(k), unit: u, .. })
-                                if unit.is_none_or(|x| x == *u) =>
-                            {
-                                unit = Some(*u);
-                                values.push(*k);
-                            }
-                            _ => {
-                                return Err(Diagnostic::new(
-                                    "a list given to a function with state holds numbers known while compiling, with one unit",
-                                    at,
-                                ));
-                            }
-                        }
-                    }
-                    if values.is_empty() {
-                        return Err(Diagnostic::new("this list is empty", at));
-                    }
-                    KArg::Table {
-                        unit: unit.unwrap_or(Unit::Num),
-                        values: values.into(),
-                    }
-                }
-            });
+            kargs.push(self.kernel_arg(v, &p.name.name, &mut wires, &mut width, &mut layout, at)?);
         }
-        let (kernel, units) = compile_kernel(def, &kargs, self.registry, self.names, self.tempo)?;
+        let (kernel, shape) = compile_kernel(def, &kargs, self.registry, self.names, self.tempo)?;
         let kernel = Arc::new(kernel);
         let outputs = kernel.outputs.len();
         let mut per_output: Vec<Vec<Src>> = vec![Vec::with_capacity(width); outputs];
@@ -3732,31 +3618,57 @@ impl Lower<'_> {
                 .g
                 .add_outputs(Custom::new(kernel.clone()), &wired)
                 .map_err(|e| Diagnostic::new(e.to_string(), span))?;
-            for (k, src) in results.into_iter().enumerate() {
+            for (k, src) in results.into_iter().take(outputs).enumerate() {
                 per_output[k].push(src);
             }
         }
-        let sigs: Vec<Sig> = per_output
-            .into_iter()
-            .zip(&units)
-            .map(|(srcs, unit)| Sig {
-                layout: if width == 1 { Layout::Mono } else { layout },
-                srcs,
-                unit: *unit,
-                konst: None,
-                outputs: Vec::new(),
-            })
-            .collect();
-        let mut first = sigs[0].clone();
-        if let FnResult::Named(_) = def.result {
-            first.outputs = kernel
-                .outputs
-                .iter()
-                .map(|(n, _)| n.clone())
-                .zip(sigs)
-                .collect();
+        Ok(Self::kernel_result(shape, &per_output, layout))
+    }
+
+    fn kernel_arg(&self, value: Datum, path: &str, wires: &mut Vec<(String, Sig)>, width: &mut usize, layout: &mut Layout, span: Span) -> Res<KArg> {
+        match value {
+            Datum::Sig(s) => {
+                if let Some(value) = s.konst { return Ok(KArg::Const { unit: s.unit, value }); }
+                if s.count() > 1 {
+                    if *width > 1 && s.count() != *width {
+                        return Err(Diagnostic::new("function arguments have different channel counts", span));
+                    }
+                    *width = s.count();
+                    *layout = s.layout;
+                }
+                let arg = KArg::Port { unit: s.unit, rate: self.sig_rate(&s) };
+                wires.push((path.to_string(), s));
+                Ok(arg)
+            }
+            Datum::Array(items) => {
+                // Constant numeric arrays retain shared table storage.
+                let numbers: Option<Vec<_>> = items.iter().map(|v| match v {
+                    Datum::Sig(s) => s.konst.map(|k| (s.unit, k)), _ => None,
+                }).collect();
+                if let Some(values) = numbers && !values.is_empty() && values.iter().all(|(u, _)| *u == values[0].0) {
+                    return Ok(KArg::Table { unit: values[0].0, values: Arc::new(values.into_iter().map(|(_, v)| v).collect()) });
+                }
+                Ok(KArg::Array(items.into_iter().enumerate().map(|(i, v)|
+                    self.kernel_arg(v, &format!("{path}[{i}]"), wires, width, layout, span)).collect::<Res<_>>()?))
+            }
+            Datum::Range { lo, hi, inclusive } => match (lo.konst, hi.konst) {
+                (Some(lo_value), Some(hi_value)) => Ok(KArg::Range { unit: lo.unit, lo: lo_value, hi: hi_value, inclusive }),
+                _ => Err(Diagnostic::new("a range given to a function must be known while compiling", span)),
+            },
+            Datum::Record(fields) => self.kernel_arg(fields[0].1.clone(), path, wires, width, layout, span),
         }
-        Ok(Datum::Sig(first))
+    }
+
+    fn kernel_result(shape: KernelResult, sources: &[Vec<Src>], layout: Layout) -> Datum {
+        match shape {
+            KernelResult::Scalar { index, unit } => Datum::Sig(Sig {
+                srcs: sources[index].clone().into(),
+                layout: if sources[index].len() == 1 { Layout::Mono } else { layout },
+                unit, konst: None,
+            }),
+            KernelResult::Array(items) => Datum::Array(items.into_iter().map(|v| Self::kernel_result(v, sources, layout)).collect()),
+            KernelResult::Record(fields) => Datum::Record(fields.into_iter().map(|(name, v)| (name, Self::kernel_result(v, sources, layout))).collect()),
+        }
     }
 
     /// An instrument played inside another: its body runs as part of this voice. `gain:` is the
@@ -3800,7 +3712,7 @@ impl Lower<'_> {
     // ---- built-in functions ----------------------------------------------
 
     /// The values of a call such as `min(a, b)` or `a.mod(b)`, without names.
-    fn plain_args(&mut self, name: &Ident, args: &[Arg], count: usize) -> Res<Vec<(Sig, Span)>> {
+    fn plain_args(&mut self, name: &Ident, args: &[Arg], count: usize) -> Res<Vec<(Datum, Span)>> {
         if args.len() != count {
             return Err(Diagnostic::new(
                 format!("`{}` takes {count} values", name.name),
@@ -3815,16 +3727,20 @@ impl Lower<'_> {
         }
         let mut values = Vec::with_capacity(count);
         for a in args {
-            values.push((self.expr(&a.value)?, a.value.span));
+            values.push((self.value(&a.value)?, a.value.span));
         }
         Ok(values)
     }
 
     /// `min(a, b)`, `max(a, b)`, `pow(x, y)` and `a.mod(b)`.
-    fn combine(&mut self, name: &Ident, args: &[Arg]) -> Res<Sig> {
+    fn combine(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
         let mut values = self.plain_args(name, args, 2)?;
         let (b, b_span) = values.pop().unwrap();
         let (a, _) = values.pop().unwrap();
+        self.zip_values(a, b, b_span, |this, a, b| this.combine_scalar(name, a, b, b_span))
+    }
+
+    fn combine_scalar(&mut self, name: &Ident, a: Sig, b: Sig, b_span: Span) -> Res<Sig> {
         match name.name.as_str() {
             "mod" => self.rem(a, b, b_span),
             "pow" => {
@@ -3850,30 +3766,20 @@ impl Lower<'_> {
     }
 
     /// `x.clamp(lo..hi)`
-    fn clamp(&mut self, name: &Ident, args: &[Arg]) -> Res<Sig> {
+    fn clamp(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
         let [x, range] = args else {
             return Err(Diagnostic::new("`clamp` takes a range", name.span)
                 .with_help("for example `cutoff.clamp(20hz..18khz)`"));
         };
-        let v = self.expr(&x.value)?;
+        let v = self.value(&x.value)?;
         let Datum::Range { lo, hi, .. } = self.value(&range.value)? else {
             return Err(Diagnostic::new(
                 "`clamp` takes a range, such as `20hz..18khz`",
                 range.value.span,
             ));
         };
-        if lo.unit != v.unit {
-            return Err(Diagnostic::new(
-                format!(
-                    "the range is {}, but the value is {}",
-                    lo.unit.describe(),
-                    v.unit.describe()
-                ),
-                range.value.span,
-            ));
-        }
-        let up = self.max_sig(&v, &lo, name.span)?;
-        self.min_sig(&up, &hi, name.span)
+        let up = self.extreme_value(v, Datum::Sig(lo), false, name.span)?;
+        self.extreme_value(up, Datum::Sig(hi), true, name.span)
     }
 
     /// `zeros(n)`: a list of `n` zeros.
@@ -3881,20 +3787,20 @@ impl Lower<'_> {
         let [count] = args else {
             return Err(Diagnostic::new("`zeros` takes a count", name.span));
         };
-        let n = self.whole_number(&count.value, 1 << 22)?;
-        Ok(Datum::List(vec![Datum::Sig(Sig::constant(Unit::Num, 0.0)); n]))
+        let n = self.whole_number(&count.value, 0, 1 << 22)?;
+        Ok(Datum::array(vec![Datum::Sig(Sig::constant(Unit::Num, 0.0)); n]))
     }
 
     /// A whole number from 1 to `max`, known while compiling.
-    fn whole_number(&mut self, e: &Expr, max: usize) -> Res<usize> {
+    fn whole_number(&mut self, e: &Expr, min: usize, max: usize) -> Res<usize> {
         match self.expr(e)? {
             Sig {
                 konst: Some(k),
                 unit: Unit::Num,
                 ..
-            } if k.fract() == 0.0 && k >= 1.0 && k <= max as f64 => Ok(k as usize),
+            } if k.fract() == 0.0 && k >= min as f64 && k <= max as f64 => Ok(k as usize),
             _ => Err(Diagnostic::new(
-                format!("expected a whole number from 1 to {max}, known while compiling"),
+                format!("expected a whole number from {min} to {max}, known while compiling"),
                 e.span,
             )),
         }
@@ -3906,10 +3812,10 @@ impl Lower<'_> {
         let names = ["amps", "size"];
         let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
         let Some(amps) = bound[0] else {
-            return Err(Diagnostic::new("`harmonics` takes a list of amplitudes", name.span));
+            return Err(Diagnostic::new("`harmonics` takes an array of amplitudes", name.span));
         };
         let size = match bound[1] {
-            Some(a) => self.whole_number(&a.value, 1 << 20)?,
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
             None => 2048,
         };
         let list = self.value(&amps.value)?;
@@ -3943,7 +3849,7 @@ impl Lower<'_> {
         if peak > 0.0 {
             table.iter_mut().for_each(|v| *v /= peak);
         }
-        Ok(Datum::List(
+        Ok(Datum::Array(
             table
                 .into_iter()
                 .map(|v| Datum::Sig(Sig::constant(Unit::Num, v)))
@@ -3952,23 +3858,27 @@ impl Lower<'_> {
     }
 
     /// `x.hz`, `n.ms`, `(-6db).num`...: give a plain value a unit, or take it away.
-    fn unit_method(&mut self, name: &Ident, args: &[Arg]) -> Res<Option<Sig>> {
+    fn unit_method(&mut self, name: &Ident, args: &[Arg]) -> Res<Option<Datum>> {
         let units = [
             "num", "hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "deg", "st",
         ];
         if !units.contains(&name.name.as_str()) || !(args.len() == 1 && args[0].receiver) {
             return Ok(None);
         }
-        let v = self.expr(&args[0].value)?;
+        let value = self.value(&args[0].value)?;
         let span = args[0].value.span;
+        self.map_value(value, span, |this, value| this.unit_value(name, value, span)).map(Some)
+    }
+
+    fn unit_value(&mut self, name: &Ident, v: Sig, span: Span) -> Res<Sig> {
         if name.name == "num" {
             if v.unit == Unit::Db {
                 // a db value is held as a gain factor
                 let ln = self.func(Fn1::Log, &Sig { unit: Unit::Num, ..v });
                 let k = Sig::constant(Unit::Num, 20.0 / std::f64::consts::LN_10);
-                return self.mul(&ln, &k, Unit::Num, span).map(Some);
+                return self.mul(&ln, &k, Unit::Num, span);
             }
-            return Ok(Some(Sig { unit: Unit::Num, outputs: Vec::new(), ..v }));
+            return Ok(Sig { unit: Unit::Num, ..v });
         }
         if v.unit != Unit::Num {
             return Err(Diagnostic::new(
@@ -3986,9 +3896,9 @@ impl Lower<'_> {
             let k = Sig::constant(Unit::Num, std::f64::consts::LN_10 / 20.0);
             let e = self.mul(&v, &k, Unit::Num, span)?;
             let g = self.func(Fn1::Exp, &e);
-            return Ok(Some(Sig { unit: Unit::Db, ..g }));
+            return Ok(Sig { unit: Unit::Db, ..g });
         }
-        self.mul(&v, &Sig::constant(Unit::Num, factor), unit, span).map(Some)
+        self.mul(&v, &Sig::constant(Unit::Num, factor), unit, span)
     }
 
     /// `note.time` and `note.released`: the running voice.
@@ -4035,7 +3945,7 @@ impl Lower<'_> {
             .with_help(format!("a loop is written on one line: `{n} = x + prev({n}) * 0.5`")));
         }
         let x = self.expr(&arg.value)?;
-        let srcs = x
+        let srcs: Array<Src> = x
             .srcs
             .iter()
             .map(|&s| self.g.add(Delay1::default(), &[("x", s)]).expect("prev ports"))
@@ -4043,7 +3953,6 @@ impl Lower<'_> {
         Ok(Sig {
             srcs,
             konst: None,
-            outputs: Vec::new(),
             ..x
         })
     }
@@ -4056,7 +3965,8 @@ pub(crate) fn compile_const(value: &Expr, tempo: Tempo, registry: &Registry, nam
     fn known(d: &Datum) -> bool {
         match d {
             Datum::Sig(s) => s.konst.is_some(),
-            Datum::List(items) => items.iter().all(known),
+            Datum::Array(items) => items.iter().all(known),
+            Datum::Record(fields) => fields.iter().all(|(_, v)| known(v)),
             Datum::Range { lo, hi, .. } => lo.konst.is_some() && hi.konst.is_some(),
         }
     }
@@ -4065,7 +3975,7 @@ pub(crate) fn compile_const(value: &Expr, tempo: Tempo, registry: &Registry, nam
             "a `const` must be known while compiling",
             value.span,
         )
-        .with_help("use numbers, ranges, lists and functions without state"));
+        .with_help("use numbers, ranges, arrays and functions without state"));
     }
     Ok(v)
 }
@@ -4099,7 +4009,7 @@ fn from_a_guess(d: &Diagnostic) -> bool {
         || m.contains(" gives ")
         || m.contains("plain signal")
         || m.contains(" entries")
-        || m.contains("a list of ")
+        || m.contains("an array of ")
 }
 
 /// Whether the body reads an untyped parameter inside `span`.
@@ -4107,7 +4017,7 @@ fn reads_untyped(def: &FnDef, span: Span) -> bool {
     let untyped: Vec<&str> = def
         .params
         .iter()
-        .filter(|p| p.default.is_none() && matches!(p.ty, None | Some(TypeSpec::List(..))))
+        .filter(|p| p.default.is_none() && matches!(p.ty, None | Some(TypeSpec::Array(..))))
         .map(|p| p.name.name.as_str())
         .collect();
     fn visit(e: &Expr, names: &[&str], span: Span, found: &mut bool) {
@@ -4184,10 +4094,10 @@ fn check_fn_with(
                 Some(Datum::Sig(Sig::signal(src, *unit)))
             }
             PKind::Choice(_) => Some(Datum::Sig(Sig::constant(Unit::Num, 0.0))),
-            PKind::List(inner) => {
+            PKind::Array(inner) => {
                 guessed = true;
                 let unit = inner.unit().unwrap_or(guess);
-                Some(Datum::List(vec![Datum::Sig(Sig::constant(unit, 0.0)); length]))
+                Some(Datum::array(vec![Datum::Sig(Sig::constant(unit, 0.0)); length]))
             }
             PKind::Any => None,
         };

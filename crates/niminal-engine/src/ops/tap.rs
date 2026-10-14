@@ -51,6 +51,8 @@ impl Opcode for TapOut {
         Box::new(self.clone())
     }
 
+    fn has_side_effects(&self) -> bool { true }
+
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         out.copy_from_slice(inputs[0]);
         if let Some(last) = out.last().filter(|v| v.is_finite()) {

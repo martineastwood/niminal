@@ -332,13 +332,6 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             _ => {}
         }
     }
-    for item in &items {
-        let Item::Fn(def) = item else { continue };
-        if let Err(d) = check_fn(def, tempo, &registry, &names) {
-            errors.push(d);
-            names.failed_fns.push(def.name.name.clone());
-        }
-    }
 
     for item in &items {
         let Item::Control { name, value, input } = item else {
@@ -373,6 +366,14 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 names.consts.insert(name.name.clone(), v);
             }
             Err(d) => errors.push(d),
+        }
+    }
+
+    for item in &items {
+        let Item::Fn(def) = item else { continue };
+        if let Err(d) = check_fn(def, tempo, &registry, &names) {
+            errors.push(d);
+            names.failed_fns.push(def.name.name.clone());
         }
     }
 
@@ -1896,15 +1897,12 @@ a(f: 100hz) for 1beat
     fn choices_and_lists_belong_to_functions() {
         assert_eq!(
             msg("instr a(mode: (x | y) = x) { 0.5 }"),
-            "an instrument's parameters are set by notes, so `mode` can't be a choice or a list"
+            "an instrument's parameters are set by notes, so `mode` can't be a choice or an array"
         );
         assert_eq!(msg("fn f(m: (a | b) = c) { 1 }"), "the default for `m` is one of a, b");
         assert_eq!(msg("fn f(m: (a) = a) { 1 }"), "a choice lists at least two names");
         ok("fn f(xs: [num]) { xs.sum }\ninstr a() { f([0.1, 0.2]) * osc(sine, 100hz) }");
-        assert_eq!(
-            msg("fn f(xs: [num]) { xs.sum }\ninstr a() { f(0.5) * osc(sine, 100hz) }"),
-            "`xs` expects a list of a plain number, found a single value"
-        );
+        ok("fn f(xs: [num]) { xs.sum }\ninstr a() { f(0.5) * osc(sine, 100hz) }");
     }
 
     #[test]
@@ -2373,7 +2371,7 @@ bad() for 1beat
         );
         assert_eq!(
             msg(&stereo("[osc(saw, f).pan, osc(saw, f)]")),
-            "a channel list takes one channel per entry, but this has 2"
+            "a channel array takes one channel per entry, but this has 2"
         );
         assert_eq!(
             msg(&stereo("[f, f]")),
@@ -2381,17 +2379,17 @@ bad() for 1beat
         );
         assert_eq!(
             msg(&stereo("[osc(saw, f), f]")),
-            "the entries of a channel list must have the same unit: this is hz, the first was a plain number"
+            "the entries of a channel array must have the same unit: this is hz, the first was a plain number"
         );
         assert_eq!(
             msg(&stereo(
                 "[osc(saw, f), osc(saw, f)] + [osc(saw, f), osc(saw, f), osc(saw, f)]"
             )),
-            "can't combine a list of 2 with a list of 3"
+            "can't combine an array of 2 with an array of 3"
         );
         assert_eq!(
             msg(&stereo("osc(saw, [f, f]).lpf(cutoff: [1khz, 2khz, 3khz])")),
-            "`lpf`'s arguments have 2 and 3 channels, which can't be combined"
+            "opcode array arguments must have matching shapes"
         );
         assert_eq!(
             msg(&stereo("[l, r] = osc(saw, f)\nl")),
@@ -2413,14 +2411,14 @@ bad() for 1beat
         let p = ok("config { channels: stereo }\ninstr a(f: hz) { [1, 1.01].map(fn(r) { osc(saw, f * r) }) }");
         assert_eq!(p.instruments[0].graph.channels(), 2);
 
-        assert_eq!(msg(&mono("(3..<3).map(fn(i) { osc(saw, f) }).sum")), "this range is empty");
+        assert_eq!(msg(&mono("(3..<3).map(fn(i) { osc(saw, f) }).sum")), "this array is empty");
         // `..` includes its end
         ok(&mono("(1..8).map(fn(n) { osc(sine, f * n) / n }).sum"));
         // a list is not limited by the channel count until it becomes a signal
         ok(&mono("(0..40).map(fn(i) { osc(saw, f * (1 + i * 0.001)) }).sum"));
         assert_eq!(
             msg(&mono("(0..17).map(fn(i) { osc(saw, f) })")),
-            "a list holds at most 16 entries"
+            "audio output supports at most 16 channels"
         );
         // an expression of `it` is a function of one parameter
         ok(&mono("[1, 2].map(osc(saw, f * it)).sum"));
@@ -2463,7 +2461,7 @@ bad() for 1beat
             msg(&mono("[osc(saw, f)][f]")),
             "an index is a plain number, found hz"
         );
-        assert_eq!(msg("fn o(x: num) { x[0] }"), "only a list can be indexed");
+        ok("fn o(x: num) { x[0] }");
     }
 
     #[test]
@@ -2481,18 +2479,15 @@ bad() for 1beat
         assert_eq!(p.instruments[0].graph.channels(), 2);
         ok("config { channels: stereo }\ninstr a(f: hz) { [l, r] = [osc(saw, f), osc(sine, f)]\n[r, l] }");
 
-        assert_eq!(
-            msg(&mono("osc(saw, f).pan.map(fn(c) { c })")),
-            "`map` works on a list"
-        );
-        assert_eq!(msg(&mono("osc(saw, f)[0]")), "only a list can be indexed");
+        ok(&mono("osc(saw, f).pan.map(fn(c) { c }).sum"));
+        ok(&mono("osc(saw, f)[0]"));
         assert_eq!(
             msg(&mono("[[osc(saw, f), osc(saw, f)], [osc(saw, f), osc(saw, f)]]")),
-            "a list of lists can't be used as a signal"
+            "an array of arrays can't be used as a signal"
         );
         assert_eq!(
             msg(&mono("[l, r, c] = [osc(saw, f), osc(sine, f)]\nl")),
-            "this list has 2 entries, but 3 name(s) are given"
+            "this array has 2 entries, but 3 name(s) are given"
         );
     }
 

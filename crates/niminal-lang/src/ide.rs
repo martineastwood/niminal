@@ -215,7 +215,7 @@ fn params(source: &str, params: &[ParamDef]) -> Vec<SymbolParam> {
             if let Some(ty) = &p.ty {
                 let span = match ty {
                     TypeSpec::Unit(u) => u.span,
-                    TypeSpec::Range { span, .. } | TypeSpec::List(_, span) => *span,
+                    TypeSpec::Range { span, .. } | TypeSpec::Array(_, span) => *span,
                     TypeSpec::Choice(names) => names[0].span.to(names[names.len() - 1].span),
                 };
                 let text = &source[span.start..span.end];
@@ -463,9 +463,26 @@ pub fn builtin_ops() -> Vec<OpInfo> {
             })
             .collect();
         ops.extend(envelope_ops());
+        ops.extend(array_ops());
         ops
     })
     .clone()
+}
+
+/// Collection operations exposed alongside scalar DSP operations.
+fn array_ops() -> Vec<OpInfo> {
+    let method = |name, doc, params| op_info(name, doc, true, params);
+    vec![
+        method("len", "The fixed length of an array or number of signal channels.", &[]),
+        method("indices", "The array's indices as a range, from zero to its length (excluded).", &[]),
+        method("sum", "Add array elements or mix signal channels. Also works on writable buffers.", &[]),
+        method("min", "The smallest array element, or element-wise minimum with another value.", &[("other", "value", false)]),
+        method("max", "The largest array element, or element-wise maximum with another value.", &[("other", "value", false)]),
+        method("map", "Apply a function to each current array element: `xs.map(it * 2)`.", &[("function", "function", true)]),
+        method("channels", "A signal's channels as an ordinary array.", &[]),
+        method("at", "Read an array at a fractional, wrapping position. Interpolation: none, linear (default) or cubic.", &[("position", "number", true), ("interp", "interpolation", false)]),
+        op_info("zeros", "A fixed-length array of zeros, including an empty array for zero.", false, &[("count", "integer", true)]),
+    ]
 }
 
 /// `adsr` and `perc`: shortcuts for envelope literals, not wired opcodes.

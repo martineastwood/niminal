@@ -7,7 +7,7 @@ pub const TAIL_LEVEL: f32 = 3.162_277_7e-5;
 /// block-aligned; stateful opcodes still run per sample inside a block.
 pub const BLOCK: usize = 32;
 
-/// The most input ports an opcode may declare.
+/// Stack input capacity for scalar opcodes. Array opcodes read graph slots directly.
 pub const MAX_INPUTS: usize = 16;
 
 /// A named input of an opcode. `default: None` means the port must be wired.
@@ -71,6 +71,25 @@ pub trait Opcode: Send + Sync + std::any::Any {
         self.process(ctx, inputs, &mut outs[0][..frames]);
     }
 
+    /// Input capacity of the processing adapter. Array-aware opcodes override
+    /// this alongside `process_slots`, so invalid graphs fail before playback.
+    fn max_inputs(&self) -> usize { MAX_INPUTS }
+
+    /// Process directly from graph slots. Array inputs can have any fixed
+    /// length; scalar built-ins use the small stack adapter below.
+    fn process_slots(&mut self, ctx: &ProcessCtx, slots: &[[f32; BLOCK]], indices: &[usize], outs: &mut [[f32; BLOCK]], frames: usize) {
+        assert!(indices.len() <= MAX_INPUTS, "scalar opcode has too many ports");
+        let mut inputs: [&[f32]; MAX_INPUTS] = [&[]; MAX_INPUTS];
+        for (input, &index) in inputs.iter_mut().zip(indices) {
+            *input = &slots[index][..frames];
+        }
+        self.process_outputs(ctx, &inputs[..indices.len()], outs, frames);
+    }
+
+    /// True when processing has an observable effect beyond its output, such
+    /// as an OSC tap. These nodes remain live even without an audio consumer.
+    fn has_side_effects(&self) -> bool { false }
+
     /// True while this opcode still has sound to produce after the note ends
     /// (an envelope that has not finished, or a delay still ringing).
     fn is_active(&self) -> bool {
@@ -128,6 +147,14 @@ impl Opcode for Box<dyn Opcode> {
     fn process_outputs(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outs: &mut [[f32; BLOCK]], frames: usize) {
         (**self).process_outputs(ctx, inputs, outs, frames);
     }
+
+    fn max_inputs(&self) -> usize { (**self).max_inputs() }
+
+    fn process_slots(&mut self, ctx: &ProcessCtx, slots: &[[f32; BLOCK]], indices: &[usize], outs: &mut [[f32; BLOCK]], frames: usize) {
+        (**self).process_slots(ctx, slots, indices, outs, frames);
+    }
+
+    fn has_side_effects(&self) -> bool { (**self).has_side_effects() }
 
     fn is_active(&self) -> bool {
         (**self).is_active()
