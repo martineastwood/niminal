@@ -203,6 +203,8 @@ const saw8 = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
 const taps = [0.25, 0.5, 0.25]
 ```
 
+An oscillator plays a table as one cycle of a wave, band-limited at any pitch: `osc(saw8, freq)`.
+
 ## Built-ins
 
 Core opcodes (`osc`, filters, `gain`, `delay`, `reverb`, `pan`, math, …) are listed under [Built-in opcodes](/reference/opcodes/). That page is generated from the compiler, so it stays in sync with the binary. A function can call any of them except `pan` and `to_layout` inside a function with state. Other DSP built-ins expand element by element over array arguments there as well.

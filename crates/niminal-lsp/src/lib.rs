@@ -403,7 +403,7 @@ mod tests {
         let diagnostics = &out[0]["params"]["diagnostics"];
         assert_eq!(diagnostics.as_array().unwrap().len(), 1, "{out:?}");
         assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
-        assert_eq!(diagnostics[0]["message"], "expected a waveform\nhelp: one of sine, saw, square, tri");
+        assert_eq!(diagnostics[0]["message"], "expected a waveform or a table\nhelp: one of sine, saw, square, tri, or an array of numbers");
         assert_eq!(diagnostics[0]["range"]["start"]["character"], 27);
         // fixing it clears them
         let out = server.handle(&json!({ "method": "textDocument/didChange", "params": {

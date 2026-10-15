@@ -2178,18 +2178,7 @@ impl Kb<'_> {
                 continue;
             };
             match param.kind {
-                opcodes::Kind::Wave => {
-                    let found = match &arg.value.kind {
-                        ExprKind::Name(n) => opcodes::wave(n),
-                        _ => None,
-                    };
-                    let Some(w) = found else {
-                        let waves: Vec<_> = opcodes::WAVES.iter().map(|(n, _)| *n).collect();
-                        return Err(Diagnostic::new("expected a waveform", arg.value.span)
-                            .with_help(format!("one of {}", waves.join(", "))));
-                    };
-                    wave = Some(w);
-                }
+                opcodes::Kind::Wave => wave = Some(self.wave_arg(&arg.value)?),
                 opcodes::Kind::Layout => {
                     return Err(Diagnostic::new(
                         format!("`{}` can't be used inside a function with state", name.name),
@@ -2205,7 +2194,44 @@ impl Kb<'_> {
         self.native_arrays(name, spec, wave, &values)
     }
 
-    fn native_arrays(&mut self, name: &Ident, spec: &opcodes::OpSpec, wave: Option<opcodes::Wave>, values: &[Option<KVal>]) -> Res<KVal> {
+    /// A waveform name, or a table of plain numbers known while compiling that holds one cycle.
+    fn wave_arg(&mut self, e: &Expr) -> Res<opcodes::WaveArg> {
+        if let ExprKind::Name(n) = &e.kind
+            && let Some(w) = opcodes::wave(n)
+        {
+            return Ok(opcodes::WaveArg::Builtin(w));
+        }
+        let not_a_wave = || {
+            let names: Vec<_> = opcodes::WAVES.iter().map(|(n, _)| *n).collect();
+            Diagnostic::new("expected a waveform or a table", e.span)
+                .with_help(format!("one of {}, or an array of numbers", names.join(", ")))
+        };
+        let value = match self.value(e) {
+            Err(_) if matches!(e.kind, ExprKind::Name(_)) => return Err(not_a_wave()),
+            value => value?,
+        };
+        let cycle = match value {
+            KVal::Table { unit: Unit::Num, values, .. } => values.to_vec(),
+            KVal::Table { .. } => return Err(Diagnostic::new("a table is a one-dimensional array of plain numbers", e.span)),
+            KVal::Array(_) => {
+                let mut cycle = Vec::new();
+                for item in self.array_elements(value, e.span)? {
+                    match item {
+                        KVal::Num(v) if v.unit == Unit::Num => match self.konst(&v) {
+                            Some(k) => cycle.push(k),
+                            None => return Err(Diagnostic::new("the table must be known while compiling", e.span)),
+                        },
+                        _ => return Err(Diagnostic::new("a table is a one-dimensional array of plain numbers", e.span)),
+                    }
+                }
+                cycle
+            }
+            _ => return Err(not_a_wave()),
+        };
+        opcodes::WaveArg::table(&cycle).map_err(|m| Diagnostic::new(m, e.span))
+    }
+
+    fn native_arrays(&mut self, name: &Ident, spec: &opcodes::OpSpec, wave: Option<opcodes::WaveArg>, values: &[Option<KVal>]) -> Res<KVal> {
         if values.iter().any(|v| v.as_ref().is_some_and(Self::is_array)) {
             let arrays = values.iter().map(|v| match v {
                 Some(v) if Self::is_array(v) => self.array_elements(v.clone(), name.span).map(KVal::array).map(Some),
@@ -2218,7 +2244,7 @@ impl Kb<'_> {
                 let row: Vec<_> = arrays.iter().map(|v| match v {
                     Some(KVal::Array(items)) => Some(items[i].clone()), other => other.clone(),
                 }).collect();
-                self.native_arrays(name, spec, wave, &row)
+                self.native_arrays(name, spec, wave.clone(), &row)
             }).collect::<Res<_>>()?));
         }
         let mut build = BuildArgs { wave, ..Default::default() };

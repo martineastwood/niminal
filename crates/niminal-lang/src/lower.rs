@@ -318,7 +318,7 @@ pub(crate) enum Datum {
 /// A call's evaluated argument.
 #[derive(Clone)]
 enum Val {
-    Wave(opcodes::Wave),
+    Wave(opcodes::WaveArg),
     Layout(Layout),
     Sig(Sig),
     Array(Array<Val>),
@@ -3095,18 +3095,7 @@ impl<'a> Lower<'a> {
                 continue;
             };
             vals.push(Some(match param.kind {
-                Kind::Wave => {
-                    let found = match &arg.value.kind {
-                        ExprKind::Name(n) => opcodes::wave(n),
-                        _ => None,
-                    };
-                    let Some(w) = found else {
-                        let names: Vec<_> = opcodes::WAVES.iter().map(|(n, _)| *n).collect();
-                        return Err(Diagnostic::new("expected a waveform", arg.value.span)
-                            .with_help(format!("one of {}", names.join(", "))));
-                    };
-                    Val::Wave(w)
-                }
+                Kind::Wave => Val::Wave(self.wave_arg(&arg.value)?),
                 Kind::Layout => Val::Layout(layout_from_expr(&arg.value)?),
                 Kind::Signal(_) | Kind::Gain => {
                     let value = self.value(&arg.value)?;
@@ -3116,6 +3105,36 @@ impl<'a> Lower<'a> {
         }
 
         self.dispatch_arrays(spec, &vals, span)
+    }
+
+    /// A waveform name, or a table of plain numbers known while compiling that holds one cycle.
+    fn wave_arg(&mut self, e: &Expr) -> Res<opcodes::WaveArg> {
+        if let ExprKind::Name(n) = &e.kind
+            && let Some(w) = opcodes::wave(n)
+        {
+            return Ok(opcodes::WaveArg::Builtin(w));
+        }
+        let not_a_wave = || {
+            let names: Vec<_> = opcodes::WAVES.iter().map(|(n, _)| *n).collect();
+            Diagnostic::new("expected a waveform or a table", e.span)
+                .with_help(format!("one of {}, or an array of numbers", names.join(", ")))
+        };
+        let value = match self.value(e) {
+            Err(_) if matches!(e.kind, ExprKind::Name(_)) => return Err(not_a_wave()),
+            value => value?,
+        };
+        let Datum::Array(items) = value else { return Err(not_a_wave()); };
+        let mut cycle = Vec::with_capacity(items.len());
+        for item in items.iter() {
+            match item {
+                Datum::Sig(Sig { konst: Some(k), unit: Unit::Num, .. }) => cycle.push(*k),
+                Datum::Sig(Sig { konst: None, .. }) => {
+                    return Err(Diagnostic::new("the table must be known while compiling", e.span));
+                }
+                _ => return Err(Diagnostic::new("a table is a one-dimensional array of plain numbers", e.span)),
+            }
+        }
+        opcodes::WaveArg::table(&cycle).map_err(|m| Diagnostic::new(m, e.span))
     }
 
     fn builtin_value(&self, value: Datum, param: &opcodes::ParamSpec, arg: &Expr) -> Res<Val> {
@@ -3192,7 +3211,7 @@ impl<'a> Lower<'a> {
         let mut layout = Layout::Mono;
         for (param, val) in spec.params.iter().zip(vals) {
             match val {
-                Some(Val::Wave(w)) => build.wave = Some(*w),
+                Some(Val::Wave(w)) => build.wave = Some(w.clone()),
                 Some(Val::Layout(_)) | None => {}
                 Some(Val::Array(_)) => unreachable!("array expansion runs before signal expansion"),
                 Some(Val::Sig(sig)) => {

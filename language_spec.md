@@ -434,6 +434,8 @@ const sine1k = (0..<1024).map(sin(2 * pi * it / 1024))
 const taps = [0.25, 0.5, 0.25]
 ```
 
+`osc(saw8, freq)` plays a table as one cycle of a wave, band-limited at any pitch. The table is numbers known while compiling, from `harmonics`, a literal or `.map`; it can be up to 65536 entries.
+
 **[not built]** `file("irs/hall.wav")` as a table.
 
 ### 7.3 State arrays
@@ -583,18 +585,8 @@ instr pluck(freq: init hz, decay: 0..1 = 0.996) with(tail: 3sec) {
 ```
 const saw8 = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
 
-fn phasor(freq: hz) {
-  state p = 0
-  p = (p + freq / sample_rate).fract
-  p
-}
-
-fn wavetable(table: [num], freq: hz) {
-  table.at(phasor(freq) * table.len, interp: linear)
-}
-
 instr wt(freq: hz) {
-  wavetable(saw8, freq) * adsr(5ms, 100ms, 0.6, 300ms)
+  osc(saw8, freq) * adsr(5ms, 100ms, 0.6, 300ms)
 }
 ```
 

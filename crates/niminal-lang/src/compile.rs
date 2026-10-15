@@ -1581,7 +1581,7 @@ saw_lead(freq: a3) for 1beat
         );
         assert_eq!(
             msg("instr a(f: hz) { osc(wobble, f) }"),
-            "expected a waveform"
+            "expected a waveform or a table"
         );
         assert_eq!(
             msg("instr a(f: hertz) { osc(saw, f) }"),

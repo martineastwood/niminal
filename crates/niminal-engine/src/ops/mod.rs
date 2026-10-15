@@ -22,7 +22,7 @@ pub use math::{
     Select, Sub,
     ArrayRead, TableRead,
 };
-pub use osc::{Osc, Wave};
+pub use osc::{Osc, Wave, Wavetable};
 pub use pan::{PanChannel, pan_gains};
 pub use reverb::Reverb;
 pub use sample::{SampleData, Sampler};

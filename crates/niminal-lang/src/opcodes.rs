@@ -3,10 +3,11 @@
 //! functions are compiled where they are called (see `lower` and `kernel`).
 
 use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
-use niminal_engine::ops::{FinishWhen, Delay, FilterMode, Fn1, Func, Gain, Osc, Reverb, Svf};
+use niminal_engine::ops::{FinishWhen, Delay, FilterMode, Fn1, Func, Gain, Osc, Reverb, Svf, Wavetable};
 
 use crate::unit::Unit;
 
@@ -58,10 +59,44 @@ fn setting(name: &str, kind: Kind) -> ParamSpec {
     }
 }
 
+/// What an oscillator plays: a built-in waveform, or one cycle of a table.
+#[derive(Clone)]
+pub enum WaveArg {
+    Builtin(Wave),
+    Table(Arc<Wavetable>),
+}
+
+/// The longest table an oscillator accepts.
+const MAX_TABLE: usize = 1 << 16;
+
+impl WaveArg {
+    /// One cycle of a wave, as given in a program.
+    pub fn table(cycle: &[f64]) -> Result<Self, String> {
+        if cycle.is_empty() {
+            return Err("a table can't be empty".into());
+        }
+        if cycle.len() > MAX_TABLE {
+            return Err(format!("a table to play can have at most {MAX_TABLE} entries"));
+        }
+        // Tables are shared while any program still plays them, so the same cycle is analysed once,
+        // across calls, voices and live re-evaluations.
+        static MADE: LazyLock<Mutex<HashMap<Vec<u64>, Weak<Wavetable>>>> = LazyLock::new(Mutex::default);
+        let key: Vec<u64> = cycle.iter().map(|v| v.to_bits()).collect();
+        let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(table) = made.get(&key).and_then(Weak::upgrade) {
+            return Ok(WaveArg::Table(table));
+        }
+        made.retain(|_, table| table.strong_count() > 0);
+        let table = Arc::new(Wavetable::from_cycle(cycle));
+        made.insert(key, Arc::downgrade(&table));
+        Ok(WaveArg::Table(table))
+    }
+}
+
 /// What is known at compile time when an opcode is built.
 #[derive(Default)]
 pub struct BuildArgs {
-    pub wave: Option<Wave>,
+    pub wave: Option<WaveArg>,
     /// Which channel of a multichannel signal this copy of the opcode serves.
     pub channel: usize,
     /// Arguments whose value is a compile-time constant, in engine units.
@@ -145,9 +180,14 @@ impl Registry {
             ),
             OpSpec::new(
                 "osc",
-                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri; `phase_mod` bends the phase for FM.",
+                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri, or a table of numbers known while compiling that holds one cycle of a wave, such as `harmonics([1, 1/2, 1/3])`; `phase_mod` bends the phase for FM.",
                 vec![req("wave", Kind::Wave), req("freq", Kind::Signal(Unit::Hz)), opt("phase_mod", SIGNAL)],
-                Build::Builtin(|a| Ok(Box::new(Osc::new(a.wave.expect("osc has a wave"))))),
+                Build::Builtin(|a| {
+                    Ok(Box::new(match a.wave.clone().expect("osc has a wave") {
+                        WaveArg::Builtin(wave) => Osc::new(wave),
+                        WaveArg::Table(table) => Osc::with_table(table),
+                    }))
+                }),
             ),
             filter("lpf", "A low-pass filter: lets frequencies below `cutoff` through. `res` adds resonance.", |_| Ok(Box::new(Svf::new(FilterMode::Low)))),
             filter("hpf", "A high-pass filter: lets frequencies above `cutoff` through. `res` adds resonance.", |_| Ok(Box::new(Svf::new(FilterMode::High)))),
@@ -235,4 +275,20 @@ pub fn wave(name: &str) -> Option<Wave> {
 /// The one-argument math functions.
 pub fn math_fn(name: &str) -> Option<Fn1> {
     Fn1::ALL.into_iter().find(|f| f.name() == name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_same_cycle_is_analysed_once_while_it_is_in_use() {
+        let cycle = [0.0, 0.5, 1.0, 0.5, 0.0, -0.5, -1.0, -0.5, 0.123];
+        let (WaveArg::Table(a), WaveArg::Table(b)) = (WaveArg::table(&cycle).unwrap(), WaveArg::table(&cycle).unwrap()) else {
+            panic!("tables")
+        };
+        assert!(Arc::ptr_eq(&a, &b));
+        let WaveArg::Table(other) = WaveArg::table(&cycle[..8]).unwrap() else { panic!("table") };
+        assert!(!Arc::ptr_eq(&a, &other));
+    }
 }

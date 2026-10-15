@@ -14,7 +14,7 @@ instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {
   level = perc(decay: 400ms)
   voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * level
   out = voice.pan(azimuth: az)
-  space += out.gain(-12db)
+  space += out.gain(-18db)
 }
 
 // A clip with an `instrument:` is a part: start it, stop it, mute it and change it by name.

@@ -137,6 +137,36 @@ fn a_table_is_read_between_its_entries() {
 }
 
 #[test]
+fn an_oscillator_plays_a_table_as_one_cycle() {
+    let table = raw("const wave = harmonics([1], size: 512)\ninstr a() { osc(wave, 200hz) * env[1 1sec 1] }\na() for 1beat");
+    let sine = raw("instr a() { osc(sine, 200hz) * env[1 1sec 1] }\na() for 1beat");
+    assert_eq!(period(&table[1000..5000]), period(&sine[1000..5000]));
+    assert!((rms(&table) - rms(&sine)).abs() < 0.01, "{} vs {}", rms(&table), rms(&sine));
+    // a literal array, array frequencies and phase_mod work as they do for a named wave
+    let literal = raw("instr a() { osc([0, 1, 0, -1], 200hz, phase_mod: 0.1) }\na() for 1beat");
+    assert!(rms(&literal) > 0.1);
+    assert!(error("const t = harmonics([1, 1/2])\ninstr a() { osc(t, 200hz * [1, 1.01]).sum }\na() for 1beat").is_empty());
+}
+
+#[test]
+fn an_oscillator_plays_a_table_inside_a_function_with_state() {
+    let src = |body: &str| format!("const t = harmonics([1, 0, 1/3], size: 1024)\nfn v(freq: hz) {{ state n = 0\n n = n + 1\n {body} }}\ninstr a() {{ v(300hz) * env[1 1sec 1] }}\na() for 1beat");
+    let inside = raw(&src("osc(t, freq)"));
+    let outside = raw("const t = harmonics([1, 0, 1/3], size: 1024)\ninstr a() { osc(t, 300hz) * env[1 1sec 1] }\na() for 1beat");
+    assert!(near(&inside, &outside));
+}
+
+#[test]
+fn a_table_that_cannot_be_played_says_why() {
+    let play = |table: &str| error(&format!("instr a(x: num) {{ osc({table}, 200hz) }}\na(x: 1) for 1beat"));
+    assert!(play("[0, x]").contains("known while compiling"), "{}", play("[0, x]"));
+    assert!(play("[[0, 1], [1, 0]]").contains("one-dimensional"));
+    assert!(play("[1hz, 2hz]").contains("one-dimensional"));
+    assert!(play("[]").contains("empty"));
+    assert!(play("sawz").contains("waveform"));
+}
+
+#[test]
 fn an_index_that_changes_switches_between_entries() {
     let stepped = raw("instr a() { osc(sine, [200hz, 400hz][note.time.num * 4]) * env[1 1sec 1] }\na() for 1beat");
     let at = |t: f64| (t * SR) as usize;

@@ -447,7 +447,7 @@ One opcode per job, with variants as parameters.
 
 | Category | Opcodes |
 | --- | --- |
-| Oscillators | `osc` with `sine`, `saw`, `square`, `tri`, `pulse(width:)`; `osc(table:)`; `phase_mod:` for FM; `noise` (white, pink or brown) |
+| Oscillators | `osc` with `sine`, `saw`, `square`, `tri`, `pulse(width:)`; `osc(table, freq)`; `phase_mod:` for FM; `noise` (white, pink or brown) |
 | Filters | `lpf`, `hpf`, `bpf`, `notch`, `peak`, `low_shelf`, `high_shelf`; `model:` svf, ladder or biquad |
 | Envelopes and modulation | `env[...]`, `adsr`, `perc`, `lfo`, `glide`, `follow`, `random`, `smooth_random` |
 | Delay and reverb | `delay`, `delay_line` and `tap`, `comb`, `allpass`, `reverb` (`model:` freeverb, plate or hall) |
