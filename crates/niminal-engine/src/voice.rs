@@ -401,7 +401,7 @@ impl Voice {
             let over = self.tail_left == 0;
             self.tail_left = self.tail_left.saturating_sub(frames);
             let done = if self.shaped {
-                over && self.graph.tail > 0.0 && !self.ops.iter().any(|op| op.is_envelope() && op.is_active())
+                over && self.graph.tail > 0.0 && !self.ops.iter().any(|op| op.has_active_envelope())
             } else {
                 over
             };

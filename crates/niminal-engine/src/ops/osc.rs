@@ -47,6 +47,7 @@ fn wrap(x: f64) -> f64 {
 }
 
 impl Opcode for Osc {
+    fn reset(&mut self) { self.phase = 0.0; }
     fn name(&self) -> &'static str {
         "osc"
     }

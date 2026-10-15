@@ -217,7 +217,7 @@ impl Names {
         }
         if matches!(
             name.name.as_str(),
-            "out" | "it" | "instrument" | "state" | "note" | "true" | "false" | "pi" | "sample_rate"
+            "out" | "it" | "instrument" | "state" | "note" | "true" | "false" | "pi" | "sample_rate" | "reset_on"
         ) {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
@@ -307,6 +307,7 @@ impl Sig {
 /// conversion to an audio layout happens where audio is consumed.
 #[derive(Clone)]
 pub(crate) enum Datum {
+    Function { def: FnDef, captures: HashMap<String, Datum> },
     Sig(Sig),
     Array(Array<Datum>),
     Record(Vec<(String, Datum)>),
@@ -490,10 +491,10 @@ pub(crate) fn compile_instr(
                     .with_help(format!("for example `{}: hz`", p.name.name)));
                 }
             },
-            PKind::Choice(_) | PKind::Array(_) => {
+            PKind::Choice(_) | PKind::Array(_) | PKind::Function => {
                 return Err(Diagnostic::new(
                     format!(
-                        "an instrument's parameters are set by notes, so `{}` can't be a choice or an array",
+                        "an instrument's parameters are set by notes, so `{}` can't be a choice, an array or a function",
                         p.name.name
                     ),
                     p.name.span,
@@ -1260,6 +1261,7 @@ impl<'a> Lower<'a> {
     /// The entries of a list or range, for `for`, `map` and the like.
     fn entries(&mut self, d: Datum, span: Span) -> Res<Vec<Datum>> {
         match d {
+            Datum::Function { .. } => Err(Diagnostic::new("a function is not an array", span)),
             Datum::Record(fields) => self.entries(fields[0].1.clone(), span),
             Datum::Array(items) => Ok(items.into_vec()),
             Datum::Range { lo, hi, inclusive } => {
@@ -1387,6 +1389,7 @@ impl<'a> Lower<'a> {
     /// `[l, r] = src`: one name per channel, or per entry of a list.
     fn destructure(&mut self, names: &[Ident], value: &Expr) -> Res<()> {
         let entries = match self.value(value)? {
+            Datum::Function { .. } => return Err(Diagnostic::new("a function cannot be destructured", value.span)),
             Datum::Record(fields) => fields.into_iter().map(|(_, v)| v).collect(),
             Datum::Range { .. } => {
                 return Err(Diagnostic::new(
@@ -1663,7 +1666,10 @@ impl<'a> Lower<'a> {
                 Some(v) => Ok(v.clone()),
                 None => match self.names.consts.get(name) {
                     Some(v) => Ok(v.clone()),
-                    None => self.name(name, e.span).map(Datum::Sig),
+                    None => match self.names.fns.get(name) {
+                        Some(def) => Ok(Datum::Function { def: def.clone(), captures: HashMap::new() }),
+                        None => self.name(name, e.span).map(Datum::Sig),
+                    },
                 },
             },
             ExprKind::Array(items) => items
@@ -1729,11 +1735,11 @@ impl<'a> Lower<'a> {
                 Ok(Datum::array(results))
             }
             ExprKind::Call { name, args } => self.call(name, args, e.span),
-            ExprKind::Lambda { .. } => Err(Diagnostic::new(
-                "a function value can only be given to `map`",
-                e.span,
-            )
-            .with_help("for example `(0..<4).map(fn(i) { osc(saw, freq * (1 + i * 0.01)) }).sum`")),
+            ExprKind::Lambda { params, body } => {
+                let def = funcs::lambda(params, body, e.span);
+                let captures = self.scope.iter().filter(|(n, _)| funcs::reads(&def, n)).map(|(n,v)| (n.clone(), v.clone())).collect();
+                Ok(Datum::Function { def, captures })
+            }
             _ => self.signal(e).map(Datum::Sig),
         }
     }
@@ -1805,12 +1811,14 @@ impl<'a> Lower<'a> {
     /// two-channel frequency.
     fn signal_of(&self, v: Datum, span: Span) -> Res<Sig> {
         match v {
+            Datum::Function { .. } => Err(Diagnostic::new("a function is not a signal", span)),
             Datum::Sig(sig) => Ok(sig),
             Datum::Record(fields) => self.signal_of(fields[0].1.clone(), span),
             Datum::Array(items) => {
                 let mut entries = Vec::with_capacity(items.len());
                 for item in items {
                     match item {
+                        Datum::Function { .. } => return Err(Diagnostic::new("a function is not a signal", span)),
                         Datum::Record(fields) => entries.push((self.signal_of(fields[0].1.clone(), span)?, span)),
                         Datum::Sig(sig) => entries.push((sig, span)),
                         Datum::Array(_) => {
@@ -2120,6 +2128,7 @@ impl<'a> Lower<'a> {
         if name.name == "channels" {
             no_args("channels")?;
             return match value {
+                Datum::Function { .. } => Err(Diagnostic::new("a function has no channels", receiver.value.span)),
                 list @ Datum::Array(_) => Ok(list),
                 Datum::Sig(sig) => Ok(Datum::Array(
                     (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect(),
@@ -2217,7 +2226,11 @@ impl<'a> Lower<'a> {
             return Err(Diagnostic::new("`map` takes a function", name.span)
                 .with_help("for example `[1, 2, 3].map(fn(x) { x * 2 })` or `.map(it * 2)`"));
         };
-        let (param, body) = lambda_of(&f.value)?;
+        let mapped = match &f.value.kind {
+            ExprKind::Name(n) if self.names.fns.contains_key(n) || matches!(self.scope.get(n), Some(Datum::Function { .. })) => Some(funcs::mapped_call(n, f.value.span)),
+            _ => None,
+        };
+        let (param, body) = lambda_of(mapped.as_ref().unwrap_or(&f.value))?;
         if param != "it" {
             self.names.check_local_in(
                 &Ident {
@@ -2674,7 +2687,8 @@ impl<'a> Lower<'a> {
             });
         }
         if let ExprKind::Call { name, .. } = &e.kind
-            && self.names.fns.get(&name.name).is_some_and(|def| matches!(def.result, FnResult::Named(_)))
+            && (self.names.fns.get(&name.name).is_some_and(|def| matches!(def.result, FnResult::Named(_)))
+                || matches!(self.scope.get(&name.name), Some(Datum::Function { def, .. }) if matches!(def.result, FnResult::Named(_))))
         {
             return Ok(match self.value(e)? { Datum::Record(fields) => Some(fields), _ => None });
         }
@@ -2908,6 +2922,31 @@ impl<'a> Lower<'a> {
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
         let n = name.name.as_str();
+        if n == "reset_on" {
+            let (trigger, body) = funcs::reset_args(args, span)?;
+            if self.mode == Mode::Plain { return Err(Diagnostic::new("reset scopes run while playing", span)); }
+            let trig = self.expr(trigger)?;
+            if trig.unit != Unit::Num || trig.count() != 1 { return Err(Diagnostic::new("a reset trigger is one plain signal", trigger.span)); }
+            let first = self.g.node_count();
+            let def = funcs::lambda(&[], body, span);
+            let id = def.name.clone();
+            if !funcs::has_state(&def, &self.names.fns) {
+                let saved_scope = self.scope.clone();
+                let out = self.out.take();
+                let result = self.fn_body(&def, &id, &[], Vec::new());
+                self.scope = saved_scope;
+                self.out = out;
+                self.g.reset_since(first, trig.srcs[0]);
+                return result;
+            }
+            let captures = self.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
+            self.scope.insert(id.name.clone(), Datum::Function { def, captures });
+            let result = self.call(&id, &[], span);
+            self.scope.remove(&id.name);
+            let result = result?;
+            self.g.reset_since(first, trig.srcs[0]);
+            return Ok(result);
+        }
         // `f.band`: one result of a function that has several
         if let [receiver] = args
             && receiver.receiver
@@ -2930,6 +2969,33 @@ impl<'a> Lower<'a> {
             && matches!(&receiver.value.kind, ExprKind::Name(r) if r == "note" && !self.scope.contains_key("note"))
         {
             return self.note_context(name).map(Datum::Sig);
+        }
+        if let Some(Datum::Function { mut def, captures }) = self.scope.get(n).cloned() {
+            let params = funcs::signature(&def.params, self.tempo)?;
+            let mut given = self.fn_args(name, &params, args)?;
+            let mut params = params;
+            let mut captures: Vec<_> = captures.into_iter().collect();
+            captures.sort_by(|a,b| a.0.cmp(&b.0));
+            for (n, v) in captures {
+                let id = Ident { name: n, span };
+                def.params.push(ParamDef { name: id.clone(), rate: None, ty: None, default: None });
+                params.push(PParam { name: id.clone(), rate: None, kind: PKind::Any, default: None });
+                given.push(Some((v, Expr { kind: ExprKind::Name(id.name), span })));
+            }
+            if self.fn_stack.contains(&def.name.name) {
+                return Err(Diagnostic::new("functions can't call themselves", name.span));
+            }
+            if funcs::has_state(&def, &self.names.fns) {
+                return self.call_kernel(&def, name, &params, given, span);
+            }
+            let saved = std::mem::take(&mut self.scope);
+            let out = self.out.take();
+            let in_fn = std::mem::replace(&mut self.in_fn, true);
+            self.fn_stack.push(def.name.name.clone());
+            let result = self.fn_body(&def, name, &params, given);
+            self.fn_stack.pop();
+            self.scope = saved; self.out = out; self.in_fn = in_fn;
+            return result;
         }
         if self.names.failed_fns.iter().any(|f| f == n) {
             // already reported where it is defined; this stops the caller without a second report
@@ -3054,6 +3120,7 @@ impl<'a> Lower<'a> {
 
     fn builtin_value(&self, value: Datum, param: &opcodes::ParamSpec, arg: &Expr) -> Res<Val> {
         match value {
+            Datum::Function { .. } => Err(Diagnostic::new("this argument needs a numeric value", arg.span)),
             Datum::Array(items) => Ok(Val::Array(items.into_iter().map(|v| self.builtin_value(v, param, arg)).collect::<Res<_>>()?)),
             Datum::Record(fields) => self.builtin_value(fields[0].1.clone(), param, arg),
             Datum::Sig(sig) => {
@@ -3352,6 +3419,9 @@ impl Lower<'_> {
                 .with_help(format!("in the call of `{callee}`"))
         };
         let sig = match (&p.kind, v) {
+            (PKind::Function | PKind::Any, d @ Datum::Function { .. }) => return Ok(d),
+            (PKind::Function, _) => return Err(mismatch("a value")),
+            (_, Datum::Function { .. }) => return Err(mismatch("a function")),
             (_, Datum::Record(fields)) => return self.check_param(callee, p, fields[0].1.clone(), arg),
             (PKind::Array(inner), value) => {
                 let elements = self.entries(value, span)?;
@@ -3627,6 +3697,15 @@ impl Lower<'_> {
 
     fn kernel_arg(&self, value: Datum, path: &str, wires: &mut Vec<(String, Sig)>, width: &mut usize, layout: &mut Layout, span: Span) -> Res<KArg> {
         match value {
+            Datum::Function { def, captures } => {
+                let mut entries: Vec<_> = captures.into_iter().collect();
+                entries.sort_by(|a,b| a.0.cmp(&b.0));
+                let captures = entries.into_iter().map(|(n,v)| {
+                    let arg = self.kernel_arg(v, &format!("{path}::{n}"), wires, width, layout, span)?;
+                    Ok((n,arg))
+                }).collect::<Res<_>>()?;
+                Ok(KArg::Function { def, captures })
+            }
             Datum::Sig(s) => {
                 if let Some(value) = s.konst { return Ok(KArg::Const { unit: s.unit, value }); }
                 if s.count() > 1 {
@@ -3964,6 +4043,7 @@ pub(crate) fn compile_const(value: &Expr, tempo: Tempo, registry: &Registry, nam
     let v = lower.value(value)?;
     fn known(d: &Datum) -> bool {
         match d {
+            Datum::Function { .. } => false,
             Datum::Sig(s) => s.konst.is_some(),
             Datum::Array(items) => items.iter().all(known),
             Datum::Record(fields) => fields.iter().all(|(_, v)| known(v)),
@@ -3984,6 +4064,9 @@ pub(crate) fn compile_const(value: &Expr, tempo: Tempo, registry: &Registry, nam
 /// Untyped parameters take their units from each call, so with one of those only mistakes in names are
 /// reported here; the rest are found where it is called.
 pub(crate) fn check_fn(def: &FnDef, tempo: Tempo, registry: &Registry, names: &Names) -> Res<()> {
+    let params = funcs::signature(&def.params, tempo)?;
+    funcs::result_unit(&def.result)?;
+    if params.iter().any(|p| matches!(p.kind, PKind::Function)) { return Ok(()); }
     // an untyped parameter takes its unit from each call, and a list parameter its length: the body is
     // checked with two guesses, and a mistake that could come from the guess only counts if both make it
     match check_fn_with(def, tempo, registry, names, Unit::Num, 2) {
@@ -4099,7 +4182,7 @@ fn check_fn_with(
                 let unit = inner.unit().unwrap_or(guess);
                 Some(Datum::array(vec![Datum::Sig(Sig::constant(unit, 0.0)); length]))
             }
-            PKind::Any => None,
+            PKind::Any | PKind::Function => None,
         };
         given.push(v.map(|v| {
             (

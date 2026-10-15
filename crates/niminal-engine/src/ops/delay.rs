@@ -40,6 +40,12 @@ impl Delay {
 }
 
 impl Opcode for Delay {
+    fn reset(&mut self) {
+        self.buf.fill(0.0);
+        self.write = 0;
+        self.quiet_run = ALREADY_QUIET;
+        self.in_flight = 0;
+    }
     fn name(&self) -> &str {
         "delay"
     }

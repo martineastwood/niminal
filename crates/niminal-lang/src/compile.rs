@@ -307,7 +307,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let mut fns: HashMap<String, FnDef> = HashMap::new();
     for item in &items {
         let Item::Fn(def) = item else { continue };
-        if registry.find(&def.name.name).is_some() {
+        if registry.find(&def.name.name).is_some() || def.name.name == "reset_on" {
             errors.push(Diagnostic::new(
                 format!("`{}` is a built-in function, so it can't be defined again", def.name.name),
                 def.name.span,
@@ -1897,7 +1897,7 @@ a(f: 100hz) for 1beat
     fn choices_and_lists_belong_to_functions() {
         assert_eq!(
             msg("instr a(mode: (x | y) = x) { 0.5 }"),
-            "an instrument's parameters are set by notes, so `mode` can't be a choice or an array"
+            "an instrument's parameters are set by notes, so `mode` can't be a choice, an array or a function"
         );
         assert_eq!(msg("fn f(m: (a | b) = c) { 1 }"), "the default for `m` is one of a, b");
         assert_eq!(msg("fn f(m: (a) = a) { 1 }"), "a choice lists at least two names");
@@ -2424,7 +2424,7 @@ bad() for 1beat
         ok(&mono("[1, 2].map(osc(saw, f * it)).sum"));
         assert_eq!(
             msg(&mono("fn(x) { x }")),
-            "a function value can only be given to `map`"
+            "a function is not a signal"
         );
         assert_eq!(
             msg(&mono("[1, 2].map(fn(f) { osc(saw, f) }).sum")),

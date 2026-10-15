@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
-use niminal_engine::ops::{Delay, FilterMode, Fn1, Func, Gain, Osc, Reverb, Svf};
+use niminal_engine::ops::{FinishWhen, Delay, FilterMode, Fn1, Func, Gain, Osc, Reverb, Svf};
 
 use crate::unit::Unit;
 
@@ -137,6 +137,12 @@ pub struct Registry {
 impl Registry {
     pub fn builtin() -> Self {
         let ops = vec![
+            OpSpec::new(
+                "finish_when",
+                "Silence this layer permanently when done becomes positive. After release, the voice waits for every layer and downstream tail to finish.",
+                vec![req("x", SIGNAL), req("done", SIGNAL)],
+                Build::Builtin(|_| Ok(Box::new(FinishWhen::default()))),
+            ),
             OpSpec::new(
                 "osc",
                 "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri; `phase_mod` bends the phase for FM.",

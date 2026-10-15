@@ -1,0 +1,27 @@
+// Function arguments, retriggerable subgraphs, and custom voice completion.
+tempo 110bpm
+
+fn unison(freq: hz, make: fn, voices: const int = 5) {
+  layers = for i in 0..<voices {
+    make(freq * (1 + (i - (voices - 1) / 2) * 0.003))
+  }
+  layers.sum / voices
+}
+
+fn release_level(released) {
+  state level = 1
+  if released { level = level * 0.9995 }
+  level.finish_when(level < 0.00001)
+}
+
+instr pulse(freq: hz, cutoff: hz = 2khz) {
+  trigger = osc(square, 6hz) * (1 - note.released)
+  tone = reset_on(trigger) {
+    unison(freq, fn(f) { osc(saw, f).lpf(cutoff) }) * env[1 120ms.exp 0]
+  }
+  tone * release_level(note.released) * 0.15
+}
+
+pulse(freq: c3) for 1beat
+at 1beat pulse(freq: eb3) for 1beat
+at 2beats pulse(freq: g3) for 2beats

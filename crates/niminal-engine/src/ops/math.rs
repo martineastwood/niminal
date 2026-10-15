@@ -127,6 +127,7 @@ pub struct Hold {
 }
 
 impl Opcode for Hold {
+    fn reset(&mut self) { self.value = None; }
     fn name(&self) -> &'static str {
         "hold"
     }
@@ -187,6 +188,7 @@ pub struct Delay1 {
 }
 
 impl Opcode for Delay1 {
+    fn reset(&mut self) { self.last = 0.0; }
     fn name(&self) -> &'static str {
         "prev"
     }
@@ -257,6 +259,7 @@ pub struct NoteTime {
 }
 
 impl Opcode for NoteTime {
+    fn reset(&mut self) { self.samples = 0; }
     fn name(&self) -> &'static str {
         "note_time"
     }

@@ -84,6 +84,7 @@ impl Sampler {
 }
 
 impl Opcode for Sampler {
+    fn reset(&mut self) { self.position = 0.0; self.started = false; self.done = false; }
     fn name(&self) -> &'static str {
         "sample"
     }

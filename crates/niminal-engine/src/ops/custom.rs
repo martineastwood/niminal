@@ -158,6 +158,7 @@ pub enum Cmp {
 /// is straight-line single-assignment code.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Instr {
+    Reset { scope: usize, trigger: usize, previous: usize, guard: Option<usize> },
     Const { dst: usize, value: f64 },
     /// Input port `port`: its current sample, or its first one in the note-start and block sections.
     Input { dst: usize, port: usize },
@@ -172,7 +173,7 @@ pub enum Instr {
     Select { dst: usize, cond: usize, a: usize, b: usize },
     Call { dst: usize, f: Fn1, a: usize },
     /// One sample of the kernel's `index`th built-in opcode.
-    Native { dst: usize, index: usize },
+    Native { dst: usize, index: usize, guard: Option<usize> },
     /// Entry `idx` of a list, wrapping at both ends.
     Read { dst: usize, list: ArraySource, idx: usize },
     /// A list read at a fractional position, wrapping.
@@ -233,10 +234,21 @@ impl PartialEq for Native {
     }
 }
 
+/// Memory and initialization code owned by one lexical reset scope.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResetScope {
+    pub states: std::ops::Range<usize>,
+    pub buffers: std::ops::Range<usize>,
+    pub natives: std::ops::Range<usize>,
+    pub init: Vec<Instr>,
+    pub block: Vec<Instr>,
+}
+
 /// A compiled `fn` body.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Kernel {
     pub name: String,
+    pub resets: Vec<ResetScope>,
     pub ports: Vec<Port>,
     /// Run once, before the first sample: what depends only on constants and note-start values,
     /// including the starting values of state.
@@ -290,15 +302,42 @@ impl Custom {
     }
 
     fn run(&mut self, section: Section, ctx: &ProcessCtx, input: &impl Fn(usize, usize) -> f32, i: usize) {
-        let k = &*self.kernel;
+        let kernel = self.kernel.clone();
         let code = match section {
-            Section::Init => &k.init,
-            Section::Block => &k.block,
-            Section::Sample => &k.code,
+            Section::Init => &kernel.init,
+            Section::Block => &kernel.block,
+            Section::Sample => &kernel.code,
         };
-        let (regs, state, buffers) = (&mut self.regs, &mut self.state, &mut self.buffers);
+        self.run_code(code, section, ctx, input, i);
+    }
+
+    fn run_code(&mut self, code: &[Instr], section: Section, ctx: &ProcessCtx, input: &impl Fn(usize, usize) -> f32, i: usize) {
         for instr in code {
+            if let Instr::Reset { scope, trigger, previous, guard } = *instr {
+                if guard.is_none_or(|g| self.regs[g] != 0.0) {
+                    let positive = self.regs[trigger] > 0.0;
+                    let edge = positive && self.state[previous] <= 0.0;
+                    self.state[previous] = if positive { 1.0 } else { 0.0 };
+                    if edge {
+                        let kernel = self.kernel.clone();
+                        let k = &*kernel;
+                        let scope = &k.resets[scope];
+                        self.state[scope.states.clone()].copy_from_slice(&k.state_init[scope.states.clone()]);
+                        for index in scope.buffers.clone() { self.buffers[index].copy_from_slice(&k.buffers[index]); }
+                        for index in scope.natives.clone() { self.natives[index].reset(); }
+                        let carried = self.carried;
+                        self.carried = false;
+                        self.run_code(&scope.init, Section::Init, ctx, input, i);
+                        self.run_code(&scope.block, Section::Block, ctx, input, i);
+                        self.carried = carried;
+                    }
+                }
+                continue;
+            }
+            let k = &*self.kernel;
+            let (regs, state, buffers) = (&mut self.regs, &mut self.state, &mut self.buffers);
             match *instr {
+                Instr::Reset { .. } => unreachable!("handled above"),
                 Instr::Const { dst, value } => regs[dst] = value,
                 Instr::Input { dst, port } => regs[dst] = f64::from(input(port, i)),
                 Instr::SampleRate { dst } => regs[dst] = self.sample_rate,
@@ -318,7 +357,8 @@ impl Custom {
                 Instr::Neg { dst, a } => regs[dst] = -regs[a],
                 Instr::Copy { dst, src } => regs[dst] = regs[src],
                 Instr::Call { dst, f, a } => regs[dst] = f.apply(regs[a]),
-                Instr::Native { dst, index } => {
+                Instr::Native { dst, index, guard } => {
+                    if guard.is_some_and(|g| regs[g] == 0.0) { continue; }
                     let call = &k.natives[index];
                     let mut values = [[0.0f32; 1]; MAX_INPUTS];
                     for (value, input) in values.iter_mut().zip(&call.inputs) {
@@ -361,8 +401,9 @@ impl Custom {
             self.started = true;
         }
         self.run(Section::Block, ctx, &input, 0);
+        let kernel = self.kernel.clone();
         for i in 0..frames {
-            self.run(Section::Sample, ctx, &input, i);
+            self.run_code(&kernel.code, Section::Sample, ctx, &input, i);
             for (out, (_, reg)) in outs.iter_mut().zip(&self.kernel.outputs) {
                 out[i] = self.regs[*reg] as f32;
             }
@@ -422,6 +463,14 @@ impl Opcode for Custom {
         Box::new(Custom::new(self.kernel.clone()))
     }
 
+    fn reset(&mut self) {
+        self.state.copy_from_slice(&self.kernel.state_init);
+        for (buffer, initial) in self.buffers.iter_mut().zip(&self.kernel.buffers) { buffer.copy_from_slice(initial); }
+        self.regs.fill(0.0);
+        self.started = false; self.carried = false;
+        for native in &mut self.natives { native.reset(); }
+    }
+
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = f64::from(sample_rate);
         self.natives.iter_mut().for_each(|n| n.prepare(sample_rate));
@@ -430,6 +479,10 @@ impl Opcode for Custom {
     fn has_side_effects(&self) -> bool {
         self.kernel.natives.iter().any(|n| n.op.has_side_effects())
     }
+
+    fn is_envelope(&self) -> bool { self.natives.iter().any(|n| n.is_envelope()) }
+
+    fn has_active_envelope(&self) -> bool { self.natives.iter().any(|n| n.has_active_envelope()) }
 
     fn is_active(&self) -> bool {
         self.natives.iter().any(|n| n.is_active())

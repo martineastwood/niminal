@@ -29,7 +29,7 @@ instr pad(freq: hz, amp: db = -3db) {
 
 ## Parameters
 
-- Each needs a type or a default. They can't be `const` (notes set them while playing), a choice or a list.
+- Each needs a type or a default. They can't be `const` (notes set them while playing), a choice, a list or a function.
 - **Without a rate** a parameter stays live: lanes, glides, MPE and `n.set(...)` move it on the running voice. **`init`** fixes it at note start: `instr pluck(freq: init hz)`.
 - **`gain`** is a control every note has, applied after the instrument. An instrument may declare its own `gain: db = 0db` to take it over and use it as it likes; then it isn't applied for it.
 
@@ -40,6 +40,7 @@ instr pad(freq: hz, amp: db = -3db) {
 ## When a voice ends
 
 - With an envelope (or a sample), it lives until it is released and every envelope has finished, and anything they fed, such as a delay, has rung out.
+- Custom functions can use `signal.finish_when(done)` to report completion just like an envelope; every layer must finish. See [Functions](/reference/language/functions/#custom-completion).
 - Without one, it fades out at its release.
 - **`with(tail: 2sec)`** keeps it sounding that long after its release (and after its envelopes are done), then it fades: what a plucked string or an endless oscillator into a delay needs.
 

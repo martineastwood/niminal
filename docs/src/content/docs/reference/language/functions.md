@@ -38,6 +38,7 @@ fn f(x, cutoff: hz, res: 0..1 = 0.5, freq: init hz, size: const int = 4096, mode
 | `cutoff: hz` | A value in hz. The types are `num`, `int`, `hz`, `db`, `sec`, `st` and `deg` |
 | `res: 0..1`, `cut: 20hz..20khz` | A value between the ends, clamped to them |
 | `mode: (low \| band \| high)` | One of the names, known while compiling. Inside the body, `mode == low` picks a branch then |
+| `make: fn` | A user function name or `fn(x) { … }`, known while compiling; anonymous functions capture values from where they are written |
 | `taps: [num]` | A fixed-length array whose elements are checked as plain numbers. Signals supply their channels, including a mono signal as one element |
 | `= default` | Makes the parameter optional. A default may use earlier parameters |
 
@@ -51,6 +52,25 @@ A **rate** before the type says what the function needs from the caller:
 | `const` | Known while compiling | Compile error |
 
 **Arguments:** the leading required parameters may be given in order; the rest are named. `sig.lpf(800hz)` and `osc(saw, 440hz)` work, `sig.lpf(800hz, 0.3)` doesn't (write `res: 0.3`).
+
+## Functions as parameters
+
+A `fn` parameter takes a named user function or an anonymous function. Calls are specialized while compiling; there is no runtime dispatch. A function value can be forwarded to another function or supplied to `.map`. Defaults can name another function.
+
+```nml
+fn unison(freq: hz, make: fn, voices: const int = 7) {
+  layers = for i in 0..<voices {
+    make(freq * (1 + (i - (voices - 1) / 2) * 0.003))
+  }
+  layers.sum / voices
+}
+
+instr pad(freq: hz, cutoff: hz = 2khz) {
+  unison(freq, fn(f) { osc(saw, f).lpf(cutoff) }) * adsr(10ms, 100ms, 0.6, 300ms)
+}
+```
+
+Anonymous functions capture the surrounding values they read. Each invocation has independent state, including when expanded by a loop. A callback's argument count, units and result are checked when its caller is specialized. Bodies of functions with `fn` parameters are checked at their calls, rather than against a guessed callback at definition time. Function parameters cannot have `init` or `control` rates, and instruments cannot accept them.
 
 ## Results
 
@@ -94,6 +114,41 @@ fn string(x, freq: init hz, decay: 0..1 = 0.996, size: const int = 4096) {
   y
 }
 ```
+
+## Reset scopes
+
+`reset_on(trigger) { … }` evaluates a processor and restarts state created inside its body on every positive edge: when the trigger changes from zero or negative to positive. An initially positive trigger resets on the first sample. Holding it positive does not repeatedly reset it.
+
+```nml
+instr pulse(freq: hz) {
+  trigger = osc(square, 4hz) * (1 - note.released)
+  reset_on(trigger) {
+    osc(saw, freq) * env[1 150ms.exp 0]
+  }
+}
+```
+
+Resets happen before processing that sample, including between block boundaries. They restart nested functions, built-in processors, `prev`, state arrays, and initialization inside the scope. State initializers read the current inputs again. Scopes may nest; resetting an outer scope also restarts the inner one. Resetting clears existing delay and reverb contents.
+
+Signals calculated outside the scope keep running. Pass audio into a scope to reset only its processing, or create the generator inside to restart both. A scope returns its last expression or its own `out`, and its locals stay inside. It may declare `state` at the beginning, just like a function. Stateful scope bodies follow the function rules: bind note context outside and pass it in through a captured value. All storage is allocated before rendering; resetting does not allocate.
+
+## Custom completion
+
+`signal.finish_when(done)` silences a layer permanently when `done` becomes positive and reports that layer as finished. It works inside custom functions as well as instruments. A reset scope can restart it.
+
+```nml
+fn decay(released, amount: 0..1 = 0.9995) {
+  state level = 1
+  if released { level = level * amount }
+  level.finish_when(level < 0.00001)
+}
+
+instr tone(freq: hz) {
+  osc(sine, freq) * decay(note.released)
+}
+```
+
+Completion follows the existing envelope rules: the voice waits until release, all envelopes and custom completion signals have finished, and downstream delay/reverb tails have drained. `tail:` still applies. Each layer can report completion independently. Choose a completion point where the layer is already silent to avoid an abrupt cut.
 
 ## Decisions and loops
 

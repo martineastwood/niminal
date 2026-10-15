@@ -67,6 +67,18 @@ impl Default for Reverb {
 }
 
 impl Opcode for Reverb {
+    fn reset(&mut self) {
+        for comb in &mut self.combs {
+            comb.buf.fill(0.0);
+            comb.pos = 0;
+            comb.store = 0.0;
+        }
+        for allpass in &mut self.allpasses {
+            allpass.buf.fill(0.0);
+            allpass.pos = 0;
+        }
+        self.quiet_run = self.longest;
+    }
     fn name(&self) -> &str {
         "reverb"
     }

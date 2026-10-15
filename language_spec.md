@@ -176,7 +176,7 @@ A **type** is an optional rate followed by what the value is:
 ```
 type  = [rate] kind
 rate  = const | init | control
-kind  = unit | range | choice | list
+kind  = unit | range | choice | list | fn
 ```
 
 | Kind | Example | Accepts |
@@ -184,6 +184,7 @@ kind  = unit | range | choice | list
 | Unit | `cutoff: hz` | A value of that unit: `num`, `int`, `hz`, `db`, `sec`, `st`, `deg` |
 | Range | `res: 0..1`, `cutoff: 20hz..20khz` | A value of the range's unit. A value known while compiling must be inside it; one that changes is clamped |
 | Choice | `mode: (low \| band \| high) = low` | One of the listed names; always `const`. Inside the body each name stands for its choice, so `mode == low` picks a branch while compiling |
+| Function | `make: fn` | A user function name or anonymous function, known while compiling |
 | List | `coeffs: [num]`, `table: [num]` | A list whose entries have that kind; its length is `const` inside the body. A multichannel signal passed here is the list of its channels |
 
 **Rate qualifiers** say what the function needs from the caller:
@@ -265,6 +266,12 @@ fn comb(x, g: 0..1 = 0.5) {
 ```
 
 `prev` means one sample everywhere inside a function or an instrument. In an instrument, `y = ... prev(y) ...` on one line becomes a small function with state whose inputs are the names the line reads. A loop through several lines needs a `fn`. In a bus send, `prev` keeps its old meaning: the send arrives a block late (see open question 2).
+
+### 5.5 Reset scopes and completion
+
+`reset_on(trigger) { ... }` restarts all state created inside its body on positive trigger edges, before processing that sample. Initially positive triggers reset at the first sample; sustained positive levels do not repeat. Nested functions, built-ins, `prev`, state arrays and initialization restart, with current inputs used by initializers. Values calculated outside keep running. Nested scopes reset with their parent. Storage is allocated before rendering; resets do not allocate. The body has local bindings and gives its last expression or its own `out`. Stateful bodies follow function context rules; capture note context in a value outside.
+
+`signal.finish_when(done)` latches completion when `done` becomes positive, silences that layer, and participates in envelope lifetime rules. It works inside functions and instruments. Voices still wait for release, every envelope/completion signal, and downstream effect tails; `tail:` still applies. Resetting the containing scope clears completion. Choose a completion point where the layer is silent.
 
 ## 6. Statements and expressions
 
@@ -400,7 +407,7 @@ ratios = (1..8).map(fn(n) { 1 / n })
 ratios = (1..8).map(1 / it)
 ```
 
-**[not built]** Functions as parameters of user functions (open question 4).
+User functions accept function parameters: `fn apply(x, make: fn) { make(x) }`. Arguments are user function names or anonymous functions. Anonymous functions capture surrounding values; each invocation owns independent state. Function values can be forwarded and used with `.map`. They are known while compiling, with no runtime dispatch. Their bodies are checked at specialization, including argument counts and units; functions accepting callbacks are checked at calls rather than with guessed callbacks. `init` and `control` do not apply to function parameters.
 
 ## 7. Arrays, tables and state buffers
 
@@ -465,7 +472,7 @@ An instrument is a function that the score can call: each note creates a voice t
 ### 8.2 Parameters
 
 - Parameters follow §5.2, but **each needs a type or a default**, so the score can be checked against them. Parameters can't be generic.
-- **`const` isn't allowed,** because notes supply values while playing. Choices and lists aren't either. For a structural setting, write a `fn` and call it with a constant.
+- **`const` isn't allowed,** because notes supply values while playing. Choices, lists and functions aren't either. For a structural setting, write a `fn` and call it with a constant.
 - **Without a rate,** a parameter stays live: lanes, glides, MPE and `n.set(...)` move it on the running voice.
 - **`init`** fixes the parameter at note start, which is what a plucked string's length or a per-note random seed needs.
 - **`gain` is a universal control,** applied after the instrument. An instrument may declare its own `gain: db` parameter to take it over, for example to drive the filter harder on louder notes; it is then not applied for it.
@@ -641,7 +648,7 @@ Only the words used by this part of the language are listed here. The full list 
 | Kind | Words |
 | --- | --- |
 | Declarations | `fn`, `const`, `instr`, `mono`, `state`, `with` |
-| Control flow | `if`, `else`, `for`, `in` |
+| Control flow | `if`, `else`, `for`, `in`, `reset_on` |
 | Logic | `and`, `or`, `not`, `true`, `false` |
 | Rates | `const`, `init`, `control` |
 | Implicit names | `out`, `it`, `note` |
@@ -699,7 +706,7 @@ Only the words used by this part of the language are listed here. The full list 
 1. **Positional arguments.** "Leading required parameters" relaxes the main spec's "positional only for an obvious first argument". It makes built-ins and user functions consistent, and it is shorter live (`sig.lpf(800hz)`).
 2. **Bus feedback.** Inside a voice, `prev` is one sample. Feedback between buses (`echo += prev(out)`) is still one block, because buses run in blocks. Should the bus form get its own name, such as `out.late`, so that `prev` always means one sample?
 3. **Functions that build score material.** Brackets in a body are lists, so a `fn` can't write a pattern (`[c2 ~ eb2]`). Score functions (`fn verse(...)` in the main spec) need one. Options include a pattern prefix inside bodies (`p[c2 ~ eb2]`) or letting the expected type decide.
-4. **Functions as parameters.** Should a `fn` take a function argument (`fn layer(n: const int, make: fn) { ... }`)? It is cheap to add because functions are `const`.
+4. **Functions as parameters** are built (§6.7).
 5. **`match`.** `if mode == low { } else if ...` works for choices. A `match mode { low: ..., band: ... }` would read better once choices have more than three options.
 6. **Annotations on bindings** (§3.2). They are left out for now and could be added with the parameter syntax if dogfooding asks for them.
 7. **Feedback across several lines in an instrument.** One-line loops work (§5.4); longer loops need a `fn`. Is that the right line to draw?

@@ -74,7 +74,7 @@ fn nested_osc_taps_are_observable_even_when_the_kernel_output_is_unused() {
     let tap = Tap::new();
     let kernel = Arc::new(Kernel {
         name: "tap".into(),
-        code: vec![Instr::Native { dst: 0, index: 0 }],
+        code: vec![Instr::Native { dst: 0, index: 0, guard: None }],
         registers: 1,
         outputs: vec![("out".into(), 0)],
         natives: vec![Native {

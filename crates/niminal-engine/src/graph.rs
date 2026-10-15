@@ -76,6 +76,18 @@ impl GraphBuilder {
         Self::default()
     }
 
+    pub fn node_count(&self) -> usize { self.nodes.len() }
+
+    /// Wrap just the nodes built inside a lexical reset scope.
+    pub fn reset_since(&mut self, first: usize, trigger: Src) {
+        let slot = self.slot_for(trigger);
+        for node in &mut self.nodes[first..] {
+            let op = std::mem::replace(&mut node.op, Box::new(crate::ops::Add));
+            node.op = Box::new(crate::ops::ResetOn::new(op));
+            node.inputs.push(slot);
+        }
+    }
+
     /// Declare a named voice parameter with a default value.
     pub fn param(&mut self, name: &str, default: f32) -> Result<Src, GraphError> {
         if self.params.iter().any(|p| p.name == name) {

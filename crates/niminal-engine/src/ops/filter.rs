@@ -63,6 +63,7 @@ impl Svf {
 }
 
 impl Opcode for Svf {
+    fn reset(&mut self) { self.ic1 = 0.0; self.ic2 = 0.0; }
     fn name(&self) -> &'static str {
         match self.mode {
             FilterMode::Low => "lpf",

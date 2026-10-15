@@ -13,7 +13,7 @@ mod sample;
 mod tap;
 
 pub use control::Control;
-pub use custom::{BinOp, Cmp, Custom, Fn1, Func, Instr, Interp, Kernel, ArraySource, Native, NativeInput, read_array, read_at, rem};
+pub use custom::{BinOp, Cmp, Custom, Fn1, Func, Instr, Interp, Kernel, ResetScope, ArraySource, Native, NativeInput, read_array, read_at, rem};
 pub use delay::Delay;
 pub use env::{Curve, Env, EnvField, Segment, shape};
 pub use filter::{FilterMode, Svf};
@@ -27,3 +27,9 @@ pub use pan::{PanChannel, pan_gains};
 pub use reverb::Reverb;
 pub use sample::{SampleData, Sampler};
 pub use tap::{Tap, TapOut};
+
+mod lifetime;
+pub use lifetime::FinishWhen;
+
+mod reset;
+pub use reset::ResetOn;

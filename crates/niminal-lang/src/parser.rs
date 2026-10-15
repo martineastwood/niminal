@@ -1469,6 +1469,17 @@ impl Parser {
                 };
                 continue;
             }
+            if self.peek() == &Tok::LBrace && matches!(&e.kind, ExprKind::Call { name, .. } if name.name == "reset_on") {
+                let (body, end) = self.block()?;
+                let body_span = e.span.to(end);
+                if let ExprKind::Call { args, .. } = &mut e.kind {
+                    args.push(Arg { name: None, receiver: false, value: Expr {
+                        kind: ExprKind::Lambda { params: Vec::new(), body }, span: body_span,
+                    }});
+                }
+                e.span = body_span;
+                continue;
+            }
             if self.peek() != &Tok::Dot {
                 break;
             }

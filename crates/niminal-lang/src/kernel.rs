@@ -27,6 +27,7 @@ type Res<T> = Result<T, Diagnostic>;
 /// What a call gives one parameter of a function compiled to a kernel.
 #[derive(Clone, Debug)]
 pub(crate) enum KArg {
+    Function { def: FnDef, captures: Vec<(String, KArg)> },
     /// A signal wired into one of the kernel's ports.
     Port { unit: Unit, rate: Rate },
     /// A value known while compiling.
@@ -56,6 +57,7 @@ struct Value {
 
 #[derive(Clone, Debug)]
 enum KVal {
+    Function { def: FnDef, captures: HashMap<String, KVal> },
     Num(Value),
     /// A list known while compiling.
     Array(Array<KVal>),
@@ -146,6 +148,7 @@ struct Kb<'a> {
     value_rates: Vec<Rate>,
     natives: Vec<Native>,
     ports: Vec<Port>,
+    resets: Vec<niminal_engine::ops::ResetScope>,
     /// Registers that hold a value known while compiling.
     consts: HashMap<usize, f64>,
     frame: Frame,
@@ -184,6 +187,7 @@ pub(crate) fn compile_kernel(
         value_rates: Vec::new(),
         natives: Vec::new(),
         ports: Vec::new(),
+        resets: Vec::new(),
         consts: HashMap::new(),
         frame: Frame::default(),
         guard: None,
@@ -212,6 +216,7 @@ pub(crate) fn compile_kernel(
     let result = kb.output_shape(result, "out", &mut outputs, def.name.span)?;
     let kernel = Kernel {
         name: def.name.name.clone(),
+        resets: kb.resets,
         ports: kb.ports,
         init: kb.init,
         block: kb.block,
@@ -238,6 +243,7 @@ impl KVal {
 impl Kb<'_> {
     fn input_arg(&mut self, name: &str, arg: &KArg) -> KVal {
         match arg {
+            KArg::Function { def, captures } => KVal::Function { def: def.clone(), captures: captures.iter().map(|(n,v)| (n.clone(), self.input_arg(&format!("{name}::{n}"), v))).collect() },
             KArg::Port { unit, rate } => {
                 let port = self.ports.len();
                 self.ports.push(Port::named(name.to_string(), None));
@@ -654,6 +660,9 @@ impl Kb<'_> {
             .with_help(format!("in the call of `{callee}`"))
         };
         match (&param.kind, v) {
+            (Kind::Function, KVal::Function { .. }) => return Ok(v.clone()),
+            (Kind::Function, _) => return Err(mismatch("a value")),
+            (_, KVal::Function { .. }) if !matches!(param.kind, Kind::Any) => return Err(mismatch("a function")),
             (Kind::Array(inner), value) => {
                 if let Kind::Unit { unit, whole } = **inner {
                     match value {
@@ -724,6 +733,10 @@ impl Kb<'_> {
 
     /// A call of another user function: its body is compiled here, with its own state.
     fn call_fn(&mut self, def: &FnDef, name: &Ident, args: &[Arg]) -> Res<KVal> {
+        self.call_captured(def, name, args, HashMap::new())
+    }
+
+    fn call_captured(&mut self, def: &FnDef, name: &Ident, args: &[Arg], captures: HashMap<String,KVal>) -> Res<KVal> {
         if self.stack.contains(&def.name.name) {
             let mut path = self.stack.clone();
             path.push(def.name.name.clone());
@@ -747,6 +760,7 @@ impl Kb<'_> {
             });
         }
         let saved = std::mem::take(&mut self.frame);
+        self.frame.scope = captures;
         self.stack.push(def.name.name.clone());
         let result = (|| {
             for (param, given) in params.iter().zip(values) {
@@ -929,7 +943,7 @@ impl Kb<'_> {
     }
 
     fn check_name(&self, name: &Ident) -> Res<()> {
-        if matches!(name.name.as_str(), "it" | "note" | "state" | "pi" | "sample_rate" | "true" | "false") {
+        if matches!(name.name.as_str(), "it" | "note" | "state" | "pi" | "sample_rate" | "true" | "false" | "reset_on") {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
                 name.span,
@@ -1308,10 +1322,11 @@ impl Kb<'_> {
             }
             ExprKind::Index { list, index } => self.index(list, index, e.span),
             ExprKind::Call { name, args } => self.call(name, args, e.span),
-            ExprKind::Lambda { .. } => Err(Diagnostic::new(
-                "a function value can only be given to `map`",
-                e.span,
-            )),
+            ExprKind::Lambda { params, body } => {
+                let def = funcs::lambda(params, body, e.span);
+                let captures = self.frame.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
+                Ok(KVal::Function { def, captures })
+            }
             ExprKind::Pattern(_) | ExprKind::Grid(_) | ExprKind::Rows(_) | ExprKind::Rest => Err(
                 Diagnostic::new("patterns can't be used inside a function with state", e.span),
             ),
@@ -1333,6 +1348,9 @@ impl Kb<'_> {
                 other if self.force.is_some() => self.map_value(other, span, |this, value| this.read(value, span)),
                 other => Ok(other),
             };
+        }
+        if let Some(def) = self.names.fns.get(name) {
+            return Ok(KVal::Function { def: def.clone(), captures: HashMap::new() });
         }
         match name {
             "pi" => return Ok(KVal::Num(self.constant(Unit::Num, std::f64::consts::PI))),
@@ -1379,6 +1397,7 @@ impl Kb<'_> {
     /// A constant from a `const` definition.
     fn const_value(&mut self, d: &Datum, span: Span) -> Res<KVal> {
         match d {
+            Datum::Function { .. } => Err(Diagnostic::new("a function is not a numeric constant", span)),
             Datum::Record(fields) => Ok(KVal::Record(fields.iter().map(|(name, v)| Ok((name.clone(), self.const_value(v, span)?))).collect::<Res<_>>()?)),
             Datum::Sig(s) => match s.konst() {
                 Some(k) => Ok(KVal::Num(self.constant(s.unit(), k))),
@@ -1703,19 +1722,44 @@ impl Kb<'_> {
         })
     }
 
+    fn reset_scope(&mut self, args: &[Arg], span: Span) -> Res<KVal> {
+        let (trigger, body) = funcs::reset_args(args, span)?;
+        let trigger = self.num(trigger)?;
+        if trigger.unit != Unit::Num { return Err(Diagnostic::new("a reset trigger is one plain signal", span)); }
+        let previous = self.state_init.len();
+        self.state_init.push(0.0);
+        let (states, buffers, natives) = (self.state_init.len(), self.buffers.len(), self.natives.len());
+        let (init, block, code) = (self.init.len(), self.block.len(), self.code.len());
+        let def = funcs::lambda(&[], body, span);
+        let captures = self.frame.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
+        let result = self.call_captured(&def, &def.name, &[], captures)?;
+        let scope = self.resets.len();
+        self.resets.push(niminal_engine::ops::ResetScope {
+            states: states..self.state_init.len(), buffers: buffers..self.buffers.len(), natives: natives..self.natives.len(),
+            init: self.init[init..].to_vec(), block: self.block[block..].to_vec(),
+        });
+        self.code.insert(code, Instr::Reset { scope, trigger: trigger.reg, previous, guard: self.guard });
+        Ok(result)
+    }
+
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
         let n = name.name.as_str();
+        if n == "reset_on" { return self.reset_scope(args, span); }
         // Named result lookup must preserve an array field's shape.
         if let [receiver] = args && receiver.receiver && !self.names.fns.contains_key(n) {
             let record = match &receiver.value.kind {
                 ExprKind::Name(name) => self.frame.scope.get(name).cloned(),
-                ExprKind::Call { name, .. } if self.names.fns.get(&name.name).is_some_and(|def| matches!(def.result, FnResult::Named(_))) => Some(self.value(&receiver.value)?),
+                ExprKind::Call { name, .. } if self.names.fns.get(&name.name).is_some_and(|def| matches!(def.result, FnResult::Named(_)))
+                    || matches!(self.frame.scope.get(&name.name), Some(KVal::Function { def, .. }) if matches!(def.result, FnResult::Named(_))) => Some(self.value(&receiver.value)?),
                 _ => None,
             };
             if let Some(KVal::Record(fields)) = record {
                 return fields.iter().find(|(field, _)| field == n).map(|(_, value)| value.clone())
                     .ok_or_else(|| Diagnostic::new(format!("this has no result `{n}`"), name.span));
             }
+        }
+        if let Some(KVal::Function { def, captures }) = self.frame.scope.get(n).cloned() {
+            return self.call_captured(&def, name, args, captures);
         }
         if let Some(def) = self.names.fns.get(n) {
             let def = def.clone();
@@ -2085,7 +2129,11 @@ impl Kb<'_> {
                 let [_, f] = args else {
                     return Err(Diagnostic::new("`map` takes a function", name.span));
                 };
-                let (param, body) = lambda_of(&f.value)?;
+                let mapped = match &f.value.kind {
+                    ExprKind::Name(n) if self.names.fns.contains_key(n) || matches!(self.frame.scope.get(n), Some(KVal::Function { .. })) => Some(funcs::mapped_call(n, f.value.span)),
+                    _ => None,
+                };
+                let (param, body) = lambda_of(mapped.as_ref().unwrap_or(&f.value))?;
                 if param != "it" { self.check_name(&Ident { name: param.clone(), span: f.value.span })?; }
                 if self.frame.scope.contains_key(&param) {
                     return Err(Diagnostic::new(format!("`{param}` is already in use, so it can't be this function's parameter"), f.value.span));
@@ -2214,7 +2262,8 @@ impl Kb<'_> {
         }
         let index = self.natives.len();
         self.natives.push(Native { op, inputs: wired });
-        let reg = self.emit(Rate::Audio, |dst| Instr::Native { dst, index });
+        let guard = self.guard;
+        let reg = self.emit(Rate::Audio, |dst| Instr::Native { dst, index, guard });
         Ok(KVal::Num(Value {
             reg,
             unit: Unit::Num,

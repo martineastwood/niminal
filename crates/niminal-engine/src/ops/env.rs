@@ -153,11 +153,9 @@ impl Env {
     fn reset(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         self.read = self.fields.is_empty();
-        self.lengths = self
-            .segments
-            .iter()
-            .map(|s| (s.dur.max(0.0) * sample_rate).round() as u32)
-            .collect();
+        for (length, segment) in self.lengths.iter_mut().zip(&self.segments) {
+            *length = (segment.dur.max(0.0) * sample_rate).round() as u32;
+        }
         self.level = self.start;
         self.released = false;
         self.enter(0, self.start);
@@ -223,6 +221,7 @@ impl Env {
 }
 
 impl Opcode for Env {
+    fn reset(&mut self) { self.reset(self.sample_rate); }
     fn name(&self) -> &'static str {
         "env"
     }

@@ -48,6 +48,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "over",
     "panic",
     "reset",
+    "reset_on",
     "sample",
     "scene",
     "state",
@@ -464,6 +465,7 @@ pub fn builtin_ops() -> Vec<OpInfo> {
             .collect();
         ops.extend(envelope_ops());
         ops.extend(array_ops());
+        ops.push(op_info("reset_on", "Restart state created inside `reset_on(trigger) { ... }` at each positive edge, before that sample. Signals outside the scope keep running.", false, &[("trigger", "number", true), ("body", "function", true)]));
         ops
     })
     .clone()

@@ -15,6 +15,7 @@ type Res<T> = Result<T, Diagnostic>;
 pub(crate) enum Kind {
     /// Untyped: any unit, worked out at each call.
     Any,
+    Function,
     /// A value of this unit. `whole` for `int`.
     Unit { unit: Unit, whole: bool },
     /// A value of this unit between two ends, clamped to them.
@@ -31,13 +32,14 @@ impl Kind {
         match self {
             Kind::Unit { unit, .. } | Kind::Range { unit, .. } => Some(*unit),
             Kind::Choice(_) => Some(Unit::Num),
-            Kind::Any | Kind::Array(_) => None,
+            Kind::Any | Kind::Function | Kind::Array(_) => None,
         }
     }
 
     pub fn describe(&self) -> String {
         match self {
             Kind::Any => "any value".into(),
+            Kind::Function => "a function".into(),
             Kind::Unit { whole: true, .. } => "a whole number".into(),
             Kind::Unit { unit, .. } => unit.describe().into(),
             Kind::Range { unit, .. } => unit.describe().into(),
@@ -63,7 +65,7 @@ impl Param {
 
     /// The rate the value must be known at: a choice is always known while compiling.
     pub fn rate(&self) -> Option<Rate> {
-        if matches!(self.kind, Kind::Choice(_)) {
+        if matches!(self.kind, Kind::Choice(_) | Kind::Function) {
             Some(Rate::Const)
         } else {
             self.rate
@@ -110,6 +112,7 @@ fn type_number(e: &Expr, tempo: Tempo) -> Res<(Unit, f64)> {
 
 pub(crate) fn kind_of(ty: &TypeSpec, tempo: Tempo) -> Res<Kind> {
     Ok(match ty {
+        TypeSpec::Unit(id) if id.name == "fn" => Kind::Function,
         TypeSpec::Unit(id) => {
             let (unit, whole) = unit_type(id)?;
             Kind::Unit { unit, whole }
@@ -167,6 +170,11 @@ pub(crate) fn signature(params: &[ParamDef], tempo: Tempo) -> Res<Vec<Param>> {
             Some(ty) => kind_of(ty, tempo)?,
             None => Kind::Any,
         };
+        if let (Kind::Function, Some((rate, span))) = (&kind, p.rate)
+            && rate != Rate::Const
+        {
+            return Err(Diagnostic::new("a function is always known while compiling", span));
+        }
         if let (Kind::Choice(_), Some((rate, span))) = (&kind, p.rate)
             && rate != Rate::Const
         {
@@ -317,4 +325,75 @@ pub(crate) fn has_state(def: &FnDef, fns: &std::collections::HashMap<String, FnD
         found
     }
     visit(&def.body, fns, &mut vec![def.name.name.clone()])
+}
+
+/// Anonymous functions use the same call machinery and state ownership as named functions.
+pub(crate) fn lambda(params: &[Ident], body: &[Stmt], span: Span) -> FnDef {
+    FnDef {
+        name: Ident {
+            name: format!("<fn@{}>", span.start),
+            span,
+        },
+        params: params
+            .iter()
+            .map(|name| ParamDef {
+                name: name.clone(),
+                rate: None,
+                ty: None,
+                default: None,
+            })
+            .collect(),
+        result: FnResult::Inferred,
+        body: body.to_vec(),
+        span,
+    }
+}
+
+/// Capture only names read by the body. Bindings are resolved before capture is used.
+pub(crate) fn reads(def: &FnDef, name: &str) -> bool {
+    fn visit(e: &Expr, name: &str) -> bool {
+        let mut found = matches!(&e.kind, ExprKind::Name(n) if n == name)
+            || matches!(&e.kind, ExprKind::Call { name: n, .. } if n.name == name);
+        e.for_each_child(&mut |c| found |= visit(c, name));
+        found
+    }
+    !def.params.iter().any(|p| p.name.name == name)
+        && def
+            .body
+            .iter()
+            .flat_map(Stmt::exprs)
+            .any(|e| visit(e, name))
+}
+
+pub(crate) fn reset_args(args: &[Arg], span: Span) -> Res<(&Expr, &[Stmt])> {
+    if let [trigger, body] = args
+        && trigger.name.is_none()
+        && body.name.is_none()
+        && let ExprKind::Lambda { params, body } = &body.value.kind
+        && params.is_empty()
+    {
+        return Ok((&trigger.value, body));
+    }
+    Err(Diagnostic::new("write `reset_on(trigger) { ... }`", span))
+}
+
+/// A named function supplied to map is applied to its implicit element.
+pub(crate) fn mapped_call(name: &str, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::Call {
+            name: Ident {
+                name: name.into(),
+                span,
+            },
+            args: vec![Arg {
+                name: None,
+                receiver: false,
+                value: Expr {
+                    kind: ExprKind::Name("it".into()),
+                    span,
+                },
+            }],
+        },
+        span,
+    }
 }

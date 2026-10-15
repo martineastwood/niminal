@@ -56,6 +56,9 @@ pub trait Opcode: Send + Sync + std::any::Any {
     /// Called once per voice before the first block.
     fn prepare(&mut self, _sample_rate: f32) {}
 
+    /// Restart runtime state in place, without allocating.
+    fn reset(&mut self) {}
+
     /// Fill `out` from `inputs`. `inputs[i]` belongs to `ports()[i]`, and every
     /// slice has the same length as `out` (at most [`BLOCK`]).
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]);
@@ -101,6 +104,9 @@ pub trait Opcode: Send + Sync + std::any::Any {
         false
     }
 
+    /// Envelope activity separately from effect tails in compound processors.
+    fn has_active_envelope(&self) -> bool { self.is_envelope() && self.is_active() }
+
     /// Carry compatible runtime state into a newly compiled instance. Settings
     /// and wiring belong to the new instance; implementations only copy memory.
     fn carry_state(&mut self, _old: &mut dyn Opcode) {}
@@ -131,6 +137,8 @@ impl Opcode for Box<dyn Opcode> {
     fn prepare(&mut self, sample_rate: f32) {
         (**self).prepare(sample_rate);
     }
+
+    fn reset(&mut self) { (**self).reset(); }
 
     fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
         (**self).set_control(key, start, target, frames, elapsed);
@@ -163,6 +171,8 @@ impl Opcode for Box<dyn Opcode> {
     fn is_envelope(&self) -> bool {
         (**self).is_envelope()
     }
+
+    fn has_active_envelope(&self) -> bool { (**self).has_active_envelope() }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         (**self).carry_state(old);
