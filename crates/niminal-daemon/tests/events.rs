@@ -468,3 +468,18 @@ fn definitions_and_the_transport_replay_to_the_same_audio() {
     let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), 170_000, false).remove(0);
     assert_eq!(live, replayed[20_000..]);
 }
+
+#[test]
+fn a_timed_panic_silences_voices_at_its_sample_and_later_events_still_play() {
+    let mut s = voices();
+    s.send_events(1, vec![held(1, At::Sample(0), 220.0), held(2, At::Sample(30_000), 330.0), Op::Panic { at: At::Sample(10_000), tag: None }]).unwrap();
+    let out = s.process(50_000).remove(0);
+    assert!(rms(&out[8_000..10_000]) > 0.01, "sounding right up to it");
+    assert_eq!(peak(&out[10_000..30_000]), 0.0, "silent after it");
+    assert!(rms(&out[40_000..50_000]) > 0.003, "a note that starts after it plays");
+    // and a panic that was asked for can be taken back
+    let mut s = voices();
+    s.send_events(1, vec![held(1, At::Sample(0), 220.0), Op::Panic { at: At::Sample(10_000), tag: Some("p".into()) }]).unwrap();
+    assert_eq!(s.cancel_events(1, Some("p"), At::Now, false).cancelled, 1);
+    assert!(rms(&s.process(20_000).remove(0)[12_000..]) > 0.01);
+}

@@ -132,6 +132,15 @@ pub(crate) struct TrackSet {
     done: bool,
 }
 
+/// A panic asked for at a sample.
+#[derive(Clone)]
+struct TimedPanic {
+    at: u64,
+    client: ClientId,
+    tag: Option<String>,
+    done: bool,
+}
+
 /// A waiting release of the note a key holds.
 struct KeyOff {
     key: u32,
@@ -367,6 +376,7 @@ pub struct Session {
     closed: Vec<VoiceEntry>,
     voice_sets: Vec<VoiceSet>,
     track_sets: Vec<TrackSet>,
+    timed_panics: Vec<TimedPanic>,
     control_owners: Vec<ControlOwner>,
     /// Where the audio output is, as its callback last said.
     probe: Arc<crate::ClockProbe>,
@@ -450,6 +460,7 @@ impl Session {
             closed: Vec::new(),
             voice_sets: Vec::new(),
             track_sets: Vec::new(),
+            timed_panics: Vec::new(),
             control_owners: Vec::new(),
             probe: Arc::default(),
             fresh: Vec::new(),
@@ -1121,6 +1132,7 @@ impl Session {
             self.release_due();
             self.apply_voice_sets();
             self.apply_track_sets();
+            self.apply_timed_panics();
 
             // How far we can go before something needs doing.
             let mut n = (end - self.clock).min(BLOCK as u64);
@@ -1131,7 +1143,8 @@ impl Session {
                 n = n.min(change.at.saturating_sub(self.clock).max(1));
             }
             n = self.sounding.limit(self.clock, n);
-            let upcoming = self.key_offs.iter().map(|k| k.at).chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at)).chain(self.track_sets.iter().filter(|s| !s.done).map(|s| s.at));
+            let upcoming = self.key_offs.iter().map(|k| k.at).chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at)).chain(self.track_sets.iter().filter(|s| !s.done).map(|s| s.at))
+                .chain(self.timed_panics.iter().filter(|p| !p.done).map(|p| p.at));
             for at in upcoming.filter(|&at| at > self.clock) {
                 n = n.min(at - self.clock);
             }
@@ -1387,6 +1400,39 @@ impl Session {
     /// The notes that went to `midi_out` instruments since this was last called, in order.
     pub fn take_midi(&mut self) -> Vec<crate::MidiEvent> {
         std::mem::take(&mut self.midi_out)
+    }
+
+    /// Silence everything at the samples panics were asked for.
+    fn apply_timed_panics(&mut self) {
+        let now = self.clock;
+        let mut any = false;
+        for panic in self.timed_panics.iter_mut().filter(|p| !p.done && p.at <= now) {
+            panic.done = true;
+            any = true;
+        }
+        self.timed_panics.retain(|p| !p.done || p.at + 1 > now.saturating_sub(self.sample_rate as u64 * 2));
+        if any {
+            if !self.detached {
+                self.mixer.panic();
+                crate::controls::sync_mixer(&self.controls, &mut self.mixer, now);
+            }
+            if let Some(limiter) = &mut self.limiter {
+                limiter.clear();
+            }
+            self.sounding.held.clear();
+            for (_, _, note) in std::mem::take(&mut self.sounding.midi) {
+                if self.midi_out.len() < MAX_MIDI_QUEUE {
+                    self.midi_out.push(crate::MidiEvent {
+                        at: now,
+                        on: false,
+                        port: note.port,
+                        channel: note.channel,
+                        note: note.note,
+                        velocity: note.velocity,
+                    });
+                }
+            }
+        }
     }
 
     /// Move the track parameters that `track` events say should move by now.

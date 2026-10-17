@@ -203,6 +203,7 @@ impl Session {
             Note { event: Event, instrument: String, start: u64, dur: u64, id: Option<u64>, tag: Option<String>, musical: Option<bool> },
             Control { name: String, value: f32, frames: u64, at: u64, op: usize, tag: Option<String> },
             Track { key: String, value: f32, frames: u64, at: u64, tag: Option<String> },
+            Panic { at: u64, tag: Option<String> },
             Set { id: u64, args: Vec<(String, Value, f32)>, frames: u64, at: u64, tag: Option<String> },
             Off { id: u64, at: u64, tag: Option<String> },
         }
@@ -341,6 +342,11 @@ impl Session {
                     open.remove(i);
                     plans.push(Plan::Off { id: *id, at, tag: tag.clone() });
                 }
+                Op::Panic { at, tag } => {
+                    let start = self.resolve(*at);
+                    resolved[n] = Some(Op::Panic { at: self.logged(*at), tag: tag.clone() });
+                    plans.push(Plan::Panic { at: start, tag: tag.clone() });
+                }
                 Op::Define { .. } | Op::Transport { .. } | Op::Forget { .. } => {}
             }
         }
@@ -396,6 +402,11 @@ impl Session {
                 }
                 Plan::Set { id, args, frames, at, tag } => {
                     self.set_voice(client, id, args, frames, at.max(clock), tag);
+                    at
+                }
+                Plan::Panic { at, tag } => {
+                    self.timed_panics.push(TimedPanic { at: at.max(clock), client, tag, done: false });
+                    self.invalidate_windows();
                     at
                 }
                 Plan::Off { id, at, tag } => {
@@ -530,6 +541,11 @@ impl Session {
                 }
             }
         }
+        self.timed_panics.retain(|p| {
+            let drop = !p.done && p.at >= from && mine(Some(p.client), &p.tag);
+            done.cancelled += usize::from(drop);
+            !drop
+        });
         let mut tracks = std::mem::take(&mut self.track_sets);
         tracks.retain(|s| {
             let drop = !s.done && s.at >= from && mine(s.client, &s.tag);

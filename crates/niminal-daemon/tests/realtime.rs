@@ -1121,3 +1121,34 @@ fn definitions_a_tempo_change_and_beat_stamped_notes_sound_the_same_prepared_as_
     assert_eq!(out, expected);
     assert_eq!(r.metrics().late_events, 0);
 }
+
+#[test]
+fn a_timed_panic_sounds_the_same_prepared_as_offline() {
+    use niminal_daemon::{At, Op};
+    let script = |at: u64| Op::Panic { at: At::Sample(at), tag: None };
+    let held = voice_script();
+    let frames = 60_000;
+    let mut offline = organ_session();
+    offline.send_events(1, held.iter().map(|(_, op)| op.clone()).collect()).unwrap();
+    offline.send_events(1, vec![script(18_000)]).unwrap();
+    let expected = offline.process(frames).remove(0);
+    for ahead in [20_000u64, 500] {
+        let mut s = organ_session();
+        let mut r = s.start_realtime(RealtimeConfig::default());
+        let mut out = vec![0.0; frames];
+        let (mut sent, mut panicked) = (0, false);
+        for chunk in out.chunks_mut(256) {
+            while sent < held.len() && held[sent].0 <= r.clock() + ahead {
+                s.send_events(1, vec![held[sent].1.clone()]).unwrap();
+                sent += 1;
+            }
+            if !panicked && r.clock() + ahead >= 18_000 {
+                s.send_events(1, vec![script(18_000)]).unwrap();
+                panicked = true;
+            }
+            s.prepare_realtime();
+            measured(&mut r, chunk.len(), chunk);
+        }
+        assert_eq!(out, expected, "sent {ahead} frames ahead");
+    }
+}

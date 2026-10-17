@@ -965,6 +965,11 @@ impl Session {
                     .push(self.reset_command(at, program, config));
             }
         }
+        for panic in &self.timed_panics {
+            if panic.at >= from && panic.at < to {
+                window.commands.push(self.reset_command(panic.at, program, config));
+            }
+        }
         // envelope lanes moving track parameters
         for set in found.controls.iter().take(MAX_WINDOW_CONTROLS) {
             let Some(def) = program.controls.iter().find(|c| c.name == set.name) else {

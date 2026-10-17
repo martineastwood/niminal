@@ -98,6 +98,13 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },
+    /// Silence everything at `at`: every voice, and the memory of every effect. Events waiting for later
+    /// still play.
+    Panic {
+        at: At,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
     /// Drop every definition. The output layout is kept.
     Forget {
         at: At,
