@@ -30,6 +30,7 @@ for (const entry of [
   "panel.js",
   "learn.js",
   "language-configuration.json",
+  "score-language-configuration.json",
   "syntaxes",
   "media",
   "node_modules",

@@ -1,0 +1,82 @@
+{
+  "scopeName": "source.niminal-score",
+  "name": "niminal score",
+  "patterns": [{ "include": "#value" }],
+  "repository": {
+    "value": {
+      "patterns": [
+        { "include": "#object" },
+        { "include": "#array" },
+        { "include": "#string" },
+        { "include": "#number" },
+        { "include": "#constant" }
+      ]
+    },
+    "object": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": { "0": { "name": "punctuation.definition.dictionary.begin.json" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.dictionary.end.json" } },
+      "patterns": [
+        { "include": "#key" },
+        { "match": ",", "name": "punctuation.separator.dictionary.pair.json" },
+        { "include": "#value" }
+      ]
+    },
+    "array": {
+      "begin": "\\[",
+      "end": "\\]",
+      "beginCaptures": { "0": { "name": "punctuation.definition.array.begin.json" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.array.end.json" } },
+      "patterns": [
+        { "match": ",", "name": "punctuation.separator.array.json" },
+        { "include": "#value" }
+      ]
+    },
+    "key": {
+      "patterns": [
+        {
+          "match": "(\")(version|section|clips|scenes|arrangement|sections|name|instrument|length|loop|lanes|events|entries|scene|target|at|dur|args)(\")(?=\\s*:)",
+          "name": "meta.structure.dictionary.key.niminal-score",
+          "captures": {
+            "1": { "name": "punctuation.definition.string.begin.json" },
+            "2": { "name": "keyword.other.niminal-score" },
+            "3": { "name": "punctuation.definition.string.end.json" }
+          }
+        },
+        {
+          "match": "(\")((?:[^\"\\\\]|\\\\.)*)(\")(?=\\s*:)",
+          "name": "meta.structure.dictionary.key.niminal-score",
+          "captures": {
+            "1": { "name": "punctuation.definition.string.begin.json" },
+            "2": { "name": "variable.parameter.niminal-score" },
+            "3": { "name": "punctuation.definition.string.end.json" }
+          }
+        }
+      ]
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.niminal-score",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.json" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.json" } },
+      "patterns": [
+        { "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})", "name": "constant.character.escape.json" },
+        { "match": "[+-]?\\b\\d+(?:/\\d+|\\.\\d+)?(?:hz|khz|db|bpm|sec|ms|beats?|bars?|deg|st|ct|s|%)(?![A-Za-z0-9_])", "name": "constant.numeric.unit.niminal-score" },
+        { "match": "\\b[a-g](?:#|b)?-?\\d\\b", "name": "constant.language.note.niminal-score" },
+        { "match": "[+-]?\\b\\d+(?:\\.\\d+)?\\b", "name": "constant.numeric.niminal-score" },
+        { "match": "[\\[\\]<>{}()]", "name": "punctuation.section.pattern.niminal-score" },
+        { "match": "[~*/@!?|]|(?<=\\s)\\.(?=\\s|\")", "name": "keyword.operator.pattern.niminal-score" }
+      ]
+    },
+    "number": {
+      "match": "-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?",
+      "name": "constant.numeric.json"
+    },
+    "constant": {
+      "match": "\\b(?:true|false|null)\\b",
+      "name": "constant.language.json"
+    }
+  }
+}

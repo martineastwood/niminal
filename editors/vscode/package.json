@@ -2,7 +2,7 @@
   "name": "niminal",
   "displayName": "niminal",
   "description": "Live-code niminal: syntax highlighting and evaluation against a running niminal daemon.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "niminal",
   "license": "MIT",
   "engines": {
@@ -33,6 +33,16 @@
           ".nml"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "niminal-score",
+        "aliases": [
+          "niminal score"
+        ],
+        "extensions": [
+          ".nms"
+        ],
+        "configuration": "./score-language-configuration.json"
       }
     ],
     "grammars": [
@@ -40,6 +50,11 @@
         "language": "niminal",
         "scopeName": "source.niminal",
         "path": "./syntaxes/niminal.tmLanguage.json"
+      },
+      {
+        "language": "niminal-score",
+        "scopeName": "source.niminal-score",
+        "path": "./syntaxes/niminal-score.tmLanguage.json"
       }
     ],
     "commands": [

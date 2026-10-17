@@ -1,6 +1,6 @@
 # niminal for VS Code
 
-Highlighting for `.nml` files, language-server editing help, and live evaluation against a running daemon.
+Highlighting for `.nml` files and `.nms` score files (JSON with units, note names and mini-notation highlighted inside strings), language-server editing help, and live evaluation against a running daemon.
 
 Full user docs: [niminal.dev](https://niminal.dev) · [Editor and LSP](https://niminal.dev/reference/editor/)
 
