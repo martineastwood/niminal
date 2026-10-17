@@ -3,7 +3,9 @@
 //! session starts and stops the notes.
 
 use crate::log::Expression;
-use crate::session::NO_KEY;
+
+/// The key of a note that is not held open by one.
+pub(crate) const NO_KEY: u32 = u32::MAX;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]

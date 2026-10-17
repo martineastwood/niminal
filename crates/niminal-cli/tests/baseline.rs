@@ -5,8 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
-use niminal_daemon::Session;
 use niminal_lang::Layout;
+use niminal_live::Offline;
 
 const SR: f32 = 48_000.0;
 const BAR: u64 = 96_000; // 120bpm in 4/4
@@ -21,6 +21,57 @@ fn hash(channels: &[Vec<f32>]) -> String {
         }
     }
     format!("{h:016x} {}x{}", channels.len(), channels.first().map_or(0, Vec::len))
+}
+
+/// How loud each stretch of a render is: the RMS of every `DIGEST_BLOCK` samples of each channel. It is what
+/// "sounds the same" means across a change that moves the rounding of the mix, such as cutting blocks
+/// somewhere else.
+const DIGEST_BLOCK: usize = 1024;
+
+fn digest(channels: &[Vec<f32>]) -> String {
+    channels
+        .iter()
+        .map(|c| {
+            c.chunks(DIGEST_BLOCK)
+                .map(|b| format!("{:.5e}", (b.iter().map(|s| f64::from(*s) * f64::from(*s)).sum::<f64>() / b.len() as f64).sqrt()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn close(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<&str>, Vec<&str>) = (a.split_whitespace().collect(), b.split_whitespace().collect());
+    a.len() == b.len()
+        && a.iter().zip(&b).all(|(x, y)| {
+            if x == y {
+                return true;
+            }
+            match (x.parse::<f64>(), y.parse::<f64>()) {
+                (Ok(x), Ok(y)) => (x - y).abs() <= 1e-4 * x.abs().max(y.abs()) + 1e-6,
+                _ => false,
+            }
+        })
+}
+
+/// Compare with a reference digest, which is only rewritten with `REFERENCE=1`, on purpose.
+fn check_reference(name: &str, lines: Vec<(String, String)>) {
+    let path = baseline_file(name);
+    let text: String = lines.iter().map(|(k, v)| format!("{k}: {v}\n")).collect();
+    if std::env::var_os("REFERENCE").is_some() {
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("no reference {}; run with REFERENCE=1", path.display()));
+    let (got, want): (Vec<_>, Vec<_>) = (text.lines().collect(), expected.lines().collect());
+    assert_eq!(got.len(), want.len(), "{name}: different number of renders");
+    for (g, w) in got.iter().zip(&want) {
+        let (gn, gv) = g.split_once(": ").unwrap();
+        let (wn, wv) = w.split_once(": ").unwrap();
+        assert_eq!(gn, wn);
+        assert!(close(gv, wv), "{name}: {gn} no longer sounds like its reference");
+    }
 }
 
 fn baseline_file(name: &str) -> PathBuf {
@@ -52,7 +103,7 @@ fn examples_render_as_they_did() {
     files.sort();
     let dir = std::env::temp_dir().join(format!("niminal-baseline-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut lines = Vec::new();
+    let (mut lines, mut digests) = (Vec::new(), Vec::new());
     for file in files {
         let out = dir.join("out.wav");
         let _ = std::fs::remove_file(&out);
@@ -60,10 +111,17 @@ fn examples_render_as_they_did() {
             .arg("render").arg(&file).args(["--bars", "4", "--out"]).arg(&out)
             .output().unwrap();
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
-        let value = if run.status.success() { hash(&read_wav(&out)) } else { "does not render".to_string() };
-        lines.push((name, value));
+        let (value, sound) = if run.status.success() {
+            let audio = read_wav(&out);
+            (hash(&audio), digest(&audio))
+        } else {
+            ("does not render".to_string(), "does not render".to_string())
+        };
+        lines.push((name.clone(), value));
+        digests.push((name, sound));
     }
     check("examples.txt", lines);
+    check_reference("examples_reference.txt", digests);
 }
 
 /// One thing that happens to a live session, and when.
@@ -100,7 +158,7 @@ fn live_script() -> Vec<(u64, Step)> {
         (BAR + BAR / 3, Eval("lead.undo", Some("next bar"))),
         (2 * BAR, Eval("scene one { lead: [c5 e5], bass: [c2] }\nscene two { lead: [g4 b4], bass: [g2] }\none.start then two after 1bar", Some("next bar"))),
         (2 * BAR + 1234, Eval("bass.mute", Some("next beat"))),
-        (3 * BAR, Eval("tempo 140bpm @ next bar over 2bars", Some("now"))),
+        (3 * BAR, Eval("tempo 141bpm @ next bar over 2bars", Some("now"))),
         (3 * BAR + 5000, Eval("lead.play([c4 d4 e4 f4 g4 a4 b4 c5])", Some("next bar"))),
         (3 * BAR + 5100, Eval("bass.unmute\nbass.play([c3 c3])", Some("next 2bars"))),
         (4 * BAR, Eval("clicks.play([a5 a5])", Some("next 4bars"))),
@@ -122,9 +180,9 @@ fn live_script() -> Vec<(u64, Step)> {
 
 /// Play `script` into a fresh session and return `frames` of audio, block-size independent.
 fn play(script: &[(u64, Step)], frames: u64) -> Vec<Vec<f32>> {
-    let mut session = Session::new(SR, Layout::Stereo).without_limiter();
+    let mut session = Offline::new(SR, Layout::Stereo).without_limiter();
     let mut out = vec![Vec::new(); 2];
-    let mut run_to = |s: &mut Session, to: u64| {
+    let mut run_to = |s: &mut Offline, to: u64| {
         let gap = to.saturating_sub(s.clock()) as usize;
         for (o, p) in out.iter_mut().zip(s.process(gap)) {
             o.extend(p);
@@ -135,7 +193,7 @@ fn play(script: &[(u64, Step)], frames: u64) -> Vec<Vec<f32>> {
         match step {
             Eval(src, q) => {
                 if let Err(problems) = session.eval(src, *q) {
-                    eprintln!("rejected at {at}: {}", problems[0].message);
+                    panic!("rejected at {at}: {}", problems[0].message);
                 }
             }
             Cancel(id) => {
@@ -156,4 +214,5 @@ fn a_scripted_live_session_sounds_as_it_did() {
     let audio = play(&live_script(), 10 * BAR);
     assert!(audio[0].iter().any(|s| s.abs() > 0.01), "the session made sound");
     check("live_session.txt", vec![("live_session".into(), hash(&audio))]);
+    check_reference("live_reference.txt", vec![("live_session".into(), digest(&audio))]);
 }

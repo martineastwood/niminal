@@ -2,12 +2,12 @@
 //! real example, damages it in a random way, and sends it to a live session
 //! (which compiles it, schedules it and renders a little audio).
 //!
-//! `NIMINAL_FUZZ_CASES=20000 cargo test --release -p niminal-daemon --test fuzz` runs it longer.
+//! `NIMINAL_FUZZ_CASES=20000 cargo test --release -p niminal-live --test fuzz` runs it longer.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
-use niminal_daemon::Session;
+use niminal_live::Offline;
 use niminal_lang::Layout;
 
 struct Rng(u64);
@@ -191,7 +191,7 @@ fn cases() -> usize {
 fn run(source: &str, layout: Layout, accepted: &mut usize) -> Option<String> {
     let started = Instant::now();
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        let mut s = Session::new(48_000.0, layout);
+        let mut s = Offline::new(48_000.0, layout);
         let ok = s.eval(source, Some("now")).is_ok();
         let _ = s.eval("verse.start\nlead.play([c4 e4 g4])\nhush", Some("now"));
         let _ = s.process(48_000 * 3);
@@ -293,7 +293,7 @@ const GREEDY: [&str; 20] = [
 fn greedy_programs_are_accepted_quickly_and_playback_carries_on() {
     for src in GREEDY {
         let started = Instant::now();
-        let mut s = Session::new(48_000.0, Layout::Stereo);
+        let mut s = Offline::new(48_000.0, Layout::Stereo);
         s.eval(SETUP, Some("now")).unwrap();
         let accepted = s.eval(src, Some("now")).is_ok();
         let evaluated = started.elapsed();

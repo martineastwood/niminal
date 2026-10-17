@@ -116,11 +116,10 @@ fn a_tempo_ramp_replays_to_the_same_audio() {
     s.eval("tempo 200bpm @ now over 2beats", Some("now"))
         .unwrap();
     original.extend(run(&mut s, 120_000));
-    let log = from_lines(&to_lines(s.log())).unwrap();
-    let replayed = Session::replay(
+    let log = from_lines(&to_lines(&s.log())).unwrap();
+    let replayed = niminal_daemon::Session::replay(
         SR,
         Layout::Mono,
-        QuantizeDefaults::default(),
         &log,
         original.len() as u64,
         false,

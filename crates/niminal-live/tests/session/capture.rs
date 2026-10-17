@@ -46,7 +46,7 @@ fn capture_writes_the_last_bars_as_a_score() {
         section.events.len()
     );
     let first = section.events[0].at.to_seconds(niminal_score::Tempo::new(120.0));
-    assert!(first >= 0.0 && first < 4.0, "first note at {first}s into the section");
+    assert!((0.0..4.0).contains(&first), "first note at {first}s into the section");
 
     std::env::set_current_dir(prev).unwrap();
     let _ = std::fs::remove_dir_all(dir);

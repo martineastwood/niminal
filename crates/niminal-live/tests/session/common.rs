@@ -1,4 +1,5 @@
-pub use niminal_daemon::{At, Op, QuantizeDefaults, Session, from_lines, to_lines};
+pub use niminal_daemon::{At, Op, from_lines, to_lines};
+pub use niminal_live::{Offline, QuantizeDefaults};
 pub use niminal_lang::Layout;
 pub use niminal_score::{Time, Value};
 
@@ -12,18 +13,18 @@ track lead { instrument = pluck }
 track bass { instrument = pluck }
 ";
 
-pub fn session() -> Session {
-    Session::new(SR, Layout::Mono).without_limiter()
+pub fn session() -> Offline {
+    Offline::new(SR, Layout::Mono).without_limiter()
 }
 
 /// A session with the setup already in place and the clock at zero.
-pub fn ready() -> Session {
+pub fn ready() -> Offline {
     let mut s = session();
     s.eval(SETUP, Some("now")).unwrap();
     s
 }
 
-pub fn run(s: &mut Session, frames: usize) -> Vec<f32> {
+pub fn run(s: &mut Offline, frames: usize) -> Vec<f32> {
     s.process(frames).remove(0)
 }
 
@@ -39,7 +40,7 @@ pub fn crossings(x: &[f32]) -> usize {
     x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count()
 }
 
-pub fn with_tail() -> Session {
+pub fn with_tail() -> Offline {
     let mut s = session();
     s.eval(REVERB, Some("now")).unwrap();
     s.eval("src(freq: 100hz) for 1/8beat", Some("now")).unwrap();

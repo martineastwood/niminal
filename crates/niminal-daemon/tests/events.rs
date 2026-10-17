@@ -1,6 +1,8 @@
 //! The engine's `events.send`: each op, validation, late events and replay.
 
-use niminal_daemon::{At, Op, QuantizeDefaults, Session};
+use niminal_daemon::{At, Op, Session};
+mod support;
+use support::Eval;
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
 
@@ -16,6 +18,12 @@ track pad(cut: hz = 300hz) { instrument = tone
   out = it.lpf(cutoff: cut) }
 track held { instrument = flat }
 ";
+
+/// A note on the `held` track that lasts the whole test.
+fn hold(s: &mut Session) {
+    let args = [("freq".to_string(), Value::Hz(100.0))].into();
+    s.send_events(0, vec![Op::Note { target: "held".into(), at: At::Now, args, dur: Some(Time::Bars(100.0)), id: None, tag: None }]).unwrap();
+}
 
 fn session() -> Session {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
@@ -72,7 +80,7 @@ fn events_in_the_past_sound_at_once_and_are_counted() {
 #[test]
 fn a_control_moves_at_its_sample_with_a_glide() {
     let mut s = session();
-    s.eval("held(freq: 100hz) for 100bars", Some("now")).unwrap();
+    hold(&mut s);
     s.send_events(0, vec![Op::Control { name: "level".into(), at: At::Sample(2_400), value: 0.5, unit: None, glide: Some(Time::Seconds(0.0)), tag: None }]).unwrap();
     let out = s.process(4_800).remove(0);
     assert_eq!(peak(&out[..2_399]), 0.0);
@@ -100,7 +108,7 @@ fn a_track_op_sets_a_track_parameter() {
 #[test]
 fn the_log_replays_to_the_same_audio() {
     let mut s = session();
-    s.eval("held(freq: 100hz) for 100bars", Some("now")).unwrap();
+    hold(&mut s);
     s.process(1_000);
     s.send_events(0, vec![
         note("lead", At::Sample(3_000), 330.0),
@@ -111,7 +119,7 @@ fn the_log_replays_to_the_same_audio() {
     s.process(2_000);
     s.send_events(0, vec![note("lead", At::Now, 550.0)]).unwrap();
     let live = s.process(60_000).remove(0);
-    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), 63_000, false).remove(0);
+    let replayed = Session::replay(SR, Layout::Mono, s.log(), 63_000, false).remove(0);
     assert_eq!(live, replayed[3_000..]);
 }
 
@@ -240,7 +248,7 @@ fn held_notes_and_sets_replay_to_the_same_audio() {
     s.process(3_000);
     s.send_events(4, vec![Op::Off { id: 1, at: At::Sample(30_000), tag: None }, held(2, At::Time(Time::Beats(1.0)), 165.0)]).unwrap();
     let live = s.process(60_000).remove(0);
-    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), 63_000, false).remove(0);
+    let replayed = Session::replay(SR, Layout::Mono, s.log(), 63_000, false).remove(0);
     let mut expected = voices();
     expected.send_events(4, vec![held(1, At::Sample(500), 110.0)]).unwrap();
     assert_eq!(live, replayed[3_000..]);
@@ -323,7 +331,7 @@ fn cancel_with_release_lets_go_of_held_notes_and_drops_waiting_offs() {
 #[test]
 fn a_waiting_control_can_be_cancelled() {
     let mut s = session();
-    s.eval("held(freq: 100hz) for 100bars", Some("now")).unwrap();
+    hold(&mut s);
     s.send_events(1, vec![Op::Control { name: "level".into(), at: At::Sample(5_000), value: 0.5, unit: None, glide: Some(Time::Seconds(0.0)), tag: Some("x".into()) }]).unwrap();
     assert_eq!(s.cancel_events(1, Some("y"), At::Now, false).cancelled, 0);
     assert_eq!(s.cancel_events(1, Some("x"), At::Now, false).cancelled, 1);
@@ -379,7 +387,7 @@ fn a_define_can_be_cancelled_by_its_tag_and_performance_statements_are_refused()
     reference.send_events(0, vec![tone(At::Sample(48_000), 110.0)]).unwrap();
     assert_eq!(out, reference.process(60_000).remove(0));
 
-    for bad in ["lead.play([c4])", "tempo 90bpm", "clip c { notes: [c4] }", "lead(freq: c4) for 1beat"] {
+    for bad in ["lead.play([c4])", "tempo 90bpm", "lead(freq: c4) for 1beat"] {
         let problems = s.send_events(1, vec![tone(At::Now, 110.0), define(bad, At::Now)]).unwrap_err();
         assert_eq!(problems[0].event, Some(1), "{bad}");
     }
@@ -391,10 +399,10 @@ fn a_batch_that_fails_leaves_nothing_behind() {
     s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
     let problems = s.send_events(1, vec![define(SAW, At::Sample(100)), define("instr broken( {", At::Sample(200))]).unwrap_err();
     assert_eq!(problems[0].event, Some(1));
-    assert!(s.pending().is_empty(), "the first define was taken back");
+    assert_eq!(s.waiting_changes(), 0, "the first define was taken back");
     let problems = s.send_events(1, vec![define(SAW, At::Sample(100)), tone(At::Sample(300), -1.0), Op::Off { id: 1, at: At::Now, tag: None }]).unwrap_err();
     assert!(!problems.is_empty());
-    assert!(s.pending().is_empty(), "so was the one before a bad note");
+    assert_eq!(s.waiting_changes(), 0, "so was the one before a bad note");
 }
 
 #[test]
@@ -465,7 +473,7 @@ fn definitions_and_the_transport_replay_to_the_same_audio() {
     s.process(20_000);
     s.send_events(1, vec![tone(At::Time(Time::Beats(3.0)), 165.0)]).unwrap();
     let live = s.process(150_000).remove(0);
-    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), 170_000, false).remove(0);
+    let replayed = Session::replay(SR, Layout::Mono, s.log(), 170_000, false).remove(0);
     assert_eq!(live, replayed[20_000..]);
 }
 

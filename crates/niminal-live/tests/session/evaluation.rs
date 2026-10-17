@@ -401,12 +401,12 @@ fn streamed_events_play_at_their_time() {
         tag: None,
         args: [("freq".to_string(), Value::Note(57))].into(),
     };
-    s.send_events(0, vec![note(0.5)]).unwrap();
+    s.send_events(vec![note(0.5)]).unwrap();
     let out = run(&mut s, 48_000);
     assert_eq!(peak(&out[..24_000 - 1]), 0.0);
     assert!(peak(&out[24_000..26_000]) > 0.1);
     // a late one sounds at once; a bad one is refused
-    s.send_events(0, vec![note(0.0)]).unwrap();
+    s.send_events(vec![note(0.0)]).unwrap();
     assert!(peak(&run(&mut s, 2000)) > 0.1);
     let bad = Op::Note {
         target: "nobody".into(),
@@ -416,12 +416,12 @@ fn streamed_events_play_at_their_time() {
         tag: None,
         args: Default::default(),
     };
-    assert!(s.send_events(0, vec![bad]).is_err());
+    assert!(s.send_events(vec![bad]).is_err());
 }
 
 #[test]
 fn the_output_layout_is_fixed_for_the_session() {
-    let mut s = Session::new(SR, Layout::Stereo);
+    let mut s = Offline::new(SR, Layout::Stereo);
     assert_eq!(s.channels(), 2);
     let e = s
         .eval("config { channels: mono }\ninstr a() { 0.5 }", None)

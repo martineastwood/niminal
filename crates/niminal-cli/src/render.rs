@@ -1,8 +1,8 @@
 use std::fmt;
 
 use niminal_engine::{BLOCK, DEFAULT_CEILING, Master};
-use niminal_daemon::Session;
 use niminal_lang::{Layout, Program};
+use niminal_live::Offline;
 use niminal_score::Event;
 
 pub const SAMPLE_RATE: u32 = 48_000;
@@ -114,12 +114,9 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     let input_len = options.input.iter().map(Vec::len).max().unwrap_or(0);
     let stop = ((until.unwrap_or(0.0) * sr).max(note_end).round() as usize).max(input_len) as u64;
 
-    let mut session = Session::playing(program.clone(), schedule, SAMPLE_RATE as f32);
-    let ops = extra
-        .iter()
-        .map(|e| niminal_daemon::Op::Note { target: e.target.clone(), at: niminal_daemon::At::Time(e.at), args: e.args.clone(), dur: Some(e.dur), id: None, tag: None })
-        .collect();
-    session.send_events(0, ops).map_err(|ps| problems(&ps))?;
+    let mut session = Offline::new(SAMPLE_RATE as f32, program.master).without_limiter();
+    session.play_program(program.clone(), schedule);
+    session.sequencer().send_notes(extra).map_err(|ps| problems(&ps))?;
     if options.stems {
         session.capture_stems();
     }
@@ -139,7 +136,7 @@ fn problems(ps: &[niminal_daemon::Problem]) -> RenderError {
 }
 
 /// Play `session` on, adding to `out`, until `done`.
-fn run_until(session: &mut Session, out: &mut [Vec<f32>], mut done: impl FnMut(&Session) -> bool) {
+fn run_until(session: &mut Offline, out: &mut [Vec<f32>], mut done: impl FnMut(&Offline) -> bool) {
     loop {
         run(session, out, STEP);
         if done(session) {
@@ -148,19 +145,19 @@ fn run_until(session: &mut Session, out: &mut [Vec<f32>], mut done: impl FnMut(&
     }
 }
 
-fn run(session: &mut Session, out: &mut [Vec<f32>], frames: usize) {
+fn run(session: &mut Offline, out: &mut [Vec<f32>], frames: usize) {
     for (o, block) in out.iter_mut().zip(session.process(frames)) {
         o.extend(block);
     }
 }
 
 /// Let what is still sounding ring out, then name the stems and apply the master stage.
-fn collect(mut session: Session, mut out: Vec<Vec<f32>>, limiter: bool) -> RenderOutput {
+fn collect(mut session: Offline, mut out: Vec<Vec<f32>>, limiter: bool) -> RenderOutput {
     ring_out(&mut out, |out| run(&mut session, out, STEP));
     let len = out[0].len();
     let silenced = session.take_silenced();
     let captured = session.take_stems();
-    let stems = name_stems(session.program(), captured, len);
+    let stems = name_stems(session.engine().session().program(), captured, len);
     finish(out, silenced, stems, limiter)
 }
 
@@ -268,7 +265,7 @@ pub enum End {
 /// ramp is sent after the rest, so it sets off from there at the boundary it names.
 pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: End, limiter: bool, stems: bool, input: Vec<Vec<f32>>) -> Result<RenderOutput, RenderError> {
     let (rest, ramps) = split_ramps(source).map_err(|d| RenderError(d.message))?;
-    let mut session = Session::new(SAMPLE_RATE as f32, layout).without_limiter();
+    let mut session = Offline::new(SAMPLE_RATE as f32, layout).without_limiter();
     session.set_sample_dir(dir);
     session.eval(&rest, Some("now")).map_err(|ps| problems(&ps))?;
     for ramp in &ramps {

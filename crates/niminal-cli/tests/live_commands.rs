@@ -39,17 +39,22 @@ impl Daemon {
     fn start(extra: &[&str]) -> Daemon {
         // Another test may take the port between choosing it and binding it, so try again.
         for _ in 0..5 {
-            let port = free_port();
+            let (port, engine_port) = (free_port(), free_port());
             let mut child = niminal()
-                .args(["daemon", "--no-audio", "--port", &port.to_string()])
+                .args(["daemon", "--no-audio", "--port", &port.to_string(), "--engine-port", &engine_port.to_string()])
                 .args(extra)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
+            // the engine says it is listening, then the sequencer
+            let mut reader = BufReader::new(child.stdout.as_mut().unwrap());
             let mut line = String::new();
-            BufReader::new(child.stdout.as_mut().unwrap()).read_line(&mut line).unwrap();
-            if line.contains("listening on ws://127.0.0.1") {
+            for _ in 0..2 {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+            }
+            if line.contains("niminal daemon listening on ws://127.0.0.1") {
                 return Daemon { child, port };
             }
             let _ = child.kill();
@@ -161,8 +166,9 @@ fn a_recorded_session_replays_to_audio() {
         std::thread::sleep(Duration::from_millis(700));
     }
     let text = std::fs::read_to_string(&log).unwrap();
-    assert_eq!(text.lines().count(), 3, "{text}");
-    assert!(text.lines().next().unwrap().contains("\"eval\""));
+    // the log is of what the engine was sent: the definitions, the tempo and the notes
+    assert!(text.lines().count() >= 3, "{text}");
+    assert!(text.lines().next().unwrap().contains("\"send\""));
 
     let wav = dir.join("set.wav");
     let out = niminal()
@@ -170,7 +176,7 @@ fn a_recorded_session_replays_to_audio() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).contains("replayed 3 inputs"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("replayed ") && stdout(&out).contains(" inputs"), "{}", stdout(&out));
     let mut reader = hound::WavReader::open(&wav).unwrap();
     assert_eq!(reader.spec().channels, 2);
     let samples: Vec<f32> = reader.samples::<f32>().map(Result::unwrap).collect();

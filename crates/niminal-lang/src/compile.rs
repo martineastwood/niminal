@@ -763,6 +763,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     errors.retain(|d| !d.is_quiet());
     if errors.is_empty() {
         Ok(Program {
+            source: source.to_string(),
+            samples: options.samples.clone(),
             quantize,
             taps: tracks.iter().flat_map(|t| t.taps.clone()).collect(),
             controls: names.controls,

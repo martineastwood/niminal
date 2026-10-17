@@ -127,7 +127,7 @@ impl Command {
                 Kind::Reset { .. } => 0,
                 Kind::Swap { .. } | Kind::Control { .. } => 1,
                 Kind::Note { .. } => 2,
-                Kind::Release { .. } | Kind::Param { .. } | Kind::SetParam { .. } => 3,
+                Kind::Release { .. } | Kind::SetParam { .. } => 3,
             },
         )
     }
@@ -147,12 +147,6 @@ enum Kind {
     },
     /// Let go of the notes a key is holding open.
     Release { key: u32 },
-    /// Change a parameter (a keyboard's `bend` or `pressure`) of the notes a key is holding.
-    Param {
-        key: u32,
-        name: &'static str,
-        value: f32,
-    },
     /// Move a parameter, by its index, of the notes a key is holding, over `frames`.
     SetParam {
         key: u32,
@@ -181,6 +175,10 @@ enum Kind {
 }
 
 /// The command that moves a parameter of a held note, if `program` has the instrument and the parameter.
+fn is_timing_change(p: &Pending) -> bool {
+    p.statements.iter().any(|s| matches!(s.key(), Some("tempo" | "meter")))
+}
+
 fn set_command(program: &Program, set: &super::VoiceSet, at: u64, frames: u64) -> Option<Command> {
     let index = program
         .instruments
@@ -225,9 +223,8 @@ struct Injected {
 
 /// Something added since the planner last looked.
 pub(super) enum Fresh {
-    Note { event: Event, start: u64, dur: u64, key: Option<u32> },
+    Note { event: Event, start: u64, dur: u64, key: Option<u32>, musical: bool },
     Release { key: u32, at: u64 },
-    Param { key: u32, name: &'static str, value: f32, at: u64 },
     Set(super::VoiceSet),
     Track(super::TrackSet),
 }
@@ -236,7 +233,7 @@ impl Fresh {
     fn at(&self) -> u64 {
         match self {
             Fresh::Note { start, .. } => *start,
-            Fresh::Release { at, .. } | Fresh::Param { at, .. } => *at,
+            Fresh::Release { at, .. } => *at,
             Fresh::Set(set) => set.at,
             Fresh::Track(set) => set.at,
         }
@@ -490,7 +487,6 @@ impl Session {
             self.apply_controls();
         }
         self.land_due();
-        self.apply_panics();
         self.apply_controls();
         let Some(planner) = &self.live else { return };
         if planner.revision == planner.state.revision.load(Ordering::Acquire) {
@@ -681,7 +677,8 @@ impl Session {
             if at >= planner.prepared_until {
                 continue;
             }
-            let program = self.program.clone();
+            // a note is made with the program that is running when it starts
+            let program = self.program_at(at).clone();
             let mut window = Window {
                 end: planner.prepared_until,
                 revision: planner.revision,
@@ -690,19 +687,18 @@ impl Session {
                 stopped: Vec::new(),
                 dropped: 0,
             };
-            let unsafe_to_inject = self.pending.iter().any(|p| p.lands_at <= at)
-                || self.schedule.panics().iter().any(|&t| {
-                    let t = self.samples(t);
-                    t > self.clock && t <= at
-                });
+            // a note given in beats or bars moves with a tempo or meter that lands before it, which the windows to
+            // be made allow for
+            let moves = matches!(item, Fresh::Note { musical: true, .. })
+                && self.pending.iter().any(|p| p.lands_at <= at && is_timing_change(p));
+            let unsafe_to_inject = moves;
             if !unsafe_to_inject {
                 match item {
-                    Fresh::Note { event, start, dur, key } => {
+                    Fresh::Note { event, start, dur, key, .. } => {
                         let hold = Hold { at: start.max(self.clock), dur, key };
                         self.prepare_note(&program, &event, hold, config, &mut window);
                     }
                     Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
-                    Fresh::Param { key, name, value, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Param { key, name, value } }),
                     Fresh::Track(set) => window.commands.push(Command {
                         at: set.at.max(self.clock),
                         kind: Kind::Control { key: set.key, value: set.value, frames: set.frames },
@@ -720,8 +716,10 @@ impl Session {
             }
             planner.state.capacity_drops.fetch_add(window.dropped, Ordering::Relaxed);
             if unsafe_to_inject || full {
+                // the windows are made again, which the next step will see (the planner is out of the
+                // session while it works, so this can't go through `invalidate_windows`)
                 self.fresh.clear();
-                self.invalidate_live();
+                planner.state.revision.fetch_add(1, Ordering::AcqRel);
                 return;
             }
             for command in window.commands {
@@ -757,17 +755,13 @@ impl Session {
             dropped: 0,
         };
         let mut program = self.program.clone();
-        let mut history = self.history.clone();
-        let mut schedule = schedule_for(&program, &history);
         let mut explicit: Vec<Explicit> = self
             .upcoming
             .iter()
-            .filter(|n| !n.scheduled)
             .map(|n| Explicit {
                 start: n.start.max(self.clock),
                 dur: n.dur.saturating_sub(self.clock.saturating_sub(n.start)),
                 event: n.event.clone(),
-                created: self.clock,
                 key: n.key,
                 musical: n.musical,
             })
@@ -775,23 +769,17 @@ impl Session {
         let mut position = from;
         match mode {
             PlanMode::Reset => {
-                window
-                    .commands
-                    .push(self.reset_command(from, &program, config));
+                window.commands.push(self.reset_command(from, &program, config));
             }
             PlanMode::Refresh => {
-                window
-                    .commands
-                    .push(self.swap_command(from, &program, config));
+                window.commands.push(self.swap_command(from, &program, config));
             }
             PlanMode::Replan | PlanMode::Advance => {}
         }
-        // Pending transactions are previewed without committing control state.
-        // Window boundaries and note times remain sample positions, independent
-        // of how far ahead this thread happens to prepare them.
+        // Pending changes are previewed without committing control state. Window boundaries and note times
+        // remain sample positions, independent of how far ahead this thread happens to prepare them.
         // A new tempo or meter moves the changes still waiting, as it will when it lands for real.
-        let mut queue: Vec<(u64, &Pending)> =
-            self.pending.iter().map(|p| (p.lands_at, p)).collect();
+        let mut queue: Vec<(u64, &Pending)> = self.pending.iter().map(|p| (p.lands_at, p)).collect();
         let mut i = 0;
         while i < queue.len() {
             let (lands_at, pending) = queue[i];
@@ -801,14 +789,7 @@ impl Session {
             }
             let boundary = lands_at.max(from);
             if position < boundary {
-                self.plan_notes(
-                    &program,
-                    &schedule,
-                    &explicit,
-                    position..boundary,
-                    config,
-                                        &mut window,
-                );
+                self.plan_notes(&program, &explicit, position..boundary, config, &mut window);
                 position = boundary;
             }
             if let Some(next) = &pending.program {
@@ -819,19 +800,13 @@ impl Session {
                     }
                     window.commands.push(swap);
                 }
-                let landing = self.seconds(lands_at);
-                super::retime(&mut history, landing, program.tempo, next.tempo);
                 if program.tempo != next.tempo {
                     for (at, p) in &mut queue[i..] {
                         if !super::is_timing(p) {
                             *at = super::rescale_landing(
                                 *at,
                                 lands_at,
-                                super::landing_factor(
-                                    self.landing_unit_is_bar(p),
-                                    program.tempo,
-                                    next.tempo,
-                                ),
+                                super::landing_factor(p.meta.musical.unwrap_or(false), program.tempo, next.tempo),
                             );
                         }
                     }
@@ -849,27 +824,9 @@ impl Session {
                 }
                 program = next.clone();
             }
-            for action in pending.actions.iter().chain(&pending.replays) {
-                preview_action(
-                    action,
-                    lands_at,
-                    self.sample_rate,
-                    &mut history,
-                    &mut explicit,
-                );
-            }
-            // Pending landings change the program and/or history the next slice plans against.
-            schedule = schedule_for(&program, &history);
         }
         if position < to {
-            self.plan_notes(
-                &program,
-                &schedule,
-                &explicit,
-                position..to,
-                config,
-                                &mut window,
-            );
+            self.plan_notes(&program, &explicit, position..to, config, &mut window);
         }
         // Stable sorting keeps a graph swap/reset before notes at the same sample.
         window.commands.sort_by_key(Command::order);
@@ -931,143 +888,56 @@ impl Session {
     fn plan_notes(
         &self,
         program: &Arc<Program>,
-        schedule: &Schedule,
         explicit: &[Explicit],
         range: std::ops::Range<u64>,
         config: RealtimeConfig,
         window: &mut Window,
     ) {
         let (from, to) = (range.start, range.end);
-        let skip: Vec<_> = window
-            .stopped
-            .iter()
-            .filter_map(|name| program.track_index(name))
-            .collect();
-        let found = schedule.events_lenient(self.seconds(from), self.seconds(to), &skip);
-        if let Some(problem) = found.problem {
-            window.notices.push(problem.to_string());
-        }
-        for i in found.overloaded {
-            let name = program.tracks[i].name.clone();
-            if !window.stopped.contains(&name) {
-                window.stopped.push(name);
-            }
-        }
-        for &at in schedule.panics() {
-            let at = self.samples(at);
-            if at >= from && at < to {
-                window
-                    .commands
-                    .push(self.reset_command(at, program, config));
-            }
-        }
         for panic in &self.timed_panics {
             if panic.at >= from && panic.at < to {
                 window.commands.push(self.reset_command(panic.at, program, config));
             }
         }
-        // envelope lanes moving track parameters
-        for set in found.controls.iter().take(MAX_WINDOW_CONTROLS) {
-            let Some(def) = program.controls.iter().find(|c| c.name == set.name) else {
-                continue;
-            };
-            let at = self.samples(set.at).max(from);
-            let frames = (set.glide * f64::from(self.sample_rate)).round() as u64;
-            window.commands.push(Command {
-                at,
-                kind: Kind::Control {
-                    key: def.key.clone(),
-                    value: set.target as f32,
-                    frames,
-                },
-            });
-        }
-        if found.controls.len() > MAX_WINDOW_CONTROLS {
-            window.notice(
-                "an envelope lane changes a parameter too often; the extra changes were dropped",
-            );
-        }
-        for event in found.events {
-            let at = self.samples(event.at.to_seconds(program.tempo));
-            let dur = self.samples(event.dur.to_seconds(program.tempo));
-            self.prepare_note(
-                program,
-                &event,
-                Hold {
-                    at: at.max(from),
-                    dur,
-                    key: None,
-                },
-                config,
-                window,
-            );
-        }
         for note in explicit {
-            let panic = schedule
-                .panics()
-                .iter()
-                .map(|&at| self.samples(at))
-                .find(|&at| at >= note.created);
-            if note.start >= from && note.start < to && panic.is_none_or(|p| note.start < p) {
+            if note.start >= from && note.start < to {
                 self.prepare_note(
                     program,
                     &note.event,
-                    Hold {
-                        at: note.start,
-                        dur: note.dur,
-                        key: note.key,
-                    },
+                    Hold { at: note.start, dur: note.dur, key: note.key },
                     config,
                     window,
                 );
             }
         }
-        // a key's bend and pressure: those from this window as they were, and for each the latest from
-        // before it, in case the window that carried it never played
-        let mut latest: Vec<(u32, &'static str, f32)> = Vec::new();
-        for &(key, name, value, at) in &self.key_params {
-            if at >= from && at < to {
-                window.commands.push(Command {
-                    at,
-                    kind: Kind::Param { key, name, value },
-                });
-            } else if at < from {
-                match latest.iter_mut().find(|l| l.0 == key && l.1 == name) {
-                    Some(l) => l.2 = value,
-                    None => latest.push((key, name, value)),
-                }
-            }
-        }
-        for (key, name, value) in latest {
-            window.commands.push(Command {
-                at: from,
-                kind: Kind::Param { key, name, value },
-            });
-        }
         // changes to a held note's parameters: whatever was before this window has played
         for set in &self.voice_sets {
-            if set.at >= from && set.at < to
+            if set.at >= from
+                && set.at < to
                 && let Some(command) = set_command(program, set, set.at, set.frames)
             {
                 window.commands.push(command);
             }
         }
         // track parameters moved by `track` events
+        let mut moved = 0;
         for set in &self.track_sets {
             if set.at >= from && set.at < to {
+                moved += 1;
+                if moved > MAX_WINDOW_CONTROLS {
+                    window.notice("an envelope lane changes a parameter too often; the extra changes were dropped");
+                    break;
+                }
                 window.commands.push(Command {
                     at: set.at,
                     kind: Kind::Control { key: set.key.clone(), value: set.value, frames: set.frames },
                 });
             }
         }
-        // keys that came up: each key is its own note, so a release that is repeated in a later window does no harm
+        // releases: each key is its own note, so a release that is repeated in a later window does no harm
         for off in &self.key_offs {
             if off.at < to {
-                window.commands.push(Command {
-                    at: off.at.max(from),
-                    kind: Kind::Release { key: off.key },
-                });
+                window.commands.push(Command { at: off.at.max(from), kind: Kind::Release { key: off.key } });
             }
         }
     }
@@ -1143,89 +1013,13 @@ struct Hold {
     key: Option<u32>,
 }
 
-/// A note the session was handed directly: when and how long, what, the clock it was handed at, and the key holding it open.
+/// A note the engine was handed: when and how long, what, and the key holding it open.
 struct Explicit {
     start: u64,
     dur: u64,
     event: Event,
-    created: u64,
     key: Option<u32>,
     musical: Option<bool>,
-}
-
-fn preview_action(
-    action: &Compiled,
-    at: u64,
-    sample_rate: f32,
-    history: &mut Vec<HistoryEntry>,
-    explicit: &mut Vec<Explicit>,
-) {
-    let sample = |sec: f64| (sec * f64::from(sample_rate)).round().max(0.0) as u64;
-    let origin = super::origin_of(history);
-    for event in &action.program.notes {
-        let offset = event.at.to_seconds(action.program.tempo);
-        let start = if action.statement.has_at() {
-            sample(origin + offset).max(at)
-        } else {
-            at + sample(offset)
-        };
-        explicit.push(Explicit {
-            start,
-            dur: sample(event.dur.to_seconds(action.program.tempo)),
-            event: event.clone(),
-            created: at,
-            key: None,
-            musical: None,
-        });
-    }
-    for scheduled in &action.program.performance {
-        let after = scheduled.at.to_seconds(action.program.tempo);
-        let when = if action.statement.has_at() {
-            origin + after
-        } else {
-            at as f64 / f64::from(sample_rate) + after
-        };
-        let Some(named) = name_action(&action.program, &scheduled.action) else {
-            continue;
-        };
-        history.push(HistoryEntry {
-            at: when,
-            action: named,
-        });
-    }
-}
-
-pub(super) fn schedule_for(program: &Program, history: &[HistoryEntry]) -> Schedule {
-    let names = program.tracks.iter().map(|t| t.name.clone()).collect();
-    let index = |name: &String| program.track_index(name);
-    let commands = history
-        .iter()
-        .filter_map(|h| {
-            let action = match &h.action {
-                NamedAction::Play { track, clip } => Action::Play {
-                    track: index(track)?,
-                    clip: clip.clone(),
-                },
-                NamedAction::Stop(t) => Action::Stop { track: index(t)? },
-                NamedAction::Mute(t) => Action::Mute { track: index(t)? },
-                NamedAction::Unmute(t) => Action::Unmute { track: index(t)? },
-                NamedAction::Solo(t) => Action::Solo { track: index(t)? },
-                NamedAction::Unsolo(t) => Action::Unsolo {
-                    track: t.as_ref().and_then(index),
-                },
-                NamedAction::Hush => Action::Hush,
-                NamedAction::Panic => Action::Panic,
-                NamedAction::Reset => Action::Reset,
-                NamedAction::Origin => return None,
-            };
-            Some(Scheduled {
-                at: Time::Seconds(h.at),
-                action,
-                quantize: None,
-            })
-        })
-        .collect::<Vec<_>>();
-    Schedule::from_commands(program.tempo, names, &commands)
 }
 
 impl RealtimeRenderer {
@@ -1365,11 +1159,6 @@ impl RealtimeRenderer {
             Kind::SetParam { key, index, value, frames } => {
                 for held in self.sounding.held.iter().filter(|h| h.2 == *key) {
                     self.mixer.set_voice_param_index(held.1, *index, *value, *frames);
-                }
-            }
-            Kind::Param { key, name, value } => {
-                for held in self.sounding.held.iter().filter(|h| h.2 == *key) {
-                    self.mixer.set_voice_param(held.1, name, *value);
                 }
             }
             Kind::Note {

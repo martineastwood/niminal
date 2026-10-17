@@ -697,6 +697,7 @@ dependencies = [
  "niminal-daemon",
  "niminal-engine",
  "niminal-lang",
+ "niminal-live",
  "niminal-lsp",
  "niminal-score",
  "rtrb",
@@ -732,6 +733,19 @@ dependencies = [
  "niminal-engine",
  "niminal-pattern",
  "niminal-score",
+]
+
+[[package]]
+name = "niminal-live"
+version = "0.0.1"
+dependencies = [
+ "hound",
+ "niminal-daemon",
+ "niminal-engine",
+ "niminal-lang",
+ "niminal-score",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

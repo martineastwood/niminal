@@ -6,9 +6,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use midir::{MidiInput, MidiInputConnection};
-use niminal_daemon::ControlSignal;
+use niminal_live::{ControlSignal, LiveServer};
 
-use crate::audio::{Shared, lock};
+use crate::server::lock;
 use crate::worker::Worker;
 
 /// A control change (`1011nnnn 0ccccccc 0vvvvvvv`) or a key going down (`1001nnnn`) or up (`1000nnnn`).
@@ -70,6 +70,9 @@ fn padded_string(bytes: &[u8]) -> Option<(&str, &[u8])> {
     Some((text, bytes.get((end / 4 + 1) * 4..).unwrap_or_default()))
 }
 
+/// The sequencer, shared between the threads that serve clients and take MIDI and OSC.
+pub type LiveShared = std::sync::Arc<std::sync::Mutex<LiveServer>>;
+
 /// Listens for OSC over UDP on this machine until dropped.
 pub struct OscInput {
     port: u16,
@@ -77,7 +80,7 @@ pub struct OscInput {
 }
 
 impl OscInput {
-    pub fn start(daemon: Shared, port: u16) -> Result<OscInput, String> {
+    pub fn start(daemon: LiveShared, port: u16) -> Result<OscInput, String> {
         let socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], port)))
             .map_err(|e| format!("can't listen for OSC on 127.0.0.1:{port}: {e}"))?;
         socket.set_read_timeout(Some(Duration::from_millis(100))).map_err(|e| e.to_string())?;
@@ -92,7 +95,7 @@ impl OscInput {
                 if messages.is_empty() { continue; }
                 let mut daemon = lock(&daemon);
                 for (address, value) in &messages {
-                    daemon.session_mut().control_input(&ControlSignal::Osc { address, value: *value });
+                    daemon.live_mut().control_input(&ControlSignal::Osc { address, value: *value });
                 }
             }
         });
@@ -106,7 +109,7 @@ impl OscInput {
 
 /// Open every MIDI input whose name contains `filter` (all of them if it is empty).
 /// Returns the connections, which stay open until dropped, and their names.
-pub fn start_midi(daemon: &Shared, filter: &str) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
+pub fn start_midi(daemon: &LiveShared, filter: &str) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
     let probe = MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
     let mut connections = Vec::new();
     let mut names = Vec::new();
@@ -118,7 +121,7 @@ pub fn start_midi(daemon: &Shared, filter: &str) -> Result<(Vec<MidiInputConnect
         let connection = input
             .connect(&port, "niminal-in", move |_, bytes, _| {
                 if let Some(signal) = parse_midi(bytes) {
-                    lock(&daemon).session_mut().control_input(&signal);
+                    lock(&daemon).live_mut().control_input(&signal);
                 }
             }, ())
             .map_err(|e| format!("can't open MIDI input `{name}`: {e}"))?;

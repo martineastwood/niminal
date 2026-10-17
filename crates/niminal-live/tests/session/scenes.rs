@@ -14,7 +14,7 @@ fn used_modules_play_and_replay_without_their_files() {
         "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\ntrack lead { instrument = pluck }\n",
     );
     let mut s = session();
-    s.eval_parsed(niminal_daemon::ParsedEval::from_dir(
+    s.eval_parsed(niminal_live::ParsedEval::from_dir(
         "use rig\nlead.play([c4])",
         &dir,
         Some("now"),
@@ -23,11 +23,10 @@ fn used_modules_play_and_replay_without_their_files() {
     let original = run(&mut s, BAR);
     assert!(peak(&original) > 0.1);
     std::fs::remove_dir_all(&dir).unwrap();
-    let replayed = Session::replay(
+    let replayed = niminal_daemon::Session::replay(
         SR,
         Layout::Mono,
-        QuantizeDefaults::default(),
-        s.log(),
+        &s.log(),
         BAR as u64,
         false,
     );
@@ -39,7 +38,7 @@ fn a_problem_in_a_used_module_points_at_the_use_line() {
     let dir = rig_dir("instr broken() { nonsense(1) }\n");
     let mut s = session();
     let problems = s
-        .eval_parsed(niminal_daemon::ParsedEval::from_dir(
+        .eval_parsed(niminal_live::ParsedEval::from_dir(
             "use rig\n",
             &dir,
             Some("now"),
@@ -155,7 +154,7 @@ fn stopping_a_scene_stops_its_tracks_and_a_track_with_nothing_playing_cannot_be_
 
 #[test]
 fn changes_stack_and_can_be_undone_or_cleared() {
-    let first_beat = |s: &mut Session| hz(&run(s, BAR)[2000..22_000]);
+    let first_beat = |s: &mut Offline| hz(&run(s, BAR)[2000..22_000]);
     let mut s = ready();
     s.eval(
         "riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nverse.start",
@@ -309,7 +308,7 @@ fn launching_a_scene_replaces_the_parts_it_does_not_list() {
 #[test]
 fn a_bus_with_a_body_processes_what_instruments_send_to_it() {
     let heard = |gain: &str| {
-        let mut s = Session::new(SR, Layout::Stereo).without_limiter();
+        let mut s = Offline::new(SR, Layout::Stereo).without_limiter();
         let code = format!(
             "tempo 120bpm\nbus space: stereo {{ out = it.gain({gain}) }}\ninstr ping(freq: hz) {{ out = osc(sine, freq) * env[1 | 10ms 0]\n space += out }}\nclip p {{ instrument: ping\n notes: [c4] }}\np.start"
         );
@@ -333,7 +332,7 @@ fn a_bus_with_a_body_processes_what_instruments_send_to_it() {
 #[test]
 fn set_changes_a_lane_live_and_undo_puts_it_back() {
     // the first bit of each bar is the last bar's note dying away
-    let level = |s: &mut Session| peak(&run(s, BAR)[2000..]);
+    let level = |s: &mut Offline| peak(&run(s, BAR)[2000..]);
     let mut s = session();
     s.eval("tempo 120bpm\ninstr loud(freq: hz, amp: 0..1 = 1) { osc(sine, freq) * amp * env[1 | 10ms 0] }\nclip lead { instrument: loud\n notes: [c4] }\nlead.start", Some("now")).unwrap();
     let full = level(&mut s);

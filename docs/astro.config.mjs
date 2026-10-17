@@ -55,6 +55,7 @@ export default defineConfig({
           { slug: 'reference/opcodes' },
           { slug: 'reference/cli' },
           { slug: 'reference/protocol' },
+          { slug: 'reference/engine-api' },
           { slug: 'reference/editor' },
         ] },
       ],

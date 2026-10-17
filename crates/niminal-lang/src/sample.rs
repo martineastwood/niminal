@@ -35,6 +35,11 @@ impl Samples {
         }
     }
 
+    /// The folders paths are looked for in, the first match winning.
+    pub fn bases(&self) -> &[PathBuf] {
+        &self.bases
+    }
+
     /// The same cache, with paths looked for in `bases`, first match wins.
     pub fn with_bases(&self, bases: Vec<PathBuf>) -> Self {
         Samples {

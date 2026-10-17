@@ -1,32 +1,33 @@
-//! The niminal live session: quantized, transactional evaluation of code into
-//! a running mixer, and the protocol around it.
+//! The niminal engine: a sound server. It holds the instruments, effects, tracks, buses and controls that
+//! niminal code defines, and plays timestamped events (notes, parameter changes, control changes,
+//! definitions, tempo) sent to it through a public API. It knows nothing of clips, scenes or patterns:
+//! those are for the sequencer, which is one client among others.
 
 mod audio_in;
 mod clock;
 mod controls;
+mod engine_server;
 mod events;
-mod keyboard;
+mod grid;
 mod log;
 mod midi_out;
 mod project;
-mod protocol;
-mod quantize;
 mod session;
 mod sounding;
+mod status;
 
 pub use audio_in::AudioInput;
 pub use clock::ClockProbe;
+pub use engine_server::{
+    ClientId, ENGINE_TOPICS, EngineError, EngineReply, EngineRequest, EngineServer, PROTOCOL_VERSION, clock_json,
+    problem_json,
+};
 pub use events::{At, Cancelled, Op, Sent};
-pub use log::{Expression, LogEntry, LogInput, from_lines, to_lines};
+pub use grid::Grid;
+pub use log::{LogEntry, LogInput, from_lines, to_lines};
 pub use midi_out::MidiEvent;
-pub use project::{Entry, Problem, Project};
-pub use protocol::{
-    ClientId, CompileTicket, CompiledTicket, Daemon, PROTOCOL_VERSION, Request, TOPICS,
-};
-pub use quantize::{Grid, QuantizeDefaults};
-pub use session::{
-    Accepted, Begin, ClockInfo, ControlSignal, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo, Session,
-    TrackStatus, Transport,
-};
+pub use project::{Entry, Located, Origin, Piece, Problem, Project};
+pub use session::{ClockInfo, Session, Transport};
+pub use status::status_json;
 
 pub use session::realtime::{RealtimeConfig, RealtimeRenderer, RenderMetrics};

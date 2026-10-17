@@ -6,3 +6,4 @@ pub mod osc_out;
 pub mod render;
 pub mod server;
 pub mod worker;
+pub mod link;

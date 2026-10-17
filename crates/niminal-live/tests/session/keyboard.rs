@@ -61,11 +61,10 @@ fn a_keyboard_set_replays_from_the_log() {
     original.extend(run(&mut s, 5000));
     s.key_input(1, 64, 0);
     original.extend(run(&mut s, 5000));
-    let log = from_lines(&to_lines(s.log())).unwrap();
-    let replayed = Session::replay(
+    let log = from_lines(&to_lines(&s.log())).unwrap();
+    let replayed = niminal_daemon::Session::replay(
         SR,
         Layout::Mono,
-        QuantizeDefaults::default(),
         &log,
         original.len() as u64,
         false,
@@ -135,7 +134,7 @@ fn a_mono_instrument_sounds_one_note_at_a_time_and_max_caps_a_poly_one() {
 fn voice_options_are_checked() {
     let mut s = session();
     let err =
-        |code: &str, s: &mut Session| s.eval(code, Some("now")).unwrap_err()[0].message.clone();
+        |code: &str, s: &mut Offline| s.eval(code, Some("now")).unwrap_err()[0].message.clone();
     assert!(err("mono x(freq: hz) with(max: 4) { osc(sine, freq) }", &mut s).contains("one voice"));
     assert!(
         err(

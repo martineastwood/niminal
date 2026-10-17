@@ -1,7 +1,7 @@
 //! Pieces of the live commands that don't need a terminal: turning problems
 //! into text, choosing a layout, and replaying a log to audio.
 
-use niminal_daemon::{LogEntry, Problem, QuantizeDefaults, Session};
+use niminal_daemon::{LogEntry, Problem, Session};
 use niminal_lang::Layout;
 use serde_json::Value;
 
@@ -87,7 +87,7 @@ pub fn replay(log: &[LogEntry], channels: u16, sample_rate: u32, limiter: bool) 
     let layout = layout_for(channels)?;
     let last = log.iter().map(|e| e.sample).max().unwrap_or(0);
     let frames = last + TAIL_SECONDS * u64::from(sample_rate);
-    let mut audio = Session::replay(sample_rate as f32, layout, QuantizeDefaults::default(), log, frames, limiter);
+    let mut audio = Session::replay(sample_rate as f32, layout, log, frames, limiter);
 
     if limiter {
         let latency = Session::new(sample_rate as f32, layout).latency();

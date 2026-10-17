@@ -10,12 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use niminal_daemon::{ClientId, Request};
+use niminal_daemon::{ClientId, EngineServer};
+use niminal_live::{CompiledTicket, LiveServer, ParsedEval, Request};
 use serde_json::{Value, json};
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Error, Message, WebSocket};
 
-use crate::audio::{Shared, lock};
 
 type Outboxes = Arc<Mutex<HashMap<ClientId, Sender<String>>>>;
 
@@ -44,6 +44,124 @@ impl Default for ServerConfig {
     }
 }
 
+/// What a server serves: something that answers JSON-RPC requests for any number of clients and pushes
+/// notifications to them. A request that needs compiling is answered in three steps, so that the compiling
+/// can happen without the service locked: `begin`, `compile`, `finish`.
+pub trait Service: Send + Sized + 'static {
+    /// What can be done with a request before the service is locked.
+    type Prepared: Send;
+    /// Work to do away from the lock, and its result.
+    type Job: Send;
+    type Done: Send;
+
+    fn connect(&mut self) -> ClientId;
+    fn disconnect(&mut self, client: ClientId);
+    fn notifications(&mut self) -> Vec<(ClientId, String)>;
+    fn prepare(text: &str) -> Option<Self::Prepared>;
+    /// Answer at once, or hand back work.
+    fn begin(&mut self, client: ClientId, text: &str, prepared: Option<Self::Prepared>) -> Begun<Self::Job>;
+    fn compile(job: Self::Job) -> Self::Done;
+    /// Work to do again because the service changed while it was being done.
+    fn retry(&mut self, done: &Self::Done) -> Option<Self::Job>;
+    fn finish(&mut self, done: Self::Done) -> Vec<String>;
+    /// Read what a request will need, such as sample files, without the service locked.
+    fn preload(_service: &Mutex<Self>, _text: &str) {}
+}
+
+pub enum Begun<J> {
+    Replies(Vec<String>),
+    Job(J),
+}
+
+impl Service for EngineServer {
+    type Prepared = ();
+    type Job = ();
+    type Done = ();
+
+    fn connect(&mut self) -> ClientId {
+        EngineServer::connect(self)
+    }
+    fn disconnect(&mut self, client: ClientId) {
+        EngineServer::disconnect(self, client);
+    }
+    fn notifications(&mut self) -> Vec<(ClientId, String)> {
+        EngineServer::notifications(self)
+    }
+    fn prepare(_: &str) -> Option<()> {
+        None
+    }
+    fn begin(&mut self, client: ClientId, text: &str, _: Option<()>) -> Begun<()> {
+        Begun::Replies(self.handle(client, text))
+    }
+    fn compile(_: ()) {}
+    fn retry(&mut self, _: &()) -> Option<()> {
+        None
+    }
+    fn finish(&mut self, _: ()) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+impl Service for LiveServer {
+    type Prepared = ParsedEval;
+    type Job = Box<niminal_live::CompileTicket>;
+    type Done = CompiledTicket;
+
+    fn connect(&mut self) -> ClientId {
+        LiveServer::connect(self)
+    }
+    fn disconnect(&mut self, client: ClientId) {
+        LiveServer::disconnect(self, client);
+    }
+    fn notifications(&mut self) -> Vec<(ClientId, String)> {
+        LiveServer::notifications(self)
+    }
+    fn prepare(text: &str) -> Option<ParsedEval> {
+        LiveServer::prepare_eval(text)
+    }
+    fn begin(&mut self, client: ClientId, text: &str, prepared: Option<ParsedEval>) -> Begun<Self::Job> {
+        match self.begin_prepared(client, text, prepared) {
+            Request::Replies(replies) => Begun::Replies(replies),
+            Request::Compile(ticket) => Begun::Job(ticket),
+        }
+    }
+    fn compile(job: Self::Job) -> CompiledTicket {
+        job.compile()
+    }
+    fn retry(&mut self, done: &CompiledTicket) -> Option<Self::Job> {
+        LiveServer::retry(self, done).map(Box::new)
+    }
+    fn finish(&mut self, done: CompiledTicket) -> Vec<String> {
+        LiveServer::finish(self, done)
+    }
+    fn preload(service: &Mutex<Self>, text: &str) {
+        let Ok(request) = serde_json::from_str::<Value>(text) else { return };
+        if request.get("method").and_then(Value::as_str) != Some("eval") {
+            return;
+        }
+        let params = &request["params"];
+        let Some(source) = params.get("source").and_then(Value::as_str) else { return };
+        let samples = {
+            let mut s = lock(service);
+            if let Some(dir) = params.get("dir").and_then(Value::as_str) {
+                s.live_mut().set_sample_dir(std::path::Path::new(dir));
+            }
+            s.live().sample_files().clone()
+        };
+        samples.warm(source);
+        // files named by modules the code uses
+        let dir = params.get("dir").and_then(Value::as_str).unwrap_or(".");
+        if let Ok(expanded) = niminal_lang::expand(source, std::path::Path::new(dir)) {
+            samples.warm(&expanded.text[expanded.root_len..]);
+        }
+    }
+}
+
+/// Lock a service, carrying on if another thread panicked while holding it.
+pub fn lock<S>(service: &Mutex<S>) -> std::sync::MutexGuard<'_, S> {
+    service.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub struct Server {
     port: u16,
     stop: Arc<AtomicBool>,
@@ -51,7 +169,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn start(daemon: Shared, config: ServerConfig) -> Result<Server, String> {
+    pub fn start<S: Service>(daemon: Arc<Mutex<S>>, config: ServerConfig) -> Result<Server, String> {
         if !config.listen.is_loopback() {
             return Err(format!(
                 "won't listen on {}: connections from other machines need a token and TLS, and TLS isn't supported yet",
@@ -143,7 +261,7 @@ impl Drop for Server {
     }
 }
 
-fn serve(stream: TcpStream, daemon: Shared, outboxes: Outboxes, token: Option<String>, stop: Arc<AtomicBool>) {
+fn serve<S: Service>(stream: TcpStream, daemon: Arc<Mutex<S>>, outboxes: Outboxes, token: Option<String>, stop: Arc<AtomicBool>) {
     // A client that connects and says nothing must not hold this thread for ever.
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_nodelay(true);
@@ -198,49 +316,26 @@ fn serve(stream: TcpStream, daemon: Shared, outboxes: Outboxes, token: Option<St
 }
 
 /// Answer one message. Source parsing, sample loading and compilation happen
-/// outside the render worker's control lock; only snapshots and acceptance take it.
-fn request(daemon: &Shared, client: ClientId, text: &str) -> Vec<String> {
-    preload_samples(daemon, text);
-    let parsed = niminal_daemon::Daemon::prepare_eval(text);
-    let begun = lock(daemon).begin_prepared(client, text, parsed);
+/// outside the service's lock; only snapshots and acceptance take it.
+fn request<S: Service>(service: &Arc<Mutex<S>>, client: ClientId, text: &str) -> Vec<String> {
+    S::preload(service, text);
+    let prepared = S::prepare(text);
+    let begun = lock(service).begin(client, text, prepared);
     match begun {
-        Request::Replies(replies) => replies,
-        Request::Compile(ticket) => {
-            let mut compiled = ticket.compile();
+        Begun::Replies(replies) => replies,
+        Begun::Job(job) => {
+            let mut done = S::compile(job);
             loop {
                 let retry = {
-                    let mut d = lock(daemon);
-                    match d.retry(&compiled) {
+                    let mut s = lock(service);
+                    match s.retry(&done) {
                         Some(job) => job,
-                        None => return d.finish(compiled),
+                        None => return s.finish(done),
                     }
                 };
-                compiled = retry.compile();
+                done = S::compile(retry);
             }
         }
-    }
-}
-
-/// Warm declared sample files without holding the render worker's control lock.
-fn preload_samples(daemon: &Shared, request: &str) {
-    let Ok(request) = serde_json::from_str::<Value>(request) else { return };
-    if request.get("method").and_then(Value::as_str) != Some("eval") {
-        return;
-    }
-    let params = &request["params"];
-    let Some(source) = params.get("source").and_then(Value::as_str) else { return };
-    let samples = {
-        let mut d = lock(daemon);
-        if let Some(dir) = params.get("dir").and_then(Value::as_str) {
-            d.session_mut().set_sample_dir(std::path::Path::new(dir));
-        }
-        d.session().sample_files().clone()
-    };
-    samples.warm(source);
-    // files named by modules the code uses
-    let dir = params.get("dir").and_then(Value::as_str).unwrap_or(".");
-    if let Ok(expanded) = niminal_lang::expand(source, std::path::Path::new(dir)) {
-        samples.warm(&expanded.text[expanded.root_len..]);
     }
 }
 
@@ -263,6 +358,8 @@ fn authenticate(text: &str, token: &str) -> Result<(), String> {
 pub struct Client {
     ws: WebSocket<TcpStream>,
     next_id: u64,
+    /// Notifications that arrived while waiting for a reply.
+    notifications: Vec<Value>,
 }
 
 impl Client {
@@ -270,7 +367,7 @@ impl Client {
         let stream = TcpStream::connect(("127.0.0.1", port)).map_err(|e| format!("can't reach the daemon on port {port}: {e}"))?;
         stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
         let (ws, _) = tungstenite::client(format!("ws://127.0.0.1:{port}/"), stream).map_err(|e| e.to_string())?;
-        let mut client = Client { ws, next_id: 1 };
+        let mut client = Client { ws, next_id: 1, notifications: Vec::new() };
         let mut params = json!({"protocol": niminal_daemon::PROTOCOL_VERSION, "client": "niminal-cli"});
         if let Some(t) = token {
             params["token"] = json!(t);
@@ -294,7 +391,15 @@ impl Client {
                     None => Ok(message["result"].clone()),
                 });
             }
+            if message.get("method").is_some() {
+                self.notifications.push(message);
+            }
         }
+    }
+
+    /// The notifications that arrived while waiting for replies, oldest first.
+    pub fn take_notifications(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.notifications)
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {

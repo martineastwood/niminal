@@ -2,7 +2,7 @@ use crate::common::*;
 
 #[test]
 fn pitch_bend_moves_a_held_note_and_the_next_one_starts_bent() {
-    use niminal_daemon::Expression::Bend;
+    use niminal_live::Expression::Bend;
     let mut s = session();
     s.eval(EXPRESSIVE, Some("now")).unwrap();
     s.key_input(1, 69, 100);
@@ -33,7 +33,7 @@ fn pitch_bend_moves_a_held_note_and_the_next_one_starts_bent() {
 
 #[test]
 fn pressure_changes_the_level_of_the_note_it_is_on() {
-    use niminal_daemon::Expression::Pressure;
+    use niminal_live::Expression::Pressure;
     let mut s = session();
     s.eval(EXPRESSIVE, Some("now")).unwrap();
     s.key_input(1, 69, 100);
@@ -55,7 +55,7 @@ fn pressure_changes_the_level_of_the_note_it_is_on() {
 
 #[test]
 fn the_sustain_pedal_holds_notes_whose_keys_have_come_up() {
-    use niminal_daemon::Expression::Sustain;
+    use niminal_live::Expression::Sustain;
     let mut s = session();
     s.eval(EXPRESSIVE, Some("now")).unwrap();
     s.expression_input(1, Sustain, 1.0, None);
@@ -85,7 +85,7 @@ fn the_sustain_pedal_holds_notes_whose_keys_have_come_up() {
 
 #[test]
 fn expression_replays_to_the_same_audio() {
-    use niminal_daemon::Expression::{Bend, Pressure, Sustain};
+    use niminal_live::Expression::{Bend, Pressure, Sustain};
     let mut s = session();
     s.eval(EXPRESSIVE, Some("now")).unwrap();
     let mut original = run(&mut s, 1000);
@@ -99,11 +99,10 @@ fn expression_replays_to_the_same_audio() {
     original.extend(run(&mut s, 5000));
     s.expression_input(1, Sustain, 0.0, None);
     original.extend(run(&mut s, 9000));
-    let replayed = Session::replay(
+    let replayed = niminal_daemon::Session::replay(
         SR,
         Layout::Mono,
-        QuantizeDefaults::default(),
-        s.log(),
+        &s.log(),
         original.len() as u64,
         false,
     );

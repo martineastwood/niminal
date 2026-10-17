@@ -1,0 +1,252 @@
+//! Changes of definitions and of the transport, waiting for the sample they land at.
+//!
+//! Each is compiled when it is sent, on top of the changes waiting before it, and the mixer for the
+//! program it makes is built then too, so that landing only has to move things into place. A change that
+//! is taken back, or put in front of others, makes the ones after it compile again.
+
+use super::*;
+
+/// What a change sent to the engine is allowed to say.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum What {
+    /// Instruments, tracks, effects, buses, controls, tables, buffers, functions: anything defined except the
+    /// tempo and meter.
+    Definitions,
+    /// The tempo and meter.
+    Timing,
+    /// `new`.
+    Forget,
+}
+
+/// Who sent a change, and what it was told.
+#[derive(Clone, Default)]
+pub(super) struct Meta {
+    pub client: Option<ClientId>,
+    pub tag: Option<String>,
+    /// Given in beats (`Some(false)`) or bars (`Some(true)`), so it moves when the tempo or meter does.
+    pub musical: Option<bool>,
+    /// This point is bar 1.
+    pub origin: bool,
+}
+
+/// A change that has compiled and is waiting to land.
+pub(super) struct Pending {
+    pub id: u64,
+    pub lands_at: u64,
+    /// What was sent, with the modules it uses joined in, so that it can be compiled again.
+    pub snippet: String,
+    pub statements: Vec<Statement>,
+    /// The project once this has landed.
+    pub project: Project,
+    /// The new program and a mixer built for it, if definitions changed.
+    pub program: Option<Arc<Program>>,
+    pub mixer: Option<Mixer>,
+    pub meta: Meta,
+}
+
+/// The modules joined into a change, and the code as it was sent, so a problem in a module can be pointed
+/// at the line that uses it.
+struct Uses {
+    expanded: Expanded,
+    sent: String,
+}
+
+impl Uses {
+    fn locate(&self, problems: Vec<Problem>) -> Vec<Problem> {
+        problems.into_iter().map(|p| p.in_module(&self.expanded, &self.sent)).collect()
+    }
+}
+
+impl Session {
+    /// Queue a change to land at sample `at` (at once if that has passed). It is read and compiled now: if
+    /// anything is wrong nothing changes. Returns its id.
+    pub(super) fn queue_change(
+        &mut self,
+        source: &str,
+        dir: Option<&str>,
+        at: u64,
+        what: What,
+        meta: Meta,
+    ) -> Result<u64, Vec<Problem>> {
+        let (snippet, statements, uses) = self.read_change(source, dir, what)?;
+        let at = at.max(self.clock);
+        let index = self.pending.partition_point(|p| p.lands_at <= at);
+        let base = match index.checked_sub(1) {
+            Some(i) => self.pending[i].project.clone(),
+            None => self.project.clone(),
+        };
+        let id = self.next_id;
+        let pending = self
+            .prepare(id, at, snippet, statements, &base, meta)
+            .map_err(|problems| match &uses {
+                Some(u) => u.locate(problems),
+                None => problems,
+            })?;
+        self.next_id += 1;
+        self.pending.insert(index, pending);
+        // the changes after it were compiled without it
+        self.recompile_from(index + 1);
+        self.version += 1;
+        Ok(id)
+    }
+
+    /// Queue a change that only says that a point is bar 1.
+    pub(super) fn queue_origin(&mut self, at: u64, meta: Meta) -> Result<u64, Vec<Problem>> {
+        let at = at.max(self.clock);
+        let index = self.pending.partition_point(|p| p.lands_at <= at);
+        let project = match index.checked_sub(1) {
+            Some(i) => self.pending[i].project.clone(),
+            None => self.project.clone(),
+        };
+        let id = self.next_id;
+        self.next_id += 1;
+        self.pending.insert(
+            index,
+            Pending { id, lands_at: at, snippet: String::new(), statements: Vec::new(), project, program: None, mixer: None, meta },
+        );
+        self.version += 1;
+        Ok(id)
+    }
+
+    /// Take a waiting change back. What was waiting after it is compiled again.
+    pub(super) fn cancel_change(&mut self, id: u64) -> bool {
+        let Some(index) = self.pending.iter().position(|p| p.id == id) else {
+            return false;
+        };
+        self.pending.remove(index);
+        self.recompile_from(index);
+        self.version += 1;
+        true
+    }
+
+    /// Read the source: join in the modules it uses, split it into statements and check it says only what
+    /// `what` allows.
+    fn read_change(
+        &self,
+        source: &str,
+        dir: Option<&str>,
+        what: What,
+    ) -> Result<(String, Vec<Statement>, Option<Uses>), Vec<Problem>> {
+        let (text, uses) = match niminal_lang::expand(source, std::path::Path::new(dir.unwrap_or("."))) {
+            Ok(expanded) => (expanded.text.clone(), Some(Uses { expanded, sent: source.to_string() })),
+            Err(d) => return Err(vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))]),
+        };
+        let statements = analyze(&text).map_err(|d| {
+            let problems = vec![Problem::from_diagnostic(&d, &text, Located::Snippet(d.span))];
+            match &uses {
+                Some(u) => u.locate(problems),
+                None => problems,
+            }
+        })?;
+        if statements.is_empty() {
+            return Err(vec![Problem::plain("there is nothing to define")]);
+        }
+        for statement in &statements {
+            let kind = statement.key().map(|k| k.split(':').next().unwrap_or(k));
+            let allowed = match what {
+                What::Definitions => kind.is_some_and(|k| !matches!(k, "tempo" | "meter")),
+                What::Timing => matches!(kind, Some("tempo" | "meter")),
+                What::Forget => statement.clears(),
+            };
+            if !allowed {
+                let mut problem = Problem::plain(format!(
+                    "`{}` can't be sent here: `define` takes definitions such as instruments, tracks, effects, buses and controls, and `transport` the tempo and meter",
+                    first_line(&statement.text)
+                ));
+                problem.span = Some(niminal_lang::Span::new(statement.offset, statement.offset + statement.text.len()));
+                return Err(match &uses {
+                    Some(u) => u.locate(vec![problem]),
+                    None => vec![problem],
+                });
+            }
+        }
+        Ok((text, statements, uses))
+    }
+
+    /// Compile `statements` on top of the project `base`, and build a mixer for the result.
+    fn prepare(
+        &self,
+        id: u64,
+        lands_at: u64,
+        snippet: String,
+        statements: Vec<Statement>,
+        base: &Project,
+        meta: Meta,
+    ) -> Result<Pending, Vec<Problem>> {
+        let definitions: Vec<&Statement> = statements.iter().filter(|s| s.kind() == StatementKind::Definition).collect();
+        let delta: Vec<Entry> = definitions
+            .iter()
+            .map(|s| Entry { key: s.key().expect("definitions have keys").to_string(), text: s.text.clone() })
+            .collect();
+        let from_snippet: HashMap<String, usize> =
+            definitions.iter().map(|s| (s.key().expect("definitions have keys").to_string(), s.offset)).collect();
+
+        // `new` forgets everything sent before this snippet; the output layout stays, since it can only be
+        // chosen when the daemon starts.
+        let clears = statements.iter().any(|s| s.clears());
+        let fresh = Project { entries: base.entries.iter().filter(|e| e.key == "config").cloned().collect() };
+        let base = if clears { &fresh } else { base };
+        let mut project = base.clone();
+        project.apply(&delta);
+
+        let (full, map) = project.source(&from_snippet, &[]);
+        let program = compile_with(&full, &options(self.layout, &self.samples)).map_err(|diags| {
+            diags.iter().map(|d| Problem::from_diagnostic(d, &snippet, map.locate(d.span))).collect::<Vec<_>>()
+        })?;
+        if program.master != self.layout {
+            return Err(vec![Problem::plain(format!(
+                "this engine outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
+                self.layout, program.master
+            ))]);
+        }
+        let has_definitions = !definitions.is_empty() || clears;
+        let mixer = has_definitions.then(|| program.mixer(self.sample_rate));
+        Ok(Pending {
+            id,
+            lands_at,
+            snippet,
+            statements,
+            project,
+            program: has_definitions.then(|| Arc::new(program)),
+            mixer,
+            meta,
+        })
+    }
+
+    /// Compile the waiting changes from `index` on again, each on the one before. One that no longer
+    /// compiles because of what came before it is dropped, with a notice.
+    fn recompile_from(&mut self, index: usize) {
+        let mut base = match index.checked_sub(1) {
+            Some(i) => self.pending[i].project.clone(),
+            None => self.project.clone(),
+        };
+        let rest: Vec<Pending> = self.pending.drain(index..).collect();
+        for p in rest {
+            let Pending { id, lands_at, snippet, statements, meta, .. } = p;
+            match self.prepare(id, lands_at, snippet, statements, &base, meta) {
+                Ok(next) => {
+                    base = next.project.clone();
+                    self.pending.push(next);
+                }
+                Err(problems) => {
+                    let why = problems.first().map_or("it no longer compiles", |p| p.message.as_str());
+                    self.notify(format!("change {id} was dropped: {why}"));
+                }
+            }
+        }
+    }
+}
+
+/// How code is compiled here.
+pub(super) fn options(layout: Layout, samples: &Samples) -> CompileOptions {
+    CompileOptions { default_layout: layout, samples: samples.clone() }
+}
+
+pub(super) fn first_line(text: &str) -> String {
+    let line = text.lines().next().unwrap_or("").trim();
+    if line.chars().count() > 60 {
+        format!("{}...", line.chars().take(57).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}

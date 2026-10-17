@@ -1,26 +1,16 @@
-//! The record of everything sent to a session and when, in samples. Replaying
-//! it into a fresh session gives back the same audio.
+//! The record of everything sent to the engine and when, in samples. Replaying it into a fresh engine
+//! gives back the same audio.
 
 use serde::{Deserialize, Serialize};
+
+use crate::events::Op;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogInput {
-    Eval {
-        source: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        quantize: Option<String>,
-    },
-    Cancel {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u64>,
-    },
-    Panic,
-    /// A batch of events a client sent, with every time resolved to a sample.
-    Send {
-        client: u64,
-        ops: Vec<crate::events::Op>,
-    },
+    /// A batch of events a client sent, with every time resolved to a sample (or kept as a position in beats
+    /// or bars, which the transport resolves the same way again).
+    Send { client: u64, ops: Vec<Op> },
     /// A client took back its waiting events.
     CancelEvents {
         client: u64,
@@ -29,36 +19,12 @@ pub enum LogInput {
         from: u64,
         release: bool,
     },
-    /// A key on a MIDI keyboard: pressed with `velocity` from 1, or let go with 0.
-    Key {
-        channel: u8,
-        note: u8,
-        velocity: u8,
-    },
-    /// A keyboard's pitch bend (in semitones), pressure (0 to 1, for one key if `note` is given) or sustain pedal.
-    Expression {
-        channel: u8,
-        what: Expression,
-        value: f64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        note: Option<u8>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Expression {
-    Bend,
-    Pressure,
-    /// MPE's third dimension (CC 74), 0 to 1.
-    Slide,
-    /// Down for a value of 0.5 or more.
-    Sustain,
+    Panic,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogEntry {
-    /// The session clock when it was applied.
+    /// The engine clock when it was applied.
     pub sample: u64,
     #[serde(flatten)]
     pub input: LogInput,
@@ -73,10 +39,7 @@ pub fn to_lines(log: &[LogEntry]) -> String {
 }
 
 pub fn from_lines(text: &str) -> Result<Vec<LogEntry>, serde_json::Error> {
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(serde_json::from_str)
-        .collect()
+    text.lines().filter(|l| !l.trim().is_empty()).map(serde_json::from_str).collect()
 }
 
 #[cfg(test)]
@@ -86,25 +49,15 @@ mod tests {
     #[test]
     fn logs_round_trip_as_lines() {
         let log = vec![
-            LogEntry {
-                sample: 0,
-                input: LogInput::Eval {
-                    source: "hush".into(),
-                    quantize: Some("now".into()),
-                },
-            },
-            LogEntry {
-                sample: 96_000,
-                input: LogInput::Panic,
-            },
+            LogEntry { sample: 0, input: LogInput::Panic },
             LogEntry {
                 sample: 96_001,
-                input: LogInput::Cancel { id: None },
+                input: LogInput::CancelEvents { client: 1, tag: Some("a".into()), from: 5, release: false },
             },
         ];
         let text = to_lines(&log);
-        assert_eq!(text.lines().count(), 3);
-        assert!(text.lines().next().unwrap().contains("\"eval\""));
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.lines().next().unwrap().contains("\"panic\""));
         assert_eq!(from_lines(&text).unwrap(), log);
         assert!(from_lines("{nope").is_err());
     }

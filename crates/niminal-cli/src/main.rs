@@ -6,11 +6,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use clap::{Args, Parser, Subcommand};
-use niminal_cli::audio::{NullClock, Output, Shared, lock};
+use niminal_cli::audio::{NullClock, Output, Shared};
 use niminal_cli::live::{DEFAULT_SAMPLE_RATE, layout_for, render_error, render_problems, replay};
 use niminal_cli::render::{End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav};
-use niminal_cli::server::{Client, Server, ServerConfig};
-use niminal_daemon::{Daemon, Session, from_lines, to_lines};
+use niminal_cli::input::LiveShared;
+use niminal_cli::link::WsLink;
+use niminal_cli::server::{Client, Server, ServerConfig, lock};
+use niminal_daemon::{EngineServer, Session, from_lines, to_lines};
+use niminal_live::{Live, LiveServer};
 use niminal_score::ScoreFile;
 use serde_json::json;
 
@@ -71,6 +74,13 @@ struct DaemonArgs {
     file: Option<PathBuf>,
     #[arg(long, default_value_t = 7400)]
     port: u16,
+    /// The port of the engine, which the sequencer on `--port` plays through. Other programs can send the
+    /// engine events here, as the sequencer does.
+    #[arg(long, default_value_t = 7401)]
+    engine_port: u16,
+    /// Run only the engine, a sound server that takes timestamped events, with no sequencer.
+    #[arg(long)]
+    engine_only: bool,
     /// Output channels: 1, 2 (stereo), 4, 6 (5.1) or 8 (7.1).
     #[arg(long, default_value_t = 2)]
     channels: u16,
@@ -364,14 +374,17 @@ fn run_replay(log: &Path, out: &Path, channels: u16, no_limiter: bool) -> Result
 }
 
 fn run_daemon(args: DaemonArgs) -> Result<(), String> {
-    let DaemonArgs { file, port, channels, sample_rate, no_audio, log, token, listen, midi, osc_port, audio_input, .. } = args;
+    let DaemonArgs { file, port, engine_port, engine_only, channels, sample_rate, no_audio, log, token, listen, midi, osc_port, audio_input, .. } = args;
     let (file, log, midi) = (file.as_deref(), log.as_deref(), midi.as_deref());
+    if engine_only && (file.is_some() || midi.is_some() || osc_port.is_some()) {
+        return Err("error: a project, MIDI and OSC control are for the sequencer; leave them out with --engine-only".into());
+    }
     let layout = layout_for(channels)?;
     let output = if no_audio { None } else { Some(Output::open(channels, sample_rate)?) };
     let rate = output.as_ref().map(Output::sample_rate).or(sample_rate).unwrap_or(DEFAULT_SAMPLE_RATE);
     let where_to = output.as_ref().map_or_else(|| "no audio output".to_string(), |o| format!("audio to {}", o.name()));
 
-    let daemon: Shared = Arc::new(Mutex::new(Daemon::new(Session::new(rate as f32, layout))));
+    let engine: Shared = Arc::new(Mutex::new(EngineServer::new(Session::new(rate as f32, layout))));
     let health = output.as_ref().map(Output::health);
     // the default input device, if asked for, feeds tracks that read `input(..)`
     let (mut listening, mut input) = (None, None);
@@ -387,36 +400,57 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
     }
     let _ = &listening;
     let mut audio = match output {
-        Some(o) => Some(o.start(daemon.clone(), input)?),
+        Some(o) => Some(o.start(engine.clone(), input)?),
         None => None,
     };
-    let _clock = no_audio.then(|| NullClock::start(daemon.clone(), 1.0));
-    let server = Server::start(daemon.clone(), ServerConfig { listen, port, token })?;
-    println!("niminal daemon listening on ws://{listen}:{} ({layout}, {rate} Hz, {where_to})", server.port());
-    let _midi = match midi {
-        Some(filter) => {
-            let (connections, names) = niminal_cli::input::start_midi(&daemon, filter)?;
-            println!("MIDI control from {}", names.join(", "));
-            Some(connections)
-        }
-        None => None,
-    };
-    let _osc = match osc_port {
-        Some(port) => {
-            let osc = niminal_cli::input::OscInput::start(daemon.clone(), port)?;
-            println!("OSC control on udp://127.0.0.1:{}", osc.port());
-            Some(osc)
-        }
-        None => None,
-    };
+    let _clock = no_audio.then(|| NullClock::start(engine.clone(), 1.0));
+    let engine_server = Server::start(engine.clone(), ServerConfig { listen, port: if engine_only { port } else { engine_port }, token: token.clone() })?;
+    println!("niminal engine listening on ws://{listen}:{} ({layout}, {rate} Hz, {where_to})", engine_server.port());
 
-    // signals the project sends over OSC (`osc_out`) go out whenever the daemon runs
-    let _osc_out = niminal_cli::osc_out::OscOutput::start(daemon.clone())?;
+    // signals the project sends over OSC (`osc_out`) go out whenever the engine runs
+    let _osc_out = niminal_cli::osc_out::OscOutput::start(engine.clone())?;
 
-    let mut watched = None;
-    if let Some(path) = file {
-        watched = Some(load(&daemon, path, Some("now")));
+    // the sequencer plays through the engine, over its own API like any other client
+    let (mut sequencer, mut watched) = (None, None);
+    let (mut _server, mut _ticker, mut _midi, mut _osc) = (None, None, None, None);
+    if !engine_only {
+        let link = WsLink::connect(engine_server.port(), token.as_deref())?;
+        let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(Live::new(Box::new(link), rate as f32, layout))));
+        let server = Server::start(live.clone(), ServerConfig { listen, port, token })?;
+        println!("niminal daemon listening on ws://{listen}:{} (sequencer for the engine on port {})", server.port(), engine_server.port());
+        // keep the sequencer working ahead of the engine's clock
+        _ticker = Some(niminal_cli::worker::Worker::spawn({
+            let live = live.clone();
+            move |stop| {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    lock(&live).live_mut().advance();
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }));
+        _midi = match midi {
+            Some(filter) => {
+                let (connections, names) = niminal_cli::input::start_midi(&live, filter)?;
+                println!("MIDI control from {}", names.join(", "));
+                Some(connections)
+            }
+            None => None,
+        };
+        _osc = match osc_port {
+            Some(port) => {
+                let osc = niminal_cli::input::OscInput::start(live.clone(), port)?;
+                println!("OSC control on udp://127.0.0.1:{}", osc.port());
+                Some(osc)
+            }
+            None => None,
+        };
+        if let Some(path) = file {
+            watched = Some(load(&live, path, Some("now")));
+        }
+        _server = Some(server);
+        sequencer = Some(live);
     }
+
     let mut written = (0, 0);
     let mut reported = (0, 0, 0, 0, 0);
     let mut last_reopen = std::time::Instant::now();
@@ -459,19 +493,19 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
                 last_report = std::time::Instant::now();
             }
         }
-        if let (Some(path), Some((files, last))) = (file, watched.as_mut()) {
+        if let (Some(live), Some(path), Some((files, last))) = (&sequencer, file, watched.as_mut()) {
             let modified = newest(files);
             if modified.is_some() && modified != *last {
-                (*files, *last) = load(&daemon, path, None);
+                (*files, *last) = load(live, path, None);
             }
         }
         if let Some(path) = log {
             // format under the lock, write to disk without it
             let text = {
-                let mut d = lock(&daemon);
-                d.session_mut().sync_realtime();
-                let entries = d.session().log();
-                let version = d.session().log_version();
+                let mut e = niminal_cli::audio::lock(&engine);
+                e.session_mut().sync_realtime();
+                let entries = e.session().log();
+                let version = e.session().log_version();
                 (version != written).then(|| {
                     written = version;
                     to_lines(entries)
@@ -491,7 +525,7 @@ fn newest(files: &[PathBuf]) -> Option<SystemTime> {
 
 /// Evaluate a project file, reporting what happened. Returns the files it is
 /// made of and when they were last changed, to notice when any changes again.
-fn load(daemon: &Shared, path: &Path, quantize: Option<&str>) -> (Vec<PathBuf>, Option<SystemTime>) {
+fn load(daemon: &LiveShared, path: &Path, quantize: Option<&str>) -> (Vec<PathBuf>, Option<SystemTime>) {
     let mut files = vec![path.to_path_buf()];
     let name = path.display().to_string();
     let source = match read(path) {
@@ -502,24 +536,24 @@ fn load(daemon: &Shared, path: &Path, quantize: Option<&str>) -> (Vec<PathBuf>, 
         }
     };
     let dir = path.parent().unwrap_or(Path::new("."));
-    let parsed = niminal_daemon::ParsedEval::from_dir(&source, dir, quantize);
+    let parsed = niminal_live::ParsedEval::from_dir(&source, dir, quantize);
     files.extend(parsed.module_files());
     let modified = newest(&files);
     let begun = {
         let mut d = lock(daemon);
-        d.session_mut().set_sample_dir(path.parent().unwrap_or(Path::new(".")));
-        d.session_mut().begin_parsed(parsed)
+        d.live_mut().set_sample_dir(path.parent().unwrap_or(Path::new(".")));
+        d.live_mut().begin_parsed(parsed)
     };
     let result = match begun {
-        niminal_daemon::Begin::Done(result) => result,
-        niminal_daemon::Begin::Job(job) => {
+        niminal_live::Begin::Done(result) => result,
+        niminal_live::Begin::Job(job) => {
             let mut done = job.compile();
             loop {
                 let retry = {
                     let mut d = lock(daemon);
-                    match d.session().retry_eval(&done) {
+                    match d.live().retry_eval(&done) {
                         Some(job) => job,
-                        None => break d.session_mut().finish_eval(done),
+                        None => break d.live_mut().finish_eval(done),
                     }
                 };
                 done = retry.compile();

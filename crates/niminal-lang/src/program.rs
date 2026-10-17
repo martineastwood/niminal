@@ -219,6 +219,10 @@ pub struct QuantizeConfig {
 
 #[derive(Clone)]
 pub struct Program {
+    /// The text it was compiled from.
+    pub source: String,
+    /// Where the sample files it names were looked for.
+    pub samples: crate::sample::Samples,
     pub quantize: QuantizeConfig,
     /// Every signal the project sends over OSC.
     pub taps: Vec<OscTap>,

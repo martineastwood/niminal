@@ -1,11 +1,11 @@
 ---
-title: Daemon protocol
-description: JSON-RPC 2.0 over WebSocket for live evaluation, streaming events, and session state.
+title: Sequencer protocol
+description: JSON-RPC 2.0 over WebSocket for live evaluation, clips and scenes, and the state of a live session.
 ---
 
-The **daemon** (`niminal daemon`) exposes a single session to multiple clients over **WebSocket**. Messages are **JSON-RPC 2.0** text frames. This is separate from **[`niminal lsp`](/reference/editor/)**, which speaks the Language Server Protocol on stdio for editing only.
+`niminal daemon` runs two parts. The **engine** is a sound server that plays timestamped events: its API is the [Engine API](/reference/engine-api/), on port 7401. The **live sequencer** is the text-based Ableton: it takes code, clips, scenes and quantized changes on port 7400, and plays them by sending the engine events over that same API, like any other client. This page is the sequencer's protocol, which editors such as VS Code speak. It is separate from **[`niminal lsp`](/reference/editor/)**, which speaks the Language Server Protocol on stdio for editing only.
 
-Default URL: `ws://127.0.0.1:7400/` (see `--port` and `--listen` on the daemon).
+Both are **JSON-RPC 2.0** text frames over **WebSocket**. Default URL of the sequencer: `ws://127.0.0.1:7400/` (see `--port` and `--listen` on the daemon).
 
 ## Connection
 
@@ -15,7 +15,7 @@ Default URL: `ws://127.0.0.1:7400/` (see `--port` and `--listen` on the daemon).
 4. Subscribe to topics if you want push updates (optional).
 5. Send requests with an **`id`**; the daemon replies with the same **`id`**. Requests **without** an `id` are notifications and get **no reply** (used for `panic`).
 
-All connected clients share **one session**. Disconnecting a client does not stop playback.
+All connected clients share **one session**. Disconnecting a client does not stop playback. A program that wants to send timed events rather than code should talk to the [engine](/reference/engine-api/) instead, or as well.
 
 Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sources).
 
@@ -129,80 +129,9 @@ Snapshot of the session (no subscription needed).
 - **`transport`** — `sample`, `seconds`, `bar`, `beat`, `bpm`, `voices`, `pending` (count)
 - **`pending`** — array of pending changes (same fields as `pending` notifications)
 - **`sample_rate`**, **`channels`**
-- **`realtime`** — optional counters (`late_events`, `starved_frames`, `capacity_drops`, `control_drops`, `deadline_misses`, `max_render_micros`, …)
-- **`controls`** — each `ctl` and track parameter (named `track::param`): `name`, `value`, `target`, `unit` (db shown in dB)
-- **`instruments`** — each instrument's `name` and `params` (`name`, `unit`, `default`, `range`)
-- **`buses`** — bus names
-- **`clients`** — each connected client that has something going: `id`, `voices` (the ids of its held notes) and `waiting` (how many of its events are still waiting)
+- **`realtime`**, **`controls`**, **`instruments`** — as the [engine reports them](/reference/engine-api/#status)
 - **`scenes`**, **`clips`** — defined names
 - **`tracks`** — `name`, `clip`, `muted`, `soloed`
-
-### `events.send`
-
-One batched method for every timed thing a client can do. The whole batch is checked before any of it is queued.
-
-```json
-{ "method": "events.send", "params": { "events": [
-  { "op": "note", "target": "lead", "at": "64beat", "dur": "1/2beat", "args": { "freq": "c4" } },
-  { "op": "control", "name": "cutoff", "at": 96000, "value": 2, "unit": "khz", "glide": "50ms" },
-  { "op": "track", "name": "pad", "at": "now", "args": { "cut": "800hz" } }
-] } }
-```
-
-**`at`** is a whole number (an absolute sample), `"now"` (as soon as possible) or a time with a unit (`"32beat"`, `"8.5bar"`, `"12.25sec"`): a position on the transport, measured from its bar origin. `dur` and `glide` are durations (`"1/2beat"`, `"250ms"`).
-
-| `op` | Fields | Meaning |
-| --- | --- | --- |
-| `note` | `target`, `at`, optional `args`, `dur`, `id`, `tag` | Play a note on a track or instrument. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
-| `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide` the parameter moves in a straight line to its new value. |
-| `off` | `id`, `at` | Release a note, so its envelope runs its release stage. An `off` before the note starts makes it a short blip. |
-| `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
-| `track` | `name`, `at`, `args`, optional `glide` | Set parameters of a track (what a clip lane like `cut:` sets). `glide` defaults to the parameter's own smoothing. Planned into prepared audio like notes, so a lane can move a parameter many times a second. |
-
-An **`id`** is a whole number the client picks, and it belongs to that connection: another client can use the same one. Using an id that is still sounding, or one that was never opened or has been let go of, fails the batch. Because the client picks it, a `note`, a `set` and an `off` can go in one batch with no round trip. When a client disconnects its held notes are released and its notes still waiting never sound.
-
-| `define` | `source`, `at`, optional `dir` | Compile definitions (`instr`, `track`, effects, `bus`, `ctl`, `config`, tables, buffers, `fn`, `const`, samples) and swap them in at `at`, sample-exactly: the new mixer is built ahead and running notes carry over. Performance statements, clips, scenes and `tempo`/`meter` are an error. Compile problems come back like `eval`'s. `dir` is where sample files and `use` modules are looked for. |
-| `transport` | `at`, any of `bpm`, `meter` (as `"3/4"`), `origin` | Change the tempo or meter, or say that this point is bar 1 (`"origin": true`). A ramp is several of these. |
-| `forget` | `at` | Drop every definition, as `new` does. The output layout is kept. |
-
-**Time and tempo.** The engine owns time: the tempo, the meter and the bar origin live in its transport, so every client resolves `"8bar"` or `"32beat"` the same way. An event given in beats or bars keeps its musical position if the tempo or meter changes before it plays: still-waiting notes, `define`s and the like are moved when the change lands. Events given in samples or seconds never move. `transport` changes themselves keep the time they were given.
-
-Notes, controls and the rest in a batch are checked against the definitions in force at their own time, so a batch can `define` an instrument and play it. If anything in a batch is wrong, a `define` or `transport` queued earlier in the same batch is taken back.
-
-**Result:** `{ "accepted": 3, "late": 0, "first": 4800, "horizon": 8192 }`. `late` counts events whose time had already passed: they sounded at once. `first` is the earliest sample any event resolved to, and `horizon` is the sample up to which the engine has prepared audio.
-
-Anything wrong in the batch → **-32001** and nothing is queued; each entry of **`problems`** has an **`event`** field with the index of the event it is about. A batch that doesn't parse → **-32602**.
-
-### `clock`
-
-Where the engine is in time, for a client that schedules against it.
-
-**Result**
-
-| Field | Meaning |
-| --- | --- |
-| `sample` | The sample the output is at, as the audio callback last said. |
-| `bar`, `beat` | The musical position of `sample`; `beat` counts from 1 in the bar, fractions included. |
-| `bpm`, `beats_per_bar` | The tempo and meter in force at `sample`. |
-| `sample_rate` | |
-| `prepared_until` | The sample up to which audio has been prepared. An event stamped before it is put into prepared audio; later ones are planned when their turn comes. |
-| `lookahead` | How far ahead of the clock the engine prepares, in samples. |
-| `output_latency` | Seconds from the audio callback to the speakers, as the audio API reports it. |
-| `wall_micros` | The Unix time in microseconds at which the audio callback was handed the buffer that starts at `sample`, recorded in the callback beside the clock rather than when the reply is made. `null` before there is an output. With `sample_rate` it maps any sample to the wall clock: `wall_micros + (s - sample) / sample_rate * 1e6`, plus `output_latency` to when it is heard. |
-
-### `events.cancel`
-
-Take back this client's events that are still waiting.
-
-```json
-{ "method": "events.cancel", "params": { "tag": "lead", "from": "64beat", "release": true } }
-```
-
-Any event in an `events.send` batch can carry a **`tag`**, a string of the client's choosing. `events.cancel` drops the waiting events (notes, `set`s, `off`s, `control` and `track` changes) with that tag that are at or after **`from`** (a time as for `at`; default `"now"`). Without `tag` it drops all of this client's waiting events. Other clients' events are never touched. With **`release`: true**, held notes with that tag that are already sounding are also let go of at `from`. A held note whose `off` was taken back is held again.
-
-**Result:** `{ "cancelled": 12, "released": 1 }`
-
-A control change that has already reached the audio thread when the cancel arrives can't be taken back, and isn't counted.
 
 ### Performance API
 
@@ -231,21 +160,19 @@ Typed calls that compile to the same `.nml` source as `eval`, so quantize, the s
 | -32000 | Protocol error (hello, version, token) |
 | -32001 | Rejected — compile/validation failed; see **`data.problems`** |
 
-**Problem object:** `message`, `help`, `line`, `column`, `span` (`start`, `end`), optional `in_definition`, and for `events.send` the `event` index.
+**Problem object:** `message`, `help`, `line`, `column`, `span` (`start`, `end`), optional `in_definition`.
 
-## Evaluation log and replay
+## Logs and replay
 
-With default logging, the daemon writes session input under **`~/.niminal/sessions/`**. Replay offline:
+With default logging, the daemon writes what the **engine** was sent under **`~/.niminal/sessions/`**: every definition, note, parameter change and cancellation, with the samples they were stamped for. That is all it takes to play a live set again, whatever the sequencer was doing. Replay offline:
 
 ```sh
 niminal render --replay ~/.niminal/sessions/<log> --out set.wav --channels 2
 ```
 
-Evaluations, **`events.send`**, MIDI/OSC (when enabled), and related control input are recorded so replay matches live audio.
-
 ## Planned (spec, not in the daemon yet)
 
-The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) also describes **`event.update`**, **`file.put`**, remote TLS, and richer meter streaming. Those are not implemented on the wire today. Clips and scenes are defined with **`clip.define`** / **`scene.define`** (or `eval`), and timed events with **`events.send`**.
+The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) also describes **`event.update`**, **`file.put`**, remote TLS, and richer meter streaming. Those are not implemented on the wire today. Clips and scenes are defined with **`clip.define`** / **`scene.define`** (or `eval`).
 
 ## Minimal client flow
 

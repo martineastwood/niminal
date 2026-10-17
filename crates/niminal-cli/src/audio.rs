@@ -7,16 +7,16 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use niminal_daemon::{AudioInput, Daemon, RealtimeConfig, RealtimeRenderer};
+use niminal_daemon::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
 use niminal_engine::{BLOCK, MAX_CHANNELS};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 /// Control and event preparation share the daemon. DSP owns its state and
 /// communicates through bounded queues; neither rendering nor playback locks it.
-pub type Shared = Arc<Mutex<Daemon>>;
+pub type Shared = Arc<Mutex<EngineServer>>;
 
 /// Lock the daemon, carrying on if another thread panicked while holding it.
-pub fn lock(daemon: &Shared) -> MutexGuard<'_, Daemon> {
+pub fn lock(daemon: &Shared) -> MutexGuard<'_, EngineServer> {
     daemon.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -545,8 +545,8 @@ mod tests {
     #[test]
     fn preparation_carries_on_after_another_thread_panics_holding_the_daemon() {
         let mut session = niminal_daemon::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
-        session.eval("instr tone(freq: hz) { osc(sine, freq) }\ntone(freq: 440hz) for 1beat", Some("now")).unwrap();
-        let daemon: Shared = Arc::new(Mutex::new(Daemon::new(session)));
+        play_tone(&mut session);
+        let daemon: Shared = Arc::new(Mutex::new(EngineServer::new(session)));
         let poisoner = daemon.clone();
         let _ = thread::spawn(move || { let _guard = poisoner.lock().unwrap(); panic!("a client thread failed"); }).join();
         assert!(daemon.is_poisoned());
@@ -562,14 +562,22 @@ mod tests {
         assert!(heard);
     }
 
+    fn play_tone(session: &mut niminal_daemon::Session) {
+        use niminal_daemon::{At, Op};
+        use niminal_score::{Time, Value};
+        let define = Op::Define { source: "instr tone(freq: hz) { osc(sine, freq) }".into(), at: At::Sample(0), dir: None, tag: None };
+        let note = Op::Note { target: "tone".into(), at: At::Sample(0), args: [("freq".to_string(), Value::Hz(440.0))].into(), dur: Some(Time::Beats(1.0)), id: None, tag: None };
+        session.send_events(0, vec![define, note]).unwrap();
+    }
+
     #[test]
     fn a_control_lock_cannot_block_the_callback_or_change_its_audio() {
         let mut session = niminal_daemon::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
-        session.eval("instr tone(freq: hz) { osc(sine, freq) }\ntone(freq: 440hz) for 1beat", Some("now")).unwrap();
+        play_tone(&mut session);
         let mut reference = niminal_daemon::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
-        reference.eval("instr tone(freq: hz) { osc(sine, freq) }\ntone(freq: 440hz) for 1beat", Some("now")).unwrap();
+        play_tone(&mut reference);
         let expected = reference.process(QUEUE_FRAMES * 4);
-        let daemon = Arc::new(Mutex::new(Daemon::new(session)));
+        let daemon = Arc::new(Mutex::new(EngineServer::new(session)));
         let (mut playback, worker) = RenderWorker::start(daemon.clone(), 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
         let guard = lock(&daemon);
         let mut audio = vec![0.0; QUEUE_FRAMES * 2];

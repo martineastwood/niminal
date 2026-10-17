@@ -1,8 +1,52 @@
-use niminal_daemon::{ClientId, Daemon, PROTOCOL_VERSION, Session};
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Mutex};
+
+use niminal_daemon::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
 use niminal_lang::Layout;
+use niminal_live::{InProcess, Live, LiveServer};
 use serde_json::{Value, json};
 
 const SR: f32 = 48_000.0;
+
+/// The sequencer's server, with an engine in the same process whose clock only moves when asked to.
+struct Daemon {
+    server: LiveServer,
+    engine: Arc<Mutex<EngineServer>>,
+}
+
+impl Deref for Daemon {
+    type Target = LiveServer;
+    fn deref(&self) -> &LiveServer {
+        &self.server
+    }
+}
+
+impl DerefMut for Daemon {
+    fn deref_mut(&mut self) -> &mut LiveServer {
+        &mut self.server
+    }
+}
+
+impl Daemon {
+    fn new(session: Session) -> Daemon {
+        let engine = Arc::new(Mutex::new(EngineServer::new(session)));
+        let live = Live::new(Box::new(InProcess::new(engine.clone())), SR, Layout::Mono);
+        Daemon { server: LiveServer::new(live), engine }
+    }
+
+    /// Mix `frames` samples, with the sequencer sending the engine what falls in them first.
+    fn process(&mut self, frames: usize) -> Vec<Vec<f32>> {
+        let end = self.engine.lock().unwrap().session().clock() + frames as u64;
+        self.server.live_mut().advance_to(end);
+        let out = self.engine.lock().unwrap().session_mut().process(frames);
+        self.server.live_mut().advance();
+        out
+    }
+
+    fn take_peaks(&mut self) -> Vec<f32> {
+        self.engine.lock().unwrap().session_mut().take_peaks()
+    }
+}
 const SETUP: &str = "tempo 120bpm\\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\\ntrack lead { instrument = pluck }";
 
 fn daemon() -> Daemon {
@@ -128,7 +172,7 @@ fn eval_replies_with_where_the_change_lands() {
     assert_eq!(r["result"]["position"], json!({"bar": 1, "beat": 1.0}));
     assert_eq!(r["result"]["changes"].as_array().unwrap().len(), 3);
 
-    d.session_mut().process(10_000);
+    d.process(10_000);
     let r = call(&mut d, c, 3, "eval", json!({"source": "lead.play([c4])"}));
     assert_eq!(r["result"]["lands_at"], 96_000);
     assert_eq!(r["result"]["position"], json!({"bar": 2, "beat": 1.0}));
@@ -188,7 +232,7 @@ fn cancel_hush_and_panic() {
         "eval",
         json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}),
     );
-    d.session_mut().process(1000);
+    d.process(1000);
     call(&mut d, c, 3, "eval", json!({"source": "lead.play([c4])"}));
     assert_eq!(
         call(&mut d, c, 4, "status", json!({}))["result"]["pending"]
@@ -207,52 +251,6 @@ fn cancel_hush_and_panic() {
     );
     assert!(call(&mut d, c, 7, "hush", json!({}))["result"]["lands_at"].is_number());
     assert_eq!(call(&mut d, c, 8, "panic", json!({}))["result"], json!({}));
-}
-
-#[test]
-fn event_stream_plays_notes_from_outside() {
-    let (mut d, c) = ready();
-    call(
-        &mut d,
-        c,
-        2,
-        "eval",
-        json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}),
-    );
-    let ok = call(
-        &mut d,
-        c,
-        3,
-        "events.send",
-        json!({"events": [{"op": "note", "target": "lead", "at": "0.1sec", "dur": "0.2sec", "args": {"freq": "a4"}}]}),
-    );
-    assert_eq!(ok["result"]["accepted"], 1);
-    assert_eq!(ok["result"]["late"], 0);
-    assert_eq!(ok["result"]["first"], 4800);
-    let out = d.session_mut().process(12_000).remove(0);
-    assert_eq!(out[..4799].iter().fold(0.0f32, |m, s| m.max(s.abs())), 0.0);
-    assert!(out[4800..8000].iter().fold(0.0f32, |m, s| m.max(s.abs())) > 0.1);
-
-    let bad = call(
-        &mut d,
-        c,
-        4,
-        "events.send",
-        json!({"events": [
-            {"op": "note", "target": "lead", "at": "0sec", "dur": "1sec", "args": {"freq": "a4"}},
-            {"op": "note", "target": "nobody", "at": "0sec", "dur": "1sec"},
-        ]}),
-    );
-    assert_eq!(bad["error"]["code"], -32001);
-    assert_eq!(bad["error"]["data"]["problems"][0]["event"], 1);
-    let malformed = call(
-        &mut d,
-        c,
-        5,
-        "events.send",
-        json!({"events": [{"op": "note", "target": "lead"}]}),
-    );
-    assert_eq!(malformed["error"]["code"], -32602);
 }
 
 #[test]
@@ -278,7 +276,7 @@ fn subscribers_hear_about_changes_landing() {
         "eval",
         json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}),
     );
-    d.session_mut().process(1000);
+    d.process(1000);
     call(&mut d, c, 4, "eval", json!({"source": "lead.play([c4])"}));
 
     // the evaluation that is waiting is announced to subscribers, not to others
@@ -300,7 +298,7 @@ fn subscribers_hear_about_changes_landing() {
     );
 
     // when it lands, they are told, and the waiting list empties
-    d.session_mut().process(100_000);
+    d.process(100_000);
     let after = d.notifications();
     let landed: Vec<Value> = after
         .iter()
@@ -338,12 +336,12 @@ fn the_transport_and_meters_are_pushed_regularly() {
         d.notifications().is_empty(),
         "nothing new while the clock stands still"
     );
-    d.session_mut().process(2000);
+    d.process(2000);
     assert!(
         d.notifications().is_empty(),
         "not until a tenth of a second has passed"
     );
-    d.session_mut().process(3000);
+    d.process(3000);
     let later = d.notifications();
     let t: Value = serde_json::from_str(
         &later
@@ -375,11 +373,11 @@ fn the_meters_are_left_alone_unless_someone_is_listening() {
         "eval",
         json!({"source": "lead(freq: a4) for 1beat", "quantize": "now"}),
     );
-    d.session_mut().process(10_000);
+    d.process(10_000);
     d.notifications(); // someone polling must not eat the readings
-    d.session_mut().process(10_000);
+    d.process(10_000);
     d.notifications();
-    assert!(d.session_mut().take_peaks()[0] > 0.5);
+    assert!(d.take_peaks()[0] > 0.5);
 }
 
 #[test]
@@ -407,7 +405,7 @@ fn notices_tell_subscribers_what_went_wrong_while_playing() {
         "eval",
         json!({"source": "instr pluck(pitch: hz) { osc(sine, pitch) }", "quantize": "now"}),
     );
-    d.session_mut().process(96_000);
+    d.process(96_000);
     let notes: Vec<Value> = d
         .notifications()
         .iter()
@@ -468,8 +466,7 @@ fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
     assert!(r["result"].is_object());
     d.disconnect(a);
     assert!(
-        d.session_mut()
-            .process(10_000)
+        d.process(10_000)
             .remove(0)
             .iter()
             .any(|s| s.abs() > 0.1)
@@ -543,7 +540,7 @@ fn status_lists_scenes_clips_and_what_each_track_is_doing() {
 
 #[test]
 fn begin_and_finish_answer_an_eval_like_handle_does() {
-    use niminal_daemon::Request;
+    use niminal_live::Request;
     let (mut d, c) = ready();
     let request = json!({"jsonrpc": "2.0", "id": 2, "method": "eval", "params": {"source": SETUP.replace("\\n", "\n"), "quantize": "now"}});
     let Request::Compile(ticket) = d.begin(c, &request.to_string()) else {
@@ -583,7 +580,7 @@ fn begin_and_finish_answer_an_eval_like_handle_does() {
 
 #[test]
 fn cancellation_compiles_outside_the_session_and_retries_if_it_became_stale() {
-    use niminal_daemon::Request;
+    use niminal_live::Request;
     let (mut d, c) = ready();
     call(
         &mut d,
@@ -617,13 +614,13 @@ fn cancellation_compiles_outside_the_session_and_retries_if_it_became_stale() {
     let reply: Value = serde_json::from_str(&d.finish(done)[0]).unwrap();
     assert_eq!(reply["id"], 4);
     assert_eq!(reply["result"]["cancelled"], 1);
-    assert_eq!(d.session().pending().len(), 1);
-    assert_eq!(d.session().pending()[0].changes, ["lead.mute"]);
+    assert_eq!(d.live().pending().len(), 1);
+    assert_eq!(d.live().pending()[0].changes, ["lead.mute"]);
 }
 
 #[test]
 fn hush_uses_the_background_compilation_path() {
-    use niminal_daemon::Request;
+    use niminal_live::Request;
     let (mut d, c) = ready();
     call(
         &mut d,
@@ -640,59 +637,14 @@ fn hush_uses_the_background_compilation_path() {
         json!({"source": "lead.play([c4])", "quantize": "now"}),
     );
     let request = json!({"jsonrpc": "2.0", "id": 4, "method": "hush", "params": {}}).to_string();
-    let parsed = Daemon::prepare_eval(&request);
+    let parsed = LiveServer::prepare_eval(&request);
     let Request::Compile(ticket) = d.begin_prepared(c, &request, parsed) else {
         panic!("hush needs background work")
     };
     let reply: Value = serde_json::from_str(&d.finish(ticket.compile())[0]).unwrap();
     assert_eq!(reply["id"], 4);
     assert!(reply["result"]["id"].is_u64());
-    assert!(d.session().tracks().iter().all(|t| t.clip.is_none()));
-}
-
-#[test]
-fn controls_are_typed_timestamped_and_reported_in_status() {
-    let (mut d, c) = ready();
-    let accepted = call(
-        &mut d,
-        c,
-        2,
-        "eval",
-        json!({
-            "source": "ctl cutoff = 1khz\nctl volume = -6db", "quantize": "now"
-        }),
-    );
-    assert!(accepted.get("error").is_none(), "{accepted}");
-    let update = call(
-        &mut d,
-        c,
-        3,
-        "events.send",
-        json!({"events": [{
-            "op": "control", "name": "cutoff", "value": 2.0, "unit": "khz", "at": 37, "glide": "0ms"
-        }]}),
-    );
-    assert_eq!(update["result"]["first"], 37);
-    d.session_mut().process(64);
-    let status = call(&mut d, c, 4, "status", json!({}));
-    assert_eq!(status["result"]["controls"][0]["name"], "cutoff");
-    assert_eq!(status["result"]["controls"][0]["value"], 2000.0);
-    assert_eq!(status["result"]["controls"][0]["unit"], "hz");
-    assert!((status["result"]["controls"][1]["value"].as_f64().unwrap() + 6.0).abs() < 1e-5);
-    for params in [
-        json!({"name": "cutoff", "value": 2.0, "unit": "db"}),
-        json!({"name": "missing", "value": 2.0}),
-        json!({"name": "cutoff", "value": "2khz"}),
-        json!({"name": "cutoff", "value": 2.0, "at": -1}),
-        json!({"name": "cutoff", "value": 2.0, "glide": "-1sec"}),
-        json!({"name": "cutoff", "value": 2.0, "unit": 7}),
-    ] {
-        let mut op = params;
-        op["op"] = json!("control");
-        op.as_object_mut().unwrap().entry("at").or_insert(json!("now"));
-        let result = call(&mut d, c, 5, "events.send", json!({"events": [op]}));
-        assert!(result.get("error").is_some(), "{result}");
-    }
+    assert!(d.live().tracks().iter().all(|t| t.clip.is_none()));
 }
 
 #[test]
@@ -750,43 +702,3 @@ fn typed_clip_define_launch_and_edit() {
         .any(|n| n.as_str() == Some("riff")));
 }
 
-#[test]
-fn events_cancel_takes_back_waiting_tagged_events() {
-    let (mut d, c) = ready();
-    call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
-    let note = |tag: &str, at: &str| json!({"op": "note", "target": "lead", "at": at, "dur": "0.1sec", "args": {"freq": "a4"}, "tag": tag});
-    let sent = call(&mut d, c, 3, "events.send", json!({"events": [note("a", "1sec"), note("a", "2sec"), note("b", "2sec")]}));
-    assert_eq!(sent["result"]["accepted"], 3);
-    let cancelled = call(&mut d, c, 4, "events.cancel", json!({"tag": "a", "from": "1.5sec"}));
-    assert_eq!(cancelled["result"], json!({"cancelled": 1, "released": 0}));
-    let all = call(&mut d, c, 5, "events.cancel", json!({}));
-    assert_eq!(all["result"]["cancelled"], 2);
-    let bad = call(&mut d, c, 6, "events.cancel", json!({"tag": 7}));
-    assert_eq!(bad["error"]["code"], -32602);
-}
-
-#[test]
-fn clock_and_status_describe_the_engine_and_define_goes_through_events_send() {
-    let (mut d, c) = ready();
-    call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
-    let clock = call(&mut d, c, 3, "clock", json!({}));
-    let result = &clock["result"];
-    assert_eq!((result["bpm"].as_f64(), result["beats_per_bar"].as_f64(), result["sample"].as_u64()), (Some(120.0), Some(4.0), Some(0)));
-    assert!(result["wall_micros"].is_null() && result["sample_rate"].is_number());
-
-    let sent = call(&mut d, c, 4, "events.send", json!({"events": [
-        {"op": "define", "at": "1beat", "source": "instr extra(freq: hz, cut: hz = 1khz) { osc(saw, freq) }"},
-        {"op": "transport", "at": "2beat", "bpm": 90},
-    ]}));
-    assert_eq!(sent["result"]["accepted"], 2);
-    let bad = call(&mut d, c, 5, "events.send", json!({"events": [{"op": "define", "at": "now", "source": "lead.play([c4])"}]}));
-    assert_eq!(bad["error"]["code"], -32001);
-    assert_eq!(bad["error"]["data"]["problems"][0]["event"], 0);
-
-    d.session_mut().process(96_000);
-    let status = call(&mut d, c, 6, "status", json!({}));
-    let instruments = status["result"]["instruments"].as_array().unwrap();
-    let extra = instruments.iter().find(|i| i["name"] == "extra").expect("the defined instrument");
-    assert_eq!(extra["params"][1]["name"], "cut");
-    assert_eq!(call(&mut d, c, 7, "clock", json!({}))["result"]["bpm"], 90.0);
-}

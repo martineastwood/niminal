@@ -7,20 +7,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use niminal_daemon::{ClientId, PROTOCOL_VERSION, Problem, problem_json};
 use niminal_score::{ClipDef, SceneDef};
 use serde_json::{Value, json};
 
-use crate::events::{At, Op};
-use crate::project::Problem;
-use crate::session::{
-    Accepted, Begin, CancelDone, CancelJob, ClockInfo, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo,
-    Session, Transport,
-};
-
-/// The protocol version a client must say it speaks.
-pub const PROTOCOL_VERSION: u64 = 1;
-
-pub type ClientId = u64;
+use crate::live::{Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, Live, ParsedEval, PendingInfo, Transport};
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -48,8 +39,9 @@ struct Client {
     topics: BTreeSet<String>,
 }
 
-pub struct Daemon {
-    session: Session,
+pub struct LiveServer {
+    live: Live,
+    metering: bool,
     clients: BTreeMap<ClientId, Client>,
     next_client: ClientId,
     /// The waiting changes last announced, to tell when they change.
@@ -59,11 +51,12 @@ pub struct Daemon {
     outbox: Vec<(ClientId, String)>,
 }
 
-impl Daemon {
-    pub fn new(session: Session) -> Daemon {
-        let transport_every = (session.sample_rate() / 10.0) as u64;
-        Daemon {
-            session,
+impl LiveServer {
+    pub fn new(live: Live) -> LiveServer {
+        let transport_every = (live.sample_rate() / 10.0) as u64;
+        LiveServer {
+            live,
+            metering: false,
             clients: BTreeMap::new(),
             next_client: 1,
             announced: Vec::new(),
@@ -73,13 +66,13 @@ impl Daemon {
         }
     }
 
-    pub fn session(&self) -> &Session {
-        &self.session
+    pub fn live(&self) -> &Live {
+        &self.live
     }
 
-    /// For the audio side, which advances the clock.
-    pub fn session_mut(&mut self) -> &mut Session {
-        &mut self.session
+    /// For the thread that keeps the sequencer working ahead of the engine's clock.
+    pub fn live_mut(&mut self) -> &mut Live {
+        &mut self.live
     }
 
     pub fn connect(&mut self) -> ClientId {
@@ -91,12 +84,10 @@ impl Daemon {
 
     pub fn disconnect(&mut self, client: ClientId) {
         self.clients.remove(&client);
-        self.session.drop_client(client);
     }
 
     /// Handle one message from `client`; the replies to send back to it.
     pub fn handle(&mut self, client: ClientId, text: &str) -> Vec<String> {
-        self.session.sync_realtime();
         let request: Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(e) => {
@@ -194,7 +185,7 @@ impl Daemon {
                     if let Ok(id) = optional_u64(&request["params"], "id") {
                         return Request::Compile(Box::new(CompileTicket {
                             id: request.get("id").cloned(),
-                            job: Job::Cancel(self.session.begin_cancel(id)),
+                            job: Job::Cancel(self.live.begin_cancel(id)),
                         }));
                     }
                 }
@@ -235,11 +226,11 @@ impl Daemon {
         let source = params["source"].as_str().unwrap_or_default();
         let quantize = params.get("quantize").and_then(Value::as_str);
         if let Some(dir) = params.get("dir").and_then(Value::as_str) {
-            self.session.set_sample_dir(std::path::Path::new(dir));
+            self.live.set_sample_dir(std::path::Path::new(dir));
         }
         let begun = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match prepared {
-            Some(parsed) => self.session.begin_parsed(parsed),
-            None => self.session.begin_eval(source, quantize),
+            Some(parsed) => self.live.begin_parsed(parsed),
+            None => self.live.begin_eval(source, quantize),
         }));
         match begun {
             Ok(Begin::Job(job)) => Request::Compile(Box::new(CompileTicket {
@@ -257,10 +248,9 @@ impl Daemon {
     /// A compilation made stale by another client or a landed change must be
     /// retried without holding the render worker's control lock.
     pub fn retry(&mut self, ticket: &CompiledTicket) -> Option<CompileTicket> {
-        self.session.sync_realtime();
         let job = match ticket.done.as_ref()? {
-            Done::Eval(done) => Job::Eval(self.session.retry_eval(done)?),
-            Done::Cancel(done) => Job::Cancel(self.session.retry_cancel(done)?),
+            Done::Eval(done) => Job::Eval(self.live.retry_eval(done)?),
+            Done::Cancel(done) => Job::Cancel(self.live.retry_cancel(done)?),
         };
         Some(CompileTicket {
             id: ticket.id.clone(),
@@ -277,11 +267,11 @@ impl Daemon {
             Some(done) => {
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match done {
                     Done::Eval(done) => {
-                        let result = self.session.finish_eval(*done);
+                        let result = self.live.finish_eval(done);
                         self.eval_outcome(result)
                     }
                     Done::Cancel(done) => {
-                        Ok(json!({ "cancelled": self.session.finish_cancel(done) }))
+                        Ok(json!({ "cancelled": self.live.finish_cancel(done) }))
                     }
                 })) {
                     Ok(result) => result,
@@ -294,7 +284,7 @@ impl Daemon {
 
     fn eval_outcome(&self, result: Result<Accepted, Vec<Problem>>) -> Result<Value, RpcError> {
         match result {
-            Ok(a) => Ok(accepted_json(&self.session, &a)),
+            Ok(a) => Ok(accepted_json(&self.live, &a)),
             Err(problems) => Err(rejected(&problems)),
         }
     }
@@ -320,21 +310,18 @@ impl Daemon {
             | "unsolo" | "edit" => self.api_eval(method, params),
             "cancel" => {
                 let id = optional_u64(params, "id")?;
-                Ok(json!({ "cancelled": self.session.cancel(id) }))
+                Ok(json!({ "cancelled": self.live.cancel(id) }))
             }
-            "hush" => match self.session.hush() {
-                Ok(a) => Ok(accepted_json(&self.session, &a)),
+            "hush" => match self.live.hush() {
+                Ok(a) => Ok(accepted_json(&self.live, &a)),
                 Err(problems) => Err(rejected(&problems)),
             },
             "panic" => {
-                self.session.panic();
+                self.live.panic();
                 Ok(json!({}))
             }
-            "events.send" => self.events_send(client, params),
-            "events.cancel" => self.events_cancel(client, params),
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
-            "status" => Ok(status_json(&self.session)),
-            "clock" => Ok(clock_json(&self.session.clock_info())),
+            "status" => Ok(status_json(&mut self.live)),
             other => Err(RpcError::new(
                 METHOD_NOT_FOUND,
                 &format!("no method `{other}`"),
@@ -346,7 +333,7 @@ impl Daemon {
     fn api_eval(&mut self, method: &str, params: &Value) -> Result<Value, RpcError> {
         let source = api_source(method, params)?;
         let quantize = params.get("quantize").and_then(Value::as_str).or(Some("now"));
-        let result = self.session.eval(&source, quantize);
+        let result = self.live.eval(&source, quantize);
         self.eval_outcome(result)
     }
 
@@ -365,8 +352,8 @@ impl Daemon {
         }
         Ok(json!({
             "protocol": PROTOCOL_VERSION,
-            "sample_rate": self.session.sample_rate(),
-            "channels": self.session.channels(),
+            "sample_rate": self.live.sample_rate(),
+            "channels": self.live.channels(),
             "topics": TOPICS,
         }))
     }
@@ -382,52 +369,14 @@ impl Daemon {
             .and_then(Value::as_str)
             .map(std::path::Path::new);
         if let Some(dir) = dir {
-            self.session.set_sample_dir(dir);
+            self.live.set_sample_dir(dir);
         }
-        let result = self.session.eval_parsed(ParsedEval::from_dir(
+        let result = self.live.eval_parsed(ParsedEval::from_dir(
             source,
             dir.unwrap_or(std::path::Path::new(".")),
             quantize,
         ));
         self.eval_outcome(result)
-    }
-
-    fn events_send(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
-        let ops: Vec<Op> = params
-            .get("events")
-            .cloned()
-            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`events.send` needs `events`"))
-            .and_then(|v| {
-                serde_json::from_value(v)
-                    .map_err(|e| RpcError::new(INVALID_PARAMS, &format!("bad events: {e}")))
-            })?;
-        let sent = self
-            .session
-            .send_events(client, ops)
-            .map_err(|problems| rejected(&problems))?;
-        Ok(json!({
-            "accepted": sent.accepted,
-            "late": sent.late,
-            "first": sent.first,
-            "horizon": self.session.prepared_until(),
-        }))
-    }
-
-    fn events_cancel(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
-        let tag = match params.get("tag") {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(v.as_str().ok_or_else(|| RpcError::new(INVALID_PARAMS, "`tag` should be a string"))?),
-        };
-        let from: At = match params.get("from") {
-            None | Some(Value::Null) => At::Now,
-            Some(v) => serde_json::from_value(v.clone()).map_err(|e| RpcError::new(INVALID_PARAMS, &format!("bad `from`: {e}")))?,
-        };
-        let release = match params.get("release") {
-            None | Some(Value::Null) => false,
-            Some(v) => v.as_bool().ok_or_else(|| RpcError::new(INVALID_PARAMS, "`release` should be true or false"))?,
-        };
-        let done = self.session.cancel_events(client, tag, from, release);
-        Ok(json!({ "cancelled": done.cancelled, "released": done.released }))
     }
 
     fn subscribe(&mut self, client: ClientId, params: &Value, on: bool) -> Result<Value, RpcError> {
@@ -478,7 +427,7 @@ impl Daemon {
 
     /// Tell subscribers when the set of waiting changes differs from last time.
     fn queue_changes(&mut self) {
-        let pending = self.session.pending();
+        let pending = self.live.pending();
         let now: Vec<(u64, u64)> = pending.iter().map(|p| (p.id, p.lands_at)).collect();
         if now != self.announced {
             self.announced = now;
@@ -495,31 +444,28 @@ impl Daemon {
     /// advances: it reports changes that landed and, about ten times a second,
     /// the transport and meters.
     pub fn notifications(&mut self) -> Vec<(ClientId, String)> {
-        self.session.sync_realtime();
-        for landed in self.session.take_landed() {
+        for landed in self.live.take_landed() {
             self.send_to_subscribers("landed", "landed", landed_json(&landed));
         }
-        for (control, source) in self.session.take_learned() {
+        for (control, source) in self.live.take_learned() {
             self.send_to_subscribers(
                 "learned",
                 "learned",
                 json!({ "control": control, "source": source }),
             );
         }
-        for notice in self.session.take_notices() {
+        for notice in self.live.take_notices() {
             self.send_to_subscribers("notices", "notice", json!({ "message": notice }));
-        }
-        let silenced = self.session.take_silenced();
-        if silenced > 0 {
-            self.send_to_subscribers(
-                "notices",
-                "notice",
-                json!({ "message": format!("{silenced} voice(s) produced NaN or infinity and were silenced") }),
-            );
         }
         self.queue_changes();
 
-        let now = self.session.clock();
+        // the meters are only read from the engine for someone listening
+        let listening = self.has_subscribers("meters");
+        if listening != self.metering {
+            self.metering = listening;
+            self.live.set_metering(listening);
+        }
+        let now = self.live.clock();
         if self
             .last_transport
             .is_none_or(|t| now >= t + self.transport_every)
@@ -528,11 +474,11 @@ impl Daemon {
             self.send_to_subscribers(
                 "transport",
                 "transport",
-                transport_json(&self.session.transport()),
+                transport_json(&self.live.transport()),
             );
             // reading the meters resets them, so only do it for someone listening
-            if self.has_subscribers("meters") {
-                let peaks = self.session.take_peaks();
+            if listening {
+                let peaks = self.live.take_peaks();
                 self.send_to_subscribers("meters", "meters", json!({ "peaks": peaks }));
             }
         }
@@ -567,7 +513,7 @@ enum Job {
 }
 
 enum Done {
-    Eval(Box<EvalDone>),
+    Eval(EvalDone),
     Cancel(CancelDone),
 }
 
@@ -577,7 +523,7 @@ impl CompileTicket {
     pub fn compile(self) -> CompiledTicket {
         let CompileTicket { id, job } = self;
         let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
-            Job::Eval(job) => Done::Eval(Box::new(job.compile())),
+            Job::Eval(job) => Done::Eval(job.compile()),
             Job::Cancel(job) => Done::Cancel(job.compile()),
         }))
         .ok();
@@ -634,23 +580,11 @@ fn error_reply(id: Value, code: i64, message: &str, data: Option<Value>) -> Stri
     json!({"jsonrpc": "2.0", "id": id, "error": error}).to_string()
 }
 
-fn problem_json(p: &Problem) -> Value {
-    json!({
-        "message": p.message,
-        "help": p.help,
-        "line": p.line,
-        "column": p.column,
-        "span": p.span.map(|s| json!({"start": s.start, "end": s.end})),
-        "in_definition": p.in_definition,
-        "event": p.event,
-    })
-}
-
 fn position_json(position: (u64, f64)) -> Value {
     json!({ "bar": position.0, "beat": position.1 })
 }
 
-fn accepted_json(session: &Session, a: &Accepted) -> Value {
+fn accepted_json(session: &Live, a: &Accepted) -> Value {
     json!({
         "id": a.id,
         "lands_at": a.lands_at,
@@ -666,15 +600,6 @@ fn pending_json(p: &PendingInfo) -> Value {
 
 fn landed_json(l: &Landed) -> Value {
     json!({ "id": l.id, "at": l.at, "position": position_json(l.position), "changes": l.changes })
-}
-
-fn clock_json(c: &ClockInfo) -> Value {
-    json!({
-        "sample": c.sample, "bar": c.bar, "beat": c.beat, "bpm": c.bpm,
-        "beats_per_bar": c.beats_per_bar,
-        "sample_rate": c.sample_rate, "prepared_until": c.prepared_until, "lookahead": c.lookahead,
-        "output_latency": c.output_latency, "wall_micros": c.wall_micros,
-    })
 }
 
 fn transport_json(t: &Transport) -> Value {
@@ -758,38 +683,19 @@ fn api_source(method: &str, params: &Value) -> Result<String, RpcError> {
     })
 }
 
-fn status_json(session: &Session) -> Value {
+fn status_json(live: &mut Live) -> Value {
+    let engine = live.engine_status();
     json!({
-        "transport": transport_json(&session.transport()),
-        "pending": session.pending().iter().map(pending_json).collect::<Vec<_>>(),
-        "sample_rate": session.sample_rate(),
-        "channels": session.channels(),
-        "realtime": session.realtime_metrics().map(|m| json!({
-            "prepared_until": session.prepared_until(),
-            "late_events": m.late_events, "starved_frames": m.starved_frames,
-            "capacity_drops": m.capacity_drops, "control_drops": m.control_drops, "retire_pressure": m.retire_pressure,
-            "deadline_misses": m.deadline_misses, "max_render_micros": m.max_render_micros,
-        })),
-        "controls": session.control_values().iter().map(|(name, value, target, unit)| {
-            let display = |value: f32| if *unit == Some("db") { 20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10() } else { f64::from(value) };
-            json!({ "name": name, "value": display(*value), "target": display(*target), "unit": unit })
-        }).collect::<Vec<_>>(),
-        "instruments": session.definitions().0.iter().map(|i| json!({
-            "name": i.name,
-            "params": i.params.iter().map(|p| json!({
-                "name": p.name,
-                "unit": p.unit.suffix(),
-                "default": p.default,
-                "range": p.range,
-            })).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
-        "buses": session.definitions().2,
-        "clients": session.client_status().iter().map(|(client, voices, waiting)| json!({
-            "id": client, "voices": voices, "waiting": waiting,
-        })).collect::<Vec<_>>(),
-        "scenes": session.defined("scene"),
-        "clips": session.defined("clip"),
-        "tracks": session.tracks().iter().map(|t| json!({
+        "transport": transport_json(&live.transport()),
+        "pending": live.pending().iter().map(pending_json).collect::<Vec<_>>(),
+        "sample_rate": live.sample_rate(),
+        "channels": live.channels(),
+        "realtime": engine["realtime"],
+        "controls": engine["controls"],
+        "instruments": engine["instruments"],
+        "scenes": live.defined("scene"),
+        "clips": live.defined("clip"),
+        "tracks": live.tracks().iter().map(|t| json!({
             "name": t.name,
             "clip": t.clip,
             "playing": t.playing,

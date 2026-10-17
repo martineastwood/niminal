@@ -1,0 +1,17 @@
+[package]
+name = "niminal-live"
+version.workspace = true
+edition.workspace = true
+description = "The niminal live sequencer: clips, scenes, quantized changes and keyboards, driving the engine through its public event API"
+
+[dependencies]
+niminal-engine = { path = "../niminal-engine" }
+niminal-lang = { path = "../niminal-lang" }
+niminal-score = { path = "../niminal-score" }
+niminal-daemon = { path = "../niminal-daemon" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+hound = "3"
+rtrb = "0.3"

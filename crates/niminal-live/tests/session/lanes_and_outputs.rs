@@ -48,7 +48,7 @@ fn an_envelope_lane_moves_a_track_parameter_as_the_clip_plays() {
         Some("now"),
     )
     .unwrap();
-    let cut = |s: &Session| {
+    let cut = |s: &Offline| {
         s.control_values()
             .into_iter()
             .find(|v| v.0 == "pad::cut")
@@ -76,7 +76,7 @@ fn a_signal_lane_moves_a_track_parameter_continuously_even_without_notes() {
         Some("now"),
     )
     .unwrap();
-    let cut = |s: &Session| {
+    let cut = |s: &Offline| {
         s.control_values()
             .into_iter()
             .find(|v| v.0 == "pad::cut")
@@ -106,7 +106,7 @@ fn set_can_give_a_part_a_track_parameter_lane_and_a_signal() {
     let mut s = session();
     s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }", Some("now")).unwrap();
     s.eval("pad.play([c5])", Some("now")).unwrap();
-    let cut = |s: &Session| {
+    let cut = |s: &Offline| {
         s.control_values()
             .into_iter()
             .find(|v| v.0 == "pad::cut")
@@ -133,11 +133,11 @@ fn set_can_give_a_part_a_track_parameter_lane_and_a_signal() {
 
 mod mpe {
     use super::*;
-    use niminal_daemon::ControlSignal;
+    use niminal_live::ControlSignal;
 
     const ORGAN: &str = "tempo 120bpm\ninstr organ(freq: hz, bend: st = 0st, pressure: 0..1 = 0, slide: 0..1 = 0) { osc(sine, freq + bend) * (0.1 + pressure * 0.4 + slide * 0.4) * env[1 | 10ms 0] }\nclip pad { instrument: organ\n keys: midi.keys(mpe: true) }\npad.start";
 
-    fn mpe_session() -> Session {
+    fn mpe_session() -> Offline {
         let mut s = session();
         s.eval(ORGAN, Some("now")).unwrap();
         s
@@ -353,7 +353,7 @@ mod quantize_settings {
     fn quantum_mistakes_are_reported() {
         let mut s = ready();
         let message =
-            |s: &mut Session, src: &str| s.eval(src, Some("now")).unwrap_err()[0].message.clone();
+            |s: &mut Offline, src: &str| s.eval(src, Some("now")).unwrap_err()[0].message.clone();
         assert_eq!(
             message(&mut s, "config { quantize: { sometimes: bar } }"),
             "unknown kind of change `sometimes`"
@@ -380,8 +380,9 @@ mod quantize_settings {
 fn an_osc_out_tap_holds_the_latest_value_of_its_signal_while_audio_runs() {
     let mut s = session();
     s.eval("tempo 120bpm\ninstr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ntrack lead {\n instrument = tone\n out = it.osc_out(\"/level\", port: 9000)\n}\nctl k = 0.25\ntrack ctl_track {\n out = k.osc_out(\"/knob\", port: 9000)\n}", Some("now")).unwrap();
-    assert_eq!(s.program().taps.len(), 2);
-    let (lead, knob) = (s.program().taps[0].clone(), s.program().taps[1].clone());
+    let taps = s.engine().session().program().taps.clone();
+    assert_eq!(taps.len(), 2);
+    let (lead, knob) = (taps[0].clone(), taps[1].clone());
     run(&mut s, 2_000);
     assert_eq!(knob.value.read(), 0.25, "a control's value, as it is");
     assert_eq!(lead.value.read(), 0.0, "silence until a note");
@@ -394,11 +395,8 @@ fn an_osc_out_tap_holds_the_latest_value_of_its_signal_while_audio_runs() {
     assert!(seen > 0.3, "the track's signal reaches the tap: {seen}");
     s.eval("ctl k = 0.75", Some("now")).unwrap();
     run(&mut s, 4_000);
-    assert!(
-        (s.program().taps[1].value.read() - 0.75).abs() < 1e-3,
-        "{}",
-        s.program().taps[1].value.read()
-    );
+    let knob = s.engine().session().program().taps[1].value.read();
+    assert!((knob - 0.75).abs() < 1e-3, "{knob}");
 }
 
 #[test]

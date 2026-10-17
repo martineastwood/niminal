@@ -5,7 +5,7 @@ use crate::common::*;
 /// Drive a session through a performance, dividing time into blocks of `block`
 /// samples and sending each input at the first block boundary at or after the
 /// time it was meant for.
-fn performance(block: usize) -> Session {
+fn performance(block: usize) -> Offline {
     let inputs: [(usize, &str, Option<&str>); 7] = [
         (0, SETUP, Some("now")),
         (0, "riff = [a3 e4 a4 e4]\nlead.play(riff)", None),
@@ -19,7 +19,7 @@ fn performance(block: usize) -> Session {
         ),
         (330_000, "hush", Some("next bar")),
     ];
-    let mut s = Session::new(SR, Layout::Mono);
+    let mut s = Offline::new(SR, Layout::Mono);
     let mut i = 0;
     while s.clock() < 600_000 {
         while i < inputs.len() && inputs[i].0 as u64 <= s.clock() {
@@ -35,7 +35,7 @@ fn performance(block: usize) -> Session {
 #[test]
 fn a_replay_reproduces_the_original_audio_exactly() {
     for block in [64, 480, 777, 1024] {
-        let mut s = Session::new(SR, Layout::Mono);
+        let mut s = Offline::new(SR, Layout::Mono);
         let inputs: [(usize, &str, Option<&str>); 4] = [
             (0, SETUP, Some("now")),
             (0, "riff = [a3 e4 a4 e4]\nlead.play(riff)", None),
@@ -52,11 +52,10 @@ fn a_replay_reproduces_the_original_audio_exactly() {
             original.extend(s.process(block).remove(0));
         }
         let total = s.clock();
-        let replayed = Session::replay(
+        let replayed = niminal_daemon::Session::replay(
             SR,
             Layout::Mono,
-            QuantizeDefaults::default(),
-            s.log(),
+            &s.log(),
             total,
             true,
         )
@@ -72,21 +71,19 @@ fn a_replay_reproduces_the_original_audio_exactly() {
 #[test]
 fn logs_survive_being_written_down() {
     let s = performance(480);
-    let text = to_lines(s.log());
+    let text = to_lines(&s.log());
     let back = from_lines(&text).unwrap();
     assert_eq!(back, s.log());
-    let a = Session::replay(
+    let a = niminal_daemon::Session::replay(
         SR,
         Layout::Mono,
-        QuantizeDefaults::default(),
-        s.log(),
+        &s.log(),
         100_000,
         true,
     );
-    let b = Session::replay(
+    let b = niminal_daemon::Session::replay(
         SR,
         Layout::Mono,
-        QuantizeDefaults::default(),
         &back,
         100_000,
         true,
@@ -149,7 +146,7 @@ fn a_live_eval_plays_a_kit_from_the_sample_folder_and_picks_up_a_changed_file() 
 
 #[test]
 fn compiling_can_happen_away_from_the_session() {
-    use niminal_daemon::Begin;
+    use niminal_live::Begin;
     let mut s = ready();
     let Begin::Job(job) = s.begin_eval("lead.play([c4])", Some("now")) else {
         panic!("expected something to compile")
@@ -164,11 +161,10 @@ fn compiling_can_happen_away_from_the_session() {
     );
     assert!(rms(&run(&mut s, 12_000)[2000..]) > 0.1);
     // and what the session logged replays to the same sound
-    let replayed = Session::replay(
+    let replayed = niminal_daemon::Session::replay(
         SR,
         Layout::Mono,
-        QuantizeDefaults::default(),
-        s.log(),
+        &s.log(),
         13_000,
         false,
     );
@@ -177,7 +173,7 @@ fn compiling_can_happen_away_from_the_session() {
 
 #[test]
 fn an_evaluation_compiled_before_another_landed_is_compiled_again() {
-    use niminal_daemon::Begin;
+    use niminal_live::Begin;
     let mut s = ready();
     let Begin::Job(first) = s.begin_eval("clip riff { notes: [c4 e4] }", Some("next bar")) else {
         panic!()
@@ -196,7 +192,7 @@ fn an_evaluation_compiled_before_another_landed_is_compiled_again() {
 
 #[test]
 fn a_rejected_evaluation_through_the_two_step_path_changes_nothing() {
-    use niminal_daemon::Begin;
+    use niminal_live::Begin;
     let mut s = ready();
     let Begin::Job(job) = s.begin_eval("lead.play([c4 zz])", Some("now")) else {
         panic!()
@@ -292,7 +288,7 @@ fn an_effect_parameter_edit_keeps_its_tail_and_uses_the_new_setting() {
 
 #[test]
 fn panic_clears_the_limiter_lookahead_as_well_as_the_mixer() {
-    let mut s = Session::new(SR, Layout::Mono);
+    let mut s = Offline::new(SR, Layout::Mono);
     s.eval(SETUP, Some("now")).unwrap();
     s.eval("pluck(freq: a4) for 4beats", Some("now")).unwrap();
     assert!(peak(&run(&mut s, 1000)) > 0.1);
@@ -362,7 +358,7 @@ lead.play(riff)",
 fn a_slow_compile_moves_to_the_next_boundary_and_reports_it() {
     let mut s = ready();
     run(&mut s, 23_000);
-    let niminal_daemon::Begin::Job(job) = s.begin_eval("lead.play([a4])", Some("next beat")) else {
+    let niminal_live::Begin::Job(job) = s.begin_eval("lead.play([a4])", Some("next beat")) else {
         panic!()
     };
     let done = job.compile();
@@ -393,11 +389,10 @@ lead.play(riff)",
     )
     .unwrap();
     original.extend(run(&mut s, 5 * BAR));
-    let replayed = Session::replay(
+    let replayed = niminal_daemon::Session::replay(
         SR,
         Layout::Mono,
-        QuantizeDefaults::default(),
-        s.log(),
+        &s.log(),
         original.len() as u64,
         false,
     );
