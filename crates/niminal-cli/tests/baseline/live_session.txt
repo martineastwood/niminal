@@ -1,1 +1,1 @@
-live_session: a957f97608b41661 2x960000
+live_session: 2x960000

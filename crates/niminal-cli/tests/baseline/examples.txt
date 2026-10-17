@@ -1,19 +1,19 @@
-acid.nml: 60c2d0ac872c1365 2x410573
-array_bank.nml: 447c7f53cc9fc52d 1x196427
-breakbeat.nml: d84ca2ca251dc011 2x354462
-composition.nml: d48a0b0150c8301c 1x105973
-drums.nml: 7321c1090ff70b0f 2x492612
-functions.nml: 95e211d407b35be0 2x293633
-groove.nml: 46cde0db6821fc91 2x570512
-live_controls.nml: f21d3995b8defd7d 2x369682
-lsp_tour.nml: 5ad4277c624b79d5 2x369682
-midi_osc.nml: 6a7bf51cef84c4e7 2x369169
-room.nml: 6dd8030bd5600533 1x222063
-saw_lead.nml: e77e311edbc60a79 1x158399
+acid.nml: 2x410573
+array_bank.nml: 1x196427
+breakbeat.nml: 2x354462
+composition.nml: 1x105973
+drums.nml: 2x492612
+functions.nml: 2x293633
+groove.nml: 2x570512
+live_controls.nml: 2x369682
+lsp_tour.nml: 2x369682
+midi_osc.nml: 2x369169
+room.nml: 1x222063
+saw_lead.nml: 1x158399
 score_prog.nml: does not render
 song.nml: does not render
-stereo.nml: 837f3cb900cb43a8 2x280705
-synth_drums.nml: 265888e14f858d9c 2x356382
-tables.nml: f6cc2b0add360b85 2x182400
-tracks.nml: 459ebc237ebabe90 2x583652
-voices.nml: 30fb402cf52505d5 2x158390
+stereo.nml: 2x280705
+synth_drums.nml: 2x356382
+tables.nml: 2x182400
+tracks.nml: 2x583652
+voices.nml: 2x158390

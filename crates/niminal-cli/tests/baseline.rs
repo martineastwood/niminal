@@ -1,7 +1,7 @@
-//! What "the same" means across the open-API refactor: every example renders to the same audio,
-//! and a scripted live session renders to the same audio. Hashes are of the exact samples, so they
-//! belong to this machine's floating point. Set `BLESS=1` to rewrite them after a change that is
-//! understood and recorded in docs/open-api-plan.md.
+//! Audio regression checks for every example and a scripted live session.
+//! Compare render dimensions exactly and block RMS levels with a tolerance: DSP math can
+//! round differently across platforms. Set `BLESS=1` to update dimensions, and `REFERENCE=1`
+//! to update audio references after an understood change.
 
 use std::path::{Path, PathBuf};
 
@@ -11,16 +11,8 @@ use niminal_live::Offline;
 const SR: f32 = 48_000.0;
 const BAR: u64 = 96_000; // 120bpm in 4/4
 
-fn hash(channels: &[Vec<f32>]) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for c in channels {
-        for s in c {
-            for b in s.to_bits().to_le_bytes() {
-                h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
-            }
-        }
-    }
-    format!("{h:016x} {}x{}", channels.len(), channels.first().map_or(0, Vec::len))
+fn dimensions(channels: &[Vec<f32>]) -> String {
+    format!("{}x{}", channels.len(), channels.first().map_or(0, Vec::len))
 }
 
 /// How loud each stretch of a render is: the RMS of every `DIGEST_BLOCK` samples of each channel. It is what
@@ -113,7 +105,7 @@ fn examples_render_as_they_did() {
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
         let (value, sound) = if run.status.success() {
             let audio = read_wav(&out);
-            (hash(&audio), digest(&audio))
+            (dimensions(&audio), digest(&audio))
         } else {
             ("does not render".to_string(), "does not render".to_string())
         };
@@ -213,6 +205,6 @@ fn play(script: &[(u64, Step)], frames: u64) -> Vec<Vec<f32>> {
 fn a_scripted_live_session_sounds_as_it_did() {
     let audio = play(&live_script(), 10 * BAR);
     assert!(audio[0].iter().any(|s| s.abs() > 0.01), "the session made sound");
-    check("live_session.txt", vec![("live_session".into(), hash(&audio))]);
+    check("live_session.txt", vec![("live_session".into(), dimensions(&audio))]);
     check_reference("live_reference.txt", vec![("live_session".into(), digest(&audio))]);
 }
