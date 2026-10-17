@@ -491,3 +491,10 @@ fn a_timed_panic_silences_voices_at_its_sample_and_later_events_still_play() {
     assert_eq!(s.cancel_events(1, Some("p"), At::Now, false).cancelled, 1);
     assert!(rms(&s.process(20_000).remove(0)[12_000..]) > 0.01);
 }
+
+#[test]
+fn a_kit_sample_in_a_note_crosses_the_wire() {
+    let op = Op::Note { target: "drums".into(), at: At::Sample(0), args: [("sample".to_string(), Value::Sample(4))].into(), dur: Some(Time::Beats(1.0)), id: None, tag: None };
+    let text = serde_json::to_string(&op).unwrap();
+    assert_eq!(serde_json::from_str::<Op>(&text).unwrap(), op);
+}

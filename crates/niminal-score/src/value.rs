@@ -89,6 +89,10 @@ impl FromStr for Value {
 
     fn from_str(s: &str) -> Result<Self, ParseError> {
         let s = s.trim();
+        // a kit sample, as it is written out
+        if let Some(id) = s.strip_prefix("sample #").and_then(|n| n.parse().ok()) {
+            return Ok(Value::Sample(id));
+        }
         if let Some(midi) = parse_note(s) {
             return Ok(Value::Note(midi));
         }
@@ -440,5 +444,16 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>("3").unwrap(), Value::Num(3.0));
         assert_eq!(serde_json::to_string(&Value::Hz(440.0)).unwrap(), "\"440hz\"");
         assert!(serde_json::from_str::<Time>("\"440hz\"").is_err());
+    }
+}
+
+#[cfg(test)]
+mod sample_tests {
+    use super::*;
+
+    #[test]
+    fn a_kit_sample_survives_being_written_out_and_read_back() {
+        let v = Value::Sample(12);
+        assert_eq!(v.to_string().parse::<Value>().unwrap(), v);
     }
 }
