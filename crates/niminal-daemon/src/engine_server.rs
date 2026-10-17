@@ -36,6 +36,16 @@ pub const ENGINE_TOPICS: [&str; 3] = ["transport", "meters", "notices"];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params")]
 pub enum EngineRequest {
+    #[serde(rename = "buffers.list")]
+    BuffersList {},
+    #[serde(rename = "buffers.read")]
+    BuffersRead { name: String, #[serde(default)] offset: usize, count: usize },
+    #[serde(rename = "buffers.alloc")]
+    BuffersAlloc { name: String, frames: usize },
+    #[serde(rename = "buffers.load")]
+    BuffersLoad { name: String, path: String, #[serde(default = "first_channel")] channel: usize },
+    #[serde(rename = "buffers.save")]
+    BuffersSave { name: String, path: String },
     #[serde(rename = "hello")]
     Hello {
         protocol: u64,
@@ -67,6 +77,8 @@ pub enum EngineRequest {
     Clock {},
 }
 
+fn first_channel() -> usize { 1 }
+
 /// What the engine answers.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineReply {
@@ -76,6 +88,7 @@ pub enum EngineReply {
     Cancelled(Cancelled),
     Panicked,
     Status(Value),
+    Buffers(Value),
     Clock(ClockInfo),
 }
 
@@ -161,6 +174,8 @@ impl EngineReply {
                 EngineReply::Cancelled(Cancelled { cancelled: number("cancelled") as usize, released: number("released") as usize })
             }
             EngineRequest::Panic {} => EngineReply::Panicked,
+            EngineRequest::BuffersList {} | EngineRequest::BuffersRead { .. } | EngineRequest::BuffersAlloc { .. }
+                | EngineRequest::BuffersLoad { .. } | EngineRequest::BuffersSave { .. } => EngineReply::Buffers(result.clone()),
             EngineRequest::Status {} => EngineReply::Status(result.clone()),
             EngineRequest::Clock {} => EngineReply::Clock(ClockInfo {
                 sample: number("sample"),
@@ -195,7 +210,7 @@ impl EngineReply {
             }),
             EngineReply::Cancelled(c) => json!({ "cancelled": c.cancelled, "released": c.released }),
             EngineReply::Panicked => json!({}),
-            EngineReply::Status(v) => v.clone(),
+            EngineReply::Status(v) | EngineReply::Buffers(v) => v.clone(),
             EngineReply::Clock(c) => clock_json(c),
         }
     }
@@ -341,6 +356,10 @@ impl EngineServer {
                 self.session.panic();
                 Ok(EngineReply::Panicked)
             }
+            request @ (EngineRequest::BuffersList {} | EngineRequest::BuffersRead { .. } | EngineRequest::BuffersAlloc { .. }
+                | EngineRequest::BuffersLoad { .. } | EngineRequest::BuffersSave { .. }) => {
+                    crate::resources::request(&mut self.session, client, request).map(EngineReply::Buffers)
+                }
             EngineRequest::Status {} => Ok(EngineReply::Status(crate::status::status_json(&self.session))),
             EngineRequest::Clock {} => Ok(EngineReply::Clock(self.session.clock_info())),
         }

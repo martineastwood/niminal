@@ -1,11 +1,14 @@
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
-const { Client } = require("niminal-client");
+const { LiveClient: Client } = require("niminal-client");
+const { startLive } = require("./live");
 const { blockAround } = require("./blocks");
 const { trackDescription } = require("./panel");
 const { rewriteLearned } = require("./learn");
 
 let client = null;
+let live = null;
+let connecting = null;
 let languageServer = null;
 let status;
 let diagnostics;
@@ -22,7 +25,7 @@ const flash = vscode.window.createTextEditorDecorationType({
 
 function settings() {
   const c = vscode.workspace.getConfiguration("niminal");
-  return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), path: c.get("path") };
+  return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), path: c.get("path"), midi: c.get("midi"), oscPort: c.get("oscPort") };
 }
 
 function showStatus() {
@@ -58,7 +61,26 @@ async function applyLearned(control, source) {
 
 async function connect() {
   if (client?.connected) return client;
-  const { port, token } = settings();
+  if (connecting) return connecting;
+  connecting = connectLive();
+  try {
+    return await connecting;
+  } catch (error) {
+    client?.close();
+    live?.dispose();
+    live = null;
+    throw error;
+  } finally {
+    connecting = null;
+  }
+}
+
+async function connectLive() {
+  const config = settings();
+  const { token } = config;
+  live?.dispose();
+  live = startLive(config, (text) => channel.appendLine(`live: ${text}`));
+  const port = await live.ready;
   client = new Client({
     port,
     token,
@@ -292,6 +314,7 @@ function activate(context) {
 
 function deactivate() {
   client?.close();
+  live?.dispose();
   return languageServer?.stop();
 }
 

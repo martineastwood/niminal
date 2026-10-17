@@ -15,7 +15,7 @@ cd editors/vscode && npm install && node install.js --cursor # Cursor
 niminal daemon          # or "niminal: Start Daemon in a Terminal"
 ```
 
-The sidebar launch / mute / solo / stop buttons use the daemon's typed performance API (`launch`, `mute`, …) via the shared [`niminal-client`](../../clients/js) package.
+The sidebar launch / mute / solo / stop buttons use the extension's private live sequencer API (`launch`, `mute`, …) via the shared [`niminal-client`](../../clients/js) package.
 
 Open `examples/groove.nml`, then:
 
@@ -30,7 +30,9 @@ The **niminal** side bar lists your scenes (click one, or press Cmd+1 to Cmd+9 f
 
 Compile errors appear as squiggles at the right place, the status bar shows the bar, beat, tempo, voices and changes waiting to land, and `niminal: Panic` is in the command palette.
 
-Settings: `niminal.port`, `niminal.token`, `niminal.quantize` (for example `next 4bars`), `niminal.path`.
+The extension owns a separate live sequencer process. Clips, scenes, lanes, transforms and quantized edits live there; it sends generic events to the daemon. Each editor session has its own performance state.
+
+Settings: `niminal.port` (generic daemon, default 7401), `niminal.token`, `niminal.quantize` (for example `next 4bars`), `niminal.path`.
 
 ## Language server
 
@@ -46,7 +48,7 @@ Other editors can use it too: run `niminal lsp` as a stdio language server for `
 
 ## Live controls, MIDI and OSC
 
-Named controls (`ctl`), MIDI CC / learn, OSC in, and keyboard clips (`keys: midi.keys`) are part of the language. Start the daemon with `--midi` and/or `--osc-port` when you need hardware or OSC.
+Named controls (`ctl`), MIDI CC / learn, OSC in, and keyboard clips (`keys: midi.keys`) are part of the language. Set `niminal.midi` (empty string for all inputs) and/or `niminal.oscPort` for the editor’s live sequencer, then reload the editor. For terminal performances with hardware or OSC, run `niminal live --midi` and/or `--osc-port` alongside the daemon.
 
 See the [live coding guide](https://niminal.dev/guide/live-coding/) and [performance reference](https://niminal.dev/reference/language/performance/). Examples: `examples/live_controls.nml`, `examples/midi_osc.nml`.
 

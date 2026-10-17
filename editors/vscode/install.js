@@ -29,6 +29,7 @@ for (const entry of [
   "blocks.js",
   "panel.js",
   "learn.js",
+  "live.js",
   "language-configuration.json",
   "score-language-configuration.json",
   "syntaxes",

@@ -311,3 +311,18 @@ fn a_timed_panic_sounds_the_same_prepared_as_offline() {
         assert_eq!(out, expected, "sent {ahead} frames ahead");
     }
 }
+
+#[test]
+fn instrument_scopes_and_buffer_events_allocate_nothing_while_rendering() {
+    use niminal_daemon::{At, Op};
+    use niminal_score::Time;
+    let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
+    s.send_events(0, vec![Op::Define { source: "buffer data = zeros(4)\ninstr a() { oversample(4) { osc(sine, 440hz).tanh } + spawn(osc(square, 400hz), dur: 10ms, max: 8) { osc(sine, 220hz) * env[1 | 2ms 0] } + data[0] }".into(), at: At::Now, dir: None, tag: None }]).unwrap();
+    s.send_events(0, vec![Op::Note { target: "a".into(), at: At::Now, args: Default::default(), dur: Some(Time::Seconds(0.05)), id: None, tag: None },
+        Op::BufferWrite { name: "data".into(), at: At::Sample(33), offset: 0, values: vec![0.1], tag: None }]).unwrap();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut out = vec![0.0; 8192];
+    s.prepare_realtime();
+    measured(&mut r, out.len(), &mut out);
+    assert!(out.iter().any(|x| x.abs() > 0.1));
+}

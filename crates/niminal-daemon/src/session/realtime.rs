@@ -125,7 +125,7 @@ impl Command {
             self.at,
             match self.kind {
                 Kind::Reset { .. } => 0,
-                Kind::Swap { .. } | Kind::Control { .. } => 1,
+                Kind::Swap { .. } | Kind::Control { .. } | Kind::Buffer { .. } => 1,
                 Kind::Note { .. } => 2,
                 Kind::Release { .. } | Kind::SetParam { .. } => 3,
             },
@@ -137,6 +137,7 @@ impl Command {
 // mean freeing it on the audio thread.
 #[allow(clippy::large_enum_variant)]
 enum Kind {
+    Buffer { buffer: Arc<niminal_engine::Buffer>, offset: usize, values: Arc<[f32]> },
     Note {
         track: Option<String>,
         program: Arc<Program>,
@@ -230,6 +231,7 @@ pub(super) enum Fresh {
     Release { key: u32, at: u64 },
     Set(super::VoiceSet),
     Track(super::TrackSet),
+    Buffer(super::BufferSet),
 }
 
 impl Fresh {
@@ -239,6 +241,7 @@ impl Fresh {
             Fresh::Release { at, .. } => *at,
             Fresh::Set(set) => set.at,
             Fresh::Track(set) => set.at,
+            Fresh::Buffer(set) => set.at,
         }
     }
 }
@@ -493,6 +496,9 @@ impl Session {
         }
         self.land_due();
         self.apply_controls();
+        for set in &mut self.buffer_sets { if set.at < self.clock { set.done = true; } }
+        let stale = self.clock.saturating_sub(self.sample_rate as u64 * 2);
+        self.buffer_sets.retain(|s| !s.done || s.at > stale);
         let Some(planner) = &self.live else { return };
         if planner.revision == planner.state.revision.load(Ordering::Acquire) {
             let consumed = self.clock.min(planner.prepared_until);
@@ -704,6 +710,12 @@ impl Session {
                         self.prepare_note(&program, &event, hold, config, &mut window);
                     }
                     Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
+                    Fresh::Buffer(set) => {
+                        if let Some((_, buffer)) = self.program_at(set.at).buffers.iter().find(|(name, _)| *name == set.name)
+                            && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
+                            window.commands.push(Command { at: set.at.max(self.clock), kind: Kind::Buffer { buffer: buffer.clone(), offset: set.offset, values: set.values } });
+                        }
+                    }
                     Fresh::Track(set) => window.commands.push(Command {
                         at: set.at.max(self.clock),
                         kind: Kind::Control { key: set.key, value: set.value, frames: set.frames },
@@ -922,6 +934,13 @@ impl Session {
                 && let Some(command) = set_command(program, set, set.at, set.frames)
             {
                 window.commands.push(command);
+            }
+        }
+        for set in &self.buffer_sets {
+            if set.at >= from && set.at < to
+                && let Some((_, buffer)) = program.buffers.iter().find(|(name, _)| *name == set.name)
+                && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
+                window.commands.push(Command { at: set.at, kind: Kind::Buffer { buffer: buffer.clone(), offset: set.offset, values: set.values.clone() } });
             }
         }
         // track parameters moved by `track` events
@@ -1152,6 +1171,9 @@ impl RealtimeRenderer {
     /// Carry out one prepared command at the current sample.
     fn apply(&mut self, kind: &mut Kind) {
         match kind {
+            Kind::Buffer { buffer, offset, values } => {
+                for (i, value) in values.iter().enumerate() { buffer.write(*offset + i, *value); }
+            }
             Kind::Release { key } => {
                 self.sounding.release_key(*key, self.clock);
             }

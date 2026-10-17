@@ -1,6 +1,8 @@
 # niminal clients
 
-Thin libraries that speak the daemon's protocols. `niminal daemon` runs two parts: the **live sequencer** on port 7400 (code, clips, scenes, quantized changes) and the **engine** on port 7401, a sound server that plays timestamped events. The clients build clip/scene defs and send them to the sequencer, or send events straight to the engine; the sequencer owns looping and landing on bar lines, and the engine owns time and the session log.
+`Client` in JavaScript speaks the generic daemon events API (port 7401). Clients own their sequencing model; the daemon schedules notes, parameter changes and DSP definitions. It has no clips or scenes.
+
+`LiveClient` controls a separate `niminal live` process (port 7400), which owns clips, scenes, lanes, transforms and quantized edits. VS Code starts a private instance of that process. For terminal use, run `niminal daemon`, then `niminal live` in another terminal. Python also provides `Client` for the generic daemon and `LiveClient` for the separate sequencer.
 
 | Path | Language |
 | --- | --- |
@@ -8,8 +10,8 @@ Thin libraries that speak the daemon's protocols. `niminal daemon` runs two part
 | [`python/`](python/) | Python (`pip install -e clients/python`) |
 
 ```js
-const { Client } = require("niminal-client");
-const c = new Client({ port: 7400 });
+const { Client, LiveClient } = require("niminal-client");
+const c = new LiveClient();
 await c.connect();
 await c.defineClip({ name: "riff", instrument: "pluck", lanes: { notes: "c4 e4" } });
 await c.launch("riff", { quantize: "next bar" });
@@ -28,9 +30,9 @@ console.log(await engine.clock());
 ```
 
 ```python
-from niminal import Client, ClipDef, Project
+from niminal import LiveClient, ClipDef, Project
 
-c = Client()
+c = LiveClient()
 c.connect()
 c.define_clip(ClipDef(name="riff", instrument="pluck", lanes={"notes": "c4 e4"}))
 c.launch("riff", quantize="next bar")

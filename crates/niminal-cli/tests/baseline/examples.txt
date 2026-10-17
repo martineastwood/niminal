@@ -5,6 +5,7 @@ composition.nml: 1x105973
 drums.nml: 2x492612
 functions.nml: 2x293633
 groove.nml: 2x570512
+instrument_scopes.nml: 1x100797
 live_controls.nml: 2x369682
 lsp_tour.nml: 2x369682
 midi_osc.nml: 2x369169

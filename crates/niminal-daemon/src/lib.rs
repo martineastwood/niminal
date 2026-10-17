@@ -12,6 +12,7 @@ mod grid;
 mod log;
 mod midi_out;
 mod project;
+mod resources;
 mod session;
 mod sounding;
 mod status;

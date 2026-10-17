@@ -168,6 +168,7 @@ impl Session {
         }
 
         enum Plan {
+            Buffer { set: BufferSet, start: u64 },
             Note { event: Event, instrument: String, start: u64, dur: u64, id: Option<u64>, tag: Option<String>, musical: Option<bool> },
             Control { name: String, value: f32, frames: u64, at: u64, op: usize, tag: Option<String> },
             Track { key: String, value: f32, frames: u64, at: u64, tag: Option<String> },
@@ -310,6 +311,24 @@ impl Session {
                     open.remove(i);
                     plans.push(Plan::Off { id: *id, at, tag: tag.clone() });
                 }
+                Op::BufferWrite { name, at, offset, values, tag } => {
+                    let start = self.resolve(*at);
+                    resolved[n] = Some(Op::BufferWrite { name: name.clone(), at: self.logged(*at), offset: *offset, values: values.clone(), tag: tag.clone() });
+                    let program = self.program_at(start);
+                    let Some((_, buffer)) = program.buffers.iter().find(|(n, _)| n == name) else {
+                        fail(format!("no buffer `{name}`")); continue;
+                    };
+                    if *offset > buffer.len() || values.len() > buffer.len() - offset {
+                        fail("buffer write is outside its length".into()); continue;
+                    }
+                    if values.len() > 65536 || values.iter().any(|v| !v.is_finite()) {
+                        fail("a buffer write has at most 65536 finite samples".into()); continue;
+                    }
+                    if self.buffer_sets.len() + plans.len() >= 4096 {
+                        fail("the buffer write queue is full".into()); continue;
+                    }
+                    plans.push(Plan::Buffer { start, set: BufferSet { name: name.clone(), offset: *offset, values: values.clone().into(), at: start.max(clock), client, tag: tag.clone(), done: false } });
+                }
                 Op::Panic { at, tag } => {
                     let start = self.resolve(*at);
                     resolved[n] = Some(Op::Panic { at: self.logged(*at), tag: tag.clone() });
@@ -343,6 +362,11 @@ impl Session {
         }
         for plan in plans {
             let at = match plan {
+                Plan::Buffer { set, start } => {
+                    if self.live.is_some() { self.fresh.push(realtime::Fresh::Buffer(set.clone())); }
+                    self.buffer_sets.push(set);
+                    start
+                }
                 Plan::Note { event, instrument, start, dur, id, tag, musical } => {
                     let key = id.map(|_| self.new_key());
                     if let (Some(id), Some(key)) = (id, key) {
@@ -528,6 +552,11 @@ impl Session {
             done.cancelled += usize::from(drop);
             !drop
         });
+        self.buffer_sets.retain(|s| {
+            let drop = !s.done && s.at >= from && mine(Some(s.client), &s.tag);
+            done.cancelled += usize::from(drop);
+            !drop
+        });
         self.track_sets = tracks;
         replan |= done.cancelled > before;
 
@@ -614,11 +643,12 @@ impl Session {
         for key in held {
             self.release_at(key, self.clock, None);
         }
-        let before = self.upcoming.len() + self.track_sets.len();
+        let before = self.upcoming.len() + self.track_sets.len() + self.buffer_sets.len();
         let clock = self.clock;
         self.upcoming.retain(|u| u.client != Some(client) || u.start < clock || u.key.is_some());
         self.track_sets.retain(|s| s.client != Some(client) || s.at < clock);
-        if self.upcoming.len() + self.track_sets.len() != before {
+        self.buffer_sets.retain(|s| s.client != client || s.at < clock);
+        if self.upcoming.len() + self.track_sets.len() + self.buffer_sets.len() != before {
             self.invalidate_windows();
         }
     }

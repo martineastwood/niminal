@@ -70,7 +70,7 @@ instr pad(freq: hz, cutoff: hz = 2khz) {
 }
 ```
 
-Anonymous functions capture the surrounding values they read. Each invocation has independent state, including when expanded by a loop. A callback's argument count, units and result are checked when its caller is specialized. Bodies of functions with `fn` parameters are checked at their calls, rather than against a guessed callback at definition time. Function parameters cannot have `init` or `control` rates, and instruments cannot accept them.
+Anonymous functions capture the surrounding values they read. Each invocation has independent state, including when expanded by a loop. A callback's argument count, units and result are checked when its caller is specialized. Bodies of functions with `fn` parameters are checked at their calls, rather than against a guessed callback at definition time. Function parameters cannot have `init` or `control` rates, and instruments can accept them as structural parameters with defaults.
 
 ## Results
 
@@ -221,3 +221,19 @@ An oscillator plays a table as one cycle of a wave, band-limited at any pitch: `
 ## Built-ins
 
 Core opcodes (`osc`, filters, `gain`, `delay`, `reverb`, `pan`, math, …) are listed under [Built-in opcodes](/reference/opcodes/). That page is generated from the compiler, so it stays in sync with the binary. A function can call any of them except `pan` and `to_layout` inside a function with state. Other DSP built-ins expand element by element over array arguments there as well.
+
+## Oversampling
+
+`oversample(2) { ... }`, `oversample(4) { ... }` and `oversample(8) { ... }` run sample DSP at a higher rate with filtered upsampling and downsampling:
+
+```nml
+instr driven(freq: hz) {
+  oversample(4) {
+    (osc(saw, freq) * 5).tanh
+  }
+}
+```
+
+Create generators and nonlinear processors inside the scope to run them at its sample rate. A signal calculated outside is upsampled; its generator still runs at the original rate. `sample_rate` inside is the higher rate, keeping oscillators, delays, filters and user-written DSP at the intended pitch and time scale. Input conversion preserves constant values. The conversion filters add 16 output samples of delay; align parallel dry paths explicitly when phase alignment matters.
+
+The body supports state, arrays, envelopes and DSP functions. It follows the sample DSP function restrictions on channel-layout processing and side effects. Nested `spawn`/`oversample` scopes are not supported yet. Capture transport or other parent context in a local before entering the scope. Read slow controls with `.control` outside the scope when they must retain the parent's block cadence; processing inside is sample by sample.

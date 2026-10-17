@@ -1,17 +1,19 @@
 ---
 title: Live coding
-description: Run the daemon and send code to it.
+description: Run a generic sound server and a live sequencer client.
 ---
 
-Start the daemon, then send code from the REPL, the CLI, or the [editor](/reference/editor/). Syntax help and completion come from [`niminal lsp`](/reference/editor/) and work without a daemon.
+Start the daemon and a separate `niminal live` client, then send code from the REPL, the CLI, or the [editor](/reference/editor/). Syntax help and completion come from [`niminal lsp`](/reference/editor/) and work without a daemon.
 
 ```sh
-niminal daemon examples/groove.nml
+niminal daemon
+# another terminal:
+niminal live examples/groove.nml
 niminal repl
 niminal send 'chorus.start' --quantize "next 4bars"
 ```
 
-With a file argument, the daemon watches that file and every module it `use`s, and reloads when you save.
+With a file argument, the live client watches that file and every module it `use`s, and reloads when you save.
 
 ## REPL
 
@@ -49,7 +51,9 @@ Use `--no-log` on the daemon to skip recording, or `--log PATH` to choose the fi
 Drive named controls from a controller or OSC sender:
 
 ```sh
-niminal daemon examples/midi_osc.nml --midi --osc-port 9000
+niminal daemon
+# another terminal:
+niminal live examples/midi_osc.nml --midi --osc-port 9000
 ```
 
 ```nml

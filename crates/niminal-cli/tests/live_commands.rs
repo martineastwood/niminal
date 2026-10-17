@@ -32,6 +32,7 @@ fn free_port() -> u16 {
 /// A daemon running as a child process, killed when dropped.
 struct Daemon {
     child: Child,
+    engine: Child,
     port: u16,
 }
 
@@ -40,23 +41,38 @@ impl Daemon {
         // Another test may take the port between choosing it and binding it, so try again.
         for _ in 0..5 {
             let (port, engine_port) = (free_port(), free_port());
-            let mut child = niminal()
-                .args(["daemon", "--no-audio", "--port", &port.to_string(), "--engine-port", &engine_port.to_string()])
-                .args(extra)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
-            // the engine says it is listening, then the sequencer
-            let mut reader = BufReader::new(child.stdout.as_mut().unwrap());
+            let (engine_args, live_args) = if extra.first() == Some(&"--log") {
+                (extra, &[][..])
+            } else {
+                (&[][..], extra)
+            };
+            let mut engine = niminal()
+                .args(["daemon", "--no-audio", "--port", &engine_port.to_string()])
+                .args(engine_args)
+                .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
             let mut line = String::new();
-            for _ in 0..2 {
+            BufReader::new(engine.stdout.as_mut().unwrap()).read_line(&mut line).unwrap();
+            if !line.contains("niminal engine listening") {
+                let _ = engine.kill();
+                let _ = engine.wait();
+                continue;
+            }
+            let mut child = niminal()
+                .args(["live", "--port", &port.to_string(), "--engine-port", &engine_port.to_string()])
+                .args(live_args)
+                .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+            let mut reader = BufReader::new(child.stdout.as_mut().unwrap());
+            loop {
                 line.clear();
-                reader.read_line(&mut line).unwrap();
+                if reader.read_line(&mut line).unwrap() == 0 || line.contains("niminal live listening") {
+                    break;
+                }
             }
-            if line.contains("niminal daemon listening on ws://127.0.0.1") {
-                return Daemon { child, port };
+            if line.contains("niminal live listening on ws://127.0.0.1") {
+                return Daemon { child, engine, port };
             }
+            let _ = engine.kill();
+            let _ = engine.wait();
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -77,6 +93,8 @@ impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = self.engine.kill();
+        let _ = self.engine.wait();
     }
 }
 

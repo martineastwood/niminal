@@ -32,7 +32,7 @@ Installed packages are the `.nml` files in `$NIMINAL_PACKAGES`, or in `~/.nimina
 ## Errors and reloading
 
 - An error in a module is reported on the `use` line, with the module's own file and line.
-- `niminal daemon file.nml` watches every module the file uses and evaluates it again, as a whole, when any of them changes.
+- `niminal live file.nml` watches every module the file uses and evaluates it again, as a whole, when any of them changes.
 - The evaluation log keeps the joined code, so a log replays without the module files.
 - The language server completes, hovers and jumps to names from modules. After `r::` it offers what `r` defines.
 

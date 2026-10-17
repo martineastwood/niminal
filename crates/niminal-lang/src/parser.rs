@@ -1708,7 +1708,7 @@ impl Parser {
                 };
                 continue;
             }
-            if self.peek() == &Tok::LBrace && matches!(&e.kind, ExprKind::Call { name, .. } if name.name == "reset_on") {
+            if self.peek() == &Tok::LBrace && matches!(&e.kind, ExprKind::Call { name, .. } if matches!(name.name.as_str(), "reset_on" | "spawn" | "oversample")) {
                 let (body, end) = self.block()?;
                 let body_span = e.span.to(end);
                 if let ExprKind::Call { args, .. } = &mut e.kind {

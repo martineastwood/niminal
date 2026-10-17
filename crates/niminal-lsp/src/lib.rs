@@ -302,7 +302,7 @@ fn doc_comment(text: &str, symbol: &Symbol) -> String {
 }
 
 fn diagnostics(uri: &str, text: &str, expanded: Result<niminal_lang::Expanded, niminal_lang::Diagnostic>) -> Vec<Value> {
-    let options = CompileOptions { default_layout: Layout::Mono, samples: Samples::new(text::directory_of(uri)) };
+    let options = CompileOptions { default_layout: Layout::Mono, samples: Samples::new(text::directory_of(uri)), ..Default::default() };
     let expanded = match expanded {
         Ok(e) => e,
         Err(d) => return vec![diagnostic(text, &d)],

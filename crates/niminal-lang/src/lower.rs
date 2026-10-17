@@ -22,13 +22,19 @@ use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::layout::{Layout, conversion};
 use crate::funcs::{self, Kind as PKind, Param as PParam};
-use crate::kernel::{Body, KArg, KernelResult, cmp_op, compile_kernel, edge_of, ends_with_value, interp_of, lambda_of, range_numbers};
+use crate::kernel::{Body, KArg, KernelResult, cmp_op, edge_of, ends_with_value, interp_of, lambda_of, range_numbers};
 use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
 use crate::program::MidiTarget;
 use crate::program::{ControlBinding, ControlDef, Instrument, Param};
 use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
+type BoundFnArgs = Vec<Option<(Datum, Expr)>>;
+
+enum ProcessorScope {
+    Spawn { max: usize, trigger: Sig, duration: Sig },
+    Oversample(usize),
+}
 
 const UNIT_NAMES: [&str; 13] = [
     "hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "bpm", "deg", "st", "ct",
@@ -237,7 +243,7 @@ impl Names {
         }
         if matches!(
             name.name.as_str(),
-            "out" | "it" | "instrument" | "state" | "note" | "clock" | "true" | "false" | "pi" | "sample_rate" | "reset_on"
+            "out" | "it" | "instrument" | "state" | "note" | "clock" | "true" | "false" | "pi" | "sample_rate" | "reset_on" | "spawn" | "oversample"
         ) {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
@@ -505,6 +511,26 @@ pub(crate) fn compile_instr(
     let signature = funcs::signature(&def.params, tempo)?;
     for p in &signature {
         names.check_local(&p.name)?;
+        // Structural arguments specialize the graph. Notes only see the remaining scalar ports.
+        if p.rate == Some(Rate::Const) || matches!(p.kind, PKind::Choice(_) | PKind::Function | PKind::Array(_)) {
+            let default = p.default.as_ref().ok_or_else(|| Diagnostic::new(
+                format!("structural parameter `{}` needs a default", p.name.name), p.name.span,
+            ).with_help("override it by calling this instrument inside another instrument"))?;
+            let value = if let PKind::Choice(options) = &p.kind {
+                let ExprKind::Name(n) = &default.kind else { unreachable!("signature checked") };
+                for (i, option) in options.iter().enumerate() {
+                    lower.scope.insert(option.clone(), Datum::Sig(Sig::constant(Unit::Num, i as f64)));
+                }
+                Datum::Sig(Sig::constant(Unit::Num, options.iter().position(|o| o == n).unwrap() as f64))
+            } else {
+                lower.value(default)?
+            };
+            let mut structural = p.clone();
+            structural.rate = Some(Rate::Const);
+            let value = lower.check_param(&def.name.name, &structural, value, default)?;
+            lower.scope.insert(p.name.name.clone(), value);
+            continue;
+        }
         let (unit, range) = match &p.kind {
             PKind::Unit { unit, .. } => (*unit, None),
             PKind::Range { unit, lo, hi } => (*unit, Some((*lo, *hi))),
@@ -518,24 +544,8 @@ pub(crate) fn compile_instr(
                     .with_help(format!("for example `{}: hz`", p.name.name)));
                 }
             },
-            PKind::Choice(_) | PKind::Array(_) | PKind::Function => {
-                return Err(Diagnostic::new(
-                    format!(
-                        "an instrument's parameters are set by notes, so `{}` can't be a choice, an array or a function",
-                        p.name.name
-                    ),
-                    p.name.span,
-                )
-                .with_help("write a `fn` for that, and call it from the instrument"));
-            }
+            PKind::Choice(_) | PKind::Array(_) | PKind::Function => unreachable!("structural arguments handled above"),
         };
-        if p.rate == Some(Rate::Const) {
-            return Err(Diagnostic::new(
-                format!("notes set `{}` while playing, so it can't be `const`", p.name.name),
-                p.name.span,
-            )
-            .with_help("use `init` to fix it at note start"));
-        }
         let default = match &p.default {
             None => None,
             Some(e) => Some(lower.param_default(e, unit, range, &p.name.name)?),
@@ -648,11 +658,11 @@ pub(crate) fn compile_instr(
         Some(gain) => lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, span)?,
         None => result,
     };
-    Ok(Instrument::new(
-        def.name.name.clone(),
-        Arc::new(lower.g.build_channels(&result.srcs)),
-        params,
-    ))
+    let mut instrument = Instrument::new(
+        def.name.name.clone(), Arc::new(lower.g.build_channels(&result.srcs)), params,
+    );
+    instrument.taps = lower.taps;
+    Ok(instrument)
 }
 
 /// One sample of a sampler instrument.
@@ -3370,13 +3380,6 @@ impl<'a> Lower<'a> {
             return Err(Diagnostic::new("`osc_out` can't be used inside a function", name.span)
                 .with_help("send from the track that calls it"));
         }
-        if self.mode != Mode::Track {
-            return Err(Diagnostic::new(
-                "`osc_out` sends a track's signal, so it is used in a track",
-                name.span,
-            )
-            .with_help("for example `out = it.osc_out(\"/vj/level\", port: 9000)`"));
-        }
         let Some(signal) = args.first().filter(|a| a.receiver) else {
             return Err(Diagnostic::new(
                 "`osc_out` works on a signal: write it after one, as in `out.osc_out(...)`",
@@ -3384,7 +3387,7 @@ impl<'a> Lower<'a> {
             ));
         };
         let mut address = None;
-        let (mut host, mut port, mut rate) = (None, None, None);
+        let (mut host, mut port, mut rate, mut trigger) = (None, None, None, None);
         for arg in &args[1..] {
             match arg.name.as_ref().map(|n| n.name.as_str()) {
                 None => {
@@ -3399,12 +3402,13 @@ impl<'a> Lower<'a> {
                 Some("host") => host = Some(&arg.value),
                 Some("port") => port = Some(&arg.value),
                 Some("rate") => rate = Some(&arg.value),
+                Some("on") => trigger = Some(&arg.value),
                 Some(other) => {
                     let mut d = Diagnostic::new(
                         format!("`osc_out` has no argument named `{other}`"),
                         arg.name.as_ref().map_or(arg.value.span, |n| n.span),
                     );
-                    if let Some(c) = closest(other, ["host", "port", "rate"]) {
+                    if let Some(c) = closest(other, ["host", "port", "rate", "on"]) {
                         d = d.with_help(format!("did you mean `{c}`?"));
                     }
                     return Err(d);
@@ -3477,11 +3481,14 @@ impl<'a> Lower<'a> {
             )
             .with_help("send a channel at a time: `[l, r] = ...` then `l.osc_out(...)`"));
         }
-        let tap = Tap::new();
-        let src = self
-            .g
-            .add(TapOut::new(tap.clone()), &[("x", sig.srcs[0])])
-            .expect("tap ports");
+        let mut ports = vec![("x", sig.srcs[0])];
+        let tap = if let Some(trigger) = trigger {
+            let value = self.expr(trigger)?;
+            if value.count() != 1 || value.unit != Unit::Num { return Err(Diagnostic::new("OSC on is one plain trigger signal", trigger.span)); }
+            ports.push(("on", value.srcs[0]));
+            Tap::triggered()
+        } else { Tap::new() };
+        let src = self.g.add(TapOut::new(tap.clone()), &ports).expect("tap ports");
         self.taps.push(crate::program::OscTap {
             address,
             host,
@@ -3517,8 +3524,74 @@ impl<'a> Lower<'a> {
         })
     }
 
+    fn spawn_scope(&mut self, args: &[Arg], span: Span) -> Res<Datum> {
+        let usage = || Diagnostic::new("write `spawn(trigger, dur: 100ms, max: 8) { ... }`", span);
+        let Some((body, options)) = args.split_last() else { return Err(usage()); };
+        let ExprKind::Lambda { params, body } = &body.value.kind else { return Err(usage()); };
+        if !params.is_empty() { return Err(usage()); }
+        let Some((trigger, options)) = options.split_first() else { return Err(usage()); };
+        if trigger.name.is_some() { return Err(usage()); }
+        let trigger = self.expr(&trigger.value)?;
+        if trigger.unit != Unit::Num || trigger.count() != 1 { return Err(usage()); }
+        let mut duration = None;
+        let mut max = None;
+        for option in options {
+            match option.name.as_ref().map(|n| n.name.as_str()) {
+                Some("dur") if duration.is_none() => {
+                    let value = self.expr(&option.value)?;
+                    if value.unit != Unit::Time || value.count() != 1 { return Err(usage()); }
+                    if value.konst.is_some_and(|v| !v.is_finite() || v <= 0.0 || v > 600.0) {
+                        return Err(Diagnostic::new("spawn duration is above 0 and at most 600sec", option.value.span));
+                    }
+                    duration = Some(value);
+                }
+                Some("max") if max.is_none() => {
+                    let value = self.expr(&option.value)?;
+                    let Some(v) = value.konst.filter(|v| value.unit == Unit::Num && v.fract() == 0.0 && (1.0..=64.0).contains(v)) else {
+                        return Err(Diagnostic::new("spawn max is a constant whole number from 1 to 64", option.value.span));
+                    };
+                    max = Some(v as usize);
+                }
+                _ => return Err(usage()),
+            }
+        }
+        let duration = duration.ok_or_else(usage)?;
+        let (def, params, given) = self.scope_kernel(body, span);
+        self.call_scoped_kernel(&def, &def.name, &params, given, span, Some(ProcessorScope::Spawn { max: max.unwrap_or(8), trigger, duration }))
+    }
+
+    /// Make free variables explicit ports; each processor decides when to read them.
+    fn scope_kernel(&self, body: &[Stmt], span: Span) -> (FnDef, Vec<PParam>, BoundFnArgs) {
+        let mut def = funcs::lambda(&[], body, span);
+        let mut captures: Vec<_> = self.scope.iter().filter(|(n, _)| funcs::reads(&def, n)).collect();
+        captures.sort_by(|a, b| a.0.cmp(b.0));
+        let mut params = Vec::new();
+        let mut given = Vec::new();
+        for (name, value) in captures {
+            let id = Ident { name: name.clone(), span };
+            def.params.push(ParamDef { name: id.clone(), rate: None, ty: None, default: None });
+            params.push(PParam { name: id, rate: None, kind: PKind::Any, default: None });
+            given.push(Some((value.clone(), Expr { kind: ExprKind::Name(name.clone()), span })));
+        }
+        (def, params, given)
+    }
+
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
         let n = name.name.as_str();
+        if n == "oversample" {
+            let [factor, body] = args else { return Err(Diagnostic::new("write `oversample(4) { ... }`", span)); };
+            let value = self.expr(&factor.value)?;
+            let Some(factor) = value.konst.filter(|f| value.unit == Unit::Num && [2.0, 4.0, 8.0].contains(f)) else {
+                return Err(Diagnostic::new("oversample factor is 2, 4 or 8", factor.value.span));
+            };
+            let ExprKind::Lambda { params, body } = &body.value.kind else { return Err(Diagnostic::new("oversample needs a body", span)); };
+            if !params.is_empty() { return Err(Diagnostic::new("oversample body takes no arguments", span)); }
+            let (def, params, given) = self.scope_kernel(body, span);
+            return self.call_scoped_kernel(&def, &def.name, &params, given, span, Some(ProcessorScope::Oversample(factor as usize)));
+        }
+        if n == "spawn" {
+            return self.spawn_scope(args, span);
+        }
         if n == "reset_on" {
             let (trigger, body) = funcs::reset_args(args, span)?;
             if self.mode == Mode::Plain { return Err(Diagnostic::new("reset scopes run while playing", span)); }
@@ -4164,7 +4237,7 @@ impl Lower<'_> {
         callee: &Ident,
         params: &[PParam],
         args: &[Arg],
-    ) -> Res<Vec<Option<(Datum, Expr)>>> {
+    ) -> Res<BoundFnArgs> {
         let names: Vec<&str> = params.iter().map(|p| p.name.name.as_str()).collect();
         let positional = funcs::positional(params.iter().map(PParam::required));
         let bound = funcs::bind(&callee.name, callee.span, &names, positional, args)?;
@@ -4228,7 +4301,7 @@ impl Lower<'_> {
         def: &FnDef,
         name: &Ident,
         params: &[PParam],
-        given: Vec<Option<(Datum, Expr)>>,
+        given: BoundFnArgs,
     ) -> Res<Datum> {
         for (p, g) in params.iter().zip(given) {
             let (v, arg) = match g {
@@ -4332,8 +4405,20 @@ impl Lower<'_> {
         def: &FnDef,
         name: &Ident,
         params: &[PParam],
-        given: Vec<Option<(Datum, Expr)>>,
+        given: BoundFnArgs,
         span: Span,
+    ) -> Res<Datum> {
+        self.call_scoped_kernel(def, name, params, given, span, None)
+    }
+
+    fn call_scoped_kernel(
+        &mut self,
+        def: &FnDef,
+        name: &Ident,
+        params: &[PParam],
+        given: BoundFnArgs,
+        span: Span,
+        processor: Option<ProcessorScope>,
     ) -> Res<Datum> {
         if self.mode == Mode::Plain {
             return Err(Diagnostic::new(
@@ -4354,7 +4439,30 @@ impl Lower<'_> {
             let v = self.check_param(&name.name, p, v, &arg)?;
             kargs.push(self.kernel_arg(v, &p.name.name, &mut wires, &mut width, &mut layout, at)?);
         }
-        let (kernel, shape) = compile_kernel(def, &kargs, self.registry, self.names, self.tempo)?;
+        if processor.is_some() {
+            // Shared reads hidden in a subvoice still participate in cross-track ordering.
+            let mut pending = vec![def.clone()];
+            let mut visited = std::collections::HashSet::new();
+            while let Some(body) = pending.pop() {
+                if !visited.insert(body.name.name.clone()) { continue; }
+                for (name, (id, _)) in &self.names.buffers {
+                    if funcs::reads(&body, name) { self.g.touch_buffer_read(*id); }
+                }
+                for (name, nested) in &self.names.fns {
+                    if funcs::reads(&body, name) { pending.push(nested.clone()); }
+                }
+                for (name, nested) in &self.names.instrs {
+                    if funcs::reads(&body, name) {
+                        pending.push(FnDef { name: nested.name.clone(), params: nested.params.clone(), body: nested.body.clone(), result: FnResult::Inferred, span: nested.span });
+                    }
+                }
+            }
+        }
+        let (kernel, shape) = if processor.is_some() {
+            crate::kernel::compile_scoped_kernel(def, &kargs, self.registry, self.names, self.tempo, true)?
+        } else {
+            crate::kernel::compile_kernel(def, &kargs, self.registry, self.names, self.tempo)?
+        };
         let kernel = Arc::new(kernel);
         let outputs = kernel.outputs.len();
         let mut per_output: Vec<Vec<Src>> = vec![Vec::with_capacity(width); outputs];
@@ -4363,9 +4471,19 @@ impl Lower<'_> {
                 .iter()
                 .map(|(n, s)| (n.as_str(), s.pick(channel)))
                 .collect();
+            let mut wired = wired;
+            let op: Box<dyn niminal_engine::Opcode> = match &processor {
+                Some(ProcessorScope::Spawn { max, trigger, duration }) => {
+                    wired.push(("__trigger", trigger.srcs[0]));
+                    wired.push(("__duration", duration.srcs[0]));
+                    Box::new(niminal_engine::ops::Spawn::new(Box::new(Custom::new(kernel.clone())), *max))
+                }
+                Some(ProcessorScope::Oversample(factor)) => Box::new(niminal_engine::ops::Oversample::new(Box::new(Custom::new(kernel.clone())), *factor)),
+                None => Box::new(Custom::new(kernel.clone())),
+            };
             let results = self
                 .g
-                .add_outputs(Custom::new(kernel.clone()), &wired)
+                .add_outputs(op, &wired)
                 .map_err(|e| Diagnostic::new(e.to_string(), span))?;
             for (k, src) in results.into_iter().take(outputs).enumerate() {
                 per_output[k].push(src);

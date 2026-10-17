@@ -14,6 +14,7 @@ use crate::unit::Unit;
 /// notes are checked against.
 #[derive(Clone)]
 pub struct Instrument {
+    pub taps: Vec<OscTap>,
     pub name: String,
     pub graph: Arc<Graph>,
     /// In graph parameter order.
@@ -506,6 +507,7 @@ impl Instrument {
     /// A silent-by-default voice instrument; callers set kit members, MIDI, or voice options.
     pub(crate) fn new(name: String, graph: Arc<Graph>, params: Vec<Param>) -> Self {
         Self {
+            taps: Vec::new(),
             name,
             graph,
             params,

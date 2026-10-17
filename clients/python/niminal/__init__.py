@@ -76,7 +76,7 @@ class Client:
 
     def __init__(
         self,
-        url: str = "ws://127.0.0.1:7400/",
+        url: str = "ws://127.0.0.1:7401/",
         token: Optional[str] = None,
         on_notification: Optional[Callable[[str, dict], None]] = None,
     ):
@@ -113,6 +113,46 @@ class Client:
                 return message.get("result")
             if message.get("method"):
                 self.on_notification(message["method"], message.get("params") or {})
+
+    def status(self) -> Any:
+        return self.call("status")
+
+    def send_events(self, events: list[dict]) -> Any:
+        """Send timed events: `{"op": "note" | "control" | "track", "at": ..., ...}`.
+
+        `at` is a sample, "now" or a position such as "32beat".
+        """
+        return self.call("events.send", {"events": events})
+
+    def cancel_events(self, tag: Optional[str] = None, from_: Any = None, release: Optional[bool] = None) -> Any:
+        """Take back this client's waiting events."""
+        params: dict[str, Any] = {}
+        if tag is not None:
+            params["tag"] = tag
+        if from_ is not None:
+            params["from"] = from_
+        if release is not None:
+            params["release"] = release
+        return self.call("events.cancel", params)
+
+    def clock(self) -> Any:
+        """Where the engine is in time: sample, bar, beat, bpm, prepared_until, wall_micros..."""
+        return self.call("clock")
+
+    def set_control(self, name: str, value: float, unit: Optional[str] = None, at: Any = "now", glide: Optional[str] = None) -> Any:
+        op: dict[str, Any] = {"op": "control", "name": name, "value": value, "at": at}
+        if unit is not None:
+            op["unit"] = unit
+        if glide is not None:
+            op["glide"] = glide
+        return self.send_events([op])
+
+
+class LiveClient(Client):
+    """Control a separate `niminal live` sequencer process."""
+
+    def __init__(self, url: str = "ws://127.0.0.1:7400/", **kwargs):
+        super().__init__(url=url, **kwargs)
 
     def eval(self, source: str, quantize: Optional[str] = None, dir: Optional[str] = None) -> Any:
         params: dict[str, Any] = {"source": source}
@@ -158,39 +198,6 @@ class Client:
     def panic(self) -> Any:
         return self.call("panic")
 
-    def status(self) -> Any:
-        return self.call("status")
-
-    def send_events(self, events: list[dict]) -> Any:
-        """Send timed events: `{"op": "note" | "control" | "track", "at": ..., ...}`.
-
-        `at` is a sample, "now" or a position such as "32beat".
-        """
-        return self.call("events.send", {"events": events})
-
-    def cancel_events(self, tag: Optional[str] = None, from_: Any = None, release: Optional[bool] = None) -> Any:
-        """Take back this client's waiting events."""
-        params: dict[str, Any] = {}
-        if tag is not None:
-            params["tag"] = tag
-        if from_ is not None:
-            params["from"] = from_
-        if release is not None:
-            params["release"] = release
-        return self.call("events.cancel", params)
-
-    def clock(self) -> Any:
-        """Where the engine is in time: sample, bar, beat, bpm, prepared_until, wall_micros..."""
-        return self.call("clock")
-
-    def set_control(self, name: str, value: float, unit: Optional[str] = None, at: Any = "now", glide: Optional[str] = None) -> Any:
-        op: dict[str, Any] = {"op": "control", "name": name, "value": value, "at": at}
-        if unit is not None:
-            op["unit"] = unit
-        if glide is not None:
-            op["glide"] = glide
-        return self.send_events([op])
-
 
 # Back-compat alias used in the language spec examples.
 Session = Client
@@ -202,5 +209,6 @@ __all__ = [
     "SceneDef",
     "Project",
     "Client",
+    "LiveClient",
     "Session",
 ]

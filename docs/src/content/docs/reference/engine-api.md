@@ -5,7 +5,7 @@ description: "JSON-RPC 2.0 over WebSocket for the sound server inside the daemon
 
 The **engine** is a sound server. It holds the instruments, effects, tracks, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions and tempo. It knows nothing of clips, scenes, patterns or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
 
-`niminal daemon` runs the engine on port **7401** (`--engine-port`) and the sequencer on 7400. `niminal daemon --engine-only` runs only the engine, on `--port`. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
+`niminal daemon` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the daemon never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
 
 ## Connection
 
@@ -69,6 +69,37 @@ Where the engine is in time, for a client that schedules against it.
 | `lookahead` | How far ahead of the clock the engine prepares, in samples. |
 | `output_latency` | Seconds from the audio callback to the speakers, as the audio API reports it. |
 | `wall_micros` | The Unix time in microseconds at which the audio callback was handed the buffer that starts at `sample`, recorded in the callback beside the clock rather than when the reply is made. `null` before there is an output. With `sample_rate` it maps any sample to the wall clock: `wall_micros + (s - sample) / sample_rate * 1e6`, plus `output_latency` to when it is heard. |
+
+### Buffers
+
+| Method | Parameters | Result |
+| --- | --- | --- |
+| `buffers.list` | none | `buffers`: each resource's `name`, `frames`, `sample_rate` |
+| `buffers.alloc` | `name`, `frames` | Allocate a new named buffer (1–4194304 frames) through a logged definition |
+| `buffers.read` | `name`, `offset` (default 0), `count` | `name`, `offset`, `values` (at most 65536 samples) |
+| `buffers.load` | `name`, `path`, `channel` (1-based, default 1) | Load a WAV channel, resample to the engine rate, allocate if absent, and queue logged writes; an existing buffer must have the resulting length |
+| `buffers.save` | `name`, `path` | Save a mono 32-bit float WAV snapshot; returns `name`, `path`, `frames` |
+
+Sample updates go in `events.send`:
+
+```json
+{ "op": "buffer_write", "name": "take", "at": "now", "offset": 0, "values": [0.25, -0.5], "tag": "edit" }
+```
+
+A write contains at most 65536 finite samples within the declared length. It applies before notes at that sample, is validated with the rest of the batch, and supports cancellation and disconnect cleanup. Longer updates use several writes at the same time. `buffers.load` records the decoded values in the session log, so replay does not need the original WAV. Writes apply when rendering reaches their time; reading immediately after queuing a write may still return the previous contents. Snapshots do not stop concurrent recording.
+
+### Instrument reporting
+
+Instruments and tracks can report a changing signal through `.osc_out("/address", port: 9000)`. Add `on: trigger` to capture a value on each positive edge:
+
+```nml
+instr tone(freq: hz) {
+  report = (freq / 1hz).osc_out("/note/frequency", port: 9000, on: note.start)
+  osc(sine, freq) * env[1 | 20ms 0] + report * 0
+}
+```
+
+Triggered reports preserve repeated equal values. Each tap has a bounded queue of 256 scalar events shared by its voices; overflow discards the oldest. `rate` (default 30hz, 0.5–200hz) controls how often the sender drains the queue, rather than limiting the trigger rate. Network sending happens outside the audio thread. Offline rendering/replay does not send OSC. Reports currently carry one float and no note ID or timestamp.
 
 ### `events.cancel`
 

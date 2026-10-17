@@ -1,5 +1,4 @@
-// Typed client for the niminal daemon: eval, clip/scene define, launch, edit, status.
-// Same protocol as the VS Code extension; keep this package thin (no scheduling of its own).
+// Generic daemon client. LiveClient controls a separate client-side live sequencer.
 
 const WebSocket = require("ws");
 
@@ -16,7 +15,7 @@ class Client {
   /** `onNotification(method, params)` and `onClose()` are called as the daemon speaks or goes away. */
   constructor({
     url,
-    port = 7400,
+    port = 7401,
     token,
     client = "niminal-js",
     onNotification = () => {},
@@ -77,6 +76,59 @@ class Client {
       this.waiting.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });
+  }
+
+  status() {
+    return this.call("status");
+  }
+
+  /**
+   * Send timed events to the engine: `{ op: "note" | "control" | "track", at, ... }`.
+   * `at` is a sample, "now" or a position such as "32beat". See the protocol reference.
+   */
+  sendEvents(events) {
+    return this.call("events.send", { events });
+  }
+
+  /** Take back this client's waiting events: `{ tag, from, release }`. */
+  cancelEvents({ tag, from, release } = {}) {
+    const params = {};
+    if (tag !== undefined) params.tag = tag;
+    if (from !== undefined) params.from = from;
+    if (release !== undefined) params.release = release;
+    return this.call("events.cancel", params);
+  }
+
+  /** Where the engine is in time: sample, bar, beat, bpm, prepared_until, wall_micros... */
+  clock() {
+    return this.call("clock");
+  }
+
+  setControl(name, value, { unit, glide, at = "now" } = {}) {
+    const op = { op: "control", name, value, at };
+    if (unit !== undefined) op.unit = unit;
+    if (glide !== undefined) op.glide = glide;
+    return this.sendEvents([op]);
+  }
+
+  subscribe(topics) {
+    return this.call("subscribe", { topics });
+  }
+
+  /** Build a version-2 `.nms` project JSON string for offline render. */
+  static projectToJson(project) {
+    return JSON.stringify({ version: 2, ...project }, null, 2);
+  }
+
+  close() {
+    this.ws?.close();
+  }
+}
+
+/** Control a live sequencer started with `niminal live`, rather than the daemon. */
+class LiveClient extends Client {
+  constructor(options = {}) {
+    super({ port: 7400, ...options });
   }
 
   eval(source, { quantize, dir } = {}) {
@@ -142,51 +194,6 @@ class Client {
     return this.call("panic");
   }
 
-  status() {
-    return this.call("status");
-  }
-
-  /**
-   * Send timed events to the engine: `{ op: "note" | "control" | "track", at, ... }`.
-   * `at` is a sample, "now" or a position such as "32beat". See the protocol reference.
-   */
-  sendEvents(events) {
-    return this.call("events.send", { events });
-  }
-
-  /** Take back this client's waiting events: `{ tag, from, release }`. */
-  cancelEvents({ tag, from, release } = {}) {
-    const params = {};
-    if (tag !== undefined) params.tag = tag;
-    if (from !== undefined) params.from = from;
-    if (release !== undefined) params.release = release;
-    return this.call("events.cancel", params);
-  }
-
-  /** Where the engine is in time: sample, bar, beat, bpm, prepared_until, wall_micros... */
-  clock() {
-    return this.call("clock");
-  }
-
-  setControl(name, value, { unit, glide, at = "now" } = {}) {
-    const op = { op: "control", name, value, at };
-    if (unit !== undefined) op.unit = unit;
-    if (glide !== undefined) op.glide = glide;
-    return this.sendEvents([op]);
-  }
-
-  subscribe(topics) {
-    return this.call("subscribe", { topics });
-  }
-
-  /** Build a version-2 `.nms` project JSON string for offline render. */
-  static projectToJson(project) {
-    return JSON.stringify({ version: 2, ...project }, null, 2);
-  }
-
-  close() {
-    this.ws?.close();
-  }
 }
 
-module.exports = { Client, NiminalError, PROTOCOL };
+module.exports = { Client, LiveClient, NiminalError, PROTOCOL };

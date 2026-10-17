@@ -69,17 +69,9 @@ struct RenderArgs {
 
 #[derive(Args)]
 struct DaemonArgs {
-    /// A project to load, and to load again whenever it is saved.
-    file: Option<PathBuf>,
-    #[arg(long, default_value_t = 7400)]
-    port: u16,
-    /// The port of the engine, which the sequencer on `--port` plays through. Other programs can send the
-    /// engine events here, as the sequencer does.
+    /// The generic engine events API port.
     #[arg(long, default_value_t = 7401)]
-    engine_port: u16,
-    /// Run only the engine, a sound server that takes timestamped events, with no sequencer.
-    #[arg(long)]
-    engine_only: bool,
+    port: u16,
     /// Output channels: 1, 2 (stereo), 4, 6 (5.1) or 8 (7.1).
     #[arg(long, default_value_t = 2)]
     channels: u16,
@@ -101,6 +93,27 @@ struct DaemonArgs {
     /// The address to listen on. Only local addresses are accepted for now.
     #[arg(long, default_value = "127.0.0.1")]
     listen: IpAddr,
+    /// Listen to the default audio input device, for tracks that read `input(1)`.
+    #[arg(long)]
+    audio_input: bool,
+}
+
+/// A live performance client of the generic daemon.
+#[derive(Args)]
+struct LiveArgs {
+    /// A project to load and watch.
+    file: Option<PathBuf>,
+    /// Private live-control port (0 chooses a free port).
+    #[arg(long, default_value_t = 7400)]
+    port: u16,
+    /// The generic daemon to connect to.
+    #[arg(long, default_value_t = 7401)]
+    engine_port: u16,
+    #[arg(long)]
+    token: Option<String>,
+    /// Exit when the owning editor closes stdin.
+    #[arg(long)]
+    parent_stdio: bool,
     /// Take MIDI control changes from every input whose name contains this
     /// (give an empty name for all inputs), for `ctl x = midi.cc(n)`.
     #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
@@ -108,22 +121,21 @@ struct DaemonArgs {
     /// Take OSC over UDP on this local port, for `ctl x = osc_in("/address")`.
     #[arg(long, value_name = "PORT")]
     osc_port: Option<u16>,
-    /// Listen to the default audio input device, for tracks that read `input(1)`.
-    #[arg(long)]
-    audio_input: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
     /// Render a niminal file to a WAV file, or replay a recorded live session.
     Render(RenderArgs),
-    /// Run the live daemon: plays sound, and takes code over a WebSocket.
+    /// Run the sound server: schedule generic events from any client.
     Daemon(DaemonArgs),
+    /// Run the live sequencer as a separate client of the daemon.
+    Live(LiveArgs),
     /// Run the language server (LSP over stdin and stdout) for an editor.
     Lsp,
     /// Print the built-in opcode reference as Markdown, for the docs site.
     Docs,
-    /// Send code to a running daemon.
+    /// Send code to a running live client.
     Send {
         /// The code to evaluate. With no code and no --file, it is read from the standard input.
         code: Option<String>,
@@ -137,7 +149,7 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
-    /// Type code at a running daemon, one statement at a time.
+    /// Type code at a running live client, one statement at a time.
     Repl {
         #[arg(long, default_value_t = 7400)]
         port: u16,
@@ -169,6 +181,7 @@ fn main() -> ExitCode {
             }
             run_daemon(args)
         }
+        Command::Live(args) => run_live(args),
         Command::Lsp => {
             let code = niminal_lsp::run(std::io::stdin().lock(), std::io::stdout().lock());
             if code == 0 { Ok(()) } else { Err(String::new()) }
@@ -373,11 +386,8 @@ fn run_replay(log: &Path, out: &Path, channels: u16, no_limiter: bool) -> Result
 }
 
 fn run_daemon(args: DaemonArgs) -> Result<(), String> {
-    let DaemonArgs { file, port, engine_port, engine_only, channels, sample_rate, no_audio, log, token, listen, midi, osc_port, audio_input, .. } = args;
-    let (file, log, midi) = (file.as_deref(), log.as_deref(), midi.as_deref());
-    if engine_only && (file.is_some() || midi.is_some() || osc_port.is_some()) {
-        return Err("error: a project, MIDI and OSC control are for the sequencer; leave them out with --engine-only".into());
-    }
+    let DaemonArgs { port, channels, sample_rate, no_audio, log, token, listen, audio_input, .. } = args;
+    let log = log.as_deref();
     let layout = layout_for(channels)?;
     let output = if no_audio { None } else { Some(Output::open(channels, sample_rate)?) };
     let rate = output.as_ref().map(Output::sample_rate).or(sample_rate).unwrap_or(DEFAULT_SAMPLE_RATE);
@@ -403,53 +413,11 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
         None => None,
     };
     let _clock = no_audio.then(|| NullClock::start(engine.clone(), 1.0));
-    let engine_server = Server::start(engine.clone(), ServerConfig { listen, port: if engine_only { port } else { engine_port }, token: token.clone() })?;
+    let engine_server = Server::start(engine.clone(), ServerConfig { listen, port, token: token.clone() })?;
     println!("niminal engine listening on ws://{listen}:{} ({layout}, {rate} Hz, {where_to})", engine_server.port());
 
     // signals the project sends over OSC (`osc_out`) go out whenever the engine runs
     let _osc_out = niminal_cli::osc_out::OscOutput::start(engine.clone())?;
-
-    // The built-in sequencer uses the same engine API directly, without loopback JSON or sockets.
-    let (mut sequencer, mut watched) = (None, None);
-    let (mut _server, mut _ticker, mut _midi, mut _osc) = (None, None, None, None);
-    if !engine_only {
-        let link = niminal_live::InProcess::new(engine.clone());
-        let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(Live::new(Box::new(link), rate as f32, layout))));
-        let server = Server::start(live.clone(), ServerConfig { listen, port, token })?;
-        println!("niminal daemon listening on ws://{listen}:{} (sequencer for the engine on port {})", server.port(), engine_server.port());
-        // keep the sequencer working ahead of the engine's clock
-        _ticker = Some(niminal_cli::worker::Worker::spawn({
-            let live = live.clone();
-            move |stop| {
-                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    lock(&live).live_mut().advance();
-                    // The sequencer schedules 100ms ahead; 25ms ticks leave three ticks of margin.
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-            }
-        }));
-        _midi = match midi {
-            Some(filter) => {
-                let (connections, names) = niminal_cli::input::start_midi(&live, filter)?;
-                println!("MIDI control from {}", names.join(", "));
-                Some(connections)
-            }
-            None => None,
-        };
-        _osc = match osc_port {
-            Some(port) => {
-                let osc = niminal_cli::input::OscInput::start(live.clone(), port)?;
-                println!("OSC control on udp://127.0.0.1:{}", osc.port());
-                Some(osc)
-            }
-            None => None,
-        };
-        if let Some(path) = file {
-            watched = Some(load(&live, path, Some("now")));
-        }
-        _server = Some(server);
-        sequencer = Some(live);
-    }
 
     let mut written = (0, 0);
     let mut reported = (0, 0, 0, 0, 0);
@@ -493,12 +461,6 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
                 last_report = std::time::Instant::now();
             }
         }
-        if let (Some(live), Some(path), Some((files, last))) = (&sequencer, file, watched.as_mut()) {
-            let modified = newest(files);
-            if modified.is_some() && modified != *last {
-                (*files, *last) = load(live, path, None);
-            }
-        }
         if let Some(path) = log {
             // format under the lock, write to disk without it
             let text = {
@@ -515,6 +477,45 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
                 let _ = std::fs::write(path, text);
             }
         }
+    }
+}
+
+fn run_live(args: LiveArgs) -> Result<(), String> {
+    use niminal_live::EngineLink;
+    use niminal_daemon::{EngineRequest, EngineReply};
+    let LiveArgs { file, port, engine_port, token, parent_stdio, midi, osc_port } = args;
+    let mut link = niminal_cli::link::WsLink::connect(engine_port, token.as_deref())?;
+    let hello = link.request(EngineRequest::Hello {
+        protocol: niminal_daemon::PROTOCOL_VERSION,
+        client: Some("niminal-live".into()), token: token.clone(),
+    }).map_err(|e| e.message)?;
+    let EngineReply::Hello { sample_rate, channels } = hello else {
+        return Err("the daemon did not return its audio format".into());
+    };
+    let layout = layout_for(channels as u16)?;
+    let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(Live::new(Box::new(link), sample_rate, layout))));
+    let server = Server::start(live.clone(), ServerConfig { port, token, ..ServerConfig::default() })?;
+    let _midi = midi.as_deref().map(|filter| niminal_cli::input::start_midi(&live, filter)).transpose()?;
+    let _osc = osc_port.map(|port| niminal_cli::input::OscInput::start(live.clone(), port)).transpose()?;
+    let mut watched = file.as_deref().map(|path| load(&live, path, Some("now")));
+    if parent_stdio {
+        std::thread::spawn(|| {
+            let mut buffer = [0; 256];
+            while matches!(std::io::stdin().read(&mut buffer), Ok(n) if n > 0) {}
+            // The OS closes the engine connection, cancelling this client's pending events.
+            std::process::exit(0);
+        });
+    }
+    println!("niminal live listening on ws://127.0.0.1:{}", server.port());
+    loop {
+        lock(&live).live_mut().advance();
+        if let (Some(path), Some((files, last))) = (file.as_deref(), watched.as_mut()) {
+            let modified = newest(files);
+            if modified.is_some() && modified != *last {
+                (*files, *last) = load(&live, path, None);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 

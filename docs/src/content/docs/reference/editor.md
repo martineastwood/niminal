@@ -59,19 +59,19 @@ The **niminal** sidebar lists scenes and tracks (mute, solo, stop). Compile erro
 | Setting | Purpose |
 | --- | --- |
 | `niminal.path` | Path to the `niminal` binary (daemon + LSP) |
-| `niminal.port` | Daemon WebSocket port (default `7400`) |
+| `niminal.port` | Daemon WebSocket port (default `7401`) |
 | `niminal.token` | Token if the daemon was started with `--token` |
 | `niminal.quantize` | Default land time for evaluation (e.g. `next 4bars`) |
 
 ### MIDI learn
 
-With the daemon started with `--midi`, a control written as `midi.learn` waits for the next CC. When one arrives, the extension can rewrite the line to the bound `midi.cc(...)`. See [Performance](/reference/language/performance/) and [Live coding](/guide/live-coding/).
+With the live client started with `--midi`, a control written as `midi.learn` waits for the next CC. When one arrives, the extension can rewrite the line to the bound `midi.cc(...)`. See [Performance](/reference/language/performance/) and [Live coding](/guide/live-coding/).
 
 ## Daemon vs LSP
 
 | | **LSP** | **Daemon** |
 | --- | --- | --- |
-| Transport | stdio | WebSocket (default port 7400) |
+| Transport | stdio | Private live client → generic daemon (7401) |
 | Audio | No | Yes |
 | Live `start` / `stop` / changes | No | Yes |
 | Diagnostics / completion | Yes | Eval diagnostics via extension/REPL |

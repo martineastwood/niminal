@@ -17,7 +17,8 @@ Run `niminal <command> --help` for every flag.
 | Command | What it does |
 | --- | --- |
 | `niminal render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, `--stems` (one file per track and bus into the `--out` folder); or `--replay` a session log. |
-| `niminal daemon` | The live sequencer ([protocol](/reference/protocol/), port 7400) and the engine it plays through ([Engine API](/reference/engine-api/), `--engine-port`, 7401), with audio, optional file watch, `--midi`, `--osc-port`, `--log`, `--token`, `--no-audio`. `--engine-only` runs just the engine. |
+| `niminal daemon` | Generic sound server and [events API](/reference/engine-api/) on port 7401 (`--port`), with audio, `--log`, `--token`, `--no-audio`. |
+| `niminal live [FILE]` | Separate live sequencer client: clips, scenes, quantized edits, file watch, `--midi`, `--osc-port`. Connects to `--engine-port` (7401); live-control API on `--port` (7400). |
 | `niminal repl` | REPL connected to a running daemon (`--port`, `--quantize`, `--token`). |
 | `niminal send` | One-shot eval to the daemon (code argument, `--file`, or stdin). |
 | `niminal lsp` | Language server on stdio — see [Editor and LSP](/reference/editor/). |
@@ -25,7 +26,7 @@ Run `niminal <command> --help` for every flag.
 
 ## Common flags
 
-**Daemon** — default listen `127.0.0.1:7400`, stereo output. `--channels` supports 1, 2, 4, 6 (5.1), 8 (7.1). Optional `[FILE]` loads that project and reloads on save. Session logs default to `~/.niminal/sessions/` (newest 20 kept) unless `--no-log` or `--log PATH`. Crashes append to `~/.niminal/crash.log`.
+**Daemon** — default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6 (5.1), 8 (7.1). `niminal live [FILE]` loads a project and reloads it on save. Session logs default to `~/.niminal/sessions/` (newest 20 kept) unless `--no-log` or `--log PATH`. Crashes append to `~/.niminal/crash.log`.
 
 **Render** — `--out` is required. Live pieces without a fixed end use `--bars` or `--seconds`. Offline renders can use `--no-limiter`. Replay: `niminal render --replay <log> --out set.wav --channels 2`. Score: `niminal render file.nml --score events.nms --out out.wav`.
 

@@ -469,6 +469,7 @@ pub(super) fn options(layout: Layout, samples: &Samples) -> CompileOptions {
     CompileOptions {
         default_layout: layout,
         samples: samples.clone(),
+        ..Default::default()
     }
 }
 

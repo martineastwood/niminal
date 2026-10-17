@@ -189,9 +189,11 @@ impl Session {
         let mut project = base.clone();
         project.apply(&delta);
 
-        project.drop_broken(&from_snippet, |full| compile_with(full, &options(self.layout, &self.samples)).map(|_| ()));
+        let mut compile_options = options(self.layout, &self.samples);
+        if !clears { compile_options.buffers = self.program_at(lands_at).buffers.iter().cloned().collect(); }
+        project.drop_broken(&from_snippet, |full| compile_with(full, &compile_options).map(|_| ()));
         let (full, map) = project.source(&from_snippet, &[]);
-        let program = compile_with(&full, &options(self.layout, &self.samples)).map_err(|diags| {
+        let program = compile_with(&full, &compile_options).map_err(|diags| {
             diags.iter().map(|d| Problem::from_diagnostic(d, &snippet, map.locate(d.span))).collect::<Vec<_>>()
         })?;
         if program.master != self.layout {
@@ -240,7 +242,7 @@ impl Session {
 
 /// How code is compiled here.
 pub(super) fn options(layout: Layout, samples: &Samples) -> CompileOptions {
-    CompileOptions { default_layout: layout, samples: samples.clone() }
+    CompileOptions { default_layout: layout, samples: samples.clone(), ..Default::default() }
 }
 
 pub(super) fn first_line(text: &str) -> String {

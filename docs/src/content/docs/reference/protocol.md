@@ -3,9 +3,11 @@ title: Sequencer protocol
 description: JSON-RPC 2.0 over WebSocket for live evaluation, clips and scenes, and the state of a live session.
 ---
 
-`niminal daemon` runs two parts. The **engine** is a sound server that plays timestamped events: its API is the [Engine API](/reference/engine-api/), on port 7401. The **live sequencer** is the text-based Ableton: it takes code, clips, scenes and quantized changes on port 7400, and plays them by sending the engine events over that same API, like any other client. This page is the sequencer's protocol, which editors such as VS Code speak. It is separate from **[`niminal lsp`](/reference/editor/)**, which speaks the Language Server Protocol on stdio for editing only.
+`niminal daemon` is the generic sound server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which turns them into timestamped engine events.
 
-Both are **JSON-RPC 2.0** text frames over **WebSocket**. Default URL of the sequencer: `ws://127.0.0.1:7400/` (see `--port` and `--listen` on the daemon).
+VS Code starts and owns a private `niminal live --port 0 --parent-stdio` process, connected to the configured daemon. Closing the editor stops its sequencer. For terminal use, start `niminal live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the daemon. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
+
+This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from **`niminal lsp`**, which speaks LSP on stdio for editing.
 
 ## Connection
 

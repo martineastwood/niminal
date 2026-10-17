@@ -34,10 +34,12 @@ Open `saw_lead.nml` to see the language: tempo, instruments with units (`hz`, `d
 
 ## Live coding
 
-Start the engine with an initial file, then send more code from the REPL or CLI:
+Start the generic daemon, then a separate live sequencer client:
 
 ```sh
-niminal daemon examples/groove.nml
+niminal daemon
+# in another terminal:
+niminal live examples/groove.nml
 niminal repl
 # in another terminal:
 niminal send 'chorus.start' --quantize "next 4bars"
@@ -49,11 +51,11 @@ Sessions are logged sample-accurately, so you can replay them:
 niminal render --replay ~/.niminal/sessions/<log> --out set.wav
 ```
 
-For MIDI / OSC controls, start the daemon with `--midi` and/or `--osc-port` (see `examples/midi_osc.nml`). Use `niminal <command> --help` for flags (`render`, `daemon`, `repl`, `send`, `lsp`).
+For MIDI / OSC controls, start the live client with `--midi` and/or `--osc-port` (see `examples/midi_osc.nml`). Use `niminal <command> --help` for flags (`render`, `daemon`, `live`, `repl`, `send`, `lsp`).
 
 ## Editor
 
-The [VS Code / Cursor extension](editors/vscode/) adds syntax highlighting, diagnostics, and evaluate-while-playing against a running daemon. Install it from `editors/vscode` (see that folder’s README), run `niminal daemon`, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
+The [VS Code / Cursor extension](editors/vscode/) adds syntax highlighting, diagnostics, and evaluate-while-playing against a running daemon. Install it from `editors/vscode` (see that folder’s README), run `niminal daemon`, the extension starts its own private live sequencer, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
 
 The language server (`niminal lsp`) works without a daemon for hover, completion, and errors.
 

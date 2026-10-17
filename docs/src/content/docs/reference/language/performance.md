@@ -293,7 +293,7 @@ ctl filth = midi.learn.range(200hz..4khz)      // move a knob...
 ctl filth = midi.cc(21).range(200hz..4khz)     // ...and the line becomes this
 ```
 
-With several `midi.learn` controls waiting, each takes the next control change in the order they appear. Start the daemon with `--midi` to listen to a controller.
+With several `midi.learn` controls waiting, each takes the next control change in the order they appear. Start the live client with `--midi` to listen to a controller.
 
 **Keyboards:** a clip with `keys:` instead of `notes:` is played from a MIDI keyboard. Start it like any part, then play:
 
@@ -324,7 +324,7 @@ All three are logged, so a set with them replays exactly.
 
 **MPE:** `keys: midi.keys(mpe: true)` plays from a controller that sends each note on a channel of its own (2 to 16, with 1 as the master channel). Each note takes the pitch bend (48 semitones each way), the pressure and the **`slide`** (CC 74, 0 to 1, a `slide: 0..1` parameter) of its own channel. What the master channel sends (bend of two semitones, pressure, slide, the pedal) reaches every note. `mpe: true` and `channel:` can't be used together.
 
-**OSC on controls:** `ctl x = osc_in("/address")` (start the daemon with `--osc-port`). See [Live coding](/guide/live-coding/).
+**OSC on controls:** `ctl x = osc_in("/address")` (start the live client with `--osc-port`). See [Live coding](/guide/live-coding/).
 
 ## Modules
 

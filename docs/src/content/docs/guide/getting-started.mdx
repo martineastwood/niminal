@@ -50,7 +50,9 @@ More examples live under `examples/` — kits and grids (`drums.nml`, `breakbeat
 Start the engine with a file, then send code from the REPL or another terminal:
 
 ```sh
-niminal daemon examples/groove.nml
+niminal daemon
+# in another terminal:
+niminal live examples/groove.nml
 niminal repl
 # in another terminal:
 niminal send 'chorus.start' --quantize "next 4bars"

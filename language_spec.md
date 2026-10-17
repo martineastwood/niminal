@@ -494,7 +494,7 @@ An instrument is a function that the score can call: each note creates a voice t
 ### 8.2 Parameters
 
 - Parameters follow §5.2, but **each needs a type or a default**, so the score can be checked against them. Parameters can't be generic.
-- **`const` isn't allowed,** because notes supply values while playing. Choices, lists and functions aren't either. For a structural setting, write a `fn` and call it with a constant.
+- **Structural parameters** (`const`, choices, arrays and functions) need defaults and specialize the graph. Embedded instrument calls can override them. Only live scalar parameters are supplied by notes and `set`.
 - **Without a rate,** a parameter stays live: lanes, glides, MPE and `n.set(...)` move it on the running voice.
 - **`init`** fixes the parameter at note start, which is what a plucked string's length or a per-note random seed needs.
 - **`gain` is a universal control,** applied after the instrument. An instrument may declare its own `gain: db` parameter to take it over, for example to drive the filter harder on louder notes; it is then not applied for it.
@@ -719,7 +719,7 @@ Only the words used by this part of the language are listed here. The full list 
 - **Calling an instrument plays its body in this voice** rather than starting a sub-voice; the envelopes start and release with it.
 - **Bus feedback is `late(x)`,** so `prev` is always one sample; `prev` in a send is an error.
 - **`schedule` became `after`.** A voice can't start a note through the score model on the audio thread, so a delayed layer inside the voice (`after`), `finish_when` for ending it, and shared buffers (with `note.index`, `note.start`) cover what Csound's `schedule`, `turnoff` and instrument-to-instrument state were used for.
-- **`oversample` isn't built.** Running part of a body at a multiple of the sample rate needs per-opcode sample-rate support and resampling filters in the engine; a hand-written oversampled shaper is better done with a table (`waveshape`) for now.
+- **`oversample(2|4|8) { ... }`** runs sample DSP with filtered rate conversion and 16 base-rate samples of conversion delay. `sample_rate` and built-in processors use the local rate. Nested processor scopes are not supported yet.
 - **`note` is reserved,** like `out` and `it`; the examples use `key: num` for a MIDI note number.
 
 **Implementation note.** Two compilers remain: one builds the block graph for instruments, tracks and functions without state (`lower.rs`), the other the per-sample kernel for functions with state (`kernel.rs`). They share signatures, argument binding, unit rules and the AST walk, and both compile a function for each call, so the rules above hold in both. Merging them into one front end with two back ends is still worth doing if they drift.
@@ -734,3 +734,11 @@ Only the words used by this part of the language are listed here. The full list 
 6. **Annotations on bindings** (§3.2). They are left out for now and could be added with the parameter syntax if dogfooding asks for them.
 7. **Feedback across several lines in an instrument.** One-line loops work (§5.4); longer loops need a `fn`. Is that the right line to draw?
 8. **Checking generic functions where they are defined** is a guess at their units (§5.1). Full unit inference would find more mistakes earlier, at the cost of a more complex checker.
+
+### Instrument structural parameters and subvoices
+
+Instrument choices, arrays, functions and explicitly `const` parameters require defaults and specialize the graph; only scalar live parameters appear in note/event signatures. Embedded instrument calls can override structural arguments, including tables and untyped const buffer references.
+
+`spawn(trigger, dur: time, max: count) { body }` starts a fresh sample DSP layer on positive edges, capturing inputs and duration. `max` is constant, 1–64, default 8; full pools drop triggers. Each layer has independent note context, state and envelopes, releases at its duration or parent release, then drains. Shared buffers can be read by index or interpolation. Storage is allocated ahead of processing.
+
+Instrument and track `.osc_out` supports `on: trigger`; its 256-event queue preserves repeated values and drops the oldest on overflow. Network output runs outside audio processing.

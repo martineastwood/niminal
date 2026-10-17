@@ -1,0 +1,25 @@
+tempo 120bpm
+
+fn sine_voice(freq: hz) { osc(sine, freq) }
+
+instr bank(freq: hz, partials: [num] = [1, 0.5], make: fn = sine_voice) {
+  (for i in partials.indices { make(freq * (i + 1)) * partials[i] }).sum
+}
+
+instr bright(freq: hz) {
+  bank(freq, partials: [1, 0.3, 0.15]) * env[0 5ms 1 | 200ms 0]
+}
+
+instr cloud(freq: hz) {
+  spawn(osc(square, 16hz), dur: 70ms, max: 8) {
+    osc(sine, freq) * env[0 2ms 0.2 | 30ms 0]
+  }
+}
+
+instr driven(freq: hz) {
+  oversample(4) { (osc(saw, freq) * 3).tanh } * env[0 5ms 0.15 | 100ms 0]
+}
+
+bright(freq: c4) for 1beat
+at 1beat cloud(freq: e4) for 2beats
+at 3beats driven(freq: c3) for 1beat

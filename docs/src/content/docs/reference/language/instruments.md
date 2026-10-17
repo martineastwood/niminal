@@ -29,9 +29,27 @@ instr pad(freq: hz, amp: db = -3db) {
 
 ## Parameters
 
-- Each needs a type or a default. They can't be `const` (notes set them while playing), a choice, a list or a function.
+- Each needs a type or a default. Numeric parameters are live note controls. Choices, arrays, functions and explicitly `const` parameters specialize the graph and need a default; set them when calling the instrument inside another instrument.
 - **Without a rate** a parameter stays live: lanes, glides, MPE and `n.set(...)` move it on the running voice. **`init`** fixes it at note start: `instr pluck(freq: init hz)`.
 - **`gain`** is a control every note has, applied after the instrument. An instrument may declare its own `gain: db = 0db` to take it over and use it as it likes; then it isn't applied for it.
+
+### Structural parameters
+
+```nml
+fn sine_voice(freq: hz) { osc(sine, freq) }
+
+instr bank(freq: hz, partials: [num] = [1, 0.5], make: fn = sine_voice,
+           mode: (soft | hard) = soft) {
+  signal = (for i in partials.indices { make(freq * (i + 1)) * partials[i] }).sum
+  if mode == soft { signal.tanh } else { signal }
+}
+
+instr bright(freq: hz) {
+  bank(freq, partials: [1, 0.7, 0.3], mode: hard)
+}
+```
+
+These arguments select graph structure at compilation. They are omitted from the note/event control signature, so `set` cannot change them. A `const` untyped argument can also bind a named table or shared buffer, for example `source: const = take`; an embedded instrument call can bind another resource. Redefine the instrument to change its structure live. Arrays passed to embedded calls may contain signals; their shape remains fixed for that call.
 
 ## The running voice
 
@@ -64,7 +82,19 @@ instr tick(freq: hz) {
 
 `after(delay) { body }` plays `body` once the note is `delay` old, from fresh state, and is silent before: `out = pluck + after(1/8beat) { pluck.gain(-6db) }`. It is `reset_on(note.time >= delay) { body } * (note.time >= delay)`. `signal.finish_when(done)` ends a note from the inside (Csound's `turnoff`).
 
-A voice can't start another note: the audio thread allocates nothing and voices are prepared ahead of time. Use `after` for echoes, and clips and `at` for notes.
+For signal-triggered overlapping layers, use `spawn`:
+
+```nml
+instr cloud(freq: hz = 220hz) {
+  spawn(osc(square, 20hz), dur: 80ms, max: 8) {
+    osc(sine, freq) * env[0 2ms 1 | 20ms 0]
+  }
+}
+```
+
+Each positive trigger edge starts a fresh layer and captures the surrounding signal values it reads. `dur` is captured on that edge too. The layer has its own envelopes, state, `note.time`, `note.start`, `note.index`, and `note.released`. It releases after `dur`, then drains its envelopes and effects. Releasing the parent releases all its layers and stops new triggers. `max` is a compile-time integer from 1 to 64 (default 8); a full pool drops new triggers. Storage is prepared before playback.
+
+The body can call an instrument or a DSP function, and can read a shared buffer with `buf[i]` or `buf.at(pos)`. It follows the sample DSP function rules: channel-layout processors, bus sends, shared writes and OSC output belong outside the scope. Processor scopes currently cannot contain another `spawn` or `oversample` scope. Use clips and `at` to schedule independent top-level notes.
 
 ### Noise
 

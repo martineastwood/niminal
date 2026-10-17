@@ -49,6 +49,16 @@ impl Serialize for At {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Op {
+    /// Replace a range of a declared shared buffer, before notes at this sample.
+    BufferWrite {
+        name: String,
+        at: At,
+        #[serde(default)]
+        offset: usize,
+        values: Vec<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
     /// Play a note on a track or instrument. With `dur` and no `id` it is fire-and-forget. With an `id` and
     /// no `dur` it is held until an `off`. With both it is held for at most `dur`.
     Note {

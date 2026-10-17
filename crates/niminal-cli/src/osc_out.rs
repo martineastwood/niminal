@@ -28,7 +28,8 @@ pub fn encode_osc(address: &str, value: f32) -> Vec<u8> {
 
 /// What was last sent for one tap.
 struct Sent {
-    key: (String, String, u16),
+    key: (String, String, u16, usize),
+    cursor: u32,
     to: Option<SocketAddr>,
     at: Option<Instant>,
     bits: u32,
@@ -55,7 +56,7 @@ impl OscSender {
                 Some(i) => i,
                 None => {
                     let to = (tap.host.as_str(), tap.port).to_socket_addrs().ok().and_then(|mut a| a.next());
-                    self.sent.push(Sent { key: key(tap), to, at: None, bits: 0 });
+                    self.sent.push(Sent { key: key(tap), to, at: None, bits: 0, cursor: 0 });
                     self.sent.len() - 1
                 }
             };
@@ -63,6 +64,16 @@ impl OscSender {
             let Some(to) = state.to else { continue };
             let value = tap.value.read();
             let due = state.at.is_none_or(|at| now.duration_since(at).as_secs_f64() >= 1.0 / tap.rate);
+            if tap.value.is_triggered() {
+                if due {
+                    for value in tap.value.read_events(&mut state.cursor) {
+                        let _ = self.socket.send_to(&encode_osc(&tap.address, value), to);
+                        count += 1;
+                    }
+                    state.at = Some(now);
+                }
+                continue;
+            }
             if due && (state.at.is_none() || value.to_bits() != state.bits) && value.is_finite() {
                 let _ = self.socket.send_to(&encode_osc(&tap.address, value), to);
                 state.at = Some(now);
@@ -74,8 +85,8 @@ impl OscSender {
     }
 }
 
-fn key(tap: &OscTap) -> (String, String, u16) {
-    (tap.address.clone(), tap.host.clone(), tap.port)
+fn key(tap: &OscTap) -> (String, String, u16, usize) {
+    (tap.address.clone(), tap.host.clone(), tap.port, std::sync::Arc::as_ptr(&tap.value) as usize)
 }
 
 /// Sends the running project's `osc_out` signals until dropped.

@@ -31,6 +31,8 @@ pub struct CompileOptions {
     pub default_layout: Layout,
     /// Where the files named by `sample` and `kit` are found.
     pub samples: Samples,
+    /// Existing shared resources to retain when a definition keeps its name, length and rate.
+    pub buffers: HashMap<String, Arc<niminal_engine::Buffer>>,
 }
 
 impl Default for CompileOptions {
@@ -38,6 +40,7 @@ impl Default for CompileOptions {
         CompileOptions {
             default_layout: Layout::Mono,
             samples: Samples::default(),
+            buffers: HashMap::new(),
         }
     }
 }
@@ -599,6 +602,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
         match compile_buffer(decl, tempo, &registry, &names) {
             Ok((name, buffer)) => {
+                let buffer = options.buffers.get(&name)
+                    .filter(|old| old.len() == buffer.len() && old.sample_rate() == buffer.sample_rate())
+                    .cloned().unwrap_or(buffer);
                 let id = names.buffers.len();
                 names.add(&name, "buffer");
                 names.buffers.insert(name, (id, buffer));
@@ -766,7 +772,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             source: source.to_string(),
             samples: options.samples.clone(),
             quantize,
-            taps: tracks.iter().flat_map(|t| t.taps.clone()).collect(),
+            taps: tracks.iter().flat_map(|t| t.taps.clone()).chain(instruments.iter().flat_map(|i| i.taps.clone())).collect(),
             controls: names.controls,
             tempo,
             master: names.master,
@@ -2570,10 +2576,10 @@ a(f: 100hz) for 1beat
             msg("fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: 2.5) }"),
             "`n` expects a whole number, found 2.5"
         );
-        // notes set an instrument's parameters while playing
+        // Structural parameters need defaults; scalar parameters retain their rate.
         assert_eq!(
             msg("instr a(f: const hz) { osc(saw, f) }"),
-            "notes set `f` while playing, so it can't be `const`"
+            "structural parameter `f` needs a default"
         );
         ok("instr a(f: init hz, cut: control hz = 1khz) { osc(saw, f).lpf(cut) }");
         assert_eq!(
@@ -2583,11 +2589,10 @@ a(f: 100hz) for 1beat
     }
 
     #[test]
-    fn choices_and_lists_belong_to_functions() {
-        assert_eq!(
-            msg("instr a(mode: (x | y) = x) { 0.5 }"),
-            "an instrument's parameters are set by notes, so `mode` can't be a choice, an array or a function"
-        );
+    fn choices_and_arrays_specialize_functions_and_instruments() {
+        ok("instr a(mode: (x | y) = x) { if mode == x { 0.5 } else { 0.25 } }");
+        ok("instr a(freq: hz, partials: [num] = [1, 0.5], count: const int = 2) { (for i in 0..<count { osc(sine, freq * (i + 1)) * partials[i] }).sum }\ninstr b(freq: hz) { a(freq, partials: [1, 0.2, 0.1], count: 3) }");
+        ok("fn sine(f: hz) { osc(sine, f) }\ninstr a(freq: hz, make: fn = sine) { make(freq) }\ninstr b(freq: hz) { a(freq, make: fn(f) { osc(saw, f) }) }");
         assert_eq!(msg("fn f(m: (a | b) = c) { 1 }"), "the default for `m` is one of a, b");
         assert_eq!(msg("fn f(m: (a) = a) { 1 }"), "a choice lists at least two names");
         ok("fn f(xs: [num]) { xs.sum }\ninstr a() { f([0.1, 0.2]) * osc(sine, 100hz) }");
@@ -3448,10 +3453,7 @@ track pad { instrument = pluck }
             msg(&track("out = it.osc_out(5, port: 9000)")),
             "an OSC address is text in quotes"
         );
-        assert_eq!(
-            msg("instr a(f: hz) { osc(saw, f).osc_out(\"/a\", port: 9000) }"),
-            "`osc_out` sends a track's signal, so it is used in a track"
-        );
+        ok("instr a(f: hz) { osc(saw, f).osc_out(\"/a\", port: 9000) }");
         assert_eq!(
             msg("fn a(x) { x.osc_out(\"/a\", port: 9000) }"),
             "`osc_out` can't be used inside a function"

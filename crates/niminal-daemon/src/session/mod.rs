@@ -85,6 +85,17 @@ pub(crate) struct TrackSet {
     done: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct BufferSet {
+    name: String,
+    offset: usize,
+    values: Arc<[f32]>,
+    at: u64,
+    client: ClientId,
+    tag: Option<String>,
+    done: bool,
+}
+
 /// A panic asked for at a sample.
 #[derive(Clone)]
 struct TimedPanic {
@@ -196,6 +207,7 @@ pub struct Session {
     closed: Vec<VoiceEntry>,
     voice_sets: Vec<VoiceSet>,
     track_sets: Vec<TrackSet>,
+    buffer_sets: Vec<BufferSet>,
     timed_panics: Vec<TimedPanic>,
     control_owners: Vec<ControlOwner>,
     /// The key the next held note gets.
@@ -248,6 +260,7 @@ impl Session {
             closed: Vec::new(),
             voice_sets: Vec::new(),
             track_sets: Vec::new(),
+            buffer_sets: Vec::new(),
             timed_panics: Vec::new(),
             control_owners: Vec::new(),
             next_key: 0,
@@ -351,6 +364,7 @@ impl Session {
         self.log.push(LogEntry { sample: self.clock, input: LogInput::Panic });
         self.upcoming.clear();
         self.track_sets.clear();
+        self.buffer_sets.clear();
         self.voice_sets.clear();
         self.key_offs.clear();
         self.voices.clear();
@@ -429,6 +443,7 @@ impl Session {
         clients.extend(self.upcoming.iter().filter_map(|u| u.client));
         clients.extend(self.control_owners.iter().map(|o| o.client));
         clients.extend(self.pending.iter().filter_map(|p| p.meta.client));
+        clients.extend(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.client));
         clients.sort_unstable();
         clients.dedup();
         clients
@@ -439,7 +454,8 @@ impl Session {
                     + self.control_owners.iter().filter(|o| o.client == c).count()
                     + self.voice_sets.iter().filter(|s| s.client == c && !s.done).count()
                     + self.track_sets.iter().filter(|s| s.client == Some(c) && !s.done).count()
-                    + self.pending.iter().filter(|p| p.meta.client == Some(c)).count();
+                    + self.pending.iter().filter(|p| p.meta.client == Some(c)).count()
+                    + self.buffer_sets.iter().filter(|s| s.client == c && !s.done).count();
                 (c, ids, waiting)
             })
             .collect()
@@ -629,6 +645,17 @@ impl Session {
             self.release_due();
             self.apply_voice_sets();
             self.apply_track_sets();
+            for set in &mut self.buffer_sets {
+                if !set.done && set.at <= self.clock {
+                    if let Some((_, buffer)) = self.program.buffers.iter().find(|(name, _)| *name == set.name)
+                        && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
+                        for (i, value) in set.values.iter().enumerate() { buffer.write(set.offset + i, *value); }
+                    }
+                    set.done = true;
+                }
+            }
+            let stale = self.clock.saturating_sub(self.sample_rate as u64 * 2);
+            self.buffer_sets.retain(|s| !s.done || s.at > stale);
             self.apply_timed_panics();
 
             // How far we can go before something needs doing.
@@ -641,7 +668,8 @@ impl Session {
             }
             n = self.sounding.limit(self.clock, n);
             let upcoming = self.key_offs.iter().map(|k| k.at).chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at)).chain(self.track_sets.iter().filter(|s| !s.done).map(|s| s.at))
-                .chain(self.timed_panics.iter().filter(|p| !p.done).map(|p| p.at));
+                .chain(self.timed_panics.iter().filter(|p| !p.done).map(|p| p.at))
+                .chain(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.at));
             for at in upcoming.filter(|&at| at > self.clock) {
                 n = n.min(at - self.clock);
             }
@@ -913,9 +941,8 @@ pub(super) fn plan_transfers(old: &Program, new: &Program, out: &mut Vec<Transfe
 /// Keep shared buffer contents across a live re-eval when name and length match.
 pub(super) fn carry_buffers(old: &Program, new: &Program) {
     for (name, next) in &new.buffers {
-        if let Some((_, prev)) = old.buffers.iter().find(|(n, b)| n == name && b.len() == next.len()) {
-            prev.copy_into(next);
-        }
+        if let Some((_, prev)) = old.buffers.iter().find(|(n, b)| n == name && b.len() == next.len())
+            && !Arc::ptr_eq(prev, next) { prev.copy_into(next); }
     }
 }
 

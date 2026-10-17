@@ -45,3 +45,9 @@ pub use lifetime::FinishWhen;
 
 mod reset;
 pub use reset::ResetOn;
+
+mod spawn;
+pub use spawn::Spawn;
+
+mod oversample;
+pub use oversample::Oversample;

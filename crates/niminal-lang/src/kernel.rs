@@ -134,6 +134,7 @@ struct Frame {
 }
 
 struct Kb<'a> {
+    instrument_scope: bool,
     registry: &'a Registry,
     names: &'a Names,
     tempo: Tempo,
@@ -171,8 +172,15 @@ pub(crate) fn compile_kernel(
     names: &Names,
     tempo: Tempo,
 ) -> Res<(Kernel, KernelResult)> {
+    compile_scoped_kernel(def, args, registry, names, tempo, false)
+}
+
+pub(crate) fn compile_scoped_kernel(
+    def: &FnDef, args: &[KArg], registry: &Registry, names: &Names, tempo: Tempo, instrument_scope: bool,
+) -> Res<(Kernel, KernelResult)> {
     let params = funcs::signature(&def.params, tempo)?;
     let mut kb = Kb {
+        instrument_scope,
         registry,
         names,
         tempo,
@@ -945,7 +953,7 @@ impl Kb<'_> {
     }
 
     fn check_name(&self, name: &Ident) -> Res<()> {
-        if matches!(name.name.as_str(), "it" | "note" | "clock" | "state" | "pi" | "sample_rate" | "true" | "false" | "reset_on") {
+        if matches!(name.name.as_str(), "it" | "note" | "clock" | "state" | "pi" | "sample_rate" | "true" | "false" | "reset_on" | "spawn" | "oversample") {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
                 name.span,
@@ -1347,12 +1355,52 @@ impl Kb<'_> {
                 "text can't be used inside a function with state",
                 e.span,
             )),
+            ExprKind::Env(env) if self.instrument_scope => self.envelope(env, e.span),
             ExprKind::Env(_) => Err(Diagnostic::new(
                 "envelopes can't be used inside a function with state",
                 e.span,
             )
             .with_help("make the envelope in the instrument and pass it in as an argument")),
         }
+    }
+
+    fn emit_native(&mut self, op: Box<dyn niminal_engine::Opcode>, inputs: Vec<NativeInput>, unit: Unit) -> KVal {
+        let index = self.natives.len();
+        self.natives.push(Native { op, inputs });
+        let guard = self.guard;
+        let reg = self.emit(Rate::Audio, |dst| Instr::Native { dst, index, guard });
+        KVal::Num(Value { reg, unit, rate: Rate::Audio, port: None })
+    }
+
+    fn envelope(&mut self, env: &EnvLit, span: Span) -> Res<KVal> {
+        use niminal_engine::ops::{Env, EnvField, Segment};
+        let mut values = Vec::new();
+        for step in env.values() {
+            let value = match step {
+                EnvValue::Lit(n) => { let (unit, value) = literal_sig(n.value, n.unit.as_deref(), self.tempo, n.span)?; self.constant(unit, value) }
+                EnvValue::Expr(e) => self.num(e)?,
+            };
+            values.push(value);
+        }
+        let start = values[0];
+        if start.unit == Unit::Time || start.unit == Unit::Db { return Err(Diagnostic::new("an envelope level cannot be a duration or db", span)); }
+        let mut fields = Vec::new();
+        let mut inputs = Vec::new();
+        if self.konst(&start).is_none() { fields.push(EnvField::Start); inputs.push(NativeInput::Reg(start.reg)); }
+        let mut segments = Vec::new();
+        for (i, segment) in env.segments.iter().enumerate() {
+            if values[1 + i * 2].unit != Unit::Time { return Err(Diagnostic::new("an envelope duration needs a time", segment.dur.span())); }
+            if values[2 + i * 2].unit != start.unit { return Err(Diagnostic::new("envelope levels need the same unit", segment.level.span())); }
+            let duration = values[1 + i * 2];
+            let level = values[2 + i * 2];
+            if self.konst(&duration).is_none() { fields.push(EnvField::Dur(i)); inputs.push(NativeInput::Reg(duration.reg)); }
+            if self.konst(&level).is_none() { fields.push(EnvField::Level(i)); inputs.push(NativeInput::Reg(level.reg)); }
+            segments.push(Segment::new(self.konst(&duration).unwrap_or(0.0) as f32, self.konst(&level).unwrap_or(0.0) as f32, crate::lower::curve_of(segment.curve)));
+        }
+        if fields.len() > niminal_engine::MAX_INPUTS { return Err(Diagnostic::new("too many envelope inputs in a processor scope", span)); }
+        let mut op = Env::new(self.konst(&start).unwrap_or(0.0) as f32, segments, env.sustain_at).with_inputs(fields);
+        if env.looped { op = op.looped(); }
+        Ok(self.emit_native(Box::new(op), inputs, start.unit))
     }
 
     fn name(&mut self, name: &str, span: Span) -> Res<KVal> {
@@ -1596,6 +1644,12 @@ impl Kb<'_> {
     }
 
     fn index(&mut self, list: &Expr, index: &Expr, span: Span) -> Res<KVal> {
+        if self.instrument_scope && let ExprKind::Name(name) = &list.kind
+            && let Some((_, buffer)) = self.names.buffers.get(name).cloned() {
+            let index = self.num(index)?;
+            if index.unit != Unit::Num { return Err(Diagnostic::new("a buffer index is a plain number", span)); }
+            return Ok(self.emit_native(Box::new(niminal_engine::ops::BufferRead::new(buffer, Interp::None)), vec![NativeInput::Reg(index.reg)], Unit::Num));
+        }
         let l = self.value(list)?;
         if let ExprKind::Range { .. } = index.kind {
             let KVal::Range { lo, hi, inclusive, .. } = self.value(index)? else {
@@ -1767,7 +1821,57 @@ impl Kb<'_> {
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
         let n = name.name.as_str();
+        if matches!(n, "spawn" | "oversample") {
+            return Err(Diagnostic::new("spawn and oversample scopes cannot be nested yet", span));
+        }
         if n == "reset_on" { return self.reset_scope(args, span); }
+        if self.instrument_scope && let [receiver] = args && receiver.receiver {
+            use niminal_engine::ops::{Context, NoteTime, NoteStart, ReadContext, Released};
+            if matches!(&receiver.value.kind, ExprKind::Name(n) if n == "note") {
+                let (op, unit): (Box<dyn niminal_engine::Opcode>, Unit) = match n {
+                    "time" => (Box::new(NoteTime::default()), Unit::Time),
+                    "start" => (Box::new(NoteStart::default()), Unit::Num),
+                    "released" => (Box::new(Released), Unit::Num),
+                    "dur" => (Box::new(ReadContext::new(Context::NoteDur)), Unit::Time),
+                    "index" => (Box::new(ReadContext::new(Context::NoteIndex)), Unit::Num),
+                    _ => return Err(Diagnostic::new("unknown note field", name.span)),
+                };
+                return Ok(self.emit_native(op, Vec::new(), unit));
+            }
+        }
+        if self.instrument_scope && let Some(def) = self.names.instrs.get(n).cloned() {
+            let own_gain = def.params.iter().any(|p| p.name.name == "gain");
+            let (gains, rest): (Vec<_>, Vec<_>) = args.iter().cloned().partition(|a| !own_gain && a.name.as_ref().is_some_and(|n| n.name == "gain"));
+            if gains.len() > 1 { return Err(Diagnostic::new("gain given more than once", span)); }
+            let gain = if let Some(arg) = gains.first() {
+                let mut value = self.num(&arg.value)?;
+                if !matches!(value.unit, Unit::Num | Unit::Db) { return Err(Diagnostic::new("gain needs db or a plain factor", arg.value.span)); }
+                value.unit = Unit::Num;
+                Some(value)
+            } else { None };
+            let as_fn = FnDef { name: def.name, params: def.params, body: def.body, result: FnResult::Inferred, span: def.span };
+            let result = self.call_fn(&as_fn, name, &rest)?;
+            return match gain {
+                Some(gain) => self.binary_value(BinOp::Mul, result, KVal::Num(gain), span),
+                None => Ok(result),
+            };
+        }
+        if self.instrument_scope && n == "at" && let Some(receiver) = args.first().filter(|a| a.receiver)
+            && let ExprKind::Name(buffer) = &receiver.value.kind
+            && let Some((_, buffer)) = self.names.buffers.get(buffer).cloned() {
+            let mut position = None;
+            let mut interp = None;
+            for arg in &args[1..] {
+                match arg.name.as_ref().map(|n| n.name.as_str()) {
+                    None | Some("pos") if position.is_none() => position = Some(self.num(&arg.value)?),
+                    Some("interp") if interp.is_none() => interp = Some(interp_of(&arg.value)?),
+                    _ => return Err(Diagnostic::new("write `buffer.at(pos, interp: linear)`", arg.value.span)),
+                }
+            }
+            let position = position.ok_or_else(|| Diagnostic::new("buffer.at needs a position", span))?;
+            if position.unit != Unit::Num { return Err(Diagnostic::new("a buffer position is a plain number", span)); }
+            return Ok(self.emit_native(Box::new(niminal_engine::ops::BufferRead::new(buffer, interp.unwrap_or(Interp::Linear))), vec![NativeInput::Reg(position.reg)], Unit::Num));
+        }
         // Named result lookup must preserve an array field's shape.
         if let [receiver] = args && receiver.receiver && !self.names.fns.contains_key(n) {
             let record = match &receiver.value.kind {
