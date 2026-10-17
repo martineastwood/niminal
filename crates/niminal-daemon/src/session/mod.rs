@@ -1145,8 +1145,7 @@ impl Session {
                         plan.rule,
                     );
                     self.mixer.set_voice_pan(id, plan.pan);
-                    let held = note.key.is_some();
-                    self.mixer.set_voice_dur(id, if held { 0.0 } else { note.dur as f32 / self.sample_rate });
+                    self.mixer.set_voice_dur(id, if note.key.is_some() { 0.0 } else { note.dur as f32 / self.sample_rate });
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
                     let off = if note.key.is_some() {
                         u64::MAX

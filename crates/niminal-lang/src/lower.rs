@@ -34,6 +34,16 @@ const UNIT_NAMES: [&str; 13] = [
     "hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "bpm", "deg", "st", "ct",
 ];
 
+/// `note.foo` or `clock.foo`, where `owner` has no `foo`.
+fn no_field(owner: &str, field: &Ident, fields: &[&str]) -> Diagnostic {
+    let list = fields.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ");
+    let mut d = Diagnostic::new(format!("`{owner}` has no `{}`", field.name), field.span).with_help(format!("it has {list}"));
+    if let Some(c) = closest(&field.name, fields.iter().copied()) {
+        d = d.with_help(format!("did you mean `{c}`?"));
+    }
+    d
+}
+
 /// A literal's unit and value. Decibels become gain factors and beats become
 /// seconds at `tempo`.
 pub(crate) fn literal_sig(
@@ -5008,27 +5018,20 @@ impl Lower<'_> {
             return Err(Diagnostic::new("`note` is only available in an instrument", name.span)
                 .with_help("pass `note.time` or `note.released` to a function as an argument"));
         }
-        let read = |this: &mut Self, what: Context, unit: Unit, rate: Rate| {
-            let src = this.g.add(ReadContext::new(what), &[]).expect("no ports");
-            this.note_rate(src, rate);
-            Ok(Sig::signal(src, unit))
-        };
         match name.name.as_str() {
             "time" => Ok(Sig::signal(self.g.add(NoteTime::default(), &[]).expect("no ports"), Unit::Time)),
             "released" => Ok(Sig::signal(self.g.add(Released, &[]).expect("no ports"), Unit::Num)),
             "start" => Ok(Sig::signal(self.g.add(NoteStart::default(), &[]).expect("no ports"), Unit::Num)),
-            "dur" => read(self, Context::NoteDur, Unit::Time, Rate::Init),
-            "index" => read(self, Context::NoteIndex, Unit::Num, Rate::Init),
-            other => {
-                const FIELDS: [&str; 5] = ["time", "released", "start", "dur", "index"];
-                let mut d = Diagnostic::new(format!("`note` has no `{other}`"), name.span)
-                    .with_help(format!("it has {}", FIELDS.map(|f| format!("`{f}`")).join(", ")));
-                if let Some(c) = closest(other, FIELDS) {
-                    d = d.with_help(format!("did you mean `{c}`?"));
-                }
-                Err(d)
-            }
+            "dur" => Ok(self.read_context(Context::NoteDur, Unit::Time, Rate::Init)),
+            "index" => Ok(self.read_context(Context::NoteIndex, Unit::Num, Rate::Init)),
+            _ => Err(no_field("note", name, &["time", "released", "start", "dur", "index"])),
         }
+    }
+
+    fn read_context(&mut self, what: Context, unit: Unit, rate: Rate) -> Sig {
+        let src = self.g.add(ReadContext::new(what), &[]).expect("no ports");
+        self.note_rate(src, rate);
+        Sig::signal(src, unit)
     }
 
     /// `clock.beat`, `clock.bar` and `clock.bpm`: where the session's transport is.
@@ -5041,19 +5044,9 @@ impl Lower<'_> {
             "beat" => (Context::ClockBeat, Rate::Audio),
             "bar" => (Context::ClockBar, Rate::Audio),
             "bpm" => (Context::ClockBpm, Rate::Control),
-            other => {
-                const FIELDS: [&str; 3] = ["beat", "bar", "bpm"];
-                let mut d = Diagnostic::new(format!("`clock` has no `{other}`"), name.span)
-                    .with_help("it has `beat`, `bar` and `bpm`");
-                if let Some(c) = closest(other, FIELDS) {
-                    d = d.with_help(format!("did you mean `{c}`?"));
-                }
-                return Err(d);
-            }
+            _ => return Err(no_field("clock", name, &["beat", "bar", "bpm"])),
         };
-        let src = self.g.add(ReadContext::new(what), &[]).expect("no ports");
-        self.note_rate(src, rate);
-        Ok(Sig::signal(src, Unit::Num))
+        Ok(self.read_context(what, Unit::Num, rate))
     }
 
     /// `late(x)`, in a bus send: `x` as it was a block ago, which breaks a loop through buses.

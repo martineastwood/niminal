@@ -120,7 +120,7 @@ impl Grid {
 
     /// `bar:beat` of a sample, counting from 1.
     pub fn position(&self, sample: u64) -> (u64, f64) {
-        let beats = (sample as i64 - self.origin) as f64 / self.sample_rate / self.beat_seconds();
+        let beats = self.beats(sample);
         let bar = (beats / self.beats_per_bar).floor();
         (bar as u64 + 1, beats - bar * self.beats_per_bar + 1.0)
     }

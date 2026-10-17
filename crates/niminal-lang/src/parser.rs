@@ -1417,14 +1417,15 @@ impl Parser {
     }
 
     /// `match mode { low: a, band | high: b, else: c }`, which is an `if`/`else if` chain on
-    /// `mode == pattern`. An arm's body is one expression or a `{ block }`. The subject is a name
-    /// so that testing it once per arm costs nothing.
+    /// `mode == pattern`. An arm's body is one expression or a `{ block }`, and `else` comes last.
+    /// The subject is a name so that testing it once per arm costs nothing.
     fn match_expr(&mut self) -> Res<Expr> {
         let start = self.bump().span; // `match`
         let subject = self.ident("a name to match on")?;
         let subject_span = self.prev_span();
         self.expect(&Tok::LBrace)?;
-        let mut arms: Vec<(Option<Expr>, Vec<Stmt>)> = Vec::new();
+        let mut arms: Vec<(Expr, Vec<Stmt>)> = Vec::new();
+        let mut otherwise = None;
         let end = loop {
             while matches!(self.peek(), Tok::Newline | Tok::Comma) {
                 self.bump();
@@ -1432,32 +1433,26 @@ impl Parser {
             if self.peek() == &Tok::RBrace {
                 break self.bump().span;
             }
+            if otherwise.is_some() {
+                return Err(self.unexpected("`}`, as `else` is the last arm"));
+            }
             let mut cond: Option<Expr> = None;
             if self.is_keyword("else") {
                 self.bump();
             } else {
+                // `a | b` matches either
                 loop {
                     let pattern = self.sum()?;
+                    let name = Expr { kind: ExprKind::Name(subject.name.clone()), span: subject_span };
                     let test = Expr {
                         span: pattern.span,
-                        kind: ExprKind::Compare {
-                            op: CmpOp::Eq,
-                            lhs: Box::new(Expr {
-                                kind: ExprKind::Name(subject.name.clone()),
-                                span: subject_span,
-                            }),
-                            rhs: Box::new(pattern),
-                        },
+                        kind: ExprKind::Compare { op: CmpOp::Eq, lhs: Box::new(name), rhs: Box::new(pattern) },
                     };
                     cond = Some(match cond {
                         None => test,
                         Some(prior) => Expr {
                             span: prior.span.to(test.span),
-                            kind: ExprKind::Logic {
-                                op: LogicOp::Or,
-                                lhs: Box::new(prior),
-                                rhs: Box::new(test),
-                            },
+                            kind: ExprKind::Logic { op: LogicOp::Or, lhs: Box::new(prior), rhs: Box::new(test) },
                         },
                     });
                     if !self.eat(&Tok::Bar) {
@@ -1471,38 +1466,22 @@ impl Parser {
             } else {
                 vec![Stmt::Expr(self.expr()?)]
             };
-            let is_else = cond.is_none();
-            arms.push((cond, body));
-            if is_else && !matches!(self.peek(), Tok::Newline | Tok::Comma | Tok::RBrace) {
-                return Err(self.unexpected("the end of the arm"));
+            match cond {
+                Some(cond) => arms.push((cond, body)),
+                None => otherwise = Some(body),
             }
         };
         let span = start.to(end);
-        let mut chain: Option<Vec<Stmt>> = None;
-        for (cond, body) in arms.into_iter().rev() {
-            match cond {
-                None => chain = Some(body),
-                Some(cond) => {
-                    let expr = Expr {
-                        kind: ExprKind::If {
-                            cond: Box::new(cond),
-                            then: body,
-                            otherwise: chain.take(),
-                        },
-                        span,
-                    };
-                    chain = Some(vec![Stmt::Expr(expr)]);
-                }
-            }
-        }
-        match chain.as_deref() {
-            Some([Stmt::Expr(e)]) if matches!(e.kind, ExprKind::If { .. }) => {
-                Ok(e.clone())
-            }
-            Some(_) => Err(Diagnostic::new("a `match` needs an arm to test", span)
-                .with_help("list the choices to match, such as `match mode { low: 1, high: 2 }`")),
-            None => Err(Diagnostic::new("a `match` needs an arm", span)),
-        }
+        let mut arms = arms.into_iter().rev();
+        let Some((cond, then)) = arms.next() else {
+            return Err(Diagnostic::new("a `match` needs an arm to test", span)
+                .with_help("list the choices to match, such as `match mode { low: 1, high: 2 }`"));
+        };
+        let last = Expr { kind: ExprKind::If { cond: Box::new(cond), then, otherwise }, span };
+        Ok(arms.fold(last, |rest, (cond, then)| Expr {
+            kind: ExprKind::If { cond: Box::new(cond), then, otherwise: Some(vec![Stmt::Expr(rest)]) },
+            span,
+        }))
     }
 
     /// `for i in 0..8 { ... }`, after seeing `for i in`.
@@ -1610,9 +1589,11 @@ impl Parser {
                 continue;
             }
             if self.peek() == &Tok::LBrace
-                && matches!(&e.kind, ExprKind::Call { name, args } if name.name == "after" && args.len() == 1 && args[0].name.is_none())
+                && let ExprKind::Call { name, args } = &e.kind
+                && name.name == "after"
+                && let [Arg { name: None, value: delay, .. }] = args.as_slice()
             {
-                e = self.after_block(e)?;
+                e = self.after_block(e.span, name.span, delay.clone())?;
                 continue;
             }
             if self.peek() != &Tok::Dot {
@@ -1639,25 +1620,21 @@ impl Parser {
 
     /// `after(delay) { body }`: the body starts when the note is `delay` old, from fresh state,
     /// and is silent until then. It is `reset_on(note.time >= delay) { body } * (note.time >= delay)`.
-    fn after_block(&mut self, call: Expr) -> Res<Expr> {
-        let ExprKind::Call { name, mut args } = call.kind else {
-            unreachable!("checked by the caller");
-        };
-        let delay = args.remove(0).value;
+    fn after_block(&mut self, call: Span, name: Span, delay: Expr) -> Res<Expr> {
         let (body, end) = self.block()?;
-        let span = call.span.to(end);
+        let span = call.to(end);
         let reached = || Expr {
             span: delay.span,
             kind: ExprKind::Compare {
                 op: CmpOp::Ge,
                 lhs: Box::new(Expr {
-                    span: name.span,
+                    span: name,
                     kind: ExprKind::Call {
-                        name: Ident { name: "time".into(), span: name.span },
+                        name: Ident { name: "time".into(), span: name },
                         args: vec![Arg {
                             name: None,
                             receiver: true,
-                            value: Expr { kind: ExprKind::Name("note".into()), span: name.span },
+                            value: Expr { kind: ExprKind::Name("note".into()), span: name },
                         }],
                     },
                 }),
@@ -1667,7 +1644,7 @@ impl Parser {
         let scope = Expr {
             span,
             kind: ExprKind::Call {
-                name: Ident { name: "reset_on".into(), span: name.span },
+                name: Ident { name: "reset_on".into(), span: name },
                 args: vec![
                     Arg { name: None, receiver: false, value: reached() },
                     Arg {
@@ -2338,5 +2315,11 @@ instr a(f: hz) {
         );
         assert_eq!(err("instr a() { 1 + }"), "expected a value, found `}`");
         assert_eq!(err("instr a() { f(1 2) }"), "expected `)`, found a number");
+    }
+    #[test]
+    fn a_match_needs_an_arm_to_test_and_ends_with_else() {
+        assert!(parse("fn f(m: (a | b) = a) { match m { a: 1, b | c: 2, else: 3 } }").is_ok());
+        assert_eq!(err("fn f(m: (a | b) = a) { match m { else: 3 } }"), "a `match` needs an arm to test");
+        assert!(err("fn f(m: (a | b) = a) { match m { else: 3, a: 1 } }").contains("`else` is the last arm"));
     }
 }

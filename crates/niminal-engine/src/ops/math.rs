@@ -429,19 +429,20 @@ impl Opcode for ReadContext {
     fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
         let clock = ctx.clock;
         let per_sample = f64::from(clock.bpm) / 60.0 / f64::from(ctx.sample_rate);
+        let beat_at = |i: usize| clock.beat + i as f64 * per_sample;
         match self.what {
             Context::NoteDur => out.fill(ctx.dur),
             Context::NoteIndex => out.fill(ctx.index as f32),
             Context::ClockBpm => out.fill(clock.bpm),
             Context::ClockBeat => {
                 for (i, o) in out.iter_mut().enumerate() {
-                    *o = (clock.beat + i as f64 * per_sample) as f32;
+                    *o = beat_at(i) as f32;
                 }
             }
             Context::ClockBar => {
                 let bar = f64::from(clock.beats_per_bar.max(f32::MIN_POSITIVE));
                 for (i, o) in out.iter_mut().enumerate() {
-                    *o = ((clock.beat + i as f64 * per_sample) / bar) as f32;
+                    *o = (beat_at(i) / bar) as f32;
                 }
             }
         }

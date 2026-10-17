@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::graph::Graph;
 use crate::mixer::{Buses, MAX_CHANNELS};
@@ -228,7 +229,7 @@ impl Voice {
 
     /// Number this note among its instrument's. Called once, when the note actually starts.
     pub fn start_note(&mut self) {
-        self.index = self.graph.notes_started.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.index = self.graph.notes_started.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Note off. Envelopes with a sustain point begin their release.

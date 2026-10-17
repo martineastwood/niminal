@@ -900,20 +900,14 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
                     return Err(Diagnostic::new("`pitch` is the name of a parameter", value.span)
                         .with_help("for example `with(pitch: tone)`, for `instr bass(tone: hz = 55hz)`"));
                 };
-                match instrument.params.iter().find(|p| p.name == *name) {
-                    Some(p) if p.unit == crate::Unit::Hz => {}
-                    Some(_) => {
-                        return Err(Diagnostic::new(
-                            format!("`{name}` is the pitch, so it is in `hz`"),
-                            value.span,
-                        ));
-                    }
-                    None => {
-                        return Err(Diagnostic::new(
-                            format!("the instrument has no parameter `{name}` to take the pitch"),
-                            value.span,
-                        ));
-                    }
+                let Some(param) = instrument.params.iter().find(|p| p.name == *name) else {
+                    return Err(Diagnostic::new(
+                        format!("the instrument has no parameter `{name}` to take the pitch"),
+                        value.span,
+                    ));
+                };
+                if param.unit != crate::Unit::Hz {
+                    return Err(Diagnostic::new(format!("`{name}` is the pitch, so it is in `hz`"), value.span));
                 }
                 instrument.pitch = name.clone();
             }
@@ -1531,15 +1525,15 @@ const NAMED_SCALES: [(&str, [f64; 12]); 4] = [
 /// `scale` is a name (`equal`, `just`, `pythagorean`, `meantone`), `cents(0, 112, ...)` or
 /// `ratios(1, 16/15, ...)`, one entry per note number from c up to the period.
 fn tuning_of(items: &[Item]) -> Res<Tuning> {
-    let mut tuning = Tuning::default();
-    let (mut a4, mut period, mut scale): (Option<f64>, Option<f64>, Option<Vec<f64>>) = (None, None, None);
+    let default = Tuning::default();
+    let (mut a4, mut period, mut scale) = (default.a4, default.period, NAMED_SCALES[0].1.to_vec());
     for item in items {
         let Item::Config(config) = item else { continue };
         for (key, value) in &config.tuning {
             match key.name.as_str() {
                 "a4" => match &value.kind {
                     ExprKind::Num { value: v, unit: Some(u) } if (u == "hz" || u == "khz") && *v > 0.0 => {
-                        a4 = Some(if u == "khz" { v * 1000.0 } else { *v });
+                        a4 = if u == "khz" { v * 1000.0 } else { *v };
                     }
                     _ => {
                         return Err(Diagnostic::new("`a4` is a frequency", value.span)
@@ -1551,20 +1545,17 @@ fn tuning_of(items: &[Item]) -> Res<Tuning> {
                     if cents <= 0.0 {
                         return Err(Diagnostic::new("`period` must be above 0ct", value.span));
                     }
-                    period = Some(cents);
+                    period = cents;
                 }
-                "scale" => scale = Some(scale_of(value)?),
+                "scale" => scale = scale_of(value)?,
                 other => {
-                    let mut d = Diagnostic::new(format!("unknown tuning setting `{other}`"), key.span);
-                    d = d.with_help("the settings are: a4, scale, period");
-                    return Err(d);
+                    return Err(Diagnostic::new(format!("unknown tuning setting `{other}`"), key.span)
+                        .with_help("the settings are: a4, scale, period"));
                 }
             }
         }
     }
-    let degrees = scale.unwrap_or_else(|| NAMED_SCALES[0].1.to_vec());
-    tuning = Tuning::new(a4.unwrap_or(tuning.a4), period.unwrap_or(tuning.period), &degrees);
-    Ok(tuning)
+    Ok(Tuning::new(a4, period, &scale))
 }
 
 /// An interval written in cents (`702ct`) or semitones (`7st`), as cents.
@@ -1578,12 +1569,9 @@ fn cents_of(e: &Expr) -> Res<f64> {
 }
 
 fn scale_of(e: &Expr) -> Res<Vec<f64>> {
-    let bad_length = |span| {
-        Diagnostic::new(format!("a scale has between 1 and {MAX_DEGREES} degrees"), span)
-    };
     let check = |degrees: Vec<f64>, span| -> Res<Vec<f64>> {
         if degrees.is_empty() || degrees.len() > MAX_DEGREES {
-            return Err(bad_length(span));
+            return Err(Diagnostic::new(format!("a scale has between 1 and {MAX_DEGREES} degrees"), span));
         }
         if degrees[0] != 0.0 {
             return Err(Diagnostic::new("a scale starts at the root: its first degree is 0 cents (or a ratio of 1)", span));

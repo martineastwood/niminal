@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::atomic::AtomicU32;
 
 use crate::opcode::Opcode;
 
@@ -310,7 +311,7 @@ impl GraphBuilder {
             buffer_writes,
             buffer_reads,
             output_slots: output_enc.into_iter().map(resolve).collect(),
-            notes_started: std::sync::atomic::AtomicU32::new(0),
+            notes_started: AtomicU32::new(0),
         };
         graph.state_keys = graph.compute_state_keys();
         graph
@@ -339,7 +340,7 @@ pub struct Graph {
     pub(crate) buffer_reads: Vec<usize>,
     pub(crate) output_slots: Vec<usize>,
     /// Notes of this graph that have started, which numbers the next one (`note.index`).
-    pub(crate) notes_started: std::sync::atomic::AtomicU32,
+    pub(crate) notes_started: AtomicU32,
 }
 
 impl Graph {
