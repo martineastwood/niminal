@@ -372,8 +372,8 @@ All samples are tables, but not all tables are samples, so each has a surface de
 
 ```
 const saw8   = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
-const shaper = curve([0, 0.2, 0.7, 1], size: 1024)         // not built yet
-const hall   = file("irs/hall.wav")                       // not built yet
+const shaper = curve([[0, 0], [0.2, 0.2], [0.7, 0.7], [1, 1]], size: 1024)
+const hall   = file("irs/hall.wav")
 
 sample kick  = "drums/kick.wav"
 sample hh    = "drums/hh_open.wav" with(choke: hats)

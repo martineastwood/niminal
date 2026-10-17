@@ -12,6 +12,7 @@ mod master;
 mod mixer;
 mod opcode;
 pub mod ops;
+mod table;
 mod voice;
 
 pub use array::{Array, wrapped_index};
@@ -19,4 +20,5 @@ pub use master::{DEFAULT_CEILING, Master};
 pub use mixer::{Buses, DEFAULT_MAX_VOICES, ChainInput, MAX_CHANNELS, Mixer, Route, Stems, TrackDef, Transfer, VoiceId, execution_order};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
 pub use opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};
+pub use table::{Buffer, Edge, Table};
 pub use voice::{Priority, Voice, VoiceRule};

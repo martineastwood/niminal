@@ -129,6 +129,10 @@ pub struct TrackDef {
     pub route: Route,
     /// Buses that this track's voices may send to.
     pub voice_sends: Vec<usize>,
+    /// Shared buffers that this track's voices may write.
+    pub voice_buffer_writes: Vec<usize>,
+    /// Shared buffers that this track's voices may read.
+    pub voice_buffer_reads: Vec<usize>,
 }
 
 impl TrackDef {
@@ -154,18 +158,49 @@ impl TrackDef {
         }
         w
     }
+
+    fn buffer_reads(&self) -> Vec<usize> {
+        let mut r = self.voice_buffer_reads.clone();
+        if let Some(chain) = &self.chain {
+            r.extend(chain.buffer_reads().iter().copied());
+        }
+        r.sort_unstable();
+        r.dedup();
+        r
+    }
+
+    fn buffer_writes(&self) -> Vec<usize> {
+        let mut w = self.voice_buffer_writes.clone();
+        if let Some(chain) = &self.chain {
+            w.extend(chain.buffer_writes().iter().copied());
+        }
+        w.sort_unstable();
+        w.dedup();
+        w
+    }
 }
 
-/// An order in which to run tracks so that every bus is written before it is
-/// read. A cycle comes back as the tracks that form it, in order; a track that
-/// both writes and reads one bus is a cycle of one.
+/// An order in which to run tracks so that every bus and shared buffer is
+/// written before it is read. A cycle comes back as the tracks that form it, in
+/// order; a track that both writes and reads one bus is a cycle of one. A track
+/// that both writes and reads the same buffer does not count as a cycle (the
+/// write and read order inside its graph already decides that).
 pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
     let n = tracks.len();
     let reads: Vec<_> = tracks.iter().map(TrackDef::reads).collect();
     let writes: Vec<_> = tracks.iter().map(TrackDef::writes).collect();
+    let buf_reads: Vec<_> = tracks.iter().map(TrackDef::buffer_reads).collect();
+    let buf_writes: Vec<_> = tracks.iter().map(TrackDef::buffer_writes).collect();
     // edges[w] lists tracks that must run after w
     let edges: Vec<Vec<usize>> = (0..n)
-        .map(|w| (0..n).filter(|&r| writes[w].iter().any(|b| reads[r].contains(b))).collect())
+        .map(|w| {
+            (0..n)
+                .filter(|&r| {
+                    writes[w].iter().any(|b| reads[r].contains(b))
+                        || (w != r && buf_writes[w].iter().any(|b| buf_reads[r].contains(b)))
+                })
+                .collect()
+        })
         .collect();
 
     let mut waiting_on = vec![0usize; n];

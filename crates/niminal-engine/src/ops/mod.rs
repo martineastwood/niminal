@@ -1,6 +1,7 @@
 //! Built-in opcodes.
 
 mod bitcrush;
+mod buffer;
 mod chorus;
 mod compress;
 mod control;
@@ -18,6 +19,7 @@ mod sample;
 mod tap;
 
 pub use bitcrush::Bitcrush;
+pub use buffer::{BufferRead, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
 pub use compress::Compressor;
 pub use control::Control;
@@ -29,13 +31,13 @@ pub use fold::{Clip, Fold};
 pub use math::{
     Add, BlockHold, Compare, Delay1, Div, Gain, Hold, Max, Min, Mul, NoteTime, Pow, Released, Rem, SampleRate,
     Select, Sub,
-    ArrayRead, TableRead,
+    ArrayRead, TableRead, Waveshape,
 };
 pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
 pub use pan::{PanChannel, pan_gains};
 pub use reverb::Reverb;
-pub use sample::{SampleData, Sampler};
+pub use sample::{LoopMode, Sampler};
 pub use tap::{Tap, TapOut};
 
 mod lifetime;

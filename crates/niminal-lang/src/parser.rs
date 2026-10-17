@@ -349,6 +349,16 @@ impl Parser {
                 None
             };
             Ok(Item::Bus(BusDecl { name, layout, body }))
+        } else if self.is_keyword("buffer") {
+            let start = self.bump().span;
+            let name = self.ident("a buffer name")?;
+            self.expect(&Tok::Eq)?;
+            let value = self.expr()?;
+            Ok(Item::Buffer(BufferDecl {
+                name,
+                value,
+                span: start.to(self.prev_span()),
+            }))
         } else if self.is_keyword("midi_out") {
             let start = self.bump().span;
             let name = self.ident("a name for the MIDI output")?;
@@ -377,7 +387,7 @@ impl Parser {
                     self.bump();
                     SampleSource::Path(path)
                 }
-                Tok::Ident(_) if is_kit && self.peek_at(1) == &Tok::Dot => {
+                Tok::Ident(_) if self.peek_at(1) == &Tok::Dot => {
                     let sample = self.ident("a sample name")?;
                     self.bump();
                     let method = self.ident("`slices`")?;
@@ -387,6 +397,13 @@ impl Parser {
                             method.span,
                         )
                         .with_help("the only thing to make from a sample is `.slices(n)`"));
+                    }
+                    if !is_kit {
+                        return Err(Diagnostic::new(
+                            "`.slices` makes a kit, not a sample",
+                            method.span,
+                        )
+                        .with_help("for example `kit chops = amen.slices(16)`"));
                     }
                     self.expect(&Tok::LParen)?;
                     let Tok::Num {
@@ -400,11 +417,12 @@ impl Parser {
                     self.expect(&Tok::RParen)?;
                     SampleSource::Slices { sample, count }
                 }
+                _ if !is_kit => SampleSource::Table(self.expr()?),
                 _ => {
                     return Err(self.unexpected("a file path in quotes").with_help(if is_kit {
                         "for example `kit drums = \"drums/808\"` or `kit chops = amen.slices(16)`"
                     } else {
-                        "for example `sample kick = \"drums/kick.wav\"`"
+                        "for example `sample kick = \"drums/kick.wav\"` or `sample pad = organ`"
                     }));
                 }
             };

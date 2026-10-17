@@ -68,6 +68,10 @@ pub struct GraphBuilder {
     n_inputs: usize,
     /// (bus, channel, encoded slot)
     sends: Vec<(usize, usize, usize, bool)>,
+    /// Shared buffers this graph writes (for cross-track ordering).
+    buffer_writes: Vec<usize>,
+    /// Shared buffers this graph reads (for cross-track ordering).
+    buffer_reads: Vec<usize>,
     tail: f32,
 }
 
@@ -127,6 +131,21 @@ impl GraphBuilder {
     pub fn send_channel_delayed(&mut self, bus: usize, channel: usize, src: Src) {
         let slot = self.slot_for(src);
         self.sends.push((bus, channel, slot, true));
+    }
+
+    /// Note that this graph writes a shared buffer. Used so tracks that write a
+    /// buffer run before tracks that read it in the same block.
+    pub fn touch_buffer_write(&mut self, id: usize) {
+        if !self.buffer_writes.contains(&id) {
+            self.buffer_writes.push(id);
+        }
+    }
+
+    /// Note that this graph reads a shared buffer.
+    pub fn touch_buffer_read(&mut self, id: usize) {
+        if !self.buffer_reads.contains(&id) {
+            self.buffer_reads.push(id);
+        }
     }
 
     /// Add an opcode, wiring its ports by name. Ports left out take their
@@ -273,6 +292,12 @@ impl GraphBuilder {
             .collect();
         let sends = self.sends.iter().map(|&(bus, channel, slot, delayed)| (bus, channel, resolve(slot), delayed)).collect();
 
+        let mut buffer_writes = self.buffer_writes;
+        buffer_writes.sort_unstable();
+        buffer_writes.dedup();
+        let mut buffer_reads = self.buffer_reads;
+        buffer_reads.sort_unstable();
+        buffer_reads.dedup();
         let mut graph = Graph {
             state_keys: Vec::new(),
             params: self.params,
@@ -282,6 +307,8 @@ impl GraphBuilder {
             nodes,
             n_inputs,
             sends,
+            buffer_writes,
+            buffer_reads,
             output_slots: output_enc.into_iter().map(resolve).collect(),
         };
         graph.state_keys = graph.compute_state_keys();
@@ -307,6 +334,8 @@ pub struct Graph {
     /// (bus, channel, slot) triples added to buses after every block.
     /// Bus, channel, the slot sent, and whether it arrives a block late.
     pub(crate) sends: Vec<(usize, usize, usize, bool)>,
+    pub(crate) buffer_writes: Vec<usize>,
+    pub(crate) buffer_reads: Vec<usize>,
     pub(crate) output_slots: Vec<usize>,
 }
 
@@ -377,6 +406,16 @@ impl Graph {
         buses.sort_unstable();
         buses.dedup();
         buses
+    }
+
+    /// Shared buffers this graph writes, for cross-track ordering.
+    pub fn buffer_writes(&self) -> &[usize] {
+        &self.buffer_writes
+    }
+
+    /// Shared buffers this graph reads, for cross-track ordering.
+    pub fn buffer_reads(&self) -> &[usize] {
+        &self.buffer_reads
     }
 
     pub(crate) fn input_slot_base(&self) -> usize {

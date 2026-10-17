@@ -20,6 +20,7 @@ mod performance;
 mod program;
 mod sample;
 mod schedule;
+mod tables;
 mod unit;
 
 pub use analysis::{

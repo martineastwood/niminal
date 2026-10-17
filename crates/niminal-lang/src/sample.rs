@@ -1,14 +1,14 @@
-//! Loading the audio files that `sample` and `kit` declarations name.
+//! Loading the audio files that `sample`, `kit` and `file()` declarations name.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use niminal_engine::ops::SampleData;
+use niminal_engine::Table;
 
-/// A file as read, with the modification time it had then.
-type Loaded = (Option<SystemTime>, Arc<SampleData>);
+/// Channels of a loaded file, with the modification time it had then.
+type Loaded = (Option<SystemTime>, Vec<Arc<Table>>);
 
 /// Where sample paths are found from, and the files already read. Clones
 /// share one cache, so a live session reads each file once until it changes.
@@ -73,11 +73,42 @@ impl Samples {
         }
     }
 
-    pub fn load(&self, path: &str) -> Result<Arc<SampleData>, String> {
+    /// Load a WAV as one table per channel.
+    pub fn load(&self, path: &str) -> Result<Vec<Arc<Table>>, String> {
         self.load_file(&self.resolve(path))
     }
 
-    fn load_file(&self, path: &Path) -> Result<Arc<SampleData>, String> {
+    /// Load one channel of a WAV as a table (`channel` counts from 0).
+    pub fn load_channel(
+        &self,
+        path: &str,
+        channel: usize,
+        start: Option<usize>,
+        end: Option<usize>,
+    ) -> Result<Arc<Table>, String> {
+        let channels = self.load(path)?;
+        let table = channels.get(channel).ok_or_else(|| {
+            format!(
+                "{} has {} channel{}, not channel {channel}",
+                path,
+                channels.len(),
+                if channels.len() == 1 { "" } else { "s" }
+            )
+        })?;
+        let len = table.len();
+        let from = start.unwrap_or(0).min(len);
+        let to = end.unwrap_or(len).min(len);
+        if to <= from {
+            return Err(format!("the slice of {path} is empty"));
+        }
+        if from == 0 && to == len {
+            Ok(table.clone())
+        } else {
+            Ok(Arc::new(table.slice(from, to)))
+        }
+    }
+
+    fn load_file(&self, path: &Path) -> Result<Vec<Arc<Table>>, String> {
         let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((when, data)) = cache.get(path)
@@ -85,13 +116,14 @@ impl Samples {
         {
             return Ok(data.clone());
         }
-        let data = Arc::new(read_wav(path)?);
+        let data = read_wav(path)?.into_iter().map(Arc::new).collect::<Vec<_>>();
         cache.insert(path.to_path_buf(), (modified, data.clone()));
         Ok(data)
     }
 
     /// Every WAV file in a folder, by name without the extension, in name order.
-    pub fn load_kit(&self, path: &str) -> Result<Vec<(String, Arc<SampleData>)>, String> {
+    /// Each entry is the file's channels as tables.
+    pub fn load_kit(&self, path: &str) -> Result<Vec<(String, Vec<Arc<Table>>)>, String> {
         let dir = self.resolve(path);
         let entries = std::fs::read_dir(&dir)
             .map_err(|e| format!("can't read the folder {}: {e}", dir.display()))?;
@@ -118,7 +150,7 @@ impl Samples {
     }
 }
 
-fn read_wav(path: &Path) -> Result<SampleData, String> {
+fn read_wav(path: &Path) -> Result<Vec<Table>, String> {
     let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
     let mut reader = hound::WavReader::open(path).map_err(|e| fail(&e))?;
     let spec = reader.spec();
@@ -146,10 +178,11 @@ fn read_wav(path: &Path) -> Result<SampleData, String> {
             buffer.push(x);
         }
     }
-    Ok(SampleData {
-        channels: buffers,
-        sample_rate: spec.sample_rate as f32,
-    })
+    let rate = Some(spec.sample_rate as f32);
+    Ok(buffers
+        .into_iter()
+        .map(|b| Table::from_f32(b.into_boxed_slice(), rate))
+        .collect())
 }
 
 #[cfg(test)]
@@ -174,7 +207,7 @@ mod tests {
         samples.warm("sample a = \"a.wav\"\nsample gone = \"missing.wav\"\nthis is not valid");
         samples.warm("sample a = \"a.wav\"\nkit k = \"nofolder\"");
         let first = samples.load("a.wav").unwrap();
-        assert!(Arc::ptr_eq(&first, &samples.load("a.wav").unwrap()));
+        assert!(Arc::ptr_eq(&first[0], &samples.load("a.wav").unwrap()[0]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

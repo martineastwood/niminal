@@ -227,6 +227,8 @@ pub struct Program {
     pub instruments: Vec<Instrument>,
     pub buses: Vec<String>,
     pub bus_layouts: Vec<Layout>,
+    /// Shared writable tables, by name.
+    pub buffers: Vec<(String, std::sync::Arc<niminal_engine::Buffer>)>,
     /// Track 0 is the implicit one that plays instruments named directly.
     pub tracks: Vec<TrackInfo>,
     /// Every sample name used by a kit, which is what a `Value::Sample` counts.

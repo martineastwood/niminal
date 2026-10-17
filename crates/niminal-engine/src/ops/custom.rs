@@ -263,7 +263,7 @@ pub struct Kernel {
     /// Starting contents of each state list.
     pub buffers: Vec<Array<f64>>,
     /// Lists every voice reads and none writes.
-    pub tables: Vec<Arc<Array<f64>>>,
+    pub tables: Vec<Arc<crate::Table>>,
     /// Register indices of computed arrays, built once by the compiler.
     pub values: Vec<Array<usize>>,
     /// The registers holding the results, by name. Most kernels have one.
@@ -378,7 +378,7 @@ impl Custom {
                 Instr::Read { dst, list, idx } | Instr::ReadAt { dst, list, pos: idx, .. } => {
                     let interp = match *instr { Instr::ReadAt { interp, .. } => interp, _ => Interp::None };
                     let value = match list {
-                        ArraySource::Table(t) => read_at(&k.tables[t], regs[idx], interp),
+                        ArraySource::Table(t) => k.tables[t].read_at(regs[idx], interp),
                         ArraySource::State(s) => read_at(&buffers[s], regs[idx], interp),
                         ArraySource::Values(a) => read_array(k.values[a].len(), regs[idx], interp, |i| regs[k.values[a][i]]),
                     };

@@ -405,7 +405,7 @@ fn slicing_mistakes_are_reported() {
     let e = errors(&dir, "sample amen = \"amen.wav\"\nkit c = amen.slices(4)\ntrack t { instrument = c }\nt.play([s9])");
     assert!(e.contains("`s9` isn't a note, a value, or a sample in a kit"), "{e}");
     let e = errors(&dir, "sample amen = \"amen.wav\"\nsample c = amen.slices(4)");
-    assert!(e.contains("a file path in quotes"), "{e}");
+    assert!(e.contains("makes a kit"), "{e}");
 }
 
 #[test]

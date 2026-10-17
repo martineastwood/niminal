@@ -11,8 +11,8 @@ use crate::diag::{Diagnostic, Span, closest};
 use crate::env_shortcut;
 use crate::layout::Layout;
 use crate::lower::{
-    Member, Mixer, Names, check_fn, compile_chain, compile_const, compile_instr, compile_sampler,
-    layout_from_expr, unknown_unit,
+    Datum, Member, Mixer, Names, check_fn, compile_chain, compile_const, compile_instr,
+    compile_sampler, layout_from_expr, unknown_unit,
 };
 use crate::opcodes::Registry;
 use crate::parser;
@@ -252,6 +252,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         })
         .collect();
     let mut names = Names::default();
+    names.samples = options.samples.clone();
     for item in &items {
         let (ident, kind) = match item {
             Item::Control { name, .. } => (name, "control"),
@@ -260,6 +261,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Item::Fn(d) => (&d.name, "function"),
             Item::Const { name, .. } => (name, "constant"),
             Item::Bus(d) => (&d.name, "bus"),
+            Item::Buffer(d) => (&d.name, "buffer"),
             // a clip with an `instrument:` is a track of its own name; the clip may share it
             Item::Track(d) => (
                 &d.name,
@@ -403,18 +405,24 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let mut defined = Defined::default();
     let mut samples_state = SampleState::default();
     for item in &items {
-        let Item::Instr(def) = item else { continue };
-        defined.add(&def.name, &mut errors, || {
-            compile_instr(def, tempo, &registry, &names)
-                .and_then(|mut i| voice_options(def, &mut i, &mut samples_state).map(|()| i))
-        });
+        let Item::Buffer(decl) = item else { continue };
+        if names.buffers.contains_key(&decl.name.name) {
+            errors.push(Diagnostic::new(
+                format!("buffer `{}` is defined twice", decl.name.name),
+                decl.name.span,
+            ));
+            continue;
+        }
+        match compile_buffer(decl, tempo, &registry, &names) {
+            Ok((name, buffer)) => {
+                let id = names.buffers.len();
+                names.add(&name, "buffer");
+                names.buffers.insert(name, (id, buffer));
+            }
+            Err(d) => errors.push(d),
+        }
     }
-    for item in &items {
-        let Item::MidiOut(decl) = item else { continue };
-        defined.add(&decl.name, &mut errors, || {
-            crate::lower::compile_midi_out(decl, &names)
-        });
-    }
+    // Samples before instruments so `kick.data` and table-as-sample are available.
     for item in &items {
         let Item::Sample(decl) = item else { continue };
         defined.add(&decl.name, &mut errors, || {
@@ -426,6 +434,22 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 &names,
                 &mut samples_state,
             )
+        });
+    }
+    for (name, (channels, _)) in &samples_state.loaded {
+        names.sample_data.insert(name.clone(), channels.clone());
+    }
+    for item in &items {
+        let Item::Instr(def) = item else { continue };
+        defined.add(&def.name, &mut errors, || {
+            compile_instr(def, tempo, &registry, &names)
+                .and_then(|mut i| voice_options(def, &mut i, &mut samples_state).map(|()| i))
+        });
+    }
+    for item in &items {
+        let Item::MidiOut(decl) = item else { continue };
+        defined.add(&decl.name, &mut errors, || {
+            crate::lower::compile_midi_out(decl, &names)
         });
     }
     let Defined {
@@ -452,6 +476,24 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 sends.sort_unstable();
                 sends.dedup();
                 sends
+            },
+            voice_buffer_writes: {
+                let mut w: Vec<usize> = instruments
+                    .iter()
+                    .flat_map(|i| i.graph.buffer_writes().iter().copied())
+                    .collect();
+                w.sort_unstable();
+                w.dedup();
+                w
+            },
+            voice_buffer_reads: {
+                let mut r: Vec<usize> = instruments
+                    .iter()
+                    .flat_map(|i| i.graph.buffer_reads().iter().copied())
+                    .collect();
+                r.sort_unstable();
+                r.dedup();
+                r
             },
         },
     };
@@ -496,8 +538,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             .map(|&i| tracks[i].name.as_str())
             .collect();
         errors.push(
-            Diagnostic::new(format!("tracks feed back through buses: {}", path.join(" -> ")), track_spans[cycle[0]])
-                .with_help("a bus has to be written before it is read; break the loop with `prev`, by sending a late copy: `echo += prev(out)`"),
+            Diagnostic::new(format!("tracks feed back through buses or buffers: {}", path.join(" -> ")), track_spans[cycle[0]])
+                .with_help("a bus or shared buffer has to be written before it is read; break a bus loop with `prev`, by sending a late copy: `echo += prev(out)`"),
         );
     }
 
@@ -544,6 +586,15 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             instruments,
             buses: names.buses,
             bus_layouts: names.bus_layouts,
+            buffers: {
+                let mut bufs: Vec<_> = names
+                    .buffers
+                    .into_iter()
+                    .map(|(name, (id, buffer))| (id, name, buffer))
+                    .collect();
+                bufs.sort_by_key(|(id, _, _)| *id);
+                bufs.into_iter().map(|(_, name, buffer)| (name, buffer)).collect()
+            },
             tracks,
             sample_names: samples_state.names,
             choke_groups: samples_state.groups,
@@ -633,6 +684,12 @@ fn compile_track(
     let voice_sends = instrument
         .map(|i| instruments[i].graph.send_buses())
         .unwrap_or_default();
+    let voice_buffer_writes = instrument
+        .map(|i| instruments[i].graph.buffer_writes().to_vec())
+        .unwrap_or_default();
+    let voice_buffer_reads = instrument
+        .map(|i| instruments[i].graph.buffer_reads().to_vec())
+        .unwrap_or_default();
     Ok(Some(TrackInfo {
         taps: chain.taps.clone(),
         name: decl.name.name.clone(),
@@ -644,6 +701,8 @@ fn compile_track(
             inputs: chain.inputs,
             route: chain.route,
             voice_sends,
+            voice_buffer_writes,
+            voice_buffer_reads,
         },
     }))
 }
@@ -891,8 +950,8 @@ struct SampleState {
     names: Vec<String>,
     /// The names of choke groups.
     groups: Vec<String>,
-    /// Lone samples already loaded, for `.slices` to cut up.
-    loaded: HashMap<String, (Arc<niminal_engine::ops::SampleData>, f64)>,
+    /// Lone samples already loaded, for `.slices` to cut up and `.data` to expose.
+    loaded: HashMap<String, (Vec<Arc<niminal_engine::Table>>, f64)>,
 }
 
 /// The kit made by cutting `data` into `count` equal pieces called `s0`, `s1`...
@@ -914,31 +973,29 @@ fn slice_members(
         }
         return Err(d);
     };
-    if count.fract() != 0.0 || count < 1.0 || count as usize > data.len() {
+    let frames = data.first().map_or(0, |c| c.len());
+    if count.fract() != 0.0 || count < 1.0 || count as usize > frames {
         return Err(Diagnostic::new(
-            format!(
-                "a sample of {} frames can be cut into 1 to {} slices",
-                data.len(),
-                data.len()
-            ),
+            format!("a sample of {frames} frames can be cut into 1 to {frames} slices"),
             decl.source_span,
         ));
     }
     let count = count as usize;
-    let each = data.len() / count;
+    let each = frames / count;
     Ok((0..count)
         .map(|i| Member {
             name: format!("s{i}"),
-            data: data.clone(),
+            channels: data.clone(),
             slice: Some((
                 i * each,
                 if i + 1 == count {
-                    data.len()
+                    frames
                 } else {
                     (i + 1) * each
                 },
             )),
             speed: *speed,
+            loop_mode: niminal_engine::ops::LoopMode::None,
         })
         .collect())
 }
@@ -982,12 +1039,13 @@ fn compile_sample(
                 }
             },
             "fit" => fit = Some(arg),
+            "loop" => {} // handled by loop_mode_of
             other => {
                 let mut d =
                     Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
-                d = match closest(other, ["root", "choke", "beats", "fit"]) {
+                d = match closest(other, ["root", "choke", "beats", "fit", "loop"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
-                    None => d.with_help("the options are `root`, `choke`, `beats` and `fit`"),
+                    None => d.with_help("the options are `root`, `choke`, `beats`, `fit` and `loop`"),
                 };
                 return Err(d);
             }
@@ -1034,33 +1092,67 @@ fn compile_sample(
             .load_kit(path)
             .map_err(file_error)?
             .into_iter()
-            .map(|(name, data)| Member {
+            .map(|(name, channels)| Member {
                 name,
-                data,
+                channels,
                 slice: None,
                 speed: 1.0,
+                loop_mode: niminal_engine::ops::LoopMode::None,
             })
             .collect(),
         (SampleSource::Path(path), false) => {
-            let data = samples.load(path).map_err(file_error)?;
+            let channels = samples.load(path).map_err(file_error)?;
+            let frames = channels.first().map_or(0, |c| c.len());
+            let rate = channels
+                .first()
+                .map_or(48_000.0, |c| c.sample_rate_or(48_000.0));
             // Fitting to the tempo: the loop's own length in seconds against the time its beats take.
             let speed = match (fit, beats) {
                 (Some(_), Some(b)) => {
-                    (data.len() as f64 / f64::from(data.sample_rate)) / (b * 60.0 / tempo.bpm)
+                    (frames as f64 / f64::from(rate)) / (b * 60.0 / tempo.bpm)
                 }
                 _ => 1.0,
             };
             state
                 .loaded
-                .insert(decl.name.name.clone(), (data.clone(), speed));
+                .insert(decl.name.name.clone(), (channels.clone(), speed));
             vec![Member {
                 name: decl.name.name.clone(),
-                data,
+                channels,
                 slice: None,
                 speed,
+                loop_mode: loop_mode_of(&decl.options)?,
             }]
         }
-        (SampleSource::Slices { sample, count }, _) => slice_members(decl, sample, *count, state)?,
+        (SampleSource::Slices { sample, count }, _) => {
+            let mut members = slice_members(decl, sample, *count, state)?;
+            let mode = loop_mode_of(&decl.options)?;
+            for m in &mut members {
+                m.loop_mode = mode;
+            }
+            members
+        }
+        (SampleSource::Table(expr), false) => {
+            let value = compile_const(expr, tempo, registry, names)?;
+            let table = table_from_const(value, decl.source_span)?;
+            let channels = vec![table];
+            state
+                .loaded
+                .insert(decl.name.name.clone(), (channels.clone(), 1.0));
+            vec![Member {
+                name: decl.name.name.clone(),
+                channels,
+                slice: None,
+                speed: 1.0,
+                loop_mode: loop_mode_of(&decl.options)?,
+            }]
+        }
+        (SampleSource::Table(_), true) => {
+            return Err(Diagnostic::new(
+                "a kit is a folder of files or `.slices`, not a table",
+                decl.source_span,
+            ));
+        }
     };
     if decl.is_kit {
         for member in &members {
@@ -1144,6 +1236,117 @@ fn compile_sample(
 
 /// The pitch (c4) at which a sample plays as recorded unless it says otherwise.
 const DEFAULT_ROOT_HZ: f32 = 261.625_56;
+
+/// Default sample rate used when sizing buffers from musical time.
+const BUFFER_SAMPLE_RATE: f32 = 48_000.0;
+
+fn loop_mode_of(options: &[Arg]) -> Res<niminal_engine::ops::LoopMode> {
+    for arg in options {
+        if arg.name.as_ref().is_some_and(|n| n.name == "loop") {
+            return match &arg.value.kind {
+                ExprKind::Name(n) if n == "none" || n == "false" => {
+                    Ok(niminal_engine::ops::LoopMode::None)
+                }
+                ExprKind::Name(n) if n == "forward" || n == "true" => {
+                    Ok(niminal_engine::ops::LoopMode::Forward)
+                }
+                ExprKind::Name(n) if n == "bidirectional" || n == "pingpong" => {
+                    Ok(niminal_engine::ops::LoopMode::Bidirectional)
+                }
+                _ => Err(Diagnostic::new(
+                    "`loop` is `none`, `forward` or `bidirectional`",
+                    arg.value.span,
+                )),
+            };
+        }
+    }
+    Ok(niminal_engine::ops::LoopMode::None)
+}
+
+fn table_from_const(value: Datum, span: Span) -> Res<Arc<niminal_engine::Table>> {
+    match value {
+        Datum::Table(t) => Ok(t),
+        Datum::Array(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                match item {
+                    Datum::Sig(s) if s.konst().is_some() && s.unit() == crate::unit::Unit::Num => {
+                        values.push(s.konst().unwrap());
+                    }
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "a sample table is a one-dimensional array of plain numbers",
+                            span,
+                        ));
+                    }
+                }
+            }
+            if values.is_empty() {
+                return Err(Diagnostic::new("a table can't be empty", span));
+            }
+            Ok(Arc::new(niminal_engine::Table::from_f64(values, None)))
+        }
+        _ => Err(Diagnostic::new(
+            "expected a table of plain numbers known while compiling",
+            span,
+        )),
+    }
+}
+
+fn compile_buffer(
+    decl: &BufferDecl,
+    tempo: Tempo,
+    registry: &Registry,
+    names: &Names,
+) -> Res<(String, Arc<niminal_engine::Buffer>)> {
+    let value = compile_const(&decl.value, tempo, registry, names)?;
+    let buffer = match value {
+        Datum::Table(t) => niminal_engine::Buffer::from_table(&t),
+        Datum::Array(_) => {
+            let table = table_from_const(value, decl.value.span)?;
+            niminal_engine::Buffer::from_table(&table)
+        }
+        Datum::Sig(s) => {
+            // A duration becomes that many samples at 48 kHz.
+            if s.unit() == crate::unit::Unit::Time {
+                let Some(secs) = s.konst() else {
+                    return Err(Diagnostic::new(
+                        "a buffer's length must be known while compiling",
+                        decl.value.span,
+                    ));
+                };
+                let len = (secs * f64::from(BUFFER_SAMPLE_RATE)).round().max(1.0) as usize;
+                niminal_engine::Buffer::zeros(len, Some(BUFFER_SAMPLE_RATE))
+            } else if s.unit() == crate::unit::Unit::Num {
+                let Some(n) = s.konst() else {
+                    return Err(Diagnostic::new(
+                        "a buffer's length must be known while compiling",
+                        decl.value.span,
+                    ));
+                };
+                if n.fract() != 0.0 || n < 1.0 {
+                    return Err(Diagnostic::new(
+                        "a buffer length is a whole number of samples",
+                        decl.value.span,
+                    ));
+                }
+                niminal_engine::Buffer::zeros(n as usize, None)
+            } else {
+                return Err(Diagnostic::new(
+                    "a buffer is sized with `zeros(n)`, a table, or a duration such as `4bars`",
+                    decl.value.span,
+                ));
+            }
+        }
+        _ => {
+            return Err(Diagnostic::new(
+                "a buffer is sized with `zeros(n)`, a table, or a duration such as `4bars`",
+                decl.value.span,
+            ));
+        }
+    };
+    Ok((decl.name.name.clone(), Arc::new(buffer)))
+}
 
 // ---- program-level statements -------------------------------------------
 
@@ -2293,8 +2496,8 @@ track b { out = y.lpf(cutoff: 1khz).to(x) }
 ";
         let d = first_error(src);
         assert!(
-            d.message == "tracks feed back through buses: a -> b -> a"
-                || d.message == "tracks feed back through buses: b -> a -> b",
+            d.message == "tracks feed back through buses or buffers: a -> b -> a"
+                || d.message == "tracks feed back through buses or buffers: b -> a -> b",
             "{}",
             d.message
         );
@@ -2307,7 +2510,7 @@ track b { out = y.lpf(cutoff: 1khz).to(x) }
         // outside a send, `prev` is one sample earlier
         ok("bus x\ntrack a { out = prev(x) }");
         let d = first_error("bus x\ntrack a { out = x.to(x) }");
-        assert_eq!(d.message, "tracks feed back through buses: a -> a");
+        assert_eq!(d.message, "tracks feed back through buses or buffers: a -> a");
     }
 
     #[test]

@@ -88,6 +88,10 @@ kit drums = "drums" with(choke: hats(hat_open, hat_closed))
 kit chops = brk.slices(16) with(choke: g(s4, s12))
 ```
 
+### Tables and samples
+
+A sample's audio is a table. `kick.data` is that table (or an array of channel tables). A const table can be played as a sample: `sample pad = organ with(root: c4, loop: forward)`. See [Tables](/reference/language/tables/).
+
 ## Built-in DSP
 
-For filters, delay, reverb, noise, compress, chorus, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Spectral processing, SFZ multisamples, and live recording buffers are not in the language yet.
+For filters, delay, reverb, noise, compress, chorus, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Spectral processing and SFZ multisamples are not in the language yet.

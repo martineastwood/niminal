@@ -96,18 +96,38 @@ pub struct Osc {
     wave: Wave,
     /// Plays this instead of `wave` when set.
     table: Option<Arc<Wavetable>>,
+    /// Morphing bank of tables; `position` selects between them.
+    bank: Option<Arc<[Arc<Wavetable>]>>,
     phase: f64,
     sample_rate: f32,
 }
 
 impl Osc {
     pub fn new(wave: Wave) -> Self {
-        Osc { wave, table: None, phase: 0.0, sample_rate: 48_000.0 }
+        Osc {
+            wave,
+            table: None,
+            bank: None,
+            phase: 0.0,
+            sample_rate: 48_000.0,
+        }
     }
 
     /// An oscillator that plays one cycle of a table, band-limited at any pitch.
     pub fn with_table(table: Arc<Wavetable>) -> Self {
-        Osc { table: Some(table), ..Osc::new(Wave::Sine) }
+        Osc {
+            table: Some(table),
+            ..Osc::new(Wave::Sine)
+        }
+    }
+
+    /// Morph between several band-limited tables with the `position` port (0..1).
+    pub fn with_bank(bank: Arc<[Arc<Wavetable>]>) -> Self {
+        assert!(bank.len() >= 2, "a bank needs at least two tables");
+        Osc {
+            bank: Some(bank),
+            ..Osc::new(Wave::Sine)
+        }
     }
 }
 
@@ -138,12 +158,16 @@ impl Opcode for Osc {
             Port::required("freq"),
             Port::optional("phase_mod", 0.0),
             Port::optional("width", 0.5),
+            Port::optional("position", 0.0),
         ];
         PORTS
     }
 
     fn box_clone(&self) -> Box<dyn Opcode> {
-        Box::new(Osc { phase: 0.0, ..self.clone() })
+        Box::new(Osc {
+            phase: 0.0,
+            ..self.clone()
+        })
     }
 
     fn prepare(&mut self, sample_rate: f32) {
@@ -158,10 +182,25 @@ impl Opcode for Osc {
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         let sr = f64::from(self.sample_rate);
+        let position = inputs.get(3);
         for (i, o) in out.iter_mut().enumerate() {
             let inc = f64::from(inputs[0][i]) / sr;
             let dt = inc.abs().min(0.5);
             let t = wrap(self.phase + f64::from(inputs[1][i]));
+
+            if let Some(bank) = &self.bank {
+                let pos = position.map(|p| f64::from(p[i])).unwrap_or(0.0).clamp(0.0, 1.0);
+                let slots = (bank.len() - 1) as f64;
+                let p = pos * slots;
+                let a = p as usize;
+                let b = (a + 1).min(bank.len() - 1);
+                let w = (p - a as f64) as f32;
+                let low = bank[a].read(t, inc);
+                let high = bank[b].read(t, inc);
+                *o = low + (high - low) * w;
+                self.phase = wrap(self.phase + inc);
+                continue;
+            }
 
             if let Some(table) = &self.table {
                 *o = table.read(t, inc);

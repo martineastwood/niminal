@@ -734,6 +734,7 @@ impl Session {
         plan_transfers(&self.program, &program, &mut transfers);
         mixer.adopt(&mut self.mixer, &transfers);
         crate::controls::sync_mixer(&self.controls, &mut mixer, self.clock);
+        carry_buffers(&self.program, &program);
         self.mixer = mixer;
         self.program = program;
         self.project = project;
@@ -1232,6 +1233,15 @@ pub(super) fn plan_transfers(old: &Program, new: &Program, out: &mut Vec<Transfe
             voices_from: from,
             chain_from: from.filter(|_| i > 0),
         });
+    }
+}
+
+/// Keep shared buffer contents across a live re-eval when name and length match.
+pub(super) fn carry_buffers(old: &Program, new: &Program) {
+    for (name, next) in &new.buffers {
+        if let Some((_, prev)) = old.buffers.iter().find(|(n, b)| n == name && b.len() == next.len()) {
+            prev.copy_into(next);
+        }
     }
 }
 

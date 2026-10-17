@@ -216,17 +216,27 @@ impl Opcode for Delay1 {
     }
 }
 
-/// A table read at a position: whole entries with `Interp::None`, or between them. Wraps.
+/// A table read at a position: whole entries with `Interp::None`, or between them.
 #[derive(Clone)]
 pub struct TableRead {
-    data: std::sync::Arc<crate::Array<f64>>,
+    data: std::sync::Arc<crate::Table>,
     interp: super::custom::Interp,
+    edge: crate::Edge,
 }
 
 impl TableRead {
-    pub fn new(data: std::sync::Arc<crate::Array<f64>>, interp: super::custom::Interp) -> Self {
+    pub fn new(data: std::sync::Arc<crate::Table>, interp: super::custom::Interp) -> Self {
         assert!(!data.is_empty(), "a table has at least one entry");
-        TableRead { data, interp }
+        TableRead {
+            data,
+            interp,
+            edge: crate::Edge::Wrap,
+        }
+    }
+
+    pub fn with_edge(mut self, edge: crate::Edge) -> Self {
+        self.edge = edge;
+        self
     }
 }
 
@@ -246,7 +256,43 @@ impl Opcode for TableRead {
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (o, p) in out.iter_mut().zip(inputs[0]) {
-            *o = super::custom::read_at(&self.data, f64::from(*p), self.interp) as f32;
+            *o = self.data.read_at_edge(f64::from(*p), self.interp, self.edge) as f32;
+        }
+    }
+}
+
+/// Transfer-function waveshaping: maps input in -1..1 onto a table spanning that range.
+#[derive(Clone)]
+pub struct Waveshape {
+    data: std::sync::Arc<crate::Table>,
+}
+
+impl Waveshape {
+    pub fn new(data: std::sync::Arc<crate::Table>) -> Self {
+        assert!(!data.is_empty(), "a waveshaper table has at least one entry");
+        Waveshape { data }
+    }
+}
+
+impl Opcode for Waveshape {
+    fn name(&self) -> &'static str {
+        "waveshape"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        const PORTS: &[Port] = &[Port::required("x")];
+        PORTS
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(self.clone())
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        let last = (self.data.len() - 1) as f64;
+        for (o, x) in out.iter_mut().zip(inputs[0]) {
+            let t = (f64::from(*x).clamp(-1.0, 1.0) + 1.0) * 0.5 * last;
+            *o = self.data.read_at_edge(t, super::custom::Interp::Linear, crate::Edge::Clamp) as f32;
         }
     }
 }

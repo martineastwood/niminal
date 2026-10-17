@@ -11,18 +11,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use niminal_engine::ops::{
-    Add, BlockHold, Cmp, Compare, Curve, Custom, Delay1, Div, Env, EnvField, Fn1, Func, Hold, Interp,
-    Max, Min, Mul, NoteTime, PanChannel, Pow, Released, Rem, SampleData, SampleRate, Sampler, Segment,
-    Select, Sub, ArrayRead, TableRead,
+    Add, BlockHold, BufferRead, BufferRecord, BufferWrite, Cmp, Compare, Curve, Custom, Delay1, Div,
+    Env, EnvField, Fn1, Func, Hold, Interp, LoopMode, Max, Min, Mul, NoteTime, PanChannel, Pow,
+    Released, Rem, SampleRate, Sampler, Segment, Select, Sub, ArrayRead, TableRead, Waveshape,
 };
-use niminal_engine::{Array, ChainInput, Graph, GraphBuilder, Route, Src};
+use niminal_engine::{Array, Buffer, ChainInput, Edge, Graph, GraphBuilder, Route, Src, Table};
 use niminal_score::{Tempo, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
 use crate::layout::{Layout, conversion};
 use crate::funcs::{self, Kind as PKind, Param as PParam};
-use crate::kernel::{Body, KArg, KernelResult, cmp_op, compile_kernel, ends_with_value, interp_of, lambda_of, range_numbers};
+use crate::kernel::{Body, KArg, KernelResult, cmp_op, compile_kernel, edge_of, ends_with_value, interp_of, lambda_of, range_numbers};
 use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
 use crate::program::MidiTarget;
 use crate::program::{ControlBinding, ControlDef, Instrument, Param};
@@ -157,6 +157,12 @@ pub(crate) struct Names {
     pub bus_layouts: Vec<Layout>,
     /// The layout of the master, and so of every voice and track.
     pub master: Layout,
+    /// Where `file()` and sample paths are resolved from.
+    pub samples: crate::Samples,
+    /// Sample instruments' underlying tables, for `.data`.
+    pub sample_data: HashMap<String, Vec<Arc<Table>>>,
+    /// Shared writable buffers, keyed by name with a stable index for graph deps.
+    pub buffers: HashMap<String, (usize, Arc<niminal_engine::Buffer>)>,
 }
 
 impl Default for Names {
@@ -171,6 +177,9 @@ impl Default for Names {
             buses: Vec::new(),
             bus_layouts: Vec::new(),
             master: Layout::Mono,
+            samples: crate::Samples::default(),
+            sample_data: HashMap::new(),
+            buffers: HashMap::new(),
         }
     }
 }
@@ -310,6 +319,10 @@ pub(crate) enum Datum {
     Function { def: FnDef, captures: HashMap<String, Datum> },
     Sig(Sig),
     Array(Array<Datum>),
+    /// A compile-time numeric table (shared storage).
+    Table(Arc<Table>),
+    /// A shared writable buffer declared at the top level (`id` indexes Program.buffers).
+    Buffer { id: usize, data: Arc<Buffer> },
     Record(Vec<(String, Datum)>),
     /// `lo..hi`, or `lo..<hi`.
     Range { lo: Sig, hi: Sig, inclusive: bool },
@@ -631,11 +644,21 @@ pub(crate) fn compile_instr(
 /// One sample of a sampler instrument.
 pub(crate) struct Member {
     pub name: String,
-    pub data: Arc<SampleData>,
-    /// The frames of `data` it plays, if not all of them.
+    /// One table per channel.
+    pub channels: Vec<Arc<Table>>,
+    /// The frames of the tables it plays, if not all of them.
     pub slice: Option<(usize, usize)>,
     /// Playback speed that fits a loop to the tempo; 1 for none.
     pub speed: f64,
+    pub loop_mode: LoopMode,
+}
+
+impl Member {
+    pub fn sample_rate(&self) -> f32 {
+        self.channels
+            .first()
+            .map_or(48_000.0, |c| c.sample_rate_or(48_000.0))
+    }
 }
 
 /// An instrument that plays recorded audio. A kit has one player per sample,
@@ -683,21 +706,21 @@ pub(crate) fn compile_sampler(
     };
     let mut mix: Option<Sig> = None;
     for (i, member) in members.iter().enumerate() {
-        let data = &member.data;
-        let channels = data.channels.len();
+        let channels = member.channels.len();
         if channels > MAX_SAMPLE_CHANNELS {
             return Err(too_many(channels));
         }
         let mut srcs = Vec::with_capacity(channels);
-        for c in 0..channels {
-            let frames = member.slice.map_or(data.len(), |(from, to)| to - from);
+        for channel in &member.channels {
+            let frames = member.slice.map_or(channel.len(), |(from, to)| to - from);
+            let rate_hz = member.sample_rate();
             let offset = lower
                 .g
                 .add(
                     Mul,
                     &[
                         ("a", begin),
-                        ("b", Src::Const(frames as f32 / data.sample_rate)),
+                        ("b", Src::Const(frames as f32 / rate_hz)),
                     ],
                 )
                 .expect("mul ports");
@@ -712,8 +735,9 @@ pub(crate) fn compile_sampler(
                 ("start", from),
             ];
             wires.extend(pick.map(|p| ("sample", p)));
-            let mut player = Sampler::new(data.clone(), c, root_hz, is_kit.then_some(i))
-                .with_speed(member.speed);
+            let mut player = Sampler::new(channel.clone(), root_hz, is_kit.then_some(i))
+                .with_speed(member.speed)
+                .with_loop(member.loop_mode);
             if let Some((start, end)) = member.slice {
                 player = player.slice(start, end);
             }
@@ -1072,11 +1096,21 @@ fn same_datum(a: &Datum, b: &Datum) -> bool {
         (Datum::Array(x), Datum::Array(y)) => {
             x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_datum(p, q))
         }
+        (Datum::Table(a), Datum::Table(b)) => Arc::ptr_eq(a, b) || a == b,
+        (Datum::Buffer { data: a, .. }, Datum::Buffer { data: b, .. }) => Arc::ptr_eq(a, b),
         (Datum::Range { lo: a, hi: b, .. }, Datum::Range { lo: c, hi: d, .. }) => {
             a.srcs == c.srcs && b.srcs == d.srcs
         }
         _ => false,
     }
+}
+
+fn table_entries(table: &Table) -> Vec<Datum> {
+    table
+        .data()
+        .iter()
+        .map(|&v| Datum::Sig(Sig::constant(Unit::Num, f64::from(v))))
+        .collect()
 }
 
 impl<'a> Lower<'a> {
@@ -1126,11 +1160,41 @@ impl<'a> Lower<'a> {
     fn stmt(&mut self, stmt: &Stmt, last: bool) -> Res<Option<(Datum, Span)>> {
         match stmt {
             Stmt::State { name, .. } => Err(state_outside_fn(name)),
-            Stmt::IndexAssign { name, .. } => Err(Diagnostic::new(
-                format!("only a state array can be written, and `{}` isn't one", name.name),
-                name.span,
-            )
-            .with_help("state arrays belong to a `fn`: `state buf = zeros(64)`, then `buf[i] = x`")),
+            Stmt::IndexAssign { name, index, value } => {
+                if let Some((id, buffer)) = self.names.buffers.get(&name.name).cloned() {
+                    if self.in_fn {
+                        return Err(Diagnostic::new(
+                            "a shared buffer can't be written inside a function",
+                            name.span,
+                        )
+                        .with_help("write it from an instrument or track"));
+                    }
+                    let idx = self.expr(index)?;
+                    let val = self.expr(value)?;
+                    if idx.unit != Unit::Num || val.unit != Unit::Num {
+                        return Err(Diagnostic::new(
+                            "a buffer write needs plain numbers for the index and value",
+                            name.span,
+                        ));
+                    }
+                    self.g.touch_buffer_write(id);
+                    for (i, v) in idx.srcs.iter().zip(&val.srcs) {
+                        let _ = self
+                            .g
+                            .add(
+                                BufferWrite::new(buffer.clone()),
+                                &[("idx", *i), ("value", *v)],
+                            )
+                            .map_err(|e| Diagnostic::new(e.to_string(), name.span))?;
+                    }
+                    return Ok(None);
+                }
+                Err(Diagnostic::new(
+                    format!("only a state array or shared buffer can be written, and `{}` isn't one", name.name),
+                    name.span,
+                )
+                .with_help("state arrays belong to a `fn`: `state buf = zeros(64)`, then `buf[i] = x`"))
+            }
             Stmt::Bind { name, value } => self.assign(name, value).map(|()| None),
             Stmt::Destructure { names, value } => self.destructure(names, value).map(|()| None),
             Stmt::AddAssign { name, value } => self.add_assign(name, value).map(|()| None),
@@ -1264,6 +1328,10 @@ impl<'a> Lower<'a> {
             Datum::Function { .. } => Err(Diagnostic::new("a function is not an array", span)),
             Datum::Record(fields) => self.entries(fields[0].1.clone(), span),
             Datum::Array(items) => Ok(items.into_vec()),
+            Datum::Table(table) => Ok(table_entries(&table)),
+            Datum::Buffer { data: buf, .. } => Ok((0..buf.len())
+                .map(|i| Datum::Sig(Sig::constant(Unit::Num, f64::from(buf.read(i)))))
+                .collect()),
             Datum::Range { lo, hi, inclusive } => {
                 let (Some(a), Some(b)) = (lo.konst, hi.konst) else {
                     return Err(Diagnostic::new(
@@ -1277,6 +1345,46 @@ impl<'a> Lower<'a> {
                     .collect())
             }
             Datum::Sig(sig) => Ok((0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect()),
+        }
+    }
+
+    /// A compile-time numeric table, or a constant numeric array coerced into one.
+    fn as_table(&mut self, value: Datum, span: Span) -> Res<Arc<Table>> {
+        match value {
+            Datum::Table(t) => Ok(t),
+            Datum::Buffer { data: b, .. } => Ok(Arc::new(b.snapshot())),
+            Datum::Array(items) => {
+                let mut values = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    match item {
+                        Datum::Sig(Sig {
+                            konst: Some(k),
+                            unit: Unit::Num,
+                            ..
+                        }) => values.push(*k),
+                        Datum::Sig(Sig { konst: None, .. }) => {
+                            return Err(Diagnostic::new(
+                                "the table must be known while compiling",
+                                span,
+                            ));
+                        }
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "a table is a one-dimensional array of plain numbers",
+                                span,
+                            ));
+                        }
+                    }
+                }
+                if values.is_empty() {
+                    return Err(Diagnostic::new("a table can't be empty", span));
+                }
+                Ok(Arc::new(Table::from_f64(values, None)))
+            }
+            _ => Err(Diagnostic::new(
+                "expected a table of plain numbers known while compiling",
+                span,
+            )),
         }
     }
 
@@ -1397,7 +1505,8 @@ impl<'a> Lower<'a> {
                     value.span,
                 ));
             }
-            Datum::Array(items) => {
+            Datum::Table(table) => {
+                let items = table_entries(&table);
                 if items.len() != names.len() {
                     return Err(Diagnostic::new(
                         format!(
@@ -1409,6 +1518,26 @@ impl<'a> Lower<'a> {
                     ));
                 }
                 items
+            }
+            Datum::Buffer { .. } => {
+                return Err(Diagnostic::new(
+                    "a shared buffer can't be taken apart with `[a, b] = ...`",
+                    value.span,
+                )
+                .with_help("read it with `buf[i]` or `buf.at(pos)`"));
+            }
+            Datum::Array(items) => {
+                if items.len() != names.len() {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "this array has {} entries, but {} name(s) are given",
+                            items.len(),
+                            names.len()
+                        ),
+                        value.span,
+                    ));
+                }
+                items.into_vec()
             }
             Datum::Sig(sig) => {
                 self.require_signal("a channel", &sig, value.span)?;
@@ -1666,9 +1795,18 @@ impl<'a> Lower<'a> {
                 Some(v) => Ok(v.clone()),
                 None => match self.names.consts.get(name) {
                     Some(v) => Ok(v.clone()),
-                    None => match self.names.fns.get(name) {
-                        Some(def) => Ok(Datum::Function { def: def.clone(), captures: HashMap::new() }),
-                        None => self.name(name, e.span).map(Datum::Sig),
+                    None => match self.names.buffers.get(name) {
+                        Some(&(id, ref b)) => Ok(Datum::Buffer {
+                            id,
+                            data: b.clone(),
+                        }),
+                        None => match self.names.fns.get(name) {
+                            Some(def) => Ok(Datum::Function {
+                                def: def.clone(),
+                                captures: HashMap::new(),
+                            }),
+                            None => self.name(name, e.span).map(Datum::Sig),
+                        },
                     },
                 },
             },
@@ -1814,6 +1952,14 @@ impl<'a> Lower<'a> {
             Datum::Function { .. } => Err(Diagnostic::new("a function is not a signal", span)),
             Datum::Sig(sig) => Ok(sig),
             Datum::Record(fields) => self.signal_of(fields[0].1.clone(), span),
+            Datum::Table(_) => Err(Diagnostic::new(
+                "a table isn't a signal; play it with `osc(table, freq)` or read it with `.at`",
+                span,
+            )),
+            Datum::Buffer { .. } => Err(Diagnostic::new(
+                "a buffer isn't a signal; read it with `buf[i]` or `buf.at(pos)`",
+                span,
+            )),
             Datum::Array(items) => {
                 let mut entries = Vec::with_capacity(items.len());
                 for item in items {
@@ -1821,6 +1967,12 @@ impl<'a> Lower<'a> {
                         Datum::Function { .. } => return Err(Diagnostic::new("a function is not a signal", span)),
                         Datum::Record(fields) => entries.push((self.signal_of(fields[0].1.clone(), span)?, span)),
                         Datum::Sig(sig) => entries.push((sig, span)),
+                        Datum::Table(_) | Datum::Buffer { .. } => {
+                            return Err(Diagnostic::new(
+                                "an array of tables can't be used as a signal",
+                                span,
+                            ));
+                        }
                         Datum::Array(_) => {
                             return Err(Diagnostic::new("an array of arrays can't be used as a signal", span)
                                 .with_help("sum the inner arrays, or index into them"));
@@ -1841,6 +1993,44 @@ impl<'a> Lower<'a> {
     /// `list[i]`, counting from 0 and wrapping at both ends, or `list[a..<b]`.
     fn index(&mut self, list: &Expr, index: &Expr, span: Span) -> Res<Datum> {
         let l = self.value(list)?;
+        if let Datum::Buffer { id, data: buffer } = &l {
+            if let ExprKind::Range { .. } = index.kind {
+                return Err(Diagnostic::new(
+                    "slicing a shared buffer isn't supported; read with `buf[i]` or `buf.at(pos)`",
+                    span,
+                ));
+            }
+            let i = self.expr(index)?;
+            if i.unit != Unit::Num {
+                return Err(Diagnostic::new(
+                    format!("an index is a plain number, found {}", i.unit.describe()),
+                    index.span,
+                ));
+            }
+            self.g.touch_buffer_read(*id);
+            let rate = self.sig_rate(&i);
+            let srcs: Array<Src> = i
+                .srcs
+                .iter()
+                .map(|&p| {
+                    let src = self
+                        .g
+                        .add(
+                            BufferRead::new(buffer.clone(), Interp::None),
+                            &[("pos", p)],
+                        )
+                        .expect("buffer ports");
+                    self.note_rate(src, rate);
+                    src
+                })
+                .collect();
+            return Ok(Datum::Sig(Sig {
+                srcs,
+                layout: i.layout,
+                unit: Unit::Num,
+                konst: None,
+            }));
+        }
         let items = self.entries(l, list.span)?;
         let n = items.len();
         if let ExprKind::Range { .. } = index.kind {
@@ -1913,8 +2103,8 @@ impl<'a> Lower<'a> {
             return Err(Diagnostic::new("this operation needs a one-dimensional array with one unit", span));
         }
         if sigs.iter().all(|s| s.konst.is_some()) {
-            let data = Arc::new(sigs.iter().map(|s| s.konst.unwrap()).collect());
-            return self.table_read(data, unit, pos, interp, span);
+            let data = Arc::new(Table::from_f64(sigs.iter().map(|s| s.konst.unwrap()), None));
+            return self.table_read(data, unit, pos, interp, Edge::Wrap, span);
         }
         let op = ArrayRead::new(sigs.len(), interp);
         let names: Vec<_> = (0..sigs.len()).map(|i| format!("e{i}")).collect();
@@ -1930,16 +2120,33 @@ impl<'a> Lower<'a> {
     }
 
     /// A table read at `pos`, wrapping, one read per channel of `pos`.
-    fn table_read(&mut self, data: Arc<Array<f64>>, unit: Unit, pos: &Sig, interp: Interp, _span: Span) -> Res<Sig> {
+    fn table_read(
+        &mut self,
+        data: Arc<Table>,
+        unit: Unit,
+        pos: &Sig,
+        interp: Interp,
+        edge: Edge,
+        _span: Span,
+    ) -> Res<Sig> {
         if let Some(position) = pos.konst {
-            return Ok(Sig::constant(unit, niminal_engine::ops::read_at(&data, position, interp)));
+            return Ok(Sig::constant(
+                unit,
+                data.read_at_edge(position, interp, edge),
+            ));
         }
         let rate = self.sig_rate(pos);
         let srcs: Array<Src> = pos
             .srcs
             .iter()
             .map(|&p| {
-                let src = self.g.add(TableRead::new(data.clone(), interp), &[("pos", p)]).expect("table ports");
+                let src = self
+                    .g
+                    .add(
+                        TableRead::new(data.clone(), interp).with_edge(edge),
+                        &[("pos", p)],
+                    )
+                    .expect("table ports");
                 self.note_rate(src, rate);
                 src
             })
@@ -2129,7 +2336,7 @@ impl<'a> Lower<'a> {
             no_args("channels")?;
             return match value {
                 Datum::Function { .. } => Err(Diagnostic::new("a function has no channels", receiver.value.span)),
-                list @ Datum::Array(_) => Ok(list),
+                list @ (Datum::Array(_) | Datum::Table(_) | Datum::Buffer { .. }) => Ok(list),
                 Datum::Sig(sig) => Ok(Datum::Array(
                     (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect(),
                 )),
@@ -2139,6 +2346,12 @@ impl<'a> Lower<'a> {
         }
         if name.name == "at" {
             return self.at(name, args, value, receiver.value.span).map(Datum::Sig);
+        }
+        if name.name == "phase" {
+            return self.phase(name, args, value, receiver.value.span).map(Datum::Sig);
+        }
+        if let Some(result) = self.table_transform(name, args, &value, span)? {
+            return Ok(result);
         }
         let items = self.entries(value, receiver.value.span)?;
         match name.name.as_str() {
@@ -2173,6 +2386,270 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// `t.phase(p)`: read at normalized position 0..1.
+    fn phase(&mut self, name: &Ident, args: &[Arg], list: Datum, span: Span) -> Res<Sig> {
+        let mut pos = None;
+        let mut interp = Interp::Linear;
+        for a in &args[1..] {
+            match a.name.as_ref().map(|n| n.name.as_str()) {
+                None if pos.is_none() => pos = Some(self.expr(&a.value)?),
+                Some("interp") => interp = interp_of(&a.value)?,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`phase` takes a position in 0..1 and `interp:`",
+                        a.value.span,
+                    ));
+                }
+            }
+        }
+        let Some(pos) = pos else {
+            return Err(Diagnostic::new("`phase` takes a position in 0..1", name.span));
+        };
+        if let Datum::Buffer { id, data: buffer } = &list {
+            self.g.touch_buffer_read(*id);
+            let len = Sig::constant(Unit::Num, buffer.len() as f64);
+            let index = self.mul(&pos, &len, Unit::Num, span)?;
+            let rate = self.sig_rate(&index);
+            let srcs: Array<Src> = index
+                .srcs
+                .iter()
+                .map(|&p| {
+                    let src = self
+                        .g
+                        .add(BufferRead::new(buffer.clone(), interp), &[("pos", p)])
+                        .expect("buffer ports");
+                    self.note_rate(src, rate);
+                    src
+                })
+                .collect();
+            return Ok(Sig {
+                srcs,
+                layout: index.layout,
+                unit: Unit::Num,
+                konst: None,
+            });
+        }
+        let table = self.as_table(list, span)?;
+        if table.is_empty() {
+            return Err(Diagnostic::new("this array is empty", span));
+        }
+        let len = Sig::constant(Unit::Num, table.len() as f64);
+        let index = self.mul(&pos, &len, Unit::Num, span)?;
+        self.table_read(table, Unit::Num, &index, interp, Edge::Wrap, span)
+    }
+
+    fn table_transform(
+        &mut self,
+        name: &Ident,
+        args: &[Arg],
+        value: &Datum,
+        span: Span,
+    ) -> Res<Option<Datum>> {
+        let table = match value {
+            Datum::Table(t) => t.clone(),
+            Datum::Array(_)
+                if matches!(
+                    name.name.as_str(),
+                    "normalize" | "reverse" | "rotate" | "resample" | "concat" | "integrate" | "mix"
+                ) =>
+            {
+                self.as_table(value.clone(), span)?
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(match name.name.as_str() {
+            "normalize" => {
+                if args.len() > 1 {
+                    return Err(Diagnostic::new("`normalize` takes no arguments", name.span));
+                }
+                Datum::Table(Arc::new(table.normalize()))
+            }
+            "reverse" => {
+                if args.len() > 1 {
+                    return Err(Diagnostic::new("`reverse` takes no arguments", name.span));
+                }
+                Datum::Table(Arc::new(table.reverse()))
+            }
+            "integrate" => {
+                if args.len() > 1 {
+                    return Err(Diagnostic::new("`integrate` takes no arguments", name.span));
+                }
+                Datum::Table(Arc::new(table.integrate()))
+            }
+            "rotate" => {
+                let amount = match args.get(1) {
+                    Some(a) => self.expr(&a.value)?.konst.unwrap_or(0.0) as isize,
+                    None => {
+                        return Err(Diagnostic::new("`rotate` takes an amount", name.span));
+                    }
+                };
+                Datum::Table(Arc::new(table.rotate(amount)))
+            }
+            "resample" => {
+                let size = match args.get(1) {
+                    Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+                    None => {
+                        return Err(Diagnostic::new("`resample` takes a size", name.span));
+                    }
+                };
+                Datum::Table(Arc::new(table.resample(size)))
+            }
+            "concat" => {
+                let other = match args.get(1) {
+                    Some(a) => {
+                        let v = self.value(&a.value)?;
+                        self.as_table(v, a.value.span)?
+                    }
+                    None => {
+                        return Err(Diagnostic::new("`concat` takes another table", name.span));
+                    }
+                };
+                Datum::Table(Arc::new(table.concat(&other)))
+            }
+            "mix" => {
+                let names = ["other", "amount"];
+                let bound = funcs::bind("mix", name.span, &names, 1, &args[1..])?;
+                let Some(other_arg) = bound[0] else {
+                    return Err(Diagnostic::new("`mix` takes another table", name.span));
+                };
+                let other_v = self.value(&other_arg.value)?;
+                let other = self.as_table(other_v, other_arg.value.span)?;
+                let amount = match bound[1] {
+                    Some(a) => self.expr(&a.value)?.konst.unwrap_or(0.5),
+                    None => 0.5,
+                };
+                Datum::Table(Arc::new(table.mix(&other, amount)))
+            }
+            _ => return Ok(None),
+        }))
+    }
+
+    /// `x.waveshape(table)`: map x in -1..1 through a transfer table.
+    fn waveshape(&mut self, name: &Ident, args: &[Arg], _span: Span) -> Res<Datum> {
+        let (x_arg, table_arg) = match args {
+            [x, t] if x.receiver => (x, t),
+            [t, x] if !x.receiver => (x, t),
+            _ => {
+                return Err(Diagnostic::new(
+                    "`waveshape` takes a signal and a table",
+                    name.span,
+                )
+                .with_help("for example `osc(saw, freq).waveshape(cheby([1, 0.3]))`"));
+            }
+        };
+        let x_v = self.value(&x_arg.value)?;
+        let x = self.signal_of(x_v, x_arg.value.span)?;
+        let table_v = self.value(&table_arg.value)?;
+        let table = self.as_table(table_v, table_arg.value.span)?;
+        let rate = self.sig_rate(&x);
+        let srcs: Array<Src> = x
+            .srcs
+            .iter()
+            .map(|&s| {
+                let src = self
+                    .g
+                    .add(Waveshape::new(table.clone()), &[("x", s)])
+                    .expect("waveshape ports");
+                self.note_rate(src, rate);
+                src
+            })
+            .collect();
+        Ok(Datum::Sig(Sig {
+            srcs,
+            layout: x.layout,
+            unit: Unit::Num,
+            konst: None,
+        }))
+    }
+
+    /// `take.record(sig, loop: true)`: write consecutive samples into a shared buffer.
+    fn buffer_record(&mut self, name: &Ident, args: &[Arg], _span: Span) -> Res<Datum> {
+        let Some(receiver) = args.first().filter(|a| a.receiver) else {
+            return Err(Diagnostic::new(
+                "`record` is called on a buffer",
+                name.span,
+            ));
+        };
+        let Datum::Buffer { id, data: buffer } = self.value(&receiver.value)? else {
+            return Err(Diagnostic::new(
+                "`record` needs a shared buffer",
+                receiver.value.span,
+            ));
+        };
+        if self.in_fn {
+            return Err(Diagnostic::new(
+                "a shared buffer can't be written inside a function",
+                name.span,
+            ));
+        }
+        let names = ["x", "loop"];
+        let bound = funcs::bind("record", name.span, &names, 1, &args[1..])?;
+        let Some(x_arg) = bound[0] else {
+            return Err(Diagnostic::new("`record` takes a signal to write", name.span));
+        };
+        let looped = match bound[1] {
+            Some(a) => match &a.value.kind {
+                ExprKind::Name(n) if n == "true" || n == "forever" => true,
+                ExprKind::Name(n) if n == "false" || n == "once" => false,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`loop` is `true`/`forever` or `false`/`once`",
+                        a.value.span,
+                    ));
+                }
+            },
+            None => true,
+        };
+        self.g.touch_buffer_write(id);
+        let x = self.expr(&x_arg.value)?;
+        let rate = self.sig_rate(&x);
+        let srcs: Array<Src> = x
+            .srcs
+            .iter()
+            .map(|&s| {
+                let src = self
+                    .g
+                    .add(BufferRecord::new(buffer.clone(), looped), &[("x", s)])
+                    .expect("record ports");
+                self.note_rate(src, rate);
+                src
+            })
+            .collect();
+        Ok(Datum::Sig(Sig {
+            srcs,
+            layout: x.layout,
+            unit: Unit::Num,
+            konst: None,
+        }))
+    }
+
+    /// `kick.data`: the sample's underlying table(s).
+    fn sample_data(&mut self, name: &Ident, receiver: &Expr) -> Res<Datum> {
+        let ExprKind::Name(sample) = &receiver.kind else {
+            return Err(Diagnostic::new(
+                "`.data` is used on a sample name",
+                receiver.span,
+            ));
+        };
+        let Some(channels) = self.names.sample_data.get(sample) else {
+            let mut d = Diagnostic::new(
+                format!("no sample named `{sample}`"),
+                receiver.span,
+            );
+            if let Some(c) = closest(sample, self.names.sample_data.keys().map(String::as_str)) {
+                d = d.with_help(format!("did you mean `{c}`?"));
+            }
+            return Err(d);
+        };
+        match channels.as_slice() {
+            [] => Err(Diagnostic::new("this sample has no audio", name.span)),
+            [one] => Ok(Datum::Table(one.clone())),
+            many => Ok(Datum::Array(
+                many.iter().cloned().map(Datum::Table).collect(),
+            )),
+        }
+    }
+
     fn same_unit(&self, a: &Sig, b: &Sig, what: &str, span: Span) -> Res<()> {
         if a.unit != b.unit {
             return Err(Diagnostic::new(
@@ -2187,22 +2664,19 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
-    /// `table.at(pos, interp: linear)`: a list of numbers read at a fractional position, wrapping.
+    /// `table.at(pos, interp: linear, edge: wrap)`: a list of numbers read at a fractional position.
     fn at(&mut self, name: &Ident, args: &[Arg], list: Datum, span: Span) -> Res<Sig> {
-        let items = self.entries(list, span)?;
-        let sigs = items.into_iter().map(|item| match item {
-            Datum::Sig(sig) if sig.count() == 1 => Ok(sig),
-            _ => Err(Diagnostic::new("`at` reads a one-dimensional numeric array", span)),
-        }).collect::<Res<Vec<_>>>()?;
         let mut pos = None;
         let mut interp = Interp::Linear;
+        let mut edge = Edge::Wrap;
         for a in &args[1..] {
             match a.name.as_ref().map(|n| n.name.as_str()) {
                 None if pos.is_none() => pos = Some(self.expr(&a.value)?),
                 Some("interp") => interp = interp_of(&a.value)?,
+                Some("edge") => edge = edge_of(&a.value)?,
                 _ => {
                     return Err(Diagnostic::new(
-                        "`at` takes a position and `interp:`",
+                        "`at` takes a position, `interp:` and `edge:`",
                         a.value.span,
                     ));
                 }
@@ -2216,6 +2690,50 @@ impl<'a> Lower<'a> {
                 format!("a position is a plain number, found {}", pos.unit.describe()),
                 name.span,
             ));
+        }
+        if let Datum::Table(table) = list {
+            if table.is_empty() {
+                return Err(Diagnostic::new("this array is empty", span));
+            }
+            return self.table_read(table, Unit::Num, &pos, interp, edge, span);
+        }
+        if let Datum::Buffer { id, data: buffer } = list {
+            self.g.touch_buffer_read(id);
+            let rate = self.sig_rate(&pos);
+            let srcs: Array<Src> = pos
+                .srcs
+                .iter()
+                .map(|&p| {
+                    let src = self
+                        .g
+                        .add(BufferRead::new(buffer.clone(), interp), &[("pos", p)])
+                        .expect("buffer ports");
+                    self.note_rate(src, rate);
+                    src
+                })
+                .collect();
+            return Ok(Sig {
+                srcs,
+                layout: pos.layout,
+                unit: Unit::Num,
+                konst: None,
+            });
+        }
+        let items = self.entries(list, span)?;
+        let sigs = items.into_iter().map(|item| match item {
+            Datum::Sig(sig) if sig.count() == 1 => Ok(sig),
+            _ => Err(Diagnostic::new("`at` reads a one-dimensional numeric array", span)),
+        }).collect::<Res<Vec<_>>>()?;
+        if edge != Edge::Wrap {
+            let data = Arc::new(Table::from_f64(
+                sigs.iter().map(|s| {
+                    s.konst.ok_or_else(|| {
+                        Diagnostic::new("`edge:` needs a table known while compiling", span)
+                    })
+                }).collect::<Res<Vec<_>>>()?,
+                None,
+            ));
+            return self.table_read(data, sigs[0].unit, &pos, interp, edge, span);
         }
         self.read_values(sigs, &pos, interp, span)
     }
@@ -3016,8 +3534,14 @@ impl<'a> Lower<'a> {
             return self.math_value(f, value, arg.value.span);
         }
         match n {
-            "map" | "sum" | "len" | "channels" | "indices" | "at" => {
+            "map" | "sum" | "len" | "channels" | "indices" | "at" | "phase"
+            | "normalize" | "reverse" | "rotate" | "resample" | "concat" | "integrate" | "mix" => {
                 return self.array_call(name, args, span);
+            }
+            "waveshape" => return self.waveshape(name, args, span),
+            "record" => return self.buffer_record(name, args, span),
+            "data" if args.len() == 1 && args[0].receiver => {
+                return self.sample_data(name, &args[0].value);
             }
             "min" | "max" if args.len() == 1 && args[0].receiver => return self.array_call(name, args, span),
             "split" if args.len() == 1 && args[0].receiver => {
@@ -3033,6 +3557,17 @@ impl<'a> Lower<'a> {
             }
             "zeros" => return self.zeros(name, args),
             "harmonics" => return self.harmonics(name, args),
+            "partials" => return self.partials(name, args),
+            "cosines" => return self.cosines(name, args),
+            "curve" => return self.curve(name, args),
+            "steps" => return self.steps(name, args),
+            "poly" => return self.poly(name, args),
+            "ramp" => return self.ramp(name, args),
+            "cheby" => return self.cheby(name, args),
+            "window" => return self.window(name, args),
+            "random" => return self.random_table(name, args),
+            "file" => return self.file_table(name, args),
+            "bank" => return self.bank(name, args),
             _ => {}
         }
         if let Some(v) = self.unit_method(name, args)? {
@@ -3067,7 +3602,11 @@ impl<'a> Lower<'a> {
                 .names()
                 .chain(self.names.fns.keys().map(String::as_str))
                 .chain(self.names.instrs.keys().map(String::as_str))
-                .chain(["min", "max", "pow", "mod", "clamp", "prev", "range", "zeros", "harmonics"])
+                .chain([
+                    "min", "max", "pow", "mod", "clamp", "prev", "range", "zeros", "harmonics",
+                    "partials", "cosines", "curve", "steps", "poly", "ramp", "cheby", "window",
+                    "random", "file", "bank",
+                ])
                 .collect();
             let mut d = Diagnostic::new(format!("unknown function `{}`", name.name), name.span);
             if let Some(c) = closest(&name.name, known) {
@@ -3123,23 +3662,45 @@ impl<'a> Lower<'a> {
             Err(_) if matches!(e.kind, ExprKind::Name(_)) => return Err(not_a_wave()),
             value => value?,
         };
-        let Datum::Array(items) = value else { return Err(not_a_wave()); };
-        let mut cycle = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            match item {
-                Datum::Sig(Sig { konst: Some(k), unit: Unit::Num, .. }) => cycle.push(*k),
-                Datum::Sig(Sig { konst: None, .. }) => {
-                    return Err(Diagnostic::new("the table must be known while compiling", e.span));
-                }
-                _ => return Err(Diagnostic::new("a table is a one-dimensional array of plain numbers", e.span)),
+        match value {
+            Datum::Table(table) => {
+                opcodes::WaveArg::from_table(&table).map_err(|m| Diagnostic::new(m, e.span))
+            }
+            Datum::Array(items)
+                if !items.is_empty()
+                    && items
+                        .iter()
+                        .all(|i| matches!(i, Datum::Table(_))) =>
+            {
+                let tables: Vec<_> = items
+                    .iter()
+                    .map(|i| match i {
+                        Datum::Table(t) => t.clone(),
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                opcodes::WaveArg::bank(&tables).map_err(|m| Diagnostic::new(m, e.span))
+            }
+            other => {
+                let table = self.as_table(other, e.span).map_err(|d| {
+                    if matches!(e.kind, ExprKind::Name(_)) {
+                        not_a_wave()
+                    } else {
+                        d
+                    }
+                })?;
+                opcodes::WaveArg::from_table(&table).map_err(|m| Diagnostic::new(m, e.span))
             }
         }
-        opcodes::WaveArg::table(&cycle).map_err(|m| Diagnostic::new(m, e.span))
     }
 
     fn builtin_value(&self, value: Datum, param: &opcodes::ParamSpec, arg: &Expr) -> Res<Val> {
         match value {
             Datum::Function { .. } => Err(Diagnostic::new("this argument needs a numeric value", arg.span)),
+            Datum::Table(_) | Datum::Buffer { .. } => Err(Diagnostic::new(
+                "pass a table as the wave of `osc`, not as a signal argument",
+                arg.span,
+            )),
             Datum::Array(items) => Ok(Val::Array(items.into_iter().map(|v| self.builtin_value(v, param, arg)).collect::<Res<_>>()?)),
             Datum::Record(fields) => self.builtin_value(fields[0].1.clone(), param, arg),
             Datum::Sig(sig) => {
@@ -3447,8 +4008,18 @@ impl Lower<'_> {
                 let element_param = PParam { kind: *inner.clone(), ..p.clone() };
                 return Ok(Datum::Array(elements.into_iter().map(|v| self.check_param(callee, &element_param, v, arg)).collect::<Res<_>>()?));
             }
-            (PKind::Any, d @ (Datum::Array(_) | Datum::Range { .. })) => return Ok(d),
+            (PKind::Any, d @ (Datum::Array(_) | Datum::Table(_) | Datum::Buffer { .. } | Datum::Range { .. })) => {
+                return Ok(d);
+            }
             (_, Datum::Range { .. }) => return Err(mismatch("a range")),
+            (_, Datum::Table(table)) => {
+                // Tables are arrays of plain numbers for typed `[num]` parameters.
+                if matches!(p.kind, PKind::Unit { unit: Unit::Num, .. }) {
+                    return Ok(Datum::Table(table));
+                }
+                return Err(mismatch("a table"));
+            }
+            (_, Datum::Buffer { .. }) => return Err(mismatch("a shared buffer")),
             (_, Datum::Array(items)) => {
                 // a list where one value is expected: each entry is checked
                 let mut out = Vec::with_capacity(items.len());
@@ -3738,13 +4309,25 @@ impl Lower<'_> {
                 wires.push((path.to_string(), s));
                 Ok(arg)
             }
+            Datum::Table(table) => Ok(KArg::Table {
+                unit: Unit::Num,
+                values: table,
+            }),
+            Datum::Buffer { .. } => Err(Diagnostic::new(
+                "a shared buffer can't be passed into a function",
+                span,
+            )
+            .with_help("pass a snapshot with `buf` reads, or use the buffer from an instrument")),
             Datum::Array(items) => {
                 // Constant numeric arrays retain shared table storage.
                 let numbers: Option<Vec<_>> = items.iter().map(|v| match v {
                     Datum::Sig(s) => s.konst.map(|k| (s.unit, k)), _ => None,
                 }).collect();
                 if let Some(values) = numbers && !values.is_empty() && values.iter().all(|(u, _)| *u == values[0].0) {
-                    return Ok(KArg::Table { unit: values[0].0, values: Arc::new(values.into_iter().map(|(_, v)| v).collect()) });
+                    return Ok(KArg::Table {
+                        unit: values[0].0,
+                        values: Arc::new(Table::from_f64(values.into_iter().map(|(_, v)| v), None)),
+                    });
                 }
                 Ok(KArg::Array(items.into_iter().enumerate().map(|(i, v)|
                     self.kernel_arg(v, &format!("{path}[{i}]"), wires, width, layout, span)).collect::<Res<_>>()?))
@@ -3904,10 +4487,29 @@ impl Lower<'_> {
         }
     }
 
-    /// `harmonics([1, -1/2, 1/3], size: 4096)`: one cycle of a wave made of these harmonics, as a table
-    /// whose loudest point is 1.
+    fn const_numbers(&mut self, value: Datum, span: Span, what: &str) -> Res<Vec<f64>> {
+        let mut out = Vec::new();
+        for item in self.entries(value, span)? {
+            match item {
+                Datum::Sig(Sig {
+                    konst: Some(k),
+                    unit: Unit::Num,
+                    ..
+                }) => out.push(k),
+                _ => {
+                    return Err(Diagnostic::new(
+                        format!("{what} are plain numbers known while compiling"),
+                        span,
+                    ));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// `harmonics([1, -1/2, 1/3], size: 4096, phases: [...])`
     fn harmonics(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
-        let names = ["amps", "size"];
+        let names = ["amps", "size", "phases"];
         let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
         let Some(amps) = bound[0] else {
             return Err(Diagnostic::new("`harmonics` takes an array of amplitudes", name.span));
@@ -3916,43 +4518,299 @@ impl Lower<'_> {
             Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
             None => 2048,
         };
-        let list = self.value(&amps.value)?;
-        let mut weights = Vec::new();
-        for item in self.entries(list, amps.value.span)? {
-            match item {
-                Datum::Sig(Sig {
-                    konst: Some(k),
-                    unit: Unit::Num,
-                    ..
-                }) => weights.push(k),
+        let weights = { let __v = self.value(&amps.value)?; self.const_numbers(__v, amps.value.span, "the amplitudes") }?;
+        let phases = match bound[2] {
+            Some(a) => Some({ let __v = self.value(&a.value)?; self.const_numbers(__v, a.value.span, "the phases") }?),
+            None => None,
+        };
+        Ok(Datum::Table(Arc::new(crate::tables::harmonics(
+            &weights,
+            phases.as_deref(),
+            size,
+        ))))
+    }
+
+    fn partials(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["partials", "size"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(list) = bound[0] else {
+            return Err(Diagnostic::new(
+                "`partials` takes an array of `[ratio, amp]` or `[ratio, amp, phase]`",
+                name.span,
+            ));
+        };
+        let size = match bound[1] {
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+            None => 2048,
+        };
+        let mut rows = Vec::new();
+        for item in { let __v = self.value(&list.value)?; self.entries(__v, list.value.span) }? {
+            let nums = self.const_numbers(item, list.value.span, "each partial")?;
+            let row = match nums.as_slice() {
+                [ratio, amp] => [*ratio, *amp, 0.0],
+                [ratio, amp, phase] => [*ratio, *amp, *phase],
                 _ => {
                     return Err(Diagnostic::new(
-                        "the amplitudes are plain numbers known while compiling",
-                        amps.value.span,
+                        "each partial is `[ratio, amp]` or `[ratio, amp, phase]`",
+                        list.value.span,
                     ));
                 }
+            };
+            rows.push(row);
+        }
+        Ok(Datum::Table(Arc::new(crate::tables::partials(&rows, size))))
+    }
+
+    fn cosines(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["amps", "size"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(amps) = bound[0] else {
+            return Err(Diagnostic::new("`cosines` takes an array of amplitudes", name.span));
+        };
+        let size = match bound[1] {
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+            None => 2048,
+        };
+        let weights = { let __v = self.value(&amps.value)?; self.const_numbers(__v, amps.value.span, "the amplitudes") }?;
+        Ok(Datum::Table(Arc::new(crate::tables::cosines(&weights, size))))
+    }
+
+    fn curve(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["points", "size", "shape"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(points) = bound[0] else {
+            return Err(Diagnostic::new("`curve` takes an array of `[x, y]` points", name.span));
+        };
+        let size = match bound[1] {
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+            None => 1024,
+        };
+        let shape = match bound[2] {
+            Some(a) => match &a.value.kind {
+                ExprKind::Name(n) if n == "linear" => crate::tables::CurveShape::Linear,
+                ExprKind::Name(n) if n == "exp" => crate::tables::CurveShape::Exp,
+                ExprKind::Name(n) if n == "cubic" => crate::tables::CurveShape::Cubic,
+                ExprKind::Name(n) if n == "spline" => crate::tables::CurveShape::Spline,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`shape` is `linear`, `exp`, `cubic` or `spline`",
+                        a.value.span,
+                    ));
+                }
+            },
+            None => crate::tables::CurveShape::Linear,
+        };
+        let mut rows = Vec::new();
+        for item in { let __v = self.value(&points.value)?; self.entries(__v, points.value.span) }? {
+            let nums = self.const_numbers(item, points.value.span, "each point")?;
+            let [x, y] = nums.as_slice() else {
+                return Err(Diagnostic::new("each point is `[x, y]`", points.value.span));
+            };
+            rows.push([*x, *y]);
+        }
+        crate::tables::curve(&rows, size, shape)
+            .map(|t| Datum::Table(Arc::new(t)))
+            .map_err(|e| Diagnostic::new(e, name.span))
+    }
+
+    fn steps(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["xs", "ys", "size"];
+        let bound = funcs::bind(&name.name, name.span, &names, 2, args)?;
+        let (Some(xs), Some(ys)) = (bound[0], bound[1]) else {
+            return Err(Diagnostic::new("`steps` takes `xs` and `ys` arrays", name.span));
+        };
+        let size = match bound[2] {
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+            None => 1024,
+        };
+        let x = { let __v = self.value(&xs.value)?; self.const_numbers(__v, xs.value.span, "the x positions") }?;
+        let y = { let __v = self.value(&ys.value)?; self.const_numbers(__v, ys.value.span, "the y values") }?;
+        crate::tables::steps(&x, &y, size)
+            .map(|t| Datum::Table(Arc::new(t)))
+            .map_err(|e| Diagnostic::new(e, name.span))
+    }
+
+    fn poly(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["coeffs", "size"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(coeffs) = bound[0] else {
+            return Err(Diagnostic::new("`poly` takes an array of coefficients", name.span));
+        };
+        let size = match bound[1] {
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+            None => 1024,
+        };
+        let c = { let __v = self.value(&coeffs.value)?; self.const_numbers(__v, coeffs.value.span, "the coefficients") }?;
+        Ok(Datum::Table(Arc::new(crate::tables::poly(&c, size))))
+    }
+
+    fn ramp(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["start", "end", "size"];
+        let bound = funcs::bind(&name.name, name.span, &names, 2, args)?;
+        let (Some(start), Some(end)) = (bound[0], bound[1]) else {
+            return Err(Diagnostic::new("`ramp` takes `start` and `end`", name.span));
+        };
+        let size = match bound[2] {
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+            None => 1024,
+        };
+        let s = self.expr(&start.value)?;
+        let e = self.expr(&end.value)?;
+        let (Some(start_v), Some(end_v)) = (s.konst, e.konst) else {
+            return Err(Diagnostic::new(
+                "`ramp` ends must be known while compiling",
+                name.span,
+            ));
+        };
+        Ok(Datum::Table(Arc::new(crate::tables::ramp(start_v, end_v, size))))
+    }
+
+    fn cheby(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["amps", "size"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(amps) = bound[0] else {
+            return Err(Diagnostic::new("`cheby` takes an array of amplitudes", name.span));
+        };
+        let size = match bound[1] {
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+            None => 1024,
+        };
+        let weights = { let __v = self.value(&amps.value)?; self.const_numbers(__v, amps.value.span, "the amplitudes") }?;
+        Ok(Datum::Table(Arc::new(crate::tables::cheby(&weights, size))))
+    }
+
+    fn window(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["kind", "size"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(kind_arg) = bound[0] else {
+            return Err(Diagnostic::new(
+                "`window` takes a kind such as `hann`",
+                name.span,
+            ));
+        };
+        let size = match bound[1] {
+            Some(a) => self.whole_number(&a.value, 1, 1 << 20)?,
+            None => 1024,
+        };
+        let kind = match &kind_arg.value.kind {
+            ExprKind::Name(n) if n == "hann" => crate::tables::WindowKind::Hann,
+            ExprKind::Name(n) if n == "hamming" => crate::tables::WindowKind::Hamming,
+            ExprKind::Name(n) if n == "blackman" => crate::tables::WindowKind::Blackman,
+            ExprKind::Name(n) if n == "sinc" => crate::tables::WindowKind::Sinc,
+            ExprKind::Name(n) if n == "tri" => crate::tables::WindowKind::Tri,
+            ExprKind::Call { name: n, args } if n.name == "kaiser" => {
+                let beta = match args.as_slice() {
+                    [a] => self.expr(&a.value)?.konst.unwrap_or(8.0),
+                    _ => 8.0,
+                };
+                crate::tables::WindowKind::Kaiser { beta }
             }
+            ExprKind::Call { name: n, args } if n.name == "gauss" => {
+                let alpha = match args.as_slice() {
+                    [a] => self.expr(&a.value)?.konst.unwrap_or(2.5),
+                    _ => 2.5,
+                };
+                crate::tables::WindowKind::Gauss { alpha }
+            }
+            ExprKind::Call { name: n, args } if n.name == "tukey" => {
+                let alpha = match args.as_slice() {
+                    [a] => self.expr(&a.value)?.konst.unwrap_or(0.5),
+                    _ => 0.5,
+                };
+                crate::tables::WindowKind::Tukey { alpha }
+            }
+            _ => {
+                return Err(Diagnostic::new(
+                    "`window` kind is hann, hamming, blackman, kaiser(beta), gauss, tukey, sinc or tri",
+                    kind_arg.value.span,
+                ));
+            }
+        };
+        Ok(Datum::Table(Arc::new(crate::tables::window(kind, size))))
+    }
+
+    fn random_table(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["size", "dist", "seed"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(size_arg) = bound[0] else {
+            return Err(Diagnostic::new("`random` takes a size", name.span));
+        };
+        let size = self.whole_number(&size_arg.value, 1, 1 << 20)?;
+        let dist = match bound[1] {
+            Some(a) => match &a.value.kind {
+                ExprKind::Name(n) if n == "uniform" => crate::tables::Dist::Uniform,
+                ExprKind::Name(n) if n == "linear" => crate::tables::Dist::Linear,
+                ExprKind::Name(n) if n == "triangle" => crate::tables::Dist::Triangle,
+                ExprKind::Name(n) if n == "exponential" => crate::tables::Dist::Exponential,
+                ExprKind::Name(n) if n == "bilateral" => crate::tables::Dist::Bilateral,
+                ExprKind::Name(n) if n == "cauchy" => crate::tables::Dist::Cauchy,
+                ExprKind::Name(n) if n == "poisson" => crate::tables::Dist::Poisson,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`dist` is uniform, linear, triangle, exponential, bilateral, cauchy or poisson",
+                        a.value.span,
+                    ));
+                }
+            },
+            None => crate::tables::Dist::Uniform,
+        };
+        let Some(seed_arg) = bound[2] else {
+            return Err(Diagnostic::new(
+                "`random` needs `seed:` so renders stay identical",
+                name.span,
+            ));
+        };
+        let seed = self.whole_number(&seed_arg.value, 0, usize::MAX)? as u64;
+        Ok(Datum::Table(Arc::new(crate::tables::random(size, dist, seed))))
+    }
+
+    fn file_table(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let names = ["path", "channel", "start", "end"];
+        let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
+        let Some(path_arg) = bound[0] else {
+            return Err(Diagnostic::new("`file` takes a path string", name.span));
+        };
+        let ExprKind::Str(path) = &path_arg.value.kind else {
+            return Err(Diagnostic::new("`file` takes a path string", path_arg.value.span));
+        };
+        let channel = match bound[1] {
+            Some(a) => self.whole_number(&a.value, 0, 64)?,
+            None => 0,
+        };
+        let start = match bound[2] {
+            Some(a) => Some(self.whole_number(&a.value, 0, 1 << 30)?),
+            None => None,
+        };
+        let end = match bound[3] {
+            Some(a) => Some(self.whole_number(&a.value, 0, 1 << 30)?),
+            None => None,
+        };
+        self.names
+            .samples
+            .load_channel(path, channel, start, end)
+            .map(Datum::Table)
+            .map_err(|e| Diagnostic::new(e, path_arg.value.span))
+    }
+
+    fn bank(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        let [tables] = args else {
+            return Err(Diagnostic::new(
+                "`bank` takes an array of tables",
+                name.span,
+            ));
+        };
+        let list = self.value(&tables.value)?;
+        let mut out = Vec::new();
+        for item in self.entries(list, tables.value.span)? {
+            out.push(Datum::Table(self.as_table(item, tables.value.span)?));
         }
-        let mut table: Vec<f64> = (0..size)
-            .map(|i| {
-                let t = std::f64::consts::TAU * i as f64 / size as f64;
-                weights
-                    .iter()
-                    .enumerate()
-                    .map(|(h, w)| w * (t * (h + 1) as f64).sin())
-                    .sum()
-            })
-            .collect();
-        let peak = table.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-        if peak > 0.0 {
-            table.iter_mut().for_each(|v| *v /= peak);
+        if out.len() < 2 {
+            return Err(Diagnostic::new(
+                "a wavetable bank needs at least two tables",
+                name.span,
+            ));
         }
-        Ok(Datum::Array(
-            table
-                .into_iter()
-                .map(|v| Datum::Sig(Sig::constant(Unit::Num, v)))
-                .collect(),
-        ))
+        Ok(Datum::Array(out.into()))
     }
 
     /// `x.hz`, `n.ms`, `(-6db).num`...: give a plain value a unit, or take it away.
@@ -4064,6 +4922,8 @@ pub(crate) fn compile_const(value: &Expr, tempo: Tempo, registry: &Registry, nam
         match d {
             Datum::Function { .. } => false,
             Datum::Sig(s) => s.konst.is_some(),
+            Datum::Table(_) => true,
+            Datum::Buffer { .. } => false,
             Datum::Array(items) => items.iter().all(known),
             Datum::Record(fields) => fields.iter().all(|(_, v)| known(v)),
             Datum::Range { lo, hi, .. } => lo.konst.is_some() && hi.konst.is_some(),

@@ -23,6 +23,8 @@ pub enum Item {
         value: Expr,
     },
     Bus(BusDecl),
+    /// `buffer take = zeros(48000)` or `buffer take = 4bars`: shared writable table.
+    Buffer(BufferDecl),
     Track(TrackDecl),
     Sample(SampleDecl),
     MidiOut(MidiOutDecl),
@@ -205,6 +207,8 @@ pub enum SampleSource {
     Path(String),
     /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier.
     Slices { sample: Ident, count: f64 },
+    /// A const table (or expression that yields one): `sample pad = organ`.
+    Table(Expr),
 }
 
 /// `bus space` or `bus space: stereo`
@@ -216,6 +220,14 @@ pub struct BusDecl {
     /// `bus space: stereo { out = it.reverb(room: 0.8) }`: what the bus is processed by.
     /// `it` is what the bus has collected.
     pub body: Option<Vec<Stmt>>,
+}
+
+/// `buffer take = zeros(48000)` or `buffer take = 4bars`
+#[derive(Debug, Clone, PartialEq)]
+pub struct BufferDecl {
+    pub name: Ident,
+    pub value: Expr,
+    pub span: Span,
 }
 
 /// `config { channels: stereo }`

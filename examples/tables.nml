@@ -1,0 +1,35 @@
+// First-class tables: constructors, waveshaping, a wavetable bank, and a shared buffer.
+// Render with:  niminal render examples/tables.nml --out tables.wav
+config { channels: stereo }
+tempo 100bpm
+
+const organ = harmonics([1, 0, 1/3, 0, 1/5, 0.15, 1/7], size: 2048)
+const soft  = cheby([1, 0.2, 0.05], size: 1024)
+const bright = harmonics([1, 1/2, 1/3, 1/4, 1/5], size: 2048)
+const dark   = harmonics([1, 0, 0, 0, 1/5], size: 2048)
+const morph  = bank([dark, organ, bright])
+const win    = window(hann, size: 512)
+
+buffer scratch = zeros(2048)
+
+instr keys(freq: hz) {
+  level = adsr(8ms, 200ms, 0.5, 400ms)
+  osc(organ, freq).waveshape(soft) * level
+}
+
+instr pad(freq: hz, position: 0..1 = 0.5) {
+  osc(morph, freq, position: position) * adsr(80ms, 300ms, 0.6, 800ms)
+}
+
+instr tone(freq: hz) {
+  // Write a short impulse into the shared buffer, then scrub it with .phase.
+  scratch[0] = 1
+  click = scratch.phase(note.time / 50ms)
+  osc(sine, freq) * adsr(2ms, 80ms, 0.2, 200ms) + click * 0.3
+}
+
+keys(freq: e3) for 1beat
+at 1/2beat keys(freq: b3) for 1beat
+at 1beat pad(freq: e2, position: 0.2) for 2beats
+at 3beats pad(freq: g2, position: 0.8) for 2beats
+at 5beats tone(freq: e4) for 1beat

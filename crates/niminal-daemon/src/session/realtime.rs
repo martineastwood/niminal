@@ -1201,6 +1201,7 @@ impl RealtimeRenderer {
                     self.sample_rate,
                 );
                 crate::controls::sync_mixer(controls, mixer, self.clock);
+                super::carry_buffers(&self.program, program);
                 std::mem::swap(&mut self.controls, controls);
                 std::mem::swap(&mut self.mixer, mixer);
                 std::mem::swap(&mut self.program, program);

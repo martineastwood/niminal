@@ -23,7 +23,14 @@ fn amp(factor: f32) -> Arc<niminal_engine::Graph> {
 }
 
 fn master_track() -> TrackDef {
-    TrackDef { chain: None, inputs: vec![], route: Route::Master, voice_sends: vec![] }
+    TrackDef {
+        chain: None,
+        inputs: vec![],
+        route: Route::Master,
+        voice_sends: vec![],
+        voice_buffer_writes: vec![],
+        voice_buffer_reads: vec![],
+    }
 }
 
 fn reader(bus: usize, factor: f32) -> TrackDef {
@@ -32,6 +39,8 @@ fn reader(bus: usize, factor: f32) -> TrackDef {
         inputs: vec![ChainInput::Bus { bus, channel: 0 }],
         route: Route::Master,
         voice_sends: vec![],
+        voice_buffer_writes: vec![],
+        voice_buffer_reads: vec![],
     }
 }
 
@@ -63,6 +72,8 @@ fn a_chain_processes_its_tracks_summed_voices() {
         inputs: vec![ChainInput::It { channel: 0 }],
         route: Route::Master,
         voice_sends: vec![],
+        voice_buffer_writes: vec![],
+        voice_buffer_reads: vec![],
     };
     let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
     m.note_on(0, source(0.1, None), &[], None);
@@ -78,6 +89,26 @@ fn sends_reach_their_reader_in_the_same_block_whatever_the_declaration_order() {
     m.note_on(1, source(0.0, Some((0, 0.25))), &[], None);
     let out = block(&mut m);
     assert!(out.iter().all(|s| (s - 0.5).abs() < 1e-6), "{:?}", &out[..4]);
+}
+
+#[test]
+fn a_buffer_writer_runs_before_its_reader_whatever_the_declaration_order() {
+    let writer = TrackDef {
+        voice_buffer_writes: vec![0],
+        ..master_track()
+    };
+    let reader = TrackDef {
+        voice_buffer_reads: vec![0],
+        ..master_track()
+    };
+    assert_eq!(execution_order(&[reader.clone(), writer.clone()]).unwrap(), vec![1, 0]);
+    // Writing and reading the same buffer on one track is fine.
+    let both = TrackDef {
+        voice_buffer_writes: vec![0],
+        voice_buffer_reads: vec![0],
+        ..master_track()
+    };
+    assert_eq!(execution_order(&[both]).unwrap(), vec![0]);
 }
 
 #[test]
@@ -122,6 +153,8 @@ fn chains_can_send_too() {
         inputs: vec![ChainInput::It { channel: 0 }],
         route: Route::Master,
         voice_sends: vec![],
+        voice_buffer_writes: vec![],
+        voice_buffer_reads: vec![],
     };
     let mut m = Mixer::new(vec![reader(0, 1.0), chain], vec![1], 1, SR).unwrap();
     m.note_on(1, source(0.4, None), &[], None);
@@ -212,7 +245,7 @@ mod stereo {
 
     #[test]
     fn the_mixer_keeps_channels_apart() {
-        let master = TrackDef { chain: None, inputs: vec![], route: Route::Master, voice_sends: vec![] };
+        let master = TrackDef { chain: None, inputs: vec![], route: Route::Master, voice_sends: vec![], voice_buffer_writes: vec![], voice_buffer_reads: vec![] };
         let mut m = Mixer::new(vec![master], vec![], 2, SR).unwrap();
         m.note_on(0, two_channels(0.25, 0.5), &[], None);
         m.note_on(0, two_channels(0.25, 0.0), &[], None);
@@ -246,8 +279,10 @@ mod stereo {
             ],
             route: Route::Master,
             voice_sends: vec![],
+            voice_buffer_writes: vec![],
+            voice_buffer_reads: vec![],
         };
-        let writer = TrackDef { voice_sends: vec![0], chain: None, inputs: vec![], route: Route::Master };
+        let writer = TrackDef { voice_sends: vec![0], chain: None, inputs: vec![], route: Route::Master, voice_buffer_writes: vec![], voice_buffer_reads: vec![] };
 
         let mut m = Mixer::new(vec![reader, writer], vec![2], 2, SR).unwrap();
         m.note_on(1, sender, &[], None);
@@ -259,7 +294,7 @@ mod stereo {
     #[test]
     #[should_panic(expected = "master's channel count")]
     fn an_instrument_with_the_wrong_channel_count_is_rejected() {
-        let master = TrackDef { chain: None, inputs: vec![], route: Route::Master, voice_sends: vec![] };
+        let master = TrackDef { chain: None, inputs: vec![], route: Route::Master, voice_sends: vec![], voice_buffer_writes: vec![], voice_buffer_reads: vec![] };
         let mut m = Mixer::new(vec![master], vec![], 2, SR).unwrap();
         m.note_on(0, source(0.5, None), &[], None);
     }
@@ -290,6 +325,8 @@ mod panic {
             inputs: vec![ChainInput::It { channel: 0 }],
             route: Route::Master,
             voice_sends: vec![],
+            voice_buffer_writes: vec![],
+            voice_buffer_reads: vec![],
         };
         let mut m = Mixer::new(vec![track], vec![], 1, SR).unwrap();
         m.note_on(0, source(0.5, None), &[], None);
@@ -338,6 +375,8 @@ mod adopting {
             inputs: vec![ChainInput::It { channel: 0 }],
             route: Route::Master,
             voice_sends: vec![],
+            voice_buffer_writes: vec![],
+            voice_buffer_reads: vec![],
         }
     }
 
@@ -485,6 +524,8 @@ fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arr
         inputs: vec![ChainInput::It { channel: 0 }],
         route: Route::Master,
         voice_sends: vec![],
+        voice_buffer_writes: vec![],
+        voice_buffer_reads: vec![],
     };
     let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
     let seconds = |m: &mut Mixer, s: f32| -> f32 {
@@ -517,6 +558,8 @@ fn a_resting_reverb_chain_still_rings_out_its_tail_and_wakes_for_the_next_note()
         inputs: vec![ChainInput::It { channel: 0 }],
         route: Route::Master,
         voice_sends: vec![],
+        voice_buffer_writes: vec![],
+        voice_buffer_reads: vec![],
     };
     let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
     let id = m.note_on(0, source(0.5, None), &[], None);

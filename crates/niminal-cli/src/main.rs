@@ -273,10 +273,11 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
             let data = niminal_lang::Samples::new(path.parent().unwrap_or(Path::new(".")))
                 .load(&path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()))
                 .map_err(|e| format!("error: {e}"))?;
-            if (data.sample_rate - SAMPLE_RATE as f32).abs() > 0.5 {
-                return Err(format!("error: {} is {} Hz, but niminal renders at {SAMPLE_RATE} Hz; convert it first", path.display(), data.sample_rate));
+            let rate = data.first().map_or(SAMPLE_RATE as f32, |c| c.sample_rate_or(SAMPLE_RATE as f32));
+            if (rate - SAMPLE_RATE as f32).abs() > 0.5 {
+                return Err(format!("error: {} is {rate} Hz, but niminal renders at {SAMPLE_RATE} Hz; convert it first", path.display()));
             }
-            data.channels.clone()
+            data.iter().map(|c| c.data().to_vec()).collect()
         }
     };
     let bar_seconds = program.tempo.beats_per_bar * 60.0 / program.tempo.bpm;

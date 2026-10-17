@@ -62,11 +62,13 @@ fn setting(name: &str, kind: Kind) -> ParamSpec {
     }
 }
 
-/// What an oscillator plays: a built-in waveform, or one cycle of a table.
+/// What an oscillator plays: a built-in waveform, one cycle of a table, or a morphing bank.
 #[derive(Clone)]
 pub enum WaveArg {
     Builtin(Wave),
     Table(Arc<Wavetable>),
+    /// Several band-limited tables morphable with `position:`.
+    Bank(Arc<[Arc<Wavetable>]>),
 }
 
 /// The longest table an oscillator accepts.
@@ -81,19 +83,51 @@ impl WaveArg {
         if cycle.len() > MAX_TABLE {
             return Err(format!("a table to play can have at most {MAX_TABLE} entries"));
         }
-        // Tables are shared while any program still plays them, so the same cycle is analysed once,
-        // across calls, voices and live re-evaluations.
-        static MADE: LazyLock<Mutex<HashMap<Vec<u64>, Weak<Wavetable>>>> = LazyLock::new(Mutex::default);
-        let key: Vec<u64> = cycle.iter().map(|v| v.to_bits()).collect();
-        let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(table) = made.get(&key).and_then(Weak::upgrade) {
-            return Ok(WaveArg::Table(table));
-        }
-        made.retain(|_, table| table.strong_count() > 0);
-        let table = Arc::new(Wavetable::from_cycle(cycle));
-        made.insert(key, Arc::downgrade(&table));
-        Ok(WaveArg::Table(table))
+        Ok(WaveArg::Table(cached_wavetable(cycle)))
     }
+
+    pub fn from_table(table: &niminal_engine::Table) -> Result<Self, String> {
+        if table.is_empty() {
+            return Err("a table can't be empty".into());
+        }
+        if table.len() > MAX_TABLE {
+            return Err(format!("a table to play can have at most {MAX_TABLE} entries"));
+        }
+        Ok(WaveArg::Table(cached_wavetable(&table.as_f64())))
+    }
+
+    pub fn bank(tables: &[Arc<niminal_engine::Table>]) -> Result<Self, String> {
+        if tables.len() < 2 {
+            return Err("a wavetable bank needs at least two tables".into());
+        }
+        let waves: Result<Vec<_>, _> = tables
+            .iter()
+            .map(|t| {
+                if t.is_empty() {
+                    return Err("a table can't be empty".into());
+                }
+                if t.len() > MAX_TABLE {
+                    return Err(format!("a table to play can have at most {MAX_TABLE} entries"));
+                }
+                Ok(cached_wavetable(&t.as_f64()))
+            })
+            .collect();
+        Ok(WaveArg::Bank(waves?.into()))
+    }
+}
+
+/// Tables are shared while any program still plays them, so the same cycle is analysed once.
+fn cached_wavetable(cycle: &[f64]) -> Arc<Wavetable> {
+    static MADE: LazyLock<Mutex<HashMap<Vec<u64>, Weak<Wavetable>>>> = LazyLock::new(Mutex::default);
+    let key: Vec<u64> = cycle.iter().map(|v| v.to_bits()).collect();
+    let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(table) = made.get(&key).and_then(Weak::upgrade) {
+        return table;
+    }
+    made.retain(|_, table| table.strong_count() > 0);
+    let table = Arc::new(Wavetable::from_cycle(cycle));
+    made.insert(key, Arc::downgrade(&table));
+    table
 }
 
 /// What is known at compile time when an opcode is built.
@@ -183,12 +217,18 @@ impl Registry {
             ),
             OpSpec::new(
                 "osc",
-                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri, or a table of numbers known while compiling that holds one cycle of a wave, such as `harmonics([1, 1/2, 1/3])`; `phase_mod` bends the phase for FM.",
-                vec![req("wave", Kind::Wave), req("freq", Kind::Signal(Unit::Hz)), opt("phase_mod", SIGNAL)],
+                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri, a table (`harmonics([...])`), or a `bank([...])` of tables; `phase_mod` bends the phase for FM; `position` morphs a bank.",
+                vec![
+                    req("wave", Kind::Wave),
+                    req("freq", Kind::Signal(Unit::Hz)),
+                    opt("phase_mod", SIGNAL),
+                    opt("position", SIGNAL),
+                ],
                 Build::Builtin(|a| {
                     Ok(Box::new(match a.wave.clone().expect("osc has a wave") {
                         WaveArg::Builtin(wave) => Osc::new(wave),
                         WaveArg::Table(table) => Osc::with_table(table),
+                        WaveArg::Bank(bank) => Osc::with_bank(bank),
                     }))
                 }),
             ),

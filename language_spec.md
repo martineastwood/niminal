@@ -436,7 +436,7 @@ const taps = [0.25, 0.5, 0.25]
 
 `osc(saw8, freq)` plays a table as one cycle of a wave, band-limited at any pitch. The table is numbers known while compiling, from `harmonics`, a literal or `.map`; it can be up to 65536 entries.
 
-**[not built]** `file("irs/hall.wav")` as a table.
+`file("irs/hall.wav")` loads one channel of a WAV as a table. See the tables reference for the full set of constructors, transforms and shared `buffer` declarations.
 
 ### 7.3 State arrays
 
@@ -449,6 +449,10 @@ buf[pos] = y
 ```
 
 Writes wrap like reads. Reads after a write see the new value. Mapping, slicing, passing and returning a state buffer read snapshots of its current elements. Ordinary array values and function arguments cannot be written. Array storage is allocated before audio processing and never resized while running.
+
+### 7.4 Shared buffers
+
+`buffer name = zeros(n)` or `buffer name = 4bars` declares a writable table that outlives voices, shared across instruments and tracks. Write with `buf[i] = x` or `buf.record(sig, loop:)`; read with `[i]`, `.at`, `.phase`, or play via a sample. Functions cannot write shared buffers. Live re-evaluation keeps contents when the name and length are unchanged. Tracks that write a buffer run before tracks that read it in the same block.
 
 ## 8. Instruments
 

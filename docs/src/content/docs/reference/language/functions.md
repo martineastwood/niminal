@@ -196,7 +196,7 @@ instr cloud(freq: hz) {
 
 ### Constant tables
 
-`const` numeric arrays are worked out while compiling and their storage is shared by voices. They can be mapped, indexed, interpolated and reduced just like other arrays:
+`const` numeric arrays are worked out while compiling and their storage is shared by voices. Named constructors (`harmonics`, `curve`, `cheby`, `window`, `file`, …), transforms and readers are documented under [Tables](/reference/language/tables/).
 
 ```nml
 const saw8 = harmonics([1, -1/2, 1/3, -1/4], size: 4096)

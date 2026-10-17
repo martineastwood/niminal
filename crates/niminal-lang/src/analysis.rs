@@ -331,6 +331,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                 simple_def(text, offset, format!("arrangement:{}", d.name.name))
             }
             Item::Bus(d) => simple_def(text, offset, format!("bus:{}", d.name.name)),
+            Item::Buffer(d) => simple_def(text, offset, format!("buffer:{}", d.name.name)),
             Item::Track(d) => {
                 let dq = crate::perform::definition_quantum(&d.options)
                     .ok()

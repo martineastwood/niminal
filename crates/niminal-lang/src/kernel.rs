@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use niminal_engine::{Array, Port};
+use niminal_engine::{Array, Port, Table};
 use niminal_engine::ops::{
     BinOp as Op, Cmp, Fn1, Instr, Interp, Kernel, ArraySource, Native, NativeInput,
 };
@@ -33,7 +33,7 @@ pub(crate) enum KArg {
     /// A value known while compiling.
     Const { unit: Unit, value: f64 },
     /// A list of numbers known while compiling.
-    Table { unit: Unit, values: Arc<Array<f64>> },
+    Table { unit: Unit, values: Arc<Table> },
     /// A range known while compiling.
     Range {
         unit: Unit,
@@ -65,7 +65,7 @@ enum KVal {
     Table {
         id: usize,
         unit: Unit,
-        values: Arc<Array<f64>>,
+        values: Arc<Table>,
     },
     /// A list this kernel writes.
     State { id: usize, unit: Unit, len: usize },
@@ -143,7 +143,7 @@ struct Kb<'a> {
     registers: usize,
     state_init: Vec<f64>,
     buffers: Vec<Array<f64>>,
-    tables: Vec<Arc<Array<f64>>>,
+    tables: Vec<Arc<Table>>,
     values: Vec<Array<usize>>,
     value_rates: Vec<Rate>,
     natives: Vec<Native>,
@@ -332,7 +332,7 @@ impl Kb<'_> {
         self.consts.get(&v.reg).copied()
     }
 
-    fn table(&mut self, unit: Unit, values: Arc<Array<f64>>) -> KVal {
+    fn table(&mut self, unit: Unit, values: Arc<Table>) -> KVal {
         let id = self.tables.len();
         self.tables.push(values.clone());
         KVal::Table { id, unit, values }
@@ -668,7 +668,9 @@ impl Kb<'_> {
                     match value {
                         KVal::Table { unit: found, values, .. } => {
                             if *found != unit { return Err(mismatch(found.describe())); }
-                            if whole && values.iter().any(|v| v.fract() != 0.0) { return Err(mismatch("a fractional array element")); }
+                            if whole && values.as_f64().iter().any(|v| v.fract() != 0.0) {
+                                return Err(mismatch("a fractional array element"));
+                            }
                             return Ok(value.clone());
                         }
                         KVal::State { unit: found, .. } if param.rate().is_none() => {
@@ -1029,7 +1031,7 @@ impl Kb<'_> {
             }
             KVal::Table { unit, values, .. } => {
                 let id = self.buffers.len();
-                self.buffers.push(values.to_vec().into());
+                self.buffers.push(values.as_f64().into());
                 self.frame.buffers.insert(name.name.clone());
                 self.frame.scope.insert(
                     name.name.clone(),
@@ -1159,8 +1161,11 @@ impl Kb<'_> {
     fn array_elements(&mut self, value: KVal, span: Span) -> Res<Vec<KVal>> {
         match value {
             KVal::Array(items) => Ok(items.into_vec()),
-            KVal::Table { unit, values, .. } => Ok(values.iter()
-                .map(|&k| KVal::Num(self.constant(unit, k))).collect()),
+            KVal::Table { unit, values, .. } => Ok(values
+                .as_f64()
+                .into_iter()
+                .map(|k| KVal::Num(self.constant(unit, k)))
+                .collect()),
             KVal::State { id, unit, len } => Ok((0..len).map(|k| {
                 let index = self.constant(Unit::Num, k as f64);
                 KVal::Num(self.read_array(ArraySource::State(id), unit, index, None))
@@ -1403,6 +1408,11 @@ impl Kb<'_> {
                 Some(k) => Ok(KVal::Num(self.constant(s.unit(), k))),
                 None => Err(Diagnostic::new("this constant isn't a number", span)),
             },
+            Datum::Table(table) => Ok(self.table(Unit::Num, table.clone())),
+            Datum::Buffer { .. } => Err(Diagnostic::new(
+                "a shared buffer isn't a compile-time constant",
+                span,
+            )),
             Datum::Range { lo, hi, inclusive } => match (lo.konst(), hi.konst()) {
                 (Some(a), Some(b)) => Ok(KVal::Range {
                     unit: lo.unit(),
@@ -1422,7 +1432,7 @@ impl Kb<'_> {
                     .collect();
                 match numbers {
                     Some(n) if !n.is_empty() && n.iter().all(|(u, _)| *u == n[0].0) => {
-                        let values = Arc::new(n.iter().map(|(_, k)| *k).collect());
+                        let values = Arc::new(Table::from_f64(n.iter().map(|(_, k)| *k), None));
                         Ok(self.table(n[0].0, values))
                     }
                     _ => {
@@ -1612,9 +1622,10 @@ impl Kb<'_> {
                 if values.is_empty() { return Err(Diagnostic::new("this array is empty", span)); }
                 if let Some(k) = self.konst(&i) {
                     let n = values.len();
-                    return Ok(KVal::Num(
-                        self.constant(unit, values[niminal_engine::wrapped_index(k, n)]),
-                    ));
+                    return Ok(KVal::Num(self.constant(
+                        unit,
+                        f64::from(values.get(niminal_engine::wrapped_index(k, n))),
+                    )));
                 }
                 Ok(KVal::Num(self.read_array(ArraySource::Table(id), unit, i, None)))
             }
@@ -1679,7 +1690,7 @@ impl Kb<'_> {
     fn read_array(&mut self, list: ArraySource, unit: Unit, i: Value, interp: Option<Interp>) -> Value {
         if let Some(pos) = self.konst(&i) {
             let data = match list {
-                ArraySource::Table(id) => Some(self.tables[id].to_vec()),
+                ArraySource::Table(id) => Some(self.tables[id].as_f64()),
                 ArraySource::Values(id) => self.values[id].iter().map(|reg| self.consts.get(reg).copied()).collect::<Option<Vec<_>>>(),
                 ArraySource::State(_) => None,
             };
@@ -1790,7 +1801,13 @@ impl Kb<'_> {
                         ));
                     }
                 };
-                return Ok(self.table(Unit::Num, Arc::new(vec![0.0; n].into())));
+                if n == 0 {
+                    return Ok(KVal::array(vec![]));
+                }
+                return Ok(self.table(
+                    Unit::Num,
+                    Arc::new(Table::from_f32(vec![0.0f32; n].into_boxed_slice(), None)),
+                ));
             }
             "split" => {
                 return Err(Diagnostic::new(
@@ -2211,7 +2228,7 @@ impl Kb<'_> {
             value => value?,
         };
         let cycle = match value {
-            KVal::Table { unit: Unit::Num, values, .. } => values.to_vec(),
+            KVal::Table { unit: Unit::Num, values, .. } => values.as_f64(),
             KVal::Table { .. } => return Err(Diagnostic::new("a table is a one-dimensional array of plain numbers", e.span)),
             KVal::Array(_) => {
                 let mut cycle = Vec::new();
@@ -2380,6 +2397,14 @@ pub(crate) fn interp_of(e: &Expr) -> Res<Interp> {
             "`interp` is `none`, `linear` or `cubic`",
             e.span,
         )),
+    }
+}
+
+pub(crate) fn edge_of(e: &Expr) -> Res<niminal_engine::Edge> {
+    match &e.kind {
+        ExprKind::Name(n) if n == "wrap" => Ok(niminal_engine::Edge::Wrap),
+        ExprKind::Name(n) if n == "clamp" => Ok(niminal_engine::Edge::Clamp),
+        _ => Err(Diagnostic::new("`edge` is `wrap` or `clamp`", e.span)),
     }
 }
 

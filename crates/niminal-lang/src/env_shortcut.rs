@@ -21,7 +21,7 @@ pub fn desugar(items: &mut [Item], fns: &HashMap<String, FnDef>) -> Vec<Diagnost
             Item::Instr(d) => &mut d.body,
             Item::Track(d) => &mut d.body,
             Item::Fn(d) => &mut d.body,
-            Item::Control { value, .. } | Item::Const { value, .. } => {
+            Item::Control { value, .. } | Item::Const { value, .. } | Item::Buffer(BufferDecl { value, .. }) => {
                 rewrite_expr(value, &skip, &mut errors);
                 continue;
             }
