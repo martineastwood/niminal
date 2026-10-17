@@ -9,6 +9,8 @@ mod array;
 pub mod denormals;
 mod graph;
 mod master;
+mod mapping;
+pub use mapping::ParamMapping;
 mod mixer;
 mod opcode;
 pub mod ops;

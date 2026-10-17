@@ -61,6 +61,7 @@ impl Opcode for ResetOn {
     fn has_side_effects(&self) -> bool {
         self.op.has_side_effects()
     }
+    fn input_is_init(&self, index: usize) -> bool { self.op.input_is_init(index) }
     fn latency(&self) -> usize {
         self.op.latency()
     }

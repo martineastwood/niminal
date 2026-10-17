@@ -19,6 +19,8 @@ pub struct Instrument {
     pub graph: Arc<Graph>,
     /// In graph parameter order.
     pub params: Vec<Param>,
+    pub arrays: BTreeMap<String, Vec<String>>,
+    pub resources: BTreeMap<String, Vec<String>>,
     /// For a kit, the names of its samples, in the order its `sample` parameter counts them.
     pub members: Vec<String>,
     /// The choke group of each sample: one entry per kit member, or at most
@@ -511,6 +513,8 @@ impl Instrument {
             name,
             graph,
             params,
+            arrays: BTreeMap::new(),
+            resources: BTreeMap::new(),
             members: Vec::new(),
             chokes: Vec::new(),
             max_voices: None,
@@ -551,8 +555,7 @@ impl Instrument {
         };
 
         let v = engine_value(param.unit, value, tempo).map_err(unit_err)?;
-        if param.unit == Unit::Num
-            && let Some((lo, hi)) = param.range
+        if let Some((lo, hi)) = param.range
             && !(lo..=hi).contains(&v)
         {
             return Err(ArgError::new(format!(

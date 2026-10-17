@@ -66,7 +66,9 @@ pub struct GraphBuilder {
     nodes: Vec<NodeDef>,
     /// Results of all nodes so far.
     results: usize,
+    latencies: Vec<usize>,
     n_inputs: usize,
+    input_latencies: Vec<usize>,
     /// (bus, channel, encoded slot)
     sends: Vec<(usize, usize, usize, bool)>,
     /// Shared buffers this graph writes (for cross-track ordering).
@@ -111,7 +113,11 @@ impl GraphBuilder {
     /// Declare an external input. The host fills it before each block, for
     /// example with a track's incoming audio or the contents of a bus.
     pub fn input(&mut self) -> Src {
-        self.n_inputs += 1;
+        self.input_with_latency(0)
+    }
+
+    pub fn input_with_latency(&mut self, latency: usize) -> Src {
+        self.n_inputs += 1; self.input_latencies.push(latency);
         Src::Input(self.n_inputs - 1)
     }
 
@@ -172,8 +178,9 @@ impl GraphBuilder {
             wired[i] = Some(src);
         }
 
+        let input_latency = wired.iter().flatten().map(|s| self.source_latency(*s)).max().unwrap_or(0);
         let mut inputs = Vec::with_capacity(ports.len());
-        for (port, src) in ports.iter().zip(wired) {
+        for (port_index, (port, src)) in ports.iter().zip(wired).enumerate() {
             let src = match (src, port.default) {
                 (Some(s), _) => s,
                 (None, Some(d)) => Src::Const(d),
@@ -184,14 +191,27 @@ impl GraphBuilder {
                     });
                 }
             };
+            let src = self.align_source(src, input_latency, op.input_is_init(port_index));
             inputs.push(self.slot_for(src));
         }
 
         let outputs = op.outputs().max(1);
         let first = self.results;
         self.results += outputs;
+        self.latencies.extend(std::iter::repeat_n(input_latency + op.latency(), outputs));
         self.nodes.push(NodeDef { op: Box::new(op), inputs, first, outputs });
         Ok((first..first + outputs).map(Src::Node).collect())
+    }
+
+    fn source_latency(&self, source: Src) -> usize {
+        match source { Src::Node(i) => self.latencies[i], Src::Input(i) => self.input_latencies[i], _ => 0 }
+    }
+
+    fn align_source(&mut self, source: Src, target: usize, init: bool) -> Src {
+        let delay = target.saturating_sub(self.source_latency(source));
+        if delay == 0 || matches!(source, Src::Const(_)) { return source; }
+        let delay = if init || matches!(source,Src::Param(_)) { crate::ops::SampleDelay::warm(delay) } else { crate::ops::SampleDelay::new(delay) };
+        self.add(delay, &[("x", source)]).expect("delay port")
     }
 
     // Slot layout, fixed once `build` knows the counts: params, then consts,
@@ -228,7 +248,20 @@ impl GraphBuilder {
     /// Finish a graph with one output per channel.
     pub fn build_channels(mut self, outputs: &[Src]) -> Graph {
         assert!(!outputs.is_empty(), "a graph needs at least one output channel");
-        // interns constant outputs
+        let source = |slot: usize| {
+            if slot >= INPUT_BASE { Src::Input(slot-INPUT_BASE) }
+            else if slot >= NODE_BASE { Src::Node(slot-NODE_BASE) }
+            else if slot >= CONST_BASE { Src::Const(self.consts[slot-CONST_BASE]) }
+            else { Src::Param(slot) }
+        };
+        let sends: Vec<_> = self.sends.iter().map(|&(b,c,s,d)| (b,c,source(s),d)).collect();
+        let latency = outputs.iter().copied().chain(sends.iter().filter(|s| !s.3).map(|s|s.2)).map(|o| self.source_latency(o)).max().unwrap_or(0);
+        self.sends.clear();
+        for (b,c,s,d) in sends {
+            let s = if d { s } else { self.align_source(s,latency,false) };
+            if d { self.send_channel_delayed(b,c,s); } else { self.send_channel(b,c,s); }
+        }
+        let outputs: Vec<_> = outputs.iter().map(|&o| self.align_source(o, latency,false)).collect();
         let output_enc: Vec<usize> = outputs.iter().map(|&o| self.slot_for(o)).collect();
         // Nodes are topologically ordered, so one backwards pass retains
         // exactly the dependencies of outputs, sends and observable effects.
@@ -300,6 +333,7 @@ impl GraphBuilder {
         buffer_reads.sort_unstable();
         buffer_reads.dedup();
         let mut graph = Graph {
+            latency,
             state_keys: Vec::new(),
             params: self.params,
             consts: self.consts,
@@ -324,6 +358,7 @@ const INPUT_BASE: usize = 1 << 22;
 
 /// An immutable compiled graph, shared between voices.
 pub struct Graph {
+    latency: usize,
     state_keys: Vec<u64>,
     pub(crate) params: Vec<ParamDef>,
     pub(crate) consts: Vec<f32>,
@@ -344,6 +379,52 @@ pub struct Graph {
 }
 
 impl Graph {
+    pub fn latency(&self) -> usize { self.latency }
+
+    /// Rebuild with the known timing of external inputs, aligning them before processing.
+    pub fn with_input_latencies(&self, latencies: &[usize]) -> Graph {
+        assert_eq!(latencies.len(),self.n_inputs);
+        let mut g = GraphBuilder::new();
+        let mut slots = Vec::new();
+        for p in &self.params { slots.push(g.param(&p.name,p.default).unwrap()); }
+        slots.extend(self.consts.iter().map(|&v| Src::Const(v)));
+        let target = latencies.iter().copied().max().unwrap_or(0);
+        for &latency in latencies { let input = g.input_with_latency(latency); slots.push(g.align_source(input,target,false)); }
+        for node in &self.nodes {
+            let ports: Vec<_> = node.op.ports().iter().zip(&node.inputs).map(|(p,&s)| (p.name.as_ref(),slots[s])).collect();
+            slots.extend(g.add_outputs(node.op.box_clone(),&ports).expect("valid graph ports"));
+        }
+        for &(bus,channel,slot,late) in &self.sends {
+            if late { g.send_channel_delayed(bus,channel,slots[slot]); } else { g.send_channel(bus,channel,slots[slot]); }
+        }
+        for &id in &self.buffer_reads { g.touch_buffer_read(id); }
+        for &id in &self.buffer_writes { g.touch_buffer_write(id); }
+        g.set_tail(self.tail);
+        g.build_channels(&self.output_slots.iter().map(|&s| slots[s]).collect::<Vec<_>>())
+    }
+
+    fn delay_slot(&mut self, slot: usize, frames: usize) -> usize {
+        if frames == 0 { return slot; }
+        let first = self.results; self.results += 1;
+        self.nodes.push(NodeDef { op: Box::new(crate::ops::SampleDelay::new(frames)), inputs: vec![slot], first, outputs:1 });
+        self.node_slot_base() + first
+    }
+
+    pub fn pad_outputs(&mut self, latency: usize) {
+        let delay = latency.saturating_sub(self.latency);
+        for i in 0..self.output_slots.len() { self.output_slots[i] = self.delay_slot(self.output_slots[i],delay); }
+        self.latency = self.latency.max(latency);
+        self.state_keys = self.compute_state_keys();
+    }
+
+    pub fn pad_sends(&mut self, bus_latencies: &[usize]) {
+        for i in 0..self.sends.len() {
+            let (bus,_,slot,late) = self.sends[i];
+            if !late { self.sends[i].2 = self.delay_slot(slot,bus_latencies[bus].saturating_sub(self.latency)); }
+        }
+        self.state_keys = self.compute_state_keys();
+    }
+
     /// Structural node identities for live state transfer. Constants are deliberately
     /// omitted: changing a cutoff or gain must not erase filter or delay memory.
     fn compute_state_keys(&self) -> Vec<u64> {

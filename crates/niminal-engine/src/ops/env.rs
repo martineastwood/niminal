@@ -221,6 +221,7 @@ impl Env {
 }
 
 impl Opcode for Env {
+    fn input_is_init(&self, _index: usize) -> bool { true }
     fn reset(&mut self) { self.reset(self.sample_rate); }
     fn name(&self) -> &'static str {
         "env"

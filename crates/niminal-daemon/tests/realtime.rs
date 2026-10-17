@@ -326,3 +326,19 @@ fn instrument_scopes_and_buffer_events_allocate_nothing_while_rendering() {
     measured(&mut r, out.len(), &mut out);
     assert!(out.iter().any(|x| x.abs() > 0.1));
 }
+
+#[test]
+fn rich_parameters_and_dynamic_mapping_allocate_nothing_on_audio() {
+    use niminal_daemon::{At, Op};
+    use niminal_score::{Time,Value};
+    let mut s=Session::new(48000.0,Layout::Mono).without_limiter();
+    s.send_events(0,vec![Op::Define{source:"buffer one = zeros(8)\nbuffer two = zeros(8)\nctl level = 0.25\ninstr a(weights: [num] = [0.1, 0.2], source: buffer = one, value: num = 0) { spawn(osc(square, 100hz), dur: 1ms) { oversample(4) { osc(sine, 440hz) * env[1 | 1ms 0] } } + weights.sum + source[0] + value }".into(),at:At::Now,dir:None,tag:None}]).unwrap();
+    s.send_events(0,vec![Op::Note{target:"a".into(),at:At::Now,args:Default::default(),dur:Some(Time::Seconds(0.1)),id:Some(1),tag:None},
+        Op::Array{id:1,at:At::Sample(17),param:"weights".into(),values:vec![Value::Num(0.25),Value::Num(0.5)],glide:Some(Time::Seconds(0.001)),tag:None},
+        Op::BindBuffer{id:1,at:At::Sample(33),param:"source".into(),buffer:"two".into(),tag:None},
+        Op::Map{id:1,at:At::Sample(49),param:"value".into(),source:Some("level".into()),channel:1,scale:1.0,offset:0.0,tag:None},
+        Op::Map{id:1,at:At::Sample(81),param:"value".into(),source:None,channel:1,scale:1.0,offset:0.0,tag:None}]).unwrap();
+    let mut renderer=s.start_realtime(RealtimeConfig::default());s.prepare_realtime();let mut output=vec![0.0;8192];
+    measured(&mut renderer,output.len(),&mut output);
+    assert!(output.iter().all(|x|x.is_finite()));
+}

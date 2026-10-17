@@ -29,7 +29,7 @@ instr pad(freq: hz, amp: db = -3db) {
 
 ## Parameters
 
-- Each needs a type or a default. Numeric parameters are live note controls. Choices, arrays, functions and explicitly `const` parameters specialize the graph and need a default; set them when calling the instrument inside another instrument.
+- Each needs a type or a default. Numeric parameters, fixed-shape arrays and `buffer` references can stay live. Choices, functions and explicitly `const` parameters specialize the graph and need a default; set those when calling the instrument inside another instrument.
 - **Without a rate** a parameter stays live: lanes, glides, MPE and `n.set(...)` move it on the running voice. **`init`** fixes it at note start: `instr pluck(freq: init hz)`.
 - **`gain`** is a control every note has, applied after the instrument. An instrument may declare its own `gain: db = 0db` to take it over and use it as it likes; then it isn't applied for it.
 
@@ -38,7 +38,7 @@ instr pad(freq: hz, amp: db = -3db) {
 ```nml
 fn sine_voice(freq: hz) { osc(sine, freq) }
 
-instr bank(freq: hz, partials: [num] = [1, 0.5], make: fn = sine_voice,
+instr bank(freq: hz, partials: const [num] = [1, 0.5], make: fn = sine_voice,
            mode: (soft | hard) = soft) {
   signal = (for i in partials.indices { make(freq * (i + 1)) * partials[i] }).sum
   if mode == soft { signal.tanh } else { signal }
@@ -49,7 +49,28 @@ instr bright(freq: hz) {
 }
 ```
 
-These arguments select graph structure at compilation. They are omitted from the note/event control signature, so `set` cannot change them. A `const` untyped argument can also bind a named table or shared buffer, for example `source: const = take`; an embedded instrument call can bind another resource. Redefine the instrument to change its structure live. Arrays passed to embedded calls may contain signals; their shape remains fixed for that call.
+These structural arguments select graph structure at compilation. They are omitted from the note/event control signature, so `set` cannot change them. A `const` untyped argument can also bind a named table or shared buffer, for example `source: const = take`. Redefine the instrument to change its structure live.
+
+### Live arrays and buffer references
+
+An ordinary array parameter needs a constant default to establish its shape. Its numeric elements become live controls. A `buffer` parameter needs a named shared buffer as its default:
+
+```nml
+buffer take = zeros(48000)
+buffer alternate = zeros(48000)
+
+instr sampler(weights: [num] = [1, 0.5], source: buffer = take) {
+  source.at(note.time.num * sample_rate.num) * weights.sum
+}
+
+sampler(weights: [0.25, 0.5], source: alternate) for 100ms
+```
+
+Arrays keep their declared shape for the life of a voice. Numeric element types, units and ranges are checked. Use `const [num]` when the elements themselves must be known while compiling, such as a wavetable used by `osc`.
+
+Buffer references read with `source[i]` or `source.at(pos, interp: linear)`, including through DSP functions and nested scopes. A running voice can select any shared buffer prepared with its original instrument graph. Buffers allocated later are available to newly prepared voices. `init buffer` captures the selection at note start. Reference parameters currently support reading, not recording or writes through the reference.
+
+Clients update these controls with the timed `array` and `bind_buffer` events. Individual numeric elements also have paths such as `weights[0]`, accepted by `set` and `map`. See [Engine API](/reference/engine-api/#live-parameters-and-modulation).
 
 ## The running voice
 
@@ -94,7 +115,7 @@ instr cloud(freq: hz = 220hz) {
 
 Each positive trigger edge starts a fresh layer and captures the surrounding signal values it reads. `dur` is captured on that edge too. The layer has its own envelopes, state, `note.time`, `note.start`, `note.index`, and `note.released`. It releases after `dur`, then drains its envelopes and effects. Releasing the parent releases all its layers and stops new triggers. `max` is a compile-time integer from 1 to 64 (default 8); a full pool drops new triggers. Storage is prepared before playback.
 
-The body can call an instrument or a DSP function, and can read a shared buffer with `buf[i]` or `buf.at(pos)`. It follows the sample DSP function rules: channel-layout processors, bus sends, shared writes and OSC output belong outside the scope. Processor scopes currently cannot contain another `spawn` or `oversample` scope. Use clips and `at` to schedule independent top-level notes.
+The body can call an instrument or a DSP function, and can read a shared buffer with `buf[i]` or `buf.at(pos)`. It follows the sample DSP function rules: channel-layout processors, bus sends, shared writes and OSC output belong outside the scope. `spawn`, `oversample` and `reset_on` scopes can compose; `spawn` and `oversample` nesting is limited to 16 levels. Use clips and `at` to schedule independent top-level notes.
 
 ### Noise
 
@@ -157,6 +178,8 @@ With keys from `midi.keys()` this plays like a mono synth: hold a note, roll a s
 **Parameters are signals.** With `legato: true` a new note updates parameters on the running voice, which is what carries `glide`. A keyboard's pitch bend and pressure set the `bend` and `pressure` parameters of the notes it holds (see [Performance](/reference/language/performance/)). MPE works the same way: `keys: midi.keys(mpe: true)` gives each note its own bend, pressure and a `slide: 0..1` parameter.
 
 **Pitch:** parameter `freq` is pitch by convention — used by `same_note`, mono priority, `keys.note`, and unqualified `transpose`.
+
+Runtime modulation can connect a running parameter to a named control or bus without recompiling the instrument; see [Engine API](/reference/engine-api/#live-parameters-and-modulation). Bus mappings read exactly one block behind, avoiding dynamic routing cycles.
 
 No project-wide voice cap in `config` today. Per-instrument limits use `with(max: n, steal: …)` above.
 

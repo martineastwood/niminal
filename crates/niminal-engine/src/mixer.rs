@@ -25,6 +25,7 @@ pub struct Buses {
     /// What delayed sends have put in during the current block.
     staged: Vec<Vec<[f32; BLOCK]>>,
     late_pos: usize,
+    history: Vec<Vec<[f32; BLOCK]>>,
     /// Where the session's clock is, for the block being mixed.
     pub clock: crate::Clock,
 }
@@ -37,13 +38,14 @@ impl Buses {
             late: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
             staged: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
             late_pos: 0,
+            history: channels.iter().map(|&n| vec![[0.0; BLOCK];n]).collect(),
             clock: crate::Clock::default(),
         }
     }
 
     /// Empty every bus, including what is on its way.
     pub fn clear(&mut self) {
-        for bus in self.data.iter_mut().chain(&mut self.late).chain(&mut self.staged) {
+        for bus in self.data.iter_mut().chain(&mut self.late).chain(&mut self.staged).chain(&mut self.history) {
             bus.iter_mut().for_each(|c| *c = [0.0; BLOCK]);
         }
         self.late_pos = 0;
@@ -67,6 +69,9 @@ impl Buses {
 
     /// Finish the block: what delayed sends staged waits to arrive in `BLOCK` samples.
     pub fn end_block(&mut self, frames: usize) {
+        for (history,data) in self.history.iter_mut().zip(&self.data) {
+            for (h,d) in history.iter_mut().zip(data) { for i in 0..frames { h[(self.late_pos+i)%BLOCK] = d[i]; } }
+        }
         for (late, staged) in self.late.iter_mut().zip(&self.staged) {
             for (l, s) in late.iter_mut().zip(staged) {
                 for i in 0..frames {
@@ -99,6 +104,9 @@ impl Buses {
     pub fn get(&self, bus: usize, channel: usize, frames: usize) -> &[f32] {
         &self.data[bus][channel][..frames]
     }
+
+    /// Runtime bus mappings intentionally read exactly one block behind, avoiding dynamic cycles.
+    pub fn previous(&self, bus: usize, channel: usize, i: usize) -> f32 { self.history.get(bus).and_then(|b| b.get(channel)).map_or(0.0,|c| c[(self.late_pos+i)%BLOCK]) }
 
     pub fn channels(&self, bus: usize) -> usize {
         self.data[bus].len()
@@ -564,6 +572,22 @@ impl Mixer {
             if let Some((_, v)) = track.voices.iter_mut().find(|n| ends(n)) {
                 v.set_param_glide(index, value, frames);
                 return;
+            }
+        }
+    }
+
+    pub fn swap_voice_mapping(&mut self, id: VoiceId, name: &str, mapping: &mut Option<Box<crate::ParamMapping>>) {
+        let ends = |(s,v): &(u64,Voice)| *s == id.serial || v.holds(id.serial);
+        for track in &mut self.tracks {
+            if let Some((_,voice)) = track.voices.iter_mut().find(|v| ends(v)) { voice.swap_mapping(name,mapping); return; }
+        }
+    }
+
+    pub fn set_voice_param_glide(&mut self, id: VoiceId, name: &str, value: f32, frames: u64) {
+        let ends = |(s,v): &(u64,Voice)| *s == id.serial || v.holds(id.serial);
+        for track in &mut self.tracks {
+            if let Some((_,voice)) = track.voices.iter_mut().find(|v| ends(v)) {
+                if let Some(index) = voice.param_index(name) { voice.set_param_glide(index,value,frames); } return;
             }
         }
     }

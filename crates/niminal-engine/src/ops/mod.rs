@@ -19,7 +19,7 @@ mod sample;
 mod tap;
 
 pub use bitcrush::Bitcrush;
-pub use buffer::{BufferRead, BufferRecord, BufferWrite};
+pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
 pub use compress::Compressor;
 pub use control::Control;
@@ -51,3 +51,7 @@ pub use spawn::Spawn;
 
 mod oversample;
 pub use oversample::Oversample;
+
+mod latency;
+pub use latency::SampleDelay;
+mod kernel_latency;

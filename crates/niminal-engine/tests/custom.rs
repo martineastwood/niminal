@@ -7,6 +7,7 @@ use std::sync::Arc;
 /// y = x * (1 - a) + y * a, with a = 0.9
 fn one_pole() -> Arc<Kernel> {
     Arc::new(Kernel {
+                latency: 0,
         name: "one_pole".into(),
         ports: vec![Port::named("x", None)],
         code: vec![

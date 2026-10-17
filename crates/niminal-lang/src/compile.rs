@@ -768,7 +768,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
 
     errors.retain(|d| !d.is_quiet());
     if errors.is_empty() {
-        Ok(Program {
+        let mut program = Program {
             source: source.to_string(),
             samples: options.samples.clone(),
             quantize,
@@ -794,7 +794,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             notes,
             performance,
             arrangements,
-        })
+        };
+        program.compensate_latency();
+        Ok(program)
     } else {
         Err(errors)
     }
@@ -1825,6 +1827,29 @@ fn literal_args(
                     .with_help("for example `lead(freq: c4)`"),
             );
         };
+        if let Some(paths) = instr.arrays.get(&arg_name.name) {
+            fn leaves(e: &Expr, out: &mut Vec<Expr>) -> Res<()> {
+                match &e.kind {
+                    ExprKind::Array(items) => { for item in items { leaves(item,out)?; } }
+                    ExprKind::Pattern(raw) => {
+                        let text = format!("const __argument = [{raw}]");
+                        let parsed = parser::parse(&text).map_err(|_| Diagnostic::new("array arguments use comma-separated values",e.span))?;
+                        let Some(Item::Const { value, .. }) = parsed.first() else { unreachable!() };
+                        leaves(value,out)?;
+                    }
+                    _ => out.push(e.clone()),
+                }
+                Ok(())
+            }
+            let mut values = Vec::new(); leaves(&arg.value,&mut values)?;
+            if values.len() != paths.len() { return Err(Diagnostic::new(format!("array `{}` needs {} values",arg_name.name, paths.len()),arg.value.span)); }
+            for (path,e) in paths.iter().zip(values) {
+                let value = literal_value(&e).map_err(|mut d| { d.span = arg.value.span; d })?;
+                instr.param_value(instr.param(path).unwrap().1,value,tempo).map_err(|e| arg_error(e,arg.value.span))?;
+                if out.insert(path.clone(),value).is_some() { return Err(Diagnostic::new("array argument given more than once",arg_name.span)); }
+            }
+            continue;
+        }
         let (_, param) = instr
             .param(&arg_name.name)
             .map_err(|e| arg_error(e, arg_name.span))?;
@@ -1849,6 +1874,11 @@ fn literal_arg_value(
     instr: &Instrument,
     _sample_names: &[String],
 ) -> Res<Value> {
+    if let Some(resources) = instr.resources.get(param) {
+        let ExprKind::Name(name) = &e.kind else { return Err(Diagnostic::new("buffer arguments are named shared buffers",e.span)); };
+        let index = resources.iter().position(|n| n == name).ok_or_else(|| Diagnostic::new(format!("unknown buffer `{name}`"),e.span))?;
+        return Ok(Value::Num(index as f64));
+    }
     if param == "sample"
         && let ExprKind::Name(name) = &e.kind
         && !instr.members.is_empty()

@@ -19,7 +19,7 @@ fn structural_parameters_specialize_nested_instruments() {
     let source = "
     const wave = [1, 0.5, 0.25]
     fn sine(f: hz) { osc(sine, f) }
-    instr base(freq: hz = 440hz, mode: (soft | hard) = soft, partials: [num] = wave, make: fn = sine) {
+    instr base(freq: hz = 440hz, mode: (soft | hard) = soft, partials: const [num] = wave, make: fn = sine) {
         if mode == soft { make(freq) * partials.sum } else { partials[0] }
     }
     instr patch() { base(mode: hard, partials: [0.25, 0.1]) }
@@ -197,4 +197,71 @@ fn oversampled_init_parameters_keep_exact_constant_input_values() {
 fn instruments_can_bind_shared_buffer_references() {
     let source = "const values = [0.25, 0.5]\nbuffer take = zeros(2)\nbuffer alternate = values\ninstr reader(source: const = take) { source[0] }\ninstr patch() { reader(source: alternate) }";
     assert_eq!(render(&mut voice(source, "patch"), 4, 4), [0.25; 4]);
+}
+
+#[test]
+fn nested_scopes_support_multichannel_results_and_reset_independently() {
+    let source = "instr a() { spawn(osc(square, 100hz), dur: 2ms) { oversample(4) { [osc(sine, 440hz), osc(sine, 660hz)] * env[1 | 1ms 0] } }.sum }";
+    let a = render(&mut voice(source, "a"), 2048, 32);
+    let b = render(&mut voice(source, "a"), 2048, 7);
+    assert_eq!(a, b);
+    assert!(a.iter().any(|v| v.abs() > 0.1));
+}
+
+#[test]
+fn latency_compensation_aligns_parallel_paths_inside_and_outside_scopes() {
+    for source in [
+        "instr a() { x = osc(sine, 1khz)\nx - oversample(4) { x } }",
+        "instr a() { spawn(1, dur: 1sec) { x = osc(sine, 1khz)\nx - oversample(4) { x } } }",
+    ] {
+        let out = render(&mut voice(source, "a"), 4096, 32);
+        let rms = (out[1000..].iter().map(|x| x * x).sum::<f32>() / 3096.0).sqrt();
+        assert!(
+            rms < 0.005,
+            "parallel paths cancel after compensation: {rms}"
+        );
+    }
+}
+
+#[test]
+fn live_arrays_and_buffer_references_accept_source_note_arguments() {
+    let source = "const data = [0.5, 0.25]\nbuffer one = zeros(2)\nbuffer two = data\ninstr a(weights: [num] = [1, 2], source: buffer = one) { weights.sum + source[0] }\na(weights: [0.25, 0.5], source: two) for 10ms";
+    let p = compile(source).unwrap();
+    let plan = p.plan(&p.notes[0]).unwrap();
+    let mut v = Voice::new(p.instruments[0].graph.clone(), 48000.0);
+    for (index, value) in plan.params {
+        v.set_param(index, value);
+    }
+    assert_eq!(render(&mut v, 8, 8), [1.25; 8]);
+}
+
+#[test]
+fn buffer_parameters_work_through_stateful_functions_and_nested_scopes() {
+    let source = "const data = [0.25, 0.5]\nbuffer one = data\nfn reader(source: buffer) { state pos = 0\nx = source[pos]\npos = pos + 1\nx }\ninstr a(source: buffer = one) { spawn(1, dur: 1sec) { oversample(2) { reader(source) } } }";
+    let output = render(&mut voice(source, "a"), 128, 17);
+    assert!(output.iter().all(|v| v.is_finite()));
+    assert!(output[64..].iter().any(|v| v.abs() > 0.1));
+}
+
+#[test]
+fn resetting_a_nested_processor_clears_its_compensation_history() {
+    let source = "fn pair(trigger) { state keep = 0\nreset_on(trigger) { x = osc(sine, 440hz)\nx + oversample(2) { x } } }\ninstr a(trigger: num = 0) { pair(trigger) }";
+    let mut running = voice(source, "a");
+    render(&mut running, 100, 25);
+    running.set_param(0, 1.0);
+    let reset = render(&mut running, 64, 16);
+    let mut fresh = voice(source, "a");
+    fresh.set_param(0, 1.0);
+    assert_eq!(reset, render(&mut fresh, 64, 16));
+}
+
+#[test]
+fn delayed_nested_inputs_preserve_note_start_initialization() {
+    let source = "fn normalized(x, freq: init hz) { state length = sample_rate / freq\nx * length / length }\ninstr a(freq: hz = 440hz) { oversample(2) { x = oversample(2) { osc(sine, freq) }\noversample(2) { normalized(x, freq) } } }";
+    let output = render(&mut voice(source, "a"), 1024, 32);
+    assert!(output.iter().all(|v| v.is_finite()));
+    assert!(
+        output[128..].iter().any(|v| v.abs() > 0.5),
+        "initialization must not see a zero frequency"
+    );
 }

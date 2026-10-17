@@ -27,6 +27,7 @@ type Res<T> = Result<T, Diagnostic>;
 /// What a call gives one parameter of a function compiled to a kernel.
 #[derive(Clone, Debug)]
 pub(crate) enum KArg {
+    Buffer { selector: Box<KArg>, choices: crate::lower::BufferChoices },
     Function { def: FnDef, captures: Vec<(String, KArg)> },
     /// A signal wired into one of the kernel's ports.
     Port { unit: Unit, rate: Rate },
@@ -57,6 +58,7 @@ struct Value {
 
 #[derive(Clone, Debug)]
 enum KVal {
+    Buffer { selector: Value, choices: crate::lower::BufferChoices },
     Function { def: FnDef, captures: HashMap<String, KVal> },
     Num(Value),
     /// A list known while compiling.
@@ -135,6 +137,7 @@ struct Frame {
 
 struct Kb<'a> {
     instrument_scope: bool,
+    scope_depth: usize,
     registry: &'a Registry,
     names: &'a Names,
     tempo: Tempo,
@@ -178,9 +181,15 @@ pub(crate) fn compile_kernel(
 pub(crate) fn compile_scoped_kernel(
     def: &FnDef, args: &[KArg], registry: &Registry, names: &Names, tempo: Tempo, instrument_scope: bool,
 ) -> Res<(Kernel, KernelResult)> {
+    compile_scope_depth(def, args, registry, names, tempo, instrument_scope, usize::from(instrument_scope))
+}
+
+fn compile_scope_depth(def: &FnDef, args: &[KArg], registry: &Registry, names: &Names, tempo: Tempo, instrument_scope: bool, scope_depth: usize) -> Res<(Kernel, KernelResult)> {
+    if scope_depth > 16 { return Err(Diagnostic::new("processor scopes nest at most 16 levels", def.span)); }
     let params = funcs::signature(&def.params, tempo)?;
     let mut kb = Kb {
         instrument_scope,
+        scope_depth,
         registry,
         names,
         tempo,
@@ -222,7 +231,8 @@ pub(crate) fn compile_scoped_kernel(
     let result = kb.body(def)?;
     let mut outputs = Vec::new();
     let result = kb.output_shape(result, "out", &mut outputs, def.name.span)?;
-    let kernel = Kernel {
+    let mut kernel = Kernel {
+        latency: 0,
         name: def.name.name.clone(),
         resets: kb.resets,
         ports: kb.ports,
@@ -237,6 +247,7 @@ pub(crate) fn compile_scoped_kernel(
         outputs,
         natives: kb.natives,
     };
+    kernel.compensate_latency();
     Ok((kernel, result))
 }
 
@@ -251,6 +262,10 @@ impl KVal {
 impl Kb<'_> {
     fn input_arg(&mut self, name: &str, arg: &KArg) -> KVal {
         match arg {
+            KArg::Buffer { selector, choices } => {
+                let KVal::Num(selector) = self.input_arg(name,selector) else { unreachable!() };
+                KVal::Buffer { selector, choices: choices.clone() }
+            }
             KArg::Function { def, captures } => KVal::Function { def: def.clone(), captures: captures.iter().map(|(n,v)| (n.clone(), self.input_arg(&format!("{name}::{n}"), v))).collect() },
             KArg::Port { unit, rate } => {
                 let port = self.ports.len();
@@ -668,6 +683,8 @@ impl Kb<'_> {
             .with_help(format!("in the call of `{callee}`"))
         };
         match (&param.kind, v) {
+            (Kind::Buffer | Kind::Any, KVal::Buffer { .. }) => return Ok(v.clone()),
+            (Kind::Buffer, _) | (_, KVal::Buffer { .. }) => return Err(mismatch("a value")),
             (Kind::Function, KVal::Function { .. }) => return Ok(v.clone()),
             (Kind::Function, _) => return Err(mismatch("a value")),
             (_, KVal::Function { .. }) if !matches!(param.kind, Kind::Any) => return Err(mismatch("a function")),
@@ -1410,6 +1427,9 @@ impl Kb<'_> {
                 other => Ok(other),
             };
         }
+        if let Some((_,buffer)) = self.names.buffers.get(name).cloned() {
+            return Ok(KVal::Buffer { selector: self.constant(Unit::Num,0.0), choices: Arc::new(vec![(name.to_string(),buffer)]) });
+        }
         if let Some(def) = self.names.fns.get(name) {
             return Ok(KVal::Function { def: def.clone(), captures: HashMap::new() });
         }
@@ -1469,7 +1489,7 @@ impl Kb<'_> {
                 None => Err(Diagnostic::new("this constant isn't a number", span)),
             },
             Datum::Table(table) => Ok(self.table(Unit::Num, table.clone())),
-            Datum::Buffer { .. } => Err(Diagnostic::new(
+            Datum::Buffer { .. } | Datum::BufferRef { .. } => Err(Diagnostic::new(
                 "a shared buffer isn't a compile-time constant",
                 span,
             )),
@@ -1651,6 +1671,10 @@ impl Kb<'_> {
             return Ok(self.emit_native(Box::new(niminal_engine::ops::BufferRead::new(buffer, Interp::None)), vec![NativeInput::Reg(index.reg)], Unit::Num));
         }
         let l = self.value(list)?;
+        if let KVal::Buffer { selector, choices } = l {
+            let pos = self.num(index)?;
+            return self.read_buffer_ref(selector,choices,pos,Interp::None,span);
+        }
         if let ExprKind::Range { .. } = index.kind {
             let KVal::Range { lo, hi, inclusive, .. } = self.value(index)? else {
                 unreachable!()
@@ -1799,6 +1823,89 @@ impl Kb<'_> {
         })
     }
 
+    fn capture_arg(&mut self, value: KVal, wires: &mut Vec<NativeInput>, span: Span) -> Res<KArg> {
+        Ok(match value {
+            KVal::Buffer { selector, choices } => KArg::Buffer { selector: Box::new(self.capture_arg(KVal::Num(selector),wires,span)?), choices },
+            KVal::Num(v) => match self.konst(&v) {
+                Some(value) => KArg::Const { unit: v.unit, value },
+                None => { wires.push(NativeInput::Reg(v.reg)); KArg::Port { unit: v.unit, rate: v.rate } }
+            },
+            KVal::Function { def, captures } => {
+                let mut captures: Vec<_> = captures.into_iter().collect(); captures.sort_by(|a,b| a.0.cmp(&b.0));
+                KArg::Function { def, captures: captures.into_iter().map(|(n,v)| Ok((n, self.capture_arg(v, wires, span)?))).collect::<Res<_>>()? }
+            }
+            KVal::Table { unit, values, .. } => KArg::Table { unit, values },
+            KVal::Range { unit, lo, hi, inclusive } => KArg::Range { unit, lo, hi, inclusive },
+            KVal::Record(fields) => return self.capture_arg(fields[0].1.clone(), wires, span),
+            other => {
+                let values = self.array_elements(other, span)?;
+                KArg::Array(values.into_iter().map(|v| self.capture_arg(v, wires, span)).collect::<Res<_>>()?)
+            }
+        })
+    }
+
+    fn read_buffer_ref(&mut self, selector: Value, choices: crate::lower::BufferChoices, pos: Value, interp: Interp, span: Span) -> Res<KVal> {
+        if pos.unit != Unit::Num { return Err(Diagnostic::new("a buffer position is a plain number",span)); }
+        let buffers = Arc::new(choices.iter().map(|(_,b)| b.clone()).collect());
+        Ok(self.emit_native(Box::new(niminal_engine::ops::BufferReadBank::new(buffers,interp)),vec![NativeInput::Reg(selector.reg),NativeInput::Reg(pos.reg)],Unit::Num))
+    }
+
+    fn processor_scope(&mut self, name: &str, args: &[Arg], span: Span) -> Res<KVal> {
+        let usage = || Diagnostic::new(if name == "spawn" { "write `spawn(trigger, dur: 100ms, max: 8) { ... }`" } else { "write `oversample(4) { ... }`" }, span);
+        let Some((body, options)) = args.split_last() else { return Err(usage()); };
+        let ExprKind::Lambda { params, body } = &body.value.kind else { return Err(usage()); };
+        if !params.is_empty() { return Err(usage()); }
+        let Some((first, options)) = options.split_first() else { return Err(usage()); };
+        if first.name.is_some() { return Err(usage()); }
+        let first = self.num(&first.value)?;
+        if first.unit != Unit::Num { return Err(usage()); }
+        let mut duration = None;
+        let mut max = None;
+        for option in options {
+            match option.name.as_ref().map(|n| n.name.as_str()) {
+                Some("dur") if name == "spawn" && duration.is_none() => {
+                    let value = self.num(&option.value)?;
+                    if value.unit != Unit::Time || self.konst(&value).is_some_and(|v| !(0.0..=600.0).contains(&v) || v == 0.0) { return Err(usage()); }
+                    duration = Some(value);
+                }
+                Some("max") if name == "spawn" && max.is_none() => {
+                    let value = self.num(&option.value)?;
+                    max = self.konst(&value).filter(|v| value.unit == Unit::Num && v.fract() == 0.0 && (1.0..=64.0).contains(v)).map(|v| v as usize);
+                    if max.is_none() { return Err(usage()); }
+                }
+                _ => return Err(usage()),
+            }
+        }
+        let factor = if name == "oversample" { self.konst(&first).filter(|f| [2.0,4.0,8.0].contains(f)).ok_or_else(usage)? as usize } else { 1 };
+        if name == "spawn" && duration.is_none() { return Err(usage()); }
+        let mut def = funcs::lambda(&[], body, span);
+        let mut captures: Vec<_> = self.frame.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
+        captures.sort_by(|a,b| a.0.cmp(&b.0));
+        let mut wires = Vec::new(); let mut kargs = Vec::new();
+        for (n,v) in captures {
+            def.params.push(ParamDef { name: Ident { name: n, span }, rate: None, ty: None, default: None });
+            kargs.push(self.capture_arg(v, &mut wires, span)?);
+        }
+        let (kernel, shape) = compile_scope_depth(&def, &kargs, self.registry, self.names, self.tempo, true, self.scope_depth + 1)?;
+        let custom = Box::new(niminal_engine::ops::Custom::new(Arc::new(kernel)));
+        let op: Box<dyn niminal_engine::Opcode> = if name == "spawn" {
+            wires.extend([NativeInput::Reg(first.reg), NativeInput::Reg(duration.unwrap().reg)]);
+            Box::new(niminal_engine::ops::Spawn::new(custom, max.unwrap_or(8)))
+        } else { Box::new(niminal_engine::ops::Oversample::new(custom, factor)) };
+        let outputs = op.outputs(); let index = self.natives.len();
+        self.natives.push(Native { op, inputs: wires });
+        let first = self.registers; self.registers += outputs;
+        self.push(Rate::Audio, Instr::Native { dst: first, index, guard: self.guard });
+        fn result(shape: KernelResult, first: usize) -> KVal {
+            match shape {
+                KernelResult::Scalar { index, unit } => KVal::Num(Value { reg: first + index, unit, rate: Rate::Audio, port: None }),
+                KernelResult::Array(values) => KVal::Array(values.into_iter().map(|v| result(v,first)).collect()),
+                KernelResult::Record(values) => KVal::Record(values.into_iter().map(|(n,v)| (n,result(v,first))).collect()),
+            }
+        }
+        Ok(result(shape, first))
+    }
+
     fn reset_scope(&mut self, args: &[Arg], span: Span) -> Res<KVal> {
         let (trigger, body) = funcs::reset_args(args, span)?;
         let trigger = self.num(trigger)?;
@@ -1807,12 +1914,13 @@ impl Kb<'_> {
         self.state_init.push(0.0);
         let (states, buffers, natives) = (self.state_init.len(), self.buffers.len(), self.natives.len());
         let (init, block, code) = (self.init.len(), self.block.len(), self.code.len());
+        let registers = self.registers;
         let def = funcs::lambda(&[], body, span);
         let captures = self.frame.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
         let result = self.call_captured(&def, &def.name, &[], captures)?;
         let scope = self.resets.len();
         self.resets.push(niminal_engine::ops::ResetScope {
-            states: states..self.state_init.len(), buffers: buffers..self.buffers.len(), natives: natives..self.natives.len(),
+            states: states..self.state_init.len(), buffers: buffers..self.buffers.len(), natives: (natives..self.natives.len()).collect(), registers: registers..self.registers,
             init: self.init[init..].to_vec(), block: self.block[block..].to_vec(),
         });
         self.code.insert(code, Instr::Reset { scope, trigger: trigger.reg, previous, guard: self.guard });
@@ -1821,9 +1929,7 @@ impl Kb<'_> {
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
         let n = name.name.as_str();
-        if matches!(n, "spawn" | "oversample") {
-            return Err(Diagnostic::new("spawn and oversample scopes cannot be nested yet", span));
-        }
+        if matches!(n, "spawn" | "oversample") { return self.processor_scope(n, args, span); }
         if n == "reset_on" { return self.reset_scope(args, span); }
         if self.instrument_scope && let [receiver] = args && receiver.receiver {
             use niminal_engine::ops::{Context, NoteTime, NoteStart, ReadContext, Released};
@@ -1871,6 +1977,19 @@ impl Kb<'_> {
             let position = position.ok_or_else(|| Diagnostic::new("buffer.at needs a position", span))?;
             if position.unit != Unit::Num { return Err(Diagnostic::new("a buffer position is a plain number", span)); }
             return Ok(self.emit_native(Box::new(niminal_engine::ops::BufferRead::new(buffer, interp.unwrap_or(Interp::Linear))), vec![NativeInput::Reg(position.reg)], Unit::Num));
+        }
+        if n == "at" && let Some(receiver) = args.first().filter(|a| a.receiver)
+            && let ExprKind::Name(id) = &receiver.value.kind
+            && let Some(KVal::Buffer { selector, choices }) = self.frame.scope.get(id).cloned() {
+            let mut pos = None; let mut interp = None;
+            for arg in &args[1..] {
+                match arg.name.as_ref().map(|n| n.name.as_str()) {
+                    None if pos.is_none() => pos = Some(self.num(&arg.value)?),
+                    Some("interp") if interp.is_none() => interp = Some(interp_of(&arg.value)?),
+                    _ => return Err(Diagnostic::new("write `source.at(pos, interp: linear)`",span)),
+                }
+            }
+            return self.read_buffer_ref(selector,choices,pos.ok_or_else(|| Diagnostic::new("at needs a position",span))?,interp.unwrap_or(Interp::Linear),span);
         }
         // Named result lookup must preserve an array field's shape.
         if let [receiver] = args && receiver.receiver && !self.names.fns.contains_key(n) {

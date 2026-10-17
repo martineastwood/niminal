@@ -49,6 +49,13 @@ impl Serialize for At {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Op {
+    /// Map a parameter to a control or a block-delayed bus; null disconnects it.
+    Map { id: u64, at: At, param: String, #[serde(default)] source: Option<String>, #[serde(default = "first_channel")] channel: usize,
+        #[serde(default = "unity")] scale: f32, #[serde(default)] offset: f32, #[serde(default)] tag: Option<String> },
+    /// Replace a fixed-shape array control on a held note.
+    Array { id: u64, at: At, param: String, values: Vec<Value>, #[serde(default)] glide: Option<Time>, #[serde(default)] tag: Option<String> },
+    /// Select a prepared shared buffer for a held note.
+    BindBuffer { id: u64, at: At, param: String, buffer: String, #[serde(default)] tag: Option<String> },
     /// Replace a range of a declared shared buffer, before notes at this sample.
     BufferWrite {
         name: String,
@@ -171,3 +178,6 @@ pub struct Cancelled {
     /// Held notes already sounding that were let go of.
     pub released: usize,
 }
+
+fn first_channel() -> usize { 1 }
+fn unity() -> f32 { 1.0 }

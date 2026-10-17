@@ -42,6 +42,8 @@ pub struct Voice {
     /// Parameters on their way to a new value. Made with room for every parameter, so that setting
     /// one never allocates.
     ramps: Vec<Ramp>,
+    mappings: Vec<Option<Box<crate::ParamMapping>>>,
+    last_frames: usize,
 }
 
 /// A parameter moving in a straight line to `to` over `frames`, `done` of which have passed.
@@ -185,7 +187,7 @@ impl Voice {
         let shaped = ops.iter().any(|op| op.is_envelope());
         let tail_left = (graph.tail * sample_rate) as usize;
         let graph_params = graph.params.len();
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None, shaped, tail_left, dur: 0.0, index: 0, ramps: Vec::with_capacity(graph_params) }
+        Voice { mappings: (0..graph_params).map(|_|None).collect(), last_frames: 1, graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None, shaped, tail_left, dur: 0.0, index: 0, ramps: Vec::with_capacity(graph_params) }
     }
 
     /// Keep memory at matching call sites while retaining the new graph's
@@ -213,8 +215,9 @@ impl Voice {
     }
 
     pub fn remap_buses_with(&mut self, mapping: &mut impl FnMut(usize) -> Option<usize>) {
-        for bus in &mut self.bus_map {
-            *bus = bus.and_then(&mut *mapping);
+        for bus in &mut self.bus_map { *bus = bus.and_then(&mut *mapping); }
+        for (index,map) in self.mappings.iter_mut().enumerate() {
+            if let Some(map) = map && map.remap(mapping) { let value = self.slots[index][self.last_frames-1]; self.slots[index].fill(value); }
         }
     }
 
@@ -227,6 +230,17 @@ impl Voice {
 
     pub fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
         for op in &mut self.ops { op.set_control(key, start, target, frames, elapsed); }
+        for map in self.mappings.iter_mut().flatten() { map.set_control(key,start,target,frames,elapsed); }
+    }
+
+    pub fn param_index(&self, name: &str) -> Option<usize> { self.graph.param_index(name) }
+
+    pub fn swap_mapping(&mut self, name: &str, mapping: &mut Option<Box<crate::ParamMapping>>) {
+        if let Some(index) = self.graph.param_index(name) {
+            if mapping.is_none() { let value = self.slots[index][self.last_frames-1]; self.slots[index].fill(value); }
+            self.ramps.retain(|r| r.index != index);
+            std::mem::swap(&mut self.mappings[index],mapping);
+        }
     }
 
     /// Set a parameter by index. Takes effect from the next block.
@@ -502,6 +516,10 @@ impl Voice {
             }
         }
 
+        for (index,mapping) in self.mappings.iter_mut().enumerate() {
+            if let Some(mapping) = mapping { mapping.process(&ctx,buses,&mut self.slots[index][..frames]); }
+        }
+        self.last_frames = frames.max(1);
         let base = self.graph.node_slot_base();
         for (i, op) in self.ops.iter_mut().enumerate() {
             let node = &self.graph.nodes[i];

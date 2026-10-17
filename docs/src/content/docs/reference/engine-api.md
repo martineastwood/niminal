@@ -53,6 +53,30 @@ Notes, controls and the rest in a batch are checked against the definitions in f
 
 Anything wrong in the batch → **-32001** and nothing is queued; each entry of **`problems`** has an **`event`** field with the index of the event it is about. A batch that doesn't parse → **-32602**.
 
+### Live parameters and modulation
+
+These are timed `events.send` operations. Each uses a note `id` owned by the connection and can appear in the same batch as the note that opens that ID:
+
+| `op` | Fields | Meaning |
+| --- | --- | --- |
+| `array` | `id`, `at`, `param`, `values`, optional `glide`, `tag` | Update every numeric element of a fixed-shape array. `values` is a flat list in row order; count, units and ranges must match. |
+| `bind_buffer` | `id`, `at`, `param`, `buffer`, optional `tag` | Select a shared buffer prepared with this voice's original instrument graph. |
+| `map` | `id`, `at`, `param`, optional `source`, `channel`, `scale`, `offset`, `tag` | Connect a parameter to a named control or bus. `source: null` disconnects and holds the last rendered value. |
+
+```json
+{ "method": "events.send", "params": { "events": [
+  { "op": "array", "id": 10, "at": "now", "param": "weights", "values": [0.2, 0.7], "glide": "50ms" },
+  { "op": "bind_buffer", "id": 10, "at": "now", "param": "source", "buffer": "alternate" },
+  { "op": "map", "id": 10, "at": "now", "param": "cutoff", "source": "lfo", "scale": 2000, "offset": 100 }
+] } }
+```
+
+`channel` is 1-based (default 1). Controls connect directly and follow their smoothing. Bus connections read exactly 32 samples behind, independently of render block splitting, so adding or replacing a connection cannot introduce a routing cycle. `scale` defaults to 1 and `offset` to 0; mapping applies `source * scale + offset` in engine units: Hz, seconds, degrees, semitones or linear gain for dB parameters. Declared parameter ranges clamp the resulting signal. Use `bind_buffer` for resource selection rather than mapping a numeric signal to a resource index.
+
+A scalar `set` does not disconnect an active mapping; explicitly unmap first. A component such as `weights[0]` can be mapped independently. Disconnecting and reconnecting moves prepared storage between the command and voice; rendering never allocates or frees it.
+
+Array and buffer updates use the original voice's parameter schema even after the instrument is redefined. Array/buffer events are recorded as equivalent named scalar updates for deterministic replay. All three operations participate in batch validation, cancellation and disconnect cleanup. `status.instruments` includes `arrays` (element paths) and `buffers` (available resource names), alongside scalar `params`.
+
 ### `clock`
 
 Where the engine is in time, for a client that schedules against it.
@@ -129,7 +153,7 @@ Silence everything at once: every voice and the memory of every effect. **Result
 The engine's state. **Result** includes:
 
 - **`transport`** — `sample`, `seconds`, `bar`, `beat`, `bpm`, `voices`
-- **`sample_rate`**, **`channels`**
+- **`sample_rate`**, **`channels`**, **`processing_latency`** (DSP samples before the limiter/device)
 - **`realtime`** — counters such as `late_events`, `starved_frames`, `capacity_drops`, `deadline_misses`, `max_render_micros` and `mixer_builds`
 - **`controls`** — each `ctl` and track parameter (named `track::param`): `name`, `value`, `target`, `unit` (db shown in dB)
 - **`instruments`** — each instrument's `name` and `params` (`name`, `unit`, `default`, `range`)

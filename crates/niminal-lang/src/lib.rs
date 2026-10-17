@@ -10,6 +10,7 @@ mod funcs;
 mod ide;
 mod kernel;
 mod layout;
+mod latency;
 mod lexer;
 mod lower;
 mod modules;

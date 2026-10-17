@@ -127,7 +127,7 @@ impl Command {
                 Kind::Reset { .. } => 0,
                 Kind::Swap { .. } | Kind::Control { .. } | Kind::Buffer { .. } => 1,
                 Kind::Note { .. } => 2,
-                Kind::Release { .. } | Kind::SetParam { .. } => 3,
+                Kind::Release { .. } | Kind::SetParam { .. } | Kind::Map { .. } => 3,
             },
         )
     }
@@ -137,6 +137,7 @@ impl Command {
 // mean freeing it on the audio thread.
 #[allow(clippy::large_enum_variant)]
 enum Kind {
+    Map { key: u32, param: String, mapping: Option<Box<niminal_engine::ParamMapping>> },
     Buffer { buffer: Arc<niminal_engine::Buffer>, offset: usize, values: Arc<[f32]> },
     Note {
         track: Option<String>,
@@ -151,7 +152,7 @@ enum Kind {
     /// Move a parameter, by its index, of the notes a key is holding, over `frames`.
     SetParam {
         key: u32,
-        index: usize,
+        name: String,
         value: f32,
         frames: u64,
     },
@@ -181,13 +182,12 @@ fn is_timing_change(p: &Pending) -> bool {
 }
 
 fn set_command(program: &Program, set: &super::VoiceSet, at: u64, frames: u64) -> Option<Command> {
-    let index = program
-        .instruments
-        .iter()
-        .find(|i| i.name == set.instrument)?
-        .graph
-        .param_index(&set.name)?;
-    Some(Command { at, kind: Kind::SetParam { key: set.key, index, value: set.value, frames } })
+    let _ = program;
+    Some(Command { at, kind: Kind::SetParam { key: set.key, name: set.name.clone(), value: set.value, frames } })
+}
+
+fn map_command(program: &Program, set: &super::VoiceMap, at: u64) -> Command {
+    Command { at, kind: Kind::Map { key: set.key, param: set.param.clone(), mapping: super::parameters::prepare_mapping(program,set) } }
 }
 
 /// A `midi_out` note on or off, if anyone is listening. Allocates nothing.
@@ -232,6 +232,7 @@ pub(super) enum Fresh {
     Set(super::VoiceSet),
     Track(super::TrackSet),
     Buffer(super::BufferSet),
+    Map(super::VoiceMap),
 }
 
 impl Fresh {
@@ -242,6 +243,7 @@ impl Fresh {
             Fresh::Set(set) => set.at,
             Fresh::Track(set) => set.at,
             Fresh::Buffer(set) => set.at,
+            Fresh::Map(set) => set.at,
         }
     }
 }
@@ -499,6 +501,8 @@ impl Session {
         for set in &mut self.buffer_sets { if set.at < self.clock { set.done = true; } }
         let stale = self.clock.saturating_sub(self.sample_rate as u64 * 2);
         self.buffer_sets.retain(|s| !s.done || s.at > stale);
+        for set in &mut self.voice_maps { if set.at < self.clock { set.done = true; } }
+        self.voice_maps.retain(|s| !s.done || s.at > stale);
         let Some(planner) = &self.live else { return };
         if planner.revision == planner.state.revision.load(Ordering::Acquire) {
             let consumed = self.clock.min(planner.prepared_until);
@@ -710,6 +714,7 @@ impl Session {
                         self.prepare_note(&program, &event, hold, config, &mut window);
                     }
                     Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
+                    Fresh::Map(set) => window.commands.push(map_command(self.program_at(set.at),&set,set.at.max(self.clock))),
                     Fresh::Buffer(set) => {
                         if let Some((_, buffer)) = self.program_at(set.at).buffers.iter().find(|(name, _)| *name == set.name)
                             && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
@@ -936,6 +941,7 @@ impl Session {
                 window.commands.push(command);
             }
         }
+        for set in &self.voice_maps { if set.at >= from && set.at < to { window.commands.push(map_command(program,set,set.at)); } }
         for set in &self.buffer_sets {
             if set.at >= from && set.at < to
                 && let Some((_, buffer)) = program.buffers.iter().find(|(name, _)| *name == set.name)
@@ -1184,10 +1190,14 @@ impl RealtimeRenderer {
                         .set_control(&c.key, c.start, c.target, c.frames, 0);
                 }
             }
-            Kind::SetParam { key, index, value, frames } => {
-                for held in self.sounding.held.iter().filter(|h| h.2 == *key) {
-                    self.mixer.set_voice_param_index(held.1, *index, *value, *frames);
+            Kind::Map { key, param, mapping } => {
+                if let Some((_,id,_)) = self.sounding.held.iter().find(|h| h.2 == *key) {
+                    self.mixer.swap_voice_mapping(*id,param,mapping);
+                    crate::controls::sync_note(&self.controls,&mut self.mixer,*id,self.clock);
                 }
+            }
+            Kind::SetParam { key, name, value, frames } => {
+                for held in self.sounding.held.iter().filter(|h| h.2 == *key) { self.mixer.set_voice_param_glide(held.1,name,*value,*frames); }
             }
             Kind::Note {
                 track,

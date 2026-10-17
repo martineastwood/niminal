@@ -11,6 +11,7 @@ fn unused_nodes_are_removed_and_multi_output_slots_are_remapped() {
     let outputs = builder
         .add_outputs(
             Custom::new(Arc::new(Kernel {
+                latency: 0,
                 name: "pair".into(),
                 init: vec![
                     Instr::Const { dst: 0, value: 2.0 },
@@ -73,6 +74,7 @@ fn nested_osc_taps_are_observable_even_when_the_kernel_output_is_unused() {
     use niminal_engine::ops::{Native, NativeInput};
     let tap = Tap::new();
     let kernel = Arc::new(Kernel {
+                latency: 0,
         name: "tap".into(),
         code: vec![Instr::Native { dst: 0, index: 0, guard: None }],
         registers: 1,

@@ -154,3 +154,24 @@ impl Opcode for BufferRecord {
         }
     }
 }
+
+/// A running voice selects from resources prepared with its graph.
+#[derive(Clone)]
+pub struct BufferReadBank {
+    buffers: Arc<Vec<Arc<Buffer>>>,
+    interp: Interp,
+}
+impl BufferReadBank {
+    pub fn new(buffers: Arc<Vec<Arc<Buffer>>>, interp: Interp) -> Self { assert!(!buffers.is_empty()); Self { buffers, interp } }
+}
+impl Opcode for BufferReadBank {
+    fn name(&self) -> &str { "buffer_bank_read" }
+    fn ports(&self) -> &[Port] { const PORTS: &[Port] = &[Port::required("source"), Port::required("pos")]; PORTS }
+    fn box_clone(&self) -> Box<dyn Opcode> { Box::new(self.clone()) }
+    fn process(&mut self, _: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        for (i,out) in out.iter_mut().enumerate() {
+            let source = inputs[0][i].max(0.0).floor() as usize;
+            *out = self.buffers[source.min(self.buffers.len()-1)].read_at(f64::from(inputs[1][i]),self.interp) as f32;
+        }
+    }
+}

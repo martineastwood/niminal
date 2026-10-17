@@ -23,8 +23,11 @@ pub fn status_json(session: &Session) -> Value {
             let display = |value: f32| if *unit == Some("db") { 20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10() } else { f64::from(value) };
             json!({ "name": name, "value": display(*value), "target": display(*target), "unit": unit })
         }).collect::<Vec<_>>(),
+        "processing_latency": session.program().processing_latency(),
         "instruments": instruments.iter().map(|i| json!({
             "name": i.name,
+            "arrays": i.arrays,
+            "buffers": i.resources,
             "params": i.params.iter().map(|p| json!({
                 "name": p.name,
                 "unit": p.unit.suffix(),

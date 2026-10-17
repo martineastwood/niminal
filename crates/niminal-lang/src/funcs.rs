@@ -15,6 +15,7 @@ type Res<T> = Result<T, Diagnostic>;
 pub(crate) enum Kind {
     /// Untyped: any unit, worked out at each call.
     Any,
+    Buffer,
     Function,
     /// A value of this unit. `whole` for `int`.
     Unit { unit: Unit, whole: bool },
@@ -32,13 +33,14 @@ impl Kind {
         match self {
             Kind::Unit { unit, .. } | Kind::Range { unit, .. } => Some(*unit),
             Kind::Choice(_) => Some(Unit::Num),
-            Kind::Any | Kind::Function | Kind::Array(_) => None,
+            Kind::Any | Kind::Buffer | Kind::Function | Kind::Array(_) => None,
         }
     }
 
     pub fn describe(&self) -> String {
         match self {
             Kind::Any => "any value".into(),
+            Kind::Buffer => "a shared buffer".into(),
             Kind::Function => "a function".into(),
             Kind::Unit { whole: true, .. } => "a whole number".into(),
             Kind::Unit { unit, .. } => unit.describe().into(),
@@ -113,6 +115,7 @@ fn type_number(e: &Expr, tempo: Tempo) -> Res<(Unit, f64)> {
 pub(crate) fn kind_of(ty: &TypeSpec, tempo: Tempo) -> Res<Kind> {
     Ok(match ty {
         TypeSpec::Unit(id) if id.name == "fn" => Kind::Function,
+        TypeSpec::Unit(id) if id.name == "buffer" => Kind::Buffer,
         TypeSpec::Unit(id) => {
             let (unit, whole) = unit_type(id)?;
             Kind::Unit { unit, whole }

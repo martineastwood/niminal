@@ -81,7 +81,7 @@ impl Session {
 
     /// The sample a time stands for: a sample as it is, `now` as the clock, and a position on the
     /// transport counted from the bar origin.
-    fn resolve(&self, at: At) -> u64 {
+    pub(super) fn resolve(&self, at: At) -> u64 {
         match at {
             At::Sample(n) => n,
             At::Now => self.clock,
@@ -167,8 +167,10 @@ impl Session {
             return Err(early);
         }
 
+        let ops = self.expand_parameter_events(client, ops).inspect_err(|_| { self.take_back(&queued); })?;
         enum Plan {
             Buffer { set: BufferSet, start: u64 },
+            Map { id: u64, start: u64, param: String, source: Option<String>, channel: usize, scale: f32, offset: f32, tag: Option<String> },
             Note { event: Event, instrument: String, start: u64, dur: u64, id: Option<u64>, tag: Option<String>, musical: Option<bool> },
             Control { name: String, value: f32, frames: u64, at: u64, op: usize, tag: Option<String> },
             Track { key: String, value: f32, frames: u64, at: u64, tag: Option<String> },
@@ -271,6 +273,23 @@ impl Session {
                         }
                     }
                 }
+                Op::Map { id, at, param, source, channel, scale, offset, tag } => {
+                    let start = self.resolve(*at); let program = self.program_at(start);
+                    let Some((_,name)) = open.iter().find(|(open,_)| open == id) else { fail(format!("no note with id {id} is sounding")); continue; };
+                    let schema = self.voices.iter().find(|v| v.client == client && v.id == *id).map(|v| v.schema.as_ref()).or_else(|| program.instrument(name));
+                    let Some(schema) = schema else { fail("the instrument is no longer defined".into()); continue; };
+                    if let Err(error) = schema.param(param) { fail(error.to_string()); continue; }
+                    if schema.resources.contains_key(param) { fail("use bind_buffer to select a buffer resource".into()); continue; }
+                    if !scale.is_finite() || !offset.is_finite() || *channel == 0 { fail("mapping scale and offset must be finite, and channel is 1-based".into()); continue; }
+                    if let Some(source) = source {
+                        if let Some(bus) = program.buses.iter().position(|n| n == source) {
+                            if *channel > program.bus_layouts[bus].channels() { fail("mapping channel is outside the bus".into()); continue; }
+                        } else if !program.controls.iter().any(|c| c.name == *source) || *channel != 1 { fail(format!("no control or bus `{source}` with that channel")); continue; }
+                    }
+                    if self.voice_maps.len() + plans.len() >= 4096 { fail("the modulation mapping queue is full".into()); continue; }
+                    resolved[n] = Some(Op::Map { id: *id, at: self.logged(*at), param: param.clone(), source: source.clone(), channel: *channel, scale: *scale, offset: *offset, tag: tag.clone() });
+                    plans.push(Plan::Map { id: *id, start, param: param.clone(), source: source.clone(), channel: *channel, scale: *scale, offset: *offset, tag: tag.clone() });
+                }
                 Op::Set { id, at, args, glide, tag } => {
                     let raw = at;
                     let at = self.resolve(*at);
@@ -280,10 +299,9 @@ impl Session {
                         continue;
                     };
                     let program = self.program_at(at);
-                    let Some(instrument) = program.instruments.iter().find(|i| i.name == *instrument) else {
-                        fail(format!("the instrument of note {id} is not defined any more"));
-                        continue;
-                    };
+                    let schema = self.voices.iter().find(|v| v.client == client && v.id == *id).map(|v| v.schema.clone())
+                        .or_else(|| program.instrument(instrument).map(|i| Arc::new(i.clone())));
+                    let Some(instrument) = schema else { fail(format!("the instrument of note {id} is not defined any more")); continue; };
                     let seconds = glide.map_or(0.0, |g| g.to_seconds(program.tempo));
                     if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
                         fail("`glide` must be between 0 and 60sec".into());
@@ -334,6 +352,7 @@ impl Session {
                     resolved[n] = Some(Op::Panic { at: self.logged(*at), tag: tag.clone() });
                     plans.push(Plan::Panic { at: start, tag: tag.clone() });
                 }
+                Op::Array { .. } | Op::BindBuffer { .. } => unreachable!("parameter events expanded"),
                 Op::Define { .. } | Op::Transport { .. } | Op::Forget { .. } => {}
             }
         }
@@ -362,6 +381,15 @@ impl Session {
         }
         for plan in plans {
             let at = match plan {
+                Plan::Map { id, start, param, source, channel, scale, offset, tag } => {
+                    if let Some(entry) = self.voices.iter().find(|v| v.client == client && v.id == id) {
+                        let range = entry.schema.param(&param).ok().and_then(|(_,p)| p.range).map(|(lo,hi)| (lo as f32,hi as f32));
+                        let set = VoiceMap { range, key: entry.key, param, source, channel: channel-1, scale, offset, at: start.max(clock), client, tag, done: false };
+                        if self.live.is_some() { self.fresh.push(realtime::Fresh::Map(set.clone())); }
+                        self.voice_maps.push(set);
+                    }
+                    start
+                }
                 Plan::Buffer { set, start } => {
                     if self.live.is_some() { self.fresh.push(realtime::Fresh::Buffer(set.clone())); }
                     self.buffer_sets.push(set);
@@ -370,7 +398,8 @@ impl Session {
                 Plan::Note { event, instrument, start, dur, id, tag, musical } => {
                     let key = id.map(|_| self.new_key());
                     if let (Some(id), Some(key)) = (id, key) {
-                        self.voices.push(VoiceEntry { client, id, key, instrument, tag: tag.clone() });
+                        let schema = Arc::new(self.program_at(start).instrument(&instrument).expect("validated instrument").clone());
+                        self.voices.push(VoiceEntry { client, id, key, instrument, schema, tag: tag.clone() });
                     }
                     self.add_explicit(start.max(clock), dur, event, key, Some((client, tag)), musical);
                     start
@@ -439,7 +468,7 @@ impl Session {
         let Some(entry) = self.voices.iter().find(|v| v.client == client && v.id == id) else {
             return;
         };
-        let (key, instrument) = (entry.key, entry.instrument.clone());
+        let key = entry.key;
         // a note that has not started by then starts with the value
         let waiting = self.upcoming.iter().any(|u| u.key == Some(key) && u.start >= at);
         if waiting {
@@ -453,7 +482,7 @@ impl Session {
             return;
         }
         for (name, _, value) in args {
-            let set = VoiceSet { key, instrument: instrument.clone(), name, value, frames, at, done: false, client, tag: tag.clone() };
+            let set = VoiceSet { key, name, value, frames, at, done: false, client, tag: tag.clone() };
             if self.live.is_some() {
                 self.fresh.push(realtime::Fresh::Set(set.clone()));
             }
@@ -552,6 +581,10 @@ impl Session {
             done.cancelled += usize::from(drop);
             !drop
         });
+        self.voice_maps.retain(|s| {
+            let drop = !s.done && s.at >= from && mine(Some(s.client),&s.tag);
+            done.cancelled += usize::from(drop); !drop
+        });
         self.buffer_sets.retain(|s| {
             let drop = !s.done && s.at >= from && mine(Some(s.client), &s.tag);
             done.cancelled += usize::from(drop);
@@ -643,12 +676,13 @@ impl Session {
         for key in held {
             self.release_at(key, self.clock, None);
         }
-        let before = self.upcoming.len() + self.track_sets.len() + self.buffer_sets.len();
+        let before = self.upcoming.len() + self.track_sets.len() + self.buffer_sets.len() + self.voice_maps.len();
         let clock = self.clock;
         self.upcoming.retain(|u| u.client != Some(client) || u.start < clock || u.key.is_some());
         self.track_sets.retain(|s| s.client != Some(client) || s.at < clock);
         self.buffer_sets.retain(|s| s.client != client || s.at < clock);
-        if self.upcoming.len() + self.track_sets.len() + self.buffer_sets.len() != before {
+        self.voice_maps.retain(|s| s.client != client || s.at < clock);
+        if self.upcoming.len() + self.track_sets.len() + self.buffer_sets.len() + self.voice_maps.len() != before {
             self.invalidate_windows();
         }
     }

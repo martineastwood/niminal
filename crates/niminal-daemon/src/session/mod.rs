@@ -54,6 +54,7 @@ struct VoiceEntry {
     key: u32,
     /// The instrument it plays, by name so that it survives the program being replaced.
     instrument: String,
+    schema: Arc<niminal_lang::Instrument>,
     tag: Option<String>,
 }
 
@@ -62,7 +63,6 @@ struct VoiceEntry {
 #[derive(Clone)]
 pub(crate) struct VoiceSet {
     pub key: u32,
-    pub instrument: String,
     pub name: String,
     pub value: f32,
     pub frames: u64,
@@ -70,6 +70,21 @@ pub(crate) struct VoiceSet {
     done: bool,
     client: ClientId,
     tag: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct VoiceMap {
+    key: u32,
+    param: String,
+    source: Option<String>,
+    channel: usize,
+    scale: f32,
+    offset: f32,
+    range: Option<(f32,f32)>,
+    at: u64,
+    client: ClientId,
+    tag: Option<String>,
+    done: bool,
 }
 
 /// A track parameter, which is a control, moving at a sample: a lane or the `track` event. Planned
@@ -122,6 +137,7 @@ struct ControlOwner {
 
 mod definitions;
 mod input;
+mod parameters;
 pub mod realtime;
 
 use definitions::{Meta, Pending, What, options};
@@ -206,6 +222,7 @@ pub struct Session {
     /// Notes whose release has been asked for but has not come yet, in case that is taken back.
     closed: Vec<VoiceEntry>,
     voice_sets: Vec<VoiceSet>,
+    voice_maps: Vec<VoiceMap>,
     track_sets: Vec<TrackSet>,
     buffer_sets: Vec<BufferSet>,
     timed_panics: Vec<TimedPanic>,
@@ -259,6 +276,7 @@ impl Session {
             voices: Vec::new(),
             closed: Vec::new(),
             voice_sets: Vec::new(),
+            voice_maps: Vec::new(),
             track_sets: Vec::new(),
             buffer_sets: Vec::new(),
             timed_panics: Vec::new(),
@@ -366,6 +384,7 @@ impl Session {
         self.track_sets.clear();
         self.buffer_sets.clear();
         self.voice_sets.clear();
+        self.voice_maps.clear();
         self.key_offs.clear();
         self.voices.clear();
         self.closed.clear();
@@ -444,6 +463,7 @@ impl Session {
         clients.extend(self.control_owners.iter().map(|o| o.client));
         clients.extend(self.pending.iter().filter_map(|p| p.meta.client));
         clients.extend(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.client));
+        clients.extend(self.voice_maps.iter().filter(|s| !s.done).map(|s| s.client));
         clients.sort_unstable();
         clients.dedup();
         clients
@@ -455,7 +475,8 @@ impl Session {
                     + self.voice_sets.iter().filter(|s| s.client == c && !s.done).count()
                     + self.track_sets.iter().filter(|s| s.client == Some(c) && !s.done).count()
                     + self.pending.iter().filter(|p| p.meta.client == Some(c)).count()
-                    + self.buffer_sets.iter().filter(|s| s.client == c && !s.done).count();
+                    + self.buffer_sets.iter().filter(|s| s.client == c && !s.done).count()
+                    + self.voice_maps.iter().filter(|s| s.client == c && !s.done).count();
                 (c, ids, waiting)
             })
             .collect()
@@ -669,7 +690,8 @@ impl Session {
             n = self.sounding.limit(self.clock, n);
             let upcoming = self.key_offs.iter().map(|k| k.at).chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at)).chain(self.track_sets.iter().filter(|s| !s.done).map(|s| s.at))
                 .chain(self.timed_panics.iter().filter(|p| !p.done).map(|p| p.at))
-                .chain(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.at));
+                .chain(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.at))
+                .chain(self.voice_maps.iter().filter(|s| !s.done).map(|s| s.at));
             for at in upcoming.filter(|&at| at > self.clock) {
                 n = n.min(at - self.clock);
             }
@@ -677,6 +699,7 @@ impl Session {
                 n = n.min(next.start - self.clock);
             }
             self.start_due();
+            self.apply_voice_maps();
 
             let n = n.max(1) as usize;
             for (c, samples) in self
@@ -865,16 +888,8 @@ impl Session {
             if set.done || set.at > now {
                 continue;
             }
-            let index = self
-                .program
-                .instruments
-                .iter()
-                .find(|inst| inst.name == set.instrument)
-                .and_then(|inst| inst.graph.param_index(&set.name));
-            if let Some(index) = index {
-                for held in self.sounding.held.iter().filter(|h| h.2 == set.key) {
-                    self.mixer.set_voice_param_index(held.1, index, set.value, set.frames);
-                }
+            for held in self.sounding.held.iter().filter(|h| h.2 == set.key) {
+                self.mixer.set_voice_param_glide(held.1,&set.name,set.value,set.frames);
             }
             self.voice_sets[i].done = true;
         }

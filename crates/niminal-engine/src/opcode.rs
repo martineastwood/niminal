@@ -140,6 +140,9 @@ pub trait Opcode: Send + Sync + std::any::Any {
     /// Apply a named control target, with a linear ramp measured in samples.
     fn set_control(&mut self, _key: &str, _start: f32, _target: f32, _frames: u64, _elapsed: u64) {}
 
+    /// Whether this input is sampled during processor initialization.
+    fn input_is_init(&self, _index: usize) -> bool { false }
+
     /// Samples of delay the opcode introduces, for latency compensation.
     fn latency(&self) -> usize {
         0
@@ -203,6 +206,8 @@ impl Opcode for Box<dyn Opcode> {
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         (**self).carry_state(old);
     }
+
+    fn input_is_init(&self, index: usize) -> bool { (**self).input_is_init(index) }
 
     fn latency(&self) -> usize {
         (**self).latency()

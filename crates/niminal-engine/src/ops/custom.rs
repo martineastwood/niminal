@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::{Array, wrapped_index};
-use crate::opcode::{BLOCK, MAX_INPUTS, Opcode, Port, ProcessCtx};
+use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx};
 
 /// Scalar math functions, usable inside kernels and as the [`Func`] opcode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,7 +239,8 @@ impl PartialEq for Native {
 pub struct ResetScope {
     pub states: std::ops::Range<usize>,
     pub buffers: std::ops::Range<usize>,
-    pub natives: std::ops::Range<usize>,
+    pub natives: Vec<usize>,
+    pub registers: std::ops::Range<usize>,
     pub init: Vec<Instr>,
     pub block: Vec<Instr>,
 }
@@ -247,6 +248,7 @@ pub struct ResetScope {
 /// A compiled `fn` body.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Kernel {
+    pub latency: usize,
     pub name: String,
     pub resets: Vec<ResetScope>,
     pub ports: Vec<Port>,
@@ -285,11 +287,19 @@ pub struct Custom {
     carried: bool,
     /// This copy's own built-in opcodes, with their state.
     natives: Vec<Box<dyn Opcode>>,
+    native_inputs: Vec<[f32; BLOCK]>,
+    native_outputs: Vec<[f32; BLOCK]>,
+    native_indices: Vec<usize>,
 }
 
 impl Custom {
     pub fn new(kernel: Arc<Kernel>) -> Self {
+        let inputs = kernel.natives.iter().map(|n| n.inputs.len()).max().unwrap_or(0);
+        let outputs = kernel.natives.iter().map(|n| n.op.outputs()).max().unwrap_or(1);
         Custom {
+            native_inputs: vec![[0.0; BLOCK]; inputs],
+            native_outputs: vec![[0.0; BLOCK]; outputs],
+            native_indices: (0..inputs).collect(),
             state: kernel.state_init.clone(),
             buffers: kernel.buffers.clone(),
             regs: vec![0.0; kernel.registers],
@@ -324,7 +334,7 @@ impl Custom {
                         let scope = &k.resets[scope];
                         self.state[scope.states.clone()].copy_from_slice(&k.state_init[scope.states.clone()]);
                         for index in scope.buffers.clone() { self.buffers[index].copy_from_slice(&k.buffers[index]); }
-                        for index in scope.natives.clone() { self.natives[index].reset(); }
+                        for &index in &scope.natives { self.natives[index].reset(); }
                         let carried = self.carried;
                         self.carried = false;
                         self.run_code(&scope.init, Section::Init, ctx, input, i);
@@ -360,20 +370,15 @@ impl Custom {
                 Instr::Native { dst, index, guard } => {
                     if guard.is_some_and(|g| regs[g] == 0.0) { continue; }
                     let call = &k.natives[index];
-                    let mut values = [[0.0f32; 1]; MAX_INPUTS];
-                    for (value, input) in values.iter_mut().zip(&call.inputs) {
+                    for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
                         value[0] = match *input {
                             NativeInput::Reg(r) => regs[r] as f32,
                             NativeInput::Const(c) => c as f32,
                         };
                     }
-                    let mut slices: [&[f32]; MAX_INPUTS] = [&[]; MAX_INPUTS];
-                    for (slice, value) in slices.iter_mut().zip(&values).take(call.inputs.len()) {
-                        *slice = value;
-                    }
-                    let mut y = [0.0f32; 1];
-                    self.natives[index].process(ctx, &slices[..call.inputs.len()], &mut y);
-                    regs[dst] = f64::from(y[0]);
+                    let op = &mut self.natives[index];
+                    op.process_slots(ctx, &self.native_inputs, &self.native_indices[..call.inputs.len()], &mut self.native_outputs[..op.outputs()], 1);
+                    for (k, output) in self.native_outputs.iter().take(op.outputs()).enumerate() { regs[dst + k] = f64::from(output[0]); }
                 }
                 Instr::Read { dst, list, idx } | Instr::ReadAt { dst, list, pos: idx, .. } => {
                     let interp = match *instr { Instr::ReadAt { interp, .. } => interp, _ => Interp::None };
@@ -446,6 +451,11 @@ pub fn read_at(data: &[f64], pos: f64, interp: Interp) -> f64 {
 }
 
 impl Opcode for Custom {
+    fn input_is_init(&self, index: usize) -> bool {
+        self.kernel.init.iter().any(|i| matches!(i, Instr::Input { port, .. } if *port == index))
+    }
+    fn latency(&self) -> usize { self.kernel.latency }
+
     fn name(&self) -> &str {
         &self.kernel.name
     }

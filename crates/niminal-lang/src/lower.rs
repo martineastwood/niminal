@@ -29,6 +29,7 @@ use crate::program::{ControlBinding, ControlDef, Instrument, Param};
 use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
+pub(crate) type BufferChoices = Arc<Vec<(String, Arc<Buffer>)>>;
 type BoundFnArgs = Vec<Option<(Datum, Expr)>>;
 
 enum ProcessorScope {
@@ -340,6 +341,7 @@ pub(crate) enum Datum {
     Table(Arc<Table>),
     /// A shared writable buffer declared at the top level (`id` indexes Program.buffers).
     Buffer { id: usize, data: Arc<Buffer> },
+    BufferRef { selector: Sig, choices: BufferChoices },
     Record(Vec<(String, Datum)>),
     /// `lo..hi`, or `lo..<hi`.
     Range { lo: Sig, hi: Sig, inclusive: bool },
@@ -507,10 +509,36 @@ pub(crate) fn compile_instr(
     let mut lower = Lower::new(registry, names, tempo);
     lower.mode = Mode::Instrument;
     let mut params: Vec<Param> = Vec::new();
+    let mut arrays = std::collections::BTreeMap::new();
+    let mut resources = std::collections::BTreeMap::new();
 
     let signature = funcs::signature(&def.params, tempo)?;
     for p in &signature {
         names.check_local(&p.name)?;
+        if p.kind == PKind::Buffer && p.rate != Some(Rate::Const) {
+            let default = p.default.as_ref().ok_or_else(|| Diagnostic::new("a buffer parameter needs a default resource",p.name.span))?;
+            let Datum::Buffer { data, .. } = lower.value(default)? else { return Err(Diagnostic::new("buffer default is a named shared buffer",default.span)); };
+            let mut choices: Vec<_> = names.buffers.iter().map(|(n,(id,b))| (*id,n.clone(),b.clone())).collect();
+            choices.sort_by_key(|v| v.0);
+            let choices: BufferChoices = Arc::new(choices.into_iter().map(|(_,n,b)| (n,b)).collect());
+            let index = choices.iter().position(|(_,b)| Arc::ptr_eq(b,&data)).unwrap();
+            let src = lower.g.param(&p.name.name,index as f32).expect("unique parameter"); lower.param_rates.push(Rate::Audio);
+            params.push(Param { name: p.name.name.clone(), unit: Unit::Num, range: Some((0.0,(choices.len()-1) as f64)), default: Some(index as f32) });
+            resources.insert(p.name.name.clone(),choices.iter().map(|(n,_)| n.clone()).collect());
+            let selector = lower.at_rate(Sig::signal(src,Unit::Num),p.rate);
+            lower.scope.insert(p.name.name.clone(),Datum::BufferRef { selector, choices });
+            continue;
+        }
+        if matches!(p.kind, PKind::Array(_)) && p.rate != Some(Rate::Const) {
+            let default = p.default.as_ref().ok_or_else(|| Diagnostic::new("a live array parameter needs a default to fix its shape", p.name.span))?;
+            let value = lower.value(default)?;
+            let value = lower.check_param(&def.name.name, p, value, default)?;
+            let start = params.len();
+            let value = lower.live_array(value, &p.name.name, &p.kind, p.rate, &mut params, default.span)?;
+            arrays.insert(p.name.name.clone(), params[start..].iter().map(|p| p.name.clone()).collect());
+            lower.scope.insert(p.name.name.clone(), value);
+            continue;
+        }
         // Structural arguments specialize the graph. Notes only see the remaining scalar ports.
         if p.rate == Some(Rate::Const) || matches!(p.kind, PKind::Choice(_) | PKind::Function | PKind::Array(_)) {
             let default = p.default.as_ref().ok_or_else(|| Diagnostic::new(
@@ -544,7 +572,7 @@ pub(crate) fn compile_instr(
                     .with_help(format!("for example `{}: hz`", p.name.name)));
                 }
             },
-            PKind::Choice(_) | PKind::Array(_) | PKind::Function => unreachable!("structural arguments handled above"),
+            PKind::Buffer | PKind::Choice(_) | PKind::Array(_) | PKind::Function => unreachable!("structural arguments handled above"),
         };
         let default = match &p.default {
             None => None,
@@ -662,6 +690,8 @@ pub(crate) fn compile_instr(
         def.name.name.clone(), Arc::new(lower.g.build_channels(&result.srcs)), params,
     );
     instrument.taps = lower.taps;
+    instrument.arrays = arrays;
+    instrument.resources = resources;
     Ok(instrument)
 }
 
@@ -1345,6 +1375,7 @@ impl<'a> Lower<'a> {
     /// The entries of a list or range, for `for`, `map` and the like.
     fn entries(&mut self, d: Datum, span: Span) -> Res<Vec<Datum>> {
         match d {
+            Datum::BufferRef { .. } => Err(Diagnostic::new("a buffer reference is read with indexing or .at",span)),
             Datum::Function { .. } => Err(Diagnostic::new("a function is not an array", span)),
             Datum::Record(fields) => self.entries(fields[0].1.clone(), span),
             Datum::Array(items) => Ok(items.into_vec()),
@@ -1539,7 +1570,7 @@ impl<'a> Lower<'a> {
                 }
                 items
             }
-            Datum::Buffer { .. } => {
+            Datum::Buffer { .. } | Datum::BufferRef { .. } => {
                 return Err(Diagnostic::new(
                     "a shared buffer can't be taken apart with `[a, b] = ...`",
                     value.span,
@@ -1980,7 +2011,7 @@ impl<'a> Lower<'a> {
                 "a table isn't a signal; play it with `osc(table, freq)` or read it with `.at`",
                 span,
             )),
-            Datum::Buffer { .. } => Err(Diagnostic::new(
+            Datum::Buffer { .. } | Datum::BufferRef { .. } => Err(Diagnostic::new(
                 "a buffer isn't a signal; read it with `buf[i]` or `buf.at(pos)`",
                 span,
             )),
@@ -1991,7 +2022,7 @@ impl<'a> Lower<'a> {
                         Datum::Function { .. } => return Err(Diagnostic::new("a function is not a signal", span)),
                         Datum::Record(fields) => entries.push((self.signal_of(fields[0].1.clone(), span)?, span)),
                         Datum::Sig(sig) => entries.push((sig, span)),
-                        Datum::Table(_) | Datum::Buffer { .. } => {
+                        Datum::Table(_) | Datum::Buffer { .. } | Datum::BufferRef { .. } => {
                             return Err(Diagnostic::new(
                                 "an array of tables can't be used as a signal",
                                 span,
@@ -2017,6 +2048,10 @@ impl<'a> Lower<'a> {
     /// `list[i]`, counting from 0 and wrapping at both ends, or `list[a..<b]`.
     fn index(&mut self, list: &Expr, index: &Expr, span: Span) -> Res<Datum> {
         let l = self.value(list)?;
+        if let Datum::BufferRef { selector, choices } = &l {
+            let pos = self.expr(index)?;
+            return self.read_buffer_ref(selector,choices,&pos,Interp::None,span).map(Datum::Sig);
+        }
         if let Datum::Buffer { id, data: buffer } = &l {
             if let ExprKind::Range { .. } = index.kind {
                 return Err(Diagnostic::new(
@@ -2365,6 +2400,7 @@ impl<'a> Lower<'a> {
                     (0..sig.count()).map(|k| Datum::Sig(Self::element(&sig, k))).collect(),
                 )),
                 Datum::Record(fields) => Ok(Datum::array(self.entries(fields[0].1.clone(), span)?)),
+                Datum::BufferRef { .. } => Err(Diagnostic::new("a buffer reference has no channel array",receiver.value.span)),
                 Datum::Range { .. } => Err(Diagnostic::new("a range has no channels", receiver.value.span)),
             };
         }
@@ -2750,6 +2786,14 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    fn read_buffer_ref(&mut self, selector: &Sig, choices: &BufferChoices, pos: &Sig, interp: Interp, span: Span) -> Res<Sig> {
+        if pos.unit != Unit::Num || pos.count() != 1 { return Err(Diagnostic::new("a buffer position is one plain number",span)); }
+        for (name,_) in choices.iter() { self.g.touch_buffer_read(self.names.buffers[name].0); }
+        let buffers = Arc::new(choices.iter().map(|(_,b)| b.clone()).collect());
+        let src = self.g.add(niminal_engine::ops::BufferReadBank::new(buffers,interp), &[("source",selector.srcs[0]),("pos",pos.srcs[0])]).expect("buffer reader ports");
+        Ok(Sig::signal(src,Unit::Num))
+    }
+
     /// `table.at(pos, interp: linear, edge: wrap)`: a list of numbers read at a fractional position.
     fn at(&mut self, name: &Ident, args: &[Arg], list: Datum, span: Span) -> Res<Sig> {
         let mut pos = None;
@@ -2783,6 +2827,7 @@ impl<'a> Lower<'a> {
             }
             return self.table_read(table, Unit::Num, &pos, interp, edge, span);
         }
+        if let Datum::BufferRef { selector, choices } = &list { return self.read_buffer_ref(selector,choices,&pos,interp,span); }
         if let Datum::Buffer { id, data: buffer } = list {
             self.g.touch_buffer_read(id);
             let rate = self.sig_rate(&pos);
@@ -3561,8 +3606,10 @@ impl<'a> Lower<'a> {
     }
 
     /// Make free variables explicit ports; each processor decides when to read them.
-    fn scope_kernel(&self, body: &[Stmt], span: Span) -> (FnDef, Vec<PParam>, BoundFnArgs) {
+    fn scope_kernel(&mut self, body: &[Stmt], span: Span) -> (FnDef, Vec<PParam>, BoundFnArgs) {
         let mut def = funcs::lambda(&[], body, span);
+        let capture_it = self.mode == Mode::Track && !self.scope.contains_key("it") && funcs::reads(&def,"it");
+        if capture_it { let it = self.it(); self.scope.insert("it".into(),Datum::Sig(it)); }
         let mut captures: Vec<_> = self.scope.iter().filter(|(n, _)| funcs::reads(&def, n)).collect();
         captures.sort_by(|a, b| a.0.cmp(b.0));
         let mut params = Vec::new();
@@ -3573,6 +3620,7 @@ impl<'a> Lower<'a> {
             params.push(PParam { name: id, rate: None, kind: PKind::Any, default: None });
             given.push(Some((value.clone(), Expr { kind: ExprKind::Name(name.clone()), span })));
         }
+        if capture_it { self.scope.remove("it"); }
         (def, params, given)
     }
 
@@ -3858,7 +3906,7 @@ impl<'a> Lower<'a> {
     fn builtin_value(&self, value: Datum, param: &opcodes::ParamSpec, arg: &Expr) -> Res<Val> {
         match value {
             Datum::Function { .. } => Err(Diagnostic::new("this argument needs a numeric value", arg.span)),
-            Datum::Table(_) | Datum::Buffer { .. } => Err(Diagnostic::new(
+            Datum::Table(_) | Datum::Buffer { .. } | Datum::BufferRef { .. } => Err(Diagnostic::new(
                 "pass a table as the wave of `osc`, not as a signal argument",
                 arg.span,
             )),
@@ -4152,6 +4200,25 @@ impl<'a> Lower<'a> {
 impl Lower<'_> {
     // ---- functions -----------------------------------------------------
 
+    fn live_array(&mut self, value: Datum, path: &str, kind: &PKind, rate: Option<Rate>, params: &mut Vec<Param>, span: Span) -> Res<Datum> {
+        if *kind == PKind::Buffer { return Err(Diagnostic::new("use individual buffer parameters instead of a live array of buffers",span)); }
+        match value {
+            Datum::Sig(sig) if sig.count() == 1 => {
+                let default = sig.konst.ok_or_else(|| Diagnostic::new("array defaults must be constant", span))? as f32;
+                let src = self.g.param(path, default).map_err(|e| Diagnostic::new(e.to_string(),span))?;
+                self.param_rates.push(Rate::Audio);
+                let range = if let PKind::Range { lo,hi, .. } = kind { Some((*lo,*hi)) } else { None };
+                params.push(Param { name: path.into(), unit: sig.unit, default: Some(default), range });
+                Ok(Datum::Sig(self.at_rate(Sig::signal(src, sig.unit), rate)))
+            }
+            value => {
+                let entries = self.entries(value, span)?;
+                let kind = if let PKind::Array(inner) = kind { inner } else { kind };
+                Ok(Datum::Array(entries.into_iter().enumerate().map(|(i,v)| self.live_array(v, &format!("{path}[{i}]"), kind, rate, params, span)).collect::<Res<_>>()?))
+            }
+        }
+    }
+
     /// Check a value against a parameter, and fit it to the parameter's range.
     fn check_param(&mut self, callee: &str, p: &PParam, v: Datum, arg: &Expr) -> Res<Datum> {
         let name = &p.name.name;
@@ -4161,6 +4228,9 @@ impl Lower<'_> {
                 .with_help(format!("in the call of `{callee}`"))
         };
         let sig = match (&p.kind, v) {
+            (PKind::Buffer | PKind::Any, d @ (Datum::Buffer { .. } | Datum::BufferRef { .. })) => return Ok(d),
+            (PKind::Buffer, _) => return Err(mismatch("a value")),
+            (_, Datum::BufferRef { .. }) => return Err(mismatch("a buffer reference")),
             (PKind::Function | PKind::Any, d @ Datum::Function { .. }) => return Ok(d),
             (PKind::Function, _) => return Err(mismatch("a value")),
             (_, Datum::Function { .. }) => return Err(mismatch("a function")),
@@ -4170,7 +4240,7 @@ impl Lower<'_> {
                 let element_param = PParam { kind: *inner.clone(), ..p.clone() };
                 return Ok(Datum::Array(elements.into_iter().map(|v| self.check_param(callee, &element_param, v, arg)).collect::<Res<_>>()?));
             }
-            (PKind::Any, d @ (Datum::Array(_) | Datum::Table(_) | Datum::Buffer { .. } | Datum::Range { .. })) => {
+            (PKind::Any, d @ (Datum::Array(_) | Datum::Table(_) | Datum::Range { .. })) => {
                 return Ok(d);
             }
             (_, Datum::Range { .. }) => return Err(mismatch("a range")),
@@ -4492,8 +4562,13 @@ impl Lower<'_> {
         Ok(Self::kernel_result(shape, &per_output, layout))
     }
 
-    fn kernel_arg(&self, value: Datum, path: &str, wires: &mut Vec<(String, Sig)>, width: &mut usize, layout: &mut Layout, span: Span) -> Res<KArg> {
+    fn kernel_arg(&mut self, value: Datum, path: &str, wires: &mut Vec<(String, Sig)>, width: &mut usize, layout: &mut Layout, span: Span) -> Res<KArg> {
         match value {
+            Datum::BufferRef { selector, choices } => {
+                let selector = self.kernel_arg(Datum::Sig(selector),path,wires,width,layout,span)?;
+                for (name,_) in choices.iter() { self.g.touch_buffer_read(self.names.buffers[name].0); }
+                Ok(KArg::Buffer { selector: Box::new(selector), choices })
+            }
             Datum::Function { def, captures } => {
                 let mut entries: Vec<_> = captures.into_iter().collect();
                 entries.sort_by(|a,b| a.0.cmp(&b.0));
@@ -4520,11 +4595,10 @@ impl Lower<'_> {
                 unit: Unit::Num,
                 values: table,
             }),
-            Datum::Buffer { .. } => Err(Diagnostic::new(
-                "a shared buffer can't be passed into a function",
-                span,
-            )
-            .with_help("pass a snapshot with `buf` reads, or use the buffer from an instrument")),
+            Datum::Buffer { id, data } => {
+                self.g.touch_buffer_read(id);
+                Ok(KArg::Buffer { selector: Box::new(KArg::Const { unit: Unit::Num, value: 0.0 }), choices: Arc::new(vec![(path.to_string(),data)]) })
+            }
             Datum::Array(items) => {
                 // Constant numeric arrays retain shared table storage.
                 let numbers: Option<Vec<_>> = items.iter().map(|v| match v {
@@ -5199,7 +5273,7 @@ pub(crate) fn compile_const(value: &Expr, tempo: Tempo, registry: &Registry, nam
             Datum::Function { .. } => false,
             Datum::Sig(s) => s.konst.is_some(),
             Datum::Table(_) => true,
-            Datum::Buffer { .. } => false,
+            Datum::Buffer { .. } | Datum::BufferRef { .. } => false,
             Datum::Array(items) => items.iter().all(known),
             Datum::Record(fields) => fields.iter().all(|(_, v)| known(v)),
             Datum::Range { lo, hi, .. } => lo.konst.is_some() && hi.konst.is_some(),
@@ -5221,7 +5295,7 @@ pub(crate) fn compile_const(value: &Expr, tempo: Tempo, registry: &Registry, nam
 pub(crate) fn check_fn(def: &FnDef, tempo: Tempo, registry: &Registry, names: &Names) -> Res<()> {
     let params = funcs::signature(&def.params, tempo)?;
     funcs::result_unit(&def.result)?;
-    if params.iter().any(|p| matches!(p.kind, PKind::Function)) { return Ok(()); }
+    if params.iter().any(|p| matches!(p.kind, PKind::Function | PKind::Buffer)) { return Ok(()); }
     // an untyped parameter takes its unit from each call, and a list parameter its length: the body is
     // checked with two guesses, and a mistake that could come from the guess only counts if both make it
     match check_fn_with(def, tempo, registry, names, Unit::Num, 2) {
@@ -5337,7 +5411,7 @@ fn check_fn_with(
                 let unit = inner.unit().unwrap_or(guess);
                 Some(Datum::array(vec![Datum::Sig(Sig::constant(unit, 0.0)); length]))
             }
-            PKind::Any | PKind::Function => None,
+            PKind::Any | PKind::Buffer | PKind::Function => None,
         };
         given.push(v.map(|v| {
             (

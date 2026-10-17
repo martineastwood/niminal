@@ -515,7 +515,7 @@ pub fn builtin_ops() -> Vec<OpInfo> {
         ops.extend(envelope_ops());
         ops.extend(array_ops());
         ops.push(op_info("spawn", "Start an independent layer on each positive trigger edge: `spawn(trigger, dur: 100ms, max: 8) { ... }`. Inputs are captured at the trigger; a full pool drops new triggers.", false, &[("trigger", "number", true), ("dur", "time", true), ("max", "constant integer", false), ("body", "function", true)]));
-        ops.push(op_info("oversample", "Run sample DSP at 2x, 4x or 8x with filtered rate conversion: `oversample(4) { ... }`. Adds 16 samples of conversion latency.", false, &[("factor", "constant integer", true), ("body", "function", true)]));
+        ops.push(op_info("oversample", "Run sample DSP at 2x, 4x or 8x with filtered rate conversion: `oversample(4) { ... }`. Adds 16 samples of conversion latency; parallel paths are aligned automatically.", false, &[("factor", "constant integer", true), ("body", "function", true)]));
         ops.push(op_info("reset_on", "Restart state created inside `reset_on(trigger) { ... }` at each positive edge, before that sample. Signals outside the scope keep running.", false, &[("trigger", "number", true), ("body", "function", true)]));
         ops.push(op_info("late", "In a send to a bus, a copy that arrives one block late: `echo += late(out)`. Breaks a loop between buses; `prev` is one sample.", false, &[("x", "number", true)]));
         ops.push(op_info("after", "Run `after(delay) { ... }` from when the note is `delay` old: the body starts with fresh state and is silent until then.", false, &[("delay", "time", true), ("body", "function", true)]));

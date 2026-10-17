@@ -50,6 +50,25 @@ Use the **`delay`** opcode. Beat times follow tempo. A changing `time` needs **`
 out = sig.delay(time: 3/16beat, feedback: 0.4)
 out = sig.delay(time: oscillated, feedback: 0.3, max: 2sec)   // changing time needs max:
 ```
+## Latency compensation
+
+Processing latency declared by DSP processors is propagated through the graph. Faster parallel paths receive exact sample delays before they combine. This includes nested processors, array outputs, instrument voices, track effects and feed-forward bus sends. Conversion filters in `oversample` participate automatically.
+
+```nml
+instr tone(freq: hz) { osc(sine, freq) }
+track dry { instrument = tone }
+track wet {
+  instrument = tone
+  out = oversample(4) { it.tanh }
+}
+```
+
+The dry path is delayed to match the wet path. The engine `status` result reports `processing_latency` in samples; this excludes the master limiter and audio device latency. Compensation adds causal delay to faster paths; it cannot produce audio before the triggering event.
+
+Musical `delay`, sample feedback with `prev`, and explicit block feedback with `late` keep their intended timing. Feedback routes are not converted into a feed-forward latency budget. Filters' frequency-dependent phase shifts are not processing latency and are not cancelled by compensation.
+
+The timing plan belongs to the compiled topology. Held voices keep their original graphs across live redefinitions, so changing the latency of a topology can leave existing voices on their previous timing until they end.
+
 ## Channel layouts
 
 Signals carry a layout in their type: `mono`, `stereo`, `quad`, `surround(5.1)`, `surround(7.1)`, or `channels(N)` (1–16).

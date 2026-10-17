@@ -55,6 +55,7 @@ impl Opcode for Spawn {
     fn ports(&self) -> &[Port] {
         &self.ports
     }
+    fn latency(&self) -> usize { self.template.latency() }
     fn outputs(&self) -> usize {
         self.template.outputs()
     }
