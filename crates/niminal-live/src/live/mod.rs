@@ -223,7 +223,6 @@ pub struct Live {
     version: u64,
     log: Vec<LiveLogEntry>,
     peaks: Vec<f32>,
-    silenced: usize,
 }
 
 /// The most notices that wait to be collected, and how long before the same one is said again.
@@ -267,7 +266,6 @@ impl Live {
             version: 0,
             log: Vec::new(),
             peaks: vec![0.0; layout.channels()],
-            silenced: 0,
         }
     }
 
@@ -532,11 +530,6 @@ impl Live {
         std::mem::replace(&mut self.peaks, vec![0.0; self.layout.channels()])
     }
 
-    /// Voices silenced for producing NaN or infinity since this was last called, as reported in notices.
-    pub fn take_silenced(&mut self) -> usize {
-        std::mem::take(&mut self.silenced)
-    }
-
     /// Everything that was sent to the sequencer, with when.
     pub fn log(&self) -> &[LiveLogEntry] {
         &self.log
@@ -548,10 +541,6 @@ impl Live {
             Ok(EngineReply::Status(v)) => v,
             _ => serde_json::json!({}),
         }
-    }
-
-    pub fn engine_clock(&self) -> Option<&ClockInfo> {
-        self.engine.as_ref()
     }
 
     // ---- the project --------------------------------------------------------------

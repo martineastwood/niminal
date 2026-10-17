@@ -61,23 +61,6 @@ impl Project {
         }
         (text, map)
     }
-
-    /// The text of every definition that is not a track, instrument or other
-    /// body, which a track's effect chain depends on: functions, constants,
-    /// buses, the output layout, meter and tempo.
-    pub fn environment(&self) -> String {
-        self.entries
-            .iter()
-            .filter(|e| {
-                e.key.starts_with("fn:")
-                    || e.key.starts_with("const:")
-                    || e.key.starts_with("bus:")
-                    || matches!(e.key.as_str(), "config" | "meter" | "tempo")
-            })
-            .map(|e| e.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 }
 
 /// A statement being added to a compile, and where it came from.
@@ -245,20 +228,4 @@ mod tests {
         assert_eq!((problem.line, problem.column), (Some(3), Some(13)));
     }
 
-    #[test]
-    fn the_environment_is_what_effect_chains_depend_on() {
-        let mut p = Project::default();
-        p.apply(&[
-            entry("config", "config { channels: stereo }"),
-            entry("instr:a", "instr a() { 0.5 }"),
-            entry("bus:s", "bus s"),
-            entry("fn:o", "fn o(x) { x }"),
-            entry("track:t", "track t { out = it }"),
-        ]);
-        let env = p.environment();
-        assert!(
-            env.contains("channels: stereo") && env.contains("bus s") && env.contains("fn o")
-        );
-        assert!(!env.contains("instr a") && !env.contains("track t"));
-    }
 }
