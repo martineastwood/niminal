@@ -1,6 +1,6 @@
 # Open daemon API — plan
 
-Status: proposed, 17 October 2026. Work through the phases in order. Each one ends in a working, tested, installed build.
+Status: phases 0 to 6 built, 17 October 2026 (the VS Code check in phase 6 still has to be done by hand); phases 7 and 8 are left. Work through the phases in order. Each one ends in a working, tested, installed build.
 
 ## Goal
 
