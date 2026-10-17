@@ -393,24 +393,26 @@ fn mute_and_solo_work_live() {
 #[test]
 fn streamed_events_play_at_their_time() {
     let mut s = ready();
-    let note = |at: f64| Event {
+    let note = |at: f64| Op::Note {
         target: "lead".into(),
-        at: Time::Seconds(at),
+        at: At::Time(Time::Seconds(at)),
         dur: Time::Seconds(0.25),
         args: [("freq".to_string(), Value::Note(57))].into(),
     };
-    s.stream_events(vec![note(0.5)]).unwrap();
+    s.send_events(vec![note(0.5)]).unwrap();
     let out = run(&mut s, 48_000);
     assert_eq!(peak(&out[..24_000 - 1]), 0.0);
     assert!(peak(&out[24_000..26_000]) > 0.1);
     // a late one sounds at once; a bad one is refused
-    s.stream_events(vec![note(0.0)]).unwrap();
+    s.send_events(vec![note(0.0)]).unwrap();
     assert!(peak(&run(&mut s, 2000)) > 0.1);
-    let bad = Event {
+    let bad = Op::Note {
         target: "nobody".into(),
-        ..note(1.0)
+        at: At::Time(Time::Seconds(1.0)),
+        dur: Time::Seconds(0.25),
+        args: Default::default(),
     };
-    assert!(s.stream_events(vec![bad]).is_err());
+    assert!(s.send_events(vec![bad]).is_err());
 }
 
 #[test]

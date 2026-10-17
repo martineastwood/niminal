@@ -3,7 +3,7 @@ title: Score model
 description: Events, sections, projects, and the .nms JSON format.
 ---
 
-The engine can play **score events** that do not come from niminal source: a `.nms` file on the command line, or `event.stream` / `clip.define` on a live daemon. The orchestra still defines the instruments; the score times and names the notes, clips and scenes.
+The engine can play **score events** that do not come from niminal source: a `.nms` file on the command line, or `events.send` / `clip.define` on a live daemon. The orchestra still defines the instruments; the score times and names the notes, clips and scenes.
 
 ## Elements
 
@@ -74,4 +74,4 @@ Clips, scenes and an optional arrangement. The CLI compiles them to `.nml` and r
 niminal render examples/live_controls.nml --score examples/project.nms --out project.wav
 ```
 
-Live: define the same clips with **`clip.define`** / **`scene.define`**, or send finite events with **`event.stream`** ([Daemon protocol](/reference/protocol/)). In `.nml`, `load("score/riff.nms")` turns a version-1 section (or a one-clip project) into a clip.
+Live: define the same clips with **`clip.define`** / **`scene.define`**, or send timed events with **`events.send`** ([Daemon protocol](/reference/protocol/)). In `.nml`, `load("score/riff.nms")` turns a version-1 section (or a one-clip project) into a clip.

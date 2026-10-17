@@ -136,8 +136,8 @@ fn websocket_controls_reach_the_live_renderer_and_appear_in_status() {
         "source": "ctl level = 0.0.smooth(0ms)\ninstr flat(freq: hz) { level }\ntrack t { instrument = flat }\nt(freq: 440hz) for 100bars",
         "quantize": "now"
     })).unwrap();
-    let reply = c.call("control.set", json!({ "name": "level", "value": 0.5, "smooth_ms": 0 })).unwrap();
-    assert!(reply["at"].as_u64().is_some());
+    let reply = c.call("events.send", json!({ "events": [{ "op": "control", "name": "level", "value": 0.5, "glide": "0ms", "at": "now" }] })).unwrap();
+    assert_eq!(reply["accepted"], 1);
     let started = std::time::Instant::now();
     loop {
         let peaks = r.daemon.lock().unwrap().session_mut().take_peaks();

@@ -134,48 +134,29 @@ Snapshot of the session (no subscription needed).
 - **`scenes`**, **`clips`** — defined names
 - **`tracks`** — `name`, `clip`, `muted`, `soloed`
 
-### `control.set`
+### `events.send`
 
-Update a **`ctl`** without recompiling the graph.
-
-**Params**
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `name` | string | **Required.** Control name. |
-| `value` | number | **Required.** |
-| `unit` | string | Optional; defaults to the declaration’s unit (`hz`, `db`, …). Compatible units (`khz`, `ms`, `beats`, …) are converted. |
-| `smooth_ms` | number | Optional override of glide (0–60000). |
-| `at` | integer | Optional sample timestamp; default is current render clock. |
-
-**Result:** `{ "at": 37 }` — sample time the update was scheduled for.
-
-Invalid name, unit, value, or full queue → **-32001** or **-32602**.
-
-### `event.stream`
-
-Inject score-model **events** from an external client without niminal source.
-
-**Params**
+One batched method for every timed thing a client can do. The whole batch is checked before any of it is queued.
 
 ```json
-{
-  "events": [
-    {
-      "target": "lead",
-      "at": "0.1sec",
-      "dur": "0.2sec",
-      "args": { "freq": "a4", "gain": "-6db" }
-    }
-  ]
-}
+{ "method": "events.send", "params": { "events": [
+  { "op": "note", "target": "lead", "at": "64beat", "dur": "1/2beat", "args": { "freq": "c4" } },
+  { "op": "control", "name": "cutoff", "at": 96000, "value": 2, "unit": "khz", "glide": "50ms" },
+  { "op": "track", "name": "pad", "at": "now", "args": { "cut": "800hz" } }
+] } }
 ```
 
-- **`target`** — track or instrument name in the running session.
-- **`at`**, **`dur`** — times with units (`beat`, `sec`, `bar`, …) as in [Score model](/reference/score-model/).
-- **`args`** — named parameters; values are unit strings or numbers as in `.nms` JSON.
+**`at`** is a whole number (an absolute sample), `"now"` (as soon as possible) or a time with a unit (`"32beat"`, `"8.5bar"`, `"12.25sec"`): a position on the transport, measured from its bar origin. `dur` and `glide` are durations (`"1/2beat"`, `"250ms"`).
 
-Validation matches orchestra typing. Unknown target or bad units → **-32001** with **`problems`**.
+| `op` | Fields | Meaning |
+| --- | --- | --- |
+| `note` | `target`, `at`, `dur`, optional `args` | Play a note on a track or instrument. `args` are named parameters as in [Score model](/reference/score-model/). |
+| `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
+| `track` | `name`, `at`, `args` | Set parameters of a track (what a clip lane like `cut:` sets). |
+
+**Result:** `{ "accepted": 3, "late": 0, "first": 4800, "horizon": 8192 }`. `late` counts events whose time had already passed: they sounded at once. `first` is the earliest sample any event resolved to, and `horizon` is the sample up to which the engine has prepared audio.
+
+Anything wrong in the batch → **-32001** and nothing is queued; each entry of **`problems`** has an **`event`** field with the index of the event it is about. A batch that doesn't parse → **-32602**.
 
 ### Performance API
 
@@ -204,7 +185,7 @@ Typed calls that compile to the same `.nml` source as `eval`, so quantize, the s
 | -32000 | Protocol error (hello, version, token) |
 | -32001 | Rejected — compile/validation failed; see **`data.problems`** |
 
-**Problem object:** `message`, `help`, `line`, `column`, `span` (`start`, `end`), optional `in_definition`.
+**Problem object:** `message`, `help`, `line`, `column`, `span` (`start`, `end`), optional `in_definition`, and for `events.send` the `event` index.
 
 ## Evaluation log and replay
 
@@ -214,11 +195,11 @@ With default logging, the daemon writes session input under **`~/.niminal/sessio
 niminal render --replay ~/.niminal/sessions/<log> --out set.wav --channels 2
 ```
 
-Evaluations, **`control.set`**, MIDI/OSC (when enabled), and related control input are recorded so replay matches live audio.
+Evaluations, **`events.send`**, MIDI/OSC (when enabled), and related control input are recorded so replay matches live audio.
 
 ## Planned (spec, not in the daemon yet)
 
-The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) also describes **`event.update`**, **`file.put`**, remote TLS, and richer meter streaming. Those are not implemented on the wire today. Clips and scenes are defined with **`clip.define`** / **`scene.define`** (or `eval`), and finite events with **`event.stream`**.
+The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) also describes **`event.update`**, **`file.put`**, remote TLS, and richer meter streaming. Those are not implemented on the wire today. Clips and scenes are defined with **`clip.define`** / **`scene.define`** (or `eval`), and timed events with **`events.send`**.
 
 ## Minimal client flow
 

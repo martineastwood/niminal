@@ -3,6 +3,7 @@
 
 mod audio_in;
 mod controls;
+mod events;
 mod keyboard;
 mod log;
 mod midi_out;
@@ -13,6 +14,7 @@ mod session;
 mod sounding;
 
 pub use audio_in::AudioInput;
+pub use events::{At, Op, Sent};
 pub use log::{Expression, LogEntry, LogInput, from_lines, to_lines};
 pub use midi_out::MidiEvent;
 pub use project::{Entry, Problem, Project};

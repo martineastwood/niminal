@@ -223,10 +223,12 @@ fn event_stream_plays_notes_from_outside() {
         &mut d,
         c,
         3,
-        "event.stream",
-        json!({"events": [{"target": "lead", "at": "0.1sec", "dur": "0.2sec", "args": {"freq": "a4"}}]}),
+        "events.send",
+        json!({"events": [{"op": "note", "target": "lead", "at": "0.1sec", "dur": "0.2sec", "args": {"freq": "a4"}}]}),
     );
-    assert_eq!(ok["result"], json!({}));
+    assert_eq!(ok["result"]["accepted"], 1);
+    assert_eq!(ok["result"]["late"], 0);
+    assert_eq!(ok["result"]["first"], 4800);
     let out = d.session_mut().process(12_000).remove(0);
     assert_eq!(out[..4799].iter().fold(0.0f32, |m, s| m.max(s.abs())), 0.0);
     assert!(out[4800..8000].iter().fold(0.0f32, |m, s| m.max(s.abs())) > 0.1);
@@ -235,16 +237,20 @@ fn event_stream_plays_notes_from_outside() {
         &mut d,
         c,
         4,
-        "event.stream",
-        json!({"events": [{"target": "nobody", "at": "0sec", "dur": "1sec"}]}),
+        "events.send",
+        json!({"events": [
+            {"op": "note", "target": "lead", "at": "0sec", "dur": "1sec", "args": {"freq": "a4"}},
+            {"op": "note", "target": "nobody", "at": "0sec", "dur": "1sec"},
+        ]}),
     );
     assert_eq!(bad["error"]["code"], -32001);
+    assert_eq!(bad["error"]["data"]["problems"][0]["event"], 1);
     let malformed = call(
         &mut d,
         c,
         5,
-        "event.stream",
-        json!({"events": [{"target": "lead"}]}),
+        "events.send",
+        json!({"events": [{"op": "note", "target": "lead"}]}),
     );
     assert_eq!(malformed["error"]["code"], -32602);
 }
@@ -661,12 +667,12 @@ fn controls_are_typed_timestamped_and_reported_in_status() {
         &mut d,
         c,
         3,
-        "control.set",
-        json!({
-            "name": "cutoff", "value": 2.0, "unit": "khz", "at": 37, "smooth_ms": 0
-        }),
+        "events.send",
+        json!({"events": [{
+            "op": "control", "name": "cutoff", "value": 2.0, "unit": "khz", "at": 37, "glide": "0ms"
+        }]}),
     );
-    assert_eq!(update["result"]["at"], 37);
+    assert_eq!(update["result"]["first"], 37);
     d.session_mut().process(64);
     let status = call(&mut d, c, 4, "status", json!({}));
     assert_eq!(status["result"]["controls"][0]["name"], "cutoff");
@@ -678,10 +684,13 @@ fn controls_are_typed_timestamped_and_reported_in_status() {
         json!({"name": "missing", "value": 2.0}),
         json!({"name": "cutoff", "value": "2khz"}),
         json!({"name": "cutoff", "value": 2.0, "at": -1}),
-        json!({"name": "cutoff", "value": 2.0, "smooth_ms": -1}),
+        json!({"name": "cutoff", "value": 2.0, "glide": "-1sec"}),
         json!({"name": "cutoff", "value": 2.0, "unit": 7}),
     ] {
-        let result = call(&mut d, c, 5, "control.set", params);
+        let mut op = params;
+        op["op"] = json!("control");
+        op.as_object_mut().unwrap().entry("at").or_insert(json!("now"));
+        let result = call(&mut d, c, 5, "events.send", json!({"events": [op]}));
         assert!(result.get("error").is_some(), "{result}");
     }
 }

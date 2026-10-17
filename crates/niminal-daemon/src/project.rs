@@ -145,6 +145,8 @@ pub struct Problem {
     pub span: Option<Span>,
     /// For a problem in an earlier definition: its key.
     pub in_definition: Option<String>,
+    /// For a problem in a batch of events: which one.
+    pub event: Option<usize>,
 }
 
 impl Problem {
@@ -167,6 +169,7 @@ impl Problem {
             column: None,
             span: None,
             in_definition: None,
+            event: None,
         }
     }
 

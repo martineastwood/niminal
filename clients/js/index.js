@@ -146,16 +146,19 @@ class Client {
     return this.call("status");
   }
 
-  setControl(name, value, { unit, smooth_ms, at } = {}) {
-    const params = { name, value };
-    if (unit !== undefined) params.unit = unit;
-    if (smooth_ms !== undefined) params.smooth_ms = smooth_ms;
-    if (at !== undefined) params.at = at;
-    return this.call("control.set", params);
+  /**
+   * Send timed events to the engine: `{ op: "note" | "control" | "track", at, ... }`.
+   * `at` is a sample, "now" or a position such as "32beat". See the protocol reference.
+   */
+  sendEvents(events) {
+    return this.call("events.send", { events });
   }
 
-  streamEvents(events) {
-    return this.call("event.stream", { events });
+  setControl(name, value, { unit, glide, at = "now" } = {}) {
+    const op = { op: "control", name, value, at };
+    if (unit !== undefined) op.unit = unit;
+    if (glide !== undefined) op.glide = glide;
+    return this.sendEvents([op]);
   }
 
   subscribe(topics) {

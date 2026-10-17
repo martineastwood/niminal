@@ -903,12 +903,13 @@ fn random_live_edits_sound_the_same_prepared_as_direct() {
     );
 }
 
-fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_score::Event> {
-    use niminal_score::{Event, Time, Value};
+fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_daemon::Op> {
+    use niminal_daemon::{At, Op};
+    use niminal_score::{Time, Value};
     (0..count)
-        .map(|i| Event {
+        .map(|i| Op::Note {
             target: "lead".into(),
-            at: Time::Seconds(0.05 + seconds * i as f64 / count as f64),
+            at: At::Time(Time::Seconds(0.05 + seconds * i as f64 / count as f64)),
             dur: Time::Seconds(0.02),
             args: [("freq".to_string(), Value::Hz(200.0 + (i % 12) as f64 * 40.0))].into(),
         })
@@ -917,7 +918,7 @@ fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_score::Event> {
 
 /// Stream `events` in batches, each sent `ahead` frames before its first note, while the renderer plays.
 /// Returns the audio and what the renderer reported.
-fn stream_while_playing(events: &[niminal_score::Event], ahead: u64, frames: usize) -> (Vec<f32>, niminal_daemon::RenderMetrics) {
+fn stream_while_playing(events: &[niminal_daemon::Op], ahead: u64, frames: usize) -> (Vec<f32>, niminal_daemon::RenderMetrics) {
     let mut s = session();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = vec![0.0; frames];
@@ -925,11 +926,11 @@ fn stream_while_playing(events: &[niminal_score::Event], ahead: u64, frames: usi
     for chunk in out.chunks_mut(256) {
         let clock = r.clock();
         while sent < events.len() {
-            let start = (match events[sent].at { niminal_score::Time::Seconds(t) => t, _ => unreachable!() } * 48_000.0) as u64;
+            let start = match &events[sent] { niminal_daemon::Op::Note { at: niminal_daemon::At::Time(niminal_score::Time::Seconds(t)), .. } => (t * 48_000.0) as u64, _ => unreachable!() };
             if start > clock + ahead {
                 break;
             }
-            s.stream_events(vec![events[sent].clone()]).unwrap();
+            s.send_events(vec![events[sent].clone()]).unwrap();
             sent += 1;
         }
         s.prepare_realtime();
@@ -938,9 +939,9 @@ fn stream_while_playing(events: &[niminal_score::Event], ahead: u64, frames: usi
     (out, r.metrics())
 }
 
-fn offline(events: &[niminal_score::Event], frames: usize) -> Vec<f32> {
+fn offline(events: &[niminal_daemon::Op], frames: usize) -> Vec<f32> {
     let mut s = session();
-    s.stream_events(events.to_vec()).unwrap();
+    s.send_events(events.to_vec()).unwrap();
     s.process(frames).remove(0)
 }
 

@@ -1,6 +1,6 @@
-pub use niminal_daemon::{QuantizeDefaults, Session, from_lines, to_lines};
+pub use niminal_daemon::{At, Op, QuantizeDefaults, Session, from_lines, to_lines};
 pub use niminal_lang::Layout;
-pub use niminal_score::{Event, Time, Value};
+pub use niminal_score::{Time, Value};
 
 pub const SR: f32 = 48_000.0;
 pub const BAR: usize = 96_000; // 120bpm in 4/4

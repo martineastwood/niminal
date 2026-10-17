@@ -161,14 +161,20 @@ class Client:
     def status(self) -> Any:
         return self.call("status")
 
-    def set_control(self, name: str, value: float, unit: Optional[str] = None) -> Any:
-        params: dict[str, Any] = {"name": name, "value": value}
-        if unit is not None:
-            params["unit"] = unit
-        return self.call("control.set", params)
+    def send_events(self, events: list[dict]) -> Any:
+        """Send timed events: `{"op": "note" | "control" | "track", "at": ..., ...}`.
 
-    def stream_events(self, events: list[dict]) -> Any:
-        return self.call("event.stream", {"events": events})
+        `at` is a sample, "now" or a position such as "32beat".
+        """
+        return self.call("events.send", {"events": events})
+
+    def set_control(self, name: str, value: float, unit: Optional[str] = None, at: Any = "now", glide: Optional[str] = None) -> Any:
+        op: dict[str, Any] = {"op": "control", "name": name, "value": value, "at": at}
+        if unit is not None:
+            op["unit"] = unit
+        if glide is not None:
+            op["glide"] = glide
+        return self.send_events([op])
 
 
 # Back-compat alias used in the language spec examples.

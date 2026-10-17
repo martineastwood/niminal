@@ -27,6 +27,7 @@ use niminal_lang::{
 };
 use niminal_score::{Event, Tempo, Time, Value};
 
+use crate::events::{At, Op, Sent};
 use crate::keyboard::Keyboard;
 use crate::log::{Expression, LogEntry, LogInput};
 use crate::project::{Entry, Located, Origin, Piece, Problem, Project};
@@ -1023,15 +1024,15 @@ impl Session {
                 LogInput::Control {
                     name,
                     value,
-                    unit,
+                    frames,
                     at,
-                    smooth_ms,
                 } => {
-                    let _ =
-                        session.set_control(name, *value, unit.as_deref(), Some(*at), *smooth_ms);
+                    if let Some(index) = session.program.controls.iter().position(|c| c.name == *name) {
+                        let _ = session.queue_control(index, *value, *frames, *at);
+                    }
                 }
-                LogInput::Events { events } => {
-                    let _ = session.stream_events(events.clone());
+                LogInput::Note { event, start, dur } => {
+                    session.add_explicit((*start).max(session.clock), *dur, event.clone(), None);
                 }
                 LogInput::Key {
                     channel,

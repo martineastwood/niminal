@@ -7,9 +7,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use niminal_score::{ClipDef, Event, SceneDef};
+use niminal_score::{ClipDef, SceneDef};
 use serde_json::{Value, json};
 
+use crate::events::Op;
 use crate::project::Problem;
 use crate::session::{
     Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo,
@@ -328,8 +329,7 @@ impl Daemon {
                 self.session.panic();
                 Ok(json!({}))
             }
-            "event.stream" => self.stream(params),
-            "control.set" => self.control(params),
+            "events.send" => self.events_send(params),
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
             "status" => Ok(status_json(&self.session)),
             other => Err(RpcError::new(
@@ -389,51 +389,25 @@ impl Daemon {
         self.eval_outcome(result)
     }
 
-    fn control(&mut self, params: &Value) -> Result<Value, RpcError> {
-        let name = params
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`control.set` needs a string `name`"))?;
-        let value = params
-            .get("value")
-            .and_then(Value::as_f64)
-            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`control.set` needs a number `value`"))?;
-        let unit = match params.get("unit") {
-            None => None,
-            Some(value) => Some(
-                value
-                    .as_str()
-                    .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`unit` must be a string"))?,
-            ),
-        };
-        let smooth =
-            match params.get("smooth_ms") {
-                None => None,
-                Some(value) => Some(value.as_f64().ok_or_else(|| {
-                    RpcError::new(INVALID_PARAMS, "`smooth_ms` must be a number")
-                })?),
-            };
-        let at = optional_u64(params, "at")?;
-        let at = self
-            .session
-            .set_control(name, value, unit, at, smooth)
-            .map_err(|p| rejected(&p))?;
-        Ok(json!({ "at": at }))
-    }
-
-    fn stream(&mut self, params: &Value) -> Result<Value, RpcError> {
-        let events: Vec<Event> = params
+    fn events_send(&mut self, params: &Value) -> Result<Value, RpcError> {
+        let ops: Vec<Op> = params
             .get("events")
             .cloned()
-            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`event.stream` needs `events`"))
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`events.send` needs `events`"))
             .and_then(|v| {
                 serde_json::from_value(v)
                     .map_err(|e| RpcError::new(INVALID_PARAMS, &format!("bad events: {e}")))
             })?;
-        self.session
-            .stream_events(events)
+        let sent = self
+            .session
+            .send_events(ops)
             .map_err(|problems| rejected(&problems))?;
-        Ok(json!({}))
+        Ok(json!({
+            "accepted": sent.accepted,
+            "late": sent.late,
+            "first": sent.first,
+            "horizon": self.session.prepared_until(),
+        }))
     }
 
     fn subscribe(&mut self, client: ClientId, params: &Value, on: bool) -> Result<Value, RpcError> {
@@ -648,6 +622,7 @@ fn problem_json(p: &Problem) -> Value {
         "column": p.column,
         "span": p.span.map(|s| json!({"start": s.start, "end": s.end})),
         "in_definition": p.in_definition,
+        "event": p.event,
     })
 }
 

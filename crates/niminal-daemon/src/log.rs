@@ -17,17 +17,18 @@ pub enum LogInput {
         id: Option<u64>,
     },
     Panic,
+    /// A control moved to `value` (in the engine's unit) over `frames`, at sample `at`.
     Control {
         name: String,
-        value: f64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        unit: Option<String>,
+        value: f32,
+        frames: u64,
         at: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        smooth_ms: Option<f64>,
     },
-    Events {
-        events: Vec<Event>,
+    /// A note started at sample `start` and held for `dur` samples.
+    Note {
+        event: Event,
+        start: u64,
+        dur: u64,
     },
     /// A key on a MIDI keyboard: pressed with `velocity` from 1, or let go with 0.
     Key {

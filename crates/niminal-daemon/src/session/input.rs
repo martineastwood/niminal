@@ -3,37 +3,6 @@
 use super::*;
 
 impl Session {
-    /// Notes from outside, such as another program playing live. Each carries
-    /// the time (since the session started) at which it should sound; ones that
-    /// are already late sound immediately.
-    pub fn stream_events(&mut self, events: Vec<Event>) -> Result<(), Vec<Problem>> {
-        self.sync_realtime();
-        self.log.push(LogEntry {
-            sample: self.clock,
-            input: LogInput::Events {
-                events: events.clone(),
-            },
-        });
-        let mut problems = Vec::new();
-        for event in &events {
-            if let Err(e) = self.program.plan(event) {
-                problems.push(Problem::plain(format!("note for `{}`: {e}", event.target)));
-            }
-        }
-        if !problems.is_empty() {
-            return Err(problems);
-        }
-        for event in events {
-            let start = self
-                .samples(event.at.to_seconds(self.program.tempo))
-                .max(self.clock);
-            let dur = self.samples(event.dur.to_seconds(self.program.tempo));
-            self.add_explicit(start, dur, event, None);
-        }
-        self.wake_planner();
-        Ok(())
-    }
-
     /// A note handed to the session directly. If it falls in a stretch the planner has prepared already,
     /// the planner puts it in without redoing that stretch.
     pub(super) fn add_explicit(&mut self, start: u64, dur: u64, event: Event, key: Option<u32>) {
@@ -75,16 +44,30 @@ impl Session {
                 "control smoothing must be between 0ms and 60sec".into(),
             ));
         }
+        let frames = (seconds * f64::from(self.sample_rate)).round() as u64;
+        self.queue_control(index, converted, frames, at)
+            .map_err(|e| vec![Problem::plain(e)])
+    }
+
+    /// Move control `index` to `value` (in the engine's unit) at sample `at`, over `frames`.
+    pub(super) fn queue_control(
+        &mut self,
+        index: usize,
+        value: f32,
+        frames: u64,
+        at: u64,
+    ) -> Result<u64, &'static str> {
         if self.control_changes.len() >= crate::controls::CAPACITY {
-            return Err(error("the control update queue is full".into()));
+            return Err("the control update queue is full");
         }
+        let def = &self.program.controls[index];
         let change = crate::controls::Change {
             index,
             unit: def.unit,
             revision: self.controls[index].revision,
             at,
-            value: converted,
-            frames: (seconds * f64::from(self.sample_rate)).round() as u64,
+            value,
+            frames,
             serial: self.next_control,
             log_index: self.log.len(),
             applied: !self.detached,
@@ -92,7 +75,7 @@ impl Session {
         if let Some(planner) = &mut self.live {
             planner
                 .push_control(change)
-                .map_err(|_| error("the control update queue is full".into()))?;
+                .map_err(|_| "the control update queue is full")?;
         }
         self.next_control += 1;
         self.control_changes.push(change);
@@ -101,14 +84,141 @@ impl Session {
         self.log.push(LogEntry {
             sample: self.clock,
             input: LogInput::Control {
-                name: name.into(),
+                name: def.name.clone(),
                 value,
-                unit: unit.map(str::to_owned),
+                frames,
                 at,
-                smooth_ms,
             },
         });
         Ok(at)
+    }
+
+    /// The sample a time stands for: a sample as it is, `now` as the clock, and a position on the
+    /// transport counted from the bar origin.
+    pub(super) fn resolve(&self, at: At) -> u64 {
+        match at {
+            At::Sample(n) => n,
+            At::Now => self.clock,
+            At::Time(t) => {
+                let grid = self.grid();
+                let seconds = t.to_seconds(self.program.tempo);
+                (grid.origin as f64 + seconds * f64::from(self.sample_rate)).round().max(0.0) as u64
+            }
+        }
+    }
+
+    /// Do what a batch of events says. All of it is checked first: if any is wrong none of it is done.
+    pub fn send_events(&mut self, ops: Vec<Op>) -> Result<Sent, Vec<Problem>> {
+        self.sync_realtime();
+        enum Plan {
+            Note { event: Event, start: u64, dur: u64 },
+            Control { index: usize, value: f32, frames: u64, at: u64 },
+        }
+        let mut plans = Vec::new();
+        let mut problems = Vec::new();
+        let tempo = self.program.tempo;
+        for (n, op) in ops.iter().enumerate() {
+            let mut fail = |message: String| {
+                let mut p = Problem::plain(message);
+                p.event = Some(n);
+                problems.push(p);
+            };
+            match op {
+                Op::Note { target, at, args, dur } => {
+                    let event = Event {
+                        target: target.clone(),
+                        at: Time::Seconds(0.0),
+                        dur: *dur,
+                        args: args.clone(),
+                    };
+                    match self.program.plan(&event) {
+                        Ok(_) => plans.push(Plan::Note {
+                            start: self.resolve(*at),
+                            dur: self.samples(dur.to_seconds(tempo)),
+                            event,
+                        }),
+                        Err(e) => fail(format!("note for `{target}`: {e}")),
+                    }
+                }
+                Op::Control { name, at, value, unit, glide } => {
+                    let Some(index) = self.program.controls.iter().position(|c| c.name == *name) else {
+                        fail(format!("unknown control `{name}`"));
+                        continue;
+                    };
+                    let def = &self.program.controls[index];
+                    let converted = match def.convert(*value, unit.as_deref(), tempo) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            fail(e);
+                            continue;
+                        }
+                    };
+                    let seconds = glide.map_or(def.smooth_seconds, |g| g.to_seconds(tempo));
+                    if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
+                        fail("`glide` must be between 0 and 60sec".into());
+                        continue;
+                    }
+                    plans.push(Plan::Control {
+                        index,
+                        value: converted,
+                        frames: (seconds * f64::from(self.sample_rate)).round() as u64,
+                        at: self.resolve(*at),
+                    });
+                }
+                Op::Track { name, at, args } => {
+                    let at = self.resolve(*at);
+                    for (param, value) in args {
+                        let full = format!("{name}::{param}");
+                        let Some(index) = self.program.controls.iter().position(|c| c.name == full) else {
+                            fail(format!("`{name}` has no parameter `{param}`"));
+                            continue;
+                        };
+                        let def = &self.program.controls[index];
+                        match def.from_value(*value, tempo) {
+                            Ok(v) => plans.push(Plan::Control {
+                                index,
+                                value: v,
+                                frames: (def.smooth_seconds * f64::from(self.sample_rate)).round() as u64,
+                                at,
+                            }),
+                            Err(e) => fail(format!("parameter `{param}`: {e}")),
+                        }
+                    }
+                }
+            }
+        }
+        let queued = plans.iter().filter(|p| matches!(p, Plan::Control { .. })).count();
+        if problems.is_empty() && self.control_changes.len() + queued > crate::controls::CAPACITY {
+            problems.push(Problem::plain("the control update queue is full"));
+        }
+        if !problems.is_empty() {
+            return Err(problems);
+        }
+        let mut sent = Sent { accepted: ops.len(), late: 0, first: None };
+        let clock = self.clock;
+        for plan in plans {
+            let at = match plan {
+                Plan::Note { event, start, dur } => {
+                    let at = start;
+                    self.log.push(LogEntry {
+                        sample: clock,
+                        input: LogInput::Note { event: event.clone(), start: at, dur },
+                    });
+                    self.add_explicit(at.max(clock), dur, event, None);
+                    at
+                }
+                Plan::Control { index, value, frames, at } => {
+                    let _ = self.queue_control(index, value, frames, at.max(clock));
+                    at
+                }
+            };
+            if at < clock {
+                sent.late += 1;
+            }
+            sent.first = Some(sent.first.map_or(at, |f| f.min(at)));
+        }
+        self.wake_planner();
+        Ok(sent)
     }
 
     /// A message from a MIDI device or OSC sender. Every control bound to it moves,

@@ -115,7 +115,11 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     let stop = ((until.unwrap_or(0.0) * sr).max(note_end).round() as usize).max(input_len) as u64;
 
     let mut session = Session::playing(program.clone(), schedule, SAMPLE_RATE as f32);
-    session.stream_events(extra.to_vec()).map_err(|ps| problems(&ps))?;
+    let ops = extra
+        .iter()
+        .map(|e| niminal_daemon::Op::Note { target: e.target.clone(), at: niminal_daemon::At::Time(e.at), args: e.args.clone(), dur: e.dur })
+        .collect();
+    session.send_events(ops).map_err(|ps| problems(&ps))?;
     if options.stems {
         session.capture_stems();
     }
