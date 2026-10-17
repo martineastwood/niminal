@@ -157,7 +157,7 @@ One batched method for every timed thing a client can do. The whole batch is che
 | `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide` the parameter moves in a straight line to its new value. |
 | `off` | `id`, `at` | Release a note, so its envelope runs its release stage. An `off` before the note starts makes it a short blip. |
 | `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
-| `track` | `name`, `at`, `args` | Set parameters of a track (what a clip lane like `cut:` sets). |
+| `track` | `name`, `at`, `args`, optional `glide` | Set parameters of a track (what a clip lane like `cut:` sets). `glide` defaults to the parameter's own smoothing. Planned into prepared audio like notes, so a lane can move a parameter many times a second. |
 
 An **`id`** is a whole number the client picks, and it belongs to that connection: another client can use the same one. Using an id that is still sounding, or one that was never opened or has been let go of, fails the batch. Because the client picks it, a `note`, a `set` and an `off` can go in one batch with no round trip. When a client disconnects its held notes are released and its notes still waiting never sound.
 

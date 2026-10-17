@@ -229,6 +229,7 @@ pub(super) enum Fresh {
     Release { key: u32, at: u64 },
     Param { key: u32, name: &'static str, value: f32, at: u64 },
     Set(super::VoiceSet),
+    Track(super::TrackSet),
 }
 
 impl Fresh {
@@ -237,6 +238,7 @@ impl Fresh {
             Fresh::Note { start, .. } => *start,
             Fresh::Release { at, .. } | Fresh::Param { at, .. } => *at,
             Fresh::Set(set) => set.at,
+            Fresh::Track(set) => set.at,
         }
     }
 }
@@ -701,6 +703,10 @@ impl Session {
                     }
                     Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
                     Fresh::Param { key, name, value, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Param { key, name, value } }),
+                    Fresh::Track(set) => window.commands.push(Command {
+                        at: set.at.max(self.clock),
+                        kind: Kind::Control { key: set.key, value: set.value, frames: set.frames },
+                    }),
                     Fresh::Set(set) => {
                         if let Some(command) = set_command(&program, &set, set.at.max(self.clock), set.frames) {
                             window.commands.push(command);
@@ -1054,6 +1060,27 @@ impl Session {
             if let Some(command) = set_command(program, set, from, 0) {
                 window.commands.push(command);
             }
+        }
+        // track parameters moved by `track` events: those from this window, and after a replan the latest
+        // from before it for each, in case the discarded windows never played them
+        let mut latest: Vec<&super::TrackSet> = Vec::new();
+        for set in &self.track_sets {
+            if set.at >= from && set.at < to {
+                window.commands.push(Command {
+                    at: set.at,
+                    kind: Kind::Control { key: set.key.clone(), value: set.value, frames: set.frames },
+                });
+            } else if set.at < from && catch_up {
+                latest.retain(|l| l.key != set.key);
+                latest.push(set);
+            }
+        }
+        for set in latest {
+            let remaining = set.frames.saturating_sub(from - set.at);
+            window.commands.push(Command {
+                at: from,
+                kind: Kind::Control { key: set.key.clone(), value: set.value, frames: remaining },
+            });
         }
         // keys that came up: each key is its own note, so a release that is repeated in a later window does no harm
         for off in &self.key_offs {

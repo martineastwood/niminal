@@ -84,7 +84,7 @@ fn a_track_op_sets_a_track_parameter() {
     let render = |cutoff: &str| {
         let mut s = session();
         s.send_events(0, vec![
-            Op::Track { name: "pad".into(), at: At::Sample(0), args: [("cut".to_string(), cutoff.parse().unwrap())].into(), tag: None },
+            Op::Track { name: "pad".into(), at: At::Sample(0), args: [("cut".to_string(), cutoff.parse().unwrap())].into(), glide: None, tag: None },
             note("pad", At::Sample(10), 2_000.0),
         ])
         .unwrap();
@@ -93,7 +93,7 @@ fn a_track_op_sets_a_track_parameter() {
     let (dull, bright) = (render("100hz"), render("8khz"));
     assert!(peak(&bright) > peak(&dull) * 2.0, "{} vs {}", peak(&bright), peak(&dull));
     let mut s = session();
-    let problems = s.send_events(0, vec![Op::Track { name: "pad".into(), at: At::Now, args: [("nope".to_string(), Value::Num(1.0))].into(), tag: None }]).unwrap_err();
+    let problems = s.send_events(0, vec![Op::Track { name: "pad".into(), at: At::Now, args: [("nope".to_string(), Value::Num(1.0))].into(), glide: None, tag: None }]).unwrap_err();
     assert!(problems[0].message.contains("no parameter"), "{}", problems[0].message);
 }
 

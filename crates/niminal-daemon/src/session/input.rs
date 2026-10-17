@@ -202,6 +202,7 @@ impl Session {
         enum Plan {
             Note { event: Event, instrument: String, start: u64, dur: u64, id: Option<u64>, tag: Option<String>, musical: Option<bool> },
             Control { name: String, value: f32, frames: u64, at: u64, op: usize, tag: Option<String> },
+            Track { key: String, value: f32, frames: u64, at: u64, tag: Option<String> },
             Set { id: u64, args: Vec<(String, Value, f32)>, frames: u64, at: u64, tag: Option<String> },
             Off { id: u64, at: u64, tag: Option<String> },
         }
@@ -276,10 +277,10 @@ impl Session {
                     controls += 1;
                     plans.push(Plan::Control { name: name.clone(), value: converted, frames: (seconds * rate).round() as u64, at, op: n, tag: tag.clone() });
                 }
-                Op::Track { name, at, args, tag } => {
+                Op::Track { name, at, args, glide, tag } => {
                     let raw = at;
                     let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Track { name: name.clone(), at: self.logged(*raw), args: args.clone(), tag: tag.clone() });
+                    resolved[n] = Some(Op::Track { name: name.clone(), at: self.logged(*raw), args: args.clone(), glide: *glide, tag: tag.clone() });
                     let program = self.program_at(at);
                     for (param, value) in args {
                         let full = format!("{name}::{param}");
@@ -287,10 +288,14 @@ impl Session {
                             fail(format!("`{name}` has no parameter `{param}`"));
                             continue;
                         };
+                        let seconds = glide.map_or(def.smooth_seconds, |g| g.to_seconds(program.tempo));
+                        if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
+                            fail("`glide` must be between 0 and 60sec".into());
+                            continue;
+                        }
                         match def.from_value(*value, program.tempo) {
                             Ok(v) => {
-                                controls += 1;
-                                plans.push(Plan::Control { name: full, value: v, frames: (def.smooth_seconds * rate).round() as u64, at, op: n, tag: tag.clone() });
+                                plans.push(Plan::Track { key: def.key.clone(), value: v, frames: (seconds * rate).round() as u64, at, tag: tag.clone() });
                             }
                             Err(e) => fail(format!("parameter `{param}`: {e}")),
                         }
@@ -378,6 +383,15 @@ impl Session {
                         Ok(()) => self.control_owners.push(ControlOwner { serial, client, tag }),
                         Err(e) => self.notify(e.into()),
                     }
+                    at
+                }
+                Plan::Track { key, value, frames, at, tag } => {
+                    let set = TrackSet { key, value, frames, at: at.max(clock), client: Some(client), tag, done: false };
+                    if self.live.is_some() {
+                        self.fresh.push(realtime::Fresh::Track(set.clone()));
+                    }
+                    let place = self.track_sets.partition_point(|s| s.at <= set.at);
+                    self.track_sets.insert(place, set);
                     at
                 }
                 Plan::Set { id, args, frames, at, tag } => {
@@ -516,6 +530,13 @@ impl Session {
                 }
             }
         }
+        let mut tracks = std::mem::take(&mut self.track_sets);
+        tracks.retain(|s| {
+            let drop = !s.done && s.at >= from && mine(s.client, &s.tag);
+            done.cancelled += usize::from(drop);
+            !drop
+        });
+        self.track_sets = tracks;
         replan |= done.cancelled > before;
 
         // control changes the renderer has not carried out
@@ -599,10 +620,11 @@ impl Session {
         for key in held {
             self.release_at(key, self.clock, None);
         }
-        let before = self.upcoming.len();
+        let before = self.upcoming.len() + self.track_sets.len();
         let clock = self.clock;
         self.upcoming.retain(|u| u.client != Some(client) || u.start < clock || u.key.is_some());
-        if self.upcoming.len() != before {
+        self.track_sets.retain(|s| s.client != Some(client) || s.at < clock);
+        if self.upcoming.len() + self.track_sets.len() != before {
             self.invalidate_windows();
         }
     }

@@ -128,6 +128,9 @@ pub enum Op {
         name: String,
         at: At,
         args: BTreeMap<String, Value>,
+        /// How long to take getting there; the parameter's own smoothing if not given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        glide: Option<Time>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },
