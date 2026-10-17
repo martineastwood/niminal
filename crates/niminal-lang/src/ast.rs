@@ -327,6 +327,7 @@ impl Rate {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum TypeSpec {
     /// `hz`, `db`, `sec`, `num`, `int`
     Unit(Ident),

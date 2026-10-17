@@ -7,6 +7,9 @@ use std::time::SystemTime;
 
 use niminal_engine::Table;
 
+/// A kit: each sample's name with its channels as tables.
+pub type Kit = Vec<(String, Vec<Arc<Table>>)>;
+
 /// Channels of a loaded file, with the modification time it had then.
 type Loaded = (Option<SystemTime>, Vec<Arc<Table>>);
 
@@ -138,7 +141,7 @@ impl Samples {
 
     /// Every WAV file in a folder, by name without the extension, in name order.
     /// Each entry is the file's channels as tables.
-    pub fn load_kit(&self, path: &str) -> Result<Vec<(String, Vec<Arc<Table>>)>, String> {
+    pub fn load_kit(&self, path: &str) -> Result<Kit, String> {
         let dir = self.resolve(path);
         let entries = std::fs::read_dir(&dir)
             .map_err(|e| format!("can't read the folder {}: {e}", dir.display()))?;

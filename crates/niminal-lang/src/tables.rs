@@ -341,9 +341,9 @@ pub fn random(size: usize, dist: Dist, seed: u64) -> Table {
             }
             Dist::Poisson => {
                 // Simple count truncated to -1..1 scale.
-                let lambda = 4.0;
+                let lambda: f64 = 4.0;
                 let mut k = 0;
-                let mut p = (-lambda as f64).exp();
+                let mut p = (-lambda).exp();
                 let mut s = p;
                 let u = next();
                 while u > s && k < 20 {

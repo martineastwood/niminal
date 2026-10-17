@@ -3405,7 +3405,7 @@ fn parse_events(raw: &str, span: Span, cx: &Context) -> Res<Vec<ScoredNote>> {
             .parse()
             .map_err(|e: niminal_score::ParseError| err(e.to_string()))?;
         let value = atom_value(tokens[1], cx.sample_names)
-            .map_err(|e| err(e))?;
+            .map_err(err)?;
         let dur: Time = tokens[3]
             .parse()
             .map_err(|e: niminal_score::ParseError| err(e.to_string()))?;
@@ -3424,8 +3424,7 @@ fn parse_events(raw: &str, span: Span, cx: &Context) -> Res<Vec<ScoredNote>> {
                 } else {
                     (n, v)
                 }
-            } else if part.ends_with(':') {
-                let n = &part[..part.len() - 1];
+            } else if let Some(n) = part.strip_suffix(':') {
                 i += 1;
                 if i >= tokens.len() {
                     return Err(err(format!("`{n}:` needs a value")));
@@ -3436,7 +3435,7 @@ fn parse_events(raw: &str, span: Span, cx: &Context) -> Res<Vec<ScoredNote>> {
                     "expected `name: value` after the duration, found `{part}`"
                 )));
             };
-            let v = atom_value(val_tok, cx.sample_names).map_err(|e| err(e))?;
+            let v = atom_value(val_tok, cx.sample_names).map_err(err)?;
             match name {
                 "gain" => {
                     step.gain = Some(match v {
@@ -3530,7 +3529,7 @@ fn section_to_clip(section: niminal_score::Section, tempo: Tempo) -> Res<Clip> {
 fn clipdef_to_clip(def: &niminal_score::ClipDef, cx: &Context) -> Res<Clip> {
     // Re-parse the canonical source so lanes go through the same path as handwritten clips.
     let src = def.to_source();
-    let items = crate::parser::parse(&src).map_err(|d| d)?;
+    let items = crate::parser::parse(&src)?;
     let Item::Clip(block) = items
         .into_iter()
         .find(|i| matches!(i, Item::Clip(_)))

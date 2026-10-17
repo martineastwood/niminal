@@ -1,6 +1,6 @@
 ---
 title: Engine API
-description: JSON-RPC 2.0 over WebSocket for the sound server inside the daemon: timestamped notes, parameter changes, definitions and tempo.
+description: "JSON-RPC 2.0 over WebSocket for the sound server inside the daemon: timestamped notes, parameter changes, definitions and tempo."
 ---
 
 The **engine** is a sound server. It holds the instruments, effects, tracks, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions and tempo. It knows nothing of clips, scenes, patterns or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.

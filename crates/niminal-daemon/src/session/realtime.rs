@@ -210,6 +210,7 @@ fn send_midi(
     }
 }
 
+#[allow(clippy::large_enum_variant)] // boxing would allocate on the audio thread
 enum Retired {
     Window(Box<Window>),
     Voice(Voice),

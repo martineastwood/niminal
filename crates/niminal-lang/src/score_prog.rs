@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod score_prog {
+mod tests {
     use crate::compile;
     use crate::schedule::Schedule;
     use niminal_score::{Tempo, Time, Value};
