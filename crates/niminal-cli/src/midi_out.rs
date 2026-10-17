@@ -48,6 +48,11 @@ impl Pump {
         sent
     }
 
+    /// Whether any event is waiting for the sound card to catch up with it.
+    pub fn is_waiting(&self) -> bool {
+        !self.waiting.is_empty()
+    }
+
     /// End every note that is still sounding, as when the daemon stops.
     pub fn all_off(&mut self, ports: &mut impl Ports) {
         for (port, channel, note) in self.sounding.drain(..) {
@@ -109,7 +114,8 @@ impl MidiOutput {
                 let (mut pump, mut devices) = (Pump::default(), Devices::default());
                 while !stop.load(Ordering::Relaxed) {
                     pump.run(played.load(Ordering::Acquire), &mut incoming, &mut devices);
-                    thread::sleep(Duration::from_millis(1));
+                    // Events are rendered well before they play, so with none waiting there is no hurry to look.
+                    thread::sleep(Duration::from_millis(if pump.is_waiting() { 1 } else { 5 }));
                 }
                 pump.all_off(&mut devices);
             }),

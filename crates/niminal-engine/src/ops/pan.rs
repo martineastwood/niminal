@@ -64,11 +64,14 @@ pub fn pan_gains(speakers: &[Option<f32>], azimuth: f32, spread: f32) -> [f32; c
 pub struct PanChannel {
     speakers: Arc<[Option<f32>]>,
     index: usize,
+    /// The azimuth and spread the gain was last worked out for, and that gain. Panning rarely moves,
+    /// and working it out is far dearer than the multiply.
+    last: Option<(f32, f32, f32)>,
 }
 
 impl PanChannel {
     pub fn new(speakers: Arc<[Option<f32>]>, index: usize) -> Self {
-        PanChannel { speakers, index }
+        PanChannel { speakers, index, last: None }
     }
 }
 
@@ -89,7 +92,16 @@ impl Opcode for PanChannel {
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (i, o) in out.iter_mut().enumerate() {
-            *o = inputs[0][i] * pan_gains(&self.speakers, inputs[1][i], inputs[2][i])[self.index];
+            let (azimuth, spread) = (inputs[1][i], inputs[2][i]);
+            let gain = match self.last {
+                Some((a, s, gain)) if a.to_bits() == azimuth.to_bits() && s.to_bits() == spread.to_bits() => gain,
+                _ => {
+                    let gain = pan_gains(&self.speakers, azimuth, spread)[self.index];
+                    self.last = Some((azimuth, spread, gain));
+                    gain
+                }
+            };
+            *o = inputs[0][i] * gain;
         }
     }
 }

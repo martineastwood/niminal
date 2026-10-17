@@ -40,6 +40,15 @@ pub struct Master {
     gain: f64,
     /// The weights that find the signal between two samples, for each of `PHASES`.
     between: [[f64; TAPS]; PHASES.len()],
+    /// The most any of those weights' absolute values add up to: between two samples the signal can be
+    /// no louder than this times the loudest of the samples looked at.
+    between_reach: f64,
+    /// How many entries of `required` are below 1.
+    reduced: usize,
+    /// How many entries of `windowed_min` are below 1.
+    reduced_min: usize,
+    /// Set once `at_rest` has been seen to hold, and until a sample is next processed.
+    rest: bool,
 }
 
 /// The per-channel parts: DC blocker memory and the lookahead delay line.
@@ -64,6 +73,8 @@ impl Master {
     pub fn with_channels(sample_rate: f32, ceiling: f32, channels: usize) -> Self {
         let sr = f64::from(sample_rate);
         let window = ((LOOKAHEAD_SECONDS * sample_rate).round() as usize).max(2);
+        let between: [[f64; TAPS]; PHASES.len()] = std::array::from_fn(|i| interpolation_weights(PHASES[i]));
+        let between_reach = between.iter().map(|w| w.iter().map(|w| w.abs()).sum::<f64>()).fold(1.0, f64::max);
         Master {
             channels: (0..channels)
                 .map(|_| ChannelState { dc_x1: 0.0, dc_y1: 0.0, delay: vec![0.0; window], recent: [0.0; TAPS] })
@@ -77,7 +88,11 @@ impl Master {
             min_sum: window as f64,
             release_coeff: 1.0 - (-1.0 / (RELEASE_SECONDS * sr)).exp(),
             gain: 1.0,
-            between: std::array::from_fn(|i| interpolation_weights(PHASES[i])),
+            between,
+            between_reach,
+            reduced: 0,
+            reduced_min: 0,
+            rest: false,
         }
     }
 
@@ -94,6 +109,9 @@ impl Master {
         self.min_sum = self.window as f64;
         self.gain = 1.0;
         self.pos = 0;
+        self.reduced = 0;
+        self.reduced_min = 0;
+        self.rest = false;
     }
 
     /// Nothing is in the delay line, no gain reduction is in progress and the DC blocker has
@@ -127,8 +145,11 @@ impl Master {
     pub fn process_block(&mut self, block: &mut [[f32; crate::opcode::BLOCK]], frames: usize) {
         assert_eq!(block.len(), self.channels.len(), "one block per channel");
         // Silence into a master that has nothing left to say comes out as silence: skip the work.
-        if self.at_rest() && block.iter().all(|b| b[..frames].iter().all(|s| *s == 0.0)) {
-            return;
+        if block.iter().all(|b| b[..frames].iter().all(|s| *s == 0.0)) {
+            self.rest = self.rest || self.at_rest();
+            if self.rest {
+                return;
+            }
         }
         let mut frame = [0.0f32; crate::mixer::MAX_CHANNELS];
         let n = block.len();
@@ -160,6 +181,7 @@ impl Master {
     }
 
     fn process_frame(&mut self, frame: &mut [f32]) {
+        self.rest = false;
         let n = self.window;
         let p = self.pos;
 
@@ -169,6 +191,8 @@ impl Master {
             let input = f64::from(*sample);
             let input = if input.is_finite() { input } else { 0.0 };
             let x = input - state.dc_x1 + self.dc_r * state.dc_y1;
+            // the blocker's memory dies away for ever; far below hearing it is set to nothing
+            let x = if x.abs() < 1e-18 { 0.0 } else { x };
             state.dc_x1 = input;
             state.dc_y1 = x;
             state.recent.rotate_right(1);
@@ -177,20 +201,31 @@ impl Master {
             // can be looked at with samples from before and after.
             let sample = state.recent[HALF];
             state.delay[p] = sample;
-            let between = self.between.iter().map(|w| w.iter().zip(&state.recent).map(|(w, r)| w * r).sum::<f64>().abs());
-            peak = between.fold(peak.max(sample.abs()), f64::max);
+            peak = peak.max(sample.abs());
+            // the stretches between samples need looking at only if they could reach the ceiling
+            let loudest = state.recent.iter().fold(0.0f64, |m, r| m.max(r.abs()));
+            if loudest * self.between_reach > self.ceiling {
+                let between = self.between.iter().map(|w| w.iter().zip(&state.recent).map(|(w, r)| w * r).sum::<f64>().abs());
+                peak = between.fold(peak, f64::max);
+            }
         }
-        self.required[p] = if peak > self.ceiling { self.ceiling / peak } else { 1.0 };
+        let required = if peak > self.ceiling { self.ceiling / peak } else { 1.0 };
+        self.reduced = self.reduced + usize::from(required < 1.0) - usize::from(self.required[p] < 1.0);
+        self.required[p] = required;
 
-        let min = self.required.iter().fold(1.0f64, |m, r| m.min(*r));
-        self.min_sum += min - self.windowed_min[p];
+        let min = if self.reduced == 0 { 1.0 } else { self.required.iter().fold(1.0f64, |m, r| m.min(*r)) };
+        self.reduced_min = self.reduced_min + usize::from(min < 1.0) - usize::from(self.windowed_min[p] < 1.0);
+        // the running sum drifts a little with every change, so when nothing is reduced it is set exactly
+        self.min_sum = if self.reduced_min == 0 { n as f64 } else { self.min_sum + min - self.windowed_min[p] };
         self.windowed_min[p] = min;
         let smoothed = (self.min_sum / n as f64).min(1.0);
 
         self.gain = if smoothed < self.gain {
             smoothed
         } else {
-            self.gain + (smoothed - self.gain) * self.release_coeff
+            let gain = self.gain + (smoothed - self.gain) * self.release_coeff;
+            // recovery only ever gets nearer to 1: the last inaudible sliver is dropped so the limiter can rest
+            if smoothed == 1.0 && 1.0 - gain < 1e-12 { 1.0 } else { gain }
         };
 
         // The oldest entry in each ring is the sample from `latency` ago.
@@ -215,4 +250,26 @@ fn interpolation_weights(phase: f64) -> [f64; TAPS] {
     let sum: f64 = weights.iter().sum();
     weights.iter_mut().for_each(|w| *w /= sum);
     weights
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_master_that_was_limiting_comes_to_rest_in_silence() {
+        let mut master = Master::with_channels(48_000.0, DEFAULT_CEILING, 2);
+        let mut block = [[1.5f32; crate::opcode::BLOCK]; 2];
+        for _ in 0..200 {
+            master.process_block(&mut block, crate::opcode::BLOCK);
+            block = [[1.5; crate::opcode::BLOCK]; 2];
+        }
+        assert!(!master.at_rest());
+        let seconds = 30;
+        for _ in 0..seconds * 48_000 / crate::opcode::BLOCK {
+            block = [[0.0; crate::opcode::BLOCK]; 2];
+            master.process_block(&mut block, crate::opcode::BLOCK);
+        }
+        assert!(master.at_rest(), "gain {} after {seconds}s of silence", master.gain);
+    }
 }

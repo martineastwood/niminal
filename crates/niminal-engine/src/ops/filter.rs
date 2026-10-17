@@ -1,3 +1,4 @@
+use crate::denormals::flush;
 use crate::opcode::{Opcode, Port, ProcessCtx};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,8 +107,8 @@ impl Opcode for Svf {
             let v3 = x - self.ic2;
             let v1 = self.a1 * self.ic1 + self.a2 * v3;
             let v2 = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
-            self.ic1 = 2.0 * v1 - self.ic1;
-            self.ic2 = 2.0 * v2 - self.ic2;
+            self.ic1 = flush(2.0 * v1 - self.ic1);
+            self.ic2 = flush(2.0 * v2 - self.ic2);
 
             let y = match self.mode {
                 FilterMode::Low => v2,

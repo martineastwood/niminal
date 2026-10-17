@@ -29,7 +29,7 @@ impl Default for RealtimeConfig {
     fn default() -> Self {
         Self {
             lookahead_frames: 8192,
-            window_frames: 512,
+            window_frames: 2048,
             queued_windows: 32,
             max_voices: 512,
         }
@@ -1235,6 +1235,7 @@ impl RealtimeRenderer {
     /// heap destruction, including voice completion, edits and panic.
     pub fn render(&mut self, frames: usize, sink: &mut dyn FnMut(&[[f32; BLOCK]], usize)) {
         let started = std::time::Instant::now();
+        let _flush = niminal_engine::denormals::FlushToZero::new();
         let end = self.clock.saturating_add(frames as u64);
         let mut block = [[0.0; BLOCK]; MAX_CHANNELS];
         let mut stale_budget = self.config.queued_windows;

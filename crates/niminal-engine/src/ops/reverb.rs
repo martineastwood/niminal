@@ -1,3 +1,4 @@
+use crate::denormals::flush32 as flush;
 use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
 // The classic Freeverb network: eight parallel lowpass-feedback combs into four
@@ -13,10 +14,6 @@ const CHANNEL_SPREAD: usize = 23;
 /// The most the network can amplify what is stored in its combs on the way
 /// out: eight combs summed, the wet scale, and some allpass headroom.
 const OUTPUT_GAIN_BOUND: f32 = COMB_LENGTHS.len() as f32 * WET_SCALE * 2.0;
-
-fn flush(x: f32) -> f32 {
-    if x.abs() < 1e-20 { 0.0 } else { x }
-}
 
 #[derive(Clone)]
 struct Comb {
@@ -125,14 +122,16 @@ impl Opcode for Reverb {
                 c.store = flush(y * damp2 + c.store * damp1);
                 c.buf[c.pos] = input + c.store * feedback;
                 loudest = loudest.max(c.buf[c.pos].abs());
-                c.pos = (c.pos + 1) % c.buf.len();
+                c.pos += 1;
+                if c.pos == c.buf.len() { c.pos = 0; }
                 sum += y;
             }
             for a in &mut self.allpasses {
                 let buffered = a.buf[a.pos];
                 let y = buffered - sum;
                 a.buf[a.pos] = flush(sum + buffered * ALLPASS_FEEDBACK);
-                a.pos = (a.pos + 1) % a.buf.len();
+                a.pos += 1;
+                if a.pos == a.buf.len() { a.pos = 0; }
                 sum = y;
             }
             *o = sum * WET_SCALE;

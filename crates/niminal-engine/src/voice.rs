@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::graph::Graph;
 use crate::mixer::{Buses, MAX_CHANNELS};
-use crate::opcode::{BLOCK, Opcode, ProcessCtx};
+use crate::opcode::{BLOCK, Opcode, ProcessCtx, TAIL_LEVEL};
 
 /// One running note: a private copy of every opcode's state plus the signal
 /// buffers that connect them.
@@ -352,6 +352,15 @@ impl Voice {
                 && self.graph.tail == 0.0
                 && self.choke_left.is_none()
                 && !self.ops.iter().any(|op| op.is_active()))
+    }
+
+    /// Whether the last `frames` samples put nothing audible out (to the outputs or the buses) and no
+    /// opcode has a tail left to ring out.
+    pub fn is_quiet(&self, frames: usize) -> bool {
+        let quiet = |slot: usize| self.slots[slot][..frames].iter().all(|s| s.abs() < TAIL_LEVEL);
+        self.level < TAIL_LEVEL
+            && !self.ops.iter().any(|op| op.is_active())
+            && self.graph.sends.iter().all(|&(_, _, slot, _)| quiet(slot))
     }
 
     /// True once the voice produced NaN or infinity. It is silenced from then

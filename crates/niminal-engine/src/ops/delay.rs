@@ -1,3 +1,4 @@
+use crate::denormals::flush32;
 use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
 /// A line that has only ever held silence counts as quiet from the start.
@@ -99,7 +100,7 @@ impl Opcode for Delay {
             let delayed = newer + (older - newer) * frac;
 
             let feedback = inputs[2][i].clamp(0.0, 0.995);
-            let written = inputs[0][i] + feedback * delayed;
+            let written = flush32(inputs[0][i] + feedback * delayed);
             self.buf[self.write] = written;
             self.quiet_run = if written.abs() < TAIL_LEVEL { self.quiet_run.saturating_add(1) } else { 0 };
             self.in_flight = samples.ceil() as usize + 1;

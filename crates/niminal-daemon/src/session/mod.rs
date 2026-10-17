@@ -842,6 +842,8 @@ impl Session {
             !self.detached,
             "a detached session is driven by its renderer"
         );
+        // the same mode as the live renderer, so that the two render alike
+        let _flush = niminal_engine::denormals::FlushToZero::new();
         let end = self.clock + frames as u64;
         let channels = self.layout.channels();
         let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];

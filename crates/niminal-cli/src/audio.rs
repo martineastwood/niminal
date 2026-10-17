@@ -268,7 +268,7 @@ struct RenderWorker {
 
 /// How many windows the planner makes while it holds the daemon, so that a change after a big edit
 /// (when every window is made again) waits for a few windows rather than for all of them.
-const PLAN_STEP: usize = 2;
+const PLAN_STEP: usize = 1;
 
 fn start_planner(daemon: Shared, stop: Arc<AtomicBool>, health: Arc<Health>) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new().name("niminal-plan".into()).spawn(move || {
@@ -296,9 +296,9 @@ fn start_planner(daemon: Shared, stop: Arc<AtomicBool>, health: Arc<Health>) -> 
                         // Some windows are still to plan, but whoever is waiting for the daemon goes first.
                         thread::sleep(Duration::from_micros(100));
                     } else {
-                        // A window is about 10ms of sound and the plan reaches 170ms ahead, so there is no
+                        // A window is up to 40ms of sound and the plan reaches 170ms ahead, so there is no
                         // hurry. A change that lands wakes this thread at once.
-                        thread::park_timeout(Duration::from_millis(8));
+                        thread::park_timeout(Duration::from_millis(30));
                     }
                 }
                 // someone is evaluating: look again in a moment
@@ -345,7 +345,8 @@ impl RenderWorker {
                 if free >= chunk {
                     fill_queue(&mut renderer, &mut producer, chunk, clock.load(Ordering::Acquire), &epoch, &health);
                 } else {
-                    thread::sleep(Duration::from_secs_f64(((chunk - free) as f64 / rate).clamp(0.001, 0.002)));
+                    // The sound card frees `chunk` frames about every `chunk / rate`, so there is nothing to do sooner.
+                    thread::sleep(Duration::from_secs_f64(((chunk - free) as f64 / rate).clamp(0.001, 0.004)));
                 }
             }
         });

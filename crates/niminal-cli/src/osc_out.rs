@@ -93,7 +93,8 @@ impl OscOutput {
                     if !taps.is_empty() {
                         sender.poll(&taps, Instant::now());
                     }
-                    thread::sleep(Duration::from_millis(4));
+                    // most projects send nothing, so look less often until one does
+                    thread::sleep(Duration::from_millis(if taps.is_empty() { 50 } else { 4 }));
                 }
             }),
         })

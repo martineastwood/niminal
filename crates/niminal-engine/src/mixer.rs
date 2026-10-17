@@ -220,6 +220,8 @@ struct Track {
     chain: Option<Voice>,
     voices: Vec<(u64, Voice)>,
     chain_silenced: bool,
+    /// How many samples in a row the chain has had no input and put nothing audible out.
+    chain_quiet: usize,
 }
 
 /// Voices that may sound at once unless told otherwise.
@@ -257,7 +259,15 @@ pub struct Mixer {
     max_voices: usize,
     stolen: usize,
     muted: bool,
+    /// Block-sized working buffers for `process_inner`, kept so they are not cleared again every block.
+    summed: Vec<[f32; BLOCK]>,
+    scratch: Vec<[f32; BLOCK]>,
+    processed: Vec<[f32; BLOCK]>,
 }
+
+/// How long a track's effect chain must have had nothing going in and nothing coming out before it is
+/// left alone until something arrives, in seconds.
+const CHAIN_REST_SECONDS: f32 = 0.1;
 
 impl Mixer {
     /// `bus_channels` gives the channel count of each bus; voices and the master
@@ -286,6 +296,7 @@ impl Mixer {
                 def,
                 voices: Vec::new(),
                 chain_silenced: false,
+                chain_quiet: 0,
             })
             .collect();
         Ok(Mixer {
@@ -302,6 +313,9 @@ impl Mixer {
             max_voices: DEFAULT_MAX_VOICES,
             stolen: 0,
             muted: false,
+            summed: vec![[0.0; BLOCK]; MAX_CHANNELS],
+            scratch: vec![[0.0; BLOCK]; MAX_CHANNELS],
+            processed: vec![[0.0; BLOCK]; MAX_CHANNELS],
         })
     }
 
@@ -496,6 +510,7 @@ impl Mixer {
             track.voices.clear();
             track.chain = track.def.chain.as_ref().map(|g| Voice::new(g.clone(), rate));
             track.chain_silenced = false;
+            track.chain_quiet = 0;
         }
         self.buses.clear();
         self.muted = false;
@@ -579,6 +594,8 @@ impl Mixer {
     fn process_inner(&mut self, out: &mut [[f32; BLOCK]], frames: usize, mut retired: Option<&mut Vec<Voice>>) {
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
         assert_eq!(out.len(), self.channels, "one output block per master channel");
+        // every way of rendering audio comes through here, so they all treat tiny numbers alike
+        let _flush = crate::denormals::FlushToZero::new();
         out.iter_mut().for_each(|c| c[..frames].fill(0.0));
         if self.muted {
             self.buses.clear();
@@ -587,9 +604,8 @@ impl Mixer {
         self.buses.begin_block(frames);
 
         let n = self.channels;
-        let mut summed = [[0.0f32; BLOCK]; MAX_CHANNELS];
-        let mut scratch = [[0.0f32; BLOCK]; MAX_CHANNELS];
-        let mut processed = [[0.0f32; BLOCK]; MAX_CHANNELS];
+        let (summed, scratch, processed) = (&mut self.summed, &mut self.scratch, &mut self.processed);
+        let rest_after = (CHAIN_REST_SECONDS * self.sample_rate) as usize;
 
         for &t in &self.order {
             let track = &mut self.tracks[t];
@@ -620,20 +636,28 @@ impl Mixer {
             let result: &[[f32; BLOCK]] = match &mut track.chain {
                 None => &summed[..n],
                 Some(chain) => {
-                    for (i, input) in track.def.inputs.iter().enumerate() {
-                        match *input {
-                            ChainInput::It { channel } => chain.set_input(i, &summed[channel][..frames]),
-                            ChainInput::Audio { channel } => chain.set_input(i, &self.audio_in[channel][..frames]),
-                            ChainInput::Bus { bus, channel } => {
-                                chain.set_input(i, self.buses.get(bus, channel, frames));
-                            }
-                        }
-                    }
                     let out_channels = chain.channels();
-                    chain.process_blocks(&mut processed[..out_channels], frames, &mut self.buses);
-                    if chain.is_poisoned() && !track.chain_silenced {
-                        track.chain_silenced = true;
-                        self.silenced += 1;
+                    let heard = |input: &ChainInput| -> &[f32] {
+                        match *input {
+                            ChainInput::It { channel } => &summed[channel][..frames],
+                            ChainInput::Audio { channel } => &self.audio_in[channel][..frames],
+                            ChainInput::Bus { bus, channel } => self.buses.get(bus, channel, frames),
+                        }
+                    };
+                    let silent_in = track.def.inputs.iter().all(|input| heard(input).iter().all(|s| *s == 0.0));
+                    if silent_in && track.chain_quiet >= rest_after {
+                        // nothing to ring out and nothing coming in: the chain stays as it is, and says nothing
+                        processed[..out_channels].iter_mut().for_each(|c| c[..frames].fill(0.0));
+                    } else {
+                        for (i, input) in track.def.inputs.iter().enumerate() {
+                            chain.set_input(i, heard(input));
+                        }
+                        chain.process_blocks(&mut processed[..out_channels], frames, &mut self.buses);
+                        if chain.is_poisoned() && !track.chain_silenced {
+                            track.chain_silenced = true;
+                            self.silenced += 1;
+                        }
+                        track.chain_quiet = if silent_in && chain.is_quiet(frames) { track.chain_quiet + frames } else { 0 };
                     }
                     &processed[..out_channels]
                 }

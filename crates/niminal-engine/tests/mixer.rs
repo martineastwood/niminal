@@ -455,3 +455,81 @@ fn a_delayed_send_arrives_exactly_one_block_of_samples_later_whatever_the_call_s
     let arrivals: Vec<usize> = seen.iter().enumerate().filter(|(_, v)| **v != 0.0).map(|(i, _)| i).collect();
     assert_eq!(arrivals, [BLOCK, 100 + BLOCK, 200 + BLOCK], "each impulse comes out BLOCK samples after it went in");
 }
+
+/// Passes its input through, counting the samples it has been asked to process.
+#[derive(Clone)]
+struct Counting(Arc<std::sync::atomic::AtomicUsize>);
+
+impl niminal_engine::Opcode for Counting {
+    fn name(&self) -> &str { "counting" }
+    fn ports(&self) -> &[niminal_engine::Port] {
+        const PORTS: &[niminal_engine::Port] = &[niminal_engine::Port::required("x")];
+        PORTS
+    }
+    fn box_clone(&self) -> Box<dyn niminal_engine::Opcode> { Box::new(self.clone()) }
+    fn process(&mut self, _ctx: &niminal_engine::ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        self.0.fetch_add(out.len(), std::sync::atomic::Ordering::Relaxed);
+        out.copy_from_slice(inputs[0]);
+    }
+}
+
+#[test]
+fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arrives() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let processed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut g = GraphBuilder::new();
+    let input = g.input();
+    let out = g.add(Counting(processed.clone()), &[("x", input)]).unwrap();
+    let def = TrackDef {
+        chain: Some(Arc::new(g.build(out))),
+        inputs: vec![ChainInput::It { channel: 0 }],
+        route: Route::Master,
+        voice_sends: vec![],
+    };
+    let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
+    let seconds = |m: &mut Mixer, s: f32| -> f32 {
+        (0..(s * SR) as usize / BLOCK).flat_map(|_| block(m)).fold(0.0, |peak, x| peak.max(x.abs()))
+    };
+    let id = m.note_on(0, source(0.5, None), &[], None);
+    assert!(seconds(&mut m, 0.5) > 0.4);
+    m.release(id);
+    seconds(&mut m, 0.5);
+    let resting = processed.load(Relaxed);
+    assert_eq!(seconds(&mut m, 1.0), 0.0);
+    assert_eq!(processed.load(Relaxed), resting, "the chain was processed while nothing went through it");
+    m.note_on(0, source(0.5, None), &[], None);
+    assert!(seconds(&mut m, 0.1) > 0.4, "the chain takes up again at once");
+    assert!(processed.load(Relaxed) > resting);
+}
+
+/// A chain that is a reverb of its one input.
+fn reverb_chain() -> Arc<niminal_engine::Graph> {
+    let mut g = GraphBuilder::new();
+    let input = g.input();
+    let out = g.add(niminal_engine::ops::Reverb::new(), &[("x", input), ("room", Src::Const(0.5)), ("damp", Src::Const(0.5))]).unwrap();
+    Arc::new(g.build(out))
+}
+
+#[test]
+fn a_resting_reverb_chain_still_rings_out_its_tail_and_wakes_for_the_next_note() {
+    let def = TrackDef {
+        chain: Some(reverb_chain()),
+        inputs: vec![ChainInput::It { channel: 0 }],
+        route: Route::Master,
+        voice_sends: vec![],
+    };
+    let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
+    let id = m.note_on(0, source(0.5, None), &[], None);
+    let heard = |m: &mut Mixer, seconds: usize| -> Vec<f32> {
+        (0..seconds * SR as usize / BLOCK).flat_map(|_| block(m)).collect()
+    };
+    let peak = |x: &[f32]| x.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+    assert!(peak(&heard(&mut m, 1)) > 1e-3, "the reverb sounds while the note is held");
+    m.release(id);
+    // the tail is still audible a moment after the note ends, and fades out
+    assert!(peak(&heard(&mut m, 1)) > 1e-3);
+    heard(&mut m, 40);
+    assert_eq!(peak(&heard(&mut m, 1)), 0.0);
+    m.note_on(0, source(0.5, None), &[], None);
+    assert!(peak(&heard(&mut m, 1)) > 1e-3, "the next note is reverberated again");
+}

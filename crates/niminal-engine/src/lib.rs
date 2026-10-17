@@ -6,6 +6,7 @@
 //! graph. There is no OS-specific code here, so the crate builds for WebAssembly.
 
 mod array;
+pub mod denormals;
 mod graph;
 mod master;
 mod mixer;

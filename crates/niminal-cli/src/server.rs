@@ -88,7 +88,7 @@ impl Server {
                                 clients.push(handle);
                             }
                         }
-                        Err(e) if e.kind() == ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(10)),
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(25)),
                         Err(_) => break,
                     }
                 }
@@ -112,7 +112,7 @@ impl Server {
                             }
                         }
                     }
-                    thread::sleep(Duration::from_millis(40));
+                    thread::sleep(Duration::from_millis(50));
                 }
             }));
         }

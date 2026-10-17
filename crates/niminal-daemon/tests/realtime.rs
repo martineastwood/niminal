@@ -348,6 +348,7 @@ fn retirement_backpressure_retains_resources_until_the_planner_returns() {
     s.eval("lead.play([c4 e4].fast(128))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig {
         lookahead_frames: 16_384,
+        window_frames: 512,
         max_voices: 1,
         ..RealtimeConfig::default()
     });
