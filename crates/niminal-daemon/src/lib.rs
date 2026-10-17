@@ -14,7 +14,7 @@ mod session;
 mod sounding;
 
 pub use audio_in::AudioInput;
-pub use events::{At, Op, Sent};
+pub use events::{At, Cancelled, Op, Sent};
 pub use log::{Expression, LogEntry, LogInput, from_lines, to_lines};
 pub use midi_out::MidiEvent;
 pub use project::{Entry, Problem, Project};

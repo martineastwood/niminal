@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use niminal_score::{ClipDef, SceneDef};
 use serde_json::{Value, json};
 
-use crate::events::Op;
+use crate::events::{At, Op};
 use crate::project::Problem;
 use crate::session::{
     Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo,
@@ -331,6 +331,7 @@ impl Daemon {
                 Ok(json!({}))
             }
             "events.send" => self.events_send(client, params),
+            "events.cancel" => self.events_cancel(client, params),
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
             "status" => Ok(status_json(&self.session)),
             other => Err(RpcError::new(
@@ -409,6 +410,23 @@ impl Daemon {
             "first": sent.first,
             "horizon": self.session.prepared_until(),
         }))
+    }
+
+    fn events_cancel(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let tag = match params.get("tag") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v.as_str().ok_or_else(|| RpcError::new(INVALID_PARAMS, "`tag` should be a string"))?),
+        };
+        let from: At = match params.get("from") {
+            None | Some(Value::Null) => At::Now,
+            Some(v) => serde_json::from_value(v.clone()).map_err(|e| RpcError::new(INVALID_PARAMS, &format!("bad `from`: {e}")))?,
+        };
+        let release = match params.get("release") {
+            None | Some(Value::Null) => false,
+            Some(v) => v.as_bool().ok_or_else(|| RpcError::new(INVALID_PARAMS, "`release` should be true or false"))?,
+        };
+        let done = self.session.cancel_events(client, tag, from, release);
+        Ok(json!({ "cancelled": done.cancelled, "released": done.released }))
     }
 
     fn subscribe(&mut self, client: ClientId, params: &Value, on: bool) -> Result<Value, RpcError> {

@@ -912,6 +912,7 @@ fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_daemon::Op> {
             at: At::Time(Time::Seconds(0.05 + seconds * i as f64 / count as f64)),
             dur: Some(Time::Seconds(0.02)),
             id: None,
+            tag: None,
             args: [("freq".to_string(), Value::Hz(200.0 + (i % 12) as f64 * 40.0))].into(),
         })
         .collect()
@@ -972,15 +973,15 @@ fn streamed_notes_inside_the_prepared_region_cause_no_replanning() {
 fn voice_script() -> Vec<(u64, niminal_daemon::Op)> {
     use niminal_daemon::{At, Op};
     use niminal_score::{Time, Value};
-    let held = |id, at: u64, hz, dur: Option<f64>| (at, Op::Note { target: "organ".into(), at: At::Sample(at), args: [("freq".to_string(), Value::Hz(hz))].into(), dur: dur.map(Time::Seconds), id: Some(id) });
+    let held = |id, at: u64, hz, dur: Option<f64>| (at, Op::Note { target: "organ".into(), at: At::Sample(at), args: [("freq".to_string(), Value::Hz(hz))].into(), dur: dur.map(Time::Seconds), id: Some(id), tag: None });
     vec![
         held(1, 4_800, 110.0, None),
         held(2, 9_600, 165.0, Some(0.3)),
-        (14_400, Op::Set { id: 1, at: At::Sample(14_400), args: [("cut".to_string(), Value::Hz(6000.0))].into(), glide: Some(Time::Seconds(0.2)) }),
-        (20_000, Op::Set { id: 2, at: At::Sample(20_000), args: [("cut".to_string(), Value::Hz(300.0))].into(), glide: None }),
-        (28_800, Op::Off { id: 1, at: At::Sample(28_800) }),
+        (14_400, Op::Set { id: 1, at: At::Sample(14_400), args: [("cut".to_string(), Value::Hz(6000.0))].into(), glide: Some(Time::Seconds(0.2)), tag: None }),
+        (20_000, Op::Set { id: 2, at: At::Sample(20_000), args: [("cut".to_string(), Value::Hz(300.0))].into(), glide: None, tag: None }),
+        (28_800, Op::Off { id: 1, at: At::Sample(28_800), tag: None }),
         held(3, 30_000, 220.0, None),
-        (33_000, Op::Off { id: 3, at: At::Sample(33_000) }),
+        (33_000, Op::Off { id: 3, at: At::Sample(33_000), tag: None }),
     ]
 }
 
@@ -1016,5 +1017,56 @@ fn held_notes_sets_and_offs_sound_the_same_prepared_as_offline_wherever_they_are
         assert_eq!(out, expected, "sent {ahead} frames ahead");
         assert_eq!(r.metrics().mixer_builds, 0, "sent {ahead} frames ahead");
         assert_eq!(r.metrics().late_events, 0, "sent {ahead} frames ahead");
+    }
+}
+
+fn bars(hz: f64, first: u32, count: u32, tag: &str) -> Vec<niminal_daemon::Op> {
+    use niminal_daemon::{At, Op};
+    use niminal_score::{Time, Value};
+    (first * 4..(first + count) * 4)
+        .map(|beat| Op::Note {
+            target: "organ".into(),
+            at: At::Time(Time::Beats(f64::from(beat))),
+            args: [("freq".to_string(), Value::Hz(hz))].into(),
+            dur: Some(Time::Seconds(0.2)),
+            id: None,
+            tag: Some(tag.into()),
+        })
+        .collect()
+}
+
+#[test]
+fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_prepared_region() {
+    use niminal_daemon::At;
+    use niminal_score::Time;
+    const BAR: usize = 96_000;
+    let frames = 4 * BAR;
+
+    // what it should sound like: bar 1 from `a`, the rest from `b`
+    let mut expected = organ_session();
+    expected.send_events(1, bars(220.0, 0, 1, "a")).unwrap();
+    expected.send_events(1, bars(440.0, 1, 3, "b")).unwrap();
+    let expected = expected.process(frames).remove(0);
+
+    // the cancel is sent far ahead of bar 2, and again only just before it, when it is inside what is prepared
+    for cancel_at in [BAR as u64 / 2, BAR as u64 - 3_000] {
+        let mut s = organ_session();
+        let mut r = s.start_realtime(RealtimeConfig::default());
+        s.send_events(1, bars(220.0, 0, 4, "a")).unwrap();
+        let mut out = vec![0.0; frames];
+        let mut cancelled = false;
+        for chunk in out.chunks_mut(256) {
+            if !cancelled && r.clock() >= cancel_at {
+                let done = s.cancel_events(1, Some("a"), At::Time(Time::Bars(1.0)), false);
+                assert_eq!(done.cancelled, 12);
+                s.send_events(1, bars(440.0, 1, 3, "b")).unwrap();
+                cancelled = true;
+            }
+            s.prepare_realtime();
+            measured(&mut r, chunk.len(), chunk);
+        }
+        assert_eq!(out, expected, "cancelled at {cancel_at}");
+        assert_eq!(r.metrics().mixer_builds, 0, "cancelled at {cancel_at}");
+        assert_eq!(r.metrics().late_events, 0, "cancelled at {cancel_at}");
     }
 }

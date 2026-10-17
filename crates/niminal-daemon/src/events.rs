@@ -61,6 +61,8 @@ pub enum Op {
         /// Chosen by the client, scoped to its connection.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
     },
     /// Change parameters of a sounding or waiting note.
     Set {
@@ -69,9 +71,16 @@ pub enum Op {
         args: BTreeMap<String, Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         glide: Option<Time>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
     },
     /// Release a note, so its envelope runs its release stage.
-    Off { id: u64, at: At },
+    Off {
+        id: u64,
+        at: At,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
     /// Move a `ctl`.
     Control {
         name: String,
@@ -81,12 +90,16 @@ pub enum Op {
         unit: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         glide: Option<Time>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
     },
     /// Set parameters of a track.
     Track {
         name: String,
         at: At,
         args: BTreeMap<String, Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
     },
 }
 
@@ -98,4 +111,13 @@ pub struct Sent {
     pub late: usize,
     /// The earliest sample any of them was resolved to.
     pub first: Option<u64>,
+}
+
+/// What a cancellation did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Cancelled {
+    /// Waiting events dropped.
+    pub cancelled: usize,
+    /// Held notes already sounding that were let go of.
+    pub released: usize,
 }

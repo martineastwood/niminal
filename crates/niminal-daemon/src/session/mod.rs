@@ -27,7 +27,7 @@ use niminal_lang::{
 };
 use niminal_score::{Event, Tempo, Time, Value};
 
-use crate::events::{At, Op, Sent};
+use crate::events::{At, Cancelled, Op, Sent};
 use crate::protocol::ClientId;
 use crate::keyboard::Keyboard;
 use crate::log::{Expression, LogEntry, LogInput};
@@ -87,8 +87,9 @@ struct Upcoming {
     /// Taken from the schedule (so it is dropped and fetched again if the
     /// schedule changes), rather than written out or sent from outside.
     scheduled: bool,
-    /// The client that sent it, if one did.
+    /// The client that sent it, if one did, and the tag it gave.
     client: Option<ClientId>,
+    tag: Option<String>,
 }
 
 /// A note a client holds open or may change, by the id the client chose.
@@ -98,6 +99,7 @@ struct VoiceEntry {
     key: u32,
     /// The instrument it plays, by name so that it survives the program being replaced.
     instrument: String,
+    tag: Option<String>,
 }
 
 /// A change to a parameter of the note a key holds. The parameter is found by name in the instrument
@@ -111,6 +113,23 @@ pub(crate) struct VoiceSet {
     pub frames: u64,
     pub at: u64,
     done: bool,
+    client: ClientId,
+    tag: Option<String>,
+}
+
+/// A waiting release of the note a key holds.
+struct KeyOff {
+    key: u32,
+    at: u64,
+    client: Option<ClientId>,
+    tag: Option<String>,
+}
+
+/// Who sent a control change that has not happened yet.
+struct ControlOwner {
+    serial: u64,
+    client: ClientId,
+    tag: Option<String>,
 }
 
 /// A statement that runs when a change lands, with the program it was
@@ -242,7 +261,7 @@ pub struct Session {
     learned_out: Vec<(String, String)>,
     /// The notes each held key started, by channel and note, and the keys let go of lately.
     keyboard: Keyboard,
-    key_offs: Vec<(u32, u64)>,
+    key_offs: Vec<KeyOff>,
     /// Changes of a held key's bend or pressure: `(key, parameter, value, when)`.
     key_params: Vec<(u32, &'static str, f32, u64)>,
     /// Audio for tracks that read `input(..)`, from a file being rendered: a buffer for each channel, from sample 0.
@@ -295,7 +314,10 @@ pub struct Session {
     detached: bool,
     /// Notes clients hold by id, and their parameter changes still to come.
     voices: Vec<VoiceEntry>,
+    /// Notes whose release has been asked for but has not come yet, in case that is taken back.
+    closed: Vec<VoiceEntry>,
     voice_sets: Vec<VoiceSet>,
+    control_owners: Vec<ControlOwner>,
     /// Things added since the planner last looked, that it may have to put into windows already prepared.
     fresh: Vec<realtime::Fresh>,
     /// How many mixers have been built for the renderer.
@@ -373,7 +395,9 @@ impl Session {
             live: None,
             detached: false,
             voices: Vec::new(),
+            closed: Vec::new(),
             voice_sets: Vec::new(),
+            control_owners: Vec::new(),
             fresh: Vec::new(),
             mixer_builds: Arc::default(),
         }
@@ -397,6 +421,7 @@ impl Session {
                 key: None,
                 scheduled: false,
                 client: None,
+                tag: None,
             });
         }
         session.program = Arc::new(program);
@@ -803,6 +828,7 @@ impl Session {
                 key: None,
                 scheduled: false,
                 client: None,
+                tag: None,
             });
         }
         for scheduled in &program.performance {
@@ -973,7 +999,7 @@ impl Session {
                 n = n.min(change.at.saturating_sub(self.clock).max(1));
             }
             n = self.sounding.limit(self.clock, n);
-            let upcoming = self.key_offs.iter().map(|&(_, at)| at).chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at));
+            let upcoming = self.key_offs.iter().map(|k| k.at).chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at));
             for at in upcoming.filter(|&at| at > self.clock) {
                 n = n.min(at - self.clock);
             }
@@ -1122,6 +1148,7 @@ impl Session {
                 key: None,
                 scheduled: true,
                 client: None,
+                tag: None,
             });
         }
         if let Some(e) = problem {
@@ -1253,9 +1280,9 @@ impl Session {
 
     fn release_due(&mut self) {
         let now = self.clock;
-        for &(key, at) in &self.key_offs {
-            if at <= now {
-                self.sounding.release_key(key, at);
+        for off in &self.key_offs {
+            if off.at <= now {
+                self.sounding.release_key(off.key, off.at);
             }
         }
         let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sounding.midi)

@@ -749,3 +749,18 @@ fn typed_clip_define_launch_and_edit() {
         .iter()
         .any(|n| n.as_str() == Some("riff")));
 }
+
+#[test]
+fn events_cancel_takes_back_waiting_tagged_events() {
+    let (mut d, c) = ready();
+    call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
+    let note = |tag: &str, at: &str| json!({"op": "note", "target": "lead", "at": at, "dur": "0.1sec", "args": {"freq": "a4"}, "tag": tag});
+    let sent = call(&mut d, c, 3, "events.send", json!({"events": [note("a", "1sec"), note("a", "2sec"), note("b", "2sec")]}));
+    assert_eq!(sent["result"]["accepted"], 3);
+    let cancelled = call(&mut d, c, 4, "events.cancel", json!({"tag": "a", "from": "1.5sec"}));
+    assert_eq!(cancelled["result"], json!({"cancelled": 1, "released": 0}));
+    let all = call(&mut d, c, 5, "events.cancel", json!({}));
+    assert_eq!(all["result"]["cancelled"], 2);
+    let bad = call(&mut d, c, 6, "events.cancel", json!({"tag": 7}));
+    assert_eq!(bad["error"]["code"], -32602);
+}

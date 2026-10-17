@@ -398,6 +398,7 @@ fn streamed_events_play_at_their_time() {
         at: At::Time(Time::Seconds(at)),
         dur: Some(Time::Seconds(0.25)),
         id: None,
+        tag: None,
         args: [("freq".to_string(), Value::Note(57))].into(),
     };
     s.send_events(0, vec![note(0.5)]).unwrap();
@@ -412,6 +413,7 @@ fn streamed_events_play_at_their_time() {
         at: At::Time(Time::Seconds(1.0)),
         dur: Some(Time::Seconds(0.25)),
         id: None,
+        tag: None,
         args: Default::default(),
     };
     assert!(s.send_events(0, vec![bad]).is_err());

@@ -150,7 +150,7 @@ One batched method for every timed thing a client can do. The whole batch is che
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
-| `note` | `target`, `at`, optional `args`, `dur`, `id` | Play a note on a track or instrument. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
+| `note` | `target`, `at`, optional `args`, `dur`, `id`, `tag` | Play a note on a track or instrument. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
 | `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide` the parameter moves in a straight line to its new value. |
 | `off` | `id`, `at` | Release a note, so its envelope runs its release stage. An `off` before the note starts makes it a short blip. |
 | `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
@@ -161,6 +161,20 @@ An **`id`** is a whole number the client picks, and it belongs to that connectio
 **Result:** `{ "accepted": 3, "late": 0, "first": 4800, "horizon": 8192 }`. `late` counts events whose time had already passed: they sounded at once. `first` is the earliest sample any event resolved to, and `horizon` is the sample up to which the engine has prepared audio.
 
 Anything wrong in the batch → **-32001** and nothing is queued; each entry of **`problems`** has an **`event`** field with the index of the event it is about. A batch that doesn't parse → **-32602**.
+
+### `events.cancel`
+
+Take back this client's events that are still waiting.
+
+```json
+{ "method": "events.cancel", "params": { "tag": "lead", "from": "64beat", "release": true } }
+```
+
+Any event in an `events.send` batch can carry a **`tag`**, a string of the client's choosing. `events.cancel` drops the waiting events (notes, `set`s, `off`s, `control` and `track` changes) with that tag that are at or after **`from`** (a time as for `at`; default `"now"`). Without `tag` it drops all of this client's waiting events. Other clients' events are never touched. With **`release`: true**, held notes with that tag that are already sounding are also let go of at `from`. A held note whose `off` was taken back is held again.
+
+**Result:** `{ "cancelled": 12, "released": 1 }`
+
+A control change that has already reached the audio thread when the cancel arrives can't be taken back, and isn't counted.
 
 ### Performance API
 

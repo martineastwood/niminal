@@ -21,7 +21,10 @@ pub struct RealtimeConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlanMode {
     Advance,
+    /// Plan again from now with the mixer swapped for a new one, because definitions changed.
     Refresh,
+    /// Plan again from now, keeping the mixer, because something waiting was taken back.
+    Replan,
     Reset,
 }
 
@@ -53,6 +56,8 @@ pub struct RenderMetrics {
 pub(super) struct State {
     clock: AtomicU64,
     revision: AtomicU64,
+    /// Changes along with `revision` when the mixer too must be swapped.
+    swap_epoch: AtomicU64,
     reset_epoch: AtomicU64,
     pub(super) voices: AtomicUsize,
     peaks: [AtomicU32; MAX_CHANNELS],
@@ -246,8 +251,10 @@ pub(super) struct Planner {
     config: RealtimeConfig,
     prepared_until: u64,
     revision: u64,
+    swap_epoch: u64,
     reported: RenderMetrics,
     refresh: bool,
+    replan: bool,
     deferred: Vec<Command>,
     stopped: Vec<String>,
 }
@@ -312,6 +319,7 @@ impl Session {
         let state = Arc::new(State {
             clock: AtomicU64::new(self.clock),
             revision: AtomicU64::new(0),
+            swap_epoch: AtomicU64::new(0),
             reset_epoch: AtomicU64::new(self.panic_epoch.load(Ordering::Acquire)),
             voices: AtomicUsize::new(self.mixer.active_voices()),
             peaks: std::array::from_fn(|_| AtomicU32::new(0)),
@@ -376,8 +384,10 @@ impl Session {
             config,
             prepared_until: self.clock,
             revision: 0,
+            swap_epoch: 0,
             reported: RenderMetrics::default(),
             refresh: false,
+            replan: false,
             deferred: Vec::new(),
             stopped: Vec::new(),
         });
@@ -388,6 +398,16 @@ impl Session {
 
     /// Everything prepared is out of date: it is thrown away and prepared again.
     pub(super) fn invalidate_live(&self) {
+        if let Some(planner) = &self.live {
+            planner.state.swap_epoch.fetch_add(1, Ordering::AcqRel);
+            planner.state.revision.fetch_add(1, Ordering::AcqRel);
+        }
+        self.wake_planner();
+    }
+
+    /// Something waiting was taken back: what is prepared is thrown away and prepared again, with the
+    /// mixer as it is.
+    pub(super) fn invalidate_windows(&self) {
         if let Some(planner) = &self.live {
             planner.state.revision.fetch_add(1, Ordering::AcqRel);
         }
@@ -495,7 +515,10 @@ impl Session {
         }
         let revision = planner.state.revision.load(Ordering::Acquire);
         if revision != planner.revision {
-            planner.refresh = true;
+            let swap_epoch = planner.state.swap_epoch.load(Ordering::Acquire);
+            planner.refresh |= swap_epoch != planner.swap_epoch;
+            planner.swap_epoch = swap_epoch;
+            planner.replan = true;
             planner.deferred.clear();
             planner.stopped.clear();
             planner.revision = revision;
@@ -580,6 +603,8 @@ impl Session {
                 PlanMode::Reset
             } else if planner.refresh {
                 PlanMode::Refresh
+            } else if planner.replan {
+                PlanMode::Replan
             } else {
                 PlanMode::Advance
             };
@@ -627,6 +652,7 @@ impl Session {
                 Ok(()) => {
                     planner.prepared_until = to;
                     planner.refresh = false;
+                    planner.replan = false;
                 }
                 Err(PushError::Full(window)) => {
                     drop(window);
@@ -747,7 +773,7 @@ impl Session {
                     .commands
                     .push(self.swap_command(from, &program, config));
             }
-            PlanMode::Advance => {}
+            PlanMode::Replan | PlanMode::Advance => {}
         }
         // Pending transactions are previewed without committing control state.
         // Window boundaries and note times remain sample positions, independent
@@ -770,7 +796,7 @@ impl Session {
                     &explicit,
                     position..boundary,
                     config,
-                    mode == PlanMode::Refresh && position == from,
+                    matches!(mode, PlanMode::Refresh | PlanMode::Replan) && position == from,
                     &mut window,
                 );
                 position = boundary;
@@ -822,7 +848,7 @@ impl Session {
                 &explicit,
                 position..to,
                 config,
-                mode == PlanMode::Refresh && position == from,
+                matches!(mode, PlanMode::Refresh | PlanMode::Replan) && position == from,
                 &mut window,
             );
         }
@@ -1015,11 +1041,11 @@ impl Session {
             }
         }
         // keys that came up: each key is its own note, so a release that is repeated in a later window does no harm
-        for &(key, at) in &self.key_offs {
-            if at < to {
+        for off in &self.key_offs {
+            if off.at < to {
                 window.commands.push(Command {
-                    at: at.max(from),
-                    kind: Kind::Release { key },
+                    at: off.at.max(from),
+                    kind: Kind::Release { key: off.key },
                 });
             }
         }
@@ -1224,6 +1250,7 @@ impl RealtimeRenderer {
     /// the caller catches a DSP failure.
     pub fn request_panic(&self) {
         self.panic_epoch.fetch_add(1, Ordering::AcqRel);
+        self.state.swap_epoch.fetch_add(1, Ordering::AcqRel);
         self.state.revision.fetch_add(1, Ordering::AcqRel);
     }
 
@@ -1446,7 +1473,11 @@ impl RealtimeRenderer {
                 let Ok(change) = self.control_rx.pop() else {
                     break;
                 };
-                self.control_pending.push(change);
+                if change.retract {
+                    self.control_pending.retain(|c| c.serial != change.serial);
+                } else {
+                    self.control_pending.push(change);
+                }
             }
             if self.control_pending.len() > waiting {
                 self.control_pending
