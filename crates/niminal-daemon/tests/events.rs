@@ -329,3 +329,142 @@ fn a_waiting_control_can_be_cancelled() {
     assert_eq!(s.cancel_events(1, Some("x"), At::Now, false).cancelled, 1);
     assert_eq!(peak(&s.process(10_000).remove(0)), 0.0);
 }
+
+fn define(source: &str, at: At) -> Op {
+    Op::Define { source: source.into(), at, dir: None, tag: None }
+}
+
+fn first_sound(x: &[f32]) -> Option<usize> {
+    x.iter().position(|s| s.abs() > 1e-4)
+}
+
+const SINE: &str = "instr a(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ntrack lead { instrument = a }";
+const SAW: &str = "instr a(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\ntrack lead { instrument = a }";
+
+fn tone(at: At, hz: f64) -> Op {
+    Op::Note { target: "lead".into(), at, args: [("freq".to_string(), Value::Hz(hz))].into(), dur: Some(Time::Seconds(0.05)), id: None, tag: None }
+}
+
+#[test]
+fn a_define_lands_at_its_beat_and_the_next_note_uses_it_from_that_sample() {
+    let mut s = Session::new(SR, Layout::Mono).without_limiter();
+    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+    // beat 2 at 120bpm is sample 48000
+    s.send_events(0, vec![define(SAW, At::Time(Time::Beats(2.0))), tone(At::Sample(20_000), 110.0), tone(At::Sample(48_000), 110.0)]).unwrap();
+    let out = s.process(70_000).remove(0);
+
+    let mut reference = Session::new(SR, Layout::Mono).without_limiter();
+    reference.eval(&format!("tempo 120bpm\n{SAW}"), Some("now")).unwrap();
+    reference.send_events(0, vec![tone(At::Sample(48_000), 110.0)]).unwrap();
+    let saw = reference.process(70_000).remove(0);
+    assert_eq!(out[48_000..], saw[48_000..], "the second note is the new instrument from its first sample");
+    assert_ne!(out[20_000..22_000], saw[20_000..22_000], "the first note was the old one");
+    assert!(first_sound(&out[48_000..]).unwrap() < 10);
+}
+
+#[test]
+fn a_define_can_be_cancelled_by_its_tag_and_performance_statements_are_refused() {
+    let mut s = Session::new(SR, Layout::Mono).without_limiter();
+    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+    let mut op = define(SAW, At::Time(Time::Beats(2.0)));
+    if let Op::Define { tag, .. } = &mut op {
+        *tag = Some("t".into());
+    }
+    s.send_events(1, vec![op]).unwrap();
+    assert_eq!(s.cancel_events(1, Some("t"), At::Now, false).cancelled, 1);
+    s.send_events(1, vec![tone(At::Sample(48_000), 110.0)]).unwrap();
+    let out = s.process(60_000).remove(0);
+    let mut reference = Session::new(SR, Layout::Mono).without_limiter();
+    reference.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+    reference.send_events(0, vec![tone(At::Sample(48_000), 110.0)]).unwrap();
+    assert_eq!(out, reference.process(60_000).remove(0));
+
+    for bad in ["lead.play([c4])", "tempo 90bpm", "clip c { notes: [c4] }", "lead(freq: c4) for 1beat"] {
+        let problems = s.send_events(1, vec![tone(At::Now, 110.0), define(bad, At::Now)]).unwrap_err();
+        assert_eq!(problems[0].event, Some(1), "{bad}");
+    }
+}
+
+#[test]
+fn a_batch_that_fails_leaves_nothing_behind() {
+    let mut s = Session::new(SR, Layout::Mono).without_limiter();
+    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+    let problems = s.send_events(1, vec![define(SAW, At::Sample(100)), define("instr broken( {", At::Sample(200))]).unwrap_err();
+    assert_eq!(problems[0].event, Some(1));
+    assert!(s.pending().is_empty(), "the first define was taken back");
+    let problems = s.send_events(1, vec![define(SAW, At::Sample(100)), tone(At::Sample(300), -1.0), Op::Off { id: 1, at: At::Now, tag: None }]).unwrap_err();
+    assert!(!problems.is_empty());
+    assert!(s.pending().is_empty(), "so was the one before a bad note");
+}
+
+#[test]
+fn notes_after_a_define_are_checked_against_the_program_it_makes() {
+    let mut s = Session::new(SR, Layout::Mono).without_limiter();
+    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+    let new_track = "instr b(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\ntrack extra { instrument = b }";
+    let note = |at| Op::Note { target: "extra".into(), at, args: [("freq".to_string(), Value::Hz(110.0))].into(), dur: Some(Time::Seconds(0.05)), id: None, tag: None };
+    // the track exists only once the define lands
+    assert!(s.send_events(1, vec![note(At::Sample(60_000))]).is_err());
+    s.send_events(1, vec![define(new_track, At::Sample(48_000)), note(At::Sample(60_000))]).unwrap();
+    assert!(peak(&s.process(70_000).remove(0)[60_000..]) > 0.1);
+}
+
+#[test]
+fn a_forget_drops_every_definition_when_it_lands() {
+    let mut s = Session::new(SR, Layout::Mono).without_limiter();
+    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+    s.send_events(1, vec![Op::Forget { at: At::Sample(10_000), tag: None }]).unwrap();
+    assert!(s.send_events(1, vec![tone(At::Sample(20_000), 110.0)]).is_err(), "no `lead` once it has gone");
+    s.send_events(1, vec![tone(At::Sample(5_000), 110.0)]).unwrap();
+    s.process(12_000);
+    assert!(s.send_events(1, vec![tone(At::Now, 110.0)]).is_err());
+}
+
+#[test]
+fn a_tempo_change_moves_beat_stamped_notes_but_not_seconds_stamped_ones() {
+    let render = |at: At| {
+        let mut s = Session::new(SR, Layout::Mono).without_limiter();
+        s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+        // 120bpm: 8 beats is 4 seconds. Double the tempo after 1 second.
+        s.send_events(1, vec![Op::Transport { at: At::Sample(48_000), bpm: Some(240.0), meter: None, origin: None, tag: None }, tone(at, 330.0)]).unwrap();
+        let out = s.process(5 * 48_000).remove(0);
+        first_sound(&out).unwrap()
+    };
+    // a sine starts from zero, so its first audible sample is a moment after the note starts
+    let near = |got: usize, want: usize| assert!(got >= want && got <= want + 3, "{got} is not {want}");
+    // the beat-stamped note was 3 seconds after the change and is now 1.5
+    near(render(At::Time(Time::Beats(8.0))), 48_000 + 72_000);
+    near(render(At::Time(Time::Seconds(4.0))), 4 * 48_000);
+    near(render(At::Time(Time::Bars(2.0))), 48_000 + 72_000);
+    near(render(At::Sample(200_000)), 200_000);
+}
+
+#[test]
+fn the_transport_changes_the_clock_and_marks_bar_one() {
+    let mut s = Session::new(SR, Layout::Mono).without_limiter();
+    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+    s.send_events(1, vec![Op::Transport { at: At::Sample(96_000), bpm: Some(60.0), meter: Some("3/4".into()), origin: Some(true), tag: None }]).unwrap();
+    let clock = s.clock_info();
+    assert_eq!((clock.bpm, clock.beats_per_bar, clock.bar), (120.0, 4.0, 1));
+    assert_eq!(clock.sample, 0);
+    // 1.5 seconds after the change, at 60bpm: beat 2.5 of bar 1
+    s.process(96_000 + 72_000);
+    let clock = s.clock_info();
+    assert_eq!((clock.bpm, clock.beats_per_bar, clock.bar), (60.0, 3.0, 1));
+    assert!((clock.beat - 2.5).abs() < 1e-6, "{}", clock.beat);
+    assert_eq!(clock.sample, 168_000);
+    assert_eq!(clock.sample_rate, SR);
+    assert!(clock.wall_micros.is_none());
+}
+
+#[test]
+fn definitions_and_the_transport_replay_to_the_same_audio() {
+    let mut s = Session::new(SR, Layout::Mono).without_limiter();
+    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+    s.send_events(1, vec![define(SAW, At::Time(Time::Beats(2.0))), Op::Transport { at: At::Sample(60_000), bpm: Some(150.0), meter: None, origin: None, tag: None }, tone(At::Time(Time::Beats(6.0)), 220.0)]).unwrap();
+    s.process(20_000);
+    s.send_events(1, vec![tone(At::Time(Time::Beats(3.0)), 165.0)]).unwrap();
+    let live = s.process(150_000).remove(0);
+    let replayed = Session::replay(SR, Layout::Mono, QuantizeDefaults::default(), s.log(), 170_000, false).remove(0);
+    assert_eq!(live, replayed[20_000..]);
+}

@@ -2,6 +2,7 @@
 //! a running mixer, and the protocol around it.
 
 mod audio_in;
+mod clock;
 mod controls;
 mod events;
 mod keyboard;
@@ -14,6 +15,7 @@ mod session;
 mod sounding;
 
 pub use audio_in::AudioInput;
+pub use clock::ClockProbe;
 pub use events::{At, Cancelled, Op, Sent};
 pub use log::{Expression, LogEntry, LogInput, from_lines, to_lines};
 pub use midi_out::MidiEvent;
@@ -23,7 +25,7 @@ pub use protocol::{
 };
 pub use quantize::{Grid, QuantizeDefaults};
 pub use session::{
-    Accepted, Begin, ControlSignal, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo, Session,
+    Accepted, Begin, ClockInfo, ControlSignal, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo, Session,
     TrackStatus, Transport,
 };
 

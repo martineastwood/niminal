@@ -1070,3 +1070,54 @@ fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_pr
         assert_eq!(r.metrics().late_events, 0, "cancelled at {cancel_at}");
     }
 }
+
+#[test]
+fn definitions_a_tempo_change_and_beat_stamped_notes_sound_the_same_prepared_as_offline() {
+    use niminal_daemon::{At, Op};
+    use niminal_score::{Time, Value};
+    const SINE: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(sine, freq) * env[1 | 100ms 0] * 0.3 }";
+    const SAW: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(saw, freq).lpf(cutoff: 3000hz) * env[1 | 100ms 0] * 0.3 }";
+    let note = |at: At, hz: f64| Op::Note { target: "organ".into(), at, args: [("freq".to_string(), Value::Hz(hz))].into(), dur: Some(Time::Seconds(0.1)), id: None, tag: None };
+    let script = vec![
+        (0u64, note(At::Time(Time::Beats(1.0)), 220.0)),
+        (0, note(At::Time(Time::Beats(5.0)), 330.0)),
+        (0, Op::Define { source: SAW.into(), at: At::Time(Time::Beats(3.0)), dir: None, tag: None }),
+        (0, Op::Transport { at: At::Sample(48_000), bpm: Some(180.0), meter: None, origin: None, tag: None }),
+        (30_000, note(At::Time(Time::Beats(8.0)), 440.0)),
+        (60_000, note(At::Time(Time::Bars(1.0)), 110.0)),
+        (60_000, note(At::Sample(150_000), 550.0)),
+    ];
+    let session = || {
+        let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+        s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+        s
+    };
+    let frames = 4 * 48_000;
+    let mut offline = session();
+    let mut expected = Vec::new();
+    let mut sent = 0;
+    while expected.len() < frames {
+        // the same things at the same clock as the prepared run sends them
+        while sent < script.len() && script[sent].0 <= expected.len() as u64 {
+            offline.send_events(1, vec![script[sent].1.clone()]).unwrap();
+            sent += 1;
+        }
+        expected.extend(offline.process(256).remove(0));
+    }
+    assert!(expected.iter().any(|s| s.abs() > 0.05));
+
+    let mut s = session();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut out = vec![0.0; frames];
+    let mut sent = 0;
+    for chunk in out.chunks_mut(256) {
+        while sent < script.len() && script[sent].0 <= r.clock() {
+            s.send_events(1, vec![script[sent].1.clone()]).unwrap();
+            sent += 1;
+        }
+        s.prepare_realtime();
+        measured(&mut r, chunk.len(), chunk);
+    }
+    assert_eq!(out, expected);
+    assert_eq!(r.metrics().late_events, 0);
+}

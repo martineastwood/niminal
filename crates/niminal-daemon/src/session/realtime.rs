@@ -260,6 +260,10 @@ pub(super) struct Planner {
 }
 
 impl Planner {
+    pub(super) fn lookahead(&self) -> u64 {
+        self.config.lookahead_frames
+    }
+
     pub(super) fn push_control(&mut self, change: Change) -> Result<(), ()> {
         self.control_tx.push(change).map_err(|_| ())
     }
@@ -759,6 +763,7 @@ impl Session {
                 event: n.event.clone(),
                 created: self.clock,
                 key: n.key,
+                musical: n.musical,
             })
             .collect();
         let mut position = from;
@@ -826,6 +831,16 @@ impl Session {
                         }
                     }
                     queue[i..].sort_by_key(|(at, _)| *at);
+                    // notes given in beats or bars keep their musical position
+                    for note in explicit.iter_mut().filter(|n| n.start > lands_at) {
+                        if let Some(by_bar) = note.musical {
+                            note.start = super::rescale_landing(
+                                note.start,
+                                lands_at,
+                                super::landing_factor(by_bar, program.tempo, next.tempo),
+                            );
+                        }
+                    }
                 }
                 program = next.clone();
             }
@@ -1129,6 +1144,7 @@ struct Explicit {
     event: Event,
     created: u64,
     key: Option<u32>,
+    musical: Option<bool>,
 }
 
 fn preview_action(
@@ -1153,6 +1169,7 @@ fn preview_action(
             event: event.clone(),
             created: at,
             key: None,
+            musical: None,
         });
     }
     for scheduled in &action.program.performance {

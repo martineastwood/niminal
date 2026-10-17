@@ -154,6 +154,20 @@ class Client {
     return this.call("events.send", { events });
   }
 
+  /** Take back this client's waiting events: `{ tag, from, release }`. */
+  cancelEvents({ tag, from, release } = {}) {
+    const params = {};
+    if (tag !== undefined) params.tag = tag;
+    if (from !== undefined) params.from = from;
+    if (release !== undefined) params.release = release;
+    return this.call("events.cancel", params);
+  }
+
+  /** Where the engine is in time: sample, bar, beat, bpm, prepared_until, wall_micros... */
+  clock() {
+    return this.call("clock");
+  }
+
   setControl(name, value, { unit, glide, at = "now" } = {}) {
     const op = { op: "control", name, value, at };
     if (unit !== undefined) op.unit = unit;

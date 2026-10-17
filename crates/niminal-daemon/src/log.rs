@@ -21,6 +21,14 @@ pub enum LogInput {
         client: u64,
         ops: Vec<crate::events::Op>,
     },
+    /// A client took back its waiting events.
+    CancelEvents {
+        client: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+        from: u64,
+        release: bool,
+    },
     /// A key on a MIDI keyboard: pressed with `velocity` from 1, or let go with 0.
     Key {
         channel: u8,

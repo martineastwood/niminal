@@ -764,3 +764,29 @@ fn events_cancel_takes_back_waiting_tagged_events() {
     let bad = call(&mut d, c, 6, "events.cancel", json!({"tag": 7}));
     assert_eq!(bad["error"]["code"], -32602);
 }
+
+#[test]
+fn clock_and_status_describe_the_engine_and_define_goes_through_events_send() {
+    let (mut d, c) = ready();
+    call(&mut d, c, 2, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}));
+    let clock = call(&mut d, c, 3, "clock", json!({}));
+    let result = &clock["result"];
+    assert_eq!((result["bpm"].as_f64(), result["beats_per_bar"].as_f64(), result["sample"].as_u64()), (Some(120.0), Some(4.0), Some(0)));
+    assert!(result["wall_micros"].is_null() && result["sample_rate"].is_number());
+
+    let sent = call(&mut d, c, 4, "events.send", json!({"events": [
+        {"op": "define", "at": "1beat", "source": "instr extra(freq: hz, cut: hz = 1khz) { osc(saw, freq) }"},
+        {"op": "transport", "at": "2beat", "bpm": 90},
+    ]}));
+    assert_eq!(sent["result"]["accepted"], 2);
+    let bad = call(&mut d, c, 5, "events.send", json!({"events": [{"op": "define", "at": "now", "source": "lead.play([c4])"}]}));
+    assert_eq!(bad["error"]["code"], -32001);
+    assert_eq!(bad["error"]["data"]["problems"][0]["event"], 0);
+
+    d.session_mut().process(96_000);
+    let status = call(&mut d, c, 6, "status", json!({}));
+    let instruments = status["result"]["instruments"].as_array().unwrap();
+    let extra = instruments.iter().find(|i| i["name"] == "extra").expect("the defined instrument");
+    assert_eq!(extra["params"][1]["name"], "cut");
+    assert_eq!(call(&mut d, c, 7, "clock", json!({}))["result"]["bpm"], 90.0);
+}

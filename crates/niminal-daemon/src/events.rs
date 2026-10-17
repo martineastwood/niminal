@@ -74,6 +74,36 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },
+    /// Compile definitions (instruments, tracks, effects, buses, controls, tables, buffers, functions) and
+    /// swap them in at `at`. Performance statements are an error. `dir` is where sample files and
+    /// modules named in `source` are looked for.
+    Define {
+        source: String,
+        at: At,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dir: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
+    /// Change the tempo or meter, or say that this point is bar 1.
+    Transport {
+        at: At,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bpm: Option<f64>,
+        /// As `"3/4"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        meter: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
+    /// Drop every definition. The output layout is kept.
+    Forget {
+        at: At,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
     /// Release a note, so its envelope runs its release stage.
     Off {
         id: u64,

@@ -90,6 +90,8 @@ struct Upcoming {
     /// The client that sent it, if one did, and the tag it gave.
     client: Option<ClientId>,
     tag: Option<String>,
+    /// Given in beats (`Some(false)`) or bars (`Some(true)`): it moves when the tempo or meter does.
+    musical: Option<bool>,
 }
 
 /// A note a client holds open or may change, by the id the client chose.
@@ -139,6 +141,17 @@ struct Compiled {
     program: Program,
 }
 
+/// What a change sent through the engine API carries with it.
+#[derive(Clone, Default)]
+pub(super) struct Meta {
+    client: Option<ClientId>,
+    tag: Option<String>,
+    /// Given in beats (`Some(false)`) or bars (`Some(true)`), so it moves when the tempo or meter does.
+    musical: Option<bool>,
+    /// This point is bar 1.
+    origin: bool,
+}
+
 /// An evaluation that has compiled and is waiting to land. Everything that
 /// could be slow, such as compiling and building the mixer, was done when it
 /// was evaluated, so that landing only has to move things into place.
@@ -162,6 +175,7 @@ struct Pending {
     replays: Vec<Compiled>,
     /// What each track is playing once this has landed.
     playing: BTreeMap<String, Playing>,
+    meta: Meta,
 }
 
 /// What came of an accepted evaluation.
@@ -207,6 +221,28 @@ pub struct TrackStatus {
     pub soloed: bool,
     /// The changes made to it live (`reverse`, `thin(25%)`), oldest first.
     pub edits: Vec<String>,
+}
+
+/// Where the engine is in time, for a client that wants to schedule against it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClockInfo {
+    /// The sample the output is at, as its audio callback last said; the render clock if it hasn't.
+    pub sample: u64,
+    pub bar: u64,
+    /// The beat in the bar, counting from 1, fractions included.
+    pub beat: f64,
+    pub bpm: f64,
+    pub beats_per_bar: f64,
+    pub sample_rate: f32,
+    /// The sample up to which audio has been prepared.
+    pub prepared_until: u64,
+    /// How far ahead of the clock the engine prepares, in samples.
+    pub lookahead: u64,
+    /// Seconds from the audio callback to the speakers, as the audio API reports it.
+    pub output_latency: f64,
+    /// The Unix time in microseconds at which the audio callback was handed the buffer that starts at
+    /// `sample`, or `None` before there is an output.
+    pub wall_micros: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -318,6 +354,8 @@ pub struct Session {
     closed: Vec<VoiceEntry>,
     voice_sets: Vec<VoiceSet>,
     control_owners: Vec<ControlOwner>,
+    /// Where the audio output is, as its callback last said.
+    probe: Arc<crate::ClockProbe>,
     /// Things added since the planner last looked, that it may have to put into windows already prepared.
     fresh: Vec<realtime::Fresh>,
     /// How many mixers have been built for the renderer.
@@ -398,6 +436,7 @@ impl Session {
             closed: Vec::new(),
             voice_sets: Vec::new(),
             control_owners: Vec::new(),
+            probe: Arc::default(),
             fresh: Vec::new(),
             mixer_builds: Arc::default(),
         }
@@ -422,6 +461,7 @@ impl Session {
                 scheduled: false,
                 client: None,
                 tag: None,
+                musical: None,
             });
         }
         session.program = Arc::new(program);
@@ -472,6 +512,11 @@ impl Session {
             .unwrap_or_else(|| self.live.as_ref().map_or(0, |p| p.state.latency))
     }
 
+    /// For the audio callback to say where the output is.
+    pub fn clock_probe(&self) -> Arc<crate::ClockProbe> {
+        self.probe.clone()
+    }
+
     pub fn channels(&self) -> usize {
         self.layout.channels()
     }
@@ -486,6 +531,17 @@ impl Session {
 
     pub fn program(&self) -> &Program {
         &self.program
+    }
+
+    /// The program in effect at sample `at`: the running one, or what the last change of definitions
+    /// landing by then makes it.
+    pub(super) fn program_at(&self, at: u64) -> &Arc<Program> {
+        self.pending
+            .iter()
+            .rev()
+            .find(|p| p.lands_at <= at && p.program.is_some())
+            .and_then(|p| p.program.as_ref())
+            .unwrap_or(&self.program)
     }
 
     fn grid(&self) -> Grid {
@@ -565,6 +621,56 @@ impl Session {
                 in_samples: p.lands_at.saturating_sub(self.clock),
                 position: grid.position(p.lands_at),
                 changes: p.summary.clone(),
+            })
+            .collect()
+    }
+
+    pub fn clock_info(&mut self) -> ClockInfo {
+        self.sync_realtime();
+        let probe = self.probe.read();
+        let sample = probe.map_or(self.clock, |(sample, ..)| sample);
+        let grid = self.grid();
+        let (bar, beat) = grid.position(sample);
+        ClockInfo {
+            sample,
+            bar,
+            beat,
+            bpm: grid.bpm,
+            beats_per_bar: grid.beats_per_bar,
+            sample_rate: self.sample_rate,
+            prepared_until: self.prepared_until(),
+            lookahead: self.live.as_ref().map_or(0, |p| p.lookahead()),
+            output_latency: probe.map_or(0.0, |(_, _, micros)| micros as f64 / 1e6),
+            wall_micros: probe.map(|(_, wall, _)| wall),
+        }
+    }
+
+    /// The instruments and tracks that are defined, with their parameters, for a client that wants to offer them.
+    pub fn definitions(&self) -> (Vec<niminal_lang::Instrument>, Vec<String>, Vec<String>) {
+        (
+            self.program.instruments.clone(),
+            self.program.tracks.iter().skip(1).map(|t| t.name.clone()).collect(),
+            self.program.buses.clone(),
+        )
+    }
+
+    /// Each client's held notes (by the ids it chose) and how many of its events are still waiting.
+    pub fn client_status(&self) -> Vec<(ClientId, Vec<u64>, usize)> {
+        let mut clients: Vec<ClientId> = self.voices.iter().map(|v| v.client).collect();
+        clients.extend(self.upcoming.iter().filter_map(|u| u.client));
+        clients.extend(self.control_owners.iter().map(|o| o.client));
+        clients.extend(self.pending.iter().filter_map(|p| p.meta.client));
+        clients.sort_unstable();
+        clients.dedup();
+        clients
+            .into_iter()
+            .map(|c| {
+                let ids = self.voices.iter().filter(|v| v.client == c).map(|v| v.id).collect();
+                let waiting = self.upcoming.iter().filter(|u| u.client == Some(c) && u.start >= self.clock && !u.scheduled).count()
+                    + self.control_owners.iter().filter(|o| o.client == c).count()
+                    + self.voice_sets.iter().filter(|s| s.client == c && !s.done).count()
+                    + self.pending.iter().filter(|p| p.meta.client == Some(c)).count();
+                (c, ids, waiting)
             })
             .collect()
     }
@@ -722,6 +828,7 @@ impl Session {
             actions,
             replays,
             playing,
+            meta,
             ..
         } = p;
 
@@ -732,7 +839,12 @@ impl Session {
             let mut pending = std::mem::take(&mut self.pending);
             rescale_pending(&mut pending, at, old, new, |p| self.landing_unit_is_bar(p));
             self.pending = pending;
+            rescale_notes(&mut self.upcoming, at, old, new);
             self.swap_program(project, program, mixer, &statements, id);
+        }
+        if meta.origin {
+            let now = self.seconds(at);
+            self.history.push(HistoryEntry { at: now, action: NamedAction::Origin });
         }
         let mut captures = Vec::new();
         for a in actions.iter().chain(&replays) {
@@ -829,6 +941,7 @@ impl Session {
                 scheduled: false,
                 client: None,
                 tag: None,
+                musical: None,
             });
         }
         for scheduled in &program.performance {
@@ -908,6 +1021,9 @@ impl Session {
     /// Whether a pending change waits for a bar line, not a beat.
     fn landing_unit_is_bar(&self, p: &Pending) -> bool {
         use niminal_lang::QuantizeUnit;
+        if let Some(by_bar) = p.meta.musical {
+            return by_bar;
+        }
         p.statements.iter().any(|s| {
             matches!(
                 self.quantums().for_statement(s, None).unit,
@@ -1084,6 +1200,9 @@ impl Session {
                     session.cancel(*id);
                 }
                 LogInput::Panic => session.panic(),
+                LogInput::CancelEvents { client, tag, from, release } => {
+                    session.cancel_events(*client, tag.as_deref(), At::Sample(*from), *release);
+                }
                 LogInput::Send { client, ops } => {
                     let _ = session.send_events(*client, ops.clone());
                 }
@@ -1149,6 +1268,7 @@ impl Session {
                 scheduled: true,
                 client: None,
                 tag: None,
+                musical: None,
             });
         }
         if let Some(e) = problem {
@@ -1342,6 +1462,20 @@ pub(super) fn carry_buffers(old: &Program, new: &Program) {
             prev.copy_into(next);
         }
     }
+}
+
+/// Notes given in beats or bars that are still to start keep their musical position when the tempo or
+/// meter changes at `now`.
+fn rescale_notes(upcoming: &mut VecDeque<Upcoming>, now: u64, old: Tempo, new: Tempo) {
+    if old == new {
+        return;
+    }
+    for note in upcoming.iter_mut().filter(|u| u.start > now) {
+        if let Some(by_bar) = note.musical {
+            note.start = rescale_landing(note.start, now, landing_factor(by_bar, old, new));
+        }
+    }
+    upcoming.make_contiguous().sort_by_key(|u| u.start);
 }
 
 fn is_timing(p: &Pending) -> bool {

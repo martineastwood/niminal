@@ -100,10 +100,17 @@ fn build_stream(device: &cpal::Device, config: cpal::StreamConfig, playback: &Ar
     let stream = device
         .build_output_stream::<f32, _, _>(
             config,
-            move |data: &mut [f32], _| {
+            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                 // only this callback takes the lock, so it is never contended; a failed try is silence
                 match playback.try_lock() {
-                    Ok(mut playback) => playback.read(data),
+                    Ok(mut playback) => {
+                        if let Some(probe) = &playback.probe {
+                            let stamp = info.timestamp();
+                            let latency = stamp.playback.duration_since(stamp.callback);
+                            probe.set_latency_micros(latency.as_micros() as u64);
+                        }
+                        playback.read(data)
+                    }
                     Err(_) => data.fill(0.0),
                 }
             },
@@ -214,6 +221,7 @@ struct Playback {
     next: u64,
     waiting: Option<Frame>,
     queue_frames: usize,
+    probe: Option<Arc<niminal_daemon::ClockProbe>>,
 }
 
 impl Playback {
@@ -221,6 +229,9 @@ impl Playback {
     /// and silence on starvation. The device clock advances even during silence.
     fn read(&mut self, data: &mut [f32]) {
         data.fill(0.0);
+        if let Some(probe) = &self.probe {
+            probe.record(self.next);
+        }
         let mut epoch = self.epoch.load(Ordering::Acquire);
         let mut missed = false;
         let mut stale_budget = self.queue_frames;
@@ -311,8 +322,9 @@ fn start_planner(daemon: Shared, stop: Arc<AtomicBool>, health: Arc<Health>) -> 
 impl RenderWorker {
     fn start(daemon: Shared, channels: usize, queue_frames: usize, health: Arc<Health>, input: Option<AudioInput>) -> Result<(Playback, Self), String> {
         let (producer, consumer) = RingBuffer::new(queue_frames);
-        let (next, epoch, mut renderer, rate) = {
+        let (next, epoch, mut renderer, rate, probe) = {
             let mut d = lock(&daemon);
+            let probe = d.session().clock_probe();
             let next = d.session().clock();
             let epoch = d.session().panic_epoch();
             let rate = f64::from(d.session().sample_rate());
@@ -320,14 +332,14 @@ impl RenderWorker {
             if let Some(input) = input {
                 renderer.set_audio_input(input);
             }
-            (next, epoch, renderer, rate)
+            (next, epoch, renderer, rate, probe)
         };
         let clock = Arc::new(AtomicU64::new(next));
         let (midi_tx, midi_rx) = RingBuffer::new(1024);
         renderer.set_midi_output(midi_tx);
         let midi = crate::midi_out::MidiOutput::start(clock.clone(), midi_rx);
         let playback = Playback { queue: consumer, channels, clock: clock.clone(), epoch: epoch.clone(),
-            health: health.clone(), next, waiting: None, queue_frames };
+            health: health.clone(), next, waiting: None, queue_frames, probe: Some(probe) };
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let planner = start_planner(daemon, stop.clone(), health.clone()).map_err(|e| format!("can't start event preparation: {e}"))?;
@@ -479,7 +491,7 @@ mod tests {
     fn playback() -> (Producer<Frame>, Playback) {
         let (tx, rx) = RingBuffer::new(QUEUE_FRAMES);
         (tx, Playback { queue: rx, channels: 2, clock: Arc::new(AtomicU64::new(0)),
-            epoch: Arc::new(AtomicU64::new(0)), health: Arc::default(), next: 0, waiting: None, queue_frames: QUEUE_FRAMES })
+            epoch: Arc::new(AtomicU64::new(0)), health: Arc::default(), next: 0, waiting: None, queue_frames: QUEUE_FRAMES, probe: None })
     }
 
     fn frame(at: u64, epoch: u64, left: f32, right: f32) -> Frame {

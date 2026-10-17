@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::events::{At, Op};
 use crate::project::Problem;
 use crate::session::{
-    Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo,
+    Accepted, Begin, CancelDone, CancelJob, ClockInfo, EvalDone, EvalJob, Landed, ParsedEval, PendingInfo,
     Session, Transport,
 };
 
@@ -277,7 +277,7 @@ impl Daemon {
             Some(done) => {
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match done {
                     Done::Eval(done) => {
-                        let result = self.session.finish_eval(done);
+                        let result = self.session.finish_eval(*done);
                         self.eval_outcome(result)
                     }
                     Done::Cancel(done) => {
@@ -334,6 +334,7 @@ impl Daemon {
             "events.cancel" => self.events_cancel(client, params),
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
             "status" => Ok(status_json(&self.session)),
+            "clock" => Ok(clock_json(&self.session.clock_info())),
             other => Err(RpcError::new(
                 METHOD_NOT_FOUND,
                 &format!("no method `{other}`"),
@@ -566,7 +567,7 @@ enum Job {
 }
 
 enum Done {
-    Eval(EvalDone),
+    Eval(Box<EvalDone>),
     Cancel(CancelDone),
 }
 
@@ -576,7 +577,7 @@ impl CompileTicket {
     pub fn compile(self) -> CompiledTicket {
         let CompileTicket { id, job } = self;
         let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
-            Job::Eval(job) => Done::Eval(job.compile()),
+            Job::Eval(job) => Done::Eval(Box::new(job.compile())),
             Job::Cancel(job) => Done::Cancel(job.compile()),
         }))
         .ok();
@@ -665,6 +666,15 @@ fn pending_json(p: &PendingInfo) -> Value {
 
 fn landed_json(l: &Landed) -> Value {
     json!({ "id": l.id, "at": l.at, "position": position_json(l.position), "changes": l.changes })
+}
+
+fn clock_json(c: &ClockInfo) -> Value {
+    json!({
+        "sample": c.sample, "bar": c.bar, "beat": c.beat, "bpm": c.bpm,
+        "beats_per_bar": c.beats_per_bar,
+        "sample_rate": c.sample_rate, "prepared_until": c.prepared_until, "lookahead": c.lookahead,
+        "output_latency": c.output_latency, "wall_micros": c.wall_micros,
+    })
 }
 
 fn transport_json(t: &Transport) -> Value {
@@ -764,6 +774,19 @@ fn status_json(session: &Session) -> Value {
             let display = |value: f32| if *unit == Some("db") { 20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10() } else { f64::from(value) };
             json!({ "name": name, "value": display(*value), "target": display(*target), "unit": unit })
         }).collect::<Vec<_>>(),
+        "instruments": session.definitions().0.iter().map(|i| json!({
+            "name": i.name,
+            "params": i.params.iter().map(|p| json!({
+                "name": p.name,
+                "unit": p.unit.suffix(),
+                "default": p.default,
+                "range": p.range,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "buses": session.definitions().2,
+        "clients": session.client_status().iter().map(|(client, voices, waiting)| json!({
+            "id": client, "voices": voices, "waiting": waiting,
+        })).collect::<Vec<_>>(),
         "scenes": session.defined("scene"),
         "clips": session.defined("clip"),
         "tracks": session.tracks().iter().map(|t| json!({

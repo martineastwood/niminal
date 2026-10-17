@@ -168,6 +168,21 @@ class Client:
         """
         return self.call("events.send", {"events": events})
 
+    def cancel_events(self, tag: Optional[str] = None, from_: Any = None, release: Optional[bool] = None) -> Any:
+        """Take back this client's waiting events."""
+        params: dict[str, Any] = {}
+        if tag is not None:
+            params["tag"] = tag
+        if from_ is not None:
+            params["from"] = from_
+        if release is not None:
+            params["release"] = release
+        return self.call("events.cancel", params)
+
+    def clock(self) -> Any:
+        """Where the engine is in time: sample, bar, beat, bpm, prepared_until, wall_micros..."""
+        return self.call("clock")
+
     def set_control(self, name: str, value: float, unit: Optional[str] = None, at: Any = "now", glide: Optional[str] = None) -> Any:
         op: dict[str, Any] = {"op": "control", "name": name, "value": value, "at": at}
         if unit is not None:

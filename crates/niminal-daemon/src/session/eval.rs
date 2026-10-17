@@ -2,6 +2,14 @@
 
 use super::*;
 
+/// What an engine API change is allowed to say.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Define {
+    Definitions,
+    Timing,
+    Forget,
+}
+
 /// What compiling an evaluation needs to know about the session.
 #[derive(Clone)]
 pub(super) struct PrepareConfig {
@@ -17,6 +25,7 @@ pub(super) struct Waiting {
     lands_at: u64,
     snippet: String,
     statements: Vec<Statement>,
+    meta: Meta,
 }
 
 pub(super) struct Prepared {
@@ -136,6 +145,9 @@ pub struct EvalJob {
     lands_at: u64,
     /// The later steps of a tempo ramp: how long after `lands_at` each lands, and what it does.
     ramp: Vec<(u64, Statement)>,
+    /// Sent through the engine API: it lands at exactly `lands_at`, not at a boundary, and isn't logged as an eval.
+    fixed: bool,
+    meta: Meta,
 }
 
 /// Ids below this are real. A ramp's steps are new transactions too, numbered from here until they are queued.
@@ -181,13 +193,14 @@ impl EvalJob {
                     .is_none_or(|key| !writes.contains(&key))
             });
         }
-        waiting.retain(|p| !p.statements.is_empty());
+        waiting.retain(|p| !p.statements.is_empty() || p.meta.origin);
         waiting.push(Waiting {
             id: 0,
             group: None,
             lands_at: self.lands_at,
             snippet: self.source.clone(),
             statements: self.statements.clone(),
+            meta: self.meta.clone(),
         });
         for (k, (after, statement)) in self.ramp.iter().enumerate() {
             waiting.push(Waiting {
@@ -196,6 +209,7 @@ impl EvalJob {
                 lands_at: self.lands_at + after,
                 snippet: self.source.clone(),
                 statements: vec![statement.clone()],
+                meta: Meta::default(),
             });
         }
         waiting.sort_by_key(|p| (p.lands_at, !is_new(p.id), p.id));
@@ -310,6 +324,7 @@ pub(super) fn prepare_next(
     *project = next.project.clone();
     *playing = next.playing.clone();
     next.group = p.group;
+    next.meta = p.meta.clone();
     Ok(next)
 }
 
@@ -463,6 +478,7 @@ pub(super) fn prepare_pending(
         actions,
         replays,
         playing,
+        meta: Meta::default(),
     })
 }
 
@@ -549,13 +565,15 @@ impl Session {
     ) -> Box<EvalJob> {
         let (base, playing) = self.projected();
         Box::new(EvalJob {
-            lands_at: self.landing(&statements, fallback),
+            lands_at: if statements.is_empty() { self.clock } else { self.landing(&statements, fallback) },
             source,
             uses,
             quantize,
             fallback,
             statements,
             ramp,
+            fixed: false,
+            meta: Meta::default(),
             base,
             playing,
             version: self.version,
@@ -564,6 +582,59 @@ impl Session {
             committed_playing: self.playing.clone(),
             waiting: self.waiting(),
         })
+    }
+
+    /// Something sent through the engine API to land at exactly `at`, as `source`. Returns the job to
+    /// compile, or what is wrong with the source.
+    pub(super) fn define_job(
+        &self,
+        source: &str,
+        dir: Option<&str>,
+        at: u64,
+        what: Define,
+        meta: Meta,
+    ) -> Result<Box<EvalJob>, Vec<Problem>> {
+        let parsed = ParsedEval::from_dir(source, std::path::Path::new(dir.unwrap_or(".")), None);
+        let ParsedEval { source, parsed, uses, .. } = parsed;
+        let (statements, _) = parsed?;
+        if statements.is_empty() {
+            return Err(vec![Problem::plain("there is nothing to define")]);
+        }
+        for statement in &statements {
+            let kind = statement.key().map(|k| k.split(':').next().unwrap_or(k));
+            let allowed = match what {
+                Define::Definitions => {
+                    kind.is_some_and(|k| !matches!(k, "clip" | "scene" | "arrangement" | "bind" | "tempo" | "meter"))
+                }
+                Define::Timing => matches!(kind, Some("tempo" | "meter")),
+                Define::Forget => statement.clears(),
+            };
+            if !allowed {
+                let mut problem = Problem::plain(format!(
+                    "`{}` can't be sent here: `define` takes instruments, tracks, effects, buses, controls, tables, buffers and functions, `transport` the tempo and meter",
+                    first_line(&statement.text)
+                ));
+                problem.span = Some(niminal_lang::Span::new(statement.offset, statement.offset + statement.text.len()));
+                return Err(match &uses {
+                    Some(u) => u.locate(vec![problem]),
+                    None => vec![problem],
+                });
+            }
+        }
+        let mut job = self.job(source, uses, None, None, statements, Vec::new());
+        job.fixed = true;
+        job.lands_at = at.max(self.clock);
+        job.meta = meta;
+        Ok(job)
+    }
+
+    /// A change that only says that a point is bar 1.
+    pub(super) fn origin_job(&self, at: u64, meta: Meta) -> Box<EvalJob> {
+        let mut job = self.job(String::new(), None, None, None, Vec::new(), Vec::new());
+        job.fixed = true;
+        job.lands_at = at.max(self.clock);
+        job.meta = meta;
+        job
     }
 
     /// The evaluations waiting to land, as a compile job sees them.
@@ -576,6 +647,7 @@ impl Session {
                 lands_at: p.lands_at,
                 snippet: p.snippet.clone(),
                 statements: p.statements.clone(),
+                meta: p.meta.clone(),
             })
             .collect()
     }
@@ -640,14 +712,20 @@ impl Session {
         if job.version == self.version {
             return None;
         }
-        Some(self.job(
+        let mut again = self.job(
             job.source.clone(),
             job.uses.clone(),
             job.quantize.clone(),
             job.fallback,
             job.statements.clone(),
             job.ramp.clone(),
-        ))
+        );
+        if job.fixed {
+            again.fixed = true;
+            again.lands_at = job.lands_at;
+            again.meta = job.meta.clone();
+        }
+        Some(again)
     }
 
     /// Queue a compiled transaction. The synchronous API retries inline;
@@ -658,9 +736,15 @@ impl Session {
             done = job.compile();
         }
         let EvalDone { job, result } = done;
-        self.log_eval(&job.source, job.quantize.as_deref());
+        if !job.fixed {
+            self.log_eval(&job.source, job.quantize.as_deref());
+        }
         let Prepared { mut queue, notices } = result?;
-        let landing = self.landing(&job.statements, job.fallback);
+        let landing = if job.fixed {
+            job.lands_at.max(self.clock)
+        } else {
+            self.landing(&job.statements, job.fallback)
+        };
         let pending = queue
             .iter_mut()
             .find(|p| p.id == 0)
@@ -704,7 +788,8 @@ impl Session {
         }
         self.pending = queue;
         self.invalidate_live();
-        if accepted.lands_at > job.lands_at
+        if !job.fixed
+            && accepted.lands_at > job.lands_at
             && self.clock > job.lands_at
             && job.statements.iter().any(|s| {
                 self.quantums().for_statement(s, job.fallback).unit
@@ -764,15 +849,27 @@ impl Session {
         (done.job.version != self.version).then(|| self.begin_cancel(done.job.id))
     }
 
-    pub fn finish_cancel(&mut self, mut done: CancelDone) -> usize {
+    pub fn finish_cancel(&mut self, done: CancelDone) -> usize {
+        self.finish_cancel_logged(done, true)
+    }
+
+    /// Cancel a waiting change without it going in the log, because something that is logged does it.
+    pub(super) fn cancel_quietly(&mut self, id: u64) -> usize {
+        let done = self.begin_cancel(Some(id)).compile();
+        self.finish_cancel_logged(done, false)
+    }
+
+    fn finish_cancel_logged(&mut self, mut done: CancelDone, log: bool) -> usize {
         self.sync_realtime();
         while let Some(job) = self.retry_cancel(&done) {
             done = job.compile();
         }
-        self.log.push(LogEntry {
-            sample: self.clock,
-            input: LogInput::Cancel { id: done.job.id },
-        });
+        if log {
+            self.log.push(LogEntry {
+                sample: self.clock,
+                input: LogInput::Cancel { id: done.job.id },
+            });
+        }
         self.pending = done.prepared.queue;
         self.invalidate_live();
         for notice in done.prepared.notices {
@@ -782,3 +879,4 @@ impl Session {
         done.dropped
     }
 }
+

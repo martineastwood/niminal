@@ -1,5 +1,6 @@
 //! Things that arrive from outside while the session runs: events, control changes and keys.
 
+use super::eval::Define;
 use super::*;
 
 impl Session {
@@ -12,12 +13,13 @@ impl Session {
         event: Event,
         key: Option<u32>,
         owner: Option<(ClientId, Option<String>)>,
+        musical: Option<bool>,
     ) {
         if self.live.is_some() {
             self.fresh.push(realtime::Fresh::Note { event: event.clone(), start, dur, key });
         }
         let (client, tag) = owner.map_or((None, None), |(c, t)| (Some(c), t));
-        self.insert_upcoming(Upcoming { start, dur, event, key, scheduled: false, client, tag });
+        self.insert_upcoming(Upcoming { start, dur, event, key, scheduled: false, client, tag, musical });
     }
 
     /// Queue a typed control update at an absolute sample, or at the render
@@ -54,11 +56,12 @@ impl Session {
         Ok(at)
     }
 
-    /// Move control `index` to `value` (in the engine's unit) at sample `at`, over `frames`. `log` says which
-    /// event of which log entry it is, so that the sample it really happens at can be written back.
+    /// Move the control `name` to `value` (in the engine's unit) at sample `at`, over `frames`, in the program
+    /// that is running then. `log` says which event of which log entry it is, so that the sample it really
+    /// happens at can be written back.
     fn queue_control(
         &mut self,
-        index: usize,
+        name: &str,
         value: f32,
         frames: u64,
         at: u64,
@@ -67,11 +70,20 @@ impl Session {
         if self.control_changes.len() >= crate::controls::CAPACITY {
             return Err("the control update queue is full");
         }
-        let def = &self.program.controls[index];
+        let program = self.program_at(at).clone();
+        let Some(index) = program.controls.iter().position(|c| c.name == name) else {
+            return Err("the control is not defined any more");
+        };
+        let def = &program.controls[index];
+        // a control that a change still to land declares is not there for the renderer until it lands
+        let revision = match self.pending.iter().rev().find(|p| p.lands_at <= at && p.program.is_some()) {
+            Some(p) if p.statements.iter().any(|s| s.key().and_then(|k| k.strip_prefix("ctl:")) == Some(name)) => p.id,
+            _ => self.controls.iter().find(|c| c.key == def.key).map_or(0, |c| c.revision),
+        };
         let change = crate::controls::Change {
             index,
             unit: def.unit,
-            revision: self.controls[index].revision,
+            revision,
             at,
             value,
             frames,
@@ -93,6 +105,15 @@ impl Session {
         Ok(())
     }
 
+    /// A time as the log keeps it: a sample, except a position in beats or bars, which is kept so that
+    /// it moves with the tempo again when the log is played back.
+    fn logged(&self, at: At) -> At {
+        match at {
+            At::Time(Time::Beats(_) | Time::Bars(_)) => at,
+            _ => At::Sample(self.resolve(at)),
+        }
+    }
+
     /// The sample a time stands for: a sample as it is, `now` as the clock, and a position on the
     /// transport counted from the bar origin.
     fn resolve(&self, at: At) -> u64 {
@@ -111,14 +132,79 @@ impl Session {
     /// done. Times come out as samples in the log, so that replaying it gives the same sound.
     pub fn send_events(&mut self, client: ClientId, ops: Vec<Op>) -> Result<Sent, Vec<Problem>> {
         self.sync_realtime();
+        let rate = f64::from(self.sample_rate);
+        let clock = self.clock;
+        let musical = |at: &At| match at {
+            At::Time(Time::Beats(_)) => Some(false),
+            At::Time(Time::Bars(_)) => Some(true),
+            _ => None,
+        };
+
+        // Changes of definitions and of the transport go first: they are compiled, which can fail, and the
+        // rest of the batch is checked against the program they leave. If anything later is wrong they are
+        // taken back.
+        let mut resolved: Vec<Option<Op>> = vec![None; ops.len()];
+        let mut queued: Vec<u64> = Vec::new();
+        let mut early = Vec::new();
+        for (n, op) in ops.iter().enumerate() {
+            let (source, dir, at, what, meta, origin) = match op {
+                Op::Define { source, at, dir, tag } => {
+                    let meta = Meta { client: Some(client), tag: tag.clone(), musical: musical(at), origin: false };
+                    resolved[n] = Some(Op::Define { source: source.clone(), at: self.logged(*at), dir: dir.clone(), tag: tag.clone() });
+                    (source.clone(), dir.as_deref(), self.resolve(*at), Define::Definitions, meta, false)
+                }
+                Op::Transport { at, bpm, meter, origin, tag } => {
+                    let mut lines = Vec::new();
+                    if let Some(bpm) = bpm {
+                        lines.push(format!("tempo {bpm}bpm"));
+                    }
+                    if let Some(meter) = meter {
+                        lines.push(format!("meter {meter}"));
+                    }
+                    let is_origin = origin.unwrap_or(false);
+                    if lines.is_empty() && !is_origin {
+                        early.push(problem_at(n, "a `transport` needs a `bpm`, a `meter` or `origin`"));
+                        continue;
+                    }
+                    let meta = Meta { client: Some(client), tag: tag.clone(), musical: musical(at), origin: is_origin };
+                    resolved[n] = Some(Op::Transport { at: self.logged(*at), bpm: *bpm, meter: meter.clone(), origin: *origin, tag: tag.clone() });
+                    (lines.join("\n"), None, self.resolve(*at), Define::Timing, meta, is_origin)
+                }
+                Op::Forget { at, tag } => {
+                    let meta = Meta { client: Some(client), tag: tag.clone(), musical: musical(at), origin: false };
+                    resolved[n] = Some(Op::Forget { at: self.logged(*at), tag: tag.clone() });
+                    ("new".to_string(), None, self.resolve(*at), Define::Forget, meta, false)
+                }
+                _ => continue,
+            };
+            let job = if source.is_empty() && origin {
+                Ok(self.origin_job(at, meta))
+            } else {
+                self.define_job(&source, dir, at, what, meta)
+            };
+            let result = job.and_then(|job| self.finish_eval(job.compile()));
+            match result {
+                Ok(accepted) => queued.extend(accepted.id),
+                Err(mut problems) => {
+                    for p in &mut problems {
+                        p.event = Some(n);
+                    }
+                    early.extend(problems);
+                    break;
+                }
+            }
+        }
+        if !early.is_empty() {
+            self.take_back(&queued);
+            return Err(early);
+        }
+
         enum Plan {
-            Note { event: Event, start: u64, dur: u64, id: Option<u64>, tag: Option<String> },
-            Control { index: usize, value: f32, frames: u64, at: u64, op: usize, tag: Option<String> },
+            Note { event: Event, instrument: String, start: u64, dur: u64, id: Option<u64>, tag: Option<String>, musical: Option<bool> },
+            Control { name: String, value: f32, frames: u64, at: u64, op: usize, tag: Option<String> },
             Set { id: u64, args: Vec<(String, Value, f32)>, frames: u64, at: u64, tag: Option<String> },
             Off { id: u64, at: u64, tag: Option<String> },
         }
-        let tempo = self.program.tempo;
-        let rate = f64::from(self.sample_rate);
         // the notes this client holds, as the batch goes on opening and releasing them
         let mut open: Vec<(u64, String)> = self
             .voices
@@ -128,18 +214,13 @@ impl Session {
             .collect();
         let mut plans = Vec::new();
         let mut problems = Vec::new();
-        let mut resolved = Vec::new();
         let mut controls = self.control_changes.len();
         for (n, op) in ops.iter().enumerate() {
-            let mut fail = |message: String| {
-                let mut p = Problem::plain(message);
-                p.event = Some(n);
-                problems.push(p);
-            };
+            let mut fail = |message: String| problems.push(problem_at(n, message));
             match op {
                 Op::Note { target, at, args, dur, id, tag } => {
                     let start = self.resolve(*at);
-                    resolved.push(Op::Note { target: target.clone(), at: At::Sample(start), args: args.clone(), dur: *dur, id: *id, tag: tag.clone() });
+                    resolved[n] = Some(Op::Note { target: target.clone(), at: self.logged(*at), args: args.clone(), dur: *dur, id: *id, tag: tag.clone() });
                     if dur.is_none() && id.is_none() {
                         fail("a note needs a `dur`, or an `id` to be released by an `off`".into());
                         continue;
@@ -150,77 +231,85 @@ impl Session {
                         fail(format!("note id {id} is already sounding"));
                         continue;
                     }
+                    let program = self.program_at(start).clone();
                     let event = Event { target: target.clone(), at: Time::Seconds(0.0), dur: dur.unwrap_or(Time::Seconds(0.0)), args: args.clone() };
-                    match self.program.plan(&event) {
+                    match program.plan(&event) {
                         Ok(plan) => {
+                            let instrument = program.instruments[plan.instrument].name.clone();
                             if let Some(id) = id {
-                                open.push((*id, self.program.instruments[plan.instrument].name.clone()));
+                                open.push((*id, instrument.clone()));
                             }
                             plans.push(Plan::Note {
                                 start,
-                                dur: dur.map_or(0, |d| self.samples(d.to_seconds(tempo))),
+                                dur: dur.map_or(0, |d| self.samples(d.to_seconds(program.tempo))),
                                 event,
+                                instrument,
                                 id: *id,
                                 tag: tag.clone(),
+                                musical: musical(at),
                             });
                         }
                         Err(e) => fail(format!("note for `{target}`: {e}")),
                     }
                 }
                 Op::Control { name, at, value, unit, glide, tag } => {
+                    let raw = at;
                     let at = self.resolve(*at);
-                    resolved.push(Op::Control { name: name.clone(), at: At::Sample(at), value: *value, unit: unit.clone(), glide: *glide, tag: tag.clone() });
-                    let Some(index) = self.program.controls.iter().position(|c| c.name == *name) else {
+                    resolved[n] = Some(Op::Control { name: name.clone(), at: self.logged(*raw), value: *value, unit: unit.clone(), glide: *glide, tag: tag.clone() });
+                    let program = self.program_at(at);
+                    let Some(def) = program.controls.iter().find(|c| c.name == *name) else {
                         fail(format!("unknown control `{name}`"));
                         continue;
                     };
-                    let def = &self.program.controls[index];
-                    let converted = match def.convert(*value, unit.as_deref(), tempo) {
+                    let converted = match def.convert(*value, unit.as_deref(), program.tempo) {
                         Ok(v) => v,
                         Err(e) => {
                             fail(e);
                             continue;
                         }
                     };
-                    let seconds = glide.map_or(def.smooth_seconds, |g| g.to_seconds(tempo));
+                    let seconds = glide.map_or(def.smooth_seconds, |g| g.to_seconds(program.tempo));
                     if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
                         fail("`glide` must be between 0 and 60sec".into());
                         continue;
                     }
                     controls += 1;
-                    plans.push(Plan::Control { index, value: converted, frames: (seconds * rate).round() as u64, at, op: n, tag: tag.clone() });
+                    plans.push(Plan::Control { name: name.clone(), value: converted, frames: (seconds * rate).round() as u64, at, op: n, tag: tag.clone() });
                 }
                 Op::Track { name, at, args, tag } => {
+                    let raw = at;
                     let at = self.resolve(*at);
-                    resolved.push(Op::Track { name: name.clone(), at: At::Sample(at), args: args.clone(), tag: tag.clone() });
+                    resolved[n] = Some(Op::Track { name: name.clone(), at: self.logged(*raw), args: args.clone(), tag: tag.clone() });
+                    let program = self.program_at(at);
                     for (param, value) in args {
                         let full = format!("{name}::{param}");
-                        let Some(index) = self.program.controls.iter().position(|c| c.name == full) else {
+                        let Some(def) = program.controls.iter().find(|c| c.name == full) else {
                             fail(format!("`{name}` has no parameter `{param}`"));
                             continue;
                         };
-                        let def = &self.program.controls[index];
-                        match def.from_value(*value, tempo) {
+                        match def.from_value(*value, program.tempo) {
                             Ok(v) => {
                                 controls += 1;
-                                plans.push(Plan::Control { index, value: v, frames: (def.smooth_seconds * rate).round() as u64, at, op: n, tag: tag.clone() });
+                                plans.push(Plan::Control { name: full, value: v, frames: (def.smooth_seconds * rate).round() as u64, at, op: n, tag: tag.clone() });
                             }
                             Err(e) => fail(format!("parameter `{param}`: {e}")),
                         }
                     }
                 }
                 Op::Set { id, at, args, glide, tag } => {
+                    let raw = at;
                     let at = self.resolve(*at);
-                    resolved.push(Op::Set { id: *id, at: At::Sample(at), args: args.clone(), glide: *glide, tag: tag.clone() });
+                    resolved[n] = Some(Op::Set { id: *id, at: self.logged(*raw), args: args.clone(), glide: *glide, tag: tag.clone() });
                     let Some((_, instrument)) = open.iter().find(|(open, _)| open == id) else {
                         fail(format!("no note with id {id} is sounding"));
                         continue;
                     };
-                    let Some(instrument) = self.program.instruments.iter().find(|i| i.name == *instrument) else {
+                    let program = self.program_at(at);
+                    let Some(instrument) = program.instruments.iter().find(|i| i.name == *instrument) else {
                         fail(format!("the instrument of note {id} is not defined any more"));
                         continue;
                     };
-                    let seconds = glide.map_or(0.0, |g| g.to_seconds(tempo));
+                    let seconds = glide.map_or(0.0, |g| g.to_seconds(program.tempo));
                     if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
                         fail("`glide` must be between 0 and 60sec".into());
                         continue;
@@ -229,7 +318,7 @@ impl Session {
                     for (name, value) in args {
                         // a note's pitch is `freq` to the score, and whatever `with(pitch: ...)` named it to the instrument
                         let actual = if name == niminal_lang::PITCH_PARAM { &instrument.pitch } else { name };
-                        match instrument.param(actual).and_then(|(_, p)| instrument.param_value(p, *value, tempo)) {
+                        match instrument.param(actual).and_then(|(_, p)| instrument.param_value(p, *value, program.tempo)) {
                             Ok(v) => converted.push((actual.clone(), *value, v)),
                             Err(e) => fail(e.to_string()),
                         }
@@ -237,8 +326,9 @@ impl Session {
                     plans.push(Plan::Set { id: *id, args: converted, frames: (seconds * rate).round() as u64, at, tag: tag.clone() });
                 }
                 Op::Off { id, at, tag } => {
+                    let raw = at;
                     let at = self.resolve(*at);
-                    resolved.push(Op::Off { id: *id, at: At::Sample(at), tag: tag.clone() });
+                    resolved[n] = Some(Op::Off { id: *id, at: self.logged(*raw), tag: tag.clone() });
                     let Some(i) = open.iter().position(|(open, _)| open == id) else {
                         fail(format!("no note with id {id} is sounding"));
                         continue;
@@ -246,33 +336,45 @@ impl Session {
                     open.remove(i);
                     plans.push(Plan::Off { id: *id, at, tag: tag.clone() });
                 }
+                Op::Define { .. } | Op::Transport { .. } | Op::Forget { .. } => {}
             }
         }
         if problems.is_empty() && controls > crate::controls::CAPACITY {
             problems.push(Problem::plain("the control update queue is full"));
         }
         if !problems.is_empty() {
+            self.take_back(&queued);
             return Err(problems);
         }
 
-        let clock = self.clock;
         let log_index = self.log.len();
-        self.log.push(LogEntry { sample: clock, input: LogInput::Send { client, ops: resolved } });
+        self.log.push(LogEntry {
+            sample: clock,
+            input: LogInput::Send { client, ops: resolved.into_iter().flatten().collect() },
+        });
         let mut sent = Sent { accepted: ops.len(), late: 0, first: None };
+        // definitions and the transport, which are queued already
+        for op in &ops {
+            let at = match op {
+                Op::Define { at, .. } | Op::Transport { at, .. } | Op::Forget { at, .. } => self.resolve(*at),
+                _ => continue,
+            };
+            sent.late += usize::from(at < clock);
+            sent.first = Some(sent.first.map_or(at, |f| f.min(at)));
+        }
         for plan in plans {
             let at = match plan {
-                Plan::Note { event, start, dur, id, tag } => {
+                Plan::Note { event, instrument, start, dur, id, tag, musical } => {
                     let key = id.map(|_| self.keyboard.new_key());
                     if let (Some(id), Some(key)) = (id, key) {
-                        let instrument = self.program.plan(&event).map(|p| self.program.instruments[p.instrument].name.clone()).unwrap_or_default();
                         self.voices.push(VoiceEntry { client, id, key, instrument, tag: tag.clone() });
                     }
-                    self.add_explicit(start.max(clock), dur, event, key, Some((client, tag)));
+                    self.add_explicit(start.max(clock), dur, event, key, Some((client, tag)), musical);
                     start
                 }
-                Plan::Control { index, value, frames, at, op, tag } => {
+                Plan::Control { name, value, frames, at, op, tag } => {
                     let serial = self.next_control;
-                    match self.queue_control(index, value, frames, at.max(clock), (log_index, op)) {
+                    match self.queue_control(&name, value, frames, at.max(clock), (log_index, op)) {
                         Ok(()) => self.control_owners.push(ControlOwner { serial, client, tag }),
                         Err(e) => self.notify(e.into()),
                     }
@@ -298,6 +400,13 @@ impl Session {
         }
         self.wake_planner();
         Ok(sent)
+    }
+
+    /// Take back changes of definitions or the transport queued by a batch that then failed.
+    fn take_back(&mut self, ids: &[u64]) {
+        for &id in ids {
+            self.cancel_quietly(id);
+        }
     }
 
     /// Change parameters of the note a client holds by `id`: now, if it is sounding, or as it starts.
@@ -359,6 +468,10 @@ impl Session {
     pub fn cancel_events(&mut self, client: ClientId, tag: Option<&str>, from: At, release: bool) -> Cancelled {
         self.sync_realtime();
         let from = self.resolve(from);
+        self.log.push(LogEntry {
+            sample: self.clock,
+            input: LogInput::CancelEvents { client, tag: tag.map(str::to_owned), from, release },
+        });
         let mut done = Cancelled::default();
         let mut replan = false;
         let mine = |owner: Option<ClientId>, t: &Option<String>| owner == Some(client) && tag.is_none_or(|x| t.as_deref() == Some(x));
@@ -444,6 +557,17 @@ impl Session {
                 let _ = planner.push_control(retract);
             }
             done.cancelled += 1;
+        }
+
+        // changes of definitions or the transport that are still to land
+        let landing: Vec<u64> = self
+            .pending
+            .iter()
+            .filter(|p| p.lands_at >= from && mine(p.meta.client, &p.meta.tag))
+            .map(|p| p.id)
+            .collect();
+        for id in landing {
+            done.cancelled += usize::from(self.cancel_quietly(id) > 0);
         }
 
         if release {
@@ -721,7 +845,7 @@ impl Session {
             let start = self
                 .samples(event.at.to_seconds(self.program.tempo))
                 .max(self.clock);
-            self.add_explicit(start, 0, event, Some(key), None);
+            self.add_explicit(start, 0, event, Some(key), None, None);
             keys.push(key);
         }
         self.wake_planner();
@@ -795,4 +919,10 @@ impl Session {
             }
         }
     }
+}
+
+fn problem_at(event: usize, message: impl Into<String>) -> Problem {
+    let mut p = Problem::plain(message);
+    p.event = Some(event);
+    p
 }
