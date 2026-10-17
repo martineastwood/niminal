@@ -10,7 +10,6 @@ use niminal_cli::audio::{NullClock, Output, Shared};
 use niminal_cli::live::{DEFAULT_SAMPLE_RATE, layout_for, render_error, render_problems, replay};
 use niminal_cli::render::{End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav};
 use niminal_cli::input::LiveShared;
-use niminal_cli::link::WsLink;
 use niminal_cli::server::{Client, Server, ServerConfig, lock};
 use niminal_daemon::{EngineServer, Session, from_lines, to_lines};
 use niminal_live::{Live, LiveServer};
@@ -410,11 +409,11 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
     // signals the project sends over OSC (`osc_out`) go out whenever the engine runs
     let _osc_out = niminal_cli::osc_out::OscOutput::start(engine.clone())?;
 
-    // the sequencer plays through the engine, over its own API like any other client
+    // The built-in sequencer uses the same engine API directly, without loopback JSON or sockets.
     let (mut sequencer, mut watched) = (None, None);
     let (mut _server, mut _ticker, mut _midi, mut _osc) = (None, None, None, None);
     if !engine_only {
-        let link = WsLink::connect(engine_server.port(), token.as_deref())?;
+        let link = niminal_live::InProcess::new(engine.clone());
         let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(Live::new(Box::new(link), rate as f32, layout))));
         let server = Server::start(live.clone(), ServerConfig { listen, port, token })?;
         println!("niminal daemon listening on ws://{listen}:{} (sequencer for the engine on port {})", server.port(), engine_server.port());
@@ -424,7 +423,8 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
             move |stop| {
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     lock(&live).live_mut().advance();
-                    std::thread::sleep(Duration::from_millis(10));
+                    // The sequencer schedules 100ms ahead; 25ms ticks leave three ticks of margin.
+                    std::thread::sleep(Duration::from_millis(25));
                 }
             }
         }));

@@ -214,6 +214,7 @@ struct Frame {
 
 struct Playback {
     queue: Consumer<Frame>,
+    render_thread: Option<thread::Thread>,
     channels: usize,
     clock: Arc<AtomicU64>,
     epoch: Arc<AtomicU64>,
@@ -231,6 +232,30 @@ impl Playback {
         data.fill(0.0);
         if let Some(probe) = &self.probe {
             probe.record(self.next);
+        }
+        // Usually the queue contains exactly the next stretch of audio. Read it in place and
+        // release the slots once per callback, avoiding a ring update and a Frame copy per sample.
+        let frames = data.len() / self.channels;
+        if self.waiting.is_none()
+            && let Ok(chunk) = self.queue.read_chunk(frames)
+        {
+            let (first, second) = chunk.as_slices();
+            if first.iter().chain(second).enumerate().all(|(i, f)| f.at == self.next + i as u64) {
+                let mut epoch = self.epoch.load(Ordering::Acquire);
+                for (i, (frame, output)) in first.iter().chain(second)
+                    .zip(data.chunks_exact_mut(self.channels)).enumerate()
+                {
+                    if i % BLOCK == 0 { epoch = self.epoch.load(Ordering::Acquire); }
+                    if frame.epoch == epoch {
+                        output.copy_from_slice(&frame.samples[..self.channels]);
+                    }
+                }
+                chunk.commit_all();
+                self.next += frames as u64;
+                self.clock.store(self.next, Ordering::Release);
+                if let Some(renderer) = &self.render_thread { renderer.unpark(); }
+                return;
+            }
         }
         let mut epoch = self.epoch.load(Ordering::Acquire);
         let mut missed = false;
@@ -263,6 +288,7 @@ impl Playback {
             self.next += 1;
         }
         self.clock.store(self.next, Ordering::Release);
+        if let Some(renderer) = &self.render_thread { renderer.unpark(); }
         if missed {
             self.health.underruns.fetch_add(1, Ordering::Relaxed);
         }
@@ -322,23 +348,22 @@ fn start_planner(daemon: Shared, stop: Arc<AtomicBool>, health: Arc<Health>) -> 
 impl RenderWorker {
     fn start(daemon: Shared, channels: usize, queue_frames: usize, health: Arc<Health>, input: Option<AudioInput>) -> Result<(Playback, Self), String> {
         let (producer, consumer) = RingBuffer::new(queue_frames);
-        let (next, epoch, mut renderer, rate, probe) = {
+        let (next, epoch, mut renderer, probe) = {
             let mut d = lock(&daemon);
             let probe = d.session().clock_probe();
             let next = d.session().clock();
             let epoch = d.session().panic_epoch();
-            let rate = f64::from(d.session().sample_rate());
             let mut renderer = d.session_mut().start_realtime(RealtimeConfig::default());
             if let Some(input) = input {
                 renderer.set_audio_input(input);
             }
-            (next, epoch, renderer, rate, probe)
+            (next, epoch, renderer, probe)
         };
         let clock = Arc::new(AtomicU64::new(next));
         let (midi_tx, midi_rx) = RingBuffer::new(1024);
-        renderer.set_midi_output(midi_tx);
         let midi = crate::midi_out::MidiOutput::start(clock.clone(), midi_rx);
-        let playback = Playback { queue: consumer, channels, clock: clock.clone(), epoch: epoch.clone(),
+        renderer.set_midi_output(midi_tx, Some(midi.wake_handle()));
+        let mut playback = Playback { queue: consumer, render_thread: None, channels, clock: clock.clone(), epoch: epoch.clone(),
             health: health.clone(), next, waiting: None, queue_frames, probe: Some(probe) };
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -357,8 +382,9 @@ impl RenderWorker {
                 if free >= chunk {
                     fill_queue(&mut renderer, &mut producer, chunk, clock.load(Ordering::Acquire), &epoch, &health);
                 } else {
-                    // The sound card frees `chunk` frames about every `chunk / rate`, so there is nothing to do sooner.
-                    thread::sleep(Duration::from_secs_f64(((chunk - free) as f64 / rate).clamp(0.001, 0.004)));
+                    // The callback wakes us after consuming audio. The timeout also lets shutdown
+                    // and device loss make progress when there are no callbacks.
+                    thread::park_timeout(Duration::from_millis(20));
                 }
             }
         });
@@ -370,6 +396,7 @@ impl RenderWorker {
                 return Err(format!("can't start the audio render worker: {error}"));
             }
         };
+        playback.render_thread = Some(thread.thread().clone());
         let worker = Self { stop, thread: Some(thread), planner: Some(planner), _midi: Some(midi) };
         ready_rx.recv().map_err(|_| "the audio render worker stopped before starting".to_string())?;
         Ok((playback, worker))
@@ -391,19 +418,21 @@ fn fill_queue(renderer: &mut RealtimeRenderer, producer: &mut Producer<Frame>, f
         // Catch up in bounded slices. Audio missed by the device stays missed;
         // events and DSP still advance to preserve the session's timeline.
         let behind = played.saturating_sub(renderer.clock()).min((BLOCK * 8) as u64) as usize;
-        renderer.render(behind, &mut |_, _| {});
+        if behind > 0 { renderer.render(behind, &mut |_, _| {}); }
         if renderer.clock() < played { return; }
         let mut at = renderer.clock();
         let epoch = epoch.load(Ordering::Acquire);
         renderer.render(frames, &mut |block, n| {
-            for i in 0..n {
-                let mut samples = [0.0; MAX_CHANNELS];
-                for (sample, channel) in samples.iter_mut().zip(block) { *sample = channel[i]; }
-                // The consumer can only free slots, so the space checked by the
-                // producer remains available for this entire render.
-                let _ = producer.push(Frame { at, epoch, samples });
-                at += 1;
+            // Publish one DSP block at a time instead of synchronizing the ring for every sample.
+            // The consumer only frees slots, so the caller's capacity check still holds here.
+            if let Ok(chunk) = producer.write_chunk_uninit(n) {
+                chunk.fill_from_iter((0..n).map(|i| {
+                    let mut samples = [0.0; MAX_CHANNELS];
+                    for (sample, channel) in samples.iter_mut().zip(block) { *sample = channel[i]; }
+                    Frame { at: at + i as u64, epoch, samples }
+                }));
             }
+            at += n as u64;
         });
     }));
     if result.is_err() {
@@ -415,7 +444,7 @@ fn fill_queue(renderer: &mut RealtimeRenderer, producer: &mut Producer<Frame>, f
 impl Drop for RenderWorker {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() { thread.thread().unpark(); let _ = thread.join(); }
         if let Some(planner) = self.planner.take() { let _ = planner.join(); }
     }
 }
@@ -490,7 +519,7 @@ mod tests {
 
     fn playback() -> (Producer<Frame>, Playback) {
         let (tx, rx) = RingBuffer::new(QUEUE_FRAMES);
-        (tx, Playback { queue: rx, channels: 2, clock: Arc::new(AtomicU64::new(0)),
+        (tx, Playback { queue: rx, render_thread: None, channels: 2, clock: Arc::new(AtomicU64::new(0)),
             epoch: Arc::new(AtomicU64::new(0)), health: Arc::default(), next: 0, waiting: None, queue_frames: QUEUE_FRAMES, probe: None })
     }
 

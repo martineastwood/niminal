@@ -515,3 +515,31 @@ fn chop_plays_the_next_part_of_the_sample_for_each_piece() {
         assert!((out[0][at] - level).abs() < 1e-3, "piece {i}: {} vs {level}", out[0][at]);
     }
 }
+
+#[test]
+fn a_larger_slice_kit_does_not_build_a_larger_audio_graph() {
+    let dir = scratch("kit-graph-size");
+    write_wav(&dir.join("s.wav"), &[ramp(4096)]);
+    let nodes = |slices| {
+        let program = compile_in(&dir, &format!(
+            "sample s = \"s.wav\"\nkit k = s.slices({slices})\ntrack t {{ instrument = k }}"
+        )).unwrap();
+        program.instruments.iter().find(|i| i.name == "k").unwrap().graph.node_count()
+    };
+    assert_eq!(nodes(4), nodes(64));
+}
+
+#[test]
+fn a_kit_with_mixed_channel_layouts_matches_individual_sample_playback() {
+    let dir = scratch("kit-mixed-layouts");
+    std::fs::create_dir_all(dir.join("kit")).unwrap();
+    write_wav(&dir.join("kit/mono.wav"), &[ramp(2000)]);
+    write_wav(&dir.join("kit/stereo.wav"), &[block(0.3, 40), block(-0.2, 40)]);
+    let kit = play(&dir, "config { channels: stereo }\nkit k = \"kit\" with(root: c4)\ntrack t { instrument = k }\nt.play([mono stereo])");
+    let separate = play(&dir, "config { channels: stereo }\nsample a = \"kit/mono.wav\" with(root: c4)\nsample b = \"kit/stereo.wav\" with(root: c4)\ntrack x { instrument = a }\ntrack y { instrument = b }\nx.play([c4 ~])\ny.play([~ c4])");
+    for (a, b) in kit.iter().zip(&separate) {
+        let difference = a.iter().zip(b).enumerate().find(|(_, (a, b))| (*a - *b).abs() > 1e-6);
+        assert!(difference.is_none(), "lengths {} {}, first difference {:?}", a.len(), b.len(), difference);
+        assert_eq!(a.len(), b.len());
+    }
+}

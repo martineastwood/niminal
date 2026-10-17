@@ -103,19 +103,23 @@ impl Ports for Devices {
 
 /// Sends the notes of `midi_out` instruments until dropped.
 pub struct MidiOutput {
-    _worker: Worker,
+    worker: Worker,
 }
 
 impl MidiOutput {
+    pub fn wake_handle(&self) -> thread::Thread { self.worker.wake_handle() }
+
     /// `played` counts the samples the sound card has played; `incoming` brings the events.
     pub fn start(played: Arc<AtomicU64>, mut incoming: Consumer<MidiEvent>) -> MidiOutput {
         MidiOutput {
-            _worker: Worker::spawn(move |stop| {
+            worker: Worker::spawn(move |stop| {
                 let (mut pump, mut devices) = (Pump::default(), Devices::default());
                 while !stop.load(Ordering::Relaxed) {
                     pump.run(played.load(Ordering::Acquire), &mut incoming, &mut devices);
-                    // Events are rendered well before they play, so with none waiting there is no hurry to look.
-                    thread::sleep(Duration::from_millis(if pump.is_waiting() { 1 } else { 5 }));
+                    // New events wake this worker. Only poll the playback clock while a message
+                    // is actually waiting for its timestamp, so unused MIDI has no timer churn.
+                    if pump.is_waiting() { thread::sleep(Duration::from_millis(1)); }
+                    else { thread::park(); }
                 }
                 pump.all_off(&mut devices);
             }),

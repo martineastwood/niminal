@@ -3,6 +3,12 @@ use std::sync::Arc;
 use crate::opcode::{Opcode, Port, ProcessCtx};
 use crate::table::Table;
 
+const PORTS: &[Port] = &[
+    Port::optional("freq", 0.0), Port::optional("pitch", 0.0),
+    Port::optional("rate", 1.0), Port::optional("start", 0.0),
+    Port::optional("sample", 0.0), Port::optional("begin", 0.0),
+];
+
 /// Frames over which a slice fades in and out.
 const SLICE_FADE: f64 = 16.0;
 
@@ -118,13 +124,6 @@ impl Opcode for Sampler {
     }
 
     fn ports(&self) -> &'static [Port] {
-        const PORTS: &[Port] = &[
-            Port::optional("freq", 0.0),
-            Port::optional("pitch", 0.0),
-            Port::optional("rate", 1.0),
-            Port::optional("start", 0.0),
-            Port::optional("sample", 0.0),
-        ];
         PORTS
     }
 
@@ -147,8 +146,11 @@ impl Opcode for Sampler {
             self.started = true;
             let selected = self.member.is_none_or(|m| inputs[4][0].round() as i64 == m as i64);
             if selected && !self.data.is_empty() {
+                let length = (self.range.1 - self.range.0) as f32 / self.source_rate();
+                let begin = inputs.get(5).map_or(0.0, |input| input[0]);
+                let start = inputs[3][0] + begin * length;
                 self.position = self.range.0 as f64
-                    + f64::from(inputs[3][0].max(0.0)) * f64::from(self.source_rate());
+                    + f64::from(start.max(0.0)) * f64::from(self.source_rate());
             } else {
                 self.done = true;
             }
@@ -185,7 +187,7 @@ impl Opcode for Sampler {
             }
             let pitch = f64::from(inputs[1][n]) / 12.0;
             let ratio = f64::from(inputs[0][n]) / f64::from(self.root_hz)
-                * pitch.exp2()
+                * if pitch == 0.0 { 1.0 } else { pitch.exp2() }
                 * f64::from(inputs[2][n])
                 * self.speed;
             self.position +=
@@ -200,6 +202,52 @@ impl Opcode for Sampler {
     /// A sample plays out, so like an envelope it decides when its voice ends.
     fn is_envelope(&self) -> bool {
         self.loop_mode == LoopMode::None
+    }
+}
+
+/// A kit channel selects one player at note start. Unselected members never run DSP or allocate
+/// per-voice buffers. Missing members are silent (another channel-layout group handles them).
+#[derive(Clone)]
+pub struct KitSampler {
+    players: Arc<[Option<Sampler>]>,
+    selected: Option<Sampler>,
+    started: bool,
+    sample_rate: f32,
+}
+
+impl KitSampler {
+    pub fn new(players: Vec<Option<Sampler>>) -> Self {
+        Self { players: players.into(), selected: None, started: false, sample_rate: 48_000.0 }
+    }
+}
+
+impl Opcode for KitSampler {
+    fn name(&self) -> &str { "sample" }
+    fn ports(&self) -> &'static [Port] { PORTS }
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(Self { selected: None, started: false, ..self.clone() })
+    }
+    fn reset(&mut self) {
+        self.selected = None;
+        self.started = false;
+    }
+    fn prepare(&mut self, sample_rate: f32) { self.sample_rate = sample_rate; }
+    fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        if !self.started {
+            self.started = true;
+            let member = inputs[4][0].round() as i64;
+            self.selected = usize::try_from(member).ok()
+                .and_then(|i| self.players.get(i)).and_then(Option::as_ref).cloned();
+            if let Some(player) = &mut self.selected { player.prepare(self.sample_rate); }
+        }
+        if let Some(player) = &mut self.selected { player.process(ctx, inputs, out); }
+        else { out.fill(0.0); }
+    }
+    fn is_active(&self) -> bool {
+        !self.started || self.selected.as_ref().is_some_and(Sampler::is_active)
+    }
+    fn is_envelope(&self) -> bool {
+        self.players.iter().flatten().any(Sampler::is_envelope)
     }
 }
 

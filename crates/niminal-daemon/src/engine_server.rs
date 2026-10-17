@@ -212,6 +212,7 @@ pub fn clock_json(c: &ClockInfo) -> Value {
 
 #[derive(Default)]
 struct Client {
+    local: bool,
     greeted: bool,
     topics: BTreeSet<String>,
 }
@@ -254,8 +255,16 @@ impl EngineServer {
         id
     }
 
+    /// A client that collects its own notifications instead of using the network server's outbox.
+    pub fn connect_local(&mut self) -> ClientId {
+        let id = self.connect();
+        self.clients.get_mut(&id).unwrap().local = true;
+        id
+    }
+
     pub fn disconnect(&mut self, client: ClientId) {
         self.clients.remove(&client);
+        self.outbox.retain(|(id, _)| *id != client);
         self.session.drop_client(client);
     }
 
@@ -374,6 +383,17 @@ impl EngineServer {
     /// `(client, message)`. Call it regularly while the clock advances: it reports notices and, about ten
     /// times a second, the transport and meters.
     pub fn notifications(&mut self) -> Vec<(ClientId, String)> {
+        self.collect_notifications();
+        self.outbox.extract_if(.., |(id, _)| self.clients.get(id).is_none_or(|c| !c.local)).collect()
+    }
+
+    /// Collect only this in-process client's messages, preserving those for network clients.
+    pub fn notifications_for(&mut self, client: ClientId) -> Vec<(ClientId, String)> {
+        self.collect_notifications();
+        self.outbox.extract_if(.., |(id, _)| *id == client).collect()
+    }
+
+    fn collect_notifications(&mut self) {
         self.session.sync_realtime();
         for notice in self.session.take_notices() {
             self.send_to_subscribers("notices", "notice", json!({ "message": notice }));
@@ -399,7 +419,6 @@ impl EngineServer {
                 self.send_to_subscribers("meters", "meters", json!({ "peaks": peaks }));
             }
         }
-        std::mem::take(&mut self.outbox)
     }
 }
 

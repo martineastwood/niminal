@@ -192,19 +192,21 @@ fn set_command(program: &Program, set: &super::VoiceSet, at: u64, frames: u64) -
 /// A `midi_out` note on or off, if anyone is listening. Allocates nothing.
 fn send_midi(
     tx: &mut Option<Producer<crate::MidiEvent>>,
+    wake: &Option<std::thread::Thread>,
     at: u64,
     on: bool,
     note: &niminal_lang::MidiNote,
 ) {
     if let Some(tx) = tx {
-        let _ = tx.push(crate::MidiEvent {
+        let sent = tx.push(crate::MidiEvent {
             at,
             on,
             port: note.port.clone(),
             channel: note.channel,
             note: note.note,
             velocity: note.velocity,
-        });
+        }).is_ok();
+        if sent && let Some(thread) = wake { thread.unpark(); }
     }
 }
 
@@ -301,6 +303,7 @@ pub struct RealtimeRenderer {
     audio_in: Option<crate::AudioInput>,
     /// Where notes for `midi_out` instruments go, and those still sounding: when they end and the key that holds them.
     midi_tx: Option<Producer<crate::MidiEvent>>,
+    midi_wake: Option<std::thread::Thread>,
 }
 
 impl Session {
@@ -375,6 +378,7 @@ impl Session {
             config,
             audio_in: None,
             midi_tx: None,
+            midi_wake: None,
         };
         renderer.control_pending.reserve(controls::CAPACITY);
         self.live = Some(Planner {
@@ -1024,14 +1028,15 @@ struct Explicit {
 
 impl RealtimeRenderer {
     /// Send the notes of `midi_out` instruments down `tx`, stamped with the sample they belong to.
-    pub fn set_midi_output(&mut self, tx: Producer<crate::MidiEvent>) {
+    pub fn set_midi_output(&mut self, tx: Producer<crate::MidiEvent>, wake: Option<std::thread::Thread>) {
         self.midi_tx = Some(tx);
+        self.midi_wake = wake;
     }
 
     /// Every sounding `midi_out` note off, as `panic` and a reset do.
     fn all_midi_off(&mut self) {
         for (_, _, note) in self.sounding.midi.drain(..) {
-            send_midi(&mut self.midi_tx, self.clock, false, &note);
+            send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
         }
     }
 
@@ -1041,7 +1046,7 @@ impl RealtimeRenderer {
         while i < self.sounding.midi.len() {
             if self.sounding.midi[i].0 <= self.clock {
                 let (_, _, note) = self.sounding.midi.swap_remove(i);
-                send_midi(&mut self.midi_tx, self.clock, false, &note);
+                send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
             } else {
                 i += 1;
             }
@@ -1173,7 +1178,7 @@ impl RealtimeRenderer {
                     && *off > self.clock
                     && self.sounding.midi.len() < self.sounding.midi.capacity()
                 {
-                    send_midi(&mut self.midi_tx, self.clock, true, &note);
+                    send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, true, &note);
                     self.sounding.midi.push((*off, *key, note));
                 }
                 let target = track
@@ -1261,7 +1266,7 @@ impl RealtimeRenderer {
                 }
                 self.sounding.held.clear();
                 for (_, _, note) in self.sounding.midi.drain(..) {
-                    send_midi(&mut self.midi_tx, self.clock, false, &note);
+                    send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
                 }
                 self.state.reset_epoch.store(*epoch, Ordering::Release);
             }

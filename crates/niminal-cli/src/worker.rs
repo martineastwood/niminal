@@ -12,6 +12,10 @@ pub struct Worker {
 }
 
 impl Worker {
+    pub fn wake_handle(&self) -> thread::Thread {
+        self.thread.as_ref().expect("a running worker").thread().clone()
+    }
+
     pub fn spawn(body: impl FnOnce(&AtomicBool) + Send + 'static) -> Worker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -23,6 +27,7 @@ impl Drop for Worker {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
             let _ = thread.join();
         }
     }

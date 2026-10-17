@@ -25,7 +25,7 @@ impl InProcess {
     pub fn new(server: Arc<Mutex<EngineServer>>) -> InProcess {
         let client = {
             let mut s = lock(&server);
-            let client = s.connect();
+            let client = s.connect_local();
             let hello = EngineRequest::Hello { protocol: PROTOCOL_VERSION, client: Some("niminal-live".into()), token: None };
             s.request(client, hello).expect("an engine in this process takes a hello");
             let topics = vec!["notices".to_string()];
@@ -48,9 +48,8 @@ impl EngineLink for InProcess {
     fn notifications(&mut self) -> Vec<(String, Value)> {
         let mut server = lock(&self.server);
         server
-            .notifications()
+            .notifications_for(self.client)
             .into_iter()
-            .filter(|(client, _)| *client == self.client)
             .filter_map(|(_, text)| {
                 let message: Value = serde_json::from_str(&text).ok()?;
                 Some((message["method"].as_str()?.to_string(), message["params"].clone()))

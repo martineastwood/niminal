@@ -37,7 +37,7 @@ pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
 pub use pan::{PanChannel, pan_gains};
 pub use reverb::Reverb;
-pub use sample::{LoopMode, Sampler};
+pub use sample::{KitSampler, LoopMode, Sampler};
 pub use tap::{Tap, TapOut};
 
 mod lifetime;

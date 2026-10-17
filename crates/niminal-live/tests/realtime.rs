@@ -799,7 +799,7 @@ fn midi_out_notes_leave_the_prepared_path_at_the_samples_they_belong_to() {
     s.eval(code, Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let (tx, mut rx) = rtrb::RingBuffer::new(64);
-    r.set_midi_output(tx);
+    r.set_midi_output(tx, None);
     let mut out = vec![0.0; 100_000];
     for chunk in out.chunks_mut(256) {
         s.prepare_realtime();

@@ -58,6 +58,8 @@ struct ChannelState {
     delay: Vec<f64>,
     /// The latest `TAPS` samples after the DC blocker, newest first.
     recent: [f64; TAPS],
+    /// Samples in `recent` large enough to require true peak interpolation.
+    interpolation_candidates: usize,
 }
 
 impl Master {
@@ -77,7 +79,7 @@ impl Master {
         let between_reach = between.iter().map(|w| w.iter().map(|w| w.abs()).sum::<f64>()).fold(1.0, f64::max);
         Master {
             channels: (0..channels)
-                .map(|_| ChannelState { dc_x1: 0.0, dc_y1: 0.0, delay: vec![0.0; window], recent: [0.0; TAPS] })
+                .map(|_| ChannelState { dc_x1: 0.0, dc_y1: 0.0, delay: vec![0.0; window], recent: [0.0; TAPS], interpolation_candidates: 0 })
                 .collect(),
             dc_r: 1.0 - std::f64::consts::TAU * DC_CUTOFF_HZ / sr,
             ceiling: f64::from(ceiling),
@@ -103,6 +105,7 @@ impl Master {
             channel.dc_y1 = 0.0;
             channel.delay.fill(0.0);
             channel.recent = [0.0; TAPS];
+            channel.interpolation_candidates = 0;
         }
         self.required.fill(1.0);
         self.windowed_min.fill(1.0);
@@ -195,6 +198,9 @@ impl Master {
             let x = if x.abs() < 1e-18 { 0.0 } else { x };
             state.dc_x1 = input;
             state.dc_y1 = x;
+            let candidate = |sample: f64| sample.abs() * self.between_reach > self.ceiling;
+            state.interpolation_candidates = state.interpolation_candidates
+                + usize::from(candidate(x)) - usize::from(candidate(state.recent[TAPS - 1]));
             state.recent.rotate_right(1);
             state.recent[0] = x;
             // The sample from `HALF` ago is the one going into the lookahead, so the stretch after it
@@ -203,8 +209,7 @@ impl Master {
             state.delay[p] = sample;
             peak = peak.max(sample.abs());
             // the stretches between samples need looking at only if they could reach the ceiling
-            let loudest = state.recent.iter().fold(0.0f64, |m, r| m.max(r.abs()));
-            if loudest * self.between_reach > self.ceiling {
+            if state.interpolation_candidates > 0 {
                 let between = self.between.iter().map(|w| w.iter().zip(&state.recent).map(|(w, r)| w * r).sum::<f64>().abs());
                 peak = between.fold(peak, f64::max);
             }

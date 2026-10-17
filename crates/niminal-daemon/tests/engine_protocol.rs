@@ -164,3 +164,29 @@ fn clock_and_status_describe_the_engine_and_define_goes_through_events_send() {
     assert_eq!(extra["params"][1]["name"], "cut");
     assert_eq!(call(&mut d, c, 7, "clock", json!({}))["result"]["bpm"], 90.0);
 }
+
+#[test]
+fn local_and_network_clients_keep_their_own_notifications() {
+    let (mut server, network) = ready();
+    let local = server.connect_local();
+    call(&mut server, local, 1, "hello", json!({"protocol": PROTOCOL_VERSION}));
+    for client in [local, network] {
+        call(&mut server, client, 2, "subscribe", json!({"topics": ["transport"]}));
+    }
+    let local_messages = server.notifications_for(local);
+    assert_eq!(local_messages.len(), 1);
+    assert_eq!(local_messages[0].0, local);
+    let network_messages = server.notifications();
+    assert_eq!(network_messages.len(), 1);
+    assert_eq!(network_messages[0].0, network);
+
+    server.session_mut().process(4801);
+    let network_messages = server.notifications();
+    assert_eq!(network_messages.len(), 1);
+    assert_eq!(network_messages[0].0, network);
+    let local_messages = server.notifications_for(local);
+    assert_eq!(local_messages.len(), 1);
+    assert_eq!(local_messages[0].0, local);
+    assert!(server.notifications().is_empty());
+    assert!(server.notifications_for(local).is_empty());
+}

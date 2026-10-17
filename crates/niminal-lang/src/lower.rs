@@ -13,7 +13,7 @@ use std::sync::Arc;
 use niminal_engine::ops::{
     Add, BlockHold, BufferRead, Context, NoteStart, ReadContext, BufferRecord, BufferWrite, Cmp, Compare, Curve, Custom, Delay1, Div,
     Env, EnvField, Fn1, Func, Hold, Interp, LoopMode, Max, Min, Mul, NoteTime, PanChannel, Pow,
-    Released, Rem, SampleRate, Sampler, Segment, Select, Sub, ArrayRead, TableRead, Waveshape,
+    Released, Rem, SampleRate, Sampler, KitSampler, Segment, Select, Sub, ArrayRead, TableRead, Waveshape,
 };
 use niminal_engine::{Array, Buffer, ChainInput, Edge, Graph, GraphBuilder, Route, Src, Table};
 use niminal_score::{Tempo, Value};
@@ -667,16 +667,7 @@ pub(crate) struct Member {
     pub loop_mode: LoopMode,
 }
 
-impl Member {
-    pub fn sample_rate(&self) -> f32 {
-        self.channels
-            .first()
-            .map_or(48_000.0, |c| c.sample_rate_or(48_000.0))
-    }
-}
-
-/// An instrument that plays recorded audio. A kit has one player per sample,
-/// and its `sample` parameter picks which one sounds.
+/// An instrument that plays recorded audio, selecting a kit member once per note.
 pub(crate) fn compile_sampler(
     name: &Ident,
     members: &[Member],
@@ -718,54 +709,34 @@ pub(crate) fn compile_sampler(
             name.span,
         )
     };
-    let mut mix: Option<Sig> = None;
+    // Members with the same channel layout share one selectable player per channel. A note
+    // chooses its member once; it does not run and sum every other member's silent graph.
+    let mut layouts = std::collections::BTreeMap::<usize, Vec<usize>>::new();
     for (i, member) in members.iter().enumerate() {
         let channels = member.channels.len();
-        if channels > MAX_SAMPLE_CHANNELS {
-            return Err(too_many(channels));
-        }
+        if channels > MAX_SAMPLE_CHANNELS { return Err(too_many(channels)); }
+        layouts.entry(channels).or_default().push(i);
+    }
+    let mut mix: Option<Sig> = None;
+    for (channels, indices) in layouts {
         let mut srcs = Vec::with_capacity(channels);
-        for channel in &member.channels {
-            let frames = member.slice.map_or(channel.len(), |(from, to)| to - from);
-            let rate_hz = member.sample_rate();
-            let offset = lower
-                .g
-                .add(
-                    Mul,
-                    &[
-                        ("a", begin),
-                        ("b", Src::Const(frames as f32 / rate_hz)),
-                    ],
-                )
-                .expect("mul ports");
-            let from = lower
-                .g
-                .add(Add, &[("a", start), ("b", offset)])
-                .expect("add ports");
-            let mut wires = vec![
-                ("freq", freq),
-                ("pitch", pitch),
-                ("rate", rate),
-                ("start", from),
-            ];
-            wires.extend(pick.map(|p| ("sample", p)));
-            let mut player = Sampler::new(channel.clone(), root_hz, is_kit.then_some(i))
-                .with_speed(member.speed)
-                .with_loop(member.loop_mode);
-            if let Some((start, end)) = member.slice {
-                player = player.slice(start, end);
+        for channel in 0..channels {
+            let mut players = vec![None; members.len()];
+            for &i in &indices {
+                let member = &members[i];
+                let mut player = Sampler::new(member.channels[channel].clone(), root_hz, None)
+                    .with_speed(member.speed).with_loop(member.loop_mode);
+                if let Some((start, end)) = member.slice { player = player.slice(start, end); }
+                players[i] = Some(player);
             }
-            srcs.push(
-                lower
-                    .g
-                    .add(player, &wires)
-                    .map_err(|e| Diagnostic::new(e.to_string(), name.span))?,
-            );
+            let mut wires = vec![("freq", freq), ("pitch", pitch), ("rate", rate),
+                ("start", start), ("begin", begin)];
+            wires.extend(pick.map(|p| ("sample", p)));
+            srcs.push(lower.g.add(KitSampler::new(players), &wires)
+                .map_err(|e| Diagnostic::new(e.to_string(), name.span))?);
         }
         let sig = lower.convert(
-            &Sig::channels(srcs, Layout::from_count(channels)),
-            names.master,
-            name.span,
+            &Sig::channels(srcs, Layout::from_count(channels)), names.master, name.span,
         )?;
         mix = Some(match mix {
             None => sig,
