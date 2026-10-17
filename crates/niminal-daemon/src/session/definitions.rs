@@ -189,6 +189,7 @@ impl Session {
         let mut project = base.clone();
         project.apply(&delta);
 
+        project.drop_broken(&from_snippet, |full| compile_with(full, &options(self.layout, &self.samples)).map(|_| ()));
         let (full, map) = project.source(&from_snippet, &[]);
         let program = compile_with(&full, &options(self.layout, &self.samples)).map_err(|diags| {
             diags.iter().map(|d| Problem::from_diagnostic(d, &snippet, map.locate(d.span))).collect::<Vec<_>>()

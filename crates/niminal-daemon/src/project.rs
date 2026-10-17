@@ -25,6 +25,32 @@ fn is_instrument_and_track(a: &str, b: &str) -> bool {
 }
 
 impl Project {
+    /// Take out the earlier definitions that the ones just added have broken, such as an instrument that
+    /// another definition used until its name was taken for something else. A new definition replaces
+    /// what came before it, and what depended on that goes too. Only when every problem is in an earlier
+    /// definition: a mistake in what was just sent is left to be reported. Returns the keys taken out.
+    pub fn drop_broken(
+        &mut self,
+        from_snippet: &std::collections::HashMap<String, usize>,
+        compile: impl Fn(&str) -> Result<(), Vec<Diagnostic>>,
+    ) -> Vec<String> {
+        let mut dropped = Vec::new();
+        for _ in 0..8 {
+            let (full, map) = self.source(from_snippet, &[]);
+            let Err(diagnostics) = compile(&full) else { break };
+            let mut stale = Vec::new();
+            for d in &diagnostics {
+                match map.locate(d.span) {
+                    Located::Earlier(key) if self.entries.iter().any(|e| e.key == key) => stale.push(key),
+                    _ => return dropped,
+                }
+            }
+            self.entries.retain(|e| !stale.contains(&e.key));
+            dropped.extend(stale);
+        }
+        dropped
+    }
+
     /// Add or replace definitions. A replaced definition keeps its place, since
     /// later definitions may depend on it being earlier.
     pub fn apply(&mut self, delta: &[Entry]) {

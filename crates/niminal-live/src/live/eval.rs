@@ -364,6 +364,7 @@ pub(super) fn prepare_pending(
 
     let mut project = base.clone();
     project.apply(&delta);
+    project.drop_broken(&from_snippet, |full| compile_with(full, &options(cfg.layout, &cfg.samples)).map(|_| ()));
     let check = |extra: &[Piece]| -> Result<Program, Vec<Problem>> {
         let (full, map) = project.source(&from_snippet, extra);
         compile_with(&full, &options(cfg.layout, &cfg.samples)).map_err(|diags| {
