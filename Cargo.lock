@@ -744,6 +744,7 @@ dependencies = [
  "niminal-engine",
  "niminal-lang",
  "niminal-score",
+ "rtrb",
  "serde",
  "serde_json",
 ]
