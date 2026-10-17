@@ -2,7 +2,7 @@
   "name": "niminal",
   "displayName": "niminal",
   "description": "Live-code niminal: syntax highlighting and evaluation against a running niminal daemon.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "niminal",
   "license": "MIT",
   "engines": {
@@ -13,9 +13,12 @@
   ],
   "main": "./extension.js",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "install-ext": "node install.js",
+    "install-cursor": "node install.js --cursor"
   },
   "dependencies": {
+    "niminal-client": "file:../../clients/js",
     "vscode-languageclient": "9.0.1",
     "ws": "8.18.0"
   },

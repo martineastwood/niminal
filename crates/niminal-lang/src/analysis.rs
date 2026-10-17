@@ -245,7 +245,7 @@ fn command_write_key(c: &CommandStmt) -> Option<String> {
 
 fn command_action(c: &CommandStmt, source: &str, span_start: usize) -> CommandAction {
     match &c.command {
-        Command::Start { name, verb } => CommandAction::Edit {
+        Command::Start { name, verb, .. } => CommandAction::Edit {
             plays: PlayInfo {
                 track: name.name.clone(),
                 what: "start".into(),
@@ -316,6 +316,14 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                 )
             }
             Item::Fn(d) => simple_def(text, offset, format!("fn:{}", d.name.name)),
+            Item::Def(d) => simple_def(text, offset, format!("def:{}", d.name.name)),
+            Item::For { .. } | Item::If { .. } => Statement {
+                text,
+                offset,
+                quantize: None,
+                write_key: None,
+                data: StatementData::Note { has_at: false },
+            },
             Item::Const { name, .. } => simple_def(text, offset, format!("const:{}", name.name)),
             Item::MidiOut(d) => simple_def(text, offset, format!("instr:{}", d.name.name)),
             Item::Sample(d) => simple_def(

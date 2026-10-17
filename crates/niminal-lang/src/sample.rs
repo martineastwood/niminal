@@ -53,6 +53,11 @@ impl Samples {
         })
     }
 
+    /// Public form of [`Samples::resolve`] for `load("…")` and similar.
+    pub fn resolve_path(&self, path: &str) -> PathBuf {
+        self.resolve(path)
+    }
+
     /// Read the files `source` declares into the cache, ignoring any problems
     /// (compiling reports them). A live daemon does this before it takes the
     /// lock that the audio thread needs, so reading a big file can't stall it.

@@ -148,10 +148,13 @@ Two small pieces of syntax say *when*, and they answer different questions:
 
 ```nml
 verse.start
+verse.start then chorus after 4bars   // follow action: chorus 4 bars after verse
 at +4bars chorus.start
 at +8bars bass.mute
 at +12bars hush
 ```
+
+`then` after a `start` queues another launch relative to the first (or to `at +N` when both are used). Live, the same form works, or the `launch` RPC with a `then` object. Named undo is `bass.undo(reverse)` (also via `edit` with `change: "undo(reverse)"`).
 
 `at bar 5 chorus.start` is at bar 5 on the session's clock, which keeps counting while the daemon runs, so submitting it again after bar 5 does nothing. Prefer `at +N` in anything you will submit more than once.
 
@@ -220,11 +223,55 @@ tempo 140bpm @ next 4bars over 8bars
 
 `niminal render` plays a file like that through a session, as the daemon would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
 
+## Score functions
+
+`def` builds clips, scenes and patterns offline (and live, through the same eval path). Unlike DSP `fn`, a `def` never runs on the audio thread: it returns score values.
+
+```nml
+def motif(root) {
+  [root ~ root+7st ~]
+}
+
+def stairs(n) {
+  for i in 0..<n {
+    c4 + i * 1st
+  }
+}
+
+clip riff {
+  instrument: pluck
+  notes: cat(motif(c3), stairs(4))
+}
+
+// anonymous clips inside a def
+def fill() {
+  clip {
+    length: 1bar
+    notes: [c4 e4 g4]
+  }
+}
+lead.play(fill())
+```
+
+Pattern atoms resolve `def` parameters (`[root ~]`), `for` / `if` / arithmetic work on notes and numbers, and `stack` / `cat` / `seq` combine patterns. Top-level `for` and `if` expand notes and commands while compiling:
+
+```nml
+for i in 0..<8 {
+  at i * 1/2beat pluck(freq: c4 + i * 1st) for 1/4beat
+}
+
+if 1 > 0 {
+  lead.play([c4 e4 g4])
+} else {
+  lead.play([c3])
+}
+```
+
 ## Live coding model
 
 - Evaluate block/line while performing; whole file when rendering.
 - Failed compile changes nothing.
-- Redefinition: new notes use new defs; sounding notes finish on old ones.
+- Redefinition: new notes use new defs; sounding notes finish on old ones. Redefining a `def` updates every clip that uses it on the next eval.
 - Tracks and effects keep delay/filter state across edits.
 
 ## External control

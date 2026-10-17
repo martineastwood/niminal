@@ -1966,8 +1966,12 @@ impl<'a> Lower<'a> {
             .with_help(
                 "patterns go in `clip`, `scene` and `play`; use `[a, b]` here for a channel array",
             )),
-            ExprKind::Grid(_) | ExprKind::Rows(_) => Err(Diagnostic::new(
+            ExprKind::Grid(_) | ExprKind::Rows(_) | ExprKind::Events(_) => Err(Diagnostic::new(
                 "grids as trigger signals aren't supported yet",
+                e.span,
+            )),
+            ExprKind::ClipBlock(_) | ExprKind::SceneBlock(_) => Err(Diagnostic::new(
+                "clips and scenes belong in the score, not in an instrument",
                 e.span,
             )),
             ExprKind::Name(_)

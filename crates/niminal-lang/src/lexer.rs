@@ -47,6 +47,8 @@ pub enum Tok {
     Grid(String),
     /// The raw text of `grid { ... }`: one row per sample.
     Rows(String),
+    /// The raw text of `events { ... }` inside a clip.
+    Events(String),
     /// A quoted string such as a file path.
     Str(String),
     Newline,
@@ -156,18 +158,26 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     Tok::Pattern(text)
                 }
             }
-            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid") =>
+            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid" || n == "events") =>
             {
-                let Some(len) = src[i + 1..].find('}') else {
+                let Some(len) = matching_brace(src, i) else {
                     return Err(Diagnostic::new(
                         "this `{` is never closed",
                         Span::new(i, i + 1),
                     ));
                 };
-                let text = src[i + 1..i + 1 + len].to_string();
+                let text = src[i + 1..i + len].to_string();
+                let kind = match tokens.last() {
+                    Some(Token { tok: Tok::Ident(n), .. }) if n == "events" => "events",
+                    _ => "grid",
+                };
                 start = tokens.pop().map_or(start, |t| t.span.start);
-                i += len + 2;
-                Tok::Rows(text)
+                i += len + 1;
+                if kind == "events" {
+                    Tok::Events(text)
+                } else {
+                    Tok::Rows(text)
+                }
             }
             b'"' => {
                 let Some(len) = src[i + 1..]
@@ -336,6 +346,26 @@ fn matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
                 depth -= 1;
                 if depth == 0 {
                     return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Index of the matching `}`, or `None`. `open` is the index of `{`. Returns the
+/// length from `{` to `}` inclusive so `src[open + 1..open + len]` is the body.
+fn matching_brace(src: &str, open: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut depth = 0;
+    for (i, &b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i - open);
                 }
             }
             _ => {}

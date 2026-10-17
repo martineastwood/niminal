@@ -1,8 +1,8 @@
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
-const { Client } = require("./client");
+const { Client } = require("niminal-client");
 const { blockAround } = require("./blocks");
-const { trackDescription, commands: panelCommands } = require("./panel");
+const { trackDescription } = require("./panel");
 const { rewriteLearned } = require("./learn");
 
 let client = null;
@@ -62,6 +62,7 @@ async function connect() {
   client = new Client({
     port,
     token,
+    client: "niminal-vscode",
     onNotification(method, params) {
       if (method === "transport") {
         transport = params;
@@ -84,7 +85,7 @@ async function connect() {
     },
   });
   await client.connect();
-  await client.call("subscribe", { topics: ["transport", "landed", "notices", "learned"] });
+  await client.subscribe(["transport", "landed", "notices", "learned"]);
   showStatus();
   refreshPerformance();
   return client;
@@ -93,7 +94,7 @@ async function connect() {
 async function refreshPerformance() {
   if (!client?.connected) return;
   try {
-    const status = await client.call("status");
+    const status = await client.status();
     performance = { scenes: status.scenes ?? [], tracks: status.tracks ?? [] };
     scenesChanged.fire();
     tracksChanged.fire();
@@ -102,17 +103,15 @@ async function refreshPerformance() {
   }
 }
 
-/** Send a line of code from a panel button or key, as if it had been evaluated in an editor. */
-async function sendCode(code) {
+/** Typed performance call (launch, mute, …) with status feedback. */
+async function sendApi(label, run) {
   const c = await ensureConnected();
   if (!c) return;
-  const params = { source: code };
   const { quantize } = settings();
-  if (quantize) params.quantize = quantize;
   try {
-    const result = await c.call("eval", params);
+    const result = await run(c, quantize);
     const where = result.id === null ? "nothing to do" : result.in_seconds === 0 ? "applied" : `lands at bar ${result.position.bar} beat ${result.position.beat.toFixed(2)}`;
-    vscode.window.setStatusBarMessage(`niminal: ${code} — ${where}`, 2500);
+    vscode.window.setStatusBarMessage(`niminal: ${label} — ${where}`, 2500);
     refreshPerformance();
   } catch (e) {
     vscode.window.showErrorMessage(`niminal: ${e.message}`);
@@ -147,12 +146,11 @@ async function evaluate(editor, range) {
   const c = await ensureConnected();
   if (!c) return;
   const { document } = editor;
-  const params = { source: document.getText(range) };
-  if (document.uri.scheme === "file") params.dir = require("path").dirname(document.uri.fsPath);
   const { quantize } = settings();
-  if (quantize) params.quantize = quantize;
+  const opts = { quantize };
+  if (document.uri.scheme === "file") opts.dir = require("path").dirname(document.uri.fsPath);
   try {
-    const result = await c.call("eval", params);
+    const result = await c.eval(document.getText(range), opts);
     reportProblems(document, range.start.line, [], range);
     editor.setDecorations(flash, [range]);
     setTimeout(() => editor.setDecorations(flash, []), 250);
@@ -266,15 +264,25 @@ function activate(context) {
         return item;
       },
     }),
-    command("niminal.launchScene", (scene) => scene && sendCode(panelCommands.launch(scene.name))),
+    command("niminal.launchScene", (scene) => scene && sendApi(`${scene.name}.start`, (c, q) => c.launch(scene.name, { quantize: q }))),
     command("niminal.launchNth", (n) => {
       const name = performance.scenes[n - 1];
-      if (name) return sendCode(panelCommands.launch(name));
+      if (name) return sendApi(`${name}.start`, (c, q) => c.launch(name, { quantize: q }));
       vscode.window.setStatusBarMessage(`niminal: no scene number ${n}`, 2000);
     }),
-    command("niminal.toggleMute", (track) => track && sendCode(panelCommands.mute(track))),
-    command("niminal.toggleSolo", (track) => track && sendCode(panelCommands.solo(track))),
-    command("niminal.stopTrack", (track) => track && sendCode(panelCommands.stop(track))),
+    command("niminal.toggleMute", (track) => {
+      if (!track) return;
+      return track.muted
+        ? sendApi(`${track.name}.unmute`, (c, q) => c.unmute(track.name, { quantize: q }))
+        : sendApi(`${track.name}.mute`, (c, q) => c.mute(track.name, { quantize: q }));
+    }),
+    command("niminal.toggleSolo", (track) => {
+      if (!track) return;
+      return track.soloed
+        ? sendApi(`${track.name}.unsolo`, (c, q) => c.unsolo(track.name, { quantize: q }))
+        : sendApi(`${track.name}.solo`, (c, q) => c.solo(track.name, { quantize: q }));
+    }),
+    command("niminal.stopTrack", (track) => track && sendApi(`${track.name}.stop`, (c, q) => c.stop(track.name, { quantize: q }))),
     { dispose: () => clearInterval(refreshTimer) },
   );
   // Tracks change without any evaluation when a timeline command comes due.

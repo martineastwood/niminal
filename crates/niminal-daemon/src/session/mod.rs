@@ -156,6 +156,8 @@ pub struct TrackStatus {
     pub name: String,
     /// The clip playing on it now.
     pub clip: Option<String>,
+    /// What the track was told to play (base clip text before live edits).
+    pub playing: Option<String>,
     pub muted: bool,
     pub soloed: bool,
     /// The changes made to it live (`reverse`, `thin(25%)`), oldest first.
@@ -533,16 +535,14 @@ impl Session {
             .filter(|(_, t)| t.instrument.is_some())
             .map(|(i, t)| {
                 let state = self.schedule.track_state(i, now);
+                let record = self.playing.get(&t.name);
                 TrackStatus {
                     name: t.name.clone(),
                     clip: state.clip,
+                    playing: record.map(|p| p.base.clone()),
                     muted: state.muted,
                     soloed: state.soloed,
-                    edits: self
-                        .playing
-                        .get(&t.name)
-                        .map(|p| p.edits.clone())
-                        .unwrap_or_default(),
+                    edits: record.map(|p| p.edits.clone()).unwrap_or_default(),
                 }
             })
             .collect()

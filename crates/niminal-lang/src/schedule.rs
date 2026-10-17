@@ -526,9 +526,6 @@ impl Schedule {
         to: f64,
         out: &mut Vec<(f64, Event)>,
     ) -> Result<(), ScheduleError> {
-        let Some(notes) = segment.clip.lane("notes") else {
-            return Ok(());
-        };
         let clock = &segment.clock;
         let length = segment.clip.length.to_f64();
         let until = segment.end.map_or(to, |e| e.min(to));
@@ -573,22 +570,49 @@ impl Schedule {
             if span.start >= span.end {
                 continue;
             }
-            for hap in notes.onsets(span) {
-                let whole = hap.whole.expect("notes have a duration");
-                let onset = clock.seconds_at(base + whole.start.to_f64());
+            if let Some(notes) = segment.clip.lane("notes") {
+                for hap in notes.onsets(span) {
+                    let whole = hap.whole.expect("notes have a duration");
+                    let onset = clock.seconds_at(base + whole.start.to_f64());
+                    if onset < window_start || onset >= until {
+                        continue;
+                    }
+                    // a note meant for the first instant after the clip ends can land a hair early, when the
+                    // end was found by adding up the steps of a gradual tempo change
+                    if segment.end.is_some_and(|end| onset >= end - END_SLACK) {
+                        continue;
+                    }
+                    let track = segment.track;
+                    if !self.audible(track, onset) {
+                        continue;
+                    }
+                    out.push((onset, self.note(segment, whole, base, &hap.value, onset)?));
+                }
+            }
+            for note in &segment.clip.scored {
+                if note.at < span.start || note.at >= span.end {
+                    continue;
+                }
+                let onset = clock.seconds_at(base + note.at.to_f64());
                 if onset < window_start || onset >= until {
                     continue;
                 }
-                // a note meant for the first instant after the clip ends can land a hair early, when the
-                // end was found by adding up the steps of a gradual tempo change
                 if segment.end.is_some_and(|end| onset >= end - END_SLACK) {
                     continue;
                 }
-                let track = segment.track;
-                if !self.audible(track, onset) {
+                if !self.audible(segment.track, onset) {
                     continue;
                 }
-                out.push((onset, self.note(segment, whole, base, &hap.value, onset)?));
+                let whole = CycleSpan::new(note.at, note.at + note.dur);
+                let mut event = self.note(segment, whole, base, &note.step, onset)?;
+                for (k, v) in &note.args {
+                    event.args.insert(k.clone(), *v);
+                }
+                // scored notes carry their own duration
+                event.dur = Time::Seconds(
+                    clock.seconds_at(base + (note.at + note.dur).to_f64()) - onset,
+                );
+                out.push((onset, event));
             }
         }
         Ok(())
@@ -1122,6 +1146,43 @@ track bass { instrument = pluck }
         );
         assert!(error("arrangement song { sections: [s.over(8bars)]\n tempo: env[60bpm 8bars 240bpm].loop }").contains("runs once"));
         assert!(error("arrangement song { sections: [s.over(8bars)]\n tempo: [60bpm]\n tempo: env[60bpm 8bars 240bpm] }").contains("given twice"));
+    }
+
+    #[test]
+    fn start_then_queues_a_follow_launch() {
+        let s = schedule(
+            r#"
+            scene a { lead: [c4] }
+            scene b { lead: [e4] }
+            a.start then b after 1bar
+            "#,
+        );
+        let early = notes(&s, 0.0, 1.9);
+        let later = notes(&s, 2.0, 3.9);
+        assert!(!early.is_empty());
+        assert!(!later.is_empty());
+        assert_eq!(early[0].2, 60);
+        assert_eq!(later[0].2, 64);
+    }
+
+    #[test]
+    fn events_blocks_schedule_exact_notes() {
+        let s = schedule(
+            r#"
+            clip fill {
+              length: 1bar
+              events {
+                0beat c4 for 1/2beat gain: -6db
+                1/2beat e4 for 1/2beat
+              }
+            }
+            lead.play(fill)
+            "#,
+        );
+        let found = notes(&s, 0.0, 2.0);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].2, 60);
+        assert_eq!(found[1].2, 64);
     }
 
     #[test]

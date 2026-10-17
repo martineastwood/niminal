@@ -1332,9 +1332,17 @@ impl Kb<'_> {
                 let captures = self.frame.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
                 Ok(KVal::Function { def, captures })
             }
-            ExprKind::Pattern(_) | ExprKind::Grid(_) | ExprKind::Rows(_) | ExprKind::Rest => Err(
+            ExprKind::Pattern(_)
+            | ExprKind::Grid(_)
+            | ExprKind::Rows(_)
+            | ExprKind::Events(_)
+            | ExprKind::Rest => Err(
                 Diagnostic::new("patterns can't be used inside a function with state", e.span),
             ),
+            ExprKind::ClipBlock(_) | ExprKind::SceneBlock(_) => Err(Diagnostic::new(
+                "clips and scenes belong in the score, not in a function with state",
+                e.span,
+            )),
             ExprKind::Str(_) => Err(Diagnostic::new(
                 "text can't be used inside a function with state",
                 e.span,

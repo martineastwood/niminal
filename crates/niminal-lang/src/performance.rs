@@ -43,6 +43,18 @@ impl Step {
     }
 }
 
+/// A note written with exact times in an `events { }` block (or loaded from a score).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScoredNote {
+    /// Start in cycles from the beginning of the clip.
+    pub at: Rational,
+    /// Length in cycles.
+    pub dur: Rational,
+    pub step: Step,
+    /// Extra arguments for the instrument (`bright: 0.5`, …).
+    pub args: Vec<(String, Value)>,
+}
+
 /// A clip: lanes of patterns sharing one timeline.
 ///
 /// One pattern cycle is one bar. A clip plays `length` cycles and then starts
@@ -60,6 +72,8 @@ pub struct Clip {
     /// `notes` is the pitch lane; other lanes set parameters or universal
     /// controls note by note.
     pub lanes: Vec<(String, Pattern<Step>)>,
+    /// Exact timed notes from `events { }` or `load(...)`.
+    pub scored: Vec<ScoredNote>,
     /// `keys: midi.keys(channel: 1)`: played from a keyboard instead of by `notes`.
     pub keys: Option<Keys>,
     /// Lanes drawn as an envelope, `cut: env[300hz 1bar 3khz]`: they move a track's

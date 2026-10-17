@@ -13,11 +13,31 @@ const id = `${pkg.publisher}.${pkg.name}`;
 const folder = `${id}-${pkg.version}`;
 const target = path.join(root, folder);
 
+// Drop any older versions of this extension so only the fresh copy is loaded.
+for (const name of fs.existsSync(root) ? fs.readdirSync(root) : []) {
+  if (name.startsWith(`${id}-`) && name !== folder) {
+    fs.rmSync(path.join(root, name), { recursive: true, force: true });
+  }
+}
+
 fs.rmSync(target, { recursive: true, force: true });
 fs.mkdirSync(target, { recursive: true });
-for (const entry of ["package.json", "package-lock.json", "extension.js", "client.js", "blocks.js", "panel.js", "learn.js",
-  "language-configuration.json", "syntaxes", "media", "node_modules"]) {
-  fs.cpSync(path.join(__dirname, entry), path.join(target, entry), { recursive: true });
+for (const entry of [
+  "package.json",
+  "package-lock.json",
+  "extension.js",
+  "blocks.js",
+  "panel.js",
+  "learn.js",
+  "language-configuration.json",
+  "syntaxes",
+  "media",
+  "node_modules",
+]) {
+  const src = path.join(__dirname, entry);
+  if (!fs.existsSync(src)) continue;
+  // dereference so file: deps (niminal-client) are real copies, not broken symlinks
+  fs.cpSync(src, path.join(target, entry), { recursive: true, dereference: true });
 }
 
 const registry = path.join(root, "extensions.json");

@@ -31,6 +31,7 @@ pub struct Section {
 pub enum ScoreError {
     Json(serde_json::Error),
     UnsupportedVersion(u32),
+    Message(String),
 }
 
 impl fmt::Display for ScoreError {
@@ -38,8 +39,12 @@ impl fmt::Display for ScoreError {
         match self {
             ScoreError::Json(e) => write!(f, "invalid score: {e}"),
             ScoreError::UnsupportedVersion(v) => {
-                write!(f, "score format version {v} is not supported (this build reads version {VERSION})")
+                write!(
+                    f,
+                    "score format version {v} is not supported (this build reads versions {VERSION} and 2)"
+                )
             }
+            ScoreError::Message(m) => f.write_str(m),
         }
     }
 }

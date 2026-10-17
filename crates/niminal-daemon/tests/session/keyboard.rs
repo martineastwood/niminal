@@ -80,7 +80,9 @@ fn a_keyboard_clip_checks_its_lanes() {
     let both = "tempo 120bpm\ninstr organ(freq: hz) { osc(sine, freq) }\nclip pad { instrument: organ\n keys: midi.keys()\n notes: [c4] }\npad.start";
     let problems = s.eval(both, Some("now")).unwrap_err();
     assert!(
-        problems[0].message.contains("both `notes` and `keys`"),
+        problems[0].message.contains("both")
+            && problems[0].message.contains("keys")
+            && problems[0].message.contains("notes"),
         "{}",
         problems[0].message
     );

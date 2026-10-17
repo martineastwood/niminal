@@ -1,17 +1,20 @@
 ---
 title: Score model
-description: Events, sections, and the .nms JSON format.
+description: Events, sections, projects, and the .nms JSON format.
 ---
 
-The engine can play **score events** that do not come from niminal source: a `.nms` file on the command line, or `event.stream` on a live daemon. The orchestra still defines the instruments; the score only times and names the notes.
+The engine can play **score events** that do not come from niminal source: a `.nms` file on the command line, or `event.stream` / `clip.define` on a live daemon. The orchestra still defines the instruments; the score times and names the notes, clips and scenes.
 
 ## Elements
 
 | Element | Contents |
 | --- | --- |
 | **Event** | Target (instrument or track), start, duration, named arguments with units |
-| **Section** | Named finite list of events with a length (a `.nms` file is one section) |
-| **Arrangement** | Scenes over time in niminal source (see [Performance](/reference/language/performance/)) — not part of the `.nms` file format |
+| **Section** | Named finite list of events with a length (`.nms` version 1) |
+| **ClipDef** | Named clip: mini-notation lanes and/or a finite event list (`.nms` version 2 / wire API) |
+| **SceneDef** | Named set of clips, one per track |
+| **Project** | Clips, scenes and an optional arrangement (`.nms` version 2) |
+| **Arrangement** | Scenes over time — in `.nml` or in a v2 project |
 
 Endless patterns (mini-notation, grids) stay in niminal and are evaluated by the daemon; they are not stored as finite score events until they play.
 
@@ -22,6 +25,8 @@ Positions and durations use the same unit strings as the language: `0beat`, `1/4
 ## Wire format (`.nms`)
 
 JSON. Values keep units as strings. Every file has a format **`version`**.
+
+### Version 1 — a single section
 
 ```json
 {
@@ -41,12 +46,32 @@ JSON. Values keep units as strings. Every file has a format **`version`**.
 | `at`, `dur` | Start and hold time, with units |
 | `args` | Named parameters; strings with units or numbers, checked like orchestra code |
 
-Example in the repo: `examples/phi.nms`, played with:
-
 ```sh
 niminal render examples/saw_lead.nml --score examples/phi.nms --out phi.wav
 ```
 
-Live: send the same events with **`event.stream`** ([Daemon protocol](/reference/protocol/)).
+### Version 2 — a project
 
-Arrangements, clip lanes, and tempo maps are written in `.nml`, not in `.nms` today.
+Clips, scenes and an optional arrangement. The CLI compiles them to `.nml` and renders the project's arrangement (or the one named on the command line).
+
+```json
+{
+  "version": 2,
+  "clips": [
+    { "name": "theme", "lanes": { "notes": "c4 e4 g4 b4" } }
+  ],
+  "scenes": [
+    { "name": "verse", "entries": { "lead": "theme" } }
+  ],
+  "arrangement": {
+    "name": "song",
+    "sections": [{ "scene": "verse", "length": "2bars" }]
+  }
+}
+```
+
+```sh
+niminal render examples/live_controls.nml --score examples/project.nms --out project.wav
+```
+
+Live: define the same clips with **`clip.define`** / **`scene.define`**, or send finite events with **`event.stream`** ([Daemon protocol](/reference/protocol/)). In `.nml`, `load("score/riff.nms")` turns a version-1 section (or a one-clip project) into a clip.

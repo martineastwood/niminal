@@ -224,8 +224,184 @@ impl<'a> Defined<'a> {
     }
 }
 
+/// Expand top-level `for` / `if` blocks into repeated or chosen notes and commands.
+fn expand_score_fors(items: Vec<Item>) -> Result<Vec<Item>, Diagnostic> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            Item::For {
+                var,
+                iter,
+                body,
+                span,
+            } => {
+                let values = const_list(&iter)?;
+                if values.len() > 10_000 {
+                    return Err(Diagnostic::new("this `for` expands to too many items", span));
+                }
+                for value in values {
+                    let mut body = body.clone();
+                    for item in &mut body {
+                        substitute_item(item, &var.name, &value);
+                    }
+                    out.extend(expand_score_fors(body)?);
+                }
+            }
+            Item::If {
+                cond,
+                then,
+                otherwise,
+                span,
+            } => {
+                let take = const_truthy(&cond).map_err(|d| {
+                    Diagnostic::new(d.message, span).with_help(
+                        "a top-level `if` needs a condition known while compiling, such as `i > 2`",
+                    )
+                })?;
+                let body = if take { then } else { otherwise };
+                out.extend(expand_score_fors(body)?);
+            }
+            other => out.push(other),
+        }
+    }
+    Ok(out)
+}
+
+fn const_truthy(e: &Expr) -> Result<bool, Diagnostic> {
+    match &e.kind {
+        ExprKind::Num { value, unit: None } => Ok(*value != 0.0),
+        ExprKind::Name(n) if n == "true" => Ok(true),
+        ExprKind::Name(n) if n == "false" => Ok(false),
+        ExprKind::Compare { op, lhs, rhs } => {
+            let l = const_number(lhs)?;
+            let r = const_number(rhs)?;
+            Ok(match op {
+                CmpOp::Eq => l == r,
+                CmpOp::Ne => l != r,
+                CmpOp::Lt => l < r,
+                CmpOp::Le => l <= r,
+                CmpOp::Gt => l > r,
+                CmpOp::Ge => l >= r,
+            })
+        }
+        ExprKind::Not(inner) => Ok(!const_truthy(inner)?),
+        ExprKind::Logic { op, lhs, rhs } => {
+            let (l, r) = (const_truthy(lhs)?, const_truthy(rhs)?);
+            Ok(match op {
+                LogicOp::And => l && r,
+                LogicOp::Or => l || r,
+            })
+        }
+        _ => Err(Diagnostic::new(
+            "expected a condition known while compiling",
+            e.span,
+        )),
+    }
+}
+
+fn const_list(e: &Expr) -> Result<Vec<Expr>, Diagnostic> {
+    match &e.kind {
+        ExprKind::Range { lo, hi, inclusive } => {
+            let lo = const_number(lo)?;
+            let hi = const_number(hi)?;
+            let mut out = Vec::new();
+            let mut i = lo.floor() as i64;
+            let end = hi.floor() as i64;
+            while if *inclusive { i <= end } else { i < end } {
+                out.push(Expr {
+                    kind: ExprKind::Num {
+                        value: i as f64,
+                        unit: None,
+                    },
+                    span: e.span,
+                });
+                i += 1;
+                if out.len() > 10_000 {
+                    break;
+                }
+            }
+            Ok(out)
+        }
+        ExprKind::Array(items) => Ok(items.clone()),
+        _ => Err(Diagnostic::new(
+            "a top-level `for` needs a range or list known while compiling",
+            e.span,
+        )
+        .with_help("for example `for i in 0..<16 { ... }`")),
+    }
+}
+
+fn const_number(e: &Expr) -> Result<f64, Diagnostic> {
+    match &e.kind {
+        ExprKind::Num { value, unit: None } => Ok(*value),
+        ExprKind::Neg(inner) => Ok(-const_number(inner)?),
+        _ => Err(Diagnostic::new("expected a plain number", e.span)),
+    }
+}
+
+fn substitute_item(item: &mut Item, name: &str, value: &Expr) {
+    match item {
+        Item::Note(n) => {
+            if let Some(at) = &mut n.at {
+                substitute_at(at, name, value);
+            }
+            for arg in &mut n.args {
+                substitute_expr(&mut arg.value, name, value);
+            }
+            substitute_expr(&mut n.dur, name, value);
+        }
+        Item::Command(c) => {
+            if let Some(at) = &mut c.at {
+                substitute_at(at, name, value);
+            }
+            if let Command::Play { what, .. } = &mut c.command {
+                substitute_expr(what, name, value);
+            }
+        }
+        Item::For { iter, body, .. } => {
+            substitute_expr(iter, name, value);
+            for item in body {
+                substitute_item(item, name, value);
+            }
+        }
+        Item::If {
+            cond,
+            then,
+            otherwise,
+            ..
+        } => {
+            substitute_expr(cond, name, value);
+            for item in then.iter_mut().chain(otherwise.iter_mut()) {
+                substitute_item(item, name, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn substitute_at(at: &mut AtPos, name: &str, value: &Expr) {
+    match at {
+        AtPos::Time(e) | AtPos::After(e) => substitute_expr(e, name, value),
+        AtPos::Bar { bar, beat } => {
+            substitute_expr(bar, name, value);
+            if let Some(b) = beat {
+                substitute_expr(b, name, value);
+            }
+        }
+    }
+}
+
+fn substitute_expr(e: &mut Expr, name: &str, value: &Expr) {
+    if matches!(&e.kind, ExprKind::Name(n) if n == name) {
+        *e = value.clone();
+        return;
+    }
+    e.for_each_child_mut(&mut |child| substitute_expr(child, name, value));
+}
+
 pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
     let mut items = desugar(parser::parse(source).map_err(|d| vec![d])?);
+    items = expand_score_fors(items).map_err(|d| vec![d])?;
     let mut errors = Vec::new();
 
     let beats_per_bar = meter_of(&items).unwrap_or_else(|d| {
@@ -278,6 +454,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             ),
             Item::Sample(d) => (&d.name, if d.is_kit { "kit" } else { "sample" }),
             Item::Arrangement(d) => (&d.name, "arrangement"),
+            Item::Def(d) => (&d.name, "score function"),
             Item::Tempo(_)
             | Item::Meter(_)
             | Item::Bind { .. }
@@ -285,6 +462,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             | Item::Scene(_)
             | Item::Command(_)
             | Item::Note(_)
+            | Item::For { .. }
+            | Item::If { .. }
             | Item::Config(_) => continue,
         };
         match names.kind_of(&ident.name) {
@@ -555,6 +734,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         tracks: &tracks,
         failed: &failed,
         sample_names: &samples_state.names,
+        samples: &options.samples,
     };
     let quantize = quantize_config(&items).unwrap_or_else(|d| {
         errors.push(d);
@@ -1737,21 +1917,44 @@ fn bar_position(bar: &Expr, beat: Option<&Expr>, tempo: Tempo) -> Res<Time> {
 }
 
 fn literal_time(e: &Expr) -> Res<Time> {
-    if let ExprKind::Num {
-        value,
-        unit: Some(u),
-    } = &e.kind
-    {
-        match u.as_str() {
-            "sec" => return Ok(Time::Seconds(*value)),
-            "ms" => return Ok(Time::Seconds(value / 1000.0)),
-            "beat" | "beats" => return Ok(Time::Beats(*value)),
-            "bar" | "bars" => return Ok(Time::Bars(*value)),
-            _ => {}
-        }
+    if let Ok((value, unit)) = folded_quantity(e) {
+        return match unit.as_deref() {
+            Some("sec") => Ok(Time::Seconds(value)),
+            Some("ms") => Ok(Time::Seconds(value / 1000.0)),
+            Some("beat" | "beats") => Ok(Time::Beats(value)),
+            Some("bar" | "bars") => Ok(Time::Bars(value)),
+            _ => Err(Diagnostic::new("expected a time", e.span)
+                .with_help("for example `1beat`, `2bars` or `250ms`")),
+        };
     }
     Err(Diagnostic::new("expected a time", e.span)
         .with_help("for example `1beat`, `2bars` or `250ms`"))
+}
+
+/// A number with a unit, including constant arithmetic such as `i * 1/2beat`.
+fn folded_quantity(e: &Expr) -> Res<(f64, Option<String>)> {
+    match &e.kind {
+        ExprKind::Num { value, unit } => Ok((*value, unit.clone())),
+        ExprKind::Neg(inner) => {
+            let (v, u) = folded_quantity(inner)?;
+            Ok((-v, u))
+        }
+        ExprKind::Binary { op, lhs, rhs } => {
+            let ((l, lu), (r, ru)) = (folded_quantity(lhs)?, folded_quantity(rhs)?);
+            let bad = || Diagnostic::new("can't combine these units", e.span);
+            match op {
+                BinOp::Add | BinOp::Sub if lu == ru => {
+                    Ok((if *op == BinOp::Add { l + r } else { l - r }, lu))
+                }
+                BinOp::Mul if ru.is_none() => Ok((l * r, lu)),
+                BinOp::Mul if lu.is_none() => Ok((l * r, ru)),
+                BinOp::Div if ru.is_none() && r != 0.0 => Ok((l / r, lu)),
+                BinOp::Div if lu == ru && r != 0.0 => Ok((l / r, None)),
+                _ => Err(bad()),
+            }
+        }
+        _ => Err(Diagnostic::new("expected a number", e.span)),
+    }
 }
 
 /// Note arguments are plain values for now: a number with a unit, or a note name.
@@ -1774,7 +1977,56 @@ fn literal_value(e: &Expr) -> Res<Value> {
             Value::Note(_) | Value::Sample(_) => Err(bad()),
             v => Ok(crate::perform::negate(v)),
         },
+        ExprKind::Binary { op, lhs, rhs } => {
+            let (a, b) = (literal_value(lhs)?, literal_value(rhs)?);
+            match op {
+                BinOp::Add => fold_add(a, b, e.span),
+                BinOp::Sub => fold_sub(a, b, e.span),
+                BinOp::Mul => fold_mul(a, b, e.span),
+                BinOp::Div => fold_div(a, b, e.span),
+            }
+        }
         _ => Err(bad()),
+    }
+}
+
+fn fold_add(a: Value, b: Value, span: Span) -> Res<Value> {
+    match (a, b) {
+        (Value::Note(n), Value::Semitones(st)) | (Value::Semitones(st), Value::Note(n)) => {
+            Ok(crate::perform::transpose_public(Value::Note(n), st))
+        }
+        (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a + b)),
+        (Value::Db(a), Value::Db(b)) => Ok(Value::Db(a + b)),
+        (Value::Semitones(a), Value::Semitones(b)) => Ok(Value::Semitones(a + b)),
+        _ => Err(Diagnostic::new("can't add these note arguments", span)),
+    }
+}
+
+fn fold_sub(a: Value, b: Value, span: Span) -> Res<Value> {
+    match (a, b) {
+        (Value::Note(n), Value::Semitones(st)) => {
+            Ok(crate::perform::transpose_public(Value::Note(n), -st))
+        }
+        (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a - b)),
+        (Value::Semitones(a), Value::Semitones(b)) => Ok(Value::Semitones(a - b)),
+        _ => Err(Diagnostic::new("can't subtract these note arguments", span)),
+    }
+}
+
+fn fold_mul(a: Value, b: Value, span: Span) -> Res<Value> {
+    match (a, b) {
+        (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a * b)),
+        (Value::Semitones(s), Value::Num(n)) | (Value::Num(n), Value::Semitones(s)) => {
+            Ok(Value::Semitones(s * n))
+        }
+        _ => Err(Diagnostic::new("can't multiply these note arguments", span)),
+    }
+}
+
+fn fold_div(a: Value, b: Value, span: Span) -> Res<Value> {
+    match (a, b) {
+        (Value::Num(a), Value::Num(b)) if b != 0.0 => Ok(Value::Num(a / b)),
+        _ => Err(Diagnostic::new("can't divide these note arguments", span)),
     }
 }
 
@@ -2140,8 +2392,14 @@ saw_lead(freq: a3) for 1beat
             msg(&note("lead(freq: c4, freq: c5) for 1beat")),
             "argument `freq` given more than once"
         );
+        // Constant arithmetic folds: c4 + 1st is midi 61 (c#4).
+        let transposed = ok(&note("lead(freq: c4 + 1st) for 1beat"));
         assert_eq!(
-            msg(&note("lead(freq: c4 + 1st) for 1beat")),
+            transposed.notes[0].args.get("freq"),
+            Some(&Value::Note(61))
+        );
+        assert_eq!(
+            msg(&note("lead(freq: c4 + bright) for 1beat")),
             "note arguments must be literal values"
         );
     }

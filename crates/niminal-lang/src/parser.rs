@@ -104,6 +104,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Pattern(_) => "a pattern".into(),
         Tok::Rows(_) => "a grid".into(),
         Tok::Grid(_) => "a grid".into(),
+        Tok::Events(_) => "an events block".into(),
         Tok::Str(_) => "a string".into(),
         Tok::Newline => "the end of the line".into(),
         Tok::Eof => "the end of the file".into(),
@@ -498,6 +499,17 @@ impl Parser {
                 return Err(self.unexpected("a function name"));
             }
             self.function().map(Item::Fn)
+        } else if self.is_keyword("def") {
+            if !matches!(self.peek_at(1), Tok::Ident(_)) {
+                self.bump();
+                return Err(self.unexpected("a score function name"));
+            }
+            // same shape as `fn`, but lives in the performance layer
+            self.function_as_def()
+        } else if self.is_keyword("for") && matches!(self.peek_at(1), Tok::Ident(_)) {
+            self.top_for()
+        } else if self.is_keyword("if") {
+            self.top_if()
         } else if self.is_keyword("opcode") {
             Err(Diagnostic::new("`opcode` is now `fn`", self.span())
                 .with_help("write `fn name(x, ...) { ... }`; a function with `state` is a unit generator"))
@@ -762,9 +774,98 @@ impl Parser {
     }
 
     /// `fn name(params) -> result { body }`
+    fn function_as_def(&mut self) -> Res<Item> {
+        let mut def = self.function_from("def")?;
+        // score functions don't declare DSP result units
+        def.result = FnResult::Inferred;
+        Ok(Item::Def(def))
+    }
+
+    fn item_block(&mut self) -> Res<(Vec<Item>, Span)> {
+        self.expect(&Tok::LBrace)?;
+        let mut body = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.peek() == &Tok::RBrace {
+                break;
+            }
+            body.push(self.item()?);
+            self.skip_newlines();
+        }
+        let end = self.expect(&Tok::RBrace)?;
+        Ok((body, end))
+    }
+
+    fn top_if(&mut self) -> Res<Item> {
+        let start = self.bump().span; // `if`
+        let cond = self.expr()?;
+        let (then, then_end) = self.item_block()?;
+        let mut otherwise = Vec::new();
+        let mut end = then_end;
+        self.skip_newlines();
+        if self.is_keyword("else") {
+            self.bump();
+            self.skip_newlines();
+            if self.is_keyword("if") {
+                // `else if` as a nested top-level if
+                let nested = self.top_if()?;
+                end = match &nested {
+                    Item::If { span, .. } => *span,
+                    _ => self.prev_span(),
+                };
+                otherwise.push(nested);
+            } else {
+                let (body, else_end) = self.item_block()?;
+                otherwise = body;
+                end = else_end;
+            }
+        }
+        Ok(Item::If {
+            cond,
+            then,
+            otherwise,
+            span: start.to(end),
+        })
+    }
+
+    fn top_for(&mut self) -> Res<Item> {
+        let start = self.bump().span; // `for`
+        let var = self.ident("the loop variable")?;
+        if !self.is_keyword("in") {
+            return Err(self.unexpected("`in`"));
+        }
+        self.bump();
+        let iter = self.expr()?;
+        self.expect(&Tok::LBrace)?;
+        let mut body = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.peek() == &Tok::RBrace {
+                break;
+            }
+            body.push(self.item()?);
+            self.skip_newlines();
+        }
+        let end = self.expect(&Tok::RBrace)?;
+        Ok(Item::For {
+            var,
+            iter,
+            body,
+            span: start.to(end),
+        })
+    }
+
     fn function(&mut self) -> Res<FnDef> {
-        let start = self.bump().span; // `fn`
-        let name = self.ident("a function name")?;
+        self.function_from("fn")
+    }
+
+    fn function_from(&mut self, keyword: &str) -> Res<FnDef> {
+        let start = self.bump().span; // `fn` or `def`
+        let name = self.ident(if keyword == "def" {
+            "a score function name"
+        } else {
+            "a function name"
+        })?;
         let params = self.params()?;
         let mut result = FnResult::Inferred;
         if self.peek() == &Tok::Arrow {
@@ -993,6 +1094,7 @@ impl Parser {
 
     /// `{ key: value, key: value }`, separated by commas or lines.
     /// `{ key: value, ... }`. With `bare`, a lone name is shorthand for `name: name`.
+    /// `events { ... }` is accepted without a colon (the lexer folds it into one token).
     fn entries(&mut self, bare: bool) -> Res<(Vec<(Ident, Expr)>, Span)> {
         self.expect(&Tok::LBrace)?;
         let mut entries = Vec::new();
@@ -1001,16 +1103,32 @@ impl Parser {
             if self.peek() == &Tok::RBrace {
                 break;
             }
-            let key = self.ident("a name")?;
-            if bare && matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::RBrace) {
-                let value = Expr {
-                    kind: ExprKind::Name(key.name.clone()),
-                    span: key.span,
+            if let Tok::Events(raw) = self.peek().clone() {
+                let span = self.span();
+                self.bump();
+                let key = Ident {
+                    name: "events".into(),
+                    span,
                 };
-                entries.push((key, value));
+                entries.push((
+                    key,
+                    Expr {
+                        kind: ExprKind::Events(raw),
+                        span,
+                    },
+                ));
             } else {
-                self.expect(&Tok::Colon)?;
-                entries.push((key, self.expr()?));
+                let key = self.ident("a name")?;
+                if bare && matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::RBrace) {
+                    let value = Expr {
+                        kind: ExprKind::Name(key.name.clone()),
+                        span: key.span,
+                    };
+                    entries.push((key, value));
+                } else {
+                    self.expect(&Tok::Colon)?;
+                    entries.push((key, self.expr()?));
+                }
             }
             if !self.eat(&Tok::Comma) && !matches!(self.peek(), Tok::Newline | Tok::RBrace) {
                 return Err(self.unexpected("the end of the entry"));
@@ -1138,6 +1256,7 @@ impl Parser {
                 "start" => Some(Command::Start {
                     name: track.clone(),
                     verb: first,
+                    then: None,
                 }),
                 "stop" => Some(Command::Stop(track.clone())),
                 "mute" => Some(Command::Mute(track.clone())),
@@ -1146,8 +1265,20 @@ impl Parser {
                 "unsolo" => Some(Command::Unsolo(Some(track.clone()))),
                 _ => None,
             };
-            if let Some(command) = command {
+            if let Some(mut command) = command {
                 self.bump();
+                if matches!(&command, Command::Start { .. }) && self.is_keyword("then") {
+                    self.bump();
+                    let next = self.ident("what to launch next")?;
+                    if !self.is_keyword("after") {
+                        return Err(self.unexpected("`after`, as in `then fill after 4bars`"));
+                    }
+                    self.bump();
+                    let after = self.expr()?;
+                    if let Command::Start { then, .. } = &mut command {
+                        *then = Some((next, after));
+                    }
+                }
                 let quantize = self.quantize()?;
                 return Ok(CommandStmt {
                     at,
@@ -1696,6 +1827,13 @@ impl Parser {
                     span,
                 })
             }
+            Tok::Events(raw) => {
+                self.bump();
+                Ok(Expr {
+                    kind: ExprKind::Events(raw),
+                    span,
+                })
+            }
             Tok::Tilde => {
                 self.bump();
                 Ok(Expr {
@@ -1703,30 +1841,30 @@ impl Parser {
                     span,
                 })
             }
-            Tok::LBracket => {
-                self.bump();
+            Tok::LBracket => self.nested(|p| {
+                p.bump();
                 let mut items = Vec::new();
-                if self.peek() != &Tok::RBracket {
-                    items.push(self.expr()?);
-                    while self.eat(&Tok::Comma) && self.peek() != &Tok::RBracket {
-                        items.push(self.expr()?);
+                if p.peek() != &Tok::RBracket {
+                    items.push(p.expr()?);
+                    while p.eat(&Tok::Comma) && p.peek() != &Tok::RBracket {
+                        items.push(p.expr()?);
                     }
                 }
-                let end = self.expect(&Tok::RBracket)?;
+                let end = p.expect(&Tok::RBracket)?;
                 Ok(Expr {
                     kind: ExprKind::Array(items),
                     span: span.to(end),
                 })
-            }
-            Tok::LParen => {
-                self.bump();
-                let inner = self.expr()?;
-                let end = self.expect(&Tok::RParen)?;
+            }),
+            Tok::LParen => self.nested(|p| {
+                p.bump();
+                let inner = p.expr()?;
+                let end = p.expect(&Tok::RParen)?;
                 Ok(Expr {
                     span: span.to(end),
                     ..inner
                 })
-            }
+            }),
             Tok::Ident(name)
                 if name == "for"
                     && matches!(self.peek_at(1), Tok::Ident(_))
@@ -1759,6 +1897,33 @@ impl Parser {
                     && self.peek_at(2) == &Tok::LBrace =>
             {
                 self.nested(Self::match_expr)
+            }
+            Tok::Ident(name)
+                if (name == "clip" || name == "scene") && self.peek_at(1) == &Tok::LBrace =>
+            {
+                let is_clip = name == "clip";
+                self.nested(|p| {
+                    let start = p.bump().span;
+                    let (entries, end) = p.entries(!is_clip)?;
+                    let options = p.with_options()?;
+                    let block = NamedBlock {
+                        name: Ident {
+                            name: String::new(),
+                            span: start,
+                        },
+                        entries,
+                        options,
+                        span: start.to(end),
+                    };
+                    Ok(Expr {
+                        kind: if is_clip {
+                            ExprKind::ClipBlock(block)
+                        } else {
+                            ExprKind::SceneBlock(block)
+                        },
+                        span: start.to(p.prev_span()),
+                    })
+                })
             }
             Tok::Ident(name) => {
                 let ident = self.ident("a name")?;

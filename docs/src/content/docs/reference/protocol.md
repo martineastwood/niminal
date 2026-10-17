@@ -177,7 +177,20 @@ Inject score-model **events** from an external client without niminal source.
 
 Validation matches orchestra typing. Unknown target or bad units → **-32001** with **`problems`**.
 
-There is no separate **`launch`** RPC yet — use **`eval`** with source like `chorus.start` or `bass.play(riff)`.
+### Performance API
+
+Typed calls that compile to the same `.nml` source as `eval`, so quantize, the session log and replay all work unchanged. Every method takes an optional **`quantize`**.
+
+| Method | Params | Source form |
+| --- | --- | --- |
+| `clip.define` | a [ClipDef](/reference/score-model/) (`name`, optional `instrument`, `length`, `loop`, `lanes`, `events`) | `clip name { … }` |
+| `scene.define` | a SceneDef (`name`, `entries`) | `scene name { … }` |
+| `launch` | `{ "target": "verse" }` | `verse.start` |
+| `stop` / `mute` / `unmute` / `solo` | `{ "target": "bass" }` | `bass.stop` / `.mute` / … |
+| `unsolo` | optional `target` | `bass.unsolo` or `unsolo` |
+| `edit` | `{ "track": "bass", "change": "reverse" }` | `bass.reverse` (`undo`, `clear`, `undo(reverse)` also work) |
+
+`status` includes each track's `playing` base, `edits` stack, `clip`, `muted` and `soloed`, plus the defined `scenes` and `clips`.
 
 ## Error codes
 
@@ -205,7 +218,7 @@ Evaluations, **`control.set`**, MIDI/OSC (when enabled), and related control inp
 
 ## Planned (spec, not in the daemon yet)
 
-The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) also describes **`score.load`**, **`event.update`**, **`file.put`**, remote TLS, and richer meter streaming. Those are not implemented on the wire today; use **`eval`**, **`event.stream`**, and project-local paths instead.
+The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) also describes **`event.update`**, **`file.put`**, remote TLS, and richer meter streaming. Those are not implemented on the wire today. Clips and scenes are defined with **`clip.define`** / **`scene.define`** (or `eval`), and finite events with **`event.stream`**.
 
 ## Minimal client flow
 

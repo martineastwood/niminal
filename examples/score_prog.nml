@@ -1,0 +1,34 @@
+// Programmable score layer: def, for, if, and pattern combinators.
+tempo 120bpm
+
+instr pluck(freq: hz, bright: 0..1 = 0.5) {
+  osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)).gain(-9db)
+}
+
+def motif(root) {
+  [root ~ root+7st ~]
+}
+
+def stairs(n) {
+  for i in 0..<n {
+    c4 + i * 1st
+  }
+}
+
+clip line {
+  instrument: pluck
+  length: 2bars
+  notes: cat(motif(c3), stairs(4))
+}
+
+clip fill {
+  instrument: pluck(bright: 0.8)
+  length: 1bar
+  notes: stack([c5], [g4].slow(2))
+}
+
+scene verse { line }
+scene break { fill }
+
+verse.start
+break.start @ next 2bars then verse.start after 1

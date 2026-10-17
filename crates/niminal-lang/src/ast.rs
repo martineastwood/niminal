@@ -40,8 +40,24 @@ pub enum Item {
     },
     Clip(NamedBlock),
     Scene(NamedBlock),
+    /// `def name(params) { ... }`: a score function returning a clip, scene or pattern.
+    Def(FnDef),
     Command(CommandStmt),
     Note(NoteStmt),
+    /// Top-level `for x in xs { ... }` expanding notes and commands.
+    For {
+        var: Ident,
+        iter: Expr,
+        body: Vec<Item>,
+        span: Span,
+    },
+    /// Top-level `if cond { ... } else { ... }` picking notes and commands at compile time.
+    If {
+        cond: Expr,
+        then: Vec<Item>,
+        otherwise: Vec<Item>,
+        span: Span,
+    },
 }
 
 /// Where a control's value comes from: a MIDI CC or an OSC address, mapped onto `value..hi`
@@ -118,10 +134,12 @@ pub enum Command {
         name: Ident,
     },
     /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its track.
-    /// `verb` is the `start`.
+    /// `verb` is the `start`. Optional `then fill after 4bars` queues another launch later.
     Start {
         name: Ident,
         verb: Span,
+        /// `(next, after)` from `then next after 4bars`.
+        then: Option<(Ident, Expr)>,
     },
     /// `bass.reverse`: change what a track is playing. `change` is `reverse`, in the source.
     Edit {
@@ -415,6 +433,8 @@ pub enum ExprKind {
     Grid(String),
     /// `grid { kick: x... }`: the raw text between the braces, a row per sample.
     Rows(String),
+    /// `events { 0beat c4 for 1/2beat }`: the raw text between the braces.
+    Events(String),
     /// `~`: nothing, or stop.
     Rest,
     /// `[a, b]`: a fixed-length array. Audio output interprets its elements as channels.
@@ -470,6 +490,10 @@ pub enum ExprKind {
     },
     /// `"/fx/width"`: text, as an argument such as an OSC address.
     Str(String),
+    /// Anonymous `clip { ... }` inside a score `def` or expression.
+    ClipBlock(NamedBlock),
+    /// Anonymous `scene { ... }` inside a score `def` or expression.
+    SceneBlock(NamedBlock),
 }
 
 impl Expr {
@@ -488,6 +512,7 @@ impl Expr {
             | ExprKind::Pattern(_)
             | ExprKind::Grid(_)
             | ExprKind::Rows(_)
+            | ExprKind::Events(_)
             | ExprKind::Rest
             | ExprKind::Str(_) => {}
             ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| f(&mut a.value)),
@@ -530,6 +555,14 @@ impl Expr {
                 f(index);
             }
             ExprKind::Lambda { body, .. } => block(body, f),
+            ExprKind::ClipBlock(b) | ExprKind::SceneBlock(b) => {
+                for (_, e) in &mut b.entries {
+                    f(e);
+                }
+                for a in &mut b.options {
+                    f(&mut a.value);
+                }
+            }
         }
     }
 
@@ -548,6 +581,7 @@ impl Expr {
             | ExprKind::Pattern(_)
             | ExprKind::Grid(_)
             | ExprKind::Rows(_)
+            | ExprKind::Events(_)
             | ExprKind::Rest
             | ExprKind::Str(_) => {}
             ExprKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
@@ -590,6 +624,14 @@ impl Expr {
                 f(index);
             }
             ExprKind::Lambda { body, .. } => block(body, f),
+            ExprKind::ClipBlock(b) | ExprKind::SceneBlock(b) => {
+                for (_, e) in &b.entries {
+                    f(e);
+                }
+                for a in &b.options {
+                    f(&a.value);
+                }
+            }
         }
     }
 }

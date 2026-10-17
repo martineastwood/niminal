@@ -2,7 +2,7 @@
 
 Built · Oct 13, 2026
 
-This document defines the core of the niminal language: values, functions (`fn`) and instruments (`instr`, `mono`). It is the base that every opcode is built on, so it came before growing the opcode library. It replaces the "Orchestra" sections of `niminal Spec.md` that cover syntax, opcodes, functions and instruments. Tracks, clips, scenes, patterns and the score model are out of scope here; they keep their own sections and reuse the statement and expression rules below.
+This document defines the core of the niminal language: values, functions (`fn`) and instruments (`instr`, `mono`). It is the base that every opcode is built on, so it came before growing the opcode library. It replaces the "Orchestra" sections of `niminal Spec.md` that cover syntax, opcodes, functions and instruments. Tracks, clips, scenes, patterns and the score model are out of scope here; they keep their own sections and reuse the statement and expression rules below. Score helpers use the separate keyword `def` (not `fn`) so the DSP checker never sees them — see the Performance reference for `def`, top-level `for` / `if`, and pattern combinators.
 
 Everything here is built unless it is marked **[not built]**. Section 11 lists what changed from the first draft while it was built, and why.
 

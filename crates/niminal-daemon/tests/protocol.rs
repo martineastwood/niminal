@@ -498,7 +498,7 @@ fn status_lists_scenes_clips_and_what_each_track_is_doing() {
     assert_eq!(before["clips"], json!(["riff"]));
     assert_eq!(
         before["tracks"][0],
-        json!({"name": "lead", "clip": null, "muted": false, "soloed": false, "edits": []})
+        json!({"name": "lead", "clip": null, "playing": null, "muted": false, "soloed": false, "edits": []})
     );
 
     call(
@@ -514,10 +514,12 @@ fn status_lists_scenes_clips_and_what_each_track_is_doing() {
         "a bare pattern is named for its track"
     );
     assert_eq!(after["tracks"][0]["soloed"], true);
-    assert_eq!(
-        after["tracks"][1],
-        json!({"name": "bass", "clip": "riff", "muted": true, "soloed": false, "edits": []})
-    );
+    assert_eq!(after["tracks"][1]["name"], "bass");
+    assert_eq!(after["tracks"][1]["clip"], "riff");
+    assert_eq!(after["tracks"][1]["muted"], true);
+    assert_eq!(after["tracks"][1]["soloed"], false);
+    assert_eq!(after["tracks"][1]["edits"], json!([]));
+    assert!(after["tracks"][1]["playing"].is_string() || after["tracks"][1]["playing"].is_null());
 
     call(
         &mut d,
@@ -682,4 +684,59 @@ fn controls_are_typed_timestamped_and_reported_in_status() {
         let result = call(&mut d, c, 5, "control.set", params);
         assert!(result.get("error").is_some(), "{result}");
     }
+}
+
+#[test]
+fn typed_clip_define_launch_and_edit() {
+    let (mut d, c) = ready();
+    assert!(call(&mut d, c, 10, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}))["result"].is_object());
+
+    let defined = call(
+        &mut d,
+        c,
+        11,
+        "clip.define",
+        json!({
+            "name": "riff",
+            "instrument": "pluck",
+            "lanes": { "notes": "c4 e4 g4 b4" },
+            "quantize": "now"
+        }),
+    );
+    assert!(defined["result"].is_object(), "{defined}");
+
+    let launched = call(
+        &mut d,
+        c,
+        12,
+        "launch",
+        json!({ "target": "riff", "quantize": "now" }),
+    );
+    assert!(launched["result"].is_object(), "{launched}");
+
+    let edited = call(
+        &mut d,
+        c,
+        13,
+        "edit",
+        json!({ "track": "riff", "change": "reverse", "quantize": "now" }),
+    );
+    assert!(edited["result"].is_object(), "{edited}");
+
+    let status = call(&mut d, c, 14, "status", json!({}));
+    let tracks = status["result"]["tracks"].as_array().unwrap();
+    let riff = tracks.iter().find(|t| t["name"] == "riff").unwrap();
+    assert!(
+        riff["edits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e.as_str() == Some("reverse")),
+        "{riff}"
+    );
+    assert!(status["result"]["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n.as_str() == Some("riff")));
 }

@@ -9,9 +9,13 @@ Full user docs: [niminal.dev](https://niminal.dev) · [Editor and LSP](https://n
 From the repo root:
 
 ```
-cd editors/vscode && npm install && node install.js   # then reload VS Code (--cursor for Cursor)
+cd editors/vscode && npm install && node install.js          # VS Code
+cd editors/vscode && npm install && node install.js --cursor # Cursor
+# then reload the editor
 niminal daemon          # or "niminal: Start Daemon in a Terminal"
 ```
+
+The sidebar launch / mute / solo / stop buttons use the daemon's typed performance API (`launch`, `mute`, …) via the shared [`niminal-client`](../../clients/js) package.
 
 Open `examples/groove.nml`, then:
 

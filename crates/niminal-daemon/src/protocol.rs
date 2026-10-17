@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use niminal_score::Event;
+use niminal_score::{ClipDef, Event, SceneDef};
 use serde_json::{Value, json};
 
 use crate::project::Problem;
@@ -148,17 +148,24 @@ impl Daemon {
     /// Parse potentially large source before taking the render worker's lock.
     pub fn prepare_eval(text: &str) -> Option<ParsedEval> {
         let request: Value = serde_json::from_str(text).ok()?;
-        match request.get("method").and_then(Value::as_str)? {
+        let method = request.get("method").and_then(Value::as_str)?;
+        let params = &request["params"];
+        let quantize = params.get("quantize").and_then(Value::as_str);
+        match method {
             "eval" => {
-                let params = &request["params"];
                 let dir = params["dir"].as_str().unwrap_or(".");
                 Some(ParsedEval::from_dir(
                     params["source"].as_str()?,
                     std::path::Path::new(dir),
-                    params["quantize"].as_str(),
+                    quantize,
                 ))
             }
             "hush" => Some(ParsedEval::new("hush", Some("now"))),
+            "clip.define" | "scene.define" | "launch" | "stop" | "mute" | "unmute" | "solo"
+            | "unsolo" | "edit" => {
+                let source = api_source(method, params).ok()?;
+                Some(ParsedEval::new(&source, quantize.or(Some("now"))))
+            }
             _ => None,
         }
     }
@@ -192,10 +199,29 @@ impl Daemon {
                 _ => {}
             }
         }
+        let method = parsed
+            .as_ref()
+            .and_then(|r| r.get("method").and_then(Value::as_str));
+        let is_api = matches!(
+            method,
+            Some(
+                "eval"
+                    | "clip.define"
+                    | "scene.define"
+                    | "launch"
+                    | "stop"
+                    | "mute"
+                    | "unmute"
+                    | "solo"
+                    | "unsolo"
+                    | "edit"
+            )
+        );
         let eval = parsed.as_ref().filter(|r| {
             r.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
-                && r.get("method").and_then(Value::as_str) == Some("eval")
-                && r["params"].get("source").is_some_and(Value::is_string)
+                && is_api
+                && (method == Some("eval") && r["params"].get("source").is_some_and(Value::is_string)
+                    || method != Some("eval") && prepared.is_some())
                 && self.clients.get(&client).is_some_and(|c| c.greeted)
         });
         let Some(request) = eval else {
@@ -288,6 +314,8 @@ impl Daemon {
         }
         match method {
             "eval" => self.eval(params),
+            "clip.define" | "scene.define" | "launch" | "stop" | "mute" | "unmute" | "solo"
+            | "unsolo" | "edit" => self.api_eval(method, params),
             "cancel" => {
                 let id = optional_u64(params, "id")?;
                 Ok(json!({ "cancelled": self.session.cancel(id) }))
@@ -309,6 +337,14 @@ impl Daemon {
                 &format!("no method `{other}`"),
             )),
         }
+    }
+
+    /// Typed performance calls: build canonical source and evaluate it.
+    fn api_eval(&mut self, method: &str, params: &Value) -> Result<Value, RpcError> {
+        let source = api_source(method, params)?;
+        let quantize = params.get("quantize").and_then(Value::as_str).or(Some("now"));
+        let result = self.session.eval(&source, quantize);
+        self.eval_outcome(result)
     }
 
     fn hello(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
@@ -644,6 +680,80 @@ fn transport_json(t: &Transport) -> Value {
     })
 }
 
+/// A definition plus optional `quantize` on the wire: drop the quantum before deserializing.
+fn decode_def<T: serde::de::DeserializeOwned>(params: &Value, kind: &str) -> Result<T, RpcError> {
+    let mut value = params.clone();
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("quantize");
+    }
+    serde_json::from_value(value)
+        .map_err(|e| RpcError::new(INVALID_PARAMS, &format!("bad {kind}: {e}")))
+}
+
+/// Build canonical `.nml` source for a typed performance RPC.
+fn api_source(method: &str, params: &Value) -> Result<String, RpcError> {
+    let target = || {
+        params
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, &format!("`{method}` needs a string `target`")))
+    };
+    Ok(match method {
+        "clip.define" => {
+            let clip: ClipDef = decode_def(params, "clip")?;
+            clip.to_source()
+        }
+        "scene.define" => {
+            let scene: SceneDef = decode_def(params, "scene")?;
+            scene.to_source()
+        }
+        "launch" => {
+            let mut src = format!("{}.start", target()?);
+            if let Some(then) = params.get("then") {
+                let next = then
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        RpcError::new(INVALID_PARAMS, "`then` needs a string `target`")
+                    })?;
+                let after = then
+                    .get("after")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        RpcError::new(INVALID_PARAMS, "`then` needs a string `after`, as in `4bars`")
+                    })?;
+                src.push_str(&format!(" then {next} after {after}"));
+            }
+            src
+        }
+        "stop" => format!("{}.stop", target()?),
+        "mute" => format!("{}.mute", target()?),
+        "unmute" => format!("{}.unmute", target()?),
+        "solo" => format!("{}.solo", target()?),
+        "unsolo" => match params.get("target").and_then(Value::as_str) {
+            Some(t) => format!("{t}.unsolo"),
+            None => "unsolo".into(),
+        },
+        "edit" => {
+            let track = params
+                .get("track")
+                .and_then(Value::as_str)
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`edit` needs a string `track`"))?;
+            let change = params
+                .get("change")
+                .and_then(Value::as_str)
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`edit` needs a string `change`"))?;
+            format!("{track}.{change}")
+        }
+        other => {
+            return Err(RpcError::new(
+                METHOD_NOT_FOUND,
+                &format!("no method `{other}`"),
+            ));
+        }
+    })
+}
+
 fn status_json(session: &Session) -> Value {
     json!({
         "transport": transport_json(&session.transport()),
@@ -663,7 +773,12 @@ fn status_json(session: &Session) -> Value {
         "scenes": session.defined("scene"),
         "clips": session.defined("clip"),
         "tracks": session.tracks().iter().map(|t| json!({
-            "name": t.name, "clip": t.clip, "muted": t.muted, "soloed": t.soloed, "edits": t.edits,
+            "name": t.name,
+            "clip": t.clip,
+            "playing": t.playing,
+            "muted": t.muted,
+            "soloed": t.soloed,
+            "edits": t.edits,
         })).collect::<Vec<_>>(),
     })
 }

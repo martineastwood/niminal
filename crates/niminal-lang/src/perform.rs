@@ -36,7 +36,20 @@ enum PerfValue {
     Scene(Scene),
     /// `env[...]`: only a lane can hold one.
     Env(EnvLane),
+    /// A number with a unit, or a note, used while building clips and scores.
+    Num(Value),
+    /// A list from `for` or `[a, b]` in a score context.
+    List(Vec<PerfValue>),
+    /// A score function from `def`.
+    Def(DefFn),
     Rest,
+}
+
+#[derive(Clone)]
+struct DefFn {
+    name: String,
+    params: Vec<ParamDef>,
+    body: Vec<Stmt>,
 }
 
 impl PerfValue {
@@ -47,7 +60,22 @@ impl PerfValue {
             PerfValue::Clip(_) => "a clip",
             PerfValue::Scene(_) => "a scene",
             PerfValue::Env(_) => "an envelope",
+            PerfValue::Num(_) => "a number",
+            PerfValue::List(_) => "a list",
+            PerfValue::Def(_) => "a score function",
             PerfValue::Rest => "`~`",
+        }
+    }
+
+    fn as_num(&self) -> Option<Value> {
+        match self {
+            PerfValue::Num(v) => Some(*v),
+            PerfValue::Pattern(p) => p
+                .query(niminal_pattern::Span::new(Rational::ZERO, Rational::ONE))
+                .into_iter()
+                .next()
+                .map(|h| h.value.value),
+            _ => None,
         }
     }
 }
@@ -98,6 +126,8 @@ pub(crate) struct Context<'a> {
     pub failed: &'a [&'a str],
     /// The names of the samples in kits, which a pattern may use as steps.
     pub sample_names: &'a [String],
+    /// Where `load("…")` looks for `.nms` files.
+    pub samples: &'a crate::sample::Samples,
 }
 
 struct Perform<'a> {
@@ -125,6 +155,14 @@ pub(crate) fn compile_performance(
             Item::Scene(block) => p
                 .scene(block)
                 .and_then(|s| p.define(&block.name, PerfValue::Scene(s))),
+            Item::Def(def) => p.define(
+                &def.name,
+                PerfValue::Def(DefFn {
+                    name: def.name.name.clone(),
+                    params: def.params.clone(),
+                    body: def.body.clone(),
+                }),
+            ),
             _ => continue,
         };
         if let Err(d) = result {
@@ -440,12 +478,12 @@ fn blend(lo: Value, hi: Value, x: f64) -> Option<Value> {
 
 impl Perform<'_> {
     fn define(&mut self, name: &Ident, value: PerfValue) -> Res<()> {
-        if let Some(kind) = self
-            .cx
-            .names
-            .kind_of(&name.name)
-            .filter(|k| !(*k == "part" && matches!(value, PerfValue::Clip(_))))
-        {
+        // `part` clips and `def`s are also registered in the project name table; that
+        // is the same binding, not a clash.
+        if let Some(kind) = self.cx.names.kind_of(&name.name).filter(|k| {
+            !(*k == "part" && matches!(value, PerfValue::Clip(_)))
+                && !(*k == "score function" && matches!(value, PerfValue::Def(_)))
+        }) {
             return Err(Diagnostic::new(
                 format!("`{}` is already the name of a {kind}", name.name),
                 name.span,
@@ -483,6 +521,8 @@ impl Perform<'_> {
                     e.span,
                 )
             }),
+            ExprKind::Name(name) if name == "true" => Ok(PerfValue::Num(Value::Num(1.0))),
+            ExprKind::Name(name) if name == "false" => Ok(PerfValue::Num(Value::Num(0.0))),
             ExprKind::Name(name) => match self.bindings.get(name) {
                 Some(v) => Ok(v.clone()),
                 None if signal(name).is_some() => Ok(PerfValue::Pattern(
@@ -490,7 +530,7 @@ impl Perform<'_> {
                         .expect("checked")
                         .map(|x| Step::from(Value::Num(x))),
                 )),
-                // a lone note or value is a one-step pattern
+                // a lone note or value is a one-step pattern (and a number for arithmetic)
                 None => match atom_value(name, self.cx.sample_names) {
                     Ok(v) => Ok(PerfValue::Pattern(Pattern::pure(Step::from(v)))),
                     Err(_) => {
@@ -502,47 +542,275 @@ impl Perform<'_> {
                     }
                 },
             },
-            ExprKind::Num { value, unit } => Ok(PerfValue::Pattern(Pattern::pure(Step::from(
-                value_of(*value, unit.as_deref(), e.span)?,
-            )))),
+            ExprKind::Num { value, unit } => Ok(PerfValue::Num(value_of(
+                *value,
+                unit.as_deref(),
+                e.span,
+            )?)),
             ExprKind::Neg(inner) => match self.eval(inner, it)? {
+                PerfValue::Num(v) => Ok(PerfValue::Num(negate(v))),
                 PerfValue::Pattern(p) => Ok(PerfValue::Pattern(p.map(|s| s.with(negate(s.value))))),
                 other => Err(Diagnostic::new(
                     format!("can't negate {}", other.describe()),
                     e.span,
                 )),
             },
-            ExprKind::Call { name, args } => self.op(name, args, e.span, it),
+            ExprKind::Call { name, args } if name.name == "load" => self.load(args, e.span),
+            ExprKind::Call { name, args }
+                if matches!(name.name.as_str(), "stack" | "cat" | "seq")
+                    && !args.first().is_some_and(|a| a.receiver) =>
+            {
+                self.combine(name, args, e.span, it)
+            }
+            ExprKind::Call { name, args } => {
+                if let Some(PerfValue::Def(def)) = self.bindings.get(&name.name) {
+                    return self.call_def(def.clone(), args, e.span, it);
+                }
+                self.op(name, args, e.span, it)
+            }
+            ExprKind::ClipBlock(block) => self.clip(block).map(PerfValue::Clip),
+            ExprKind::SceneBlock(block) => self.scene(block).map(PerfValue::Scene),
             ExprKind::Env(lit) => env_lane(lit).map(PerfValue::Env),
+            ExprKind::Events(_) => Err(Diagnostic::new(
+                "`events { }` belongs inside a clip, as a lane",
+                e.span,
+            )),
             ExprKind::Str(_) => Err(Diagnostic::new(
                 "text can only be an argument that asks for it",
                 e.span,
             )),
-            ExprKind::Compare { .. }
-            | ExprKind::If { .. }
-            | ExprKind::Logic { .. }
-            | ExprKind::Not(_)
-            | ExprKind::For { .. } => Err(Diagnostic::new(
-                "comparisons, logic, `if` and `for` work in instruments, functions and tracks, not in clips and scenes",
+            ExprKind::Binary { op, lhs, rhs } => self.binary(*op, lhs, rhs, e.span, it),
+            ExprKind::Compare { op, lhs, rhs } => {
+                let (l, r) = (self.eval(lhs, it)?, self.eval(rhs, it)?);
+                let (lv, rv) = (l.as_num(), r.as_num());
+                match (lv, rv) {
+                    (Some(a), Some(b)) => {
+                        let ok = cmp_values(*op, a, b);
+                        Ok(PerfValue::Num(Value::Num(if ok { 1.0 } else { 0.0 })))
+                    }
+                    _ => Err(Diagnostic::new(
+                        "comparisons need numbers or notes",
+                        e.span,
+                    )),
+                }
+            }
+            ExprKind::Logic { op, lhs, rhs } => {
+                let l = self.eval(lhs, it)?.as_num().map(|v| match v {
+                    Value::Num(n) => n != 0.0,
+                    _ => true,
+                });
+                let r = self.eval(rhs, it)?.as_num().map(|v| match v {
+                    Value::Num(n) => n != 0.0,
+                    _ => true,
+                });
+                match (l, r, op) {
+                    (Some(a), Some(b), LogicOp::And) => {
+                        Ok(PerfValue::Num(Value::Num(if a && b { 1.0 } else { 0.0 })))
+                    }
+                    (Some(a), Some(b), LogicOp::Or) => {
+                        Ok(PerfValue::Num(Value::Num(if a || b { 1.0 } else { 0.0 })))
+                    }
+                    _ => Err(Diagnostic::new("logic needs numbers", e.span)),
+                }
+            }
+            ExprKind::Not(inner) => {
+                let v = self.eval(inner, it)?;
+                match v.as_num() {
+                    Some(Value::Num(n)) => {
+                        Ok(PerfValue::Num(Value::Num(if n == 0.0 { 1.0 } else { 0.0 })))
+                    }
+                    _ => Err(Diagnostic::new("`not` needs a number", e.span)),
+                }
+            }
+            ExprKind::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                let c = self.eval(cond, it)?;
+                let truthy = match c.as_num() {
+                    Some(Value::Num(n)) => n != 0.0,
+                    Some(_) => true,
+                    None => {
+                        return Err(Diagnostic::new(
+                            "`if` needs a condition that is a number",
+                            cond.span,
+                        ));
+                    }
+                };
+                let body = if truthy {
+                    then.as_slice()
+                } else {
+                    otherwise.as_deref().unwrap_or(&[])
+                };
+                self.block_value(body, it)
+            }
+            ExprKind::For { var, iter, body } => {
+                let items = self.iterate(iter, it)?;
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    let mut child = Perform {
+                        cx: self.cx,
+                        bindings: self.bindings.clone(),
+                    };
+                    child.bindings.insert(var.name.clone(), item);
+                    out.push(child.block_value(body, None)?);
+                }
+                Ok(PerfValue::List(out))
+            }
+            ExprKind::Array(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.eval(item, it)?);
+                }
+                Ok(PerfValue::List(out))
+            }
+            ExprKind::Range { lo, hi, inclusive } => {
+                let lo = self
+                    .eval(lo, it)?
+                    .as_num()
+                    .and_then(|v| v.as_number().ok())
+                    .ok_or_else(|| Diagnostic::new("range bounds are numbers", e.span))?;
+                let hi = self
+                    .eval(hi, it)?
+                    .as_num()
+                    .and_then(|v| v.as_number().ok())
+                    .ok_or_else(|| Diagnostic::new("range bounds are numbers", e.span))?;
+                let mut out = Vec::new();
+                let mut i = lo.floor() as i64;
+                let end = hi.floor() as i64;
+                while if *inclusive { i <= end } else { i < end } {
+                    out.push(PerfValue::Num(Value::Num(i as f64)));
+                    i += 1;
+                    if out.len() > 10_000 {
+                        return Err(Diagnostic::new("range is too long", e.span));
+                    }
+                }
+                Ok(PerfValue::List(out))
+            }
+            ExprKind::Index { list, index } => {
+                let list = self.eval(list, it)?;
+                let i = self
+                    .eval(index, it)?
+                    .as_num()
+                    .and_then(|v| v.as_number().ok())
+                    .ok_or_else(|| Diagnostic::new("an index is a whole number", index.span))?
+                    as i64;
+                match list {
+                    PerfValue::List(items) => {
+                        let i = if i < 0 {
+                            items.len() as i64 + i
+                        } else {
+                            i
+                        };
+                        items.get(i as usize).cloned().ok_or_else(|| {
+                            Diagnostic::new(format!("index {i} is out of range"), index.span)
+                        })
+                    }
+                    _ => Err(Diagnostic::new("only a list can be indexed here", e.span)),
+                }
+            }
+            ExprKind::Lambda { .. } => Err(Diagnostic::new(
+                "lambdas belong in instruments and functions, not in clips and scenes",
                 e.span,
             )),
-            ExprKind::Array(_)
-            | ExprKind::Binary { .. }
-            | ExprKind::Range { .. }
-            | ExprKind::Index { .. }
-            | ExprKind::Lambda { .. } => Err(Diagnostic::new(
-                "expected a pattern, clip or scene here",
-                e.span,
-            )
-            .with_help("write steps in brackets, as in `[c4 e4 g4]`")),
         }
     }
 
     fn pattern(&self, raw: &str, span: Span) -> Res<Pattern<Step>> {
         parse_with(raw, |atom| {
-            atom_value(atom, self.cx.sample_names).map(Step::from)
+            if let Ok(v) = atom_value(atom, self.cx.sample_names) {
+                return Ok(Step::from(v));
+            }
+            // Score `def` params and lets: `[root ~]` resolves `root` from bindings.
+            // A lone note name is stored as a one-step pattern; take its value.
+            match self.bindings.get(atom).and_then(|v| v.as_num()) {
+                Some(v) => Ok(Step::from(v)),
+                None => match self.bindings.get(atom) {
+                    Some(other) => Err(format!(
+                        "`{atom}` is {}, not a note or value for a pattern",
+                        other.describe()
+                    )),
+                    None => atom_value(atom, self.cx.sample_names).map(Step::from),
+                },
+            }
         })
         .map_err(|e| at_offset(e.message, span, e.offset))
+    }
+
+    /// A list of notes, rests or patterns as one pattern in sequence.
+    fn list_pattern(&self, items: Vec<PerfValue>, span: Span) -> Res<Pattern<Step>> {
+        if items.is_empty() {
+            return Ok(Pattern::silence());
+        }
+        let mut parts = Vec::with_capacity(items.len());
+        for item in items {
+            parts.push(match item {
+                PerfValue::Num(v) => Pattern::pure(Step::from(v)),
+                PerfValue::Rest => Pattern::silence(),
+                PerfValue::Pattern(p) => p,
+                PerfValue::List(inner) => self.list_pattern(inner, span)?,
+                other => {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "a pattern list holds notes, rests or patterns, not {}",
+                            other.describe()
+                        ),
+                        span,
+                    ));
+                }
+            });
+        }
+        Ok(Pattern::fastcat(parts))
+    }
+
+    /// Free functions `stack`, `cat` and `seq` over patterns.
+    fn combine(&self, name: &Ident, args: &[Arg], span: Span, it: Option<&PerfValue>) -> Res<PerfValue> {
+        let mut patterns = Vec::with_capacity(args.len());
+        for arg in args {
+            if arg.receiver {
+                continue;
+            }
+            let v = self.eval(&arg.value, it)?;
+            patterns.push(match v {
+                PerfValue::Pattern(p) => p,
+                PerfValue::Num(n) => Pattern::pure(Step::from(n)),
+                PerfValue::Rest => Pattern::silence(),
+                PerfValue::List(items) => self.list_pattern(items, arg.value.span)?,
+                PerfValue::Clip(c) => c
+                    .lanes
+                    .iter()
+                    .find(|(n, _)| n == "notes")
+                    .map(|(_, p)| p.clone())
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            format!("`{}` needs patterns or notes", name.name),
+                            arg.value.span,
+                        )
+                    })?,
+                other => {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`{}` needs patterns or notes, found {}",
+                            name.name,
+                            other.describe()
+                        ),
+                        arg.value.span,
+                    ));
+                }
+            });
+        }
+        if patterns.is_empty() {
+            return Err(Diagnostic::new(
+                format!("`{}` needs at least one pattern", name.name),
+                span,
+            ));
+        }
+        Ok(PerfValue::Pattern(match name.name.as_str() {
+            "stack" => Pattern::stack(patterns),
+            "cat" | "seq" => Pattern::fastcat(patterns),
+            _ => unreachable!(),
+        }))
     }
 
     /// `grid { kick: x... snare: .x.. }`: each row plays the sample it names on its hits,
@@ -654,6 +922,14 @@ impl Perform<'_> {
     fn quantity(&self, e: &Expr) -> Res<(Rational, Option<String>)> {
         match &e.kind {
             ExprKind::Num { value, unit } => Ok((Rational::from_f64(*value), unit.clone())),
+            ExprKind::Name(name) => match self.bindings.get(name).and_then(|v| v.as_num()) {
+                Some(Value::Num(n)) => Ok((Rational::from_f64(n), None)),
+                Some(Value::Bars(b)) => Ok((Rational::from_f64(b), Some("bars".into()))),
+                Some(Value::Beats(b)) => Ok((Rational::from_f64(b), Some("beats".into()))),
+                Some(Value::Seconds(s)) => Ok((Rational::from_f64(s), Some("sec".into()))),
+                _ => Err(Diagnostic::new("expected a number", e.span)
+                    .with_help("for example `2`, `3/2` or `1/8beat`")),
+            },
             ExprKind::Neg(inner) => self.quantity(inner).map(|(r, u)| (-r, u)),
             ExprKind::Binary { op, lhs, rhs } => {
                 let ((l, lu), (r, ru)) = (self.quantity(lhs)?, self.quantity(rhs)?);
@@ -725,6 +1001,7 @@ impl Perform<'_> {
                     length: Rational::ONE,
                     endless: true,
                     lanes: vec![("notes".to_string(), p)],
+                    scored: Vec::new(),
                     keys: None,
                     curves: Vec::new(),
                     signals: Vec::new(),
@@ -1021,11 +1298,15 @@ impl Perform<'_> {
                     _ => Control::Begin,
                 };
                 let e = self.arg(name, rest, control.param(), span)?;
-                let PerfValue::Pattern(values) = self.eval(e, it)? else {
-                    return Err(Diagnostic::new(
-                        format!("`{}` takes {}", name.name, control.describe()),
-                        e.span,
-                    ));
+                let values = match self.eval(e, it)? {
+                    PerfValue::Pattern(p) => p,
+                    PerfValue::Num(v) => Pattern::pure(Step::from(v)),
+                    _ => {
+                        return Err(Diagnostic::new(
+                            format!("`{}` takes {}", name.name, control.describe()),
+                            e.span,
+                        ));
+                    }
                 };
                 // say now, not when the note plays, if the value is of the wrong kind
                 let cycle = niminal_pattern::Span::new(Rational::ZERO, Rational::ONE);
@@ -1148,6 +1429,7 @@ impl Perform<'_> {
                 length,
                 endless: false,
                 lanes,
+                scored: clip.scored,
                 keys: clip.keys,
                 curves: clip.curves,
                 signals: Vec::new(),
@@ -1204,6 +1486,7 @@ impl Perform<'_> {
             length,
             endless: clip.endless && name.name != "over",
             lanes,
+            scored: clip.scored,
             keys: clip.keys,
             curves: clip.curves,
             signals: Vec::new(),
@@ -1227,6 +1510,7 @@ impl Perform<'_> {
             }
             let pattern = match self.eval(&arg.value, it)? {
                 PerfValue::Pattern(p) => p,
+                PerfValue::Num(v) => Pattern::pure(Step::from(v)),
                 PerfValue::Env(_) if lane.name == "notes" => {
                     return Err(Diagnostic::new(
                         "the `notes` lane holds notes, not an envelope",
@@ -1422,6 +1706,7 @@ impl Perform<'_> {
             Err(_) => {}
         }
         match self.eval(e, it)? {
+            PerfValue::Num(Value::Num(n)) => Ok(Param::Const(Rational::from_f64(n))),
             PerfValue::Pattern(p) => Ok(Param::Pat(p.filter_map(|s| match s.value {
                 Value::Num(n) => Some(Rational::from_f64(n)),
                 _ => None,
@@ -1491,15 +1776,18 @@ impl Perform<'_> {
 
     /// A single value, such as the `c3` in `in_scale(minor, root: c3)`.
     fn constant(&self, e: &Expr, it: Option<&PerfValue>) -> Res<Value> {
-        let PerfValue::Pattern(p) = self.eval(e, it)? else {
-            return Err(Diagnostic::new("expected a single value", e.span));
-        };
-        let at = niminal_pattern::Span::new(Rational::ZERO, Rational::ZERO);
-        p.query(at)
-            .into_iter()
-            .next()
-            .map(|h| h.value.value)
-            .ok_or_else(|| Diagnostic::new("expected a single value", e.span))
+        match self.eval(e, it)? {
+            PerfValue::Num(v) => Ok(v),
+            PerfValue::Pattern(p) => {
+                let at = niminal_pattern::Span::new(Rational::ZERO, Rational::ZERO);
+                p.query(at)
+                    .into_iter()
+                    .next()
+                    .map(|h| h.value.value)
+                    .ok_or_else(|| Diagnostic::new("expected a single value", e.span))
+            }
+            _ => Err(Diagnostic::new("expected a single value", e.span)),
+        }
     }
 
     /// A bare word such as `minor7`, looked up in `table`.
@@ -1629,6 +1917,179 @@ impl Perform<'_> {
         })
     }
 
+    fn binary(
+        &self,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+        it: Option<&PerfValue>,
+    ) -> Res<PerfValue> {
+        let (l, r) = (self.eval(lhs, it)?, self.eval(rhs, it)?);
+        match (l.as_num(), r.as_num(), op) {
+            (Some(a), Some(b), BinOp::Add) => Ok(PerfValue::Num(add_values(a, b, span)?)),
+            (Some(a), Some(b), BinOp::Sub) => Ok(PerfValue::Num(sub_values(a, b, span)?)),
+            (Some(a), Some(b), BinOp::Mul) => Ok(PerfValue::Num(mul_values(a, b, span)?)),
+            (Some(a), Some(b), BinOp::Div) => Ok(PerfValue::Num(div_values(a, b, span)?)),
+            _ => Err(Diagnostic::new(
+                format!("can't {} these values in a clip or scene", op_name(op)),
+                span,
+            )),
+        }
+    }
+
+    fn block_value(&self, body: &[Stmt], it: Option<&PerfValue>) -> Res<PerfValue> {
+        let mut local = Perform {
+            cx: self.cx,
+            bindings: self.bindings.clone(),
+        };
+        let mut last = PerfValue::Rest;
+        for stmt in body {
+            match stmt {
+                Stmt::Bind { name, value } => {
+                    let v = local.eval(value, it)?;
+                    local.bindings.insert(name.name.clone(), v.clone());
+                    last = v;
+                }
+                Stmt::Expr(e) => last = local.eval(e, it)?,
+                Stmt::State { name, .. }
+                | Stmt::AddAssign { name, .. }
+                | Stmt::IndexAssign { name, .. } => {
+                    return Err(Diagnostic::new(
+                        "only bindings and expressions belong in a score `def`, `for` or `if`",
+                        name.span,
+                    ));
+                }
+                Stmt::Destructure { names, .. } => {
+                    return Err(Diagnostic::new(
+                        "only bindings and expressions belong in a score `def`, `for` or `if`",
+                        names.first().map(|n| n.span).unwrap_or_default(),
+                    ));
+                }
+            }
+        }
+        Ok(last)
+    }
+
+    fn iterate(&self, iter: &Expr, it: Option<&PerfValue>) -> Res<Vec<PerfValue>> {
+        match self.eval(iter, it)? {
+            PerfValue::List(items) => Ok(items),
+            other => Err(Diagnostic::new(
+                format!("`for` needs a list or range, found {}", other.describe()),
+                iter.span,
+            )),
+        }
+    }
+
+    fn call_def(
+        &self,
+        def: DefFn,
+        args: &[Arg],
+        span: Span,
+        it: Option<&PerfValue>,
+    ) -> Res<PerfValue> {
+        if self.bindings.values().any(|v| {
+            matches!(v, PerfValue::Def(d) if d.name == def.name)
+                && false // recursion tracked below
+        }) {
+            // fall through
+        }
+        let mut child = Perform {
+            cx: self.cx,
+            bindings: HashMap::new(),
+        };
+        // copy defs and outer bindings except the active call stack marker
+        for (k, v) in &self.bindings {
+            if !matches!(v, PerfValue::Def(_)) {
+                continue;
+            }
+            child.bindings.insert(k.clone(), v.clone());
+        }
+        // mark this call to catch recursion
+        let marker = format!("__calling:{}", def.name);
+        if self.bindings.contains_key(&marker) {
+            return Err(Diagnostic::new(
+                format!("score function `{}` calls itself", def.name),
+                span,
+            ));
+        }
+        child
+            .bindings
+            .insert(marker.clone(), PerfValue::Num(Value::Num(1.0)));
+
+        let mut positional = args.iter().filter(|a| a.name.is_none() && !a.receiver);
+        for param in &def.params {
+            let value = if let Some(arg) = args
+                .iter()
+                .find(|a| a.name.as_ref().is_some_and(|n| n.name == param.name.name))
+            {
+                self.eval(&arg.value, it)?
+            } else if let Some(arg) = positional.next() {
+                self.eval(&arg.value, it)?
+            } else if let Some(default) = &param.default {
+                self.eval(default, it)?
+            } else {
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` needs an argument `{}`",
+                        def.name, param.name.name
+                    ),
+                    span,
+                ));
+            };
+            child
+                .bindings
+                .insert(param.name.name.clone(), value);
+        }
+        child.block_value(&def.body, None)
+    }
+
+    /// `load("score/riff.nms")`: a section or single-clip project as a clip.
+    fn load(&self, args: &[Arg], span: Span) -> Res<PerfValue> {
+        let path = match args {
+            [Arg {
+                name: None,
+                value:
+                    Expr {
+                        kind: ExprKind::Str(path),
+                        ..
+                    },
+                ..
+            }] => path.as_str(),
+            _ => {
+                return Err(Diagnostic::new(
+                    "`load` needs a file path, as in `load(\"score/riff.nms\")`",
+                    span,
+                ));
+            }
+        };
+        let resolved = self.cx.samples.resolve_path(path);
+        let text = std::fs::read_to_string(&resolved).map_err(|e| {
+            Diagnostic::new(format!("couldn't read `{path}`: {e}"), span)
+        })?;
+        let file = niminal_score::ScoreFile::from_json(&text).map_err(|e| {
+            Diagnostic::new(format!("couldn't load `{path}`: {e}"), span)
+        })?;
+        let clip = match file {
+            niminal_score::ScoreFile::Section(section) => section_to_clip(section, self.cx.tempo)?,
+            niminal_score::ScoreFile::Project(project) => {
+                if project.clips.len() == 1 && project.scenes.is_empty() {
+                    clipdef_to_clip(&project.clips[0], self.cx)?
+                } else {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`{path}` is a project with {} clips and {} scenes; `load` takes a version-1 section or a project with one clip",
+                            project.clips.len(),
+                            project.scenes.len()
+                        ),
+                        span,
+                    ));
+                }
+            }
+        };
+        Ok(PerfValue::Clip(clip))
+    }
+
     // ---- clips and scenes ------------------------------------------------------
 
     fn clip(&self, block: &NamedBlock) -> Res<Clip> {
@@ -1636,6 +2097,8 @@ impl Perform<'_> {
         let mut keys = None;
         let mut lanes: Vec<(String, Pattern<Step>)> = Vec::new();
         let mut curves: Vec<(String, EnvLane)> = Vec::new();
+        let mut scored = Vec::new();
+        let mut looped = true;
         for (key, value) in &block.entries {
             if key.name == "keys" {
                 if keys.is_some() {
@@ -1653,6 +2116,32 @@ impl Perform<'_> {
                     ));
                 }
                 length = Some(cycles);
+                continue;
+            }
+            if key.name == "loop" {
+                looped = match &value.kind {
+                    ExprKind::Name(n) if n == "true" => true,
+                    ExprKind::Name(n) if n == "false" => false,
+                    _ => {
+                        return Err(Diagnostic::new("`loop` is `true` or `false`", value.span));
+                    }
+                };
+                continue;
+            }
+            if key.name == "events" {
+                if !scored.is_empty() {
+                    return Err(Diagnostic::new("lane `events` is given twice", key.span));
+                }
+                let ExprKind::Events(raw) = &value.kind else {
+                    return Err(Diagnostic::new(
+                        "an `events` lane is a brace block",
+                        value.span,
+                    )
+                    .with_help(
+                        "for example `events { 0beat c4 for 1/2beat  1/2beat e4 for 1/2beat }`",
+                    ));
+                };
+                scored = parse_events(raw, value.span, self.cx)?;
                 continue;
             }
             if lanes.iter().any(|(n, _)| *n == key.name)
@@ -1678,7 +2167,9 @@ impl Perform<'_> {
                     curves.push((key.name.clone(), curve));
                     continue;
                 }
+                PerfValue::Num(v) => Pattern::pure(Step::from(v)),
                 PerfValue::Rest => Pattern::silence(),
+                PerfValue::List(items) => self.list_pattern(items, value.span)?,
                 other => {
                     return Err(Diagnostic::new(
                         format!("a lane holds a pattern, but this is {}", other.describe()),
@@ -1688,6 +2179,12 @@ impl Perform<'_> {
             };
             lanes.push((key.name.clone(), pattern));
         }
+        if !scored.is_empty() && lanes.iter().any(|(n, _)| n == "notes") {
+            return Err(Diagnostic::new(
+                "a clip can't have both `notes` and `events`",
+                block.span,
+            ));
+        }
         // a lane spans the whole clip, whatever its length
         if let Some(length) = length {
             lanes = lanes
@@ -1695,11 +2192,13 @@ impl Perform<'_> {
                 .map(|(name, p)| (name, p.slow(length)))
                 .collect();
         }
+        let endless = length.is_none() && looped;
         Ok(Clip {
             name: block.name.name.clone(),
             length: length.unwrap_or(Rational::ONE),
-            endless: length.is_none(),
+            endless,
             lanes,
+            scored,
             keys,
             curves,
             signals: Vec::new(),
@@ -1794,6 +2293,17 @@ impl Perform<'_> {
                 length: Rational::ONE,
                 endless: true,
                 lanes: vec![("notes".to_string(), p)],
+                scored: Vec::new(),
+                keys: None,
+                curves: Vec::new(),
+                signals: Vec::new(),
+            }),
+            PerfValue::Num(v) => Ok(Clip {
+                name: hint.to_string(),
+                length: Rational::ONE,
+                endless: true,
+                lanes: vec![("notes".to_string(), Pattern::pure(Step::from(v)))],
+                scored: Vec::new(),
                 keys: None,
                 curves: Vec::new(),
                 signals: Vec::new(),
@@ -1809,6 +2319,14 @@ impl Perform<'_> {
             .with_help("for example `clip c { notes: [c4] cut: env[300hz 1bar 3khz] }`")),
             PerfValue::Rest => Err(Diagnostic::new(
                 "`~` stops a track in a scene; to stop one, write `track.stop`",
+                span,
+            )),
+            PerfValue::List(_) => Err(Diagnostic::new(
+                "a list isn't a clip; play one entry, or build a clip from it",
+                span,
+            )),
+            PerfValue::Def(d) => Err(Diagnostic::new(
+                format!("`{}` is a score function; call it, as in `{}(...)`", d.name, d.name),
                 span,
             )),
         }
@@ -1875,48 +2393,83 @@ impl Perform<'_> {
                 let clip = self.on_track(clip, t, track, what.span)?;
                 vec![schedule(Action::Play { track: t, clip })]
             }
-            Command::Start { name, .. } => {
-                if matches!(self.bindings.get(&name.name), Some(PerfValue::Scene(_))) {
-                    return self.launch(name, &schedule);
-                }
-                if self.cx.failed.contains(&name.name.as_str()) {
-                    return Ok(Vec::new());
-                }
-                let Ok(t) = self.track(name) else {
-                    let scenes = self
-                        .bindings
-                        .iter()
-                        .filter(|(_, v)| matches!(v, PerfValue::Scene(_)))
-                        .map(|(k, _)| k.as_str());
-                    let parts = self.cx.tracks.iter().map(|t| t.name.as_str());
-                    let mut d = Diagnostic::new(
-                        format!("no scene or part named `{}`", name.name),
-                        name.span,
-                    );
-                    if let Some(c) = closest(&name.name, scenes.chain(parts)) {
-                        d = d.with_help(format!("did you mean `{c}`?"));
+            Command::Start { name, then, .. } => {
+                let mut actions = if matches!(self.bindings.get(&name.name), Some(PerfValue::Scene(_)))
+                {
+                    self.launch(name, &schedule)?
+                } else {
+                    if self.cx.failed.contains(&name.name.as_str()) {
+                        return Ok(Vec::new());
                     }
-                    return Err(d);
+                    let Ok(t) = self.track(name) else {
+                        let scenes = self
+                            .bindings
+                            .iter()
+                            .filter(|(_, v)| matches!(v, PerfValue::Scene(_)))
+                            .map(|(k, _)| k.as_str());
+                        let parts = self.cx.tracks.iter().map(|t| t.name.as_str());
+                        let mut d = Diagnostic::new(
+                            format!("no scene or part named `{}`", name.name),
+                            name.span,
+                        );
+                        if let Some(c) = closest(&name.name, scenes.chain(parts)) {
+                            d = d.with_help(format!("did you mean `{c}`?"));
+                        }
+                        return Err(d);
+                    };
+                    if !matches!(
+                        self.bindings.get(&name.name),
+                        Some(PerfValue::Clip(_) | PerfValue::Pattern(_))
+                    ) {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "`{0}` is not a scene or a clip, so `{0}.start` has nothing to start",
+                                name.name
+                            ),
+                            name.span,
+                        ));
+                    }
+                    let what = Expr {
+                        kind: ExprKind::Name(name.name.clone()),
+                        span: name.span,
+                    };
+                    let clip = self.to_clip(self.eval(&what, None)?, &name.name, name.span)?;
+                    let clip = self.on_track(clip, t, name, name.span)?;
+                    vec![schedule(Action::Play { track: t, clip })]
                 };
-                if !matches!(
-                    self.bindings.get(&name.name),
-                    Some(PerfValue::Clip(_) | PerfValue::Pattern(_))
-                ) {
-                    return Err(Diagnostic::new(
-                        format!(
-                            "`{0}` is not a scene or a clip, so `{0}.start` has nothing to start",
-                            name.name
-                        ),
-                        name.span,
-                    ));
+                if let Some((next, after)) = then {
+                    let follow_at = match &stmt.at {
+                        None => AtPos::After(after.clone()),
+                        Some(AtPos::After(base)) => {
+                            // stack the delays: at +A then B after C → at +(A+C)
+                            AtPos::After(Expr {
+                                kind: ExprKind::Binary {
+                                    op: BinOp::Add,
+                                    lhs: Box::new(base.clone()),
+                                    rhs: Box::new(after.clone()),
+                                },
+                                span: after.span,
+                            })
+                        }
+                        Some(other) => {
+                            // absolute `at bar 5`: follow is still relative from that point
+                            let _ = other;
+                            AtPos::After(after.clone())
+                        }
+                    };
+                    let follow = CommandStmt {
+                        at: Some(follow_at),
+                        command: Command::Start {
+                            name: next.clone(),
+                            verb: next.span,
+                            then: None,
+                        },
+                        quantize: stmt.quantize,
+                        span: next.span,
+                    };
+                    actions.extend(self.command(&follow)?);
                 }
-                let what = Expr {
-                    kind: ExprKind::Name(name.name.clone()),
-                    span: name.span,
-                };
-                let clip = self.to_clip(self.eval(&what, None)?, &name.name, name.span)?;
-                let clip = self.on_track(clip, t, name, name.span)?;
-                vec![schedule(Action::Play { track: t, clip })]
+                actions
             }
             Command::Stop(t) => match self.bindings.get(&t.name) {
                 // stopping a scene stops the tracks it plays on
@@ -2226,10 +2779,10 @@ impl Perform<'_> {
             .with_help("add `instrument = ...` to the track"));
         };
         if clip.keys.is_some() {
-            if clip.lane("notes").is_some() {
+            if clip.lane("notes").is_some() || !clip.scored.is_empty() {
                 return Err(Diagnostic::new(
                     format!(
-                        "clip `{}` has both `notes` and `keys`: it is played by one or the other",
+                        "clip `{}` has both `keys` and notes: it is played by one or the other",
                         clip.name
                     ),
                     span,
@@ -2293,6 +2846,7 @@ impl Perform<'_> {
                 .any(|c| c.name == format!("{}::{lane}", info.name))
             {
                 if clip.lane("notes").is_none()
+                    && clip.scored.is_empty()
                     && clip.keys.is_none()
                     && !clip.signals.iter().any(|(l, _)| l == lane)
                 {
@@ -2704,7 +3258,110 @@ pub(crate) fn negate(v: Value) -> Value {
     }
 }
 
+fn op_name(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "add",
+        BinOp::Sub => "subtract",
+        BinOp::Mul => "multiply",
+        BinOp::Div => "divide",
+    }
+}
+
+fn cmp_values(op: CmpOp, a: Value, b: Value) -> bool {
+    let key = |v: Value| match v {
+        Value::Note(n) => n as f64,
+        Value::Hz(h) => h,
+        Value::Num(n) => n,
+        Value::Db(d) => d,
+        Value::Seconds(s) => s,
+        Value::Beats(b) => b,
+        Value::Bars(b) => b,
+        Value::Semitones(s) => s,
+        Value::Degrees(d) => d,
+        Value::Sample(s) => s as f64,
+    };
+    let (a, b) = (key(a), key(b));
+    match op {
+        CmpOp::Lt => a < b,
+        CmpOp::Gt => a > b,
+        CmpOp::Le => a <= b,
+        CmpOp::Ge => a >= b,
+        CmpOp::Eq => (a - b).abs() < 1e-12,
+        CmpOp::Ne => (a - b).abs() >= 1e-12,
+    }
+}
+
+fn add_values(a: Value, b: Value, span: Span) -> Res<Value> {
+    match (a, b) {
+        (Value::Note(n), Value::Semitones(st)) | (Value::Semitones(st), Value::Note(n)) => {
+            Ok(transpose(Value::Note(n), st))
+        }
+        (Value::Hz(h), Value::Semitones(st)) | (Value::Semitones(st), Value::Hz(h)) => {
+            Ok(transpose(Value::Hz(h), st))
+        }
+        (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a + b)),
+        (Value::Db(a), Value::Db(b)) => Ok(Value::Db(a + b)),
+        (Value::Beats(a), Value::Beats(b)) => Ok(Value::Beats(a + b)),
+        (Value::Bars(a), Value::Bars(b)) => Ok(Value::Bars(a + b)),
+        (Value::Seconds(a), Value::Seconds(b)) => Ok(Value::Seconds(a + b)),
+        (Value::Semitones(a), Value::Semitones(b)) => Ok(Value::Semitones(a + b)),
+        (Value::Hz(a), Value::Hz(b)) => Ok(Value::Hz(a + b)),
+        _ => Err(Diagnostic::new("can't add these units", span)),
+    }
+}
+
+fn sub_values(a: Value, b: Value, span: Span) -> Res<Value> {
+    match (a, b) {
+        (Value::Note(n), Value::Semitones(st)) => Ok(transpose(Value::Note(n), -st)),
+        (Value::Hz(h), Value::Semitones(st)) => Ok(transpose(Value::Hz(h), -st)),
+        (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a - b)),
+        (Value::Db(a), Value::Db(b)) => Ok(Value::Db(a - b)),
+        (Value::Beats(a), Value::Beats(b)) => Ok(Value::Beats(a - b)),
+        (Value::Bars(a), Value::Bars(b)) => Ok(Value::Bars(a - b)),
+        (Value::Seconds(a), Value::Seconds(b)) => Ok(Value::Seconds(a - b)),
+        (Value::Semitones(a), Value::Semitones(b)) => Ok(Value::Semitones(a - b)),
+        (Value::Hz(a), Value::Hz(b)) => Ok(Value::Hz(a - b)),
+        _ => Err(Diagnostic::new("can't subtract these units", span)),
+    }
+}
+
+fn mul_values(a: Value, b: Value, span: Span) -> Res<Value> {
+    match (a, b) {
+        (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a * b)),
+        (v, Value::Num(n)) | (Value::Num(n), v) => match v {
+            Value::Beats(x) => Ok(Value::Beats(x * n)),
+            Value::Bars(x) => Ok(Value::Bars(x * n)),
+            Value::Seconds(x) => Ok(Value::Seconds(x * n)),
+            Value::Hz(x) => Ok(Value::Hz(x * n)),
+            Value::Db(x) => Ok(Value::Db(x * n)),
+            Value::Semitones(x) => Ok(Value::Semitones(x * n)),
+            Value::Num(x) => Ok(Value::Num(x * n)),
+            _ => Err(Diagnostic::new("can't multiply these units", span)),
+        },
+        _ => Err(Diagnostic::new("can't multiply these units", span)),
+    }
+}
+
+fn div_values(a: Value, b: Value, span: Span) -> Res<Value> {
+    match (a, b) {
+        (Value::Num(a), Value::Num(b)) if b != 0.0 => Ok(Value::Num(a / b)),
+        (v, Value::Num(n)) if n != 0.0 => match v {
+            Value::Beats(x) => Ok(Value::Beats(x / n)),
+            Value::Bars(x) => Ok(Value::Bars(x / n)),
+            Value::Seconds(x) => Ok(Value::Seconds(x / n)),
+            Value::Hz(x) => Ok(Value::Hz(x / n)),
+            Value::Num(x) => Ok(Value::Num(x / n)),
+            _ => Err(Diagnostic::new("can't divide these units", span)),
+        },
+        _ => Err(Diagnostic::new("can't divide these values", span)),
+    }
+}
+
 /// Move a pitch by `st` semitones. Notes stay notes when the interval is whole.
+pub(crate) fn transpose_public(v: Value, st: f64) -> Value {
+    transpose(v, st)
+}
+
 fn transpose(v: Value, st: f64) -> Value {
     match v {
         Value::Note(m) if st.fract() == 0.0 => Value::Note(m + st as i32),
@@ -2714,4 +3371,181 @@ fn transpose(v: Value, st: f64) -> Value {
         }
         other => other,
     }
+}
+
+/// Time as a number of cycles (bars) at `tempo`.
+fn time_cycles(t: Time, tempo: Tempo) -> Rational {
+    let beats = match t {
+        Time::Bars(b) => b * tempo.beats_per_bar,
+        Time::Beats(b) => b,
+        Time::Seconds(s) => s * tempo.bpm / 60.0,
+    };
+    Rational::from_f64(beats / tempo.beats_per_bar)
+}
+
+/// `events { 0beat c4 for 1/2beat gain: -6db }` inside a clip.
+fn parse_events(raw: &str, span: Span, cx: &Context) -> Res<Vec<ScoredNote>> {
+    let mut out = Vec::new();
+    for (line_i, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let err = |message: String| {
+            Diagnostic::new(message, span).with_help(format!("on line {}: `{line}`", line_i + 1))
+        };
+        // `<at> <value> for <dur> [name: value …]`
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.len() < 4 || tokens[2] != "for" {
+            return Err(err(
+                "an event is `at value for dur`, as in `0beat c4 for 1/2beat`".into(),
+            ));
+        }
+        let at: Time = tokens[0]
+            .parse()
+            .map_err(|e: niminal_score::ParseError| err(e.to_string()))?;
+        let value = atom_value(tokens[1], cx.sample_names)
+            .map_err(|e| err(e))?;
+        let dur: Time = tokens[3]
+            .parse()
+            .map_err(|e: niminal_score::ParseError| err(e.to_string()))?;
+        let mut step = Step::from(value);
+        let mut args = Vec::new();
+        let mut i = 4;
+        while i < tokens.len() {
+            let part = tokens[i];
+            let (name, val_tok) = if let Some((n, v)) = part.split_once(':') {
+                if v.is_empty() {
+                    i += 1;
+                    if i >= tokens.len() {
+                        return Err(err(format!("`{n}:` needs a value")));
+                    }
+                    (n, tokens[i])
+                } else {
+                    (n, v)
+                }
+            } else if part.ends_with(':') {
+                let n = &part[..part.len() - 1];
+                i += 1;
+                if i >= tokens.len() {
+                    return Err(err(format!("`{n}:` needs a value")));
+                }
+                (n, tokens[i])
+            } else {
+                return Err(err(format!(
+                    "expected `name: value` after the duration, found `{part}`"
+                )));
+            };
+            let v = atom_value(val_tok, cx.sample_names).map_err(|e| err(e))?;
+            match name {
+                "gain" => {
+                    step.gain = Some(match v {
+                        Value::Db(db) => db,
+                        other => {
+                            other.as_gain().map_err(|e| err(e.to_string()))?.log10() * 20.0
+                        }
+                    });
+                }
+                "pan" => {
+                    step.pan = Some(v.as_angle().map_err(|e| err(e.to_string()))?);
+                }
+                "begin" => {
+                    step.begin = Some(v.as_number().map_err(|e| err(e.to_string()))?);
+                }
+                "pitch" => {
+                    step.pitch = Some(v.as_semitones().map_err(|e| err(e.to_string()))?);
+                }
+                other => args.push((other.to_string(), v)),
+            }
+            i += 1;
+        }
+        out.push(ScoredNote {
+            at: time_cycles(at, cx.tempo),
+            dur: time_cycles(dur, cx.tempo),
+            step,
+            args,
+        });
+    }
+    Ok(out)
+}
+
+fn section_to_clip(section: niminal_score::Section, tempo: Tempo) -> Res<Clip> {
+    let length = time_cycles(section.length, tempo);
+    let mut scored = Vec::with_capacity(section.events.len());
+    for e in section.events {
+        let mut step = Step::from(Value::Num(0.0));
+        let mut args = Vec::new();
+        for (k, v) in e.args {
+            match k.as_str() {
+                "freq" | "note" => step = Step::from(v),
+                "gain" | "amp" => {
+                    step.gain = match v {
+                        Value::Db(db) => Some(db),
+                        other => Some(
+                            other
+                                .as_gain()
+                                .map_err(|err| {
+                                    Diagnostic::new(err.to_string(), Span::new(0, 0))
+                                })?
+                                .log10()
+                                * 20.0,
+                        ),
+                    };
+                }
+                "pan" => {
+                    step.pan = Some(v.as_angle().map_err(|err| {
+                        Diagnostic::new(err.to_string(), Span::new(0, 0))
+                    })?);
+                }
+                other => args.push((other.to_string(), v)),
+            }
+        }
+        if matches!(step.value, Value::Num(0.0)) && args.is_empty() && step.gain.is_none() {
+            // no pitch: skip empty shell events that only name the target
+            continue;
+        }
+        scored.push(ScoredNote {
+            at: time_cycles(e.at, tempo),
+            dur: time_cycles(e.dur, tempo),
+            step,
+            args,
+        });
+    }
+    Ok(Clip {
+        name: section.name,
+        length: if length > Rational::ZERO {
+            length
+        } else {
+            Rational::ONE
+        },
+        endless: false,
+        lanes: Vec::new(),
+        scored,
+        keys: None,
+        curves: Vec::new(),
+        signals: Vec::new(),
+    })
+}
+
+fn clipdef_to_clip(def: &niminal_score::ClipDef, cx: &Context) -> Res<Clip> {
+    // Re-parse the canonical source so lanes go through the same path as handwritten clips.
+    let src = def.to_source();
+    let items = crate::parser::parse(&src).map_err(|d| d)?;
+    let Item::Clip(block) = items
+        .into_iter()
+        .find(|i| matches!(i, Item::Clip(_)))
+        .ok_or_else(|| {
+            Diagnostic::new(
+                format!("clip `{}` produced no clip source", def.name),
+                Span::new(0, 0),
+            )
+        })?
+    else {
+        unreachable!()
+    };
+    let p = Perform {
+        cx,
+        bindings: HashMap::new(),
+    };
+    p.clip(&block)
 }

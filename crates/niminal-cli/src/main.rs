@@ -11,7 +11,7 @@ use niminal_cli::live::{DEFAULT_SAMPLE_RATE, layout_for, render_error, render_pr
 use niminal_cli::render::{End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav};
 use niminal_cli::server::{Client, Server, ServerConfig};
 use niminal_daemon::{Daemon, Session, from_lines, to_lines};
-use niminal_score::Section;
+use niminal_score::ScoreFile;
 use serde_json::json;
 
 #[derive(Parser)]
@@ -249,7 +249,23 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
     let file = file.as_deref().expect("a file is given");
     let (score, input, from, to) = (score.as_deref(), input.as_deref(), from.as_deref(), to.as_deref());
     let out = out.as_path();
-    let source = read(file)?;
+    let mut source = read(file)?;
+    let mut arrangement = arrangement;
+    let mut score_events = Vec::new();
+    if let Some(path) = score {
+        match ScoreFile::from_json(&read(path)?)
+            .map_err(|e| format!("error: {}: {e}", path.display()))?
+        {
+            ScoreFile::Section(section) => score_events = section.events,
+            ScoreFile::Project(project) => {
+                if arrangement.is_none() {
+                    arrangement = project.arrangement.as_ref().map(|a| a.name.clone());
+                }
+                source.push('\n');
+                source.push_str(&project.to_source());
+            }
+        }
+    }
     let name = file.display().to_string();
     let options = niminal_lang::CompileOptions {
         samples: niminal_lang::Samples::new(file.parent().unwrap_or(Path::new("."))),
@@ -307,16 +323,7 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
         return write_output(&rendered, out, stems);
     }
 
-    let events = match score {
-        None => Vec::new(),
-        Some(path) => {
-            let section = Section::from_json(&read(path)?)
-                .map_err(|e| format!("error: {}: {e}", path.display()))?;
-            section.events
-        }
-    };
-
-    let mut rendered = render(&program, &events, &options).map_err(|e| format!("error: {e}"))?;
+    let mut rendered = render(&program, &score_events, &options).map_err(|e| format!("error: {e}"))?;
     if rendered.silenced_voices > 0 {
         eprintln!("warning: {} voice(s) produced NaN or infinity and were silenced", rendered.silenced_voices);
     }

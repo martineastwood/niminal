@@ -47,3 +47,6 @@ pub use program::{
 pub use sample::Samples;
 pub use schedule::{ControlSet, Found, Schedule, ScheduleError, TrackState};
 pub use unit::Unit;
+
+#[cfg(test)]
+mod score_prog;
