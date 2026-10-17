@@ -807,8 +807,7 @@ impl Session {
                     &explicit,
                     position..boundary,
                     config,
-                    matches!(mode, PlanMode::Refresh | PlanMode::Replan) && position == from,
-                    &mut window,
+                                        &mut window,
                 );
                 position = boundary;
             }
@@ -869,8 +868,7 @@ impl Session {
                 &explicit,
                 position..to,
                 config,
-                matches!(mode, PlanMode::Refresh | PlanMode::Replan) && position == from,
-                &mut window,
+                                &mut window,
             );
         }
         // Stable sorting keeps a graph swap/reset before notes at the same sample.
@@ -930,7 +928,6 @@ impl Session {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn plan_notes(
         &self,
         program: &Arc<Program>,
@@ -938,7 +935,6 @@ impl Session {
         explicit: &[Explicit],
         range: std::ops::Range<u64>,
         config: RealtimeConfig,
-        catch_up: bool,
         window: &mut Window,
     ) {
         let (from, to) = (range.start, range.end);
@@ -1048,44 +1044,22 @@ impl Session {
                 kind: Kind::Param { key, name, value },
             });
         }
-        // changes to a held note's parameters: those from this window, and after a replan those from before it
-        // that the discarded windows never played
-        let mut caught_up: Vec<&super::VoiceSet> = Vec::new();
+        // changes to a held note's parameters: whatever was before this window has played
         for set in &self.voice_sets {
-            if set.at >= from && set.at < to {
-                if let Some(command) = set_command(program, set, set.at, set.frames) {
-                    window.commands.push(command);
-                }
-            } else if set.at < from && catch_up {
-                caught_up.retain(|c| !(c.key == set.key && c.name == set.name));
-                caught_up.push(set);
-            }
-        }
-        for set in caught_up {
-            if let Some(command) = set_command(program, set, from, 0) {
+            if set.at >= from && set.at < to
+                && let Some(command) = set_command(program, set, set.at, set.frames)
+            {
                 window.commands.push(command);
             }
         }
-        // track parameters moved by `track` events: those from this window, and after a replan the latest
-        // from before it for each, in case the discarded windows never played them
-        let mut latest: Vec<&super::TrackSet> = Vec::new();
+        // track parameters moved by `track` events
         for set in &self.track_sets {
             if set.at >= from && set.at < to {
                 window.commands.push(Command {
                     at: set.at,
                     kind: Kind::Control { key: set.key.clone(), value: set.value, frames: set.frames },
                 });
-            } else if set.at < from && catch_up {
-                latest.retain(|l| l.key != set.key);
-                latest.push(set);
             }
-        }
-        for set in latest {
-            let remaining = set.frames.saturating_sub(from - set.at);
-            window.commands.push(Command {
-                at: from,
-                kind: Kind::Control { key: set.key.clone(), value: set.value, frames: remaining },
-            });
         }
         // keys that came up: each key is its own note, so a release that is repeated in a later window does no harm
         for off in &self.key_offs {
