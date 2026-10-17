@@ -902,3 +902,67 @@ fn random_live_edits_sound_the_same_prepared_as_direct() {
         "only {audible} of 12 seeds made sound, so the comparison proves little"
     );
 }
+
+fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_score::Event> {
+    use niminal_score::{Event, Time, Value};
+    (0..count)
+        .map(|i| Event {
+            target: "lead".into(),
+            at: Time::Seconds(0.05 + seconds * i as f64 / count as f64),
+            dur: Time::Seconds(0.02),
+            args: [("freq".to_string(), Value::Hz(200.0 + (i % 12) as f64 * 40.0))].into(),
+        })
+        .collect()
+}
+
+/// Stream `events` in batches, each sent `ahead` frames before its first note, while the renderer plays.
+/// Returns the audio and what the renderer reported.
+fn stream_while_playing(events: &[niminal_score::Event], ahead: u64, frames: usize) -> (Vec<f32>, niminal_daemon::RenderMetrics) {
+    let mut s = session();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let mut out = vec![0.0; frames];
+    let mut sent = 0;
+    for chunk in out.chunks_mut(256) {
+        let clock = r.clock();
+        while sent < events.len() {
+            let start = (match events[sent].at { niminal_score::Time::Seconds(t) => t, _ => unreachable!() } * 48_000.0) as u64;
+            if start > clock + ahead {
+                break;
+            }
+            s.stream_events(vec![events[sent].clone()]).unwrap();
+            sent += 1;
+        }
+        s.prepare_realtime();
+        measured(&mut r, chunk.len(), chunk);
+    }
+    (out, r.metrics())
+}
+
+fn offline(events: &[niminal_score::Event], frames: usize) -> Vec<f32> {
+    let mut s = session();
+    s.stream_events(events.to_vec()).unwrap();
+    s.process(frames).remove(0)
+}
+
+#[test]
+fn streamed_notes_beyond_the_prepared_region_cause_no_replanning() {
+    let events = streamed_notes(1000, 10.0);
+    let frames = 11 * 48_000;
+    // sent ~200ms ahead, which is past the 8192 frame lookahead
+    let (audio, metrics) = stream_while_playing(&events, 9_600, frames);
+    assert_eq!(audio, offline(&events, frames));
+    assert_eq!(metrics.mixer_builds, 0);
+    assert_eq!(metrics.late_events, 0);
+    assert_eq!(metrics.starved_frames, 0);
+}
+
+#[test]
+fn streamed_notes_inside_the_prepared_region_cause_no_replanning() {
+    let events = streamed_notes(1000, 10.0);
+    let frames = 11 * 48_000;
+    // sent ~50ms ahead, inside the region the planner has prepared
+    let (audio, metrics) = stream_while_playing(&events, 2_400, frames);
+    assert_eq!(audio, offline(&events, frames));
+    assert_eq!(metrics.mixer_builds, 0);
+    assert_eq!(metrics.late_events, 0);
+}

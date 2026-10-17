@@ -213,7 +213,7 @@ A second client, to check that nothing in the API is specific to the sequencer.
 
 Record each decision with a line of why.
 
-1. Phase 1: (a) or (b).
+1. Phase 1: (b), a ring of single prepared commands (`Injected`) that the renderer merges by sample. The planner thread builds them from a `fresh` list the session fills, and tags each with the revision so a replan drops them. (a) would have needed a way to supersede windows already in the `ready` ring. Held-key releases of notes that haven't started yet still replan, since the note may be prepared as held. A pending change of definitions or a scheduled panic before the note's start also falls back to a replan.
 2. Phase 6 audit: each engine-state read and how it crosses the API.
 3. The sequencer's default lookahead, and the measured `now`-edit latency.
 4. Is JSON fast enough for dense streams? Measure during phases 6 and 8 before considering a binary transport.

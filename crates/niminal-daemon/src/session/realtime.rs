@@ -46,6 +46,8 @@ pub struct RenderMetrics {
     pub deadline_misses: usize,
     pub planner_panics: usize,
     pub max_render_micros: u64,
+    /// Mixers built for the renderer: one for each change of definitions, and for each replan.
+    pub mixer_builds: usize,
 }
 
 pub(super) struct State {
@@ -64,6 +66,7 @@ pub(super) struct State {
     planner_panics: AtomicUsize,
     max_render_micros: AtomicU64,
     pub(super) latency: usize,
+    mixer_builds: Arc<AtomicUsize>,
     /// The thread that plans ahead, woken when something changes that it must act on at once.
     planner_thread: std::sync::Mutex<Option<std::thread::Thread>>,
 }
@@ -79,6 +82,7 @@ impl State {
             deadline_misses: self.deadline_misses.load(Ordering::Relaxed),
             planner_panics: self.planner_panics.load(Ordering::Relaxed),
             max_render_micros: self.max_render_micros.load(Ordering::Relaxed),
+            mixer_builds: self.mixer_builds.load(Ordering::Relaxed),
         }
     }
 }
@@ -186,10 +190,35 @@ fn send_midi(
 enum Retired {
     Window(Box<Window>),
     Voice(Voice),
+    Injected(Box<Injected>),
+}
+
+/// A command prepared for a stretch that has been prepared already, to be merged into it by sample.
+/// It belongs to one revision, as a window does, and is dropped with it.
+struct Injected {
+    revision: u64,
+    command: Command,
+}
+
+/// Something added since the planner last looked.
+pub(super) enum Fresh {
+    Note { event: Event, start: u64, dur: u64, key: Option<u32> },
+    Release { key: u32, at: u64 },
+    Param { key: u32, name: &'static str, value: f32, at: u64 },
+}
+
+impl Fresh {
+    fn at(&self) -> u64 {
+        match self {
+            Fresh::Note { start, .. } => *start,
+            Fresh::Release { at, .. } | Fresh::Param { at, .. } => *at,
+        }
+    }
 }
 
 pub(super) struct Planner {
     ready: Producer<Box<Window>>,
+    inject_tx: Producer<Box<Injected>>,
     control_tx: Producer<Change>,
     control_applied: Consumer<Applied>,
     retired: Consumer<Retired>,
@@ -213,6 +242,10 @@ impl Planner {
 /// graph compilation, and resource destruction never take place in `render`.
 pub struct RealtimeRenderer {
     ready: Consumer<Box<Window>>,
+    inject_rx: Consumer<Box<Injected>>,
+    /// Commands for stretches prepared already, in the order they run.
+    #[allow(clippy::vec_box)] // moved to the retirement queue whole, without copying
+    injected: Vec<Box<Injected>>,
     control_rx: Consumer<Change>,
     control_applied: Producer<Applied>,
     control_pending: Vec<Change>,
@@ -253,6 +286,7 @@ impl Session {
         let (applied_tx, applied_rx) = RingBuffer::new(controls::CAPACITY);
         let (control_tx, control_rx) = RingBuffer::new(controls::CAPACITY);
         let (ready_tx, ready_rx) = RingBuffer::new(config.queued_windows);
+        let (inject_tx, inject_rx) = RingBuffer::new(config.max_voices * 4);
         let (retired_tx, retired_rx) =
             RingBuffer::new(config.max_voices * 4 + config.queued_windows * 2);
         let state = Arc::new(State {
@@ -271,6 +305,7 @@ impl Session {
             planner_panics: AtomicUsize::new(0),
             max_render_micros: AtomicU64::new(0),
             latency: self.latency(),
+            mixer_builds: self.mixer_builds.clone(),
             planner_thread: std::sync::Mutex::new(None),
         });
         assert!(
@@ -285,6 +320,8 @@ impl Session {
         sounding.midi.reserve(config.max_voices);
         let mut renderer = RealtimeRenderer {
             ready: ready_rx,
+            inject_rx,
+            injected: Vec::with_capacity(config.max_voices * 4),
             control_rx,
             control_applied: applied_tx,
             control_pending: self.control_changes.clone(),
@@ -311,6 +348,7 @@ impl Session {
         renderer.control_pending.reserve(controls::CAPACITY);
         self.live = Some(Planner {
             ready: ready_tx,
+            inject_tx,
             control_tx,
             control_applied: applied_rx,
             retired: retired_rx,
@@ -328,18 +366,25 @@ impl Session {
         renderer
     }
 
+    /// Everything prepared is out of date: it is thrown away and prepared again.
     pub(super) fn invalidate_live(&self) {
         if let Some(planner) = &self.live {
             planner.state.revision.fetch_add(1, Ordering::AcqRel);
-            if let Some(thread) = planner
+        }
+        self.wake_planner();
+    }
+
+    /// Ask the planner to look at what was added, without throwing away what it has prepared.
+    pub(super) fn wake_planner(&self) {
+        if let Some(planner) = &self.live
+            && let Some(thread) = planner
                 .state
                 .planner_thread
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .as_ref()
-            {
-                thread.unpark();
-            }
+        {
+            thread.unpark();
         }
     }
 
@@ -424,6 +469,7 @@ impl Session {
             match retired {
                 Retired::Window(window) => drop(window),
                 Retired::Voice(voice) => drop(voice),
+                Retired::Injected(injected) => drop(injected),
             }
         }
         let revision = planner.state.revision.load(Ordering::Acquire);
@@ -433,8 +479,11 @@ impl Session {
             planner.stopped.clear();
             planner.revision = revision;
             planner.prepared_until = self.clock;
+            // the windows to come will take in everything that was added
+            self.fresh.clear();
         }
         planner.prepared_until = planner.prepared_until.max(self.clock);
+        self.inject_fresh(&mut planner);
         // The planner must survive a panic in planning, or the renderer starves for good: start clean instead.
         let planned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.plan_ahead(&mut planner, revision, max_windows)
@@ -565,6 +614,59 @@ impl Session {
             }
         }
         false
+    }
+
+    /// Put what was added since the planner last looked into the stretch already prepared, as commands the
+    /// renderer merges in by sample. What starts after that stretch needs nothing: the windows still to be
+    /// prepared take it from the session. If it can't be put in safely (a change of definitions or a panic is
+    /// due before it, or the queue is full) the prepared windows are thrown away instead.
+    fn inject_fresh(&mut self, planner: &mut Planner) {
+        let fresh = std::mem::take(&mut self.fresh);
+        let config = planner.config;
+        for item in fresh {
+            let at = item.at();
+            if at >= planner.prepared_until {
+                continue;
+            }
+            let program = self.program.clone();
+            let mut window = Window {
+                end: planner.prepared_until,
+                revision: planner.revision,
+                commands: Vec::new(),
+                notices: Vec::new(),
+                stopped: Vec::new(),
+                dropped: 0,
+            };
+            let unsafe_to_inject = self.pending.iter().any(|p| p.lands_at <= at)
+                || self.schedule.panics().iter().any(|&t| {
+                    let t = self.samples(t);
+                    t > self.clock && t <= at
+                });
+            if !unsafe_to_inject {
+                match item {
+                    Fresh::Note { event, start, dur, key } => {
+                        let hold = Hold { at: start.max(self.clock), dur, key };
+                        self.prepare_note(&program, &event, hold, config, &mut window);
+                    }
+                    Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
+                    Fresh::Param { key, name, value, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Param { key, name, value } }),
+                }
+            }
+            let full = window.commands.len() > planner.inject_tx.slots();
+            for notice in window.notices.drain(..) {
+                self.notify(notice);
+            }
+            planner.state.capacity_drops.fetch_add(window.dropped, Ordering::Relaxed);
+            if unsafe_to_inject || full {
+                self.fresh.clear();
+                self.invalidate_live();
+                return;
+            }
+            for command in window.commands {
+                let injected = Box::new(Injected { revision: planner.revision, command });
+                let _ = planner.inject_tx.push(injected);
+            }
+        }
     }
 
     pub fn realtime_metrics(&self) -> Option<RenderMetrics> {
@@ -707,6 +809,7 @@ impl Session {
 
     /// A mixer for `program`, built here so that the render thread need only swap it in.
     fn fresh_mixer(&self, program: &Program, config: RealtimeConfig) -> Box<Mixer> {
+        self.mixer_builds.fetch_add(1, Ordering::Relaxed);
         let mut mixer = program.mixer(self.sample_rate);
         mixer.prepare_realtime(config.max_voices * 2);
         mixer.set_max_voices(config.max_voices);
@@ -1115,6 +1218,39 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Take in the commands the planner added to stretches already prepared, drop those of an older
+    /// revision, and carry out the ones that are due. Nothing here allocates or frees: finished
+    /// commands go back to the planner thread to be destroyed.
+    fn run_injected(&mut self, revision: u64) {
+        while self.injected.len() < self.injected.capacity() {
+            let Ok(injected) = self.inject_rx.pop() else { break };
+            let order = injected.command.order();
+            let place = self.injected.partition_point(|i| i.command.order() <= order);
+            self.injected.insert(place, injected);
+        }
+        let mut i = 0;
+        while i < self.injected.len() && self.retired.slots() > 0 {
+            if self.injected[i].revision == revision {
+                i += 1;
+                continue;
+            }
+            let stale = self.injected.remove(i);
+            let _ = self.retired.push(Retired::Injected(stale));
+        }
+        while self.retired.slots() > 0 {
+            let Some(first) = self.injected.first() else { break };
+            if first.command.at > self.clock {
+                break;
+            }
+            let mut injected = self.injected.remove(0);
+            if injected.command.at < self.clock {
+                self.state.late_events.fetch_add(1, Ordering::Relaxed);
+            }
+            self.apply(&mut injected.command.kind);
+            let _ = self.retired.push(Retired::Injected(injected));
+        }
+    }
+
     /// Carry out one prepared command at the current sample.
     fn apply(&mut self, kind: &mut Kind) {
         match kind {
@@ -1317,6 +1453,7 @@ impl RealtimeRenderer {
                     self.current = Some(window);
                 }
             }
+            self.run_injected(revision);
             while self.control_applied.slots() > 0
                 && self
                     .control_pending
@@ -1376,6 +1513,11 @@ impl RealtimeRenderer {
                 if window.end > self.clock {
                     n = n.min(window.end - self.clock);
                 }
+            }
+            if let Some(next) = self.injected.first()
+                && next.command.at > self.clock
+            {
+                n = n.min(next.command.at - self.clock);
             }
             if let Some(change) = self.control_pending.first()
                 && change.at > self.clock

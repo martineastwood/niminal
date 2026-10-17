@@ -267,6 +267,10 @@ pub struct Session {
     version: u64,
     live: Option<realtime::Planner>,
     detached: bool,
+    /// Things added since the planner last looked, that it may have to put into windows already prepared.
+    fresh: Vec<realtime::Fresh>,
+    /// How many mixers have been built for the renderer.
+    mixer_builds: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 mod eval;
@@ -339,6 +343,8 @@ impl Session {
             version: 0,
             live: None,
             detached: false,
+            fresh: Vec::new(),
+            mixer_builds: Arc::default(),
         }
     }
 

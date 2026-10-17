@@ -23,21 +23,24 @@ impl Session {
         if !problems.is_empty() {
             return Err(problems);
         }
-        self.invalidate_live();
         for event in events {
             let start = self
                 .samples(event.at.to_seconds(self.program.tempo))
                 .max(self.clock);
             let dur = self.samples(event.dur.to_seconds(self.program.tempo));
-            self.insert_upcoming(Upcoming {
-                start,
-                dur,
-                event,
-                key: None,
-                scheduled: false,
-            });
+            self.add_explicit(start, dur, event, None);
         }
+        self.wake_planner();
         Ok(())
+    }
+
+    /// A note handed to the session directly. If it falls in a stretch the planner has prepared already,
+    /// the planner puts it in without redoing that stretch.
+    pub(super) fn add_explicit(&mut self, start: u64, dur: u64, event: Event, key: Option<u32>) {
+        if self.live.is_some() {
+            self.fresh.push(realtime::Fresh::Note { event: event.clone(), start, dur, key });
+        }
+        self.insert_upcoming(Upcoming { start, dur, event, key, scheduled: false });
     }
 
     /// Queue a typed control update at an absolute sample, or at the render
@@ -293,7 +296,10 @@ impl Session {
         for held in self.sounding.held.iter().filter(|h| h.2 == key) {
             self.mixer.set_voice_param(held.1, name, value);
         }
-        self.invalidate_live();
+        if self.live.is_some() {
+            self.fresh.push(realtime::Fresh::Param { key, name, value, at: self.clock });
+        }
+        self.wake_planner();
     }
 
     pub(super) fn key_event(&mut self, channel: u8, note: u8, velocity: u8) -> usize {
@@ -343,16 +349,10 @@ impl Session {
             let start = self
                 .samples(event.at.to_seconds(self.program.tempo))
                 .max(self.clock);
-            self.insert_upcoming(Upcoming {
-                start,
-                dur: 0,
-                event,
-                key: Some(key),
-                scheduled: false,
-            });
+            self.add_explicit(start, 0, event, Some(key));
             keys.push(key);
         }
-        self.invalidate_live();
+        self.wake_planner();
         let taken = keys.len();
         self.keyboard.hold(channel, note, keys);
         taken
@@ -366,11 +366,21 @@ impl Session {
         self.sounding.release_key(key, self.clock);
         // a note that has not started yet is played as a blip, long enough to hear
         let blip = self.samples(0.01);
+        let mut waiting = false;
         for note in self.upcoming.iter_mut().filter(|u| u.key == Some(key)) {
             note.key = None;
             note.dur = blip;
+            waiting |= note.start > self.clock;
         }
-        self.invalidate_live();
+        if waiting {
+            // the note may be prepared already as a held one
+            self.invalidate_live();
+        } else {
+            if self.live.is_some() {
+                self.fresh.push(realtime::Fresh::Release { key, at: self.clock });
+            }
+            self.wake_planner();
+        }
     }
 
     /// The first control waiting on `midi.learn` takes the control change that just arrived.
