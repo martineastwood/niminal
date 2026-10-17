@@ -981,9 +981,12 @@ fn preview_action(
         } else {
             at as f64 / f64::from(sample_rate) + after
         };
+        let Some(named) = name_action(&action.program, &scheduled.action) else {
+            continue;
+        };
         history.push(HistoryEntry {
             at: when,
-            action: name_action(&action.program, &scheduled.action),
+            action: named,
         });
     }
 }

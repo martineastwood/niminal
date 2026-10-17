@@ -97,3 +97,62 @@ fn the_example_with_effects_renders() {
     assert!(out.iter().all(|s| s.is_finite()));
     assert!(rms(&out) > 0.01);
 }
+
+#[test]
+fn noise_and_pinknoise_make_sound() {
+    let white = raw("instr n() { noise() * env[1 20ms 0] * 0.5 }\nn() for 1/8beat");
+    let pink = raw("instr n() { pinknoise() * env[1 20ms 0] * 0.5 }\nn() for 1/8beat");
+    assert!(peak(&white) > 0.1, "white {}", peak(&white));
+    assert!(peak(&pink) > 0.01, "pink {}", peak(&pink));
+    assert!(white.iter().chain(pink.iter()).all(|s| s.is_finite()));
+}
+
+#[test]
+fn fold_clip_chorus_bitcrush_and_compress_render() {
+    let out = raw("
+instr tone() {
+  s = osc(saw, 110hz) * env[1 | 80ms 0]
+  s = s.wavefold(drive: 3) * 0.3
+  s = s.clip(level: 0.8)
+  s = s.chorus(rate: 0.8hz, depth: 0.4, time: 8ms, mix: 0.4)
+  s = s.bitcrush(rate: 8khz, bits: 8)
+  s.compress(threshold: -12db, ratio: 4, attack: 5ms, release: 40ms, makeup: 3db)
+}
+tone() for 1beat");
+    assert!(out.iter().all(|s| s.is_finite()));
+    assert!(peak(&out) > 0.05, "{}", peak(&out));
+}
+
+#[test]
+fn compress_with_a_sidechain_ducks_the_signal() {
+    // a track ducks a pad bus when a click hits the key bus
+    let ducked = raw("
+bus pad
+bus key
+instr tone() { pad += osc(sine, 220hz) * env[1 200ms 1] }
+instr click() { key += osc(sine, 1000hz) * env[1 2ms 0] }
+track ducked {
+  out = pad.compress(threshold: -24db, ratio: 20, attack: 1ms, release: 50ms, sidechain: key)
+}
+tone() for 1beat
+at 50ms click() for 10ms");
+    assert!(ducked.iter().all(|s| s.is_finite()));
+    assert!(peak(&ducked) > 0.01);
+    // around the click the pad should be quieter than before it
+    let before = peak(&ducked[1000..2000]);
+    let during = peak(&ducked[2400..2800]);
+    assert!(during < before * 0.7, "before {before} during {during}");
+}
+
+#[test]
+fn the_synth_drums_example_renders() {
+    let out = render_with(
+        &program(include_str!("../../../../examples/synth_drums.nml")),
+        &[],
+        &RenderOptions { limiter: false, until: None, ..Default::default() },
+    ).unwrap();
+    assert_eq!(out.channels.len(), 2);
+    let mix: Vec<f32> = out.channels[0].iter().zip(&out.channels[1]).map(|(l, r)| (l + r) * 0.5).collect();
+    assert!(mix.iter().all(|s| s.is_finite()));
+    assert!(rms(&mix) > 0.01);
+}

@@ -237,6 +237,7 @@ fn command_write_key(c: &CommandStmt) -> Option<String> {
         | Command::Panic
         | Command::Reset
         | Command::New
+        | Command::Capture { .. }
         | Command::Edit { .. }
         | Command::Start { .. } => None,
     }

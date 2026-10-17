@@ -671,17 +671,24 @@ impl Session {
             self.pending = pending;
             self.swap_program(project, program, mixer, &statements, id);
         }
+        let mut captures = Vec::new();
         for a in actions.iter().chain(&replays) {
-            self.run_action(a, at);
+            captures.extend(self.run_action(a, at));
         }
         self.playing = playing;
 
         self.rebuild_schedule();
+        let mut changes = summary;
+        for (bars, name) in captures {
+            if let Some(notice) = self.capture_section(bars, &name) {
+                changes.push(notice);
+            }
+        }
         self.landed.push(Landed {
             id,
             at,
             position: self.grid().position(at),
-            changes: summary,
+            changes,
         });
     }
 
@@ -733,12 +740,14 @@ impl Session {
     }
 
     /// Carry out one `play`, `mute`, note... statement that has landed. It was
-    /// compiled when it was evaluated.
-    fn run_action(&mut self, action: &Compiled, at: u64) {
+    /// compiled when it was evaluated. Returns any captures to run after the
+    /// schedule is rebuilt.
+    fn run_action(&mut self, action: &Compiled, at: u64) -> Vec<(f64, String)> {
         let (statement, program) = (&action.statement, &action.program);
         let tempo = program.tempo;
         let landing_seconds = self.seconds(at);
         let origin = origin_of(&self.history);
+        let mut captures = Vec::new();
 
         for event in &program.notes {
             let offset = event.at.to_seconds(tempo);
@@ -757,17 +766,77 @@ impl Session {
             });
         }
         for scheduled in &program.performance {
+            if let Action::Capture { bars, name } = &scheduled.action {
+                captures.push((*bars, name.clone()));
+                continue;
+            }
             let after = scheduled.at.to_seconds(tempo);
             let when = if statement.has_at() {
                 origin + after
             } else {
                 landing_seconds + after
             };
+            let Some(named) = name_action(program, &scheduled.action) else {
+                continue;
+            };
             self.history.push(HistoryEntry {
                 at: when,
-                action: name_action(program, &scheduled.action),
+                action: named,
             });
         }
+        captures
+    }
+
+    /// Write the notes sounding in the last `bars` bars to `score/{name}.nms`.
+    fn capture_section(&self, bars: f64, name: &str) -> Option<String> {
+        if self.detached {
+            return None;
+        }
+        let tempo = self.program.tempo;
+        let now = self.seconds(self.clock);
+        let length = Time::Bars(bars).to_seconds(tempo);
+        let from = (now - length).max(0.0);
+        let found = self.schedule.events_lenient(from, now, &[]);
+        let mut events = found.events;
+        // Notes written out (not from a clip) that started in the window.
+        for u in &self.upcoming {
+            let start = self.seconds(u.start);
+            if u.scheduled || start < from || start >= now {
+                continue;
+            }
+            let mut event = u.event.clone();
+            event.at = Time::Seconds(start);
+            event.dur = Time::Seconds(self.seconds(u.dur));
+            events.push(event);
+        }
+        events.sort_by(|a, b| {
+            a.at.to_seconds(tempo)
+                .partial_cmp(&b.at.to_seconds(tempo))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        // Re-base times so the section starts at 0, and prefer beats for editing.
+        let beat = |sec: f64| Time::Beats(sec * tempo.bpm / 60.0);
+        for event in &mut events {
+            let at = event.at.to_seconds(tempo) - from;
+            let dur = event.dur.to_seconds(tempo);
+            event.at = beat(at);
+            event.dur = beat(dur);
+        }
+        let section = niminal_score::Section {
+            name: name.to_string(),
+            length: Time::Bars(bars),
+            events,
+        };
+        let dir = std::path::Path::new("score");
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            return Some(format!("capture failed: could not create score/: {e}"));
+        }
+        let path = dir.join(format!("{name}.nms"));
+        let count = section.events.len();
+        if let Err(e) = std::fs::write(&path, section.to_json()) {
+            return Some(format!("capture failed: could not write {}: {e}", path.display()));
+        }
+        Some(format!("wrote {} ({count} events)", path.display()))
     }
 
     /// Whether a pending change waits for a bar line, not a beat.
@@ -1211,9 +1280,9 @@ fn origin_of(history: &[HistoryEntry]) -> f64 {
         .map_or(0.0, |h| h.at)
 }
 
-fn name_action(program: &Program, action: &Action) -> NamedAction {
+fn name_action(program: &Program, action: &Action) -> Option<NamedAction> {
     let name = |t: &usize| program.tracks[*t].name.clone();
-    match action {
+    Some(match action {
         Action::Play { track, clip } => NamedAction::Play {
             track: name(track),
             clip: clip.clone(),
@@ -1226,7 +1295,8 @@ fn name_action(program: &Program, action: &Action) -> NamedAction {
         Action::Hush => NamedAction::Hush,
         Action::Panic => NamedAction::Panic,
         Action::Reset => NamedAction::Reset,
-    }
+        Action::Capture { .. } => return None,
+    })
 }
 
 fn first_line(text: &str) -> String {

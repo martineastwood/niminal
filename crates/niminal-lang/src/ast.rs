@@ -110,6 +110,11 @@ pub enum Command {
     Reset,
     /// Like `reset`, and a live session also forgets every definition it was sent.
     New,
+    /// `capture last 32bars as jam`: write the last N bars of the session as a `.nms` section.
+    Capture {
+        length: Expr,
+        name: Ident,
+    },
     /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its track.
     /// `verb` is the `start`.
     Start {

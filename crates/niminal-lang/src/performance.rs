@@ -144,6 +144,12 @@ pub enum Action {
     /// Stop every track, and count bars from here. Only a live session can do the
     /// counting; a render treats it as `hush`.
     Reset,
+    /// Write the last `bars` of playing clips to `score/{name}.nms`. Only a live
+    /// session does the write; a render ignores it.
+    Capture {
+        bars: f64,
+        name: String,
+    },
 }
 
 /// Which grid a change waits for.

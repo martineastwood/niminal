@@ -1,0 +1,51 @@
+// Synthesised drums: kick, snare and hats from oscillators and noise.
+// Render with:  niminal render examples/synth_drums.nml --out synth_drums.wav --bars 4
+config { channels: stereo }
+tempo 128bpm
+
+bus glue: stereo {
+  out = it.compress(threshold: -18db, ratio: 3, attack: 5ms, release: 80ms, makeup: 2db)
+}
+
+instr bd(freq: hz = 55hz) {
+  // pitch drop + a touch of folded click
+  pitch = env[(freq * 4)  40ms  freq]
+  body = osc(sine, pitch) * perc(decay: 280ms)
+  click = noise().hpf(cutoff: 2khz) * env[1 3ms 0] * 0.35
+  out = (body + click).tanh.pan(azimuth: 0deg)
+  glue += out
+}
+
+instr sd(freq: hz = 180hz) {
+  tone = osc(tri, freq) * perc(decay: 120ms) * 0.4
+  air = pinknoise().bpf(cutoff: 4khz, res: 0.3) * perc(decay: 160ms)
+  out = (tone + air * 0.7).clip(level: 0.9).pan(azimuth: 10deg) * 0.85
+  glue += out
+}
+
+instr hh(freq: hz = 8khz, open: 0..1 = 0) {
+  decay = 40ms + open * 180ms
+  out = noise().hpf(cutoff: 7khz).bitcrush(rate: 22khz, bits: 12) * perc(decay: decay) * 0.22
+  out = out.pan(azimuth: -25deg)
+  glue += out.gain(-6db)
+}
+
+clip kick {
+  instrument: bd
+  notes: [c2 ~ ~ c2  ~ ~ c2 ~  c2 ~ ~ c2  ~ ~ ~ ~]
+}
+
+clip snare {
+  instrument: sd
+  notes: [~ ~ ~ ~  c2 ~ ~ ~  ~ ~ ~ ~  c2 ~ ~ ~]
+}
+
+clip hats {
+  instrument: hh
+  notes: [c2 c2 c2 c2  c2 c2 c2 c2  c2 c2 c2 c2  c2 c2 c2 c2]
+  open:  [0  0  0  0.6 0  0  0  0   0  0  0  0.8 0  0  0  0]
+}
+
+scene beat { kick, snare, hats }
+beat.start
+at +4bars hush

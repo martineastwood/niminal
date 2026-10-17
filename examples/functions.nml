@@ -7,13 +7,6 @@ bus space: stereo {
   out = it.reverb(room: 0.8, damp: 0.4)
 }
 
-/// White noise from a simple generator: each call has its own.
-fn noise() {
-  state s = 22222
-  s = (s * 16807).mod(2147483647)
-  s / 2147483647 * 2 - 1
-}
-
 /// A plucked string: a delay line fed back through an averaging low-pass (Karplus-Strong).
 fn string(x, freq: init hz, decay: 0..1 = 0.996, size: const int = 4096) {
   state buf = zeros(size)

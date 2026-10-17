@@ -71,4 +71,4 @@ kit chops = brk.slices(16) with(choke: g(s4, s12))
 
 ## Built-in DSP
 
-For filters, delay, reverb, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Spectral processing, SFZ multisamples, and live recording buffers are not in the language yet.
+For filters, delay, reverb, noise, compress, chorus, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Spectral processing, SFZ multisamples, and live recording buffers are not in the language yet.

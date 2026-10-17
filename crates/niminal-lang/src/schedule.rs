@@ -291,6 +291,7 @@ impl Schedule {
                 Action::Unmute { track } => gates.push((at, Gate::Unmute(*track))),
                 Action::Solo { track } => gates.push((at, Gate::Solo(*track))),
                 Action::Unsolo { track } => gates.push((at, Gate::Unsolo(*track))),
+                Action::Capture { .. } => {}
             }
         }
         Schedule {

@@ -94,11 +94,6 @@ fn a_state_list_makes_a_plucked_string() {
   pos = (pos + 1).mod(size)
   y
 }
-fn noise() {
-  state s = 12345
-  s = (s * 16807).mod(2147483647)
-  s / 2147483647 * 2 - 1
-}
 ";
     let out = raw(&format!("{string}instr pluck(freq: init hz) with(tail: 2sec) {{ (noise() * env[1 5ms 0]).string(freq) }}\npluck(freq: 220hz) for 1beat"));
     let at = |t: f64| (t * SR) as usize;

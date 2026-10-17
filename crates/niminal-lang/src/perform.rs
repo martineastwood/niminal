@@ -1888,6 +1888,19 @@ impl Perform<'_> {
             Command::Hush => vec![schedule(Action::Hush)],
             Command::Panic => vec![schedule(Action::Panic)],
             Command::Reset | Command::New => vec![schedule(Action::Reset)],
+            Command::Capture { length, name } => {
+                let bars = self.cycles(length)?.to_f64();
+                if bars <= 0.0 {
+                    return Err(Diagnostic::new(
+                        "capture needs a length above zero",
+                        length.span,
+                    ));
+                }
+                vec![schedule(Action::Capture {
+                    bars,
+                    name: name.name.clone(),
+                })]
+            }
             // changing what a track plays is for a live session; in a file it does nothing
             Command::Edit { .. } => Vec::new(),
         })

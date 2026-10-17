@@ -7,7 +7,10 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
-use niminal_engine::ops::{FinishWhen, Delay, FilterMode, Fn1, Func, Gain, Osc, Reverb, Svf, Wavetable};
+use niminal_engine::ops::{
+    Bitcrush, Chorus, Clip, Compressor, Delay, FilterMode, FinishWhen, Fn1, Fold, Func, Gain, Noise,
+    Osc, Reverb, Svf, Wavetable,
+};
 
 use crate::unit::Unit;
 
@@ -223,6 +226,66 @@ impl Registry {
                 "A reverb: `room` sets its size and `damp` how quickly the highs die away.",
                 vec![req("x", SIGNAL), opt("room", SIGNAL), opt("damp", SIGNAL)],
                 Build::Builtin(|a| Ok(Box::new(Reverb::for_channel(a.channel)))),
+            ),
+            OpSpec::new(
+                "noise",
+                "White noise in -1..1. No arguments: `noise()`, or `noise() * env[1 5ms 0]` for a click.",
+                vec![],
+                Build::Builtin(|_| Ok(Box::new(Noise::white()))),
+            ),
+            OpSpec::new(
+                "pinknoise",
+                "Pink noise (1/f). Quieter than `noise`, useful for hats and textures.",
+                vec![],
+                Build::Builtin(|_| Ok(Box::new(Noise::pink()))),
+            ),
+            OpSpec::new(
+                "compress",
+                "A compressor. `threshold` and `makeup` take db or a plain factor; `ratio`, `attack` and `release` shape the envelope. Pass `sidechain:` to key off another signal (for ducking).",
+                vec![
+                    req("x", SIGNAL),
+                    opt("threshold", Kind::Gain),
+                    opt("ratio", SIGNAL),
+                    opt("attack", Kind::Signal(Unit::Time)),
+                    opt("release", Kind::Signal(Unit::Time)),
+                    opt("makeup", Kind::Gain),
+                    opt("sidechain", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Compressor::default()))),
+            ),
+            OpSpec::new(
+                "wavefold",
+                "Wavefolds a signal: louder input folds back and adds harmonics. `drive` is how hard it folds (1 at ±1).",
+                vec![req("x", SIGNAL), opt("drive", SIGNAL)],
+                Build::Builtin(|_| Ok(Box::new(Fold))),
+            ),
+            OpSpec::new(
+                "clip",
+                "Hard-clips a signal to ±`level` (a plain factor, default 1).",
+                vec![req("x", SIGNAL), opt("level", SIGNAL)],
+                Build::Builtin(|_| Ok(Box::new(Clip))),
+            ),
+            OpSpec::new(
+                "chorus",
+                "A chorus (or flanger, with more `depth` and less `time`). `rate` is the LFO in hz; `mix` blends wet with dry.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("rate", Kind::Signal(Unit::Hz)),
+                    opt("depth", SIGNAL),
+                    opt("time", Kind::Signal(Unit::Time)),
+                    opt("mix", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Chorus::default()))),
+            ),
+            OpSpec::new(
+                "bitcrush",
+                "Reduces sample rate and bit depth. `rate` is how often a new sample is taken (hz); `bits` is the bit depth.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("rate", Kind::Signal(Unit::Hz)),
+                    opt("bits", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Bitcrush::default()))),
             ),
             OpSpec::new(
                 "pan",

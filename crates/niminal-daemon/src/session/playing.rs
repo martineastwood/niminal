@@ -177,15 +177,15 @@ pub(super) fn apply_to_playing(
 ) {
     for scheduled in &program.performance {
         match name_action(program, &scheduled.action) {
-            NamedAction::Play { track, .. } => {
+            Some(NamedAction::Play { track, .. }) => {
                 if let Some(plays) = statement.plays().filter(|p| p.track == track) {
                     playing.insert(track, Playing::new(plays.what.clone()));
                 }
             }
-            NamedAction::Stop(track) => {
+            Some(NamedAction::Stop(track)) => {
                 playing.remove(&track);
             }
-            NamedAction::Hush | NamedAction::Panic | NamedAction::Reset => playing.clear(),
+            Some(NamedAction::Hush | NamedAction::Panic | NamedAction::Reset) => playing.clear(),
             _ => {}
         }
     }

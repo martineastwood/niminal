@@ -1164,7 +1164,7 @@ impl Parser {
     }
 
     fn at_command(&self) -> bool {
-        ["hush", "panic", "reset", "new", "unsolo"]
+        ["hush", "panic", "reset", "new", "unsolo", "capture"]
             .iter()
             .any(|kw| self.is_keyword(kw))
     }
@@ -1180,6 +1180,7 @@ impl Parser {
             "reset" => Command::Reset,
             "new" => Command::New,
             "unsolo" => Command::Unsolo(None),
+            "capture" => self.capture_command()?,
             _ => unreachable!("checked by at_command"),
         };
         let quantize = self.quantize()?;
@@ -1189,6 +1190,21 @@ impl Parser {
             quantize,
             span: start.to(self.prev_span()),
         })
+    }
+
+    /// `capture last 32bars as jam`
+    fn capture_command(&mut self) -> Res<Command> {
+        if !self.is_keyword("last") {
+            return Err(self.unexpected("`last`").with_help("for example `capture last 32bars as jam`"));
+        }
+        self.bump();
+        let length = self.expr()?;
+        if !self.is_keyword("as") {
+            return Err(self.unexpected("`as` and a name").with_help("for example `capture last 32bars as jam`"));
+        }
+        self.bump();
+        let name = self.ident("a name for the captured section")?;
+        Ok(Command::Capture { length, name })
     }
 
     /// `@ next 4bars`, `@ in 2beats`, `@ bar`, `@ now`: when a change lands.
