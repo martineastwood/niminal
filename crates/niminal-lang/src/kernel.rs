@@ -945,7 +945,7 @@ impl Kb<'_> {
     }
 
     fn check_name(&self, name: &Ident) -> Res<()> {
-        if matches!(name.name.as_str(), "it" | "note" | "state" | "pi" | "sample_rate" | "true" | "false" | "reset_on") {
+        if matches!(name.name.as_str(), "it" | "note" | "clock" | "state" | "pi" | "sample_rate" | "true" | "false" | "reset_on") {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
                 name.span,
@@ -1374,6 +1374,10 @@ impl Kb<'_> {
                 return Err(Diagnostic::new("`note` is only available in an instrument", span)
                     .with_help("pass `note.time` or `note.released` in as an argument"));
             }
+            "clock" => {
+                return Err(Diagnostic::new("`clock` is only available in an instrument, track or bus", span)
+                    .with_help("pass `clock.beat` in as an argument"));
+            }
             _ => {}
         }
         if let Some(v) = self.const_tables.get(name) {
@@ -1387,7 +1391,7 @@ impl Kb<'_> {
             return Ok(v);
         }
         if let Ok(note @ niminal_score::Value::Note(_)) = name.parse::<niminal_score::Value>() {
-            let value = note.as_hz().expect("a note is a frequency");
+            let value = note.as_hz_in(&self.tempo.tuning).expect("a note is a frequency");
             return Ok(KVal::Num(self.constant(Unit::Hz, value)));
         }
         let known = self
@@ -1786,7 +1790,7 @@ impl Kb<'_> {
                 let value = self.value(&args[0].value)?;
                 return self.map_value(value, span, |this, v| if n == "init" { Ok(this.at_init(v)) } else { this.at_control(v, args[0].value.span) });
             }
-            "len" | "sum" | "map" | "indices" | "at" | "channels" => return self.array_call(name, args, span),
+            "len" | "sum" | "map" | "indices" | "at" | "channels" | "step" => return self.array_call(name, args, span),
             "zeros" => {
                 let [count] = args else {
                     return Err(Diagnostic::new("`zeros` takes a count", name.span));
@@ -1874,7 +1878,7 @@ impl Kb<'_> {
     fn unit_method(&mut self, name: &Ident, args: &[Arg]) -> Res<Option<KVal>> {
         let scale = matches!(
             name.name.as_str(),
-            "num" | "hz" | "khz" | "db" | "sec" | "ms" | "beat" | "beats" | "bar" | "bars" | "deg" | "st"
+            "num" | "hz" | "khz" | "db" | "sec" | "ms" | "beat" | "beats" | "bar" | "bars" | "deg" | "st" | "ct"
         );
         if !scale || !(args.len() == 1 && args[0].receiver) {
             return Ok(None);
@@ -2078,6 +2082,25 @@ impl Kb<'_> {
     fn array_call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
         let receiver = self.receiver(name, args)?;
         let l = self.value(&receiver.value)?;
+        if name.name == "step" {
+            let KVal::Range { unit, lo, hi, inclusive } = l else {
+                return Err(Diagnostic::new("`step` is called on a range", receiver.value.span)
+                    .with_help("for example `(0..1).step(0.25)`"));
+            };
+            let [_, step] = args else {
+                return Err(Diagnostic::new("`step` takes the size of a step", name.span));
+            };
+            let size = self.num(&step.value)?;
+            let size_unit = size.unit;
+            let Some(size) = self.konst(&size) else {
+                return Err(Diagnostic::new("the size of a step must be known while compiling", step.value.span));
+            };
+            if size_unit != unit || unit == Unit::Db {
+                return Err(Diagnostic::new("a step has the same unit as the range, and a db range can't be stepped", step.value.span));
+            }
+            let values = step_numbers(lo, hi, inclusive, size, span)?;
+            return Ok(KVal::array(values.into_iter().map(|v| KVal::Num(self.constant(unit, v))).collect()));
+        }
         let l = if matches!(l, KVal::Range { .. }) {
             if name.name == "channels" { return Err(Diagnostic::new("a range has no channels", span)); }
             KVal::array(self.array_elements(l, span)?)
@@ -2264,7 +2287,7 @@ impl Kb<'_> {
                 self.native_arrays(name, spec, wave.clone(), &row)
             }).collect::<Res<_>>()?));
         }
-        let mut build = BuildArgs { wave, ..Default::default() };
+        let mut build = BuildArgs { wave, salt: self.natives.len() as u32, ..Default::default() };
         let mut inputs = Vec::new();
         for (index, (param, value)) in spec.params.iter().zip(values).enumerate() {
             let Some(value) = value else { continue; };
@@ -2387,6 +2410,26 @@ pub(crate) fn range_numbers(lo: f64, hi: f64, inclusive: bool, span: Span) -> Re
     Ok((0..count).map(|i| lo + i as f64).collect())
 }
 
+/// The values a range takes in steps of `step`: `(0..1).step(0.25)` is 0, 0.25, 0.5, 0.75 and 1.
+pub(crate) fn step_numbers(lo: f64, hi: f64, inclusive: bool, step: f64, span: Span) -> Res<Vec<f64>> {
+    if step <= 0.0 {
+        return Err(Diagnostic::new("a step must be above 0", span));
+    }
+    let count = ((hi - lo) / step + 1e-9).floor();
+    if count < 0.0 {
+        return Ok(Vec::new());
+    }
+    if count > 65_536.0 {
+        return Err(Diagnostic::new("this range has too many steps", span));
+    }
+    let mut values: Vec<f64> = (0..=count as usize).map(|i| lo + i as f64 * step).collect();
+    // `..<` leaves the end out, even when a step lands on it
+    if !inclusive && values.last().is_some_and(|last| (hi - last).abs() < step * 1e-9) {
+        values.pop();
+    }
+    Ok(values)
+}
+
 /// `interp: none`, `linear` or `cubic`.
 pub(crate) fn interp_of(e: &Expr) -> Res<Interp> {
     match &e.kind {
@@ -2439,7 +2482,7 @@ mod tests {
         let items = parse(src).unwrap();
         let Item::Fn(def) = &items[0] else { panic!() };
         let names = Names::default();
-        compile_kernel(def, args, &Registry::builtin(), &names, Tempo { bpm: 120.0, beats_per_bar: 4.0 })
+        compile_kernel(def, args, &Registry::builtin(), &names, Tempo::new(120.0))
             .unwrap()
             .0
     }

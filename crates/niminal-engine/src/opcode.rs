@@ -32,12 +32,38 @@ impl Port {
     }
 }
 
+/// Where the session's clock is at the start of a block.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clock {
+    /// Beats since the session started, or since its last `reset`.
+    pub beat: f64,
+    pub bpm: f32,
+    pub beats_per_bar: f32,
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Clock { beat: 0.0, bpm: 120.0, beats_per_bar: 4.0 }
+    }
+}
+
 /// What an opcode needs to know about the block being processed.
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessCtx {
     pub sample_rate: f32,
     /// True while the note is held; false once it has been released.
     pub gate: bool,
+    /// The scheduled length of the note in seconds; 0 when a key holds it open.
+    pub dur: f32,
+    /// How many notes of this instrument started before this one.
+    pub index: u32,
+    pub clock: Clock,
+}
+
+impl ProcessCtx {
+    pub fn new(sample_rate: f32, gate: bool) -> Self {
+        ProcessCtx { sample_rate, gate, dur: 0.0, index: 0, clock: Clock::default() }
+    }
 }
 
 /// A unit generator. Built-in opcodes, niminal-defined opcodes and plugins all

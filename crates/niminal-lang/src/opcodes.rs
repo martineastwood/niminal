@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
 use niminal_engine::ops::{
-    Bitcrush, Chorus, Clip, Compressor, Delay, FilterMode, FinishWhen, Fn1, Fold, Func, Gain, Noise,
+    Bitcrush, Chorus, Clip, Compressor, Delay, FilterMode, FinishWhen, Fn1, Fold, Func, Gain, Noise, NoiseColor,
     Osc, Reverb, Svf, Wavetable,
 };
 
@@ -136,11 +136,18 @@ pub struct BuildArgs {
     pub wave: Option<WaveArg>,
     /// Which channel of a multichannel signal this copy of the opcode serves.
     pub channel: usize,
+    /// Tells apart the copies of an opcode in one instrument, for those that vary by it.
+    pub salt: u32,
     /// Arguments whose value is a compile-time constant, in engine units.
     pub consts: HashMap<String, f64>,
 }
 
 type BuildFn = fn(&BuildArgs) -> Result<Box<dyn Opcode>, String>;
+
+/// `seed:` of a noise source, a whole number.
+fn seed_of(a: &BuildArgs) -> Option<u32> {
+    a.consts.get("seed").map(|s| s.round() as i64 as u32)
+}
 
 /// The longest delay line a program may ask for.
 const MAX_DELAY_SECONDS: f64 = 30.0;
@@ -269,15 +276,15 @@ impl Registry {
             ),
             OpSpec::new(
                 "noise",
-                "White noise in -1..1. No arguments: `noise()`, or `noise() * env[1 5ms 0]` for a click.",
-                vec![],
-                Build::Builtin(|_| Ok(Box::new(Noise::white()))),
+                "White noise in -1..1: `noise()`, or `noise() * env[1 5ms 0]` for a click. Each source and each note has its own noise, the same on every run; `seed:` makes it the same for every note.",
+                vec![setting("seed", SIGNAL)],
+                Build::Builtin(|a| Ok(Box::new(Noise::new(NoiseColor::White, seed_of(a), a.salt)))),
             ),
             OpSpec::new(
                 "pinknoise",
-                "Pink noise (1/f). Quieter than `noise`, useful for hats and textures.",
-                vec![],
-                Build::Builtin(|_| Ok(Box::new(Noise::pink()))),
+                "Pink noise (1/f). Quieter than `noise`, useful for hats and textures. `seed:` works as for `noise`.",
+                vec![setting("seed", SIGNAL)],
+                Build::Builtin(|a| Ok(Box::new(Noise::new(NoiseColor::Pink, seed_of(a), a.salt)))),
             ),
             OpSpec::new(
                 "compress",

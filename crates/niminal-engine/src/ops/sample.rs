@@ -208,10 +208,7 @@ mod tests {
     use super::*;
 
     fn ctx() -> ProcessCtx {
-        ProcessCtx {
-            sample_rate: 48_000.0,
-            gate: true,
-        }
+        ProcessCtx::new(48_000.0, true)
     }
 
     fn ramp(len: usize, rate: f32) -> Arc<Table> {

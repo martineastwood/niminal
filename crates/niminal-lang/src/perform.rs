@@ -181,6 +181,7 @@ pub(crate) fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value>
         Some("bar" | "bars") => Value::Bars(value),
         Some("deg") => Value::Degrees(value),
         Some("st") => Value::Semitones(value),
+        Some("ct") => Value::Semitones(value / 100.0),
         Some("%") => Value::Num(value / 100.0),
         Some(u) => return Err(crate::lower::unknown_unit(u, span)),
     })
@@ -2063,7 +2064,7 @@ impl Perform<'_> {
                         let width = (bars - from).min(RAMP_STEP_BARS);
                         let step = Tempo {
                             bpm: curve.bpm_at(bars_so_far + from + width / 2.0),
-                            beats_per_bar: tempo.beats_per_bar,
+                            ..tempo
                         };
                         if tempos.last().is_none_or(|(_, t)| *t != step) {
                             tempos.push((seconds, step));
@@ -2199,10 +2200,7 @@ impl Perform<'_> {
             }
             return Err(d);
         };
-        let tempo = Tempo {
-            bpm: 120.0,
-            beats_per_bar: 4.0,
-        };
+        let tempo = Tempo::new(120.0);
         let levels =
             std::iter::once(&curve.start).chain(curve.segments.iter().map(|(_, _, level)| level));
         for level in levels {
@@ -2240,17 +2238,18 @@ impl Perform<'_> {
             if !instrument
                 .params
                 .iter()
-                .any(|p| p.name == PITCH_PARAM && p.unit == Unit::Hz)
+                .any(|p| p.name == instrument.pitch && p.unit == Unit::Hz)
             {
                 return Err(Diagnostic::new(
                     format!(
-                        "`{}` has no `{PITCH_PARAM}` parameter for the keys to set",
-                        instrument.name
+                        "`{}` has no `{}` parameter for the keys to set",
+                        instrument.name, instrument.pitch
                     ),
                     span,
                 )
                 .with_help(format!(
-                    "give the instrument a `{PITCH_PARAM}: hz` parameter"
+                    "give the instrument a `{}: hz` parameter",
+                    instrument.pitch
                 )));
             }
         }
@@ -2259,17 +2258,18 @@ impl Perform<'_> {
                 let pitched = instrument
                     .params
                     .iter()
-                    .any(|p| p.name == PITCH_PARAM && p.unit == Unit::Hz);
+                    .any(|p| p.name == instrument.pitch && p.unit == Unit::Hz);
                 if !pitched {
                     return Err(Diagnostic::new(
                         format!(
-                            "`{}` has no `{PITCH_PARAM}` parameter for the notes to set",
-                            instrument.name
+                            "`{}` has no `{}` parameter for the notes to set",
+                            instrument.name, instrument.pitch
                         ),
                         span,
                     )
                     .with_help(format!(
-                        "give the instrument a `{PITCH_PARAM}: hz` parameter"
+                        "give the instrument a `{}: hz` parameter",
+                        instrument.pitch
                     )));
                 }
                 continue;

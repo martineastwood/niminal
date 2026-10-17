@@ -40,8 +40,8 @@ Every value has three properties, all inferred:
 
 - Plain numbers (`num`) are unitless. Oscillators, envelopes and LFOs produce `num`.
 - `num × hz = hz`, `hz + hz = hz`, `hz / hz = num`. Adding values of different units is an error.
-- Related units convert: note names to hz (`c4`), semitones applied to a frequency (`freq + 7st`), beats to seconds at the current tempo, and db as a gain.
-- `x.num` strips a unit and `x.hz` (or `.khz`, `.db`, `.sec`, `.ms`, `.beats`, `.bars`, `.st`, `.deg`) gives a plain value one.
+- Related units convert: note names to hz (`c4`), semitones or cents (`ct`, hundredths of a semitone) applied to a frequency (`freq + 7st`, `freq + 14ct`), beats to seconds at the current tempo, and db as a gain.
+- `x.num` strips a unit and `x.hz` (or `.khz`, `.db`, `.sec`, `.ms`, `.beats`, `.bars`, `.st`, `.ct`, `.deg`) gives a plain value one.
 - A bare number where a unit is expected is an error with a quick fix (`cutoff: 800` → "did you mean `800hz`?"). Gain parameters also accept a plain linear factor.
 - **`int`** is a `num` that must be a whole number. It is used for sizes, counts and indices.
 - **`true` and `false`** are `1` and `0`.
@@ -118,7 +118,7 @@ A range is a value with two ends, written with `..`:
 | Clamp | `cut.clamp(20hz..18khz)` |
 | Audio input channels | `input(1..2)` |
 
-**[not built]** `(0..1).step(0.25)` for ranges that aren't whole numbers.
+`(0..1).step(0.25)` is the array `0, 0.25, 0.5, 0.75, 1` for ranges that aren't whole numbers (`(0..<1).step(0.25)` leaves the end out). The step is above 0 and in the range's unit: `(200hz..400hz).step(100hz)`.
 
 ## 5. Functions
 
@@ -265,7 +265,7 @@ fn comb(x, g: 0..1 = 0.5) {
 }
 ```
 
-`prev` means one sample everywhere inside a function or an instrument. In an instrument, `y = ... prev(y) ...` on one line becomes a small function with state whose inputs are the names the line reads. A loop through several lines needs a `fn`. In a bus send, `prev` keeps its old meaning: the send arrives a block late (see open question 2).
+`prev` means one sample everywhere inside a function or an instrument. In an instrument, `y = ... prev(y) ...` on one line becomes a small function with state whose inputs are the names the line reads. A loop through several lines needs a `fn`. In a bus send, `prev` is an error: `late(x)` is a send that arrives a block late, because buses run in blocks (`echo += late(out)`).
 
 ### 5.5 Reset scopes and completion
 
@@ -357,6 +357,20 @@ fn hold(x, trig) {
 - Both branches must give the same unit.
 - A bus send inside an `if` that changes while playing is an error, because it would always be made: send the `if` instead.
 
+**`match`** is the `else if` chain on one name, for choices and for numbers. An arm is a name (or several, with `|`) and a value or a block; `else` is the rest:
+
+```
+fn pick(f, mode: (low | band | high) = low) {
+  match mode {
+    low: f.low
+    band: f.band
+    high: f.high
+  }
+}
+```
+
+As a value it needs an `else`, as `if` does. The thing matched is a name, so it is tested once per arm at no cost.
+
 ### 6.5 `for`
 
 `for` repeats a body a number of times known while compiling. It iterates over a range, a list or a table.
@@ -436,7 +450,7 @@ const taps = [0.25, 0.5, 0.25]
 
 `osc(saw8, freq)` plays a table as one cycle of a wave, band-limited at any pitch. The table is numbers known while compiling, from `harmonics`, a literal or `.map`; it can be up to 65536 entries.
 
-`file("irs/hall.wav")` loads one channel of a WAV as a table. See the tables reference for the full set of constructors, transforms and shared `buffer` declarations.
+`file("irs/hall.wav")` loads one channel of a WAV as a table. A `.csv`, `.txt` or `.dat` file of numbers is a table for each column: `file("curve.csv", channel: 1)` (a first line that isn't numbers is a header, `#` starts a comment). A path may hold constants: `file("kick{n}.wav")`, or `{n:2}` to pad to two digits. See the tables reference for the full set of constructors, transforms and shared `buffer` declarations.
 
 ### 7.3 State arrays
 
@@ -453,6 +467,8 @@ Writes wrap like reads. Reads after a write see the new value. Mapping, slicing,
 ### 7.4 Shared buffers
 
 `buffer name = zeros(n)` or `buffer name = 4bars` declares a writable table that outlives voices, shared across instruments and tracks. Write with `buf[i] = x` or `buf.record(sig, loop:)`; read with `[i]`, `.at`, `.phase`, or play via a sample. Functions cannot write shared buffers. Live re-evaluation keeps contents when the name and length are unchanged. Tracks that write a buffer run before tracks that read it in the same block.
+
+**State that notes share.** A buffer is how one note sees another, or one instrument another: a write in an `if` happens only while the branch is taken, so `if note.start { count[0] = count[0] + 1 }` counts notes, and `note.index` picks a slot per note. Within a track a writing voice starts before one that reads it only if it was started first, so write from the earlier note.
 
 ## 8. Instruments
 
@@ -482,14 +498,16 @@ An instrument is a function that the score can call: each note creates a voice t
 - **Without a rate,** a parameter stays live: lanes, glides, MPE and `n.set(...)` move it on the running voice.
 - **`init`** fixes the parameter at note start, which is what a plucked string's length or a per-note random seed needs.
 - **`gain` is a universal control,** applied after the instrument. An instrument may declare its own `gain: db` parameter to take it over, for example to drive the filter harder on louder notes; it is then not applied for it.
-- **`freq` is the pitch** by convention. **[not built]** `with(pitch: name)` to change it.
+- **`freq` is the pitch** by convention. `with(pitch: tone)` makes the `hz` parameter `tone` the one a clip's notes, keys and `freq:` in a score set instead. A note call names the parameter directly: `a(tone: a5)`.
 
 ### 8.3 Body and result
 
 - **The result** is the last expression or `out` (§5.3). It must be a plain signal. It is converted to the master's channel layout.
 - **Sends:** `space += out.gain(-12db)` sends a copy to a bus. An instrument that only sends needs no result.
 - **Calling another instrument** plays its body as part of this voice: `out = click(freq: freq) + click(freq: freq * 1.5, gain: -6db)`. Its `gain:` is applied after it, as for a note.
-- **[not built]** `schedule(echo(freq: freq * 1.5), in: 1/8beat)`, which schedules a note through the score model.
+- **`after(delay) { body }`** runs `body` from when the note is `delay` old, with fresh state, and is silent until then: `out = pluck + after(1/8beat) { pluck.gain(-6db) }`. It is `reset_on(note.time >= delay) { body } * (note.time >= delay)`, so the body is computed (and any `state` in it is held) from the start. `after` is a reserved word.
+- **Ending a note from inside:** `signal.finish_when(done)` (§5.5) is `turnoff`: the note ends once `done` is positive and everything else has finished.
+- **Not scheduling.** A voice can't start another note through the score model: the audio thread allocates nothing, and voices are prepared ahead of time. Use `after` for delayed layers, a clip or `at` for notes, and shared buffers (§7.4) for state that notes share.
 
 ### 8.4 Note context
 
@@ -499,9 +517,14 @@ Inside an instrument body, `note` describes the running voice:
 | --- | --- | --- |
 | `note.time` | sec, audio | Time since the voice started |
 | `note.released` | num, audio | 0 while held, 1 after release |
-| `note.dur` | sec, init | Scheduled duration **[not built]** |
+| `note.dur` | sec, init | Scheduled duration (0 for a note held from a key, which has no end yet) |
+| `note.start` | num, audio | 1 for the first sample of the voice, then 0 |
+| `note.index` | num, init | How many notes of this instrument started before this one |
+| `clock.beat` | num, control | Beats since the performance started (a reset sets it back to 0) |
+| `clock.bar` | num, control | Bars, in the current meter |
+| `clock.bpm` | num, control | The current tempo |
 
-Functions don't see `note`. An instrument passes these values in as arguments, which keeps functions reusable. `note` is reserved, so it can't be a parameter or local name.
+`clock` is the shared transport, so a voice can follow the tempo. Functions don't see `note` or `clock`. An instrument passes these values in as arguments, which keeps functions reusable. `note` is reserved, so it can't be a parameter or local name.
 
 ### 8.5 Envelopes
 
@@ -529,6 +552,7 @@ Options go in `with(...)`, right after the parameters.
 | `glide: 80ms` (mono) | Pitch changes slide over this time |
 | `tail: 2sec` | How long the voice keeps sounding after its release (§8.7) |
 | `quantize: 1beat` | When a redefinition lands |
+| `pitch: name` | The `hz` parameter that notes set (default `freq`) |
 
 ### 8.7 Voice lifetime
 
@@ -644,12 +668,12 @@ Only the words used by this part of the language are listed here. The full list 
 | Kind | Words |
 | --- | --- |
 | Declarations | `fn`, `const`, `instr`, `mono`, `state`, `with` |
-| Control flow | `if`, `else`, `for`, `in`, `reset_on` |
+| Control flow | `if`, `else`, `match`, `for`, `in`, `reset_on`, `after` |
 | Logic | `and`, `or`, `not`, `true`, `false` |
 | Rates | `const`, `init`, `control` |
-| Implicit names | `out`, `it`, `note` |
+| Implicit names | `out`, `it`, `note`, `clock` |
 | Constants | `pi`, `sample_rate` |
-| Units | `num`, `int`, `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
+| Units | `num`, `int`, `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `ct`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
 
 `opcode` and `table` are no longer keywords.
 
@@ -693,6 +717,9 @@ Only the words used by this part of the language are listed here. The full list 
 - **Built-ins expand over arrays** while signals retain channel layout metadata. A stereo signal with `cutoff: [800hz, 1200hz]` pairs each cutoff with its channel. Tables, buffers and computed arrays share fixed-length storage and operations; channel limits apply when converting arrays into audio.
 - **`tail:` also applies to voices with envelopes:** a plucked string's envelope is only its excitation.
 - **Calling an instrument plays its body in this voice** rather than starting a sub-voice; the envelopes start and release with it.
+- **Bus feedback is `late(x)`,** so `prev` is always one sample; `prev` in a send is an error.
+- **`schedule` became `after`.** A voice can't start a note through the score model on the audio thread, so a delayed layer inside the voice (`after`), `finish_when` for ending it, and shared buffers (with `note.index`, `note.start`) cover what Csound's `schedule`, `turnoff` and instrument-to-instrument state were used for.
+- **`oversample` isn't built.** Running part of a body at a multiple of the sample rate needs per-opcode sample-rate support and resampling filters in the engine; a hand-written oversampled shaper is better done with a table (`waveshape`) for now.
 - **`note` is reserved,** like `out` and `it`; the examples use `key: num` for a MIDI note number.
 
 **Implementation note.** Two compilers remain: one builds the block graph for instruments, tracks and functions without state (`lower.rs`), the other the per-sample kernel for functions with state (`kernel.rs`). They share signatures, argument binding, unit rules and the AST walk, and both compile a function for each call, so the rules above hold in both. Merging them into one front end with two back ends is still worth doing if they drift.
@@ -700,10 +727,10 @@ Only the words used by this part of the language are listed here. The full list 
 ## 12. Open questions
 
 1. **Positional arguments.** "Leading required parameters" relaxes the main spec's "positional only for an obvious first argument". It makes built-ins and user functions consistent, and it is shorter live (`sig.lpf(800hz)`).
-2. **Bus feedback.** Inside a voice, `prev` is one sample. Feedback between buses (`echo += prev(out)`) is still one block, because buses run in blocks. Should the bus form get its own name, such as `out.late`, so that `prev` always means one sample?
+2. **Bus feedback** is settled: `prev` is always one sample, and `late(x)` is the block-late send between buses.
 3. **Functions that build score material.** Brackets in a body are lists, so a `fn` can't write a pattern (`[c2 ~ eb2]`). Score functions (`fn verse(...)` in the main spec) need one. Options include a pattern prefix inside bodies (`p[c2 ~ eb2]`) or letting the expected type decide.
 4. **Functions as parameters** are built (§6.7).
-5. **`match`.** `if mode == low { } else if ...` works for choices. A `match mode { low: ..., band: ... }` would read better once choices have more than three options.
+5. **`match`** is built (§6.4).
 6. **Annotations on bindings** (§3.2). They are left out for now and could be added with the parameter syntax if dogfooding asks for them.
 7. **Feedback across several lines in an instrument.** One-line loops work (§5.4); longer loops need a `fn`. Is that the right line to draw?
 8. **Checking generic functions where they are defined** is a guess at their units (§5.1). Full unit inference would find more mistakes earlier, at the cost of a more complex checker.

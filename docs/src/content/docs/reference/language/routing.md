@@ -31,16 +31,16 @@ Declaration order does not matter; see `examples/room.nml`.
 
 The compiler builds a dependency graph from bus reads and writes and sorts it: all writers to a bus run before readers in the same block. File order is irrelevant; redefinition re-sorts the graph.
 
-**Feedback between buses** has no valid order — the compiler rejects it and names the loop. Break it with **`prev`**, which costs one block (32 samples by default):
+**Feedback between buses** has no valid order — the compiler rejects it and names the loop. Break it with **`late`**, which costs one block (32 samples by default):
 
 ```nml
 track room {
   out = space.reverb(room: 0.85)
-  echo += prev(out).gain(-20db)
+  echo += late(out).gain(-20db)
 }
 ```
 
-Inside a voice or a function, `prev(x)` is one sample.
+Inside a voice or a function, `prev(x)` is one sample. `prev` in a send is an error, so `prev` always means one sample and `late` always means one block.
 
 ## Delay
 

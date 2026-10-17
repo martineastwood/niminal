@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 const UNITS: &[(&str, &str)] = &[
     ("hz", "frequency"), ("khz", "frequency, in thousands of hz"), ("db", "gain in decibels"), ("ms", "milliseconds"),
     ("sec", "seconds"), ("beat", "beats, at the tempo"), ("beats", "beats, at the tempo"), ("bar", "bars, at the tempo and meter"),
-    ("bars", "bars, at the tempo and meter"), ("deg", "an angle in degrees"), ("st", "semitones"),
+    ("bars", "bars, at the tempo and meter"), ("deg", "an angle in degrees"), ("st", "semitones"), ("ct", "cents, hundredths of a semitone"),
 ];
 
 // LSP CompletionItemKind

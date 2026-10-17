@@ -1,0 +1,32 @@
+// Voices that know their length and place, delayed layers, tuning and a counter shared by notes.
+// Render with:  niminal render examples/voices.nml --out voices.wav
+config {
+  channels: stereo,
+  tuning: { a4: 432hz, scale: just },
+}
+tempo 100bpm
+
+// notes count themselves in a shared buffer; each reads how many came before it
+buffer played = zeros(1)
+
+fn colour(f, kind: (soft | hard) = soft) {
+  match kind {
+    soft: f.lpf(cutoff: 1.5khz)
+    else: f
+  }
+}
+
+instr pluck(tone: hz = 220hz) with(pitch: tone, tail: 400ms) {
+  if note.start { played[0] = played[0] + 1 }
+  // the third note onward is hard, and a longer note is louder
+  raw = (osc(saw, tone) + osc(saw, tone + 7ct)) * 0.5 * env[1 | 300ms 0]
+  body = if played[0] > 2 { raw.colour(kind: hard) } else { raw.colour(kind: soft) }
+  // an echo a quarter beat later, an octave up, with its own fresh envelope
+  echo = after(1/4beat) { osc(sine, tone * 2) * env[0.5 | 200ms 0] }
+  (body + echo) * (0.2 + note.dur.num * 0.1)
+}
+
+pluck(tone: c4) for 1beat
+at 1beat pluck(tone: e4) for 2beats
+at 3beats pluck(tone: g4) for 1beat
+at 4beats pluck(tone: c5) for 1beat

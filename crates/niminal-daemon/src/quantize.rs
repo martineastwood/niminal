@@ -113,6 +113,11 @@ impl Grid {
         (target as i64 + self.origin).max(0) as u64
     }
 
+    /// Beats since bar 1 started, fractions included.
+    pub fn beats(&self, sample: u64) -> f64 {
+        (sample as i64 - self.origin) as f64 / self.sample_rate / self.beat_seconds()
+    }
+
     /// `bar:beat` of a sample, counting from 1.
     pub fn position(&self, sample: u64) -> (u64, f64) {
         let beats = (sample as i64 - self.origin) as f64 / self.sample_rate / self.beat_seconds();

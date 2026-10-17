@@ -17,7 +17,7 @@ fn prev_is_the_value_one_sample_ago_so_feedback_is_a_loop_in_one_line() {
 fn prev_of_an_expression_delays_it_a_sample() {
     // out(n) = x(n-1): a ramp from env, delayed one sample, is one step behind
     let direct = raw("fn same(x) { x }\ninstr a() { env[0 100ms 1 | 10ms 0].same() * 0.5 }\na() for 1beat");
-    let delayed = raw("fn late(x) { prev(x) }\ninstr a() { env[0 100ms 1 | 10ms 0].late() * 0.5 }\na() for 1beat");
+    let delayed = raw("fn one_behind(x) { prev(x) }\ninstr a() { env[0 100ms 1 | 10ms 0].one_behind() * 0.5 }\na() for 1beat");
     for i in 100..400 {
         assert!((delayed[i] - direct[i - 1]).abs() < 1e-6, "sample {i}");
     }

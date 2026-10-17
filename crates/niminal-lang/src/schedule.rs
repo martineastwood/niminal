@@ -976,14 +976,8 @@ track bass { instrument = pluck }
     #[test]
     fn musical_durations_follow_the_tempo_of_the_sections_they_cross() {
         let tempo = Tempo::new(120.0);
-        let quick = Tempo {
-            bpm: 240.0,
-            beats_per_bar: 4.0,
-        };
-        let waltz = Tempo {
-            bpm: 120.0,
-            beats_per_bar: 3.0,
-        };
+        let quick = Tempo::new(240.0);
+        let waltz = Tempo { beats_per_bar: 3.0, ..Tempo::new(120.0) };
         let s = Schedule::new(tempo, vec![], &[], &[(4.0, quick), (5.0, waltz)], &[]);
         // two bars at 120bpm are 4s, the next bar at 240bpm is 1s
         assert!((s.seconds_from(0.0, Time::Bars(3.0)) - 5.0).abs() < 1e-9);

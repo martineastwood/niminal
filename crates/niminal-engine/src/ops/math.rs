@@ -336,6 +336,118 @@ impl Opcode for NoteTime {
     }
 }
 
+/// 1 on the first sample of the note, 0 after.
+#[derive(Clone, Default)]
+pub struct NoteStart {
+    started: bool,
+}
+
+impl Opcode for NoteStart {
+    fn reset(&mut self) { self.started = false; }
+
+    fn name(&self) -> &'static str {
+        "note_start"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        &[]
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(NoteStart::default())
+    }
+
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
+            self.started = old.started;
+        }
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
+        out.fill(0.0);
+        if !self.started {
+            self.started = true;
+            if let Some(first) = out.first_mut() {
+                *first = 1.0;
+            }
+        }
+    }
+}
+
+/// What the note or the clock says that doesn't change within a block's worth of samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Context {
+    /// The scheduled length of the note in seconds.
+    NoteDur,
+    /// How many notes of the instrument started before this one.
+    NoteIndex,
+    /// Beats since the session started or was last reset.
+    ClockBeat,
+    /// Bars (possibly fractional) since the session started or was last reset.
+    ClockBar,
+    /// The tempo in beats per minute.
+    ClockBpm,
+}
+
+impl Context {
+    fn name(self) -> &'static str {
+        match self {
+            Context::NoteDur => "note_dur",
+            Context::NoteIndex => "note_index",
+            Context::ClockBeat => "clock_beat",
+            Context::ClockBar => "clock_bar",
+            Context::ClockBpm => "clock_bpm",
+        }
+    }
+}
+
+/// A value read from the note or the session's clock; the beat and bar advance sample by sample.
+#[derive(Clone)]
+pub struct ReadContext {
+    what: Context,
+}
+
+impl ReadContext {
+    pub fn new(what: Context) -> Self {
+        ReadContext { what }
+    }
+}
+
+impl Opcode for ReadContext {
+    fn name(&self) -> &'static str {
+        self.what.name()
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        &[]
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(self.clone())
+    }
+
+    fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
+        let clock = ctx.clock;
+        let per_sample = f64::from(clock.bpm) / 60.0 / f64::from(ctx.sample_rate);
+        match self.what {
+            Context::NoteDur => out.fill(ctx.dur),
+            Context::NoteIndex => out.fill(ctx.index as f32),
+            Context::ClockBpm => out.fill(clock.bpm),
+            Context::ClockBeat => {
+                for (i, o) in out.iter_mut().enumerate() {
+                    *o = (clock.beat + i as f64 * per_sample) as f32;
+                }
+            }
+            Context::ClockBar => {
+                let bar = f64::from(clock.beats_per_bar.max(f32::MIN_POSITIVE));
+                for (i, o) in out.iter_mut().enumerate() {
+                    *o = ((clock.beat + i as f64 * per_sample) / bar) as f32;
+                }
+            }
+        }
+    }
+}
+
 /// 0 while the note is held, 1 once it has been released.
 #[derive(Clone, Default)]
 pub struct Released;

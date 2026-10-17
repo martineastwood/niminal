@@ -34,6 +34,10 @@ pub struct Voice {
     shaped: bool,
     /// Samples of tail left after the release, for a voice that isn't shaped.
     tail_left: usize,
+    /// The scheduled length in seconds, 0 for a note a key holds open.
+    dur: f32,
+    /// How many notes of this instrument started before this one.
+    index: u32,
 }
 
 /// Which held note a legato voice sounds.
@@ -157,7 +161,7 @@ impl Voice {
         let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0)).map(Some).collect();
         let shaped = ops.iter().any(|op| op.is_envelope());
         let tail_left = (graph.tail * sample_rate) as usize;
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None, shaped, tail_left }
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None, shaped, tail_left, dur: 0.0, index: 0 }
     }
 
     /// Keep memory at matching call sites while retaining the new graph's
@@ -215,6 +219,16 @@ impl Voice {
             }
             None => false,
         }
+    }
+
+    /// How long the note is scheduled to last, in seconds; 0 for a note a key holds open.
+    pub fn set_dur(&mut self, seconds: f32) {
+        self.dur = seconds;
+    }
+
+    /// Number this note among its instrument's. Called once, when the note actually starts.
+    pub fn start_note(&mut self) {
+        self.index = self.graph.notes_started.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Note off. Envelopes with a sustain point begin their release.
@@ -418,7 +432,7 @@ impl Voice {
                 self.choke();
             }
         }
-        let ctx = ProcessCtx { sample_rate: self.sample_rate, gate: !self.released };
+        let ctx = ProcessCtx { sample_rate: self.sample_rate, gate: !self.released, dur: self.dur, index: self.index, clock: buses.clock };
 
         if let Some(param) = self.rule.and_then(|r| r.pitch_param)
             && (self.glide.left > 0 || self.glide.now != self.slots[param][0])

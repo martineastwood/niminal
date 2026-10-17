@@ -227,6 +227,8 @@ pub struct RealtimeRenderer {
     channels: usize,
     sample_rate: f32,
     clock: u64,
+    /// Beats since the session started or was last reset, at `clock`.
+    beat: f64,
     current: Option<Box<Window>>,
     cursor: usize,
     sounding: Sounding,
@@ -297,6 +299,7 @@ impl Session {
             channels: self.channels(),
             sample_rate: self.sample_rate,
             clock: self.clock,
+            beat: self.grid().beats(self.clock),
             current: None,
             cursor: 0,
             sounding,
@@ -905,6 +908,7 @@ impl Session {
             voice.set_group(plan.choke);
             voice.set_rule(plan.rule);
             voice.set_pan(plan.pan);
+            voice.set_dur(if key.is_some() { 0.0 } else { dur as f32 / self.sample_rate });
             for (key, value, smooth) in &plan.controls {
                 window.commands.push(Command {
                     at,
@@ -1223,6 +1227,7 @@ impl RealtimeRenderer {
                 std::mem::swap(&mut self.controls, controls);
                 std::mem::swap(&mut self.mixer, mixer);
                 std::mem::swap(&mut self.program, program);
+                self.beat = 0.0;
                 if let Some(limiter) = &mut self.limiter {
                     limiter.clear();
                 }
@@ -1389,6 +1394,13 @@ impl RealtimeRenderer {
                     self.mixer.set_audio_input(c, &samples[..n]);
                 }
             }
+            let tempo = self.program.tempo;
+            self.mixer.set_clock(niminal_engine::Clock {
+                beat: self.beat,
+                bpm: tempo.bpm as f32,
+                beats_per_bar: tempo.beats_per_bar as f32,
+            });
+            self.beat += n as f64 * tempo.bpm / 60.0 / f64::from(self.sample_rate);
             self.mixer
                 .process_retained(&mut block[..self.channels], n, &mut self.finished);
             self.state

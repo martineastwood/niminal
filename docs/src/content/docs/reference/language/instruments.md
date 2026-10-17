@@ -35,7 +35,40 @@ instr pad(freq: hz, amp: db = -3db) {
 
 ## The running voice
 
-`note.time` is the time since the voice started (in sec) and `note.released` is 0 while held and 1 after the release. Functions don't see `note`: pass these in as arguments.
+| Name | Meaning |
+| --- | --- |
+| `note.time` | Time since the voice started, in sec |
+| `note.released` | 0 while held, 1 after the release |
+| `note.dur` | The length the note was scheduled for, in sec (0 for a note held from a key) |
+| `note.start` | 1 for the first sample of the voice, then 0 |
+| `note.index` | How many notes of this instrument have started before this one |
+| `clock.beat`, `clock.bar`, `clock.bpm` | The shared transport: beats and bars since the performance started, and the tempo |
+
+Functions don't see `note` or `clock`: pass these in as arguments.
+
+### Sharing state between notes
+
+A shared [`buffer`](/reference/language/tables/#shared-buffers) is how one note sees another. A write in an `if` happens only while the branch is taken, so this counts the notes and lets each one read the count:
+
+```nml
+buffer count = zeros(1)
+instr tick(freq: hz) {
+  if note.start { count[0] = count[0] + 1 }
+  osc(sine, freq * (1 + count[0] * 0.01)) * env[1 | 50ms 0]
+}
+```
+
+`note.index` picks a slot for each note. A note that reads a buffer sees what earlier notes wrote.
+
+### Delayed layers and ending early
+
+`after(delay) { body }` plays `body` once the note is `delay` old, from fresh state, and is silent before: `out = pluck + after(1/8beat) { pluck.gain(-6db) }`. It is `reset_on(note.time >= delay) { body } * (note.time >= delay)`. `signal.finish_when(done)` ends a note from the inside (Csound's `turnoff`).
+
+A voice can't start another note: the audio thread allocates nothing and voices are prepared ahead of time. Use `after` for echoes, and clips and `at` for notes.
+
+### Noise
+
+Every `noise()` in an instrument, and every note of it, has its own noise, and a render is the same every time. `noise(seed: 7)` gives the same noise to every note.
 
 ## When a voice ends
 
@@ -66,7 +99,7 @@ Options follow the parameters: `instr pad(freq: hz) with(max: 8, same_note: rele
 | `legato: true` (mono) | A note that starts while another is held takes over its voice: envelopes carry on, only the pitch moves | yes |
 | `priority: last`, `lowest`, or `highest` (mono, needs `legato`) | Which held note sounds; letting go of one goes back to another still held | yes |
 | `glide: 80ms` (mono) | A change of pitch slides to the new note in this time, evenly in semitones | yes |
-| `pitch: name` | Which parameter is pitch (default `freq`) | no |
+| `pitch: name` | The `hz` parameter that notes, clips and keys set (default `freq`): `instr bass(tone: hz = 55hz) with(pitch: tone)`. A note call names it directly: `bass(tone: a2)` | yes |
 | `compensate: false` | Opt out of latency compensation | no |
 | `tail: 2sec` | How long the voice keeps sounding after its release | yes |
 | `quantize: 1beat` | When redefinitions land | yes |

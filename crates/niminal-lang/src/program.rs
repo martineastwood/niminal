@@ -35,6 +35,8 @@ pub struct Instrument {
     pub priority: niminal_engine::Priority,
     /// `with(glide: 80ms)`: how long a change of pitch takes.
     pub glide: Option<niminal_score::Time>,
+    /// `with(pitch: note)`: the parameter a note's pitch sets, `freq` unless renamed.
+    pub pitch: String,
     /// `midi_out`: notes are sent to external gear instead of sounding here.
     pub midi: Option<MidiTarget>,
 }
@@ -195,7 +197,7 @@ pub fn engine_value(
     tempo: Tempo,
 ) -> Result<f64, niminal_score::UnitError> {
     Ok(match unit {
-        Unit::Hz => value.as_hz()?,
+        Unit::Hz => value.as_hz_in(&tempo.tuning)?,
         Unit::Db => value.as_gain()?,
         Unit::Time => value.as_time()?.to_seconds(tempo),
         Unit::Angle => value.as_angle()?,
@@ -355,6 +357,13 @@ impl Program {
         } = resolve_target(&self.instruments, &self.tracks, &event.target)?;
         let mut args = defaults.cloned().unwrap_or_default();
         args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
+        // a note's pitch is `freq` to the score, and whatever `with(pitch: ...)` named it to the instrument
+        let pitch_name = &self.instruments[instrument].pitch;
+        if pitch_name != crate::perform::PITCH_PARAM
+            && let Some(pitch) = args.remove(crate::perform::PITCH_PARAM)
+        {
+            args.insert(pitch_name.clone(), pitch);
+        }
         // a lane that is a parameter of the track, not of the instrument, sets that control
         let mut controls = Vec::new();
         if track != 0 {
@@ -420,7 +429,7 @@ impl Program {
             let pitch_param = this
                 .params
                 .iter()
-                .position(|p| p.name == crate::perform::PITCH_PARAM);
+                .position(|p| p.name == this.pitch);
             (this.max_voices.is_some() || this.release_same_note).then(|| {
                 niminal_engine::VoiceRule {
                     instrument: instrument as u32,
@@ -453,7 +462,7 @@ impl Program {
                     .map(|&(_, v)| v)
                     .or(this.params[i].default)
             };
-            let hz = f64::from(value("freq").unwrap_or(440.0)).max(1.0);
+            let hz = f64::from(value(&this.pitch).unwrap_or(440.0)).max(1.0);
             let db = 20.0
                 * f64::from(value(crate::lower::GAIN_PARAM).unwrap_or(1.0))
                     .max(1e-6)
@@ -504,6 +513,7 @@ impl Instrument {
             legato: false,
             priority: Default::default(),
             glide: None,
+            pitch: crate::perform::PITCH_PARAM.into(),
             midi: None,
         }
     }

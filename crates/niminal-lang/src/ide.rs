@@ -12,6 +12,7 @@ use crate::unit::Unit;
 /// Names that mean something to the language itself: reserved for rename checks,
 /// and offered as keyword completions in the editor.
 pub const RESERVED_WORDS: &[&str] = &[
+    "after",
     "and",
     "arrangement",
     "as",
@@ -20,6 +21,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "bus",
     "capture",
     "clip",
+    "clock",
     "config",
     "const",
     "control",
@@ -37,6 +39,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "it",
     "kit",
     "last",
+    "match",
     "meter",
     "midi_out",
     "mono",
@@ -226,9 +229,18 @@ fn clip_lanes(source: &str, clip: &NamedBlock, items: &[(Item, Span)]) -> Vec<Sy
     }) else {
         return Vec::new();
     };
+    let pitch = def
+        .options
+        .iter()
+        .find(|o| o.name.as_ref().is_some_and(|n| n.name == "pitch"))
+        .and_then(|o| match &o.value.kind {
+            crate::ast::ExprKind::Name(n) => Some(n.as_str()),
+            _ => None,
+        })
+        .unwrap_or(crate::perform::PITCH_PARAM);
     let mut lanes: Vec<SymbolParam> = params(source, &def.params)
         .into_iter()
-        .filter(|p| p.name != "freq")
+        .filter(|p| p.name != pitch)
         .collect();
     lanes.extend(crate::perform::UNIVERSAL_LANES.iter().map(|l| SymbolParam {
         name: (*l).to_string(),
@@ -501,6 +513,8 @@ pub fn builtin_ops() -> Vec<OpInfo> {
         ops.extend(envelope_ops());
         ops.extend(array_ops());
         ops.push(op_info("reset_on", "Restart state created inside `reset_on(trigger) { ... }` at each positive edge, before that sample. Signals outside the scope keep running.", false, &[("trigger", "number", true), ("body", "function", true)]));
+        ops.push(op_info("late", "In a send to a bus, a copy that arrives one block late: `echo += late(out)`. Breaks a loop between buses; `prev` is one sample.", false, &[("x", "number", true)]));
+        ops.push(op_info("after", "Run `after(delay) { ... }` from when the note is `delay` old: the body starts with fresh state and is silent until then.", false, &[("delay", "time", true), ("body", "function", true)]));
         ops
     })
     .clone()
@@ -516,6 +530,8 @@ fn array_ops() -> Vec<OpInfo> {
         method("min", "The smallest array element, or element-wise minimum with another value.", &[("other", "value", false)]),
         method("max", "The largest array element, or element-wise maximum with another value.", &[("other", "value", false)]),
         method("map", "Apply a function to each current array element: `xs.map(it * 2)`.", &[("function", "function", true)]),
+        method("step", "A range as an array, one entry each `amount`: `(0..1).step(0.25)`. The amount is in the range's unit.", &[("amount", "number", true)]),
+        method("active", "Keep the first `count` entries and silence the rest; `count` can change while playing.", &[("count", "number", true)]),
         method("channels", "A signal's channels as an ordinary array.", &[]),
         method("at", "Read a table at a fractional position. Interpolation: none, linear (default) or cubic; edge: wrap or clamp.", &[("position", "number", true), ("interp", "interpolation", false), ("edge", "wrap | clamp", false)]),
         method("phase", "Read a table at a normalized 0..1 position.", &[("position", "number", true), ("interp", "interpolation", false)]),
@@ -540,7 +556,7 @@ fn array_ops() -> Vec<OpInfo> {
         op_info("cheby", "Chebyshev transfer function for waveshaping.", false, &[("amps", "array", true), ("size", "integer", false)]),
         op_info("window", "Window function: hann, hamming, blackman, kaiser(beta), gauss, tukey, sinc, tri.", false, &[("kind", "window", true), ("size", "integer", false)]),
         op_info("random", "Deterministic random table; seed is required.", false, &[("size", "integer", true), ("dist", "distribution", false), ("seed", "integer", true)]),
-        op_info("file", "Load one channel of a WAV as a table.", false, &[("path", "text", true), ("channel", "integer", false), ("start", "integer", false), ("end", "integer", false)]),
+        op_info("file", "Load one channel of a WAV, or one column of a .csv/.txt/.dat file of numbers, as a table. `{n}` or `{n:2}` in the path is a constant.", false, &[("path", "text", true), ("channel", "integer", false), ("start", "integer", false), ("end", "integer", false)]),
         op_info("bank", "A wavetable bank for osc(..., position:).", false, &[("tables", "array", true)]),
     ]
 }

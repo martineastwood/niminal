@@ -32,9 +32,11 @@ const hall  = file("irs/hall.wav")
 | `cheby(amps, size:)` | Chebyshev transfer function for waveshaping |
 | `window(kind, size:)` | `hann`, `hamming`, `blackman`, `kaiser(beta)`, `gauss`, `tukey`, `sinc`, `tri` |
 | `random(size, dist:, seed:)` | Deterministic noise; `seed:` is required |
-| `file("path.wav", channel:, start:, end:)` | Load one channel of a WAV |
+| `file("path.wav", channel:, start:, end:)` | Load one channel of a WAV, or one column of a `.csv`, `.txt` or `.dat` file of numbers (a first line that isn't numbers is a header, `#` starts a comment) |
 | `bank([t1, t2, ...])` | Wavetable bank for `osc(..., position:)` |
 | `zeros(n)` | Zero-filled array (also used to size buffers) |
+
+A path can hold constants, so a table can be picked by number: `file("kick{n}.wav")`, and `{n:2}` pads to two digits (`kick07.wav`). Each must be a whole number known while compiling.
 
 ## Transforms
 

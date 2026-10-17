@@ -79,10 +79,10 @@ Strict units, free rates: anything can be patched into anything, and the scale f
 - **Rates never block a connection.** Audio into a control parameter upgrades it to audio rate.
 - **Raw signals are unitless** (oscillators, noise, envelopes, LFOs). Unitless × hz = hz; hz + hz = hz; hz + db is an error.
 - **Unit suffixes are unit methods:** `800hz` is `800.hz`, and `osc(sine, 2hz).abs.hz` attaches a unit.
-- **Related units convert:** note names to hz, db to linear gain, beats to seconds at the current tempo, semitones applied to a frequency.
+- **Related units convert:** note names to hz, db to linear gain, beats to seconds at the current tempo, semitones and cents (`ct`) applied to a frequency. `config { tuning: { a4: 432hz, scale: just } }` changes what note names mean (see `language_spec.md`).
 - **Unrelated units are an error.** Strip with `.num` to reinterpret deliberately: `(-6db).num.hz`.
 - **Bare literals in unit slots are errors** with a quick fix (`cutoff: 800` → "did you mean `800hz`?"). The one exception: gain parameters accept unitless linear factors (`0.5`) as well as decibels, since multiplying by a number is gain.
-- **Unit names** are at least two characters and reserved: `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`/`beats`, `bar`/`bars`, plus `%`.
+- **Unit names** are at least two characters and reserved: `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `ct`, `deg`, `bpm`, `beat`/`beats`, `bar`/`bars`, plus `%`.
 - **Attaching units:** directly to a literal (`440hz`, `4bars`), including rationals (`1/8beat`). Always attached, never after a space: inside brackets a space separates steps, and outside them `3/16 beat` would divide by `16beat`. To give an expression a unit, use the unit method: `(n * 2).bars`.
 - **Ranges** use `..` (end included) or `..<` (end left out): `20hz..20khz`, `0..<8`. A range as a parameter type (`bright: 0..1`, `cut: 20hz..20khz`) declares a bounded parameter.
 
@@ -144,7 +144,7 @@ Instruments are templates; each note is a voice. Opcodes are the unit generators
 
 ### Instruments and `out`
 
-An instrument declares typed, named parameters with defaults. Its result is its **last expression**, or **`out`** if the body uses `out`, as with Nim's `result`: `out` starts as silence and can be assigned or added to. Using both in one body is an error. The same rule applies to `fn`. The language has three implicit names: `out`, `it` and `note` (the running voice: `note.time`, `note.released`).
+An instrument declares typed, named parameters with defaults. Its result is its **last expression**, or **`out`** if the body uses `out`, as with Nim's `result`: `out` starts as silence and can be assigned or added to. Using both in one body is an error. The same rule applies to `fn`. The language has four implicit names: `out`, `it`, `note` (the running voice: `note.time`, `note.released`, `note.dur`, `note.start`, `note.index`) and `clock` (`clock.beat`, `clock.bar`, `clock.bpm`).
 
 ```
 instr saw_lead(freq: hz, amp: db = -6db) {
@@ -230,18 +230,17 @@ out = f.band
 
 ### Scheduling from instruments
 
-An instrument can schedule other notes, the basis of generative writing, as with Csound's `schedule` (not built yet):
+A voice can't start other notes through the score model: the audio thread allocates nothing, and voices are prepared ahead of time, so a note made from inside a voice couldn't be logged, replayed or quantized like the rest. Csound's `schedule` and `turnoff` are covered by what a voice can do for itself:
 
 ```
-instr echo_note(freq: hz, depth: n = 4) {
+instr echo_note(freq: hz) {
   out = pluck(freq: freq)
-  if depth > 0 {
-    schedule(echo_note(freq: freq * 3/2, depth: depth - 1), in: 1/8beat)
-  }
+  out += after(1/8beat) { pluck(freq: freq * 3/2).gain(-6db) }
+  out += after(1/4beat) { pluck(freq: freq * 9/4).gain(-12db) }
 }
 ```
 
-Scheduled notes go through the score model like any other event, so they are logged, replayable and quantized the same way.
+`after(delay) { body }` plays its body from when the note is `delay` old, with fresh state. `signal.finish_when(done)` ends a note from the inside. Notes that must be independent (their own `gain`, `pan`, voice limits) are written as clips or `at` lines, and shared `buffer`s carry state from one note to the next. See `language_spec.md` §8.3.
 
 ### Parameters: what you pass is what you get
 
@@ -301,16 +300,16 @@ bus space: stereo {
 
 The compiler builds a dependency graph from bus reads and writes, and sorts it: all writers to a bus run before anything that reads it, within the same block. Buses add no latency, file order is irrelevant, and redefining anything re-sorts the graph. This replaces Csound's numeric instrument order.
 
-**Feedback between buses** has no valid order, so the compiler rejects it and names the loop. Break it explicitly with `prev`, which costs one block (32 samples by default, under 1ms):
+**Feedback between buses** has no valid order, so the compiler rejects it and names the loop. Break it explicitly with `late`, which costs one block (32 samples by default, under 1ms):
 
 ```
 track room {
   out = space.reverb(room: 0.85)
-  echo += prev(out).gain(-20db)
+  echo += late(out).gain(-20db)
 }
 ```
 
-Inside a voice or a function, feedback is sample-accurate: `prev(x)` is exactly one sample there.
+Inside a voice or a function, feedback is sample-accurate: `prev(x)` is exactly one sample there, and `prev` in a send is an error.
 
 ### Delay lines
 
@@ -970,11 +969,11 @@ None of these can be used as a name.
 | --- | --- |
 | Declarations | `instr`, `mono`, `fn`, `const`, `state`, `bus`, `buffer`, `sample`, `kit`, `ctl`, `track`, `clip`, `scene`, `arrangement`, `config`, `use`, `as`, `with` |
 | Performance and score | `start`, `stop`, `play`, `mute`, `unmute`, `solo`, `unsolo`, `undo`, `clear`, `set`, `hush`, `panic`, `reset`, `new`, `freeze`, `unfreeze`, `tempo`, `meter`, `at`, `for`, `over`, `next`, `now`, `cycle` |
-| Control flow | `if`, `else`, `for`, `in` |
+| Control flow | `if`, `else`, `match`, `for`, `in`, `after` |
 | Logic and rates | `and`, `or`, `not`, `true`, `false`, `init`, `control` |
 | Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }` |
-| Units | `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
-| Implicit names | `out`, `it`, `note` |
+| Units | `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `ct`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
+| Implicit names | `out`, `it`, `note`, `clock` |
 | Universal controls | `pan`, `gain`, `to`, `dur`, `nudge` |
 
 ## Examples

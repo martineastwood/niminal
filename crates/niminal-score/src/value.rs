@@ -106,6 +106,7 @@ impl FromStr for Value {
             "beat" | "beats" => Value::Beats(n),
             "bar" | "bars" => Value::Bars(n),
             "st" => Value::Semitones(n),
+            "ct" => Value::Semitones(n / 100.0),
             "deg" => Value::Degrees(n),
             _ => return Err(ParseError(format!("unknown unit `{unit}` in `{s}`"))),
         })
@@ -137,9 +138,14 @@ impl Value {
     }
 
     pub fn as_hz(self) -> Result<f64, UnitError> {
+        self.as_hz_in(&Tuning::default())
+    }
+
+    /// A frequency, with note names played in `tuning`.
+    pub fn as_hz_in(self, tuning: &Tuning) -> Result<f64, UnitError> {
         match self {
             Value::Hz(h) => Ok(h),
-            Value::Note(m) => Ok(440.0 * 2f64.powf((f64::from(m) - 69.0) / 12.0)),
+            Value::Note(m) => Ok(tuning.hz(m)),
             v => v.mismatch("a frequency (hz or a note name)"),
         }
     }
@@ -231,17 +237,65 @@ pub enum Time {
     Bars(f64),
 }
 
-/// A constant tempo and meter.
+/// The most degrees a scale may have.
+pub const MAX_DEGREES: usize = 24;
+
+/// How note names become frequencies: the pitch of a4 and the scale that repeats from c4 up and down
+/// by `period` cents. The default is twelve-tone equal temperament at a4 = 440hz.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tuning {
+    pub a4: f64,
+    /// The interval the scale repeats at, in cents (1200 is an octave).
+    pub period: f64,
+    pub len: usize,
+    /// The cents of each degree above the root, which is c; one note number per degree.
+    pub degrees: [f64; MAX_DEGREES],
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        let mut degrees = [0.0; MAX_DEGREES];
+        for (i, d) in degrees.iter_mut().enumerate().take(12) {
+            *d = i as f64 * 100.0;
+        }
+        Tuning { a4: 440.0, period: 1200.0, len: 12, degrees }
+    }
+}
+
+impl Tuning {
+    /// The scale `cents` (from the root, c) in a repeat of `period`, with a4 at `a4` hz.
+    pub fn new(a4: f64, period: f64, cents: &[f64]) -> Self {
+        let mut degrees = [0.0; MAX_DEGREES];
+        degrees[..cents.len()].copy_from_slice(cents);
+        Tuning { a4, period, len: cents.len(), degrees }
+    }
+
+    fn cents(&self, midi: i32) -> f64 {
+        // note numbers count degrees from c4, which is 60
+        let step = midi - 60;
+        let len = self.len as i32;
+        f64::from(step.div_euclid(len)) * self.period + self.degrees[step.rem_euclid(len) as usize]
+    }
+
+    /// The frequency of a MIDI note number.
+    pub fn hz(&self, midi: i32) -> f64 {
+        self.a4 * 2f64.powf((self.cents(midi) - self.cents(69)) / 1200.0)
+    }
+}
+
+/// A constant tempo and meter, and the tuning notes are played in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tempo {
     pub bpm: f64,
     pub beats_per_bar: f64,
+    /// Carried here because everything that turns beats into seconds also turns notes into hertz.
+    pub tuning: Tuning,
 }
 
 impl Tempo {
     /// `bpm` in 4/4.
     pub fn new(bpm: f64) -> Self {
-        Tempo { bpm, beats_per_bar: 4.0 }
+        Tempo { bpm, beats_per_bar: 4.0, tuning: Tuning::default() }
     }
 }
 

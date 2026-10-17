@@ -246,7 +246,7 @@ mod tests {
     }
 
     fn render(osc: &mut Osc, freq: f32, len: usize) -> Vec<f32> {
-        let ctx = ProcessCtx { sample_rate: 48_000.0, gate: true };
+        let ctx = ProcessCtx::new(48_000.0, true);
         let f = vec![freq; len];
         let zero = vec![0.0; len];
         let half = vec![0.5; len];

@@ -61,7 +61,7 @@ impl Opcode for BufferWrite {
     }
 
     fn ports(&self) -> &'static [Port] {
-        const PORTS: &[Port] = &[Port::required("idx"), Port::required("value")];
+        const PORTS: &[Port] = &[Port::required("idx"), Port::required("value"), Port::optional("gate", 1.0)];
         PORTS
     }
 
@@ -77,7 +77,10 @@ impl Opcode for BufferWrite {
         for (i, o) in out.iter_mut().enumerate() {
             let idx = f64::from(inputs[0][i]);
             let value = inputs[1][i];
-            self.buffer.write_at(idx, value);
+            // a write inside an `if` only happens while the `if` is taken
+            if inputs[2][i] != 0.0 {
+                self.buffer.write_at(idx, value);
+            }
             *o = value;
         }
     }
@@ -108,7 +111,7 @@ impl Opcode for BufferRecord {
     }
 
     fn ports(&self) -> &'static [Port] {
-        const PORTS: &[Port] = &[Port::required("x")];
+        const PORTS: &[Port] = &[Port::required("x"), Port::optional("gate", 1.0)];
         PORTS
     }
 
@@ -132,6 +135,10 @@ impl Opcode for BufferRecord {
         let n = self.buffer.len();
         for (i, o) in out.iter_mut().enumerate() {
             let x = inputs[0][i];
+            if inputs[1][i] == 0.0 {
+                *o = x;
+                continue;
+            }
             let mut pos = self.head.load(Ordering::Relaxed);
             if pos >= n {
                 if self.looped {

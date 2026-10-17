@@ -25,6 +25,8 @@ pub struct Buses {
     /// What delayed sends have put in during the current block.
     staged: Vec<Vec<[f32; BLOCK]>>,
     late_pos: usize,
+    /// Where the session's clock is, for the block being mixed.
+    pub clock: crate::Clock,
 }
 
 impl Buses {
@@ -35,6 +37,7 @@ impl Buses {
             late: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
             staged: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
             late_pos: 0,
+            clock: crate::Clock::default(),
         }
     }
 
@@ -354,6 +357,20 @@ impl Mixer {
         })
     }
 
+    /// Where the session's clock is at the start of the next block, for `clock.beat` and friends.
+    pub fn set_clock(&mut self, clock: crate::Clock) {
+        self.buses.clock = clock;
+    }
+
+    /// How long a sounding note is scheduled to last; see [`Voice::set_dur`].
+    pub fn set_voice_dur(&mut self, id: VoiceId, seconds: f32) {
+        if let Some(track) = self.tracks.get_mut(id.track)
+            && let Some((_, voice)) = track.voices.iter_mut().find(|(serial, _)| *serial == id.serial)
+        {
+            voice.set_dur(seconds);
+        }
+    }
+
     /// The audio input for the next block: `samples` is channel `channel` of it. A channel nobody sets
     /// is silent, and what is set stays until it is set again.
     pub fn set_audio_input(&mut self, channel: usize, samples: &[f32]) {
@@ -390,6 +407,7 @@ impl Mixer {
         self.steal_if_full();
         let serial = self.next_serial;
         self.next_serial += 1;
+        voice.start_note();
         if voice.rule().is_some_and(|r| r.legato) { voice.hold(serial); }
         self.tracks[track].voices.push((serial, voice));
         Ok(VoiceId { track, serial })
@@ -432,6 +450,7 @@ impl Mixer {
         self.steal_if_full();
         let serial = self.next_serial;
         self.next_serial += 1;
+        voice.start_note();
         if rule.is_some_and(|r| r.legato) { voice.hold(serial); }
         self.tracks[track].voices.push((serial, voice));
         VoiceId { track, serial }

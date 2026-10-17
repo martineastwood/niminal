@@ -5,4 +5,4 @@ mod model;
 mod value;
 
 pub use model::{Event, ScoreError, Section, VERSION};
-pub use value::{ParseError, Tempo, Time, UnitError, Value};
+pub use value::{MAX_DEGREES, ParseError, Tempo, Time, Tuning, UnitError, Value};

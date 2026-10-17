@@ -144,7 +144,7 @@ mod tests {
         // changed, but sooner than the rate allows (10 a second: every 100ms)
         let mut tapped = niminal_engine::ops::TapOut::new(taps[0].value.clone());
         use niminal_engine::Opcode;
-        let ctx = niminal_engine::ProcessCtx { sample_rate: 48_000.0, gate: true };
+        let ctx = niminal_engine::ProcessCtx::new(48_000.0, true);
         tapped.process(&ctx, &[&[0.25, 0.75]], &mut [0.0, 0.0]);
         assert_eq!(sender.poll(&taps, start + Duration::from_secs(5) + Duration::from_millis(50)), 1, "the rate counts from the last time it was sent");
         assert_eq!(get(), vec![("/x".to_string(), 0.75)]);

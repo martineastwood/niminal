@@ -53,7 +53,7 @@ pub fn parse_spanned(src: &str) -> Result<Vec<(Item, Span)>, Diagnostic> {
 }
 
 /// The settings of a `config`, the `quantize` table within it, and where it ends.
-type ConfigEntries = (Vec<(Ident, Expr)>, Vec<(Ident, Expr)>, Span);
+type ConfigEntries = (Vec<(Ident, Expr)>, Vec<(Ident, Expr)>, Vec<(Ident, Expr)>, Span);
 
 type Res<T> = Result<T, Diagnostic>;
 
@@ -445,10 +445,11 @@ impl Parser {
             self.arrangement(name, start).map(Item::Arrangement)
         } else if self.is_keyword("config") {
             let start = self.bump().span;
-            let (entries, quantize, end) = self.config_entries()?;
+            let (entries, quantize, tuning, end) = self.config_entries()?;
             Ok(Item::Config(ConfigDecl {
                 entries,
                 quantize,
+                tuning,
                 span: start.to(end),
             }))
         } else if self.is_keyword("track") {
@@ -1029,10 +1030,10 @@ impl Parser {
         }
     }
 
-    /// `{ channels: stereo  quantize: { default: 1bar  play: cycle } }`
+    /// `{ channels: stereo  quantize: { default: 1bar  play: cycle }  tuning: { a4: 432hz } }`
     fn config_entries(&mut self) -> Res<ConfigEntries> {
         self.expect(&Tok::LBrace)?;
-        let (mut entries, mut quantize) = (Vec::new(), Vec::new());
+        let (mut entries, mut quantize, mut tuning) = (Vec::new(), Vec::new(), Vec::new());
         loop {
             self.skip_newlines();
             if self.peek() == &Tok::RBrace {
@@ -1045,6 +1046,11 @@ impl Parser {
                     return Err(Diagnostic::new("`quantize` is given twice", key.span));
                 }
                 quantize = self.entries(false)?.0;
+            } else if key.name == "tuning" && self.peek() == &Tok::LBrace {
+                if !tuning.is_empty() {
+                    return Err(Diagnostic::new("`tuning` is given twice", key.span));
+                }
+                tuning = self.entries(false)?.0;
             } else {
                 entries.push((key, self.expr()?));
             }
@@ -1053,7 +1059,7 @@ impl Parser {
             }
         }
         let end = self.expect(&Tok::RBrace)?;
-        Ok((entries, quantize, end))
+        Ok((entries, quantize, tuning, end))
     }
 
     /// A time, or `bar 5 beat 3`.
@@ -1410,6 +1416,95 @@ impl Parser {
         })
     }
 
+    /// `match mode { low: a, band | high: b, else: c }`, which is an `if`/`else if` chain on
+    /// `mode == pattern`. An arm's body is one expression or a `{ block }`. The subject is a name
+    /// so that testing it once per arm costs nothing.
+    fn match_expr(&mut self) -> Res<Expr> {
+        let start = self.bump().span; // `match`
+        let subject = self.ident("a name to match on")?;
+        let subject_span = self.prev_span();
+        self.expect(&Tok::LBrace)?;
+        let mut arms: Vec<(Option<Expr>, Vec<Stmt>)> = Vec::new();
+        let end = loop {
+            while matches!(self.peek(), Tok::Newline | Tok::Comma) {
+                self.bump();
+            }
+            if self.peek() == &Tok::RBrace {
+                break self.bump().span;
+            }
+            let mut cond: Option<Expr> = None;
+            if self.is_keyword("else") {
+                self.bump();
+            } else {
+                loop {
+                    let pattern = self.sum()?;
+                    let test = Expr {
+                        span: pattern.span,
+                        kind: ExprKind::Compare {
+                            op: CmpOp::Eq,
+                            lhs: Box::new(Expr {
+                                kind: ExprKind::Name(subject.name.clone()),
+                                span: subject_span,
+                            }),
+                            rhs: Box::new(pattern),
+                        },
+                    };
+                    cond = Some(match cond {
+                        None => test,
+                        Some(prior) => Expr {
+                            span: prior.span.to(test.span),
+                            kind: ExprKind::Logic {
+                                op: LogicOp::Or,
+                                lhs: Box::new(prior),
+                                rhs: Box::new(test),
+                            },
+                        },
+                    });
+                    if !self.eat(&Tok::Bar) {
+                        break;
+                    }
+                }
+            }
+            self.expect(&Tok::Colon)?;
+            let body = if self.peek() == &Tok::LBrace {
+                self.block()?.0
+            } else {
+                vec![Stmt::Expr(self.expr()?)]
+            };
+            let is_else = cond.is_none();
+            arms.push((cond, body));
+            if is_else && !matches!(self.peek(), Tok::Newline | Tok::Comma | Tok::RBrace) {
+                return Err(self.unexpected("the end of the arm"));
+            }
+        };
+        let span = start.to(end);
+        let mut chain: Option<Vec<Stmt>> = None;
+        for (cond, body) in arms.into_iter().rev() {
+            match cond {
+                None => chain = Some(body),
+                Some(cond) => {
+                    let expr = Expr {
+                        kind: ExprKind::If {
+                            cond: Box::new(cond),
+                            then: body,
+                            otherwise: chain.take(),
+                        },
+                        span,
+                    };
+                    chain = Some(vec![Stmt::Expr(expr)]);
+                }
+            }
+        }
+        match chain.as_deref() {
+            Some([Stmt::Expr(e)]) if matches!(e.kind, ExprKind::If { .. }) => {
+                Ok(e.clone())
+            }
+            Some(_) => Err(Diagnostic::new("a `match` needs an arm to test", span)
+                .with_help("list the choices to match, such as `match mode { low: 1, high: 2 }`")),
+            None => Err(Diagnostic::new("a `match` needs an arm", span)),
+        }
+    }
+
     /// `for i in 0..8 { ... }`, after seeing `for i in`.
     fn for_expr(&mut self) -> Res<Expr> {
         let start = self.bump().span; // `for`
@@ -1514,6 +1609,12 @@ impl Parser {
                 e.span = body_span;
                 continue;
             }
+            if self.peek() == &Tok::LBrace
+                && matches!(&e.kind, ExprKind::Call { name, args } if name.name == "after" && args.len() == 1 && args[0].name.is_none())
+            {
+                e = self.after_block(e)?;
+                continue;
+            }
             if self.peek() != &Tok::Dot {
                 break;
             }
@@ -1534,6 +1635,50 @@ impl Parser {
             };
         }
         Ok(e)
+    }
+
+    /// `after(delay) { body }`: the body starts when the note is `delay` old, from fresh state,
+    /// and is silent until then. It is `reset_on(note.time >= delay) { body } * (note.time >= delay)`.
+    fn after_block(&mut self, call: Expr) -> Res<Expr> {
+        let ExprKind::Call { name, mut args } = call.kind else {
+            unreachable!("checked by the caller");
+        };
+        let delay = args.remove(0).value;
+        let (body, end) = self.block()?;
+        let span = call.span.to(end);
+        let reached = || Expr {
+            span: delay.span,
+            kind: ExprKind::Compare {
+                op: CmpOp::Ge,
+                lhs: Box::new(Expr {
+                    span: name.span,
+                    kind: ExprKind::Call {
+                        name: Ident { name: "time".into(), span: name.span },
+                        args: vec![Arg {
+                            name: None,
+                            receiver: true,
+                            value: Expr { kind: ExprKind::Name("note".into()), span: name.span },
+                        }],
+                    },
+                }),
+                rhs: Box::new(delay.clone()),
+            },
+        };
+        let scope = Expr {
+            span,
+            kind: ExprKind::Call {
+                name: Ident { name: "reset_on".into(), span: name.span },
+                args: vec![
+                    Arg { name: None, receiver: false, value: reached() },
+                    Arg {
+                        name: None,
+                        receiver: false,
+                        value: Expr { kind: ExprKind::Lambda { params: Vec::new(), body }, span },
+                    },
+                ],
+            },
+        };
+        Ok(binary(BinOp::Mul, scope, reached()))
     }
 
     fn primary(&mut self) -> Res<Expr> {
@@ -1631,6 +1776,13 @@ impl Parser {
             }
             Tok::Ident(name) if name == "env" && self.peek_at(1) == &Tok::LBracket => self.env(),
             Tok::Ident(name) if name == "if" => self.nested(Self::if_expr),
+            Tok::Ident(name)
+                if name == "match"
+                    && matches!(self.peek_at(1), Tok::Ident(_))
+                    && self.peek_at(2) == &Tok::LBrace =>
+            {
+                self.nested(Self::match_expr)
+            }
             Tok::Ident(name) => {
                 let ident = self.ident("a name")?;
                 if self.peek() == &Tok::LParen {

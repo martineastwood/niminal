@@ -10,7 +10,7 @@ tempo 120bpm
 bus fb
 instr click() { fb += osc(sine, 1000hz) * env[1 0.5ms 0] }
 track again { out = fb.gain(0.5)
-  fb += prev(out) }
+  fb += late(out) }
 click() for 1beat
 ";
 

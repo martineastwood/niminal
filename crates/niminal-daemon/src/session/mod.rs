@@ -960,6 +960,12 @@ impl Session {
                 self.mixer
                     .set_audio_input(c, &samples[from..(from + n).min(samples.len())]);
             }
+            let grid = self.grid();
+            self.mixer.set_clock(niminal_engine::Clock {
+                beat: grid.beats(self.clock),
+                bpm: grid.bpm as f32,
+                beats_per_bar: grid.beats_per_bar as f32,
+            });
             self.mixer.process(&mut block[..channels], n);
             self.silenced += self.mixer.take_silenced();
             if let Some(limiter) = &mut self.limiter {
@@ -1139,6 +1145,8 @@ impl Session {
                         plan.rule,
                     );
                     self.mixer.set_voice_pan(id, plan.pan);
+                    let held = note.key.is_some();
+                    self.mixer.set_voice_dur(id, if held { 0.0 } else { note.dur as f32 / self.sample_rate });
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
                     let off = if note.key.is_some() {
                         u64::MAX

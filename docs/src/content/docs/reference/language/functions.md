@@ -98,7 +98,7 @@ Used where one value is expected, a function with several results gives the firs
 
 - **`state y = 0`** keeps `y` from one sample to the next. A read above an assignment sees last sample's value; a read below it sees the new one.
 - **The starting value** is worked out at note start and can use the parameters: `state y = x` starts at the input's first sample. Its unit is the state's unit, so `state y = 0` holds plain numbers and `state y = 0hz` frequencies.
-- **`prev(x)`** is `x` one sample ago. `y = x + prev(y) * 0.5` is a feedback loop, written on one line. (In a bus send, `prev` means a block late instead; see [Routing](/reference/language/routing/).)
+- **`prev(x)`** is `x` one sample ago. `y = x + prev(y) * 0.5` is a feedback loop, written on one line. (In a bus send, `prev` is an error: `late(x)` is the block-late copy; see [Routing](/reference/language/routing/).)
 - **A state array** holds a buffer: `state buf = zeros(4096)`, written with `buf[i] = y` and read with `buf[i]` or `buf.at(pos, interp: linear)`. Its length is known while compiling. Indexes wrap in both directions; reading or writing an empty array is a compile error. It supports the same mapping, arithmetic, slices and reductions as other arrays. Its initial elements can use note-start parameters.
 
 ```nml
@@ -163,6 +163,17 @@ fn hold(x, trig) {
 ```
 
   A condition known while compiling picks its branch then; otherwise both are worked out and the result is chosen each sample, and state is only written on the branch taken.
+- **`match name { … }`** is the `else if` chain on one name, for choices or numbers. An arm is one or more patterns joined by `|`, a colon, and a value or a block; `else:` takes the rest. As a value it needs an `else`.
+
+```nml
+fn pick(f, mode: (low | band | high) = low) {
+  match mode {
+    low: f.lpf(cutoff: 800hz)
+    band | high: f.hpf(cutoff: 800hz)
+  }
+}
+```
+
 - **`for x in xs { … }`** repeats a block a number of times known while compiling: over a range or an array, including a state buffer. As a value it gives an array. As a statement, assigning to a name from outside carries the value from one pass to the next.
 
 ## Arrays
@@ -173,6 +184,8 @@ Arrays are the general collection type. Tables and writable DSP buffers use the 
 - Lengths are known while compiling. Arrays do not inherit the audio channel limit: a 2048-element table or computed frame is an array. Audio output and layout conversion enforce the channel limit.
 - Arithmetic, comparisons, math, unit conversion, `.range` and `.clamp` work element by element. A scalar broadcasts to all elements; two arrays must have matching shapes. Built-in DSP operations expand over arrays and return arrays, so `osc(saw, frequencies)` can make a large oscillator bank.
 - `xs[i]` floors a fractional index and wraps (`xs[-1]` is the last). A changing index reads an element each sample; the possible elements must have matching shapes and units. Slices such as `xs[0..<4]` produce arrays of the selected values.
+- `(0..1).step(0.25)` is the array `0, 0.25, 0.5, 0.75, 1` for a range that isn't whole numbers (`(0..<1).step(0.25)` leaves the end out); the step is in the range's unit.
+- `xs.active(count)` keeps the first `count` entries and silences the rest, where `count` may change while playing: a bank of 16 partials of which a parameter chooses how many sound, without recompiling.
 - `xs.len`, `xs.sum`, `xs.min`, `xs.max`, `xs.indices`, `xs.map(f)` work on constants, computed arrays and state buffers. Reducing nested arrays combines their rows element by element. `.map` takes `fn(x) { … }`, or an expression of `it`.
 - `xs.at(pos, interp: linear)` reads between numeric elements with wrapping. Interpolation is `none`, `linear` (the default) or `cubic`, for every storage type.
 - `[]`, `zeros(0)` and empty slices are valid arrays. They support length, mapping and iteration. Indexing, interpolation and reductions on an empty array are compile errors.

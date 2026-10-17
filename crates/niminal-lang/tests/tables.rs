@@ -56,3 +56,17 @@ fn random_requires_seed() {
     assert!(compile("const n = random(16, dist: uniform)\n").is_err());
     ok("const n = random(16, dist: uniform, seed: 1)\n");
 }
+
+#[test]
+fn a_path_can_hold_constants_and_data_files_are_tables() {
+    let dir = std::env::temp_dir().join(format!("niminal-paths-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("curve07.csv"), "x, y\n0, 0\n1, 1\n").unwrap();
+    let path = dir.join("curve{n:2}.csv").to_string_lossy().replace('\\', "/");
+    let src = format!("const n = 3 + 4\nconst t = file(\"{path}\", channel: 1)\ninstr a(freq: hz) {{ osc(t, freq) * env[1 10ms 0] }}\na(freq: 220hz) for 20ms");
+    ok(&src);
+    let missing = src.replace("{n:2}", "{m}");
+    let errors = compile(&missing).err().expect("`m` is not defined");
+    assert!(errors[0].message.contains("`m`"), "{:?}", errors[0].message);
+    std::fs::remove_dir_all(&dir).ok();
+}

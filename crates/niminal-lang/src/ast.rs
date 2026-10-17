@@ -236,6 +236,8 @@ pub struct ConfigDecl {
     pub entries: Vec<(Ident, Expr)>,
     /// `quantize: { default: 1bar  play: cycle }`: when each kind of change lands.
     pub quantize: Vec<(Ident, Expr)>,
+    /// `tuning: { a4: 432hz, scale: just }`: how note names become frequencies.
+    pub tuning: Vec<(Ident, Expr)>,
     pub span: Span,
 }
 

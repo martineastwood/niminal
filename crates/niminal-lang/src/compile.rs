@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use niminal_engine::{Route, TrackDef, execution_order};
-use niminal_score::{Event, Tempo, Time, Value};
+use niminal_score::{Event, MAX_DEGREES, Tempo, Time, Tuning, Value};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span, closest};
@@ -232,11 +232,16 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         errors.push(d);
         4.0
     });
-    let tempo = tempo_of(&items, beats_per_bar).unwrap_or_else(|d| {
+    let tuning = tuning_of(&items).unwrap_or_else(|d| {
+        errors.push(d);
+        Tuning::default()
+    });
+    let tempo = tempo_of(&items, beats_per_bar, tuning).unwrap_or_else(|d| {
         errors.push(d);
         Tempo {
             bpm: DEFAULT_BPM,
             beats_per_bar,
+            tuning,
         }
     });
 
@@ -309,7 +314,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let mut fns: HashMap<String, FnDef> = HashMap::new();
     for item in &items {
         let Item::Fn(def) = item else { continue };
-        if registry.find(&def.name.name).is_some() || def.name.name == "reset_on" {
+        if registry.find(&def.name.name).is_some() || matches!(def.name.name.as_str(), "reset_on" | "after") {
             errors.push(Diagnostic::new(
                 format!("`{}` is a built-in function, so it can't be defined again", def.name.name),
                 def.name.span,
@@ -539,7 +544,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             .collect();
         errors.push(
             Diagnostic::new(format!("tracks feed back through buses or buffers: {}", path.join(" -> ")), track_spans[cycle[0]])
-                .with_help("a bus or shared buffer has to be written before it is read; break a bus loop with `prev`, by sending a late copy: `echo += prev(out)`"),
+                .with_help("a bus or shared buffer has to be written before it is read; break a bus loop with `late`, by sending a late copy: `echo += late(out)`"),
         );
     }
 
@@ -890,6 +895,28 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
             }
             // read while the instrument is compiled
             "tail" => {}
+            "pitch" => {
+                let ExprKind::Name(name) = &value.kind else {
+                    return Err(Diagnostic::new("`pitch` is the name of a parameter", value.span)
+                        .with_help("for example `with(pitch: tone)`, for `instr bass(tone: hz = 55hz)`"));
+                };
+                match instrument.params.iter().find(|p| p.name == *name) {
+                    Some(p) if p.unit == crate::Unit::Hz => {}
+                    Some(_) => {
+                        return Err(Diagnostic::new(
+                            format!("`{name}` is the pitch, so it is in `hz`"),
+                            value.span,
+                        ));
+                    }
+                    None => {
+                        return Err(Diagnostic::new(
+                            format!("the instrument has no parameter `{name}` to take the pitch"),
+                            value.span,
+                        ));
+                    }
+                }
+                instrument.pitch = name.clone();
+            }
             "glide" => {
                 if !def.mono {
                     return Err(mono_only(option));
@@ -902,9 +929,9 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
                     format!("an instrument has no option `{other}`"),
                     option.span,
                 );
-                d = match closest(other, ["max", "steal", "same_note", "choke", "legato", "priority", "glide", "quantize", "tail"]) {
+                d = match closest(other, ["max", "steal", "same_note", "choke", "legato", "priority", "glide", "quantize", "tail", "pitch"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
-                    None => d.with_help("the options are `max`, `steal`, `same_note`, `choke`, `tail`, `quantize`, and for `mono` instruments `legato`, `priority` and `glide`"),
+                    None => d.with_help("the options are `max`, `steal`, `same_note`, `choke`, `tail`, `quantize`, `pitch`, and for `mono` instruments `legato`, `priority` and `glide`"),
                 };
                 return Err(d);
             }
@@ -914,20 +941,16 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
         && !instrument
             .params
             .iter()
-            .any(|p| p.name == crate::perform::PITCH_PARAM)
+            .any(|p| p.name == instrument.pitch)
     {
         return Err(Diagnostic::new(
             format!(
                 "`{}` moves the pitch, and this instrument has no `{}` parameter",
-                option.name,
-                crate::perform::PITCH_PARAM
+                option.name, instrument.pitch
             ),
             option.span,
         )
-        .with_help(format!(
-            "give it a `{}: hz` parameter",
-            crate::perform::PITCH_PARAM
-        )));
+        .with_help(format!("give it a `{}: hz` parameter", instrument.pitch)));
     }
     if instrument.priority != niminal_engine::Priority::Last && !instrument.legato {
         return Err(Diagnostic::new(
@@ -1021,7 +1044,7 @@ fn compile_sample(
         };
         match key.name.as_str() {
             "root" => {
-                root = literal_value(&arg.value)?.as_hz().map_err(|e| {
+                root = literal_value(&arg.value)?.as_hz_in(&tempo.tuning).map_err(|e| {
                     Diagnostic::new(
                         format!("`root` should be a note or a frequency: {e}"),
                         arg.value.span,
@@ -1475,7 +1498,7 @@ pub(crate) fn bpm_of(e: &Expr) -> Res<f64> {
     }
 }
 
-fn tempo_of(items: &[Item], beats_per_bar: f64) -> Res<Tempo> {
+fn tempo_of(items: &[Item], beats_per_bar: f64, tuning: Tuning) -> Res<Tempo> {
     let mut tempo = None;
     for item in items {
         let Item::Tempo(stmt) = item else { continue };
@@ -1486,12 +1509,129 @@ fn tempo_of(items: &[Item], beats_per_bar: f64) -> Res<Tempo> {
         tempo = Some(Tempo {
             bpm: bpm_of(&stmt.value)?,
             beats_per_bar,
+            tuning,
         });
     }
     Ok(tempo.unwrap_or(Tempo {
         bpm: DEFAULT_BPM,
         beats_per_bar,
+        tuning,
     }))
+}
+
+/// Cents above the root (c) for the twelve notes of each named scale.
+const NAMED_SCALES: [(&str, [f64; 12]); 4] = [
+    ("equal", [0.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0, 1100.0]),
+    ("just", [0.0, 111.73, 203.91, 315.64, 386.31, 498.04, 590.22, 701.96, 813.69, 884.36, 1017.60, 1088.27]),
+    ("pythagorean", [0.0, 113.69, 203.91, 294.13, 407.82, 498.04, 611.73, 701.96, 815.64, 905.87, 996.09, 1109.78]),
+    ("meantone", [0.0, 76.05, 193.16, 310.26, 386.31, 503.42, 579.47, 696.58, 772.63, 889.74, 1006.84, 1082.89]),
+];
+
+/// `config { tuning: { a4: 432hz, scale: just, period: 1200ct } }`: how note names become frequencies.
+/// `scale` is a name (`equal`, `just`, `pythagorean`, `meantone`), `cents(0, 112, ...)` or
+/// `ratios(1, 16/15, ...)`, one entry per note number from c up to the period.
+fn tuning_of(items: &[Item]) -> Res<Tuning> {
+    let mut tuning = Tuning::default();
+    let (mut a4, mut period, mut scale): (Option<f64>, Option<f64>, Option<Vec<f64>>) = (None, None, None);
+    for item in items {
+        let Item::Config(config) = item else { continue };
+        for (key, value) in &config.tuning {
+            match key.name.as_str() {
+                "a4" => match &value.kind {
+                    ExprKind::Num { value: v, unit: Some(u) } if (u == "hz" || u == "khz") && *v > 0.0 => {
+                        a4 = Some(if u == "khz" { v * 1000.0 } else { *v });
+                    }
+                    _ => {
+                        return Err(Diagnostic::new("`a4` is a frequency", value.span)
+                            .with_help("for example `a4: 432hz`"));
+                    }
+                },
+                "period" => {
+                    let cents = cents_of(value)?;
+                    if cents <= 0.0 {
+                        return Err(Diagnostic::new("`period` must be above 0ct", value.span));
+                    }
+                    period = Some(cents);
+                }
+                "scale" => scale = Some(scale_of(value)?),
+                other => {
+                    let mut d = Diagnostic::new(format!("unknown tuning setting `{other}`"), key.span);
+                    d = d.with_help("the settings are: a4, scale, period");
+                    return Err(d);
+                }
+            }
+        }
+    }
+    let degrees = scale.unwrap_or_else(|| NAMED_SCALES[0].1.to_vec());
+    tuning = Tuning::new(a4.unwrap_or(tuning.a4), period.unwrap_or(tuning.period), &degrees);
+    Ok(tuning)
+}
+
+/// An interval written in cents (`702ct`) or semitones (`7st`), as cents.
+fn cents_of(e: &Expr) -> Res<f64> {
+    match &e.kind {
+        ExprKind::Num { value, unit: Some(u) } if u == "ct" => Ok(*value),
+        ExprKind::Num { value, unit: Some(u) } if u == "st" => Ok(*value * 100.0),
+        ExprKind::Neg(inner) => cents_of(inner).map(|c| -c),
+        _ => Err(Diagnostic::new("expected an interval in cents, such as `702ct`", e.span)),
+    }
+}
+
+fn scale_of(e: &Expr) -> Res<Vec<f64>> {
+    let bad_length = |span| {
+        Diagnostic::new(format!("a scale has between 1 and {MAX_DEGREES} degrees"), span)
+    };
+    let check = |degrees: Vec<f64>, span| -> Res<Vec<f64>> {
+        if degrees.is_empty() || degrees.len() > MAX_DEGREES {
+            return Err(bad_length(span));
+        }
+        if degrees[0] != 0.0 {
+            return Err(Diagnostic::new("a scale starts at the root: its first degree is 0 cents (or a ratio of 1)", span));
+        }
+        Ok(degrees)
+    };
+    match &e.kind {
+        ExprKind::Name(n) => NAMED_SCALES
+            .iter()
+            .find(|(name, _)| name == n)
+            .map(|(_, cents)| cents.to_vec())
+            .ok_or_else(|| {
+                let names = NAMED_SCALES.map(|(name, _)| name);
+                let mut d = Diagnostic::new(format!("unknown scale `{n}`"), e.span)
+                    .with_help(format!("the named scales are: {}", names.join(", ")));
+                if let Some(c) = closest(n, names) {
+                    d = d.with_help(format!("did you mean `{c}`?"));
+                }
+                d
+            }),
+        ExprKind::Call { name, args } if name.name == "cents" => {
+            // inside `cents(...)` a bare number is already in cents
+            let cents = |a: &Arg| match &a.value.kind {
+                ExprKind::Num { value, unit: None } => Ok(*value),
+                _ => cents_of(&a.value),
+            };
+            check(args.iter().map(cents).collect::<Res<_>>()?, e.span)
+        }
+        ExprKind::Call { name, args } if name.name == "ratios" => {
+            let ratio = |a: &Arg| -> Res<f64> {
+                let value = match &a.value.kind {
+                    ExprKind::Num { value, unit: None } => Some(*value),
+                    ExprKind::Binary { op: BinOp::Div, lhs, rhs } => match (&lhs.kind, &rhs.kind) {
+                        (ExprKind::Num { value: n, unit: None }, ExprKind::Num { value: d, unit: None }) if *d != 0.0 => Some(n / d),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                match value {
+                    Some(r) if r > 0.0 => Ok(1200.0 * r.log2()),
+                    _ => Err(Diagnostic::new("expected a ratio above 0, such as `3/2`", a.value.span)),
+                }
+            };
+            check(args.iter().map(ratio).collect::<Res<_>>()?, e.span)
+        }
+        _ => Err(Diagnostic::new("a scale is a name, `cents(...)` or `ratios(...)`", e.span)
+            .with_help("for example `scale: just` or `scale: ratios(1, 9/8, 5/4, 4/3, 3/2, 5/3, 15/8)`")),
+    }
 }
 
 /// Literal named arguments, checked against `instr`'s parameters.
@@ -2501,11 +2641,11 @@ track b { out = y.lpf(cutoff: 1khz).to(x) }
             "{}",
             d.message
         );
-        assert!(d.help.unwrap().contains("`prev`"));
+        assert!(d.help.unwrap().contains("`late`"));
 
         // a late send breaks the loop
         ok(
-            "bus x\nbus y\ntrack a { out = x.lpf(cutoff: 1khz).to(y) }\ntrack b { out = y\n x += prev(out) }",
+            "bus x\nbus y\ntrack a { out = x.lpf(cutoff: 1khz).to(y) }\ntrack b { out = y\n x += late(out) }",
         );
         // outside a send, `prev` is one sample earlier
         ok("bus x\ntrack a { out = prev(x) }");

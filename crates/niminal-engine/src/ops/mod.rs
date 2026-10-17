@@ -29,7 +29,7 @@ pub use env::{Curve, Env, EnvField, Segment, shape};
 pub use filter::{FilterMode, Svf};
 pub use fold::{Clip, Fold};
 pub use math::{
-    Add, BlockHold, Compare, Delay1, Div, Gain, Hold, Max, Min, Mul, NoteTime, Pow, Released, Rem, SampleRate,
+    Add, BlockHold, Compare, Context, Delay1, Div, Gain, Hold, Max, Min, Mul, NoteStart, NoteTime, Pow, ReadContext, Released, Rem, SampleRate,
     Select, Sub,
     ArrayRead, TableRead, Waveshape,
 };
