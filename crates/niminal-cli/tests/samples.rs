@@ -106,6 +106,77 @@ fn a_kit_plays_the_samples_a_pattern_names() {
 }
 
 #[test]
+fn a_kit_member_is_an_instrument_on_its_own_track() {
+    let dir = scratch("member");
+    std::fs::create_dir_all(dir.join("drums")).unwrap();
+    write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 100)]);
+    write_wav(&dir.join("drums/snare.wav"), &[block(0.5, 100)]);
+    let src = "tempo 120bpm\nkit drums = \"drums\"\ntrack snare { instrument = drums.snare }\nsnare.play([c4 ~ ~ ~])";
+    let out = play(&dir, src);
+    let at = |s: f64| out[0].get((s * SR as f64) as usize + 100).copied().unwrap_or(0.0);
+    assert!((at(0.0) - 0.5).abs() < 1e-3, "{}", at(0.0));
+    assert!(at(0.5).abs() < 1e-6);
+}
+
+#[test]
+fn a_grid_row_that_names_a_track_goes_through_its_effects() {
+    let dir = scratch("route");
+    std::fs::create_dir_all(dir.join("drums")).unwrap();
+    write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 80)]);
+    write_wav(&dir.join("drums/snare.wav"), &[block(0.5, 80)]);
+    let src = "tempo 120bpm\nkit drums = \"drums\"\n\
+               track beat { instrument = drums }\n\
+               track snare { instrument = drums.snare\n  out = it.gain(-6db) }\n\
+               beat.play(grid {\n  kick:  x... ....\n  snare: .... x...\n})";
+    let out = play(&dir, src);
+    let at = |s: f64| out[0].get((s * SR as f64) as usize + 100).copied().unwrap_or(0.0);
+    let quiet = 0.5 * 10f32.powf(-6.0 / 20.0);
+    assert!((at(0.0) - 0.5).abs() < 1e-3, "kick stays on the host: {}", at(0.0));
+    assert!((at(1.0) - quiet).abs() < 1e-3, "snare is quieter through its track: {}", at(1.0));
+}
+
+#[test]
+fn a_grid_row_can_take_params_and_mini_notation() {
+    let dir = scratch("rowmini");
+    std::fs::create_dir_all(dir.join("drums")).unwrap();
+    write_wav(&dir.join("drums/hat.wav"), &[block(0.5, 40)]);
+    write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 40)]);
+    let src = "tempo 120bpm\nkit drums = \"drums\"\ntrack d { instrument = drums }\n\
+               d.play(grid {\n  kick(gain: -6db): x...\n  hat: [x*2 ~ ~ ~]\n})";
+    let out = play(&dir, src);
+    let at = |s: f64| out[0].get((s * SR as f64) as usize + 50).copied().unwrap_or(0.0);
+    let quiet = 0.5 * 10f32.powf(-6.0 / 20.0);
+    // kick on the downbeat at -6db; hat*2 puts a second hit halfway through the first step (0.25s)
+    assert!((at(0.0) - (quiet + 0.5)).abs() < 1e-2, "kick and first hat: {}", at(0.0));
+    assert!((at(0.25) - 0.5).abs() < 1e-2, "second hat from x*2: {}", at(0.25));
+}
+
+#[test]
+fn qualified_sample_names_work_in_patterns() {
+    let dir = scratch("qualified");
+    std::fs::create_dir_all(dir.join("drums")).unwrap();
+    write_wav(&dir.join("drums/a.wav"), &[block(0.5, 50)]);
+    write_wav(&dir.join("drums/kick.wav"), &[block(0.25, 50)]);
+    // bare `a` is a note; `drums.a` is the sample
+    let src = "tempo 120bpm\nkit drums = \"drums\"\ntrack d { instrument = drums }\nd.play([drums.a ~ kick ~])";
+    let out = play(&dir, src);
+    let at = |s: f64| out[0].get((s * SR as f64) as usize + 50).copied().unwrap_or(0.0);
+    assert!((at(0.0) - 0.5).abs() < 1e-3, "{}", at(0.0));
+    assert!((at(1.0) - 0.25).abs() < 1e-3, "{}", at(1.0));
+}
+
+#[test]
+fn kit_member_mistakes_are_reported() {
+    let dir = scratch("membererr");
+    std::fs::create_dir_all(dir.join("drums")).unwrap();
+    write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 10)]);
+    let e = errors(&dir, "kit drums = \"drums\"\ntrack t { instrument = drums.snare }");
+    assert!(e.contains("there is no sample `snare` in the kit `drums`"), "{e}");
+    let e = errors(&dir, "kit drums = \"drums\"\ntrack t { instrument = drums.kick(sample: kick) }");
+    assert!(e.contains("already chosen by the name after the kit"), "{e}");
+}
+
+#[test]
 fn a_stereo_sample_keeps_its_sides() {
     let dir = scratch("stereo");
     write_wav(&dir.join("s.wav"), &[block(0.5, 50), block(-0.5, 50)]);

@@ -17,6 +17,10 @@ pub struct Step {
     pub pan: Option<f64>,
     /// Where in a sample it starts, as a share of its length.
     pub begin: Option<f64>,
+    /// Playback pitch in semitones, for sample notes.
+    pub pitch: Option<f64>,
+    /// Play this note on another track (a grid row that names a drum strip).
+    pub track: Option<usize>,
 }
 
 impl From<Value> for Step {
@@ -26,6 +30,8 @@ impl From<Value> for Step {
             gain: None,
             pan: None,
             begin: None,
+            pitch: None,
+            track: None,
         }
     }
 }

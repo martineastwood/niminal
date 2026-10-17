@@ -872,8 +872,15 @@ impl Schedule {
         if let Some(share) = step.begin {
             args.insert("begin".to_string(), Value::Num(share));
         }
+        if let Some(st) = step.pitch {
+            args.insert("pitch".to_string(), Value::Semitones(st));
+        }
+        let target = step
+            .track
+            .map(|t| self.track_names[t].clone())
+            .unwrap_or_else(|| name.clone());
         Ok(Event {
-            target: name.clone(),
+            target,
             at: Time::Seconds(at),
             dur,
             args,

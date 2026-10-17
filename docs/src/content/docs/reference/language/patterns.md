@@ -53,11 +53,21 @@ groove = grid {
 
 A multi-row grid is a pattern of samples: each row names a sample in a kit (a slice such as `s4` works too) and plays it on its hits, and the rows play together. `X` is an accent (+3db) and `o` a ghost note (-12db). Choke groups on the kit (`with(choke: g(s4, s12))`) apply to its rows as they do to any pattern.
 
+A row can also:
+
+| Write | Meaning |
+| --- | --- |
+| `snare(pan: 10deg, gain: -3db): x...` | Set `gain`, `pan`, `begin`, or `pitch` on every hit of the row |
+| `hat: [x*2 x x(3,8)]` | Mini-notation in the body (`x`, `X`, `o`, `~`, and the usual `*`, `<>`, Euclid, and so on) |
+| `snare: .... x...` when a track is named `snare` | Play those hits on that track (so the snare can have its own effects) |
+
+Muting or stopping the host track does not silence rows routed to other tracks. Each drum track has its own mute and solo. Choke groups still apply only among notes that share a track and kit.
+
 ## Value patterns vs event patterns
 
 - **Value patterns** — notes, numbers, triggers. Note patterns need a track with an instrument.
 - **Event patterns** — name the instrument: `pluck(freq: riff)` or `[kick ~ snare ~]`.
-- On event patterns, transforms apply to events; signal opcodes (`.lpf`) append to each voice’s output.
+- On event patterns, transforms apply to events. Put effects on a track's `out` (or a bus) so they process the voices.
 - **Patterns in arguments** cycle independently: `pluck(freq: [c2 c2 g2 bb2], bright: [0.2 0.8])`.
 
 ## Universal controls

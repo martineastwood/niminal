@@ -227,18 +227,25 @@ fn env_lane(lit: &EnvLit) -> Res<EnvLane> {
 /// A pattern atom as a value: a note name, a number with a unit, or the name
 /// of a sample in a kit.
 fn atom_value(atom: &str, sample_names: &[String]) -> Result<Value, String> {
-    atom.parse::<Value>()
-        .or_else(|e| match sample_names.iter().position(|n| n == atom) {
+    atom.parse::<Value>().or_else(|e| {
+        // `kick` or `drums.kick` (the qualified form wins over a note of the same name)
+        let member = atom.rsplit_once('.').map_or(atom, |(_, m)| m);
+        match sample_names.iter().position(|n| n == member) {
             Some(id) => Ok(Value::Sample(id as u32)),
-            None if atom.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
-                let mut message = format!("`{atom}` isn't a note, a value, or a sample in a kit");
-                if let Some(c) = closest(atom, sample_names.iter().map(String::as_str)) {
+            None if atom
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') =>
+            {
+                let mut message =
+                    format!("`{atom}` isn't a note, a value, or a sample in a kit");
+                if let Some(c) = closest(member, sample_names.iter().map(String::as_str)) {
                     message.push_str(&format!(" (did you mean `{c}`?)"));
                 }
                 Err(message)
             }
             None => Err(e.to_string()),
-        })
+        }
+    })
 }
 
 /// The built-in signals: `sine`, `saw`, `tri`, `square`, `rand` and `perlin`, each from 0 to 1.
@@ -538,7 +545,8 @@ impl Perform<'_> {
     }
 
     /// `grid { kick: x... snare: .x.. }`: each row plays the sample it names on its hits,
-    /// and the rows play together.
+    /// and the rows play together. A row can name a track to send its hits there, take
+    /// parameters (`snare(pan: 10deg): ...`), and use mini-notation (`hat: [x*2 x]`).
     fn rows(&self, raw: &str, span: Span) -> Res<Pattern<Step>> {
         let base = span.end - 1 - raw.len();
         let mut layers = Vec::new();
@@ -556,32 +564,80 @@ impl Perform<'_> {
                     Span::new(at + offset, (at + offset + 1).min(span.end)),
                 )
             };
-            let Some((name, cells)) = code.split_once(':') else {
-                return Err(here(0, "a grid row is `sample: x...`".into()));
-            };
-            let sample = name.trim();
-            let Some(id) = self.cx.sample_names.iter().position(|n| n == sample) else {
-                let mut message = format!("`{sample}` isn't a sample in a kit");
-                if let Some(c) = closest(sample, self.cx.sample_names.iter().map(String::as_str)) {
+            let row = parse_grid_row(code).map_err(|(offset, message)| here(offset, message))?;
+            let member = row.name.rsplit_once('.').map_or(row.name, |(_, m)| m);
+            let track = self
+                .cx
+                .tracks
+                .iter()
+                .position(|t| t.name == row.name || t.name == member);
+            let id = self
+                .cx
+                .sample_names
+                .iter()
+                .position(|n| n == member)
+                .or_else(|| {
+                    // A row that only names a track takes the track's default sample.
+                    track.and_then(|t| {
+                        self.cx.tracks[t].defaults.get("sample").and_then(|v| match *v {
+                            Value::Sample(id) => Some(id as usize),
+                            Value::Num(n) if n >= 0.0 => {
+                                let local = n as usize;
+                                self.cx.tracks[t]
+                                    .instrument
+                                    .and_then(|i| self.cx.instruments[i].members.get(local))
+                                    .and_then(|name| {
+                                        self.cx.sample_names.iter().position(|n| n == name)
+                                    })
+                            }
+                            _ => None,
+                        })
+                    })
+                });
+            let Some(id) = id else {
+                let mut message = format!("`{}` isn't a sample in a kit", row.name);
+                if track.is_some() {
+                    message = format!(
+                        "`{}` is a track, but it has no kit sample to play",
+                        row.name
+                    );
+                } else if let Some(c) =
+                    closest(member, self.cx.sample_names.iter().map(String::as_str))
+                {
                     message.push_str(&format!(" (did you mean `{c}`?)"));
                 }
-                return Err(here(name.len() - name.trim_start().len(), message));
+                return Err(here(row.name_offset, message));
             };
-            let hits = grid(cells).map_err(|e| here(name.len() + 1 + e.offset, e.message))?;
+            let hits = if row.mini {
+                parse_with(row.body, |atom| match atom {
+                    "x" => Ok(Hit::Normal),
+                    "X" => Ok(Hit::Accent),
+                    "o" => Ok(Hit::Ghost),
+                    other => Err(format!(
+                        "`{other}` isn't a hit: use x, X, o, or ~"
+                    )),
+                })
+                .map_err(|e| here(row.body_offset + e.offset, e.message))?
+            } else {
+                grid(row.body).map_err(|e| here(row.body_offset + e.offset, e.message))?
+            };
             let id = id as u32;
+            let gain = row.gain;
+            let pan = row.pan;
+            let begin = row.begin;
+            let pitch = row.pitch;
             layers.push(hits.map(move |hit| {
-                let sample = Step::from(Value::Sample(id));
-                match hit {
-                    Hit::Normal => sample,
-                    Hit::Accent => Step {
-                        gain: Some(ACCENT_DB),
-                        ..sample
-                    },
-                    Hit::Ghost => Step {
-                        gain: Some(GHOST_DB),
-                        ..sample
-                    },
-                }
+                let mut step = Step::from(Value::Sample(id));
+                step.track = track;
+                step.pan = pan;
+                step.begin = begin;
+                step.pitch = pitch;
+                step.gain = match hit {
+                    Hit::Normal => gain,
+                    Hit::Accent => Some(gain.unwrap_or(0.0) + ACCENT_DB),
+                    Hit::Ghost => Some(gain.unwrap_or(0.0) + GHOST_DB),
+                };
+                step
             }));
         }
         if layers.is_empty() {
@@ -2344,6 +2400,226 @@ fn at_offset(message: String, token: Span, offset: usize) -> Diagnostic {
     // the token's text starts after its opening bracket
     let at = token.start + 1 + offset;
     Diagnostic::new(message, Span::new(at, (at + 1).min(token.end)))
+}
+
+/// One row of `grid { ... }`: a sample or track name, optional note controls, and a body.
+struct GridRow<'a> {
+    name: &'a str,
+    name_offset: usize,
+    gain: Option<f64>,
+    pan: Option<f64>,
+    begin: Option<f64>,
+    pitch: Option<f64>,
+    /// True when the body is mini-notation in brackets.
+    mini: bool,
+    body: &'a str,
+    body_offset: usize,
+}
+
+/// `kick: x...`, `snare(pan: 10deg): x...`, or `hat: [x*2 x]`.
+fn parse_grid_row(code: &str) -> Result<GridRow<'_>, (usize, String)> {
+    let trim_start = code.len() - code.trim_start().len();
+    let s = code.trim();
+    let err = |offset: usize, message: String| (trim_start + offset, message);
+
+    // name: letters, digits, underscores, and at most one dot for `kit.member`
+    let mut i = 0;
+    let bytes = s.as_bytes();
+    while i < bytes.len()
+        && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.')
+    {
+        i += 1;
+    }
+    if i == 0 {
+        return Err(err(
+            0,
+            "a grid row starts with a sample or track name".into(),
+        ));
+    }
+    let name = &s[..i];
+    let name_offset = trim_start;
+    if name.starts_with('.') || name.ends_with('.') || name.matches('.').count() > 1 {
+        return Err(err(0, format!("`{name}` isn't a sample or track name")));
+    }
+
+    let mut gain = None;
+    let mut pan = None;
+    let mut begin = None;
+    let mut pitch = None;
+    if i < s.len() && s.as_bytes()[i] == b'(' {
+        let open = i;
+        i += 1;
+        let mut depth = 1usize;
+        let mut close = None;
+        while i < s.len() {
+            match s.as_bytes()[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        let Some(close) = close else {
+            return Err(err(open, "this `(` has no matching `)`".into()));
+        };
+        let params = &s[open + 1..close];
+        parse_row_params(params, open + 1, &mut gain, &mut pan, &mut begin, &mut pitch)
+            .map_err(|(o, m)| err(o, m))?;
+        i = close + 1;
+    }
+
+    while i < s.len() && s.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= s.len() || s.as_bytes()[i] != b':' {
+        return Err(err(
+            0,
+            "a grid row is `sample: x...` or `sample: [x*2 x]`".into(),
+        ));
+    }
+    i += 1;
+    while i < s.len() && s.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let body = s[i..].trim_end();
+    let body_offset = trim_start + i;
+    if body.is_empty() {
+        return Err(err(i, "a grid row needs hits after the `:`".into()));
+    }
+    if body.starts_with('[') {
+        if !body.ends_with(']') {
+            return Err(err(i, "this `[` has no matching `]`".into()));
+        }
+        // Strip the outer brackets; parse_with expects the mini-notation text.
+        let inner = &body[1..body.len() - 1];
+        return Ok(GridRow {
+            name,
+            name_offset,
+            gain,
+            pan,
+            begin,
+            pitch,
+            mini: true,
+            body: inner,
+            body_offset: body_offset + 1,
+        });
+    }
+    Ok(GridRow {
+        name,
+        name_offset,
+        gain,
+        pan,
+        begin,
+        pitch,
+        mini: false,
+        body,
+        body_offset,
+    })
+}
+
+/// `gain: -6db, pan: 10deg, pitch: -2st, begin: 25%` inside a row's `(...)`.
+fn parse_row_params(
+    src: &str,
+    base: usize,
+    gain: &mut Option<f64>,
+    pan: &mut Option<f64>,
+    begin: &mut Option<f64>,
+    pitch: &mut Option<f64>,
+) -> Result<(), (usize, String)> {
+    let err = |offset: usize, message: String| (base + offset, message);
+    for part in src.split(',') {
+        let part_start = part.as_ptr() as usize - src.as_ptr() as usize;
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = part.split_once(':') else {
+            return Err(err(
+                part_start,
+                "a row parameter is `name: value`, such as `pan: 10deg`".into(),
+            ));
+        };
+        let key = key.trim();
+        let value = value.trim();
+        let value_at = part_start + (value.as_ptr() as usize - part.as_ptr() as usize);
+        // `%` is a share, not a Value unit; everything else uses the usual parse.
+        let parsed = if let Some(n) = value.strip_suffix('%') {
+            let n: f64 = n.trim().parse().map_err(|_| {
+                err(value_at, format!("`{value}` is not a percentage"))
+            })?;
+            Value::Num(n / 100.0)
+        } else {
+            value
+                .parse()
+                .map_err(|e: niminal_score::ParseError| err(value_at, e.0))?
+        };
+        match key {
+            "gain" => {
+                let db = match parsed {
+                    Value::Db(db) => db,
+                    Value::Num(n) if n > 0.0 => 20.0 * n.log10(),
+                    _ => {
+                        return Err(err(
+                            value_at,
+                            "gain is a level in db, such as `-6db`".into(),
+                        ));
+                    }
+                };
+                if gain.replace(db).is_some() {
+                    return Err(err(part_start, "`gain` is given more than once".into()));
+                }
+            }
+            "pan" => {
+                let Value::Degrees(d) = parsed else {
+                    return Err(err(
+                        value_at,
+                        "pan is a direction in degrees, such as `10deg`".into(),
+                    ));
+                };
+                if pan.replace(d).is_some() {
+                    return Err(err(part_start, "`pan` is given more than once".into()));
+                }
+            }
+            "begin" => {
+                let share = match parsed {
+                    Value::Num(n) if (0.0..=1.0).contains(&n) => n,
+                    _ => {
+                        return Err(err(
+                            value_at,
+                            "begin is a share of the sample, such as `25%`".into(),
+                        ));
+                    }
+                };
+                if begin.replace(share).is_some() {
+                    return Err(err(part_start, "`begin` is given more than once".into()));
+                }
+            }
+            "pitch" => {
+                let Value::Semitones(st) = parsed else {
+                    return Err(err(
+                        value_at,
+                        "pitch is an interval in semitones, such as `-2st`".into(),
+                    ));
+                };
+                if pitch.replace(st).is_some() {
+                    return Err(err(part_start, "`pitch` is given more than once".into()));
+                }
+            }
+            other => {
+                return Err(err(
+                    part_start,
+                    format!("`{other}` isn't a row parameter (gain, pan, begin, or pitch)"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// How long, in bars, each step of a gradual tempo change is.

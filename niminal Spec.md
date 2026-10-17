@@ -599,7 +599,7 @@ song = [intro verse(root: c3) verse(root: f3, energy: 0.8) bridge verse(root: c3
 
 - **Value patterns** hold notes, numbers or triggers. A note pattern plays on a track that has an instrument, and is an error elsewhere.
 - **Event patterns** name their instrument: `pluck(freq: riff)`, or a pattern of samples such as `[kick ~ snare ~]`.
-- **On an event pattern,** pattern operations transform the events, universal controls set per-event values, and signal opcodes (`.lpf`) are appended to each voice's output.
+- **On an event pattern,** pattern operations transform the events and universal controls set per-event values. Effects belong on a track's `out` or a bus.
 - **Patterns in arguments** expand across time, just as comma lists expand across channels: `pluck(freq: [c2 c2 g2 bb2], bright: [0.2 0.8])`. Patterns of different lengths cycle independently.
 
 ### Universal controls

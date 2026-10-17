@@ -252,7 +252,19 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
                 ];
             }
             Receiver::Scene => return pattern_ops().iter().filter(|o| o.name == "over").map(op_item).collect(),
-            Receiver::Signal => {}
+            Receiver::Signal => {
+                // `drums.`: offer the kit's members when known (from `.slices(n)`).
+                if let Some(root) = receiver_and_root(&dot[..dot.len() - 1], symbols).1
+                    && let Some(kit) = symbols.iter().find(|s| s.name == root && s.kind == SymbolKind::Kit)
+                    && !kit.params.is_empty()
+                {
+                    return kit
+                        .params
+                        .iter()
+                        .map(|p| item(&p.name, ENUM_MEMBER, &kit.detail, "a sample in this kit"))
+                        .collect();
+                }
+            }
         }
         let mut out: Vec<Value> = ops.iter().filter(|o| o.positional >= 1 && o.params.first().is_some_and(|p| p.ty != "wave")).map(op_item).collect();
         out.extend(symbols.iter().filter(|s| s.kind == SymbolKind::Function).map(symbol_item));

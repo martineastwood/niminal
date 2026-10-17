@@ -1,12 +1,29 @@
 // Samples and kits. Every .wav in the folder is a sample you can name in a pattern.
+// Give a drum its own track for effects; name that track in a grid row and the
+// hits go through its strip. Rows can take pan/gain/pitch and mini-notation.
 // Render with:  niminal render examples/drums.nml --out drums.wav --bars 4
 config { channels: stereo }
 tempo 100bpm
 
-kit drums = "drums"
-track beat { instrument = drums }
-track hats { instrument = drums(gain: -1db) }
+bus room: stereo {
+  out = it.reverb(room: 0.35, damp: 0.5).gain(0.7)
+}
 
-// the kick and snare, and eighth-note hats
-beat.play([kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare])
-hats.play([hat hat hat hat hat hat hat hat])
+kit drums = "drums"
+
+track beat { instrument = drums }
+track snare {
+  instrument = drums.snare
+  out = it.gain(-1db)
+  room += out.gain(-12db)
+}
+track hat {
+  instrument = drums.hat
+  out = it.hpf(cutoff: 6khz)
+}
+
+beat.play(grid {
+  kick:             x... x... x... x..x
+  snare(pan: 8deg): [~ x ~ [x o]]
+  hat(gain: -4db):  [x*2 x x(3,8)]
+})

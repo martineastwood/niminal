@@ -139,15 +139,20 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
             Item::Track(d) => (&d.name, SymbolKind::Track, format!("track {}", d.name.name)),
             Item::MidiOut(d) => (&d.name, SymbolKind::Instrument, first_line()),
-            Item::Sample(d) => (
-                &d.name,
+            Item::Sample(d) => {
                 if d.is_kit {
-                    SymbolKind::Kit
-                } else {
-                    SymbolKind::Sample
-                },
-                first_line(),
-            ),
+                    param_list = kit_members(d);
+                }
+                (
+                    &d.name,
+                    if d.is_kit {
+                        SymbolKind::Kit
+                    } else {
+                        SymbolKind::Sample
+                    },
+                    first_line(),
+                )
+            }
             Item::Clip(b) => {
                 param_list = clip_lanes(source, b, &items);
                 (&b.name, SymbolKind::Clip, format!("clip {}", b.name.name))
@@ -173,6 +178,24 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
     Ok(out)
 }
 
+/// Members of a kit known from the source: `amen.slices(16)` gives `s0`..`s15`.
+fn kit_members(d: &SampleDecl) -> Vec<SymbolParam> {
+    match &d.source {
+        SampleSource::Slices { count, .. } if *count >= 1.0 && count.fract() == 0.0 => {
+            (0..*count as usize)
+                .map(|i| {
+                    let name = format!("s{i}");
+                    SymbolParam {
+                        name: name.clone(),
+                        label: name,
+                    }
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// The lanes a clip with an `instrument:` can be given: the instrument's parameters, and the lanes every note has.
 fn clip_lanes(source: &str, clip: &NamedBlock, items: &[(Item, Span)]) -> Vec<SymbolParam> {
     let Some((_, instrument)) = clip
@@ -182,9 +205,18 @@ fn clip_lanes(source: &str, clip: &NamedBlock, items: &[(Item, Span)]) -> Vec<Sy
     else {
         return Vec::new();
     };
+    // `drums.snare` is parsed as `snare(drums)`: the kit is the receiver.
     let name = match &instrument.kind {
-        ExprKind::Call { name, .. } => name.name.as_str(),
+        ExprKind::Call { args, .. }
+            if args.len() == 1
+                && args[0].receiver
+                && let ExprKind::Name(kit) = &args[0].value.kind =>
+        {
+            kit.as_str()
+        }
+        ExprKind::Call { name, args } if !args.iter().any(|a| a.receiver) => name.name.as_str(),
         ExprKind::Name(name) => name.as_str(),
+        ExprKind::Call { name, .. } => name.name.as_str(),
         _ => return Vec::new(),
     };
     let Some(def) = items.iter().find_map(|(item, _)| match item {

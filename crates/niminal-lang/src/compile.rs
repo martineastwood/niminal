@@ -467,7 +467,15 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             ));
             continue;
         }
-        match compile_track(decl, &instruments, &failed, tempo, &registry, &names) {
+        match compile_track(
+            decl,
+            &instruments,
+            &failed,
+            &samples_state.names,
+            tempo,
+            &registry,
+            &names,
+        ) {
             Ok(Some(t)) => {
                 tracks.push(t);
                 track_spans.push(decl.name.span);
@@ -554,6 +562,7 @@ fn compile_track(
     decl: &TrackDecl,
     instruments: &[Instrument],
     failed: &[&str],
+    sample_names: &[String],
     tempo: Tempo,
     registry: &Registry,
     names: &Names,
@@ -603,31 +612,13 @@ fn compile_track(
     let mut instrument = None;
     let mut defaults = BTreeMap::new();
     if let Some(value) = instrument_line {
-        let (name, span, args): (&str, Span, &[Arg]) = match &value.kind {
-            ExprKind::Name(n) => (n, value.span, &[]),
-            ExprKind::Call { name, args } if !args.iter().any(|a| a.receiver) => {
-                (&name.name, name.span, args)
+        match resolve_instrument(value, instruments, failed, sample_names, tempo)? {
+            None => return Ok(None),
+            Some((index, args)) => {
+                defaults = args;
+                instrument = Some(index);
             }
-            _ => {
-                return Err(
-                    Diagnostic::new("expected an instrument here", value.span).with_help(
-                        "for example `instrument = pluck` or `instrument = pluck(bright: 0.6)`",
-                    ),
-                );
-            }
-        };
-        if failed.contains(&name) {
-            return Ok(None);
         }
-        let Some(index) = instruments.iter().position(|i| i.name == name) else {
-            let mut d = Diagnostic::new(format!("no instrument named `{name}`"), span);
-            if let Some(c) = closest(name, instruments.iter().map(|i| i.name.as_str())) {
-                d = d.with_help(format!("did you mean `{c}`?"));
-            }
-            return Err(d);
-        };
-        defaults = literal_args(args, &instruments[index], tempo)?;
-        instrument = Some(index);
     }
 
     let chain = compile_chain(
@@ -655,6 +646,82 @@ fn compile_track(
             voice_sends,
         },
     }))
+}
+
+/// `pluck`, `pluck(bright: 0.6)`, `drums.snare`, or `drums.snare(pitch: -2st)`.
+/// `None` when the instrument failed earlier.
+fn resolve_instrument(
+    value: &Expr,
+    instruments: &[Instrument],
+    failed: &[&str],
+    sample_names: &[String],
+    tempo: Tempo,
+) -> Res<Option<(usize, BTreeMap<String, Value>)>> {
+    let help = "for example `instrument = pluck`, `instrument = pluck(bright: 0.6)`, or `instrument = drums.snare`";
+    let bad = || Diagnostic::new("expected an instrument here", value.span).with_help(help);
+
+    let (name, member, span, args): (&str, Option<&str>, Span, &[Arg]) = match &value.kind {
+        ExprKind::Name(n) => (n.as_str(), None, value.span, &[][..]),
+        ExprKind::Call { name, args } => {
+            let receivers: Vec<_> = args.iter().filter(|a| a.receiver).collect();
+            if receivers.is_empty() {
+                (name.name.as_str(), None, name.span, args.as_slice())
+            } else if receivers.len() == 1
+                && let ExprKind::Name(kit) = &receivers[0].value.kind
+            {
+                // `drums.snare(...)` is parsed as `snare(drums, ...)`.
+                let start = args.iter().position(|a| !a.receiver).unwrap_or(args.len());
+                (
+                    kit.as_str(),
+                    Some(name.name.as_str()),
+                    name.span,
+                    &args[start..],
+                )
+            } else {
+                return Err(bad());
+            }
+        }
+        _ => return Err(bad()),
+    };
+
+    if failed.contains(&name) {
+        return Ok(None);
+    }
+    let Some(index) = instruments.iter().position(|i| i.name == name) else {
+        let mut d = Diagnostic::new(format!("no instrument named `{name}`"), span);
+        if let Some(c) = closest(name, instruments.iter().map(|i| i.name.as_str())) {
+            d = d.with_help(format!("did you mean `{c}`?"));
+        }
+        return Err(d);
+    };
+    let instr = &instruments[index];
+    let mut defaults = literal_args(args, instr, sample_names, tempo)?;
+    if let Some(member) = member {
+        let local = instr.members.iter().position(|m| m == member).ok_or_else(|| {
+            let mut d = Diagnostic::new(
+                format!("there is no sample `{member}` in the kit `{name}`"),
+                span,
+            );
+            if instr.members.is_empty() {
+                d = d.with_help(format!("`{name}` isn't a kit"));
+            } else if let Some(c) = closest(member, instr.members.iter().map(String::as_str)) {
+                d = d.with_help(format!("did you mean `{c}`?"));
+            }
+            d
+        })?;
+        if defaults.contains_key("sample") {
+            return Err(Diagnostic::new(
+                "the sample is already chosen by the name after the kit",
+                span,
+            )
+            .with_help(format!(
+                "write `{name}.{member}` or `{name}(sample: ...)`, not both"
+            )));
+        }
+        // The kit's `sample` parameter counts members from zero.
+        defaults.insert("sample".into(), Value::Num(local as f64));
+    }
+    Ok(Some((index, defaults)))
 }
 
 /// `mono bass(...) with(legato: true, glide: 80ms, priority: lowest)` and
@@ -1225,7 +1292,12 @@ fn tempo_of(items: &[Item], beats_per_bar: f64) -> Res<Tempo> {
 }
 
 /// Literal named arguments, checked against `instr`'s parameters.
-fn literal_args(args: &[Arg], instr: &Instrument, tempo: Tempo) -> Res<BTreeMap<String, Value>> {
+fn literal_args(
+    args: &[Arg],
+    instr: &Instrument,
+    sample_names: &[String],
+    tempo: Tempo,
+) -> Res<BTreeMap<String, Value>> {
     let mut out = BTreeMap::new();
     for arg in args {
         let Some(arg_name) = &arg.name else {
@@ -1237,7 +1309,7 @@ fn literal_args(args: &[Arg], instr: &Instrument, tempo: Tempo) -> Res<BTreeMap<
         let (_, param) = instr
             .param(&arg_name.name)
             .map_err(|e| arg_error(e, arg_name.span))?;
-        let value = literal_value(&arg.value)?;
+        let value = literal_arg_value(&arg.value, &arg_name.name, instr, sample_names)?;
         instr
             .param_value(param, value, tempo)
             .map_err(|e| arg_error(e, arg.value.span))?;
@@ -1249,6 +1321,32 @@ fn literal_args(args: &[Arg], instr: &Instrument, tempo: Tempo) -> Res<BTreeMap<
         }
     }
     Ok(out)
+}
+
+/// A note argument: a literal, or a kit sample name for `sample:`.
+fn literal_arg_value(
+    e: &Expr,
+    param: &str,
+    instr: &Instrument,
+    _sample_names: &[String],
+) -> Res<Value> {
+    if param == "sample"
+        && let ExprKind::Name(name) = &e.kind
+        && !instr.members.is_empty()
+    {
+        if let Some(local) = instr.members.iter().position(|m| m == name) {
+            return Ok(Value::Num(local as f64));
+        }
+        let mut d = Diagnostic::new(
+            format!("there is no sample `{name}` in the kit `{}`", instr.name),
+            e.span,
+        );
+        if let Some(c) = closest(name, instr.members.iter().map(String::as_str)) {
+            d = d.with_help(format!("did you mean `{c}`?"));
+        }
+        return Err(d);
+    }
+    literal_value(e)
 }
 
 fn check_note(
@@ -1269,7 +1367,7 @@ fn check_note(
     };
     let dur = literal_time(&note.dur)?;
 
-    let args = literal_args(&note.args, instr, tempo)?;
+    let args = literal_args(&note.args, instr, &[], tempo)?;
     let mut merged = target.defaults.cloned().unwrap_or_default();
     merged.extend(args.iter().map(|(k, v)| (k.clone(), *v)));
     instr

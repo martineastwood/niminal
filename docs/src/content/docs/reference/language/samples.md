@@ -40,6 +40,19 @@ track drums { instrument = chops }
 drums.play([s0 s1 s2 s3 s4 s5 s6 s7])
 ```
 
+A kit member is an instrument too: `drums.snare` means the kit with that sample chosen (the same as `drums(sample: snare)`). Give it its own track when you want effects, sends, mute or solo on that drum alone:
+
+```nml
+kit drums = "drums"
+track snare {
+  instrument = drums.snare
+  out = it.reverb(room: 0.4).gain(-3db)
+}
+snare.play(grid[.... x... .... x...])
+```
+
+In patterns, `drums.kick` names the sample when a bare name would clash with a note (`a`, `e`, `c4`).
+
 Parameters you can set on a hit:
 
 | Parameter | Meaning |
@@ -48,13 +61,19 @@ Parameters you can set on a hit:
 | `start:` | Start offset into the file |
 | `gain:` | Level (as for any instrument) |
 
-Chop a break with a grid — a row per slice, columns are steps. `X` accents, `o` ghosts:
+Chop a break with a grid — a row per slice, columns are steps. `X` accents, `o` ghosts. A row can take note controls, use mini-notation, or name a drum track so its hits go through that strip:
 
 ```nml
 drums.play(grid {
   s0:  x... .... x... ....
   s4:  .... x... .... x..x
   s2:  ..x. ..o. ..X. ....
+})
+
+beat.play(grid {
+  kick:              x... x... x... x..x
+  snare(pan: 10deg): [~ x ~ [x o]]
+  hat(gain: -6db):   [x*2 x x(3,8)]
 })
 ```
 
