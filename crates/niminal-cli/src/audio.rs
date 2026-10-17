@@ -566,7 +566,7 @@ mod tests {
             playback.read(&mut audio);
             for (i, pair) in audio.as_chunks::<2>().0.iter().enumerate() {
                 let at = batch * QUEUE_FRAMES + i;
-                assert_eq!(*pair, [expected[0][at], expected[1][at]]);
+                assert_eq!(*pair, [expected[0][at], expected[1][at]], "batch {batch} i {i}");
             }
         }
         assert_eq!(playback.health.underruns.load(Ordering::Relaxed), 0);

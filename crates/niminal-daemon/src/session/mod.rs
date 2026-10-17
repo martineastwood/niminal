@@ -28,6 +28,7 @@ use niminal_lang::{
 use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::events::{At, Op, Sent};
+use crate::protocol::ClientId;
 use crate::keyboard::Keyboard;
 use crate::log::{Expression, LogEntry, LogInput};
 use crate::project::{Entry, Located, Origin, Piece, Problem, Project};
@@ -86,6 +87,30 @@ struct Upcoming {
     /// Taken from the schedule (so it is dropped and fetched again if the
     /// schedule changes), rather than written out or sent from outside.
     scheduled: bool,
+    /// The client that sent it, if one did.
+    client: Option<ClientId>,
+}
+
+/// A note a client holds open or may change, by the id the client chose.
+struct VoiceEntry {
+    client: ClientId,
+    id: u64,
+    key: u32,
+    /// The instrument it plays, by name so that it survives the program being replaced.
+    instrument: String,
+}
+
+/// A change to a parameter of the note a key holds. The parameter is found by name in the instrument
+/// when the change is planned.
+#[derive(Clone)]
+pub(crate) struct VoiceSet {
+    pub key: u32,
+    pub instrument: String,
+    pub name: String,
+    pub value: f32,
+    pub frames: u64,
+    pub at: u64,
+    done: bool,
 }
 
 /// A statement that runs when a change lands, with the program it was
@@ -268,6 +293,9 @@ pub struct Session {
     version: u64,
     live: Option<realtime::Planner>,
     detached: bool,
+    /// Notes clients hold by id, and their parameter changes still to come.
+    voices: Vec<VoiceEntry>,
+    voice_sets: Vec<VoiceSet>,
     /// Things added since the planner last looked, that it may have to put into windows already prepared.
     fresh: Vec<realtime::Fresh>,
     /// How many mixers have been built for the renderer.
@@ -344,6 +372,8 @@ impl Session {
             version: 0,
             live: None,
             detached: false,
+            voices: Vec::new(),
+            voice_sets: Vec::new(),
             fresh: Vec::new(),
             mixer_builds: Arc::default(),
         }
@@ -366,6 +396,7 @@ impl Session {
                 event: event.clone(),
                 key: None,
                 scheduled: false,
+                client: None,
             });
         }
         session.program = Arc::new(program);
@@ -771,6 +802,7 @@ impl Session {
                 event: event.clone(),
                 key: None,
                 scheduled: false,
+                client: None,
             });
         }
         for scheduled in &program.performance {
@@ -930,6 +962,7 @@ impl Session {
             self.apply_panics();
             self.apply_controls();
             self.release_due();
+            self.apply_voice_sets();
 
             // How far we can go before something needs doing.
             let mut n = (end - self.clock).min(BLOCK as u64);
@@ -940,6 +973,10 @@ impl Session {
                 n = n.min(change.at.saturating_sub(self.clock).max(1));
             }
             n = self.sounding.limit(self.clock, n);
+            let upcoming = self.key_offs.iter().map(|&(_, at)| at).chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at));
+            for at in upcoming.filter(|&at| at > self.clock) {
+                n = n.min(at - self.clock);
+            }
             if let Some(&t) = self.schedule.panics().get(self.next_panic) {
                 n = n.min(self.samples(t).saturating_sub(self.clock).max(1));
             }
@@ -1021,18 +1058,8 @@ impl Session {
                     session.cancel(*id);
                 }
                 LogInput::Panic => session.panic(),
-                LogInput::Control {
-                    name,
-                    value,
-                    frames,
-                    at,
-                } => {
-                    if let Some(index) = session.program.controls.iter().position(|c| c.name == *name) {
-                        let _ = session.queue_control(index, *value, *frames, *at);
-                    }
-                }
-                LogInput::Note { event, start, dur } => {
-                    session.add_explicit((*start).max(session.clock), *dur, event.clone(), None);
+                LogInput::Send { client, ops } => {
+                    let _ = session.send_events(*client, ops.clone());
                 }
                 LogInput::Key {
                     channel,
@@ -1094,6 +1121,7 @@ impl Session {
                 event,
                 key: None,
                 scheduled: true,
+                client: None,
             });
         }
         if let Some(e) = problem {
@@ -1152,9 +1180,9 @@ impl Session {
                         plan.rule,
                     );
                     self.mixer.set_voice_pan(id, plan.pan);
-                    self.mixer.set_voice_dur(id, if note.key.is_some() { 0.0 } else { note.dur as f32 / self.sample_rate });
+                    self.mixer.set_voice_dur(id, if note.key.is_some() && note.dur == 0 { 0.0 } else { note.dur as f32 / self.sample_rate });
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
-                    let off = if note.key.is_some() {
+                    let off = if note.key.is_some() && note.dur == 0 {
                         u64::MAX
                     } else {
                         self.clock + note.dur
@@ -1198,8 +1226,38 @@ impl Session {
         std::mem::take(&mut self.midi_out)
     }
 
+    /// Move the parameters of held notes that their changes say should move by now.
+    fn apply_voice_sets(&mut self) {
+        let now = self.clock;
+        for i in 0..self.voice_sets.len() {
+            let set = &self.voice_sets[i];
+            if set.done || set.at > now {
+                continue;
+            }
+            let index = self
+                .program
+                .instruments
+                .iter()
+                .find(|inst| inst.name == set.instrument)
+                .and_then(|inst| inst.graph.param_index(&set.name));
+            if let Some(index) = index {
+                for held in self.sounding.held.iter().filter(|h| h.2 == set.key) {
+                    self.mixer.set_voice_param_index(held.1, index, set.value, set.frames);
+                }
+            }
+            self.voice_sets[i].done = true;
+        }
+        let stale = now.saturating_sub(self.samples(2.0));
+        self.voice_sets.retain(|s| !s.done || s.at > stale);
+    }
+
     fn release_due(&mut self) {
         let now = self.clock;
+        for &(key, at) in &self.key_offs {
+            if at <= now {
+                self.sounding.release_key(key, at);
+            }
+        }
         let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sounding.midi)
             .into_iter()
             .partition(|h| h.0 <= now);

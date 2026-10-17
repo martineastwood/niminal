@@ -39,6 +39,28 @@ pub struct Voice {
     dur: f32,
     /// How many notes of this instrument started before this one.
     index: u32,
+    /// Parameters on their way to a new value. Made with room for every parameter, so that setting
+    /// one never allocates.
+    ramps: Vec<Ramp>,
+}
+
+/// A parameter moving in a straight line to `to` over `frames`, `done` of which have passed.
+struct Ramp {
+    index: usize,
+    from: f32,
+    to: f32,
+    frames: u64,
+    done: u64,
+}
+
+impl Ramp {
+    fn at(&self, done: u64) -> f32 {
+        if done >= self.frames {
+            self.to
+        } else {
+            self.from + (self.to - self.from) * (done as f32 / self.frames as f32)
+        }
+    }
 }
 
 /// Which held note a legato voice sounds.
@@ -162,7 +184,8 @@ impl Voice {
         let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0)).map(Some).collect();
         let shaped = ops.iter().any(|op| op.is_envelope());
         let tail_left = (graph.tail * sample_rate) as usize;
-        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None, shaped, tail_left, dur: 0.0, index: 0 }
+        let graph_params = graph.params.len();
+        Voice { graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None, shaped, tail_left, dur: 0.0, index: 0, ramps: Vec::with_capacity(graph_params) }
     }
 
     /// Keep memory at matching call sites while retaining the new graph's
@@ -209,6 +232,29 @@ impl Voice {
     /// Set a parameter by index. Takes effect from the next block.
     pub fn set_param(&mut self, index: usize, value: f32) {
         self.slots[index] = [value; BLOCK];
+    }
+
+    /// Move a parameter to `value` in a straight line over `frames`. A glide is carried out as the voice is
+    /// processed, so it starts from the first sample after this. Allocates nothing.
+    pub fn set_param_glide(&mut self, index: usize, value: f32, frames: u64) {
+        if index >= self.graph.params.len() {
+            return;
+        }
+        let from = self.current_param(index);
+        self.ramps.retain(|r| r.index != index);
+        if frames == 0 {
+            self.set_param(index, value);
+        } else {
+            self.ramps.push(Ramp { index, from, to: value, frames, done: 0 });
+        }
+    }
+
+    /// Where a parameter is now, partway along a glide if it is on one.
+    fn current_param(&self, index: usize) -> f32 {
+        match self.ramps.iter().find(|r| r.index == index) {
+            Some(r) => r.at(r.done),
+            None => self.slots[index][0],
+        }
     }
 
     /// Set a parameter by name; returns false if there is no such parameter.
@@ -434,6 +480,19 @@ impl Voice {
             }
         }
         let ctx = ProcessCtx { sample_rate: self.sample_rate, gate: !self.released, dur: self.dur, index: self.index, clock: buses.clock };
+
+        for ramp in &mut self.ramps {
+            for (n, sample) in self.slots[ramp.index][..frames].iter_mut().enumerate() {
+                *sample = ramp.at(ramp.done + n as u64 + 1);
+            }
+            ramp.done += frames as u64;
+        }
+        for i in (0..self.ramps.len()).rev() {
+            if self.ramps[i].done >= self.ramps[i].frames {
+                let Ramp { index, to, .. } = self.ramps.swap_remove(i);
+                self.slots[index] = [to; BLOCK];
+            }
+        }
 
         if let Some(param) = self.rule.and_then(|r| r.pitch_param)
             && (self.glide.left > 0 || self.glide.now != self.slots[param][0])

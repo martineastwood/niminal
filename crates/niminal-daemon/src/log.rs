@@ -1,7 +1,6 @@
 //! The record of everything sent to a session and when, in samples. Replaying
 //! it into a fresh session gives back the same audio.
 
-use niminal_score::Event;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,18 +16,10 @@ pub enum LogInput {
         id: Option<u64>,
     },
     Panic,
-    /// A control moved to `value` (in the engine's unit) over `frames`, at sample `at`.
-    Control {
-        name: String,
-        value: f32,
-        frames: u64,
-        at: u64,
-    },
-    /// A note started at sample `start` and held for `dur` samples.
-    Note {
-        event: Event,
-        start: u64,
-        dur: u64,
+    /// A batch of events a client sent, with every time resolved to a sample.
+    Send {
+        client: u64,
+        ops: Vec<crate::events::Op>,
     },
     /// A key on a MIDI keyboard: pressed with `velocity` from 1, or let go with 0.
     Key {

@@ -556,6 +556,18 @@ impl Mixer {
         }
     }
 
+    /// Move a parameter of a sounding note, by its index, to `value` over `frames` (at once if 0). A note
+    /// that has ended is ignored. Allocates nothing.
+    pub fn set_voice_param_index(&mut self, id: VoiceId, index: usize, value: f32, frames: u64) {
+        let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
+        for track in &mut self.tracks {
+            if let Some((_, v)) = track.voices.iter_mut().find(|n| ends(n)) {
+                v.set_param_glide(index, value, frames);
+                return;
+            }
+        }
+    }
+
     /// Silence everything at once: stop every voice, clear every effect's
     /// memory (delay lines, reverb tails) and empty the buses.
     pub fn panic(&mut self) {

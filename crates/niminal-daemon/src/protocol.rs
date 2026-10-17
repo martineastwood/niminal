@@ -91,6 +91,7 @@ impl Daemon {
 
     pub fn disconnect(&mut self, client: ClientId) {
         self.clients.remove(&client);
+        self.session.drop_client(client);
     }
 
     /// Handle one message from `client`; the replies to send back to it.
@@ -329,7 +330,7 @@ impl Daemon {
                 self.session.panic();
                 Ok(json!({}))
             }
-            "events.send" => self.events_send(params),
+            "events.send" => self.events_send(client, params),
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
             "status" => Ok(status_json(&self.session)),
             other => Err(RpcError::new(
@@ -389,7 +390,7 @@ impl Daemon {
         self.eval_outcome(result)
     }
 
-    fn events_send(&mut self, params: &Value) -> Result<Value, RpcError> {
+    fn events_send(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
         let ops: Vec<Op> = params
             .get("events")
             .cloned()
@@ -400,7 +401,7 @@ impl Daemon {
             })?;
         let sent = self
             .session
-            .send_events(ops)
+            .send_events(client, ops)
             .map_err(|problems| rejected(&problems))?;
         Ok(json!({
             "accepted": sent.accepted,

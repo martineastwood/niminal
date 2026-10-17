@@ -14,6 +14,8 @@ pub(crate) struct Change {
     pub frames: u64,
     pub serial: u64,
     pub log_index: usize,
+    /// Which event of the batch in the log entry this came from.
+    pub log_op: usize,
     pub applied: bool,
 }
 
@@ -21,6 +23,7 @@ pub(crate) struct Change {
 pub(crate) struct Applied {
     pub serial: u64,
     pub log_index: usize,
+    pub log_op: usize,
     pub at: u64,
 }
 

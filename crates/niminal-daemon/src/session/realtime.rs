@@ -122,7 +122,7 @@ impl Command {
                 Kind::Reset { .. } => 0,
                 Kind::Swap { .. } | Kind::Control { .. } => 1,
                 Kind::Note { .. } => 2,
-                Kind::Release { .. } | Kind::Param { .. } => 3,
+                Kind::Release { .. } | Kind::Param { .. } | Kind::SetParam { .. } => 3,
             },
         )
     }
@@ -148,6 +148,13 @@ enum Kind {
         name: &'static str,
         value: f32,
     },
+    /// Move a parameter, by its index, of the notes a key is holding, over `frames`.
+    SetParam {
+        key: u32,
+        index: usize,
+        value: f32,
+        frames: u64,
+    },
     /// A clip lane setting a track parameter: control key, value, glide in frames.
     Control {
         key: String,
@@ -166,6 +173,17 @@ enum Kind {
         controls: Vec<ControlState>,
         epoch: u64,
     },
+}
+
+/// The command that moves a parameter of a held note, if `program` has the instrument and the parameter.
+fn set_command(program: &Program, set: &super::VoiceSet, at: u64, frames: u64) -> Option<Command> {
+    let index = program
+        .instruments
+        .iter()
+        .find(|i| i.name == set.instrument)?
+        .graph
+        .param_index(&set.name)?;
+    Some(Command { at, kind: Kind::SetParam { key: set.key, index, value: set.value, frames } })
 }
 
 /// A `midi_out` note on or off, if anyone is listening. Allocates nothing.
@@ -205,6 +223,7 @@ pub(super) enum Fresh {
     Note { event: Event, start: u64, dur: u64, key: Option<u32> },
     Release { key: u32, at: u64 },
     Param { key: u32, name: &'static str, value: f32, at: u64 },
+    Set(super::VoiceSet),
 }
 
 impl Fresh {
@@ -212,6 +231,7 @@ impl Fresh {
         match self {
             Fresh::Note { start, .. } => *start,
             Fresh::Release { at, .. } | Fresh::Param { at, .. } => *at,
+            Fresh::Set(set) => set.at,
         }
     }
 }
@@ -407,12 +427,13 @@ impl Session {
         };
         while let Ok(applied) = planner.control_applied.pop() {
             if let Some(entry) = self.log.get_mut(applied.log_index)
-                && let LogInput::Control { at, .. } = &mut entry.input
+                && let LogInput::Send { ops, .. } = &mut entry.input
+                && let Some(Op::Control { at, .. } | Op::Track { at, .. }) = ops.get_mut(applied.log_op)
             {
-                if *at != applied.at {
+                if *at != At::Sample(applied.at) {
                     self.log_corrections += 1;
                 }
-                *at = applied.at;
+                *at = At::Sample(applied.at);
             }
             if let Some(change) = self
                 .control_changes
@@ -650,6 +671,11 @@ impl Session {
                     }
                     Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
                     Fresh::Param { key, name, value, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Param { key, name, value } }),
+                    Fresh::Set(set) => {
+                        if let Some(command) = set_command(&program, &set, set.at.max(self.clock), set.frames) {
+                            window.commands.push(command);
+                        }
+                    }
                 }
             }
             let full = window.commands.len() > planner.inject_tx.slots();
@@ -744,6 +770,7 @@ impl Session {
                     &explicit,
                     position..boundary,
                     config,
+                    mode == PlanMode::Refresh && position == from,
                     &mut window,
                 );
                 position = boundary;
@@ -795,6 +822,7 @@ impl Session {
                 &explicit,
                 position..to,
                 config,
+                mode == PlanMode::Refresh && position == from,
                 &mut window,
             );
         }
@@ -855,6 +883,7 @@ impl Session {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn plan_notes(
         &self,
         program: &Arc<Program>,
@@ -862,6 +891,7 @@ impl Session {
         explicit: &[Explicit],
         range: std::ops::Range<u64>,
         config: RealtimeConfig,
+        catch_up: bool,
         window: &mut Window,
     ) {
         let (from, to) = (range.start, range.end);
@@ -966,6 +996,24 @@ impl Session {
                 kind: Kind::Param { key, name, value },
             });
         }
+        // changes to a held note's parameters: those from this window, and after a replan those from before it
+        // that the discarded windows never played
+        let mut caught_up: Vec<&super::VoiceSet> = Vec::new();
+        for set in &self.voice_sets {
+            if set.at >= from && set.at < to {
+                if let Some(command) = set_command(program, set, set.at, set.frames) {
+                    window.commands.push(command);
+                }
+            } else if set.at < from && catch_up {
+                caught_up.retain(|c| !(c.key == set.key && c.name == set.name));
+                caught_up.push(set);
+            }
+        }
+        for set in caught_up {
+            if let Some(command) = set_command(program, set, from, 0) {
+                window.commands.push(command);
+            }
+        }
         // keys that came up: each key is its own note, so a release that is repeated in a later window does no harm
         for &(key, at) in &self.key_offs {
             if at < to {
@@ -1011,7 +1059,7 @@ impl Session {
             voice.set_group(plan.choke);
             voice.set_rule(plan.rule);
             voice.set_pan(plan.pan);
-            voice.set_dur(if key.is_some() { 0.0 } else { dur as f32 / self.sample_rate });
+            voice.set_dur(if key.is_some() && dur == 0 { 0.0 } else { dur as f32 / self.sample_rate });
             for (key, value, smooth) in &plan.controls {
                 window.commands.push(Command {
                     at,
@@ -1027,7 +1075,7 @@ impl Session {
                 kind: Kind::Note {
                     track: (plan.track != 0).then(|| program.tracks[plan.track].name.clone()),
                     program: program.clone(),
-                    off: if key.is_some() {
+                    off: if key.is_some() && dur == 0 {
                         u64::MAX
                     } else {
                         at.saturating_add(dur)
@@ -1264,6 +1312,11 @@ impl RealtimeRenderer {
                         .set_control(&c.key, c.start, c.target, c.frames, 0);
                 }
             }
+            Kind::SetParam { key, index, value, frames } => {
+                for held in self.sounding.held.iter().filter(|h| h.2 == *key) {
+                    self.mixer.set_voice_param_index(held.1, *index, *value, *frames);
+                }
+            }
             Kind::Param { key, name, value } => {
                 for held in self.sounding.held.iter().filter(|h| h.2 == *key) {
                     self.mixer.set_voice_param(held.1, name, *value);
@@ -1472,6 +1525,7 @@ impl RealtimeRenderer {
                 let _ = self.control_applied.push(Applied {
                     serial: change.serial,
                     log_index: change.log_index,
+                    log_op: change.log_op,
                     at: self.clock,
                 });
                 if change.at < self.clock {

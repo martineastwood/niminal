@@ -117,9 +117,9 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
     let mut session = Session::playing(program.clone(), schedule, SAMPLE_RATE as f32);
     let ops = extra
         .iter()
-        .map(|e| niminal_daemon::Op::Note { target: e.target.clone(), at: niminal_daemon::At::Time(e.at), args: e.args.clone(), dur: e.dur })
+        .map(|e| niminal_daemon::Op::Note { target: e.target.clone(), at: niminal_daemon::At::Time(e.at), args: e.args.clone(), dur: Some(e.dur), id: None })
         .collect();
-    session.send_events(ops).map_err(|ps| problems(&ps))?;
+    session.send_events(0, ops).map_err(|ps| problems(&ps))?;
     if options.stems {
         session.capture_stems();
     }

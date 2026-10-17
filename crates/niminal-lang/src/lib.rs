@@ -36,6 +36,7 @@ pub use ide::{
 pub use layout::Layout;
 pub use lexer::{Tok, Token, lex};
 pub use modules::{Expanded, expand};
+pub use perform::PITCH_PARAM;
 pub use performance::EnvLane;
 pub use performance::{
     Action, Arrangement, Clip, Keys, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled,

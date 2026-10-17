@@ -49,14 +49,29 @@ impl Serialize for At {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Op {
-    /// Play a note on a track or instrument for `dur`.
+    /// Play a note on a track or instrument. With `dur` and no `id` it is fire-and-forget. With an `id` and
+    /// no `dur` it is held until an `off`. With both it is held for at most `dur`.
     Note {
         target: String,
         at: At,
         #[serde(default)]
         args: BTreeMap<String, Value>,
-        dur: Time,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dur: Option<Time>,
+        /// Chosen by the client, scoped to its connection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u64>,
     },
+    /// Change parameters of a sounding or waiting note.
+    Set {
+        id: u64,
+        at: At,
+        args: BTreeMap<String, Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        glide: Option<Time>,
+    },
+    /// Release a note, so its envelope runs its release stage.
+    Off { id: u64, at: At },
     /// Move a `ctl`.
     Control {
         name: String,

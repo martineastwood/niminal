@@ -468,10 +468,10 @@ fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
     let (r, out) = thread.join().unwrap();
     s.sync_realtime();
     assert_eq!(r.metrics().late_events, 1);
-    assert!(matches!(
-        s.log().last().unwrap().input,
-        niminal_daemon::LogInput::Control { at: 32, .. }
-    ));
+    let niminal_daemon::LogInput::Send { ops, .. } = &s.log().last().unwrap().input else {
+        panic!("the control is in the log");
+    };
+    assert!(matches!(ops[0], niminal_daemon::Op::Control { at: niminal_daemon::At::Sample(32), .. }), "{ops:?}");
     let replay = Session::replay(
         48_000.0,
         Layout::Mono,
@@ -910,7 +910,8 @@ fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_daemon::Op> {
         .map(|i| Op::Note {
             target: "lead".into(),
             at: At::Time(Time::Seconds(0.05 + seconds * i as f64 / count as f64)),
-            dur: Time::Seconds(0.02),
+            dur: Some(Time::Seconds(0.02)),
+            id: None,
             args: [("freq".to_string(), Value::Hz(200.0 + (i % 12) as f64 * 40.0))].into(),
         })
         .collect()
@@ -930,7 +931,7 @@ fn stream_while_playing(events: &[niminal_daemon::Op], ahead: u64, frames: usize
             if start > clock + ahead {
                 break;
             }
-            s.send_events(vec![events[sent].clone()]).unwrap();
+            s.send_events(0, vec![events[sent].clone()]).unwrap();
             sent += 1;
         }
         s.prepare_realtime();
@@ -941,7 +942,7 @@ fn stream_while_playing(events: &[niminal_daemon::Op], ahead: u64, frames: usize
 
 fn offline(events: &[niminal_daemon::Op], frames: usize) -> Vec<f32> {
     let mut s = session();
-    s.send_events(events.to_vec()).unwrap();
+    s.send_events(0, events.to_vec()).unwrap();
     s.process(frames).remove(0)
 }
 
@@ -966,4 +967,54 @@ fn streamed_notes_inside_the_prepared_region_cause_no_replanning() {
     assert_eq!(audio, offline(&events, frames));
     assert_eq!(metrics.mixer_builds, 0);
     assert_eq!(metrics.late_events, 0);
+}
+
+fn voice_script() -> Vec<(u64, niminal_daemon::Op)> {
+    use niminal_daemon::{At, Op};
+    use niminal_score::{Time, Value};
+    let held = |id, at: u64, hz, dur: Option<f64>| (at, Op::Note { target: "organ".into(), at: At::Sample(at), args: [("freq".to_string(), Value::Hz(hz))].into(), dur: dur.map(Time::Seconds), id: Some(id) });
+    vec![
+        held(1, 4_800, 110.0, None),
+        held(2, 9_600, 165.0, Some(0.3)),
+        (14_400, Op::Set { id: 1, at: At::Sample(14_400), args: [("cut".to_string(), Value::Hz(6000.0))].into(), glide: Some(Time::Seconds(0.2)) }),
+        (20_000, Op::Set { id: 2, at: At::Sample(20_000), args: [("cut".to_string(), Value::Hz(300.0))].into(), glide: None }),
+        (28_800, Op::Off { id: 1, at: At::Sample(28_800) }),
+        held(3, 30_000, 220.0, None),
+        (33_000, Op::Off { id: 3, at: At::Sample(33_000) }),
+    ]
+}
+
+fn organ_session() -> Session {
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval("instr organ(freq: hz, cut: hz = 100hz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 100ms 0] * 0.3 }", Some("now")).unwrap();
+    s
+}
+
+#[test]
+fn held_notes_sets_and_offs_sound_the_same_prepared_as_offline_wherever_they_are_sent() {
+    let script = voice_script();
+    let frames = 60_000;
+    let mut offline = organ_session();
+    offline.send_events(1, script.iter().map(|(_, op)| op.clone()).collect()).unwrap();
+    let expected = offline.process(frames).remove(0);
+    assert!(expected.iter().any(|s| s.abs() > 0.05));
+
+    // 20000 frames ahead is past the prepared region, 1000 ahead is inside it
+    for ahead in [20_000u64, 1_000] {
+        let mut s = organ_session();
+        let mut r = s.start_realtime(RealtimeConfig::default());
+        let mut out = vec![0.0; frames];
+        let mut sent = 0;
+        for chunk in out.chunks_mut(256) {
+            while sent < script.len() && script[sent].0 <= r.clock() + ahead {
+                s.send_events(1, vec![script[sent].1.clone()]).unwrap();
+                sent += 1;
+            }
+            s.prepare_realtime();
+            measured(&mut r, chunk.len(), chunk);
+        }
+        assert_eq!(out, expected, "sent {ahead} frames ahead");
+        assert_eq!(r.metrics().mixer_builds, 0, "sent {ahead} frames ahead");
+        assert_eq!(r.metrics().late_events, 0, "sent {ahead} frames ahead");
+    }
 }
