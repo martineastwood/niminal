@@ -866,7 +866,7 @@ pad.start
 
 ## Engine and architecture
 
-Client/server. The daemon compiles DSP definitions and executes events against its sample clock. Clients compile and schedule their own musical models, sending events ahead of playback and cancelling/replacing their pending events when edits change the timing. The engine never retimes accepted events. Live and offline share the same DSP runtime.
+Client/server. The daemon compiles DSP definitions and executes events against its sample clock. Clients compile and schedule their own musical models, sending events ahead of playback and cancelling/replacing their pending events when edits change the timing. The engine never retimes accepted events. Its routing API separates reusable processor definitions, running instances, collection buses and connections. Routing resources are connection-owned, with explicitly shared buses. Graph edits are timed events; they retain compatible state and can be cancelled or replayed. The live client lowers its track model onto those primitives. Live and offline share the same DSP runtime.
 
 ### Components
 

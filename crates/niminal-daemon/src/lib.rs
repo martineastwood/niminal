@@ -11,6 +11,8 @@ mod events;
 mod log;
 mod midi_out;
 mod resources;
+mod routing;
+pub use routing::{Endpoint, RoutingEdit};
 mod session;
 mod sounding;
 mod status;

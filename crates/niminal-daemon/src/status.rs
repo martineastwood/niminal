@@ -10,6 +10,7 @@ pub fn status_json(session: &Session) -> Value {
     let (instruments, tracks, buses) = session.definitions();
     json!({
         "clock": state_json(session),
+        "routing": session.routing_status(),
         "sample_rate": session.sample_rate(),
         "channels": session.channels(),
         "realtime": session.realtime_metrics().map(|m| json!({

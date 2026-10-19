@@ -113,8 +113,9 @@ pub struct OscTap {
 }
 
 /// A track as the mixer sees it, plus what the language knows about it.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TrackInfo {
+    pub accepts_notes: bool,
     /// Its signals sent over OSC.
     pub taps: Vec<OscTap>,
     /// Empty for the implicit track that plays bare instruments.
@@ -286,6 +287,9 @@ pub(crate) fn resolve_target<'a>(
 ) -> Result<Target<'a>, ArgError> {
     if let Some(t) = tracks.iter().skip(1).position(|t| t.name == target) {
         let track = &tracks[t + 1];
+        if !track.accepts_notes && track.instrument.is_some() {
+            return Err(ArgError::new("destination node is draining".into()));
+        }
         return match track.instrument {
             Some(i) => Ok(Target {
                 track: t + 1,
@@ -297,6 +301,21 @@ pub(crate) fn resolve_target<'a>(
                 help: Some("add `instrument = ...` to the track".into()),
             }),
         };
+    }
+    if let Some((instrument, destination)) = target.split_once('@') {
+        let instrument = instruments
+            .iter()
+            .position(|i| i.name == instrument)
+            .ok_or_else(|| ArgError::new("unknown routed instrument".into()))?;
+        let track = tracks
+            .iter()
+            .position(|t| t.name == destination && t.accepts_notes)
+            .ok_or_else(|| ArgError::new("destination node is absent or draining".into()))?;
+        return Ok(Target {
+            track,
+            instrument,
+            defaults: None,
+        });
     }
     if let Some(i) = instruments.iter().position(|i| i.name == target) {
         return Ok(Target {

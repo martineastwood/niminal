@@ -12,7 +12,7 @@ try:
 except ImportError as e:  # pragma: no cover
     raise ImportError("install websocket-client: pip install websocket-client") from e
 
-PROTOCOL = 2
+PROTOCOL = 3
 
 
 class NiminalError(Exception):
@@ -86,12 +86,12 @@ class Client:
         self._ws: Optional[websocket.WebSocket] = None
         self._next_id = 1
 
-    def connect(self) -> None:
+    def connect(self) -> Any:
         self._ws = websocket.create_connection(self.url, timeout=5)
         params: dict[str, Any] = {"protocol": PROTOCOL, "client": "niminal-python"}
         if self.token:
             params["token"] = self.token
-        self.call("hello", params)
+        return self.call("hello", params)
 
     def close(self) -> None:
         if self._ws is not None:
@@ -123,6 +123,13 @@ class Client:
         `at` is an absolute sample count or "now".
         """
         return self.call("events.send", {"events": events})
+
+    def routing(self, edits: list[dict], at: int | str = "now", tag: Optional[str] = None) -> Any:
+        """Edit this connection's processor instances, buses and connections."""
+        event = {"op": "routing", "at": at, "edits": edits}
+        if tag is not None:
+            event["tag"] = tag
+        return self.send_events([event])
 
     def cancel_events(self, tag: Optional[str] = None, from_: Any = None, release: Optional[bool] = None) -> Any:
         """Take back this client's waiting events."""

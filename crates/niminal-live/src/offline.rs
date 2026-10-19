@@ -15,6 +15,7 @@ pub struct Offline {
     live: Live,
     engine: Arc<Mutex<EngineServer>>,
     layout: Layout,
+    client: niminal_daemon::ClientId,
 }
 
 impl Offline {
@@ -33,8 +34,15 @@ impl Offline {
     fn with_session(session: Session, layout: Layout) -> Offline {
         let sample_rate = session.sample_rate();
         let engine = Arc::new(Mutex::new(EngineServer::new(session)));
-        let live = Live::new(Box::new(InProcess::new(engine.clone())), sample_rate, layout);
-        Offline { live, engine, layout }
+        let link = InProcess::new(engine.clone());
+        let client = link.client_id();
+        let live = Live::new(Box::new(link), sample_rate, layout);
+        Offline {
+            live,
+            engine,
+            layout,
+            client,
+        }
     }
 
     pub fn with_defaults(mut self, defaults: QuantizeDefaults) -> Offline {
@@ -64,7 +72,16 @@ impl Offline {
 
     /// Each control's name, value, where it is going, and unit.
     pub fn control_values(&self) -> Vec<(String, f32, f32, Option<&'static str>)> {
-        self.engine().session().control_values()
+        self.engine()
+            .session()
+            .control_values()
+            .into_iter()
+            .filter_map(|(name, value, target, unit)| {
+                self.live
+                    .control_name(&name, self.client)
+                    .map(|name| (name, value, target, unit))
+            })
+            .collect()
     }
 
     /// The loudest sample on each output channel since this was last called.
@@ -89,7 +106,48 @@ impl Offline {
 
     /// The stems kept so far, no longer kept after this.
     pub fn take_stems(&mut self) -> Option<niminal_engine::Stems> {
-        self.engine().session_mut().take_stems()
+        let mut engine = self.engine();
+        let mut captured = engine.session_mut().take_stems()?;
+        let program = engine.session().program();
+        let tracks = self
+            .live
+            .program()
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, track)| {
+                let index = if i == 0 {
+                    Some(0)
+                } else {
+                    let name = format!(
+                        "__routing_processor_{}_{}",
+                        self.client,
+                        crate::live::routing_id(&track.name)
+                    );
+                    program.track_index(&name)
+                };
+                index
+                    .and_then(|i| captured.tracks.get_mut(i))
+                    .map(std::mem::take)
+                    .unwrap_or_default()
+            })
+            .collect();
+        let buses = self
+            .live
+            .program()
+            .buses
+            .iter()
+            .map(|name| {
+                program
+                    .buses
+                    .iter()
+                    .position(|n| n == name)
+                    .and_then(|i| captured.buses.get_mut(i))
+                    .map(std::mem::take)
+                    .unwrap_or_default()
+            })
+            .collect();
+        Some(niminal_engine::Stems { tracks, buses })
     }
 
     /// Changes on an immediate panic.

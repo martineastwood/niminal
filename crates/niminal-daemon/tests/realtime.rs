@@ -67,6 +67,7 @@ fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_daemon::Op> {
     use niminal_score::{Time, Value};
     (0..count)
         .map(|i| Op::Note {
+            to: None,
             target: "lead".into(),
             at: At::Sample(((0.05 + seconds * i as f64 / count as f64) * 48000.0).round() as u64),
             dur: Some(Time::Seconds(0.02)),
@@ -132,7 +133,20 @@ fn streamed_notes_inside_the_prepared_region_cause_no_replanning() {
 fn voice_script() -> Vec<(u64, niminal_daemon::Op)> {
     use niminal_daemon::{At, Op};
     use niminal_score::{Time, Value};
-    let held = |id, at: u64, hz, dur: Option<f64>| (at, Op::Note { target: "organ".into(), at: At::Sample(at), args: [("freq".to_string(), Value::Hz(hz))].into(), dur: dur.map(Time::Seconds), id: Some(id), tag: None });
+    let held = |id, at: u64, hz, dur: Option<f64>| {
+        (
+            at,
+            Op::Note {
+                to: None,
+                target: "organ".into(),
+                at: At::Sample(at),
+                args: [("freq".to_string(), Value::Hz(hz))].into(),
+                dur: dur.map(Time::Seconds),
+                id: Some(id),
+                tag: None,
+            },
+        )
+    };
     vec![
         held(1, 4_800, 110.0, None),
         held(2, 9_600, 165.0, Some(0.3)),
@@ -184,6 +198,7 @@ fn bars(hz: f64, first: u32, count: u32, tag: &str) -> Vec<niminal_daemon::Op> {
     use niminal_score::{Time, Value};
     (first * 4..(first + count) * 4)
         .map(|beat| Op::Note {
+            to: None,
             target: "organ".into(),
             at: At::Sample(((f64::from(beat)) * 24000.0).round() as u64),
             args: [("freq".to_string(), Value::Hz(hz))].into(),
@@ -235,7 +250,15 @@ fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
     use niminal_score::{Time, Value};
     const SINE: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(sine, freq) * env[1 | 100ms 0] * 0.3 }";
     const SAW: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(saw, freq).lpf(cutoff: 3000hz) * env[1 | 100ms 0] * 0.3 }";
-    let note = |at: At, hz: f64| Op::Note { target: "organ".into(), at, args: [("freq".to_string(), Value::Hz(hz))].into(), dur: Some(Time::Seconds(0.1)), id: None, tag: None };
+    let note = |at: At, hz: f64| Op::Note {
+        to: None,
+        target: "organ".into(),
+        at,
+        args: [("freq".to_string(), Value::Hz(hz))].into(),
+        dur: Some(Time::Seconds(0.1)),
+        id: None,
+        tag: None,
+    };
     let script = [
         (0u64, note(At::Sample(24_000), 220.0)),
         (0, note(At::Sample(120_000), 330.0)),
@@ -316,8 +339,28 @@ fn instrument_scopes_and_buffer_events_allocate_nothing_while_rendering() {
     use niminal_score::Time;
     let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
     s.send_events(0, vec![Op::Define { source: "buffer data = zeros(4)\ninstr a() { oversample(4) { osc(sine, 440hz).tanh } + spawn(osc(square, 400hz), dur: 10ms, max: 8) { osc(sine, 220hz) * env[1 | 2ms 0] } + data[0] }".into(), at: At::Now, dir: None, tag: None }]).unwrap();
-    s.send_events(0, vec![Op::Note { target: "a".into(), at: At::Now, args: Default::default(), dur: Some(Time::Seconds(0.05)), id: None, tag: None },
-        Op::BufferWrite { name: "data".into(), at: At::Sample(33), offset: 0, values: vec![0.1], tag: None }]).unwrap();
+    s.send_events(
+        0,
+        vec![
+            Op::Note {
+                to: None,
+                target: "a".into(),
+                at: At::Now,
+                args: Default::default(),
+                dur: Some(Time::Seconds(0.05)),
+                id: None,
+                tag: None,
+            },
+            Op::BufferWrite {
+                name: "data".into(),
+                at: At::Sample(33),
+                offset: 0,
+                values: vec![0.1],
+                tag: None,
+            },
+        ],
+    )
+    .unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = vec![0.0; 8192];
     s.prepare_realtime();
@@ -331,12 +374,125 @@ fn rich_parameters_and_dynamic_mapping_allocate_nothing_on_audio() {
     use niminal_score::{Time,Value};
     let mut s=Session::new(48000.0,Layout::Mono).without_limiter();
     s.send_events(0,vec![Op::Define{source:"buffer one = zeros(8)\nbuffer two = zeros(8)\nctl level = 0.25\ninstr a(weights: [num] = [0.1, 0.2], source: buffer = one, value: num = 0) { spawn(osc(square, 100hz), dur: 1ms) { oversample(4) { osc(sine, 440hz) * env[1 | 1ms 0] } } + weights.sum + source[0] + value }".into(),at:At::Now,dir:None,tag:None}]).unwrap();
-    s.send_events(0,vec![Op::Note{target:"a".into(),at:At::Now,args:Default::default(),dur:Some(Time::Seconds(0.1)),id:Some(1),tag:None},
-        Op::Array{id:1,at:At::Sample(17),param:"weights".into(),values:vec![Value::Num(0.25),Value::Num(0.5)],glide:Some(Time::Seconds(0.001)),tag:None},
-        Op::BindBuffer{id:1,at:At::Sample(33),param:"source".into(),buffer:"two".into(),tag:None},
-        Op::Map{id:1,at:At::Sample(49),param:"value".into(),source:Some("level".into()),channel:1,scale:1.0,offset:0.0,tag:None},
-        Op::Map{id:1,at:At::Sample(81),param:"value".into(),source:None,channel:1,scale:1.0,offset:0.0,tag:None}]).unwrap();
-    let mut renderer=s.start_realtime(RealtimeConfig::default());s.prepare_realtime();let mut output=vec![0.0;8192];
-    measured(&mut renderer,output.len(),&mut output);
-    assert!(output.iter().all(|x|x.is_finite()));
+    s.send_events(
+        0,
+        vec![
+            Op::Note {
+                to: None,
+                target: "a".into(),
+                at: At::Now,
+                args: Default::default(),
+                dur: Some(Time::Seconds(0.1)),
+                id: Some(1),
+                tag: None,
+            },
+            Op::Array {
+                id: 1,
+                at: At::Sample(17),
+                param: "weights".into(),
+                values: vec![Value::Num(0.25), Value::Num(0.5)],
+                glide: Some(Time::Seconds(0.001)),
+                tag: None,
+            },
+            Op::BindBuffer {
+                id: 1,
+                at: At::Sample(33),
+                param: "source".into(),
+                buffer: "two".into(),
+                tag: None,
+            },
+            Op::Map {
+                id: 1,
+                at: At::Sample(49),
+                param: "value".into(),
+                source: Some("level".into()),
+                channel: 1,
+                scale: 1.0,
+                offset: 0.0,
+                tag: None,
+            },
+            Op::Map {
+                id: 1,
+                at: At::Sample(81),
+                param: "value".into(),
+                source: None,
+                channel: 1,
+                scale: 1.0,
+                offset: 0.0,
+                tag: None,
+            },
+        ],
+    )
+    .unwrap();
+    let mut renderer = s.start_realtime(RealtimeConfig::default());
+    s.prepare_realtime();
+    let mut output = vec![0.0; 8192];
+    measured(&mut renderer, output.len(), &mut output);
+    assert!(output.iter().all(|x| x.is_finite()));
+}
+
+#[test]
+fn routing_swaps_and_draining_held_voices_do_no_heap_work_in_the_renderer() {
+    use niminal_daemon::{At, Endpoint, Op, RoutingEdit as Edit};
+    let session = || {
+        let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+        s.send_events(
+            1,
+            vec![
+                Op::Define {
+                    source: "instr constant() with(tail: 0ms) { 0.2 }".into(),
+                    at: At::Now,
+                    dir: None,
+                    tag: None,
+                },
+                Op::Routing {
+                    at: At::Now,
+                    tag: None,
+                    edits: vec![
+                        Edit::Node {
+                            id: "channel".into(),
+                            processor: None,
+                            instrument: None,
+                            args: Default::default(),
+                        },
+                        Edit::Connect {
+                            id: "out".into(),
+                            from: Endpoint::Node {
+                                id: "channel".into(),
+                            },
+                            to: Endpoint::Master,
+                            gain: 1.0,
+                            glide: 0.0,
+                            delayed: false,
+                        },
+                    ],
+                },
+                Op::Note {
+                    target: "constant".into(),
+                    to: Some("channel".into()),
+                    at: At::Now,
+                    args: Default::default(),
+                    dur: None,
+                    id: Some(1),
+                    tag: None,
+                },
+                Op::Routing {
+                    at: At::Sample(91),
+                    edits: vec![Edit::Drain {
+                        id: "channel".into(),
+                    }],
+                    tag: None,
+                },
+            ],
+        )
+        .unwrap();
+        s
+    };
+    let expected = session().process(512).remove(0);
+    let mut s = session();
+    let mut renderer = s.start_realtime(RealtimeConfig::default());
+    s.prepare_realtime();
+    let mut actual = vec![0.0; 512];
+    measured(&mut renderer, 512, &mut actual);
+    assert_eq!(actual, expected);
 }

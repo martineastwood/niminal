@@ -19,6 +19,7 @@ fn session(source: &str) -> Session {
 }
 fn note() -> Op {
     Op::Note {
+        to: None,
         target: "a".into(),
         at: At::Now,
         args: Default::default(),
@@ -166,6 +167,7 @@ fn parallel_tracks_and_bus_sends_are_latency_compensated() {
         let notes = ["dry", "wet"]
             .into_iter()
             .map(|target| Op::Note {
+                to: None,
                 target: target.into(),
                 at: At::Now,
                 args: Default::default(),

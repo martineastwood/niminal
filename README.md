@@ -64,6 +64,7 @@ The language server (`niminal lsp`) works without a daemon for hover, completion
 - **Live** — WebSocket daemon, REPL, `send`, and editor integration; quantize changes to musical time. The daemon is a sound server (the engine) with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
 - **Offline** — Same `.nml` files render to audio; session logs replay to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
+- **Routing** — Independent processor instances, private buses and sample-timed connection edits; client-owned mixer models.
 - **Extensible** — Write functions (down to the sample, with state) and instruments in the language, with the same tooling as built-ins.
 
 ## Repository layout

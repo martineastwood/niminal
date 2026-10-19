@@ -42,7 +42,19 @@ fn install(session: &mut Session, source: &str, play_seconds: f64) -> Result<(),
     }
     for e in events {
         let at = sample(e.at.to_seconds(program.tempo));
-        ops.push(Op::Note { target: e.target, at, args: e.args.into_iter().map(|(n,v)| (n, niminal_lang::dsp_value(v, program.tempo))).collect(), dur: Some(Time::Seconds(e.dur.to_seconds(program.tempo))), id: None, tag: None });
+        ops.push(Op::Note {
+            to: None,
+            target: e.target,
+            at,
+            args: e
+                .args
+                .into_iter()
+                .map(|(n, v)| (n, niminal_lang::dsp_value(v, program.tempo)))
+                .collect(),
+            dur: Some(Time::Seconds(e.dur.to_seconds(program.tempo))),
+            id: None,
+            tag: None,
+        });
     }
     session.send_events(0, ops).map(|_| ())
 }

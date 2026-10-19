@@ -17,6 +17,7 @@ fn session() -> Session {
     s.send_events(
         1,
         vec![Op::Note {
+            to: None,
             target: "read".into(),
             at: At::Now,
             args: Default::default(),

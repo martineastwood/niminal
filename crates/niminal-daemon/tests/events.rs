@@ -22,7 +22,19 @@ track held { instrument = flat }
 /// A note on the `held` track that lasts the whole test.
 fn hold(s: &mut Session) {
     let args = [("freq".to_string(), Value::Hz(100.0))].into();
-    s.send_events(0, vec![Op::Note { target: "held".into(), at: At::Now, args, dur: Some(Time::Seconds(200.0)), id: None, tag: None }]).unwrap();
+    s.send_events(
+        0,
+        vec![Op::Note {
+            to: None,
+            target: "held".into(),
+            at: At::Now,
+            args,
+            dur: Some(Time::Seconds(200.0)),
+            id: None,
+            tag: None,
+        }],
+    )
+    .unwrap();
 }
 
 fn session() -> Session {
@@ -32,7 +44,15 @@ fn session() -> Session {
 }
 
 fn note(target: &str, at: At, hz: f64) -> Op {
-    Op::Note { target: target.into(), at, args: [("freq".to_string(), Value::Hz(hz))].into(), dur: Some(Time::Seconds(0.1)), id: None, tag: None }
+    Op::Note {
+        to: None,
+        target: target.into(),
+        at,
+        args: [("freq".to_string(), Value::Hz(hz))].into(),
+        dur: Some(Time::Seconds(0.1)),
+        id: None,
+        tag: None,
+    }
 }
 
 fn peak(x: &[f32]) -> f32 {
@@ -136,7 +156,15 @@ fn voices() -> Session {
 }
 
 fn held(id: u64, at: At, hz: f64) -> Op {
-    Op::Note { target: "lead".into(), at, args: [("freq".to_string(), Value::Hz(hz))].into(), dur: None, id: Some(id), tag: None }
+    Op::Note {
+        to: None,
+        target: "lead".into(),
+        at,
+        args: [("freq".to_string(), Value::Hz(hz))].into(),
+        dur: None,
+        id: Some(id),
+        tag: None,
+    }
 }
 
 fn set(id: u64, at: At, cut: &str, glide: Option<f64>) -> Op {
@@ -164,9 +192,29 @@ fn a_note_with_an_id_and_a_dur_is_held_for_at_most_the_dur_and_off_can_end_it_so
     s.send_events(
         0,
         vec![
-            Op::Note { target: "lead".into(), at: At::Sample(0), args: [("freq".to_string(), Value::Hz(220.0))].into(), dur: Some(Time::Seconds(0.5)), id: Some(1), tag: None },
-            Op::Note { target: "lead".into(), at: At::Sample(0), args: [("freq".to_string(), Value::Hz(330.0))].into(), dur: Some(Time::Seconds(0.5)), id: Some(2), tag: None },
-            Op::Off { id: 2, at: At::Sample(2_400), tag: None },
+            Op::Note {
+                to: None,
+                target: "lead".into(),
+                at: At::Sample(0),
+                args: [("freq".to_string(), Value::Hz(220.0))].into(),
+                dur: Some(Time::Seconds(0.5)),
+                id: Some(1),
+                tag: None,
+            },
+            Op::Note {
+                to: None,
+                target: "lead".into(),
+                at: At::Sample(0),
+                args: [("freq".to_string(), Value::Hz(330.0))].into(),
+                dur: Some(Time::Seconds(0.5)),
+                id: Some(2),
+                tag: None,
+            },
+            Op::Off {
+                id: 2,
+                at: At::Sample(2_400),
+                tag: None,
+            },
         ],
     )
     .unwrap();
@@ -232,8 +280,21 @@ fn ids_belong_to_the_client_and_bad_ones_fail_the_batch() {
 #[test]
 fn a_client_that_goes_has_its_notes_released_and_its_waiting_notes_dropped() {
     let mut s = voices();
-    s.send_events(1, vec![held(1, At::Sample(0), 220.0)]).unwrap();
-    s.send_events(1, vec![Op::Note { target: "lead".into(), at: At::Sample(30_000), args: [("freq".to_string(), Value::Hz(440.0))].into(), dur: Some(Time::Seconds(0.2)), id: None, tag: None }]).unwrap();
+    s.send_events(1, vec![held(1, At::Sample(0), 220.0)])
+        .unwrap();
+    s.send_events(
+        1,
+        vec![Op::Note {
+            to: None,
+            target: "lead".into(),
+            at: At::Sample(30_000),
+            args: [("freq".to_string(), Value::Hz(440.0))].into(),
+            dur: Some(Time::Seconds(0.2)),
+            id: None,
+            tag: None,
+        }],
+    )
+    .unwrap();
     s.process(10_000);
     s.drop_client(1);
     let out = s.process(30_000).remove(0);
@@ -259,6 +320,7 @@ fn held_notes_and_sets_replay_to_the_same_audio() {
 fn bars_of(hz: f64, first: u32, bars: u32, tag: &str) -> Vec<Op> {
     (first * 4..(first + bars) * 4)
         .map(|beat| Op::Note {
+            to: None,
             target: "lead".into(),
             at: At::Sample(((f64::from(beat)) * 24000.0).round() as u64),
             args: [("freq".to_string(), Value::Hz(hz))].into(),
@@ -350,7 +412,15 @@ const SINE: &str = "instr a(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ntrac
 const SAW: &str = "instr a(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\ntrack lead { instrument = a }";
 
 fn tone(at: At, hz: f64) -> Op {
-    Op::Note { target: "lead".into(), at, args: [("freq".to_string(), Value::Hz(hz))].into(), dur: Some(Time::Seconds(0.05)), id: None, tag: None }
+    Op::Note {
+        to: None,
+        target: "lead".into(),
+        at,
+        args: [("freq".to_string(), Value::Hz(hz))].into(),
+        dur: Some(Time::Seconds(0.05)),
+        id: None,
+        tag: None,
+    }
 }
 
 #[test]
@@ -408,9 +478,19 @@ fn a_batch_that_fails_leaves_nothing_behind() {
 #[test]
 fn notes_after_a_define_are_checked_against_the_program_it_makes() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
-    let new_track = "instr b(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\ntrack extra { instrument = b }";
-    let note = |at| Op::Note { target: "extra".into(), at, args: [("freq".to_string(), Value::Hz(110.0))].into(), dur: Some(Time::Seconds(0.05)), id: None, tag: None };
+    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now"))
+        .unwrap();
+    let new_track =
+        "instr b(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\ntrack extra { instrument = b }";
+    let note = |at| Op::Note {
+        to: None,
+        target: "extra".into(),
+        at,
+        args: [("freq".to_string(), Value::Hz(110.0))].into(),
+        dur: Some(Time::Seconds(0.05)),
+        id: None,
+        tag: None,
+    };
     // the track exists only once the define lands
     assert!(s.send_events(1, vec![note(At::Sample(60_000))]).is_err());
     s.send_events(1, vec![define(new_track, At::Sample(48_000)), note(At::Sample(60_000))]).unwrap();
@@ -457,7 +537,15 @@ fn a_timed_panic_silences_voices_at_its_sample_and_later_events_still_play() {
 
 #[test]
 fn a_kit_sample_in_a_note_crosses_the_wire() {
-    let op = Op::Note { target: "drums".into(), at: At::Sample(0), args: [("sample".to_string(), Value::Sample(4))].into(), dur: Some(Time::Seconds(0.5)), id: None, tag: None };
+    let op = Op::Note {
+        to: None,
+        target: "drums".into(),
+        at: At::Sample(0),
+        args: [("sample".to_string(), Value::Sample(4))].into(),
+        dur: Some(Time::Seconds(0.5)),
+        id: None,
+        tag: None,
+    };
     let text = serde_json::to_string(&op).unwrap();
     assert_eq!(serde_json::from_str::<Op>(&text).unwrap(), op);
 }

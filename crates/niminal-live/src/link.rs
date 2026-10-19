@@ -22,6 +22,9 @@ pub struct InProcess {
 }
 
 impl InProcess {
+    pub fn client_id(&self) -> ClientId {
+        self.client
+    }
     pub fn new(server: Arc<Mutex<EngineServer>>) -> InProcess {
         let client = {
             let mut s = lock(&server);

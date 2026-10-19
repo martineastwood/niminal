@@ -114,8 +114,9 @@ impl Buses {
 }
 
 /// Where a track's output goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
+    #[default]
     Master,
     Bus(usize),
 }
@@ -131,8 +132,10 @@ pub enum ChainInput {
     Audio { channel: usize },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TrackDef {
+    /// Public instance control keys mapped to keys in the reusable DSP graph.
+    pub controls: Vec<(String, String)>,
     /// Processing applied to the summed voices. `None` passes them through.
     pub chain: Option<Arc<Graph>>,
     /// What each of the chain graph's inputs receives, in input order.
@@ -276,6 +279,8 @@ pub const DEFAULT_MAX_VOICES: usize = 256;
 /// How a new mixer's track takes over from an old mixer's tracks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Transfer {
+    /// Release transferred voices while keeping their processor tails.
+    pub release: bool,
     /// The old track whose sounding voices continue on this one.
     pub voices_from: Option<usize>,
     /// The old track whose effect chain, with its state, this one keeps.
@@ -514,8 +519,27 @@ impl Mixer {
 
     pub fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
         for track in &mut self.tracks {
-            for (_, voice) in &mut track.voices { voice.set_control(key, start, target, frames, elapsed); }
-            if let Some(chain) = &mut track.chain { chain.set_control(key, start, target, frames, elapsed); }
+            for (_, voice) in &mut track.voices {
+                voice.set_control(key, start, target, frames, elapsed);
+            }
+            if let Some(chain) = &mut track.chain {
+                let local = track
+                    .def
+                    .controls
+                    .iter()
+                    .find(|(public, _)| public == key)
+                    .map_or(key, |(_, local)| local.as_str());
+                // A template's private controls are changed through its instance keys only.
+                if !track
+                    .def
+                    .controls
+                    .iter()
+                    .any(|(_, template)| template == key)
+                    || local != key
+                {
+                    chain.set_control(local, start, target, frames, elapsed);
+                }
+            }
         }
     }
 
@@ -810,6 +834,11 @@ impl Mixer {
                 && old.channels == self.channels
             {
                 track.voices.append(&mut old.tracks[from].voices);
+                if transfer.release {
+                    for (_, voice) in &mut track.voices {
+                        voice.release();
+                    }
+                }
             }
             if let Some(from) = transfer.chain_from
                 && let (Some(chain), Some(previous)) = (&mut track.chain, &mut old.tracks[from].chain)

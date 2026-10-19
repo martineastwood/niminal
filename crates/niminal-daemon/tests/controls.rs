@@ -109,6 +109,7 @@ fn controls_replay_exactly_across_block_sizes_and_log_serialization() {
     let mut original = s.process(100).remove(0);
     set_control(&mut s, "level", 0.3, None, None, Some(1.0)).unwrap();
     let note = niminal_daemon::Op::Note {
+        to: None,
         target: "flat".into(),
         at: niminal_daemon::At::Sample(s.clock() + 144),
         args: Default::default(),

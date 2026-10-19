@@ -15,7 +15,7 @@ use niminal_lang::Problem;
 use crate::session::{ClockInfo, Session};
 
 /// The protocol version a client must say it speaks.
-pub const PROTOCOL_VERSION: u64 = 2;
+pub const PROTOCOL_VERSION: u64 = 3;
 
 pub type ClientId = u64;
 
@@ -82,9 +82,16 @@ fn first_channel() -> usize { 1 }
 /// What the engine answers.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineReply {
-    Hello { sample_rate: f32, channels: usize },
+    Hello {
+        sample_rate: f32,
+        channels: usize,
+        client_id: ClientId,
+    },
     Subscribed(Vec<String>),
-    Sent { sent: Sent, horizon: u64 },
+    Sent {
+        sent: Sent,
+        horizon: u64,
+    },
     Cancelled(Cancelled),
     Panicked,
     Status(Value),
@@ -160,6 +167,7 @@ impl EngineReply {
         let number = |key: &str| result[key].as_u64().unwrap_or(0);
         Ok(match request {
             EngineRequest::Hello { .. } => EngineReply::Hello {
+                client_id: number("client_id"),
                 sample_rate: result["sample_rate"].as_f64().unwrap_or(48_000.0) as f32,
                 channels: number("channels") as usize,
             },
@@ -191,8 +199,13 @@ impl EngineReply {
 
     pub fn to_json(&self) -> Value {
         match self {
-            EngineReply::Hello { sample_rate, channels } => json!({
+            EngineReply::Hello {
+                sample_rate,
+                channels,
+                client_id,
+            } => json!({
                 "protocol": PROTOCOL_VERSION,
+                "client_id": client_id,
                 "sample_rate": sample_rate,
                 "channels": channels,
                 "topics": ENGINE_TOPICS,
@@ -329,7 +342,11 @@ impl EngineServer {
             if let Some(c) = self.clients.get_mut(&client) {
                 c.greeted = true;
             }
-            return Ok(EngineReply::Hello { sample_rate: self.session.sample_rate(), channels: self.session.channels() });
+            return Ok(EngineReply::Hello {
+                client_id: client,
+                sample_rate: self.session.sample_rate(),
+                channels: self.session.channels(),
+            });
         }
         if !self.clients.get(&client).is_some_and(|c| c.greeted) {
             return Err(EngineError::new(PROTOCOL_ERROR, "say hello first, with the protocol version"));
@@ -351,11 +368,19 @@ impl EngineServer {
                 self.session.panic();
                 Ok(EngineReply::Panicked)
             }
-            request @ (EngineRequest::BuffersList {} | EngineRequest::BuffersRead { .. } | EngineRequest::BuffersAlloc { .. }
-                | EngineRequest::BuffersLoad { .. } | EngineRequest::BuffersSave { .. }) => {
-                    crate::resources::request(&mut self.session, client, request).map(EngineReply::Buffers)
-                }
-            EngineRequest::Status {} => Ok(EngineReply::Status(crate::status::status_json(&self.session))),
+            request @ (EngineRequest::BuffersList {}
+            | EngineRequest::BuffersRead { .. }
+            | EngineRequest::BuffersAlloc { .. }
+            | EngineRequest::BuffersLoad { .. }
+            | EngineRequest::BuffersSave { .. }) => {
+                crate::resources::request(&mut self.session, client, request)
+                    .map(EngineReply::Buffers)
+            }
+            EngineRequest::Status {} => {
+                let mut status = crate::status::status_json(&self.session);
+                status["client_id"] = json!(client);
+                Ok(EngineReply::Status(status))
+            }
             EngineRequest::Clock {} => Ok(EngineReply::Clock(self.session.clock_info())),
         }
     }

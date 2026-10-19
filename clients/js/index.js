@@ -2,7 +2,7 @@
 
 const WebSocket = require("ws");
 
-const PROTOCOL = 2;
+const PROTOCOL = 3;
 
 class NiminalError extends Error {
   constructor(message, problems) {
@@ -52,7 +52,7 @@ class Client {
     ws.on("error", () => {});
     const params = { protocol: PROTOCOL, client: this.client };
     if (this.token) params.token = this.token;
-    await this.call("hello", params);
+    return this.call("hello", params);
   }
 
   #receive(text) {
@@ -88,6 +88,11 @@ class Client {
    */
   sendEvents(events) {
     return this.call("events.send", { events });
+  }
+
+  /** Edit private processor instances, buses and connections at an absolute sample. */
+  routing(edits, { at = "now", tag } = {}) {
+    return this.sendEvents([{ op: "routing", at, edits, ...(tag === undefined ? {} : { tag }) }]);
   }
 
   /** Take back this client's waiting events: `{ tag, from, release }`. */

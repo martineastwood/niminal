@@ -394,7 +394,8 @@ fn mute_and_solo_work_live() {
 fn streamed_events_play_at_their_time() {
     let mut s = ready();
     let note = |at: f64| Op::Note {
-        target: "lead".into(),
+        to: None,
+        target: "pluck".into(),
         at: At::Sample(((at) * 48000.0).round() as u64),
         dur: Some(Time::Seconds(0.25)),
         id: None,
@@ -409,6 +410,7 @@ fn streamed_events_play_at_their_time() {
     s.send_events(vec![note(0.0)]).unwrap();
     assert!(peak(&run(&mut s, 2000)) > 0.1);
     let bad = Op::Note {
+        to: None,
         target: "nobody".into(),
         at: At::Sample(48_000),
         dur: Some(Time::Seconds(0.25)),

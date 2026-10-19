@@ -10,7 +10,7 @@ The **engine** is a sound server. It holds the instruments, effects, tracks, bus
 ## Connection
 
 1. Open a WebSocket to `ws://127.0.0.1:7401/`.
-2. Send **`hello`** first, with `{ "protocol": 2, "client": "my-app" }` (and `token` if the daemon needs one). The result has `sample_rate`, `channels` and the `topics`.
+2. Send **`hello`** first, with `{ "protocol": 3, "client": "my-app" }` (and `token` if the daemon needs one). The result has `sample_rate`, `channels` and the `topics`.
 3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels) and **`notices`** (warnings).
 
 ## Requests
@@ -33,7 +33,7 @@ One batched method for every timed thing a client can do. The whole batch is che
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
-| `note` | `target`, `at`, optional `args`, `dur`, `id`, `tag` | Play a note on a track or instrument. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
+| `note` | `target`, `at`, optional `to`, `args`, `dur`, `id`, `tag` | Play a note on a track or instrument. With `to`, play the named instrument into that connection’s collection/processor node. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
 | `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide` the parameter moves in a straight line to its new value. |
 | `off` | `id`, `at` | Release a note, so its envelope runs its release stage. An `off` before the note starts makes it a short blip. |
 | `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
@@ -51,6 +51,49 @@ Notes, controls and the rest in a batch are checked against the definitions in f
 **Result:** `{ "accepted": 3, "late": 0, "first": 4800, "horizon": 8192 }`. `late` counts events whose time had already passed: they sounded at once. `first` is the earliest sample any event resolved to, and `horizon` is the sample up to which the engine has prepared audio.
 
 Anything wrong in the batch → **-32001** and nothing is queued; each entry of **`problems`** has an **`event`** field with the index of the event it is about. A batch that doesn't parse → **-32602**.
+
+### Processor instances, buses and connections
+
+Protocol **3** adds a timed `routing` operation inside `events.send`. Each connection owns its routing IDs, processor definitions and instances. Two clients can use the same IDs without collisions. `hello` returns `client_id`; a client can deliberately expose a bus with `shared: true`, and another client can address it using that owner ID. DSP library definitions sent through `define` remain shared by name.
+
+```json
+{ "method": "events.send", "params": { "events": [
+  { "op": "routing", "at": 96000, "edits": [
+    { "op": "processor", "name": "echo", "source": "(feedback: num = 0.3) { out = it.delay(time: 120ms, feedback: feedback) }" },
+    { "op": "node", "id": "channel" },
+    { "op": "node", "id": "return", "processor": "echo", "args": { "feedback": 0.5 } },
+    { "op": "connect", "id": "send", "from": { "kind": "node", "id": "channel" }, "to": { "kind": "node", "id": "return" }, "gain": 0.25 },
+    { "op": "connect", "id": "wet", "from": { "kind": "node", "id": "return" }, "to": { "kind": "master" } }
+  ] },
+  { "op": "note", "target": "pluck", "to": "channel", "at": 96000, "dur": "250ms", "args": { "freq": "c4" } }
+] } }
+```
+
+`processor` defines reusable DSP with a parameter signature and body. `it` is incoming audio. A node without a processor is a voice collection and audio pass-through. Notes choose their instrument independently with `target`, and their destination with `to`. Node output is silent until connected. Add a second channel-to-master connection for a dry path.
+
+| Routing edit | Fields | Meaning |
+| --- | --- | --- |
+| `processor` | `name`, `source` | Compile a reusable processor. Updating or freeing the definition leaves existing instances on their original graph; creating/updating a node selects the current definition. |
+| `bus` | `id`, `channels`, optional `shared` | Create an audio bus, private by default. Channel count is 1–16 and remains fixed until freed. |
+| `node` | `id`, optional `processor`, `instrument`, `args` | Create or update an instance, preserving compatible DSP state. `instrument` is an optional default for notes targeting the node directly. |
+| `set` | `id`, `args`, optional `glide` | Change instance parameters. `glide` is seconds, defaults to zero and is at most 60. |
+| `connect` | `id`, `from`, `to`, optional `gain`, `glide`, `delayed` | Create/update a connection. Gain defaults to 1; glide is seconds. A delayed connection arrives exactly one engine block later, allowing feedback. |
+| `disconnect` | `id` | Remove a connection while retaining both endpoints and their state. |
+| `drain` | `id` | Disconnect incoming connections, release held voices and refuse new notes. The processor and outgoing connections remain active so tails can ring. |
+| `free_node` | `id` | Immediately remove the node, its voices and attached connections. |
+| `free_bus` | `id` | Free an unused bus. A remaining connection/reference makes the batch fail. |
+| `free_processor` | `name` | Remove a reusable definition; existing instances continue. |
+| `clear` | none | Remove this connection’s graph. |
+
+Endpoints are `{ "kind": "node", "id": "…" }`, `{ "kind": "bus", "id": "…", "owner": 7 }` or `{ "kind": "master" }`. Omit a bus’s `owner` for your own bus. The master is an output, not a source. Routing IDs use 1–128 ASCII letters, digits or underscores. Channel widths must match; the compiler’s existing DSP layout conversions remain available when defining processing. Collection-node input uses the engine output layout.
+
+Changes are validated together, including cycle detection and ownership, before anything is queued. Non-delayed feedback is rejected. Connections reuse compiled DSP graphs; topology preparation and allocation happen outside rendering. Existing voices, compatible processor state and unchanged control values survive graph edits. Timing, cancellation, tags and replay work as for other engine events.
+
+To remove an effect gracefully, send `drain` at the cutoff, then `free_node` later after the tail you want. There is no inferred tail deadline. Disconnecting the owning client removes its graph and records the cleanup for replay; other clients’ private graphs remain.
+
+The live client lowers each compiled track into a processor template plus a collection and processor instance, then submits explicit output connections. Two lowering edits are also available: `import` (`name`, `track`) imports a compiled DSP track template and consumes its implicit instance; `bus` can take `source` to use a named DSP bus. `retain` (`nodes`, `processors`, `buses`, `connections`, each an ID list) reconciles the owner’s graph without recreating retained instances. DSP expressions may still contain bus sends; those stay part of their compiled processor graph.
+
+The JavaScript and Python clients expose `routing(edits, …)` as a convenience over `events.send`. See [`clients/examples/routing.js`](https://github.com/martineastwood/niminal/blob/main/clients/examples/routing.js) for independently controlled effect returns.
 
 ### Live parameters and modulation
 
@@ -155,6 +198,7 @@ The engine's state. **Result** includes:
 - **`controls`** — each `ctl` and track parameter (named `track::param`): `name`, `value`, `target`, `unit` (db shown in dB)
 - **`instruments`** — each instrument's `name` and `params` (`name`, `unit`, `default`, `range`)
 - **`tracks`**, **`buses`** — their names
+- **`routing`** — each owner’s processor definitions, buses, instances and connections
 - **`clients`** — each connected client that has something going: `id`, `voices` (the ids of its held notes) and `waiting` (how many of its events are still waiting)
 
 ## Error codes
@@ -178,8 +222,8 @@ The engine records every accepted `events.send` and `events.cancel`, with the ti
 ## Minimal client flow
 
 ```json
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":2,"client":"example"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":3,"client":"example"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":3,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices"]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"events.send","params":{"events":[
     {"op":"define","at":"now","source":"instr x(freq: hz) { osc(sine, freq) * env[1 | 20ms 0] }\ntrack t { instrument = x }"},

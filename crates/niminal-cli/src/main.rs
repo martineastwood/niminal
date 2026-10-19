@@ -485,11 +485,19 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
     use niminal_daemon::{EngineRequest, EngineReply};
     let LiveArgs { file, port, engine_port, token, parent_stdio, midi, osc_port } = args;
     let mut link = niminal_cli::link::WsLink::connect(engine_port, token.as_deref())?;
-    let hello = link.request(EngineRequest::Hello {
-        protocol: niminal_daemon::PROTOCOL_VERSION,
-        client: Some("niminal-live".into()), token: token.clone(),
-    }).map_err(|e| e.message)?;
-    let EngineReply::Hello { sample_rate, channels } = hello else {
+    let hello = link
+        .request(EngineRequest::Hello {
+            protocol: niminal_daemon::PROTOCOL_VERSION,
+            client: Some("niminal-live".into()),
+            token: token.clone(),
+        })
+        .map_err(|e| e.message)?;
+    let EngineReply::Hello {
+        sample_rate,
+        channels,
+        ..
+    } = hello
+    else {
         return Err("the daemon did not return its audio format".into());
     };
     let layout = layout_for(channels as u16)?;

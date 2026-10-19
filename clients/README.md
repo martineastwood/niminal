@@ -44,3 +44,5 @@ Project(clips=[...], scenes=[...], arrangement={...}).to_json()
 A minimal independent tracker client lives in [`examples/tracker.js`](examples/tracker.js). It owns its rows, tempo and timing conversion and uses only the generic engine API. Run `npm install --prefix clients/js`, start `niminal daemon`, then run `node clients/examples/tracker.js`.
 
 Protocol version 2 removes engine transport events and musical timestamps. Engine clock subscriptions use the `clock` topic. The live sequencer still exposes its musical `transport` topic.
+
+Protocol version 3 adds private routing graphs and `note.to`. Use `client.routing(edits, { at })` in JavaScript or `client.routing(edits, at=sample)` in Python to edit processors, instances, buses and connections. [`examples/routing.js`](examples/routing.js) demonstrates two independent instances of one effect. Processor definitions and routing IDs are connection-owned; sharing a bus requires `shared: true` and its owner’s `client_id` from `hello`.

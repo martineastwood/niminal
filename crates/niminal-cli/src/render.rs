@@ -157,7 +157,7 @@ fn collect(mut session: Offline, mut out: Vec<Vec<f32>>, limiter: bool) -> Rende
     let len = out[0].len();
     let silenced = session.take_silenced();
     let captured = session.take_stems();
-    let stems = name_stems(session.engine().session().program(), captured, len);
+    let stems = name_stems(session.program(), captured, len);
     finish(out, silenced, stems, limiter)
 }
 

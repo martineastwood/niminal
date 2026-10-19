@@ -223,7 +223,12 @@ impl Live {
             let id = u64::from(key);
             self.held.insert(id, instrument);
             ops.push(Op::Note {
-                target: event.target.clone(),
+                to: None,
+                target: if self.program.track_index(&event.target).is_some() {
+                    super::routing_id(&event.target)
+                } else {
+                    event.target.clone()
+                },
                 at: At::Sample(start),
                 args: event.args.iter().map(|(n,v)| (n.clone(), niminal_lang::dsp_value(*v, self.program.tempo))).collect(),
                 dur: None,

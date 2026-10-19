@@ -799,16 +799,15 @@ impl Session {
                 self.plan_notes(&program, &explicit, position..boundary, config, &mut window);
                 position = boundary;
             }
-            if let Some(next) = &pending.program {
-                if lands_at >= from {
-                    let mut swap = self.swap_command(lands_at, next, config);
-                    if let Kind::Swap { controls, .. } = &mut swap.kind {
-                        controls::mark(controls, next, &pending.statements, pending.id);
-                    }
-                    window.commands.push(swap);
+            let next = &pending.program;
+            if lands_at >= from {
+                let mut swap = self.swap_command(lands_at, next, config);
+                if let Kind::Swap { controls, .. } = &mut swap.kind {
+                    controls::mark(controls, next, &pending.statements, pending.id);
                 }
-                program = next.clone();
+                window.commands.push(swap);
             }
+            program = next.clone();
         }
         if position < to {
             self.plan_notes(&program, &explicit, position..to, config, &mut window);

@@ -46,6 +46,7 @@ struct Upcoming {
 
 /// A note a client holds open or may change, by the id the client chose.
 struct VoiceEntry {
+    destination: Option<String>,
     client: ClientId,
     id: u64,
     key: u32,
@@ -185,6 +186,8 @@ pub struct Session {
 
     project: Project,
     program: Arc<Program>,
+    definitions: Arc<Program>,
+    routing: crate::routing::Routing,
     mixer: Mixer,
     limiter: Option<Master>,
 
@@ -243,6 +246,8 @@ impl Session {
             sample_dirs: Vec::new(),
             clock: 0,
             project: Project::default(),
+            definitions: Arc::new(program.clone()),
+            routing: Default::default(),
             program: Arc::new(program),
             mixer,
             limiter: Some(Master::with_channels(sample_rate, DEFAULT_CEILING, layout.channels())),
@@ -330,9 +335,21 @@ impl Session {
         self.pending
             .iter()
             .rev()
-            .find(|p| p.lands_at <= at && p.program.is_some())
-            .and_then(|p| p.program.as_ref())
+            .find(|p| p.lands_at <= at)
+            .map(|p| &p.program)
             .unwrap_or(&self.program)
+    }
+
+    fn routing_at(&self, at: u64) -> &crate::routing::Routing {
+        self.pending
+            .iter()
+            .rev()
+            .find(|p| p.lands_at <= at)
+            .map_or(&self.routing, |p| &p.routing)
+    }
+
+    pub fn routing_status(&self) -> serde_json::Value {
+        self.routing.status()
     }
 
     fn seconds(&self, sample: u64) -> f64 {
@@ -533,11 +550,37 @@ impl Session {
 
     fn land(&mut self, p: Pending) {
         self.version += 1;
-        let Pending { id, statements, project, program, mixer, .. } = p;
-
-        if let (Some(program), Some(mixer)) = (program, mixer) {
-            self.swap_program(project, program, mixer, &statements, id);
+        let Pending {
+            id,
+            statements,
+            project,
+            program,
+            mixer,
+            definitions,
+            routing,
+            ..
+        } = p;
+        self.definitions = definitions;
+        self.routing = routing;
+        let released = self
+            .voices
+            .iter()
+            .filter(|v| {
+                v.destination.as_ref().is_some_and(|name| {
+                    !program
+                        .tracks
+                        .iter()
+                        .any(|t| t.name == *name && t.accepts_notes)
+                })
+            })
+            .map(|v| v.key)
+            .collect::<Vec<_>>();
+        self.voices.retain(|v| !released.contains(&v.key));
+        for key in released {
+            self.release_at(key, self.clock, None);
         }
+
+        self.swap_program(project, program, mixer, &statements, id);
     }
 
     /// Replace the running program, keeping what is sounding.
@@ -881,6 +924,7 @@ pub(super) fn plan_transfers(old: &Program, new: &Program, out: &mut Vec<Transfe
             old.track_index(&track.name)
         };
         out.push(Transfer {
+            release: !track.accepts_notes && from.is_some_and(|i| old.tracks[i].accepts_notes),
             voices_from: from,
             chain_from: from.filter(|_| i > 0),
         });

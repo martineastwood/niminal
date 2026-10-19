@@ -32,10 +32,32 @@ pub(super) struct Pending {
     pub statements: Vec<Statement>,
     /// The project once this has landed.
     pub project: Project,
-    /// The new program and a mixer built for it, if definitions changed.
-    pub program: Option<Arc<Program>>,
-    pub mixer: Option<Mixer>,
+    pub definitions: Arc<Program>,
+    pub routing: crate::routing::Routing,
+    pub edits: Option<Vec<crate::RoutingEdit>>,
+    /// The materialized program and mixer, prepared before rendering.
+    pub program: Arc<Program>,
+    pub mixer: Mixer,
     pub meta: Meta,
+}
+
+impl Pending {
+    /// Copy a prepared change for batch validation, retaining the original for rollback.
+    pub(super) fn copy_prepared(&self, sample_rate: f32) -> Self {
+        Self {
+            id: self.id,
+            lands_at: self.lands_at,
+            snippet: self.snippet.clone(),
+            statements: self.statements.clone(),
+            project: self.project.clone(),
+            definitions: self.definitions.clone(),
+            routing: self.routing.clone(),
+            edits: self.edits.clone(),
+            program: self.program.clone(),
+            mixer: self.program.mixer(sample_rate),
+            meta: self.meta.clone(),
+        }
+    }
 }
 
 /// The modules joined into a change, and the code as it was sent, so a problem in a module can be pointed
@@ -69,9 +91,12 @@ impl Session {
             Some(i) => self.pending[i].project.clone(),
             None => self.project.clone(),
         };
+        let routing = index
+            .checked_sub(1)
+            .map_or_else(|| self.routing.clone(), |i| self.pending[i].routing.clone());
         let id = self.next_id;
         let pending = self
-            .prepare(id, at, snippet, statements, &base, meta)
+            .prepare(id, at, snippet, statements, &base, &routing, meta)
             .map_err(|problems| match &uses {
                 Some(u) => u.locate(problems),
                 None => problems,
@@ -82,6 +107,79 @@ impl Session {
         self.recompile_from(index + 1);
         self.version += 1;
         Ok(id)
+    }
+
+    pub(super) fn queue_routing(
+        &mut self,
+        edits: Vec<crate::RoutingEdit>,
+        at: u64,
+        meta: Meta,
+    ) -> Result<u64, Vec<Problem>> {
+        let at = at.max(self.clock);
+        let index = self.pending.partition_point(|p| p.lands_at <= at);
+        let (project, definitions, routing) = index.checked_sub(1).map_or_else(
+            || {
+                (
+                    self.project.clone(),
+                    self.definitions.clone(),
+                    self.routing.clone(),
+                )
+            },
+            |i| {
+                let p = &self.pending[i];
+                (p.project.clone(), p.definitions.clone(), p.routing.clone())
+            },
+        );
+        let id = self.next_id;
+        let pending =
+            self.prepare_routing(id, at, edits, &project, &definitions, &routing, meta)?;
+        self.next_id += 1;
+        self.pending.insert(index, pending);
+        self.recompile_from(index + 1);
+        self.version += 1;
+        Ok(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_routing(
+        &self,
+        id: u64,
+        lands_at: u64,
+        edits: Vec<crate::RoutingEdit>,
+        project: &Project,
+        definitions: &Arc<Program>,
+        routing: &crate::routing::Routing,
+        meta: Meta,
+    ) -> Result<Pending, Vec<Problem>> {
+        let mut routing = routing.clone();
+        let client = meta.client.expect("routing changes have an owner");
+        routing
+            .apply(
+                client,
+                &edits,
+                definitions,
+                &options(self.layout, &self.samples),
+            )
+            .map_err(|e| vec![Problem::plain(e)])?;
+        let program = Arc::new(
+            routing
+                .materialize(definitions)
+                .map_err(|e| vec![Problem::plain(e)])?,
+        );
+        let mixer = program.mixer(self.sample_rate);
+        Ok(Pending {
+            id,
+            lands_at,
+            snippet: String::new(),
+            statements: Vec::new(),
+            project: project.clone(),
+            definitions: definitions.clone(),
+            routing,
+            edits: Some(edits),
+            program,
+            mixer,
+            meta,
+        })
     }
 
     /// Take a waiting change back. What was waiting after it is compiled again.
@@ -124,6 +222,15 @@ impl Session {
             return Err(vec![Problem::plain("there is nothing to define")]);
         }
         for statement in &statements {
+            if statement
+                .key()
+                .and_then(|key| key.split_once(':'))
+                .is_some_and(|(_, name)| name.starts_with("__routing_"))
+            {
+                return Err(vec![Problem::plain(
+                    "names starting with __routing_ are reserved for private routing resources",
+                )]);
+            }
             let kind = statement.key().map(|k| k.split(':').next().unwrap_or(k));
             let allowed = match what {
                 What::Definitions => kind.is_some_and(|k| matches!(k, "instr" | "fn" | "const" | "ctl" | "bus" | "buffer" | "track" | "sample" | "kit" | "config")),
@@ -145,6 +252,7 @@ impl Session {
     }
 
     /// Compile `statements` on top of the project `base`, and build a mixer for the result.
+    #[allow(clippy::too_many_arguments)]
     fn prepare(
         &self,
         id: u64,
@@ -152,6 +260,7 @@ impl Session {
         snippet: String,
         statements: Vec<Statement>,
         base: &Project,
+        routing: &crate::routing::Routing,
         meta: Meta,
     ) -> Result<Pending, Vec<Problem>> {
         let definitions: Vec<&Statement> = statements.iter().filter(|s| s.kind() == StatementKind::Definition).collect();
@@ -183,15 +292,26 @@ impl Session {
                 self.layout, program.master
             ))]);
         }
-        let has_definitions = !definitions.is_empty() || clears;
-        let mixer = has_definitions.then(|| program.mixer(self.sample_rate));
+        let definitions = Arc::new(program);
+        let routing = if clears {
+            crate::routing::Routing::default()
+        } else {
+            routing.clone()
+        };
+        let program = routing
+            .materialize(&definitions)
+            .map_err(|e| vec![Problem::plain(e)])?;
+        let mixer = program.mixer(self.sample_rate);
         Ok(Pending {
             id,
             lands_at,
             snippet,
             statements,
             project,
-            program: has_definitions.then(|| Arc::new(program)),
+            definitions,
+            routing,
+            edits: None,
+            program: Arc::new(program),
             mixer,
             meta,
         })
@@ -204,12 +324,34 @@ impl Session {
             Some(i) => self.pending[i].project.clone(),
             None => self.project.clone(),
         };
+        let mut routing = index
+            .checked_sub(1)
+            .map_or_else(|| self.routing.clone(), |i| self.pending[i].routing.clone());
+        let mut definitions = index.checked_sub(1).map_or_else(
+            || self.definitions.clone(),
+            |i| self.pending[i].definitions.clone(),
+        );
         let rest: Vec<Pending> = self.pending.drain(index..).collect();
         for p in rest {
-            let Pending { id, lands_at, snippet, statements, meta, .. } = p;
-            match self.prepare(id, lands_at, snippet, statements, &base, meta) {
+            let Pending {
+                id,
+                lands_at,
+                snippet,
+                statements,
+                meta,
+                edits,
+                ..
+            } = p;
+            let result = if let Some(edits) = edits {
+                self.prepare_routing(id, lands_at, edits, &base, &definitions, &routing, meta)
+            } else {
+                self.prepare(id, lands_at, snippet, statements, &base, &routing, meta)
+            };
+            match result {
                 Ok(next) => {
                     base = next.project.clone();
+                    routing = next.routing.clone();
+                    definitions = next.definitions.clone();
                     self.pending.push(next);
                 }
                 Err(problems) => {
@@ -223,7 +365,12 @@ impl Session {
 
 /// How code is compiled here.
 pub(super) fn options(layout: Layout, samples: &Samples) -> CompileOptions {
-    CompileOptions { default_layout: layout, samples: samples.clone(), ..Default::default() }
+    CompileOptions {
+        defer_latency: true,
+        default_layout: layout,
+        samples: samples.clone(),
+        ..Default::default()
+    }
 }
 
 pub(super) fn first_line(text: &str) -> String {

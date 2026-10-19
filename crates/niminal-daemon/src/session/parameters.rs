@@ -28,6 +28,12 @@ impl Session {
                     ..
                 } => {
                     let program = self.program_at(self.resolve(at));
+                    let local = if self.routing_at(self.resolve(at)).has_node(client, target) {
+                        crate::routing::node_name(client, target)
+                    } else {
+                        target.clone()
+                    };
+                    let target = &local;
                     let instrument = program.instrument(target).or_else(|| {
                         program
                             .track_index(target)

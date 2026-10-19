@@ -379,7 +379,23 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub fn latency(&self) -> usize { self.latency }
+    /// Reuse a compiled processor after the surrounding bus registry changes.
+    pub fn with_bus_mapping(&self, mapping: &[Option<usize>]) -> Graph {
+        let mut graph = self.with_input_latencies(&vec![0; self.input_count()]);
+        graph.sends.retain_mut(|(bus, _, _, _)| {
+            if let Some(next) = mapping.get(*bus).copied().flatten() {
+                *bus = next;
+                true
+            } else {
+                false
+            }
+        });
+        graph
+    }
+
+    pub fn latency(&self) -> usize {
+        self.latency
+    }
 
     /// Rebuild with the known timing of external inputs, aligning them before processing.
     pub fn with_input_latencies(&self, latencies: &[usize]) -> Graph {

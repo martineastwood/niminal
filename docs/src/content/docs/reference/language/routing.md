@@ -78,3 +78,7 @@ Signals carry a layout in their type: `mono`, `stereo`, `quad`, `surround(5.1)`,
 - Convert explicitly with **`.to_layout(stereo)`** (and other layouts) when a send or instrument layout must match a bus.
 
 The daemon’s `--channels` flag must match the layout you intend to hear (1, 2, 4, 6 for 5.1, or 8 for 7.1).
+
+## Engine routing API
+
+Live tracks are lowered by the live client into private processor instances and explicit output connections. Other clients can build their own graph with the [Engine API](/reference/engine-api/#processor-instances-buses-and-connections): collection nodes, reusable effects, buses and timed connection edits. DSP-defined sends above remain part of their compiled graph. Musical tracks and sequencing stay client-owned.

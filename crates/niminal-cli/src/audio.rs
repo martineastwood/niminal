@@ -594,8 +594,21 @@ mod tests {
     fn play_tone(session: &mut niminal_daemon::Session) {
         use niminal_daemon::{At, Op};
         use niminal_score::{Time, Value};
-        let define = Op::Define { source: "instr tone(freq: hz) { osc(sine, freq) }".into(), at: At::Sample(0), dir: None, tag: None };
-        let note = Op::Note { target: "tone".into(), at: At::Sample(0), args: [("freq".to_string(), Value::Hz(440.0))].into(), dur: Some(Time::Seconds(0.5)), id: None, tag: None };
+        let define = Op::Define {
+            source: "instr tone(freq: hz) { osc(sine, freq) }".into(),
+            at: At::Sample(0),
+            dir: None,
+            tag: None,
+        };
+        let note = Op::Note {
+            to: None,
+            target: "tone".into(),
+            at: At::Sample(0),
+            args: [("freq".to_string(), Value::Hz(440.0))].into(),
+            dur: Some(Time::Seconds(0.5)),
+            id: None,
+            tag: None,
+        };
         session.send_events(0, vec![define, note]).unwrap();
     }
 

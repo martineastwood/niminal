@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use niminal_daemon::{
-    At, ClockInfo, EngineError, EngineReply, EngineRequest, Op,
+    At, ClockInfo, Endpoint, EngineError, EngineReply, EngineRequest, Op, RoutingEdit,
 };
 use niminal_lang::{
     Entry, Located, Origin, Piece, Problem, Project,
@@ -546,9 +546,35 @@ impl Live {
     /// The engine's own account of itself, for a status that wants it.
     pub fn engine_status(&mut self) -> serde_json::Value {
         match self.link.request(EngineRequest::Status {}) {
-            Ok(EngineReply::Status(v)) => v,
+            Ok(EngineReply::Status(mut v)) => {
+                let client = v["client_id"].as_u64().unwrap_or(0);
+                if let Some(controls) = v["controls"].as_array_mut() {
+                    controls.retain_mut(|control| {
+                        let Some(name) = control["name"]
+                            .as_str()
+                            .and_then(|n| self.control_name(n, client))
+                        else {
+                            return false;
+                        };
+                        control["name"] = serde_json::Value::String(name);
+                        true
+                    });
+                }
+                v
+            }
             _ => serde_json::json!({}),
         }
+    }
+
+    pub(crate) fn control_name(&self, name: &str, client: u64) -> Option<String> {
+        if !name.starts_with("__routing_") {
+            return Some(name.to_string());
+        }
+        self.program.tracks.iter().skip(1).find_map(|track| {
+            let prefix = format!("__routing_node_{client}_{}::", routing_id(&track.name));
+            name.strip_prefix(&prefix)
+                .map(|param| format!("{}::{param}", track.name))
+        })
     }
 
     // ---- the project --------------------------------------------------------------
@@ -659,7 +685,12 @@ impl Live {
             return None;
         }
         Some(Op::Note {
-            target: event.target.clone(),
+            to: None,
+            target: if self.program.track_index(&event.target).is_some() {
+                routing_id(&event.target)
+            } else {
+                event.target.clone()
+            },
             at: At::Sample(start),
             args: event.args.iter().map(|(name, value)| (name.clone(), niminal_lang::dsp_value(*value, self.program.tempo))).collect(),
             dur: Some(Time::Seconds(dur as f64 / f64::from(self.sample_rate))),
@@ -794,7 +825,7 @@ impl Live {
                 niminal_lang::Unit::Semitones => Value::Semitones(set.target),
             };
             ops.push(Op::Track {
-                name: track.to_string(),
+                name: routing_id(track),
                 at: At::Sample(self.samples(set.at)),
                 args: [(param.to_string(), value)].into(),
                 glide: Some(Time::Seconds(set.glide)),
@@ -816,11 +847,15 @@ impl Live {
         self.send(ops);
     }
 
-    /// Make sure the engine is waiting to make the changes of definitions and tempo that are waiting here, at
+    /// Keep the engine's pending definitions and routing in sync with the client, at
     /// the samples they land at, and no others.
     fn sync_pending(&mut self) {
-        let wanted: Vec<(u64, u64)> =
-            self.pending.iter().filter(|p| self.engine_ops(p).is_some()).map(|p| (p.id, p.lands_at)).collect();
+        let wanted: Vec<(u64, u64)> = self
+            .pending
+            .iter()
+            .filter(|p| p.program.is_some() || p.statements.iter().any(Statement::clears))
+            .map(|p| (p.id, p.lands_at))
+            .collect();
         let keep = self
             .asked
             .iter()
@@ -833,8 +868,12 @@ impl Live {
             self.take_back(&change_tag(id), 0);
         }
         for &(id, lands_at) in &wanted[keep..] {
-            let Some(index) = self.pending.iter().position(|p| p.id == id) else { continue };
-            let Some(mut ops) = self.engine_ops(&self.pending[index]) else { continue };
+            let Some(index) = self.pending.iter().position(|p| p.id == id) else {
+                continue;
+            };
+            let p = &self.pending[index];
+            let mut ops =
+                self.definition_ops(&p.statements, p.program.as_deref(), At::Sample(p.lands_at));
             for op in &mut ops {
                 tag_op(op, &change_tag(id));
             }
@@ -851,14 +890,12 @@ impl Live {
         }
     }
 
-    /// What a pending change asks of the engine: forget, define, change the tempo or meter. `None` if it
-    /// asks nothing, as for a `play`.
-    fn engine_ops(&self, p: &Pending) -> Option<Vec<Op>> {
-        let ops = self.definition_ops(&p.statements, p.program.as_deref(), At::Sample(p.lands_at));
-        (!ops.is_empty()).then_some(ops)
-    }
-
-    fn definition_ops(&self, statements: &[Statement], program: Option<&Program>, at: At) -> Vec<Op> {
+    fn definition_ops(
+        &self,
+        statements: &[Statement],
+        program: Option<&Program>,
+        at: At,
+    ) -> Vec<Op> {
         let mut ops = definition_ops(statements, program, at, self.sample_dirs.first());
         for op in &mut ops {
             if let Op::Define { source, .. } = op {
@@ -874,6 +911,64 @@ impl Live {
                 }
                 source.insert_str(0, &controls);
             }
+        }
+        if let Some(program) = program {
+            let mut edits = Vec::new();
+            let mut nodes = Vec::new();
+            let mut buses = Vec::new();
+            let mut connections = Vec::new();
+            for (name, layout) in program.buses.iter().zip(&program.bus_layouts) {
+                let id = routing_id(name);
+                buses.push(id.clone());
+                edits.push(RoutingEdit::Bus {
+                    id,
+                    channels: layout.channels(),
+                    shared: false,
+                    source: Some(name.clone()),
+                });
+            }
+            for track in program.tracks.iter().skip(1) {
+                let id = routing_id(&track.name);
+                nodes.push(id.clone());
+                edits.push(RoutingEdit::Import {
+                    name: id.clone(),
+                    track: track.name.clone(),
+                });
+                edits.push(RoutingEdit::Node {
+                    id: id.clone(),
+                    processor: Some(id.clone()),
+                    instrument: None,
+                    args: BTreeMap::new(),
+                });
+                let connection = format!("output_{id}");
+                connections.push(connection.clone());
+                let to = match track.def.route {
+                    niminal_engine::Route::Master => Endpoint::Master,
+                    niminal_engine::Route::Bus(bus) => Endpoint::Bus {
+                        id: routing_id(&program.buses[bus]),
+                        owner: None,
+                    },
+                };
+                edits.push(RoutingEdit::Connect {
+                    id: connection,
+                    from: Endpoint::Node { id },
+                    to,
+                    gain: 1.0,
+                    glide: 0.0,
+                    delayed: false,
+                });
+            }
+            edits.push(RoutingEdit::Retain {
+                processors: nodes.clone(),
+                nodes,
+                buses,
+                connections,
+            });
+            ops.push(Op::Routing {
+                at,
+                edits,
+                tag: None,
+            });
         }
         ops
     }
@@ -937,7 +1032,23 @@ impl Live {
         let tempo = self.program.tempo;
         let ops: Vec<Op> = events
             .iter()
-            .map(|e| Op::Note { target: e.target.clone(), at: At::Sample(self.samples(e.at.to_seconds(tempo))), args: e.args.iter().map(|(n,v)| (n.clone(), niminal_lang::dsp_value(*v, tempo))).collect(), dur: Some(Time::Seconds(e.dur.to_seconds(tempo))), id: None, tag: Some(WRITTEN.into()) })
+            .map(|e| Op::Note {
+                to: None,
+                target: if self.program.track_index(&e.target).is_some() {
+                    routing_id(&e.target)
+                } else {
+                    e.target.clone()
+                },
+                at: At::Sample(self.samples(e.at.to_seconds(tempo))),
+                args: e
+                    .args
+                    .iter()
+                    .map(|(n, v)| (n.clone(), niminal_lang::dsp_value(*v, tempo)))
+                    .collect(),
+                dur: Some(Time::Seconds(e.dur.to_seconds(tempo))),
+                id: None,
+                tag: Some(WRITTEN.into()),
+            })
             .collect();
         self.link
             .request(EngineRequest::EventsSend { events: ops })
@@ -963,13 +1074,25 @@ fn definition_ops(statements: &[Statement], program: Option<&Program>, at: At, d
     ops
 }
 
+pub(super) fn routing_id(name: &str) -> String {
+    format!(
+        "live_{}",
+        name.as_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    )
+}
+
 fn change_tag(id: u64) -> String {
     format!("change-{id}")
 }
 
 fn tag_op(op: &mut Op, tag: &str) {
     match op {
-        Op::Define { tag: t, .. } | Op::Forget { tag: t, .. } => *t = Some(tag.to_string()),
+        Op::Define { tag: t, .. } | Op::Forget { tag: t, .. } | Op::Routing { tag: t, .. } => {
+            *t = Some(tag.to_string())
+        }
         _ => {}
     }
 }

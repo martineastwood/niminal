@@ -4,7 +4,7 @@ use niminal_engine::{ChainInput, GraphBuilder, Route, execution_order};
 use std::sync::Arc;
 
 impl Program {
-    pub(crate) fn compensate_latency(&mut self) {
+    pub fn compensate_latency(&mut self) {
         let voices = self
             .instruments
             .iter()
@@ -33,7 +33,7 @@ impl Program {
         let mut tracks = vec![0usize; self.tracks.len()];
         for &t in &order {
             let info = &mut self.tracks[t];
-            let voice_latency = if t == 0 || info.instrument.is_some() {
+            let voice_latency = if t == 0 || info.accepts_notes {
                 voices
             } else {
                 0
@@ -88,7 +88,7 @@ impl Program {
                         .iter()
                         .map(|i| match i {
                             ChainInput::It { .. } => {
-                                if t == 0 || info.instrument.is_some() {
+                                if t == 0 || info.accepts_notes {
                                     voices
                                 } else {
                                     0

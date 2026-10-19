@@ -27,6 +27,8 @@ const DEFAULT_BPM: f64 = 120.0;
 /// Settings for compiling a project.
 #[derive(Clone)]
 pub struct CompileOptions {
+    /// Defer topology-dependent compensation until the host has connected processor instances.
+    pub defer_latency: bool,
     /// The output layout when the source has no `config { channels: ... }`.
     pub default_layout: Layout,
     /// Where the files named by `sample` and `kit` are found.
@@ -38,6 +40,7 @@ pub struct CompileOptions {
 impl Default for CompileOptions {
     fn default() -> Self {
         CompileOptions {
+            defer_latency: false,
             default_layout: Layout::Mono,
             samples: Samples::default(),
             buffers: HashMap::new(),
@@ -655,12 +658,14 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
 
     // Track 0 plays bare instruments, so it may send to any bus an instrument does.
     let implicit = TrackInfo {
+        accepts_notes: true,
         taps: Vec::new(),
         name: String::new(),
         instrument: None,
         defaults: BTreeMap::new(),
         notes: None,
         def: TrackDef {
+            controls: Vec::new(),
             chain: None,
             inputs: Vec::new(),
             route: Route::Master,
@@ -801,7 +806,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             performance,
             arrangements,
         };
-        program.compensate_latency();
+        if !options.defer_latency {
+            program.compensate_latency();
+        }
         Ok(program)
     } else {
         Err(errors)
@@ -892,12 +899,14 @@ fn compile_track(
         .map(|i| instruments[i].graph.buffer_reads().to_vec())
         .unwrap_or_default();
     Ok(Some(TrackInfo {
+        accepts_notes: instrument.is_some(),
         taps: chain.taps.clone(),
         name: decl.name.name.clone(),
         instrument,
         defaults,
         notes: notes_line.cloned(),
         def: TrackDef {
+            controls: Vec::new(),
             chain: chain.graph,
             inputs: chain.inputs,
             route: chain.route,

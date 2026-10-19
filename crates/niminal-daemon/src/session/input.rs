@@ -40,9 +40,19 @@ impl Session {
         };
         let def = &program.controls[index];
         // a control that a change still to land declares is not there for the renderer until it lands
-        let revision = match self.pending.iter().rev().find(|p| p.lands_at <= at && p.program.is_some()) {
-            Some(p) if p.statements.iter().any(|s| s.key().and_then(|k| k.strip_prefix("ctl:")) == Some(name)) => p.id,
-            _ => self.controls.iter().find(|c| c.key == def.key).map_or(0, |c| c.revision),
+        let revision = match self.pending.iter().rev().find(|p| p.lands_at <= at) {
+            Some(p)
+                if p.statements
+                    .iter()
+                    .any(|s| s.key().and_then(|k| k.strip_prefix("ctl:")) == Some(name)) =>
+            {
+                p.id
+            }
+            _ => self
+                .controls
+                .iter()
+                .find(|c| c.key == def.key)
+                .map_or(0, |c| c.revision),
         };
         let change = crate::controls::Change {
             index,
@@ -79,6 +89,45 @@ impl Session {
     /// done. Times come out as samples in the log, so that replaying it gives the same sound.
     pub fn send_events(&mut self, client: ClientId, ops: Vec<Op>) -> Result<Sent, Vec<Problem>> {
         self.sync_realtime();
+        let has_changes = ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::Define { .. } | Op::Forget { .. } | Op::Routing { .. }
+            )
+        });
+        let backup = has_changes.then(|| {
+            let pending = std::mem::take(&mut self.pending);
+            self.pending = pending
+                .iter()
+                .map(|p| p.copy_prepared(self.sample_rate))
+                .collect();
+            (
+                pending,
+                self.notices.clone(),
+                self.recent_notices.clone(),
+                self.samples.clone(),
+                self.sample_dirs.clone(),
+            )
+        });
+        let result = self.send_events_inner(client, ops, has_changes);
+        if result.is_err()
+            && let Some((pending, notices, recent, samples, dirs)) = backup
+        {
+            self.pending = pending;
+            self.notices = notices;
+            self.recent_notices = recent;
+            self.samples = samples;
+            self.sample_dirs = dirs;
+        }
+        result
+    }
+
+    fn send_events_inner(
+        &mut self,
+        client: ClientId,
+        ops: Vec<Op>,
+        has_changes: bool,
+    ) -> Result<Sent, Vec<Problem>> {
         let mut invalid = Vec::new();
         for (index, op) in ops.iter().enumerate() {
             let (duration, args) = match op {
@@ -112,9 +161,34 @@ impl Session {
         // rest of the batch is checked against the program they leave. If anything later is wrong they are
         // taken back.
         let mut resolved: Vec<Option<Op>> = vec![None; ops.len()];
-        let mut queued: Vec<u64> = Vec::new();
         let mut early = Vec::new();
         for (n, op) in ops.iter().enumerate() {
+            if let Op::Routing { at, edits, tag } = op {
+                let sample = self.resolve(*at);
+                resolved[n] = Some(Op::Routing {
+                    at: At::Sample(sample),
+                    edits: edits.clone(),
+                    tag: tag.clone(),
+                });
+                match self.queue_routing(
+                    edits.clone(),
+                    sample,
+                    Meta {
+                        client: Some(client),
+                        tag: tag.clone(),
+                    },
+                ) {
+                    Ok(_) => {}
+                    Err(mut problems) => {
+                        for p in &mut problems {
+                            p.event = Some(n);
+                        }
+                        early.extend(problems);
+                        break;
+                    }
+                }
+                continue;
+            }
             let (source, dir, at, what, meta) = match op {
                 Op::Define { source, at, dir, tag } => {
                     let meta = Meta { client: Some(client), tag: tag.clone() };
@@ -133,7 +207,7 @@ impl Session {
             }
             let result = self.queue_change(&source, dir, at, what, meta);
             match result {
-                Ok(id) => queued.push(id),
+                Ok(_) => {}
                 Err(mut problems) => {
                     for p in &mut problems {
                         p.event = Some(n);
@@ -144,11 +218,10 @@ impl Session {
             }
         }
         if !early.is_empty() {
-            self.take_back(&queued);
             return Err(early);
         }
 
-        let ops = self.expand_parameter_events(client, ops).inspect_err(|_| { self.take_back(&queued); })?;
+        let ops = self.expand_parameter_events(client, ops)?;
         enum Plan {
             Buffer { set: BufferSet, start: u64 },
             Map { id: u64, start: u64, param: String, source: Option<String>, channel: usize, scale: f32, offset: f32, tag: Option<String> },
@@ -172,9 +245,25 @@ impl Session {
         for (n, op) in ops.iter().enumerate() {
             let mut fail = |message: String| problems.push(problem_at(n, message));
             match op {
-                Op::Note { target, at, args, dur, id, tag } => {
+                Op::Note {
+                    target,
+                    to,
+                    at,
+                    args,
+                    dur,
+                    id,
+                    tag,
+                } => {
                     let start = self.resolve(*at);
-                    resolved[n] = Some(Op::Note { target: target.clone(), at: self.logged(*at), args: args.clone(), dur: *dur, id: *id, tag: tag.clone() });
+                    resolved[n] = Some(Op::Note {
+                        to: to.clone(),
+                        target: target.clone(),
+                        at: self.logged(*at),
+                        args: args.clone(),
+                        dur: *dur,
+                        id: *id,
+                        tag: tag.clone(),
+                    });
                     if dur.is_none() && id.is_none() {
                         fail("a note needs a `dur`, or an `id` to be released by an `off`".into());
                         continue;
@@ -186,7 +275,30 @@ impl Session {
                         continue;
                     }
                     let program = self.program_at(start).clone();
-                    let event = Event { target: target.clone(), at: Time::Seconds(0.0), dur: dur.unwrap_or(Time::Seconds(0.0)), args: args.clone() };
+                    if target.contains('@') || target.starts_with("__routing_") {
+                        fail("use a local node ID, rather than an internal routing name".into());
+                        continue;
+                    }
+                    let target = if let Some(destination) = to {
+                        if !self.routing_at(start).has_node(client, destination) {
+                            fail(format!("no node `{destination}`"));
+                            continue;
+                        }
+                        format!(
+                            "{target}@{}",
+                            crate::routing::node_name(client, destination)
+                        )
+                    } else if self.routing_at(start).has_node(client, target) {
+                        crate::routing::node_name(client, target)
+                    } else {
+                        target.clone()
+                    };
+                    let event = Event {
+                        target: target.clone(),
+                        at: Time::Seconds(0.0),
+                        dur: dur.unwrap_or(Time::Seconds(0.0)),
+                        args: args.clone(),
+                    };
                     match program.plan(&event) {
                         Ok(plan) => {
                             let instrument = program.instruments[plan.instrument].name.clone();
@@ -205,7 +317,18 @@ impl Session {
                         Err(e) => fail(format!("note for `{target}`: {e}")),
                     }
                 }
-                Op::Control { name, at, value, unit, glide, tag } => {
+                Op::Control {
+                    name,
+                    at,
+                    value,
+                    unit,
+                    glide,
+                    tag,
+                } => {
+                    if name.starts_with("__routing_") {
+                        fail("use routing edits to change private instance controls".into());
+                        continue;
+                    }
                     let raw = at;
                     let at = self.resolve(*at);
                     resolved[n] = Some(Op::Control { name: name.clone(), at: self.logged(*raw), value: *value, unit: unit.clone(), glide: *glide, tag: tag.clone() });
@@ -232,7 +355,23 @@ impl Session {
                 Op::Track { name, at, args, glide, tag } => {
                     let raw = at;
                     let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Track { name: name.clone(), at: self.logged(*raw), args: args.clone(), glide: *glide, tag: tag.clone() });
+                    resolved[n] = Some(Op::Track {
+                        name: name.clone(),
+                        at: self.logged(*raw),
+                        args: args.clone(),
+                        glide: *glide,
+                        tag: tag.clone(),
+                    });
+                    if name.starts_with("__routing_") {
+                        fail("use a local node ID".into());
+                        continue;
+                    }
+                    let local_name = if self.routing_at(at).has_node(client, name) {
+                        crate::routing::node_name(client, name)
+                    } else {
+                        name.clone()
+                    };
+                    let name = &local_name;
                     let program = self.program_at(at);
                     for (param, value) in args {
                         let full = format!("{name}::{param}");
@@ -253,14 +392,51 @@ impl Session {
                         }
                     }
                 }
-                Op::Map { id, at, param, source, channel, scale, offset, tag } => {
-                    let start = self.resolve(*at); let program = self.program_at(start);
-                    let Some((_,name)) = open.iter().find(|(open,_)| open == id) else { fail(format!("no note with id {id} is sounding")); continue; };
-                    let schema = self.voices.iter().find(|v| v.client == client && v.id == *id).map(|v| v.schema.as_ref()).or_else(|| program.instrument(name));
-                    let Some(schema) = schema else { fail("the instrument is no longer defined".into()); continue; };
-                    if let Err(error) = schema.param(param) { fail(error.to_string()); continue; }
-                    if schema.resources.contains_key(param) { fail("use bind_buffer to select a buffer resource".into()); continue; }
-                    if !scale.is_finite() || !offset.is_finite() || *channel == 0 { fail("mapping scale and offset must be finite, and channel is 1-based".into()); continue; }
+                Op::Map {
+                    id,
+                    at,
+                    param,
+                    source,
+                    channel,
+                    scale,
+                    offset,
+                    tag,
+                } => {
+                    if source.as_ref().is_some_and(|n| n.starts_with("__routing_")) {
+                        fail("private routing buses cannot be addressed by internal names".into());
+                        continue;
+                    }
+                    let start = self.resolve(*at);
+                    let program = self.program_at(start);
+                    let Some((_, name)) = open.iter().find(|(open, _)| open == id) else {
+                        fail(format!("no note with id {id} is sounding"));
+                        continue;
+                    };
+                    let schema = self
+                        .voices
+                        .iter()
+                        .find(|v| v.client == client && v.id == *id)
+                        .map(|v| v.schema.as_ref())
+                        .or_else(|| program.instrument(name));
+                    let Some(schema) = schema else {
+                        fail("the instrument is no longer defined".into());
+                        continue;
+                    };
+                    if let Err(error) = schema.param(param) {
+                        fail(error.to_string());
+                        continue;
+                    }
+                    if schema.resources.contains_key(param) {
+                        fail("use bind_buffer to select a buffer resource".into());
+                        continue;
+                    }
+                    if !scale.is_finite() || !offset.is_finite() || *channel == 0 {
+                        fail(
+                            "mapping scale and offset must be finite, and channel is 1-based"
+                                .into(),
+                        );
+                        continue;
+                    }
                     if let Some(source) = source {
                         if let Some(bus) = program.buses.iter().position(|n| n == source) {
                             if *channel > program.bus_layouts[bus].channels() { fail("mapping channel is outside the bus".into()); continue; }
@@ -333,14 +509,13 @@ impl Session {
                     plans.push(Plan::Panic { at: start, tag: tag.clone() });
                 }
                 Op::Array { .. } | Op::BindBuffer { .. } => unreachable!("parameter events expanded"),
-                Op::Define { .. } | Op::Forget { .. } => {}
+                Op::Define { .. } | Op::Forget { .. } | Op::Routing { .. } => {}
             }
         }
         if problems.is_empty() && controls > crate::controls::CAPACITY {
             problems.push(Problem::plain("the control update queue is full"));
         }
         if !problems.is_empty() {
-            self.take_back(&queued);
             return Err(problems);
         }
 
@@ -353,7 +528,9 @@ impl Session {
         // definitions, which are queued already
         for op in &ops {
             let at = match op {
-                Op::Define { at, .. } | Op::Forget { at, .. } => self.resolve(*at),
+                Op::Define { at, .. } | Op::Forget { at, .. } | Op::Routing { at, .. } => {
+                    self.resolve(*at)
+                }
                 _ => continue,
             };
             sent.late += usize::from(at < clock);
@@ -378,8 +555,31 @@ impl Session {
                 Plan::Note { event, instrument, start, dur, id, tag } => {
                     let key = id.map(|_| self.new_key());
                     if let (Some(id), Some(key)) = (id, key) {
-                        let schema = Arc::new(self.program_at(start).instrument(&instrument).expect("validated instrument").clone());
-                        self.voices.push(VoiceEntry { client, id, key, instrument, schema, tag: tag.clone() });
+                        let schema = Arc::new(
+                            self.program_at(start)
+                                .instrument(&instrument)
+                                .expect("validated instrument")
+                                .clone(),
+                        );
+                        let destination = event
+                            .target
+                            .split_once('@')
+                            .map(|(_, node)| node.to_string())
+                            .or_else(|| {
+                                event
+                                    .target
+                                    .starts_with("__routing_node_")
+                                    .then(|| event.target.clone())
+                            });
+                        self.voices.push(VoiceEntry {
+                            destination,
+                            client,
+                            id,
+                            key,
+                            instrument,
+                            schema,
+                            tag: tag.clone(),
+                        });
                     }
                     self.add_explicit(start.max(clock), dur, event, key, Some((client, tag)));
                     start
@@ -429,18 +629,11 @@ impl Session {
         self.land_due();
         if self.pending.len() != waiting {
             self.invalidate_live();
-        } else if !queued.is_empty() {
+        } else if has_changes {
             self.invalidate_windows();
         }
         self.wake_planner();
         Ok(sent)
-    }
-
-    /// Take back changes of definitions queued by a batch that then failed.
-    fn take_back(&mut self, ids: &[u64]) {
-        for &id in ids {
-            self.cancel_change(id);
-        }
     }
 
     /// Change parameters of the note a client holds by `id`: now, if it is sounding, or as it starts.
@@ -650,20 +843,18 @@ impl Session {
 
     /// A client has gone: its held notes are let go of and its notes still waiting never sound.
     pub fn drop_client(&mut self, client: ClientId) {
-        self.sync_realtime();
-        let held: Vec<u32> = self.voices.iter().filter(|v| v.client == client).map(|v| v.key).collect();
-        self.voices.retain(|v| v.client != client);
-        for key in held {
-            self.release_at(key, self.clock, None);
-        }
-        let before = self.upcoming.len() + self.track_sets.len() + self.buffer_sets.len() + self.voice_maps.len();
-        let clock = self.clock;
-        self.upcoming.retain(|u| u.client != Some(client) || u.start < clock || u.key.is_some());
-        self.track_sets.retain(|s| s.client != Some(client) || s.at < clock);
-        self.buffer_sets.retain(|s| s.client != client || s.at < clock);
-        self.voice_maps.retain(|s| s.client != client || s.at < clock);
-        if self.upcoming.len() + self.track_sets.len() + self.buffer_sets.len() + self.voice_maps.len() != before {
-            self.invalidate_windows();
+        self.cancel_events(client, None, At::Now, true);
+        if !self.routing.is_empty(client)
+            && let Err(problems) = self.send_events(
+                client,
+                vec![Op::Routing {
+                    at: At::Now,
+                    edits: vec![crate::RoutingEdit::Clear],
+                    tag: None,
+                }],
+            )
+        {
+            self.notify(format!("routing cleanup failed: {}", problems[0].message));
         }
     }
 

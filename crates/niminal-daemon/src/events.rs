@@ -42,6 +42,13 @@ impl Serialize for At {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Op {
+    /// Atomically edit this connection's processor instances, buses and audio connections.
+    Routing {
+        at: At,
+        edits: Vec<crate::RoutingEdit>,
+        #[serde(default)]
+        tag: Option<String>,
+    },
     /// Map a parameter to a control or a block-delayed bus; null disconnects it.
     Map { id: u64, at: At, param: String, #[serde(default)] source: Option<String>, #[serde(default = "first_channel")] channel: usize,
         #[serde(default = "unity")] scale: f32, #[serde(default)] offset: f32, #[serde(default)] tag: Option<String> },
@@ -63,6 +70,9 @@ pub enum Op {
     /// no `dur` it is held until an `off`. With both it is held for at most `dur`.
     Note {
         target: String,
+        /// Optional collection/processor node, scoped to this connection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
         at: At,
         #[serde(default)]
         args: BTreeMap<String, Value>,
