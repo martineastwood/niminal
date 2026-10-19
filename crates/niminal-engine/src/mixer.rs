@@ -295,6 +295,7 @@ pub struct VoiceId {
     serial: u64,
 }
 
+#[derive(Default)]
 struct ChainFade {
     previous: Option<Voice>,
     inputs: Vec<ChainInput>,
@@ -383,7 +384,7 @@ impl Mixer {
         let tracks = defs
             .into_iter()
             .map(|def| Track {
-                fade: ChainFade { previous: None, inputs: Vec::new(), frames: (def.transition.1 * f64::from(sample_rate)).round() as usize, elapsed: 0 },
+                fade: ChainFade { frames: (def.transition.1 * f64::from(sample_rate)).round() as usize, ..Default::default() },
                 chain: def.chain.as_ref().map(|g| Voice::new(g.clone(), sample_rate)),
                 def,
                 voices: Vec::new(),
@@ -666,6 +667,7 @@ impl Mixer {
         let rate = self.sample_rate;
         for track in &mut self.tracks {
             track.voices.clear();
+            track.fade = ChainFade::default();
             track.chain = track.def.chain.as_ref().map(|g| Voice::new(g.clone(), rate));
             track.chain_silenced = false;
             track.chain_quiet = 0;

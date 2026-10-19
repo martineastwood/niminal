@@ -279,7 +279,7 @@ The JavaScript and Python clients expose `transaction(...)`. The live sequencer 
 
 Matching parameter names and units retain their current values and smoothing trajectories unless overridden in `args`. New parameters use their defaults; removed parameters disappear. A zero `fade` (the default) preserves compatible DSP memory. A positive fade starts the new DSP fresh and linearly blends the old and new outputs for that duration, in seconds (maximum 60). The old processor receives the same incoming audio during the fade; its remaining tail is discarded at the end. Retired DSP storage is destroyed off the audio thread. To keep a longer independent tail, use separate instances and `drain` instead.
 
-Crossfades require the same output width and processors whose audio inputs come only from `it`, with sends represented by explicit connections. Schedule successive crossfaded replacements after the preceding fade finishes. An unrelated graph edit preserves an ongoing fade.
+Crossfades require the same output width and processors whose audio inputs come only from `it`, with sends represented by explicit connections. Schedule successive crossfaded replacements after the preceding fade finishes. An unrelated graph edit preserves an ongoing fade. Panic cancels the fade and clears both processors' memory; subsequent notes use the replacement immediately.
 
 ### Graph inspection and meters
 

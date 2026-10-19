@@ -16,9 +16,9 @@ pub(super) enum What {
 }
 
 /// Who sent a change, and what it was told.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct Meta {
-    pub client: Option<ClientId>,
+    pub client: ClientId,
     pub tag: Option<String>,
 }
 
@@ -334,7 +334,7 @@ impl Session {
         };
         routing
             .apply(
-                meta.client.expect("graph changes have an owner"),
+                meta.client,
                 &edits,
                 &definitions,
                 &options(self.layout, &self.samples),

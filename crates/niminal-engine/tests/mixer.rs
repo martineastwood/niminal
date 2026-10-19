@@ -422,6 +422,67 @@ mod panic {
     }
 
     #[test]
+    fn panic_drops_both_processors_in_an_active_crossfade() {
+        use niminal_engine::Transfer;
+        let mut old = Mixer::new(
+            vec![TrackDef {
+                chain: Some(echo_chain()),
+                inputs: vec![ChainInput::It { channel: 0 }],
+                ..Default::default()
+            }],
+            vec![],
+            1,
+            SR,
+        )
+        .unwrap();
+        old.note_on(0, source(0.5, None), &[], None);
+        for _ in 0..10 {
+            block(&mut old);
+        }
+
+        let replacement = TrackDef {
+            chain: Some(amp(2.0)),
+            inputs: vec![ChainInput::It { channel: 0 }],
+            transition: (1, 1.0),
+            ..Default::default()
+        };
+        let mut new = Mixer::new(vec![replacement.clone()], vec![], 1, SR).unwrap();
+        new.adopt(
+            &mut old,
+            &[Transfer {
+                voices_from: Some(0),
+                chain_from: Some(0),
+                ..Default::default()
+            }],
+        );
+        assert!(block(&mut new).iter().any(|v| *v > 0.5));
+        new.panic();
+        for _ in 0..20 {
+            assert!(
+                block(&mut new).iter().all(|v| *v == 0.0),
+                "panic must clear the outgoing processor's delay memory"
+            );
+        }
+        new.note_on(0, source(0.25, None), &[], None);
+        assert!(
+            block(&mut new).iter().all(|v| *v == 0.5),
+            "new notes use the replacement immediately"
+        );
+
+        // A later graph rebuild must not bring the cancelled fade back.
+        let mut rebuilt = Mixer::new(vec![replacement], vec![], 1, SR).unwrap();
+        rebuilt.adopt(
+            &mut new,
+            &[Transfer {
+                voices_from: Some(0),
+                chain_from: Some(0),
+                ..Default::default()
+            }],
+        );
+        assert!(block(&mut rebuilt).iter().all(|v| *v == 0.5));
+    }
+
+    #[test]
     fn panic_empties_the_buses() {
         let writer = TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),

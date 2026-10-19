@@ -176,7 +176,7 @@ impl Session {
                     edits.clone(),
                     sample,
                     Meta {
-                        client: Some(client),
+                        client,
                         tag: tag.clone(),
                     },
                 ) {
@@ -197,18 +197,18 @@ impl Session {
             let (source, dir, at, what, edits, meta) = match op {
                 Op::Define { source, at, dir, tag } => {
                     if source.trim().is_empty() { early.push(problem_at(n,"there is nothing to define")); break; }
-                    let meta = Meta { client: Some(client), tag: tag.clone() };
+                    let meta = Meta { client, tag: tag.clone() };
                     resolved[n] = Some(Op::Define { source: source.clone(), at: self.logged(*at), dir: dir.clone(), tag: tag.clone() });
                     (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, Vec::new(), meta)
                 }
                 Op::Forget { at, tag } => {
-                    let meta = Meta { client: Some(client), tag: tag.clone() };
+                    let meta = Meta { client, tag: tag.clone() };
                     resolved[n] = Some(Op::Forget { at: self.logged(*at), tag: tag.clone() });
                     ("new".to_string(), None, self.resolve(*at), What::Forget, Vec::new(), meta)
                 }
                 Op::Transaction { source, dir, at, edits, tag } => {
                     resolved[n] = Some(Op::Transaction { source:source.clone(), dir:dir.clone(), at:self.logged(*at), edits:edits.clone(), tag:tag.clone() });
-                    (source.clone(),dir.as_deref(),self.resolve(*at),What::Definitions,edits.clone(),Meta {client:Some(client),tag:tag.clone()})
+                    (source.clone(),dir.as_deref(),self.resolve(*at),What::Definitions,edits.clone(),Meta {client,tag:tag.clone()})
                 }
                 _ => continue,
             };
@@ -836,7 +836,7 @@ impl Session {
         let landing: Vec<u64> = self
             .pending
             .iter()
-            .filter(|p| p.lands_at >= from && mine(p.meta.client, &p.meta.tag))
+            .filter(|p| p.lands_at >= from && mine(Some(p.meta.client), &p.meta.tag))
             .map(|p| p.id)
             .collect();
         for id in landing {

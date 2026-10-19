@@ -490,7 +490,9 @@ impl Session {
             if let Some(change) = self.control_changes.iter().find(|c| c.applied) {
                 next = next.min(change.at.max(self.clock));
             }
-            if let Some(at)=self.track_sets.iter().filter(|s|!s.done && s.at<now).map(|s|s.at).min() { next=next.min(at.max(self.clock)); }
+            if let Some(set) = self.track_sets.iter().find(|s| !s.done) && set.at < now {
+                next = next.min(set.at.max(self.clock));
+            }
             self.clock = next;
             self.land_due(now);
             self.apply_controls();

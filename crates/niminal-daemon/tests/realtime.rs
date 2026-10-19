@@ -614,3 +614,98 @@ fn a_graph_missed_during_starvation_is_applied_and_acknowledged_when_planning_re
     let status=s.transaction_status(1);
     assert_eq!(status.as_array().unwrap().iter().find(|t|t["id"]==receipt).unwrap()["applied_at"],128);
 }
+
+#[test]
+fn panic_during_a_processor_crossfade_matches_offline_without_heap_work_on_audio() {
+    use niminal_daemon::{At, Op};
+    use serde_json::json;
+    let setup = |scheduled: bool| {
+        let mut s = routing_session();
+        s.send_events(1, serde_json::from_value(json!([
+            {"op":"routing","at":0,"edits":[
+                {"op":"processor","name":"echo","source":"() { out = it.delay(time: 1ms, feedback: 0.9) }"},
+                {"op":"replace","id":"a","processor":"echo"}
+            ]},
+            {"op":"routing","at":128,"edits":[
+                {"op":"processor","name":"double","source":"() { out = it * 2 }"},
+                {"op":"replace","id":"a","processor":"double","fade":0.02}
+            ]}
+        ])).unwrap()).unwrap();
+        if scheduled {
+            s.send_events(
+                1,
+                vec![Op::Panic {
+                    at: At::Sample(256),
+                    tag: None,
+                }],
+            )
+            .unwrap();
+        }
+        s
+    };
+    let note = || {
+        serde_json::from_value(json!([
+            {"op":"note","target":"flat","to":"a","at":320,"dur":"1sec"}
+        ]))
+        .unwrap()
+    };
+    for scheduled in [false, true] {
+        let mut offline = setup(scheduled);
+        let mut expected = offline.process(256).remove(0);
+        if !scheduled {
+            offline.panic();
+        }
+        offline.send_events(1, note()).unwrap();
+        expected.extend(offline.process(256).remove(0));
+        assert!(expected[128..256].iter().any(|v| *v > 0.4));
+        assert!(expected[256..320].iter().all(|v| *v == 0.0));
+        assert!(expected[320..].iter().all(|v| *v == 0.4));
+
+        let mut s = setup(scheduled);
+        let mut renderer = s.start_realtime(RealtimeConfig::default());
+        let mut actual = vec![0.0; 512];
+        measured(&mut renderer, 256, &mut actual[..256]);
+        if !scheduled {
+            s.panic();
+        }
+        s.send_events(1, note()).unwrap();
+        s.prepare_realtime();
+        measured(&mut renderer, 256, &mut actual[256..]);
+        assert_eq!(actual, expected, "scheduled panic: {scheduled}");
+    }
+}
+
+#[test]
+fn late_events_use_definitions_waiting_at_the_current_sample() {
+    use serde_json::json;
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    let mut renderer = s.start_realtime(RealtimeConfig::default());
+    let mut audio = vec![0.0; 64];
+    measured(&mut renderer, 64, &mut audio);
+
+    // Compilation/transport missed the requested sample. The new graph waits at 64,
+    // but its renderer has not consumed it when the client's next message arrives.
+    let graph = s.send_events(1, serde_json::from_value(json!([
+        {"op":"transaction","at":0,"source":"ctl level = 0.0.smooth(0ms)\ninstr flat() { level }","edits":[
+            {"op":"node","id":"voices"},
+            {"op":"connect","id":"out","from":{"kind":"node","id":"voices"},"to":{"kind":"master"}}
+        ]}
+    ])).unwrap()).unwrap();
+    assert_eq!(graph.transactions[0].at, 64);
+    let sent = s
+        .send_events(
+            1,
+            serde_json::from_value(json!([
+                {"op":"control","name":"level","at":0,"value":0.5,"glide":"0ms"},
+                {"op":"note","target":"flat","to":"voices","at":0,"dur":"1sec"}
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(sent.accepted, 2);
+    assert_eq!(sent.late, 2);
+    assert_eq!(sent.first, Some(0));
+    s.prepare_realtime();
+    measured(&mut renderer, 64, &mut audio);
+    assert!(audio.iter().all(|sample| *sample == 0.5));
+}

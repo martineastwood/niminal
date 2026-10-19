@@ -216,6 +216,7 @@ pub struct Session {
     closed: Vec<VoiceEntry>,
     voice_sets: Vec<VoiceSet>,
     voice_maps: Vec<VoiceMap>,
+    /// Sorted by sample; recent applied entries remain available for replanning.
     track_sets: Vec<TrackSet>,
     buffer_sets: Vec<BufferSet>,
     timed_panics: Vec<TimedPanic>,
@@ -334,9 +335,10 @@ impl Session {
         &self.program
     }
 
-    /// The program in effect at sample `at`: the running one, or what the last change of definitions
-    /// landing by then makes it.
+    /// The program an event will execute on. Late events execute now, including
+    /// definitions waiting at the current sample but not yet consumed by DSP.
     pub(super) fn program_at(&self, at: u64) -> &Arc<Program> {
+        let at = at.max(self.clock);
         self.pending
             .iter()
             .rev()
@@ -346,6 +348,7 @@ impl Session {
     }
 
     fn routing_at(&self, at: u64) -> &crate::routing::Routing {
+        let at = at.max(self.clock);
         self.pending
             .iter()
             .rev()
@@ -456,7 +459,7 @@ impl Session {
         let mut clients: Vec<ClientId> = self.voices.iter().map(|v| v.client).collect();
         clients.extend(self.upcoming.iter().filter_map(|u| u.client));
         clients.extend(self.control_owners.iter().map(|o| o.client));
-        clients.extend(self.pending.iter().filter_map(|p| p.meta.client));
+        clients.extend(self.pending.iter().map(|p| p.meta.client));
         clients.extend(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.client));
         clients.extend(self.voice_maps.iter().filter(|s| !s.done).map(|s| s.client));
         clients.sort_unstable();
@@ -469,7 +472,7 @@ impl Session {
                     + self.control_owners.iter().filter(|o| o.client == c).count()
                     + self.voice_sets.iter().filter(|s| s.client == c && !s.done).count()
                     + self.track_sets.iter().filter(|s| s.client == Some(c) && !s.done).count()
-                    + self.pending.iter().filter(|p| p.meta.client == Some(c)).count()
+                    + self.pending.iter().filter(|p| p.meta.client == c).count()
                     + self.buffer_sets.iter().filter(|s| s.client == c && !s.done).count()
                     + self.voice_maps.iter().filter(|s| s.client == c && !s.done).count();
                 (c, ids, waiting)
@@ -869,17 +872,14 @@ impl Session {
     // `before` is exclusive: metadata must not consume a control at the renderer's next, unrendered sample.
     fn apply_track_sets(&mut self, before: u64) {
         let now = self.clock;
-        for i in 0..self.track_sets.len() {
-            let set = &self.track_sets[i];
-            if set.done || set.at >= before {
-                continue;
-            }
-            let (key, value, frames) = (set.key.clone(), set.value, set.frames);
-            if let Some(state) = self.controls.iter_mut().find(|c| c.key == key) {
-                state.set(set.at, value, frames);
+        for set in &mut self.track_sets {
+            if set.at >= before { break; }
+            if set.done { continue; }
+            if let Some(state) = self.controls.iter_mut().find(|c| c.key == set.key) {
+                state.set(set.at, set.value, set.frames);
                 self.mixer.set_control(&state.key, state.start, state.target, state.frames, now.saturating_sub(set.at));
             }
-            self.track_sets[i].done = true;
+            set.done = true;
         }
         let stale = now.saturating_sub(self.samples(2.0));
         self.track_sets.retain(|s| !s.done || s.at > stale);
