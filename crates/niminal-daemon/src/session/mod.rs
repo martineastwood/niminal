@@ -133,6 +133,7 @@ struct ControlOwner {
     tag: Option<String>,
 }
 
+mod transactions;
 mod definitions;
 mod input;
 mod parameters;
@@ -184,6 +185,8 @@ pub struct Session {
     sample_dirs: Vec<std::path::PathBuf>,
     clock: u64,
 
+    transactions: VecDeque<transactions::Transaction>,
+    current_transaction: Option<Arc<AtomicU64>>,
     project: Project,
     program: Arc<Program>,
     definitions: Arc<Program>,
@@ -245,6 +248,8 @@ impl Session {
             midi_out: Vec::new(),
             sample_dirs: Vec::new(),
             clock: 0,
+            transactions:VecDeque::new(),
+            current_transaction:None,
             project: Project::default(),
             definitions: Arc::new(program.clone()),
             routing: Default::default(),
@@ -348,8 +353,10 @@ impl Session {
             .map_or(&self.routing, |p| &p.routing)
     }
 
+    pub fn routing_meters(&self, take: bool) -> serde_json::Value { self.routing.meters(take) }
+
     pub fn routing_status(&self) -> serde_json::Value {
-        self.routing.status()
+        self.routing.status(&self.control_values())
     }
 
     fn seconds(&self, sample: u64) -> f64 {
@@ -541,8 +548,8 @@ impl Session {
 
     // ---- landing ------------------------------------------------------------------------
 
-    fn land_due(&mut self) {
-        while self.pending.first().is_some_and(|p| p.lands_at <= self.clock) {
+    fn land_due(&mut self, before: u64) {
+        while self.pending.first().is_some_and(|p| p.lands_at <= self.clock && (p.lands_at < before || p.applied.load(Ordering::Acquire) != transactions::WAITING)) {
             let pending = self.pending.remove(0);
             self.land(pending);
         }
@@ -558,8 +565,12 @@ impl Session {
             mixer,
             definitions,
             routing,
+            applied,
             ..
         } = p;
+        if !self.detached { applied.store(self.clock,Ordering::Release); }
+        self.current_transaction=Some(applied);
+        self.reconcile_transactions();
         self.definitions = definitions;
         self.routing = routing;
         let released = self
@@ -659,11 +670,11 @@ impl Session {
         let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];
 
         while self.clock < end {
-            self.land_due();
+            self.land_due(self.clock.saturating_add(1));
             self.apply_controls();
             self.release_due();
             self.apply_voice_sets();
-            self.apply_track_sets();
+            self.apply_track_sets(self.clock.saturating_add(1));
             for set in &mut self.buffer_sets {
                 if !set.done && set.at <= self.clock {
                     if let Some((_, buffer)) = self.program.buffers.iter().find(|(name, _)| *name == set.name)
@@ -722,7 +733,7 @@ impl Session {
             sink(&block[..channels], n);
             self.clock += n as u64;
         }
-        self.land_due();
+        self.land_due(self.clock.saturating_add(1));
     }
 
     /// Run a recorded session from the start and return its audio, `frames`
@@ -855,17 +866,18 @@ impl Session {
     }
 
     /// Move the track parameters that `track` events say should move by now.
-    fn apply_track_sets(&mut self) {
+    // `before` is exclusive: metadata must not consume a control at the renderer's next, unrendered sample.
+    fn apply_track_sets(&mut self, before: u64) {
         let now = self.clock;
         for i in 0..self.track_sets.len() {
             let set = &self.track_sets[i];
-            if set.done || set.at > now {
+            if set.done || set.at >= before {
                 continue;
             }
             let (key, value, frames) = (set.key.clone(), set.value, set.frames);
             if let Some(state) = self.controls.iter_mut().find(|c| c.key == key) {
-                state.set(now, value, frames);
-                self.mixer.set_control(&state.key, state.start, state.target, state.frames, 0);
+                state.set(set.at, value, frames);
+                self.mixer.set_control(&state.key, state.start, state.target, state.frames, now.saturating_sub(set.at));
             }
             self.track_sets[i].done = true;
         }

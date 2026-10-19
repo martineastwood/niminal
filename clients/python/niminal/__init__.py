@@ -131,6 +131,15 @@ class Client:
             event["tag"] = tag
         return self.send_events([event])
 
+    def transaction(self, source: str = "", edits: Optional[list[dict]] = None, at: int | str = "now", dir: Optional[str] = None, tag: Optional[str] = None) -> Any:
+        """Compile definitions and edit routing as one scheduled graph change."""
+        event = {"op": "transaction", "source": source, "edits": edits or [], "at": at}
+        if dir is not None:
+            event["dir"] = dir
+        if tag is not None:
+            event["tag"] = tag
+        return self.send_events([event])
+
     def cancel_events(self, tag: Optional[str] = None, from_: Any = None, release: Optional[bool] = None) -> Any:
         """Take back this client's waiting events."""
         params: dict[str, Any] = {}

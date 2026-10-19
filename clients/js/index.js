@@ -95,6 +95,11 @@ class Client {
     return this.sendEvents([{ op: "routing", at, edits, ...(tag === undefined ? {} : { tag }) }]);
   }
 
+  /** Compile definitions and edit routing as a single scheduled graph transaction. */
+  transaction({ source = "", edits = [], at = "now", dir, tag } = {}) {
+    return this.sendEvents([{ op: "transaction", source, edits, at, ...(dir === undefined ? {} : {dir}), ...(tag === undefined ? {} : {tag}) }]);
+  }
+
   /** Take back this client's waiting events: `{ tag, from, release }`. */
   cancelEvents({ tag, from, release } = {}) {
     const params = {};

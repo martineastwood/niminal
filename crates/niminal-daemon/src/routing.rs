@@ -64,6 +64,22 @@ pub enum RoutingEdit {
         #[serde(default)]
         delayed: bool,
     },
+    /// Replace this instance's DSP, preserving matching parameters unless overridden.
+    Replace {
+        id: String,
+        processor: String,
+        #[serde(default)]
+        args: BTreeMap<String, Value>,
+        #[serde(default)]
+        fade: f64,
+    },
+    /// Move an existing connection's gain without changing its topology.
+    Gain {
+        id: String,
+        value: f64,
+        #[serde(default)]
+        glide: f64,
+    },
     Set {
         id: String,
         args: BTreeMap<String, Value>,
@@ -109,12 +125,17 @@ struct Processor {
 }
 #[derive(Clone)]
 struct Bus {
+    meter: Arc<niminal_engine::Meter>,
     channels: usize,
     shared: bool,
     source: Option<String>,
 }
 #[derive(Clone)]
 struct Node {
+    meter: Arc<niminal_engine::Meter>,
+    generation: u64,
+    fade: f64,
+    fade_until: u64,
     processor: Option<(String, Processor)>,
     instrument: Option<String>,
     args: BTreeMap<String, Value>,
@@ -154,6 +175,16 @@ fn valid(id: &str) -> Result<(), String> {
         Ok(())
     }
 }
+fn connection_key(client: u64, id: &str) -> String {
+    format!("__routing_gain_{client}_{id}")
+}
+fn gain(value: f64) -> Result<f32, String> {
+    if value.is_finite() && value.abs() <= f64::from(f32::MAX) {
+        Ok(value as f32)
+    } else {
+        Err("connection gain must be a finite f32 value".into())
+    }
+}
 fn smoothing(seconds: f64) -> Result<(), String> {
     if seconds.is_finite() && (0.0..=60.0).contains(&seconds) {
         Ok(())
@@ -183,6 +214,8 @@ impl Routing {
         edits: &[RoutingEdit],
         definitions: &Program,
         options: &CompileOptions,
+        at: u64,
+        sample_rate: f32,
     ) -> Result<(), String> {
         let patch = self.clients.entry(client).or_default();
         for edit in edits {
@@ -286,6 +319,10 @@ impl Routing {
                     patch.buses.insert(
                         id.clone(),
                         Bus {
+                            meter: patch.buses.get(id).map_or_else(
+                                || Arc::new(niminal_engine::Meter::default()),
+                                |b| b.meter.clone(),
+                            ),
                             channels: *channels,
                             shared: *shared,
                             source: source.clone(),
@@ -312,6 +349,13 @@ impl Routing {
                     patch.nodes.insert(
                         id.clone(),
                         Node {
+                            meter: patch.nodes.get(id).map_or_else(
+                                || Arc::new(niminal_engine::Meter::default()),
+                                |n| n.meter.clone(),
+                            ),
+                            generation: patch.nodes.get(id).map_or(1, |n| n.generation + 1),
+                            fade: 0.0,
+                            fade_until: 0,
                             processor: processor.clone().zip(template),
                             instrument: instrument.clone(),
                             args: args.clone(),
@@ -330,9 +374,7 @@ impl Routing {
                 } => {
                     valid(id)?;
                     smoothing(*glide)?;
-                    if !gain.is_finite() || gain.abs() > f64::from(f32::MAX) {
-                        return Err("connection gain must be a finite f32 value".into());
-                    }
+                    self::gain(*gain)?;
                     patch.connections.insert(
                         id.clone(),
                         Connection {
@@ -343,6 +385,91 @@ impl Routing {
                             delayed: *delayed,
                         },
                     );
+                }
+                RoutingEdit::Replace {
+                    id,
+                    processor,
+                    args,
+                    fade,
+                } => {
+                    smoothing(*fade)?;
+                    let mut template = patch
+                        .processors
+                        .get(processor)
+                        .cloned()
+                        .ok_or_else(|| format!("no processor `{processor}`"))?;
+                    let node = patch
+                        .nodes
+                        .get_mut(id)
+                        .ok_or_else(|| format!("no node `{id}`"))?;
+                    if *fade > 0.0 {
+                        if at < node.fade_until {
+                            return Err("this processor is still crossfading; schedule its next replacement after the fade".into());
+                        }
+                        let previous = node
+                            .processor
+                            .as_ref()
+                            .ok_or("crossfade requires an existing processor")?;
+                        for p in [&previous.1, &template] {
+                            if p.track
+                                .def
+                                .inputs
+                                .iter()
+                                .any(|i| !matches!(i, ChainInput::It { .. }))
+                                || p.track
+                                    .def
+                                    .chain
+                                    .as_ref()
+                                    .is_some_and(|g| !g.send_buses().is_empty())
+                            {
+                                return Err("crossfaded processors must use only incoming audio and explicit output connections".into());
+                            }
+                        }
+                        if previous.1.track.def.chain.as_ref().map(|g| g.channels())
+                            != template.track.def.chain.as_ref().map(|g| g.channels())
+                        {
+                            return Err(
+                                "crossfaded processors must have the same output layout".into()
+                            );
+                        }
+                    }
+                    if let Some((_, previous)) = &node.processor {
+                        for next in &mut template.controls {
+                            let name = next.name.split_once("::").unwrap().1;
+                            if let Some(old) = previous.controls.iter().find(|c| {
+                                c.name.split_once("::").unwrap().1 == name && c.unit == next.unit
+                            }) {
+                                next.initial = old.initial;
+                            }
+                        }
+                    }
+                    node.args.retain(|name, _| {
+                        template.controls.iter().any(|next| {
+                            next.name.ends_with(&format!("::{name}"))
+                                && node.processor.as_ref().is_some_and(|(_, old)| {
+                                    old.controls.iter().any(|c| {
+                                        c.name.ends_with(&format!("::{name}"))
+                                            && c.unit == next.unit
+                                    })
+                                })
+                        })
+                    });
+                    node.args.extend(args.clone());
+                    node.processor = Some((processor.clone(), template));
+                    node.generation += 1;
+                    node.fade = *fade;
+                    node.fade_until =
+                        at.saturating_add((*fade * f64::from(sample_rate)).round() as u64);
+                }
+                RoutingEdit::Gain { id, value, glide } => {
+                    smoothing(*glide)?;
+                    gain(*value)?;
+                    let c = patch
+                        .connections
+                        .get_mut(id)
+                        .ok_or_else(|| format!("no connection `{id}`"))?;
+                    c.gain = *value;
+                    c.glide = *glide;
                 }
                 RoutingEdit::Set { id, args, glide } => {
                     smoothing(*glide)?;
@@ -458,6 +585,9 @@ impl Routing {
                         bus.channels,
                     )
                 };
+                if program.bus_layouts[index].channels() != bus.channels {
+                    return Err("imported bus channel count differs".into());
+                }
                 buses.insert((owner, id.clone()), (index, bus.shared));
             }
         }
@@ -600,6 +730,8 @@ impl Routing {
                 program.tracks.push(collector);
                 track.name = format!("__routing_processor_{owner}_{id}");
                 track.instrument = None;
+                track.def.meter = Some(node.meter.clone());
+                track.def.transition = (node.generation, node.fade);
                 track.accepts_notes = false;
                 if track.def.chain.is_none() {
                     let mut graph = GraphBuilder::new();
@@ -653,7 +785,7 @@ impl Routing {
                     return Err("a delayed connection needs a bus or node destination".into());
                 }
                 let mut graph = GraphBuilder::new();
-                let key = format!("__routing_gain_{owner}_{id}");
+                let key = connection_key(owner, id);
                 let gain = graph
                     .add(
                         niminal_engine::ops::Control::new(key.clone(), connection.gain as f32),
@@ -724,11 +856,83 @@ impl Routing {
                     .join(" -> ")
             )
         })?;
+        for (&owner, patch) in &self.clients {
+            for (id, bus) in &patch.buses {
+                program
+                    .bus_meters
+                    .push((buses[&(owner, id.clone())].0, bus.meter.clone()));
+            }
+        }
         program.compensate_latency();
         Ok(program)
     }
 
-    pub fn status(&self) -> serde_json::Value {
+    pub fn is_control_edit(edits: &[RoutingEdit]) -> bool {
+        !edits.is_empty()
+            && edits
+                .iter()
+                .all(|e| matches!(e, RoutingEdit::Set { .. } | RoutingEdit::Gain { .. }))
+    }
+
+    pub fn updates(
+        &self,
+        client: u64,
+        edits: &[RoutingEdit],
+        program: &Program,
+    ) -> Result<Vec<(String, f32, f64)>, String> {
+        let patch = self
+            .clients
+            .get(&client)
+            .ok_or("this connection has no routing graph")?;
+        let mut updates = Vec::new();
+        for edit in edits {
+            match edit {
+                RoutingEdit::Set { id, args, glide } => {
+                    smoothing(*glide)?;
+                    if !patch.nodes.contains_key(id) {
+                        return Err(format!("no node `{id}`"));
+                    }
+                    for (name, value) in args {
+                        if matches!(value, Value::Beats(_) | Value::Bars(_)) {
+                            return Err("resolve musical units in the client".into());
+                        }
+                        let key = format!("{}::{name}", node_name(client, id));
+                        let def = program
+                            .controls
+                            .iter()
+                            .find(|c| c.key == key)
+                            .ok_or_else(|| format!("unknown processor parameter `{name}`"))?;
+                        let value = def
+                            .from_value(*value, program.tempo)
+                            .map_err(|e| e.to_string())?;
+                        if !value.is_finite() {
+                            return Err("processor parameters must be finite".into());
+                        }
+                        updates.push((key, value, *glide));
+                    }
+                }
+                RoutingEdit::Gain { id, value, glide } => {
+                    smoothing(*glide)?;
+                    if !patch.connections.contains_key(id) {
+                        return Err(format!("no connection `{id}`"));
+                    }
+                    gain(*value)?;
+                    updates.push((connection_key(client, id), *value as f32, *glide));
+                }
+                _ => unreachable!("only control edits use the control path"),
+            }
+        }
+        Ok(updates)
+    }
+
+    pub fn meters(&self, take: bool) -> serde_json::Value {
+        serde_json::json!(self.clients.iter().map(|(client,p)| serde_json::json!({ "client":client,
+            "nodes": p.nodes.iter().map(|(id,n)| serde_json::json!({"id":id,"peaks":n.meter.read(take)})).collect::<Vec<_>>(),
+            "buses": p.buses.iter().map(|(id,b)| serde_json::json!({"id":id,"peaks":b.meter.read(take)})).collect::<Vec<_>>() })).collect::<Vec<_>>())
+    }
+
+    pub fn status(&self, values: &[(String, f32, f32, Option<&str>)]) -> serde_json::Value {
+        let control = |key: &str| values.iter().find(|v| v.0 == key).map(|v| (v.1, v.2));
         serde_json::json!(self.clients.iter().map(|(client, patch)| serde_json::json!({
             "client": client,
             "processors": patch.processors.keys().collect::<Vec<_>>(),
@@ -736,9 +940,14 @@ impl Routing {
             "nodes": patch.nodes.iter().map(|(id, n)| serde_json::json!({
                 "id": id, "processor": n.processor.as_ref().map(|(name, _)| name),
                 "instrument": n.instrument, "args": n.args, "draining": n.draining,
+                "params": n.processor.as_ref().map(|(_,p)| p.controls.iter().map(|c| serde_json::json!({
+                    "name": c.name.split_once("::").unwrap().1, "unit":c.unit.suffix(), "default":c.initial, "smooth":c.smooth_seconds,
+                    "value":control(&format!("{}::{}",node_name(*client,id),c.name.split_once("::").unwrap().1)).map(|v|v.0),
+                    "target":control(&format!("{}::{}",node_name(*client,id),c.name.split_once("::").unwrap().1)).map(|v|v.1)
+                })).collect::<Vec<_>>()).unwrap_or_default(),
             })).collect::<Vec<_>>(),
             "connections": patch.connections.iter().map(|(id, c)| serde_json::json!({
-                "id": id, "from": c.from, "to": c.to, "gain": c.gain, "delayed": c.delayed,
+                "id": id, "from": c.from, "to": c.to, "gain": control(&connection_key(*client,id)).map_or(c.gain, |v| f64::from(v.0)), "target":control(&connection_key(*client,id)).map_or(c.gain,|v|f64::from(v.1)), "delayed": c.delayed,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>())
     }

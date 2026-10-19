@@ -223,6 +223,7 @@ pub struct QuantizeConfig {
 
 #[derive(Clone)]
 pub struct Program {
+    pub bus_meters: Vec<(usize, Arc<niminal_engine::Meter>)>,
     /// The text it was compiled from.
     pub source: String,
     /// Where the sample files it names were looked for.
@@ -519,8 +520,10 @@ impl Program {
     pub fn mixer(&self, sample_rate: f32) -> Mixer {
         let defs = self.tracks.iter().map(|t| t.def.clone()).collect();
         let bus_channels = self.bus_layouts.iter().map(|l| l.channels()).collect();
-        Mixer::new(defs, bus_channels, self.master.channels(), sample_rate)
-            .expect("feedback is rejected when compiling")
+        let mut mixer = Mixer::new(defs, bus_channels, self.master.channels(), sample_rate)
+            .expect("feedback is rejected when compiling");
+        mixer.set_bus_meters(self.bus_meters.clone());
+        mixer
     }
 }
 

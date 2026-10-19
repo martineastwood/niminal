@@ -11,6 +11,7 @@ pub fn status_json(session: &Session) -> Value {
     json!({
         "clock": state_json(session),
         "routing": session.routing_status(),
+        "routing_meters": session.routing_meters(false),
         "sample_rate": session.sample_rate(),
         "channels": session.channels(),
         "realtime": session.realtime_metrics().map(|m| json!({

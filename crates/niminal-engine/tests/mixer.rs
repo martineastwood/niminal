@@ -23,7 +23,7 @@ fn amp(factor: f32) -> Arc<niminal_engine::Graph> {
 }
 
 fn master_track() -> TrackDef {
-    TrackDef {
+    TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         chain: None,
         inputs: vec![],
@@ -35,7 +35,7 @@ fn master_track() -> TrackDef {
 }
 
 fn reader(bus: usize, factor: f32) -> TrackDef {
-    TrackDef {
+    TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         chain: Some(amp(factor)),
         inputs: vec![ChainInput::Bus { bus, channel: 0 }],
@@ -69,7 +69,7 @@ fn voices_sum_to_the_master() {
 
 #[test]
 fn a_chain_processes_its_tracks_summed_voices() {
-    let def = TrackDef {
+    let def = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         chain: Some(amp(2.0)),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -87,7 +87,7 @@ fn a_chain_processes_its_tracks_summed_voices() {
 #[test]
 fn sends_reach_their_reader_in_the_same_block_whatever_the_declaration_order() {
     // The reader is declared first; it must still run after the writer.
-    let writer = TrackDef {
+    let writer = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         voice_sends: vec![0],
         ..master_track()
@@ -100,19 +100,19 @@ fn sends_reach_their_reader_in_the_same_block_whatever_the_declaration_order() {
 
 #[test]
 fn a_buffer_writer_runs_before_its_reader_whatever_the_declaration_order() {
-    let writer = TrackDef {
+    let writer = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         voice_buffer_writes: vec![0],
         ..master_track()
     };
-    let reader = TrackDef {
+    let reader = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         voice_buffer_reads: vec![0],
         ..master_track()
     };
     assert_eq!(execution_order(&[reader.clone(), writer.clone()]).unwrap(), vec![1, 0]);
     // Writing and reading the same buffer on one track is fine.
-    let both = TrackDef {
+    let both = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         voice_buffer_writes: vec![0],
         voice_buffer_reads: vec![0],
@@ -123,7 +123,7 @@ fn a_buffer_writer_runs_before_its_reader_whatever_the_declaration_order() {
 
 #[test]
 fn buses_are_cleared_every_block() {
-    let writer = TrackDef {
+    let writer = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         voice_sends: vec![0],
         ..master_track()
@@ -139,7 +139,7 @@ fn buses_are_cleared_every_block() {
 
 #[test]
 fn several_sends_to_one_bus_are_summed() {
-    let writer = TrackDef {
+    let writer = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         voice_sends: vec![0],
         ..master_track()
@@ -152,7 +152,7 @@ fn several_sends_to_one_bus_are_summed() {
 
 #[test]
 fn a_track_can_route_to_a_bus_instead_of_the_master() {
-    let to_bus = TrackDef {
+    let to_bus = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         route: Route::Bus(0),
         ..master_track()
@@ -170,7 +170,7 @@ fn chains_can_send_too() {
     let input = g.input();
     g.send(0, input);
     let silent = g.add(Mul, &[("a", input), ("b", Src::Const(0.0))]).unwrap();
-    let chain = TrackDef {
+    let chain = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         chain: Some(Arc::new(g.build(silent))),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -187,12 +187,12 @@ fn chains_can_send_too() {
 #[test]
 fn feedback_between_tracks_is_reported_with_the_tracks_involved() {
     // 0 reads bus 0 and routes to bus 1; 1 reads bus 1 and routes to bus 0
-    let a = TrackDef {
+    let a = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         route: Route::Bus(1),
         ..reader(0, 1.0)
     };
-    let b = TrackDef {
+    let b = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         route: Route::Bus(0),
         ..reader(1, 1.0)
@@ -203,7 +203,7 @@ fn feedback_between_tracks_is_reported_with_the_tracks_involved() {
     assert!(Mixer::new(vec![a, b], vec![1, 1], 1, SR).is_err());
 
     // a track that reads the bus it writes is a loop of one
-    let c = TrackDef {
+    let c = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         route: Route::Bus(0),
         ..reader(0, 1.0)
@@ -215,12 +215,12 @@ fn feedback_between_tracks_is_reported_with_the_tracks_involved() {
 fn a_cycle_is_found_even_when_a_track_merely_sits_downstream_of_it() {
     // track 0 reads bus 1 only to listen; tracks 1 and 2 loop through buses 0 and 1.
     let listener = reader(1, 1.0);
-    let a = TrackDef {
+    let a = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         route: Route::Bus(1),
         ..reader(0, 1.0)
     };
-    let b = TrackDef {
+    let b = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         route: Route::Bus(0),
         ..reader(1, 1.0)
@@ -238,7 +238,7 @@ fn independent_tracks_keep_declaration_order() {
 
 #[test]
 fn nan_in_a_send_silences_the_voice_and_does_not_poison_the_bus() {
-    let writer = TrackDef {
+    let writer = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         voice_sends: vec![0],
         ..master_track()
@@ -292,7 +292,7 @@ mod stereo {
 
     #[test]
     fn the_mixer_keeps_channels_apart() {
-        let master = TrackDef {
+        let master = TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             chain: None,
             inputs: vec![],
@@ -326,7 +326,7 @@ mod stereo {
         let (il, ir) = (gr.input(), gr.input());
         let l = gr.add(Gain, &[("x", il), ("gain", Src::Const(2.0))]).unwrap();
         let r = gr.add(Gain, &[("x", ir), ("gain", Src::Const(0.5))]).unwrap();
-        let reader = TrackDef {
+        let reader = TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             chain: Some(Arc::new(gr.build_channels(&[l, r]))),
             inputs: vec![
@@ -338,7 +338,7 @@ mod stereo {
             voice_buffer_writes: vec![],
             voice_buffer_reads: vec![],
         };
-        let writer = TrackDef {
+        let writer = TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             voice_sends: vec![0],
             chain: None,
@@ -358,7 +358,7 @@ mod stereo {
     #[test]
     #[should_panic(expected = "master's channel count")]
     fn an_instrument_with_the_wrong_channel_count_is_rejected() {
-        let master = TrackDef {
+        let master = TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             chain: None,
             inputs: vec![],
@@ -392,7 +392,7 @@ mod panic {
 
     #[test]
     fn panic_stops_voices_and_clears_the_echoes_in_a_chain() {
-        let track = TrackDef {
+        let track = TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             chain: Some(echo_chain()),
             inputs: vec![ChainInput::It { channel: 0 }],
@@ -423,7 +423,7 @@ mod panic {
 
     #[test]
     fn panic_empties_the_buses() {
-        let writer = TrackDef {
+        let writer = TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             voice_sends: vec![0],
             ..master_track()
@@ -447,7 +447,7 @@ mod adopting {
         let d = g
             .add(Delay::new(0.1), &[("x", input), ("time", Src::Const(0.001)), ("feedback", Src::Const(0.9))])
             .unwrap();
-        TrackDef {
+        TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             chain: Some(Arc::new(g.build(d))),
             inputs: vec![ChainInput::It { channel: 0 }],
@@ -621,7 +621,7 @@ fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arr
     let mut g = GraphBuilder::new();
     let input = g.input();
     let out = g.add(Counting(processed.clone()), &[("x", input)]).unwrap();
-    let def = TrackDef {
+    let def = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         chain: Some(Arc::new(g.build(out))),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -656,7 +656,7 @@ fn reverb_chain() -> Arc<niminal_engine::Graph> {
 
 #[test]
 fn a_resting_reverb_chain_still_rings_out_its_tail_and_wakes_for_the_next_note() {
-    let def = TrackDef {
+    let def = TrackDef { meter: None, transition: (0,0.0),
         controls: Vec::new(),
         chain: Some(reverb_chain()),
         inputs: vec![ChainInput::It { channel: 0 }],

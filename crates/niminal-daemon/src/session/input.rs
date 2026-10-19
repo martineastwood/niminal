@@ -92,8 +92,8 @@ impl Session {
         let has_changes = ops.iter().any(|op| {
             matches!(
                 op,
-                Op::Define { .. } | Op::Forget { .. } | Op::Routing { .. }
-            )
+                Op::Define { .. } | Op::Forget { .. } | Op::Transaction { .. }
+            ) || matches!(op, Op::Routing { edits, .. } if !crate::routing::Routing::is_control_edit(edits))
         });
         let backup = has_changes.then(|| {
             let pending = std::mem::take(&mut self.pending);
@@ -162,7 +162,9 @@ impl Session {
         // taken back.
         let mut resolved: Vec<Option<Op>> = vec![None; ops.len()];
         let mut early = Vec::new();
+        let mut accepted = Vec::new();
         for (n, op) in ops.iter().enumerate() {
+            if let Op::Routing { edits, .. } = op && crate::routing::Routing::is_control_edit(edits) { continue; }
             if let Op::Routing { at, edits, tag } = op {
                 let sample = self.resolve(*at);
                 resolved[n] = Some(Op::Routing {
@@ -178,7 +180,10 @@ impl Session {
                         tag: tag.clone(),
                     },
                 ) {
-                    Ok(_) => {}
+                    Ok(id) => {
+                        let pending=self.pending.iter().find(|p|p.id==id).unwrap();
+                        accepted.push((crate::events::TransactionReceipt { id, at:pending.lands_at }, pending.applied.clone()));
+                    }
                     Err(mut problems) => {
                         for p in &mut problems {
                             p.event = Some(n);
@@ -189,25 +194,33 @@ impl Session {
                 }
                 continue;
             }
-            let (source, dir, at, what, meta) = match op {
+            let (source, dir, at, what, edits, meta) = match op {
                 Op::Define { source, at, dir, tag } => {
+                    if source.trim().is_empty() { early.push(problem_at(n,"there is nothing to define")); break; }
                     let meta = Meta { client: Some(client), tag: tag.clone() };
                     resolved[n] = Some(Op::Define { source: source.clone(), at: self.logged(*at), dir: dir.clone(), tag: tag.clone() });
-                    (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, meta)
+                    (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, Vec::new(), meta)
                 }
                 Op::Forget { at, tag } => {
                     let meta = Meta { client: Some(client), tag: tag.clone() };
                     resolved[n] = Some(Op::Forget { at: self.logged(*at), tag: tag.clone() });
-                    ("new".to_string(), None, self.resolve(*at), What::Forget, meta)
+                    ("new".to_string(), None, self.resolve(*at), What::Forget, Vec::new(), meta)
+                }
+                Op::Transaction { source, dir, at, edits, tag } => {
+                    resolved[n] = Some(Op::Transaction { source:source.clone(), dir:dir.clone(), at:self.logged(*at), edits:edits.clone(), tag:tag.clone() });
+                    (source.clone(),dir.as_deref(),self.resolve(*at),What::Definitions,edits.clone(),Meta {client:Some(client),tag:tag.clone()})
                 }
                 _ => continue,
             };
             if let Some(dir) = dir {
                 self.set_sample_dir(std::path::Path::new(dir));
             }
-            let result = self.queue_change(&source, dir, at, what, meta);
+            let result = self.queue_transaction(&source, dir, at, what, edits, meta);
             match result {
-                Ok(_) => {}
+                Ok(id) => {
+                    let pending=self.pending.iter().find(|p|p.id==id).unwrap();
+                    accepted.push((crate::events::TransactionReceipt {id,at:pending.lands_at}, pending.applied.clone()));
+                }
                 Err(mut problems) => {
                     for p in &mut problems {
                         p.event = Some(n);
@@ -392,6 +405,16 @@ impl Session {
                         }
                     }
                 }
+                Op::Routing { at, edits, tag } => {
+                    let start=self.resolve(*at);
+                    if crate::routing::Routing::is_control_edit(edits) {
+                        resolved[n]=Some(Op::Routing { at:self.logged(*at), edits:edits.clone(), tag:tag.clone() });
+                        match self.routing_at(start).updates(client,edits,self.program_at(start)) {
+                            Ok(updates) => for (key,value,glide) in updates { plans.push(Plan::Track {key,value,frames:(glide*rate).round() as u64,at:start,tag:tag.clone()}); },
+                            Err(e) => fail(e),
+                        }
+                    }
+                }
                 Op::Map {
                     id,
                     at,
@@ -509,7 +532,7 @@ impl Session {
                     plans.push(Plan::Panic { at: start, tag: tag.clone() });
                 }
                 Op::Array { .. } | Op::BindBuffer { .. } => unreachable!("parameter events expanded"),
-                Op::Define { .. } | Op::Forget { .. } | Op::Routing { .. } => {}
+                Op::Define { .. } | Op::Forget { .. } | Op::Transaction { .. } => {}
             }
         }
         if problems.is_empty() && controls > crate::controls::CAPACITY {
@@ -524,13 +547,15 @@ impl Session {
             sample: clock,
             input: LogInput::Send { client, ops: resolved.into_iter().flatten().collect() },
         });
-        let mut sent = Sent { accepted: ops.len(), late: 0, first: None };
+        self.accept_transactions(&accepted,client);
+        let mut sent = Sent { transactions:accepted.into_iter().map(|(r,_)|r).collect(), accepted: ops.len(), late: 0, first: None };
         // definitions, which are queued already
         for op in &ops {
             let at = match op {
-                Op::Define { at, .. } | Op::Forget { at, .. } | Op::Routing { at, .. } => {
+                Op::Define { at, .. } | Op::Forget { at, .. } | Op::Transaction { at, .. } => {
                     self.resolve(*at)
                 }
+                Op::Routing {at,edits,..} if !crate::routing::Routing::is_control_edit(edits) => self.resolve(*at),
                 _ => continue,
             };
             sent.late += usize::from(at < clock);
@@ -626,7 +651,7 @@ impl Session {
         }
         // a change that was asked for at once happens at once, and the renderer is told
         let waiting = self.pending.len();
-        self.land_due();
+        self.land_due(if self.detached { self.clock } else { self.clock.saturating_add(1) });
         if self.pending.len() != waiting {
             self.invalidate_live();
         } else if has_changes {

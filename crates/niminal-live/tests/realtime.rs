@@ -721,7 +721,7 @@ fn an_envelope_lane_moves_a_track_parameter_the_same_prepared_as_direct_and_with
         s.prepare_realtime();
         measured(&mut r, chunk.len(), chunk);
     }
-    assert_eq!(actual, expected);
+    assert_eq!(actual.iter().zip(&expected).position(|(a,b)| a!=b).map(|i|(i,actual[i],expected[i])), None);
     assert_eq!(r.metrics().late_events, 0);
     let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
     assert!(rms(&expected) > 0.1);
@@ -746,7 +746,7 @@ fn a_signal_lane_moves_a_track_parameter_the_same_prepared_as_direct_and_without
         s.prepare_realtime();
         measured(&mut r, chunk.len(), chunk);
     }
-    assert_eq!(actual, expected);
+    assert_eq!(actual.iter().zip(&expected).position(|(a,b)| a!=b).map(|i|(i,actual[i],expected[i])), None);
     assert_eq!(r.metrics().late_events, 0);
     let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
     assert!(rms(&expected) > 0.05);

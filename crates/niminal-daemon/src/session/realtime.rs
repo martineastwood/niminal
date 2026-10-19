@@ -163,12 +163,14 @@ enum Kind {
         frames: u64,
     },
     Swap {
+        applied: Option<Arc<AtomicU64>>,
         mixer: Box<Mixer>,
         program: Arc<Program>,
         controls: Vec<ControlState>,
         transfers: Vec<Transfer>,
     },
     Reset {
+        applied: Option<Arc<AtomicU64>>,
         mixer: Box<Mixer>,
         program: Arc<Program>,
         controls: Vec<ControlState>,
@@ -473,6 +475,9 @@ impl Session {
         self.control_changes
             .sort_unstable_by_key(|c| (c.at, c.serial));
         let now = planner.state.clock.load(Ordering::Acquire);
+        // Metadata can reach a graph boundary before DSP receives its prepared window.
+        // Refresh once when consuming such a change, so it cannot disappear from planning.
+        let unapplied_graph = self.pending.iter().any(|p| p.lands_at < now && p.applied.load(Ordering::Acquire) == super::transactions::WAITING);
         self.silenced += planner.state.silenced.swap(0, Ordering::Relaxed);
         for (peak, value) in self.peaks.iter_mut().zip(&planner.state.peaks) {
             *peak = peak.max(f32::from_bits(value.swap(0, Ordering::Relaxed)));
@@ -485,12 +490,16 @@ impl Session {
             if let Some(change) = self.control_changes.iter().find(|c| c.applied) {
                 next = next.min(change.at.max(self.clock));
             }
+            if let Some(at)=self.track_sets.iter().filter(|s|!s.done && s.at<now).map(|s|s.at).min() { next=next.min(at.max(self.clock)); }
             self.clock = next;
-            self.land_due();
+            self.land_due(now);
             self.apply_controls();
+            self.apply_track_sets(if self.clock<now {self.clock.saturating_add(1)} else {self.clock});
         }
-        self.land_due();
+        self.land_due(now);
         self.apply_controls();
+        self.apply_track_sets(self.clock);
+        if unapplied_graph { self.invalidate_live(); }
         for set in &mut self.buffer_sets { if set.at < self.clock { set.done = true; } }
         let stale = self.clock.saturating_sub(self.sample_rate as u64 * 2);
         self.buffer_sets.retain(|s| !s.done || s.at > stale);
@@ -802,7 +811,8 @@ impl Session {
             let next = &pending.program;
             if lands_at >= from {
                 let mut swap = self.swap_command(lands_at, next, config);
-                if let Kind::Swap { controls, .. } = &mut swap.kind {
+                if let Kind::Swap { controls, applied, .. } = &mut swap.kind {
+                    *applied=Some(pending.applied.clone());
                     controls::mark(controls, next, &pending.statements, pending.id);
                 }
                 window.commands.push(swap);
@@ -836,6 +846,7 @@ impl Session {
         Command {
             at,
             kind: Kind::Swap {
+                applied: Arc::ptr_eq(program, &self.program).then(|| self.current_transaction.clone()).flatten(),
                 mixer,
                 program: program.clone(),
                 controls: states,
@@ -861,6 +872,7 @@ impl Session {
         Command {
             at,
             kind: Kind::Reset {
+                applied: Arc::ptr_eq(program, &self.program).then(|| self.current_transaction.clone()).flatten(),
                 mixer,
                 program: program.clone(),
                 controls: self.control_states(program),
@@ -1210,6 +1222,7 @@ impl RealtimeRenderer {
                 }
             }
             Kind::Swap {
+                applied,
                 mixer,
                 program,
                 controls,
@@ -1236,8 +1249,10 @@ impl RealtimeRenderer {
                 std::mem::swap(&mut self.controls, controls);
                 std::mem::swap(&mut self.mixer, mixer);
                 std::mem::swap(&mut self.program, program);
+                if let Some(applied)=applied { let _=applied.compare_exchange(super::transactions::WAITING,self.clock,Ordering::AcqRel,Ordering::Acquire); }
             }
             Kind::Reset {
+                applied,
                 mixer,
                 program,
                 controls,
@@ -1262,6 +1277,7 @@ impl RealtimeRenderer {
                     send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
                 }
                 self.state.reset_epoch.store(*epoch, Ordering::Release);
+                if let Some(applied)=applied { let _=applied.compare_exchange(super::transactions::WAITING,self.clock,Ordering::AcqRel,Ordering::Acquire); }
             }
         }
     }

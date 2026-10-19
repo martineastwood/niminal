@@ -496,3 +496,121 @@ fn routing_swaps_and_draining_held_voices_do_no_heap_work_in_the_renderer() {
     measured(&mut renderer, 512, &mut actual);
     assert_eq!(actual, expected);
 }
+
+fn routing_session() -> Session {
+    use serde_json::json;
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.send_events(
+        1,
+        serde_json::from_value(json!([
+            {"op":"transaction","at":0,"source":"instr flat() { 0.2 }","edits":[
+                {"op":"processor","name":"volume","source":"(level: num = 1) { out = it * level }"},
+                {"op":"node","id":"a","processor":"volume"},
+                {"op":"connect","id":"out","from":{"kind":"node","id":"a"},"to":{"kind":"master"}}
+            ]},
+            {"op":"note","target":"flat","to":"a","at":0,"dur":"1sec"}
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    s
+}
+
+#[test]
+fn streamed_routing_controls_never_build_a_mixer_or_allocate_while_rendering() {
+    use serde_json::json;
+    let mut s = routing_session();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let builds = s.realtime_metrics().unwrap().mixer_builds;
+    let mut out = vec![0.0; 32];
+    for i in 0..12 {
+        s.send_events(
+            1,
+            serde_json::from_value(json!([{"op":"routing","at":r.clock()+8,"edits":[
+                {"op":"set","id":"a","args":{"level":if i%2==0 {0.5} else {1.0}}},
+                {"op":"gain","id":"out","value":0.5,"glide":0.0001}
+            ]}]))
+            .unwrap(),
+        )
+        .unwrap();
+        s.prepare_realtime();
+        measured(&mut r, 32, &mut out);
+        s.sync_realtime();
+        assert!(
+            out[20..]
+                .iter()
+                .all(|v| (*v - if i % 2 == 0 { 0.05 } else { 0.1 }).abs() < 1e-6)
+        );
+    }
+    assert_eq!(s.realtime_metrics().unwrap().mixer_builds, builds);
+    assert!(
+        s.routing_meters(false)[0]["nodes"][0]["peaks"][0]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+}
+
+#[test]
+fn crossfades_and_actual_transaction_acknowledgements_do_no_heap_work_on_audio() {
+    use serde_json::json;
+    let mut s = routing_session();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let ops: Vec<niminal_daemon::Op> = serde_json::from_value(json!([
+        {"op":"transaction","at":17,"edits":[
+            {"op":"processor","name":"twice","source":"(level: num = 1) { out = it * level * 2 }"},
+            {"op":"replace","id":"a","processor":"twice","fade":8.0/48000.0}
+        ]},
+        {"op":"routing","at":21,"edits":[{"op":"bus","id":"unused","channels":1}]}
+    ]))
+    .unwrap();
+    let receipt = s.send_events(1, ops.clone()).unwrap().transactions[0].id;
+    let mut expected = routing_session();
+    expected.send_events(1, ops).unwrap();
+    let expected = expected.process(64).remove(0);
+    s.prepare_realtime();
+    let mut out = vec![0.0; 17];
+    measured(&mut r, 17, &mut out);
+    s.sync_realtime();
+    assert_eq!(
+        s.transaction_status(1)
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == receipt)
+            .unwrap()["status"],
+        "queued"
+    );
+    let mut tail = vec![0.0; 47];
+    measured(&mut r, 47, &mut tail);
+    out.extend(tail);
+    s.sync_realtime();
+    assert_eq!(out, expected);
+    let status = s.transaction_status(1);
+    let applied = status
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == receipt)
+        .unwrap();
+    assert_eq!(applied["status"], "applied");
+    assert_eq!(applied["applied_at"], 17);
+}
+
+#[test]
+fn a_graph_missed_during_starvation_is_applied_and_acknowledged_when_planning_resumes() {
+    use serde_json::json;
+    let mut s=routing_session(); let mut r=s.start_realtime(RealtimeConfig::default());
+    let result=s.send_events(1,serde_json::from_value(json!([{"op":"routing","at":32,"edits":[
+        {"op":"processor","name":"double","source":"() { out = it * 2 }"},
+        {"op":"replace","id":"a","processor":"double"}
+    ]}])).unwrap()).unwrap();
+    let receipt=result.transactions[0].id;
+    let mut before=vec![0.0;128]; measured(&mut r,128,&mut before);
+    s.prepare_realtime();
+    assert_eq!(s.transaction_status(1).as_array().unwrap().iter().find(|t|t["id"]==receipt).unwrap()["status"],"queued");
+    let mut after=vec![0.0;32]; measured(&mut r,32,&mut after); s.sync_realtime();
+    assert!(after.iter().all(|v|(*v-0.4).abs()<1e-6));
+    let status=s.transaction_status(1);
+    assert_eq!(status.as_array().unwrap().iter().find(|t|t["id"]==receipt).unwrap()["applied_at"],128);
+}

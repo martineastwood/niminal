@@ -664,7 +664,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         instrument: None,
         defaults: BTreeMap::new(),
         notes: None,
-        def: TrackDef {
+        def: TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             chain: None,
             inputs: Vec::new(),
@@ -780,6 +780,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     errors.retain(|d| !d.is_quiet());
     if errors.is_empty() {
         let mut program = Program {
+            bus_meters: Vec::new(),
             source: source.to_string(),
             samples: options.samples.clone(),
             quantize,
@@ -905,7 +906,7 @@ fn compile_track(
         instrument,
         defaults,
         notes: notes_line.cloned(),
-        def: TrackDef {
+        def: TrackDef { meter: None, transition: (0,0.0),
             controls: Vec::new(),
             chain: chain.graph,
             inputs: chain.inputs,

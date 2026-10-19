@@ -46,3 +46,5 @@ A minimal independent tracker client lives in [`examples/tracker.js`](examples/t
 Protocol version 2 removes engine transport events and musical timestamps. Engine clock subscriptions use the `clock` topic. The live sequencer still exposes its musical `transport` topic.
 
 Protocol version 3 adds private routing graphs and `note.to`. Use `client.routing(edits, { at })` in JavaScript or `client.routing(edits, at=sample)` in Python to edit processors, instances, buses and connections. [`examples/routing.js`](examples/routing.js) demonstrates two independent instances of one effect. Processor definitions and routing IDs are connection-owned; sharing a bus requires `shared: true` and its owner’s `client_id` from `hello`.
+
+Use `transaction` to compile DSP definitions and edit routing as one graph change. Use routing `set` and `gain` edits for lightweight live controls, and `replace` with `fade` for processor crossfades. Subscribe to `transactions` for actual DSP application acknowledgements; `meters` includes public node and bus peaks. See the [Engine API](../docs/src/content/docs/reference/engine-api.md#live-graph-updates).

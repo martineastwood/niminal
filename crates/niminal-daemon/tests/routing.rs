@@ -529,3 +529,226 @@ fn an_unrelated_graph_edit_preserves_effect_memory_when_bus_indices_change() {
     let actual = render(true);
     assert_eq!(expected, actual);
 }
+
+fn json_op(value: serde_json::Value) -> Op {
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn control_edits_keep_the_program_and_smooth_gains_sample_exactly() {
+    let mut s = ready();
+    setup(&mut s);
+    let program = s.program() as *const _;
+    s.send_events(
+        1,
+        vec![
+            note("a", 0, 1.0),
+            json_op(serde_json::json!({
+                "op":"routing","at":16,"edits":[
+                    {"op":"set","id":"a","args":{"level":1}},
+                    {"op":"gain","id":"a_out","value":0,"glide":0.00016666666666666666}
+                ]
+            })),
+        ],
+    )
+    .unwrap();
+    assert_eq!(s.program() as *const _, program);
+    let out = s.process(40).remove(0);
+    assert!(out[..16].iter().all(|v| *v == 0.25));
+    for (i, value) in out[16..24].iter().enumerate() {
+        assert!((*value - (1.0 - (i + 1) as f32 / 8.0)).abs() < 1e-6);
+    }
+    assert!(out[24..].iter().all(|v| *v == 0.0));
+}
+
+#[test]
+fn a_transaction_validates_only_the_final_definition_and_routing_graph() {
+    use serde_json::json;
+    let mut s = ready();
+    s.send_events(
+        1,
+        vec![json_op(
+            json!({"op":"transaction","at":0,"source":"bus shared: mono","edits":[
+                {"op":"bus","id":"imported","channels":1,"source":"shared"}
+            ]}),
+        )],
+    )
+    .unwrap();
+    assert!(
+        s.send_events(
+            1,
+            vec![json_op(
+                json!({"op":"define","at":10,"source":"bus shared: stereo"})
+            )]
+        )
+        .is_err()
+    );
+    let result = s
+        .send_events(
+            1,
+            vec![json_op(
+                json!({"op":"transaction","at":10,"source":"bus shared: stereo","edits":[
+                    {"op":"free_bus","id":"imported"},
+                    {"op":"bus","id":"imported","channels":2,"source":"shared"}
+                ]}),
+            )],
+        )
+        .unwrap();
+    assert_eq!(result.transactions.len(), 1);
+    let id = result.transactions[0].id;
+    s.process(20);
+    let status = s.transaction_status(1);
+    let transaction = status
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == id)
+        .unwrap();
+    assert_eq!(transaction["status"], "applied");
+    assert_eq!(transaction["applied_at"], 10);
+    assert_eq!(s.routing_status()[0]["buses"][0]["channels"], 2);
+}
+
+#[test]
+fn replacement_crossfades_survive_unrelated_graph_changes_and_replay() {
+    use serde_json::json;
+    let mut s = ready();
+    s.send_events(
+        1,
+        vec![
+            json_op(json!({"op":"routing","at":0,"edits":[
+                {"op":"processor","name":"one","source":"() { out = it }"},
+                {"op":"processor","name":"two","source":"() { out = it * 2 }"},
+                {"op":"node","id":"a","processor":"one"},
+                {"op":"connect","id":"out","from":{"kind":"node","id":"a"},"to":{"kind":"master"}}
+            ]})),
+            note("a", 0, 1.0),
+            json_op(json!({"op":"routing","at":17,"edits":[
+                {"op":"replace","id":"a","processor":"two","fade":8.0/48000.0}
+            ]})),
+            route(
+                21,
+                vec![Edit::Bus {
+                    id: "unused".into(),
+                    channels: 1,
+                    source: None,
+                    shared: false,
+                }],
+            ),
+        ],
+    )
+    .unwrap();
+    let out = s.process(64).remove(0);
+    assert!(out[..17].iter().all(|v| *v == 1.0));
+    for (i, value) in out[17..25].iter().enumerate() {
+        assert!(
+            (*value - (1.0 + i as f32 / 8.0)).abs() < 1e-6,
+            "fade sample {i}: {value}"
+        );
+    }
+    assert!(out[25..].iter().all(|v| *v == 2.0));
+    assert_eq!(
+        Session::replay(RATE, Layout::Mono, s.log(), 64, false).remove(0),
+        out
+    );
+}
+
+#[test]
+fn replacement_preserves_matching_live_parameters_and_allows_explicit_overrides() {
+    use serde_json::json;
+    let mut s = ready();
+    setup(&mut s);
+    s.send_events(1,vec![note("a",0,1.0),json_op(json!({"op":"routing","at":4,"edits":[{"op":"set","id":"a","args":{"level":0.6}}]})),json_op(json!({"op":"routing","at":12,"edits":[
+        {"op":"processor","name":"new","source":"(level: num = 0.1) { out = it * level * 2 }"},
+        {"op":"replace","id":"a","processor":"new"}
+    ]})),json_op(json!({"op":"routing","at":24,"edits":[{"op":"replace","id":"a","processor":"volume","args":{"level":0.8}}]}))]).unwrap();
+    let out = s.process(40).remove(0);
+    assert!((out[6] - 0.6).abs() < 1e-6);
+    assert!((out[16] - 1.2).abs() < 1e-6);
+    assert!((out[30] - 0.8).abs() < 1e-6);
+}
+
+#[test]
+fn routing_meters_expose_public_ids_and_reset_without_changing_audio() {
+    let mut s = ready();
+    setup(&mut s);
+    s.send_events(
+        1,
+        vec![
+            route(
+                0,
+                vec![
+                    Edit::Bus {
+                        id: "sum".into(),
+                        channels: 1,
+                        source: None,
+                        shared: false,
+                    },
+                    connect("send", node("a"), bus("sum"), 0.5),
+                ],
+            ),
+            note("a", 0, 1.0),
+        ],
+    )
+    .unwrap();
+    s.process(32);
+    let meters = s.routing_meters(true);
+    let a = meters[0]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "a")
+        .unwrap();
+    assert_eq!(a["peaks"], serde_json::json!([0.25]));
+    assert_eq!(meters[0]["buses"][0]["peaks"], serde_json::json!([0.125]));
+    assert_eq!(
+        s.routing_meters(false)[0]["nodes"][0]["peaks"],
+        serde_json::json!([0.0])
+    );
+    assert_eq!(
+        s.routing_status()[0]["nodes"][0]["params"][0]["name"],
+        "level"
+    );
+    assert!(s.process(32)[0].iter().all(|v| *v == 0.25));
+}
+
+#[test]
+fn replacement_resets_parameters_whose_units_changed() {
+    use serde_json::json;
+    let mut s = ready();
+    setup(&mut s);
+    s.send_events(1,vec![note("a",0,1.0),json_op(json!({"op":"routing","at":4,"edits":[{"op":"set","id":"a","args":{"level":0.6}}]})),json_op(json!({"op":"routing","at":12,"edits":[
+        {"op":"processor","name":"frequency","source":"(level: hz = 100hz) { out = it * (level / 100hz) }"},
+        {"op":"replace","id":"a","processor":"frequency"}
+    ]}))]).unwrap();
+    let out = s.process(20).remove(0);
+    assert!((out[16] - 1.0).abs() < 1e-6);
+    let parameter = &s.routing_status()[0]["nodes"][0]["params"][0];
+    assert_eq!(parameter["unit"], "hz");
+    assert_eq!(parameter["value"], 100.0);
+}
+
+#[test]
+fn overlapping_crossfades_are_rejected_without_disturbing_the_accepted_fade() {
+    use serde_json::json;
+    let mut s = ready();
+    setup(&mut s);
+    let replace = |at| {
+        json_op(
+            json!({"op":"routing","at":at,"edits":[{"op":"replace","id":"a","processor":"volume","fade":0.02}]}),
+        )
+    };
+    let receipt = s.send_events(1, vec![replace(10)]).unwrap().transactions[0].id;
+    assert!(s.send_events(1, vec![replace(20)]).is_err());
+    let status = s.transaction_status(1);
+    assert_eq!(
+        status
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == receipt)
+            .unwrap()["status"],
+        "queued"
+    );
+    assert!(s.send_events(1, vec![replace(1000)]).is_ok());
+}

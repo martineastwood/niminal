@@ -30,7 +30,7 @@ pub(crate) const PROTOCOL_ERROR: i64 = -32000;
 pub(crate) const REJECTED: i64 = -32001;
 
 /// What a client of the engine can subscribe to.
-pub const ENGINE_TOPICS: [&str; 3] = ["clock", "meters", "notices"];
+pub const ENGINE_TOPICS: [&str; 4] = ["clock", "meters", "notices", "transactions"];
 
 /// A request to the engine, as it is named on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -175,7 +175,7 @@ impl EngineReply {
                 result["topics"].as_array().map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()).unwrap_or_default(),
             ),
             EngineRequest::EventsSend { .. } => EngineReply::Sent {
-                sent: Sent { accepted: number("accepted") as usize, late: number("late") as usize, first: result["first"].as_u64() },
+                sent: Sent { transactions: serde_json::from_value(result["transactions"].clone()).unwrap_or_default(), accepted: number("accepted") as usize, late: number("late") as usize, first: result["first"].as_u64() },
                 horizon: number("horizon"),
             },
             EngineRequest::EventsCancel { .. } => {
@@ -212,6 +212,7 @@ impl EngineReply {
             }),
             EngineReply::Subscribed(topics) => json!({ "topics": topics }),
             EngineReply::Sent { sent, horizon } => json!({
+                "transactions": sent.transactions,
                 "accepted": sent.accepted,
                 "late": sent.late,
                 "first": sent.first,
@@ -379,6 +380,7 @@ impl EngineServer {
             EngineRequest::Status {} => {
                 let mut status = crate::status::status_json(&self.session);
                 status["client_id"] = json!(client);
+                status["transactions"]=self.session.transaction_status(client);
                 Ok(EngineReply::Status(status))
             }
             EngineRequest::Clock {} => Ok(EngineReply::Clock(self.session.clock_info())),
@@ -434,6 +436,11 @@ impl EngineServer {
 
     fn collect_notifications(&mut self) {
         self.session.sync_realtime();
+        for (id, update) in self.session.take_transaction_updates() {
+            if self.clients.get(&id).is_some_and(|c|c.greeted && c.topics.contains("transactions")) {
+                self.outbox.push((id,json!({"jsonrpc":"2.0","method":"transaction","params":update}).to_string()));
+            }
+        }
         for notice in self.session.take_notices() {
             self.send_to_subscribers("notices", "notice", json!({ "message": notice }));
         }
@@ -455,7 +462,7 @@ impl EngineServer {
             // reading the meters resets them, so only do it for someone listening
             if self.has_subscribers("meters") {
                 let peaks = self.session.take_peaks();
-                self.send_to_subscribers("meters", "meters", json!({ "peaks": peaks }));
+                self.send_to_subscribers("meters", "meters", json!({ "peaks": peaks, "routing": self.session.routing_meters(true) }));
             }
         }
     }

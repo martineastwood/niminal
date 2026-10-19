@@ -10,9 +10,10 @@ async function main() {
   await engine.connect();
   try {
     const { channels } = await engine.status();
-    await engine.sendEvents([
-      { op: "define", at: "now", source: "instr routing_tone(freq: hz) { osc(sine, freq) * env[0.15 | 100ms 0] }" },
-      { op: "routing", at: "now", edits: [
+    await engine.subscribe(["transactions", "meters"]);
+    await engine.transaction({
+      source: "instr routing_tone(freq: hz) { osc(sine, freq) * env[0.15 | 100ms 0] }",
+      edits: [
         { op: "processor", name: "echo", source: "(feedback: num = 0.3) { out = it.delay(time: 120ms, feedback: feedback) }" },
         { op: "bus", id: "send", channels },
         { op: "node", id: "voices" },
@@ -24,12 +25,22 @@ async function main() {
         connect("long_in", bus("send"), node("long")),
         connect("short_out", node("short"), { kind: "master" }, 0.5),
         connect("long_out", node("long"), { kind: "master" }, 0.5),
-      ] },
-    ]);
+      ],
+    });
     const { sample, sample_rate } = await engine.clock();
     const start = sample + Math.round(sample_rate * 0.2);
     await engine.sendEvents([
       { op: "note", target: "routing_tone", to: "voices", at: start, dur: "150ms", args: { freq: "c4" } },
+      // Continuous controls use the lightweight command queue.
+      { op: "routing", at: start + Math.round(sample_rate * 0.3), edits: [
+        { op: "set", id: "short", args: { feedback: 0.4 }, glide: 0.02 },
+        { op: "gain", id: "short_out", value: 0.3, glide: 0.02 },
+      ] },
+      // Compile and replace a return without an audible discontinuity.
+      { op: "transaction", at: start + Math.round(sample_rate * 0.5), edits: [
+        { op: "processor", name: "new_echo", source: "(feedback: num = 0.3) { out = it.delay(time: 180ms, feedback: feedback) }" },
+        { op: "replace", id: "long", processor: "new_echo", fade: 0.02 },
+      ] },
       { op: "routing", at: start + sample_rate, edits: [{ op: "drain", id: "long" }] },
       // Keep the return connected during its tail, then free the instance explicitly.
       { op: "routing", at: start + sample_rate * 3, edits: [{ op: "free_node", id: "long" }] },

@@ -6,7 +6,7 @@
 //! The order is worked out from the graphs themselves, so the order tracks are
 //! declared in never matters.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
 
 use crate::graph::Graph;
 use crate::opcode::BLOCK;
@@ -14,6 +14,34 @@ use crate::voice::{Voice, VoiceRule};
 
 /// The most channels any signal path may carry (7.1.4 needs 12).
 pub const MAX_CHANNELS: usize = 16;
+
+/// Peaks shared with the control thread; rendering never allocates or locks.
+#[derive(Debug, Default)]
+pub struct Meter {
+    peaks: [AtomicU32; MAX_CHANNELS],
+    channels: AtomicU32,
+}
+impl Meter {
+    fn observe(&self, blocks: &[[f32; BLOCK]], frames: usize) {
+        self.channels.store(blocks.len() as u32, Ordering::Relaxed);
+        for (peak, block) in self.peaks.iter().zip(blocks) {
+            let value = block[..frames].iter().fold(0.0_f32, |a, b| a.max(b.abs()));
+            peak.fetch_max(value.to_bits(), Ordering::Relaxed);
+        }
+    }
+    pub fn read(&self, take: bool) -> Vec<f32> {
+        self.peaks[..self.channels.load(Ordering::Relaxed) as usize]
+            .iter()
+            .map(|p| {
+                f32::from_bits(if take {
+                    p.swap(0, Ordering::Relaxed)
+                } else {
+                    p.load(Ordering::Relaxed)
+                })
+            })
+            .collect()
+    }
+}
 
 /// Block-sized, possibly multichannel buffers that are summed into and cleared
 /// every block.
@@ -134,6 +162,9 @@ pub enum ChainInput {
 
 #[derive(Clone, Default)]
 pub struct TrackDef {
+    pub meter: Option<Arc<Meter>>,
+    /// Replacement generation and crossfade duration in seconds.
+    pub transition: (u64, f64),
     /// Public instance control keys mapped to keys in the reusable DSP graph.
     pub controls: Vec<(String, String)>,
     /// Processing applied to the summed voices. `None` passes them through.
@@ -264,7 +295,15 @@ pub struct VoiceId {
     serial: u64,
 }
 
+struct ChainFade {
+    previous: Option<Voice>,
+    inputs: Vec<ChainInput>,
+    frames: usize,
+    elapsed: usize,
+}
+
 struct Track {
+    fade: ChainFade,
     def: TrackDef,
     chain: Option<Voice>,
     voices: Vec<(u64, Voice)>,
@@ -304,6 +343,7 @@ pub struct Mixer {
     order: Vec<usize>,
     channels: usize,
     bus_channels: Vec<usize>,
+    bus_meters: Vec<(usize, Arc<Meter>)>,
     sample_rate: f32,
     next_serial: u64,
     silenced: usize,
@@ -343,6 +383,7 @@ impl Mixer {
         let tracks = defs
             .into_iter()
             .map(|def| Track {
+                fade: ChainFade { previous: None, inputs: Vec::new(), frames: (def.transition.1 * f64::from(sample_rate)).round() as usize, elapsed: 0 },
                 chain: def.chain.as_ref().map(|g| Voice::new(g.clone(), sample_rate)),
                 def,
                 voices: Vec::new(),
@@ -358,6 +399,7 @@ impl Mixer {
             order,
             channels,
             bus_channels,
+            bus_meters: Vec::new(),
             sample_rate,
             next_serial: 0,
             silenced: 0,
@@ -369,6 +411,8 @@ impl Mixer {
             processed: vec![[0.0; BLOCK]; MAX_CHANNELS],
         })
     }
+
+    pub fn set_bus_meters(&mut self, meters: Vec<(usize, Arc<Meter>)>) { self.bus_meters = meters; }
 
     /// Where the session's clock is at the start of the next block, for `clock.time`.
     pub fn set_clock(&mut self, clock: crate::Clock) {
@@ -723,6 +767,11 @@ impl Mixer {
 
         for &t in &self.order {
             let track = &mut self.tracks[t];
+            if track.fade.elapsed >= track.fade.frames && track.fade.previous.is_some() {
+                if let Some(retired) = retired.as_deref_mut() {
+                    if retired.len() < retired.capacity() { retired.push(track.fade.previous.take().unwrap()); }
+                } else { track.fade.previous = None; }
+            }
 
             summed[..n].iter_mut().for_each(|c| c[..frames].fill(0.0));
             for (_, voice) in &mut track.voices {
@@ -759,14 +808,25 @@ impl Mixer {
                         }
                     };
                     let silent_in = track.def.inputs.iter().all(|input| heard(input).iter().all(|s| *s == 0.0));
-                    if silent_in && track.chain_quiet >= rest_after {
+                    if silent_in && track.chain_quiet >= rest_after && !(track.fade.previous.is_some() && track.fade.elapsed < track.fade.frames) {
                         // nothing to ring out and nothing coming in: the chain stays as it is, and says nothing
                         processed[..out_channels].iter_mut().for_each(|c| c[..frames].fill(0.0));
                     } else {
                         for (i, input) in track.def.inputs.iter().enumerate() {
                             chain.set_input(i, heard(input));
                         }
+                        if let Some(previous) = &mut track.fade.previous { for (i,input) in track.fade.inputs.iter().enumerate() { previous.set_input(i, heard(input)); } }
                         chain.process_blocks(&mut processed[..out_channels], frames, &mut self.buses);
+                        if track.fade.elapsed < track.fade.frames && let Some(previous) = &mut track.fade.previous {
+                            previous.process_blocks(&mut scratch[..out_channels], frames, &mut self.buses);
+                            for (next,old) in processed[..out_channels].iter_mut().zip(&scratch[..out_channels]) {
+                                for i in 0..frames {
+                                    let mix = ((track.fade.elapsed + i) as f32 / track.fade.frames as f32).min(1.0);
+                                    next[i] = old[i] * (1.0-mix) + next[i] * mix;
+                                }
+                            }
+                            track.fade.elapsed = track.fade.elapsed.saturating_add(frames);
+                        }
                         if chain.is_poisoned() && !track.chain_silenced {
                             track.chain_silenced = true;
                             self.silenced += 1;
@@ -777,6 +837,7 @@ impl Mixer {
                 }
             };
 
+            if let Some(meter) = &track.def.meter { meter.observe(result,frames); }
             if let Some(stems) = &mut self.stems {
                 keep(&mut stems.tracks[t], result, frames);
             }
@@ -795,6 +856,7 @@ impl Mixer {
                 }
             }
         }
+        for (bus,meter) in &self.bus_meters { meter.observe(&self.buses.data[*bus], frames); }
         self.buses.end_block(frames);
         if let Some(stems) = &mut self.stems {
             for (bus, kept) in stems.buses.iter_mut().enumerate() {
@@ -816,6 +878,11 @@ impl Mixer {
     pub fn remap_buses_with(&mut self, mapping: &mut impl FnMut(usize) -> Option<usize>) {
         for track in &mut self.tracks {
             for (_, voice) in &mut track.voices { voice.remap_buses_with(mapping); }
+            for input in &mut track.def.inputs { if let ChainInput::Bus { bus, .. } = input && let Some(next) = mapping(*bus) { *bus = next; } }
+            if let Some(previous) = &mut track.fade.previous {
+                previous.remap_buses_with(mapping);
+                for input in &mut track.fade.inputs { if let ChainInput::Bus { bus, .. } = input && let Some(next) = mapping(*bus) { *bus = next; } }
+            }
         }
     }
 
@@ -840,10 +907,15 @@ impl Mixer {
                     }
                 }
             }
-            if let Some(from) = transfer.chain_from
-                && let (Some(chain), Some(previous)) = (&mut track.chain, &mut old.tracks[from].chain)
-            {
-                chain.carry_state(previous);
+            if let Some(from) = transfer.chain_from {
+                let previous = &mut old.tracks[from];
+                if track.def.transition.0 != previous.def.transition.0 && track.fade.frames > 0 {
+                    track.fade.previous = previous.chain.take();
+                    track.fade.inputs = std::mem::take(&mut previous.def.inputs);
+                } else {
+                    if let (Some(chain),Some(old_chain)) = (&mut track.chain,&mut previous.chain) { chain.carry_state(old_chain); }
+                    if track.def.transition.0 == previous.def.transition.0 { std::mem::swap(&mut track.fade, &mut previous.fade); }
+                }
             }
         }
         self.next_serial = self.next_serial.max(old.next_serial);

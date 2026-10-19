@@ -11,7 +11,7 @@ The **engine** is a sound server. It holds the instruments, effects, tracks, bus
 
 1. Open a WebSocket to `ws://127.0.0.1:7401/`.
 2. Send **`hello`** first, with `{ "protocol": 3, "client": "my-app" }` (and `token` if the daemon needs one). The result has `sample_rate`, `channels` and the `topics`.
-3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels) and **`notices`** (warnings).
+3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels), **`notices`** (warnings) and **`transactions`** (graph change acknowledgements).
 
 ## Requests
 
@@ -76,6 +76,8 @@ Protocol **3** adds a timed `routing` operation inside `events.send`. Each conne
 | `processor` | `name`, `source` | Compile a reusable processor. Updating or freeing the definition leaves existing instances on their original graph; creating/updating a node selects the current definition. |
 | `bus` | `id`, `channels`, optional `shared` | Create an audio bus, private by default. Channel count is 1–16 and remains fixed until freed. |
 | `node` | `id`, optional `processor`, `instrument`, `args` | Create or update an instance, preserving compatible DSP state. `instrument` is an optional default for notes targeting the node directly. |
+| `replace` | `id`, `processor`, optional `args`, `fade` | Replace instance DSP, optionally crossfading; see [live updates](#replacing-a-processor-live). |
+| `gain` | `id`, `value`, optional `glide` | Move a connection gain using the lightweight control path. |
 | `set` | `id`, `args`, optional `glide` | Change instance parameters. `glide` is seconds, defaults to zero and is at most 60. |
 | `connect` | `id`, `from`, `to`, optional `gain`, `glide`, `delayed` | Create/update a connection. Gain defaults to 1; glide is seconds. A delayed connection arrives exactly one engine block later, allowing feedback. |
 | `disconnect` | `id` | Remove a connection while retaining both endpoints and their state. |
@@ -223,7 +225,7 @@ The engine records every accepted `events.send` and `events.cancel`, with the ti
 
 ```json
 → {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":3,"client":"example"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":3,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices"]}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":3,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices","transactions"]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"events.send","params":{"events":[
     {"op":"define","at":"now","source":"instr x(freq: hz) { osc(sine, freq) * env[1 | 20ms 0] }\ntrack t { instrument = x }"},
@@ -233,3 +235,54 @@ The engine records every accepted `events.send` and `events.cancel`, with the ti
 → {"jsonrpc":"2.0","id":3,"method":"clock","params":{}}
 ← {"jsonrpc":"2.0","id":3,"result":{"sample":2048,"sample_rate":48000,...}}
 ```
+
+## Live graph updates
+
+Use `routing` edits containing only `set` and `gain` for continuous controls. They use timestamped, smoothed control commands without compiling DSP, building mixers or invalidating prepared audio. `gain` takes an existing connection `id`, a finite linear `value`, and optional `glide` in seconds. Use `connect` to change endpoints. When controls accompany structural edits in one routing operation, the whole operation is prepared as a graph change.
+
+```json
+{ "op": "routing", "at": 96000, "edits": [
+  { "op": "set", "id": "return", "args": { "feedback": 0.4 }, "glide": 0.02 },
+  { "op": "gain", "id": "send", "value": 0.5, "glide": 0.02 }
+] }
+```
+
+### Definition and routing transactions
+
+Use one `transaction` operation for coordinated definition and topology changes at a sample. Its optional `source` and `dir` work like `define`; `edits` work like `routing`. Definitions are compiled first and the final graph is validated and materialized once. Intermediate routing states need not be valid. A rejected transaction leaves the running graph and previously accepted future changes intact. Independent operations in `events.send` retain their own tags and cancellation boundaries; use `transaction` to combine them into one graph change.
+
+```json
+{ "op": "transaction", "at": 96000, "tag": "edit-42",
+  "source": "instr tone(freq: hz) { osc(sine, freq) * env[0.1 | 100ms 0] }",
+  "edits": [
+    { "op": "processor", "name": "echo", "source": "() { out = it.delay(time: 120ms, feedback: 0.3) }" },
+    { "op": "node", "id": "return", "processor": "echo" },
+    { "op": "connect", "id": "wet", "from": { "kind": "node", "id": "return" }, "to": { "kind": "master" } }
+  ]
+}
+```
+
+`events.send` returns `transactions: [{ "id": 42, "at": 96000 }]` for accepted graph changes (`define`, structural `routing`, `transaction` and `forget`). Control-only operations return no graph receipts. Subscribe to **`transactions`** to receive **`transaction`** notifications for your connection. Each has `id`, scheduled `at`, `status` (`queued`, `applied`, `cancelled` or `dropped`), and `applied_at` (null until applied). Applied acknowledgements come from the DSP renderer, with the actual swap sample; acceptance and the metadata clock alone do not acknowledge application. Notifications are delivered when the server next polls. `status.transactions` contains pending transactions and a bounded recent history. Cancelling uses the existing tag/time API; a dropped transaction was invalidated by an earlier graph change.
+
+The JavaScript and Python clients expose `transaction(...)`. The live sequencer also uses transactions when submitting its definitions and routing.
+
+### Replacing a processor live
+
+`replace` changes the processor of an existing node, retaining its connections and sounding voices:
+
+```json
+{ "op": "routing", "at": 96000, "edits": [
+  { "op": "processor", "name": "new_echo", "source": "(feedback: num = 0.3) { out = it.delay(time: 180ms, feedback: feedback) }" },
+  { "op": "replace", "id": "return", "processor": "new_echo", "fade": 0.02, "args": { "feedback": 0.45 } }
+] }
+```
+
+Matching parameter names and units retain their current values and smoothing trajectories unless overridden in `args`. New parameters use their defaults; removed parameters disappear. A zero `fade` (the default) preserves compatible DSP memory. A positive fade starts the new DSP fresh and linearly blends the old and new outputs for that duration, in seconds (maximum 60). The old processor receives the same incoming audio during the fade; its remaining tail is discarded at the end. Retired DSP storage is destroyed off the audio thread. To keep a longer independent tail, use separate instances and `drain` instead.
+
+Crossfades require the same output width and processors whose audio inputs come only from `it`, with sends represented by explicit connections. Schedule successive crossfaded replacements after the preceding fade finishes. An unrelated graph edit preserves an ongoing fade.
+
+### Graph inspection and meters
+
+`status.routing` describes nodes and connections using their public IDs. Each node's `params` describes parameter names, units, defaults, smoothing durations, current values and targets. Numeric parameter values use engine units (including linear gain for dB parameters). Connection `gain` and `target` report the current and target linear gain. These values follow control-only edits as well as structural edits.
+
+The **`meters`** topic now also includes `routing`, grouped by client, with `nodes` and `buses` containing `{ "id": "…", "peaks": [0.2, 0.15] }`. Node meters measure output after processing and replacement fades; bus meters measure summed audio. Values are per-channel absolute peaks since the previous meter notification, normally about ten times a second. `status.routing_meters` reads current peaks without resetting them. Meter collection never allocates or locks on the audio thread.

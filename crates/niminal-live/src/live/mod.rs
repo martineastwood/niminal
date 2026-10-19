@@ -964,11 +964,10 @@ impl Live {
                 buses,
                 connections,
             });
-            ops.push(Op::Routing {
-                at,
-                edits,
-                tag: None,
-            });
+            let (source,dir) = if let Some(i)=ops.iter().position(|op|matches!(op,Op::Define {..})) {
+                let Op::Define {source,dir,..}=ops.remove(i) else {unreachable!()}; (source,dir)
+            } else { (String::new(),None) };
+            ops.push(Op::Transaction { at, source, dir, edits, tag:None });
         }
         ops
     }
@@ -1090,7 +1089,7 @@ fn change_tag(id: u64) -> String {
 
 fn tag_op(op: &mut Op, tag: &str) {
     match op {
-        Op::Define { tag: t, .. } | Op::Forget { tag: t, .. } | Op::Routing { tag: t, .. } => {
+        Op::Define { tag: t, .. } | Op::Forget { tag: t, .. } | Op::Routing { tag: t, .. } | Op::Transaction { tag:t, .. } => {
             *t = Some(tag.to_string())
         }
         _ => {}

@@ -38,7 +38,7 @@ fn a_client_must_say_hello_with_the_right_version() {
     assert_eq!(wrong["error"]["code"], -32000);
     let ok = call(&mut d, c, 3, "hello", json!({"protocol": PROTOCOL_VERSION}));
     assert_eq!(ok["result"]["channels"], 1);
-    assert_eq!(ok["result"]["topics"], json!(["clock", "meters", "notices"]));
+    assert_eq!(ok["result"]["topics"], json!(["clock", "meters", "notices", "transactions"]));
     assert_eq!(call(&mut d, c, 4, "nothing.here", json!({}))["error"]["code"], -32601);
     assert_eq!(call(&mut d, c, 5, "events.send", json!({}))["error"]["code"], -32602);
     // the clients of the sequencer's own methods are not served here
@@ -229,4 +229,59 @@ fn dsp_clock_time_is_absolute_and_sample_accurate() {
     let audio = d.session_mut().process(6000).remove(0);
     assert!(audio[..2400].iter().all(|v| *v == 0.0));
     for i in [2400, 2401, 3000, 5999] { assert!((audio[i] - i as f32 / SR).abs() < 1e-6); }
+}
+
+#[test]
+fn transaction_notifications_are_owned_and_report_cancellation_and_application() {
+    let (mut d, c) = ready();
+    let other = d.connect();
+    call(
+        &mut d,
+        other,
+        1,
+        "hello",
+        json!({"protocol":PROTOCOL_VERSION}),
+    );
+    for client in [c, other] {
+        call(
+            &mut d,
+            client,
+            2,
+            "subscribe",
+            json!({"topics":["transactions"]}),
+        );
+    }
+    let result = call(
+        &mut d,
+        c,
+        3,
+        "events.send",
+        json!({"events":[{"op":"transaction","at":32,"tag":"edit","source":"instr flat() { 1 }","edits":[{"op":"node","id":"voices"}]}]}),
+    );
+    assert!(result.get("error").is_none(), "{result}");
+    let id = result["result"]["transactions"][0]["id"].as_u64().unwrap();
+    let queued = d.notifications();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].0, c);
+    call(&mut d, c, 4, "events.cancel", json!({"tag":"edit"}));
+    let cancelled = d.notifications();
+    assert_eq!(cancelled.len(), 1);
+    let message: Value = serde_json::from_str(&cancelled[0].1).unwrap();
+    assert_eq!(message["params"]["id"], id);
+    assert_eq!(message["params"]["status"], "cancelled");
+    let result = call(
+        &mut d,
+        c,
+        5,
+        "events.send",
+        json!({"events":[{"op":"transaction","at":32,"edits":[{"op":"node","id":"voices"}]}]}),
+    );
+    assert!(result.get("error").is_none(), "{result}");
+    d.notifications();
+    d.session_mut().process(33);
+    let applied = d.notifications();
+    assert_eq!(applied.len(), 1);
+    let message: Value = serde_json::from_str(&applied[0].1).unwrap();
+    assert_eq!(message["params"]["status"], "applied");
+    assert_eq!(message["params"]["applied_at"], 32);
 }

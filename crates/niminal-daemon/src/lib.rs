@@ -23,7 +23,7 @@ pub use engine_server::{
     ClientId, ENGINE_TOPICS, EngineError, EngineReply, EngineRequest, EngineServer, PROTOCOL_VERSION, clock_json,
     problem_json,
 };
-pub use events::{At, Cancelled, Op, Sent};
+pub use events::{At, Cancelled, Op, Sent, TransactionReceipt};
 pub use log::{LogEntry, LogInput, from_lines, to_lines};
 pub use midi_out::MidiEvent;
 pub use niminal_lang::{Entry, Located, Origin, Piece, Problem, Project};

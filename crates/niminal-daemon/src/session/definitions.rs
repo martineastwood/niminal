@@ -20,12 +20,12 @@ pub(super) enum What {
 pub(super) struct Meta {
     pub client: Option<ClientId>,
     pub tag: Option<String>,
-
 }
 
 /// A change that has compiled and is waiting to land.
 pub(super) struct Pending {
     pub id: u64,
+    pub applied: Arc<AtomicU64>,
     pub lands_at: u64,
     /// What was sent, with the modules it uses joined in, so that it can be compiled again.
     pub snippet: String,
@@ -34,7 +34,7 @@ pub(super) struct Pending {
     pub project: Project,
     pub definitions: Arc<Program>,
     pub routing: crate::routing::Routing,
-    pub edits: Option<Vec<crate::RoutingEdit>>,
+    pub edits: Vec<crate::RoutingEdit>,
     /// The materialized program and mixer, prepared before rendering.
     pub program: Arc<Program>,
     pub mixer: Mixer,
@@ -46,6 +46,7 @@ impl Pending {
     pub(super) fn copy_prepared(&self, sample_rate: f32) -> Self {
         Self {
             id: self.id,
+            applied: self.applied.clone(),
             lands_at: self.lands_at,
             snippet: self.snippet.clone(),
             statements: self.statements.clone(),
@@ -69,55 +70,40 @@ struct Uses {
 
 impl Uses {
     fn locate(&self, problems: Vec<Problem>) -> Vec<Problem> {
-        problems.into_iter().map(|p| p.in_module(&self.expanded, &self.sent)).collect()
+        problems
+            .into_iter()
+            .map(|p| p.in_module(&self.expanded, &self.sent))
+            .collect()
     }
 }
 
 impl Session {
-    /// Queue a change to land at sample `at` (at once if that has passed). It is read and compiled now: if
-    /// anything is wrong nothing changes. Returns its id.
-    pub(super) fn queue_change(
-        &mut self,
-        source: &str,
-        dir: Option<&str>,
-        at: u64,
-        what: What,
-        meta: Meta,
-    ) -> Result<u64, Vec<Problem>> {
-        let (snippet, statements, uses) = self.read_change(source, dir, what)?;
-        let at = at.max(self.clock);
-        let index = self.pending.partition_point(|p| p.lands_at <= at);
-        let base = match index.checked_sub(1) {
-            Some(i) => self.pending[i].project.clone(),
-            None => self.project.clone(),
-        };
-        let routing = index
-            .checked_sub(1)
-            .map_or_else(|| self.routing.clone(), |i| self.pending[i].routing.clone());
-        let id = self.next_id;
-        let pending = self
-            .prepare(id, at, snippet, statements, &base, &routing, meta)
-            .map_err(|problems| match &uses {
-                Some(u) => u.locate(problems),
-                None => problems,
-            })?;
-        self.next_id += 1;
-        self.pending.insert(index, pending);
-        // the changes after it were compiled without it
-        self.recompile_from(index + 1);
-        self.version += 1;
-        Ok(id)
-    }
-
     pub(super) fn queue_routing(
         &mut self,
         edits: Vec<crate::RoutingEdit>,
         at: u64,
         meta: Meta,
     ) -> Result<u64, Vec<Problem>> {
+        self.queue_transaction("", None, at, What::Definitions, edits, meta)
+    }
+
+    pub(super) fn queue_transaction(
+        &mut self,
+        source: &str,
+        dir: Option<&str>,
+        at: u64,
+        what: What,
+        edits: Vec<crate::RoutingEdit>,
+        meta: Meta,
+    ) -> Result<u64, Vec<Problem>> {
+        let (snippet, statements, uses) = if source.trim().is_empty() {
+            (String::new(), Vec::new(), None)
+        } else {
+            self.read_change(source, dir, what)?
+        };
         let at = at.max(self.clock);
         let index = self.pending.partition_point(|p| p.lands_at <= at);
-        let (project, definitions, routing) = index.checked_sub(1).map_or_else(
+        let (base, definitions, routing) = index.checked_sub(1).map_or_else(
             || {
                 (
                     self.project.clone(),
@@ -131,8 +117,22 @@ impl Session {
             },
         );
         let id = self.next_id;
-        let pending =
-            self.prepare_routing(id, at, edits, &project, &definitions, &routing, meta)?;
+        let pending = self
+            .prepare(
+                id,
+                at,
+                snippet,
+                statements,
+                &base,
+                &definitions,
+                &routing,
+                edits,
+                meta,
+            )
+            .map_err(|problems| match uses {
+                Some(u) => u.locate(problems),
+                None => problems,
+            })?;
         self.next_id += 1;
         self.pending.insert(index, pending);
         self.recompile_from(index + 1);
@@ -140,55 +140,15 @@ impl Session {
         Ok(id)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn prepare_routing(
-        &self,
-        id: u64,
-        lands_at: u64,
-        edits: Vec<crate::RoutingEdit>,
-        project: &Project,
-        definitions: &Arc<Program>,
-        routing: &crate::routing::Routing,
-        meta: Meta,
-    ) -> Result<Pending, Vec<Problem>> {
-        let mut routing = routing.clone();
-        let client = meta.client.expect("routing changes have an owner");
-        routing
-            .apply(
-                client,
-                &edits,
-                definitions,
-                &options(self.layout, &self.samples),
-            )
-            .map_err(|e| vec![Problem::plain(e)])?;
-        let program = Arc::new(
-            routing
-                .materialize(definitions)
-                .map_err(|e| vec![Problem::plain(e)])?,
-        );
-        let mixer = program.mixer(self.sample_rate);
-        Ok(Pending {
-            id,
-            lands_at,
-            snippet: String::new(),
-            statements: Vec::new(),
-            project: project.clone(),
-            definitions: definitions.clone(),
-            routing,
-            edits: Some(edits),
-            program,
-            mixer,
-            meta,
-        })
-    }
-
     /// Take a waiting change back. What was waiting after it is compiled again.
     pub(super) fn cancel_change(&mut self, id: u64) -> bool {
         let Some(index) = self.pending.iter().position(|p| p.id == id) else {
             return false;
         };
+        self.cancel_transaction(id);
         self.pending.remove(index);
         self.recompile_from(index);
+        self.reconcile_transactions();
         self.version += 1;
         true
     }
@@ -201,18 +161,42 @@ impl Session {
         dir: Option<&str>,
         what: What,
     ) -> Result<(String, Vec<Statement>, Option<Uses>), Vec<Problem>> {
-        let (text, uses) = match niminal_lang::expand(source, std::path::Path::new(dir.unwrap_or("."))) {
-            Ok(expanded) => (expanded.text.clone(), Some(Uses { expanded, sent: source.to_string() })),
-            Err(d) => return Err(vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))]),
-        };
+        let (text, uses) =
+            match niminal_lang::expand(source, std::path::Path::new(dir.unwrap_or("."))) {
+                Ok(expanded) => (
+                    expanded.text.clone(),
+                    Some(Uses {
+                        expanded,
+                        sent: source.to_string(),
+                    }),
+                ),
+                Err(d) => {
+                    return Err(vec![Problem::from_diagnostic(
+                        &d,
+                        source,
+                        Located::Snippet(d.span),
+                    )]);
+                }
+            };
         if what == What::Definitions {
             niminal_lang::validate_dsp(&text).map_err(|d| {
-                let problems = vec![Problem::from_diagnostic(&d, &text, Located::Snippet(d.span))];
-                match &uses { Some(u) => u.locate(problems), None => problems }
+                let problems = vec![Problem::from_diagnostic(
+                    &d,
+                    &text,
+                    Located::Snippet(d.span),
+                )];
+                match &uses {
+                    Some(u) => u.locate(problems),
+                    None => problems,
+                }
             })?;
         }
         let statements = analyze(&text).map_err(|d| {
-            let problems = vec![Problem::from_diagnostic(&d, &text, Located::Snippet(d.span))];
+            let problems = vec![Problem::from_diagnostic(
+                &d,
+                &text,
+                Located::Snippet(d.span),
+            )];
             match &uses {
                 Some(u) => u.locate(problems),
                 None => problems,
@@ -233,7 +217,21 @@ impl Session {
             }
             let kind = statement.key().map(|k| k.split(':').next().unwrap_or(k));
             let allowed = match what {
-                What::Definitions => kind.is_some_and(|k| matches!(k, "instr" | "fn" | "const" | "ctl" | "bus" | "buffer" | "track" | "sample" | "kit" | "config")),
+                What::Definitions => kind.is_some_and(|k| {
+                    matches!(
+                        k,
+                        "instr"
+                            | "fn"
+                            | "const"
+                            | "ctl"
+                            | "bus"
+                            | "buffer"
+                            | "track"
+                            | "sample"
+                            | "kit"
+                            | "config"
+                    )
+                }),
                 What::Forget => statement.clears(),
             };
             if !allowed {
@@ -241,7 +239,10 @@ impl Session {
                     "`{}` can't be sent here: `define` takes definitions such as instruments, tracks, effects, buses and controls, musical structure and timing belong to the client",
                     first_line(&statement.text)
                 ));
-                problem.span = Some(niminal_lang::Span::new(statement.offset, statement.offset + statement.text.len()));
+                problem.span = Some(niminal_lang::Span::new(
+                    statement.offset,
+                    statement.offset + statement.text.len(),
+                ));
                 return Err(match &uses {
                     Some(u) => u.locate(vec![problem]),
                     None => vec![problem],
@@ -260,49 +261,93 @@ impl Session {
         snippet: String,
         statements: Vec<Statement>,
         base: &Project,
+        base_definitions: &Arc<Program>,
         routing: &crate::routing::Routing,
+        edits: Vec<crate::RoutingEdit>,
         meta: Meta,
     ) -> Result<Pending, Vec<Problem>> {
-        let definitions: Vec<&Statement> = statements.iter().filter(|s| s.kind() == StatementKind::Definition).collect();
-        let delta: Vec<Entry> = definitions
-            .iter()
-            .map(|s| Entry { key: s.key().expect("definitions have keys").to_string(), text: s.text.clone() })
-            .collect();
-        let from_snippet: HashMap<String, usize> =
-            definitions.iter().map(|s| (s.key().expect("definitions have keys").to_string(), s.offset)).collect();
-
-        // `new` forgets everything sent before this snippet; the output layout stays, since it can only be
-        // chosen when the daemon starts.
         let clears = statements.iter().any(|s| s.clears());
-        let fresh = Project { entries: base.entries.iter().filter(|e| e.key == "config").cloned().collect() };
-        let base = if clears { &fresh } else { base };
-        let mut project = base.clone();
-        project.apply(&delta);
+        let (project, definitions) = if statements.is_empty() {
+            (base.clone(), base_definitions.clone())
+        } else {
+            let definitions: Vec<&Statement> = statements
+                .iter()
+                .filter(|s| s.kind() == StatementKind::Definition)
+                .collect();
+            let delta: Vec<Entry> = definitions
+                .iter()
+                .map(|s| Entry {
+                    key: s.key().expect("definitions have keys").to_string(),
+                    text: s.text.clone(),
+                })
+                .collect();
+            let from_snippet: HashMap<String, usize> = definitions
+                .iter()
+                .map(|s| {
+                    (
+                        s.key().expect("definitions have keys").to_string(),
+                        s.offset,
+                    )
+                })
+                .collect();
 
-        let mut compile_options = options(self.layout, &self.samples);
-        if !clears { compile_options.buffers = self.program_at(lands_at).buffers.iter().cloned().collect(); }
-        project.drop_broken(&from_snippet, |full| compile_with(full, &compile_options).map(|_| ()));
-        let (full, map) = project.source(&from_snippet, &[]);
-        let program = compile_with(&full, &compile_options).map_err(|diags| {
-            diags.iter().map(|d| Problem::from_diagnostic(d, &snippet, map.locate(d.span))).collect::<Vec<_>>()
-        })?;
-        if program.master != self.layout {
-            return Err(vec![Problem::plain(format!(
-                "this engine outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
-                self.layout, program.master
-            ))]);
-        }
-        let definitions = Arc::new(program);
-        let routing = if clears {
+            // `new` forgets everything sent before this snippet; the output layout stays, since it can only be
+            // chosen when the daemon starts.
+            let fresh = Project {
+                entries: base
+                    .entries
+                    .iter()
+                    .filter(|e| e.key == "config")
+                    .cloned()
+                    .collect(),
+            };
+            let base = if clears { &fresh } else { base };
+            let mut project = base.clone();
+            project.apply(&delta);
+
+            let mut compile_options = options(self.layout, &self.samples);
+            if !clears {
+                compile_options.buffers = base_definitions.buffers.iter().cloned().collect();
+            }
+            project.drop_broken(&from_snippet, |full| {
+                compile_with(full, &compile_options).map(|_| ())
+            });
+            let (full, map) = project.source(&from_snippet, &[]);
+            let program = compile_with(&full, &compile_options).map_err(|diags| {
+                diags
+                    .iter()
+                    .map(|d| Problem::from_diagnostic(d, &snippet, map.locate(d.span)))
+                    .collect::<Vec<_>>()
+            })?;
+            if program.master != self.layout {
+                return Err(vec![Problem::plain(format!(
+                    "this engine outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
+                    self.layout, program.master
+                ))]);
+            }
+            (project, Arc::new(program))
+        };
+        let mut routing = if clears {
             crate::routing::Routing::default()
         } else {
             routing.clone()
         };
+        routing
+            .apply(
+                meta.client.expect("graph changes have an owner"),
+                &edits,
+                &definitions,
+                &options(self.layout, &self.samples),
+                lands_at,
+                self.sample_rate,
+            )
+            .map_err(|e| vec![Problem::plain(e)])?;
         let program = routing
             .materialize(&definitions)
             .map_err(|e| vec![Problem::plain(e)])?;
         let mixer = program.mixer(self.sample_rate);
         Ok(Pending {
+            applied: Arc::new(AtomicU64::new(super::transactions::WAITING)),
             id,
             lands_at,
             snippet,
@@ -310,7 +355,7 @@ impl Session {
             project,
             definitions,
             routing,
-            edits: None,
+            edits,
             program: Arc::new(program),
             mixer,
             meta,
@@ -340,22 +385,32 @@ impl Session {
                 statements,
                 meta,
                 edits,
+                applied,
                 ..
             } = p;
-            let result = if let Some(edits) = edits {
-                self.prepare_routing(id, lands_at, edits, &base, &definitions, &routing, meta)
-            } else {
-                self.prepare(id, lands_at, snippet, statements, &base, &routing, meta)
-            };
+            let result = self.prepare(
+                id,
+                lands_at,
+                snippet,
+                statements,
+                &base,
+                &definitions,
+                &routing,
+                edits,
+                meta,
+            );
             match result {
-                Ok(next) => {
+                Ok(mut next) => {
+                    next.applied = applied;
                     base = next.project.clone();
                     routing = next.routing.clone();
                     definitions = next.definitions.clone();
                     self.pending.push(next);
                 }
                 Err(problems) => {
-                    let why = problems.first().map_or("it no longer compiles", |p| p.message.as_str());
+                    let why = problems
+                        .first()
+                        .map_or("it no longer compiles", |p| p.message.as_str());
                     self.notify(format!("change {id} was dropped: {why}"));
                 }
             }

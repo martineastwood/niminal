@@ -42,6 +42,14 @@ impl Serialize for At {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Op {
+    /// Compile definitions and edit routing as one graph change, with no intermediate graph.
+    Transaction {
+        at: At,
+        #[serde(default)] source: String,
+        #[serde(default)] dir: Option<String>,
+        #[serde(default)] edits: Vec<crate::RoutingEdit>,
+        #[serde(default)] tag: Option<String>,
+    },
     /// Atomically edit this connection's processor instances, buses and audio connections.
     Routing {
         at: At,
@@ -151,8 +159,9 @@ pub enum Op {
 }
 
 /// What came of a batch.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sent {
+    pub transactions: Vec<TransactionReceipt>,
     pub accepted: usize,
     /// Events whose time had passed: they sounded at once.
     pub late: usize,
@@ -171,3 +180,7 @@ pub struct Cancelled {
 
 fn first_channel() -> usize { 1 }
 fn unity() -> f32 { 1.0 }
+
+/// An accepted graph transaction and its effective scheduled sample.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransactionReceipt { pub id: u64, pub at: u64 }
