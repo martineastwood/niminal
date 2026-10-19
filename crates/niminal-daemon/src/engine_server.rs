@@ -2,7 +2,7 @@
 //! and the same requests as plain values for a client that lives in the same process.
 //!
 //! An [`EngineServer`] owns a [`Session`] and speaks the protocol to any number of clients. A client sends
-//! timestamped events and reads the clock; the server pushes the transport, the meters and notices to the
+//! timestamped events and reads the clock; the server pushes the clock, the meters and notices to the
 //! clients that subscribed.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::events::{At, Cancelled, Op, Sent};
-use crate::project::Problem;
+use niminal_lang::Problem;
 use crate::session::{ClockInfo, Session};
 
 /// The protocol version a client must say it speaks.
-pub const PROTOCOL_VERSION: u64 = 1;
+pub const PROTOCOL_VERSION: u64 = 2;
 
 pub type ClientId = u64;
 
@@ -30,7 +30,7 @@ pub(crate) const PROTOCOL_ERROR: i64 = -32000;
 pub(crate) const REJECTED: i64 = -32001;
 
 /// What a client of the engine can subscribe to.
-pub const ENGINE_TOPICS: [&str; 3] = ["transport", "meters", "notices"];
+pub const ENGINE_TOPICS: [&str; 3] = ["clock", "meters", "notices"];
 
 /// A request to the engine, as it is named on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,10 +179,6 @@ impl EngineReply {
             EngineRequest::Status {} => EngineReply::Status(result.clone()),
             EngineRequest::Clock {} => EngineReply::Clock(ClockInfo {
                 sample: number("sample"),
-                bar: number("bar"),
-                beat: result["beat"].as_f64().unwrap_or(1.0),
-                bpm: result["bpm"].as_f64().unwrap_or(120.0),
-                beats_per_bar: result["beats_per_bar"].as_f64().unwrap_or(4.0),
                 sample_rate: result["sample_rate"].as_f64().unwrap_or(48_000.0) as f32,
                 prepared_until: number("prepared_until"),
                 lookahead: number("lookahead"),
@@ -218,8 +214,7 @@ impl EngineReply {
 
 pub fn clock_json(c: &ClockInfo) -> Value {
     json!({
-        "sample": c.sample, "bar": c.bar, "beat": c.beat, "bpm": c.bpm,
-        "beats_per_bar": c.beats_per_bar,
+        "sample": c.sample,
         "sample_rate": c.sample_rate, "prepared_until": c.prepared_until, "lookahead": c.lookahead,
         "output_latency": c.output_latency, "wall_micros": c.wall_micros, "voices": c.voices,
     })
@@ -236,20 +231,20 @@ pub struct EngineServer {
     session: Session,
     clients: BTreeMap<ClientId, Client>,
     next_client: ClientId,
-    last_transport: Option<u64>,
-    transport_every: u64,
+    last_clock: Option<u64>,
+    clock_every: u64,
     outbox: Vec<(ClientId, String)>,
 }
 
 impl EngineServer {
     pub fn new(session: Session) -> EngineServer {
-        let transport_every = (session.sample_rate() / 10.0) as u64;
+        let clock_every = (session.sample_rate() / 10.0) as u64;
         EngineServer {
             session,
             clients: BTreeMap::new(),
             next_client: 1,
-            last_transport: None,
-            transport_every,
+            last_clock: None,
+            clock_every,
             outbox: Vec::new(),
         }
     }
@@ -400,7 +395,7 @@ impl EngineServer {
 
     /// Everything the server has to say that nobody asked for, since this was last called, as
     /// `(client, message)`. Call it regularly while the clock advances: it reports notices and, about ten
-    /// times a second, the transport and meters.
+    /// times a second, the clock and meters.
     pub fn notifications(&mut self) -> Vec<(ClientId, String)> {
         self.collect_notifications();
         self.outbox.extract_if(.., |(id, _)| self.clients.get(id).is_none_or(|c| !c.local)).collect()
@@ -426,11 +421,11 @@ impl EngineServer {
             );
         }
         let now = self.session.clock();
-        if self.last_transport.is_none_or(|t| now >= t + self.transport_every) {
-            self.last_transport = Some(now);
-            if self.has_subscribers("transport") {
+        if self.last_clock.is_none_or(|t| now >= t + self.clock_every) {
+            self.last_clock = Some(now);
+            if self.has_subscribers("clock") {
                 let clock = clock_json(&self.session.clock_info());
-                self.send_to_subscribers("transport", "transport", clock);
+                self.send_to_subscribers("clock", "clock", clock);
             }
             // reading the meters resets them, so only do it for someone listening
             if self.has_subscribers("meters") {

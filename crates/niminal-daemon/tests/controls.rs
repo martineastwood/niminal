@@ -112,7 +112,7 @@ fn controls_replay_exactly_across_block_sizes_and_log_serialization() {
         target: "flat".into(),
         at: niminal_daemon::At::Sample(s.clock() + 144),
         args: Default::default(),
-        dur: Some(niminal_score::Time::Beats(1.0)),
+        dur: Some(niminal_score::Time::Seconds(0.5)),
         id: None,
         tag: None,
     };

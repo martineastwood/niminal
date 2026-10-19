@@ -5207,13 +5207,16 @@ impl Lower<'_> {
             return Err(Diagnostic::new("`clock` is only available in an instrument, track or bus", name.span)
                 .with_help("pass `clock.beat` to a function as an argument"));
         }
-        let (what, rate) = match name.name.as_str() {
-            "beat" => (Context::ClockBeat, Rate::Audio),
-            "bar" => (Context::ClockBar, Rate::Audio),
-            "bpm" => (Context::ClockBpm, Rate::Control),
-            _ => return Err(no_field("clock", name, &["beat", "bar", "bpm"])),
-        };
-        Ok(self.read_context(what, Unit::Num, rate))
+        match name.name.as_str() {
+            "time" => Ok(self.read_context(Context::ClockTime, Unit::Time, Rate::Audio)),
+            "bpm" => Ok(Sig::constant(Unit::Num, self.tempo.bpm)),
+            "beat" | "bar" => {
+                let time = self.read_context(Context::ClockTime, Unit::Num, Rate::Audio);
+                let scale = self.tempo.bpm / 60.0 / if name.name == "bar" { self.tempo.beats_per_bar } else { 1.0 };
+                self.mul(&time, &Sig::constant(Unit::Num, scale), Unit::Num, name.span)
+            },
+            _ => Err(no_field("clock", name, &["time", "beat", "bar", "bpm"])),
+        }
     }
 
     /// `late(x)`, in a bus send: `x` as it was a block ago, which breaks a loop through buses.

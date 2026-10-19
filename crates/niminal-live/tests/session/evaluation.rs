@@ -395,7 +395,7 @@ fn streamed_events_play_at_their_time() {
     let mut s = ready();
     let note = |at: f64| Op::Note {
         target: "lead".into(),
-        at: At::Time(Time::Seconds(at)),
+        at: At::Sample(((at) * 48000.0).round() as u64),
         dur: Some(Time::Seconds(0.25)),
         id: None,
         tag: None,
@@ -410,7 +410,7 @@ fn streamed_events_play_at_their_time() {
     assert!(peak(&run(&mut s, 2000)) > 0.1);
     let bad = Op::Note {
         target: "nobody".into(),
-        at: At::Time(Time::Seconds(1.0)),
+        at: At::Sample(48_000),
         dur: Some(Time::Seconds(0.25)),
         id: None,
         tag: None,

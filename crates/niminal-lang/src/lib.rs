@@ -5,6 +5,8 @@ mod analysis;
 mod ast;
 mod compile;
 mod diag;
+mod dsp;
+pub use dsp::{dsp_source, dsp_value, validate_dsp, LIVE_BPM, LIVE_ORIGIN, LIVE_METER};
 mod env_shortcut;
 mod funcs;
 mod ide;
@@ -19,6 +21,8 @@ mod parser;
 mod perform;
 mod performance;
 mod program;
+mod project;
+pub use project::{Entry, Located, Origin, Piece, Problem, Project};
 mod sample;
 mod schedule;
 mod tables;
@@ -28,7 +32,7 @@ pub use analysis::{
     CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_entries,
 };
 pub use ast::{ControlInput, InputSource};
-pub use compile::{CompileOptions, compile, compile_with};
+pub use compile::{CompileOptions, compile, compile_with, compile_dsp_with};
 pub use diag::{Diagnostic, Span, closest};
 pub use ide::{
     OpInfo, ParamInfo, RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, builtin_ops, pattern_ops,

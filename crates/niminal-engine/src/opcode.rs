@@ -35,16 +35,12 @@ impl Port {
 /// Where the session's clock is at the start of a block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Clock {
-    /// Beats since the session started, or since its last `reset`.
-    pub beat: f64,
-    pub bpm: f32,
-    pub beats_per_bar: f32,
+    /// Absolute sample at the start of this block.
+    pub sample: u64,
 }
 
 impl Default for Clock {
-    fn default() -> Self {
-        Clock { beat: 0.0, bpm: 120.0, beats_per_bar: 4.0 }
-    }
+    fn default() -> Self { Clock { sample: 0 } }
 }
 
 /// What an opcode needs to know about the block being processed.

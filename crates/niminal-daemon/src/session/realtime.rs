@@ -177,10 +177,6 @@ enum Kind {
 }
 
 /// The command that moves a parameter of a held note, if `program` has the instrument and the parameter.
-fn is_timing_change(p: &Pending) -> bool {
-    p.statements.iter().any(|s| matches!(s.key(), Some("tempo" | "meter")))
-}
-
 fn set_command(program: &Program, set: &super::VoiceSet, at: u64, frames: u64) -> Option<Command> {
     let _ = program;
     Some(Command { at, kind: Kind::SetParam { key: set.key, name: set.name.clone(), value: set.value, frames } })
@@ -227,7 +223,7 @@ struct Injected {
 
 /// Something added since the planner last looked.
 pub(super) enum Fresh {
-    Note { event: Event, start: u64, dur: u64, key: Option<u32>, musical: bool },
+    Note { event: Event, start: u64, dur: u64, key: Option<u32> },
     Release { key: u32, at: u64 },
     Set(super::VoiceSet),
     Track(super::TrackSet),
@@ -298,8 +294,6 @@ pub struct RealtimeRenderer {
     channels: usize,
     sample_rate: f32,
     clock: u64,
-    /// Beats since the session started or was last reset, at `clock`.
-    beat: f64,
     current: Option<Box<Window>>,
     cursor: usize,
     sounding: Sounding,
@@ -376,7 +370,6 @@ impl Session {
             channels: self.channels(),
             sample_rate: self.sample_rate,
             clock: self.clock,
-            beat: self.grid().beats(self.clock),
             current: None,
             cursor: 0,
             sounding,
@@ -702,33 +695,26 @@ impl Session {
                 stopped: Vec::new(),
                 dropped: 0,
             };
-            // a note given in beats or bars moves with a tempo or meter that lands before it, which the windows to
-            // be made allow for
-            let moves = matches!(item, Fresh::Note { musical: true, .. })
-                && self.pending.iter().any(|p| p.lands_at <= at && is_timing_change(p));
-            let unsafe_to_inject = moves;
-            if !unsafe_to_inject {
-                match item {
-                    Fresh::Note { event, start, dur, key, .. } => {
-                        let hold = Hold { at: start.max(self.clock), dur, key };
-                        self.prepare_note(&program, &event, hold, config, &mut window);
+            match item {
+                Fresh::Note { event, start, dur, key, .. } => {
+                    let hold = Hold { at: start.max(self.clock), dur, key };
+                    self.prepare_note(&program, &event, hold, config, &mut window);
+                }
+                Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
+                Fresh::Map(set) => window.commands.push(map_command(self.program_at(set.at),&set,set.at.max(self.clock))),
+                Fresh::Buffer(set) => {
+                    if let Some((_, buffer)) = self.program_at(set.at).buffers.iter().find(|(name, _)| *name == set.name)
+                        && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
+                        window.commands.push(Command { at: set.at.max(self.clock), kind: Kind::Buffer { buffer: buffer.clone(), offset: set.offset, values: set.values } });
                     }
-                    Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
-                    Fresh::Map(set) => window.commands.push(map_command(self.program_at(set.at),&set,set.at.max(self.clock))),
-                    Fresh::Buffer(set) => {
-                        if let Some((_, buffer)) = self.program_at(set.at).buffers.iter().find(|(name, _)| *name == set.name)
-                            && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
-                            window.commands.push(Command { at: set.at.max(self.clock), kind: Kind::Buffer { buffer: buffer.clone(), offset: set.offset, values: set.values } });
-                        }
-                    }
-                    Fresh::Track(set) => window.commands.push(Command {
-                        at: set.at.max(self.clock),
-                        kind: Kind::Control { key: set.key, value: set.value, frames: set.frames },
-                    }),
-                    Fresh::Set(set) => {
-                        if let Some(command) = set_command(&program, &set, set.at.max(self.clock), set.frames) {
-                            window.commands.push(command);
-                        }
+                }
+                Fresh::Track(set) => window.commands.push(Command {
+                    at: set.at.max(self.clock),
+                    kind: Kind::Control { key: set.key, value: set.value, frames: set.frames },
+                }),
+                Fresh::Set(set) => {
+                    if let Some(command) = set_command(&program, &set, set.at.max(self.clock), set.frames) {
+                        window.commands.push(command);
                     }
                 }
             }
@@ -737,7 +723,7 @@ impl Session {
                 self.notify(notice);
             }
             planner.state.capacity_drops.fetch_add(window.dropped, Ordering::Relaxed);
-            if unsafe_to_inject || full {
+            if full {
                 // the windows are made again, which the next step will see (the planner is out of the
                 // session while it works, so this can't go through `invalidate_windows`)
                 self.fresh.clear();
@@ -777,7 +763,7 @@ impl Session {
             dropped: 0,
         };
         let mut program = self.program.clone();
-        let mut explicit: Vec<Explicit> = self
+        let explicit: Vec<Explicit> = self
             .upcoming
             .iter()
             .map(|n| Explicit {
@@ -785,7 +771,6 @@ impl Session {
                 dur: n.dur.saturating_sub(self.clock.saturating_sub(n.start)),
                 event: n.event.clone(),
                 key: n.key,
-                musical: n.musical,
             })
             .collect();
         let mut position = from;
@@ -800,8 +785,8 @@ impl Session {
         }
         // Pending changes are previewed without committing control state. Window boundaries and note times
         // remain sample positions, independent of how far ahead this thread happens to prepare them.
-        // A new tempo or meter moves the changes still waiting, as it will when it lands for real.
-        let mut queue: Vec<(u64, &Pending)> = self.pending.iter().map(|p| (p.lands_at, p)).collect();
+
+        let queue: Vec<(u64, &Pending)> = self.pending.iter().map(|p| (p.lands_at, p)).collect();
         let mut i = 0;
         while i < queue.len() {
             let (lands_at, pending) = queue[i];
@@ -821,28 +806,6 @@ impl Session {
                         controls::mark(controls, next, &pending.statements, pending.id);
                     }
                     window.commands.push(swap);
-                }
-                if program.tempo != next.tempo {
-                    for (at, p) in &mut queue[i..] {
-                        if !super::is_timing(p) {
-                            *at = super::rescale_landing(
-                                *at,
-                                lands_at,
-                                super::landing_factor(p.meta.musical.unwrap_or(false), program.tempo, next.tempo),
-                            );
-                        }
-                    }
-                    queue[i..].sort_by_key(|(at, _)| *at);
-                    // notes given in beats or bars keep their musical position
-                    for note in explicit.iter_mut().filter(|n| n.start > lands_at) {
-                        if let Some(by_bar) = note.musical {
-                            note.start = super::rescale_landing(
-                                note.start,
-                                lands_at,
-                                super::landing_factor(by_bar, program.tempo, next.tempo),
-                            );
-                        }
-                    }
                 }
                 program = next.clone();
             }
@@ -1049,7 +1012,6 @@ struct Explicit {
     dur: u64,
     event: Event,
     key: Option<u32>,
-    musical: Option<bool>,
 }
 
 impl RealtimeRenderer {
@@ -1293,7 +1255,6 @@ impl RealtimeRenderer {
                 std::mem::swap(&mut self.controls, controls);
                 std::mem::swap(&mut self.mixer, mixer);
                 std::mem::swap(&mut self.program, program);
-                self.beat = 0.0;
                 if let Some(limiter) = &mut self.limiter {
                     limiter.clear();
                 }
@@ -1471,13 +1432,7 @@ impl RealtimeRenderer {
                     self.mixer.set_audio_input(c, &samples[..n]);
                 }
             }
-            let tempo = self.program.tempo;
-            self.mixer.set_clock(niminal_engine::Clock {
-                beat: self.beat,
-                bpm: tempo.bpm as f32,
-                beats_per_bar: tempo.beats_per_bar as f32,
-            });
-            self.beat += n as f64 * tempo.bpm / 60.0 / f64::from(self.sample_rate);
+            self.mixer.set_clock(niminal_engine::Clock { sample: self.clock });
             self.mixer
                 .process_retained(&mut block[..self.channels], n, &mut self.finished);
             self.state

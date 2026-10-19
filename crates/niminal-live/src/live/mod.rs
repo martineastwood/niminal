@@ -13,9 +13,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use niminal_daemon::{
-    At, ClockInfo, EngineError, EngineReply, EngineRequest, Entry, Located, Op, Origin, Piece, Problem, Project,
+    At, ClockInfo, EngineError, EngineReply, EngineRequest, Op,
 };
 use niminal_lang::{
+    Entry, Located, Origin, Piece, Problem, Project,
     Action, Clip, CommandAction, CompileOptions, Expanded, InputSource, Layout, PlayInfo, Program, Quantize,
     Samples, Schedule, Scheduled, Statement, StatementData, StatementKind, analyze, compile_with,
 };
@@ -178,6 +179,7 @@ struct Asked {
 
 pub struct Live {
     link: Box<dyn EngineLink>,
+    clock_names: [String; 3],
     sample_rate: f32,
     layout: Layout,
     /// Where the project's sample files are found, and the ones already read.
@@ -236,6 +238,11 @@ impl Live {
         let schedule = program.schedule();
         Live {
             link,
+            clock_names: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                ["bpm", "origin", "meter"].map(|name| format!("__live_{}_{}_{name}", std::process::id(), id))
+            },
             sample_rate,
             layout,
             samples: Samples::default(),
@@ -417,6 +424,7 @@ impl Live {
             // what falls before the change is as the project was
             self.fetch_until(self.pending[i].lands_at);
             self.land(i);
+            self.sync_pending();
         }
         self.fetch_until(horizon);
         let clock = self.clock;
@@ -596,6 +604,7 @@ impl Live {
         self.playing = playing;
 
         self.rebuild_schedule(at);
+        self.send(self.clock_ops(at));
         let mut changes = summary;
         for (bars, name) in captures {
             if let Some(notice) = self.capture_section(bars, &name, at) {
@@ -638,15 +647,6 @@ impl Live {
             let Some(named) = name_action(program, &scheduled.action) else {
                 continue;
             };
-            if matches!(named, NamedAction::Reset) {
-                ops.push(Op::Transport {
-                    at: At::Sample(self.samples(when)),
-                    bpm: None,
-                    meter: None,
-                    origin: Some(true),
-                    tag: None,
-                });
-            }
             self.history.push(HistoryEntry { at: when, action: named });
         }
         captures
@@ -661,7 +661,7 @@ impl Live {
         Some(Op::Note {
             target: event.target.clone(),
             at: At::Sample(start),
-            args: event.args.clone(),
+            args: event.args.iter().map(|(name, value)| (name.clone(), niminal_lang::dsp_value(*value, self.program.tempo))).collect(),
             dur: Some(Time::Seconds(dur as f64 / f64::from(self.sample_rate))),
             id: None,
             tag: Some(tag.to_string()),
@@ -762,6 +762,9 @@ impl Live {
             }
         }
         let mut ops = Vec::new();
+        for origin in self.history.iter().filter(|h| h.at >= from && h.at < to && matches!(h.action, NamedAction::Reset | NamedAction::Origin)) {
+            ops.extend(self.clock_ops(self.samples(origin.at)));
+        }
         // panics
         let panics = self.schedule.panics().to_vec();
         while let Some(&t) = panics.get(self.next_panic) {
@@ -851,8 +854,43 @@ impl Live {
     /// What a pending change asks of the engine: forget, define, change the tempo or meter. `None` if it
     /// asks nothing, as for a `play`.
     fn engine_ops(&self, p: &Pending) -> Option<Vec<Op>> {
-        let ops = definition_ops(&p.statements, p.program.as_deref(), At::Sample(p.lands_at), self.sample_dirs.first());
+        let ops = self.definition_ops(&p.statements, p.program.as_deref(), At::Sample(p.lands_at));
         (!ops.is_empty()).then_some(ops)
+    }
+
+    fn definition_ops(&self, statements: &[Statement], program: Option<&Program>, at: At) -> Vec<Op> {
+        let mut ops = definition_ops(statements, program, at, self.sample_dirs.first());
+        for op in &mut ops {
+            if let Op::Define { source, .. } = op {
+                let names = [niminal_lang::LIVE_BPM, niminal_lang::LIVE_ORIGIN, niminal_lang::LIVE_METER];
+                let tempo = program.map_or(self.program.tempo, |p| p.tempo);
+                let values = [tempo.bpm.to_string(), format!("{}sec", self.clock_origin(match at { At::Sample(n) => n, At::Now => self.clock })), tempo.beats_per_bar.to_string()];
+                let mut controls = String::new();
+                for ((old, name), value) in names.iter().zip(&self.clock_names).zip(values) {
+                    if source.contains(old) {
+                        *source = source.replace(old, name);
+                        controls.push_str(&format!("ctl {name} = {value}\n"));
+                    }
+                }
+                source.insert_str(0, &controls);
+            }
+        }
+        ops
+    }
+
+    fn clock_origin(&self, at: u64) -> f64 {
+        self.history.iter().rev().find(|h| self.samples(h.at) <= at && matches!(h.action, NamedAction::Reset | NamedAction::Origin)).map_or(0.0, |h| h.at)
+    }
+
+    fn clock_ops(&self, at: u64) -> Vec<Op> {
+        let tempo = self.program.tempo;
+        let source = niminal_lang::dsp_source(&self.program.source, tempo).expect("compiled source projects");
+        let values = [tempo.bpm, self.clock_origin(at), tempo.beats_per_bar];
+        [niminal_lang::LIVE_BPM, niminal_lang::LIVE_ORIGIN, niminal_lang::LIVE_METER].iter().enumerate()
+            .filter(|(_, name)| source.contains(**name)).map(|(i, _)| Op::Control {
+                name: self.clock_names[i].clone(), at: At::Sample(at), value: values[i],
+                unit: None, glide: Some(Time::Seconds(0.0)), tag: Some(SCHEDULED.into()),
+            }).collect()
     }
 
     /// Play `program` as it is compiled: the notes it writes out, and `schedule` (usually
@@ -864,7 +902,7 @@ impl Live {
         }
         let at = self.clock;
         if let Ok(statements) = analyze(&program.source) {
-            let ops = definition_ops(&statements, Some(&program), At::Sample(at), self.sample_dirs.first());
+            let ops = self.definition_ops(&statements, Some(&program), At::Sample(at));
             if !ops.is_empty() {
                 self.send(ops);
             }
@@ -899,9 +937,8 @@ impl Live {
         let tempo = self.program.tempo;
         let ops: Vec<Op> = events
             .iter()
-            .map(|e| Op::Note { target: e.target.clone(), at: At::Time(e.at), args: e.args.clone(), dur: Some(e.dur), id: None, tag: Some(WRITTEN.into()) })
+            .map(|e| Op::Note { target: e.target.clone(), at: At::Sample(self.samples(e.at.to_seconds(tempo))), args: e.args.iter().map(|(n,v)| (n.clone(), niminal_lang::dsp_value(*v, tempo))).collect(), dur: Some(Time::Seconds(e.dur.to_seconds(tempo))), id: None, tag: Some(WRITTEN.into()) })
             .collect();
-        let _ = tempo;
         self.link
             .request(EngineRequest::EventsSend { events: ops })
             .map(|_| ())
@@ -915,31 +952,13 @@ impl Live {
     }
 }
 
-/// What a change to the project asks of the engine: forget, define, change the tempo or meter. The engine
-/// compiles everything the project defines, clips and scenes too, though it has no use for them: a clip with an
-/// `instrument:` is also a track, and the project's tracks must be the same ones in both.
+/// Send DSP definitions only. Implicit clip tracks and musical literals are resolved in this client.
 fn definition_ops(statements: &[Statement], program: Option<&Program>, at: At, dir: Option<&std::path::PathBuf>) -> Vec<Op> {
-    let dir = dir.map(|d| d.display().to_string());
     let mut ops = Vec::new();
-    let mut definitions = Vec::new();
-    for s in statements {
-        if s.clears() {
-            ops.push(Op::Forget { at, tag: None });
-        }
-        let Some(key) = s.key() else { continue };
-        match key.split(':').next().unwrap_or(key) {
-            "tempo" => ops.push(Op::Transport { at, bpm: program.map(|p| p.tempo.bpm), meter: None, origin: None, tag: None }),
-            "meter" => {
-                let meter = s.text.trim().strip_prefix("meter").unwrap_or(&s.text).trim().to_string();
-                ops.push(Op::Transport { at, bpm: None, meter: Some(meter), origin: None, tag: None });
-            }
-            _ => definitions.push(s.text.clone()),
-        }
-    }
-    if !definitions.is_empty() {
-        // definitions come after a forget at the same sample, and before the tempo
-        let position = ops.iter().position(|o| matches!(o, Op::Transport { .. })).unwrap_or(ops.len());
-        ops.insert(position, Op::Define { source: definitions.join("\n"), at, dir, tag: None });
+    if statements.iter().any(Statement::clears) { ops.push(Op::Forget { at, tag: None }); }
+    if let Some(program) = program {
+        let source = niminal_lang::dsp_source(&program.source, program.tempo).expect("compiled source can be projected to DSP");
+        if !source.is_empty() { ops.push(Op::Define { source, at, dir: dir.map(|d| d.display().to_string()), tag: None }); }
     }
     ops
 }
@@ -950,7 +969,7 @@ fn change_tag(id: u64) -> String {
 
 fn tag_op(op: &mut Op, tag: &str) {
     match op {
-        Op::Define { tag: t, .. } | Op::Transport { tag: t, .. } | Op::Forget { tag: t, .. } => *t = Some(tag.to_string()),
+        Op::Define { tag: t, .. } | Op::Forget { tag: t, .. } => *t = Some(tag.to_string()),
         _ => {}
     }
 }

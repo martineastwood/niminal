@@ -402,6 +402,12 @@ fn substitute_expr(e: &mut Expr, name: &str, value: &Expr) {
     e.for_each_child_mut(&mut |child| substitute_expr(child, name, value));
 }
 
+/// Compile only sound-server definitions. Musical structure must be lowered by a client first.
+pub fn compile_dsp_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
+    crate::validate_dsp(source).map_err(|d| vec![d])?;
+    compile_with(source, options)
+}
+
 pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
     let mut items = desugar(parser::parse(source).map_err(|d| vec![d])?);
     items = expand_score_fors(items).map_err(|d| vec![d])?;
@@ -1218,7 +1224,7 @@ fn compile_sample(
 ) -> Res<Instrument> {
     let mut root = DEFAULT_ROOT_HZ;
     let mut chokes: Vec<&Arg> = Vec::new();
-    let (mut beats, mut fit): (Option<f64>, Option<&Arg>) = (None, None);
+    let (mut duration, mut fit): (Option<f64>, Option<&Arg>) = (None, None);
     for arg in &decl.options {
         let Some(key) = &arg.name else {
             return Err(Diagnostic::new(
@@ -1237,7 +1243,7 @@ fn compile_sample(
             }
             "choke" => chokes.push(arg),
             "beats" => match &arg.value.kind {
-                ExprKind::Num { value, unit: None } if *value > 0.0 => beats = Some(*value),
+                ExprKind::Num { value, unit: None } if *value > 0.0 => duration = Some(*value * 60.0 / tempo.bpm),
                 _ => {
                     return Err(Diagnostic::new(
                         "`beats` is how many beats the loop lasts, such as `4`",
@@ -1245,14 +1251,19 @@ fn compile_sample(
                     ));
                 }
             },
+            "duration" => {
+                let seconds = literal_time(&arg.value)?.to_seconds(tempo);
+                if !seconds.is_finite() || seconds <= 0.0 { return Err(Diagnostic::new("sample duration must be positive", arg.value.span)); }
+                duration = Some(seconds);
+            }
             "fit" => fit = Some(arg),
             "loop" => {} // handled by loop_mode_of
             other => {
                 let mut d =
                     Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
-                d = match closest(other, ["root", "choke", "beats", "fit", "loop"]) {
+                d = match closest(other, ["root", "choke", "beats", "duration", "fit", "loop"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
-                    None => d.with_help("the options are `root`, `choke`, `beats`, `fit` and `loop`"),
+                    None => d.with_help("the options are `root`, `choke`, `beats`, `duration`, `fit` and `loop`"),
                 };
                 return Err(d);
             }
@@ -1264,7 +1275,7 @@ fn compile_sample(
         )
     };
     if let Some(arg) = fit {
-        match (&arg.value.kind, beats) {
+        match (&arg.value.kind, duration) {
             (ExprKind::Name(n), Some(_)) if n == "rate" => {}
             (ExprKind::Name(n), _) if n == "slice" || n == "stretch" => {
                 return Err(Diagnostic::new(
@@ -1314,9 +1325,9 @@ fn compile_sample(
                 .first()
                 .map_or(48_000.0, |c| c.sample_rate_or(48_000.0));
             // Fitting to the tempo: the loop's own length in seconds against the time its beats take.
-            let speed = match (fit, beats) {
+            let speed = match (fit, duration) {
                 (Some(_), Some(b)) => {
-                    (frames as f64 / f64::from(rate)) / (b * 60.0 / tempo.bpm)
+                    (frames as f64 / f64::from(rate)) / b
                 }
                 _ => 1.0,
             };

@@ -93,7 +93,7 @@ fn buffer_protocol_allocates_reads_and_saves_loads() {
         .request(
             client,
             EngineRequest::Hello {
-                protocol: 1,
+                protocol: niminal_daemon::PROTOCOL_VERSION,
                 client: None,
                 token: None,
             },

@@ -1,17 +1,17 @@
 ---
 title: Engine API
-description: "JSON-RPC 2.0 over WebSocket for the sound server inside the daemon: timestamped notes, parameter changes, definitions and tempo."
+description: "JSON-RPC 2.0 over WebSocket for the sound server inside the daemon: timestamped notes, parameter changes, definitions."
 ---
 
-The **engine** is a sound server. It holds the instruments, effects, tracks, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions and tempo. It knows nothing of clips, scenes, patterns or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
+The **engine** is a sound server. It holds the instruments, effects, tracks, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns, tempo, meter or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
 
 `niminal daemon` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the daemon never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
 
 ## Connection
 
 1. Open a WebSocket to `ws://127.0.0.1:7401/`.
-2. Send **`hello`** first, with `{ "protocol": 1, "client": "my-app" }` (and `token` if the daemon needs one). The result has `sample_rate`, `channels` and the `topics`.
-3. Subscribe to topics for push updates: **`transport`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels) and **`notices`** (warnings).
+2. Send **`hello`** first, with `{ "protocol": 2, "client": "my-app" }` (and `token` if the daemon needs one). The result has `sample_rate`, `channels` and the `topics`.
+3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels) and **`notices`** (warnings).
 
 ## Requests
 
@@ -23,13 +23,13 @@ One batched method for every timed thing a client can do. The whole batch is che
 
 ```json
 { "method": "events.send", "params": { "events": [
-  { "op": "note", "target": "lead", "at": "64beat", "dur": "1/2beat", "args": { "freq": "c4" } },
+  { "op": "note", "target": "lead", "at": 1536000, "dur": "250ms", "args": { "freq": "c4" } },
   { "op": "control", "name": "cutoff", "at": 96000, "value": 2, "unit": "khz", "glide": "50ms" },
   { "op": "track", "name": "pad", "at": "now", "args": { "cut": "800hz" } }
 ] } }
 ```
 
-**`at`** is a whole number (an absolute sample), `"now"` (as soon as possible) or a time with a unit (`"32beat"`, `"8.5bar"`, `"12.25sec"`): a position on the transport, measured from its bar origin. `dur` and `glide` are durations (`"1/2beat"`, `"250ms"`).
+**`at`** is a nonnegative whole number (an absolute sample) or `"now"` (as soon as possible). `dur` and `glide` are physical durations (`"250ms"`, `"0.5sec"`). Beats and bars must be converted by the client, including durations and parameter values.
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
@@ -41,13 +41,12 @@ One batched method for every timed thing a client can do. The whole batch is che
 
 An **`id`** is a whole number the client picks, and it belongs to that connection: another client can use the same one. Using an id that is still sounding, or one that was never opened or has been let go of, fails the batch. Because the client picks it, a `note`, a `set` and an `off` can go in one batch with no round trip. When a client disconnects its held notes are released and its notes still waiting never sound.
 
-| `define` | `source`, `at`, optional `dir` | Compile definitions (`instr`, `track`, effects, `bus`, `ctl`, `config`, tables, buffers, `fn`, `const`, samples) and swap them in at `at`, sample-exactly: the new mixer is built ahead and running notes carry over. Performance statements, clips, scenes and `tempo`/`meter` are an error. Compile problems come back like `eval`'s. `dir` is where sample files and `use` modules are looked for. |
-| `transport` | `at`, any of `bpm`, `meter` (as `"3/4"`), `origin` | Change the tempo or meter, or say that this point is bar 1 (`"origin": true`). A ramp is several of these. |
+| `define` | `source`, `at`, optional `dir` | Compile definitions (`instr`, `track`, effects, `bus`, `ctl`, `config`, tables, buffers, `fn`, `const`, samples) and swap them in at `at`, sample-exactly: the new mixer is built ahead and running notes carry over. Performance statements, clips, scenes, arrangements, patterns, input bindings, quantize settings and `tempo`/`meter` are errors. DSP source uses physical time units. `clock.time` is elapsed engine time in seconds; musical clock signals must be supplied by a client through controls. Compile problems come back like `eval`'s. `dir` is where sample files and `use` modules are looked for. |
 | `forget` | `at` | Drop every definition, as `new` does. The output layout is kept. |
 
-**Time and tempo.** The engine owns time: the tempo, the meter and the bar origin live in its transport, so every client resolves `"8bar"` or `"32beat"` the same way. An event given in beats or bars keeps its musical position if the tempo or meter changes before it plays: still-waiting notes, `define`s and the like are moved when the change lands. Events given in samples or seconds never move. `transport` changes themselves keep the time they were given.
+**Time ownership.** The engine owns a monotonically increasing sample clock. Each client owns its tempo map, meter, musical origin, looping and quantization. Clients convert their positions to samples and send events ahead of playback. A tempo edit can cancel and replace that client's pending events; another client's events stay at their submitted samples. The engine never retimes accepted events.
 
-Notes, controls and the rest in a batch are checked against the definitions in force at their own time, so a batch can `define` an instrument and play it. If anything in a batch is wrong, a `define` or `transport` queued earlier in the same batch is taken back.
+Notes, controls and the rest in a batch are checked against the definitions in force at their own time, so a batch can `define` an instrument and play it. If anything in a batch is wrong, definitions queued earlier in the same batch are taken back.
 
 **Result:** `{ "accepted": 3, "late": 0, "first": 4800, "horizon": 8192 }`. `late` counts events whose time had already passed: they sounded at once. `first` is the earliest sample any event resolved to, and `horizon` is the sample up to which the engine has prepared audio.
 
@@ -86,8 +85,6 @@ Where the engine is in time, for a client that schedules against it.
 | Field | Meaning |
 | --- | --- |
 | `sample` | The sample the output is at, as the audio callback last said. |
-| `bar`, `beat` | The musical position of `sample`; `beat` counts from 1 in the bar, fractions included. |
-| `bpm`, `beats_per_bar` | The tempo and meter in force at `sample`. |
 | `sample_rate` | |
 | `prepared_until` | The sample up to which audio has been prepared. An event stamped before it is put into prepared audio; later ones are planned when their turn comes. |
 | `lookahead` | How far ahead of the clock the engine prepares, in samples. |
@@ -130,7 +127,7 @@ Triggered reports preserve repeated equal values. Each tap has a bounded queue o
 Take back this client's events that are still waiting.
 
 ```json
-{ "method": "events.cancel", "params": { "tag": "lead", "from": "64beat", "release": true } }
+{ "method": "events.cancel", "params": { "tag": "lead", "from": 1536000, "release": true } }
 ```
 
 Any event in an `events.send` batch can carry a **`tag`**, a string of the client's choosing. `events.cancel` drops the waiting events (notes, `set`s, `off`s, `control` and `track` changes) with that tag that are at or after **`from`** (a time as for `at`; default `"now"`). Without `tag` it drops all of this client's waiting events. Other clients' events are never touched. With **`release`: true**, held notes with that tag that are already sounding are also let go of at `from`. A held note whose `off` was taken back is held again.
@@ -152,7 +149,7 @@ Silence everything at once: every voice and the memory of every effect. **Result
 
 The engine's state. **Result** includes:
 
-- **`transport`** — `sample`, `seconds`, `bar`, `beat`, `bpm`, `voices`
+- **`clock`** — `sample`, `seconds`, `voices`
 - **`sample_rate`**, **`channels`**, **`processing_latency`** (DSP samples before the limiter/device)
 - **`realtime`** — counters such as `late_events`, `starved_frames`, `capacity_drops`, `deadline_misses`, `max_render_micros` and `mixer_builds`
 - **`controls`** — each `ctl` and track parameter (named `track::param`): `name`, `value`, `target`, `unit` (db shown in dB)
@@ -181,14 +178,14 @@ The engine records every accepted `events.send` and `events.cancel`, with the ti
 ## Minimal client flow
 
 ```json
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":1,"client":"example"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"sample_rate":48000,"channels":2,"topics":["transport","meters","notices"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":2,"client":"example"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices"]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"events.send","params":{"events":[
     {"op":"define","at":"now","source":"instr x(freq: hz) { osc(sine, freq) * env[1 | 20ms 0] }\ntrack t { instrument = x }"},
-    {"op":"note","target":"t","at":"1bar","dur":"1/2beat","args":{"freq":"c4"}}]}}
+    {"op":"note","target":"t","at":96000,"dur":"250ms","args":{"freq":"c4"}}]}}
 ← {"jsonrpc":"2.0","id":2,"result":{"accepted":2,"late":0,"first":0,"horizon":8192}}
 
 → {"jsonrpc":"2.0","id":3,"method":"clock","params":{}}
-← {"jsonrpc":"2.0","id":3,"result":{"sample":2048,"bar":1,"beat":1.04,"bpm":120.0,...}}
+← {"jsonrpc":"2.0","id":3,"result":{"sample":2048,"sample_rate":48000,...}}
 ```

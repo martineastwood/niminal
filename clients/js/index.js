@@ -2,7 +2,7 @@
 
 const WebSocket = require("ws");
 
-const PROTOCOL = 1;
+const PROTOCOL = 2;
 
 class NiminalError extends Error {
   constructor(message, problems) {
@@ -84,7 +84,7 @@ class Client {
 
   /**
    * Send timed events to the engine: `{ op: "note" | "control" | "track", at, ... }`.
-   * `at` is a sample, "now" or a position such as "32beat". See the protocol reference.
+   * `at` is an absolute sample count or "now". See the protocol reference.
    */
   sendEvents(events) {
     return this.call("events.send", { events });
@@ -99,7 +99,7 @@ class Client {
     return this.call("events.cancel", params);
   }
 
-  /** Where the engine is in time: sample, bar, beat, bpm, prepared_until, wall_micros... */
+  /** Where the engine is in time: sample, sample_rate, prepared_until, wall_micros... */
   clock() {
     return this.call("clock");
   }

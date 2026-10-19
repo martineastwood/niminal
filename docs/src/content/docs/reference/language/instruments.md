@@ -81,7 +81,8 @@ Clients update these controls with the timed `array` and `bind_buffer` events. I
 | `note.dur` | The length the note was scheduled for, in sec (0 for a note held from a key) |
 | `note.start` | 1 for the first sample of the voice, then 0 |
 | `note.index` | How many notes of this instrument have started before this one |
-| `clock.beat`, `clock.bar`, `clock.bpm` | The shared transport: beats and bars since the performance started, and the tempo |
+| `clock.time` | Elapsed engine time in seconds |
+| `clock.beat`, `clock.bar`, `clock.bpm` | The live client’s transport: beats and bars since its performance started, and its tempo. The client lowers these to ordinary DSP controls; the daemon has no musical transport. |
 
 Functions don't see `note` or `clock`: pass these in as arguments.
 

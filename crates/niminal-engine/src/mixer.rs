@@ -365,7 +365,7 @@ impl Mixer {
         })
     }
 
-    /// Where the session's clock is at the start of the next block, for `clock.beat` and friends.
+    /// Where the session's clock is at the start of the next block, for `clock.time`.
     pub fn set_clock(&mut self, clock: crate::Clock) {
         self.buses.clock = clock;
     }

@@ -2,8 +2,7 @@
 //! commands and keyboards, played by sending timestamped events to the engine through its public API.
 //!
 //! A [`Live`] knows nothing of the engine's insides. It reads the engine's clock through an
-//! [`EngineLink`], and a little ahead of it sends the notes, parameter changes, definitions and tempo
-//! changes that its project says are due.
+//! [`EngineLink`], and a little ahead of it sends the notes, parameter changes, definitions that its project says are due.
 
 mod keyboard;
 mod link;

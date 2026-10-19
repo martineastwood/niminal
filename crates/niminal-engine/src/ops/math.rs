@@ -381,12 +381,8 @@ pub enum Context {
     NoteDur,
     /// How many notes of the instrument started before this one.
     NoteIndex,
-    /// Beats since the session started or was last reset.
-    ClockBeat,
-    /// Bars (possibly fractional) since the session started or was last reset.
-    ClockBar,
-    /// The tempo in beats per minute.
-    ClockBpm,
+    /// Seconds since the engine started.
+    ClockTime,
 }
 
 impl Context {
@@ -394,14 +390,12 @@ impl Context {
         match self {
             Context::NoteDur => "note_dur",
             Context::NoteIndex => "note_index",
-            Context::ClockBeat => "clock_beat",
-            Context::ClockBar => "clock_bar",
-            Context::ClockBpm => "clock_bpm",
+            Context::ClockTime => "clock_time",
         }
     }
 }
 
-/// A value read from the note or the session's clock; the beat and bar advance sample by sample.
+/// A value read from the note or the engine's sample clock.
 #[derive(Clone)]
 pub struct ReadContext {
     what: Context,
@@ -427,22 +421,12 @@ impl Opcode for ReadContext {
     }
 
     fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
-        let clock = ctx.clock;
-        let per_sample = f64::from(clock.bpm) / 60.0 / f64::from(ctx.sample_rate);
-        let beat_at = |i: usize| clock.beat + i as f64 * per_sample;
         match self.what {
             Context::NoteDur => out.fill(ctx.dur),
             Context::NoteIndex => out.fill(ctx.index as f32),
-            Context::ClockBpm => out.fill(clock.bpm),
-            Context::ClockBeat => {
+            Context::ClockTime => {
                 for (i, o) in out.iter_mut().enumerate() {
-                    *o = beat_at(i) as f32;
-                }
-            }
-            Context::ClockBar => {
-                let bar = f64::from(clock.beats_per_bar.max(f32::MIN_POSITIVE));
-                for (i, o) in out.iter_mut().enumerate() {
-                    *o = (beat_at(i) / bar) as f32;
+                    *o = ((ctx.clock.sample as f64 + i as f64) / f64::from(ctx.sample_rate)) as f32;
                 }
             }
         }

@@ -12,13 +12,12 @@ impl Session {
         event: Event,
         key: Option<u32>,
         owner: Option<(ClientId, Option<String>)>,
-        musical: Option<bool>,
     ) {
         if self.live.is_some() {
-            self.fresh.push(realtime::Fresh::Note { event: event.clone(), start, dur, key, musical: musical.is_some() });
+            self.fresh.push(realtime::Fresh::Note { event: event.clone(), start, dur, key });
         }
         let (client, tag) = owner.map_or((None, None), |(c, t)| (Some(c), t));
-        self.insert_upcoming(Upcoming { start, dur, event, key, client, tag, musical });
+        self.insert_upcoming(Upcoming { start, dur, event, key, client, tag });
     }
 
     /// Move the control `name` to `value` (in the engine's unit) at sample `at`, over `frames`, in the program
@@ -70,42 +69,46 @@ impl Session {
         Ok(())
     }
 
-    /// A time as the log keeps it: a sample, except a position in beats or bars, which is kept so that
-    /// it moves with the tempo again when the log is played back.
-    fn logged(&self, at: At) -> At {
-        match at {
-            At::Time(Time::Beats(_) | Time::Bars(_)) => at,
-            _ => At::Sample(self.resolve(at)),
-        }
-    }
+    fn logged(&self, at: At) -> At { At::Sample(self.resolve(at)) }
 
-    /// The sample a time stands for: a sample as it is, `now` as the clock, and a position on the
-    /// transport counted from the bar origin.
     pub(super) fn resolve(&self, at: At) -> u64 {
-        match at {
-            At::Sample(n) => n,
-            At::Now => self.clock,
-            At::Time(t) => {
-                let grid = self.grid();
-                let seconds = t.to_seconds(self.program.tempo);
-                (grid.origin as f64 + seconds * f64::from(self.sample_rate)).round().max(0.0) as u64
-            }
-        }
+        match at { At::Sample(n) => n, At::Now => self.clock }
     }
 
     /// Do what a batch of events from `client` says. All of it is checked first: if any is wrong none of it is
     /// done. Times come out as samples in the log, so that replaying it gives the same sound.
     pub fn send_events(&mut self, client: ClientId, ops: Vec<Op>) -> Result<Sent, Vec<Problem>> {
         self.sync_realtime();
+        let mut invalid = Vec::new();
+        for (index, op) in ops.iter().enumerate() {
+            let (duration, args) = match op {
+                Op::Note { dur, args, .. } => (*dur, Some(args)),
+                Op::Set { glide, args, .. } | Op::Track { glide, args, .. } => (*glide, Some(args)),
+                Op::Control { glide, unit, .. } => {
+                    if unit.as_deref().is_some_and(|u| matches!(u, "beat" | "beats" | "bar" | "bars" | "bpm")) {
+                        invalid.push(problem_at(index, "resolve musical units in the client"));
+                    }
+                    (*glide, None)
+                }
+                Op::Array { glide, values, .. } => {
+                    if values.iter().any(|v| matches!(v, Value::Beats(_) | Value::Bars(_))) {
+                        invalid.push(problem_at(index, "resolve musical units in the client"));
+                    }
+                    (*glide, None)
+                }
+                _ => (None, None),
+            };
+            if duration.is_some_and(|t| !matches!(t, Time::Seconds(n) if n.is_finite() && n >= 0.0)) ||
+                args.is_some_and(|a| a.values().any(|v| matches!(v, Value::Beats(_) | Value::Bars(_)))) {
+                invalid.push(problem_at(index, "durations must be finite, nonnegative seconds; resolve musical time in the client"));
+            }
+        }
+        if !invalid.is_empty() { return Err(invalid); }
         let rate = f64::from(self.sample_rate);
         let clock = self.clock;
-        let musical = |at: &At| match at {
-            At::Time(Time::Beats(_)) => Some(false),
-            At::Time(Time::Bars(_)) => Some(true),
-            _ => None,
-        };
 
-        // Changes of definitions and of the transport go first: they are compiled, which can fail, and the
+
+        // Changes of definitions go first: they are compiled, which can fail, and the
         // rest of the batch is checked against the program they leave. If anything later is wrong they are
         // taken back.
         let mut resolved: Vec<Option<Op>> = vec![None; ops.len()];
@@ -114,29 +117,12 @@ impl Session {
         for (n, op) in ops.iter().enumerate() {
             let (source, dir, at, what, meta) = match op {
                 Op::Define { source, at, dir, tag } => {
-                    let meta = Meta { client: Some(client), tag: tag.clone(), musical: musical(at), origin: false };
+                    let meta = Meta { client: Some(client), tag: tag.clone() };
                     resolved[n] = Some(Op::Define { source: source.clone(), at: self.logged(*at), dir: dir.clone(), tag: tag.clone() });
                     (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, meta)
                 }
-                Op::Transport { at, bpm, meter, origin, tag } => {
-                    let mut lines = Vec::new();
-                    if let Some(bpm) = bpm {
-                        lines.push(format!("tempo {bpm}bpm"));
-                    }
-                    if let Some(meter) = meter {
-                        lines.push(format!("meter {meter}"));
-                    }
-                    let is_origin = origin.unwrap_or(false);
-                    if lines.is_empty() && !is_origin {
-                        early.push(problem_at(n, "a `transport` needs a `bpm`, a `meter` or `origin`"));
-                        continue;
-                    }
-                    let meta = Meta { client: Some(client), tag: tag.clone(), musical: musical(at), origin: is_origin };
-                    resolved[n] = Some(Op::Transport { at: self.logged(*at), bpm: *bpm, meter: meter.clone(), origin: *origin, tag: tag.clone() });
-                    (lines.join("\n"), None, self.resolve(*at), What::Timing, meta)
-                }
                 Op::Forget { at, tag } => {
-                    let meta = Meta { client: Some(client), tag: tag.clone(), musical: musical(at), origin: false };
+                    let meta = Meta { client: Some(client), tag: tag.clone() };
                     resolved[n] = Some(Op::Forget { at: self.logged(*at), tag: tag.clone() });
                     ("new".to_string(), None, self.resolve(*at), What::Forget, meta)
                 }
@@ -145,12 +131,7 @@ impl Session {
             if let Some(dir) = dir {
                 self.set_sample_dir(std::path::Path::new(dir));
             }
-            let result = if source.is_empty() {
-                // only a point that is bar 1
-                self.queue_origin(at, meta)
-            } else {
-                self.queue_change(&source, dir, at, what, meta)
-            };
+            let result = self.queue_change(&source, dir, at, what, meta);
             match result {
                 Ok(id) => queued.push(id),
                 Err(mut problems) => {
@@ -171,7 +152,7 @@ impl Session {
         enum Plan {
             Buffer { set: BufferSet, start: u64 },
             Map { id: u64, start: u64, param: String, source: Option<String>, channel: usize, scale: f32, offset: f32, tag: Option<String> },
-            Note { event: Event, instrument: String, start: u64, dur: u64, id: Option<u64>, tag: Option<String>, musical: Option<bool> },
+            Note { event: Event, instrument: String, start: u64, dur: u64, id: Option<u64>, tag: Option<String> },
             Control { name: String, value: f32, frames: u64, at: u64, op: usize, tag: Option<String> },
             Track { key: String, value: f32, frames: u64, at: u64, tag: Option<String> },
             Panic { at: u64, tag: Option<String> },
@@ -219,7 +200,6 @@ impl Session {
                                 instrument,
                                 id: *id,
                                 tag: tag.clone(),
-                                musical: musical(at),
                             });
                         }
                         Err(e) => fail(format!("note for `{target}`: {e}")),
@@ -353,7 +333,7 @@ impl Session {
                     plans.push(Plan::Panic { at: start, tag: tag.clone() });
                 }
                 Op::Array { .. } | Op::BindBuffer { .. } => unreachable!("parameter events expanded"),
-                Op::Define { .. } | Op::Transport { .. } | Op::Forget { .. } => {}
+                Op::Define { .. } | Op::Forget { .. } => {}
             }
         }
         if problems.is_empty() && controls > crate::controls::CAPACITY {
@@ -370,10 +350,10 @@ impl Session {
             input: LogInput::Send { client, ops: resolved.into_iter().flatten().collect() },
         });
         let mut sent = Sent { accepted: ops.len(), late: 0, first: None };
-        // definitions and the transport, which are queued already
+        // definitions, which are queued already
         for op in &ops {
             let at = match op {
-                Op::Define { at, .. } | Op::Transport { at, .. } | Op::Forget { at, .. } => self.resolve(*at),
+                Op::Define { at, .. } | Op::Forget { at, .. } => self.resolve(*at),
                 _ => continue,
             };
             sent.late += usize::from(at < clock);
@@ -395,13 +375,13 @@ impl Session {
                     self.buffer_sets.push(set);
                     start
                 }
-                Plan::Note { event, instrument, start, dur, id, tag, musical } => {
+                Plan::Note { event, instrument, start, dur, id, tag } => {
                     let key = id.map(|_| self.new_key());
                     if let (Some(id), Some(key)) = (id, key) {
                         let schema = Arc::new(self.program_at(start).instrument(&instrument).expect("validated instrument").clone());
                         self.voices.push(VoiceEntry { client, id, key, instrument, schema, tag: tag.clone() });
                     }
-                    self.add_explicit(start.max(clock), dur, event, key, Some((client, tag)), musical);
+                    self.add_explicit(start.max(clock), dur, event, key, Some((client, tag)));
                     start
                 }
                 Plan::Control { name, value, frames, at, op, tag } => {
@@ -456,7 +436,7 @@ impl Session {
         Ok(sent)
     }
 
-    /// Take back changes of definitions or the transport queued by a batch that then failed.
+    /// Take back changes of definitions queued by a batch that then failed.
     fn take_back(&mut self, ids: &[u64]) {
         for &id in ids {
             self.cancel_change(id);
@@ -634,7 +614,7 @@ impl Session {
             done.cancelled += 1;
         }
 
-        // changes of definitions or the transport that are still to land
+        // changes of definitions that are still to land
         let landing: Vec<u64> = self
             .pending
             .iter()

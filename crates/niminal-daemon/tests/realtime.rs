@@ -68,7 +68,7 @@ fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_daemon::Op> {
     (0..count)
         .map(|i| Op::Note {
             target: "lead".into(),
-            at: At::Time(Time::Seconds(0.05 + seconds * i as f64 / count as f64)),
+            at: At::Sample(((0.05 + seconds * i as f64 / count as f64) * 48000.0).round() as u64),
             dur: Some(Time::Seconds(0.02)),
             id: None,
             tag: None,
@@ -87,7 +87,7 @@ fn stream_while_playing(events: &[niminal_daemon::Op], ahead: u64, frames: usize
     for chunk in out.chunks_mut(256) {
         let clock = r.clock();
         while sent < events.len() {
-            let start = match &events[sent] { niminal_daemon::Op::Note { at: niminal_daemon::At::Time(niminal_score::Time::Seconds(t)), .. } => (t * 48_000.0) as u64, _ => unreachable!() };
+            let start = match &events[sent] { niminal_daemon::Op::Note { at: niminal_daemon::At::Sample(t), .. } => *t, _ => unreachable!() };
             if start > clock + ahead {
                 break;
             }
@@ -185,7 +185,7 @@ fn bars(hz: f64, first: u32, count: u32, tag: &str) -> Vec<niminal_daemon::Op> {
     (first * 4..(first + count) * 4)
         .map(|beat| Op::Note {
             target: "organ".into(),
-            at: At::Time(Time::Beats(f64::from(beat))),
+            at: At::Sample(((f64::from(beat)) * 24000.0).round() as u64),
             args: [("freq".to_string(), Value::Hz(hz))].into(),
             dur: Some(Time::Seconds(0.2)),
             id: None,
@@ -197,7 +197,6 @@ fn bars(hz: f64, first: u32, count: u32, tag: &str) -> Vec<niminal_daemon::Op> {
 #[test]
 fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_prepared_region() {
     use niminal_daemon::At;
-    use niminal_score::Time;
     const BAR: usize = 96_000;
     let frames = 4 * BAR;
 
@@ -216,7 +215,7 @@ fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_pr
         let mut cancelled = false;
         for chunk in out.chunks_mut(256) {
             if !cancelled && r.clock() >= cancel_at {
-                let done = s.cancel_events(1, Some("a"), At::Time(Time::Bars(1.0)), false);
+                let done = s.cancel_events(1, Some("a"), At::Sample(96_000), false);
                 assert_eq!(done.cancelled, 12);
                 s.send_events(1, bars(440.0, 1, 3, "b")).unwrap();
                 cancelled = true;
@@ -231,19 +230,18 @@ fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_pr
 }
 
 #[test]
-fn definitions_a_tempo_change_and_beat_stamped_notes_sound_the_same_prepared_as_offline() {
+fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
     use niminal_daemon::{At, Op};
     use niminal_score::{Time, Value};
     const SINE: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(sine, freq) * env[1 | 100ms 0] * 0.3 }";
     const SAW: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(saw, freq).lpf(cutoff: 3000hz) * env[1 | 100ms 0] * 0.3 }";
     let note = |at: At, hz: f64| Op::Note { target: "organ".into(), at, args: [("freq".to_string(), Value::Hz(hz))].into(), dur: Some(Time::Seconds(0.1)), id: None, tag: None };
     let script = [
-        (0u64, note(At::Time(Time::Beats(1.0)), 220.0)),
-        (0, note(At::Time(Time::Beats(5.0)), 330.0)),
-        (0, Op::Define { source: SAW.into(), at: At::Time(Time::Beats(3.0)), dir: None, tag: None }),
-        (0, Op::Transport { at: At::Sample(48_000), bpm: Some(180.0), meter: None, origin: None, tag: None }),
-        (30_000, note(At::Time(Time::Beats(8.0)), 440.0)),
-        (60_000, note(At::Time(Time::Bars(1.0)), 110.0)),
+        (0u64, note(At::Sample(24_000), 220.0)),
+        (0, note(At::Sample(120_000), 330.0)),
+        (0, Op::Define { source: SAW.into(), at: At::Sample(72_000), dir: None, tag: None }),
+        (30_000, note(At::Sample(192_000), 440.0)),
+        (60_000, note(At::Sample(96_000), 110.0)),
         (60_000, note(At::Sample(150_000), 550.0)),
     ];
     let session = || {

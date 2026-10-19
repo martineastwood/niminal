@@ -109,7 +109,7 @@ fn a_client_must_say_hello_with_the_right_version() {
         wrong["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("protocol 1")
+            .contains("protocol 2")
     );
     assert_eq!(
         call(&mut d, c, 3, "status", json!({}))["error"]["code"],
@@ -117,7 +117,7 @@ fn a_client_must_say_hello_with_the_right_version() {
         "still not greeted"
     );
 
-    let ok = call(&mut d, c, 4, "hello", json!({"protocol": 1}));
+    let ok = call(&mut d, c, 4, "hello", json!({"protocol": 2}));
     assert_eq!(ok["result"]["sample_rate"], 48_000.0);
     assert_eq!(ok["result"]["channels"], 1);
     assert_eq!(ok["result"]["topics"].as_array().unwrap().len(), 6);
@@ -257,7 +257,7 @@ fn cancel_hush_and_panic() {
 fn subscribers_hear_about_changes_landing() {
     let (mut d, c) = ready();
     let other = d.connect();
-    call(&mut d, other, 1, "hello", json!({"protocol": 1}));
+    call(&mut d, other, 1, "hello", json!({"protocol": 2}));
     let ok = call(
         &mut d,
         c,
@@ -447,7 +447,7 @@ fn subscription_requests_are_checked() {
 fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
     let (mut d, a) = ready();
     let b = d.connect();
-    call(&mut d, b, 1, "hello", json!({"protocol": 1}));
+    call(&mut d, b, 1, "hello", json!({"protocol": 2}));
     call(
         &mut d,
         a,

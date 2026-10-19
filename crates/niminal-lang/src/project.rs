@@ -1,7 +1,7 @@
 //! The project a session is playing: definitions kept as source text, so that
 //! a snippet can replace one of them and the whole thing be compiled again.
 
-use niminal_lang::{Diagnostic, Expanded, Span};
+use crate::{Diagnostic, Expanded, Span};
 
 /// One top-level definition.
 #[derive(Debug, Clone, PartialEq)]

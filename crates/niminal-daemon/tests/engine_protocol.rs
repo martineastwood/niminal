@@ -38,7 +38,7 @@ fn a_client_must_say_hello_with_the_right_version() {
     assert_eq!(wrong["error"]["code"], -32000);
     let ok = call(&mut d, c, 3, "hello", json!({"protocol": PROTOCOL_VERSION}));
     assert_eq!(ok["result"]["channels"], 1);
-    assert_eq!(ok["result"]["topics"], json!(["transport", "meters", "notices"]));
+    assert_eq!(ok["result"]["topics"], json!(["clock", "meters", "notices"]));
     assert_eq!(call(&mut d, c, 4, "nothing.here", json!({}))["error"]["code"], -32601);
     assert_eq!(call(&mut d, c, 5, "events.send", json!({}))["error"]["code"], -32602);
     // the clients of the sequencer's own methods are not served here
@@ -54,7 +54,7 @@ fn event_stream_plays_notes_from_outside() {
         c,
         3,
         "events.send",
-        json!({"events": [{"op": "note", "target": "lead", "at": "0.1sec", "dur": "0.2sec", "args": {"freq": "a4"}}]}),
+        json!({"events": [{"op": "note", "target": "lead", "at": 4800, "dur": "0.2sec", "args": {"freq": "a4"}}]}),
     );
     assert_eq!(ok["result"]["accepted"], 1);
     assert_eq!(ok["result"]["late"], 0);
@@ -69,8 +69,8 @@ fn event_stream_plays_notes_from_outside() {
         4,
         "events.send",
         json!({"events": [
-            {"op": "note", "target": "lead", "at": "0sec", "dur": "1sec", "args": {"freq": "a4"}},
-            {"op": "note", "target": "nobody", "at": "0sec", "dur": "1sec"},
+            {"op": "note", "target": "lead", "at": 0, "dur": "1sec", "args": {"freq": "a4"}},
+            {"op": "note", "target": "nobody", "at": 0, "dur": "1sec"},
         ]}),
     );
     assert_eq!(bad["error"]["code"], -32001);
@@ -127,10 +127,10 @@ fn controls_are_typed_timestamped_and_reported_in_status() {
 fn events_cancel_takes_back_waiting_tagged_events() {
     let (mut d, c) = ready();
     define(&mut d, c, &SETUP.replace("\\n", "\n"));
-    let note = |tag: &str, at: &str| json!({"op": "note", "target": "lead", "at": at, "dur": "0.1sec", "args": {"freq": "a4"}, "tag": tag});
-    let sent = call(&mut d, c, 3, "events.send", json!({"events": [note("a", "1sec"), note("a", "2sec"), note("b", "2sec")]}));
+    let note = |tag: &str, at: u64| json!({"op": "note", "target": "lead", "at": at, "dur": "0.1sec", "args": {"freq": "a4"}, "tag": tag});
+    let sent = call(&mut d, c, 3, "events.send", json!({"events": [note("a", 48000), note("a", 96000), note("b", 96000)]}));
     assert_eq!(sent["result"]["accepted"], 3);
-    let cancelled = call(&mut d, c, 4, "events.cancel", json!({"tag": "a", "from": "1.5sec"}));
+    let cancelled = call(&mut d, c, 4, "events.cancel", json!({"tag": "a", "from": 72000}));
     assert_eq!(cancelled["result"], json!({"cancelled": 1, "released": 0}));
     let all = call(&mut d, c, 5, "events.cancel", json!({}));
     assert_eq!(all["result"]["cancelled"], 2);
@@ -145,14 +145,15 @@ fn clock_and_status_describe_the_engine_and_define_goes_through_events_send() {
     define(&mut d, c, &SETUP.replace("\\n", "\n"));
     let clock = call(&mut d, c, 3, "clock", json!({}));
     let result = &clock["result"];
-    assert_eq!((result["bpm"].as_f64(), result["beats_per_bar"].as_f64(), result["sample"].as_u64()), (Some(120.0), Some(4.0), Some(0)));
+    assert_eq!(result["sample"], 0);
+    for field in ["bpm", "beats_per_bar", "bar", "beat"] { assert!(result.get(field).is_none()); }
     assert!(result["wall_micros"].is_null() && result["sample_rate"].is_number());
 
     let sent = call(&mut d, c, 4, "events.send", json!({"events": [
-        {"op": "define", "at": "1beat", "source": "instr extra(freq: hz, cut: hz = 1khz) { osc(saw, freq) }"},
-        {"op": "transport", "at": "2beat", "bpm": 90},
+        {"op": "define", "at": 24000, "source": "instr extra(freq: hz, cut: hz = 1khz) { osc(saw, freq) }"},
+
     ]}));
-    assert_eq!(sent["result"]["accepted"], 2);
+    assert_eq!(sent["result"]["accepted"], 1);
     let bad = call(&mut d, c, 5, "events.send", json!({"events": [{"op": "define", "at": "now", "source": "lead.play([c4])"}]}));
     assert_eq!(bad["error"]["code"], -32001);
     assert_eq!(bad["error"]["data"]["problems"][0]["event"], 0);
@@ -162,7 +163,7 @@ fn clock_and_status_describe_the_engine_and_define_goes_through_events_send() {
     let instruments = status["result"]["instruments"].as_array().unwrap();
     let extra = instruments.iter().find(|i| i["name"] == "extra").expect("the defined instrument");
     assert_eq!(extra["params"][1]["name"], "cut");
-    assert_eq!(call(&mut d, c, 7, "clock", json!({}))["result"]["bpm"], 90.0);
+    assert_eq!(call(&mut d, c, 7, "clock", json!({}))["result"]["sample"], 96_000);
 }
 
 #[test]
@@ -171,7 +172,7 @@ fn local_and_network_clients_keep_their_own_notifications() {
     let local = server.connect_local();
     call(&mut server, local, 1, "hello", json!({"protocol": PROTOCOL_VERSION}));
     for client in [local, network] {
-        call(&mut server, client, 2, "subscribe", json!({"topics": ["transport"]}));
+        call(&mut server, client, 2, "subscribe", json!({"topics": ["clock"]}));
     }
     let local_messages = server.notifications_for(local);
     assert_eq!(local_messages.len(), 1);
@@ -189,4 +190,43 @@ fn local_and_network_clients_keep_their_own_notifications() {
     assert_eq!(local_messages[0].0, local);
     assert!(server.notifications().is_empty());
     assert!(server.notifications_for(local).is_empty());
+}
+
+#[test]
+fn musical_time_and_composition_are_rejected_at_the_engine_boundary() {
+    let (mut d, c) = ready();
+    define(&mut d, c, SETUP);
+    for at in [json!("1beat"), json!("2bar"), json!("1sec"), json!(-1), json!(0.5)] {
+        let reply = call(&mut d, c, 3, "events.send", json!({"events": [{"op":"note", "target":"lead", "at":at, "dur":"100ms"}]}));
+        assert_eq!(reply["error"]["code"], -32602, "{reply}");
+    }
+    for source in [
+        "tempo 90bpm", "meter 3/4", "clip riff { notes: [c4] }", "scene verse { lead: ~ }",
+        "arrangement song { sections: [] }", "p = [c4 e4]", "def riff() { [c4] }",
+        "track lead { instrument = pluck\nnotes = it.reverse }",
+        "instr x() with(quantize: 1bar) { 0 }", "config { quantize: { default: 1bar } }",
+        "ctl x = midi.cc(7).range(0..1)", "instr x() { osc(sine, 100hz) * env[1 | 1beat 0] }",
+        "instr x() { clock.beat }",
+    ] {
+        let reply = call(&mut d, c, 4, "events.send", json!({"events": [{"op":"define", "source":source, "at":"now"}]}));
+        assert_eq!(reply["error"]["code"], -32001, "{source}: {reply}");
+    }
+    for dur in ["1beat", "2bars"] {
+        let reply = call(&mut d, c, 5, "events.send", json!({"events": [{"op":"note", "target":"lead", "at":100, "dur":dur}]}));
+        assert_eq!(reply["error"]["code"], -32001, "{reply}");
+    }
+    let reply = call(&mut d, c, 6, "events.send", json!({"events": [{"op":"transport", "at":0, "bpm":90}]}));
+    assert_eq!(reply["error"]["code"], -32601);
+    assert_eq!(d.session().waiting_changes(), 0);
+}
+
+#[test]
+fn dsp_clock_time_is_absolute_and_sample_accurate() {
+    let (mut d, c) = ready();
+    define(&mut d, c, "instr seconds() with(tail: 0ms) { clock.time / 1sec }");
+    let sent = call(&mut d, c, 2, "events.send", json!({"events": [{"op":"note", "target":"seconds", "at":2400, "dur":"100ms"}]}));
+    assert_eq!(sent["result"]["accepted"], 1);
+    let audio = d.session_mut().process(6000).remove(0);
+    assert!(audio[..2400].iter().all(|v| *v == 0.0));
+    for i in [2400, 2401, 3000, 5999] { assert!((audio[i] - i as f32 / SR).abs() < 1e-6); }
 }

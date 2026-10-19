@@ -3,7 +3,7 @@ title: Sequencer protocol
 description: JSON-RPC 2.0 over WebSocket for live evaluation, clips and scenes, and the state of a live session.
 ---
 
-`niminal daemon` is the generic sound server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which turns them into timestamped engine events.
+`niminal daemon` is the generic sound server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which owns tempo, meter and musical position and turns them into events stamped in absolute samples.
 
 VS Code starts and owns a private `niminal live --port 0 --parent-stdio` process, connected to the configured daemon. Closing the editor stops its sequencer. For terminal use, start `niminal live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the daemon. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
 
@@ -31,7 +31,7 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
   "id": 1,
   "method": "hello",
   "params": {
-    "protocol": 1,
+    "protocol": 2,
     "client": "my-app",
     "token": "optional-if-daemon-requires-it"
   }
@@ -42,14 +42,14 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
 
 ```json
 {
-  "protocol": 1,
+  "protocol": 2,
   "sample_rate": 48000,
   "channels": 2,
   "topics": ["landed", "pending", "transport", "meters", "notices", "learned"]
 }
 ```
 
-**`protocol`** must be **`1`** (`PROTOCOL_VERSION` in the daemon). A mismatch returns error code **-32000**.
+**`protocol`** must be **`2`** (`PROTOCOL_VERSION` in the daemon). A mismatch returns error code **-32000**.
 
 ## Subscriptions
 
@@ -179,8 +179,8 @@ The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%
 ## Minimal client flow
 
 ```json
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":1,"client":"example"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"sample_rate":48000,"channels":2,"topics":[...]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":2,"client":"example"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"sample_rate":48000,"channels":2,"topics":[...]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"subscribe","params":{"topics":["landed","pending","transport"]}}
 ← {"jsonrpc":"2.0","id":2,"result":{"topics":["landed","pending","transport"]}}

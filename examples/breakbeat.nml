@@ -1,26 +1,26 @@
-// Chopping a break. The one-bar loop in break.wav is cut into 16 slices (s0..s15),
-// one per sixteenth, so any order you write plays on the grid at your tempo.
-// Change the tempo line and the break follows it.
-// Render with:  niminal render examples/breakbeat.nml --out breakbeat.wav --bars 4
-config { channels: stereo }
-tempo 130bpm
+  // Chopping a break. The one-bar loop in break.wav is cut into 16 slices (s0..s15),
+  // one per sixteenth, so any order you write plays on the grid at your tempo.
+  // Change the tempo line and the break follows it.
+  // Render with:  niminal render examples/breakbeat.nml --out breakbeat.wav --bars 4
+  config { channels: stereo }
+  tempo 130bpm
 
-// the loop is four beats long and was recorded at 100bpm; `fit: rate` speeds it up to the tempo
-sample brk = "break.wav" with(beats: 4, fit: rate)
-kit chops = brk.slices(16)
-track drums { instrument = chops }
+  // the loop is four beats long and was recorded at 100bpm; `fit: rate` speeds it up to the tempo
+  sample brk = "break.wav" with(beats: 4, fit: rate)
+  kit chops = brk.slices(16)
+  track drums { instrument = chops }
 
-// the original order plays the break as recorded
-drums.play([s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15])
+  // the original order plays the break as recorded
+  drums.play([s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15])
 
-// ...and rearranged as a grid: a row per slice, a column per sixteenth. Move the x's to
-// re-cut the break; rows play together, so slices can overlap. Edit this and evaluate it
-// while the first plays. `X` is an accent and `o` a ghost note; to cut one slice off when
-// another hits, add `with(choke: g(s4, s12))` to the kit line
-drums.play(grid {
-  s0:  x... .... x... ....
-  s4:  .... x... .... x..x
-  s2:  ..x. ..o. ..X. ....
-  s12: .... .... .... ..x.
-  s9:  .... .... ...x ....
-})
+  // ...and rearranged as a grid: a row per slice, a column per sixteenth. Move the x's to
+  // re-cut the break; rows play together, so slices can overlap. Edit this and evaluate it
+  // while the first plays. `X` is an accent and `o` a ghost note; to cut one slice off when
+  // another hits, add `with(choke: g(s4, s12))` to the kit line
+  drums.play(grid {
+    s0:  x... .... x... ....
+    s4:  .... x... .... x..x
+    s2:  ..x. ..o. ..X. ....
+    s12: .... .... .... ..x.
+    s9:  .... .... ...x ....
+  })

@@ -11,14 +11,14 @@ niminal is a modern Csound: a deep audio language for building instruments and p
 - **Deep:** write DSP from scratch with stateful opcodes, build instruments from them, and generate music in code. Nothing is limited to a fixed menu of primitives.
 - **Explicit:** named arguments, typed parameters and units. No positional mystery arguments, no p-fields.
 - **Readable at length:** a score for a seven-minute piece stays navigable through sections, functions and a notation suited to each passage.
-- **Open score:** the engine understands a score model, not one syntax. niminal's notations, a Python script, a tracker client or a MIDI file all produce it.
+- **Open engine:** the daemon accepts DSP definitions and timestamped events. Each client owns its notation, composition model and musical scheduling.
 - **Live supported:** code can be re-evaluated while playing without glitches, and changes land on musical boundaries.
 
 ### Layers
 
 &#91;embedded content: niminal's layers · four front-ends, one score model, one engine\]
 
-The orchestra is the niminal language. The score model is data, so any front-end can write it. The performance layer (tracks, clips and scenes) sits on top for live work, and the engine runs everything, either as a live daemon or as an offline renderer.
+The orchestra is the DSP language. The sound server accepts DSP definitions and events stamped in absolute samples, with durations in seconds. It has no clips, scenes, arrangements, patterns, tempo, meter or musical origin. Clients own those concepts and convert them into engine events. The text-based live sequencer is one such client; a tracker can use the engine independently. The score model described below belongs to the composition tools, rather than the sound-server protocol. Live and offline rendering use the same engine.
 
 ### Influences
 
@@ -651,7 +651,7 @@ Deliberate tools for writing, not random generators: `in_scale(minor, root: c3)`
 
 niminal ships these as references. Each owns its notation and produces score-model sections, sent over the protocol or saved as `.nms` files and loaded with `load(...)`. Anyone can write others.
 
-**Python.** The `niminal` package builds score-model objects and sends them to a daemon. It covers the whole protocol: loading sections, launching, streaming events, setting ctl values and subscribing to transport. Validation errors come back as exceptions with the same messages as niminal code.
+**Python.** The `niminal` package provides a generic engine client and a separate live-sequencer client. Composition objects, launching and musical transport belong to the latter; direct engine clients submit sample-stamped events and physical durations. Validation errors come back as exceptions with the same messages as niminal code.
 
 ```python
 from niminal import Session, Section
@@ -866,7 +866,7 @@ pad.start
 
 ## Engine and architecture
 
-Client/server. The daemon owns the session and does all compilation; clients are thin and only send messages, so they can run anywhere, including an iOS app controlling a more powerful machine. Live and offline share the same crates, so they sound identical.
+Client/server. The daemon compiles DSP definitions and executes events against its sample clock. Clients compile and schedule their own musical models, sending events ahead of playback and cancelling/replacing their pending events when edits change the timing. The engine never retimes accepted events. Live and offline share the same DSP runtime.
 
 ### Components
 
@@ -875,7 +875,8 @@ Client/server. The daemon owns the session and does all compilation; clients are
 | `niminal-lang` | Parser, type and unit checker, desugaring to a dataflow graph and to the score model |
 | `niminal-score` | The score model: events, lanes, sections, arrangements, JSON and `.nms` files |
 | `niminal-engine` | DSP runtime: graph execution, opcodes, voice pools, buses |
-| `niminal-daemon` | Session, clock, audio device, protocol, file watching, evaluation log |
+| `niminal-daemon` | Generic sound server: DSP definitions, sample clock, timestamped events and engine log |
+| `niminal-live` | Client-owned composition, clips, scenes, arrangements, tempo, meter, quantization and scheduling |
 | `niminal-lsp` | Language server: diagnostics, autocomplete, hover docs |
 | `niminal-cli` | `niminal daemon`, `niminal render`, `niminal lsp` |
 | `niminal` (Python) | Client library for the score model and the protocol |

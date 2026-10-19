@@ -22,3 +22,13 @@ fn a_clip_plays_through_the_engine() {
     assert!(peak(&out[..2_000]) > 0.1, "the first note");
     assert!(peak(&out[24_000..26_000]) > 0.1, "the second");
 }
+
+#[test]
+fn breakbeat_example_produces_audio_when_evaluated_live() {
+    let mut s = Offline::new(48_000.0, Layout::Stereo).without_limiter();
+    s.set_sample_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples"));
+    s.eval(include_str!("../../../examples/breakbeat.nml"), Some("now")).unwrap();
+    let out = s.process(96_000);
+    let notices = s.take_notices();
+    assert!(peak(&out[0]) > 0.1, "breakbeat is silent: {notices:?}");
+}

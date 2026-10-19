@@ -1,4 +1,4 @@
-//! Changes of definitions and of the transport, waiting for the sample they land at.
+//! Changes of definitions, waiting for the sample they land at.
 //!
 //! Each is compiled when it is sent, on top of the changes waiting before it, and the mixer for the
 //! program it makes is built then too, so that landing only has to move things into place. A change that
@@ -9,11 +9,8 @@ use super::*;
 /// What a change sent to the engine is allowed to say.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum What {
-    /// Instruments, tracks, effects, buses, controls, tables, buffers, functions: anything defined except the
-    /// tempo and meter.
+    /// DSP definitions only.
     Definitions,
-    /// The tempo and meter.
-    Timing,
     /// `new`.
     Forget,
 }
@@ -23,10 +20,7 @@ pub(super) enum What {
 pub(super) struct Meta {
     pub client: Option<ClientId>,
     pub tag: Option<String>,
-    /// Given in beats (`Some(false)`) or bars (`Some(true)`), so it moves when the tempo or meter does.
-    pub musical: Option<bool>,
-    /// This point is bar 1.
-    pub origin: bool,
+
 }
 
 /// A change that has compiled and is waiting to land.
@@ -90,24 +84,6 @@ impl Session {
         Ok(id)
     }
 
-    /// Queue a change that only says that a point is bar 1.
-    pub(super) fn queue_origin(&mut self, at: u64, meta: Meta) -> Result<u64, Vec<Problem>> {
-        let at = at.max(self.clock);
-        let index = self.pending.partition_point(|p| p.lands_at <= at);
-        let project = match index.checked_sub(1) {
-            Some(i) => self.pending[i].project.clone(),
-            None => self.project.clone(),
-        };
-        let id = self.next_id;
-        self.next_id += 1;
-        self.pending.insert(
-            index,
-            Pending { id, lands_at: at, snippet: String::new(), statements: Vec::new(), project, program: None, mixer: None, meta },
-        );
-        self.version += 1;
-        Ok(id)
-    }
-
     /// Take a waiting change back. What was waiting after it is compiled again.
     pub(super) fn cancel_change(&mut self, id: u64) -> bool {
         let Some(index) = self.pending.iter().position(|p| p.id == id) else {
@@ -131,6 +107,12 @@ impl Session {
             Ok(expanded) => (expanded.text.clone(), Some(Uses { expanded, sent: source.to_string() })),
             Err(d) => return Err(vec![Problem::from_diagnostic(&d, source, Located::Snippet(d.span))]),
         };
+        if what == What::Definitions {
+            niminal_lang::validate_dsp(&text).map_err(|d| {
+                let problems = vec![Problem::from_diagnostic(&d, &text, Located::Snippet(d.span))];
+                match &uses { Some(u) => u.locate(problems), None => problems }
+            })?;
+        }
         let statements = analyze(&text).map_err(|d| {
             let problems = vec![Problem::from_diagnostic(&d, &text, Located::Snippet(d.span))];
             match &uses {
@@ -144,13 +126,12 @@ impl Session {
         for statement in &statements {
             let kind = statement.key().map(|k| k.split(':').next().unwrap_or(k));
             let allowed = match what {
-                What::Definitions => kind.is_some_and(|k| !matches!(k, "tempo" | "meter")),
-                What::Timing => matches!(kind, Some("tempo" | "meter")),
+                What::Definitions => kind.is_some_and(|k| matches!(k, "instr" | "fn" | "const" | "ctl" | "bus" | "buffer" | "track" | "sample" | "kit" | "config")),
                 What::Forget => statement.clears(),
             };
             if !allowed {
                 let mut problem = Problem::plain(format!(
-                    "`{}` can't be sent here: `define` takes definitions such as instruments, tracks, effects, buses and controls, and `transport` the tempo and meter",
+                    "`{}` can't be sent here: `define` takes definitions such as instruments, tracks, effects, buses and controls, musical structure and timing belong to the client",
                     first_line(&statement.text)
                 ));
                 problem.span = Some(niminal_lang::Span::new(statement.offset, statement.offset + statement.text.len()));

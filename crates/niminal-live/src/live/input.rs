@@ -225,7 +225,7 @@ impl Live {
             ops.push(Op::Note {
                 target: event.target.clone(),
                 at: At::Sample(start),
-                args: event.args.clone(),
+                args: event.args.iter().map(|(n,v)| (n.clone(), niminal_lang::dsp_value(*v, self.program.tempo))).collect(),
                 dur: None,
                 id: Some(id),
                 tag: None,

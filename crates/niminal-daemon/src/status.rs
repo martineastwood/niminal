@@ -4,12 +4,12 @@ use serde_json::{Value, json};
 
 use crate::session::Session;
 
-/// The engine's state: transport, definitions with their parameters, controls, realtime health and, for each
+/// The engine's state: clock, definitions with their parameters, controls, realtime health and, for each
 /// client, its held notes and how many of its events are waiting.
 pub fn status_json(session: &Session) -> Value {
     let (instruments, tracks, buses) = session.definitions();
     json!({
-        "transport": transport_json(session),
+        "clock": state_json(session),
         "sample_rate": session.sample_rate(),
         "channels": session.channels(),
         "realtime": session.realtime_metrics().map(|m| json!({
@@ -43,10 +43,9 @@ pub fn status_json(session: &Session) -> Value {
     })
 }
 
-fn transport_json(session: &Session) -> Value {
-    let t = session.transport();
+fn state_json(session: &Session) -> Value {
+    let t = session.state();
     json!({
-        "sample": t.sample, "seconds": t.seconds, "bar": t.bar, "beat": t.beat,
-        "bpm": t.bpm, "voices": t.voices,
+        "sample": t.sample, "seconds": t.seconds, "voices": t.voices,
     })
 }

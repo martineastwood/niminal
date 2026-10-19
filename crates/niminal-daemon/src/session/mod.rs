@@ -1,9 +1,9 @@
 //! The engine: a running mixer that timestamped events are sent to.
 //!
-//! A client sends notes, parameter changes, control changes, definitions, tempo changes and releases, each
-//! stamped with the sample or the musical position it is for, and the engine plays them. It knows nothing of
+//! A client sends notes, parameter changes, control changes, definitions and releases, each
+//! stamped with the absolute sample it is for, and the engine plays them. It knows nothing of
 //! clips, scenes, patterns or when a change should wait for a bar line: those are for the client to work
-//! out. Changes of definitions and of the transport compile when they are sent and land at the sample they
+//! out. Changes of definitions compile when they are sent and land at the sample they
 //! name; everything else is put in a queue or in the window being prepared.
 //!
 //! The session is driven by a sample clock rather than a real one, so it is deterministic: the same inputs
@@ -16,14 +16,13 @@ use std::sync::{
 };
 
 use niminal_engine::{BLOCK, DEFAULT_CEILING, DEFAULT_MAX_VOICES, MAX_CHANNELS, Master, Mixer, Transfer};
-use niminal_lang::{CompileOptions, Expanded, Layout, Program, Samples, Statement, StatementKind, analyze, compile_with};
-use niminal_score::{Event, Tempo, Time, Value};
+use niminal_lang::{CompileOptions, Expanded, Layout, Program, Samples, Statement, StatementKind, analyze, compile_dsp_with as compile_with};
+use niminal_score::{Event, Time, Value};
 
 use crate::engine_server::ClientId;
 use crate::events::{At, Cancelled, Op, Sent};
-use crate::grid::Grid;
 use crate::log::{LogEntry, LogInput};
-use crate::project::{Entry, Located, Problem, Project};
+use niminal_lang::{Entry, Located, Problem, Project};
 use crate::sounding::Sounding;
 
 /// How many MIDI messages are kept waiting to be taken, at most.
@@ -43,8 +42,6 @@ struct Upcoming {
     /// The client that sent it, if one did, and the tag it gave.
     client: Option<ClientId>,
     tag: Option<String>,
-    /// Given in beats (`Some(false)`) or bars (`Some(true)`): it moves when the tempo or meter does.
-    musical: Option<bool>,
 }
 
 /// A note a client holds open or may change, by the id the client chose.
@@ -147,11 +144,6 @@ use definitions::{Meta, Pending, What, options};
 pub struct ClockInfo {
     /// The sample the output is at, as its audio callback last said; the render clock if it hasn't.
     pub sample: u64,
-    pub bar: u64,
-    /// The beat in the bar, counting from 1, fractions included.
-    pub beat: f64,
-    pub bpm: f64,
-    pub beats_per_bar: f64,
     pub sample_rate: f32,
     /// The sample up to which audio has been prepared.
     pub prepared_until: u64,
@@ -167,12 +159,9 @@ pub struct ClockInfo {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Transport {
+pub struct EngineState {
     pub sample: u64,
     pub seconds: f64,
-    pub bar: u64,
-    pub beat: f64,
-    pub bpm: f64,
     pub voices: usize,
     pub pending: usize,
 }
@@ -193,8 +182,6 @@ pub struct Session {
     samples: Samples,
     sample_dirs: Vec<std::path::PathBuf>,
     clock: u64,
-    /// When bar 1 is, in seconds: where the last `origin` landed.
-    origin: f64,
 
     project: Project,
     program: Arc<Program>,
@@ -205,7 +192,7 @@ pub struct Session {
     /// Sounding notes: when each is released, and the key holding it open (or `NO_KEY`).
     sounding: Sounding,
 
-    /// Changes of definitions and of the transport, waiting to land.
+    /// Changes of definitions, waiting to land.
     pending: Vec<Pending>,
     next_id: u64,
     notices: Vec<String>,
@@ -255,7 +242,6 @@ impl Session {
             midi_out: Vec::new(),
             sample_dirs: Vec::new(),
             clock: 0,
-            origin: 0.0,
             project: Project::default(),
             program: Arc::new(program),
             mixer,
@@ -349,15 +335,6 @@ impl Session {
             .unwrap_or(&self.program)
     }
 
-    fn grid(&self) -> Grid {
-        Grid {
-            sample_rate: f64::from(self.sample_rate),
-            bpm: self.program.tempo.bpm,
-            beats_per_bar: self.program.tempo.beats_per_bar,
-            origin: (self.origin * f64::from(self.sample_rate)).round() as i64,
-        }
-    }
-
     fn seconds(&self, sample: u64) -> f64 {
         sample as f64 / f64::from(self.sample_rate)
     }
@@ -430,20 +407,14 @@ impl Session {
         self.sync_realtime();
         let probe = self.probe.read();
         let sample = probe.map_or(self.clock, |(sample, ..)| sample);
-        let grid = self.grid();
-        let (bar, beat) = grid.position(sample);
         ClockInfo {
             sample,
-            bar,
-            beat,
-            bpm: grid.bpm,
-            beats_per_bar: grid.beats_per_bar,
             sample_rate: self.sample_rate,
             prepared_until: self.prepared_until(),
             lookahead: self.live.as_ref().map_or(0, |p| p.lookahead()),
             output_latency: probe.map_or(0.0, |(_, _, micros)| micros as f64 / 1e6),
             wall_micros: probe.map(|(_, wall, _)| wall),
-            voices: self.transport().voices,
+            voices: self.state().voices,
         }
     }
 
@@ -482,20 +453,15 @@ impl Session {
             .collect()
     }
 
-    /// How many changes of definitions or of the transport are waiting to land.
+    /// How many changes of definitions are waiting to land.
     pub fn waiting_changes(&self) -> usize {
         self.pending.len()
     }
 
-    pub fn transport(&self) -> Transport {
-        let grid = self.grid();
-        let (bar, beat) = grid.position(self.clock);
-        Transport {
+    pub fn state(&self) -> EngineState {
+        EngineState {
             sample: self.clock,
             seconds: self.seconds(self.clock),
-            bar,
-            beat,
-            bpm: grid.bpm,
             voices: self.live.as_ref().map_or_else(|| self.mixer.active_voices(), |p| p.state.voices.load(Ordering::Relaxed)),
             pending: self.pending.len(),
         }
@@ -567,21 +533,10 @@ impl Session {
 
     fn land(&mut self, p: Pending) {
         self.version += 1;
-        let at = self.clock;
-        let Pending { id, statements, project, program, mixer, meta, .. } = p;
+        let Pending { id, statements, project, program, mixer, .. } = p;
 
         if let (Some(program), Some(mixer)) = (program, mixer) {
-            let now = self.seconds(at);
-            let (old, new) = (self.program.tempo, program.tempo);
-            retime(&mut self.origin, now, old, new);
-            let mut pending = std::mem::take(&mut self.pending);
-            rescale_pending(&mut pending, at, old, new);
-            self.pending = pending;
-            rescale_notes(&mut self.upcoming, at, old, new);
             self.swap_program(project, program, mixer, &statements, id);
-        }
-        if meta.origin {
-            self.origin = self.seconds(at);
         }
     }
 
@@ -712,12 +667,7 @@ impl Session {
                 self.mixer
                     .set_audio_input(c, &samples[from..(from + n).min(samples.len())]);
             }
-            let grid = self.grid();
-            self.mixer.set_clock(niminal_engine::Clock {
-                beat: grid.beats(self.clock),
-                bpm: grid.bpm as f32,
-                beats_per_bar: grid.beats_per_bar as f32,
-            });
+            self.mixer.set_clock(niminal_engine::Clock { sample: self.clock });
             self.mixer.process(&mut block[..channels], n);
             self.silenced += self.mixer.take_silenced();
             if let Some(limiter) = &mut self.limiter {
@@ -921,22 +871,6 @@ impl Session {
     }
 }
 
-/// Where a change that waits for a boundary lands once the tempo or meter has changed at `now`: the same
-/// number of bars (or beats) on. Changes that are themselves a tempo or meter keep their time, as the steps
-/// of a ramp are spaced by the tempo they pass through.
-pub(super) fn rescale_landing(lands_at: u64, now: u64, factor: f64) -> u64 {
-    now + (lands_at.saturating_sub(now) as f64 * factor).round() as u64
-}
-
-/// How much longer a bar (`by_bar`) or a beat gets when the tempo or meter changes from `old` to `new`.
-pub(super) fn landing_factor(by_bar: bool, old: Tempo, new: Tempo) -> f64 {
-    if by_bar {
-        (new.beats_per_bar / new.bpm) / (old.beats_per_bar / old.bpm)
-    } else {
-        old.bpm / new.bpm
-    }
-}
-
 /// Which running voices and effect chains the new program's tracks take over from the old one's.
 pub(super) fn plan_transfers(old: &Program, new: &Program, out: &mut Vec<Transfer>) {
     out.clear();
@@ -961,47 +895,6 @@ pub(super) fn carry_buffers(old: &Program, new: &Program) {
     }
 }
 
-/// Notes given in beats or bars that are still to start keep their musical position when the tempo or
-/// meter changes at `now`.
-fn rescale_notes(upcoming: &mut VecDeque<Upcoming>, now: u64, old: Tempo, new: Tempo) {
-    if old == new {
-        return;
-    }
-    for note in upcoming.iter_mut().filter(|u| u.start > now) {
-        if let Some(by_bar) = note.musical {
-            note.start = rescale_landing(note.start, now, landing_factor(by_bar, old, new));
-        }
-    }
-    upcoming.make_contiguous().sort_by_key(|u| u.start);
-}
-
-
-
 /// The most notices that wait to be collected, and how long before the same one is said again.
 const MAX_NOTICES: usize = 100;
 const NOTICE_REPEAT_SECONDS: u64 = 10;
-
-fn is_timing(p: &Pending) -> bool {
-    p.statements.iter().any(|s| matches!(s.key(), Some("tempo" | "meter")))
-}
-
-fn rescale_pending(pending: &mut [Pending], now: u64, old: Tempo, new: Tempo) {
-    if old == new {
-        return;
-    }
-    for p in pending.iter_mut().filter(|p| !is_timing(p)) {
-        let by_bar = p.meta.musical.unwrap_or(false);
-        p.lands_at = rescale_landing(p.lands_at, now, landing_factor(by_bar, old, new));
-    }
-    pending.sort_by_key(|p| p.lands_at);
-}
-
-/// A tempo or meter change moves the bar lines, which keeps the bar and beat that `now` is at: what is
-/// still to come is stretched around `now`.
-fn retime(origin: &mut f64, now: f64, old: Tempo, new: Tempo) {
-    let (was, is) = (old.beats_per_bar / old.bpm, new.beats_per_bar / new.bpm);
-    if was == is {
-        return;
-    }
-    *origin = now + (*origin - now) * (is / was);
-}

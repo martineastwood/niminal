@@ -8,8 +8,7 @@ use crate::events::Op;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogInput {
-    /// A batch of events a client sent, with every time resolved to a sample (or kept as a position in beats
-    /// or bars, which the transport resolves the same way again).
+    /// A batch of events a client sent, with every timestamp resolved to a sample.
     Send { client: u64, ops: Vec<Op> },
     /// A client took back its waiting events.
     CancelEvents {

@@ -13,8 +13,6 @@ pub enum At {
     Sample(u64),
     /// As soon as possible.
     Now,
-    /// A position on the transport, measured from its bar origin: `"32beat"`, `"8.5bar"`, `"12.25sec"`.
-    Time(Time),
 }
 
 impl<'de> Deserialize<'de> for At {
@@ -26,11 +24,7 @@ impl<'de> Deserialize<'de> for At {
                 .map(At::Sample)
                 .ok_or_else(|| de::Error::custom("`at` as a number is a whole sample count")),
             serde_json::Value::String(s) if s == "now" => Ok(At::Now),
-            serde_json::Value::String(s) => s
-                .parse::<Time>()
-                .map(At::Time)
-                .map_err(|e| de::Error::custom(format!("`at` should be a sample, \"now\" or a time such as \"32beat\": {e}"))),
-            _ => Err(de::Error::custom("`at` should be a sample, \"now\" or a time such as \"32beat\"")),
+            _ => Err(de::Error::custom("`at` must be an absolute sample count or \"now\"")),
         }
     }
 }
@@ -40,7 +34,6 @@ impl Serialize for At {
         match self {
             At::Sample(n) => s.serialize_u64(*n),
             At::Now => s.serialize_str("now"),
-            At::Time(t) => s.collect_str(t),
         }
     }
 }
@@ -99,19 +92,6 @@ pub enum Op {
         at: At,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dir: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tag: Option<String>,
-    },
-    /// Change the tempo or meter, or say that this point is bar 1.
-    Transport {
-        at: At,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        bpm: Option<f64>,
-        /// As `"3/4"`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        meter: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        origin: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },

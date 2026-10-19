@@ -23,6 +23,7 @@ Paths are resolved relative to the file that declares them (and the project when
 
 | Option | Effect |
 | --- | --- |
+| `duration: 2sec` | Physical target length for `fit: rate`; also available directly in DSP definitions |
 | `beats: N` | The loop is N beats long (needed for tempo sync) |
 | `fit: rate` | Speed the loop up or down so those beats match the current tempo |
 | `choke: group` | On a kit sample: starting this sample ends others in the group |
