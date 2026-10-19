@@ -167,13 +167,12 @@ pub fn dsp_source(source: &str, tempo: Tempo) -> Result<String, Diagnostic> {
                 for arg in sample.options.iter().rev() {
                     if let Some(name) = &arg.name
                         && name.name == "beats"
+                        && let ExprKind::Num { value, .. } = arg.value.kind
                     {
-                        if let ExprKind::Num { value, .. } = arg.value.kind {
-                            text.replace_range(
-                                name.span.start - span.start..arg.value.span.end - span.start,
-                                &format!("duration: {}sec", value * 60.0 / tempo.bpm),
-                            );
-                        }
+                        text.replace_range(
+                            name.span.start - span.start..arg.value.span.end - span.start,
+                            &format!("duration: {}sec", value * 60.0 / tempo.bpm),
+                        );
                     }
                 }
                 out.push(text);

@@ -33,14 +33,10 @@ impl Port {
 }
 
 /// Where the session's clock is at the start of a block.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Clock {
     /// Absolute sample at the start of this block.
     pub sample: u64,
-}
-
-impl Default for Clock {
-    fn default() -> Self { Clock { sample: 0 } }
 }
 
 /// What an opcode needs to know about the block being processed.
