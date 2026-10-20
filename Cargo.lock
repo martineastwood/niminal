@@ -694,25 +694,12 @@ dependencies = [
  "hound",
  "libc",
  "midir",
- "niminal-daemon",
  "niminal-engine",
  "niminal-lang",
  "niminal-score",
+ "niminal-server",
  "niminal-ws",
  "rtrb",
- "serde_json",
-]
-
-[[package]]
-name = "niminal-daemon"
-version = "0.0.1"
-dependencies = [
- "hound",
- "niminal-engine",
- "niminal-lang",
- "niminal-score",
- "rtrb",
- "serde",
  "serde_json",
 ]
 
@@ -741,10 +728,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "niminal-server"
+version = "0.0.1"
+dependencies = [
+ "hound",
+ "niminal-engine",
+ "niminal-lang",
+ "niminal-score",
+ "rtrb",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "niminal-ws"
 version = "0.0.1"
 dependencies = [
- "niminal-daemon",
+ "niminal-server",
  "serde_json",
  "tungstenite",
 ]

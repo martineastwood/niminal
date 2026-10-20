@@ -77,7 +77,7 @@ Signals carry a layout in their type: `mono`, `stereo`, `quad`, `surround(5.1)`,
 - Master layout: `config { channels: surround(5.1) }` (or `stereo`, `quad`, `surround(7.1)`, `mono`, `channels(N)`). A project has only one `config`; `channels` is the only setting today.
 - Convert explicitly with **`.to_layout(stereo)`** (and other layouts) when a send or instrument layout must match a bus.
 
-The daemon’s `--channels` flag must match the layout you intend to hear (1, 2, 4, 6 for 5.1, or 8 for 7.1).
+The server’s `--channels` flag must match the layout you intend to hear (1, 2, 4, 6 for 5.1, or 8 for 7.1).
 
 ## Engine routing API
 

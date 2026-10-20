@@ -14,7 +14,7 @@ niminal-engine = { path = "../niminal-engine" }
 niminal-lang = { path = "../niminal-lang" }
 clap = { version = "4", features = ["derive"] }
 hound = "3"
-niminal-daemon = { path = "../niminal-daemon" }
+niminal-server = { path = "../niminal-server" }
 niminal-ws = { path = "../niminal-ws" }
 cpal = "0.18"
 serde_json = "1"

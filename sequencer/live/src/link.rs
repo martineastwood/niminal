@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use niminal_daemon::{ClientId, EngineError, EngineReply, EngineRequest, EngineServer, PROTOCOL_VERSION};
+use niminal_server::{ClientId, EngineError, EngineReply, EngineRequest, EngineServer, PROTOCOL_VERSION};
 use serde_json::Value;
 
 pub trait EngineLink: Send {

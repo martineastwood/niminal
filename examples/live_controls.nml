@@ -1,4 +1,4 @@
-// Run with: niminal daemon examples/live_controls.nml
+// Run with: niminal server examples/live_controls.nml
 // Send a control event (events.send) through the WebSocket client to turn cutoff or volume.
 config { channels: stereo }
 tempo 120bpm

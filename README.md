@@ -7,7 +7,7 @@ niminal is a sound server with its own DSP language, in the way scsynth is a sou
 `nimlive` is the first client: a live-coding sequencer (the text-based Ableton) that adds clips, scenes, mini-notation patterns, tempo and quantized changes on top, and a VS Code extension to drive it. A tracker or a richer UI would be other clients of the same API.
 
 ```
-crates/      the sound server (scsynth): engine, DSP language, daemon, `niminal`
+crates/      the sound server (scsynth): engine, DSP language, server, `niminal`
 sequencer/   a client (sclang and its patterns): the composition language, patterns, `nimlive`
 editors/     the VS Code extension, a client of `nimlive`
 clients/     JS and Python SDKs for the server's API
@@ -43,7 +43,7 @@ Open `saw_lead.nml` to see the language: tempo, instruments with units (`hz`, `d
 Start the sound server, then the live sequencer client:
 
 ```sh
-niminal daemon
+niminal server
 # in another terminal:
 nimlive live examples/groove.nml
 nimlive repl
@@ -57,17 +57,17 @@ Sessions are logged sample-accurately, so you can replay them:
 niminal replay ~/.niminal/sessions/<log> --out set.wav
 ```
 
-For MIDI / OSC controls, start the live client with `--midi` and/or `--osc-port` (see `examples/midi_osc.nml`). Use `--help` for flags (`niminal`: `daemon`, `replay`, `docs`; `nimlive`: `render`, `live`, `repl`, `send`, `lsp`).
+For MIDI / OSC controls, start the live client with `--midi` and/or `--osc-port` (see `examples/midi_osc.nml`). Use `--help` for flags (`niminal`: `server`, `replay`, `docs`; `nimlive`: `render`, `live`, `repl`, `send`, `lsp`).
 
 ## Editor
 
-The [VS Code / Cursor extension](editors/vscode/) adds syntax highlighting, diagnostics, and evaluate-while-playing against a running daemon. Install it from `editors/vscode` (see that folder’s README), run `niminal daemon`, the extension starts its own private live sequencer, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
+The [VS Code / Cursor extension](editors/vscode/) adds syntax highlighting, diagnostics, and evaluate-while-playing against a running server. Install it from `editors/vscode` (see that folder’s README), run `niminal server`, the extension starts its own private live sequencer, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
 
-The language server (`nimlive lsp`) works without a daemon for hover, completion, and errors.
+The language server (`nimlive lsp`) works without a server for hover, completion, and errors.
 
 ## What you get
 
-- **Live** — WebSocket daemon, REPL, `send`, and editor integration; quantize changes to musical time. The daemon is a sound server (the engine) with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
+- **Live** — WebSocket server, REPL, `send`, and editor integration; quantize changes to musical time. The server is a sound server (the engine) with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
 - **Frontend API** — Browser, Node and Python clients can own private DSP definitions, route and modulate processors, stream WAV files, inspect voice lifecycle and DSP reports, view waveform scopes, capture live output and run independent offline exports. See the [engine API](docs/src/content/docs/reference/engine-api.md) and [client examples](clients/examples/).
 - **Offline** — `nimlive render` renders a piece to audio; `niminal replay` plays a log of timestamped engine events (what scsynth calls non-real-time mode) to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
@@ -79,7 +79,7 @@ The language server (`nimlive lsp`) works without a daemon for hover, completion
 | Path | Purpose |
 | --- | --- |
 | `crates/niminal-cli` | `niminal` command-line tool |
-| `crates/niminal-daemon` | The engine: a sound server that plays events stamped in absolute samples |
+| `crates/niminal-server` | The engine: a sound server that plays events stamped in absolute samples |
 | `crates/niminal-live` | The live sequencer: clips, scenes, quantize, keyboards; a client of the engine's API |
 | `crates/niminal-*` | Language, DSP, LSP, and related libraries |
 | `examples/` | Example `.nml` pieces |
@@ -88,7 +88,7 @@ The language server (`nimlive lsp`) works without a daemon for hover, completion
 
 ## Feedback
 
-Issues and experiments are welcome while the project is in alpha. If something breaks, a minimal `.nml` file and what you ran (`render`, `daemon`, etc.) helps a lot.
+Issues and experiments are welcome while the project is in alpha. If something breaks, a minimal `.nml` file and what you ran (`render`, `server`, etc.) helps a lot.
 
 ## License
 

@@ -1,6 +1,6 @@
 //! The engine's `events.send`: each op, validation, late events and replay.
 
-use niminal_daemon::{At, Op, Session};
+use niminal_server::{At, Op, Session};
 mod support;
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};

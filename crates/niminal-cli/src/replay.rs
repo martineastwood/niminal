@@ -1,6 +1,6 @@
 //! Pieces of the commands that don't need a terminal: choosing a layout, and replaying a log to audio.
 
-use niminal_daemon::{LogEntry, Session};
+use niminal_server::{LogEntry, Session};
 use niminal_lang::Layout;
 
 use crate::render::SAMPLE_RATE;

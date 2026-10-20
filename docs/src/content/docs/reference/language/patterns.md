@@ -3,7 +3,7 @@ title: Patterns
 description: Mini-notation, grids, and pattern transforms.
 ---
 
-The daemon evaluates **mini-notation** and **grids** itself for endless live patterns and clip lanes. Finite event lists from outside niminal use [`.nms` scores](/reference/score-model/).
+The server evaluates **mini-notation** and **grids** itself for endless live patterns and clip lanes. Finite event lists from outside niminal use [`.nms` scores](/reference/score-model/).
 
 ## Shared symbols
 

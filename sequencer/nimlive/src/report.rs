@@ -1,6 +1,6 @@
 //! Problems in source code as text, in the same style as compile errors.
 
-use niminal_daemon::Problem;
+use niminal_server::Problem;
 use serde_json::Value;
 
 /// A problem in `source` as text, in the same style as compile errors.
@@ -35,7 +35,7 @@ pub fn render_problems(problems: &[Problem], source: &str, name: &str) -> String
         .join("\n")
 }
 
-/// The problems in an error reply from the daemon, as text.
+/// The problems in an error reply from the server, as text.
 pub fn render_error(error: &Value, source: &str, name: &str) -> String {
     let problems = error["data"]["problems"].as_array();
     match problems {
@@ -58,6 +58,6 @@ pub fn render_error(error: &Value, source: &str, name: &str) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n"),
-        _ => format!("error: {}\n", error["message"].as_str().unwrap_or("the daemon refused that")),
+        _ => format!("error: {}\n", error["message"].as_str().unwrap_or("the server refused that")),
     }
 }

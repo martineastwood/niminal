@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 
-use niminal_daemon::ClientId;
+use niminal_server::ClientId;
 use niminal_ws::{Begun, Service};
 use serde_json::Value;
 

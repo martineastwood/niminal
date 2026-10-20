@@ -1,4 +1,4 @@
-use niminal_daemon::{RealtimeConfig, RealtimeRenderer, Session};
+use niminal_server::{RealtimeConfig, RealtimeRenderer, Session};
 mod support;
 use niminal_lang::Layout;
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
@@ -62,8 +62,8 @@ fn measured(r: &mut RealtimeRenderer, n: usize, out: &mut [f32]) {
     assert_eq!(FREES.with(Cell::get), 0, "render destroyed heap storage");
 }
 
-fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_daemon::Op> {
-    use niminal_daemon::{At, Op};
+fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_server::Op> {
+    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
     (0..count)
         .map(|i| Op::Note {
@@ -85,10 +85,10 @@ fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_daemon::Op> {
 /// Stream `events` in batches, each sent `ahead` frames before its first note, while the renderer plays.
 /// Returns the audio and what the renderer reported.
 fn stream_while_playing(
-    events: &[niminal_daemon::Op],
+    events: &[niminal_server::Op],
     ahead: u64,
     frames: usize,
-) -> (Vec<f32>, niminal_daemon::RenderMetrics) {
+) -> (Vec<f32>, niminal_server::RenderMetrics) {
     let mut s = session();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = vec![0.0; frames];
@@ -97,8 +97,8 @@ fn stream_while_playing(
         let clock = r.clock();
         while sent < events.len() {
             let start = match &events[sent] {
-                niminal_daemon::Op::Note {
-                    at: niminal_daemon::At::Sample(t),
+                niminal_server::Op::Note {
+                    at: niminal_server::At::Sample(t),
                     ..
                 } => *t,
                 _ => unreachable!(),
@@ -115,7 +115,7 @@ fn stream_while_playing(
     (out, r.metrics())
 }
 
-fn offline(events: &[niminal_daemon::Op], frames: usize) -> Vec<f32> {
+fn offline(events: &[niminal_server::Op], frames: usize) -> Vec<f32> {
     let mut s = session();
     s.send_events(0, events.to_vec()).unwrap();
     s.process(frames).remove(0)
@@ -144,8 +144,8 @@ fn streamed_notes_inside_the_prepared_region_cause_no_replanning() {
     assert_eq!(metrics.late_events, 0);
 }
 
-fn voice_script() -> Vec<(u64, niminal_daemon::Op)> {
-    use niminal_daemon::{At, Op};
+fn voice_script() -> Vec<(u64, niminal_server::Op)> {
+    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
     let held = |id, at: u64, hz, dur: Option<f64>| {
         (
@@ -241,8 +241,8 @@ fn held_notes_sets_and_offs_sound_the_same_prepared_as_offline_wherever_they_are
     }
 }
 
-fn bars(hz: f64, first: u32, count: u32, tag: &str) -> Vec<niminal_daemon::Op> {
-    use niminal_daemon::{At, Op};
+fn bars(hz: f64, first: u32, count: u32, tag: &str) -> Vec<niminal_server::Op> {
+    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
     (first * 4..(first + count) * 4)
         .map(|beat| Op::Note {
@@ -259,7 +259,7 @@ fn bars(hz: f64, first: u32, count: u32, tag: &str) -> Vec<niminal_daemon::Op> {
 
 #[test]
 fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_prepared_region() {
-    use niminal_daemon::At;
+    use niminal_server::At;
     const BAR: usize = 96_000;
     let frames = 4 * BAR;
 
@@ -294,7 +294,7 @@ fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_pr
 
 #[test]
 fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
-    use niminal_daemon::{At, Op};
+    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
     const SINE: &str =
         "instr organ(freq: hz, cut: hz = 100hz) { osc(sine, freq) * env[1 | 100ms 0] * 0.3 }";
@@ -363,7 +363,7 @@ fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
 
 #[test]
 fn a_timed_panic_sounds_the_same_prepared_as_offline() {
-    use niminal_daemon::{At, Op};
+    use niminal_server::{At, Op};
     let script = |at: u64| Op::Panic {
         at: At::Sample(at),
         tag: None,
@@ -399,7 +399,7 @@ fn a_timed_panic_sounds_the_same_prepared_as_offline() {
 
 #[test]
 fn instrument_scopes_and_buffer_events_allocate_nothing_while_rendering() {
-    use niminal_daemon::{At, Op};
+    use niminal_server::{At, Op};
     use niminal_score::Time;
     let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
     s.send_events(0, vec![Op::Define { source: "buffer data = zeros(4)\ninstr a() { oversample(4) { osc(sine, 440hz).tanh } + spawn(osc(square, 400hz), dur: 10ms, max: 8) { osc(sine, 220hz) * env[1 | 2ms 0] } + data[0] }".into(), at: At::Now, dir: None, tag: None }]).unwrap();
@@ -434,7 +434,7 @@ fn instrument_scopes_and_buffer_events_allocate_nothing_while_rendering() {
 
 #[test]
 fn rich_parameters_and_dynamic_mapping_allocate_nothing_on_audio() {
-    use niminal_daemon::{At, Op};
+    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
     let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
     s.send_events(0,vec![Op::Define{source:"buffer one = zeros(8)\nbuffer two = zeros(8)\nctl level = 0.25\ninstr a(weights: [num] = [0.1, 0.2], source: buffer = one, value: num = 0) { spawn(osc(square, 100hz), dur: 1ms) { oversample(4) { osc(sine, 440hz) * env[1 | 1ms 0] } } + weights.sum + source[0] + value }".into(),at:At::Now,dir:None,tag:None}]).unwrap();
@@ -497,7 +497,7 @@ fn rich_parameters_and_dynamic_mapping_allocate_nothing_on_audio() {
 
 #[test]
 fn routing_swaps_and_draining_held_voices_do_no_heap_work_in_the_renderer() {
-    use niminal_daemon::{At, Endpoint, Op, RoutingEdit as Edit};
+    use niminal_server::{At, Endpoint, Op, RoutingEdit as Edit};
     let session = || {
         let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
         s.send_events(
@@ -620,7 +620,7 @@ fn crossfades_and_actual_transaction_acknowledgements_do_no_heap_work_on_audio()
     use serde_json::json;
     let mut s = routing_session();
     let mut r = s.start_realtime(RealtimeConfig::default());
-    let ops: Vec<niminal_daemon::Op> = serde_json::from_value(json!([
+    let ops: Vec<niminal_server::Op> = serde_json::from_value(json!([
         {"op":"transaction","at":17,"edits":[
             {"op":"processor","name":"twice","source":"(level: num = 1) { out = it * level * 2 }"},
             {"op":"replace","id":"a","processor":"twice","fade":8.0/48000.0}
@@ -707,7 +707,7 @@ fn a_graph_missed_during_starvation_is_applied_and_acknowledged_when_planning_re
 
 #[test]
 fn panic_during_a_processor_crossfade_matches_offline_without_heap_work_on_audio() {
-    use niminal_daemon::{At, Op};
+    use niminal_server::{At, Op};
     use serde_json::json;
     let setup = |scheduled: bool| {
         let mut s = routing_session();

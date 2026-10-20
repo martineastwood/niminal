@@ -1,4 +1,4 @@
-use niminal_daemon::{At, EngineServer, LogInput, Op, Session};
+use niminal_server::{At, EngineServer, LogInput, Op, Session};
 use niminal_lang::Layout;
 use niminal_live::{InProcess, Live, Offline};
 use std::sync::{Arc, Mutex};

@@ -18,7 +18,7 @@ drums = kit("drums/808")
 chops = amen.slices(16)                // s0 .. s15
 ```
 
-Paths are resolved relative to the file that declares them (and the project when the daemon evaluates).
+Paths are resolved relative to the file that declares them (and the project when the server evaluates).
 
 ### Settings on a sample
 

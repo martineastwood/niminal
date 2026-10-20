@@ -1,4 +1,4 @@
-//! What the audio callback tells the rest of the daemon about where the output is, so that a client
+//! What the audio callback tells the rest of the server about where the output is, so that a client
 //! can line a sample up with the wall clock.
 
 use std::sync::atomic::{AtomicU64, Ordering};

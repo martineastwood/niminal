@@ -1,6 +1,6 @@
 //! The sequencer's way to an engine across a WebSocket: the engine's JSON-RPC API on loopback.
 
-use niminal_daemon::{EngineError, EngineReply, EngineRequest};
+use niminal_server::{EngineError, EngineReply, EngineRequest};
 use niminal_live::EngineLink;
 use serde_json::{Value, json};
 

@@ -1,4 +1,4 @@
-use niminal_daemon::{RealtimeConfig, RealtimeRenderer};
+use niminal_server::{RealtimeConfig, RealtimeRenderer};
 use niminal_live::Offline;
 use niminal_lang::Layout;
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
@@ -411,7 +411,7 @@ fn timestamped_controls_match_offline_audio_and_do_no_heap_work() {
     assert_eq!(out.as_slice(), expected);
     assert_eq!(r.metrics().late_events, 0);
     s.sync_realtime();
-    let replay = niminal_daemon::Session::replay(
+    let replay = niminal_server::Session::replay(
         48_000.0,
         Layout::Mono,
         &s.log(),
@@ -472,11 +472,11 @@ fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
     s.sync_realtime();
     assert_eq!(r.metrics().late_events, 1);
     let log = s.log();
-    let niminal_daemon::LogInput::Send { ops, .. } = &log.last().unwrap().input else {
+    let niminal_server::LogInput::Send { ops, .. } = &log.last().unwrap().input else {
         panic!("the control is in the log");
     };
-    assert!(matches!(ops[0], niminal_daemon::Op::Control { at: niminal_daemon::At::Sample(32), .. }), "{ops:?}");
-    let replay = niminal_daemon::Session::replay(
+    assert!(matches!(ops[0], niminal_server::Op::Control { at: niminal_server::At::Sample(32), .. }), "{ops:?}");
+    let replay = niminal_server::Session::replay(
         48_000.0,
         Layout::Mono,
         &s.log(),
@@ -758,7 +758,7 @@ fn a_device_input_reaches_a_track_that_reads_it_through_the_prepared_path() {
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(code, Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
-    let (mut tx, ring) = niminal_daemon::AudioInput::ring(1, 8192);
+    let (mut tx, ring) = niminal_server::AudioInput::ring(1, 8192);
     r.set_audio_input(ring);
     let heard: Vec<f32> = (0..6000).map(|i| (i as f32 / 6000.0) * 0.8).collect();
     for sample in &heard {

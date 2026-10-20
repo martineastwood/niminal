@@ -7,7 +7,7 @@ use nimlive::input::LiveShared;
 use nimlive::link::WsLink;
 use niminal_ws::{Client, Server, ServerConfig, lock};
 use niminal_ws::worker::Worker;
-use niminal_daemon::{EngineServer, Session};
+use niminal_server::{EngineServer, Session};
 use niminal_lang::Layout;
 use niminal_live::{Live, LiveServer};
 use serde_json::json;
@@ -90,7 +90,7 @@ fn a_client_evaluates_code_and_is_told_when_it_lands() {
     assert!(reply["lands_at"].as_u64().is_some());
     assert_eq!(reply["changes"][0], "lead.play([c4])");
 
-    // it waits for its boundary, and the daemon says so
+    // it waits for its boundary, and the server says so
     let landed = c.wait_for("landed", WAIT).unwrap();
     assert!(
         landed["changes"].to_string().contains("tempo 120bpm")
@@ -271,7 +271,7 @@ fn osc_over_udp_moves_a_bound_control_and_is_logged() {
         std::thread::sleep(Duration::from_millis(2));
     }
     assert!(
-        niminal_daemon::to_lines(r.engine.lock().unwrap().session().log()).contains("\"control\"")
+        niminal_server::to_lines(r.engine.lock().unwrap().session().log()).contains("\"control\"")
     );
 }
 

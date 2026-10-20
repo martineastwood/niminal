@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use niminal_daemon::{
+use niminal_server::{
     At, ClockInfo, Endpoint, EngineError, EngineReply, EngineRequest, Op, RoutingEdit,
 };
 use niminal_compose::{

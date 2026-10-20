@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use niminal_ws::Client;
 
-/// The daemon, `niminal`, built from the engine workspace the first time it is needed.
+/// The server, `niminal`, built from the engine workspace the first time it is needed.
 fn niminal() -> Command {
     static BUILT: std::sync::Once = std::sync::Once::new();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -16,7 +16,7 @@ fn niminal() -> Command {
             .arg(root.join("Cargo.toml"))
             .status()
             .unwrap();
-        assert!(status.success(), "the niminal daemon would not build");
+        assert!(status.success(), "the niminal server would not build");
     });
     Command::new(root.join("target/debug/niminal"))
 }
@@ -44,15 +44,15 @@ fn free_port() -> u16 {
     }
 }
 
-/// A daemon running as a child process, killed when dropped.
-struct Daemon {
+/// A server running as a child process, killed when dropped.
+struct Server {
     child: Child,
     engine: Child,
     port: u16,
 }
 
-impl Daemon {
-    fn start(extra: &[&str]) -> Daemon {
+impl Server {
+    fn start(extra: &[&str]) -> Server {
         // Another test may take the port between choosing it and binding it, so try again.
         for _ in 0..5 {
             let (port, engine_port) = (free_port(), free_port());
@@ -62,7 +62,7 @@ impl Daemon {
                 (&[][..], extra)
             };
             let mut engine = niminal()
-                .args(["daemon", "--no-audio", "--port", &engine_port.to_string()])
+                .args(["server", "--no-audio", "--port", &engine_port.to_string()])
                 .args(engine_args)
                 .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
             let mut line = String::new();
@@ -84,14 +84,14 @@ impl Daemon {
                 }
             }
             if line.contains("nimlive listening on ws://127.0.0.1") {
-                return Daemon { child, engine, port };
+                return Server { child, engine, port };
             }
             let _ = engine.kill();
             let _ = engine.wait();
             let _ = child.kill();
             let _ = child.wait();
         }
-        panic!("the daemon would not start");
+        panic!("the server would not start");
     }
 
     fn send(&self, code: &str, quantize: Option<&str>) -> std::process::Output {
@@ -104,7 +104,7 @@ impl Daemon {
     }
 }
 
-impl Drop for Daemon {
+impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -126,8 +126,8 @@ fn stderr(o: &std::process::Output) -> String {
 }
 
 #[test]
-fn send_evaluates_code_in_a_running_daemon() {
-    let d = Daemon::start(&[]);
+fn send_evaluates_code_in_a_running_server() {
+    let d = Server::start(&[]);
     let applied = d.send(SETUP, Some("now"));
     assert!(applied.status.success(), "{}", stderr(&applied));
     assert_eq!(stdout(&applied).trim(), "applied");
@@ -143,7 +143,7 @@ fn send_evaluates_code_in_a_running_daemon() {
 
 #[test]
 fn send_shows_what_is_wrong_with_the_code_sent() {
-    let d = Daemon::start(&[]);
+    let d = Server::start(&[]);
     d.send(SETUP, Some("now"));
     let bad = d.send("riff = [c4]\nlead.play(riif)", None);
     assert!(!bad.status.success());
@@ -156,7 +156,7 @@ fn send_shows_what_is_wrong_with_the_code_sent() {
 
 #[test]
 fn send_reads_a_file_or_the_standard_input() {
-    let d = Daemon::start(&[]);
+    let d = Server::start(&[]);
     let dir = scratch("send-file");
     let file = dir.join("setup.nml");
     std::fs::write(&file, SETUP).unwrap();
@@ -183,7 +183,7 @@ fn send_reads_a_file_or_the_standard_input() {
 fn sending_to_nothing_says_so() {
     let out = nimlive().args(["send", "hush", "--port", &free_port().to_string()]).output().unwrap();
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("can't reach the daemon"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("can't reach the server"), "{}", stderr(&out));
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
     let dir = scratch("watch");
     let project = dir.join("set.nml");
     std::fs::write(&project, format!("{SETUP}\nriff = [c4]\nlead.play(riff)\n")).unwrap();
-    let d = Daemon::start(&[project.to_str().unwrap()]);
+    let d = Server::start(&[project.to_str().unwrap()]);
 
     let mut c = Client::connect(d.port, None).unwrap();
     c.call("subscribe", serde_json::json!({"topics": ["landed"]})).unwrap();
@@ -221,9 +221,9 @@ fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
 
 #[test]
 fn repl_runs_multiline_blocks_and_reports_errors_without_stopping() {
-    let daemon = Daemon::start(&[]);
+    let server = Server::start(&[]);
     let mut repl = nimlive()
-        .args(["repl", "--port", &daemon.port.to_string(), "--quantize", "now"])
+        .args(["repl", "--port", &server.port.to_string(), "--quantize", "now"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

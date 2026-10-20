@@ -1,4 +1,4 @@
-use niminal_daemon::{Session, from_lines, to_lines};
+use niminal_server::{Session, from_lines, to_lines};
 mod support;
 use support::{Eval, play, set_control};
 use niminal_lang::Layout;
@@ -119,10 +119,10 @@ fn controls_replay_exactly_across_block_sizes_and_log_serialization() {
         .unwrap();
     let mut original = s.process(100).remove(0);
     set_control(&mut s, "level", 0.3, None, None, Some(1.0)).unwrap();
-    let note = niminal_daemon::Op::Note {
+    let note = niminal_server::Op::Note {
         to: None,
         target: "flat".into(),
-        at: niminal_daemon::At::Sample(s.clock() + 144),
+        at: niminal_server::At::Sample(s.clock() + 144),
         args: Default::default(),
         dur: Some(niminal_score::Time::Seconds(0.5)),
         id: None,

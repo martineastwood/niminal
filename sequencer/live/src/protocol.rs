@@ -1,13 +1,13 @@
 //! JSON-RPC 2.0 over whatever carries the messages (a WebSocket, in practice).
 //!
-//! A [`Daemon`] owns a [`Session`] and speaks the protocol to any number of
+//! A [`Server`] owns a [`Session`] and speaks the protocol to any number of
 //! clients: requests come in as text and replies go out as text, and the
 //! server pushes notifications (changes landing, the transport, what is
 //! waiting) to the clients that subscribed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use niminal_daemon::{ClientId, PROTOCOL_VERSION, Problem, problem_json};
+use niminal_server::{ClientId, PROTOCOL_VERSION, Problem, problem_json};
 use niminal_compose::{ClipDef, SceneDef};
 use serde_json::{Value, json};
 
@@ -130,9 +130,9 @@ impl LiveServer {
         }
     }
 
-    /// Like [`Daemon::handle`], but an `eval` comes back as a ticket to compile
-    /// away from the daemon (see [`CompileTicket::compile`]) and hand to
-    /// [`Daemon::finish`]. A server does that, so that compiling never holds
+    /// Like [`Server::handle`], but an `eval` comes back as a ticket to compile
+    /// away from the server (see [`CompileTicket::compile`]) and hand to
+    /// [`Server::finish`]. A server does that, so that compiling never holds
     /// up the audio thread. Everything else is answered at once.
     pub fn begin(&mut self, client: ClientId, text: &str) -> Request {
         self.begin_prepared(client, text, Self::prepare_eval(text))
@@ -343,7 +343,7 @@ impl LiveServer {
             return Err(RpcError::new(
                 PROTOCOL_ERROR,
                 &format!(
-                    "this daemon speaks protocol {PROTOCOL_VERSION}, the client said {version:?}"
+                    "this server speaks protocol {PROTOCOL_VERSION}, the client said {version:?}"
                 ),
             ));
         }
@@ -493,7 +493,7 @@ fn internal_error() -> RpcError {
     )
 }
 
-/// What [`Daemon::begin`] makes of a message.
+/// What [`Server::begin`] makes of a message.
 pub enum Request {
     /// Answered already: send these replies.
     Replies(Vec<String>),
@@ -518,7 +518,7 @@ enum Done {
 }
 
 impl CompileTicket {
-    /// Compile the code. This needs nothing from the daemon, so it can run
+    /// Compile the code. This needs nothing from the server, so it can run
     /// while the render worker continues playing.
     pub fn compile(self) -> CompiledTicket {
         let CompileTicket { id, job } = self;

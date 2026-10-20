@@ -1,6 +1,6 @@
 ---
 title: Editor and LSP
-description: VS Code extension, language server, and editing without a daemon.
+description: VS Code extension, language server, and editing without a server.
 ---
 
 ## Language server (`nimlive lsp`)
@@ -13,7 +13,7 @@ nimlive lsp
 
 The VS Code extension starts the same binary automatically (see settings below).
 
-**Works without a running daemon** — editing support comes from the compiler in-process:
+**Works without a running server** — editing support comes from the compiler in-process:
 
 - Diagnostics as you type (compiler messages and help)
 - **Completion** for names in the file, built-in opcodes, methods after `.`, named arguments (`lpf(` → `cutoff:`, `res:`), waveforms, unit suffixes
@@ -35,13 +35,13 @@ cd editors/vscode && npm install && node install.js
 
 Reload the window (`--cursor` for Cursor). Build or install the CLI first (`cargo install --path crates/niminal-cli`).
 
-Start a daemon in a terminal, or use **niminal: Start Daemon in a Terminal** from the command palette:
+Start a server in a terminal, or use **niminal: Start Server in a Terminal** from the command palette:
 
 ```sh
-niminal daemon
+niminal server
 ```
 
-Open a `.nml` file. Live evaluation talks to the daemon over WebSocket; the language server is separate (stdio).
+Open a `.nml` file. Live evaluation talks to the server over WebSocket; the language server is separate (stdio).
 
 ### Shortcuts
 
@@ -58,22 +58,22 @@ The **niminal** sidebar lists scenes and tracks (mute, solo, stop). Compile erro
 
 | Setting | Purpose |
 | --- | --- |
-| `niminal.path` | Path to the `niminal` binary (daemon + LSP) |
-| `niminal.port` | Daemon WebSocket port (default `7401`) |
-| `niminal.token` | Token if the daemon was started with `--token` |
+| `niminal.path` | Path to the `niminal` binary (server + LSP) |
+| `niminal.port` | Server WebSocket port (default `7401`) |
+| `niminal.token` | Token if the server was started with `--token` |
 | `niminal.quantize` | Default land time for evaluation (e.g. `next 4bars`) |
 
 ### MIDI learn
 
 With the live client started with `--midi`, a control written as `midi.learn` waits for the next CC. When one arrives, the extension can rewrite the line to the bound `midi.cc(...)`. See [Performance](/reference/language/performance/) and [Live coding](/guide/live-coding/).
 
-## Daemon vs LSP
+## Server vs LSP
 
-| | **LSP** | **Daemon** |
+| | **LSP** | **Server** |
 | --- | --- | --- |
-| Transport | stdio | Private live client → generic daemon (7401) |
+| Transport | stdio | Private live client → generic server (7401) |
 | Audio | No | Yes |
 | Live `start` / `stop` / changes | No | Yes |
 | Diagnostics / completion | Yes | Eval diagnostics via extension/REPL |
 
-For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Daemon protocol](/reference/protocol/).
+For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Server protocol](/reference/protocol/).

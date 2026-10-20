@@ -1,7 +1,7 @@
 [project]
 name = "niminal"
 version = "0.0.1"
-description = "A small example client for the niminal daemon"
+description = "A small example client for the niminal server"
 requires-python = ">=3.10"
 dependencies = ["websocket-client>=1.6"]
 

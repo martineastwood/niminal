@@ -1,4 +1,4 @@
-use niminal_daemon::{At, Op, RealtimeConfig, Session};
+use niminal_server::{At, Op, RealtimeConfig, Session};
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
 

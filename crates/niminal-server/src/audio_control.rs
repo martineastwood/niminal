@@ -1,4 +1,4 @@
-//! The daemon's audio host publishes devices and consumes explicit restart requests.
+//! The server's audio host publishes devices and consumes explicit restart requests.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};

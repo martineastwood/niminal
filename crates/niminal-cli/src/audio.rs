@@ -7,17 +7,17 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use niminal_daemon::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
+use niminal_server::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
 use niminal_engine::{BLOCK, MAX_CHANNELS};
 use rtrb::{Consumer, Producer, RingBuffer};
 
-/// Control and event preparation share the daemon. DSP owns its state and
+/// Control and event preparation share the server. DSP owns its state and
 /// communicates through bounded queues; neither rendering nor playback locks it.
 pub type Shared = Arc<Mutex<EngineServer>>;
 
-/// Lock the daemon, carrying on if another thread panicked while holding it.
-pub fn lock(daemon: &Shared) -> MutexGuard<'_, EngineServer> {
-    daemon.lock().unwrap_or_else(|e| e.into_inner())
+/// Lock the server, carrying on if another thread panicked while holding it.
+pub fn lock(server: &Shared) -> MutexGuard<'_, EngineServer> {
+    server.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The default output device, set up for `channels` channels.
@@ -30,7 +30,7 @@ pub struct Output {
     queue_frames: usize,
 }
 
-/// What has gone wrong with the audio so far, for the daemon to report without
+/// What has gone wrong with the audio so far, for the server to report without
 /// flooding the terminal from the audio thread.
 #[derive(Default)]
 pub struct Health {
@@ -126,11 +126,11 @@ impl Output {
         self.health.clone()
     }
 
-    /// Start playing the daemon's session. Audio stops when the result is dropped.
-    pub fn start(self, daemon: Shared, input: Option<AudioInput>) -> Result<Running, String> {
+    /// Start playing the server's session. Audio stops when the result is dropped.
+    pub fn start(self, server: Shared, input: Option<AudioInput>) -> Result<Running, String> {
         let channels = usize::from(self.config.channels);
         let (playback, worker) = RenderWorker::start(
-            daemon,
+            server,
             channels,
             self.queue_frames,
             self.health.clone(),
@@ -319,7 +319,7 @@ struct Playback {
     next: u64,
     waiting: Option<Frame>,
     queue_frames: usize,
-    probe: Option<Arc<niminal_daemon::ClockProbe>>,
+    probe: Option<Arc<niminal_server::ClockProbe>>,
 }
 
 impl Playback {
@@ -416,23 +416,23 @@ struct RenderWorker {
     _midi: Option<crate::midi_out::MidiOutput>,
 }
 
-/// How many windows the planner makes while it holds the daemon, so that a change after a big edit
+/// How many windows the planner makes while it holds the server, so that a change after a big edit
 /// (when every window is made again) waits for a few windows rather than for all of them.
 const PLAN_STEP: usize = 1;
 
 fn start_planner(
-    daemon: Shared,
+    server: Shared,
     stop: Arc<AtomicBool>,
     health: Arc<Health>,
 ) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("niminal-plan".into())
         .spawn(move || {
-            if let Ok(d) = daemon.lock() {
+            if let Ok(d) = server.lock() {
                 d.session().set_planner_thread(thread::current());
             }
             while !stop.load(Ordering::Relaxed) {
-                let locked = match daemon.try_lock() {
+                let locked = match server.try_lock() {
                     Ok(d) => Some(d),
                     // a panic elsewhere must not end preparation
                     Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
@@ -452,7 +452,7 @@ fn start_planner(
                         }
                         drop(d);
                         if planned.is_ok_and(|more| more) {
-                            // Some windows are still to plan, but whoever is waiting for the daemon goes first.
+                            // Some windows are still to plan, but whoever is waiting for the server goes first.
                             thread::sleep(Duration::from_micros(100));
                         } else {
                             // A window is up to 40ms of sound and the plan reaches 170ms ahead, so there is no
@@ -469,7 +469,7 @@ fn start_planner(
 
 impl RenderWorker {
     fn start(
-        daemon: Shared,
+        server: Shared,
         channels: usize,
         queue_frames: usize,
         health: Arc<Health>,
@@ -477,7 +477,7 @@ impl RenderWorker {
     ) -> Result<(Playback, Self), String> {
         let (producer, consumer) = RingBuffer::new(queue_frames);
         let (next, epoch, mut renderer, probe) = {
-            let mut d = lock(&daemon);
+            let mut d = lock(&server);
             let probe = d.session().clock_probe();
             let next = d.session().clock();
             let epoch = d.session().panic_epoch();
@@ -505,7 +505,7 @@ impl RenderWorker {
         };
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let planner = start_planner(daemon, stop.clone(), health.clone())
+        let planner = start_planner(server, stop.clone(), health.clone())
             .map_err(|e| format!("can't start event preparation: {e}"))?;
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let thread = thread::Builder::new()
@@ -643,18 +643,18 @@ pub struct NullClock {
 }
 
 impl NullClock {
-    pub fn start(daemon: Shared, speed: f64) -> NullClock {
+    pub fn start(server: Shared, speed: f64) -> NullClock {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let (rate, mut renderer) = {
-            let mut d = lock(&daemon);
+            let mut d = lock(&server);
             (
                 f64::from(d.session().sample_rate()),
                 d.session_mut().start_realtime(RealtimeConfig::default()),
             )
         };
         let planner =
-            start_planner(daemon, stop.clone(), Arc::default()).expect("start event preparation");
+            start_planner(server, stop.clone(), Arc::default()).expect("start event preparation");
         let thread = thread::spawn(move || {
             let started = Instant::now();
             let initial = renderer.clock();
@@ -853,20 +853,20 @@ mod tests {
     }
 
     #[test]
-    fn preparation_carries_on_after_another_thread_panics_holding_the_daemon() {
+    fn preparation_carries_on_after_another_thread_panics_holding_the_server() {
         let mut session =
-            niminal_daemon::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
+            niminal_server::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
         play_tone(&mut session);
-        let daemon: Shared = Arc::new(Mutex::new(EngineServer::new(session)));
-        let poisoner = daemon.clone();
+        let server: Shared = Arc::new(Mutex::new(EngineServer::new(session)));
+        let poisoner = server.clone();
         let _ = thread::spawn(move || {
             let _guard = poisoner.lock().unwrap();
             panic!("a client thread failed");
         })
         .join();
-        assert!(daemon.is_poisoned());
+        assert!(server.is_poisoned());
         let (mut playback, _worker) =
-            RenderWorker::start(daemon, 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
+            RenderWorker::start(server, 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
         // the planner keeps feeding the renderer, so the tone is still heard
         let mut heard = false;
         for _ in 0..50 {
@@ -878,8 +878,8 @@ mod tests {
         assert!(heard);
     }
 
-    fn play_tone(session: &mut niminal_daemon::Session) {
-        use niminal_daemon::{At, Op};
+    fn play_tone(session: &mut niminal_server::Session) {
+        use niminal_server::{At, Op};
         use niminal_score::{Time, Value};
         let define = Op::Define {
             source: "instr tone(freq: hz) { osc(sine, freq) }".into(),
@@ -902,16 +902,16 @@ mod tests {
     #[test]
     fn a_control_lock_cannot_block_the_callback_or_change_its_audio() {
         let mut session =
-            niminal_daemon::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
+            niminal_server::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
         play_tone(&mut session);
         let mut reference =
-            niminal_daemon::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
+            niminal_server::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
         play_tone(&mut reference);
         let expected = reference.process(QUEUE_FRAMES * 4);
-        let daemon = Arc::new(Mutex::new(EngineServer::new(session)));
+        let server = Arc::new(Mutex::new(EngineServer::new(session)));
         let (mut playback, worker) =
-            RenderWorker::start(daemon.clone(), 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
-        let guard = lock(&daemon);
+            RenderWorker::start(server.clone(), 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
+        let guard = lock(&server);
         let mut audio = vec![0.0; QUEUE_FRAMES * 2];
         for batch in 0..4 {
             if batch > 0 {

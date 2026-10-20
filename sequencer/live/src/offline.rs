@@ -8,7 +8,7 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use niminal_daemon::{EngineServer, Session};
+use niminal_server::{EngineServer, Session};
 use niminal_lang::Layout;
 
 use crate::link::InProcess;
@@ -19,7 +19,7 @@ pub struct Offline {
     live: Live,
     engine: Arc<Mutex<EngineServer>>,
     layout: Layout,
-    client: niminal_daemon::ClientId,
+    client: niminal_server::ClientId,
 }
 
 impl Offline {
@@ -60,7 +60,7 @@ impl Offline {
     }
 
     /// What the engine was sent, with when, as a log that replays to the same audio.
-    pub fn log(&self) -> Vec<niminal_daemon::LogEntry> {
+    pub fn log(&self) -> Vec<niminal_server::LogEntry> {
         self.engine().session().log().to_vec()
     }
 
@@ -70,7 +70,7 @@ impl Offline {
     }
 
     /// The notes that went to `midi_out` instruments since this was last called, in order.
-    pub fn take_midi(&mut self) -> Vec<niminal_daemon::MidiEvent> {
+    pub fn take_midi(&mut self) -> Vec<niminal_server::MidiEvent> {
         self.engine().session_mut().take_midi()
     }
 
@@ -163,8 +163,8 @@ impl Offline {
     /// made by that renderer, not by [`Offline::process`].
     pub fn start_realtime(
         &mut self,
-        config: niminal_daemon::RealtimeConfig,
-    ) -> niminal_daemon::RealtimeRenderer {
+        config: niminal_server::RealtimeConfig,
+    ) -> niminal_server::RealtimeRenderer {
         self.engine().session_mut().start_realtime(config)
     }
 
@@ -192,7 +192,7 @@ impl Offline {
         self.engine().session_mut().sync_realtime();
     }
 
-    pub fn realtime_metrics(&self) -> Option<niminal_daemon::RenderMetrics> {
+    pub fn realtime_metrics(&self) -> Option<niminal_server::RenderMetrics> {
         self.engine().session().realtime_metrics()
     }
 
@@ -205,8 +205,8 @@ impl Offline {
         unit: Option<&str>,
         at: Option<u64>,
         smooth_ms: Option<f64>,
-    ) -> Result<(), Vec<niminal_daemon::Problem>> {
-        use niminal_daemon::{At, Op};
+    ) -> Result<(), Vec<niminal_server::Problem>> {
+        use niminal_server::{At, Op};
         let op = Op::Control {
             name: name.into(),
             at: at.map_or(At::Now, At::Sample),
@@ -221,8 +221,8 @@ impl Offline {
     /// Send the engine events directly, as a client of its own, the way a program next to the sequencer would.
     pub fn send_events(
         &mut self,
-        ops: Vec<niminal_daemon::Op>,
-    ) -> Result<niminal_daemon::Sent, Vec<niminal_daemon::Problem>> {
+        ops: Vec<niminal_server::Op>,
+    ) -> Result<niminal_server::Sent, Vec<niminal_server::Problem>> {
         self.engine().session_mut().send_events(self.client, ops)
     }
 

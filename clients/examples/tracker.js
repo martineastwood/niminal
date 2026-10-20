@@ -1,5 +1,5 @@
 // A finite tracker phrase. Rows, tempo and note lengths belong entirely to this client.
-// Run with a daemon listening on port 7401: node clients/examples/tracker.js [BPM]
+// Run with a server listening on port 7401: node clients/examples/tracker.js [BPM]
 const { Client } = require("../js");
 
 async function main() {

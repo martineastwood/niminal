@@ -56,7 +56,7 @@ struct RenderArgs {
     to: Option<String>,
 }
 
-/// A live performance client of the generic daemon.
+/// A live performance client of the generic server.
 #[derive(Args)]
 struct LiveArgs {
     /// A project to load and watch.
@@ -64,7 +64,7 @@ struct LiveArgs {
     /// Private live-control port (0 chooses a free port).
     #[arg(long, default_value_t = 7400)]
     port: u16,
-    /// The generic daemon to connect to.
+    /// The generic server to connect to.
     #[arg(long, default_value_t = 7401)]
     engine_port: u16,
     #[arg(long)]
@@ -86,7 +86,7 @@ struct LiveArgs {
 enum Command {
     /// Render a piece to a WAV file.
     Render(RenderArgs),
-    /// Run the live sequencer as a client of the niminal daemon.
+    /// Run the live sequencer as a client of the niminal server.
     Live(LiveArgs),
     /// Send code to a running live sequencer.
     Send {
@@ -342,7 +342,7 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
 
 
 fn run_live(args: LiveArgs) -> Result<(), String> {
-    use niminal_daemon::{EngineReply, EngineRequest};
+    use niminal_server::{EngineReply, EngineRequest};
     use niminal_live::EngineLink;
     let LiveArgs {
         file,
@@ -356,7 +356,7 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
     let mut link = nimlive::link::WsLink::connect(engine_port, token.as_deref())?;
     let hello = link
         .request(EngineRequest::Hello {
-            protocol: niminal_daemon::PROTOCOL_VERSION,
+            protocol: niminal_server::PROTOCOL_VERSION,
             client: Some("niminal-live".into()),
             token: token.clone(),
         })
@@ -367,7 +367,7 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
         ..
     } = hello
     else {
-        return Err("the daemon did not return its audio format".into());
+        return Err("the server did not return its audio format".into());
     };
     let layout = niminal_lang::Layout::standard(channels as u16)?;
     let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(Live::new(
@@ -423,7 +423,7 @@ fn newest(files: &[PathBuf]) -> Option<SystemTime> {
 /// Evaluate a project file, reporting what happened. Returns the files it is
 /// made of and when they were last changed, to notice when any changes again.
 fn load(
-    daemon: &LiveShared,
+    server: &LiveShared,
     path: &Path,
     quantize: Option<&str>,
 ) -> (Vec<PathBuf>, Option<SystemTime>) {
@@ -441,7 +441,7 @@ fn load(
     files.extend(parsed.module_files());
     let modified = newest(&files);
     let begun = {
-        let mut d = lock(daemon);
+        let mut d = lock(server);
         d.live_mut()
             .set_sample_dir(path.parent().unwrap_or(Path::new(".")));
         d.live_mut().begin_parsed(parsed)
@@ -452,7 +452,7 @@ fn load(
             let mut done = job.compile();
             loop {
                 let retry = {
-                    let mut d = lock(daemon);
+                    let mut d = lock(server);
                     match d.live().retry_eval(&done) {
                         Some(job) => job,
                         None => break d.live_mut().finish_eval(done),
@@ -498,7 +498,7 @@ fn run_send(
     Ok(())
 }
 
-/// Evaluate code on the daemon, describing when it lands.
+/// Evaluate code on the server, describing when it lands.
 fn eval(
     client: &mut Client,
     source: &str,
@@ -558,7 +558,7 @@ fn run_repl(port: u16, mut quantize: Option<String>, token: Option<&str>) -> Res
     };
     if interactive {
         println!(
-            "connected to the daemon on port {port}. :quantize WHEN sets when code lands, :quit leaves."
+            "connected to the server on port {port}. :quantize WHEN sets when code lands, :quit leaves."
         );
     }
 

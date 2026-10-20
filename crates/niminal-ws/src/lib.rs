@@ -1,5 +1,5 @@
 //! JSON-RPC over WebSocket: one thread per client, and one that pushes a service's notifications
-//! out to them. The daemon is a service, and so is any client that serves an API of its own.
+//! out to them. The server is a service, and so is any client that serves an API of its own.
 
 pub mod worker;
 
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use niminal_daemon::{ClientId, EngineServer};
+use niminal_server::{ClientId, EngineServer};
 use serde_json::{Value, json};
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Error, Message, WebSocket};
@@ -189,7 +189,7 @@ pub struct Server {
 
 impl Server {
     pub fn start<S: Service>(
-        daemon: Arc<Mutex<S>>,
+        server: Arc<Mutex<S>>,
         config: ServerConfig,
     ) -> Result<Server, String> {
         if !config.listen.is_loopback() {
@@ -209,7 +209,7 @@ impl Server {
 
         // Accept clients.
         {
-            let (daemon, stop, outboxes) = (daemon.clone(), stop.clone(), outboxes.clone());
+            let (server, stop, outboxes) = (server.clone(), stop.clone(), outboxes.clone());
             let token = config.token.clone();
             threads.push(thread::spawn(move || {
                 let mut clients: Vec<JoinHandle<()>> = Vec::new();
@@ -218,8 +218,8 @@ impl Server {
                     match listener.accept() {
                         Ok((stream, _)) if clients.len() >= MAX_CLIENTS => drop(stream),
                         Ok((stream, _)) => {
-                            let (daemon, stop, outboxes, token) = (
-                                daemon.clone(),
+                            let (server, stop, outboxes, token) = (
+                                server.clone(),
                                 stop.clone(),
                                 outboxes.clone(),
                                 token.clone(),
@@ -227,7 +227,7 @@ impl Server {
                             // Compiling happens on this thread, and deeply nested code needs room.
                             let spawned = thread::Builder::new()
                                 .stack_size(CLIENT_STACK)
-                                .spawn(move || serve(stream, daemon, outboxes, token, stop));
+                                .spawn(move || serve(stream, server, outboxes, token, stop));
                             if let Ok(handle) = spawned {
                                 clients.push(handle);
                             }
@@ -249,7 +249,7 @@ impl Server {
             let (stop, outboxes) = (stop.clone(), outboxes.clone());
             threads.push(thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
-                    let messages = lock(&daemon).notifications();
+                    let messages = lock(&server).notifications();
                     if !messages.is_empty() {
                         let boxes = outboxes.lock().unwrap_or_else(|e| e.into_inner());
                         for (client, text) in messages {
@@ -295,7 +295,7 @@ impl Drop for Server {
 
 fn serve<S: Service>(
     stream: TcpStream,
-    daemon: Arc<Mutex<S>>,
+    server: Arc<Mutex<S>>,
     outboxes: Outboxes,
     token: Option<String>,
     stop: Arc<AtomicBool>,
@@ -317,7 +317,7 @@ fn serve<S: Service>(
         .set_read_timeout(Some(Duration::from_millis(20)));
 
     let outbox = Arc::new(Mutex::new(Outbox::default()));
-    let client = lock(&daemon).connect();
+    let client = lock(&server).connect();
     outboxes
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -325,7 +325,7 @@ fn serve<S: Service>(
 
     let mut authenticated = token.is_none();
     while !stop.load(Ordering::Relaxed) {
-        if !lock(&daemon).is_connected(client)
+        if !lock(&server).is_connected(client)
             || outbox.lock().unwrap_or_else(|e| e.into_inner()).closed
         {
             break;
@@ -333,12 +333,12 @@ fn serve<S: Service>(
         match ws.read() {
             Ok(Message::Text(text)) => {
                 let replies = if authenticated {
-                    request(&daemon, client, text.as_str())
+                    request(&server, client, text.as_str())
                 } else {
                     match authenticate(text.as_str(), token.as_deref().unwrap_or_default()) {
                         Ok(()) => {
                             authenticated = true;
-                            request(&daemon, client, text.as_str())
+                            request(&server, client, text.as_str())
                         }
                         Err(reply) => vec![reply],
                     }
@@ -355,7 +355,7 @@ fn serve<S: Service>(
                 if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             Err(_) => break,
         }
-        // Whatever the daemon wants to tell this client.
+        // Whatever the server wants to tell this client.
         let messages = outbox.lock().unwrap_or_else(|e| e.into_inner()).take();
         for text in messages {
             if ws.send(Message::text(text)).is_err() {
@@ -367,7 +367,7 @@ fn serve<S: Service>(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&client);
-    lock(&daemon).disconnect(client);
+    lock(&server).disconnect(client);
     let _ = ws.close(None);
     let _ = ws.flush();
 }
@@ -409,7 +409,7 @@ fn authenticate(text: &str, token: &str) -> Result<(), String> {
     }
     Err(json!({
         "jsonrpc": "2.0", "id": id,
-        "error": {"code": -32000, "message": "this daemon needs a token: say hello with `token`"}
+        "error": {"code": -32000, "message": "this server needs a token: say hello with `token`"}
     })
     .to_string())
 }
@@ -425,7 +425,7 @@ pub struct Client {
 impl Client {
     pub fn connect(port: u16, token: Option<&str>) -> Result<Client, String> {
         let stream = TcpStream::connect(("127.0.0.1", port))
-            .map_err(|e| format!("can't reach the daemon on port {port}: {e}"))?;
+            .map_err(|e| format!("can't reach the server on port {port}: {e}"))?;
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .map_err(|e| e.to_string())?;
@@ -437,7 +437,7 @@ impl Client {
             notifications: Vec::new(),
         };
         let mut params =
-            json!({"protocol": niminal_daemon::PROTOCOL_VERSION, "client": "niminal-cli"});
+            json!({"protocol": niminal_server::PROTOCOL_VERSION, "client": "niminal-cli"});
         if let Some(t) = token {
             params["token"] = json!(t);
         }
@@ -482,7 +482,7 @@ impl Client {
             .map_err(|e| e["message"].as_str().unwrap_or("error").to_string())
     }
 
-    /// The next message from the daemon.
+    /// The next message from the server.
     pub fn read(&mut self) -> Result<Value, String> {
         loop {
             match self.ws.read() {

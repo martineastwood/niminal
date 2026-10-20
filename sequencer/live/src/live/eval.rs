@@ -346,7 +346,7 @@ pub(super) fn prepare_pending(
         .collect();
 
     // `new` forgets everything sent before this snippet; the output layout stays, since it
-    // can only be chosen when the daemon starts.
+    // can only be chosen when the server starts.
     let clears = statements.iter().any(|s| s.clears());
     let fresh = Project {
         entries: base
@@ -378,7 +378,7 @@ pub(super) fn prepare_pending(
     let program = check(&[])?;
     if program.master != cfg.layout {
         return Err(vec![Problem::plain(format!(
-            "this session outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
+            "this session outputs {}, but the project says {}; the output layout can only be chosen when the server starts",
             cfg.layout, program.master
         ))]);
     }
@@ -503,7 +503,7 @@ impl Live {
 
     /// The quick first part of [`Session::eval`]: read the code and note what
     /// the project is like now. Compiling is the slow part, and
-    /// [`EvalJob::compile`] needs no access to the session, so a daemon can do
+    /// [`EvalJob::compile`] needs no access to the session, so a server can do
     /// it without holding the render worker's control lock.
     pub fn begin_eval(&mut self, source: &str, quantize: Option<&str>) -> Begin {
         self.begin_parsed(ParsedEval::new(source, quantize))

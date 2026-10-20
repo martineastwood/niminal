@@ -32,7 +32,7 @@ function settings() {
 function showStatus() {
   if (!client?.connected) {
     status.text = "$(debug-disconnect) niminal";
-    status.tooltip = "Not connected. Click to connect to the daemon.";
+    status.tooltip = "Not connected. Click to connect to the server.";
     status.command = "niminal.connect";
     return;
   }
@@ -46,7 +46,7 @@ function showStatus() {
   status.text = `$(unmute) ${transport.bar}.${Math.floor(transport.beat)} · ${Math.round(transport.bpm)} bpm · ${transport.voices} voices${pending}`;
 }
 
-/** The daemon heard a control change for `midi.learn`: write it into the code that asked. */
+/** The server heard a control change for `midi.learn`: write it into the code that asked. */
 async function applyLearned(control, source) {
   channel.appendLine(`learned: ctl ${control} = ${source}`);
   for (const document of vscode.workspace.textDocuments) {
@@ -145,16 +145,16 @@ async function ensureConnected() {
   try {
     return await connect();
   } catch (e) {
-    // A daemon that is listening but won't talk is not helped by starting another one:
-    // say what it said instead of asking for a daemon that is already there.
+    // A server that is listening but won't talk is not helped by starting another one:
+    // say what it said instead of asking for a server that is already there.
     if (await listening(settings().port)) return reportConnectError(e);
-    const choice = await vscode.window.showErrorMessage(`niminal: ${e.message}`, "Start Daemon");
-    if (choice === "Start Daemon") return startDaemon();
+    const choice = await vscode.window.showErrorMessage(`niminal: ${e.message}`, "Start Server");
+    if (choice === "Start Server") return startServer();
     return null;
   }
 }
 
-/** Show the daemon's complaints about code that began at `firstLine` of `document`. */
+/** Show the server's complaints about code that began at `firstLine` of `document`. */
 function reportProblems(document, firstLine, problems, range) {
   const kept = (diagnostics.get(document.uri) ?? []).filter((d) => !range.intersection(d.range));
   const fresh = problems.map((p) => {
@@ -234,14 +234,14 @@ function listening(port, timeout = 500) {
   });
 }
 
-/** Wait for a daemon to answer on `port`, turning a timeout into something readable. */
-async function waitForDaemon(port, timeout = 20000) {
+/** Wait for a server to answer on `port`, turning a timeout into something readable. */
+async function waitForServer(port, timeout = 20000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (await listening(port)) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`nothing answered on port ${port}; the daemon terminal says why`);
+  throw new Error(`nothing answered on port ${port}; the server terminal says why`);
 }
 
 function reportConnectError(e) {
@@ -249,18 +249,18 @@ function reportConnectError(e) {
   return null;
 }
 
-/** Start a daemon in a terminal, then connect to it, so the editor uses what it started. */
-async function startDaemon() {
+/** Start a server in a terminal, then connect to it, so the editor uses what it started. */
+async function startServer() {
   const { port, token, path } = settings();
   if (await listening(port)) {
-    vscode.window.showInformationMessage(`niminal: a daemon is already listening on port ${port}`);
+    vscode.window.showInformationMessage(`niminal: a server is already listening on port ${port}`);
   } else {
-    const terminal = vscode.window.createTerminal("niminal daemon");
-    terminal.sendText(`${path} daemon --port ${port}${token ? ` --token ${token}` : ""}`);
+    const terminal = vscode.window.createTerminal("niminal server");
+    terminal.sendText(`${path} server --port ${port}${token ? ` --token ${token}` : ""}`);
     terminal.show(true);
-    channel.appendLine(`starting the daemon on port ${port}`);
+    channel.appendLine(`starting the server on port ${port}`);
     try {
-      await waitForDaemon(port);
+      await waitForServer(port);
     } catch (e) {
       return reportConnectError(e);
     }
@@ -312,7 +312,7 @@ function activate(context) {
     command("niminal.hush", () => simple("hush")),
     command("niminal.panic", () => simple("panic")),
     command("niminal.connect", ensureConnected),
-    command("niminal.startDaemon", startDaemon),
+    command("niminal.startServer", startServer),
     command("niminal.restartLanguageServer", restartLanguageServer),
     vscode.window.registerTreeDataProvider("niminal.scenes", {
       onDidChangeTreeData: scenesChanged.event,

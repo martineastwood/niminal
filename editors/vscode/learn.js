@@ -1,4 +1,4 @@
-// `ctl cutoff = midi.learn.range(200hz..4khz)` is rewritten to the control change the daemon
+// `ctl cutoff = midi.learn.range(200hz..4khz)` is rewritten to the control change the server
 // heard first: `ctl cutoff = midi.cc(21).range(200hz..4khz)`.
 
 /** The text with `midi.learn` of the control called `control` replaced by `source`, or null if it has none. */

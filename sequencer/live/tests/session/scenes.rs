@@ -23,7 +23,7 @@ fn used_modules_play_and_replay_without_their_files() {
     let original = run(&mut s, BAR);
     assert!(peak(&original) > 0.1);
     std::fs::remove_dir_all(&dir).unwrap();
-    let replayed = niminal_daemon::Session::replay(
+    let replayed = niminal_server::Session::replay(
         SR,
         Layout::Mono,
         &s.log(),

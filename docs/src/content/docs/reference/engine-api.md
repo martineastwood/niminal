@@ -1,16 +1,16 @@
 ---
 title: Engine API
-description: "JSON-RPC 2.0 over WebSocket for the sound server inside the daemon: timestamped notes, parameter changes, definitions."
+description: "JSON-RPC 2.0 over WebSocket for the sound server inside the server: timestamped notes, parameter changes, definitions."
 ---
 
 The **engine** is a sound server. It holds the instruments, effects, tracks, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns, tempo, meter or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
 
-`niminal daemon` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the daemon never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
+`niminal server` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the server never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
 
 ## Connection
 
 1. Open a WebSocket to `ws://127.0.0.1:7401/`.
-2. Send **`hello`** first, with `{ "protocol": 4, "client": "my-app" }` (and `token` if the daemon needs one). The result has `sample_rate`, `channels` and the `topics`.
+2. Send **`hello`** first, with `{ "protocol": 4, "client": "my-app" }` (and `token` if the server needs one). The result has `sample_rate`, `channels` and the `topics`.
 3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels), **`notices`** (warnings) and **`transactions`** (graph change acknowledgements), **`voices`**, **`reports`**, **`scopes`** and **`jobs`**. The hello result also advertises capabilities and limits.
 
 ## Requests
@@ -197,7 +197,7 @@ Browser clients upload WAV files with `files.upload {id?,offset?,data?,finish?}`
 
 `capture.start {output,at?}` records an existing live endpoint from an absolute sample or `"now"`; `capture.stop {id,at?}` sets the exact exclusive end sample. Capture includes the actual live performance, with the master after its limiter. A worker drains bounded audio storage; overflow or removal of a source fails visibly instead of silently dropping audio.
 
-Both return a job `id`. Use `jobs.status {id}`, `jobs.cancel {id}` or subscribe to `jobs` for `job` notifications. States are `running`, `completed`, `failed` and `cancelled`; completed results include output file handles. At most two jobs run per connection, and at most four offline renders engine-wide. The most recent 64 terminal jobs per connection are retained. Disconnect cancels outstanding work. Local output paths refer to the daemon’s filesystem.
+Both return a job `id`. Use `jobs.status {id}`, `jobs.cancel {id}` or subscribe to `jobs` for `job` notifications. States are `running`, `completed`, `failed` and `cancelled`; completed results include output file handles. At most two jobs run per connection, and at most four offline renders engine-wide. The most recent 64 terminal jobs per connection are retained. Disconnect cancels outstanding work. Local output paths refer to the server’s filesystem.
 
 ### Audio devices
 
@@ -259,7 +259,7 @@ The engine's state. **Result** includes:
 
 ## The engine log
 
-The engine records every accepted `events.send` and `events.cancel`, with the times resolved to samples, and every `panic`. Playing the log into a new engine gives the same audio, however the original was divided into blocks; `niminal replay` does that. By default the daemon writes it under `~/.niminal/sessions/`.
+The engine records every accepted `events.send` and `events.cancel`, with the times resolved to samples, and every `panic`. Playing the log into a new engine gives the same audio, however the original was divided into blocks; `niminal replay` does that. By default the server writes it under `~/.niminal/sessions/`.
 
 ## Minimal client flow
 

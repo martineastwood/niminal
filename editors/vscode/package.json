@@ -1,7 +1,7 @@
 {
   "name": "niminal",
   "displayName": "niminal",
-  "description": "Live-code niminal: syntax highlighting and evaluation against a running niminal daemon.",
+  "description": "Live-code niminal: syntax highlighting and evaluation against a running niminal server.",
   "version": "0.0.3",
   "publisher": "niminal",
   "license": "MIT",
@@ -80,12 +80,12 @@
       },
       {
         "command": "niminal.connect",
-        "title": "Connect to Daemon",
+        "title": "Connect to Server",
         "category": "niminal"
       },
       {
-        "command": "niminal.startDaemon",
-        "title": "Start Daemon in a Terminal",
+        "command": "niminal.startServer",
+        "title": "Start Server in a Terminal",
         "category": "niminal"
       },
       {
@@ -212,7 +212,7 @@
         "niminal.port": {
           "type": "number",
           "default": 7401,
-          "description": "The generic daemon events API port. The extension runs its own live sequencer."
+          "description": "The generic server events API port. The extension runs its own live sequencer."
         },
         "niminal.midi": {
           "type": ["string", "null"],
@@ -229,7 +229,7 @@
         "niminal.token": {
           "type": "string",
           "default": "",
-          "description": "The daemon's token, if it was started with --token."
+          "description": "The server's token, if it was started with --token."
         },
         "niminal.quantize": {
           "type": "string",
@@ -239,7 +239,7 @@
         "niminal.path": {
           "type": "string",
           "default": "niminal",
-          "description": "The niminal executable, the sound server that \"niminal: Start Daemon in a Terminal\" runs."
+          "description": "The niminal executable, the sound server that \"niminal: Start Server in a Terminal\" runs."
         },
         "niminal.livePath": {
           "type": "string",

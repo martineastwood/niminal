@@ -99,7 +99,7 @@ fn expression_replays_to_the_same_audio() {
     original.extend(run(&mut s, 5000));
     s.expression_input(1, Sustain, 0.0, None);
     original.extend(run(&mut s, 9000));
-    let replayed = niminal_daemon::Session::replay(
+    let replayed = niminal_server::Session::replay(
         SR,
         Layout::Mono,
         &s.log(),

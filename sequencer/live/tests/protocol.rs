@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
-use niminal_daemon::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
+use niminal_server::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
 use niminal_lang::Layout;
 use niminal_live::{InProcess, Live, LiveServer};
 use serde_json::{Value, json};
@@ -9,29 +9,29 @@ use serde_json::{Value, json};
 const SR: f32 = 48_000.0;
 
 /// The sequencer's server, with an engine in the same process whose clock only moves when asked to.
-struct Daemon {
+struct Server {
     server: LiveServer,
     engine: Arc<Mutex<EngineServer>>,
 }
 
-impl Deref for Daemon {
+impl Deref for Server {
     type Target = LiveServer;
     fn deref(&self) -> &LiveServer {
         &self.server
     }
 }
 
-impl DerefMut for Daemon {
+impl DerefMut for Server {
     fn deref_mut(&mut self) -> &mut LiveServer {
         &mut self.server
     }
 }
 
-impl Daemon {
-    fn new(session: Session) -> Daemon {
+impl Server {
+    fn new(session: Session) -> Server {
         let engine = Arc::new(Mutex::new(EngineServer::new(session)));
         let live = Live::new(Box::new(InProcess::new(engine.clone())), SR, Layout::Mono);
-        Daemon {
+        Server {
             server: LiveServer::new(live),
             engine,
         }
@@ -52,11 +52,11 @@ impl Daemon {
 }
 const SETUP: &str = "tempo 120bpm\\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\\ntrack lead { instrument = pluck }";
 
-fn daemon() -> Daemon {
-    Daemon::new(Session::new(SR, Layout::Mono).without_limiter())
+fn server() -> Server {
+    Server::new(Session::new(SR, Layout::Mono).without_limiter())
 }
 
-fn call(d: &mut Daemon, client: ClientId, id: u64, method: &str, params: Value) -> Value {
+fn call(d: &mut Server, client: ClientId, id: u64, method: &str, params: Value) -> Value {
     let request =
         json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string();
     let replies = d.handle(client, &request);
@@ -64,8 +64,8 @@ fn call(d: &mut Daemon, client: ClientId, id: u64, method: &str, params: Value) 
     serde_json::from_str(&replies[0]).unwrap()
 }
 
-fn ready() -> (Daemon, ClientId) {
-    let mut d = daemon();
+fn ready() -> (Server, ClientId) {
+    let mut d = server();
     let c = d.connect();
     let hello = call(
         &mut d,
@@ -95,7 +95,7 @@ fn methods(messages: &[(ClientId, String)]) -> Vec<(ClientId, String)> {
 
 #[test]
 fn a_client_must_say_hello_with_the_right_version() {
-    let mut d = daemon();
+    let mut d = server();
     let c = d.connect();
     let early = call(&mut d, c, 1, "status", json!({}));
     assert_eq!(early["error"]["code"], -32000);

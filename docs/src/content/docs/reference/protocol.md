@@ -3,19 +3,19 @@ title: Sequencer protocol
 description: JSON-RPC 2.0 over WebSocket for live evaluation, clips and scenes, and the state of a live session.
 ---
 
-`niminal daemon` is the generic sound server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which owns tempo, meter and musical position and turns them into events stamped in absolute samples.
+`niminal server` is the generic sound server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which owns tempo, meter and musical position and turns them into events stamped in absolute samples.
 
-VS Code starts and owns a private `nimlive live --port 0 --parent-stdio` process, connected to the configured daemon. Closing the editor stops its sequencer. For terminal use, start `nimlive live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the daemon. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
+VS Code starts and owns a private `nimlive live --port 0 --parent-stdio` process, connected to the configured server. Closing the editor stops its sequencer. For terminal use, start `nimlive live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the server. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
 
 This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from **`nimlive lsp`**, which speaks LSP on stdio for editing.
 
 ## Connection
 
-1. Open a WebSocket to the daemon.
+1. Open a WebSocket to the server.
 2. Send **`hello`** as the first request (within about three seconds, or the connection may time out).
-3. If the daemon was started with **`--token`**, the first message must be `hello` and **`params.token`** must match. Until then, other requests get a protocol error.
+3. If the server was started with **`--token`**, the first message must be `hello` and **`params.token`** must match. Until then, other requests get a protocol error.
 4. Subscribe to topics if you want push updates (optional).
-5. Send requests with an **`id`**; the daemon replies with the same **`id`**. Requests **without** an `id` are notifications and get **no reply** (used for `panic`).
+5. Send requests with an **`id`**; the server replies with the same **`id`**. Requests **without** an `id` are notifications and get **no reply** (used for `panic`).
 
 All connected clients share **one session**. Disconnecting a client does not stop playback. A program that wants to send timed events rather than code should talk to the [engine](/reference/engine-api/) instead, or as well.
 
@@ -33,7 +33,7 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
   "params": {
     "protocol": 4,
     "client": "my-app",
-    "token": "optional-if-daemon-requires-it"
+    "token": "optional-if-server-requires-it"
   }
 }
 ```
@@ -49,7 +49,7 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
 }
 ```
 
-**`protocol`** must be **`4`** (`PROTOCOL_VERSION` in the daemon). A mismatch returns error code **-32000**.
+**`protocol`** must be **`4`** (`PROTOCOL_VERSION` in the server). A mismatch returns error code **-32000**.
 
 ## Subscriptions
 
@@ -166,13 +166,13 @@ Typed calls that compile to the same `.nml` source as `eval`, so quantize, the s
 
 ## Logs and replay
 
-With default logging, the daemon writes what the **engine** was sent under **`~/.niminal/sessions/`**: every definition, note, parameter change and cancellation, with the samples they were stamped for. That is all it takes to play a live set again, whatever the sequencer was doing. Replay offline:
+With default logging, the server writes what the **engine** was sent under **`~/.niminal/sessions/`**: every definition, note, parameter change and cancellation, with the samples they were stamped for. That is all it takes to play a live set again, whatever the sequencer was doing. Replay offline:
 
 ```sh
 niminal replay ~/.niminal/sessions/<log> --out set.wav --channels 2
 ```
 
-## Planned (spec, not in the daemon yet)
+## Planned (spec, not in the server yet)
 
 The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) also describes **`event.update`**, **`file.put`**, remote TLS, and richer meter streaming. Those are not implemented on the wire today. Clips and scenes are defined with **`clip.define`** / **`scene.define`** (or `eval`).
 

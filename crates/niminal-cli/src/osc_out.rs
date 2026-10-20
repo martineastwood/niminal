@@ -95,12 +95,12 @@ pub struct OscOutput {
 }
 
 impl OscOutput {
-    pub fn start(daemon: Shared) -> Result<OscOutput, String> {
+    pub fn start(server: Shared) -> Result<OscOutput, String> {
         let mut sender = OscSender::new().map_err(|e| format!("can't send OSC: {e}"))?;
         Ok(OscOutput {
             _worker: Worker::spawn(move |stop| {
                 while !stop.load(Ordering::Relaxed) {
-                    let taps = lock(&daemon).session().program().taps.clone();
+                    let taps = lock(&server).session().program().taps.clone();
                     if !taps.is_empty() {
                         sender.poll(&taps, Instant::now());
                     }

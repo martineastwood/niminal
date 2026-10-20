@@ -1,4 +1,4 @@
-use niminal_daemon::{At, Endpoint, Op, RoutingEdit as Edit, Session};
+use niminal_server::{At, Endpoint, Op, RoutingEdit as Edit, Session};
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
 use std::collections::BTreeMap;
@@ -309,7 +309,7 @@ fn routing_changes_cancel_and_replay_with_the_same_audio() {
     )
     .unwrap();
     original.extend(s.process(100).remove(0));
-    let log = niminal_daemon::from_lines(&niminal_daemon::to_lines(s.log())).unwrap();
+    let log = niminal_server::from_lines(&niminal_server::to_lines(s.log())).unwrap();
     let replay = Session::replay(RATE, Layout::Mono, &log, 200, false);
     assert_eq!(original, replay[0]);
 }
@@ -332,7 +332,7 @@ fn prepared_and_offline_routing_match_through_graph_swaps() {
     };
     let expected = session().process(256);
     let mut s = session();
-    let mut renderer = s.start_realtime(niminal_daemon::RealtimeConfig::default());
+    let mut renderer = s.start_realtime(niminal_server::RealtimeConfig::default());
     s.prepare_realtime();
     let mut actual = vec![vec![0.0; 256]];
     let mut offset = 0;

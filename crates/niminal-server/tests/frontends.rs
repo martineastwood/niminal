@@ -1,4 +1,4 @@
-use niminal_daemon::{EngineServer, PROTOCOL_VERSION, RealtimeConfig, Session};
+use niminal_server::{EngineServer, PROTOCOL_VERSION, RealtimeConfig, Session};
 use niminal_lang::Layout;
 use serde_json::{Value, json};
 fn call(s: &mut EngineServer, c: u64, method: &str, params: Value) -> Value {
@@ -253,7 +253,7 @@ fn streamed_player_runs_and_seeks_without_loading_a_memory_buffer() {
 #[test]
 fn audio_reconfiguration_requires_explicit_restart_and_resets_connections() {
     let (mut s, a, b) = setup();
-    let host = niminal_daemon::AudioControl::default();
+    let host = niminal_server::AudioControl::default();
     host.publish_devices(json!({"outputs":[{"id":"output:0"}],"inputs":[]}));
     s.set_audio_control(host.clone());
     let request = json!({"jsonrpc":"2.0","id":1,"method":"audio.configure","params":{"settings":{"output":"output:0","channels":2,"sample_rate":48000}}});

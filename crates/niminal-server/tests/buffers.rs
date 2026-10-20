@@ -1,4 +1,4 @@
-use niminal_daemon::{At, EngineRequest, EngineServer, Op, RealtimeConfig, Session};
+use niminal_server::{At, EngineRequest, EngineServer, Op, RealtimeConfig, Session};
 use niminal_lang::Layout;
 use niminal_score::Time;
 
@@ -94,7 +94,7 @@ fn buffer_protocol_allocates_reads_and_saves_loads() {
         .request(
             client,
             EngineRequest::Hello {
-                protocol: niminal_daemon::PROTOCOL_VERSION,
+                protocol: niminal_server::PROTOCOL_VERSION,
                 client: None,
                 token: None,
             },

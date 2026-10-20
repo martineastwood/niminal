@@ -50,7 +50,7 @@ More examples live under `examples/` — kits and grids (`drums.nml`, `breakbeat
 Start the engine with a file, then send code from the REPL or another terminal:
 
 ```sh
-niminal daemon
+niminal server
 # in another terminal:
 nimlive live examples/groove.nml
 nimlive repl
@@ -62,15 +62,15 @@ See [Live coding](/guide/live-coding/) for the REPL, quantization, MIDI, and ses
 
 ## Editor
 
-The [VS Code / Cursor extension](/reference/editor/) adds highlighting, diagnostics, and evaluate-while-playing. Install it from `editors/vscode`, run `niminal daemon`, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
+The [VS Code / Cursor extension](/reference/editor/) adds highlighting, diagnostics, and evaluate-while-playing. Install it from `editors/vscode`, run `niminal server`, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
 
-The language server (`nimlive lsp`) works without a daemon for hover, completion, and errors.
+The language server (`nimlive lsp`) works without a server for hover, completion, and errors.
 
 ## Next
 
 | Guide | When |
 | --- | --- |
-| [Live coding](/guide/live-coding/) | Daemon, REPL, editor, MIDI |
+| [Live coding](/guide/live-coding/) | Server, REPL, editor, MIDI |
 | [Offline rendering](/guide/offline-rendering/) | Arrangements, stems, scores |
 | [Language overview](/reference/language/) | Instruments, patterns, performance |
 | [Command line](/reference/cli/) | Every subcommand and flag |

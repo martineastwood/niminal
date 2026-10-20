@@ -82,7 +82,7 @@ Clients update these controls with the timed `array` and `bind_buffer` events. I
 | `note.start` | 1 for the first sample of the voice, then 0 |
 | `note.index` | How many notes of this instrument have started before this one |
 | `clock.time` | Elapsed engine time in seconds |
-| `clock.beat`, `clock.bar`, `clock.bpm` | The live client’s transport: beats and bars since its performance started, and its tempo. The client lowers these to ordinary DSP controls; the daemon has no musical transport. |
+| `clock.beat`, `clock.bar`, `clock.bpm` | The live client’s transport: beats and bars since its performance started, and its tempo. The client lowers these to ordinary DSP controls; the server has no musical transport. |
 
 Functions don't see `note` or `clock`: pass these in as arguments.
 

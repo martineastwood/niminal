@@ -156,11 +156,11 @@ at +12bars hush
 
 `then` after a `start` queues another launch relative to the first (or to `at +N` when both are used). Live, the same form works, or the `launch` RPC with a `then` object. Named undo is `bass.undo(reverse)` (also via `edit` with `change: "undo(reverse)"`).
 
-`at bar 5 chorus.start` is at bar 5 on the session's clock, which keeps counting while the daemon runs, so submitting it again after bar 5 does nothing. Prefer `at +N` in anything you will submit more than once.
+`at bar 5 chorus.start` is at bar 5 on the session's clock, which keeps counting while the server runs, so submitting it again after bar 5 does nothing. Prefer `at +N` in anything you will submit more than once.
 
 `reset` stops everything (like `hush`) and makes the next bar line bar 1, so `at bar 5` and the bar numbers in the status bar count from there again. It lands on the next bar like other commands: send it on its own, then the timeline. In a render, `reset` is a `hush`.
 
-`new` is `reset` for starting another piece in the same live session: it also forgets every definition sent so far (instruments, kits, tracks, clips, scenes, tempo), so the next code starts from nothing. Put the new piece's definitions after it in the same evaluation, or send them afterwards. The output layout (`config { channels: ... }`) is kept, because it can only be chosen when the daemon starts. In a render `new` is a `hush`.
+`new` is `reset` for starting another piece in the same live session: it also forgets every definition sent so far (instruments, kits, tracks, clips, scenes, tempo), so the next code starts from nothing. Put the new piece's definitions after it in the same evaluation, or send them afterwards. The output layout (`config { channels: ... }`) is kept, because it can only be chosen when the server starts. In a render `new` is a `hush`.
 
 `capture last 32bars as jam` writes the notes that clips and scored events played in that window to `score/jam.nms`, as a section you can load again. Times are rebased so the window starts at beat 0. In a render or session replay the command does nothing.
 
@@ -221,7 +221,7 @@ tempo 100bpm
 tempo 140bpm @ next 4bars over 8bars
 ```
 
-`nimlive render` plays a file like that through a session, as the daemon would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
+`nimlive render` plays a file like that through a session, as the server would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
 
 ## Score functions
 
@@ -286,7 +286,7 @@ ctl drive  = 0.3
 track bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
 ```
 
-**Learning a controller:** write `midi.learn` and move the knob you want. The next control change binds to it, and the daemon tells the editor to rewrite the line to what it heard.
+**Learning a controller:** write `midi.learn` and move the knob you want. The next control change binds to it, and the server tells the editor to rewrite the line to what it heard.
 
 ```nml
 ctl filth = midi.learn.range(200hz..4khz)      // move a knob...

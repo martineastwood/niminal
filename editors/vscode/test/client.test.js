@@ -19,16 +19,16 @@ function freePort() {
   });
 }
 
-async function withDaemon(run) {
+async function withServer(run) {
   const port = await freePort();
-  const daemon = spawn(binary, ["daemon", "--no-audio", "--port", String(port)]);
-  await new Promise((resolve) => daemon.stdout.once("data", resolve));
+  const server = spawn(binary, ["server", "--no-audio", "--port", String(port)]);
+  await new Promise((resolve) => server.stdout.once("data", resolve));
   const live = startLive({ path: nimlive, port }, () => {});
   try {
     await run(await live.ready);
   } finally {
     live.dispose();
-    daemon.kill();
+    server.kill();
   }
 }
 
@@ -37,7 +37,7 @@ instr tone(freq: hz) { osc(sine, freq) }
 track t { instrument = tone }`;
 
 test("evaluates code, reports problems with positions, and hears transport", async () => {
-  await withDaemon(async (port) => {
+  await withServer(async (port) => {
     const heard = [];
     const client = new Client({ port, client: "niminal-vscode-test", onNotification: (m, p) => heard.push([m, p]) });
     await client.connect();
@@ -61,7 +61,7 @@ test("evaluates code, reports problems with positions, and hears transport", asy
 });
 
 test("typed launch and mute go through the performance API", async () => {
-  await withDaemon(async (port) => {
+  await withServer(async (port) => {
     const client = new Client({ port, client: "niminal-vscode-test" });
     await client.connect();
     await client.eval(
@@ -84,14 +84,14 @@ scene verse { t: riff }
 
 test("connecting to nothing fails with a clear message", async () => {
   const port = await freePort();
-  await assert.rejects(new Client({ port }).connect(), /can't reach a niminal daemon/);
+  await assert.rejects(new Client({ port }).connect(), /can't reach a niminal server/);
 });
 
-test("daemon stays generic while two editor sequencers keep separate scenes", async () => {
+test("server stays generic while two editor sequencers keep separate scenes", async () => {
   const { Client: EngineClient } = require("niminal-client");
   const port = await freePort();
-  const daemon = spawn(binary, ["daemon", "--no-audio", "--no-log", "--port", String(port)]);
-  await new Promise((resolve) => daemon.stdout.once("data", resolve));
+  const server = spawn(binary, ["server", "--no-audio", "--no-log", "--port", String(port)]);
+  await new Promise((resolve) => server.stdout.once("data", resolve));
   const editors = [startLive({ path: nimlive, port }, () => {}), startLive({ path: nimlive, port }, () => {})];
   const engine = new EngineClient({ port });
   const clients = [];
@@ -112,14 +112,14 @@ test("daemon stays generic while two editor sequencers keep separate scenes", as
     clients.forEach((client) => client.close());
     engine.close();
     editors.forEach((editor) => editor.dispose());
-    daemon.kill();
+    server.kill();
   }
 });
 
 test("live sequencer exits when its owning editor closes stdin", async () => {
   const port = await freePort();
-  const daemon = spawn(binary, ["daemon", "--no-audio", "--no-log", "--port", String(port)]);
-  await new Promise((resolve) => daemon.stdout.once("data", resolve));
+  const server = spawn(binary, ["server", "--no-audio", "--no-log", "--port", String(port)]);
+  await new Promise((resolve) => server.stdout.once("data", resolve));
   const live = spawn(nimlive, ["live", "--engine-port", String(port), "--port", "0", "--parent-stdio"]);
   try {
     await new Promise((resolve, reject) => {
@@ -137,6 +137,6 @@ test("live sequencer exits when its owning editor closes stdin", async () => {
     }
   } finally {
     live.kill();
-    daemon.kill();
+    server.kill();
   }
 });

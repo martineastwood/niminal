@@ -1,5 +1,5 @@
-// A small example client for the niminal daemon: connect, send timed events, read the clock.
-// Everything else the daemon offers is reachable with `call(method, params)`; see the Engine API reference.
+// A small example client for the niminal server: connect, send timed events, read the clock.
+// Everything else the server offers is reachable with `call(method, params)`; see the Engine API reference.
 
 const WebSocket = globalThis.WebSocket ?? (typeof require === "function" ? require("ws") : undefined);
 
@@ -13,7 +13,7 @@ class NiminalError extends Error {
 }
 
 class Client {
-  /** `onNotification(method, params)` and `onClose()` are called as the daemon speaks or goes away. */
+  /** `onNotification(method, params)` and `onClose()` are called as the server speaks or goes away. */
   constructor({
     url,
     port = 7401,
@@ -40,12 +40,12 @@ class Client {
     const ws = new WebSocket(this.url);
     await new Promise((resolve, reject) => {
       ws.addEventListener("open", resolve, { once: true });
-      ws.addEventListener("error", () => reject(new Error(`can't reach a niminal daemon at ${this.url}`)), { once: true });
+      ws.addEventListener("error", () => reject(new Error(`can't reach a niminal server at ${this.url}`)), { once: true });
     });
     this.ws = ws;
     ws.addEventListener("message", (event) => this.#receive(event.data.toString()));
     ws.addEventListener("close", () => {
-      for (const { reject } of this.waiting.values()) reject(new Error("the daemon closed the connection"));
+      for (const { reject } of this.waiting.values()) reject(new Error("the server closed the connection"));
       this.waiting.clear();
       this.ws = null;
       this.onClose();

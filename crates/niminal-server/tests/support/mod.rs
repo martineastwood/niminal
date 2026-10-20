@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use niminal_daemon::{At, Op, Problem, Session};
+use niminal_server::{At, Op, Problem, Session};
 use niminal_score::Time;
 
 /// Put definitions in place at once, with the engine's own `define` event.

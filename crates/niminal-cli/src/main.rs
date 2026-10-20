@@ -8,7 +8,7 @@ use clap::{Args, Parser, Subcommand};
 use niminal_cli::audio::{NullClock, Output, Shared};
 use niminal_cli::render::{DEFAULT_SAMPLE_RATE, write_wav};
 use niminal_cli::replay::replay;
-use niminal_daemon::{EngineServer, Session, from_lines, to_lines};
+use niminal_server::{EngineServer, Session, from_lines, to_lines};
 use niminal_lang::Layout;
 use niminal_ws::{Server, ServerConfig};
 
@@ -21,12 +21,12 @@ struct Cli {
 
 #[derive(Args)]
 struct ReplayArgs {
-    /// A log a daemon recorded with `--log`.
+    /// A log a server recorded with `--log`.
     log: PathBuf,
     /// The WAV file to write.
     #[arg(long)]
     out: PathBuf,
-    /// The channels of the daemon that recorded the log.
+    /// The channels of the server that recorded the log.
     #[arg(long, default_value_t = 2)]
     channels: u16,
     /// Turn off the master limiter.
@@ -35,7 +35,7 @@ struct ReplayArgs {
 }
 
 #[derive(Args)]
-struct DaemonArgs {
+struct ServerArgs {
     /// The generic engine events API port.
     #[arg(long, default_value_t = 7401)]
     port: u16,
@@ -71,15 +71,15 @@ struct DaemonArgs {
     /// costs, as measured on this machine), `always`, `never`, or a number of microseconds of work a
     /// block must have before it is shared. The sound is the same whichever you choose.
     #[arg(long, default_value = "auto")]
-    render_fork: niminal_daemon::Policy,
+    render_fork: niminal_server::Policy,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Re-render a session to a WAV file from the log a daemon recorded.
+    /// Re-render a session to a WAV file from the log a server recorded.
     Replay(ReplayArgs),
     /// Run the sound server: schedule generic events from any client.
-    Daemon(DaemonArgs),
+    Server(ServerArgs),
     /// Print the built-in opcode reference as Markdown, for the docs site.
     Docs,
 }
@@ -88,7 +88,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Replay(args) => run_replay(&args.log, &args.out, args.channels, args.no_limiter),
-        Command::Daemon(mut args) => {
+        Command::Server(mut args) => {
             install_crash_log();
             if args.log.is_none() && !args.no_log {
                 args.log = state_dir().map(|state| {
@@ -100,7 +100,7 @@ fn main() -> ExitCode {
                     dir.join(format!("{now}.log"))
                 });
             }
-            run_daemon(args)
+            run_server(args)
         }
         Command::Docs => {
             print!("{}", opcode_reference());
@@ -195,8 +195,8 @@ fn run_replay(log: &Path, out: &Path, channels: u16, no_limiter: bool) -> Result
     Ok(())
 }
 
-fn run_daemon(args: DaemonArgs) -> Result<(), String> {
-    let DaemonArgs {
+fn run_server(args: ServerArgs) -> Result<(), String> {
+    let ServerArgs {
         port,
         channels,
         sample_rate,
@@ -213,7 +213,7 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(4)))
         .max(1);
     let fork: Option<Arc<dyn niminal_engine::Fork>> = (threads > 1).then(|| {
-        Arc::new(niminal_daemon::Pool::new(
+        Arc::new(niminal_server::Pool::new(
             threads - 1,
             render_fork,
             niminal_cli::audio::prefer_low_latency_scheduling,
@@ -246,7 +246,7 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
         layout,
     ))));
     let mut health = output.as_ref().map(Output::health);
-    let audio_control = niminal_daemon::AudioControl::default();
+    let audio_control = niminal_server::AudioControl::default();
     audio_control.publish_devices(niminal_cli::audio::devices());
     audio_control.publish_status(serde_json::json!({"state":if no_audio{"virtual"}else{"running"},"sample_rate":rate,"channels":channels,"output":where_to}));
     niminal_cli::audio::lock(&engine).set_audio_control(audio_control.clone());

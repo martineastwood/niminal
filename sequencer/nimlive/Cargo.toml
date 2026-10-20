@@ -3,7 +3,7 @@ name = "nimlive"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The niminal live sequencer: clips, scenes and patterns, driving a niminal daemon"
+description = "The niminal live sequencer: clips, scenes and patterns, driving a niminal server"
 
 [[bin]]
 name = "nimlive"
@@ -17,7 +17,7 @@ niminal-engine = { path = "../../crates/niminal-engine" }
 niminal-lang = { path = "../../crates/niminal-lang" }
 niminal-compose = { path = "../compose" }
 niminal-score = { path = "../../crates/niminal-score" }
-niminal-daemon = { path = "../../crates/niminal-daemon" }
+niminal-server = { path = "../../crates/niminal-server" }
 clap = { version = "4", features = ["derive"] }
 hound = "3"
 serde_json = "1"

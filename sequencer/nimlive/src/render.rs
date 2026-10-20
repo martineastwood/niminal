@@ -153,7 +153,7 @@ pub fn render(
     Ok(collect(session, out, options.limiter))
 }
 
-fn problems(ps: &[niminal_daemon::Problem]) -> RenderError {
+fn problems(ps: &[niminal_server::Problem]) -> RenderError {
     RenderError(
         ps.iter()
             .map(|p| p.message.clone())
@@ -315,7 +315,7 @@ pub enum End {
     Seconds(f64),
 }
 
-/// Render a file the way the daemon would play it: sent to a session all at once, then run for `end`.
+/// Render a file the way the server would play it: sent to a session all at once, then run for `end`.
 /// This is how a tempo ramp (`tempo 140bpm @ next bar over 8bars`) is heard, since a ramp is a run of
 /// changes made as the music goes. Everything still sounding when the time is up rings out.
 ///

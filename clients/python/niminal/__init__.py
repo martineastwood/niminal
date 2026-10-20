@@ -1,6 +1,6 @@
-"""A small example client for the niminal daemon: connect, send timed events, read the clock.
+"""A small example client for the niminal server: connect, send timed events, read the clock.
 
-Everything else the daemon offers is reachable with `call(method, params)`."""
+Everything else the server offers is reachable with `call(method, params)`."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class NiminalError(Exception):
 
 
 class Client:
-    """WebSocket JSON-RPC client for `niminal daemon`."""
+    """WebSocket JSON-RPC client for `niminal server`."""
 
     def __init__(
         self,

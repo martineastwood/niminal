@@ -1,12 +1,12 @@
 const { spawn } = require("node:child_process");
 
-/** Each editor owns a live sequencer; only generic events cross into the daemon. */
+/** Each editor owns a live sequencer; only generic events cross into the server. */
 function startLive({ path, port, token, midi, oscPort }, log, spawnProcess = spawn) {
   const args = ["live", "--engine-port", String(port), "--port", "0", "--parent-stdio"];
   if (token) args.push("--token", token);
   if (midi !== null && midi !== undefined) args.push("--midi", midi);
   if (oscPort !== null && oscPort !== undefined) args.push("--osc-port", String(oscPort));
-  // An editor's sequencer is not the daemon, so it says so in the process list.
+  // An editor's sequencer is not the server, so it says so in the process list.
   const child = spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"], argv0: "nimlive" });
   const ready = new Promise((resolve, reject) => {
     let output = "";

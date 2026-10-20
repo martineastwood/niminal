@@ -1,9 +1,9 @@
 //! CPU benchmark for the parallel-DSP work: how long heavy pieces take to render.
-//! `cargo test --release -p niminal-daemon --test heavy -- --ignored --nocapture`
+//! `cargo test --release -p niminal-server --test heavy -- --ignored --nocapture`
 
 mod support;
 
-use niminal_daemon::{At, Op, Policy, Pool, Session};
+use niminal_server::{At, Op, Policy, Pool, Session};
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
 use std::sync::Arc;

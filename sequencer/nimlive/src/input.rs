@@ -80,7 +80,7 @@ pub struct OscInput {
 }
 
 impl OscInput {
-    pub fn start(daemon: LiveShared, port: u16) -> Result<OscInput, String> {
+    pub fn start(server: LiveShared, port: u16) -> Result<OscInput, String> {
         let socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], port)))
             .map_err(|e| format!("can't listen for OSC on 127.0.0.1:{port}: {e}"))?;
         socket.set_read_timeout(Some(Duration::from_millis(100))).map_err(|e| e.to_string())?;
@@ -93,9 +93,9 @@ impl OscInput {
                 messages.clear();
                 parse_osc(&buffer[..length], &mut messages);
                 if messages.is_empty() { continue; }
-                let mut daemon = lock(&daemon);
+                let mut server = lock(&server);
                 for (address, value) in &messages {
-                    daemon.live_mut().control_input(&ControlSignal::Osc { address, value: *value });
+                    server.live_mut().control_input(&ControlSignal::Osc { address, value: *value });
                 }
             }
         });
@@ -109,7 +109,7 @@ impl OscInput {
 
 /// Open every MIDI input whose name contains `filter` (all of them if it is empty).
 /// Returns the connections, which stay open until dropped, and their names.
-pub fn start_midi(daemon: &LiveShared, filter: &str) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
+pub fn start_midi(server: &LiveShared, filter: &str) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
     let probe = MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
     let mut connections = Vec::new();
     let mut names = Vec::new();
@@ -117,11 +117,11 @@ pub fn start_midi(daemon: &LiveShared, filter: &str) -> Result<(Vec<MidiInputCon
         let Ok(name) = probe.port_name(&port) else { continue };
         if !name.contains(filter) { continue; }
         let input = MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
-        let daemon = daemon.clone();
+        let server = server.clone();
         let connection = input
             .connect(&port, "niminal-in", move |_, bytes, _| {
                 if let Some(signal) = parse_midi(bytes) {
-                    lock(&daemon).live_mut().control_input(&signal);
+                    lock(&server).live_mut().control_input(&signal);
                 }
             }, ())
             .map_err(|e| format!("can't open MIDI input `{name}`: {e}"))?;

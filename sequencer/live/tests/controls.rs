@@ -1,4 +1,4 @@
-use niminal_daemon::{from_lines, to_lines};
+use niminal_server::{from_lines, to_lines};
 use niminal_lang::Layout;
 use niminal_live::{ControlSignal, Offline};
 
@@ -88,7 +88,7 @@ fn bound_controls_replay_from_the_log() {
         original.extend(s.process(100).remove(0));
     }
     let log = from_lines(&to_lines(&s.log())).unwrap();
-    let replay = niminal_daemon::Session::replay(48_000.0, Layout::Mono,
+    let replay = niminal_server::Session::replay(48_000.0, Layout::Mono,
         &log,
         400,
         false,

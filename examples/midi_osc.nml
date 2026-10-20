@@ -1,4 +1,4 @@
-// Run with: niminal daemon examples/midi_osc.nml --midi --osc-port 9000
+// Run with: niminal server examples/midi_osc.nml --midi --osc-port 9000
 // CC 21 sweeps the filter, CC 7 sets the level, and an OSC sender (TouchOSC, say)
 // can drive "/fx/pan" from 0 to 1. Everything is logged, so a set replays.
 config { channels: stereo }

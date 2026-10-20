@@ -1,6 +1,6 @@
 //! The niminal composition language: clips, scenes, patterns, commands and notes. A composition holds
 //! the sound-server definitions that `niminal-lang` compiles and everything else, which becomes the timed
-//! events a client sends to a daemon.
+//! events a client sends to a server.
 
 mod analysis;
 mod ast;

@@ -22,19 +22,19 @@ fn stderr(o: &std::process::Output) -> String {
     String::from_utf8_lossy(&o.stderr).to_string()
 }
 
-/// A daemon running as a child process, killed when dropped.
-struct Daemon {
+/// A server running as a child process, killed when dropped.
+struct Server {
     child: Child,
     port: u16,
 }
 
-impl Daemon {
-    fn start(extra: &[&str]) -> Daemon {
+impl Server {
+    fn start(extra: &[&str]) -> Server {
         // Another process may take the port between choosing it and binding it, so try again.
         for _ in 0..5 {
             let port = free_port();
             let mut child = niminal()
-                .args(["daemon", "--no-audio", "--port", &port.to_string()])
+                .args(["server", "--no-audio", "--port", &port.to_string()])
                 .args(extra)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -43,16 +43,16 @@ impl Daemon {
             let mut line = String::new();
             BufReader::new(child.stdout.as_mut().unwrap()).read_line(&mut line).unwrap();
             if line.contains("niminal engine listening") {
-                return Daemon { child, port };
+                return Server { child, port };
             }
             let _ = child.kill();
             let _ = child.wait();
         }
-        panic!("the daemon would not start");
+        panic!("the server would not start");
     }
 }
 
-impl Drop for Daemon {
+impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -65,7 +65,7 @@ fn a_recorded_session_replays_to_audio() {
     std::fs::create_dir_all(&dir).unwrap();
     let log = dir.join("set.log");
     {
-        let d = Daemon::start(&["--log", log.to_str().unwrap()]);
+        let d = Server::start(&["--log", log.to_str().unwrap()]);
         let mut c = Client::connect(d.port, None).unwrap();
         let clock = c.call("clock", json!({})).unwrap();
         let start = clock["sample"].as_u64().unwrap() + 4800;
@@ -116,13 +116,13 @@ fn a_recorded_session_replays_to_audio() {
 }
 
 #[test]
-fn the_daemon_refuses_what_it_cannot_do() {
-    let out = niminal().args(["daemon", "--no-audio", "--channels", "3"]).output().unwrap();
+fn the_server_refuses_what_it_cannot_do() {
+    let out = niminal().args(["server", "--no-audio", "--channels", "3"]).output().unwrap();
     assert!(!out.status.success());
     assert!(stderr(&out).contains("no standard layout"));
 
     let out = niminal()
-        .args(["daemon", "--no-audio", "--listen", "0.0.0.0", "--port", &free_port().to_string()])
+        .args(["server", "--no-audio", "--listen", "0.0.0.0", "--port", &free_port().to_string()])
         .output()
         .unwrap();
     assert!(!out.status.success());

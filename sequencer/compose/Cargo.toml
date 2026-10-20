@@ -3,7 +3,7 @@ name = "niminal-compose"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The niminal composition language: clips, scenes, patterns and commands, compiled to timed events for a niminal daemon"
+description = "The niminal composition language: clips, scenes, patterns and commands, compiled to timed events for a niminal server"
 
 [dependencies]
 niminal-engine = { path = "../../crates/niminal-engine" }

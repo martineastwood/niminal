@@ -52,7 +52,7 @@ fn a_replay_reproduces_the_original_audio_exactly() {
             original.extend(s.process(block).remove(0));
         }
         let total = s.clock();
-        let replayed = niminal_daemon::Session::replay(
+        let replayed = niminal_server::Session::replay(
             SR,
             Layout::Mono,
             &s.log(),
@@ -74,14 +74,14 @@ fn logs_survive_being_written_down() {
     let text = to_lines(&s.log());
     let back = from_lines(&text).unwrap();
     assert_eq!(back, s.log());
-    let a = niminal_daemon::Session::replay(
+    let a = niminal_server::Session::replay(
         SR,
         Layout::Mono,
         &s.log(),
         100_000,
         true,
     );
-    let b = niminal_daemon::Session::replay(
+    let b = niminal_server::Session::replay(
         SR,
         Layout::Mono,
         &back,
@@ -161,7 +161,7 @@ fn compiling_can_happen_away_from_the_session() {
     );
     assert!(rms(&run(&mut s, 12_000)[2000..]) > 0.1);
     // and what the session logged replays to the same sound
-    let replayed = niminal_daemon::Session::replay(
+    let replayed = niminal_server::Session::replay(
         SR,
         Layout::Mono,
         &s.log(),
@@ -389,7 +389,7 @@ lead.play(riff)",
     )
     .unwrap();
     original.extend(run(&mut s, 5 * BAR));
-    let replayed = niminal_daemon::Session::replay(
+    let replayed = niminal_server::Session::replay(
         SR,
         Layout::Mono,
         &s.log(),

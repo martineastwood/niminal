@@ -3,10 +3,10 @@ title: Live coding
 description: Run a generic sound server and a live sequencer client.
 ---
 
-Start the daemon and a separate `nimlive live` client, then send code from the REPL, the CLI, or the [editor](/reference/editor/). Syntax help and completion come from [`nimlive lsp`](/reference/editor/) and work without a daemon.
+Start the server and a separate `nimlive live` client, then send code from the REPL, the CLI, or the [editor](/reference/editor/). Syntax help and completion come from [`nimlive lsp`](/reference/editor/) and work without a server.
 
 ```sh
-niminal daemon
+niminal server
 # another terminal:
 nimlive live examples/groove.nml
 nimlive repl
@@ -44,14 +44,14 @@ Every input to a live session is logged by sample (by default under `~/.niminal/
 niminal replay ~/.niminal/sessions/<log> --out set.wav
 ```
 
-Use `--no-log` on the daemon to skip recording, or `--log PATH` to choose the file. The newest 20 session logs are kept.
+Use `--no-log` on the server to skip recording, or `--log PATH` to choose the file. The newest 20 session logs are kept.
 
 ## MIDI and OSC
 
 Drive named controls from a controller or OSC sender:
 
 ```sh
-niminal daemon
+niminal server
 # another terminal:
 nimlive live examples/midi_osc.nml --midi --osc-port 9000
 ```
@@ -77,7 +77,7 @@ track beat { instrument = drums }
 beat.play([c2 ~ d2 c2])
 ```
 
-`port` is part of the name of an output; if no output matches, the daemon makes one of that name for other software to listen to. `channel` is from 1 to 16 (1 if left out). The notes go out when the sound card plays them, so the gear stays with the sound here. A render has no sound from a `midi_out` and says so.
+`port` is part of the name of an output; if no output matches, the server makes one of that name for other software to listen to. `channel` is from 1 to 16 (1 if left out). The notes go out when the sound card plays them, so the gear stays with the sound here. A render has no sound from a `midi_out` and says so.
 
 A track's signal can be sent over OSC too. `osc_out` passes the signal through and sends its value to an address, as a float:
 
@@ -90,7 +90,7 @@ ctl k = 0.5
 track knob { out = k.osc_out("/vj/knob", host: "192.168.1.20", port: 9000, rate: 10hz) }
 ```
 
-A message is sent when the value has changed and `rate` allows it; the first value goes at once. Sending happens whenever the daemon runs, and is not logged, so a replay does not send.
+A message is sent when the value has changed and `rate` allows it; the first value goes at once. Sending happens whenever the server runs, and is not logged, so a replay does not send.
 
 ## Audio input
 
@@ -100,16 +100,16 @@ A track can read the sound card's input with `input(1)`, or `input(1..2)` for tw
 track voice { out = input(1).lpf(cutoff: 3khz) }
 ```
 
-Start the daemon with `--audio-input` to listen to the default input device (at the output's sample rate). `nimlive render file.nml --input take.wav` plays a WAV file into those tracks instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
+Start the server with `--audio-input` to listen to the default input device (at the output's sample rate). `nimlive render file.nml --input take.wav` plays a WAV file into those tracks instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
 
 ## Many voices, many cores
 
-The daemon shares voices among threads. `--render-threads N` sets how many render together, counting the render thread itself (by default your cores, up to 4; `1` renders on one core). Voices are summed in fixed groups of 8, so the sound is bit-for-bit the same whatever the number, and a recorded session still replays to the same bytes.
+The server shares voices among threads. `--render-threads N` sets how many render together, counting the render thread itself (by default your cores, up to 4; `1` renders on one core). Voices are summed in fixed groups of 8, so the sound is bit-for-bit the same whatever the number, and a recorded session still replays to the same bytes.
 
 Groups of voices from tracks that do not depend on each other (no bus or buffer passes between them) are shared out together, so ten tracks of ten voices benefit as much as one track of a hundred. Each track's effect chain still runs on one thread, and a track whose voices write a shared buffer runs its voices one at a time.
 
-Whether sharing a block out is worth it is decided as the music plays: the daemon times its own voices, and measures what waking its threads costs when it starts. `--render-fork` overrides that: `always`, `never`, or a number of microseconds of work a block must have before it is shared. The sound is the same whichever you choose; only the speed changes.
+Whether sharing a block out is worth it is decided as the music plays: the server times its own voices, and measures what waking its threads costs when it starts. `--render-fork` overrides that: `always`, `never`, or a number of microseconds of work a block must have before it is shared. The sound is the same whichever you choose; only the speed changes.
 
 ## Editor
 
-With the [VS Code / Cursor extension](/reference/editor/) connected to a daemon: **Cmd/Ctrl+Enter** evaluates the block around the cursor, **Cmd/Ctrl+Shift+Enter** the whole file, **Cmd/Ctrl+.** hushes, and the sidebar lists scenes and tracks.
+With the [VS Code / Cursor extension](/reference/editor/) connected to a server: **Cmd/Ctrl+Enter** evaluates the block around the cursor, **Cmd/Ctrl+Shift+Enter** the whole file, **Cmd/Ctrl+.** hushes, and the sidebar lists scenes and tracks.

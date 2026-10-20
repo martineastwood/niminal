@@ -1,4 +1,4 @@
-pub use niminal_daemon::{At, Op, from_lines, to_lines};
+pub use niminal_server::{At, Op, from_lines, to_lines};
 pub use niminal_live::{Offline, QuantizeDefaults};
 pub use niminal_lang::Layout;
 pub use niminal_score::{Time, Value};

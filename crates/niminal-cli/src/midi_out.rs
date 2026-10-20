@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use midir::{MidiOutput as Midir, MidiOutputConnection};
-use niminal_daemon::MidiEvent;
+use niminal_server::MidiEvent;
 use rtrb::Consumer;
 
 use niminal_ws::worker::Worker;
@@ -53,7 +53,7 @@ impl Pump {
         !self.waiting.is_empty()
     }
 
-    /// End every note that is still sounding, as when the daemon stops.
+    /// End every note that is still sounding, as when the server stops.
     pub fn all_off(&mut self, ports: &mut impl Ports) {
         for (port, channel, note) in self.sounding.drain(..) {
             ports.send(&port, MidiEvent { at: 0, on: false, port: port.clone(), channel, note, velocity: 0 }.bytes());

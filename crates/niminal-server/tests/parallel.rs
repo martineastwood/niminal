@@ -1,6 +1,6 @@
 //! Sharing a block's voices among threads changes nothing about the sound, and costs no allocation.
 
-use niminal_daemon::{At, Op, Policy, Pool, RealtimeConfig, Session};
+use niminal_server::{At, Op, Policy, Pool, RealtimeConfig, Session};
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};

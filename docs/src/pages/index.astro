@@ -16,7 +16,7 @@ const room = example('room.nml').split('\n').filter((l) => !l.startsWith('//')).
 const song = example('song.nml').split('\n').filter((l) => !l.startsWith('//')).join('\n').trim();
 
 const features = [
-  ['01', 'Live', 'Send code to a running daemon from VS Code, the REPL or a socket. Changes land on the beat you choose, and every input is logged by sample.'],
+  ['01', 'Live', 'Send code to a running server from VS Code, the REPL or a socket. Changes land on the beat you choose, and every input is logged by sample.'],
   ['02', 'Offline', 'The same file renders to audio with one command. Sessions replay from their log to identical samples.'],
   ['03', 'Extensible', 'Write functions and instruments in the language, down to the sample. They get types, units, hover docs and diagnostics like the built-ins.'],
   ['04', 'Musical', 'Rational time, mini-notation, clips, scenes and arrangements. One pattern cycle is one bar.'],
@@ -163,10 +163,10 @@ const features = [
       <section class="session">
         <div class="section-head">
           <p class="eyebrow">the loop</p>
-          <h2>Start a daemon. Send it code. Hear it change.</h2>
+          <h2>Start a server. Send it code. Hear it change.</h2>
         </div>
         <pre class="term"><code><span class="c"># play sound and listen for code</span>
-<span class="p">$</span> niminal daemon examples/groove.nml --midi
+<span class="p">$</span> niminal server examples/groove.nml --midi
 
 <span class="c"># change the music, landing four bars from now</span>
 <span class="p">$</span> nimlive send 'chorus.start' --quantize "next 4bars"

@@ -67,7 +67,7 @@ impl Samples {
     }
 
     /// Read the files `source` declares into the cache, ignoring any problems
-    /// (compiling reports them). A live daemon does this before it takes the
+    /// (compiling reports them). A live server does this before it takes the
     /// lock that the audio thread needs, so reading a big file can't stall it.
     pub fn warm(&self, source: &str) {
         let Ok(items) = crate::parser::parse(source) else {

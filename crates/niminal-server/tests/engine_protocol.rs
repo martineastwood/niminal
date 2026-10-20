@@ -1,6 +1,6 @@
 //! The engine server: JSON-RPC over whatever carries the messages.
 
-use niminal_daemon::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
+use niminal_server::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
 use niminal_lang::Layout;
 use serde_json::{Value, json};
 
@@ -51,7 +51,7 @@ fn a_client_must_say_hello_with_the_right_version() {
     assert_eq!(wrong["error"]["code"], -32000);
     let ok = call(&mut d, c, 3, "hello", json!({"protocol": PROTOCOL_VERSION}));
     assert_eq!(ok["result"]["channels"], 1);
-    assert_eq!(ok["result"]["topics"], json!(niminal_daemon::ENGINE_TOPICS));
+    assert_eq!(ok["result"]["topics"], json!(niminal_server::ENGINE_TOPICS));
     assert_eq!(
         call(&mut d, c, 4, "nothing.here", json!({}))["error"]["code"],
         -32601

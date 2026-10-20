@@ -278,7 +278,7 @@ impl Session {
                 .collect();
 
             // `new` forgets everything sent before this snippet; the output layout stays, since it can only be
-            // chosen when the daemon starts.
+            // chosen when the server starts.
             let fresh = Project {
                 entries: base
                     .entries
@@ -331,7 +331,7 @@ impl Session {
             })?;
             if program.master != self.layout {
                 return Err(vec![Problem::plain(format!(
-                    "this engine outputs {}, but the project says {}; the output layout can only be chosen when the daemon starts",
+                    "this engine outputs {}, but the project says {}; the output layout can only be chosen when the server starts",
                     self.layout, program.master
                 ))]);
             }

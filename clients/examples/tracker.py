@@ -1,5 +1,5 @@
 """A finite tracker phrase in Python. Rows, tempo and note lengths belong entirely to this client.
-Run with a daemon listening on port 7401: PYTHONPATH=clients/python python3 clients/examples/tracker.py [BPM]"""
+Run with a server listening on port 7401: PYTHONPATH=clients/python python3 clients/examples/tracker.py [BPM]"""
 import sys
 import time
 

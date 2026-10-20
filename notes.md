@@ -3,13 +3,13 @@
 ```sh
 nimlive render examples/synth_drums.nml --out synth_drums.wav
 nimlive render examples/saw_lead.nml --out saw_lead.wav
-niminal daemon examples/groove.nml
+niminal server examples/groove.nml
 # then: capture last 4bars as jam
 ```
 
 # Parallel DSP: Phase 0 baseline (2026-10-20)
 
-`cargo test --release -p niminal-daemon --test heavy -- --ignored --nocapture`
+`cargo test --release -p niminal-server --test heavy -- --ignored --nocapture`
 (48 kHz stereo, 2 s offline, block = 32 frames = 667 µs budget; 4 saw/square + lpf per voice)
 
 | Piece | µs/block | one core |
@@ -29,7 +29,7 @@ Voices are summed in chunks of `VOICE_CHUNK` = 8 (chunk = admission count / 8 wi
 does not depend on when voices end: chunking by list position made live and offline renders differ
 by an ulp). Each chunk sums into its own lane and sends into its own `Sends`; lanes merge into the
 track and the buses in chunk order. `Fork` (engine trait) runs the chunks of a wave; `Pool`
-(niminal-daemon) is the spin-then-park implementation; `--render-threads` on `niminal daemon`.
+(niminal-server) is the spin-then-park implementation; `--render-threads` on `niminal server`.
 Tracks with fewer than `FORK_MIN_VOICES` = 16 voices stay on the render thread.
 
 Release, 2 s offline render, serial vs helpers (all output bit-identical to serial):

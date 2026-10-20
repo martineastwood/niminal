@@ -1,5 +1,5 @@
 //! The niminal language server. It speaks LSP over stdio and answers from the
-//! compiler itself, so it can never disagree with the daemon about the language.
+//! compiler itself, so it can never disagree with the server about the language.
 
 mod complete;
 mod features;
