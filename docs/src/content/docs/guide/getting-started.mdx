@@ -14,19 +14,22 @@ You need a recent [Rust toolchain](https://rustup.rs/).
 From a clone of the [repo](https://github.com/martineastwood/niminal):
 
 ```sh
-cargo install --path crates/niminal-cli
+cargo install --path crates/niminal-cli   # niminal
+cargo install --path sequencer/nimlive    # nimlive
 ```
 
 Or install from GitHub without cloning:
 
 ```sh
 cargo install --git https://github.com/martineastwood/niminal niminal-cli
+cargo install --git https://github.com/martineastwood/niminal nimlive
 ```
 
-Check it:
+Check them:
 
 ```sh
 niminal --version
+nimlive --version
 ```
 
 ## Hear something
@@ -45,9 +48,19 @@ Open the `.nml` file: tempo, an instrument with units (`hz`, `db`, `ms`), an env
 
 More examples live under `examples/` — kits and grids (`drums.nml`, `breakbeat.nml`), scenes (`groove.nml`), buses (`room.nml`), and arrangements (`song.nml`).
 
-## Live coding
+## Live coding in an editor
 
-Start the engine with a file, then send code from the REPL or another terminal:
+The [VS Code / Cursor extension](/reference/editor/) is the main way to live-code: highlighting, diagnostics while you type, and evaluate-while-playing.
+
+```sh
+cd editors/vscode && npm install && node install.js   # --cursor for Cursor
+```
+
+Reload the window. Start the audio server — **niminal: Start Server in a Terminal** in the command palette, or `niminal server` in a terminal — then open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and tracks. The language server (`nimlive lsp`) works without a server for hover, completion, and errors.
+
+## Live coding from a terminal
+
+The same live sequencer, as its own process, with a REPL and one-shot sends:
 
 ```sh
 niminal server
@@ -58,19 +71,14 @@ nimlive repl
 nimlive send 'chorus.start' --quantize "next 4bars"
 ```
 
-See [Live coding](/guide/live-coding/) for the REPL, quantization, MIDI, and session replay.
-
-## Editor
-
-The [VS Code / Cursor extension](/reference/editor/) adds highlighting, diagnostics, and evaluate-while-playing. Install it from `editors/vscode`, run `niminal server`, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
-
-The language server (`nimlive lsp`) works without a server for hover, completion, and errors.
+See [Live coding](/guide/live-coding/) for quantization, MIDI, and session replay.
 
 ## Next
 
 | Guide | When |
 | --- | --- |
-| [Live coding](/guide/live-coding/) | Server, REPL, editor, MIDI |
+| [Live coding](/guide/live-coding/) | Editor, REPL, quantization, MIDI |
 | [Offline rendering](/guide/offline-rendering/) | Arrangements, stems, scores |
 | [Language overview](/reference/language/) | Instruments, patterns, performance |
 | [Command line](/reference/cli/) | Every subcommand and flag |
+| [Editor and LSP](/reference/editor/) | Extension settings and language server |

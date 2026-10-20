@@ -49,8 +49,15 @@ pub fn shape(a: f32, b: f32, t: f64, k: f64) -> f32 {
     if k.abs() < 1e-6 {
         return a + (b - a) * t as f32;
     }
-    // Rises 0..1, convex for k > 0 and concave for k < 0.
-    let c = |x: f64| ((k * x).exp() - 1.0) / (k.exp() - 1.0);
+    let inv_denom = 1.0 / (k.exp() - 1.0);
+    shape_fast(a, b, t, k, inv_denom)
+}
+
+fn shape_fast(a: f32, b: f32, t: f64, k: f64, inv_denom: f64) -> f32 {
+    if k.abs() < 1e-6 {
+        return a + (b - a) * t as f32;
+    }
+    let c = |x: f64| ((k * x).exp() - 1.0) * inv_denom;
     let s = if b >= a { c(t) } else { c(1.0 - t) };
     if b >= a { a + (b - a) * s as f32 } else { b + (a - b) * s as f32 }
 }
@@ -85,6 +92,9 @@ pub struct Env {
     sample_rate: f32,
     /// Whether the inputs have been read for this note.
     read: bool,
+    /// Cached curve parameters for the current segment, avoiding per-sample exp().
+    seg_k: f64,
+    seg_inv_denom: f64,
 }
 
 /// A part of an envelope that can come from an input.
@@ -115,6 +125,8 @@ impl Env {
             ports: Vec::new(),
             sample_rate: 48_000.0,
             read: true,
+            seg_k: 0.0,
+            seg_inv_denom: 0.0,
         };
         env.reset(48_000.0);
         env
@@ -186,6 +198,12 @@ impl Env {
                 seg += 1;
                 continue;
             }
+            self.seg_k = self.segments[seg].curve.bend();
+            self.seg_inv_denom = if self.seg_k.abs() < 1e-6 {
+                0.0
+            } else {
+                1.0 / (self.seg_k.exp() - 1.0)
+            };
             self.phase = Phase::Running { seg, pos: 0, from };
             return;
         }
@@ -213,7 +231,7 @@ impl Env {
                 self.enter(seg + 1, s.target);
             } else {
                 let t = f64::from(pos) / f64::from(self.lengths[seg]);
-                self.level = shape(from, s.target, t, s.curve.bend());
+                self.level = shape_fast(from, s.target, t, self.seg_k, self.seg_inv_denom);
                 self.phase = Phase::Running { seg, pos, from };
             }
         }

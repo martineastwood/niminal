@@ -1,9 +1,62 @@
 ---
 title: Live coding
-description: Run a generic audio server and a live sequencer client.
+description: Change the music while it plays, from the editor or a terminal.
 ---
 
-Start the server and a separate `nimlive live` client, then send code from the REPL, the CLI, or the [editor](/reference/editor/). Syntax help and completion come from [`nimlive lsp`](/reference/editor/) and work without a server.
+A `niminal` server makes the sound. A **live sequencer** holds the clips, scenes, patterns and tempo, and drives that server. The [VS Code / Cursor extension](/reference/editor/) is a live sequencer with an editor attached, and is the usual way to live-code. `nimlive live` is the same sequencer as a terminal client, for when you'd rather not use an editor.
+
+Either way, code compiles immediately and the sound changes on a musical boundary — see [When changes land](#when-changes-land).
+
+## In the editor
+
+### Install it once
+
+```sh
+cargo install --path crates/niminal-cli   # niminal: the audio server
+cargo install --path sequencer/nimlive    # nimlive: live sequencer and language server
+cd editors/vscode && npm install && node install.js      # add --cursor for Cursor
+```
+
+Reload the window. If the binaries aren't on your `PATH`, set `niminal.path` and `niminal.livePath` to them.
+
+### Start playing
+
+Start the audio server with **niminal: Start Server in a Terminal** in the command palette (or `niminal server` in any terminal), open a `.nml` file such as `examples/groove.nml`, and press **Cmd+Enter** / **Ctrl+Enter**.
+
+| Key (mac / other) | Action |
+| --- | --- |
+| Cmd+Enter / Ctrl+Enter | Evaluate the selection, or the block around the cursor: the lines up to the nearest blank lines, widened to balance brackets |
+| Cmd+Shift+Enter / Ctrl+Shift+Enter | Evaluate the whole file |
+| Cmd+. / Ctrl+. | Hush: stop every clip, letting what's sounding ring out |
+| Cmd+1..9 / Ctrl+1..9 | Launch the Nth scene from the sidebar |
+
+The extension starts its own live sequencer the first time you evaluate (or when you click the status bar to connect), and keeps it for that window. Your clips and scenes live there, not in the server, and closing the window stops it. Each window has its own performance state, so two windows don't share scenes.
+
+Saving a file does nothing by itself — the editor sends what you evaluate. The terminal client below is the one that watches files.
+
+### What it tells you
+
+- The status bar shows the bar, beat, tempo, voice count, and any changes still waiting to land. Click it to hush.
+- Compile errors become squiggles where they are, and are also written to the **niminal** output channel (View → Output).
+- The **niminal** sidebar lists your scenes (click one, or press Cmd/Ctrl+1..9) and your tracks, with what each is playing and buttons to mute, solo and stop. Cmd+1..9 replace VS Code's group-switching keys while a `.nml` file has focus.
+- **niminal: Panic** in the command palette stops everything, pending changes included.
+
+Every command, key and setting is in [Editor and LSP](/reference/editor/).
+
+### MIDI and OSC in the editor
+
+Named controls (`ctl`) can follow a controller or OSC sender. Point the editor's sequencer at them with `niminal.midi` (empty string for every input, `null` to turn MIDI off) and `niminal.oscPort`, then reload the window:
+
+```nml
+ctl cutoff = midi.cc(21).range(200hz..4khz).smooth(10ms)
+ctl pan    = osc_in("/fx/pan").range(-60deg..60deg)
+```
+
+Write the control as `ctl cutoff = midi.learn...` and, once a control change arrives, the extension rewrites the line to the `midi.cc(n)` it heard.
+
+## From a terminal
+
+The same sequencer, running as its own process, with a REPL and a one-shot `send`:
 
 ```sh
 niminal server
@@ -13,11 +66,7 @@ nimlive repl
 nimlive send 'chorus.start' --quantize "next 4bars"
 ```
 
-With a file argument, the live client watches that file and every module it `use`s, and reloads when you save.
-
-## REPL
-
-In the REPL, `:quantize next 4bars` sets when each statement lands (`:quantize off` clears it); `:quit` exits.
+With a file argument the live client watches that file and every module it `use`s, and evaluates the file again when you save. Its live-control API defaults to `ws://127.0.0.1:7400/` and it talks to the server on `--engine-port` (7401). Add `--midi` and `--osc-port` as described below. `:quit` leaves the REPL.
 
 Useful live commands once a scene is running (see [Performance](/reference/language/performance/)):
 
@@ -32,40 +81,22 @@ hush
 
 ## When changes land
 
-Code compiles immediately; sound changes land on a musical boundary. Pass `--quantize` to `send` / `repl`, set `:quantize` in the REPL, or write `@ next 4bars` after a command in source.
+Pass `--quantize` to `send` / `repl`, set `:quantize next 4bars` in the REPL (`:quantize off` clears it), set `niminal.quantize` in the editor, or write `@ next 4bars` after a command in source.
 
 Defaults when you omit a quantum: plays on the next cycle, instrument redefinitions on the next beat, most other changes on the next bar. `now` lands as soon as possible.
 
-## Session replay
+## MIDI and OSC from a controller
 
-Every input to a live session is logged by sample (by default under `~/.niminal/sessions/`), so a session replays to identical audio:
-
-```sh
-niminal replay ~/.niminal/sessions/<log> --out set.wav
-```
-
-Use `--no-log` on the server to skip recording, or `--log PATH` to choose the file. The newest 20 session logs are kept.
-
-## MIDI and OSC
-
-Drive named controls from a controller or OSC sender:
+For a terminal session, start the live client with the inputs you want:
 
 ```sh
-niminal server
-# another terminal:
 nimlive live examples/midi_osc.nml --midi --osc-port 9000
-```
-
-```nml
-ctl cutoff = midi.cc(21).range(200hz..4khz).smooth(10ms)
-ctl volume = midi.cc(7).range(-60db..0db)
-ctl pan    = osc_in("/fx/pan").range(-60deg..60deg)
 ```
 
 - `--midi [NAME]` — every MIDI input whose name contains `NAME`, or all inputs if you omit the name.
 - `--osc-port PORT` — OSC over UDP on this machine only.
 
-`midi.learn` waits for the next control change and binds to it (the editor can rewrite the line). A clip with `keys: midi.keys(...)` plays from a MIDI keyboard. Details: [Performance](/reference/language/performance/).
+`midi.learn` waits for the next control change and binds to it. A clip with `keys: midi.keys(...)` plays from a MIDI keyboard. Details: [Performance](/reference/language/performance/).
 
 ## Sending MIDI and OSC out
 
@@ -102,6 +133,16 @@ track voice { out = input(1).lpf(cutoff: 3khz) }
 
 Start the server with `--audio-input` to listen to the default input device (at the output's sample rate). `nimlive render file.nml --input take.wav` plays a WAV file into those tracks instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
 
+## Session replay
+
+Every input to a live session is logged by sample (by default under `~/.niminal/sessions/`), so a session replays to identical audio:
+
+```sh
+niminal replay ~/.niminal/sessions/<log> --out set.wav
+```
+
+Use `--no-log` on the server to skip recording, or `--log PATH` to choose the file. The newest 20 session logs are kept.
+
 ## Many voices, many cores
 
 The server shares voices among threads. `--render-threads N` sets how many render together, counting the render thread itself (by default your cores, up to 4; `1` renders on one core). Voices are summed in fixed groups of 8, so the sound is bit-for-bit the same whatever the number, and a recorded session still replays to the same bytes.
@@ -109,7 +150,3 @@ The server shares voices among threads. `--render-threads N` sets how many rende
 Groups of voices from tracks that do not depend on each other (no bus or buffer passes between them) are shared out together, so ten tracks of ten voices benefit as much as one track of a hundred. Each track's effect chain still runs on one thread, and a track whose voices write a shared buffer runs its voices one at a time.
 
 Whether sharing a block out is worth it is decided as the music plays: the server times its own voices, and measures what waking its threads costs when it starts. `--render-fork` overrides that: `always`, `never`, or a number of microseconds of work a block must have before it is shared. The sound is the same whichever you choose; only the speed changes.
-
-## Editor
-
-With the [VS Code / Cursor extension](/reference/editor/) connected to a server: **Cmd/Ctrl+Enter** evaluates the block around the cursor, **Cmd/Ctrl+Shift+Enter** the whole file, **Cmd/Ctrl+.** hushes, and the sidebar lists scenes and tracks.

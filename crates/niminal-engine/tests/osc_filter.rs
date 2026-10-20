@@ -36,7 +36,7 @@ fn waves_stay_in_range_and_are_centred() {
 #[test]
 fn sine_has_unit_amplitude_and_starts_at_zero() {
     let out = render(&osc_graph(Wave::Sine, 100.0), 4800, None, 32);
-    assert_eq!(out[0], 0.0);
+    assert!(out[0].abs() < 1e-6, "sine should start near zero, got {}", out[0]);
     let peak = out.iter().cloned().fold(0.0, f32::max);
     assert!((peak - 1.0).abs() < 1e-3);
 }

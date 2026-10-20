@@ -7,3 +7,11 @@ exclude = ["sequencer"]
 version = "0.0.1"
 license = "MIT"
 edition = "2024"
+
+[profile.release]
+lto = false
+
+[profile.release-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 1

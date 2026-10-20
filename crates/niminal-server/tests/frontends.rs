@@ -83,7 +83,7 @@ fn reports_and_lifecycle_use_renderer_samples_and_note_tokens() {
         .collect();
     assert_eq!(voices.len(), 3, "{voices:?}");
     assert_eq!(voices[0]["sample"], 17);
-    assert_eq!(voices[1]["sample"], 65);
+    assert_eq!(voices[1]["sample"], 81);
     assert_eq!(voices[2]["state"], "ended");
 }
 #[test]

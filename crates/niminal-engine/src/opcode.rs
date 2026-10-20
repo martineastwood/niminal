@@ -5,7 +5,7 @@ pub const TAIL_LEVEL: f32 = 3.162_277_7e-5;
 
 /// Samples per processing block. Control changes and bus sends are
 /// block-aligned; stateful opcodes still run per sample inside a block.
-pub const BLOCK: usize = 32;
+pub const BLOCK: usize = 64;
 
 /// Stack input capacity for scalar opcodes. Array opcodes read graph slots directly.
 pub const MAX_INPUTS: usize = 16;

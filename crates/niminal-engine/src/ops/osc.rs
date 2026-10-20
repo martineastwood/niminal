@@ -1,6 +1,23 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::opcode::{Opcode, Port, ProcessCtx};
+
+static SINE_TABLE: LazyLock<Wavetable> = LazyLock::new(|| {
+    let cycle: Vec<f64> = (0..LEVEL_SIZE)
+        .map(|i| (i as f64 / LEVEL_SIZE as f64 * std::f64::consts::TAU).sin())
+        .collect();
+    Wavetable::from_cycle(&cycle)
+});
+
+fn fast_log2(x: f64) -> f64 {
+    if x <= 0.0 {
+        return f64::MIN;
+    }
+    let bits = x.to_bits();
+    let exponent = ((bits >> 52) & 0x7FF) as i64 - 1023;
+    let mantissa_bits = bits & 0x000F_FFFF_FFFF_FFFF;
+    exponent as f64 + mantissa_bits as f64 / (1u64 << 52) as f64
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wave {
@@ -70,8 +87,7 @@ impl Wavetable {
 
     /// The wave at phase `t` (in cycles, 0 to 1) for a note that advances `inc` cycles a sample.
     fn read(&self, t: f64, inc: f64) -> f32 {
-        // the first level whose harmonics all fall below Nyquist, and the one after it
-        let octaves = (self.top as f64 * 2.0 * inc.abs()).max(f64::MIN_POSITIVE).log2() + 1.0;
+        let octaves = fast_log2(self.top as f64 * 2.0 * inc.abs()) + 1.0;
         let p = octaves.clamp(0.0, (self.levels.len() - 1) as f64);
         let a = p as usize;
         let b = (a + 1).min(self.levels.len() - 1);
@@ -172,6 +188,9 @@ impl Opcode for Osc {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        if self.wave == Wave::Sine && self.table.is_none() && self.bank.is_none() {
+            LazyLock::force(&SINE_TABLE);
+        }
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -209,7 +228,11 @@ impl Opcode for Osc {
             }
 
             let v = match self.wave {
-                Wave::Sine => (t * std::f64::consts::TAU).sin(),
+                Wave::Sine => {
+                    *o = SINE_TABLE.read(t, inc);
+                    self.phase = wrap(self.phase + inc);
+                    continue;
+                }
                 Wave::Saw => 2.0 * t - 1.0 - poly_blep(t, dt),
                 Wave::Square | Wave::Pulse => {
                     let w = if self.wave == Wave::Square {

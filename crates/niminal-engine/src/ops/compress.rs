@@ -57,28 +57,30 @@ impl Opcode for Compressor {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        if out.is_empty() {
+            return;
+        }
         let sr = self.sample_rate.max(1.0);
+        let attack_coeff = (-1.0 / (inputs[3][0].max(0.0) * sr).max(1.0)).exp();
+        let release_coeff = (-1.0 / (inputs[4][0].max(0.0) * sr).max(1.0)).exp();
         for (i, o) in out.iter_mut().enumerate() {
             let x = inputs[0][i];
             let threshold = inputs[1][i].abs().max(1e-8);
             let ratio = inputs[2][i].max(1.0);
-            let attack = inputs[3][i].max(0.0);
-            let release = inputs[4][i].max(0.0);
             let makeup = inputs[5][i].max(0.0);
             let side = inputs[6][i];
             let detect = if side.is_nan() { x } else { side }.abs();
 
             let coeff = if detect > self.envelope {
-                (-1.0 / (attack * sr).max(1.0)).exp()
+                attack_coeff
             } else {
-                (-1.0 / (release * sr).max(1.0)).exp()
+                release_coeff
             };
             self.envelope = detect + coeff * (self.envelope - detect);
 
             let gain = if self.envelope <= threshold {
                 1.0
             } else {
-                // linear: desired = thresh * (env/thresh)^(1/ratio); gain = desired/env
                 let over = self.envelope / threshold;
                 over.powf(1.0 / ratio - 1.0)
             };
