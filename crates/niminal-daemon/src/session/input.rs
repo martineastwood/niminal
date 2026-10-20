@@ -59,7 +59,7 @@ impl Session {
             Some(p)
                 if p.statements
                     .iter()
-                    .any(|s| s.key().and_then(|k| k.strip_prefix("ctl:")) == Some(name)) =>
+                    .any(|s| s.key.strip_prefix("ctl:") == Some(name)) =>
             {
                 p.id
             }

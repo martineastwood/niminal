@@ -224,18 +224,6 @@ fn latency_compensation_aligns_parallel_paths_inside_and_outside_scopes() {
 }
 
 #[test]
-fn live_arrays_and_buffer_references_accept_source_note_arguments() {
-    let source = "const data = [0.5, 0.25]\nbuffer one = zeros(2)\nbuffer two = data\ninstr a(weights: [num] = [1, 2], source: buffer = one) { weights.sum + source[0] }\na(weights: [0.25, 0.5], source: two) for 10ms";
-    let p = compile(source).unwrap();
-    let plan = p.plan(&p.notes[0]).unwrap();
-    let mut v = Voice::new(p.instruments[0].graph.clone(), 48000.0);
-    for (index, value) in plan.params {
-        v.set_param(index, value);
-    }
-    assert_eq!(render(&mut v, 8, 8), [1.25; 8]);
-}
-
-#[test]
 fn buffer_parameters_work_through_stateful_functions_and_nested_scopes() {
     let source = "const data = [0.25, 0.5]\nbuffer one = data\nfn reader(source: buffer) { state pos = 0\nx = source[pos]\npos = pos + 1\nx }\ninstr a(source: buffer = one) { spawn(1, dur: 1sec) { oversample(2) { reader(source) } } }";
     let output = render(&mut voice(source, "a"), 128, 17);

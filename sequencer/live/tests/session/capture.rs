@@ -37,7 +37,7 @@ fn capture_writes_the_last_bars_as_a_score() {
     );
 
     let json = std::fs::read_to_string(dir.join("score/jam.nms")).unwrap();
-    let section = niminal_score::Section::from_json(&json).unwrap();
+    let section = niminal_compose::Section::from_json(&json).unwrap();
     assert_eq!(section.name, "jam");
     assert_eq!(section.length, Time::Bars(2.0));
     assert!(
@@ -62,11 +62,11 @@ t.play([c4])
 capture last 1bar as unused
 at +1bars hush
 ";
-    let program = niminal_lang::compile(src).unwrap();
+    let program = niminal_compose::compile(src).unwrap();
     assert!(
         program
             .performance
             .iter()
-            .any(|s| matches!(s.action, niminal_lang::Action::Capture { bars, .. } if (bars - 1.0).abs() < 1e-9))
+            .any(|s| matches!(s.action, niminal_compose::Action::Capture { bars, .. } if (bars - 1.0).abs() < 1e-9))
     );
 }

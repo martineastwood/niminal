@@ -8,6 +8,7 @@ const { LiveClient: Client } = require("niminal-client");
 const { startLive } = require("../live");
 
 const binary = process.env.NIMINAL_BIN ?? path.join(__dirname, "../../../target/debug/niminal");
+const nimlive = process.env.NIMLIVE_BIN ?? path.join(__dirname, "../../../sequencer/target/debug/nimlive");
 
 function freePort() {
   return new Promise((resolve) => {
@@ -22,7 +23,7 @@ async function withDaemon(run) {
   const port = await freePort();
   const daemon = spawn(binary, ["daemon", "--no-audio", "--port", String(port)]);
   await new Promise((resolve) => daemon.stdout.once("data", resolve));
-  const live = startLive({ path: binary, port }, () => {});
+  const live = startLive({ path: nimlive, port }, () => {});
   try {
     await run(await live.ready);
   } finally {
@@ -91,7 +92,7 @@ test("daemon stays generic while two editor sequencers keep separate scenes", as
   const port = await freePort();
   const daemon = spawn(binary, ["daemon", "--no-audio", "--no-log", "--port", String(port)]);
   await new Promise((resolve) => daemon.stdout.once("data", resolve));
-  const editors = [startLive({ path: binary, port }, () => {}), startLive({ path: binary, port }, () => {})];
+  const editors = [startLive({ path: nimlive, port }, () => {}), startLive({ path: nimlive, port }, () => {})];
   const engine = new EngineClient({ port });
   const clients = [];
   try {
@@ -119,7 +120,7 @@ test("live sequencer exits when its owning editor closes stdin", async () => {
   const port = await freePort();
   const daemon = spawn(binary, ["daemon", "--no-audio", "--no-log", "--port", String(port)]);
   await new Promise((resolve) => daemon.stdout.once("data", resolve));
-  const live = spawn(binary, ["live", "--engine-port", String(port), "--port", "0", "--parent-stdio"]);
+  const live = spawn(nimlive, ["live", "--engine-port", String(port), "--port", "0", "--parent-stdio"]);
   try {
     await new Promise((resolve, reject) => {
       live.stdout.once("data", resolve);

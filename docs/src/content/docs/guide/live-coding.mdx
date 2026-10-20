@@ -3,14 +3,14 @@ title: Live coding
 description: Run a generic sound server and a live sequencer client.
 ---
 
-Start the daemon and a separate `niminal live` client, then send code from the REPL, the CLI, or the [editor](/reference/editor/). Syntax help and completion come from [`niminal lsp`](/reference/editor/) and work without a daemon.
+Start the daemon and a separate `nimlive live` client, then send code from the REPL, the CLI, or the [editor](/reference/editor/). Syntax help and completion come from [`nimlive lsp`](/reference/editor/) and work without a daemon.
 
 ```sh
 niminal daemon
 # another terminal:
-niminal live examples/groove.nml
-niminal repl
-niminal send 'chorus.start' --quantize "next 4bars"
+nimlive live examples/groove.nml
+nimlive repl
+nimlive send 'chorus.start' --quantize "next 4bars"
 ```
 
 With a file argument, the live client watches that file and every module it `use`s, and reloads when you save.
@@ -41,7 +41,7 @@ Defaults when you omit a quantum: plays on the next cycle, instrument redefiniti
 Every input to a live session is logged by sample (by default under `~/.niminal/sessions/`), so a session replays to identical audio:
 
 ```sh
-niminal render --replay ~/.niminal/sessions/<log> --out set.wav
+niminal replay ~/.niminal/sessions/<log> --out set.wav
 ```
 
 Use `--no-log` on the daemon to skip recording, or `--log PATH` to choose the file. The newest 20 session logs are kept.
@@ -53,7 +53,7 @@ Drive named controls from a controller or OSC sender:
 ```sh
 niminal daemon
 # another terminal:
-niminal live examples/midi_osc.nml --midi --osc-port 9000
+nimlive live examples/midi_osc.nml --midi --osc-port 9000
 ```
 
 ```nml
@@ -100,7 +100,7 @@ A track can read the sound card's input with `input(1)`, or `input(1..2)` for tw
 track voice { out = input(1).lpf(cutoff: 3khz) }
 ```
 
-Start the daemon with `--audio-input` to listen to the default input device (at the output's sample rate). `niminal render file.nml --input take.wav` plays a WAV file into those tracks instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
+Start the daemon with `--audio-input` to listen to the default input device (at the output's sample rate). `nimlive render file.nml --input take.wav` plays a WAV file into those tracks instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
 
 ## Editor
 

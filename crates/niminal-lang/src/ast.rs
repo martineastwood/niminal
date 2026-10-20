@@ -1,5 +1,4 @@
 use crate::diag::Span;
-use crate::performance::Quantize;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ident {
@@ -10,11 +9,10 @@ pub struct Ident {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Instr(InstrDef),
-    /// `ctl name = value`, or `ctl name = midi.cc(21).range(200hz..4khz)` with an `input`.
+    /// `ctl name = value`
     Control {
         name: Ident,
         value: Expr,
-        input: Option<ControlInput>,
     },
     Fn(FnDef),
     /// `const name = expr`: a value known while compiling, such as a number, a range or a table.
@@ -28,132 +26,7 @@ pub enum Item {
     Track(TrackDecl),
     Sample(SampleDecl),
     MidiOut(MidiOutDecl),
-    Arrangement(ArrangementDecl),
     Config(ConfigDecl),
-    Tempo(TempoStmt),
-    /// `meter 3/4`
-    Meter(Expr),
-    /// `name = expr` at the top level: a pattern, clip or scene value.
-    Bind {
-        name: Ident,
-        value: Expr,
-    },
-    Clip(NamedBlock),
-    Scene(NamedBlock),
-    /// `def name(params) { ... }`: a score function returning a clip, scene or pattern.
-    Def(FnDef),
-    Command(CommandStmt),
-    Note(NoteStmt),
-    /// Top-level `for x in xs { ... }` expanding notes and commands.
-    For {
-        var: Ident,
-        iter: Expr,
-        body: Vec<Item>,
-        span: Span,
-    },
-    /// Top-level `if cond { ... } else { ... }` picking notes and commands at compile time.
-    If {
-        cond: Expr,
-        then: Vec<Item>,
-        otherwise: Vec<Item>,
-        span: Span,
-    },
-}
-
-/// Where a control's value comes from: a MIDI CC or an OSC address, mapped onto `value..hi`
-/// (the control's `value` is the low end).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ControlInput {
-    pub source: InputSource,
-    pub hi: Expr,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum InputSource {
-    /// `midi.cc(number)` or `midi.cc(number, channel)`; channels count from 1.
-    MidiCc { cc: u8, channel: Option<u8> },
-    /// `midi.learn`: binds to the next control moved, which the session then reports.
-    MidiLearn,
-    /// `osc_in("/address")`
-    Osc(String),
-}
-
-/// `tempo 124bpm`, optionally `@ next bar over 2bars` for a change while playing.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TempoStmt {
-    pub value: Expr,
-    pub quantize: Option<Quantize>,
-    pub over: Option<Expr>,
-    pub span: Span,
-}
-
-/// `clip name { key: value ... }` or `scene name { track: clip ... }`
-#[derive(Debug, Clone, PartialEq)]
-pub struct NamedBlock {
-    pub name: Ident,
-    pub entries: Vec<(Ident, Expr)>,
-    /// `with(quantize: 1bar)` after the block.
-    pub options: Vec<Arg>,
-    pub span: Span,
-}
-
-/// Where a statement happens: a time, or `bar 5 beat 3`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AtPos {
-    Time(Expr),
-    /// Bars and beats count from 1.
-    Bar {
-        bar: Expr,
-        beat: Option<Expr>,
-    },
-    /// `+4bars`: that long after the code lands.
-    After(Expr),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Command {
-    Play {
-        track: Ident,
-        what: Expr,
-    },
-    Stop(Ident),
-    Mute(Ident),
-    Unmute(Ident),
-    Solo(Ident),
-    /// `unsolo` clears every solo; `bass.unsolo` just that one.
-    Unsolo(Option<Ident>),
-    Hush,
-    Panic,
-    /// Stop everything and count bars from the next bar line.
-    Reset,
-    /// Like `reset`, and a live session also forgets every definition it was sent.
-    New,
-    /// `capture last 32bars as jam`: write the last N bars of the session as a `.nms` section.
-    Capture {
-        length: Expr,
-        name: Ident,
-    },
-    /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its track.
-    /// `verb` is the `start`. Optional `then fill after 4bars` queues another launch later.
-    Start {
-        name: Ident,
-        verb: Span,
-        /// `(next, after)` from `then next after 4bars`.
-        then: Option<(Ident, Expr)>,
-    },
-    /// `bass.reverse`: change what a track is playing. `change` is `reverse`, in the source.
-    Edit {
-        track: Ident,
-        change: Span,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CommandStmt {
-    pub at: Option<AtPos>,
-    pub command: Command,
-    pub quantize: Option<Quantize>,
-    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -185,37 +58,6 @@ pub struct MidiOutDecl {
     pub name: Ident,
     pub args: Vec<Arg>,
     pub span: Span,
-}
-
-/// `arrangement song { sections: [verse.over(8bars) chorus.over(8bars)] }`
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArrangementDecl {
-    pub name: Ident,
-    pub sections: Vec<SectionRef>,
-    /// `tempo: [84bpm 96bpm]`: the tempo of each section, if it has its own.
-    pub tempos: Option<Vec<Expr>>,
-    /// `tempo: env[84bpm 64bars 96bpm]`: the tempo over the whole piece, in bars of music.
-    pub tempo_env: Option<EnvLit>,
-    /// `meter: [4/4 7/8]`: the meter of each section.
-    pub meters: Option<Vec<Expr>>,
-    /// `bass.tone: env[...]`: a track's parameter, moved over the whole piece.
-    pub lanes: Vec<ArrangementLane>,
-    pub span: Span,
-}
-
-/// `bass.tone: env[800hz 8bars 3khz]` in an arrangement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArrangementLane {
-    pub track: Ident,
-    pub param: Ident,
-    pub value: EnvLit,
-}
-
-/// One scene in an arrangement, and how long it lasts.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SectionRef {
-    pub scene: Ident,
-    pub length: Expr,
 }
 
 /// Where a sample or kit comes from.
@@ -252,8 +94,6 @@ pub struct BufferDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigDecl {
     pub entries: Vec<(Ident, Expr)>,
-    /// `quantize: { default: 1bar  play: cycle }`: when each kind of change lands.
-    pub quantize: Vec<(Ident, Expr)>,
     /// `tuning: { a4: 432hz, scale: just }`: how note names become frequencies.
     pub tuning: Vec<(Ident, Expr)>,
     pub span: Span,
@@ -428,16 +268,6 @@ pub enum ExprKind {
         args: Vec<Arg>,
     },
     Neg(Box<Expr>),
-    /// A mini-notation pattern: the raw text between the brackets.
-    Pattern(String),
-    /// `grid[x.x.]`: the raw text between the brackets.
-    Grid(String),
-    /// `grid { kick: x... }`: the raw text between the braces, a row per sample.
-    Rows(String),
-    /// `events { 0beat c4 for 1/2beat }`: the raw text between the braces.
-    Events(String),
-    /// `~`: nothing, or stop.
-    Rest,
     /// `[a, b]`: a fixed-length array. Audio output interprets its elements as channels.
     Array(Vec<Expr>),
     Binary {
@@ -491,10 +321,6 @@ pub enum ExprKind {
     },
     /// `"/fx/width"`: text, as an argument such as an OSC address.
     Str(String),
-    /// Anonymous `clip { ... }` inside a score `def` or expression.
-    ClipBlock(NamedBlock),
-    /// Anonymous `scene { ... }` inside a score `def` or expression.
-    SceneBlock(NamedBlock),
 }
 
 impl Expr {
@@ -510,11 +336,6 @@ impl Expr {
         match &mut self.kind {
             ExprKind::Num { .. }
             | ExprKind::Name(_)
-            | ExprKind::Pattern(_)
-            | ExprKind::Grid(_)
-            | ExprKind::Rows(_)
-            | ExprKind::Events(_)
-            | ExprKind::Rest
             | ExprKind::Str(_) => {}
             ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| f(&mut a.value)),
             ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
@@ -556,14 +377,6 @@ impl Expr {
                 f(index);
             }
             ExprKind::Lambda { body, .. } => block(body, f),
-            ExprKind::ClipBlock(b) | ExprKind::SceneBlock(b) => {
-                for (_, e) in &mut b.entries {
-                    f(e);
-                }
-                for a in &mut b.options {
-                    f(&mut a.value);
-                }
-            }
         }
     }
 
@@ -579,11 +392,6 @@ impl Expr {
         match &self.kind {
             ExprKind::Num { .. }
             | ExprKind::Name(_)
-            | ExprKind::Pattern(_)
-            | ExprKind::Grid(_)
-            | ExprKind::Rows(_)
-            | ExprKind::Events(_)
-            | ExprKind::Rest
             | ExprKind::Str(_) => {}
             ExprKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
             ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
@@ -625,14 +433,6 @@ impl Expr {
                 f(index);
             }
             ExprKind::Lambda { body, .. } => block(body, f),
-            ExprKind::ClipBlock(b) | ExprKind::SceneBlock(b) => {
-                for (_, e) in &b.entries {
-                    f(e);
-                }
-                for a in &b.options {
-                    f(&a.value);
-                }
-            }
         }
     }
 }
@@ -676,6 +476,15 @@ pub enum EnvValue {
 }
 
 impl EnvValue {
+    /// The literal, if this step is one.
+    #[cfg(test)]
+    pub fn lit(&self) -> Option<&EnvNum> {
+        match self {
+            EnvValue::Lit(n) => Some(n),
+            EnvValue::Expr(_) => None,
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             EnvValue::Lit(n) => n.span,
@@ -683,13 +492,6 @@ impl EnvValue {
         }
     }
 
-    /// The literal, if this step is one.
-    pub fn lit(&self) -> Option<&EnvNum> {
-        match self {
-            EnvValue::Lit(n) => Some(n),
-            EnvValue::Expr(_) => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -728,15 +530,6 @@ impl EnvLit {
         }
         v
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct NoteStmt {
-    pub at: Option<AtPos>,
-    pub target: Ident,
-    pub args: Vec<Arg>,
-    pub dur: Expr,
-    pub span: Span,
 }
 
 /// Units that measure time.

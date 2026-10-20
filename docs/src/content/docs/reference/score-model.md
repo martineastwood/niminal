@@ -47,7 +47,7 @@ JSON. Values keep units as strings. Every file has a format **`version`**.
 | `args` | Named parameters; strings with units or numbers, checked like orchestra code |
 
 ```sh
-niminal render examples/saw_lead.nml --score examples/phi.nms --out phi.wav
+nimlive render examples/saw_lead.nml --score examples/phi.nms --out phi.wav
 ```
 
 ### Version 2 — a project
@@ -71,7 +71,7 @@ Clips, scenes and an optional arrangement. The CLI compiles them to `.nml` and r
 ```
 
 ```sh
-niminal render examples/live_controls.nml --score examples/project.nms --out project.wav
+nimlive render examples/live_controls.nml --score examples/project.nms --out project.wav
 ```
 
 Live: define the same clips with **`clip.define`** / **`scene.define`**, or send timed events with **`events.send`** ([Daemon protocol](/reference/protocol/)). In `.nml`, `load("score/riff.nms")` turns a version-1 section (or a one-clip project) into a clip.

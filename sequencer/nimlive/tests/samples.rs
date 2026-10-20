@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use niminal_cli::render::{RenderOptions, SAMPLE_RATE, render};
-use niminal_lang::{CompileOptions, Program, Samples, compile_with};
+use nimlive::render::{RenderOptions, SAMPLE_RATE, render};
+use niminal_compose::{Composition as Program, compile_with};
+use niminal_lang::{CompileOptions, Samples};
 
 const SR: usize = SAMPLE_RATE as usize;
 

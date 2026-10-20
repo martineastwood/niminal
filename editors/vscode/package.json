@@ -239,7 +239,12 @@
         "niminal.path": {
           "type": "string",
           "default": "niminal",
-          "description": "The niminal executable, used to start a daemon."
+          "description": "The niminal executable, the sound server that \"niminal: Start Daemon in a Terminal\" runs."
+        },
+        "niminal.livePath": {
+          "type": "string",
+          "default": "nimlive",
+          "description": "The nimlive executable: the live sequencer the editor starts, and the language server."
         }
       }
     },

@@ -38,17 +38,6 @@ pub enum Tok {
     /// `%` between two values: the remainder
     Percent,
     Bar,
-    Tilde,
-    At,
-    /// The raw text of a mini-notation pattern, between `[` and `]`. Outside
-    /// instruments, opcodes and tracks a bracket is a pattern, not a channel list.
-    Pattern(String),
-    /// The raw text of `grid[...]`.
-    Grid(String),
-    /// The raw text of `grid { ... }`: one row per sample.
-    Rows(String),
-    /// The raw text of `events { ... }` inside a clip.
-    Events(String),
     /// A quoted string such as a file path.
     Str(String),
     Newline,
@@ -66,16 +55,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut tokens: Vec<Token> = Vec::new();
     // Newlines separate statements, except inside ( ) and [ ].
     let mut brackets: Vec<u8> = Vec::new();
-    // Whether each open brace is a signal context (an instrument, function or
-    // track body), where a bracket is a channel list or envelope.
-    let mut braces: Vec<bool> = Vec::new();
-    let mut statement_start = true;
-    let mut statement_keyword: Option<String> = None;
     let mut i = 0;
 
     while i < bytes.len() {
         let c = bytes[i];
-        let mut start = i;
+        let start = i;
         let tok = match c {
             b' ' | b'\t' | b'\r' => {
                 i += 1;
@@ -134,56 +118,6 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 i = end;
                 tok
             }
-            b'[' if is_raw_bracket(
-                &tokens,
-                braces.last().copied().unwrap_or(false)
-                    || matches!(
-                        statement_keyword.as_deref(),
-                        Some("const" | "fn" | "instr" | "mono" | "track")
-                    ),
-            ) =>
-            {
-                let is_grid =
-                    matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid");
-                let Some(close) = matching_bracket(bytes, i) else {
-                    return Err(Diagnostic::new(
-                        "this `[` is never closed",
-                        Span::new(i, i + 1),
-                    ));
-                };
-                let text = src[i + 1..close].to_string();
-                i = close + 1;
-                if is_grid {
-                    // the `grid` keyword is part of the token
-                    start = tokens.pop().map_or(start, |t| t.span.start);
-                    Tok::Grid(text)
-                } else {
-                    Tok::Pattern(text)
-                }
-            }
-            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid" || n == "events") =>
-            {
-                let Some(len) = matching_brace(src, i) else {
-                    return Err(Diagnostic::new(
-                        "this `{` is never closed",
-                        Span::new(i, i + 1),
-                    ));
-                };
-                let text = src[i + 1..i + len].to_string();
-                let kind = match tokens.last() {
-                    Some(Token {
-                        tok: Tok::Ident(n), ..
-                    }) if n == "events" => "events",
-                    _ => "grid",
-                };
-                start = tokens.pop().map_or(start, |t| t.span.start);
-                i += len + 1;
-                if kind == "events" {
-                    Tok::Events(text)
-                } else {
-                    Tok::Rows(text)
-                }
-            }
             b'"' => {
                 let Some(len) = src[i + 1..]
                     .find(['"', '\n'])
@@ -215,22 +149,6 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 match c {
                     b'(' | b'[' | b'{' => {
                         brackets.push(c);
-                        if c == b'{' {
-                            let inherited = braces.last().copied().unwrap_or(false);
-                            let signal = matches!(
-                                statement_keyword.as_deref(),
-                                Some(
-                                    "instr"
-                                        | "mono"
-                                        | "fn"
-                                        | "const"
-                                        | "track"
-                                        | "arrangement"
-                                        | "bus"
-                                )
-                            );
-                            braces.push(inherited || signal);
-                        }
                         match c {
                             b'(' => Tok::LParen,
                             b'[' => Tok::LBracket,
@@ -239,17 +157,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     }
                     b')' | b']' | b'}' => {
                         brackets.pop();
-                        if c == b'}' {
-                            braces.pop();
-                        }
                         match c {
                             b')' => Tok::RParen,
                             b']' => Tok::RBracket,
                             _ => Tok::RBrace,
                         }
                     }
-                    b'~' => Tok::Tilde,
-                    b'@' => Tok::At,
                     b',' => Tok::Comma,
                     b':' => Tok::Colon,
                     b'=' if bytes.get(i) == Some(&b'=') => {
@@ -291,17 +204,6 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
             }
         };
-        match &tok {
-            Tok::Newline | Tok::LBrace | Tok::RBrace => {
-                statement_start = true;
-                statement_keyword = None;
-            }
-            Tok::Ident(name) if statement_start => {
-                statement_keyword = Some(name.clone());
-                statement_start = false;
-            }
-            _ => statement_start = false,
-        }
         tokens.push(Token {
             tok,
             span: Span::new(start, i),
@@ -332,59 +234,6 @@ fn tidy_newlines(tokens: Vec<Token>) -> Vec<Token> {
         out.push(t.clone());
     }
     out
-}
-
-/// Is a `[` here a raw pattern (or grid) rather than ordinary tokens?
-fn is_raw_bracket(tokens: &[Token], in_signal: bool) -> bool {
-    match tokens.last() {
-        Some(Token {
-            tok: Tok::Ident(name),
-            ..
-        }) if name == "env" => false,
-        Some(Token {
-            tok: Tok::Ident(name),
-            ..
-        }) if name == "grid" => true,
-        _ => !in_signal,
-    }
-}
-
-/// The index of the `]` matching the `[` at `open`.
-fn matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
-    let mut depth = 0;
-    for (i, &b) in bytes.iter().enumerate().skip(open) {
-        match b {
-            b'[' => depth += 1,
-            b']' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Index of the matching `}`, or `None`. `open` is the index of `{`. Returns the
-/// length from `{` to `}` inclusive so `src[open + 1..open + len]` is the body.
-fn matching_brace(src: &str, open: usize) -> Option<usize> {
-    let bytes = src.as_bytes();
-    let mut depth = 0;
-    for (i, &b) in bytes.iter().enumerate().skip(open) {
-        match b {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i - open);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 fn lex_number(src: &str, start: usize) -> (Tok, usize) {
@@ -487,39 +336,6 @@ mod tests {
         let t = toks("a\n\n\nb(\n1,\n2\n)\n  .c\nd");
         // a NL b ( 1 , 2 ) .c NL d: newlines only after `a` and after `.c`
         assert_eq!(t.iter().filter(|t| **t == Tok::Newline).count(), 2);
-    }
-
-    #[test]
-    fn brackets_are_patterns_outside_signal_bodies_and_tokens_inside_them() {
-        // top level: raw text, including characters the lexer would reject
-        assert_eq!(
-            toks("riff = [c2 ~ <a b>*2 . x]")[2],
-            Tok::Pattern("c2 ~ <a b>*2 . x".into())
-        );
-        // nested brackets stay inside one pattern
-        assert_eq!(toks("x = [a [b c] d]")[2], Tok::Pattern("a [b c] d".into()));
-        // clip and scene bodies are not signal contexts
-        assert_eq!(
-            toks("clip c { notes: [a b] }")[5],
-            Tok::Pattern("a b".into())
-        );
-        // instruments, functions and tracks are
-        for head in ["instr a(f: hz)", "fn o(x)", "track t"] {
-            let t = toks(&format!("{head} {{ [x, y] }}"));
-            assert!(t.contains(&Tok::LBracket), "{head}: {t:?}");
-            assert!(!t.iter().any(|t| matches!(t, Tok::Pattern(_))), "{head}");
-        }
-        // env literals are always tokens
-        assert!(toks("x = env[0 1sec 1]").contains(&Tok::LBracket));
-        // grids are raw
-        assert_eq!(
-            toks("g = grid[x.x. xXo.]")[2],
-            Tok::Grid("x.x. xXo.".into())
-        );
-        assert_eq!(
-            lex("x = [a b").unwrap_err().message,
-            "this `[` is never closed"
-        );
     }
 
     #[test]

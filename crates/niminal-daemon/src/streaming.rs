@@ -143,7 +143,6 @@ pub(crate) fn prepare(
             unit,
             initial: value as f32,
             smooth_seconds: 0.,
-            input: None,
         });
         ports.push((name, src));
     }

@@ -5,9 +5,9 @@ description: JSON-RPC 2.0 over WebSocket for live evaluation, clips and scenes, 
 
 `niminal daemon` is the generic sound server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which owns tempo, meter and musical position and turns them into events stamped in absolute samples.
 
-VS Code starts and owns a private `niminal live --port 0 --parent-stdio` process, connected to the configured daemon. Closing the editor stops its sequencer. For terminal use, start `niminal live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the daemon. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
+VS Code starts and owns a private `nimlive live --port 0 --parent-stdio` process, connected to the configured daemon. Closing the editor stops its sequencer. For terminal use, start `nimlive live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the daemon. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
 
-This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from **`niminal lsp`**, which speaks LSP on stdio for editing.
+This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from **`nimlive lsp`**, which speaks LSP on stdio for editing.
 
 ## Connection
 
@@ -169,7 +169,7 @@ Typed calls that compile to the same `.nml` source as `eval`, so quantize, the s
 With default logging, the daemon writes what the **engine** was sent under **`~/.niminal/sessions/`**: every definition, note, parameter change and cancellation, with the samples they were stamped for. That is all it takes to play a live set again, whatever the sequencer was doing. Replay offline:
 
 ```sh
-niminal render --replay ~/.niminal/sessions/<log> --out set.wav --channels 2
+niminal replay ~/.niminal/sessions/<log> --out set.wav --channels 2
 ```
 
 ## Planned (spec, not in the daemon yet)

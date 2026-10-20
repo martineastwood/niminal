@@ -221,7 +221,7 @@ tempo 100bpm
 tempo 140bpm @ next 4bars over 8bars
 ```
 
-`niminal render` plays a file like that through a session, as the daemon would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
+`nimlive render` plays a file like that through a session, as the daemon would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
 
 ## Score functions
 

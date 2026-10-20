@@ -186,7 +186,7 @@ enum Kind {
         value: f32,
         frames: u64,
     },
-    /// A clip lane setting a track parameter: control key, value, glide in frames.
+    /// A control set to a value, gliding over some frames.
     Control {
         key: String,
         value: f32,

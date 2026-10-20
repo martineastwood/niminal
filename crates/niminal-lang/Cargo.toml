@@ -2,10 +2,9 @@
 name = "niminal-lang"
 version.workspace = true
 edition.workspace = true
-description = "niminal language: parser, unit checker, and lowering to the engine graph and score"
+description = "The niminal DSP language: parser, unit checker, and compiler to engine graphs"
 
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }
 niminal-score = { path = "../niminal-score" }
-niminal-pattern = { path = "../niminal-pattern" }
 hound = "3"

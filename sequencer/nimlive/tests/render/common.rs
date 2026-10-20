@@ -1,6 +1,6 @@
-pub use niminal_cli::render::{RenderOptions, SAMPLE_RATE, render as render_with};
-pub use niminal_lang::{Program, compile};
-pub use niminal_score::Section;
+pub use nimlive::render::{RenderOptions, SAMPLE_RATE, render as render_with};
+pub use niminal_compose::{Composition as Program, compile};
+pub use niminal_compose::Section;
 
 pub const SAW_LEAD: &str = include_str!("../../../../examples/saw_lead.nml");
 
@@ -9,12 +9,12 @@ pub const PHI: &str = include_str!("../../../../examples/phi.nms");
 pub const SR: f64 = SAMPLE_RATE as f64;
 
 /// The only channel of a mono render.
-pub fn mono(out: niminal_cli::render::RenderOutput) -> Vec<f32> {
+pub fn mono(out: nimlive::render::RenderOutput) -> Vec<f32> {
     assert_eq!(out.channels.len(), 1, "expected a mono render");
     out.channels.into_iter().next().unwrap()
 }
 
-pub fn render(p: &Program, extra: &[niminal_score::Event]) -> Result<Vec<f32>, niminal_cli::render::RenderError> {
+pub fn render(p: &Program, extra: &[niminal_score::Event]) -> Result<Vec<f32>, nimlive::render::RenderError> {
     render_with(p, extra, &RenderOptions::default()).map(mono)
 }
 
@@ -70,7 +70,7 @@ pub fn render_command(args: &[&str]) -> (std::process::Output, std::path::PathBu
     let src = dir.join("song.nml");
     std::fs::write(&src, SONG).unwrap();
     let out = dir.join("out.wav");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_nimlive"))
         .arg("render")
         .arg(&src)
         .args(args)

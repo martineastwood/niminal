@@ -26,7 +26,7 @@ const flash = vscode.window.createTextEditorDecorationType({
 
 function settings() {
   const c = vscode.workspace.getConfiguration("niminal");
-  return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), path: c.get("path"), midi: c.get("midi"), oscPort: c.get("oscPort") };
+  return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), path: c.get("path"), livePath: c.get("livePath"), midi: c.get("midi"), oscPort: c.get("oscPort") };
 }
 
 function showStatus() {
@@ -80,7 +80,7 @@ async function connectLive() {
   const config = settings();
   const { token } = config;
   live?.dispose();
-  live = startLive(config, (text) => channel.appendLine(`live: ${text}`));
+  live = startLive({ ...config, path: config.livePath }, (text) => channel.appendLine(`live: ${text}`));
   const port = await live.ready;
   client = new Client({
     port,
@@ -272,19 +272,19 @@ async function startDaemon() {
   }
 }
 
-// Errors, completion, hover and go-to-definition come from `niminal lsp`, the same
-// binary as the daemon, so they always agree with it about the language.
+// Errors, completion, hover and go-to-definition come from `nimlive lsp`, the same
+// binary as the live sequencer, so they always agree with it about the language.
 function startLanguageServer() {
   const server = new LanguageClient(
     "niminal",
     "niminal language server",
-    { command: settings().path, args: ["lsp"] },
+    { command: settings().livePath, args: ["lsp"] },
     { documentSelector: [{ language: "niminal" }] },
   );
   languageServer = server;
   server.start().catch((e) => {
     channel.appendLine(`language server: ${e.message}`);
-    vscode.window.showWarningMessage(`niminal: can't start \`${settings().path} lsp\`. Set niminal.path to the niminal executable.`);
+    vscode.window.showWarningMessage(`niminal: can't start \`${settings().livePath} lsp\`. Set niminal.livePath to the nimlive executable.`);
   });
 }
 

@@ -136,7 +136,7 @@ pub(crate) fn mark(
     for (state, def) in states.iter_mut().zip(&program.controls) {
         if statements
             .iter()
-            .any(|s| s.key().and_then(|k| k.strip_prefix("ctl:")) == Some(&def.name))
+            .any(|s| s.key.strip_prefix("ctl:") == Some(&def.name))
         {
             state.revision = revision;
         }

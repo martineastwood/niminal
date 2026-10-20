@@ -1,7 +1,8 @@
 use std::fmt;
 
 use niminal_engine::{BLOCK, DEFAULT_CEILING, Master};
-use niminal_lang::{Layout, Program};
+use niminal_compose::Composition;
+use niminal_lang::Layout;
 use niminal_live::Offline;
 use niminal_score::Event;
 
@@ -93,7 +94,7 @@ impl std::error::Error for RenderError {}
 /// `.nms` score). Voices run until their envelopes finish, and effect tails
 /// ring out, so the result includes every release.
 pub fn render(
-    program: &Program,
+    program: &Composition,
     extra: &[Event],
     options: &RenderOptions,
 ) -> Result<RenderOutput, RenderError> {
@@ -238,7 +239,7 @@ fn finish(
 
 /// The captured stems, named for their track or bus and cut to `len` samples. The track that plays
 /// bare instruments is left out if it was never heard.
-fn name_stems(program: &Program, captured: Option<niminal_engine::Stems>, len: usize) -> Vec<Stem> {
+fn name_stems(program: &Composition, captured: Option<niminal_engine::Stems>, len: usize) -> Vec<Stem> {
     let Some(captured) = captured else {
         return Vec::new();
     };
@@ -292,7 +293,7 @@ pub fn write_wav(path: &std::path::Path, channels: &[Vec<f32>]) -> Result<(), ho
 /// The file without its tempo ramps (their lines left blank so everything stays where it was), and the
 /// ramps. Empty if there are none.
 pub fn split_ramps(source: &str) -> Result<(String, Vec<String>), niminal_lang::Diagnostic> {
-    let statements = niminal_lang::analyze(source)?;
+    let statements = niminal_compose::analyze(source)?;
     let mut rest = source.to_string();
     let mut ramps = Vec::new();
     for ramp in statements.iter().filter(|s| s.ramp().is_some()) {

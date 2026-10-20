@@ -8,13 +8,24 @@ use niminal_pattern::{Hit, MAX_REPEATS, Param, Pattern, Rational, grid, parse_wi
 use niminal_score::{Tempo, Time, Value};
 
 use crate::ast::*;
-use crate::diag::{Diagnostic, Span, closest};
-use crate::lower::{GAIN_PARAM, Names, curve_of};
+use niminal_lang::{Diagnostic, Span, closest};
+use crate::compile::Names;
+use niminal_lang::GAIN_PARAM;
 use crate::performance::*;
-use crate::program::{Instrument, TrackInfo};
-use crate::unit::Unit;
+use niminal_lang::{Instrument, TrackInfo};
+use niminal_lang::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
+
+/// How a segment of an envelope bends.
+fn curve_of(kind: Option<CurveKind>) -> Curve {
+    match kind {
+        None => Curve::Linear,
+        Some(CurveKind::Exp) => Curve::Exp,
+        Some(CurveKind::Log) => Curve::Log,
+        Some(CurveKind::Custom(k)) => Curve::Custom(k as f32),
+    }
+}
 
 /// A change to a pattern, such as the `it.reverse` in `every(2, it.reverse)`.
 type Change<'a, T> = Box<dyn Fn(Pattern<T>) -> Pattern<T> + 'a>;
@@ -118,7 +129,9 @@ pub(crate) struct Compiled {
 
 pub(crate) struct Context<'a> {
     pub tempo: Tempo,
-    pub names: &'a Names,
+    pub names: &'a Names<'a>,
+    /// The `notes` line of each track, which changes the notes of every clip played on it.
+    pub track_notes: &'a HashMap<String, Expr>,
     pub instruments: &'a [Instrument],
     pub tracks: &'a [TrackInfo],
     /// Tracks whose definition failed to compile; mentions of them are not
@@ -127,7 +140,7 @@ pub(crate) struct Context<'a> {
     /// The names of the samples in kits, which a pattern may use as steps.
     pub sample_names: &'a [String],
     /// Where `load("…")` looks for `.nms` files.
-    pub samples: &'a crate::sample::Samples,
+    pub samples: &'a niminal_lang::Samples,
 }
 
 struct Perform<'a> {
@@ -221,7 +234,7 @@ pub(crate) fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value>
         Some("st") => Value::Semitones(value),
         Some("ct") => Value::Semitones(value / 100.0),
         Some("%") => Value::Num(value / 100.0),
-        Some(u) => return Err(crate::lower::unknown_unit(u, span)),
+        Some(u) => return Err(niminal_lang::unknown_unit(u, span)),
     })
 }
 
@@ -2067,12 +2080,12 @@ impl Perform<'_> {
         let text = std::fs::read_to_string(&resolved).map_err(|e| {
             Diagnostic::new(format!("couldn't read `{path}`: {e}"), span)
         })?;
-        let file = niminal_score::ScoreFile::from_json(&text).map_err(|e| {
+        let file = crate::ScoreFile::from_json(&text).map_err(|e| {
             Diagnostic::new(format!("couldn't load `{path}`: {e}"), span)
         })?;
         let clip = match file {
-            niminal_score::ScoreFile::Section(section) => section_to_clip(section, self.cx.tempo)?,
-            niminal_score::ScoreFile::Project(project) => {
+            crate::ScoreFile::Section(section) => section_to_clip(section, self.cx.tempo)?,
+            crate::ScoreFile::Project(project) => {
                 if project.clips.len() == 1 && project.scenes.is_empty() {
                     clipdef_to_clip(&project.clips[0], self.cx)?
                 } else {
@@ -2665,7 +2678,7 @@ impl Perform<'_> {
     /// The clip as `track` plays it: its `notes` line, if it has one, changes the clip's notes. It also
     /// has to make sense on the track's instrument.
     fn on_track(&self, mut clip: Clip, track: usize, id: &Ident, span: Span) -> Res<Clip> {
-        if let Some(effect) = &self.cx.tracks[track].notes
+        if let Some(effect) = self.cx.track_notes.get(&self.cx.tracks[track].name)
             && let Some(at) = clip.lanes.iter().position(|(lane, _)| lane == "notes")
         {
             let it = PerfValue::Pattern(clip.lanes[at].1.clone());
@@ -2757,7 +2770,7 @@ impl Perform<'_> {
         let levels =
             std::iter::once(&curve.start).chain(curve.segments.iter().map(|(_, _, level)| level));
         for level in levels {
-            crate::program::engine_value(def.unit, *level, tempo).map_err(|e| {
+            niminal_lang::engine_value(def.unit, *level, tempo).map_err(|e| {
                 Diagnostic::new(
                     format!("envelope lane `{param}` moves {}: {e}", def.name),
                     span,
@@ -3468,7 +3481,7 @@ fn parse_events(raw: &str, span: Span, cx: &Context) -> Res<Vec<ScoredNote>> {
     Ok(out)
 }
 
-fn section_to_clip(section: niminal_score::Section, tempo: Tempo) -> Res<Clip> {
+fn section_to_clip(section: crate::Section, tempo: Tempo) -> Res<Clip> {
     let length = time_cycles(section.length, tempo);
     let mut scored = Vec::with_capacity(section.events.len());
     for e in section.events {
@@ -3526,7 +3539,7 @@ fn section_to_clip(section: niminal_score::Section, tempo: Tempo) -> Res<Clip> {
     })
 }
 
-fn clipdef_to_clip(def: &niminal_score::ClipDef, cx: &Context) -> Res<Clip> {
+fn clipdef_to_clip(def: &crate::ClipDef, cx: &Context) -> Res<Clip> {
     // Re-parse the canonical source so lanes go through the same path as handwritten clips.
     let src = def.to_source();
     let items = crate::parser::parse(&src)?;

@@ -36,7 +36,7 @@ Settings: `niminal.port` (generic daemon, default 7401), `niminal.token`, `nimin
 
 ## Language server
 
-The extension starts `niminal lsp` (the same binary as the daemon, found through the `niminal.path` setting) for editing support that works without a running daemon:
+The extension starts `nimlive lsp` (the same binary as the daemon, found through the `niminal.path` setting) for editing support that works without a running daemon:
 
 - errors as you type, with the compiler's own messages and help
 - completion for names in the file, built-in opcodes, methods after a `.`, named arguments, waveforms and unit suffixes
@@ -44,11 +44,11 @@ The extension starts `niminal lsp` (the same binary as the daemon, found through
 - a comment directly above an `instr` or `fn` (`//` or `///`) is its documentation
 
 "Restart Language Server" in the command palette picks up a newly installed binary.
-Other editors can use it too: run `niminal lsp` as a stdio language server for `.nml` files.
+Other editors can use it too: run `nimlive lsp` as a stdio language server for `.nml` files.
 
 ## Live controls, MIDI and OSC
 
-Named controls (`ctl`), MIDI CC / learn, OSC in, and keyboard clips (`keys: midi.keys`) are part of the language. Set `niminal.midi` (empty string for all inputs) and/or `niminal.oscPort` for the editor’s live sequencer, then reload the editor. For terminal performances with hardware or OSC, run `niminal live --midi` and/or `--osc-port` alongside the daemon.
+Named controls (`ctl`), MIDI CC / learn, OSC in, and keyboard clips (`keys: midi.keys`) are part of the language. Set `niminal.midi` (empty string for all inputs) and/or `niminal.oscPort` for the editor’s live sequencer, then reload the editor. For terminal performances with hardware or OSC, run `nimlive live --midi` and/or `--osc-port` alongside the daemon.
 
 See the [live coding guide](https://niminal.dev/guide/live-coding/) and [performance reference](https://niminal.dev/reference/language/performance/). Examples: `examples/live_controls.nml`, `examples/midi_osc.nml`.
 

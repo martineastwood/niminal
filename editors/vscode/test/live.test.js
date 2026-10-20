@@ -13,13 +13,13 @@ function child() {
 
 test("editor owns a private sequencer connected to the generic daemon", async () => {
   const process = child();
-  const live = startLive({ path: "/a path/niminal", port: 7401, token: "secret" }, () => {}, (path, args, options) => {
-    assert.equal(path, "/a path/niminal");
+  const live = startLive({ path: "/a path/nimlive", port: 7401, token: "secret" }, () => {}, (path, args, options) => {
+    assert.equal(path, "/a path/nimlive");
     assert.deepEqual(args, ["live", "--engine-port", "7401", "--port", "0", "--parent-stdio", "--token", "secret"]);
-    assert.equal(options.argv0, "niminal live");
+    assert.equal(options.argv0, "nimlive");
     return process;
   });
-  process.stdout.emit("data", "niminal live listening on ws://127.");
+  process.stdout.emit("data", "nimlive listening on ws://127.");
   process.stdout.emit("data", "0.0.1:523");
   process.stdout.emit("data", "45\n");
   assert.equal(await live.ready, 52345);

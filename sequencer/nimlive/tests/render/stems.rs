@@ -20,7 +20,7 @@ verse.start
 at +1bars hush
 ";
 
-fn stems_of(src: &str) -> (Vec<f32>, Vec<niminal_cli::render::Stem>) {
+fn stems_of(src: &str) -> (Vec<f32>, Vec<nimlive::render::Stem>) {
     let out = render_with(&program(src), &[], &RenderOptions { limiter: false, stems: true, ..Default::default() }).unwrap();
     let mix = out.channels.into_iter().next().unwrap();
     (mix, out.stems)

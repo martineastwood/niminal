@@ -8,7 +8,8 @@ mod text;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 
-use niminal_lang::{CompileOptions, Layout, Samples, Symbol, SymbolKind, builtin_ops, compile_with, symbols, waves};
+use niminal_compose::{Symbol, SymbolKind, compile_with, symbols};
+use niminal_lang::{CompileOptions, Layout, Samples, builtin_ops, waves};
 use serde_json::{Value, json};
 
 /// A module the document uses.
@@ -136,7 +137,7 @@ impl Server {
 
     fn update(&mut self, uri: &str, text: &str, out: &mut Vec<Value>) {
         let previous = self.documents.remove(uri).map(|d| d.symbols);
-        let expanded = niminal_lang::expand(text, &text::directory_of(uri));
+        let expanded = niminal_compose::expand(text, &text::directory_of(uri));
         let (symbols, imports) = match &expanded {
             Ok(e) => (
                 symbols(&e.text).ok().map(|all| all.into_iter().filter(|s| s.span.end <= e.root_len).collect()),

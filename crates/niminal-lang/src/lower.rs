@@ -28,7 +28,7 @@ use crate::kernel::{
 use crate::layout::{Layout, conversion};
 use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
 use crate::program::MidiTarget;
-use crate::program::{ControlBinding, ControlDef, Instrument, Param};
+use crate::program::{ControlDef, Instrument, Param};
 use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
@@ -129,7 +129,7 @@ pub(crate) fn unknown_name<'a>(
     d
 }
 
-pub(crate) fn unknown_unit(unit: &str, span: Span) -> Diagnostic {
+pub fn unknown_unit(unit: &str, span: Span) -> Diagnostic {
     let mut d = Diagnostic::new(format!("unknown unit `{unit}`"), span);
     if let Some(c) = closest(unit, UNIT_NAMES) {
         d = d.with_help(format!("did you mean `{c}`?"));
@@ -138,7 +138,7 @@ pub(crate) fn unknown_unit(unit: &str, span: Span) -> Diagnostic {
 }
 
 /// The control every instrument has, applied after its output.
-pub(crate) const GAIN_PARAM: &str = "gain";
+pub const GAIN_PARAM: &str = "gain";
 
 const LAYOUT_HELP: &str = "one of mono, stereo, quad, surround(5.1), surround(7.1), or channels(n)";
 
@@ -461,7 +461,6 @@ pub(crate) struct Lower<'a> {
 pub(crate) fn compile_control(
     name: &Ident,
     value: &Expr,
-    input: Option<&ControlInput>,
     tempo: Tempo,
     registry: &Registry,
     names: &Names,
@@ -531,36 +530,6 @@ pub(crate) fn compile_control(
             initial.span,
         ));
     }
-    let input = match input {
-        None => None,
-        Some(input) => {
-            let hi = lower.expr(&input.hi)?;
-            let hi_value = hi.konst.ok_or_else(|| {
-                Diagnostic::new("a control's range must be constant", input.hi.span)
-            })? as f32;
-            if hi.unit != sig.unit {
-                return Err(Diagnostic::new(
-                    format!(
-                        "the range's ends need the same unit: {} and {}",
-                        sig.unit.describe(),
-                        hi.unit.describe()
-                    ),
-                    input.hi.span,
-                ));
-            }
-            if !hi_value.is_finite() || hi_value <= value {
-                return Err(Diagnostic::new(
-                    "the upper end of a range must be above the lower end",
-                    input.hi.span,
-                ));
-            }
-            Some(ControlBinding {
-                source: input.source.clone(),
-                lo: value,
-                hi: hi_value,
-            })
-        }
-    };
     Ok(ControlDef {
         range: None,
         name: name.name.clone(),
@@ -568,7 +537,6 @@ pub(crate) fn compile_control(
         unit: sig.unit,
         initial: value,
         smooth_seconds,
-        input,
     })
 }
 
@@ -2199,21 +2167,6 @@ impl<'a> Lower<'a> {
                 let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
                 self.compare(*op, l, r, e.span)
             }
-            ExprKind::Pattern(_) | ExprKind::Rest => Err(Diagnostic::new(
-                "a pattern can't be used inside an instrument, function or track",
-                e.span,
-            )
-            .with_help(
-                "patterns go in `clip`, `scene` and `play`; use `[a, b]` here for a channel array",
-            )),
-            ExprKind::Grid(_) | ExprKind::Rows(_) | ExprKind::Events(_) => Err(Diagnostic::new(
-                "grids as trigger signals aren't supported yet",
-                e.span,
-            )),
-            ExprKind::ClipBlock(_) | ExprKind::SceneBlock(_) => Err(Diagnostic::new(
-                "clips and scenes belong in the score, not in an instrument",
-                e.span,
-            )),
             ExprKind::Name(_)
             | ExprKind::Neg(_)
             | ExprKind::Binary { .. }
@@ -3470,7 +3423,7 @@ impl<'a> Lower<'a> {
             }
             "clock" => {
                 return Err(Diagnostic::new(
-                    "`clock` describes the transport: `clock.beat`, `clock.bar` or `clock.bpm`",
+                    "`clock` describes the transport: `clock.time`",
                     span,
                 ));
             }
@@ -6410,35 +6363,18 @@ impl Lower<'_> {
         Sig::signal(src, unit)
     }
 
-    /// `clock.beat`, `clock.bar` and `clock.bpm`: where the session's transport is.
+    /// `clock.time`: where the session's transport is, in seconds.
     fn clock_context(&mut self, name: &Ident) -> Res<Sig> {
         if self.mode == Mode::Plain || self.in_fn {
             return Err(Diagnostic::new(
                 "`clock` is only available in an instrument, track or bus",
                 name.span,
             )
-            .with_help("pass `clock.beat` to a function as an argument"));
+            .with_help("pass `clock.time` to a function as an argument"));
         }
         match name.name.as_str() {
             "time" => Ok(self.read_context(Context::ClockTime, Unit::Time, Rate::Audio)),
-            "bpm" => Ok(Sig::constant(Unit::Num, self.tempo.bpm)),
-            "beat" | "bar" => {
-                let time = self.read_context(Context::ClockTime, Unit::Num, Rate::Audio);
-                let scale = self.tempo.bpm
-                    / 60.0
-                    / if name.name == "bar" {
-                        self.tempo.beats_per_bar
-                    } else {
-                        1.0
-                    };
-                self.mul(
-                    &time,
-                    &Sig::constant(Unit::Num, scale),
-                    Unit::Num,
-                    name.span,
-                )
-            }
-            _ => Err(no_field("clock", name, &["time", "beat", "bar", "bpm"])),
+            _ => Err(no_field("clock", name, &["time"])),
         }
     }
 

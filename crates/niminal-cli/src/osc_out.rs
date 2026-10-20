@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use niminal_lang::OscTap;
 
 use crate::audio::{Shared, lock};
-use crate::worker::Worker;
+use niminal_ws::worker::Worker;
 
 /// An OSC message with one float argument.
 pub fn encode_osc(address: &str, value: f32) -> Vec<u8> {
@@ -115,8 +115,15 @@ impl OscOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::parse_osc;
     use niminal_engine::ops::Tap;
+
+    /// The address and float of a single OSC message.
+    fn parse_osc(packet: &[u8], out: &mut Vec<(String, f64)>) {
+        let end = packet.iter().position(|&b| b == 0).unwrap();
+        let address = std::str::from_utf8(&packet[..end]).unwrap();
+        let args = &packet[(end / 4 + 1) * 4 + 4..];
+        out.push((address.to_string(), f64::from(f32::from_be_bytes(args[..4].try_into().unwrap()))));
+    }
 
     fn tap(address: &str, port: u16, rate: f64) -> OscTap {
         OscTap { address: address.into(), host: "127.0.0.1".into(), port, rate, value: Tap::new() }

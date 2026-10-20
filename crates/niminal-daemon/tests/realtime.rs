@@ -326,7 +326,7 @@ fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
     ];
     let session = || {
         let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
-        s.eval_as(1, &format!("tempo 120bpm\n{SINE}")).unwrap();
+        s.eval_as(1, SINE).unwrap();
         s
     };
     let frames = 4 * 48_000;

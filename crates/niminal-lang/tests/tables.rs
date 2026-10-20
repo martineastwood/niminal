@@ -11,7 +11,6 @@ fn harmonics_and_osc() {
     ok(r#"
 const wave = harmonics([1, 0.5], size: 64)
 instr a(freq: hz) { osc(wave, freq) * env[1 10ms 0] }
-a(freq: 440hz) for 50ms
 "#);
 }
 
@@ -25,7 +24,6 @@ const a = harmonics([1], size: 32)
 const b = harmonics([1, 0.5], size: 32)
 const morph = bank([a, b])
 instr x(freq: hz) { osc(morph, freq, position: 0.5).waveshape(t) * c.phase(0.25) }
-x(freq: 220hz) for 20ms
 "#);
 }
 
@@ -37,7 +35,6 @@ instr a() {
   scratch[0] = 1
   scratch.at(0)
 }
-a() for 10ms
 "#);
 }
 
@@ -47,7 +44,6 @@ fn sample_data_and_table_sample() {
 const organ = harmonics([1, 0, 1/3], size: 64)
 sample pad = organ with(root: 440hz, loop: forward)
 instr a(freq: hz) { osc(pad.data, freq) * env[1 5ms 0] }
-a(freq: 440hz) for 20ms
 "#);
 }
 
@@ -63,7 +59,7 @@ fn a_path_can_hold_constants_and_data_files_are_tables() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("curve07.csv"), "x, y\n0, 0\n1, 1\n").unwrap();
     let path = dir.join("curve{n:2}.csv").to_string_lossy().replace('\\', "/");
-    let src = format!("const n = 3 + 4\nconst t = file(\"{path}\", channel: 1)\ninstr a(freq: hz) {{ osc(t, freq) * env[1 10ms 0] }}\na(freq: 220hz) for 20ms");
+    let src = format!("const n = 3 + 4\nconst t = file(\"{path}\", channel: 1)\ninstr a(freq: hz) {{ osc(t, freq) * env[1 10ms 0] }}");
     ok(&src);
     let missing = src.replace("{n:2}", "{m}");
     let errors = compile(&missing).err().expect("`m` is not defined");

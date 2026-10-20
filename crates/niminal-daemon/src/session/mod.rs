@@ -19,8 +19,8 @@ use niminal_engine::{
     BLOCK, DEFAULT_CEILING, DEFAULT_MAX_VOICES, MAX_CHANNELS, Master, Mixer, Transfer,
 };
 use niminal_lang::{
-    CompileOptions, Expanded, Layout, Program, Samples, Statement, StatementKind, analyze,
-    compile_dsp_with as compile_with,
+    CompileOptions, Expanded, Layout, Program, Samples, Statement, analyze,
+    compile_with,
 };
 use niminal_score::{Event, Time, Value};
 
@@ -838,7 +838,7 @@ impl Session {
         self.current_transaction = Some(applied);
         self.reconcile_transactions();
         for statement in &statements {
-            if let Some(name) = statement.key().and_then(|key| key.strip_prefix("buffer:")) {
+            if let Some(name) = statement.key.strip_prefix("buffer:") {
                 self.hidden_buffers.remove(name);
             }
         }

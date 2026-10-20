@@ -147,14 +147,14 @@ pub(super) fn root_name(text: &str) -> &str {
 /// track with an instrument stops.
 pub(super) fn apply_launch(
     playing: &mut BTreeMap<String, Playing>,
-    program: &Program,
+    program: &Composition,
     project: &Project,
     scene: &str,
 ) {
     let Some(text) = project.text_of(&format!("scene:{scene}")) else {
         return;
     };
-    let entries = niminal_lang::scene_entries(text);
+    let entries = niminal_compose::scene_entries(text);
     for track in program.tracks.iter().filter(|t| t.instrument.is_some()) {
         if !entries.iter().any(|(name, _)| *name == track.name) {
             playing.remove(&track.name);
@@ -172,7 +172,7 @@ pub(super) fn apply_launch(
 /// been compiled: `play` records its source, `stop` and `hush` forget.
 pub(super) fn apply_to_playing(
     playing: &mut BTreeMap<String, Playing>,
-    program: &Program,
+    program: &Composition,
     statement: &Statement,
 ) {
     for scheduled in &program.performance {

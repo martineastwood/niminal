@@ -1,5 +1,5 @@
 use crate::common::*;
-use niminal_cli::render::{End, render_session, split_ramps};
+use nimlive::render::{End, render_session, split_ramps};
 
 const FILE: &str = "tempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) * env[1 | 50ms 0] * 0.3 }\ntrack t { instrument = p }\ntempo 240bpm @ next bar over 2bars\nt.play([c4 e4 g4 c5])";
 

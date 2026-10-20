@@ -11,6 +11,7 @@ mod log;
 mod offline;
 mod protocol;
 mod quantize;
+mod service;
 
 pub use link::{EngineLink, InProcess};
 pub use live::{

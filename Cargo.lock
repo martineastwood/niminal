@@ -697,12 +697,10 @@ dependencies = [
  "niminal-daemon",
  "niminal-engine",
  "niminal-lang",
- "niminal-live",
- "niminal-lsp",
  "niminal-score",
+ "niminal-ws",
  "rtrb",
  "serde_json",
- "tungstenite",
 ]
 
 [[package]]
@@ -731,35 +729,8 @@ version = "0.0.1"
 dependencies = [
  "hound",
  "niminal-engine",
- "niminal-pattern",
  "niminal-score",
 ]
-
-[[package]]
-name = "niminal-live"
-version = "0.0.1"
-dependencies = [
- "hound",
- "niminal-daemon",
- "niminal-engine",
- "niminal-lang",
- "niminal-score",
- "rtrb",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "niminal-lsp"
-version = "0.0.1"
-dependencies = [
- "niminal-lang",
- "serde_json",
-]
-
-[[package]]
-name = "niminal-pattern"
-version = "0.0.1"
 
 [[package]]
 name = "niminal-score"
@@ -767,6 +738,15 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "niminal-ws"
+version = "0.0.1"
+dependencies = [
+ "niminal-daemon",
+ "serde_json",
+ "tungstenite",
 ]
 
 [[package]]

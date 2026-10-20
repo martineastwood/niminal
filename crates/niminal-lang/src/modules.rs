@@ -18,20 +18,20 @@ pub struct Expanded {
     pub text: String,
     /// How much of `text` is the file itself.
     pub root_len: usize,
-    modules: Vec<Module>,
+    pub modules: Vec<Module>,
 }
 
-struct Module {
-    path: PathBuf,
-    label: String,
-    alias: Option<String>,
+pub struct Module {
+    pub path: PathBuf,
+    pub label: String,
+    pub alias: Option<String>,
     /// The module as written, with its own `use` lines blanked.
-    source: String,
+    pub source: String,
     /// Where the module's text starts and ends in `Expanded::text`.
-    start: usize,
-    end: usize,
+    pub start: usize,
+    pub end: usize,
     /// The `use` line in the file itself that brought it in.
-    used_at: Span,
+    pub used_at: Span,
 }
 
 /// A module that was joined in, as the file it came from.
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(e.locate(own.clone()), own);
     }
 
-    const RIG: &str = "fn shimmer(x, size: 0..1 = 0.5) { x }\ninstr tone(freq: hz) { osc(sine, freq).shimmer(size: 0.2) }\ntrack lead { instrument = tone }\nscene a { lead: riff }\nriff = [c4]\n_secret = [d4]\n";
+    const RIG: &str = "fn shimmer(x, size: 0..1 = 0.5) { x }\ninstr tone(freq: hz) { osc(sine, freq).shimmer(size: 0.2) }\ntrack lead { instrument = tone }\nconst riff = 4\nconst _secret = 5\n";
 
     #[test]
     fn an_alias_renames_what_the_module_defines() {
@@ -396,11 +396,7 @@ mod tests {
             "{module}"
         );
         assert!(
-            module.contains("scene r::a { r::lead: r::riff }"),
-            "{module}"
-        );
-        assert!(
-            module.contains("r::riff = [c4]") && module.contains("rig::_secret = [d4]"),
+            module.contains("const r::riff = 4") && module.contains("const rig::_secret = 5"),
             "{module}"
         );
         // arguments keep their names
@@ -424,7 +420,7 @@ mod tests {
     #[test]
     fn private_names_cannot_be_written_from_outside() {
         let dir = project(&[("rig.nml", RIG)]);
-        let err = expand_here("use rig\nx.play(rig::_secret)\n", &dir)
+        let err = expand_here("use rig\nconst x = rig::_secret\n", &dir)
             .err()
             .unwrap();
         assert_eq!(err.message, "`_secret` is private to `rig`");

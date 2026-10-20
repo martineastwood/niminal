@@ -15,11 +15,11 @@ use std::sync::Arc;
 use niminal_daemon::{
     At, ClockInfo, Endpoint, EngineError, EngineReply, EngineRequest, Op, RoutingEdit,
 };
-use niminal_lang::{
-    Action, Clip, CommandAction, CompileOptions, Entry, Expanded, InputSource, Layout, Located,
-    Origin, Piece, PlayInfo, Problem, Program, Project, Quantize, Samples, Schedule, Scheduled,
+use niminal_compose::{
+    Action, Clip, CommandAction, Composition, InputSource, PlayInfo, Quantize, Schedule, Scheduled,
     Statement, StatementData, StatementKind, analyze, compile_with,
 };
+use niminal_lang::{CompileOptions, Entry, Expanded, Layout, Located, Origin, Piece, Problem, Project, Samples};
 use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::keyboard::Keyboard;
@@ -81,7 +81,7 @@ const BATCH: usize = 1000;
 /// compiling).
 pub(crate) struct Compiled {
     pub statement: Statement,
-    pub program: Program,
+    pub program: Composition,
 }
 
 /// An evaluation that has compiled and is waiting to land. Everything that could be slow, such as
@@ -98,7 +98,7 @@ pub(crate) struct Pending {
     /// The project once this has landed.
     pub project: Project,
     /// The new program, if definitions changed.
-    pub program: Option<Arc<Program>>,
+    pub program: Option<Arc<Composition>>,
     pub actions: Vec<Compiled>,
     /// Plays to start again because a pattern they use was redefined.
     pub replays: Vec<Compiled>,
@@ -199,7 +199,7 @@ pub struct Live {
     learned_out: Vec<(String, String)>,
 
     project: Project,
-    program: Arc<Program>,
+    program: Arc<Composition>,
     history: Vec<HistoryEntry>,
     schedule: Schedule,
     /// Notes and parameter changes up to this sample have been taken from the schedule and sent.
@@ -309,7 +309,7 @@ impl Live {
         self.clock
     }
 
-    pub fn program(&self) -> &Program {
+    pub fn program(&self) -> &Composition {
         &self.program
     }
 
@@ -779,7 +779,7 @@ impl Live {
             event.at = beat(at);
             event.dur = beat(dur);
         }
-        let section = niminal_score::Section {
+        let section = niminal_compose::Section {
             name: name.to_string(),
             length: Time::Bars(bars),
             events,
@@ -801,7 +801,7 @@ impl Live {
 
     /// Whether a pending change waits for a bar line, not a beat.
     fn landing_unit_is_bar(&self, p: &Pending) -> bool {
-        use niminal_lang::QuantizeUnit;
+        use niminal_compose::QuantizeUnit;
         p.statements.iter().any(|s| {
             matches!(
                 self.quantums().for_statement(s, None).unit,
@@ -958,16 +958,16 @@ impl Live {
     fn definition_ops(
         &self,
         statements: &[Statement],
-        program: Option<&Program>,
+        program: Option<&Composition>,
         at: At,
     ) -> Vec<Op> {
         let mut ops = definition_ops(statements, program, at, self.sample_dirs.first());
         for op in &mut ops {
             if let Op::Define { source, .. } = op {
                 let names = [
-                    niminal_lang::LIVE_BPM,
-                    niminal_lang::LIVE_ORIGIN,
-                    niminal_lang::LIVE_METER,
+                    niminal_compose::LIVE_BPM,
+                    niminal_compose::LIVE_ORIGIN,
+                    niminal_compose::LIVE_METER,
                 ];
                 let tempo = program.map_or(self.program.tempo, |p| p.tempo);
                 let values = [
@@ -1076,13 +1076,13 @@ impl Live {
 
     fn clock_ops(&self, at: u64) -> Vec<Op> {
         let tempo = self.program.tempo;
-        let source = niminal_lang::dsp_source(&self.program.source, tempo)
+        let source = niminal_compose::dsp_source(&self.program.source, tempo)
             .expect("compiled source projects");
         let values = [tempo.bpm, self.clock_origin(at), tempo.beats_per_bar];
         [
-            niminal_lang::LIVE_BPM,
-            niminal_lang::LIVE_ORIGIN,
-            niminal_lang::LIVE_METER,
+            niminal_compose::LIVE_BPM,
+            niminal_compose::LIVE_ORIGIN,
+            niminal_compose::LIVE_METER,
         ]
         .iter()
         .enumerate()
@@ -1100,7 +1100,7 @@ impl Live {
 
     /// Play `program` as it is compiled: the notes it writes out, and `schedule` (usually
     /// `program.schedule()`) for the rest. This is how a file is rendered offline.
-    pub fn play_program(&mut self, program: Program, schedule: Schedule) {
+    pub fn play_program(&mut self, program: Composition, schedule: Schedule) {
         self.look();
         for dir in program.samples.bases().iter().rev() {
             self.set_sample_dir(dir);
@@ -1182,7 +1182,7 @@ impl Live {
 /// Send DSP definitions only. Implicit clip tracks and musical literals are resolved in this client.
 fn definition_ops(
     statements: &[Statement],
-    program: Option<&Program>,
+    program: Option<&Composition>,
     at: At,
     dir: Option<&std::path::PathBuf>,
 ) -> Vec<Op> {
@@ -1191,7 +1191,7 @@ fn definition_ops(
         ops.push(Op::Forget { at, tag: None });
     }
     if let Some(program) = program {
-        let source = niminal_lang::dsp_source(&program.source, program.tempo)
+        let source = niminal_compose::dsp_source(&program.source, program.tempo)
             .expect("compiled source can be projected to DSP");
         if !source.is_empty() {
             ops.push(Op::Define {
@@ -1300,7 +1300,7 @@ pub(crate) fn origin_of(history: &[HistoryEntry]) -> f64 {
         .map_or(0.0, |h| h.at)
 }
 
-pub(crate) fn name_action(program: &Program, action: &Action) -> Option<NamedAction> {
+pub(crate) fn name_action(program: &Composition, action: &Action) -> Option<NamedAction> {
     let name = |t: &usize| program.tracks[*t].name.clone();
     Some(match action {
         Action::Play { track, clip } => NamedAction::Play {
@@ -1319,7 +1319,7 @@ pub(crate) fn name_action(program: &Program, action: &Action) -> Option<NamedAct
     })
 }
 
-pub(crate) fn schedule_for(program: &Program, history: &[HistoryEntry]) -> Schedule {
+pub(crate) fn schedule_for(program: &Composition, history: &[HistoryEntry]) -> Schedule {
     let names = program.tracks.iter().map(|t| t.name.clone()).collect();
     let index = |name: &String| program.track_index(name);
     let commands = history

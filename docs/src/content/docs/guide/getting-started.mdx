@@ -38,7 +38,7 @@ Save this as `saw_lead.nml` (or use `examples/saw_lead.nml` in the repo):
 Render it to a WAV file:
 
 ```sh
-niminal render saw_lead.nml --out saw_lead.wav
+nimlive render saw_lead.nml --out saw_lead.wav
 ```
 
 Open the `.nml` file: tempo, an instrument with units (`hz`, `db`, `ms`), an envelope, and notes timed with `at`.
@@ -52,10 +52,10 @@ Start the engine with a file, then send code from the REPL or another terminal:
 ```sh
 niminal daemon
 # in another terminal:
-niminal live examples/groove.nml
-niminal repl
+nimlive live examples/groove.nml
+nimlive repl
 # in another terminal:
-niminal send 'chorus.start' --quantize "next 4bars"
+nimlive send 'chorus.start' --quantize "next 4bars"
 ```
 
 See [Live coding](/guide/live-coding/) for the REPL, quantization, MIDI, and session replay.
@@ -64,7 +64,7 @@ See [Live coding](/guide/live-coding/) for the REPL, quantization, MIDI, and ses
 
 The [VS Code / Cursor extension](/reference/editor/) adds highlighting, diagnostics, and evaluate-while-playing. Install it from `editors/vscode`, run `niminal daemon`, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
 
-The language server (`niminal lsp`) works without a daemon for hover, completion, and errors.
+The language server (`nimlive lsp`) works without a daemon for hover, completion, and errors.
 
 ## Next
 

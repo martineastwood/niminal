@@ -12,7 +12,7 @@ use niminal_pattern::{Rational, Span as CycleSpan};
 use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::performance::{Action, Clip, EnvLane, Scheduled, Step};
-use crate::program::Program;
+use crate::compile::Composition;
 
 /// The pattern queries and events one clip may spend in a search: a base
 /// amount plus more for a longer stretch of time.
@@ -180,7 +180,7 @@ pub struct Schedule {
     lanes: Vec<(String, EnvLane)>,
 }
 
-impl Program {
+impl Composition {
     /// The notes this program's `play`, `launch` and related commands produce.
     pub fn schedule(&self) -> Schedule {
         Schedule::new(
@@ -193,13 +193,13 @@ impl Program {
     }
 }
 
-impl Program {
+impl Composition {
     /// The notes of the arrangement called `name`, played from the start.
-    pub fn arrangement_schedule(&self, name: &str) -> Result<Schedule, crate::program::ArgError> {
+    pub fn arrangement_schedule(&self, name: &str) -> Result<Schedule, niminal_lang::ArgError> {
         let Some(arrangement) = self.arrangements.iter().find(|a| a.name == name) else {
-            return Err(crate::program::ArgError {
+            return Err(niminal_lang::ArgError {
                 message: format!("no arrangement named `{name}`"),
-                help: match crate::diag::closest(
+                help: match niminal_lang::closest(
                     name,
                     self.arrangements.iter().map(|a| a.name.as_str()),
                 ) {
@@ -417,7 +417,7 @@ impl Schedule {
             }
         }
         args.insert(crate::perform::PITCH_PARAM.to_string(), Value::Note(note));
-        args.insert(crate::lower::GAIN_PARAM.to_string(), Value::Db(gain));
+        args.insert(niminal_lang::GAIN_PARAM.to_string(), Value::Db(gain));
         Some(Event {
             target: self.track_names[track].clone(),
             at: Time::Seconds(at),
@@ -631,7 +631,7 @@ impl Schedule {
                 .unit
                 .ok_or_else(|| fail("the envelope was never placed on a parameter".into()))?;
             let level = |v: Value| {
-                crate::program::engine_value(unit, v, self.tempo).map_err(|e| fail(e.to_string()))
+                niminal_lang::engine_value(unit, v, self.tempo).map_err(|e| fail(e.to_string()))
             };
             let start = level(lane.start)?;
             let mut steps = Vec::with_capacity(lane.segments.len());
@@ -749,7 +749,7 @@ impl Schedule {
                         .next()
                     {
                         let target =
-                            crate::program::engine_value(*unit, hap.value.value, segment.tempo)
+                            niminal_lang::engine_value(*unit, hap.value.value, segment.tempo)
                                 .map_err(|e| fail(e.to_string()))?;
                         out.push(ControlSet {
                             at,
@@ -780,7 +780,7 @@ impl Schedule {
                 .unit
                 .ok_or_else(|| fail("the envelope was never placed on a track".into()))?;
             let level = |v: Value| {
-                crate::program::engine_value(unit, v, segment.tempo)
+                niminal_lang::engine_value(unit, v, segment.tempo)
                     .map_err(|e| fail(e.to_string()))
             };
             let start = level(curve.start)?;
@@ -888,7 +888,7 @@ impl Schedule {
         }
         // controls that belong to this note alone win over the lanes
         if let Some(db) = step.gain {
-            args.insert(crate::lower::GAIN_PARAM.to_string(), Value::Db(db));
+            args.insert(niminal_lang::GAIN_PARAM.to_string(), Value::Db(db));
         }
         if let Some(degrees) = step.pan {
             args.insert("pan".to_string(), Value::Degrees(degrees));

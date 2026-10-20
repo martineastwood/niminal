@@ -4,7 +4,7 @@ use niminal_daemon::{EngineError, EngineReply, EngineRequest};
 use niminal_live::EngineLink;
 use serde_json::{Value, json};
 
-use crate::server::Client;
+use niminal_ws::Client;
 
 pub struct WsLink {
     client: Client,

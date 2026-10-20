@@ -62,7 +62,7 @@ impl ParsedEval {
     /// Code sent from `dir`, whose `use` lines are joined in. The log keeps the
     /// joined text, so a replay needs no files.
     pub fn from_dir(sent: &str, dir: &std::path::Path, quantize: Option<&str>) -> Self {
-        match niminal_lang::expand(sent, dir) {
+        match niminal_compose::expand(sent, dir) {
             Ok(expanded) => {
                 let text = expanded.text.clone();
                 let uses = Arc::new(Uses {
@@ -365,7 +365,7 @@ pub(super) fn prepare_pending(
     let mut project = base.clone();
     project.apply(&delta);
     project.drop_broken(&from_snippet, |full| compile_with(full, &options(cfg.layout, &cfg.samples)).map(|_| ()));
-    let check = |extra: &[Piece]| -> Result<Program, Vec<Problem>> {
+    let check = |extra: &[Piece]| -> Result<Composition, Vec<Problem>> {
         let (full, map) = project.source(&from_snippet, extra);
         compile_with(&full, &options(cfg.layout, &cfg.samples)).map_err(|diags| {
             diags
@@ -715,7 +715,7 @@ impl Live {
             && self.clock > job.lands_at
             && job.statements.iter().any(|s| {
                 self.quantums().for_statement(s, job.fallback).unit
-                    != niminal_lang::QuantizeUnit::Now
+                    != niminal_compose::QuantizeUnit::Now
             })
         {
             self.notify(format!(

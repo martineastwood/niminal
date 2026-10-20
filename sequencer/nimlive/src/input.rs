@@ -8,8 +8,8 @@ use std::time::Duration;
 use midir::{MidiInput, MidiInputConnection};
 use niminal_live::{ControlSignal, LiveServer};
 
-use crate::server::lock;
-use crate::worker::Worker;
+use niminal_ws::lock;
+use niminal_ws::worker::Worker;
 
 /// A control change (`1011nnnn 0ccccccc 0vvvvvvv`) or a key going down (`1001nnnn`) or up (`1000nnnn`).
 /// A key down with velocity 0 is a key up.

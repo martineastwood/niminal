@@ -259,7 +259,7 @@ The engine's state. **Result** includes:
 
 ## The engine log
 
-The engine records every accepted `events.send` and `events.cancel`, with the times resolved to samples, and every `panic`. Playing the log into a new engine gives the same audio, however the original was divided into blocks; `niminal render --replay` does that. By default the daemon writes it under `~/.niminal/sessions/`.
+The engine records every accepted `events.send` and `events.cancel`, with the times resolved to samples, and every `panic`. Playing the log into a new engine gives the same audio, however the original was divided into blocks; `niminal replay` does that. By default the daemon writes it under `~/.niminal/sessions/`.
 
 ## Minimal client flow
 

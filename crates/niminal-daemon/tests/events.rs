@@ -9,7 +9,6 @@ use support::Eval;
 const SR: f32 = 48_000.0;
 
 const SETUP: &str = "
-tempo 120bpm
 ctl level = 0.0.smooth(0ms)
 instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }
 instr flat(freq: hz) { level }
@@ -223,7 +222,6 @@ fn the_log_replays_to_the_same_audio() {
 }
 
 const VOICE: &str = "
-tempo 120bpm
 instr organ(freq: hz, cut: hz = 40hz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 100ms 0] }
 track lead { instrument = organ }
 ";
@@ -675,7 +673,7 @@ fn tone(at: At, hz: f64) -> Op {
 #[test]
 fn a_define_lands_at_its_sample_and_the_next_note_uses_it() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now"))
+    s.eval(SINE, Some("now"))
         .unwrap();
     // beat 2 at 120bpm is sample 48000
     s.send_events(
@@ -691,7 +689,7 @@ fn a_define_lands_at_its_sample_and_the_next_note_uses_it() {
 
     let mut reference = Session::new(SR, Layout::Mono).without_limiter();
     reference
-        .eval(&format!("tempo 120bpm\n{SAW}"), Some("now"))
+        .eval(SAW, Some("now"))
         .unwrap();
     reference
         .send_events(0, vec![tone(At::Sample(48_000), 110.0)])
@@ -713,7 +711,7 @@ fn a_define_lands_at_its_sample_and_the_next_note_uses_it() {
 #[test]
 fn a_define_can_be_cancelled_by_its_tag_and_performance_statements_are_refused() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval_as(1, &format!("tempo 120bpm\n{SINE}")).unwrap();
+    s.eval_as(1, SINE).unwrap();
     let mut op = define(SAW, At::Sample(48_000));
     if let Op::Define { tag, .. } = &mut op {
         *tag = Some("t".into());
@@ -725,7 +723,7 @@ fn a_define_can_be_cancelled_by_its_tag_and_performance_statements_are_refused()
     let out = s.process(60_000).remove(0);
     let mut reference = Session::new(SR, Layout::Mono).without_limiter();
     reference
-        .eval(&format!("tempo 120bpm\n{SINE}"), Some("now"))
+        .eval(SINE, Some("now"))
         .unwrap();
     reference
         .send_events(0, vec![tone(At::Sample(48_000), 110.0)])
@@ -743,7 +741,7 @@ fn a_define_can_be_cancelled_by_its_tag_and_performance_statements_are_refused()
 #[test]
 fn a_batch_that_fails_leaves_nothing_behind() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now"))
+    s.eval(SINE, Some("now"))
         .unwrap();
     let problems = s
         .send_events(
@@ -777,7 +775,7 @@ fn a_batch_that_fails_leaves_nothing_behind() {
 #[test]
 fn notes_after_a_define_are_checked_against_the_program_it_makes() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now"))
+    s.eval(SINE, Some("now"))
         .unwrap();
     let new_track =
         "instr b(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\ntrack extra { instrument = b }";
@@ -806,7 +804,7 @@ fn notes_after_a_define_are_checked_against_the_program_it_makes() {
 #[test]
 fn a_forget_drops_every_definition_when_it_lands() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval_as(1, &format!("tempo 120bpm\n{SINE}")).unwrap();
+    s.eval_as(1, SINE).unwrap();
     s.send_events(
         1,
         vec![Op::Forget {
@@ -829,7 +827,7 @@ fn a_forget_drops_every_definition_when_it_lands() {
 #[test]
 fn timestamped_definitions_and_notes_replay_to_the_same_audio() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now"))
+    s.eval(SINE, Some("now"))
         .unwrap();
     s.send_events(
         1,

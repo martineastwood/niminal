@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use niminal_cli::audio::{NullClock, Shared};
-use niminal_cli::input::LiveShared;
-use niminal_cli::link::WsLink;
-use niminal_cli::server::{Client, Server, ServerConfig, lock};
-use niminal_cli::worker::Worker;
+use nimlive::input::LiveShared;
+use nimlive::link::WsLink;
+use niminal_ws::{Client, Server, ServerConfig, lock};
+use niminal_ws::worker::Worker;
 use niminal_daemon::{EngineServer, Session};
 use niminal_lang::Layout;
 use niminal_live::{Live, LiveServer};
@@ -249,7 +249,7 @@ fn websocket_controls_reach_the_live_renderer_and_appear_in_status() {
 
 #[test]
 fn osc_over_udp_moves_a_bound_control_and_is_logged() {
-    use niminal_cli::input::OscInput;
+    use nimlive::input::OscInput;
     let r = start(None);
     let mut c = connect(&r);
     c.call("eval", json!({

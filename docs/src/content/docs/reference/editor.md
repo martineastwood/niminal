@@ -3,12 +3,12 @@ title: Editor and LSP
 description: VS Code extension, language server, and editing without a daemon.
 ---
 
-## Language server (`niminal lsp`)
+## Language server (`nimlive lsp`)
 
 The CLI runs an **LSP server on stdio**. Any editor that can spawn a language server can use it for `.nml` files:
 
 ```sh
-niminal lsp
+nimlive lsp
 ```
 
 The VS Code extension starts the same binary automatically (see settings below).

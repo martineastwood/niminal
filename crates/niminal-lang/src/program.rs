@@ -5,10 +5,12 @@ use std::sync::Arc;
 use niminal_engine::{Graph, Mixer, TrackDef};
 use niminal_score::{Event, Tempo, Value};
 
-use crate::ast::InputSource;
 use crate::diag::closest;
 use crate::layout::Layout;
 use crate::unit::Unit;
+
+/// The parameter that a note's pitch sets, unless an instrument names another with `pitch:`.
+pub const PITCH_PARAM: &str = "freq";
 
 /// A compiled instrument: an engine graph plus the typed signature that
 /// notes are checked against.
@@ -125,8 +127,6 @@ pub struct TrackInfo {
     pub instrument: Option<usize>,
     /// Arguments given in `instrument = name(...)`, applied to every note.
     pub defaults: BTreeMap<String, Value>,
-    /// `notes = it.thin(10%)`: how every clip played on the track has its notes changed, with `it` the clip's.
-    pub notes: Option<crate::ast::Expr>,
     pub def: TrackDef,
 }
 
@@ -139,38 +139,9 @@ pub struct ControlDef {
     pub unit: Unit,
     pub initial: f32,
     pub smooth_seconds: f64,
-    pub input: Option<ControlBinding>,
-}
-
-/// A control driven from outside: a message value from 0 to 1 maps onto `lo..hi`
-/// (engine units; geometric for hz and db, so sweeps are even by ear).
-#[derive(Clone, Debug, PartialEq)]
-pub struct ControlBinding {
-    pub source: InputSource,
-    pub lo: f32,
-    pub hi: f32,
 }
 
 impl ControlDef {
-    /// The control's value, in its unit's own suffix (so `convert` accepts it), for a
-    /// normalised input `t` from 0 to 1.
-    pub fn map_input(&self, t: f64) -> Option<f64> {
-        let b = self.input.as_ref()?;
-        let t = t.clamp(0.0, 1.0);
-        let (lo, hi) = (f64::from(b.lo), f64::from(b.hi));
-        let geometric = matches!(self.unit, Unit::Hz | Unit::Db) && lo > 0.0 && hi > 0.0;
-        let engine = if geometric {
-            lo * (hi / lo).powf(t)
-        } else {
-            lo + (hi - lo) * t
-        };
-        Some(if self.unit == Unit::Db {
-            20.0 * engine.log10()
-        } else {
-            engine
-        })
-    }
-
     /// A lane's value as the control's engine value, with the unit rules a parameter has.
     pub fn from_value(&self, value: Value, tempo: Tempo) -> Result<f32, niminal_score::UnitError> {
         engine_value(self.unit, value, tempo)
@@ -215,17 +186,6 @@ pub fn engine_value(
     })
 }
 
-/// `config { quantize: { ... } }`: when each kind of change lands, where the project says.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct QuantizeConfig {
-    pub default: Option<crate::performance::Quantize>,
-    pub play: Option<crate::performance::Quantize>,
-    pub instrument: Option<crate::performance::Quantize>,
-    pub track: Option<crate::performance::Quantize>,
-    pub control: Option<crate::performance::Quantize>,
-    pub tempo: Option<crate::performance::Quantize>,
-}
-
 #[derive(Clone)]
 pub struct Program {
     pub resource_controls: BTreeMap<String, u64>,
@@ -237,7 +197,6 @@ pub struct Program {
     pub source: String,
     /// Where the sample files it names were looked for.
     pub samples: crate::sample::Samples,
-    pub quantize: QuantizeConfig,
     /// Every signal the project sends over OSC.
     pub taps: Vec<OscTap>,
     pub controls: Vec<ControlDef>,
@@ -255,11 +214,6 @@ pub struct Program {
     pub sample_names: Vec<String>,
     /// The names of the choke groups, which an instrument's `chokes` count.
     pub choke_groups: Vec<String>,
-    /// Notes written directly in the source.
-    pub notes: Vec<Event>,
-    /// Commands that play clips and scenes, in source order.
-    pub performance: Vec<crate::performance::Scheduled>,
-    pub arrangements: Vec<crate::performance::Arrangement>,
 }
 
 /// A note ready to play: which track, which instrument, and its parameters.
@@ -281,7 +235,7 @@ pub struct NotePlan {
 }
 
 /// What a note's target resolves to.
-pub(crate) struct Target<'a> {
+pub struct Target<'a> {
     pub track: usize,
     pub instrument: usize,
     /// Arguments a track applies to all its notes.
@@ -290,7 +244,7 @@ pub(crate) struct Target<'a> {
 
 /// Find what a note's target plays: an instrument by name (on the implicit
 /// track), or a track (with its instrument and default arguments).
-pub(crate) fn resolve_target<'a>(
+pub fn resolve_target<'a>(
     instruments: &[Instrument],
     tracks: &'a [TrackInfo],
     target: &str,
@@ -412,8 +366,8 @@ impl Program {
         args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
         // a note's pitch is `freq` to the score, and whatever `with(pitch: ...)` named it to the instrument
         let pitch_name = &self.instruments[instrument].pitch;
-        if pitch_name != crate::perform::PITCH_PARAM
-            && let Some(pitch) = args.remove(crate::perform::PITCH_PARAM)
+        if pitch_name != PITCH_PARAM
+            && let Some(pitch) = args.remove(PITCH_PARAM)
         {
             args.insert(pitch_name.clone(), pitch);
         }
@@ -572,7 +526,7 @@ impl Instrument {
             legato: false,
             priority: Default::default(),
             glide: None,
-            pitch: crate::perform::PITCH_PARAM.into(),
+            pitch: PITCH_PARAM.into(),
             midi: None,
         }
     }

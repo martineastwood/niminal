@@ -99,7 +99,7 @@ fn examples_render_as_they_did() {
     for file in files {
         let out = dir.join("out.wav");
         let _ = std::fs::remove_file(&out);
-        let run = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"))
+        let run = std::process::Command::new(env!("CARGO_BIN_EXE_nimlive"))
             .arg("render").arg(&file).args(["--bars", "4", "--out"]).arg(&out)
             .output().unwrap();
         let name = file.file_name().unwrap().to_string_lossy().into_owned();

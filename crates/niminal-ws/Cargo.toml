@@ -1,0 +1,10 @@
+[package]
+name = "niminal-ws"
+version.workspace = true
+edition.workspace = true
+description = "JSON-RPC over WebSocket: the server that fronts the daemon, and a client for it"
+
+[dependencies]
+niminal-daemon = { path = "../niminal-daemon" }
+serde_json = "1"
+tungstenite = "0.30"

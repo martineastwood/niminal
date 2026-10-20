@@ -7,7 +7,7 @@ track lead { instrument = pluck }
 track bass { instrument = pluck(bright: 0.1) }
 ";
 
-fn render_with_bars(body: &str, bars: Option<f64>) -> Result<Vec<f32>, niminal_cli::render::RenderError> {
+fn render_with_bars(body: &str, bars: Option<f64>) -> Result<Vec<f32>, nimlive::render::RenderError> {
     let p = program(&format!("{STAGE}{body}"));
     let until = bars.map(|b| b * 2.0); // a 4/4bar at 120bpm is two seconds
     render_with(&p, &[], &RenderOptions { limiter: false, until, ..Default::default() }).map(mono)

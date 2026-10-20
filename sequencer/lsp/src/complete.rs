@@ -1,6 +1,7 @@
 //! What to offer at the cursor.
 
-use niminal_lang::{OpInfo, RESERVED_WORDS, Symbol, SymbolKind, builtin_ops, pattern_ops, waves};
+use niminal_compose::{RESERVED_WORDS, Symbol, SymbolKind, pattern_ops};
+use niminal_lang::{OpInfo, builtin_ops, waves};
 use serde_json::{Value, json};
 const UNITS: &[(&str, &str)] = &[
     ("hz", "frequency"), ("khz", "frequency, in thousands of hz"), ("db", "gain in decibels"), ("ms", "milliseconds"),
@@ -328,7 +329,7 @@ mod tests {
     use super::*;
 
     fn labels(before: &str) -> Vec<String> {
-        let symbols = niminal_lang::symbols("fn wobble(x, rate: hz = 2hz) { x }\ninstr tone(freq: hz) { freq }").unwrap();
+        let symbols = niminal_compose::symbols("fn wobble(x, rate: hz = 2hz) { x }\ninstr tone(freq: hz) { freq }").unwrap();
         items(before, &symbols, &|_| String::new()).iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
     }
 
@@ -372,7 +373,7 @@ mod tests {
     }
 
     fn labels_in(code: &str, before: &str) -> Vec<String> {
-        let symbols = niminal_lang::symbols(code).unwrap();
+        let symbols = niminal_compose::symbols(code).unwrap();
         items(before, &symbols, &|_| String::new()).iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
     }
 

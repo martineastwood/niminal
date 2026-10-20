@@ -1,7 +1,8 @@
 //! Rename, signature help and semantic tokens. They read the compiler's own tokens, so what they
 //! see as a name is what the compiler sees.
 
-use niminal_lang::{OpInfo, RESERVED_WORDS, Symbol, SymbolKind, Tok, Token, builtin_ops, lex, pattern_ops, symbols, waves};
+use niminal_compose::{RESERVED_WORDS, Symbol, SymbolKind, Tok, Token, lex, pattern_ops, symbols};
+use niminal_lang::{OpInfo, builtin_ops, waves};
 use serde_json::{Value, json};
 
 use crate::{Document, text};
@@ -61,7 +62,7 @@ fn blank_from(text: &mut String, at: usize) {
 pub fn symbols_lenient(text: &str, dir: &std::path::Path) -> Vec<Symbol> {
     let mut working = text.to_string();
     for _ in 0..16 {
-        let error = match niminal_lang::expand(&working, dir) {
+        let error = match niminal_compose::expand(&working, dir) {
             Ok(expanded) => match symbols(&expanded.text) {
                 Ok(all) => return all.into_iter().filter(|s| s.span.end <= expanded.root_len).collect(),
                 Err(d) if d.span.start < expanded.root_len => d,
@@ -286,7 +287,7 @@ impl crate::Server {
             }
             for candidate in candidates.into_iter().filter(|c| c.path != Some(defined_path.clone())) {
                 let dir = candidate.path.as_deref().and_then(std::path::Path::parent).map(std::path::Path::to_path_buf).unwrap_or_else(|| ".".into());
-                let Ok(expanded) = niminal_lang::expand(&candidate.text, &dir) else { continue };
+                let Ok(expanded) = niminal_compose::expand(&candidate.text, &dir) else { continue };
                 let imports: Vec<Option<String>> = expanded
                     .imports()
                     .filter(|i| canonical(i.path) == defined_path)
@@ -336,7 +337,7 @@ impl crate::Server {
 fn strict_symbols(source: &Source) -> Result<Vec<Symbol>, String> {
     let dir = source.path.as_deref().and_then(std::path::Path::parent).map(std::path::Path::to_path_buf).unwrap_or_else(|| ".".into());
     let reads = |d: niminal_lang::Diagnostic| format!("{} doesn't read yet: {}", file_name(source), d.message);
-    let expanded = niminal_lang::expand(&source.text, &dir).map_err(reads)?;
+    let expanded = niminal_compose::expand(&source.text, &dir).map_err(reads)?;
     let all = symbols(&expanded.text).map_err(|d| format!("{} doesn't read yet: {}", file_name(source), d.message))?;
     Ok(all.into_iter().filter(|s| s.span.end <= expanded.root_len).collect())
 }

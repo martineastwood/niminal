@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use niminal_daemon::{ClientId, PROTOCOL_VERSION, Problem, problem_json};
-use niminal_score::{ClipDef, SceneDef};
+use niminal_compose::{ClipDef, SceneDef};
 use serde_json::{Value, json};
 
 use crate::live::{Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, Live, ParsedEval, PendingInfo, Transport};

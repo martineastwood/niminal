@@ -189,7 +189,7 @@ class Client {
   }
 }
 
-/** Control a live sequencer started with `niminal live`, rather than the daemon. */
+/** Control a live sequencer started with `nimlive live`, rather than the daemon. */
 class LiveClient extends Client {
   constructor(options = {}) {
     super({ port: 7400, ...options });

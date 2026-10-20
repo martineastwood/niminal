@@ -30,6 +30,8 @@ pub(super) struct Pending {
     /// What was sent, with the modules it uses joined in, so that it can be compiled again.
     pub snippet: String,
     pub statements: Vec<Statement>,
+    /// This change starts the client's definitions over (`forget`).
+    pub clears: bool,
     /// The project once this has landed.
     pub project: Project,
     pub definitions: Arc<Program>,
@@ -50,6 +52,7 @@ impl Pending {
             lands_at: self.lands_at,
             snippet: self.snippet.clone(),
             statements: self.statements.clone(),
+            clears: self.clears,
             project: self.project.clone(),
             definitions: self.definitions.clone(),
             routing: self.routing.clone(),
@@ -87,15 +90,14 @@ impl Session {
         edits: Vec<crate::RoutingEdit>,
         meta: Meta,
     ) -> Result<u64, Vec<Problem>> {
-        let (snippet, mut statements, uses) = if source.trim().is_empty() {
+        let clears = what == What::Forget;
+        let (snippet, mut statements, uses) = if clears || source.trim().is_empty() {
             (String::new(), Vec::new(), None)
         } else {
-            self.read_change(source, dir, what, meta.client)?
+            self.read_change(source, dir, meta.client)?
         };
         for statement in &mut statements {
-            if let niminal_lang::StatementData::Definition { key, .. } = &mut statement.data {
-                *key = scoped_key(meta.client, key);
-            }
+            statement.key = scoped_key(meta.client, &statement.key);
         }
         let at = at.max(self.clock);
         let index = self.pending.partition_point(|p| p.lands_at <= at);
@@ -119,6 +121,7 @@ impl Session {
                 at,
                 snippet,
                 statements,
+                clears,
                 &base,
                 &definitions,
                 &routing,
@@ -149,13 +152,12 @@ impl Session {
         true
     }
 
-    /// Read the source: join in the modules it uses, split it into statements and check it says only what
-    /// `what` allows.
+    /// Read the source: join in the modules it uses, split it into statements and check it says only DSP
+    /// definitions.
     fn read_change(
         &self,
         source: &str,
         dir: Option<&str>,
-        what: What,
         client: u64,
     ) -> Result<(String, Vec<Statement>, Option<Uses>), Vec<Problem>> {
         let (text, uses) = match niminal_lang::expand(
@@ -183,7 +185,7 @@ impl Session {
                 )]);
             }
         };
-        if what == What::Definitions {
+        {
             niminal_lang::validate_dsp(&text).map_err(|d| {
                 let problems = vec![Problem::from_diagnostic(
                     &d,
@@ -211,37 +213,19 @@ impl Session {
             return Err(vec![Problem::plain("there is nothing to define")]);
         }
         for statement in &statements {
-            if statement
-                .key()
-                .and_then(|key| key.split_once(':'))
-                .is_some_and(|(_, name)| name.starts_with("__routing_"))
-            {
+            let (kind, name) = statement.key.split_once(':').unwrap_or((&statement.key, ""));
+            if name.starts_with("__routing_") {
                 return Err(vec![Problem::plain(
                     "names starting with __routing_ are reserved for private routing resources",
                 )]);
             }
-            let kind = statement.key().map(|k| k.split(':').next().unwrap_or(k));
-            let allowed = match what {
-                What::Definitions => kind.is_some_and(|k| {
-                    matches!(
-                        k,
-                        "instr"
-                            | "fn"
-                            | "const"
-                            | "ctl"
-                            | "bus"
-                            | "buffer"
-                            | "track"
-                            | "sample"
-                            | "kit"
-                            | "config"
-                    )
-                }),
-                What::Forget => statement.clears(),
-            };
+            let allowed = matches!(
+                kind,
+                "instr" | "fn" | "const" | "ctl" | "bus" | "buffer" | "track" | "sample" | "kit" | "config"
+            );
             if !allowed {
                 let mut problem = Problem::plain(format!(
-                    "`{}` can't be sent here: `define` takes definitions such as instruments, tracks, effects, buses and controls, musical structure and timing belong to the client",
+                    "`{}` can't be sent here: `define` takes definitions such as instruments, tracks, effects, buses and controls",
                     first_line(&statement.text)
                 ));
                 problem.span = Some(niminal_lang::Span::new(
@@ -265,24 +249,21 @@ impl Session {
         lands_at: u64,
         snippet: String,
         statements: Vec<Statement>,
+        clears: bool,
         base: &Project,
         base_definitions: &Arc<Program>,
         routing: &crate::routing::Routing,
         edits: Vec<crate::RoutingEdit>,
         meta: Meta,
     ) -> Result<Pending, Vec<Problem>> {
-        let clears = statements.iter().any(|s| s.clears());
-        let (project, definitions) = if statements.is_empty() {
+        let (project, definitions) = if statements.is_empty() && !clears {
             (base.clone(), base_definitions.clone())
         } else {
-            let definitions: Vec<&Statement> = statements
-                .iter()
-                .filter(|s| s.kind() == StatementKind::Definition)
-                .collect();
+            let definitions: Vec<&Statement> = statements.iter().collect();
             let delta: Vec<Entry> = definitions
                 .iter()
                 .map(|s| Entry {
-                    key: scoped_key(meta.client, s.key().expect("definitions have keys")),
+                    key: scoped_key(meta.client, &s.key),
                     text: s.text.clone(),
                 })
                 .collect();
@@ -290,7 +271,7 @@ impl Session {
                 .iter()
                 .map(|s| {
                     (
-                        scoped_key(meta.client, s.key().expect("definitions have keys")),
+                        scoped_key(meta.client, &s.key),
                         s.offset,
                     )
                 })
@@ -440,6 +421,7 @@ impl Session {
             lands_at,
             snippet,
             statements,
+            clears,
             project,
             definitions,
             routing,
@@ -471,6 +453,7 @@ impl Session {
                 lands_at,
                 snippet,
                 statements,
+                clears,
                 meta,
                 edits,
                 applied,
@@ -481,6 +464,7 @@ impl Session {
                 lands_at,
                 snippet,
                 statements,
+                clears,
                 &base,
                 &definitions,
                 &routing,

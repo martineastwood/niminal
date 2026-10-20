@@ -36,6 +36,18 @@ impl Layout {
     }
 
     /// The layout with this many channels, if there is a named one.
+    /// The standard layout with this many channels: 1, 2, 4, 6 (5.1) or 8 (7.1).
+    pub fn standard(channels: u16) -> Result<Layout, String> {
+        match channels {
+            1 => Ok(Layout::Mono),
+            2 => Ok(Layout::Stereo),
+            4 => Ok(Layout::Quad),
+            6 => Ok(Layout::Surround51),
+            8 => Ok(Layout::Surround71),
+            n => Err(format!("error: there is no standard layout with {n} channels; use 1, 2, 4, 6 or 8")),
+        }
+    }
+
     pub fn from_count(n: usize) -> Layout {
         match n {
             1 => Layout::Mono,

@@ -254,7 +254,7 @@ class Client:
 
 
 class LiveClient(Client):
-    """Control a separate `niminal live` sequencer process."""
+    """Control a separate `nimlive live` sequencer process."""
 
     def __init__(self, url: str = "ws://127.0.0.1:7400/", **kwargs):
         super().__init__(url=url, **kwargs)

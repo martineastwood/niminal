@@ -1,18 +1,25 @@
 use niminal_daemon::{Session, from_lines, to_lines};
 mod support;
-use support::{Eval, set_control};
+use support::{Eval, play, set_control};
 use niminal_lang::Layout;
 
-const SOURCE: &str = "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nflat() for 1beat";
+const SOURCE: &str = "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }";
 fn session(source: &str) -> Session {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(source, Some("now")).unwrap();
     s
 }
 
+/// A session with `source` defined and `flat` playing from now for half a second.
+fn held(source: &str) -> Session {
+    let mut s = session(source);
+    play(&mut s, "flat", 0.0, 0.5);
+    s
+}
+
 #[test]
 fn controls_change_held_notes_on_the_exact_sample_without_recompiling() {
-    let mut s = session(SOURCE);
+    let mut s = held(SOURCE);
     let graph = s.program().instruments[0].graph.clone();
     set_control(&mut s, "level", 1.0, None, Some(37), None).unwrap();
     let out = s.process(100).remove(0);
@@ -26,7 +33,7 @@ fn controls_change_held_notes_on_the_exact_sample_without_recompiling() {
 
 #[test]
 fn smoothing_is_linear_and_reaches_the_target_at_the_requested_duration() {
-    let mut s = session(SOURCE);
+    let mut s = held(SOURCE);
     set_control(&mut s, "level", 1.0, None, Some(48), Some(1.0))
         .unwrap();
     let out = s.process(100).remove(0);
@@ -39,9 +46,13 @@ fn smoothing_is_linear_and_reaches_the_target_at_the_requested_duration() {
 
 #[test]
 fn one_control_drives_instruments_and_effects_and_initializes_new_notes() {
-    let mut s = session(
-        "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\ntrack t { instrument = flat\n out = it * level }\nat 100ms t() for 20ms",
-    );
+    let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+    s.eval(
+        "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\ntrack t { instrument = flat\n out = it * level }",
+        Some("now"),
+    )
+    .unwrap();
+    play(&mut s, "t", 0.1, 0.02);
     set_control(&mut s, "level", 0.5, None, Some(48), None).unwrap();
     let out = s.process(5200).remove(0);
     assert_eq!(out[..4800], vec![0.0; 4800]);
@@ -50,7 +61,7 @@ fn one_control_drives_instruments_and_effects_and_initializes_new_notes() {
 
 #[test]
 fn unrelated_edits_keep_control_values_and_redefinitions_glide() {
-    let mut s = session(SOURCE);
+    let mut s = held(SOURCE);
     set_control(&mut s, "level", 0.75, None, None, None).unwrap();
     assert_eq!(s.process(64)[0], vec![0.75; 64]);
     s.eval("instr other() { 0.0 }", Some("now")).unwrap();
@@ -91,7 +102,7 @@ fn units_smoothing_timestamps_and_unknown_controls_are_validated() {
 
 #[test]
 fn out_of_order_updates_and_same_sample_updates_are_deterministic() {
-    let mut s = session(SOURCE);
+    let mut s = held(SOURCE);
     set_control(&mut s, "level", 0.2, None, Some(80), None).unwrap();
     set_control(&mut s, "level", 0.4, None, Some(32), None).unwrap();
     set_control(&mut s, "level", 0.6, None, Some(32), None).unwrap();
@@ -103,7 +114,7 @@ fn out_of_order_updates_and_same_sample_updates_are_deterministic() {
 
 #[test]
 fn controls_replay_exactly_across_block_sizes_and_log_serialization() {
-    let mut s = session(SOURCE);
+    let mut s = held(SOURCE);
     set_control(&mut s, "level", 1.0, None, Some(37), Some(2.0))
         .unwrap();
     let mut original = s.process(100).remove(0);
@@ -130,7 +141,7 @@ fn controls_replay_exactly_across_block_sizes_and_log_serialization() {
 
 #[test]
 fn queued_updates_are_bounded() {
-    let mut s = session(SOURCE);
+    let mut s = held(SOURCE);
     for i in 0..1024 {
         set_control(&mut s, "level", 1.0, None, Some(1000 + i), None)
             .unwrap();
@@ -162,7 +173,7 @@ fn controls_have_compiler_diagnostics_and_cannot_shadow_other_names() {
 
 #[test]
 fn code_redeclaration_restores_an_external_override() {
-    let mut s = session(SOURCE);
+    let mut s = held(SOURCE);
     set_control(&mut s, "level", 0.5, None, None, None).unwrap();
     s.process(64);
     s.eval("ctl level = 0.0.smooth(0ms)", Some("now")).unwrap();
@@ -180,7 +191,7 @@ fn negative_decibel_defaults_can_declare_smoothing() {
 
 #[test]
 fn smoothing_between_finite_extremes_remains_finite() {
-    let mut s = session(SOURCE);
+    let mut s = held(SOURCE);
     set_control(&mut s, "level", -3e38, None, Some(0), Some(0.0))
         .unwrap();
     set_control(&mut s, "level", 3e38, None, Some(1), Some(1.0))

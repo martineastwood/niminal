@@ -1,0 +1,746 @@
+use niminal_lang::Span;
+use crate::performance::Quantize;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ident {
+    pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Item {
+    Instr(InstrDef),
+    /// `ctl name = value`, or `ctl name = midi.cc(21).range(200hz..4khz)` with an `input`.
+    Control {
+        name: Ident,
+        value: Expr,
+        input: Option<ControlInput>,
+    },
+    Fn(FnDef),
+    /// `const name = expr`: a value known while compiling, such as a number, a range or a table.
+    Const {
+        name: Ident,
+        value: Expr,
+    },
+    Bus(BusDecl),
+    /// `buffer take = zeros(48000)` or `buffer take = 4bars`: shared writable table.
+    Buffer(BufferDecl),
+    Track(TrackDecl),
+    Sample(SampleDecl),
+    MidiOut(MidiOutDecl),
+    Arrangement(ArrangementDecl),
+    Config(ConfigDecl),
+    Tempo(TempoStmt),
+    /// `meter 3/4`
+    Meter(Expr),
+    /// `name = expr` at the top level: a pattern, clip or scene value.
+    Bind {
+        name: Ident,
+        value: Expr,
+    },
+    Clip(NamedBlock),
+    Scene(NamedBlock),
+    /// `def name(params) { ... }`: a score function returning a clip, scene or pattern.
+    Def(FnDef),
+    Command(CommandStmt),
+    Note(NoteStmt),
+    /// Top-level `for x in xs { ... }` expanding notes and commands.
+    For {
+        var: Ident,
+        iter: Expr,
+        body: Vec<Item>,
+        span: Span,
+    },
+    /// Top-level `if cond { ... } else { ... }` picking notes and commands at compile time.
+    If {
+        cond: Expr,
+        then: Vec<Item>,
+        otherwise: Vec<Item>,
+        span: Span,
+    },
+}
+
+/// Where a control's value comes from: a MIDI CC or an OSC address, mapped onto `value..hi`
+/// (the control's `value` is the low end).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControlInput {
+    pub source: InputSource,
+    pub hi: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputSource {
+    /// `midi.cc(number)` or `midi.cc(number, channel)`; channels count from 1.
+    MidiCc { cc: u8, channel: Option<u8> },
+    /// `midi.learn`: binds to the next control moved, which the session then reports.
+    MidiLearn,
+    /// `osc_in("/address")`
+    Osc(String),
+}
+
+/// `tempo 124bpm`, optionally `@ next bar over 2bars` for a change while playing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TempoStmt {
+    pub value: Expr,
+    pub quantize: Option<Quantize>,
+    pub over: Option<Expr>,
+    pub span: Span,
+}
+
+/// `clip name { key: value ... }` or `scene name { track: clip ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedBlock {
+    pub name: Ident,
+    pub entries: Vec<(Ident, Expr)>,
+    /// `with(quantize: 1bar)` after the block.
+    pub options: Vec<Arg>,
+    pub span: Span,
+}
+
+/// Where a statement happens: a time, or `bar 5 beat 3`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AtPos {
+    Time(Expr),
+    /// Bars and beats count from 1.
+    Bar {
+        bar: Expr,
+        beat: Option<Expr>,
+    },
+    /// `+4bars`: that long after the code lands.
+    After(Expr),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    Play {
+        track: Ident,
+        what: Expr,
+    },
+    Stop(Ident),
+    Mute(Ident),
+    Unmute(Ident),
+    Solo(Ident),
+    /// `unsolo` clears every solo; `bass.unsolo` just that one.
+    Unsolo(Option<Ident>),
+    Hush,
+    Panic,
+    /// Stop everything and count bars from the next bar line.
+    Reset,
+    /// Like `reset`, and a live session also forgets every definition it was sent.
+    New,
+    /// `capture last 32bars as jam`: write the last N bars of the session as a `.nms` section.
+    Capture {
+        length: Expr,
+        name: Ident,
+    },
+    /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its track.
+    /// `verb` is the `start`. Optional `then fill after 4bars` queues another launch later.
+    Start {
+        name: Ident,
+        verb: Span,
+        /// `(next, after)` from `then next after 4bars`.
+        then: Option<(Ident, Expr)>,
+    },
+    /// `bass.reverse`: change what a track is playing. `change` is `reverse`, in the source.
+    Edit {
+        track: Ident,
+        change: Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommandStmt {
+    pub at: Option<AtPos>,
+    pub command: Command,
+    pub quantize: Option<Quantize>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstrDef {
+    pub name: Ident,
+    pub params: Vec<ParamDef>,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+    /// `mono bass(...)`: one note sounds at a time.
+    pub mono: bool,
+    /// `with(max: 8, same_note: release)`
+    pub options: Vec<Arg>,
+}
+
+/// `sample kick = "drums/kick.wav" with(root: c4)`, or `kit drums = "drums/808"`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SampleDecl {
+    pub is_kit: bool,
+    pub name: Ident,
+    pub source: SampleSource,
+    pub source_span: Span,
+    pub options: Vec<Arg>,
+    pub span: Span,
+}
+
+/// `midi_out drums(port: "IAC Driver", channel: 10)`: an instrument that plays external gear.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MidiOutDecl {
+    pub name: Ident,
+    pub args: Vec<Arg>,
+    pub span: Span,
+}
+
+/// `arrangement song { sections: [verse.over(8bars) chorus.over(8bars)] }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrangementDecl {
+    pub name: Ident,
+    pub sections: Vec<SectionRef>,
+    /// `tempo: [84bpm 96bpm]`: the tempo of each section, if it has its own.
+    pub tempos: Option<Vec<Expr>>,
+    /// `tempo: env[84bpm 64bars 96bpm]`: the tempo over the whole piece, in bars of music.
+    pub tempo_env: Option<EnvLit>,
+    /// `meter: [4/4 7/8]`: the meter of each section.
+    pub meters: Option<Vec<Expr>>,
+    /// `bass.tone: env[...]`: a track's parameter, moved over the whole piece.
+    pub lanes: Vec<ArrangementLane>,
+    pub span: Span,
+}
+
+/// `bass.tone: env[800hz 8bars 3khz]` in an arrangement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrangementLane {
+    pub track: Ident,
+    pub param: Ident,
+    pub value: EnvLit,
+}
+
+/// One scene in an arrangement, and how long it lasts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionRef {
+    pub scene: Ident,
+    pub length: Expr,
+}
+
+/// Where a sample or kit comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SampleSource {
+    /// A file, or for a kit a folder.
+    Path(String),
+    /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier.
+    Slices { sample: Ident, count: f64 },
+    /// A const table (or expression that yields one): `sample pad = organ`.
+    Table(Expr),
+}
+
+/// `bus space` or `bus space: stereo`
+#[derive(Debug, Clone, PartialEq)]
+pub struct BusDecl {
+    pub name: Ident,
+    /// A layout such as `stereo` or `surround(5.1)`.
+    pub layout: Option<Expr>,
+    /// `bus space: stereo { out = it.reverb(room: 0.8) }`: what the bus is processed by.
+    /// `it` is what the bus has collected.
+    pub body: Option<Vec<Stmt>>,
+}
+
+/// `buffer take = zeros(48000)` or `buffer take = 4bars`
+#[derive(Debug, Clone, PartialEq)]
+pub struct BufferDecl {
+    pub name: Ident,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// `config { channels: stereo }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigDecl {
+    pub entries: Vec<(Ident, Expr)>,
+    /// `quantize: { default: 1bar  play: cycle }`: when each kind of change lands.
+    pub quantize: Vec<(Ident, Expr)>,
+    /// `tuning: { a4: 432hz, scale: just }`: how note names become frequencies.
+    pub tuning: Vec<(Ident, Expr)>,
+    pub span: Span,
+}
+
+/// `track name { instrument = ...  out = ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackDecl {
+    pub name: Ident,
+    /// `track bass(tone: hz = 2khz)`: each is a control, set from outside, that the track's body can read.
+    pub params: Vec<ParamDef>,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+    /// `with(quantize: 1bar)` after the body.
+    pub options: Vec<Arg>,
+}
+
+/// `fn name(x, cutoff: hz) -> hz { ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnDef {
+    pub name: Ident,
+    pub params: Vec<ParamDef>,
+    pub result: FnResult,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+/// What follows `->` in a function's signature.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FnResult {
+    /// No `->`: the unit is whatever the body gives.
+    Inferred,
+    /// `-> hz`
+    Unit(Ident),
+    /// `-> (low, band, high)`: the names the body binds as its results.
+    Named(Vec<Ident>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParamDef {
+    pub name: Ident,
+    /// `init`, `control` or `const`, before the type.
+    pub rate: Option<(Rate, Span)>,
+    /// `None` in a function means any unit (generic).
+    pub ty: Option<TypeSpec>,
+    pub default: Option<Expr>,
+}
+
+/// How often a value may change, slowest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(dead_code)]
+pub enum Rate {
+    /// Known while compiling.
+    Const,
+    /// Fixed at note start.
+    Init,
+    /// Once per block.
+    Control,
+    /// Every sample.
+    Audio,
+}
+
+impl Rate {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Rate::Const => "const",
+            Rate::Init => "init",
+            Rate::Control => "control",
+            Rate::Audio => "audio",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
+pub enum TypeSpec {
+    /// `hz`, `db`, `sec`, `num`, `int`
+    Unit(Ident),
+    /// `0..1` or `20hz..20khz`: a bounded value.
+    Range { lo: Expr, hi: Expr, span: Span },
+    /// `(low | band | high)`: one of these names, known while compiling.
+    Choice(Vec<Ident>),
+    /// `[num]`: a list whose entries have this type.
+    Array(Box<TypeSpec>, Span),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    Bind {
+        name: Ident,
+        value: Expr,
+    },
+    /// `state y = 0.0`, only inside a function.
+    State {
+        name: Ident,
+        init: Expr,
+    },
+    /// `[l, r] = src` names the channels of a multichannel signal.
+    Destructure {
+        names: Vec<Ident>,
+        value: Expr,
+    },
+    /// `out += expr` layers a signal; `space += expr` sends to a bus.
+    AddAssign {
+        name: Ident,
+        value: Expr,
+    },
+    /// `buf[i] = expr` writes an entry of a state list.
+    IndexAssign {
+        name: Ident,
+        index: Expr,
+        value: Expr,
+    },
+    Expr(Expr),
+}
+
+impl Stmt {
+    /// The expressions directly inside this statement.
+    pub fn exprs_mut(&mut self) -> Vec<&mut Expr> {
+        match self {
+            Stmt::Bind { value, .. }
+            | Stmt::Destructure { value, .. }
+            | Stmt::AddAssign { value, .. }
+            | Stmt::Expr(value) => vec![value],
+            Stmt::State { init, .. } => vec![init],
+            Stmt::IndexAssign { index, value, .. } => vec![index, value],
+        }
+    }
+
+    pub fn exprs(&self) -> Vec<&Expr> {
+        match self {
+            Stmt::Bind { value, .. }
+            | Stmt::Destructure { value, .. }
+            | Stmt::AddAssign { value, .. }
+            | Stmt::Expr(value) => vec![value],
+            Stmt::State { init, .. } => vec![init],
+            Stmt::IndexAssign { index, value, .. } => vec![index, value],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+/// `and` / `or`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicOp {
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
+    Num {
+        value: f64,
+        unit: Option<String>,
+    },
+    Name(String),
+    /// `f(a, b)`. `x.f(a)` is parsed as `f(x, a)` with `x` marked as the receiver.
+    Call {
+        name: Ident,
+        args: Vec<Arg>,
+    },
+    Neg(Box<Expr>),
+    /// A mini-notation pattern: the raw text between the brackets.
+    Pattern(String),
+    /// `grid[x.x.]`: the raw text between the brackets.
+    Grid(String),
+    /// `grid { kick: x... }`: the raw text between the braces, a row per sample.
+    Rows(String),
+    /// `events { 0beat c4 for 1/2beat }`: the raw text between the braces.
+    Events(String),
+    /// `~`: nothing, or stop.
+    Rest,
+    /// `[a, b]`: a fixed-length array. Audio output interprets its elements as channels.
+    Array(Vec<Expr>),
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    /// `a < b`: 1 when it holds and 0 when it doesn't.
+    Compare {
+        op: CmpOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    /// `a and b`, `a or b`: 1 or 0.
+    Logic {
+        op: LogicOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    /// `not a`
+    Not(Box<Expr>),
+    /// `if cond { ... } else { ... }`. As a value, both blocks end with an expression; as a
+    /// statement the `else` is optional. `else if` is an `otherwise` holding one `if`.
+    If {
+        cond: Box<Expr>,
+        then: Vec<Stmt>,
+        otherwise: Option<Vec<Stmt>>,
+    },
+    /// `for x in xs { ... }`: as a value, the list of what each pass ends with.
+    For {
+        var: Ident,
+        iter: Box<Expr>,
+        body: Vec<Stmt>,
+    },
+    Env(EnvLit),
+    /// `lo..hi`, or `lo..<hi` when it stops before `hi`.
+    Range {
+        lo: Box<Expr>,
+        hi: Box<Expr>,
+        inclusive: bool,
+    },
+    /// `list[2]`: one entry of a list, by a whole number known while compiling.
+    Index {
+        list: Box<Expr>,
+        index: Box<Expr>,
+    },
+    /// `fn(r) { osc(saw, freq * r) }`, passed where a function is expected.
+    Lambda {
+        params: Vec<Ident>,
+        body: Vec<Stmt>,
+    },
+    /// `"/fx/width"`: text, as an argument such as an OSC address.
+    Str(String),
+    /// Anonymous `clip { ... }` inside a score `def` or expression.
+    ClipBlock(NamedBlock),
+    /// Anonymous `scene { ... }` inside a score `def` or expression.
+    SceneBlock(NamedBlock),
+}
+
+impl Expr {
+    /// Call `f` on each expression directly inside this one, including those in nested blocks.
+    pub fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Expr)) {
+        let block = |stmts: &mut Vec<Stmt>, f: &mut dyn FnMut(&mut Expr)| {
+            for s in stmts {
+                for e in s.exprs_mut() {
+                    f(e);
+                }
+            }
+        };
+        match &mut self.kind {
+            ExprKind::Num { .. }
+            | ExprKind::Name(_)
+            | ExprKind::Pattern(_)
+            | ExprKind::Grid(_)
+            | ExprKind::Rows(_)
+            | ExprKind::Events(_)
+            | ExprKind::Rest
+            | ExprKind::Str(_) => {}
+            ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| f(&mut a.value)),
+            ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
+            ExprKind::Array(items) => items.iter_mut().for_each(&mut *f),
+            ExprKind::Binary { lhs, rhs, .. }
+            | ExprKind::Compare { lhs, rhs, .. }
+            | ExprKind::Logic { lhs, rhs, .. } => {
+                f(lhs);
+                f(rhs);
+            }
+            ExprKind::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                f(cond);
+                block(then, f);
+                if let Some(o) = otherwise {
+                    block(o, f);
+                }
+            }
+            ExprKind::For { iter, body, .. } => {
+                f(iter);
+                block(body, f);
+            }
+            ExprKind::Env(env) => {
+                for v in env.values_mut() {
+                    if let EnvValue::Expr(e) = v {
+                        f(e);
+                    }
+                }
+            }
+            ExprKind::Range { lo, hi, .. } => {
+                f(lo);
+                f(hi);
+            }
+            ExprKind::Index { list, index } => {
+                f(list);
+                f(index);
+            }
+            ExprKind::Lambda { body, .. } => block(body, f),
+            ExprKind::ClipBlock(b) | ExprKind::SceneBlock(b) => {
+                for (_, e) in &mut b.entries {
+                    f(e);
+                }
+                for a in &mut b.options {
+                    f(&mut a.value);
+                }
+            }
+        }
+    }
+
+    /// Like [`Expr::for_each_child_mut`], read-only.
+    pub fn for_each_child(&self, f: &mut dyn FnMut(&Expr)) {
+        let block = |stmts: &Vec<Stmt>, f: &mut dyn FnMut(&Expr)| {
+            for s in stmts {
+                for e in s.exprs() {
+                    f(e);
+                }
+            }
+        };
+        match &self.kind {
+            ExprKind::Num { .. }
+            | ExprKind::Name(_)
+            | ExprKind::Pattern(_)
+            | ExprKind::Grid(_)
+            | ExprKind::Rows(_)
+            | ExprKind::Events(_)
+            | ExprKind::Rest
+            | ExprKind::Str(_) => {}
+            ExprKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
+            ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
+            ExprKind::Array(items) => items.iter().for_each(&mut *f),
+            ExprKind::Binary { lhs, rhs, .. }
+            | ExprKind::Compare { lhs, rhs, .. }
+            | ExprKind::Logic { lhs, rhs, .. } => {
+                f(lhs);
+                f(rhs);
+            }
+            ExprKind::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                f(cond);
+                block(then, f);
+                if let Some(o) = otherwise {
+                    block(o, f);
+                }
+            }
+            ExprKind::For { iter, body, .. } => {
+                f(iter);
+                block(body, f);
+            }
+            ExprKind::Env(env) => {
+                for v in env.values() {
+                    if let EnvValue::Expr(e) = v {
+                        f(e);
+                    }
+                }
+            }
+            ExprKind::Range { lo, hi, .. } => {
+                f(lo);
+                f(hi);
+            }
+            ExprKind::Index { list, index } => {
+                f(list);
+                f(index);
+            }
+            ExprKind::Lambda { body, .. } => block(body, f),
+            ExprKind::ClipBlock(b) | ExprKind::SceneBlock(b) => {
+                for (_, e) in &b.entries {
+                    f(e);
+                }
+                for a in &b.options {
+                    f(&a.value);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arg {
+    pub name: Option<Ident>,
+    pub value: Expr,
+    pub receiver: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CurveKind {
+    Exp,
+    Log,
+    Custom(f64),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvNum {
+    pub value: f64,
+    pub unit: Option<String>,
+    pub span: Span,
+}
+
+/// One step of an envelope: a literal, or a name or `(expression)` read at note start.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnvValue {
+    Lit(EnvNum),
+    Expr(Box<Expr>),
+}
+
+impl EnvValue {
+    pub fn span(&self) -> Span {
+        match self {
+            EnvValue::Lit(n) => n.span,
+            EnvValue::Expr(e) => e.span,
+        }
+    }
+
+    /// The literal, if this step is one.
+    pub fn lit(&self) -> Option<&EnvNum> {
+        match self {
+            EnvValue::Lit(n) => Some(n),
+            EnvValue::Expr(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvSegment {
+    pub dur: EnvValue,
+    pub curve: Option<CurveKind>,
+    pub level: EnvValue,
+}
+
+/// `env[0 5ms 1 120ms 0.4 | 600ms 0]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvLit {
+    pub start: EnvValue,
+    pub segments: Vec<EnvSegment>,
+    /// Number of segments before the `|`.
+    pub sustain_at: Option<usize>,
+    /// `env[...].loop`: starts over when it ends.
+    pub looped: bool,
+}
+
+impl EnvLit {
+    pub fn values(&self) -> Vec<&EnvValue> {
+        let mut v = vec![&self.start];
+        for s in &self.segments {
+            v.push(&s.dur);
+            v.push(&s.level);
+        }
+        v
+    }
+
+    pub fn values_mut(&mut self) -> Vec<&mut EnvValue> {
+        let mut v = vec![&mut self.start];
+        for s in &mut self.segments {
+            v.push(&mut s.dur);
+            v.push(&mut s.level);
+        }
+        v
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteStmt {
+    pub at: Option<AtPos>,
+    pub target: Ident,
+    pub args: Vec<Arg>,
+    pub dur: Expr,
+    pub span: Span,
+}
+
+/// Units that measure time.
+pub fn is_time_unit(unit: &str) -> bool {
+    matches!(unit, "sec" | "ms" | "beat" | "beats" | "bar" | "bars")
+}

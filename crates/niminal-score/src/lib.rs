@@ -1,13 +1,8 @@
-//! The score model: plain data that every front-end produces and the engine
-//! plays. Values keep their units as strings on the wire (`"-6db"`, `"1/4beat"`).
+//! The values that clients and the engine share: quantities with units, and timed events. Values keep
+//! their units as strings on the wire (`"-6db"`, `"1/4beat"`).
 
-mod defs;
 mod model;
 mod value;
 
-pub use defs::{
-    ArrangementDef, ArrangementSection, ClipDef, ClipEvent, Project, SceneDef, SceneEntry,
-    ScoreFile, VERSION_2,
-};
-pub use model::{Event, ScoreError, Section, VERSION};
+pub use model::Event;
 pub use value::{MAX_DEGREES, ParseError, Tempo, Time, Tuning, UnitError, Value};

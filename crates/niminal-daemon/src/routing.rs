@@ -1,7 +1,7 @@
 //! Client-owned instances and connections, independent of the DSP definitions they use.
 use niminal_engine::{ChainInput, GraphBuilder, Route, Src, TrackDef, execution_order};
 use niminal_lang::{
-    CompileOptions, ControlDef, Layout, Program, TrackInfo, Unit, compile_dsp_with,
+    CompileOptions, ControlDef, Layout, Program, TrackInfo, Unit, compile_with,
 };
 use niminal_score::{Tempo, Value};
 use serde::{Deserialize, Serialize};
@@ -486,7 +486,7 @@ impl Routing {
                     let declaration = format!("track {internal}{source}");
                     let statements = niminal_lang::analyze(&declaration).map_err(|d| d.message)?;
                     if statements.len() != 1
-                        || statements[0].key() != Some(format!("track:{internal}").as_str())
+                        || statements[0].key != format!("track:{internal}")
                     {
                         return Err("processor source must be one signature and body".into());
                     }
@@ -502,7 +502,7 @@ impl Routing {
                             format!("__client_{client}"),
                         ));
                     }
-                    let compiled = compile_dsp_with(&text, &options).map_err(|ds| {
+                    let compiled = compile_with(&text, &options).map_err(|ds| {
                         ds.into_iter()
                             .map(|d| d.message)
                             .collect::<Vec<_>>()
@@ -513,7 +513,7 @@ impl Routing {
                         .iter()
                         .find(|t| t.name == internal)
                         .expect("the validated processor declaration compiled");
-                    if template.instrument.is_some() || template.notes.is_some() {
+                    if template.instrument.is_some() {
                         return Err("a processor processes audio; select instruments when creating nodes or sending notes".into());
                     }
                     let controls = compiled
@@ -1148,7 +1148,6 @@ impl Routing {
                     unit: Unit::Num,
                     initial: connection.gain as f32,
                     smooth_seconds: connection.glide,
-                    input: None,
                 });
                 program.tracks.push(TrackInfo {
                     name: format!("__routing_connection_{owner}_{id}"),

@@ -1,5 +1,7 @@
-//! The WebSocket front of the daemon: one thread per client, and one that
-//! pushes the daemon's notifications out to them.
+//! JSON-RPC over WebSocket: one thread per client, and one that pushes a service's notifications
+//! out to them. The daemon is a service, and so is any client that serves an API of its own.
+
+pub mod worker;
 
 use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
@@ -10,7 +12,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use niminal_daemon::{ClientId, EngineServer};
-use niminal_live::{CompiledTicket, LiveServer, ParsedEval, Request};
 use serde_json::{Value, json};
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Error, Message, WebSocket};
@@ -173,70 +174,6 @@ impl Service for EngineServer {
     }
     fn finish(&mut self, _: ()) -> Vec<String> {
         Vec::new()
-    }
-}
-
-impl Service for LiveServer {
-    type Prepared = ParsedEval;
-    type Job = Box<niminal_live::CompileTicket>;
-    type Done = CompiledTicket;
-
-    fn connect(&mut self) -> ClientId {
-        LiveServer::connect(self)
-    }
-    fn disconnect(&mut self, client: ClientId) {
-        LiveServer::disconnect(self, client);
-    }
-    fn notifications(&mut self) -> Vec<(ClientId, String)> {
-        LiveServer::notifications(self)
-    }
-    fn prepare(text: &str) -> Option<ParsedEval> {
-        LiveServer::prepare_eval(text)
-    }
-    fn begin(
-        &mut self,
-        client: ClientId,
-        text: &str,
-        prepared: Option<ParsedEval>,
-    ) -> Begun<Self::Job> {
-        match self.begin_prepared(client, text, prepared) {
-            Request::Replies(replies) => Begun::Replies(replies),
-            Request::Compile(ticket) => Begun::Job(ticket),
-        }
-    }
-    fn compile(job: Self::Job) -> CompiledTicket {
-        job.compile()
-    }
-    fn retry(&mut self, done: &CompiledTicket) -> Option<Self::Job> {
-        LiveServer::retry(self, done).map(Box::new)
-    }
-    fn finish(&mut self, done: CompiledTicket) -> Vec<String> {
-        LiveServer::finish(self, done)
-    }
-    fn preload(service: &Mutex<Self>, text: &str) {
-        let Ok(request) = serde_json::from_str::<Value>(text) else {
-            return;
-        };
-        if request.get("method").and_then(Value::as_str) != Some("eval") {
-            return;
-        }
-        let params = &request["params"];
-        let Some(source) = params.get("source").and_then(Value::as_str) else {
-            return;
-        };
-        let samples = {
-            let mut s = lock(service);
-            if let Some(dir) = params.get("dir").and_then(Value::as_str) {
-                s.live_mut().set_sample_dir(std::path::Path::new(dir));
-            }
-            s.live().sample_files().clone()
-        };
-        samples.warm(source);
-        // files named by modules the code uses
-        let dir = params.get("dir").and_then(Value::as_str).unwrap_or(".");
-        if let Ok(expanded) = niminal_lang::expand(source, std::path::Path::new(dir)) {
-            samples.warm(&expanded.text[expanded.root_len..]);
-        }
     }
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "niminal-compose"
+version.workspace = true
+edition.workspace = true
+description = "The niminal composition language: clips, scenes, patterns and commands, compiled to timed events for a niminal daemon"
+
+[dependencies]
+niminal-engine = { path = "../../crates/niminal-engine" }
+niminal-lang = { path = "../../crates/niminal-lang" }
+niminal-score = { path = "../../crates/niminal-score" }
+niminal-pattern = { path = "../pattern" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

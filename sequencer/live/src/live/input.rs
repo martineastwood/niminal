@@ -91,7 +91,7 @@ impl Live {
             .controls
             .iter()
             .filter_map(|def| {
-                let binding = def.input.as_ref()?;
+                let binding = self.program.input(&def.name)?;
                 // a learning control listens to the control change it was given
                 let learned = self.learned.get(&def.name).map(|&cc| InputSource::MidiCc { cc, channel: None });
                 let source = if binding.source == InputSource::MidiLearn { learned.as_ref()? } else { &binding.source };
@@ -104,7 +104,7 @@ impl Live {
                     }
                     _ => return None,
                 };
-                Some((def.name.clone(), def.map_input(t)?, def.unit.suffix()))
+                Some((def.name.clone(), binding.map_input(def, t), def.unit.suffix()))
             })
             .collect();
         targets
@@ -260,7 +260,8 @@ impl Live {
             .controls
             .iter()
             .find(|d| {
-                d.input.as_ref().is_some_and(|i| i.source == InputSource::MidiLearn) && !self.learned.contains_key(&d.name)
+                self.program.input(&d.name).is_some_and(|i| i.source == InputSource::MidiLearn)
+                    && !self.learned.contains_key(&d.name)
             })
             .map(|d| d.name.clone());
         if let Some(name) = waiting {

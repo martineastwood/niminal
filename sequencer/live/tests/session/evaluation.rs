@@ -466,7 +466,7 @@ fn peaks_and_notices() {
 #[test]
 fn quantize_defaults_can_be_changed() {
     let mut s = session().with_defaults(QuantizeDefaults {
-        play: niminal_lang::analyze("hush @ now").unwrap()[0]
+        play: niminal_compose::analyze("hush @ now").unwrap()[0]
             .quantize
             .unwrap(),
         ..QuantizeDefaults::default()

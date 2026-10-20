@@ -64,12 +64,7 @@ pub(crate) fn qualify(items: &mut [Item], ranges: &[(usize, usize, String)]) {
                 }
             }
             Item::Buffer(d) => expr(&mut d.value, &locals, globals),
-            Item::Control { value, input, .. } => {
-                expr(value, &locals, globals);
-                if let Some(input) = input {
-                    expr(&mut input.hi, &locals, globals);
-                }
-            }
+            Item::Control { value, .. } => expr(value, &locals, globals),
             Item::Const { value, .. } => expr(value, &locals, globals),
             Item::Sample(d) => {
                 match &mut d.source {

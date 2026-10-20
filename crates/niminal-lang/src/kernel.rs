@@ -1636,18 +1636,6 @@ impl Kb<'_> {
                     .collect();
                 Ok(KVal::Function { def, captures })
             }
-            ExprKind::Pattern(_)
-            | ExprKind::Grid(_)
-            | ExprKind::Rows(_)
-            | ExprKind::Events(_)
-            | ExprKind::Rest => Err(Diagnostic::new(
-                "patterns can't be used inside a function with state",
-                e.span,
-            )),
-            ExprKind::ClipBlock(_) | ExprKind::SceneBlock(_) => Err(Diagnostic::new(
-                "clips and scenes belong in the score, not in a function with state",
-                e.span,
-            )),
             ExprKind::Str(_) => Err(Diagnostic::new(
                 "text can't be used inside a function with state",
                 e.span,
@@ -1799,7 +1787,7 @@ impl Kb<'_> {
                     "`clock` is only available in an instrument, track or bus",
                     span,
                 )
-                .with_help("pass `clock.beat` in as an argument"));
+                .with_help("pass `clock.time` in as an argument"));
             }
             _ => {}
         }

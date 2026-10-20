@@ -12,7 +12,7 @@ use midir::{MidiOutput as Midir, MidiOutputConnection};
 use niminal_daemon::MidiEvent;
 use rtrb::Consumer;
 
-use crate::worker::Worker;
+use niminal_ws::worker::Worker;
 
 /// Somewhere a MIDI message can be sent: a port, found by part of its name.
 pub trait Ports {

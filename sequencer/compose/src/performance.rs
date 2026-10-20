@@ -81,7 +81,7 @@ pub struct Clip {
     pub curves: Vec<(String, EnvLane)>,
     /// Lanes that are signals (`cut: sine.range(300hz, 3khz)`), once placed on a track: the
     /// parameter's unit. They move the parameter continuously instead of stepping it at each note.
-    pub signals: Vec<(String, crate::unit::Unit)>,
+    pub signals: Vec<(String, niminal_lang::Unit)>,
 }
 
 /// An `env[...]` in a lane: a run of glides between levels, from the start of the clip.
@@ -93,7 +93,7 @@ pub struct EnvLane {
     /// Starts over when it ends, instead of holding its last level.
     pub looped: bool,
     /// The unit of the parameter it moves, once it is placed on a track.
-    pub unit: Option<crate::unit::Unit>,
+    pub unit: Option<niminal_lang::Unit>,
 }
 
 /// Where a clip's notes come from when it is played live.

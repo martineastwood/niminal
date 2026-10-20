@@ -1,13 +1,11 @@
-//! What the engine's tests share: putting a project in place the way a client of the engine would.
+//! What the engine's tests share: putting definitions in place the way a client of the engine would.
 
 #![allow(dead_code)]
 
 use niminal_daemon::{At, Op, Problem, Session};
-use niminal_lang::compile;
 use niminal_score::Time;
 
-/// Put a project in place at once, with the engine's own events: its definitions with `define`, its tempo
-/// with `transport`, and the notes it writes out with `note`.
+/// Put definitions in place at once, with the engine's own `define` event.
 pub trait Eval {
     fn eval_as(&mut self, client: u64, source: &str) -> Result<(), Vec<Problem>>;
     fn eval(&mut self, source: &str, quantize: Option<&str>) -> Result<(), Vec<Problem>>;
@@ -18,7 +16,7 @@ pub trait Eval {
 
 impl Eval for Session {
     fn eval_as(&mut self, client: u64, source: &str) -> Result<(), Vec<Problem>> {
-        install_as(self, source, 0.0, client)
+        install_as(self, source, client)
     }
     fn eval(&mut self, source: &str, _: Option<&str>) -> Result<(), Vec<Problem>> {
         install(self, source, 0.0)
@@ -29,60 +27,17 @@ impl Eval for Session {
     }
 }
 
-fn install(session: &mut Session, source: &str, play_seconds: f64) -> Result<(), Vec<Problem>> {
-    install_as(session, source, play_seconds, 0)
+fn install(session: &mut Session, source: &str, _play_seconds: f64) -> Result<(), Vec<Problem>> {
+    install_as(session, source, 0)
 }
-fn install_as(
-    session: &mut Session,
-    source: &str,
-    play_seconds: f64,
-    client: u64,
-) -> Result<(), Vec<Problem>> {
-    let program = compile(source).map_err(|ds| {
-        ds.into_iter()
-            .map(|d| Problem::plain(d.message))
-            .collect::<Vec<_>>()
-    })?;
-    let mut ops = Vec::new();
-    let definitions = niminal_lang::dsp_source(source, program.tempo)
-        .map_err(|d| vec![Problem::plain(d.message)])?;
-    if !definitions.is_empty() {
-        ops.push(Op::Define {
-            source: definitions,
-            at: At::Now,
-            dir: None,
-            tag: None,
-        });
-    }
-    // notes written out in the code, and what clips play
-    let start = session.clock();
-    let rate = f64::from(session.sample_rate());
-    let sample = |seconds: f64| At::Sample(start + (seconds * rate).round() as u64);
-    let mut events = program.notes.clone();
-    if play_seconds > 0.0 {
-        events.extend(
-            program
-                .schedule()
-                .events(0.0, play_seconds)
-                .map_err(|e| vec![Problem::plain(e.to_string())])?,
-        );
-    }
-    for e in events {
-        let at = sample(e.at.to_seconds(program.tempo));
-        ops.push(Op::Note {
-            to: None,
-            target: e.target,
-            at,
-            args: e
-                .args
-                .into_iter()
-                .map(|(n, v)| (n, niminal_lang::dsp_value(v, program.tempo)))
-                .collect(),
-            dur: Some(Time::Seconds(e.dur.to_seconds(program.tempo))),
-            id: None,
-            tag: None,
-        });
-    }
+
+fn install_as(session: &mut Session, source: &str, client: u64) -> Result<(), Vec<Problem>> {
+    let ops = vec![Op::Define {
+        source: source.to_string(),
+        at: At::Now,
+        dir: None,
+        tag: None,
+    }];
     session.send_events(client, ops).map(|_| ())
 }
 
@@ -104,4 +59,19 @@ pub fn set_control(
         tag: None,
     };
     session.send_events(0, vec![op]).map(|_| ())
+}
+
+/// Play `target` (an instrument or track, no arguments) `at` seconds from now, for `dur` seconds.
+pub fn play(session: &mut Session, target: &str, at: f64, dur: f64) {
+    let start = session.clock() + (at * f64::from(session.sample_rate())).round() as u64;
+    let op = Op::Note {
+        to: None,
+        target: target.into(),
+        at: At::Sample(start),
+        args: Default::default(),
+        dur: Some(Time::Seconds(dur)),
+        id: None,
+        tag: None,
+    };
+    session.send_events(0, vec![op]).unwrap();
 }

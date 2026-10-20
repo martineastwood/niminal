@@ -1,6 +1,6 @@
 //! When changes land: the musical boundary a change waits for.
 
-use niminal_lang::{
+use niminal_compose::{
     Quantize, QuantizeConfig, QuantizeRelation, QuantizeUnit, Statement, StatementKind,
 };
 
@@ -129,7 +129,7 @@ impl Grid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use niminal_lang::analyze;
+    use niminal_compose::analyze;
 
     fn grid() -> Grid {
         // 120bpm in 4/4: a bar is 2 seconds, 96000 samples

@@ -264,7 +264,7 @@ fn wav_files_interleave_the_channels() {
     let dir = std::env::temp_dir().join(format!("niminal-wav-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("stereo.wav");
-    niminal_cli::render::write_wav(&path, &out.channels).unwrap();
+    nimlive::render::write_wav(&path, &out.channels).unwrap();
 
     let mut reader = hound::WavReader::open(&path).unwrap();
     assert_eq!(reader.spec().channels, 2);
