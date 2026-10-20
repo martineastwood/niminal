@@ -475,7 +475,7 @@ fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
     let niminal_server::LogInput::Send { ops, .. } = &log.last().unwrap().input else {
         panic!("the control is in the log");
     };
-    assert!(matches!(ops[0], niminal_server::Op::Control { at: niminal_server::At::Sample(32), .. }), "{ops:?}");
+    assert!(matches!(ops[0], niminal_server::Op::Control { at: niminal_server::At::Sample(64), .. }), "{ops:?}");
     let replay = niminal_server::Session::replay(
         48_000.0,
         Layout::Mono,
