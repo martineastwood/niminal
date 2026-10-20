@@ -30,7 +30,7 @@ pub(crate) fn encode(bytes: &[u8]) -> String {
     out
 }
 fn decode(text: &str) -> Result<Vec<u8>, String> {
-    if text.len() > CHUNK.div_ceil(3) * 4 || text.len() % 4 != 0 {
+    if text.len() > CHUNK.div_ceil(3) * 4 || !text.len().is_multiple_of(4) {
         return Err("base64 chunk exceeds 256 KiB or has invalid length".into());
     }
     let mut out = Vec::with_capacity(text.len() / 4 * 3);

@@ -192,8 +192,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     };
     if !options.namespaces.is_empty() {
         for item in &parsed {
-            if let Item::Config(config) = item {
-                if options
+            if let Item::Config(config) = item
+                && options
                     .namespaces
                     .iter()
                     .any(|(start, end, _)| config.span.start >= *start && config.span.start < *end)
@@ -210,7 +210,6 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                         }
                     }
                 }
-            }
         }
         parsed.retain(|item|!matches!(item,Item::Config(config) if options.namespaces.iter().any(|(start,end,_)|config.span.start>=*start&&config.span.start<*end)));
     }
@@ -308,14 +307,13 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 }
             }
             for param in &params {
-                if let Some(ty) = &param.ty {
-                    if !matches!(ty,TypeSpec::Unit(t) if t.name=="buffer") {
+                if let Some(ty) = &param.ty
+                    && !matches!(ty,TypeSpec::Unit(t) if t.name=="buffer") {
                         control_types.insert(
                             format!("{}::{}", track.name.name, param.name.name),
                             ty.clone(),
                         );
                     }
-                }
             }
             track.params = params;
         }
@@ -1395,8 +1393,6 @@ fn compile_sample(
 /// The pitch (c4) at which a sample plays as recorded unless it says otherwise.
 const DEFAULT_ROOT_HZ: f32 = 261.625_56;
 
-/// Default sample rate used when sizing buffers from musical time.
-
 fn loop_mode_of(options: &[Arg]) -> Res<niminal_engine::ops::LoopMode> {
     for arg in options {
         if arg.name.as_ref().is_some_and(|n| n.name == "loop") {
@@ -1457,8 +1453,8 @@ fn compile_buffer(
     names: &Names,
     options: &CompileOptions,
 ) -> Res<(String, Arc<niminal_engine::Buffer>)> {
-    if let ExprKind::Call { name, args } = &decl.value.kind {
-        if name.name == "zeros" {
+    if let ExprKind::Call { name, args } = &decl.value.kind
+        && name.name == "zeros" {
             let mut frames = None;
             let mut channels = 1usize;
             for arg in args {
@@ -1496,7 +1492,6 @@ fn compile_buffer(
                 frames.ok_or_else(|| Diagnostic::new("zeros needs a frame count", decl.span))?;
             return allocate_buffer(decl, frames, channels, None, names, options);
         }
-    }
     let value = compile_const(&decl.value, tempo, registry, names)?;
     let buffer = match value {
         Datum::Table(t) => niminal_engine::Buffer::from_table(&t),
@@ -2031,6 +2026,71 @@ fn fold_div(a: Value, b: Value, span: Span) -> Res<Value> {
     match (a, b) {
         (Value::Num(a), Value::Num(b)) if b != 0.0 => Ok(Value::Num(a / b)),
         _ => Err(Diagnostic::new("can't divide these note arguments", span)),
+    }
+}
+
+fn owned_samples(options: &CompileOptions, name: &str) -> Samples {
+    name.split_once("::")
+        .and_then(|(owner, _)| options.namespace_samples.get(owner))
+        .cloned()
+        .unwrap_or_else(|| options.samples.clone())
+}
+
+fn scoped_group(context: &str, name: &str) -> String {
+    if let Some((owner, _)) = context.split_once("::") {
+        if name.starts_with(&format!("{owner}::")) {
+            name.to_string()
+        } else {
+            format!("{owner}::{name}")
+        }
+    } else {
+        name.to_string()
+    }
+}
+
+/// A number with a unit as a score value: `440hz`, `-6db`, `2bars`.
+pub fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value> {
+    Ok(match unit {
+        None => Value::Num(value),
+        Some("hz") => Value::Hz(value),
+        Some("khz") => Value::Hz(value * 1000.0),
+        Some("db") => Value::Db(value),
+        Some("sec") => Value::Seconds(value),
+        Some("ms") => Value::Seconds(value / 1000.0),
+        Some("beat" | "beats") => Value::Beats(value),
+        Some("bar" | "bars") => Value::Bars(value),
+        Some("deg") => Value::Degrees(value),
+        Some("st") => Value::Semitones(value),
+        Some("ct") => Value::Semitones(value / 100.0),
+        Some("%") => Value::Num(value / 100.0),
+        Some(u) => return Err(crate::lower::unknown_unit(u, span)),
+    })
+}
+
+/// The same quantity the other way round. A note or a sample keeps its sign.
+pub fn negate(v: Value) -> Value {
+    match v {
+        Value::Num(n) => Value::Num(-n),
+        Value::Hz(n) => Value::Hz(-n),
+        Value::Db(n) => Value::Db(-n),
+        Value::Seconds(n) => Value::Seconds(-n),
+        Value::Beats(n) => Value::Beats(-n),
+        Value::Bars(n) => Value::Bars(-n),
+        Value::Semitones(n) => Value::Semitones(-n),
+        Value::Degrees(n) => Value::Degrees(-n),
+        keep @ (Value::Note(_) | Value::Sample(_)) => keep,
+    }
+}
+
+/// Move a pitch by `st` semitones. Notes stay notes when the interval is whole.
+pub fn transpose(v: Value, st: f64) -> Value {
+    match v {
+        Value::Note(m) if st.fract() == 0.0 => Value::Note(m + st as i32),
+        Value::Note(_) | Value::Hz(_) => {
+            let hz = v.as_hz().expect("notes and frequencies have a frequency");
+            Value::Hz(hz * 2f64.powf(st / 12.0))
+        }
+        other => other,
     }
 }
 
@@ -3190,69 +3250,4 @@ instr b() { osc(saw, 440) }
     }
 
 
-}
-
-fn owned_samples(options: &CompileOptions, name: &str) -> Samples {
-    name.split_once("::")
-        .and_then(|(owner, _)| options.namespace_samples.get(owner))
-        .cloned()
-        .unwrap_or_else(|| options.samples.clone())
-}
-
-fn scoped_group(context: &str, name: &str) -> String {
-    if let Some((owner, _)) = context.split_once("::") {
-        if name.starts_with(&format!("{owner}::")) {
-            name.to_string()
-        } else {
-            format!("{owner}::{name}")
-        }
-    } else {
-        name.to_string()
-    }
-}
-
-/// A number with a unit as a score value: `440hz`, `-6db`, `2bars`.
-pub fn value_of(value: f64, unit: Option<&str>, span: Span) -> Res<Value> {
-    Ok(match unit {
-        None => Value::Num(value),
-        Some("hz") => Value::Hz(value),
-        Some("khz") => Value::Hz(value * 1000.0),
-        Some("db") => Value::Db(value),
-        Some("sec") => Value::Seconds(value),
-        Some("ms") => Value::Seconds(value / 1000.0),
-        Some("beat" | "beats") => Value::Beats(value),
-        Some("bar" | "bars") => Value::Bars(value),
-        Some("deg") => Value::Degrees(value),
-        Some("st") => Value::Semitones(value),
-        Some("ct") => Value::Semitones(value / 100.0),
-        Some("%") => Value::Num(value / 100.0),
-        Some(u) => return Err(crate::lower::unknown_unit(u, span)),
-    })
-}
-
-/// The same quantity the other way round. A note or a sample keeps its sign.
-pub fn negate(v: Value) -> Value {
-    match v {
-        Value::Num(n) => Value::Num(-n),
-        Value::Hz(n) => Value::Hz(-n),
-        Value::Db(n) => Value::Db(-n),
-        Value::Seconds(n) => Value::Seconds(-n),
-        Value::Beats(n) => Value::Beats(-n),
-        Value::Bars(n) => Value::Bars(-n),
-        Value::Semitones(n) => Value::Semitones(-n),
-        Value::Degrees(n) => Value::Degrees(-n),
-        keep @ (Value::Note(_) | Value::Sample(_)) => keep,
-    }
-}
-
-/// Move a pitch by `st` semitones. Notes stay notes when the interval is whole.
-pub fn transpose(v: Value, st: f64) -> Value {
-    match v {
-        Value::Note(m) if st.fract() == 0.0 => Value::Note(m + st as i32),
-        Value::Note(_) | Value::Hz(_) => {
-            let hz = v.as_hz().expect("notes and frequencies have a frequency");
-            Value::Hz(hz * 2f64.powf(st / 12.0))
-        }
-        other => other,
-    }
 }

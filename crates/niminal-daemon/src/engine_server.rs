@@ -613,8 +613,8 @@ impl EngineServer {
                 for event in &mut events {
                     if let Op::Routing { edits, .. } | Op::Transaction { edits, .. } = event {
                         for edit in edits {
-                            if let crate::RoutingEdit::Player { player, .. } = edit {
-                                if player.path.starts_with("file:") {
+                            if let crate::RoutingEdit::Player { player, .. } = edit
+                                && player.path.starts_with("file:") {
                                     player.path = self
                                         .files
                                         .path(client, &player.path)
@@ -622,7 +622,6 @@ impl EngineServer {
                                         .to_string_lossy()
                                         .into_owned();
                                 }
-                            }
                         }
                     }
                 }

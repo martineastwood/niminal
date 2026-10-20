@@ -55,10 +55,11 @@ pub struct Resource {
     #[serde(default)]
     pub channel: usize,
 }
+type RenderedFile = (String, PathBuf, bool);
 struct Progress {
     cancel: AtomicBool,
     frames: AtomicU64,
-    result: Mutex<Option<Result<Vec<(String, PathBuf, bool)>, String>>>,
+    result: Mutex<Option<Result<Vec<RenderedFile>, String>>>,
 }
 struct Job {
     progress: Arc<Progress>,

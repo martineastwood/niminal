@@ -12,6 +12,9 @@ struct Event {
     instance: AtomicU64,
     values: Box<[AtomicU32]>,
 }
+/// (sample, token, instance, values)
+pub type ReportEvent = (u64, u64, u64, Vec<f32>);
+
 pub struct Report {
     pub name: String,
     pub width: usize,
@@ -54,7 +57,7 @@ impl Report {
         event.sequence.store(cursor * 2 + 2, Ordering::Release);
         self.cursor.store(cursor + 1, Ordering::Release);
     }
-    pub fn read(&self, cursor: &mut u64) -> (u64, Vec<(u64, u64, u64, Vec<f32>)>) {
+    pub fn read(&self, cursor: &mut u64) -> (u64, Vec<ReportEvent>) {
         let end = self.cursor.load(Ordering::Acquire);
         let dropped = end.saturating_sub(*cursor).saturating_sub(CAPACITY as u64);
         *cursor = (*cursor).max(end.saturating_sub(CAPACITY as u64));

@@ -56,15 +56,14 @@ impl Scopes {
         Ok(json!({"id":id}))
     }
     pub fn remove(&mut self, client: ClientId, id: &str) {
-        if let Some(old) = self.entries.remove(&(client, id.to_string())) {
-            if !self
+        if let Some(old) = self.entries.remove(&(client, id.to_string()))
+            && !self
                 .entries
                 .values()
                 .any(|s| Arc::ptr_eq(&s.meter, &old.meter))
             {
                 old.meter.waveform().enabled.store(false, Ordering::Relaxed);
             }
-        }
     }
     pub fn disconnect(&mut self, client: ClientId) {
         let ids: Vec<_> = self

@@ -685,6 +685,65 @@ impl Drop for NullClock {
     }
 }
 
+fn select_device(input: bool, id: Option<&str>) -> Result<cpal::Device, String> {
+    let host = cpal::default_host();
+    if let Some(id) = id.filter(|id| *id != "default") {
+        let kind = if input { "input:" } else { "output:" };
+        let index = id
+            .strip_prefix(kind)
+            .and_then(|i| i.parse::<usize>().ok())
+            .ok_or("invalid device id")?;
+        let mut devices = if input {
+            host.input_devices()
+        } else {
+            host.output_devices()
+        }
+        .map_err(|e| e.to_string())?;
+        devices
+            .nth(index)
+            .ok_or_else(|| "audio device is no longer available".into())
+    } else {
+        if input {
+            host.default_input_device()
+        } else {
+            host.default_output_device()
+        }
+        .ok_or_else(|| "no default audio device".into())
+    }
+}
+pub fn devices() -> serde_json::Value {
+    let host = cpal::default_host();
+    let list = |input: bool| -> Vec<serde_json::Value> {
+        let devices = if input {
+            host.input_devices()
+        } else {
+            host.output_devices()
+        };
+        devices.map(|ds|ds.enumerate().map(|(index,device)|{
+            let configs=if input{device.supported_input_configs().map(|c|c.collect::<Vec<_>>())}else{device.supported_output_configs().map(|c|c.collect::<Vec<_>>())};
+            let configs=configs.map(|cs|cs.into_iter().map(|c|serde_json::json!({"channels":c.channels(),"min_sample_rate":c.min_sample_rate(),"max_sample_rate":c.max_sample_rate(),"format":format!("{:?}",c.sample_format()),"buffer_size":format!("{:?}",c.buffer_size())})).collect::<Vec<_>>()).unwrap_or_default();
+            serde_json::json!({"id":format!("{}:{index}",if input{"input"}else{"output"}),"name":device.to_string(),"configs":configs})
+        }).collect()).unwrap_or_default()
+    };
+    serde_json::json!({"inputs":list(true),"outputs":list(false)})
+}
+pub fn validate_input(id: &str, rate: u32) -> Result<(), String> {
+    let device = select_device(true, Some(id))?;
+    let supported = device
+        .supported_input_configs()
+        .map_err(|e| e.to_string())?
+        .any(|c| {
+            c.sample_format() == cpal::SampleFormat::F32
+                && rate >= c.min_sample_rate()
+                && rate <= c.max_sample_rate()
+        });
+    if supported {
+        Ok(())
+    } else {
+        Err("input device does not support the requested sample rate".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -871,64 +930,5 @@ mod tests {
         assert_eq!(playback.health.underruns.load(Ordering::Relaxed), 0);
         drop(guard);
         drop(worker);
-    }
-}
-
-fn select_device(input: bool, id: Option<&str>) -> Result<cpal::Device, String> {
-    let host = cpal::default_host();
-    if let Some(id) = id.filter(|id| *id != "default") {
-        let kind = if input { "input:" } else { "output:" };
-        let index = id
-            .strip_prefix(kind)
-            .and_then(|i| i.parse::<usize>().ok())
-            .ok_or("invalid device id")?;
-        let mut devices = if input {
-            host.input_devices()
-        } else {
-            host.output_devices()
-        }
-        .map_err(|e| e.to_string())?;
-        devices
-            .nth(index)
-            .ok_or_else(|| "audio device is no longer available".into())
-    } else {
-        if input {
-            host.default_input_device()
-        } else {
-            host.default_output_device()
-        }
-        .ok_or_else(|| "no default audio device".into())
-    }
-}
-pub fn devices() -> serde_json::Value {
-    let host = cpal::default_host();
-    let list = |input: bool| -> Vec<serde_json::Value> {
-        let devices = if input {
-            host.input_devices()
-        } else {
-            host.output_devices()
-        };
-        devices.map(|ds|ds.enumerate().map(|(index,device)|{
-            let configs=if input{device.supported_input_configs().map(|c|c.collect::<Vec<_>>())}else{device.supported_output_configs().map(|c|c.collect::<Vec<_>>())};
-            let configs=configs.map(|cs|cs.into_iter().map(|c|serde_json::json!({"channels":c.channels(),"min_sample_rate":c.min_sample_rate(),"max_sample_rate":c.max_sample_rate(),"format":format!("{:?}",c.sample_format()),"buffer_size":format!("{:?}",c.buffer_size())})).collect::<Vec<_>>()).unwrap_or_default();
-            serde_json::json!({"id":format!("{}:{index}",if input{"input"}else{"output"}),"name":device.to_string(),"configs":configs})
-        }).collect()).unwrap_or_default()
-    };
-    serde_json::json!({"inputs":list(true),"outputs":list(false)})
-}
-pub fn validate_input(id: &str, rate: u32) -> Result<(), String> {
-    let device = select_device(true, Some(id))?;
-    let supported = device
-        .supported_input_configs()
-        .map_err(|e| e.to_string())?
-        .any(|c| {
-            c.sample_format() == cpal::SampleFormat::F32
-                && rate >= c.min_sample_rate()
-                && rate <= c.max_sample_rate()
-        });
-    if supported {
-        Ok(())
-    } else {
-        Err("input device does not support the requested sample rate".into())
     }
 }

@@ -35,8 +35,8 @@ impl Outbox {
             Some("scope") => Some(format!("scope:{}", value["params"]["id"])),
             _ => None,
         };
-        if let Some(key) = &key {
-            if let Some((_, old)) = self.queue.iter_mut().find(|(k, _)| k.as_ref() == Some(key)) {
+        if let Some(key) = &key
+            && let Some((_, old)) = self.queue.iter_mut().find(|(k, _)| k.as_ref() == Some(key)) {
                 if self.bytes - old.len() + text.len() > 4 * 1024 * 1024 {
                     self.dropped += 1;
                     return;
@@ -47,7 +47,6 @@ impl Outbox {
                 self.dropped += 1;
                 return;
             }
-        }
         if self.bytes + text.len() > 4 * 1024 * 1024 || self.queue.len() >= 256 {
             if key.is_some() {
                 self.dropped += 1;

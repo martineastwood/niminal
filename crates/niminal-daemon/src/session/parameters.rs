@@ -154,15 +154,13 @@ impl Session {
         for map in &mut self.chain_maps {
             if !map.mapping.done && map.mapping.at <= self.clock {
                 if let Some(track) = self.program.track_index(&map.track()) {
-                    if map.mapping.source.is_none() {
-                        if let Some(value) = self.mixer.chain_param_value(track, &map.param) {
-                            if let Some(control) =
+                    if map.mapping.source.is_none()
+                        && let Some(value) = self.mixer.chain_param_value(track, &map.param)
+                            && let Some(control) =
                                 self.controls.iter_mut().find(|c| c.key == map.param)
                             {
                                 control.set(self.clock, value, 0);
                             }
-                        }
-                    }
                     let mut prepared = prepare_mapping(&self.program, &map.mapping);
                     self.mixer
                         .swap_chain_mapping(track, &map.param, &mut prepared);
@@ -242,13 +240,12 @@ impl Session {
             }
         }
         for map in latest.values() {
-            if map.mapping.source.is_some() {
-                if let Some(track) = self.program.track_index(&map.track()) {
+            if map.mapping.source.is_some()
+                && let Some(track) = self.program.track_index(&map.track()) {
                     let mut mapping = prepare_mapping(&self.program, &map.mapping);
                     self.mixer
                         .swap_chain_mapping(track, &map.param, &mut mapping);
                 }
-            }
         }
         let mut latest = std::collections::BTreeMap::new();
         for bind in &self.buffer_binds {

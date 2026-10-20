@@ -1,5 +1,9 @@
 //! The sequencer and an engine in one process with a clock of their own, for rendering to a file and for
 //! tests: the same requests as when the engine is across a WebSocket, but time only moves when asked to.
+//!
+//! This is a harness, not a client: it holds the engine's `Session` to step its clock and read its output, which
+//! the wire protocol doesn't offer. Only `nimlive render` and tests use it. The sequencer itself ([`crate::Live`])
+//! reaches the engine only through an [`EngineLink`](crate::EngineLink), as any other frontend would.
 
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};

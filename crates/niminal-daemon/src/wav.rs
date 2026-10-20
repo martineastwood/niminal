@@ -36,7 +36,7 @@ impl Wav {
         })
     }
     pub fn write(&mut self, values: &[f32]) -> Result<(), String> {
-        if values.len() % self.channels != 0 {
+        if !values.len().is_multiple_of(self.channels) {
             return Err("partial audio frame".into());
         }
         let bytes: Vec<_> = values.iter().flat_map(|v| v.to_le_bytes()).collect();

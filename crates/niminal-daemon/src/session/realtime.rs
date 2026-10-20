@@ -1580,15 +1580,13 @@ impl RealtimeRenderer {
                 mapping,
             } => {
                 if let Some(index) = self.program.track_index(track) {
-                    if mapping.is_none() {
-                        if let Some(value) = self.mixer.chain_param_value(index, param) {
-                            if let Some(control) =
+                    if mapping.is_none()
+                        && let Some(value) = self.mixer.chain_param_value(index, param)
+                            && let Some(control) =
                                 self.controls.iter_mut().find(|c| c.key == *param)
                             {
                                 control.set(self.clock, value, 0);
                             }
-                        }
-                    }
                     self.mixer.swap_chain_mapping(index, param, mapping);
                     crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
                 }

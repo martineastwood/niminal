@@ -237,8 +237,8 @@ impl Voice {
             return;
         }
         for (index, param) in self.graph.params.iter().enumerate() {
-            if let Some(previous) = old.graph.param_index(&param.name) {
-                if self.mappings[index].is_none() && old.mappings[previous].is_some() {
+            if let Some(previous) = old.graph.param_index(&param.name)
+                && self.mappings[index].is_none() && old.mappings[previous].is_some() {
                     self.mappings[index] = old.mappings[previous].take();
                     self.mappings[index]
                         .as_mut()
@@ -246,7 +246,6 @@ impl Voice {
                         .set_range(param.range);
                     self.slots[index] = old.slots[previous];
                 }
-            }
         }
         let old_keys = old.graph.state_keys();
         let keys = self.graph.state_keys();

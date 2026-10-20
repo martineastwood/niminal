@@ -53,7 +53,7 @@ impl Waveform {
     /// Return a coherent interleaved window, or skip this poll if rendering won the race.
     pub fn read(&self, frames: usize) -> Option<(u64, usize, Vec<f32>)> {
         let sequence = self.sequence.load(Ordering::Acquire);
-        if sequence % 2 != 0 {
+        if !sequence.is_multiple_of(2) {
             return None;
         }
         let end = self.end.load(Ordering::Relaxed);

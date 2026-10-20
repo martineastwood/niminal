@@ -23,8 +23,8 @@ pub(crate) fn qualify(items: &mut [Item], ranges: &[(usize, usize, String)]) {
     let mut symbols: HashMap<String, HashMap<String, String>> = HashMap::new();
     for item in items.iter_mut() {
         let function = matches!(item, Item::Fn(_));
-        if let Some(id) = name(item) {
-            if let Some((_, _, owner)) = ranges
+        if let Some(id) = name(item)
+            && let Some((_, _, owner)) = ranges
                 .iter()
                 .find(|(a, b, _)| id.span.start >= *a && id.span.start < *b)
             {
@@ -39,7 +39,6 @@ pub(crate) fn qualify(items: &mut [Item], ranges: &[(usize, usize, String)]) {
                     );
                 }
             }
-        }
     }
     for item in items {
         let Some(id) = name(item) else { continue };
@@ -87,13 +86,11 @@ fn reference(n: &mut String, locals: &HashSet<String>, globals: &HashMap<String,
     if !locals.contains(n) {
         if let Some(long) = globals.get(n) {
             *n = long.clone();
-        } else if let Some((base, member)) = n.split_once('.') {
-            if !locals.contains(base) {
-                if let Some(long) = globals.get(base) {
+        } else if let Some((base, member)) = n.split_once('.')
+            && !locals.contains(base)
+                && let Some(long) = globals.get(base) {
                     *n = format!("{long}.{member}");
                 }
-            }
-        }
     }
 }
 fn body(

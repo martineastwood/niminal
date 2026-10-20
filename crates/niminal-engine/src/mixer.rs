@@ -491,15 +491,14 @@ impl Mixer {
         sample: u64,
     ) {
         activity.start(sample, id.serial);
-        if let Some(track) = self.tracks.get_mut(id.track) {
-            if let Some((_, voice)) = track
+        if let Some(track) = self.tracks.get_mut(id.track)
+            && let Some((_, voice)) = track
                 .voices
                 .iter_mut()
                 .find(|(s, v)| *s == id.serial || v.holds(id.serial))
             {
                 voice.attach_activity(activity);
             }
-        }
     }
     pub fn finish_activities(&self, sample: u64, reason: u32) {
         for track in &self.tracks {
@@ -509,11 +508,10 @@ impl Mixer {
         }
     }
     pub fn set_voice_owner(&mut self, id: VoiceId, owner: u64) {
-        if let Some(track) = self.tracks.get_mut(id.track) {
-            if let Some((_, voice)) = track.voices.iter_mut().find(|(s, _)| *s == id.serial) {
+        if let Some(track) = self.tracks.get_mut(id.track)
+            && let Some((_, voice)) = track.voices.iter_mut().find(|(s, _)| *s == id.serial) {
                 voice.set_owner(owner);
             }
-        }
     }
     pub fn set_voice_dur(&mut self, id: VoiceId, seconds: f32) {
         if let Some(track) = self.tracks.get_mut(id.track)

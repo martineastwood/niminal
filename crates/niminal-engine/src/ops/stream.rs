@@ -125,12 +125,11 @@ impl Opcode for StreamOut {
         Box::new(Self::new(self.cache.clone()))
     }
     fn carry_state(&mut self, old: &mut dyn Opcode) {
-        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
-            if Arc::ptr_eq(&self.cache, &old.cache) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
+            && Arc::ptr_eq(&self.cache, &old.cache) {
                 self.position = old.position;
                 self.trigger = old.trigger;
             }
-        }
     }
     fn process(&mut self, _: &ProcessCtx, _: &[&[f32]], _: &mut [f32]) {
         unreachable!("multichannel player")
@@ -170,11 +169,10 @@ impl Opcode for StreamOut {
                     continue;
                 }
                 let value = loop {
-                    if let Some(a) = self.cache.read(at, channel) {
-                        if let Some(b) = self.cache.read(at + 1, channel) {
+                    if let Some(a) = self.cache.read(at, channel)
+                        && let Some(b) = self.cache.read(at + 1, channel) {
                             break Some(a + (b - a) * (self.position.fract() as f32));
                         }
-                    }
                     if ctx.realtime || self.cache.failed.load(Ordering::Acquire) {
                         break None;
                     }
