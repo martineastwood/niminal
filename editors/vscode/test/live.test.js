@@ -13,9 +13,10 @@ function child() {
 
 test("editor owns a private sequencer connected to the generic daemon", async () => {
   const process = child();
-  const live = startLive({ path: "/a path/niminal", port: 7401, token: "secret" }, () => {}, (path, args) => {
+  const live = startLive({ path: "/a path/niminal", port: 7401, token: "secret" }, () => {}, (path, args, options) => {
     assert.equal(path, "/a path/niminal");
     assert.deepEqual(args, ["live", "--engine-port", "7401", "--port", "0", "--parent-stdio", "--token", "secret"]);
+    assert.equal(options.argv0, "niminal live");
     return process;
   });
   process.stdout.emit("data", "niminal live listening on ws://127.");
@@ -29,6 +30,7 @@ test("editor owns a private sequencer connected to the generic daemon", async ()
 test("startup failure reaches the editor", async () => {
   const process = child();
   const live = startLive({ path: "niminal", port: 7401 }, () => {}, () => process);
+  process.stderr.emit("data", "can't reach the daemon on port 7401: Connection refused\n");
   process.emit("exit", 1);
-  await assert.rejects(live.ready, /exited \(1\)/);
+  await assert.rejects(live.ready, /exited \(1\): can't reach the daemon on port 7401/);
 });

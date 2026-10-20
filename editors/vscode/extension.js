@@ -1,4 +1,5 @@
 const vscode = require("vscode");
+const net = require("node:net");
 const { LanguageClient } = require("vscode-languageclient/node");
 const { LiveClient: Client } = require("niminal-client");
 const { startLive } = require("./live");
@@ -144,8 +145,11 @@ async function ensureConnected() {
   try {
     return await connect();
   } catch (e) {
+    // A daemon that is listening but won't talk is not helped by starting another one:
+    // say what it said instead of asking for a daemon that is already there.
+    if (await listening(settings().port)) return reportConnectError(e);
     const choice = await vscode.window.showErrorMessage(`niminal: ${e.message}`, "Start Daemon");
-    if (choice === "Start Daemon") startDaemon();
+    if (choice === "Start Daemon") return startDaemon();
     return null;
   }
 }
@@ -216,11 +220,56 @@ async function simple(method) {
   if (c) await c.call(method).catch((e) => vscode.window.showErrorMessage(`niminal: ${e.message}`));
 }
 
-function startDaemon() {
+/** Whether something is listening on `port` of this machine. */
+function listening(port, timeout = 500) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: "127.0.0.1" });
+    const answer = (yes) => {
+      socket.destroy();
+      resolve(yes);
+    };
+    socket.setTimeout(timeout, () => answer(false));
+    socket.once("connect", () => answer(true));
+    socket.once("error", () => answer(false));
+  });
+}
+
+/** Wait for a daemon to answer on `port`, turning a timeout into something readable. */
+async function waitForDaemon(port, timeout = 20000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await listening(port)) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`nothing answered on port ${port}; the daemon terminal says why`);
+}
+
+function reportConnectError(e) {
+  vscode.window.showErrorMessage(`niminal: ${e.message}`);
+  return null;
+}
+
+/** Start a daemon in a terminal, then connect to it, so the editor uses what it started. */
+async function startDaemon() {
   const { port, token, path } = settings();
-  const terminal = vscode.window.createTerminal("niminal daemon");
-  terminal.sendText(`${path} daemon --port ${port}${token ? ` --token ${token}` : ""}`);
-  terminal.show(true);
+  if (await listening(port)) {
+    vscode.window.showInformationMessage(`niminal: a daemon is already listening on port ${port}`);
+  } else {
+    const terminal = vscode.window.createTerminal("niminal daemon");
+    terminal.sendText(`${path} daemon --port ${port}${token ? ` --token ${token}` : ""}`);
+    terminal.show(true);
+    channel.appendLine(`starting the daemon on port ${port}`);
+    try {
+      await waitForDaemon(port);
+    } catch (e) {
+      return reportConnectError(e);
+    }
+  }
+  try {
+    return await connect();
+  } catch (e) {
+    return reportConnectError(e);
+  }
 }
 
 // Errors, completion, hover and go-to-definition come from `niminal lsp`, the same
