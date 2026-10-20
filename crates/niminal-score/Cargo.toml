@@ -2,6 +2,7 @@
 name = "niminal-score"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "niminal score model: values with units, events, sections, and the .nms file format"
 
 [dependencies]

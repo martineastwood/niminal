@@ -2,6 +2,7 @@
 name = "niminal-ws"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "JSON-RPC over WebSocket: the server that fronts the daemon, and a client for it"
 
 [dependencies]

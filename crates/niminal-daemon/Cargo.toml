@@ -2,6 +2,7 @@
 name = "niminal-daemon"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "The niminal sound server: generic timestamped events and DSP definitions"
 
 [dependencies]

@@ -6,4 +6,5 @@ members = ["pattern", "compose", "live", "lsp", "nimlive"]
 
 [workspace.package]
 version = "0.0.1"
+license = "MIT"
 edition = "2024"

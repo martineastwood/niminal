@@ -2,6 +2,7 @@
 name = "niminal-live"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "The niminal live sequencer: clips, scenes, quantized changes and keyboards, driving the engine through its public event API"
 
 [dependencies]

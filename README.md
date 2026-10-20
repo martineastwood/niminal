@@ -89,3 +89,7 @@ The language server (`nimlive lsp`) works without a daemon for hover, completion
 ## Feedback
 
 Issues and experiments are welcome while the project is in alpha. If something breaks, a minimal `.nml` file and what you ran (`render`, `daemon`, etc.) helps a lot.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

@@ -2,6 +2,7 @@
 name = "niminal-engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "niminal DSP runtime: graph execution, opcodes, voices"
 
 [dev-dependencies]
