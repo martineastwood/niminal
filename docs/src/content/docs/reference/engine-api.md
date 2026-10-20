@@ -236,7 +236,7 @@ The engine's state. **Result** includes:
 
 - **`clock`** — `sample`, `seconds`, `voices`
 - **`sample_rate`**, **`channels`**, **`processing_latency`** (DSP samples before the limiter/device)
-- **`realtime`** — counters such as `late_events`, `starved_frames`, `capacity_drops`, `deadline_misses`, `max_render_micros` and `mixer_builds`
+- **`realtime`** — counters such as `late_events`, `starved_frames`, `capacity_drops`, `deadline_misses`, `max_render_micros`, `mixer_builds` and `planner_panics`
 - **`controls`** — each `ctl` and track parameter (named `track::param`): `name`, `value`, `target`, `unit` (db shown in dB)
 - **`instruments`** — each instrument's `name` and `params` (`name`, `unit`, `default`, `range`)
 - **`tracks`**, **`buses`** — their names
@@ -257,6 +257,17 @@ The engine's state. **Result** includes:
 | -32001 | Rejected — a batch of events was refused; see **`data.problems`**, each with the **`event`** index it is about |
 
 **Problem object:** `message`, `help`, `line`, `column`, `span` (`start`, `end`), `in_definition`, `event`.
+
+## Failures and recovery
+
+The engine carries on after a bug rather than going quiet:
+
+- A panic while handling a request answers that request with `-32603`; the connection and every other client are untouched.
+- A panic while planning ahead, or while rendering a block, is caught. The renderer starts clean and planning resumes from the session, so the music may drop out for a moment but does not stop. `status.realtime.planner_panics` counts these, and the server prints a notice.
+- A voice or effect chain that produces NaN or infinity is silenced alone (voice end reason `invalid_dsp`); a panic inside one voice ends it with reason `panic`.
+- If the process itself dies, the cause is appended to `~/.niminal/crash.log`. The session log written up to that moment is intact: `niminal replay <log> --out set.wav` renders it, and playing it into a new engine restores the same state. Clients reconnect and resubmit their project; there is no automatic restore.
+
+Use `status.load` to find which track is costing the most, and `status.realtime` (`deadline_misses`, `max_render_micros`) to see whether the renderer is keeping up.
 
 ## The engine log
 

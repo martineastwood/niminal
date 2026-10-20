@@ -21,7 +21,7 @@ pub fn status_json(session: &Session) -> Value {
             "late_events": m.late_events, "starved_frames": m.starved_frames,
             "capacity_drops": m.capacity_drops, "control_drops": m.control_drops, "retire_pressure": m.retire_pressure,
             "deadline_misses": m.deadline_misses, "max_render_micros": m.max_render_micros,
-            "mixer_builds": m.mixer_builds,
+            "mixer_builds": m.mixer_builds, "planner_panics": m.planner_panics,
         })),
         "controls": session.control_values().iter().map(|(name, value, target, unit)| {
             let display = |value: f32| if *unit == Some("db") { 20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10() } else { f64::from(value) };
