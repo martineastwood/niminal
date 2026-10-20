@@ -36,7 +36,7 @@ Settings: `niminal.port` (generic server, default 7401), `niminal.token`, `nimin
 
 ## Language server
 
-The extension starts `nimlive lsp` (the same binary as the server, found through the `niminal.path` setting) for editing support that works without a running server:
+The extension starts `nimlive lsp` (the `nimlive` binary, found through the `niminal.livePath` setting) for editing support that works without a running server:
 
 - errors as you type, with the compiler's own messages and help
 - completion for names in the file, built-in opcodes, methods after a `.`, named arguments, waveforms and unit suffixes

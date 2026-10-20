@@ -23,7 +23,7 @@ The VS Code extension starts the same binary automatically (see settings below).
 
 Trigger character for completion: `.`
 
-After installing a new `niminal` binary, run **Restart Language Server** in the command palette (VS Code) or restart your editor’s LSP client.
+After installing a new `nimlive` binary, run **Restart Language Server** in the command palette (VS Code) or restart your editor’s LSP client.
 
 ## VS Code / Cursor extension
 
@@ -58,7 +58,8 @@ The **niminal** sidebar lists scenes and tracks (mute, solo, stop). Compile erro
 
 | Setting | Purpose |
 | --- | --- |
-| `niminal.path` | Path to the `niminal` binary (server + LSP) |
+| `niminal.path` | Path to the `niminal` binary (the sound server) |
+| `niminal.livePath` | Path to the `nimlive` binary (live sequencer + LSP) |
 | `niminal.port` | Server WebSocket port (default `7401`) |
 | `niminal.token` | Token if the server was started with `--token` |
 | `niminal.quantize` | Default land time for evaluation (e.g. `next 4bars`) |
@@ -67,13 +68,13 @@ The **niminal** sidebar lists scenes and tracks (mute, solo, stop). Compile erro
 
 With the live client started with `--midi`, a control written as `midi.learn` waits for the next CC. When one arrives, the extension can rewrite the line to the bound `midi.cc(...)`. See [Performance](/reference/language/performance/) and [Live coding](/guide/live-coding/).
 
-## Server vs LSP
+## Live session vs LSP
 
-| | **LSP** | **Server** |
+| | **LSP** | **Live session** |
 | --- | --- | --- |
 | Transport | stdio | Private live client → generic server (7401) |
 | Audio | No | Yes |
 | Live `start` / `stop` / changes | No | Yes |
 | Diagnostics / completion | Yes | Eval diagnostics via extension/REPL |
 
-For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Server protocol](/reference/protocol/).
+For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Sequencer protocol](/reference/protocol/).

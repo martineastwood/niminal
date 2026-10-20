@@ -102,7 +102,7 @@ instr tick(freq: hz) {
 
 ### Delayed layers and ending early
 
-`after(delay) { body }` plays `body` once the note is `delay` old, from fresh state, and is silent before: `out = pluck + after(1/8beat) { pluck.gain(-6db) }`. It is `reset_on(note.time >= delay) { body } * (note.time >= delay)`. `signal.finish_when(done)` ends a note from the inside (Csound's `turnoff`).
+`after(delay) { body }` plays `body` once the note is `delay` old, from fresh state, and is silent before: `out = pluck + after(1/8beat) { pluck.gain(-6db) }`. It is `reset_on(note.time >= delay) { body } * (note.time >= delay)`. `signal.finish_when(done)` ends a note from the inside.
 
 For signal-triggered overlapping layers, use `spawn`:
 

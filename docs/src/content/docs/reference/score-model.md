@@ -74,4 +74,4 @@ Clips, scenes and an optional arrangement. The CLI compiles them to `.nml` and r
 nimlive render examples/live_controls.nml --score examples/project.nms --out project.wav
 ```
 
-Live: define the same clips with **`clip.define`** / **`scene.define`**, or send timed events with **`events.send`** ([Server protocol](/reference/protocol/)). In `.nml`, `load("score/riff.nms")` turns a version-1 section (or a one-clip project) into a clip.
+Live: define the same clips with **`clip.define`** / **`scene.define`**, or send timed events with **`events.send`** ([Sequencer protocol](/reference/protocol/)). In `.nml`, `load("score/riff.nms")` turns a version-1 section (or a one-clip project) into a clip.

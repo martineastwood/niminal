@@ -1,9 +1,9 @@
 ---
 title: Engine API
-description: "JSON-RPC 2.0 over WebSocket for the sound server inside the server: timestamped notes, parameter changes, definitions."
+description: "JSON-RPC 2.0 over WebSocket for the niminal server: timestamped notes, parameter changes, definitions."
 ---
 
-The **engine** is a sound server. It holds the instruments, effects, tracks, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns, tempo, meter or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
+The **engine** is the sound server that `niminal server` runs. It holds the instruments, effects, tracks, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns, tempo, meter or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
 
 `niminal server` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the server never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
 

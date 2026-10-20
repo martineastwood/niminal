@@ -1,4 +1,4 @@
-//! Language features that close the gap with Csound: notes that know their length and place,
+//! Language features for performance: notes that know their length and place,
 //! shared control values, tuning, the clock, and more.
 
 use crate::common::*;
