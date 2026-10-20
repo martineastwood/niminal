@@ -308,7 +308,7 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
     s.set_sample_dir(&dir);
     let mut source = String::from(
-        "ctl level = 1.0\nkit k = \"kit\"\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n",
+        "ctl level = 1.0\nk = kit(\"kit\")\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n",
     );
     for i in 0..8 {
         source.push_str(&format!("track lead{i} {{ instrument = poly\n out = it.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\nlead{i}.play([c4 e4 g4 b4].fast(64))\n"));
@@ -605,7 +605,7 @@ fn a_tempo_ramp_sounds_the_same_through_the_prepared_path() {
 
 #[test]
 fn a_legato_glide_instrument_sounds_the_same_on_the_prepared_path_without_heap_work() {
-    const SOURCE: &str = "tempo 120bpm\nmono bass(freq: hz) with(legato: true, glide: 30ms, priority: highest) { osc(saw, freq) * env[0 20ms 1 | 20ms 0] }\ntrack b { instrument = bass }\nb(freq: 110hz) for 4beats\nat 1/4beat b(freq: 165hz) for 1beat\nat 1/2beat b(freq: 82hz) for 2beats";
+    const SOURCE: &str = "tempo 120bpm\nmono bass(freq: hz) { legato = true\nglide = 30ms\npriority = highest\n osc(saw, freq) * env[0 20ms 1 | 20ms 0] }\ntrack b { instrument = bass }\nb(freq: 110hz) for 4beats\nat 1/4beat b(freq: 165hz) for 1beat\nat 1/2beat b(freq: 82hz) for 2beats";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
     direct.eval(SOURCE, Some("now")).unwrap();
     let expected = direct.process(60_000).remove(0);

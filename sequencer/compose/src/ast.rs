@@ -92,7 +92,7 @@ pub struct TempoStmt {
 pub struct NamedBlock {
     pub name: Ident,
     pub entries: Vec<(Ident, Expr)>,
-    /// `with(quantize: 1bar)` after the block.
+    /// `quantize: 1bar` in the block.
     pub options: Vec<Arg>,
     pub span: Span,
 }
@@ -164,11 +164,11 @@ pub struct InstrDef {
     pub span: Span,
     /// `mono bass(...)`: one note sounds at a time.
     pub mono: bool,
-    /// `with(max: 8, same_note: release)`
+    /// `max = 8`, `same_note = release`: settings written in the body.
     pub options: Vec<Arg>,
 }
 
-/// `sample kick = "drums/kick.wav" with(root: c4)`, or `kit drums = "drums/808"`.
+/// `kick = sample("drums/kick.wav").root(c4)`, or `drums = kit("drums/808")`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SampleDecl {
     pub is_kit: bool,
@@ -225,7 +225,7 @@ pub enum SampleSource {
     Path(String),
     /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier.
     Slices { sample: Ident, count: f64 },
-    /// A const table (or expression that yields one): `sample pad = organ`.
+    /// A const table (or expression that yields one): `pad = sample(organ)`.
     Table(Expr),
 }
 
@@ -267,7 +267,7 @@ pub struct TrackDecl {
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,
-    /// `with(quantize: 1bar)` after the body.
+    /// `quantize = 1bar` in the body.
     pub options: Vec<Arg>,
 }
 

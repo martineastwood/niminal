@@ -325,16 +325,16 @@ mod quantize_settings {
         let plain = s.eval("track fx { instrument = pluck }", None).unwrap();
         assert_eq!(plain.lands_at, BAR as u64);
         let now = s
-            .eval("track fx2 { instrument = pluck } with(quantize: now)", None)
+            .eval("track fx2 { instrument = pluck\nquantize = now }", None)
             .unwrap();
         assert_eq!(now.lands_at, 10_000, "it says now");
         let beat = s
-            .eval("clip riff { notes: [c4] } with(quantize: 1beat)", None)
+            .eval("clip riff { notes: [c4], quantize: 1beat }", None)
             .unwrap();
         assert_eq!(beat.lands_at, 24_000);
         let instr = s
             .eval(
-                "instr organ(freq: hz) with(quantize: 2beats) { osc(sine, freq) }",
+                "instr organ(freq: hz) { quantize = 2beats\n osc(sine, freq) }",
                 None,
             )
             .unwrap();
@@ -342,7 +342,7 @@ mod quantize_settings {
         // the evaluation's own setting still wins over the definition's
         let over = s
             .eval(
-                "track fx4 { instrument = pluck } with(quantize: now)",
+                "track fx4 { instrument = pluck\nquantize = now }",
                 Some("next 4bars"),
             )
             .unwrap();
@@ -363,13 +363,9 @@ mod quantize_settings {
             "expected when a change lands"
         );
         assert_eq!(
-            message(&mut s, "clip c { notes: [c4] } with(speed: 2)"),
-            "there is no option `speed` here"
-        );
-        assert_eq!(
             message(
                 &mut s,
-                "track t2 { instrument = pluck } with(quantize: 2hz)"
+                "track t2 { instrument = pluck\nquantize = 2hz }"
             ),
             "expected when a change lands"
         );

@@ -7,28 +7,33 @@ description: WAV samples, kits, slices, and playing them from patterns.
 
 | Declaration | What it is |
 | --- | --- |
-| `sample` | A playable WAV file, or a sliced break |
-| `kit` | A folder of WAVs by name, or the slices of a sample |
+| `sample(...)` | A playable WAV file, or a table |
+| `kit(...)` | A folder of WAVs by name |
+| `.slices(n)` | The slices of a sample, as a kit |
 
 ```nml
-sample kick = "drums/kick.wav"
-sample amen = "breaks/amen.wav" with(beats: 4, fit: rate)
-kit drums   = "drums/808"
-kit chops   = amen.slices(16)          // s0 .. s15
+kick = sample("drums/kick.wav")
+amen = sample("breaks/amen.wav").beats(4).fit(rate)
+drums = kit("drums/808")
+chops = amen.slices(16)                // s0 .. s15
 ```
 
 Paths are resolved relative to the file that declares them (and the project when the daemon evaluates).
 
-### Options on a sample
+### Settings on a sample
 
-| Option | Effect |
+A sample is a plain binding, and its settings are chained methods: `amen = sample("amen.wav").beats(4).fit(rate)`.
+
+| Method | Effect |
 | --- | --- |
-| `duration: 2sec` | Physical target length for `fit: rate`; also available directly in DSP definitions |
-| `beats: N` | The loop is N beats long (needed for tempo sync) |
-| `fit: rate` | Speed the loop up or down so those beats match the current tempo |
-| `choke: group` | On a kit sample: starting this sample ends others in the group |
+| `.duration(2sec)` | Physical target length for `.fit(rate)`; also available directly in DSP definitions |
+| `.beats(N)` | The loop is N beats long (needed for tempo sync) |
+| `.fit(rate)` | Speed the loop up or down so those beats match the current tempo |
+| `.root(c4)` | The note (or frequency) at which the sample plays as recorded |
+| `.loop(forward)` | Loop the sample while a note is held |
+| `.choke(group)` | On a kit sample: starting this sample ends others in the group |
 
-`fit: stretch` and `fit: slice` are not supported yet. Only `fit: rate` is.
+`.fit(stretch)` and `.fit(slice)` are not supported yet. Only `.fit(rate)` is.
 
 ### Playing samples
 
@@ -44,7 +49,7 @@ drums.play([s0 s1 s2 s3 s4 s5 s6 s7])
 A kit member is an instrument too: `drums.snare` means the kit with that sample chosen (the same as `drums(sample: snare)`). Give it its own track when you want effects, sends, mute or solo on that drum alone:
 
 ```nml
-kit drums = "drums"
+drums = kit("drums")
 track snare {
   instrument = drums.snare
   out = it.reverb(room: 0.4).gain(-3db)
@@ -85,13 +90,13 @@ See `examples/drums.nml` and `examples/breakbeat.nml`.
 On a kit, name groups so one hit cuts off another (open/closed hats, overlapping slices):
 
 ```nml
-kit drums = "drums" with(choke: hats(hat_open, hat_closed))
-kit chops = brk.slices(16) with(choke: g(s4, s12))
+drums = kit("drums").choke(hats(hat_open, hat_closed))
+chops = brk.slices(16).choke(g(s4, s12))
 ```
 
 ### Tables and samples
 
-A sample's audio is a table. `kick.data` is that table (or an array of channel tables). A const table can be played as a sample: `sample pad = organ with(root: c4, loop: forward)`. See [Tables](/reference/language/tables/).
+A sample's audio is a table. `kick.data` is that table (or an array of channel tables). A const table can be played as a sample: `pad = sample(organ).root(c4).loop(forward)`. See [Tables](/reference/language/tables/).
 
 ## Built-in DSP
 

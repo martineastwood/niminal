@@ -535,7 +535,7 @@ fn implicit_tracks(items: &[Item]) -> Vec<String> {
     names
 }
 
-/// `config { quantize: { default: 1bar  play: cycle } }`, and the `with(quantize: ...)` of definitions checked.
+/// `config { quantize: { default: 1bar  play: cycle } }`, and the `quantize` of definitions checked.
 fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
     let mut config = QuantizeConfig::default();
     for item in items {

@@ -37,7 +37,8 @@ fn filter(x, cutoff: hz, res: 0..1 = 0.5, mode: (low | band | high) = low) {
 
 const organ = harmonics([1, 0, 1/3, 0, 1/5, 0.2, 1/7], size: 2048)
 
-instr pluck(freq: init hz, decay: 0..1 = 0.996) with(tail: 3sec) {
+instr pluck(freq: init hz, decay: 0..1 = 0.996) {
+  tail = 3sec
   out = (noise() * env[1 4ms 0]).string(freq, decay: decay).filter(freq * 6, mode: low)
   space += out.gain(-12db)
 }

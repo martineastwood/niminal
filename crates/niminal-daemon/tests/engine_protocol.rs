@@ -287,7 +287,7 @@ fn musical_time_and_composition_are_rejected_at_the_engine_boundary() {
         "p = [c4 e4]",
         "def riff() { [c4] }",
         "track lead { instrument = pluck\nnotes = it.reverse }",
-        "instr x() with(quantize: 1bar) { 0 }",
+        "instr x() { quantize = 1bar\n 0 }",
         "config { quantize: { default: 1bar } }",
         "ctl x = midi.cc(7).range(0..1)",
         "instr x() { osc(sine, 100hz) * env[1 | 1beat 0] }",
@@ -329,7 +329,7 @@ fn dsp_clock_time_is_absolute_and_sample_accurate() {
     define(
         &mut d,
         c,
-        "instr seconds() with(tail: 0ms) { clock.time / 1sec }",
+        "instr seconds() { tail = 0ms\n clock.time / 1sec }",
     );
     let sent = call(
         &mut d,

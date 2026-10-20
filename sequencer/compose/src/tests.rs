@@ -618,9 +618,9 @@ fn statements_in_blocks() {
 
 #[test]
 fn a_tail_is_a_time() {
-    ok("instr a(f: hz) with(tail: 2sec) { osc(saw, f) }");
+    ok("instr a(f: hz) { tail = 2sec\n osc(saw, f) }");
     assert_eq!(
-        msg("instr a(f: hz) with(tail: 2) { osc(saw, f) }"),
+        msg("instr a(f: hz) { tail = 2\n osc(saw, f) }"),
         "`tail` is a time from 0 to 600sec, such as `2sec`"
     );
 }

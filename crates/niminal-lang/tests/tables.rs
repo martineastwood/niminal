@@ -42,7 +42,7 @@ instr a() {
 fn sample_data_and_table_sample() {
     ok(r#"
 const organ = harmonics([1, 0, 1/3], size: 64)
-sample pad = organ with(root: 440hz, loop: forward)
+pad = sample(organ).root(440hz).loop(forward)
 instr a(freq: hz) { osc(pad.data, freq) * env[1 5ms 0] }
 "#);
 }

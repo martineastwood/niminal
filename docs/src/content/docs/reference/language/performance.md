@@ -170,7 +170,7 @@ Code compiles immediately; changes **land** on a musical boundary. Most specific
 
 1. `@ next 4bars` (or similar) on the statement
 2. `--quantize` / REPL `:quantize` for that evaluation
-3. `with(quantize: 1beat)` after a definition (`clip`, `scene`, `track`, `instr`)
+3. `quantize` in a definition (`quantize: 1beat` in a `clip` or `scene`, `quantize = 1beat` in a `track` or `instr`)
 4. `config { quantize: { ... } }` for a whole kind of change
 5. Built-in defaults by kind: plays on the next **cycle**, instrument redefinitions on the next **beat**, tempo and most other changes on the next **bar**
 
@@ -195,7 +195,7 @@ config {
   }
 }
 
-clip fill { notes: [c4 e4 g4 b4] } with(quantize: 1beat)
+clip fill { notes: [c4 e4 g4 b4], quantize: 1beat }
 ```
 
 Each quantum is `now`, `beat`, `bar`, `cycle`, `1beat` or `4bars`; a kind left out keeps its built-in one. The settings take effect once the `config` has landed (they are changes like any other), and `config` also takes `channels` (see [Routing](/reference/language/routing/)).

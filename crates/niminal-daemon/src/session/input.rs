@@ -883,7 +883,7 @@ impl Session {
                     }
                     let mut converted = Vec::new();
                     for (name, value) in args {
-                        // a note's pitch is `freq` to the score, and whatever `with(pitch: ...)` named it to the instrument
+                        // a note's pitch is `freq` to the score, and whatever `pitch = ...` named it to the instrument
                         let actual = if name == niminal_lang::PITCH_PARAM {
                             &instrument.pitch
                         } else {

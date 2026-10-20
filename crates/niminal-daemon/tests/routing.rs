@@ -56,7 +56,7 @@ fn ready() -> Session {
         .send_events(
             1,
             vec![Op::Define {
-                source: "instr flat() with(tail: 0ms) { 1 }".into(),
+                source: "instr flat() { tail = 0ms\n 1 }".into(),
                 at: At::Now,
                 dir: None,
                 tag: None,

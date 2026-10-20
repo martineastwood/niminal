@@ -73,7 +73,7 @@ fn play(dir: &Path, src: &str) -> Vec<Vec<f32>> {
     .channels
 }
 
-const TRACK: &str = "tempo 120bpm\nsample s = \"s.wav\"\ntrack t { instrument = s }\n";
+const TRACK: &str = "tempo 120bpm\ns = sample(\"s.wav\")\ntrack t { instrument = s }\n";
 
 #[test]
 fn a_sample_at_its_root_plays_as_recorded() {
@@ -108,7 +108,7 @@ fn a_higher_note_plays_faster() {
 fn the_root_option_shifts_which_note_is_the_original() {
     let dir = scratch("rootopt");
     write_wav(&dir.join("s.wav"), &[block(0.5, 100)]);
-    let src = TRACK.replace("\"s.wav\"", "\"s.wav\" with(root: a3)") + "t.play([a3])";
+    let src = TRACK.replace("\"s.wav\")", "\"s.wav\").root(a3)") + "t.play([a3])";
     let out = play(&dir, &src);
     let end = out[0].iter().rposition(|v| v.abs() > 0.1).unwrap();
     assert!((end as f64 - 4800.0).abs() < 4.0, "{end}");
@@ -120,7 +120,7 @@ fn a_kit_plays_the_samples_a_pattern_names() {
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 100)]);
     write_wav(&dir.join("drums/snare.wav"), &[block(-0.25, 100)]);
-    let src = "tempo 120bpm\nkit drums = \"drums\"\ntrack d { instrument = drums }\nd.play([kick ~ snare ~])";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\ntrack d { instrument = drums }\nd.play([kick ~ snare ~])";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -141,7 +141,7 @@ fn a_kit_member_is_an_instrument_on_its_own_track() {
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 100)]);
     write_wav(&dir.join("drums/snare.wav"), &[block(0.5, 100)]);
-    let src = "tempo 120bpm\nkit drums = \"drums\"\ntrack snare { instrument = drums.snare }\nsnare.play([c4 ~ ~ ~])";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\ntrack snare { instrument = drums.snare }\nsnare.play([c4 ~ ~ ~])";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -159,7 +159,7 @@ fn a_grid_row_that_names_a_track_goes_through_its_effects() {
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 80)]);
     write_wav(&dir.join("drums/snare.wav"), &[block(0.5, 80)]);
-    let src = "tempo 120bpm\nkit drums = \"drums\"\n\
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\n\
                track beat { instrument = drums }\n\
                track snare { instrument = drums.snare\n  out = it.gain(-6db) }\n\
                beat.play(grid {\n  kick:  x... ....\n  snare: .... x...\n})";
@@ -189,7 +189,7 @@ fn a_grid_row_can_take_params_and_mini_notation() {
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/hat.wav"), &[block(0.5, 40)]);
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 40)]);
-    let src = "tempo 120bpm\nkit drums = \"drums\"\ntrack d { instrument = drums }\n\
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\ntrack d { instrument = drums }\n\
                d.play(grid {\n  kick(gain: -6db): x...\n  hat: [x*2 ~ ~ ~]\n})";
     let out = play(&dir, src);
     let at = |s: f64| {
@@ -219,7 +219,7 @@ fn qualified_sample_names_work_in_patterns() {
     write_wav(&dir.join("drums/a.wav"), &[block(0.5, 50)]);
     write_wav(&dir.join("drums/kick.wav"), &[block(0.25, 50)]);
     // bare `a` is a note; `drums.a` is the sample
-    let src = "tempo 120bpm\nkit drums = \"drums\"\ntrack d { instrument = drums }\nd.play([drums.a ~ kick ~])";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\ntrack d { instrument = drums }\nd.play([drums.a ~ kick ~])";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -238,7 +238,7 @@ fn kit_member_mistakes_are_reported() {
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 10)]);
     let e = errors(
         &dir,
-        "kit drums = \"drums\"\ntrack t { instrument = drums.snare }",
+        "drums = kit(\"drums\")\ntrack t { instrument = drums.snare }",
     );
     assert!(
         e.contains("there is no sample `snare` in the kit `drums`"),
@@ -246,7 +246,7 @@ fn kit_member_mistakes_are_reported() {
     );
     let e = errors(
         &dir,
-        "kit drums = \"drums\"\ntrack t { instrument = drums.kick(sample: kick) }",
+        "drums = kit(\"drums\")\ntrack t { instrument = drums.kick(sample: kick) }",
     );
     assert!(
         e.contains("already chosen by the name after the kit"),
@@ -283,19 +283,19 @@ fn file_and_name_mistakes_are_reported_where_they_are() {
     write_wav(&dir.join("drums/snare.wav"), &[block(0.5, 10)]);
     write_wav(&dir.join("s.wav"), &[block(0.5, 10)]);
 
-    let missing = errors(&dir, "sample s = \"nope.wav\"");
+    let missing = errors(&dir, "s = sample(\"nope.wav\")");
     assert!(
         missing.contains("can't read") && missing.contains("nope.wav"),
         "{missing}"
     );
     assert!(
-        missing.contains("1 | sample s = \"nope.wav\""),
+        missing.contains("1 | s = sample(\"nope.wav\")"),
         "points at the declaration: {missing}"
     );
 
     let typo = errors(
         &dir,
-        "kit drums = \"drums\"\ntrack d { instrument = drums }\nd.play([kick ~ snar ~])",
+        "drums = kit(\"drums\")\ntrack d { instrument = drums }\nd.play([kick ~ snar ~])",
     );
     assert!(
         typo.contains("`snar` isn't a note, a value, or a sample in a kit"),
@@ -303,7 +303,7 @@ fn file_and_name_mistakes_are_reported_where_they_are() {
     );
     assert!(typo.contains("did you mean `snare`?"), "{typo}");
 
-    let wrong_kit = "kit a = \"drums\"\nsample s = \"s.wav\"\nkit b = \"drums\"\ntrack t { instrument = s }\nt.play([kick])";
+    let wrong_kit = "a = kit(\"drums\")\ns = sample(\"s.wav\")\nb = kit(\"drums\")\ntrack t { instrument = s }\nt.play([kick])";
     let on_sample = {
         let p = compile_in(&dir, wrong_kit);
         // a sample track has no kit to pick from; found when the note is planned
@@ -313,12 +313,12 @@ fn file_and_name_mistakes_are_reported_where_they_are() {
     };
     assert!(on_sample.contains("isn't a kit"), "{on_sample}");
 
-    let option = errors(&dir, "sample s = \"s.wav\" with(rot: c4)");
+    let option = errors(&dir, "s = sample(\"s.wav\").rot(c4)");
     assert!(option.contains("`rot` isn't an option"), "{option}");
 
     let name = errors(
         &dir,
-        "sample s = \"s.wav\"\ninstr s(freq: hz) { osc(sine, freq) }",
+        "s = sample(\"s.wav\")\ninstr s(freq: hz) { osc(sine, freq) }",
     );
     assert!(name.contains("`s` is already the name of"), "{name}");
 }
@@ -333,7 +333,7 @@ fn a_kit_sample_on_the_wrong_kit_is_an_error() {
     write_wav(&dir.join("b/hat.wav"), &[block(0.5, 10)]);
     let program = compile_in(
         &dir,
-        "kit a = \"a\"\nkit b = \"b\"\ntrack t { instrument = a }\nt.play([hat])",
+        "a = kit(\"a\")\nb = kit(\"b\")\ntrack t { instrument = a }\nt.play([hat])",
     )
     .unwrap();
     let events = program.schedule().events(0.0, 1.0).unwrap();
@@ -349,7 +349,7 @@ fn a_choke_group_cuts_off_the_sample_it_replaces() {
     write_wav(&dir.join("hats/closed.wav"), &[block(0.125, 20)]);
     let src = |opts: &str| {
         format!(
-            "tempo 120bpm\nkit h = \"hats\"{opts}\ntrack t {{ instrument = h }}\nt.play([open ~ closed ~])"
+            "tempo 120bpm\nh = kit(\"hats\"){opts}\ntrack t {{ instrument = h }}\nt.play([open ~ closed ~])"
         )
     };
     let at =
@@ -366,7 +366,7 @@ fn a_choke_group_cuts_off_the_sample_it_replaces() {
     assert!((at(&free, 0.95) - 0.5).abs() < 1e-3);
 
     // in one group, the closed hat ends it: nothing is left of the open hat once the fade is done
-    let choked = play(&dir, &src(" with(choke: hats(open, closed))"));
+    let choked = play(&dir, &src(".choke(hats(open, closed))"));
     assert!(
         (at(&choked, 0.99) - 0.5).abs() < 1e-3,
         "before the closed hat it's still sounding"
@@ -390,17 +390,17 @@ fn choke_options_are_checked() {
     write_wav(&dir.join("hats/closed.wav"), &[block(0.5, 10)]);
     write_wav(&dir.join("s.wav"), &[block(0.5, 10)]);
 
-    let e = errors(&dir, "kit h = \"hats\" with(choke: hats(open, clsed))");
+    let e = errors(&dir, "h = kit(\"hats\").choke(hats(open, clsed))");
     assert!(
         e.contains("no sample `clsed` in the kit `h`") || e.contains("there is no sample `clsed`"),
         "{e}"
     );
     assert!(e.contains("did you mean `closed`?"), "{e}");
-    let e = errors(&dir, "kit h = \"hats\" with(choke: hats)");
+    let e = errors(&dir, "h = kit(\"hats\").choke(hats)");
     assert!(e.contains("a kit names the samples in each group"), "{e}");
-    let e = errors(&dir, "sample s = \"s.wav\" with(choke: hats(a))");
+    let e = errors(&dir, "s = sample(\"s.wav\").choke(hats(a))");
     assert!(e.contains("expected the name of a choke group"), "{e}");
-    let e = errors(&dir, "sample s = \"s.wav\" with(chok: hats)");
+    let e = errors(&dir, "s = sample(\"s.wav\").chok(hats)");
     assert!(e.contains("did you mean `choke`?"), "{e}");
 }
 
@@ -409,7 +409,7 @@ fn single_samples_can_share_a_choke_group_with_each_other_and_a_kit() {
     let dir = scratch("chokeshared");
     write_wav(&dir.join("a.wav"), &[block(0.5, 1500)]);
     write_wav(&dir.join("b.wav"), &[block(0.25, 20)]);
-    let src = "tempo 120bpm\nsample a = \"a.wav\" with(choke: g)\nsample b = \"b.wav\" with(choke: g)\n\
+    let src = "tempo 120bpm\na = sample(\"a.wav\").choke(g)\nb = sample(\"b.wav\").choke(g)\n\
                track ta { instrument = a }\ntrack tb { instrument = b }\nta.play([c4 ~ ~ ~])\ntb.play([~ ~ c4 ~])";
     let out = play(&dir, src);
     // `a` would ring until 1.5s; the render ends when `b` ends at 1.02s because `a` was cut off
@@ -433,7 +433,7 @@ fn write_break(dir: &Path) {
 fn slices_of_a_sample_play_in_any_order() {
     let dir = scratch("slices");
     write_break(&dir);
-    let src = "tempo 120bpm\nsample amen = \"amen.wav\"\nkit chops = amen.slices(4)\n\
+    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n\
                track t { instrument = chops }\nt.play([s3 s0 s2 s1])";
     let out = play(&dir, src);
     // four steps of half a second; each plays its quarter of the file (100ms) from its start
@@ -453,7 +453,7 @@ fn slices_of_a_sample_play_in_any_order() {
 fn a_grid_row_per_slice_plays_slices_together() {
     let dir = scratch("slicegrid");
     write_break(&dir);
-    let src = "tempo 120bpm\nsample amen = \"amen.wav\"\nkit chops = amen.slices(4)\n\
+    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n\
                track t { instrument = chops }\nt.play(grid {\n  s3: x... ....\n  s0: .... x...\n  s1: x... ....\n})";
     let out = play(&dir, src);
     let at = |s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
@@ -466,7 +466,7 @@ fn a_grid_row_per_slice_plays_slices_together() {
 fn grid_accents_and_ghosts_change_the_gain() {
     let dir = scratch("gridghost");
     write_break(&dir);
-    let src = "tempo 120bpm\nsample amen = \"amen.wav\"\nkit chops = amen.slices(4)\n\
+    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n\
                track t { instrument = chops }\nt.play(grid {\n  s3: x.o. X...\n})";
     let out = play(&dir, src);
     let at = |s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
@@ -483,7 +483,7 @@ fn a_grid_follows_the_kits_choke_groups() {
     // 32 steps in a 2s bar: s1 starts 62.5ms in, while s0 (100ms long) is still sounding
     let play_with = |with: &str| {
         let src = format!(
-            "tempo 120bpm\nsample amen = \"amen.wav\"\nkit chops = amen.slices(4){with}\n\
+            "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4){with}\n\
              track t {{ instrument = chops }}\nt.play(grid {{\n  s0: x...............................\n  s1: .x..............................\n}})"
         );
         play(&dir, &src)
@@ -494,7 +494,7 @@ fn a_grid_follows_the_kits_choke_groups() {
         "without a choke both sound"
     );
     assert!(
-        (at(&play_with(" with(choke: g(s0, s1))"), 0.07) - 0.2).abs() < 1e-3,
+        (at(&play_with(".choke(g(s0, s1))"), 0.07) - 0.2).abs() < 1e-3,
         "s1 chokes s0"
     );
 }
@@ -503,7 +503,7 @@ fn a_grid_follows_the_kits_choke_groups() {
 fn grid_rows_must_name_samples() {
     let dir = scratch("gridrows");
     write_break(&dir);
-    let head = "sample amen = \"amen.wav\"\nkit c = amen.slices(4)\ntrack t { instrument = c }\n";
+    let head = "amen = sample(\"amen.wav\")\nc = amen.slices(4)\ntrack t { instrument = c }\n";
     let e = errors(
         &dir,
         &format!("{head}t.play(grid {{\n  s0: x...\n  s7: x...\n}})"),
@@ -521,7 +521,7 @@ fn slices_take_choke_groups_by_name() {
     write_break(&dir);
     let program = compile_in(
         &dir,
-        "sample amen = \"amen.wav\"\nkit chops = amen.slices(4) with(choke: g(s0, s1))",
+        "amen = sample(\"amen.wav\")\nchops = amen.slices(4).choke(g(s0, s1))",
     )
     .unwrap();
     let chokes = &program.instrument("chops").unwrap().chokes;
@@ -534,25 +534,18 @@ fn slices_take_choke_groups_by_name() {
 fn slicing_mistakes_are_reported() {
     let dir = scratch("sliceerr");
     write_break(&dir);
-    let e = errors(&dir, "kit c = amen.slices(4)");
+    let e = errors(&dir, "c = amen.slices(4)");
     assert!(e.contains("no sample named `amen` to slice"), "{e}");
-    let e = errors(&dir, "sample amen = \"amen.wav\"\nkit c = amen.slces(4)");
-    assert!(e.contains("a sample has no `slces`"), "{e}");
-    let e = errors(&dir, "sample amen = \"amen.wav\"\nkit c = amen.slices(2.5)");
+    let e = errors(&dir, "amen = sample(\"amen.wav\")\nc = amen.slices(2.5)");
     assert!(e.contains("can be cut into 1 to"), "{e}");
     let e = errors(
         &dir,
-        "sample amen = \"amen.wav\"\nkit c = amen.slices(4)\ntrack t { instrument = c }\nt.play([s9])",
+        "amen = sample(\"amen.wav\")\nc = amen.slices(4)\ntrack t { instrument = c }\nt.play([s9])",
     );
     assert!(
         e.contains("`s9` isn't a note, a value, or a sample in a kit"),
         "{e}"
     );
-    let e = errors(
-        &dir,
-        "sample amen = \"amen.wav\"\nsample c = amen.slices(4)",
-    );
-    assert!(e.contains("makes a kit"), "{e}");
 }
 
 #[test]
@@ -606,21 +599,21 @@ fn a_loop_fitted_to_the_tempo_lasts_its_beats() {
     write_wav(&dir.join("loop.wav"), &[block(0.5, 2400)]);
     let at = |tempo: u32, opts: &str| {
         let src = format!(
-            "tempo {tempo}bpm\nsample l = \"loop.wav\" with({opts})\ntrack t {{ instrument = l }}\nt.play([c4])"
+            "tempo {tempo}bpm\nl = sample(\"loop.wav\"){opts}\ntrack t {{ instrument = l }}\nt.play([c4])"
         );
         end_of(&play(&dir, &src))
     };
-    assert!((at(100, "beats: 4, fit: rate") - 2.4).abs() < 0.01);
+    assert!((at(100, ".beats(4).fit(rate)") - 2.4).abs() < 0.01);
     assert!(
-        (at(120, "beats: 4, fit: rate") - 2.0).abs() < 0.01,
+        (at(120, ".beats(4).fit(rate)") - 2.0).abs() < 0.01,
         "four beats at 120bpm"
     );
     assert!(
-        (at(60, "beats: 4, fit: rate") - 4.0).abs() < 0.01,
+        (at(60, ".beats(4).fit(rate)") - 4.0).abs() < 0.01,
         "and at 60bpm"
     );
     assert!(
-        (at(120, "beats: 4") - 2.4).abs() < 0.01,
+        (at(120, ".beats(4)") - 2.4).abs() < 0.01,
         "without fit it plays as recorded"
     );
 }
@@ -629,7 +622,7 @@ fn a_loop_fitted_to_the_tempo_lasts_its_beats() {
 fn slices_of_a_fitted_loop_follow_the_tempo_too() {
     let dir = scratch("fitslices");
     write_wav(&dir.join("loop.wav"), &[block(0.5, 2400)]);
-    let src = "tempo 120bpm\nsample l = \"loop.wav\" with(beats: 4, fit: rate)\nkit k = l.slices(4)\ntrack t { instrument = k }\nt.play([s3])";
+    let src = "tempo 120bpm\nl = sample(\"loop.wav\").beats(4).fit(rate)\nk = l.slices(4)\ntrack t { instrument = k }\nt.play([s3])";
     // the last quarter of the loop is a step long (0.5s at 120bpm) once fitted, and starts on the downbeat
     let out = play(&dir, src);
     assert!((end_of(&out) - 0.5).abs() < 0.01, "{}", end_of(&out));
@@ -639,13 +632,13 @@ fn slices_of_a_fitted_loop_follow_the_tempo_too() {
 fn fit_mistakes_are_reported() {
     let dir = scratch("fiterr");
     write_wav(&dir.join("loop.wav"), &[block(0.5, 100)]);
-    let e = errors(&dir, "sample l = \"loop.wav\" with(fit: rate)");
+    let e = errors(&dir, "l = sample(\"loop.wav\").fit(rate)");
     assert!(e.contains("needs to know the loop's length"), "{e}");
-    let e = errors(&dir, "sample l = \"loop.wav\" with(beats: 4, fit: stretch)");
+    let e = errors(&dir, "l = sample(\"loop.wav\").beats(4).fit(stretch)");
     assert!(e.contains("`fit: stretch` isn't supported yet"), "{e}");
-    let e = errors(&dir, "sample l = \"loop.wav\" with(beats: 4, fit: fast)");
+    let e = errors(&dir, "l = sample(\"loop.wav\").beats(4).fit(fast)");
     assert!(e.contains("`fit` should be `rate`"), "{e}");
-    let e = errors(&dir, "sample l = \"loop.wav\" with(beats: -1)");
+    let e = errors(&dir, "l = sample(\"loop.wav\").beats(-1)");
     assert!(e.contains("`beats` is how many beats"), "{e}");
 }
 
@@ -709,7 +702,7 @@ fn a_larger_slice_kit_does_not_build_a_larger_audio_graph() {
         let program = compile_in(
             &dir,
             &format!(
-                "sample s = \"s.wav\"\nkit k = s.slices({slices})\ntrack t {{ instrument = k }}"
+                "s = sample(\"s.wav\")\nk = s.slices({slices})\ntrack t {{ instrument = k }}"
             ),
         )
         .unwrap();
@@ -735,11 +728,11 @@ fn a_kit_with_mixed_channel_layouts_matches_individual_sample_playback() {
     );
     let kit = play(
         &dir,
-        "config { channels: stereo }\nkit k = \"kit\" with(root: c4)\ntrack t { instrument = k }\nt.play([mono stereo])",
+        "config { channels: stereo }\nk = kit(\"kit\").root(c4)\ntrack t { instrument = k }\nt.play([mono stereo])",
     );
     let separate = play(
         &dir,
-        "config { channels: stereo }\nsample a = \"kit/mono.wav\" with(root: c4)\nsample b = \"kit/stereo.wav\" with(root: c4)\ntrack x { instrument = a }\ntrack y { instrument = b }\nx.play([c4 ~])\ny.play([~ c4])",
+        "config { channels: stereo }\na = sample(\"kit/mono.wav\").root(c4)\nb = sample(\"kit/stereo.wav\").root(c4)\ntrack x { instrument = a }\ntrack y { instrument = b }\nx.play([c4 ~])\ny.play([~ c4])",
     );
     for (a, b) in kit.iter().zip(&separate) {
         let difference = a

@@ -9,8 +9,8 @@ bus glue: stereo {
 
 instr bd(freq: hz = 55hz) {
   // pitch drop + a touch of folded click
-  pitch = env[(freq * 4)  40ms  freq]
-  body = osc(sine, pitch) * perc(decay: 280ms)
+  sweep = env[(freq * 4)  40ms  freq]
+  body = osc(sine, sweep) * perc(decay: 280ms)
   click = noise().hpf(cutoff: 2khz) * env[1 3ms 0] * 0.35
   out = (body + click).tanh.pan(azimuth: 0deg)
   glue += out

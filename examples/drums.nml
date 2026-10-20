@@ -9,7 +9,7 @@ bus room: stereo {
   out = it.reverb(room: 0.35, damp: 0.5).gain(0.7)
 }
 
-kit drums = "drums"
+drums = kit("drums")
 
 track beat { instrument = drums }
 track snare {

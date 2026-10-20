@@ -49,7 +49,7 @@ pub enum StatementData {
         key: String,
         /// The name a pattern, clip or scene definition binds.
         binding: Option<String>,
-        /// The `with(quantize: ...)` of a definition, which stands in for its kind's usual quantum.
+        /// The `quantize` setting of a definition, which stands in for its kind's usual quantum.
         definition_quantize: Option<Quantize>,
         /// A tempo that is reached gradually rather than at once.
         ramp: Option<Ramp>,

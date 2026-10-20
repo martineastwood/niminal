@@ -54,26 +54,6 @@ impl DspSource {
     }
 }
 
-fn options(source: &str, args: &[Arg]) -> String {
-    let args: Vec<String> = args
-        .iter()
-        .filter(|a| a.name.as_ref().is_none_or(|n| n.name != "quantize"))
-        .map(|a| match &a.name {
-            Some(n) => format!(
-                "{}: {}",
-                n.name,
-                &source[a.value.span.start..a.value.span.end]
-            ),
-            None => source[a.value.span.start..a.value.span.end].to_string(),
-        })
-        .collect();
-    if args.is_empty() {
-        String::new()
-    } else {
-        format!(" with({})", args.join(", "))
-    }
-}
-
 fn control_value(source: &str, expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::Num { value, unit } => format!("{value}{}", unit.as_deref().unwrap_or("")),
@@ -84,6 +64,31 @@ fn control_value(source: &str, expr: &Expr) -> String {
         ),
         _ => source[expr.span.start..expr.span.end].to_string(),
     }
+}
+
+/// The text of the setting `name` in `arg`, from its name to the end of its value.
+fn setting_range(arg: &Arg, name: &str) -> Option<(usize, usize)> {
+    let key = arg.name.as_ref().filter(|n| n.name == name)?;
+    Some((key.span.start, arg.value.span.end))
+}
+
+/// `text`, which starts at `base` in the composition, without the stretches in `cuts`.
+fn without(
+    text: &str,
+    base: usize,
+    mut cuts: Vec<(usize, usize)>,
+    verbatim: impl Fn(String) -> Piece,
+    derived: impl Fn(String) -> Piece,
+) -> Piece {
+    if cuts.is_empty() {
+        return verbatim(text.to_string());
+    }
+    cuts.sort();
+    let mut text = text.to_string();
+    for (start, end) in cuts.into_iter().rev() {
+        text.replace_range(start - base..end - base, "");
+    }
+    derived(text)
 }
 
 /// One DSP definition and where it came from.
@@ -140,10 +145,9 @@ pub fn project(
                     c.entries.iter().find(|(n, _)| n.name == "instrument")
                 {
                     pieces.push(derived(format!(
-                        "track {} {{ instrument = {} }}{}",
+                        "track {} {{ instrument = {} }}",
                         c.name.name,
-                        &source[instrument.span.start..instrument.span.end],
-                        options(source, &c.options)
+                        &source[instrument.span.start..instrument.span.end]
                     )));
                 }
             }
@@ -177,60 +181,24 @@ pub fn project(
                 }
             }
             Item::Track(t) => {
-                let Some(end) = text.rfind('}').map(|n| n + 1) else {
-                    pieces.push(verbatim(text.to_string()));
-                    continue;
-                };
-                let mut body = text[..end].to_string();
-                let mut changed = false;
-                for stmt in t.body.iter().rev() {
+                // the client's own settings and its `notes` are not the server's
+                let mut cuts: Vec<(usize, usize)> = t
+                    .options
+                    .iter()
+                    .filter_map(|a| setting_range(a, "quantize"))
+                    .collect();
+                for stmt in &t.body {
                     if let Stmt::Bind { name, value } = stmt
                         && name.name == "notes"
                     {
-                        body.replace_range(
-                            name.span.start - span.start..value.span.end - span.start,
-                            "",
-                        );
-                        changed = true;
+                        cuts.push((name.span.start, value.span.end));
                     }
                 }
-                let with = options(source, &t.options);
-                if changed || !with.is_empty() || end != text.len() {
-                    pieces.push(derived(format!("{body}{with}")));
-                } else {
-                    pieces.push(verbatim(body));
-                }
+                pieces.push(without(text, span.start, cuts, verbatim, derived));
             }
             Item::Instr(i) => {
-                if i.options
-                    .iter()
-                    .any(|a| a.name.as_ref().is_some_and(|n| n.name == "quantize"))
-                {
-                    let tokens = lex(text)?;
-                    let start = tokens
-                        .iter()
-                        .position(|t| matches!(&t.tok, Tok::Ident(n) if n == "with"))
-                        .expect("options have with");
-                    let mut depth = 0;
-                    let end = tokens[start + 1..]
-                        .iter()
-                        .find(|t| {
-                            match t.tok {
-                                Tok::LParen => depth += 1,
-                                Tok::RParen => depth -= 1,
-                                _ => {}
-                            }
-                            depth == 0
-                        })
-                        .expect("options close")
-                        .span
-                        .end;
-                    let mut text = text.to_string();
-                    text.replace_range(tokens[start].span.start..end, &options(source, &i.options));
-                    pieces.push(derived(text));
-                } else {
-                    pieces.push(verbatim(text.to_string()));
-                }
+                let cuts = i.options.iter().filter_map(|a| setting_range(a, "quantize")).collect();
+                pieces.push(without(text, span.start, cuts, verbatim, derived));
             }
             Item::Sample(sample) => {
                 let mut changed = false;
@@ -251,9 +219,10 @@ pub fn project(
                                 arg.value.span,
                             ));
                         }
+                        // `beats(4)` becomes `duration(2sec)`
                         text.replace_range(
                             name.span.start - span.start..arg.value.span.end - span.start,
-                            &format!("duration: {}sec", value * 60.0 / tempo.bpm),
+                            &format!("duration({}sec", value * 60.0 / tempo.bpm),
                         );
                         changed = true;
                     }

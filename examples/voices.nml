@@ -16,7 +16,9 @@ fn colour(f, kind: (soft | hard) = soft) {
   }
 }
 
-instr pluck(tone: hz = 220hz) with(pitch: tone, tail: 400ms) {
+instr pluck(tone: hz = 220hz) {
+  pitch = tone
+  tail = 400ms
   if note.start { played[0] = played[0] + 1 }
   // the third note onward is hard, and a longer note is louder
   raw = (osc(saw, tone) + osc(saw, tone + 7ct)) * 0.5 * env[1 | 300ms 0]

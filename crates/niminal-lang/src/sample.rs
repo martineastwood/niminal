@@ -285,8 +285,8 @@ mod tests {
         w.finalize().unwrap();
 
         let samples = Samples::new(&dir);
-        samples.warm("sample a = \"a.wav\"\nsample gone = \"missing.wav\"\nthis is not valid");
-        samples.warm("sample a = \"a.wav\"\nkit k = \"nofolder\"");
+        samples.warm("a = sample(\"a.wav\")\ngone = sample(\"missing.wav\")\nthis is not valid");
+        samples.warm("a = sample(\"a.wav\")\nk = kit(\"nofolder\")");
         let first = samples.load("a.wav").unwrap();
         assert!(Arc::ptr_eq(&first[0], &samples.load("a.wav").unwrap()[0]));
         let _ = std::fs::remove_dir_all(&dir);

@@ -11,7 +11,9 @@ bus echo: stereo {
 
 // `legato` keeps one voice while notes overlap, and `glide` slides the pitch between them.
 // So a note that runs into the next one is a slide: the filter envelope doesn't restart.
-mono acid(freq: hz, cutoff: hz = 400hz, envmod: hz = 2khz, res: 0..1 = 0.9, accent: 0..1 = 0) with(legato: true, glide: 50ms) {
+mono acid(freq: hz, cutoff: hz = 400hz, envmod: hz = 2khz, res: 0..1 = 0.9, accent: 0..1 = 0) {
+  legato = true
+  glide = 50ms
   amp = env[0 2ms 1 | 8ms 0]
   sweep = env[0 1ms 1 220ms.exp 0]
   // an accent opens the filter further and plays louder

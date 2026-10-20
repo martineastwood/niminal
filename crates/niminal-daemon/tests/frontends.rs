@@ -338,7 +338,7 @@ fn client_configs_and_relative_sample_paths_are_independent() {
         send(
             &mut s,
             c,
-            json!([{"op":"define","at":"now","dir":dir,"source":"config { channels: mono, tuning: { a4: 432hz } }\nsample hit = \"same.wav\""},{"op":"note","target":"hit","at":"now","dur":"10ms"}]),
+            json!([{"op":"define","at":"now","dir":dir,"source":"config { channels: mono, tuning: { a4: 432hz } }\nhit = sample(\"same.wav\")"},{"op":"note","target":"hit","at":"now","dur":"10ms"}]),
         );
     }
     let out = s.session_mut().process(32);

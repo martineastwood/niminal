@@ -61,7 +61,6 @@ pub const RESERVED_WORDS: &[&str] = &[
     "true",
     "unsolo",
     "use",
-    "with",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

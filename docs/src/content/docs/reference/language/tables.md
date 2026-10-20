@@ -57,7 +57,7 @@ A sample is a table plus playback settings. `kick.data` is the underlying table 
 
 ```nml
 const organ = harmonics([1, 0, 1/3], size: 2048)
-sample pad = organ with(root: c4, loop: forward)
+pad = sample(organ).root(c4).loop(forward)
 ```
 
 `loop:` is `none`, `forward` or `bidirectional`.

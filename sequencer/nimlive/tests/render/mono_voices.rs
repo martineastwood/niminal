@@ -18,7 +18,8 @@ fn peak(x: &[f32]) -> f32 {
 const SLOW_ATTACK: &str = "env[0 100ms 1 | 10ms 0]";
 
 fn song(options: &str, notes: &str) -> Vec<f32> {
-    raw(&format!("tempo 120bpm\nmono x(freq: hz) with({options}) {{ osc(sine, freq) * {SLOW_ATTACK} }}\n{notes}"))
+    let settings = options.replace(", ", "\n").replace(": ", " = ");
+    raw(&format!("tempo 120bpm\nmono x(freq: hz) {{\n{settings}\nosc(sine, freq) * {SLOW_ATTACK}\n}}\n{notes}"))
 }
 
 #[test]
@@ -70,18 +71,18 @@ fn glide_slides_to_the_new_pitch_over_the_time_given() {
 #[test]
 fn steal_quietest_ends_the_softest_note_not_the_oldest() {
     let notes = "x(freq: 200hz, amp: 0db) for 8beats\nx(freq: 300hz, amp: -40db) for 8beats\nat 0.5beat x(freq: 500hz, amp: -20db) for 8beats";
-    let src = |steal: &str| raw(&format!("tempo 120bpm\ninstr x(freq: hz, amp: db) with(max: 2{steal}) {{ osc(sine, freq).gain(amp) }}\n{notes}"));
+    let src = |steal: &str| raw(&format!("tempo 120bpm\ninstr x(freq: hz, amp: db) {{ max = 2{steal}\nosc(sine, freq).gain(amp) }}\n{notes}"));
     let late = |out: &[f32]| peak(&out[(1.0 * SR) as usize..(1.5 * SR) as usize]);
-    assert!(late(&src(", steal: quietest")) > 0.8, "the loud note survives");
-    assert!(late(&src(", steal: oldest")) < 0.2, "the oldest, loudest note was ended");
+    assert!(late(&src("\nsteal = quietest")) > 0.8, "the loud note survives");
+    assert!(late(&src("\nsteal = oldest")) < 0.2, "the oldest, loudest note was ended");
 }
 
 #[test]
 fn mono_only_options_are_checked() {
     let msg = |src: &str| compile(src).err().unwrap()[0].message.clone();
-    assert!(msg("instr x(freq: hz) with(legato: true) { osc(sine, freq) }").contains("`legato` is for `mono`"));
-    assert!(msg("mono x(freq: hz) with(priority: lowest) { osc(sine, freq) }").contains("legato voice"));
-    assert!(msg("mono x(freq: hz) with(priority: middle, legato: true) { osc(sine, freq) }").contains("`last`, `lowest` or `highest`"));
-    assert!(msg("mono x(f: hz) with(glide: 1beat, legato: true) { osc(sine, f) }").contains("no `freq` parameter"));
-    assert!(compile("mono x(freq: hz) with(glide: 1beat, legato: true, priority: highest) { osc(sine, freq) }").is_ok());
+    assert!(msg("instr x(freq: hz) { legato = true\n osc(sine, freq) }").contains("`legato` is for `mono`"));
+    assert!(msg("mono x(freq: hz) { priority = lowest\n osc(sine, freq) }").contains("legato voice"));
+    assert!(msg("mono x(freq: hz) { priority = middle\nlegato = true\n osc(sine, freq) }").contains("`last`, `lowest` or `highest`"));
+    assert!(msg("mono x(f: hz) { glide = 1beat\nlegato = true\n osc(sine, f) }").contains("no `freq` parameter"));
+    assert!(compile("mono x(freq: hz) { glide = 1beat\nlegato = true\npriority = highest\n osc(sine, freq) }").is_ok());
 }

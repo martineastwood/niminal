@@ -117,12 +117,12 @@ fn a_mono_instrument_sounds_one_note_at_a_time_and_max_caps_a_poly_one() {
         "mono: the newest only (the others are fading out)"
     );
     assert_eq!(
-        sounding("instr x(freq: hz) with(max: 2) { osc(sine, freq) }", held),
+        sounding("instr x(freq: hz) { max = 2\n osc(sine, freq) }", held),
         2
     );
     assert_eq!(
         sounding(
-            "instr x(freq: hz) with(same_note: release) { osc(sine, freq) * env[1 | 5ms 0] }",
+            "instr x(freq: hz) { same_note = release\n osc(sine, freq) * env[1 | 5ms 0] }",
             "x(freq: 220hz) for 4beats\nx(freq: 220hz) for 4beats\nx(freq: 330hz) for 4beats"
         ),
         2,
@@ -135,29 +135,22 @@ fn voice_options_are_checked() {
     let mut s = session();
     let err =
         |code: &str, s: &mut Offline| s.eval(code, Some("now")).unwrap_err()[0].message.clone();
-    assert!(err("mono x(freq: hz) with(max: 4) { osc(sine, freq) }", &mut s).contains("one voice"));
+    assert!(err("mono x(freq: hz) { max = 4\n osc(sine, freq) }", &mut s).contains("one voice"));
     assert!(
         err(
-            "instr x(freq: hz) with(legato: true) { osc(sine, freq) }",
+            "instr x(freq: hz) { legato = true\n osc(sine, freq) }",
             &mut s
         )
         .contains("is for `mono`")
     );
     assert!(
         err(
-            "instr x(freq: hz) with(steal: newest) { osc(sine, freq) }",
+            "instr x(freq: hz) { steal = newest\n osc(sine, freq) }",
             &mut s
         )
         .contains("`oldest` or `quietest`")
     );
     assert!(
-        err(
-            "instr x(freq: hz) with(maxx: 3) { osc(sine, freq) }",
-            &mut s
-        )
-        .contains("no option `maxx`")
-    );
-    assert!(
-        err("instr x(freq: hz) with(max: 0) { osc(sine, freq) }", &mut s).contains("whole number")
+        err("instr x(freq: hz) { max = 0\n osc(sine, freq) }", &mut s).contains("whole number")
     );
 }

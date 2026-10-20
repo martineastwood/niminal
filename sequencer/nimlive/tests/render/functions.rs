@@ -95,7 +95,7 @@ fn a_state_list_makes_a_plucked_string() {
   y
 }
 ";
-    let out = raw(&format!("{string}instr pluck(freq: init hz) with(tail: 2sec) {{ (noise() * env[1 5ms 0]).string(freq) }}\npluck(freq: 220hz) for 1beat"));
+    let out = raw(&format!("{string}instr pluck(freq: init hz) {{ tail = 2sec\n(noise() * env[1 5ms 0]).string(freq) }}\npluck(freq: 220hz) for 1beat"));
     let at = |t: f64| (t * SR) as usize;
     assert!(out.len() > at(2.0), "the tail keeps it ringing after the note: {}", out.len());
     let p = period(&out[at(0.3)..at(0.3) + 4096]);
@@ -204,10 +204,10 @@ fn envelope_steps_can_follow_parameters() {
 
 #[test]
 fn note_time_and_released_describe_the_voice() {
-    let time = raw("instr a() with(tail: 100ms) { note.time.num * env[1 1sec 1] }\na() for 1beat");
+    let time = raw("instr a() { tail = 100ms\n note.time.num * env[1 1sec 1] }\na() for 1beat");
     let at = |t: f64| (t * SR) as usize;
     assert!((time[at(0.25)] - 0.25).abs() < 1e-3);
-    let released = raw("instr a() with(tail: 200ms) { (note.released + 0.5) * 0.5 }\na() for 1beat");
+    let released = raw("instr a() { tail = 200ms\n (note.released + 0.5) * 0.5 }\na() for 1beat");
     assert!((released[at(0.25)] - 0.25).abs() < 1e-6, "held");
     assert!((released[at(0.6)] - 0.75).abs() < 1e-6, "released at half a second");
     assert!(error("fn f(x) { x * note.time.num }").contains("only available in an instrument"));

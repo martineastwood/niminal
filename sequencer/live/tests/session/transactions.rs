@@ -112,7 +112,7 @@ fn a_live_eval_plays_a_kit_from_the_sample_folder_and_picks_up_a_changed_file() 
     let mut s = session();
     s.set_sample_dir(&dir);
     s.eval(
-        "tempo 120bpm\nkit k = \"kit\"\ntrack t { instrument = k }",
+        "tempo 120bpm\nk = kit(\"kit\")\ntrack t { instrument = k }",
         Some("now"),
     )
     .unwrap();
@@ -136,7 +136,7 @@ fn a_live_eval_plays_a_kit_from_the_sample_folder_and_picks_up_a_changed_file() 
     // replacing a file is seen the next time the project is evaluated
     std::thread::sleep(std::time::Duration::from_millis(1100));
     write("snare.wav", -0.25);
-    s.eval("kit k = \"kit\"", Some("now")).unwrap();
+    s.eval("k = kit(\"kit\")", Some("now")).unwrap();
     s.eval("t.play([~ snare ~ ~])", Some("now")).unwrap();
     let out = run(&mut s, 26_000);
     // the clip starts where it lands, so its second step is a quarter bar later

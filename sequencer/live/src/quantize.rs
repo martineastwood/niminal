@@ -52,7 +52,7 @@ impl QuantizeDefaults {
     }
 
     /// The quantum for a statement: its own `@`, else `fallback` (an override
-    /// for the whole evaluation), else its definition's `with(quantize: ...)`, else the
+    /// for the whole evaluation), else its definition's `quantize` setting, else the
     /// default for its kind.
     pub fn for_statement(&self, s: &Statement, fallback: Option<Quantize>) -> Quantize {
         if let Some(q) = s.quantize.or(fallback).or(s.definition_quantize()) {

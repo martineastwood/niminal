@@ -49,7 +49,6 @@ pub const RESERVED_WORDS: &[&str] = &[
     "track",
     "true",
     "use",
-    "with",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

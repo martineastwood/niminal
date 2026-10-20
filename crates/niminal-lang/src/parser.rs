@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
 use crate::lexer::{Tok, Token, lex};
 
-/// A name, its parameters, its `with(...)` options, its body, and where it all is.
+/// A name, its parameters, its settings, its body, and where it all is.
 type Definition = (Ident, Vec<ParamDef>, Vec<Arg>, Vec<Stmt>, Span);
 
 pub fn parse(src: &str) -> Result<Vec<Item>, Diagnostic> {
@@ -228,73 +228,16 @@ impl Parser {
                 args,
                 span: start.to(self.prev_span()),
             }))
-        } else if self.is_keyword("sample") || self.is_keyword("kit") {
-            let is_kit = self.is_keyword("kit");
-            let start = self.bump().span;
-            let name = self.ident(if is_kit {
-                "a kit name"
-            } else {
-                "a sample name"
-            })?;
+        } else if (self.is_keyword("sample") || self.is_keyword("kit")) && matches!(self.peek_at(1), Tok::Ident(_)) {
+            let word = self.bump();
+            let Tok::Ident(word_name) = word.tok else { unreachable!() };
+            Err(Diagnostic::new(format!("`{word_name}` is no longer a keyword"), word.span)
+                .with_help(format!("write `name = {word_name}(\"drums/kick.wav\")`; settings are chained, as in `.beats(4)`")))
+        } else if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
+            let name = self.ident("a name")?;
             self.expect(&Tok::Eq)?;
-            let source_span = self.span();
-            let source = match self.peek().clone() {
-                Tok::Str(path) => {
-                    self.bump();
-                    SampleSource::Path(path)
-                }
-                Tok::Ident(_) if self.peek_at(1) == &Tok::Dot => {
-                    let sample = self.ident("a sample name")?;
-                    self.bump();
-                    let method = self.ident("`slices`")?;
-                    if method.name != "slices" {
-                        return Err(Diagnostic::new(
-                            format!("a sample has no `{}`", method.name),
-                            method.span,
-                        )
-                        .with_help("the only thing to make from a sample is `.slices(n)`"));
-                    }
-                    if !is_kit {
-                        return Err(Diagnostic::new(
-                            "`.slices` makes a kit, not a sample",
-                            method.span,
-                        )
-                        .with_help("for example `kit chops = amen.slices(16)`"));
-                    }
-                    self.expect(&Tok::LParen)?;
-                    let Tok::Num {
-                        value: count,
-                        unit: None,
-                    } = self.peek().clone()
-                    else {
-                        return Err(self.unexpected("how many slices, such as `16`"));
-                    };
-                    self.bump();
-                    self.expect(&Tok::RParen)?;
-                    SampleSource::Slices { sample, count }
-                }
-                _ if !is_kit => SampleSource::Table(self.expr()?),
-                _ => {
-                    return Err(self.unexpected("a file path in quotes").with_help(if is_kit {
-                        "for example `kit drums = \"drums/808\"` or `kit chops = amen.slices(16)`"
-                    } else {
-                        "for example `sample kick = \"drums/kick.wav\"` or `sample pad = organ`"
-                    }));
-                }
-            };
-            let mut options = Vec::new();
-            if self.is_keyword("with") {
-                self.bump();
-                options = self.args()?;
-            }
-            Ok(Item::Sample(SampleDecl {
-                is_kit,
-                name,
-                source,
-                source_span,
-                options,
-                span: start.to(self.prev_span()),
-            }))
+            let value = self.expr()?;
+            sample_decl(name, value).map(Item::Sample)
         } else if self.is_keyword("config") {
             let start = self.bump().span;
             let (entries, tuning, end) = self.config_entries()?;
@@ -334,8 +277,8 @@ impl Parser {
                 )
                 .with_help("for example `track bass(tone: hz = 2khz)`"));
             }
-            let (body, end) = self.block()?;
-            let options = self.with_options()?;
+            let (mut body, end) = self.block()?;
+            let options = take_options(&mut body, TRACK_OPTIONS);
             Ok(Item::Track(TrackDecl {
                 name,
                 params,
@@ -405,7 +348,7 @@ impl Parser {
         Ok(params)
     }
 
-    /// `instr name(params) with(options) { body }`
+    /// `instr name(params) { settings and body }`
     fn definition(&mut self) -> Res<Definition> {
         let start = self.bump().span;
         let name = self.ident("an instrument name")?;
@@ -414,8 +357,11 @@ impl Parser {
             return Err(Diagnostic::new("an instrument's result is a signal, so it has no `->`", self.span())
                 .with_help("functions name their results with `->`"));
         }
-        let options = self.with_options()?;
-        let (body, end) = self.block()?;
+        if self.is_keyword("with") {
+            return Err(with_gone(self.span()));
+        }
+        let (mut body, end) = self.block()?;
+        let options = take_options(&mut body, INSTR_OPTIONS);
         Ok((name, params, options, body, start.to(end)))
     }
 
@@ -459,9 +405,6 @@ impl Parser {
             } else {
                 result = FnResult::Unit(self.ident("a unit such as `hz`, or `(a, b)` for several results")?);
             }
-        }
-        if self.is_keyword("with") {
-            return Err(Diagnostic::new("a function has no options", self.span()));
         }
         let (body, end) = self.block()?;
         Ok(FnDef {
@@ -630,16 +573,6 @@ impl Parser {
             })
         } else {
             Ok(Stmt::Expr(self.expr()?))
-        }
-    }
-
-    /// `with(name: value, ...)` after a definition, if there is one.
-    fn with_options(&mut self) -> Res<Vec<Arg>> {
-        if self.is_keyword("with") {
-            self.bump();
-            self.args()
-        } else {
-            Ok(Vec::new())
         }
     }
 
@@ -1375,6 +1308,93 @@ fn binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
         },
         span,
     }
+}
+
+/// The settings an `instr` or `mono` takes in its body, such as `tail = 3sec`.
+const INSTR_OPTIONS: &[&str] = &[
+    "max", "steal", "same_note", "legato", "priority", "glide", "pitch", "choke", "compensate", "tail", "quantize",
+];
+
+/// The settings a `track` takes in its body.
+const TRACK_OPTIONS: &[&str] = &["quantize"];
+
+fn with_gone(span: Span) -> Diagnostic {
+    Diagnostic::new("`with` is gone", span)
+        .with_help("a definition's settings go in its body, such as `tail = 3sec`")
+}
+
+/// Settings in a definition's body, `tail = 3sec`, are its options rather than part of its sound:
+/// take them out of `body`.
+fn take_options(body: &mut Vec<Stmt>, names: &[&str]) -> Vec<Arg> {
+    let mut options = Vec::new();
+    let mut rest = Vec::new();
+    for stmt in std::mem::take(body) {
+        match stmt {
+            Stmt::Bind { name, value } if names.contains(&name.name.as_str()) => {
+                options.push(Arg { name: Some(name), value, receiver: false });
+            }
+            other => rest.push(other),
+        }
+    }
+    *body = rest;
+    options
+}
+
+/// `brk = sample("break.wav").beats(4)`, `drums = kit("drums").choke(...)` or
+/// `chops = brk.slices(16).choke(...)`: the chain's calls after the first are the sample's options.
+fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
+    let span = name.span.to(value.span);
+    let not_a_sample = |at: Span| {
+        Diagnostic::new("expected a sample or a kit", at).with_help(
+            "for example `kick = sample(\"drums/kick.wav\")`, `drums = kit(\"drums/808\")` or `chops = amen.slices(16)`",
+        )
+    };
+    let mut options = Vec::new();
+    let mut cur = value;
+    let (is_kit, source, source_span) = loop {
+        let at = cur.span;
+        let ExprKind::Call { name: call, mut args } = cur.kind else {
+            return Err(not_a_sample(at));
+        };
+        if !args.first().is_some_and(|a| a.receiver) {
+            let is_kit = match call.name.as_str() {
+                "sample" => false,
+                "kit" => true,
+                _ => return Err(not_a_sample(call.span)),
+            };
+            let source = match args.as_slice() {
+                [Arg { name: None, value: Expr { kind: ExprKind::Str(path), .. }, .. }] => SampleSource::Path(path.clone()),
+                [Arg { name: None, value, .. }] if !is_kit => SampleSource::Table(value.clone()),
+                _ => {
+                    return Err(Diagnostic::new(
+                        format!("`{}` takes {}", call.name, if is_kit { "a folder in quotes" } else { "a file path in quotes, or a table" }),
+                        at,
+                    ));
+                }
+            };
+            break (is_kit, source, at);
+        }
+        let receiver = args.remove(0).value;
+        if call.name == "slices" {
+            let (ExprKind::Name(sample), [Arg { name: None, value: Expr { kind: ExprKind::Num { value: count, unit: None }, .. }, .. }]) =
+                (&receiver.kind, args.as_slice())
+            else {
+                return Err(Diagnostic::new("`slices` cuts a sample into equal pieces, as in `amen.slices(16)`", at));
+            };
+            let sample = Ident { name: sample.clone(), span: receiver.span };
+            break (true, SampleSource::Slices { sample, count: *count }, at);
+        }
+        let [Arg { name: None, value: arg, .. }] = args.as_slice() else {
+            return Err(Diagnostic::new(
+                format!("`{}` takes one value, as in `.{}(...)`", call.name, call.name),
+                at,
+            ));
+        };
+        options.push(Arg { name: Some(call), value: arg.clone(), receiver: false });
+        cur = receiver;
+    };
+    options.reverse();
+    Ok(SampleDecl { is_kit, name, source, source_span, options, span })
 }
 
 #[cfg(test)]

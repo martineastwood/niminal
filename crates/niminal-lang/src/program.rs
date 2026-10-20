@@ -29,19 +29,19 @@ pub struct Instrument {
     /// The choke group of each sample: one entry per kit member, or at most
     /// one for a lone sample.
     pub chokes: Vec<Option<u64>>,
-    /// `with(max: 8)`, or `mono`: the most notes of this instrument sounding on a track at once.
+    /// `max = 8`, or `mono`: the most notes of this instrument sounding on a track at once.
     pub max_voices: Option<usize>,
-    /// `with(same_note: release)`: a note releases the sounding note of the same pitch.
+    /// `same_note = release`: a note releases the sounding note of the same pitch.
     pub release_same_note: bool,
-    /// `with(steal: quietest)`: when `max` is reached, the quietest note ends, not the oldest.
+    /// `steal = quietest`: when `max` is reached, the quietest note ends, not the oldest.
     pub steal_quietest: bool,
-    /// `with(legato: true)` on a `mono` instrument: a note over a held one changes its pitch.
+    /// `legato = true` on a `mono` instrument: a note over a held one changes its pitch.
     pub legato: bool,
-    /// `with(priority: lowest)`: which held note a legato voice sounds.
+    /// `priority = lowest`: which held note a legato voice sounds.
     pub priority: niminal_engine::Priority,
-    /// `with(glide: 80ms)`: how long a change of pitch takes.
+    /// `glide = 80ms`: how long a change of pitch takes.
     pub glide: Option<niminal_score::Time>,
-    /// `with(pitch: note)`: the parameter a note's pitch sets, `freq` unless renamed.
+    /// `pitch = note`: the parameter a note's pitch sets, `freq` unless renamed.
     pub pitch: String,
     /// `midi_out`: notes are sent to external gear instead of sounding here.
     pub midi: Option<MidiTarget>,
@@ -364,7 +364,7 @@ impl Program {
         } = resolve_target(&self.instruments, &self.tracks, &event.target)?;
         let mut args = defaults.cloned().unwrap_or_default();
         args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
-        // a note's pitch is `freq` to the score, and whatever `with(pitch: ...)` named it to the instrument
+        // a note's pitch is `freq` to the score, and whatever `pitch = ...` named it to the instrument
         let pitch_name = &self.instruments[instrument].pitch;
         if pitch_name != PITCH_PARAM
             && let Some(pitch) = args.remove(PITCH_PARAM)

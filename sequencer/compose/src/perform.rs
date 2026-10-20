@@ -2889,7 +2889,7 @@ impl Perform<'_> {
     }
 }
 
-/// When a kind of change lands, as written in `config` and `with(quantize: ...)`: `1beat`, `4bars`,
+/// When a kind of change lands, as written in `config` and in a definition's `quantize`: `1beat`, `4bars`,
 /// `cycle`, `now`, `bar`.
 pub(crate) fn quantum_of(e: &Expr) -> Res<Quantize> {
     let on_grid = |count: f64, unit| {
@@ -2924,28 +2924,13 @@ fn quantum_error(span: Span) -> Diagnostic {
         .with_help("for example `now`, `beat`, `bar`, `cycle`, `1beat` or `4bars`")
 }
 
-/// The one option a clip, scene or track takes after its body: `with(quantize: 1bar)`.
+/// The one setting a clip, scene or track takes besides its body: `quantize: 1bar`.
 pub(crate) fn definition_quantum(options: &[Arg]) -> Res<Option<Quantize>> {
-    let mut found = None;
-    for arg in options {
-        match arg.name.as_ref().map(|n| n.name.as_str()) {
-            Some("quantize") => found = Some(quantum_of(&arg.value)?),
-            Some(other) => {
-                return Err(Diagnostic::new(
-                    format!("there is no option `{other}` here"),
-                    arg.name.as_ref().map_or(arg.value.span, |n| n.span),
-                )
-                .with_help("the option is `quantize`, as in `with(quantize: 1bar)`"));
-            }
-            None => {
-                return Err(Diagnostic::new(
-                    "an option is a name and a value, as in `quantize: 1bar`",
-                    arg.value.span,
-                ));
-            }
-        }
-    }
-    Ok(found)
+    options
+        .iter()
+        .find(|a| a.name.as_ref().is_some_and(|n| n.name == "quantize"))
+        .map(|a| quantum_of(&a.value))
+        .transpose()
 }
 
 /// A time written in source: `2beats`, `1/2beat`, `4bars`, `250ms`.

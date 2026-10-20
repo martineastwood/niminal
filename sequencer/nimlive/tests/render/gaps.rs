@@ -18,14 +18,14 @@ fn at(t: f64) -> usize {
 #[test]
 fn note_dur_is_the_scheduled_length() {
     // at 120bpm a beat is half a second
-    let out = raw("instr a() with(tail: 10ms) { note.dur.num * 0.1 * env[1 | 10ms 1] }\na() for 1beat\nat 1beat a() for 2beats");
+    let out = raw("instr a() { tail = 10ms\n note.dur.num * 0.1 * env[1 | 10ms 1] }\na() for 1beat\nat 1beat a() for 2beats");
     assert!((out[at(0.25)] - 0.05).abs() < 1e-4, "{}", out[at(0.25)]);
     assert!((out[at(0.75)] - 0.1).abs() < 1e-4, "{}", out[at(0.75)]);
 }
 
 #[test]
 fn note_index_counts_the_notes_of_an_instrument() {
-    let out = raw("instr a() with(tail: 10ms) { (note.index + 1) * 0.1 * env[1 | 10ms 1] }\ninstr b() { 0 }\na() for 1beat\nat 1beat b() for 1beat\nat 2beats a() for 1beat\nat 3beats a() for 1beat");
+    let out = raw("instr a() { tail = 10ms\n (note.index + 1) * 0.1 * env[1 | 10ms 1] }\ninstr b() { 0 }\na() for 1beat\nat 1beat b() for 1beat\nat 2beats a() for 1beat\nat 3beats a() for 1beat");
     assert!((out[at(0.25)] - 0.1).abs() < 1e-4);
     assert!((out[at(1.25)] - 0.2).abs() < 1e-4);
     assert!((out[at(1.75)] - 0.3).abs() < 1e-4);
@@ -41,7 +41,7 @@ fn note_start_is_one_sample_long() {
 #[test]
 fn a_write_inside_an_if_only_happens_when_it_is_taken() {
     // a note counts itself once, then reads the count
-    let src = "buffer n = zeros(1)\ninstr a() with(tail: 10ms) { if note.start { n[0] = n[0] + 1 }\n n[0] * 0.1 * env[1 | 10ms 1] }\na() for 1beat\nat 1beat a() for 1beat\nat 2beats a() for 1beat";
+    let src = "buffer n = zeros(1)\ninstr a() { tail = 10ms\n if note.start { n[0] = n[0] + 1 }\n n[0] * 0.1 * env[1 | 10ms 1] }\na() for 1beat\nat 1beat a() for 1beat\nat 2beats a() for 1beat";
     let out = raw(src);
     assert!((out[at(0.25)] - 0.1).abs() < 1e-4, "{}", out[at(0.25)]);
     assert!((out[at(0.75)] - 0.2).abs() < 1e-4, "{}", out[at(0.75)]);
@@ -50,11 +50,11 @@ fn a_write_inside_an_if_only_happens_when_it_is_taken() {
 
 #[test]
 fn clock_tells_beat_bar_and_tempo() {
-    let out = raw("tempo 120bpm\ninstr a() with(tail: 10ms) { clock.beat * 0.1 * env[1 | 10ms 1] }\ninstr b() with(tail: 10ms) { clock.bpm * 0.001 * env[1 | 10ms 1] }\na() for 4beats\nb() for 1beat");
+    let out = raw("tempo 120bpm\ninstr a() { tail = 10ms\n clock.beat * 0.1 * env[1 | 10ms 1] }\ninstr b() { tail = 10ms\n clock.bpm * 0.001 * env[1 | 10ms 1] }\na() for 4beats\nb() for 1beat");
     // 2 beats in after 1 second
     assert!((out[at(1.0)] - 0.2).abs() < 1e-3, "{}", out[at(1.0)]);
     assert!((out[at(0.25)] - (0.5 * 0.1 + 0.12)).abs() < 1e-3, "{}", out[at(0.25)]);
-    let bar = raw("instr a() with(tail: 10ms) { clock.bar * 0.5 * env[1 | 10ms 1] }\na() for 4beats");
+    let bar = raw("instr a() { tail = 10ms\n clock.bar * 0.5 * env[1 | 10ms 1] }\na() for 4beats");
     assert!((bar[at(1.0)] - 0.25).abs() < 1e-3, "{}", bar[at(1.0)]);
     assert!(error("fn f() { clock.beat }").contains("only available in an instrument"));
     assert!(error("instr a() { clock.beet }").contains("has no `beet`"));
@@ -62,17 +62,17 @@ fn clock_tells_beat_bar_and_tempo() {
 
 /// What a note name comes out as, in hz: through an expression, and through a note's own `freq`.
 fn hz_of(config: &str, note: &str) -> (f32, f32) {
-    let expr = raw(&format!("{config}\ninstr a() with(tail: 10ms) {{ {note}.num * 0.001 * env[1 | 10ms 1] }}\na() for 1beat"));
-    let played = raw(&format!("{config}\ninstr a(freq: hz) with(tail: 10ms) {{ freq.num * 0.001 * env[1 | 10ms 1] }}\na(freq: {note}) for 1beat"));
+    let expr = raw(&format!("{config}\ninstr a() {{ tail = 10ms\n{note}.num * 0.001 * env[1 | 10ms 1] }}\na() for 1beat"));
+    let played = raw(&format!("{config}\ninstr a(freq: hz) {{ tail = 10ms\nfreq.num * 0.001 * env[1 | 10ms 1] }}\na(freq: {note}) for 1beat"));
     (expr[at(0.1)] * 1000.0, played[at(0.1)] * 1000.0)
 }
 
 #[test]
 fn cents_are_hundredths_of_a_semitone() {
-    let out = raw("instr a(f: hz) with(tail: 10ms) { (f + 100ct).num * 0.001 * env[1 | 10ms 1] }\na(f: 440hz) for 1beat");
+    let out = raw("instr a(f: hz) { tail = 10ms\n (f + 100ct).num * 0.001 * env[1 | 10ms 1] }\na(f: 440hz) for 1beat");
     let semitone = 440.0 * 2f32.powf(1.0 / 12.0);
     assert!((out[at(0.1)] * 1000.0 - semitone).abs() < 0.05);
-    let half = raw("instr a(f: hz) with(tail: 10ms) { (f + 50ct).num * 0.001 * env[1 | 10ms 1] }\na(f: 440hz) for 1beat");
+    let half = raw("instr a(f: hz) { tail = 10ms\n (f + 50ct).num * 0.001 * env[1 | 10ms 1] }\na(f: 440hz) for 1beat");
     assert!((half[at(0.1)] * 1000.0 - 440.0 * 2f32.powf(0.5 / 12.0)).abs() < 0.05);
 }
 
@@ -122,17 +122,17 @@ fn level(src: &str, t: f64) -> f32 {
 
 #[test]
 fn a_range_steps_through_values_that_are_not_whole() {
-    let sum = |expr: &str| level(&format!("instr a() with(tail: 10ms) {{ ({expr}).sum * 0.01 * env[1 | 10ms 1] }}\na() for 1beat"), 0.1) * 100.0;
+    let sum = |expr: &str| level(&format!("instr a() {{ tail = 10ms\n({expr}).sum * 0.01 * env[1 | 10ms 1] }}\na() for 1beat"), 0.1) * 100.0;
     assert!((sum("(0..1).step(0.25)") - 2.5).abs() < 1e-4, "inclusive: 0 + 0.25 + 0.5 + 0.75 + 1");
     assert!((sum("(0..<1).step(0.25)") - 1.5).abs() < 1e-4, "the end left out");
     assert!((sum("(0..1).step(0.25).len") - 5.0).abs() < 1e-4);
     // a range with units steps in those units
-    let hz = level("instr a() with(tail: 10ms) { (200hz..400hz).step(100hz).sum.num * 0.001 * env[1 | 10ms 1] }\na() for 1beat", 0.1) * 1000.0;
+    let hz = level("instr a() { tail = 10ms\n (200hz..400hz).step(100hz).sum.num * 0.001 * env[1 | 10ms 1] }\na() for 1beat", 0.1) * 1000.0;
     assert!((hz - 900.0).abs() < 0.1, "{hz}");
     // also in a function with state, and in a table
-    let kernel = level("fn f(x) { state s = 0\ns = s + x\n(0..1).step(0.5).sum + s * 0 }\ninstr a() with(tail: 10ms) { f(1) * 0.01 * env[1 | 10ms 1] }\na() for 1beat", 0.1) * 100.0;
+    let kernel = level("fn f(x) { state s = 0\ns = s + x\n(0..1).step(0.5).sum + s * 0 }\ninstr a() { tail = 10ms\n f(1) * 0.01 * env[1 | 10ms 1] }\na() for 1beat", 0.1) * 100.0;
     assert!((kernel - 1.5).abs() < 1e-4, "{kernel}");
-    let table = level("const t = (0..1).step(0.5)\ninstr a() with(tail: 10ms) { t.sum * 0.01 * env[1 | 10ms 1] }\na() for 1beat", 0.1) * 100.0;
+    let table = level("const t = (0..1).step(0.5)\ninstr a() { tail = 10ms\n t.sum * 0.01 * env[1 | 10ms 1] }\na() for 1beat", 0.1) * 100.0;
     assert!((table - 1.5).abs() < 1e-4);
     assert!(error("instr a() { (0..1).step(0) }").contains("above 0"));
     assert!(error("instr a() { (0..1).step(1hz) }").contains("same unit"));
@@ -141,7 +141,7 @@ fn a_range_steps_through_values_that_are_not_whole() {
 #[test]
 fn active_switches_off_the_entries_beyond_a_count_that_can_change() {
     // sixteen partials, of which `count` sound: each one is worth 0.01
-    let sum = |count: &str| level(&format!("instr a(count: 0..16 = 4) with(tail: 10ms) {{ (for n in 1..16 {{ 0.01 }}).active(count).sum * env[1 | 10ms 1] }}\na(count: {count}) for 1beat"), 0.1);
+    let sum = |count: &str| level(&format!("instr a(count: 0..16 = 4) {{ tail = 10ms\n(for n in 1..16 {{ 0.01 }}).active(count).sum * env[1 | 10ms 1] }}\na(count: {count}) for 1beat"), 0.1);
     assert!((sum("4") - 0.04).abs() < 1e-5);
     assert!((sum("10") - 0.10).abs() < 1e-5);
     assert!((sum("0")).abs() < 1e-6);
@@ -158,7 +158,7 @@ fn late_is_the_block_late_send_and_prev_is_always_one_sample() {
 fn match_picks_a_choice_like_an_if_chain() {
     let src = |mode: &str| {
         format!(
-            "fn level(mode: (low | mid | high | other) = low) {{\n  match mode {{\n    low: 0.1\n    mid | high: 0.2\n    else: 0.3\n  }}\n}}\ninstr a() with(tail: 10ms) {{ level(mode: {mode}) * env[1 | 10ms 1] }}\na() for 1beat"
+            "fn level(mode: (low | mid | high | other) = low) {{\n  match mode {{\n    low: 0.1\n    mid | high: 0.2\n    else: 0.3\n  }}\n}}\ninstr a() {{ tail = 10ms\nlevel(mode: {mode}) * env[1 | 10ms 1] }}\na() for 1beat"
         )
     };
     assert!((raw(&src("low"))[at(0.1)] - 0.1).abs() < 1e-4);
@@ -170,13 +170,13 @@ fn match_picks_a_choice_like_an_if_chain() {
 
 #[test]
 fn pitch_option_names_the_parameter_notes_set() {
-    let out = raw("instr a(tone: hz = 220hz) with(pitch: tone, tail: 10ms) { osc(sine, tone) * env[1 | 10ms 1] * 0.5 }\na() for 1beat\nat 1beat a(tone: a5) for 1beat");
+    let out = raw("instr a(tone: hz = 220hz) { pitch = tone\ntail = 10ms\n osc(sine, tone) * env[1 | 10ms 1] * 0.5 }\na() for 1beat\nat 1beat a(tone: a5) for 1beat");
     let zero_crossings = |from: usize, to: usize| out[from..to].windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
     // 220hz for a half second is 110 cycles; a5 (880hz) for the next half second is 440
     assert!((zero_crossings(at(0.05), at(0.45)) as f64 - 88.0).abs() < 3.0);
     assert!((zero_crossings(at(0.55), at(0.95)) as f64 - 352.0).abs() < 3.0);
-    assert!(error("instr a(tone: hz = 220hz) with(pitch: nope) { 0 }").contains("no parameter `nope`"));
-    assert!(error("instr a(g: num = 1) with(pitch: g) { 0 }").contains("in `hz`"));
+    assert!(error("instr a(tone: hz = 220hz) { pitch = nope\n 0 }").contains("no parameter `nope`"));
+    assert!(error("instr a(g: num = 1) { pitch = g\n 0 }").contains("in `hz`"));
 }
 
 #[test]
@@ -185,8 +185,8 @@ fn clips_play_through_the_renamed_pitch() {
         let p = program(&format!("{def}\ntrack t {{ instrument = a }}\nclip c {{ notes: [c4 e4] }}\nt.play(c)"));
         mono(render_with(&p, &[], &RenderOptions { limiter: false, until: Some(2.0), ..Default::default() }).unwrap())
     };
-    let renamed = play("instr a(tone: hz = 220hz) with(pitch: tone, tail: 10ms) { osc(sine, tone) * env[1 | 10ms 1] * 0.5 }");
-    let plain = play("instr a(freq: hz = 220hz) with(tail: 10ms) { osc(sine, freq) * env[1 | 10ms 1] * 0.5 }");
+    let renamed = play("instr a(tone: hz = 220hz) { pitch = tone\ntail = 10ms\n osc(sine, tone) * env[1 | 10ms 1] * 0.5 }");
+    let plain = play("instr a(freq: hz = 220hz) { tail = 10ms\n osc(sine, freq) * env[1 | 10ms 1] * 0.5 }");
     assert!(plain.iter().any(|s| s.abs() > 0.1));
     assert_eq!(renamed, plain);
 }
@@ -194,7 +194,7 @@ fn clips_play_through_the_renamed_pitch() {
 #[test]
 fn after_starts_a_layer_late_with_fresh_state() {
     // the second layer is silent for 250ms, then an envelope that starts then
-    let out = raw("instr a() with(tail: 10ms) { 0.1 * env[1 | 10ms 1] + after(250ms) { 0.3 * env[0 100ms 1 | 10ms 1] } }\na() for 1beat");
+    let out = raw("instr a() { tail = 10ms\n 0.1 * env[1 | 10ms 1] + after(250ms) { 0.3 * env[0 100ms 1 | 10ms 1] } }\na() for 1beat");
     assert!((out[at(0.2)] - 0.1).abs() < 1e-4);
     // 50ms into the late envelope: half way up
     assert!((out[at(0.3)] - (0.1 + 0.15)).abs() < 5e-3, "{}", out[at(0.3)]);
@@ -203,13 +203,13 @@ fn after_starts_a_layer_late_with_fresh_state() {
 
 #[test]
 fn finish_when_ends_a_note_early() {
-    let out = raw("instr a() with(tail: 10ms) { 0.2.finish_when(note.time > 100ms) }\na() for 4beats");
+    let out = raw("instr a() { tail = 10ms\n 0.2.finish_when(note.time > 100ms) }\na() for 4beats");
     assert!(out.len() < at(0.3), "the note ended itself after 100ms, not the written 2s: {}", out.len());
 }
 
 #[test]
 fn noise_is_the_same_on_every_run_and_differs_by_source_and_note() {
-    let src = "instr a() with(tail: 10ms) { noise() * env[1 | 10ms 1] }\ninstr b() with(tail: 10ms) { (noise() - noise()) * env[1 | 10ms 1] }\ninstr c() with(tail: 10ms) { noise(seed: 7) * env[1 | 10ms 1] }\n";
+    let src = "instr a() { tail = 10ms\n noise() * env[1 | 10ms 1] }\ninstr b() { tail = 10ms\n (noise() - noise()) * env[1 | 10ms 1] }\ninstr c() { tail = 10ms\n noise(seed: 7) * env[1 | 10ms 1] }\n";
     let note = |body: &str| raw(&format!("{src}{body}"));
     // the same program gives the same samples
     assert_eq!(note("a() for 1beat"), note("a() for 1beat"));

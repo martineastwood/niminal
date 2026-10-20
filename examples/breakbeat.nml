@@ -5,9 +5,9 @@
   config { channels: stereo }
   tempo 130bpm
 
-  // the loop is four beats long and was recorded at 100bpm; `fit: rate` speeds it up to the tempo
-  sample brk = "break.wav" with(beats: 4, fit: rate)
-  kit chops = brk.slices(16)
+  // the loop is four beats long and was recorded at 100bpm; `.fit(rate)` speeds it up to the tempo
+  brk = sample("break.wav").beats(4).fit(rate)
+  chops = brk.slices(16)
   track drums { instrument = chops }
 
   // the original order plays the break as recorded
@@ -16,7 +16,7 @@
   // ...and rearranged as a grid: a row per slice, a column per sixteenth. Move the x's to
   // re-cut the break; rows play together, so slices can overlap. Edit this and evaluate it
   // while the first plays. `X` is an accent and `o` a ghost note; to cut one slice off when
-  // another hits, add `with(choke: g(s4, s12))` to the kit line
+  // another hits, add `.choke(g(s4, s12))` to the kit line
   drums.play(grid {
     s0:  x... .... x... ....
     s4:  .... x... .... x..x

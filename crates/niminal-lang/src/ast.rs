@@ -41,7 +41,7 @@ pub struct InstrDef {
     pub options: Vec<Arg>,
 }
 
-/// `sample kick = "drums/kick.wav" with(root: c4)`, or `kit drums = "drums/808"`.
+/// `kick = sample("drums/kick.wav").root(c4)`, or `drums = kit("drums/808")`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SampleDecl {
     pub is_kit: bool,
@@ -67,7 +67,7 @@ pub enum SampleSource {
     Path(String),
     /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier.
     Slices { sample: Ident, count: f64 },
-    /// A const table (or expression that yields one): `sample pad = organ`.
+    /// A const table (or expression that yields one): `pad = sample(organ)`.
     Table(Expr),
 }
 

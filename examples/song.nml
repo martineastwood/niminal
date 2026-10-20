@@ -4,7 +4,7 @@
 config { channels: stereo }
 tempo 110bpm
 
-kit drums = "drums"
+drums = kit("drums")
 bus space: stereo
 
 instr pluck(freq: hz, bright: 0..1 = 0.5) {

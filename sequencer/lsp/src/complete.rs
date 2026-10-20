@@ -98,35 +98,62 @@ fn enclosing_call(before: &str) -> Option<Call<'_>> {
     Some(Call { name, receiver, receiver_text, named, unnamed_before, current })
 }
 
-/// Options of `instr ... with(...)`, and for `mono` instruments the ones that are for them alone. Each has
-/// what it does and the values it takes.
+/// The settings of an `instr` or `mono`, written in its body, and for `mono` instruments the ones that are
+/// for them alone. Each has what it does and the values it takes.
 const OPTIONS: &[(&str, bool, &str, &[&str])] = &[
     ("max", false, "The most notes of this instrument sounding at once; the oldest end first", &[]),
     ("steal", false, "Which note ends when `max` is reached", &["oldest", "quietest"]),
     ("same_note", false, "A new note releases the sounding note of the same pitch", &["release"]),
     ("choke", false, "A new note ends the notes in this group, whichever instrument they are of", &[]),
+    ("tail", false, "How long a voice keeps sounding after its release, for example `2sec`", &[]),
+    ("pitch", false, "The `hz` parameter that notes set, `freq` unless renamed", &[]),
+    ("quantize", false, "When a redefinition lands", &["now", "beat", "bar", "cycle"]),
     ("legato", true, "A note that starts over a held one takes over its voice instead of attacking again", &["true", "false"]),
-    ("priority", true, "Which held note a legato voice sounds (needs `legato: true`)", &["last", "lowest", "highest"]),
+    ("priority", true, "Which held note a legato voice sounds (needs `legato = true`)", &["last", "lowest", "highest"]),
     ("glide", true, "How long a change of pitch takes to slide, for example `80ms`", &[]),
 ];
 
-/// Whether the instrument being written, the last `instr` or `mono` before the cursor, is a `mono`.
-fn is_mono_head(before: &str) -> bool {
-    before.lines().rev().find_map(|l| {
-        let l = l.trim_start();
-        l.strip_prefix("mono ").map(|_| true).or_else(|| l.strip_prefix("instr ").map(|_| false))
-    }).unwrap_or(false)
+/// Where the cursor is in the body of an `instr` or `mono`, directly in it rather than in a block inside:
+/// whether it is a `mono`, the body so far, and the line being written.
+fn in_instr_body(before: &str) -> Option<(bool, &str, &str)> {
+    let mut offset = 0;
+    let mut head = None;
+    for line in before.split_inclusive('\n') {
+        let t = line.trim_start();
+        if t.starts_with("instr ") || t.starts_with("mono ") {
+            head = Some((offset, t.starts_with("mono ")));
+        }
+        offset += line.len();
+    }
+    let (start, mono) = head?;
+    let body = &before[start..];
+    let depth = body.matches('{').count() as i64 - body.matches('}').count() as i64;
+    let line = body.rsplit('\n').next().unwrap_or("").trim_start();
+    (depth == 1 && body.contains('{')).then_some((mono, body, line))
 }
 
-/// What goes inside `with(`: the options not yet given, or the values of the one being written.
-fn option_items(call: &Call, mono: bool) -> Vec<Value> {
-    if let Some((name, _)) = call.current.split_once(':') {
-        let values = OPTIONS.iter().find(|o| o.0 == name.trim()).map_or(&[][..], |o| o.3);
-        return values.iter().map(|v| item(v, ENUM_MEMBER, name.trim(), "")).collect();
+/// The values of the setting being written, after `name = `.
+fn setting_values(before: &str) -> Option<Vec<Value>> {
+    let (mono, _, line) = in_instr_body(before)?;
+    let (name, value) = line.split_once('=')?;
+    let (name, value) = (name.trim(), value.trim());
+    if !value.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
     }
+    let (_, _, _, values) = OPTIONS.iter().find(|o| o.0 == name && (mono || !o.1))?;
+    (!values.is_empty()).then(|| values.iter().map(|v| item(v, ENUM_MEMBER, name, "")).collect())
+}
+
+/// The settings not yet written, at the start of a line in the body.
+fn setting_names(before: &str) -> Vec<Value> {
+    let Some((mono, body, line)) = in_instr_body(before) else { return Vec::new() };
+    if !line.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Vec::new();
+    }
+    let given = |name: &str| body.lines().any(|l| l.trim_start().strip_prefix(name).is_some_and(|r| r.trim_start().starts_with('=')));
     OPTIONS.iter()
-        .filter(|(name, mono_only, ..)| (mono || !mono_only) && !call.named.contains(name))
-        .map(|(name, _, doc, _)| item(&format!("{name}:"), PROPERTY, "", doc))
+        .filter(|(name, mono_only, ..)| (mono || !mono_only) && !given(name))
+        .map(|(name, _, doc, _)| item(&format!("{name} ="), PROPERTY, "", doc))
         .collect()
 }
 
@@ -272,11 +299,11 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
         return out;
     }
 
-    let mut out = Vec::new();
+    if let Some(values) = setting_values(before) {
+        return values;
+    }
+    let mut out = setting_names(before);
     if let Some(call) = enclosing_call(before) {
-        if call.name == "with" && !call.receiver {
-            return option_items(&call, is_mono_head(before));
-        }
         let consumed = usize::from(call.receiver) + call.unnamed_before;
         let in_value = call.current.contains(':');
         let on_pattern = call.receiver && receiver(call.receiver_text, symbols) != Receiver::Signal;
@@ -429,12 +456,16 @@ mod tests {
     }
 
     #[test]
-    fn with_offers_the_options_and_mono_ones_only_for_mono() {
-        let l = labels_in("", "instr pad(freq: hz) with(");
-        assert!(l.contains(&"max:".to_string()) && l.contains(&"choke:".to_string()) && !l.contains(&"legato:".to_string()), "{l:?}");
-        let l = labels_in("", "mono bass(freq: hz) with(max");
-        assert!(l.contains(&"legato:".to_string()) && l.contains(&"glide:".to_string()));
-        assert!(!labels_in("", "mono bass(freq: hz) with(legato: true, ").contains(&"legato:".to_string()));
-        assert_eq!(labels_in("", "mono bass(freq: hz) with(priority: "), ["last", "lowest", "highest"]);
+    fn an_instrument_body_offers_its_settings_and_mono_ones_only_for_mono() {
+        let l = labels_in("", "instr pad(freq: hz) {\n  ");
+        assert!(l.contains(&"max =".to_string()) && l.contains(&"choke =".to_string()) && !l.contains(&"legato =".to_string()), "{l:?}");
+        let l = labels_in("", "mono bass(freq: hz) {\n  max = 4\n  ma");
+        assert!(l.contains(&"legato =".to_string()) && l.contains(&"glide =".to_string()));
+        let l = labels_in("", "mono bass(freq: hz) {\n  legato = true\n  ");
+        assert!(!l.contains(&"legato =".to_string()));
+        assert_eq!(labels_in("", "mono bass(freq: hz) {\n  priority = "), ["last", "lowest", "highest"]);
+        // not inside a nested block, or outside an instrument
+        assert!(!labels_in("", "instr pad(freq: hz) {\n  if freq > 1hz {\n  ").contains(&"max =".to_string()));
+        assert!(!labels_in("", "").contains(&"max =".to_string()));
     }
 }

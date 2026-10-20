@@ -924,8 +924,8 @@ fn resolve_instrument(
     Ok(Some((index, defaults)))
 }
 
-/// `mono bass(...) with(legato: true, glide: 80ms, priority: lowest)` and
-/// `instr pad(...) with(max: 8, steal: quietest, same_note: release, choke: group)`.
+/// `mono bass(...) { legato = true  glide = 80ms  priority = lowest }` and
+/// `instr pad(...) { max = 8  steal = quietest  same_note = release  choke = group }`.
 fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut SampleState) -> Res<()> {
     let mut max = def.mono.then_some(1);
     let mono_only = |option: &Ident| {
@@ -939,7 +939,7 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
     for arg in &def.options {
         let Some(option) = &arg.name else {
             return Err(Diagnostic::new(
-                "an option is a name and a value, as in `max: 8`",
+                "a setting is a name and a value, as in `max = 8`",
                 arg.value.span,
             ));
         };
@@ -990,7 +990,7 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
                 _ => {
                     return Err(
                         Diagnostic::new("expected the name of a choke group", value.span)
-                            .with_help("for example `with(choke: bass)`"),
+                            .with_help("for example `choke = bass`"),
                     );
                 }
             },
@@ -1027,7 +1027,7 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
             "pitch" => {
                 let ExprKind::Name(name) = &value.kind else {
                     return Err(Diagnostic::new("`pitch` is the name of a parameter", value.span)
-                        .with_help("for example `with(pitch: tone)`, for `instr bass(tone: hz = 55hz)`"));
+                        .with_help("for example `pitch = tone`, for `instr bass(tone: hz = 55hz)`"));
                 };
                 let Some(param) = instrument.params.iter().find(|p| p.name == *name) else {
                     return Err(Diagnostic::new(
@@ -1115,7 +1115,7 @@ fn slice_members(
         if let Some(c) = closest(&sample.name, state.loaded.keys().map(String::as_str)) {
             d = d.with_help(format!("did you mean `{c}`?"));
         } else {
-            d = d.with_help("declare it first with `sample name = \"file.wav\"`");
+            d = d.with_help("declare it first with `name = sample(\"file.wav\")`");
         }
         return Err(d);
     };
@@ -1215,7 +1215,7 @@ fn compile_sample(
     }
     let fit_error = |d: Diagnostic| {
         d.with_help(
-            "for example `with(beats: 4, fit: rate)` plays a 4-beat loop in time with the tempo",
+            "for example `.beats(4).fit(rate)` plays a 4-beat loop in time with the tempo",
         )
     };
     if let Some(arg) = fit {
@@ -1376,13 +1376,13 @@ fn compile_sample(
             (_, false) => {
                 return Err(
                     Diagnostic::new("expected the name of a choke group", value.span)
-                        .with_help("for example `with(choke: hats)`"),
+                        .with_help("for example `.choke(hats)`"),
                 );
             }
             (_, true) => {
                 return Err(
                     Diagnostic::new("a kit names the samples in each group", value.span)
-                        .with_help("for example `with(choke: hats(hat_open, hat_closed))`"),
+                        .with_help("for example `.choke(hats(hat_open, hat_closed))`"),
                 );
             }
         }
@@ -2546,10 +2546,37 @@ instr a(f: hz) { osc(saw, f).bad }
 
     #[test]
     fn a_tail_is_a_time() {
-        ok("instr a(f: hz) with(tail: 2sec) { osc(saw, f) }");
+        ok("instr a(f: hz) { tail = 2sec\n osc(saw, f) }");
         assert_eq!(
-            msg("instr a(f: hz) with(tail: 2) { osc(saw, f) }"),
+            msg("instr a(f: hz) { tail = 2\n osc(saw, f) }"),
             "`tail` is a time from 0 to 600sec, such as `2sec`"
+        );
+    }
+
+    #[test]
+    fn settings_are_written_in_the_body_and_with_is_gone() {
+        ok("mono a(freq: hz) { legato = true\nglide = 50ms\n osc(saw, freq) }");
+        assert!(msg("instr a(f: hz) { quantize = 1bar\n osc(saw, f) }").contains("belong to the client"));
+        assert_eq!(msg("instr a(f: hz) with(tail: 2sec) { osc(saw, f) }"), "`with` is gone");
+        assert_eq!(
+            msg("sample kick = \"kick.wav\""),
+            "`sample` is no longer a keyword"
+        );
+    }
+
+    #[test]
+    fn samples_are_bindings_with_chained_settings() {
+        assert_eq!(
+            msg("kick = \"kick.wav\""),
+            "expected a sample or a kit"
+        );
+        assert_eq!(
+            msg("drums = kit(organ)"),
+            "`kit` takes a folder in quotes"
+        );
+        assert_eq!(
+            msg("kick = sample(\"kick.wav\").root(c4, 2)"),
+            "`root` takes one value, as in `.root(...)`"
         );
     }
 

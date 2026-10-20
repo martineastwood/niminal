@@ -504,7 +504,7 @@ fn routing_swaps_and_draining_held_voices_do_no_heap_work_in_the_renderer() {
             1,
             vec![
                 Op::Define {
-                    source: "instr constant() with(tail: 0ms) { 0.2 }".into(),
+                    source: "instr constant() { tail = 0ms\n 0.2 }".into(),
                     at: At::Now,
                     dir: None,
                     tag: None,
