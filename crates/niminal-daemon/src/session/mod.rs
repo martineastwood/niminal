@@ -276,6 +276,8 @@ pub struct Session {
     fresh: Vec<realtime::Fresh>,
     /// How many mixers have been built for the renderer.
     mixer_builds: Arc<std::sync::atomic::AtomicUsize>,
+    /// Lets mixers share a block's voices among threads.
+    pub(crate) fork: Option<Arc<dyn niminal_engine::Fork>>,
 }
 
 impl Session {
@@ -344,6 +346,7 @@ impl Session {
             probe: Arc::default(),
             fresh: Vec::new(),
             mixer_builds: Arc::default(),
+            fork: None,
         }
     }
 
@@ -417,6 +420,18 @@ impl Session {
     }
 
     /// Turn the master limiter off. Only for offline use.
+    /// Have mixers share a block's voices among the threads `fork` runs jobs on. The sound does not change.
+    pub fn set_fork(&mut self, fork: Option<Arc<dyn niminal_engine::Fork>>) {
+        self.fork = fork;
+        self.mixer.set_fork(self.fork.clone());
+    }
+
+    pub(crate) fn new_mixer(&self, program: &Program) -> Mixer {
+        let mut mixer = program.mixer(self.sample_rate);
+        mixer.set_fork(self.fork.clone());
+        mixer
+    }
+
     pub fn without_limiter(mut self) -> Session {
         self.limiter = None;
         self
@@ -587,7 +602,7 @@ impl Session {
                 control.set(self.clock, 0., 0);
             }
         }
-        let mut mixer = self.program.mixer(self.sample_rate);
+        let mut mixer = self.new_mixer(&self.program);
         let mut transfers = Vec::new();
         plan_transfers(&self.program, &self.program, &mut transfers);
         self.mixer.silence_owner(client);

@@ -15,6 +15,7 @@ mod files;
 mod jobs;
 mod log;
 mod midi_out;
+mod pool;
 mod resources;
 mod streaming;
 mod wav;
@@ -37,6 +38,7 @@ pub use engine_server::{
 pub use events::{At, Cancelled, Op, Sent, TransactionReceipt};
 pub use log::{LogEntry, LogInput, from_lines, to_lines};
 pub use midi_out::MidiEvent;
+pub use pool::{Policy, Pool};
 pub use niminal_lang::{Entry, Located, Origin, Piece, Problem, Project};
 pub use session::{ClockInfo, EngineState, Session};
 pub use status::status_json;

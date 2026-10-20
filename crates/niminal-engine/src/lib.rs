@@ -25,7 +25,7 @@ pub use array::{Array, wrapped_index};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
 pub use master::{DEFAULT_CEILING, Master};
 pub use mixer::{
-    Buses, ChainInput, DEFAULT_MAX_VOICES, MAX_CHANNELS, Meter, Mixer, Route, Stems, TrackDef,
+    Buses, ChainInput, DEFAULT_MAX_VOICES, Fork, MAX_CHANNELS, Meter, Mixer, Route, Stems, TrackDef,
     Transfer, VoiceId, execution_order,
 };
 pub use opcode::{BLOCK, Clock, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};

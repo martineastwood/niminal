@@ -171,6 +171,57 @@ impl Buses {
     }
 }
 
+/// What a few voices send to the buses over one block, kept apart from the buses until it is added
+/// to them in a fixed order, so the result does not depend on which voices ran when.
+pub(crate) struct Sends {
+    data: Vec<Vec<[f32; BLOCK]>>,
+    staged: Vec<Vec<[f32; BLOCK]>>,
+    /// Per bus: whether anything arrived this block, in `data` and in `staged`.
+    touched: Vec<(bool, bool)>,
+}
+
+impl Sends {
+    fn new(channels: &[usize]) -> Self {
+        let shape = || channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect();
+        Sends {
+            data: shape(),
+            staged: shape(),
+            touched: vec![(false, false); channels.len()],
+        }
+    }
+
+    pub(crate) fn add(&mut self, bus: usize, channel: usize, samples: &[f32]) {
+        if let Some(c) = self.data.get_mut(bus).and_then(|b| b.get_mut(channel)) {
+            self.touched[bus].0 = true;
+            c.iter_mut().zip(samples).for_each(|(d, s)| *d += s);
+        }
+    }
+
+    pub(crate) fn add_delayed(&mut self, bus: usize, channel: usize, samples: &[f32]) {
+        if let Some(c) = self.staged.get_mut(bus).and_then(|b| b.get_mut(channel)) {
+            self.touched[bus].1 = true;
+            c.iter_mut().zip(samples).for_each(|(d, s)| *d += s);
+        }
+    }
+
+    /// Add everything to `buses` and start over.
+    fn drain_into(&mut self, buses: &mut Buses, frames: usize) {
+        for (bus, touched) in self.touched.iter_mut().enumerate() {
+            let (now, later) = std::mem::take(touched);
+            for (c, (data, staged)) in self.data[bus].iter_mut().zip(&mut self.staged[bus]).enumerate() {
+                if now {
+                    buses.add(bus, c, &data[..frames]);
+                    *data = [0.0; BLOCK];
+                }
+                if later {
+                    buses.add_delayed(bus, c, &staged[..frames]);
+                    *staged = [0.0; BLOCK];
+                }
+            }
+        }
+    }
+}
+
 /// Where a track's output goes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
@@ -255,19 +306,14 @@ impl TrackDef {
     }
 }
 
-/// An order in which to run tracks so that every bus and shared buffer is
-/// written before it is read. A cycle comes back as the tracks that form it, in
-/// order; a track that both writes and reads one bus is a cycle of one. A track
-/// that both writes and reads the same buffer does not count as a cycle (the
-/// write and read order inside its graph already decides that).
-pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
+/// For each track, the tracks that must run after it: those that read a bus or buffer it writes.
+fn dependencies(tracks: &[TrackDef]) -> Vec<Vec<usize>> {
     let n = tracks.len();
     let reads: Vec<_> = tracks.iter().map(TrackDef::reads).collect();
     let writes: Vec<_> = tracks.iter().map(TrackDef::writes).collect();
     let buf_reads: Vec<_> = tracks.iter().map(TrackDef::buffer_reads).collect();
     let buf_writes: Vec<_> = tracks.iter().map(TrackDef::buffer_writes).collect();
-    // edges[w] lists tracks that must run after w
-    let edges: Vec<Vec<usize>> = (0..n)
+    (0..n)
         .map(|w| {
             (0..n)
                 .filter(|&r| {
@@ -276,8 +322,34 @@ pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
                 })
                 .collect()
         })
-        .collect();
+        .collect()
+}
 
+/// `order` cut into the longest runs of tracks in which none depends on an earlier one.
+fn independent_runs(tracks: &[TrackDef], order: &[usize]) -> Vec<std::ops::Range<usize>> {
+    let edges = dependencies(tracks);
+    let mut runs = Vec::new();
+    let mut start = 0;
+    for k in 0..order.len() {
+        if order[start..k].iter().any(|&w| edges[w].contains(&order[k])) {
+            runs.push(start..k);
+            start = k;
+        }
+    }
+    if start < order.len() {
+        runs.push(start..order.len());
+    }
+    runs
+}
+
+/// An order in which to run tracks so that every bus and shared buffer is
+/// written before it is read. A cycle comes back as the tracks that form it, in
+/// order; a track that both writes and reads one bus is a cycle of one. A track
+/// that both writes and reads the same buffer does not count as a cycle (the
+/// write and read order inside its graph already decides that).
+pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
+    let n = tracks.len();
+    let edges = dependencies(tracks);
     let mut waiting_on = vec![0usize; n];
     for targets in &edges {
         for &r in targets {
@@ -342,9 +414,25 @@ struct Track {
     def: TrackDef,
     chain: Option<Voice>,
     voices: Vec<(u64, Voice)>,
+    /// How many voices the track has taken in, which gives each its chunk.
+    admitted: u64,
+    /// What its voices added up to in the block being mixed.
+    summed: Vec<[f32; BLOCK]>,
+    /// How long a voice takes to make a frame of sound, in nanoseconds, as timed lately; 0 if never.
+    rate: f32,
     chain_silenced: bool,
     /// How many samples in a row the chain has had no input and put nothing audible out.
     chain_quiet: usize,
+}
+
+impl Track {
+    /// Take in a voice. Voices are summed in chunks of [`VOICE_CHUNK`] taken in one after another, so
+    /// which voices are summed together depends on when notes start and never on when voices end.
+    fn admit(&mut self, serial: u64, mut voice: Voice) {
+        voice.set_chunk(self.admitted / VOICE_CHUNK as u64);
+        self.admitted += 1;
+        self.voices.push((serial, voice));
+    }
 }
 
 /// Voices that may sound at once unless told otherwise.
@@ -376,6 +464,8 @@ pub struct Mixer {
     buses: Buses,
     tracks: Vec<Track>,
     order: Vec<usize>,
+    /// Runs of tracks in `order` that do not depend on each other, which are rendered side by side.
+    groups: Vec<std::ops::Range<usize>>,
     channels: usize,
     bus_channels: Vec<usize>,
     bus_meters: Vec<(usize, Arc<Meter>)>,
@@ -386,10 +476,87 @@ pub struct Mixer {
     stolen: usize,
     muted: bool,
     /// Block-sized working buffers for `process_inner`, kept so they are not cleared again every block.
-    summed: Vec<[f32; BLOCK]>,
     scratch: Vec<[f32; BLOCK]>,
     processed: Vec<[f32; BLOCK]>,
+    /// Working space for chunks of voices that run side by side, one lane for each.
+    lanes: Vec<LaneCell>,
+    /// Runs the jobs of a wave of chunks on several threads; without it they run one after another.
+    fork: Option<Arc<dyn Fork>>,
 }
+
+/// Shares jobs out among threads.
+pub trait Fork: Send + Sync {
+    /// Runs `jobs` jobs, numbered from 0, each exactly once, perhaps on several threads, and returns
+    /// when all are done. The mixer's output never depends on which thread ran which job.
+    fn run(&self, jobs: usize, job: &(dyn Fn(usize) + Sync));
+
+    /// Nanoseconds on a clock that only goes forward, for timing jobs. (The engine has no clock of
+    /// its own, so that it can run where there is none.)
+    fn now(&self) -> u64;
+
+    /// Whether `jobs` jobs that take `work_ns` nanoseconds one after another are better shared out
+    /// than run in turn. It only ever affects how fast the sound is made, never what it is.
+    fn worth_it(&self, work_ns: u64, jobs: usize) -> bool;
+}
+
+/// What one chunk of voices puts out and sends while it runs.
+struct Lane {
+    summed: Vec<[f32; BLOCK]>,
+    scratch: Vec<[f32; BLOCK]>,
+    sends: Sends,
+    /// How long the last job on this lane took, if timed.
+    nanos: u64,
+}
+
+impl Lane {
+    fn new(bus_channels: &[usize]) -> Self {
+        Lane {
+            summed: vec![[0.0; BLOCK]; MAX_CHANNELS],
+            scratch: vec![[0.0; BLOCK]; MAX_CHANNELS],
+            sends: Sends::new(bus_channels),
+            nanos: 0,
+        }
+    }
+}
+
+/// Chunks of voices that can run at once.
+const LANES: usize = 16;
+
+/// Some of a track's voices, which one job runs: voices `ptr[..len]`.
+#[derive(Clone, Copy)]
+struct ChunkRef {
+    track: usize,
+    ptr: *mut (u64, Voice),
+    len: usize,
+}
+
+// SAFETY: the chunks of a wave are different voices (of different tracks, or different stretches of
+// one track's), and nothing else touches a track's voices until the wave is done.
+unsafe impl Send for ChunkRef {}
+unsafe impl Sync for ChunkRef {}
+
+const NO_CHUNK: ChunkRef = ChunkRef {
+    track: 0,
+    ptr: std::ptr::null_mut(),
+    len: 0,
+};
+
+/// A lane that one job at a time uses.
+struct LaneCell(std::cell::UnsafeCell<Lane>);
+
+// SAFETY: while jobs run, job `i` is the only one to touch lane `i` (`Fork::run` runs each job once),
+// and the mixer touches lanes only before and after.
+unsafe impl Sync for LaneCell {}
+
+impl LaneCell {
+    fn new(bus_channels: &[usize]) -> Self {
+        LaneCell(std::cell::UnsafeCell::new(Lane::new(bus_channels)))
+    }
+}
+
+/// How many voices are summed together before joining the rest. Fixed, so that the order in which
+/// floating-point sums are made depends only on the notes played and never on how they are scheduled.
+pub const VOICE_CHUNK: usize = 8;
 
 /// How long a track's effect chain must have had nothing going in and nothing coming out before it is
 /// left alone until something arrives, in seconds.
@@ -410,6 +577,7 @@ impl Mixer {
             "unsupported channel count {channels}"
         );
         let order = execution_order(&defs)?;
+        let groups = independent_runs(&defs, &order);
         for def in &defs {
             let wanted = match def.route {
                 Route::Master => channels,
@@ -434,16 +602,21 @@ impl Mixer {
                     .map(|g| Voice::new(g.clone(), sample_rate)),
                 def,
                 voices: Vec::new(),
+                admitted: 0,
+                summed: vec![[0.0; BLOCK]; MAX_CHANNELS],
+                rate: 0.0,
                 chain_silenced: false,
                 chain_quiet: 0,
             })
             .collect();
+        let lanes = vec![LaneCell::new(&bus_channels)];
         Ok(Mixer {
             stems: None,
             audio_in: vec![[0.0; BLOCK]; MAX_CHANNELS],
             buses: Buses::new(&bus_channels),
             tracks,
             order,
+            groups,
             channels,
             bus_channels,
             bus_meters: Vec::new(),
@@ -453,9 +626,10 @@ impl Mixer {
             max_voices: DEFAULT_MAX_VOICES,
             stolen: 0,
             muted: false,
-            summed: vec![[0.0; BLOCK]; MAX_CHANNELS],
             scratch: vec![[0.0; BLOCK]; MAX_CHANNELS],
             processed: vec![[0.0; BLOCK]; MAX_CHANNELS],
+            lanes,
+            fork: None,
         })
     }
 
@@ -534,6 +708,17 @@ impl Mixer {
         }
     }
 
+    /// Let `fork` run chunks of voices on several threads. Call before the mixer renders in realtime:
+    /// it makes room for them. The sound is the same with or without.
+    pub fn set_fork(&mut self, fork: Option<Arc<dyn Fork>>) {
+        let lanes = if fork.is_some() { LANES } else { 1 };
+        while self.lanes.len() < lanes {
+            self.lanes.push(LaneCell::new(&self.bus_channels));
+        }
+        self.lanes.truncate(lanes);
+        self.fork = fork;
+    }
+
     /// Reserve bounded voice storage before handing the mixer to rendering.
     pub fn prepare_realtime(&mut self, capacity: usize) {
         for track in &mut self.tracks {
@@ -579,7 +764,7 @@ impl Mixer {
         if voice.rule().is_some_and(|r| r.legato) {
             voice.hold(serial);
         }
-        self.tracks[track].voices.push((serial, voice));
+        self.tracks[track].admit(serial, voice);
         Ok(VoiceId { track, serial })
     }
 
@@ -646,7 +831,7 @@ impl Mixer {
         if rule.is_some_and(|r| r.legato) {
             voice.hold(serial);
         }
-        self.tracks[track].voices.push((serial, voice));
+        self.tracks[track].admit(serial, voice);
         VoiceId { track, serial }
     }
 
@@ -996,6 +1181,121 @@ impl Mixer {
         self.process_inner(out, frames, Some(retired));
     }
 
+    /// Make the voices of the tracks `order[group]` sound, leaving each track's sum in its `summed`.
+    /// Chunks of voices run side by side in waves, one lane each, and their sums and sends are added
+    /// in track and chunk order afterwards: the output is the same however many threads help.
+    fn render_voices(&mut self, group: std::ops::Range<usize>, frames: usize) {
+        let n = self.channels;
+        for k in group.clone() {
+            let t = self.order[k];
+            self.tracks[t].summed[..n]
+                .iter_mut()
+                .for_each(|c| c[..frames].fill(0.0));
+        }
+        let width = self.lanes.len();
+        let mut refs = [NO_CHUNK; LANES];
+        let mut count = 0;
+        for k in group {
+            let t = self.order[k];
+            // voices that write a shared buffer must not run side by side: who writes last would be luck
+            let alone = !self.tracks[t].def.voice_buffer_writes.is_empty();
+            if alone && count > 0 {
+                self.run_wave(&refs[..count], frames, true);
+                count = 0;
+            }
+            let (len, mut start) = (self.tracks[t].voices.len(), 0);
+            while start < len {
+                let voices = &mut self.tracks[t].voices;
+                let key = voices[start].1.chunk();
+                let take = voices[start..]
+                    .iter()
+                    .position(|(_, v)| v.chunk() != key)
+                    .unwrap_or(len - start);
+                refs[count] = ChunkRef {
+                    track: t,
+                    ptr: voices[start..].as_mut_ptr(),
+                    len: take,
+                };
+                count += 1;
+                start += take;
+                if count == width || alone {
+                    self.run_wave(&refs[..count], frames, !alone);
+                    count = 0;
+                }
+            }
+        }
+        if count > 0 {
+            self.run_wave(&refs[..count], frames, true);
+        }
+    }
+
+    /// Run chunks of voices, one lane each, and add what they made to their tracks' sums and the buses,
+    /// in order. With `share` they may be shared out among threads, if that is worth it.
+    fn run_wave(&mut self, refs: &[ChunkRef], frames: usize, share: bool) {
+        let n = self.channels;
+        let Mixer {
+            fork,
+            lanes,
+            buses,
+            tracks,
+            ..
+        } = self;
+        let timer = fork.as_deref();
+        let shared = timer.filter(|fork| {
+            let work: f32 = refs
+                .iter()
+                .map(|r| r.len as f32 * frames as f32 * tracks[r.track].rate)
+                .sum();
+            share && refs.len() > 1 && fork.worth_it(work as u64, refs.len())
+        });
+        {
+            let (lanes, buses) = (&*lanes, &*buses);
+            let job = |i: usize| {
+                // each thread has its own idea of how to treat tiny numbers
+                let _flush = crate::denormals::FlushToZero::new();
+                let started = timer.map_or(0, |f| f.now());
+                // SAFETY: see `LaneCell`
+                let Lane { summed, scratch, sends, nanos } = unsafe { &mut *lanes[i].0.get() };
+                summed[..n].iter_mut().for_each(|c| c[..frames].fill(0.0));
+                let r = refs[i];
+                // SAFETY: see `ChunkRef`
+                let chunk = unsafe { std::slice::from_raw_parts_mut(r.ptr, r.len) };
+                for (_, voice) in chunk {
+                    voice.process_sending(&mut scratch[..n], frames, buses, sends);
+                    for (sum, voice_out) in summed[..n].iter_mut().zip(&scratch[..n]) {
+                        for (s, v) in sum[..frames].iter_mut().zip(&voice_out[..frames]) {
+                            *s += v;
+                        }
+                    }
+                }
+                *nanos = timer.map_or(0, |f| f.now().saturating_sub(started));
+            };
+            match shared {
+                Some(fork) => fork.run(refs.len(), &job),
+                None => (0..refs.len()).for_each(job),
+            }
+        }
+        for (i, r) in refs.iter().enumerate() {
+            let Lane { summed: lane_sum, sends, nanos, .. } = lanes[i].0.get_mut();
+            let track = &mut tracks[r.track];
+            for (sum, chunk) in track.summed[..n].iter_mut().zip(&lane_sum[..n]) {
+                for (s, v) in sum[..frames].iter_mut().zip(&chunk[..frames]) {
+                    *s += v;
+                }
+            }
+            sends.drain_into(buses, frames);
+            // short blocks are mostly fixed costs, which say little about a voice
+            if timer.is_some() && frames >= BLOCK / 2 {
+                let sample = *nanos as f32 / (r.len * frames) as f32;
+                track.rate = if track.rate == 0.0 {
+                    sample
+                } else {
+                    track.rate + (sample - track.rate) / 8.0
+                };
+            }
+        }
+    }
+
     fn process_inner(
         &mut self,
         out: &mut [[f32; BLOCK]],
@@ -1018,11 +1318,15 @@ impl Mixer {
         self.buses.begin_block(frames);
 
         let n = self.channels;
-        let (summed, scratch, processed) =
-            (&mut self.summed, &mut self.scratch, &mut self.processed);
         let rest_after = (CHAIN_REST_SECONDS * self.sample_rate) as usize;
 
-        for &t in &self.order {
+        for g in 0..self.groups.len() {
+            let group = self.groups[g].clone();
+            // the voices of every track in the run first, side by side, then each track's chain in turn
+            self.render_voices(group.clone(), frames);
+        for k in group {
+            let t = self.order[k];
+            let (scratch, processed) = (&mut self.scratch, &mut self.processed);
             let track = &mut self.tracks[t];
             if track.fade.elapsed >= track.fade.frames && track.fade.previous.is_some() {
                 if let Some(retired) = retired.as_deref_mut() {
@@ -1034,15 +1338,6 @@ impl Mixer {
                 }
             }
 
-            summed[..n].iter_mut().for_each(|c| c[..frames].fill(0.0));
-            for (_, voice) in &mut track.voices {
-                voice.process_blocks(&mut scratch[..n], frames, &mut self.buses);
-                for (sum, voice_out) in summed[..n].iter_mut().zip(&scratch[..n]) {
-                    for (s, v) in sum[..frames].iter_mut().zip(&voice_out[..frames]) {
-                        *s += v;
-                    }
-                }
-            }
             if let Some(retired) = retired.as_deref_mut() {
                 let mut i = 0;
                 while i < track.voices.len() {
@@ -1074,12 +1369,12 @@ impl Mixer {
             }
 
             let result: &[[f32; BLOCK]] = match &mut track.chain {
-                None => &summed[..n],
+                None => &track.summed[..n],
                 Some(chain) => {
                     let out_channels = chain.channels();
                     let heard = |input: &ChainInput| -> &[f32] {
                         match *input {
-                            ChainInput::It { channel } => &summed[channel][..frames],
+                            ChainInput::It { channel } => &track.summed[channel][..frames],
                             ChainInput::Audio { channel } => &self.audio_in[channel][..frames],
                             ChainInput::Bus { bus, channel } => {
                                 self.buses.get(bus, channel, frames)
@@ -1169,6 +1464,7 @@ impl Mixer {
                     }
                 }
             }
+        }
         }
         for (bus, meter) in &self.bus_meters {
             meter.observe(&self.buses.data[*bus], frames, self.buses.clock.sample);

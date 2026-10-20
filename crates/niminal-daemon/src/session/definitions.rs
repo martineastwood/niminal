@@ -414,7 +414,7 @@ impl Session {
         let program = routing
             .materialize(&definitions)
             .map_err(|e| vec![Problem::plain(e)])?;
-        let mixer = program.mixer(self.sample_rate);
+        let mixer = self.new_mixer(&program);
         Ok(Pending {
             applied: Arc::new(AtomicU64::new(super::transactions::WAITING)),
             id,

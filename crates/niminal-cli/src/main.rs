@@ -63,6 +63,15 @@ struct DaemonArgs {
     /// Listen to the default audio input device, for tracks that read `input(1)`.
     #[arg(long)]
     audio_input: bool,
+    /// Threads that render audio together, counting the render thread itself: 1 renders on one core.
+    /// By default the cores there are, up to 4. The sound is the same whatever the number.
+    #[arg(long)]
+    render_threads: Option<usize>,
+    /// When to share a track's voices among the render threads: `auto` (when it saves more time than it
+    /// costs, as measured on this machine), `always`, `never`, or a number of microseconds of work a
+    /// block must have before it is shared. The sound is the same whichever you choose.
+    #[arg(long, default_value = "auto")]
+    render_fork: niminal_daemon::Policy,
 }
 
 #[derive(Subcommand)]
@@ -196,8 +205,25 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
         token,
         listen,
         audio_input,
+        render_threads,
+        render_fork,
         ..
     } = args;
+    let threads = render_threads
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(4)))
+        .max(1);
+    let fork: Option<Arc<dyn niminal_engine::Fork>> = (threads > 1).then(|| {
+        Arc::new(niminal_daemon::Pool::new(
+            threads - 1,
+            render_fork,
+            niminal_cli::audio::prefer_low_latency_scheduling,
+        )) as Arc<dyn niminal_engine::Fork>
+    });
+    let new_session = |rate: f32, layout: Layout| {
+        let mut session = Session::new(rate, layout);
+        session.set_fork(fork.clone());
+        session
+    };
     let log = log.as_deref();
     let layout = Layout::standard(channels)?;
     let output = if no_audio {
@@ -215,7 +241,7 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
         |o| format!("audio to {}", o.name()),
     );
 
-    let engine: Shared = Arc::new(Mutex::new(EngineServer::new(Session::new(
+    let engine: Shared = Arc::new(Mutex::new(EngineServer::new(new_session(
         rate as f32,
         layout,
     ))));
@@ -298,7 +324,7 @@ fn run_daemon(args: DaemonArgs) -> Result<(), String> {
                 Ok(output)=>{
                     audio_control.publish_status(serde_json::json!({"state":"restarting","id":id}));
                     audio=None;listening=None;virtual_clock=None;
-                    niminal_cli::audio::lock(&engine).reset_session(Session::new(settings.sample_rate as f32,Layout::standard(settings.channels as u16).unwrap_or_else(|_|Layout::from_count(settings.channels))));
+                    niminal_cli::audio::lock(&engine).reset_session(new_session(settings.sample_rate as f32,Layout::standard(settings.channels as u16).unwrap_or_else(|_|Layout::from_count(settings.channels))));
                     let restarted=(||->Result<(),String>{
                         health=output.as_ref().map(Output::health);
                         let mut input=None;

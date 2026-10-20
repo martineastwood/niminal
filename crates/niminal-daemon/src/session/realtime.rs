@@ -442,6 +442,7 @@ impl Session {
         let mut mixer = std::mem::replace(&mut self.mixer, self.program.mixer(self.sample_rate));
         mixer.prepare_realtime(config.max_voices * 2);
         mixer.set_max_voices(config.max_voices);
+        mixer.set_fork(self.fork.clone());
         let mut sounding = std::mem::take(&mut self.sounding);
         sounding.held.reserve(config.max_voices * 2);
         sounding.midi.reserve(config.max_voices);
@@ -1024,6 +1025,7 @@ impl Session {
         let mut mixer = program.mixer(self.sample_rate);
         mixer.prepare_realtime(config.max_voices * 2);
         mixer.set_max_voices(config.max_voices);
+        mixer.set_fork(self.fork.clone());
         Box::new(mixer)
     }
 

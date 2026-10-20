@@ -566,7 +566,7 @@ impl RenderWorker {
 }
 
 /// Without this macOS may park the render thread for tens of milliseconds, which dries the queue.
-fn prefer_low_latency_scheduling() {
+pub fn prefer_low_latency_scheduling() {
     #[cfg(target_os = "macos")]
     // SAFETY: sets the scheduling class of the calling thread; nothing else is touched.
     unsafe {

@@ -2,12 +2,14 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::graph::Graph;
-use crate::mixer::{Buses, MAX_CHANNELS};
+use crate::mixer::{Buses, MAX_CHANNELS, Sends};
 use crate::opcode::{BLOCK, Opcode, ProcessCtx, TAIL_LEVEL};
 
 /// One running note: a private copy of every opcode's state plus the signal
 /// buffers that connect them.
 pub struct Voice {
+    /// Which chunk of its track the mixer sums this voice in.
+    chunk: u64,
     owner: u64,
     instance: u64,
     realtime: bool,
@@ -201,6 +203,7 @@ impl Voice {
         let tail_left = (graph.tail * sample_rate) as usize;
         let graph_params = graph.params.len();
         Voice {
+            chunk: 0,
             owner: 0,
             instance: 0,
             realtime: false,
@@ -265,6 +268,14 @@ impl Voice {
 
     /// Update existing send mappings in place; the number of send identities
     /// belongs to the voice's original graph and never grows during playback.
+    pub(crate) fn set_chunk(&mut self, chunk: u64) {
+        self.chunk = chunk;
+    }
+
+    pub(crate) fn chunk(&self) -> u64 {
+        self.chunk
+    }
+
     pub fn remap_buses(&mut self, mapping: &[Option<usize>]) {
         self.remap_buses_with(&mut |i| mapping.get(i).copied().flatten());
     }
@@ -668,12 +679,53 @@ impl Voice {
     /// `out`, which must have one block per channel, and add the graph's sends
     /// to `buses`.
     pub fn process_blocks(&mut self, out: &mut [[f32; BLOCK]], frames: usize, buses: &mut Buses) {
+        if let Some(fade) = self.render(out, frames, buses) {
+            self.send(frames, fade.as_ref(), &mut |bus, channel, delayed, samples| {
+                if delayed {
+                    buses.add_delayed(bus, channel, samples);
+                } else {
+                    buses.add(bus, channel, samples);
+                }
+            });
+            self.settle_ramps();
+        }
+    }
+
+    /// Like [`Voice::process_blocks`], but the graph's sends go into `sends`, to be added to the
+    /// buses later, so voices that run side by side never write to the same place.
+    pub(crate) fn process_sending(
+        &mut self,
+        out: &mut [[f32; BLOCK]],
+        frames: usize,
+        buses: &Buses,
+        sends: &mut Sends,
+    ) {
+        if let Some(fade) = self.render(out, frames, buses) {
+            self.send(frames, fade.as_ref(), &mut |bus, channel, delayed, samples| {
+                if delayed {
+                    sends.add_delayed(bus, channel, samples);
+                } else {
+                    sends.add(bus, channel, samples);
+                }
+            });
+            self.settle_ramps();
+        }
+    }
+
+    /// Everything but the sends. `None` when the voice has nothing to send; otherwise the choke fade
+    /// the sends must be given, if there is one.
+    fn render(
+        &mut self,
+        out: &mut [[f32; BLOCK]],
+        frames: usize,
+        buses: &Buses,
+    ) -> Option<Option<[f32; BLOCK]>> {
         self.sample = buses.clock.sample;
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
         assert_eq!(out.len(), self.channels(), "one output block per channel");
         if self.poisoned || self.choke_left == Some(0) {
             out.iter_mut().for_each(|c| c[..frames].fill(0.0));
-            return;
+            return None;
         }
         // after its release a voice rings for its tail, then fades out: without an envelope once the
         // tail is over, with one once its envelopes are done as well
@@ -741,7 +793,7 @@ impl Voice {
         if !healthy {
             self.poisoned = true;
             out.iter_mut().for_each(|c| c[..frames].fill(0.0));
-            return;
+            return None;
         }
         // A choked voice fades linearly to nothing over `CHOKE_FADE`.
         let fade = self.choke_left.map(|left| {
@@ -777,13 +829,21 @@ impl Voice {
             level = channel[..frames].iter().fold(level, |l, y| l.max(y.abs()));
         }
         self.level = level;
+        Some(fade)
+    }
+
+    fn send(
+        &self,
+        frames: usize,
+        fade: Option<&[f32; BLOCK]>,
+        add: &mut impl FnMut(usize, usize, bool, &[f32]),
+    ) {
         for &(bus, channel, slot, delayed) in &self.graph.sends {
             let Some(bus) = self.bus_map.get(bus).copied().flatten() else {
                 continue;
             };
-            match &fade {
-                None if delayed => buses.add_delayed(bus, channel, &self.slots[slot][..frames]),
-                None => buses.add(bus, channel, &self.slots[slot][..frames]),
+            match fade {
+                None => add(bus, channel, delayed, &self.slots[slot][..frames]),
                 Some(g) => {
                     let mut faded = [0.0f32; BLOCK];
                     faded[..frames]
@@ -791,14 +851,13 @@ impl Voice {
                         .zip(&self.slots[slot])
                         .zip(g)
                         .for_each(|((y, x), g)| *y = x * g);
-                    if delayed {
-                        buses.add_delayed(bus, channel, &faded[..frames]);
-                    } else {
-                        buses.add(bus, channel, &faded[..frames]);
-                    }
+                    add(bus, channel, delayed, &faded[..frames]);
                 }
             }
         }
+    }
+
+    fn settle_ramps(&mut self) {
         for i in (0..self.ramps.len()).rev() {
             if self.ramps[i].done >= self.ramps[i].frames {
                 let Ramp { index, to, .. } = self.ramps.swap_remove(i);
