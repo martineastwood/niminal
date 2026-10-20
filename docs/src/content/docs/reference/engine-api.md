@@ -240,6 +240,7 @@ The engine's state. **Result** includes:
 - **`controls`** — each `ctl` and track parameter (named `track::param`): `name`, `value`, `target`, `unit` (db shown in dB)
 - **`instruments`** — each instrument's `name` and `params` (`name`, `unit`, `default`, `range`)
 - **`tracks`**, **`buses`** — their names
+- **`load`** — what each of this connection's tracks costs to render: `name`, `voices` (sounding now), `voice_cpu` and `chain_cpu`, each a share of the time one block has (smoothed over recent blocks; `voice_cpu` sums every render thread's work, so it can pass 1). Collecting it costs the audio thread a clock read per track per block and never allocates or locks.
 - **`routing`** — this connection’s processor definitions, buses, instances and connections
 - **`clients`** — this connection, when it has something going: `id`, `voices` (the ids of its held notes) and `waiting` (how many of its events are still waiting)
 

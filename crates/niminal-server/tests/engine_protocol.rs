@@ -147,6 +147,32 @@ fn controls_are_typed_timestamped_and_reported_in_status() {
 }
 
 #[test]
+fn status_load_reports_each_tracks_voices_and_cost() {
+    let (mut d, c) = ready();
+    define(
+        &mut d,
+        c,
+        "instr x(freq: hz) { osc(sine, freq) * env[1 | 2sec 0] }\ntrack t { instrument = x }",
+    );
+    d.session_mut().process(64);
+    let sent = call(
+        &mut d,
+        c,
+        3,
+        "events.send",
+        json!({"events": [{"op": "note", "target": "t", "at": 128, "dur": "1sec", "args": {"freq": "a4"}}]}),
+    );
+    assert!(sent.get("error").is_none(), "{sent}");
+    d.session_mut().process(4096);
+    let status = call(&mut d, c, 4, "status", json!({}));
+    let load = &status["result"]["load"][0];
+    assert_eq!(load["name"], "t");
+    assert_eq!(load["voices"], 1);
+    assert!(load["voice_cpu"].as_f64().unwrap() > 0.0, "{load}");
+    assert_eq!(load["chain_cpu"], 0.0);
+}
+
+#[test]
 fn events_cancel_takes_back_waiting_tagged_events() {
     let (mut d, c) = ready();
     define(&mut d, c, &SETUP.replace("\\n", "\n"));

@@ -193,6 +193,8 @@ pub struct Program {
     pub namespaces: Vec<(usize, usize, String)>,
     pub namespace_samples: std::collections::HashMap<String, crate::Samples>,
     pub bus_meters: Vec<(usize, Arc<niminal_engine::Meter>)>,
+    /// What each track costs to render, shared by every mixer built from this program.
+    pub profile: Arc<niminal_engine::Profile>,
     /// The text it was compiled from.
     pub source: String,
     /// Where the sample files it names were looked for.
@@ -500,6 +502,7 @@ impl Program {
         let mut mixer = Mixer::new(defs, bus_channels, self.master.channels(), sample_rate)
             .expect("feedback is rejected when compiling");
         mixer.set_bus_meters(self.bus_meters.clone());
+        mixer.set_profile(self.profile.clone());
         for (i, track) in self.tracks.iter().enumerate() {
             mixer.set_track_instance(i, niminal_engine::instance_id(&track.name));
         }

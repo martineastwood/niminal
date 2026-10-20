@@ -1,5 +1,7 @@
 //! What the engine reports about itself.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use serde_json::{Value, json};
 
 use crate::session::Session;
@@ -39,11 +41,34 @@ pub fn status_json(session: &Session) -> Value {
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "tracks": tracks,
+        "load": load_json(session),
         "buses": buses,
         "clients": session.client_status().iter().map(|(client, voices, waiting)| json!({
             "id": client, "voices": voices, "waiting": waiting,
         })).collect::<Vec<_>>(),
     })
+}
+
+/// What each track costs to render, as a share of the time one block has: `voices` is the work of the
+/// track's voices (summed over every thread that helped, so it can pass 1), `chain` its effect chain.
+fn load_json(session: &Session) -> Value {
+    let program = session.program();
+    let budget = niminal_engine::BLOCK as f64 / f64::from(session.sample_rate()) * 1e9;
+    let share = |nanos: &AtomicU32| f64::from(nanos.load(Ordering::Relaxed)) / budget;
+    program
+        .tracks
+        .iter()
+        .zip(&program.profile.tracks)
+        .filter(|(track, _)| !track.name.is_empty() && !track.name.contains("__routing_"))
+        .map(|(track, load)| {
+            json!({
+                "name": track.name,
+                "voices": load.voices.load(Ordering::Relaxed),
+                "voice_cpu": share(&load.voice_nanos),
+                "chain_cpu": share(&load.chain_nanos),
+            })
+        })
+        .collect()
 }
 
 fn state_json(session: &Session) -> Value {
@@ -64,6 +89,13 @@ pub(crate) fn client_status_json(session: &Session, client: u64) -> Value {
                     .is_some_and(|name| crate::session::definitions::local(client, name).is_some())
             });
         }
+    }
+    if let Some(entries) = status["load"].as_array_mut() {
+        entries.retain(|entry| {
+            entry["name"]
+                .as_str()
+                .is_some_and(|name| crate::session::definitions::local(client, name).is_some())
+        });
     }
     for field in ["tracks", "buses"] {
         if let Some(entries) = status[field].as_array_mut() {

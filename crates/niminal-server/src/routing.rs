@@ -1188,6 +1188,7 @@ impl Routing {
             }
         }
         program.compensate_latency();
+        program.profile = Arc::new(niminal_engine::Profile::new(program.tracks.len()));
         Ok(program)
     }
 

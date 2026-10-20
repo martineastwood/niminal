@@ -115,6 +115,11 @@ pub struct Pool {
 }
 
 impl Pool {
+    fn now(&self) -> u64 {
+        self.start.elapsed().as_nanos() as u64
+    }
+
+
     /// `workers` threads besides the caller's. `init` runs first on each, for scheduling hints.
     pub fn new(workers: usize, policy: Policy, init: impl Fn() + Send + Sync + 'static) -> Pool {
         let shared = Arc::new(Shared {
@@ -209,10 +214,6 @@ fn worker(s: &Shared) {
 }
 
 impl Fork for Pool {
-    fn now(&self) -> u64 {
-        self.start.elapsed().as_nanos() as u64
-    }
-
     fn worth_it(&self, work_ns: u64, jobs: usize) -> bool {
         if jobs < 2 {
             return false;

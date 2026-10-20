@@ -420,6 +420,8 @@ struct Track {
     summed: Vec<[f32; BLOCK]>,
     /// How long a voice takes to make a frame of sound, in nanoseconds, as timed lately; 0 if never.
     rate: f32,
+    /// Nanoseconds spent on its voices in the block being mixed.
+    voice_nanos: u64,
     chain_silenced: bool,
     /// How many samples in a row the chain has had no input and put nothing audible out.
     chain_quiet: usize,
@@ -457,7 +459,44 @@ pub struct Stems {
     pub buses: Vec<Vec<Vec<f32>>>,
 }
 
+/// How much work each track of a program has been doing, shared with the control thread.
+/// Costs are nanoseconds per block of [`BLOCK`] frames, smoothed over recent blocks.
+#[derive(Debug, Default)]
+pub struct Profile {
+    pub tracks: Vec<TrackLoad>,
+}
+
+#[derive(Debug, Default)]
+pub struct TrackLoad {
+    pub voices: AtomicU32,
+    /// Making and summing the track's voices, added up over every thread that helped.
+    pub voice_nanos: AtomicU32,
+    pub chain_nanos: AtomicU32,
+}
+
+impl Profile {
+    pub fn new(tracks: usize) -> Self {
+        Profile {
+            tracks: (0..tracks).map(|_| TrackLoad::default()).collect(),
+        }
+    }
+}
+
+impl TrackLoad {
+    fn observe(&self, voices: usize, voice_nanos: u64, chain_nanos: u64) {
+        let smooth = |cell: &AtomicU32, sample: u64| {
+            let old = u64::from(cell.load(Ordering::Relaxed));
+            let new = old + sample.min(u64::from(u32::MAX)) / 8 - old / 8;
+            cell.store(new as u32, Ordering::Relaxed);
+        };
+        self.voices.store(voices as u32, Ordering::Relaxed);
+        smooth(&self.voice_nanos, voice_nanos);
+        smooth(&self.chain_nanos, chain_nanos);
+    }
+}
+
 pub struct Mixer {
+    profile: Option<Arc<Profile>>,
     stems: Option<Stems>,
     /// The audio input for the block being mixed, one buffer per channel.
     audio_in: Vec<[f32; BLOCK]>,
@@ -489,10 +528,6 @@ pub trait Fork: Send + Sync {
     /// Runs `jobs` jobs, numbered from 0, each exactly once, perhaps on several threads, and returns
     /// when all are done. The mixer's output never depends on which thread ran which job.
     fn run(&self, jobs: usize, job: &(dyn Fn(usize) + Sync));
-
-    /// Nanoseconds on a clock that only goes forward, for timing jobs. (The engine has no clock of
-    /// its own, so that it can run where there is none.)
-    fn now(&self) -> u64;
 
     /// Whether `jobs` jobs that take `work_ns` nanoseconds one after another are better shared out
     /// than run in turn. It only ever affects how fast the sound is made, never what it is.
@@ -605,12 +640,14 @@ impl Mixer {
                 admitted: 0,
                 summed: vec![[0.0; BLOCK]; MAX_CHANNELS],
                 rate: 0.0,
+                voice_nanos: 0,
                 chain_silenced: false,
                 chain_quiet: 0,
             })
             .collect();
         let lanes = vec![LaneCell::new(&bus_channels)];
         Ok(Mixer {
+            profile: None,
             stems: None,
             audio_in: vec![[0.0; BLOCK]; MAX_CHANNELS],
             buses: Buses::new(&bus_channels),
@@ -631,6 +668,11 @@ impl Mixer {
             lanes,
             fork: None,
         })
+    }
+
+    /// Report each track's cost to `profile`, whose tracks are numbered as this mixer's are.
+    pub fn set_profile(&mut self, profile: Arc<Profile>) {
+        self.profile = Some(profile);
     }
 
     pub fn set_bus_meters(&mut self, meters: Vec<(usize, Arc<Meter>)>) {
@@ -1191,6 +1233,7 @@ impl Mixer {
             self.tracks[t].summed[..n]
                 .iter_mut()
                 .for_each(|c| c[..frames].fill(0.0));
+            self.tracks[t].voice_nanos = 0;
         }
         let width = self.lanes.len();
         let mut refs = [NO_CHUNK; LANES];
@@ -1253,7 +1296,7 @@ impl Mixer {
             let job = |i: usize| {
                 // each thread has its own idea of how to treat tiny numbers
                 let _flush = crate::denormals::FlushToZero::new();
-                let started = timer.map_or(0, |f| f.now());
+                let started = std::time::Instant::now();
                 // SAFETY: see `LaneCell`
                 let Lane { summed, scratch, sends, nanos } = unsafe { &mut *lanes[i].0.get() };
                 summed[..n].iter_mut().for_each(|c| c[..frames].fill(0.0));
@@ -1268,7 +1311,7 @@ impl Mixer {
                         }
                     }
                 }
-                *nanos = timer.map_or(0, |f| f.now().saturating_sub(started));
+                *nanos = started.elapsed().as_nanos() as u64;
             };
             match shared {
                 Some(fork) => fork.run(refs.len(), &job),
@@ -1284,6 +1327,7 @@ impl Mixer {
                 }
             }
             sends.drain_into(buses, frames);
+            track.voice_nanos += *nanos;
             // short blocks are mostly fixed costs, which say little about a voice
             if timer.is_some() && frames >= BLOCK / 2 {
                 let sample = *nanos as f32 / (r.len * frames) as f32;
@@ -1368,6 +1412,7 @@ impl Mixer {
                 });
             }
 
+            let chain_started = std::time::Instant::now();
             let result: &[[f32; BLOCK]] = match &mut track.chain {
                 None => &track.summed[..n],
                 Some(chain) => {
@@ -1444,6 +1489,16 @@ impl Mixer {
                 }
             };
 
+            if let Some(load) = self.profile.as_ref().and_then(|p| p.tracks.get(t))
+                && frames >= BLOCK / 2
+            {
+                let chain_nanos = if track.chain.is_some() {
+                    chain_started.elapsed().as_nanos() as u64
+                } else {
+                    0
+                };
+                load.observe(track.voices.len(), track.voice_nanos, chain_nanos);
+            }
             if let Some(meter) = &track.def.meter {
                 meter.observe(result, frames, self.buses.clock.sample);
             }

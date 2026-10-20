@@ -714,6 +714,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 .collect(),
             array_controls,
             bus_meters: Vec::new(),
+            profile: Arc::new(niminal_engine::Profile::new(tracks.len())),
             source: source.to_string(),
             samples: options.samples.clone(),
             taps: tracks
