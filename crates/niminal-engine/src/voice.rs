@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 
 use crate::graph::Graph;
 use crate::mixer::{Buses, MAX_CHANNELS, Sends};
+use crate::op_dispatch::Op;
 use crate::opcode::{BLOCK, Opcode, ProcessCtx, TAIL_LEVEL};
 
 /// One running note: a private copy of every opcode's state plus the signal
@@ -16,7 +17,7 @@ pub struct Voice {
     activities: Vec<Arc<crate::Activity>>,
     sample: u64,
     graph: Arc<Graph>,
-    ops: Vec<Box<dyn Opcode>>,
+    ops: Vec<Op>,
     slots: Vec<[f32; BLOCK]>,
     sample_rate: f32,
     released: bool,
@@ -42,6 +43,8 @@ pub struct Voice {
     shaped: bool,
     /// Samples of tail left after the release, for a voice that isn't shaped.
     tail_left: usize,
+    /// Cached from the last render; avoids iterating all ops on `is_finished` / `is_quiet`.
+    active_ops: bool,
     /// The scheduled length in seconds, 0 for a note a key holds open.
     dur: f32,
     /// How many notes of this instrument started before this one.
@@ -183,7 +186,7 @@ const CHOKE_FADE: f32 = 0.005;
 
 impl Voice {
     pub fn new(graph: Arc<Graph>, sample_rate: f32) -> Self {
-        let mut ops: Vec<Box<dyn Opcode>> = graph.nodes.iter().map(|n| n.op.box_clone()).collect();
+        let mut ops: Vec<Op> = graph.nodes.iter().map(|n| Op::from_boxed(n.op.box_clone())).collect();
         for op in &mut ops {
             op.prepare(sample_rate);
         }
@@ -200,6 +203,7 @@ impl Voice {
             .map(Some)
             .collect();
         let shaped = ops.iter().any(|op| op.is_envelope());
+        let active_ops = ops.iter().any(|op| op.is_active());
         let tail_left = (graph.tail * sample_rate) as usize;
         let graph_params = graph.params.len();
         Voice {
@@ -226,6 +230,7 @@ impl Voice {
             level: f32::MAX,
             pan: None,
             shaped,
+            active_ops,
             tail_left,
             dur: 0.0,
             index: 0,
@@ -261,7 +266,7 @@ impl Voice {
                 .nth(occurrence)
                 .map(|(i, _)| i)
             {
-                op.carry_state(&mut *old.ops[i]);
+                op.carry_state(old.ops[i].inner_mut());
             }
         }
     }
@@ -622,7 +627,7 @@ impl Voice {
                 && self.shaped
                 && self.graph.tail == 0.0
                 && self.choke_left.is_none()
-                && !self.ops.iter().any(|op| op.is_active()))
+                && !self.active_ops)
     }
 
     /// Whether the last `frames` samples put nothing audible out (to the outputs or the buses) and no
@@ -634,7 +639,7 @@ impl Voice {
                 .all(|s| s.abs() < TAIL_LEVEL)
         };
         self.level < TAIL_LEVEL
-            && !self.ops.iter().any(|op| op.is_active())
+            && !self.active_ops
             && self.graph.sends.iter().all(|&(_, _, slot, _)| quiet(slot))
     }
 
@@ -786,6 +791,7 @@ impl Voice {
                 frames,
             );
         }
+        self.active_ops = self.ops.iter().any(|op| op.is_active());
 
         let finite = |slot: usize| self.slots[slot][..frames].iter().all(|s| s.is_finite());
         let healthy = self.graph.output_slots.iter().all(|&s| finite(s))

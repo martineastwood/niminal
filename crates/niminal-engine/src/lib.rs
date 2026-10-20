@@ -14,6 +14,7 @@ mod mapping;
 mod master;
 pub use mapping::ParamMapping;
 mod mixer;
+mod op_dispatch;
 mod opcode;
 pub mod ops;
 mod table;
