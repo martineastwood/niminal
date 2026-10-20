@@ -1,7 +1,7 @@
 const vscode = require("vscode");
 const net = require("node:net");
 const { LanguageClient } = require("vscode-languageclient/node");
-const { LiveClient: Client } = require("niminal-client");
+const { LiveClient: Client } = require("./live-client");
 const { startLive } = require("./live");
 const { blockAround } = require("./blocks");
 const { trackDescription } = require("./panel");

@@ -3,7 +3,7 @@ const assert = require("node:assert");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
-const { LiveClient: Client } = require("niminal-client");
+const { LiveClient: Client } = require("../live-client");
 
 const { startLive } = require("../live");
 

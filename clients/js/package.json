@@ -1,7 +1,7 @@
 {
   "name": "niminal-client",
   "version": "0.0.1",
-  "description": "Typed client for the niminal daemon performance API",
+  "description": "A small example client for the niminal daemon",
   "main": "index.js",
   "license": "MIT",
   "engines": {

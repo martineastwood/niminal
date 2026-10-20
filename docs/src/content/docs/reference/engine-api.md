@@ -95,7 +95,7 @@ To remove an effect gracefully, send `drain` at the cutoff, then `free_node` lat
 
 The live client lowers each compiled track into a processor template plus a collection and processor instance, then submits explicit output connections. Two lowering edits are also available: `import` (`name`, `track`) imports a compiled DSP track template and consumes its implicit instance; `bus` can take `source` to use a named DSP bus. `retain` (`nodes`, `processors`, `buses`, `connections`, each an ID list) reconciles the owner’s graph without recreating retained instances. DSP expressions may still contain bus sends; those stay part of their compiled processor graph.
 
-The JavaScript and Python clients expose `routing(edits, …)` as a convenience over `events.send`. See [`clients/examples/routing.js`](https://github.com/martineastwood/niminal/blob/main/clients/examples/routing.js) for independently controlled effect returns.
+Send routing edits as a `routing` op through `events.send`.
 
 ### Live parameters and modulation
 

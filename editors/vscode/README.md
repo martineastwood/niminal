@@ -15,7 +15,7 @@ cd editors/vscode && npm install && node install.js --cursor # Cursor
 niminal daemon          # or "niminal: Start Daemon in a Terminal"
 ```
 
-The sidebar launch / mute / solo / stop buttons use the extension's private live sequencer API (`launch`, `mute`, …) via the shared [`niminal-client`](../../clients/js) package.
+The sidebar launch / mute / solo / stop buttons use the extension's private live sequencer API (`launch`, `mute`, …) via the [`live-client.js`](live-client.js), built on the generic [`niminal-client`](../../clients/js).
 
 Open `examples/groove.nml`, then:
 
