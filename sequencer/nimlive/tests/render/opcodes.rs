@@ -12,7 +12,7 @@ fn drive(x, amount: 0..1 = 0.5) {
   (x * (1 + amount * 9)).tanh
 }
 
-fn dc_block(x) {
+fn my_dc_block(x) {
   state x1 = 0.0
   state y1 = 0.0
   y = x - x1 + 0.995 * y1

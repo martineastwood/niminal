@@ -260,6 +260,10 @@ op_enum! {
         Compressor(ops::Compressor),
         Waveshape(ops::Waveshape),
         TableRead(ops::TableRead),
+        SampleHold(ops::SampleHold),
+        Impulse(ops::Impulse),
+        DcBlock(ops::DcBlock),
+        Distortion(ops::Distortion),
     }
     boxed {
         Osc(ops::Osc),
@@ -286,5 +290,16 @@ op_enum! {
         BufferRecord(ops::BufferRecord),
         BufferReadBank(ops::BufferReadBank),
         ArrayRead(ops::ArrayRead),
+        Lag(ops::Lag),
+        Comb(ops::Comb),
+        Allpass(ops::Allpass),
+        Eq(ops::Eq),
+        Limiter(ops::Limiter),
+        Gate(ops::Gate),
+        Follow(ops::Follow),
+        Phaser(ops::Phaser),
+        PitchShift(ops::PitchShift),
+        Formant(ops::Formant),
+        Resonator(ops::Resonator),
     }
 }

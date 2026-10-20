@@ -8,8 +8,9 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
 use niminal_engine::ops::{
-    Bitcrush, Chorus, Clip, Compressor, Delay, FilterMode, FinishWhen, Fn1, Fold, Func, Gain, Noise, NoiseColor,
-    Osc, Reverb, Svf, Wavetable,
+    Allpass, Bitcrush, Chorus, Clip, Comb, Compressor, DcBlock, Delay, Distortion, Eq, EqMode,
+    FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, Gain, Gate, Impulse, Lag, Limiter,
+    Noise, NoiseColor, Osc, Phaser, PitchShift, Resonator, Reverb, SampleHold, Svf, Wavetable,
 };
 
 use crate::unit::Unit;
@@ -358,6 +359,184 @@ impl Registry {
             math("log", "Natural logarithm of a signal.", |_| Ok(Box::new(Func(Fn1::Log)))),
             math("sign", "1 for a positive signal, -1 for a negative one, 0 for zero.", |_| Ok(Box::new(Func(Fn1::Sign)))),
             math("fract", "The part of a signal after the point: `x - floor(x)`.", |_| Ok(Box::new(Func(Fn1::Fract)))),
+            // --- new opcodes ---
+            OpSpec::new(
+                "lag",
+                "Smooths a signal toward its target: `x.lag(10ms)` slides with a 60dB convergence time. Stops parameter changes from clicking.",
+                vec![req("x", SIGNAL), req("time", Kind::Signal(Unit::Time))],
+                Build::Builtin(|_| Ok(Box::new(Lag::default()))),
+            ),
+            OpSpec::new(
+                "comb",
+                "A comb filter. `feedback` for tuned resonance and Karplus-Strong; `feedforward` for a comb notch/peak. `damp` lowpasses the feedback path.",
+                vec![
+                    req("x", SIGNAL),
+                    req("time", Kind::Signal(Unit::Time)),
+                    opt("feedback", SIGNAL),
+                    opt("feedforward", SIGNAL),
+                    opt("damp", SIGNAL),
+                    setting("max", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|a| {
+                    let max = a.consts.get("max").or_else(|| a.consts.get("time")).copied().ok_or_else(|| {
+                        "`comb` needs a constant `time`, or a `max:` that bounds a changing one".to_string()
+                    })?;
+                    if max > MAX_DELAY_SECONDS {
+                        return Err(format!("a comb can be at most {MAX_DELAY_SECONDS} seconds long"));
+                    }
+                    Ok(Box::new(Comb::new(max.max(0.0) as f32)))
+                }),
+            ),
+            OpSpec::new(
+                "allpass",
+                "A Schroeder allpass delay: passes all frequencies at equal level but scrambles their phase. For reverb diffusion and custom reverb design.",
+                vec![
+                    req("x", SIGNAL),
+                    req("time", Kind::Signal(Unit::Time)),
+                    opt("feedback", SIGNAL),
+                    setting("max", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|a| {
+                    let max = a.consts.get("max").or_else(|| a.consts.get("time")).copied().ok_or_else(|| {
+                        "`allpass` needs a constant `time`, or a `max:` that bounds a changing one".to_string()
+                    })?;
+                    if max > MAX_DELAY_SECONDS {
+                        return Err(format!("an allpass can be at most {MAX_DELAY_SECONDS} seconds long"));
+                    }
+                    Ok(Box::new(Allpass::new(max.max(0.0) as f32)))
+                }),
+            ),
+            OpSpec::new(
+                "low_shelf",
+                "A low shelf EQ: boosts or cuts frequencies below `cutoff`. `gain` is the boost/cut as dB or a plain factor; `q` shapes the slope.",
+                vec![
+                    req("x", SIGNAL),
+                    req("cutoff", Kind::Signal(Unit::Hz)),
+                    opt("gain", Kind::Gain),
+                    opt("q", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Eq::new(EqMode::LowShelf)))),
+            ),
+            OpSpec::new(
+                "high_shelf",
+                "A high shelf EQ: boosts or cuts frequencies above `cutoff`. `gain` is the boost/cut as dB or a plain factor; `q` shapes the slope.",
+                vec![
+                    req("x", SIGNAL),
+                    req("cutoff", Kind::Signal(Unit::Hz)),
+                    opt("gain", Kind::Gain),
+                    opt("q", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Eq::new(EqMode::HighShelf)))),
+            ),
+            OpSpec::new(
+                "peak_eq",
+                "A parametric peaking EQ: boosts or cuts a band around `cutoff`. `gain` is the boost/cut; `q` narrows the band (default 1).",
+                vec![
+                    req("x", SIGNAL),
+                    req("cutoff", Kind::Signal(Unit::Hz)),
+                    opt("gain", Kind::Gain),
+                    opt("q", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Eq::new(EqMode::Peak)))),
+            ),
+            OpSpec::new(
+                "limiter",
+                "A brickwall lookahead limiter. `ceiling` is the maximum output level (dB or a plain factor); `release` controls recovery time.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("ceiling", Kind::Gain),
+                    opt("release", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Limiter::default()))),
+            ),
+            OpSpec::new(
+                "gate",
+                "A noise gate: silences the signal below `threshold`. `attack` and `release` shape the opening; `range` sets attenuation when closed (0 = silence).",
+                vec![
+                    req("x", SIGNAL),
+                    opt("threshold", Kind::Gain),
+                    opt("attack", Kind::Signal(Unit::Time)),
+                    opt("release", Kind::Signal(Unit::Time)),
+                    opt("range", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Gate::default()))),
+            ),
+            OpSpec::new(
+                "sample_hold",
+                "Captures `x` on each positive edge of `trigger` and holds it: `noise().sample_hold(impulse(4hz))` for stepped random.",
+                vec![req("x", SIGNAL), req("trigger", SIGNAL)],
+                Build::Builtin(|_| Ok(Box::new(SampleHold::default()))),
+            ),
+            OpSpec::new(
+                "impulse",
+                "A single-sample spike at `freq` hz: `impulse(4hz)`. The first sample is always a trigger. Use it to drive `sample_hold` or `reset_on`.",
+                vec![req("freq", Kind::Signal(Unit::Hz))],
+                Build::Builtin(|_| Ok(Box::new(Impulse::default()))),
+            ),
+            math("dc_block", "Removes DC offset from a signal without touching anything audible.", |_| Ok(Box::new(DcBlock::default()))),
+            OpSpec::new(
+                "follow",
+                "Tracks the amplitude envelope of a signal. Use it for sidechain effects, reactive visuals, and ducking.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("attack", Kind::Signal(Unit::Time)),
+                    opt("release", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Follow::default()))),
+            ),
+            OpSpec::new(
+                "phaser",
+                "A phaser: allpass stages swept by an LFO. `rate` is the sweep speed, `depth` the range, `feedback` feeds the chain back, `mix` blends wet with dry.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("rate", Kind::Signal(Unit::Hz)),
+                    opt("depth", SIGNAL),
+                    opt("center", Kind::Signal(Unit::Hz)),
+                    opt("feedback", SIGNAL),
+                    opt("mix", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Phaser::default()))),
+            ),
+            OpSpec::new(
+                "pitch_shift",
+                "Real-time pitch shifting. `shift` is in semitones; `window` controls grain size (longer = smoother, more latency).",
+                vec![
+                    req("x", SIGNAL),
+                    opt("shift", SIGNAL),
+                    opt("window", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|_| Ok(Box::new(PitchShift::default()))),
+            ),
+            OpSpec::new(
+                "formant",
+                "Vowel formant filter. `vowel` morphs through A(0) E(0.25) I(0.5) O(0.75) U(1): `saw.formant(vowel: lfo)`.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("vowel", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Formant::default()))),
+            ),
+            OpSpec::new(
+                "distortion",
+                "Tube-style asymmetric distortion. `drive` pushes the signal; `tone` tilts the EQ (0 dark, 1 bright); `mix` blends.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("drive", SIGNAL),
+                    opt("tone", SIGNAL),
+                    opt("mix", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Distortion::default()))),
+            ),
+            OpSpec::new(
+                "resonator",
+                "A tuned resonator: rings at `freq` for `decay` seconds. Stack several for modal synthesis of bells and bars.",
+                vec![
+                    req("x", SIGNAL),
+                    req("freq", Kind::Signal(Unit::Hz)),
+                    opt("decay", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Resonator::default()))),
+            ),
         ];
         Registry { ops }
     }

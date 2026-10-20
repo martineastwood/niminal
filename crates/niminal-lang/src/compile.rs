@@ -2311,7 +2311,7 @@ fn drive(x, amount: 0..1 = 0.5) {
   (x * (1 + amount * 9)).tanh
 }
 
-fn dc_block(x) {
+fn my_dc_block(x) {
   state x1 = 0.0
   state y1 = 0.0
   y = x - x1 + 0.995 * y1
@@ -2330,7 +2330,7 @@ fn fold(x, amount: 0..1 = 0.5) {
         ok(&format!(
             "{SPEC_OPCODES}
 instr a(freq: hz) {{ osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz) }}
-instr b(freq: hz) {{ osc(sine, freq).fold(amount: env[0 2sec 1 2sec 0]).dc_block }}
+instr b(freq: hz) {{ osc(sine, freq).fold(amount: env[0 2sec 1 2sec 0]).my_dc_block }}
 instr c(freq: hz) {{ drive(osc(saw, freq)) }}"
         ));
     }
