@@ -78,15 +78,6 @@ impl Uses {
 }
 
 impl Session {
-    pub(super) fn queue_routing(
-        &mut self,
-        edits: Vec<crate::RoutingEdit>,
-        at: u64,
-        meta: Meta,
-    ) -> Result<u64, Vec<Problem>> {
-        self.queue_transaction("", None, at, What::Definitions, edits, meta)
-    }
-
     pub(super) fn queue_transaction(
         &mut self,
         source: &str,

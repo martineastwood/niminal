@@ -911,12 +911,15 @@ impl Mixer {
             }
             if let Some(from) = transfer.chain_from {
                 let previous = &mut old.tracks[from];
-                if track.def.transition.0 != previous.def.transition.0 && track.fade.frames > 0 {
+                let changed = track.def.transition.0 != previous.def.transition.0;
+                if changed && track.fade.frames > 0 {
+                    // a different DSP: fade it in from the chain that was playing
                     track.fade.previous = previous.chain.take();
                     track.fade.inputs = std::mem::take(&mut previous.def.inputs);
                 } else {
+                    // the same DSP, or one that cannot crossfade: its memory comes straight across
                     if let (Some(chain),Some(old_chain)) = (&mut track.chain,&mut previous.chain) { chain.carry_state(old_chain); }
-                    if track.def.transition.0 == previous.def.transition.0 { std::mem::swap(&mut track.fade, &mut previous.fade); }
+                    if !changed { std::mem::swap(&mut track.fade, &mut previous.fade); }
                 }
             }
         }

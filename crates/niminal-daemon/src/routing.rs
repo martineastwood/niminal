@@ -3,7 +3,7 @@ use niminal_engine::{ChainInput, GraphBuilder, Route, Src, TrackDef, execution_o
 use niminal_lang::{
     CompileOptions, ControlDef, Layout, Program, TrackInfo, Unit, compile_dsp_with,
 };
-use niminal_score::Value;
+use niminal_score::{Tempo, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -192,6 +192,25 @@ fn smoothing(seconds: f64) -> Result<(), String> {
         Err("glide must be finite and between 0 and 60 seconds".into())
     }
 }
+/// A compiled control's name without the track it was compiled from.
+fn param_name(control: &ControlDef) -> &str {
+    control
+        .name
+        .split_once("::")
+        .map_or(control.name.as_str(), |(_, param)| param)
+}
+/// A value sent by a client, as the finite f32 a control holds.
+fn control_value(control: &ControlDef, value: Value, tempo: Tempo) -> Result<f32, String> {
+    if matches!(value, Value::Beats(_) | Value::Bars(_)) {
+        return Err("resolve musical units in the client".into());
+    }
+    let value = control.from_value(value, tempo).map_err(|e| e.to_string())?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err("processor parameters must be finite".into())
+    }
+}
 
 impl Routing {
     pub fn has_node(&self, client: u64, id: &str) -> bool {
@@ -319,10 +338,7 @@ impl Routing {
                     patch.buses.insert(
                         id.clone(),
                         Bus {
-                            meter: patch.buses.get(id).map_or_else(
-                                || Arc::new(niminal_engine::Meter::default()),
-                                |b| b.meter.clone(),
-                            ),
+                            meter: patch.buses.get(id).map(|b| b.meter.clone()).unwrap_or_default(),
                             channels: *channels,
                             shared: *shared,
                             source: source.clone(),
@@ -349,10 +365,7 @@ impl Routing {
                     patch.nodes.insert(
                         id.clone(),
                         Node {
-                            meter: patch.nodes.get(id).map_or_else(
-                                || Arc::new(niminal_engine::Meter::default()),
-                                |n| n.meter.clone(),
-                            ),
+                            meter: patch.nodes.get(id).map(|n| n.meter.clone()).unwrap_or_default(),
                             generation: patch.nodes.get(id).map_or(1, |n| n.generation + 1),
                             fade: 0.0,
                             fade_until: 0,
@@ -434,24 +447,27 @@ impl Routing {
                         }
                     }
                     if let Some((_, previous)) = &node.processor {
+                        // a parameter the new processor shares keeps the value it holds now
                         for next in &mut template.controls {
-                            let name = next.name.split_once("::").unwrap().1;
-                            if let Some(old) = previous.controls.iter().find(|c| {
-                                c.name.split_once("::").unwrap().1 == name && c.unit == next.unit
+                            if let Some(old) = previous.controls.iter().find(|old| {
+                                param_name(old) == param_name(next) && old.unit == next.unit
                             }) {
                                 next.initial = old.initial;
                             }
                         }
                     }
-                    node.args.retain(|name, _| {
-                        template.controls.iter().any(|next| {
-                            next.name.ends_with(&format!("::{name}"))
-                                && node.processor.as_ref().is_some_and(|(_, old)| {
-                                    old.controls.iter().any(|c| {
-                                        c.name.ends_with(&format!("::{name}"))
-                                            && c.unit == next.unit
-                                    })
-                                })
+                    // explicit values survive only where the new processor has that parameter in the same unit
+                    let previous = node.processor.as_ref().map(|(_, processor)| processor);
+                    node.args.retain(|param, _| {
+                        let unit = template
+                            .controls
+                            .iter()
+                            .find(|control| param_name(control) == param.as_str())
+                            .map(|control| control.unit);
+                        previous.zip(unit).is_some_and(|(old, unit)| {
+                            old.controls
+                                .iter()
+                                .any(|c| param_name(c) == param.as_str() && c.unit == unit)
                         })
                     });
                     node.args.extend(args.clone());
@@ -660,24 +676,12 @@ impl Routing {
                         .collect();
                     track.def.controls.clear();
                     for control in &processor.controls {
-                        let param = control
-                            .name
-                            .split_once("::")
-                            .expect("compiled track controls are qualified")
-                            .1;
+                        let param = param_name(control);
                         let mut exposed = control.clone();
                         exposed.name = format!("{name}::{param}");
                         exposed.key = exposed.name.clone();
                         if let Some(value) = node.args.get(param) {
-                            if matches!(value, Value::Beats(_) | Value::Bars(_)) {
-                                return Err("resolve musical parameter units in the client".into());
-                            }
-                            exposed.initial = control
-                                .from_value(*value, program.tempo)
-                                .map_err(|e| e.to_string())?;
-                            if !exposed.initial.is_finite() {
-                                return Err("processor parameters must be finite f32 values".into());
-                            }
+                            exposed.initial = control_value(control, *value, program.tempo)?;
                             exposed.smooth_seconds = node.glide;
                         }
                         track
@@ -690,7 +694,7 @@ impl Routing {
                         if !processor
                             .controls
                             .iter()
-                            .any(|c| c.name.ends_with(&format!("::{arg}")))
+                            .any(|control| param_name(control) == arg.as_str())
                         {
                             return Err(format!("unknown processor parameter `{arg}`"));
                         }
@@ -893,21 +897,13 @@ impl Routing {
                         return Err(format!("no node `{id}`"));
                     }
                     for (name, value) in args {
-                        if matches!(value, Value::Beats(_) | Value::Bars(_)) {
-                            return Err("resolve musical units in the client".into());
-                        }
                         let key = format!("{}::{name}", node_name(client, id));
                         let def = program
                             .controls
                             .iter()
                             .find(|c| c.key == key)
                             .ok_or_else(|| format!("unknown processor parameter `{name}`"))?;
-                        let value = def
-                            .from_value(*value, program.tempo)
-                            .map_err(|e| e.to_string())?;
-                        if !value.is_finite() {
-                            return Err("processor parameters must be finite".into());
-                        }
+                        let value = control_value(def, *value, program.tempo)?;
                         updates.push((key, value, *glide));
                     }
                 }
@@ -926,30 +922,65 @@ impl Routing {
     }
 
     pub fn meters(&self, take: bool) -> serde_json::Value {
-        serde_json::json!(self.clients.iter().map(|(client,p)| serde_json::json!({ "client":client,
-            "nodes": p.nodes.iter().map(|(id,n)| serde_json::json!({"id":id,"peaks":n.meter.read(take)})).collect::<Vec<_>>(),
-            "buses": p.buses.iter().map(|(id,b)| serde_json::json!({"id":id,"peaks":b.meter.read(take)})).collect::<Vec<_>>() })).collect::<Vec<_>>())
+        let clients = self.clients.iter().map(|(client, patch)| {
+            serde_json::json!({
+                "client": client,
+                "nodes": patch.nodes.iter().map(|(id, node)| serde_json::json!({ "id": id, "peaks": node.meter.read(take) })).collect::<Vec<_>>(),
+                "buses": patch.buses.iter().map(|(id, bus)| serde_json::json!({ "id": id, "peaks": bus.meter.read(take) })).collect::<Vec<_>>(),
+            })
+        });
+        serde_json::json!(clients.collect::<Vec<_>>())
     }
 
     pub fn status(&self, values: &[(String, f32, f32, Option<&str>)]) -> serde_json::Value {
         let control = |key: &str| values.iter().find(|v| v.0 == key).map(|v| (v.1, v.2));
-        serde_json::json!(self.clients.iter().map(|(client, patch)| serde_json::json!({
-            "client": client,
-            "processors": patch.processors.keys().collect::<Vec<_>>(),
-            "buses": patch.buses.iter().map(|(id, b)| serde_json::json!({ "id": id, "channels": b.channels, "shared": b.shared })).collect::<Vec<_>>(),
-            "nodes": patch.nodes.iter().map(|(id, n)| serde_json::json!({
-                "id": id, "processor": n.processor.as_ref().map(|(name, _)| name),
-                "instrument": n.instrument, "args": n.args, "draining": n.draining,
-                "params": n.processor.as_ref().map(|(_,p)| p.controls.iter().map(|c| serde_json::json!({
-                    "name": c.name.split_once("::").unwrap().1, "unit":c.unit.suffix(), "default":c.initial, "smooth":c.smooth_seconds,
-                    "value":control(&format!("{}::{}",node_name(*client,id),c.name.split_once("::").unwrap().1)).map(|v|v.0),
-                    "target":control(&format!("{}::{}",node_name(*client,id),c.name.split_once("::").unwrap().1)).map(|v|v.1)
-                })).collect::<Vec<_>>()).unwrap_or_default(),
-            })).collect::<Vec<_>>(),
-            "connections": patch.connections.iter().map(|(id, c)| serde_json::json!({
-                "id": id, "from": c.from, "to": c.to, "gain": control(&connection_key(*client,id)).map_or(c.gain, |v| f64::from(v.0)), "target":control(&connection_key(*client,id)).map_or(c.gain,|v|f64::from(v.1)), "delayed": c.delayed,
-            })).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>())
+        let clients = self.clients.iter().map(|(client, patch)| {
+            let nodes = patch
+                .nodes
+                .iter()
+                .map(|(id, node)| {
+                    let params = node.processor.as_ref().map(|(_, processor)| {
+                        processor
+                            .controls
+                            .iter()
+                            .map(|c| {
+                                let param = param_name(c);
+                                let (value, target) =
+                                    control(&format!("{}::{param}", node_name(*client, id))).unzip();
+                                serde_json::json!({
+                                    "name": param, "unit": c.unit.suffix(), "default": c.initial, "smooth": c.smooth_seconds,
+                                    "value": value, "target": target,
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    serde_json::json!({
+                        "id": id, "processor": node.processor.as_ref().map(|(name, _)| name),
+                        "instrument": node.instrument, "args": node.args, "draining": node.draining,
+                        "params": params.unwrap_or_default(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let connections = patch
+                .connections
+                .iter()
+                .map(|(id, c)| {
+                    let (gain, target) = control(&connection_key(*client, id)).unzip();
+                    serde_json::json!({
+                        "id": id, "from": c.from, "to": c.to, "delayed": c.delayed,
+                        "gain": gain.map_or(c.gain, f64::from), "target": target.map_or(c.gain, f64::from),
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "client": client,
+                "processors": patch.processors.keys().collect::<Vec<_>>(),
+                "buses": patch.buses.iter().map(|(id, b)| serde_json::json!({ "id": id, "channels": b.channels, "shared": b.shared })).collect::<Vec<_>>(),
+                "nodes": nodes,
+                "connections": connections,
+            })
+        });
+        serde_json::json!(clients.collect::<Vec<_>>())
     }
 }
 fn add_bus(program: &mut Program, name: String, channels: usize) -> usize {

@@ -163,19 +163,24 @@ enum Kind {
         frames: u64,
     },
     Swap {
-        applied: Option<Arc<AtomicU64>>,
-        mixer: Box<Mixer>,
-        program: Arc<Program>,
-        controls: Vec<ControlState>,
+        change: GraphChange,
+        /// Filled in when the swap is planned, without allocating on the audio thread.
         transfers: Vec<Transfer>,
     },
     Reset {
-        applied: Option<Arc<AtomicU64>>,
-        mixer: Box<Mixer>,
-        program: Arc<Program>,
-        controls: Vec<ControlState>,
+        change: GraphChange,
         epoch: u64,
     },
+}
+
+/// A mixer and the program it plays, with the controls that belong to it: everything a graph change
+/// puts in place at once.
+struct GraphChange {
+    /// Set when a client is waiting for a receipt for this change.
+    applied: Option<Arc<AtomicU64>>,
+    mixer: Box<Mixer>,
+    program: Arc<Program>,
+    controls: Vec<ControlState>,
 }
 
 /// The command that moves a parameter of a held note, if `program` has the instrument and the parameter.
@@ -813,9 +818,9 @@ impl Session {
             let next = &pending.program;
             if lands_at >= from {
                 let mut swap = self.swap_command(lands_at, next, config);
-                if let Kind::Swap { controls, applied, .. } = &mut swap.kind {
-                    *applied=Some(pending.applied.clone());
-                    controls::mark(controls, next, &pending.statements, pending.id);
+                if let Kind::Swap { change, .. } = &mut swap.kind {
+                    change.applied = Some(pending.applied.clone());
+                    controls::mark(&mut change.controls, next, &pending.statements, pending.id);
                 }
                 window.commands.push(swap);
             }
@@ -848,12 +853,23 @@ impl Session {
         Command {
             at,
             kind: Kind::Swap {
-                applied: Arc::ptr_eq(program, &self.program).then(|| self.current_transaction.clone()).flatten(),
-                mixer,
-                program: program.clone(),
-                controls: states,
+                change: GraphChange {
+                    applied: self.acknowledged(program),
+                    mixer,
+                    program: program.clone(),
+                    controls: states,
+                },
                 transfers: Vec::with_capacity(program.tracks.len()),
             },
+        }
+    }
+
+    /// The transaction a client is waiting on, when `program` is the one it asked for.
+    fn acknowledged(&self, program: &Arc<Program>) -> Option<Arc<AtomicU64>> {
+        if Arc::ptr_eq(program, &self.program) {
+            self.current_transaction.clone()
+        } else {
+            None
         }
     }
 
@@ -874,10 +890,12 @@ impl Session {
         Command {
             at,
             kind: Kind::Reset {
-                applied: Arc::ptr_eq(program, &self.program).then(|| self.current_transaction.clone()).flatten(),
-                mixer,
-                program: program.clone(),
-                controls: self.control_states(program),
+                change: GraphChange {
+                    applied: self.acknowledged(program),
+                    mixer,
+                    program: program.clone(),
+                    controls: self.control_states(program),
+                },
                 epoch: self.panic_epoch.load(Ordering::Acquire),
             },
         }
@@ -1149,6 +1167,30 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Put a prepared mixer, program and controls in place, and record the sample at which the
+    /// change was heard so that its client's receipt can say when it landed.
+    fn install(&mut self, change: &mut GraphChange) {
+        crate::controls::adopt(
+            &mut change.controls,
+            &self.controls,
+            &change.program,
+            self.clock,
+            self.sample_rate,
+        );
+        crate::controls::sync_mixer(&change.controls, &mut change.mixer, self.clock);
+        std::mem::swap(&mut self.controls, &mut change.controls);
+        std::mem::swap(&mut self.mixer, &mut change.mixer);
+        std::mem::swap(&mut self.program, &mut change.program);
+        if let Some(applied) = change.applied.take() {
+            let _ = applied.compare_exchange(
+                super::transactions::WAITING,
+                self.clock,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    }
+
     /// Carry out one prepared command at the current sample.
     fn apply(&mut self, kind: &mut Kind) {
         match kind {
@@ -1223,54 +1265,20 @@ impl RealtimeRenderer {
                     self.state.capacity_drops.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            Kind::Swap {
-                applied,
-                mixer,
-                program,
-                controls,
-                transfers,
-            } => {
-                super::plan_transfers(&self.program, program, transfers);
+            Kind::Swap { change, transfers } => {
+                super::plan_transfers(&self.program, &change.program, transfers);
                 self.mixer.remap_buses_with(&mut |i| {
                     self.program
                         .buses
                         .get(i)
-                        .and_then(|name| program.buses.iter().position(|n| n == name))
-                        .filter(|&j| self.program.bus_layouts[i] == program.bus_layouts[j])
+                        .and_then(|name| change.program.buses.iter().position(|n| n == name))
+                        .filter(|&j| self.program.bus_layouts[i] == change.program.bus_layouts[j])
                 });
-                mixer.adopt(&mut self.mixer, transfers);
-                crate::controls::adopt(
-                    controls,
-                    &self.controls,
-                    program,
-                    self.clock,
-                    self.sample_rate,
-                );
-                crate::controls::sync_mixer(controls, mixer, self.clock);
-                super::carry_buffers(&self.program, program);
-                std::mem::swap(&mut self.controls, controls);
-                std::mem::swap(&mut self.mixer, mixer);
-                std::mem::swap(&mut self.program, program);
-                if let Some(applied)=applied { let _=applied.compare_exchange(super::transactions::WAITING,self.clock,Ordering::AcqRel,Ordering::Acquire); }
+                change.mixer.adopt(&mut self.mixer, transfers);
+                super::carry_buffers(&self.program, &change.program);
+                self.install(change);
             }
-            Kind::Reset {
-                applied,
-                mixer,
-                program,
-                controls,
-                epoch,
-            } => {
-                crate::controls::adopt(
-                    controls,
-                    &self.controls,
-                    program,
-                    self.clock,
-                    self.sample_rate,
-                );
-                crate::controls::sync_mixer(controls, mixer, self.clock);
-                std::mem::swap(&mut self.controls, controls);
-                std::mem::swap(&mut self.mixer, mixer);
-                std::mem::swap(&mut self.program, program);
+            Kind::Reset { change, epoch } => {
                 if let Some(limiter) = &mut self.limiter {
                     limiter.clear();
                 }
@@ -1279,7 +1287,7 @@ impl RealtimeRenderer {
                     send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
                 }
                 self.state.reset_epoch.store(*epoch, Ordering::Release);
-                if let Some(applied)=applied { let _=applied.compare_exchange(super::transactions::WAITING,self.clock,Ordering::AcqRel,Ordering::Acquire); }
+                self.install(change);
             }
         }
     }

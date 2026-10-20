@@ -164,62 +164,34 @@ impl Session {
         let mut early = Vec::new();
         let mut accepted = Vec::new();
         for (n, op) in ops.iter().enumerate() {
-            if let Op::Routing { edits, .. } = op && crate::routing::Routing::is_control_edit(edits) { continue; }
-            if let Op::Routing { at, edits, tag } = op {
-                let sample = self.resolve(*at);
-                resolved[n] = Some(Op::Routing {
-                    at: At::Sample(sample),
-                    edits: edits.clone(),
-                    tag: tag.clone(),
-                });
-                match self.queue_routing(
-                    edits.clone(),
-                    sample,
-                    Meta {
-                        client,
-                        tag: tag.clone(),
-                    },
-                ) {
-                    Ok(id) => {
-                        let pending=self.pending.iter().find(|p|p.id==id).unwrap();
-                        accepted.push((crate::events::TransactionReceipt { id, at:pending.lands_at }, pending.applied.clone()));
-                    }
-                    Err(mut problems) => {
-                        for p in &mut problems {
-                            p.event = Some(n);
-                        }
-                        early.extend(problems);
-                        break;
-                    }
+            let (source, dir, at, what, edits, tag) = match op {
+                Op::Routing { edits, .. } if crate::routing::Routing::is_control_edit(edits) => continue,
+                Op::Routing { at, edits, tag } => {
+                    resolved[n] = Some(Op::Routing { at: self.logged(*at), edits: edits.clone(), tag: tag.clone() });
+                    (String::new(), None, self.resolve(*at), What::Definitions, edits.clone(), tag.clone())
                 }
-                continue;
-            }
-            let (source, dir, at, what, edits, meta) = match op {
                 Op::Define { source, at, dir, tag } => {
                     if source.trim().is_empty() { early.push(problem_at(n,"there is nothing to define")); break; }
-                    let meta = Meta { client, tag: tag.clone() };
                     resolved[n] = Some(Op::Define { source: source.clone(), at: self.logged(*at), dir: dir.clone(), tag: tag.clone() });
-                    (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, Vec::new(), meta)
+                    (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, Vec::new(), tag.clone())
                 }
                 Op::Forget { at, tag } => {
-                    let meta = Meta { client, tag: tag.clone() };
                     resolved[n] = Some(Op::Forget { at: self.logged(*at), tag: tag.clone() });
-                    ("new".to_string(), None, self.resolve(*at), What::Forget, Vec::new(), meta)
+                    ("new".to_string(), None, self.resolve(*at), What::Forget, Vec::new(), tag.clone())
                 }
                 Op::Transaction { source, dir, at, edits, tag } => {
                     resolved[n] = Some(Op::Transaction { source:source.clone(), dir:dir.clone(), at:self.logged(*at), edits:edits.clone(), tag:tag.clone() });
-                    (source.clone(),dir.as_deref(),self.resolve(*at),What::Definitions,edits.clone(),Meta {client,tag:tag.clone()})
+                    (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, edits.clone(), tag.clone())
                 }
                 _ => continue,
             };
             if let Some(dir) = dir {
                 self.set_sample_dir(std::path::Path::new(dir));
             }
-            let result = self.queue_transaction(&source, dir, at, what, edits, meta);
-            match result {
+            match self.queue_transaction(&source, dir, at, what, edits, Meta { client, tag }) {
                 Ok(id) => {
-                    let pending=self.pending.iter().find(|p|p.id==id).unwrap();
-                    accepted.push((crate::events::TransactionReceipt {id,at:pending.lands_at}, pending.applied.clone()));
+                    let pending = self.pending.iter().find(|p| p.id == id).expect("a queued change is waiting to land");
+                    accepted.push((crate::events::TransactionReceipt { id, at: pending.lands_at }, pending.applied.clone()));
                 }
                 Err(mut problems) => {
                     for p in &mut problems {
