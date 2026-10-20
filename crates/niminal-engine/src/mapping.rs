@@ -31,6 +31,9 @@ impl ParamMapping {
             range: None,
         }
     }
+    pub fn set_range(&mut self, range: Option<(f32, f32)>) {
+        self.range = range;
+    }
     pub fn with_range(mut self, range: Option<(f32, f32)>) -> Self {
         self.range = range;
         self

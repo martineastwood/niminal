@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import base64
+from pathlib import Path
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
@@ -12,7 +14,7 @@ try:
 except ImportError as e:  # pragma: no cover
     raise ImportError("install websocket-client: pip install websocket-client") from e
 
-PROTOCOL = 3
+PROTOCOL = 4
 
 
 class NiminalError(Exception):
@@ -162,6 +164,93 @@ class Client:
         if glide is not None:
             op["glide"] = glide
         return self.send_events([op])
+
+
+    def panic(self) -> Any:
+        return self.call("panic")
+
+    def panic_engine(self) -> Any:
+        return self.call("engine.panic")
+
+    def create_scope(self, id: str, endpoint: dict, frames: int = 1024, rate: float = 20) -> Any:
+        return self.call("scopes.create", {"id": id, "endpoint": endpoint, "frames": frames, "rate": rate})
+
+    def remove_scope(self, id: str) -> Any:
+        return self.call("scopes.remove", {"id": id})
+
+    def buffer_budget(self, bytes: Optional[int] = None) -> Any:
+        return self.call("buffers.budget", {} if bytes is None else {"bytes": bytes})
+
+    def list_buffers(self) -> Any:
+        return self.call("buffers.list")
+
+    def alloc_buffer(self, name: str, frames: int, channels: int = 1) -> Any:
+        return self.call("buffers.alloc", {"name": name, "frames": frames, "channels": channels})
+
+    def free_buffer(self, name: str) -> Any:
+        return self.call("buffers.free", {"name": name})
+
+    def load_buffer(self, name: str, path: str, channel: int = 0) -> Any:
+        return self.call("buffers.load", {"name": name, "path": path, "channel": channel})
+
+    def read_buffer(self, name: str, count: int, offset: int = 0) -> Any:
+        return self.call("buffers.read", {"name": name, "count": count, "offset": offset})
+
+    def save_buffer(self, name: str, path: str) -> Any:
+        return self.call("buffers.save", {"name": name, "path": path})
+
+    def render(self, **spec: Any) -> Any:
+        return self.call("render.start", spec)
+
+    def job_status(self, id: int) -> Any:
+        return self.call("jobs.status", {"id": id})
+
+    def cancel_job(self, id: int) -> Any:
+        return self.call("jobs.cancel", {"id": id})
+
+    def capture(self, output: dict, at: int | str = "now") -> Any:
+        return self.call("capture.start", {"output": output, "at": at})
+
+    def stop_capture(self, id: int, at: int | str = "now") -> Any:
+        return self.call("capture.stop", {"id": id, "at": at})
+
+    def audio_devices(self) -> Any:
+        return self.call("audio.devices")
+
+    def audio_status(self) -> Any:
+        return self.call("audio.status")
+
+    def configure_audio(self, settings: dict, restart: bool = False) -> Any:
+        return self.call("audio.configure", {"settings": settings, "restart": restart})
+
+    def remove_file(self, id: str) -> Any:
+        return self.call("files.remove", {"id": id})
+
+    def upload_file(self, path: str | Path) -> str:
+        id = None
+        offset = 0
+        with open(path, "rb") as file:
+            while True:
+                data = file.read(262144)
+                finish = offset + len(data) == Path(path).stat().st_size
+                params = {"offset": offset, "data": base64.b64encode(data).decode("ascii"), "finish": finish}
+                if id is not None:
+                    params["id"] = id
+                id = self.call("files.upload", params)["id"]
+                offset += len(data)
+                if finish:
+                    return id
+
+    def download_file(self, id: str, path: str | Path) -> None:
+        offset = 0
+        with open(path, "wb") as file:
+            while True:
+                result = self.call("files.read", {"id": id, "offset": offset, "count": 262144})
+                data = base64.b64decode(result["data"])
+                file.write(data)
+                offset += len(data)
+                if result["eof"]:
+                    return
 
 
 class LiveClient(Client):

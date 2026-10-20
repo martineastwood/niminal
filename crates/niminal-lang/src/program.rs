@@ -21,11 +21,12 @@ pub struct Instrument {
     pub params: Vec<Param>,
     pub arrays: BTreeMap<String, Vec<String>>,
     pub resources: BTreeMap<String, Vec<String>>,
+    pub resource_keys: BTreeMap<String, u64>,
     /// For a kit, the names of its samples, in the order its `sample` parameter counts them.
     pub members: Vec<String>,
     /// The choke group of each sample: one entry per kit member, or at most
     /// one for a lone sample.
-    pub chokes: Vec<Option<u32>>,
+    pub chokes: Vec<Option<u64>>,
     /// `with(max: 8)`, or `mono`: the most notes of this instrument sounding on a track at once.
     pub max_voices: Option<usize>,
     /// `with(same_note: release)`: a note releases the sounding note of the same pitch.
@@ -132,6 +133,7 @@ pub struct TrackInfo {
 /// A named scalar control. Values in graphs use engine units (db is gain).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControlDef {
+    pub range: Option<(f64, f64)>,
     pub name: String,
     pub key: String,
     pub unit: Unit,
@@ -171,7 +173,8 @@ impl ControlDef {
 
     /// A lane's value as the control's engine value, with the unit rules a parameter has.
     pub fn from_value(&self, value: Value, tempo: Tempo) -> Result<f32, niminal_score::UnitError> {
-        engine_value(self.unit, value, tempo).map(|v| v as f32)
+        engine_value(self.unit, value, tempo)
+            .map(|v| self.range.map_or(v, |(lo, hi)| v.clamp(lo, hi)) as f32)
     }
 
     pub fn convert(&self, value: f64, suffix: Option<&str>, tempo: Tempo) -> Result<f32, String> {
@@ -190,7 +193,9 @@ impl ControlDef {
         if !value.is_finite() || !converted.is_finite() || (unit == Unit::Db && converted <= 0.0) {
             return Err("control values must be finite and representable".into());
         }
-        Ok(converted)
+        Ok(self
+            .range
+            .map_or(converted, |(lo, hi)| converted.clamp(lo as f32, hi as f32)))
     }
 }
 
@@ -223,6 +228,10 @@ pub struct QuantizeConfig {
 
 #[derive(Clone)]
 pub struct Program {
+    pub resource_controls: BTreeMap<String, u64>,
+    pub array_controls: BTreeMap<String, Vec<String>>,
+    pub namespaces: Vec<(usize, usize, String)>,
+    pub namespace_samples: std::collections::HashMap<String, crate::Samples>,
     pub bus_meters: Vec<(usize, Arc<niminal_engine::Meter>)>,
     /// The text it was compiled from.
     pub source: String,
@@ -260,7 +269,7 @@ pub struct NotePlan {
     pub instrument: usize,
     pub params: Vec<(usize, f32)>,
     /// The choke group of the sample this note plays: it ends other notes in the group.
-    pub choke: Option<u32>,
+    pub choke: Option<u64>,
     /// How many notes of the instrument may sound at once, if limited.
     pub rule: Option<niminal_engine::VoiceRule>,
     /// Track parameters the note's clip sets as it starts: control key, value, and how long it glides.
@@ -336,6 +345,23 @@ pub(crate) fn resolve_target<'a>(
 }
 
 impl Program {
+    /// Translate client/compiler values to physical engine arguments and local kit indices.
+    pub fn dsp_args(&self, event: &Event) -> Result<BTreeMap<String, Value>, ArgError> {
+        let plan = self.plan(event)?;
+        let instrument = &self.instruments[plan.instrument];
+        event
+            .args
+            .iter()
+            .map(|(name, value)| {
+                let value = if let Value::Sample(id) = *value {
+                    Value::Num(self.kit_index(instrument, id, &event.target)? as f64)
+                } else {
+                    crate::dsp_value(*value, self.tempo)
+                };
+                Ok((name.clone(), value))
+            })
+            .collect()
+    }
     /// The index of the track called `name`.
     pub fn track_index(&self, name: &str) -> Option<usize> {
         self.tracks
@@ -453,13 +479,10 @@ impl Program {
             .flatten();
         let rule = {
             let this = &self.instruments[instrument];
-            let pitch_param = this
-                .params
-                .iter()
-                .position(|p| p.name == this.pitch);
+            let pitch_param = this.params.iter().position(|p| p.name == this.pitch);
             (this.max_voices.is_some() || this.release_same_note).then(|| {
                 niminal_engine::VoiceRule {
-                    instrument: instrument as u32,
+                    instrument: niminal_engine::instance_id(&this.name),
                     max: this.max_voices.unwrap_or(usize::MAX),
                     steal_quietest: this.steal_quietest,
                     release_same_pitch: this.release_same_note,
@@ -523,6 +546,9 @@ impl Program {
         let mut mixer = Mixer::new(defs, bus_channels, self.master.channels(), sample_rate)
             .expect("feedback is rejected when compiling");
         mixer.set_bus_meters(self.bus_meters.clone());
+        for (i, track) in self.tracks.iter().enumerate() {
+            mixer.set_track_instance(i, niminal_engine::instance_id(&track.name));
+        }
         mixer
     }
 }
@@ -537,6 +563,7 @@ impl Instrument {
             params,
             arrays: BTreeMap::new(),
             resources: BTreeMap::new(),
+            resource_keys: BTreeMap::new(),
             members: Vec::new(),
             chokes: Vec::new(),
             max_voices: None,

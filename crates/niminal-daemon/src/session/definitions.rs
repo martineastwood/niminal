@@ -87,11 +87,16 @@ impl Session {
         edits: Vec<crate::RoutingEdit>,
         meta: Meta,
     ) -> Result<u64, Vec<Problem>> {
-        let (snippet, statements, uses) = if source.trim().is_empty() {
+        let (snippet, mut statements, uses) = if source.trim().is_empty() {
             (String::new(), Vec::new(), None)
         } else {
-            self.read_change(source, dir, what)?
+            self.read_change(source, dir, what, meta.client)?
         };
+        for statement in &mut statements {
+            if let niminal_lang::StatementData::Definition { key, .. } = &mut statement.data {
+                *key = scoped_key(meta.client, key);
+            }
+        }
         let at = at.max(self.clock);
         let index = self.pending.partition_point(|p| p.lands_at <= at);
         let (base, definitions, routing) = index.checked_sub(1).map_or_else(
@@ -151,24 +156,33 @@ impl Session {
         source: &str,
         dir: Option<&str>,
         what: What,
+        client: u64,
     ) -> Result<(String, Vec<Statement>, Option<Uses>), Vec<Problem>> {
-        let (text, uses) =
-            match niminal_lang::expand(source, std::path::Path::new(dir.unwrap_or("."))) {
-                Ok(expanded) => (
-                    expanded.text.clone(),
-                    Some(Uses {
-                        expanded,
-                        sent: source.to_string(),
-                    }),
-                ),
-                Err(d) => {
-                    return Err(vec![Problem::from_diagnostic(
-                        &d,
-                        source,
-                        Located::Snippet(d.span),
-                    )]);
-                }
-            };
+        let (text, uses) = match niminal_lang::expand(
+            source,
+            dir.map(std::path::Path::new).unwrap_or_else(|| {
+                self.sample_files_for(client)
+                    .bases()
+                    .first()
+                    .map(|p| p.as_path())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+            }),
+        ) {
+            Ok(expanded) => (
+                expanded.text.clone(),
+                Some(Uses {
+                    expanded,
+                    sent: source.to_string(),
+                }),
+            ),
+            Err(d) => {
+                return Err(vec![Problem::from_diagnostic(
+                    &d,
+                    source,
+                    Located::Snippet(d.span),
+                )]);
+            }
+        };
         if what == What::Definitions {
             niminal_lang::validate_dsp(&text).map_err(|d| {
                 let problems = vec![Problem::from_diagnostic(
@@ -268,7 +282,7 @@ impl Session {
             let delta: Vec<Entry> = definitions
                 .iter()
                 .map(|s| Entry {
-                    key: s.key().expect("definitions have keys").to_string(),
+                    key: scoped_key(meta.client, s.key().expect("definitions have keys")),
                     text: s.text.clone(),
                 })
                 .collect();
@@ -276,7 +290,7 @@ impl Session {
                 .iter()
                 .map(|s| {
                     (
-                        s.key().expect("definitions have keys").to_string(),
+                        scoped_key(meta.client, s.key().expect("definitions have keys")),
                         s.offset,
                     )
                 })
@@ -288,7 +302,7 @@ impl Session {
                 entries: base
                     .entries
                     .iter()
-                    .filter(|e| e.key == "config")
+                    .filter(|e| !owns_key(meta.client, &e.key))
                     .cloned()
                     .collect(),
             };
@@ -296,14 +310,38 @@ impl Session {
             let mut project = base.clone();
             project.apply(&delta);
 
-            let mut compile_options = options(self.layout, &self.samples);
-            if !clears {
-                compile_options.buffers = base_definitions.buffers.iter().cloned().collect();
+            let mut compile_options = options(self.layout, &self.samples, self.sample_rate);
+            for owner in self
+                .buffer_budgets
+                .keys()
+                .copied()
+                .chain(base_definitions.buffers.iter().map(|(name, _)| owner(name)))
+                .chain(std::iter::once(meta.client))
+            {
+                let (budget, retained) = self.buffer_budget(owner);
+                let name = if owner == 0 {
+                    String::new()
+                } else {
+                    format!("__client_{owner}")
+                };
+                compile_options.buffer_budgets.insert(name.clone(), budget);
+                compile_options.retained_buffer_bytes.insert(name, retained);
             }
-            project.drop_broken(&from_snippet, |full| {
-                compile_with(full, &compile_options).map(|_| ())
-            });
+            compile_options.namespace_samples = self
+                .client_samples
+                .iter()
+                .map(|(id, s)| (format!("__client_{id}"), s.clone()))
+                .collect();
+            if !clears {
+                compile_options.buffers = base_definitions
+                    .buffers
+                    .iter()
+                    .filter(|(n, _)| !self.hidden_buffers.contains(n))
+                    .cloned()
+                    .collect();
+            }
             let (full, map) = project.source(&from_snippet, &[]);
+            compile_options.namespaces = project_namespaces(&project);
             let program = compile_with(&full, &compile_options).map_err(|diags| {
                 diags
                     .iter()
@@ -318,21 +356,80 @@ impl Session {
             }
             (project, Arc::new(program))
         };
-        let mut routing = if clears {
-            crate::routing::Routing::default()
-        } else {
-            routing.clone()
-        };
+        {
+            let mut allocations = self.buffer_allocations.borrow_mut();
+            allocations.retain(|(_, b)| b.strong_count() > 0);
+            for (name, buffer) in &definitions.buffers {
+                if !allocations
+                    .iter()
+                    .any(|(_, old)| old.as_ptr() == Arc::as_ptr(buffer))
+                {
+                    allocations.push((owner(name), Arc::downgrade(buffer)));
+                }
+            }
+        }
+        for client in definitions.buffers.iter().map(|(name, _)| owner(name)) {
+            let (budget, bytes) = self.buffer_budget(client);
+            if bytes > budget {
+                return Err(vec![Problem::plain("client buffer memory budget exceeded")]);
+            }
+        }
+        let mut routing = routing.clone();
+        if clears {
+            routing
+                .apply(
+                    meta.client,
+                    &[crate::RoutingEdit::Clear],
+                    &definitions,
+                    &options(self.layout, &self.samples, self.sample_rate),
+                    lands_at,
+                    self.sample_rate,
+                )
+                .map_err(|e| vec![Problem::plain(e)])?;
+        }
         routing
             .apply(
                 meta.client,
                 &edits,
                 &definitions,
-                &options(self.layout, &self.samples),
+                &options(self.layout, &self.samples, self.sample_rate),
                 lands_at,
                 self.sample_rate,
             )
             .map_err(|e| vec![Problem::plain(e)])?;
+        for mapping in &self.chain_maps {
+            if mapping.client != meta.client
+                || mapping.mapping.at > lands_at
+                || mapping.mapping.source.is_none()
+            {
+                continue;
+            }
+            if self.chain_maps.iter().any(|later| {
+                later.client == mapping.client
+                    && later.node == mapping.node
+                    && later.param == mapping.param
+                    && later.mapping.at > mapping.mapping.at
+                    && later.mapping.at <= lands_at
+            }) {
+                continue;
+            }
+            if !routing.has_node(mapping.client, &mapping.node) {
+                continue;
+            }
+            let explicitly_unmapped=edits.iter().any(|e|matches!(e,crate::RoutingEdit::Map{id,param,source:None,..} if *id==mapping.node && *param==mapping.mapping.param));
+            if !explicitly_unmapped
+                && routing.parameter_unit(mapping.client, &mapping.node, &mapping.mapping.param)
+                    != self.routing.parameter_unit(
+                        mapping.client,
+                        &mapping.node,
+                        &mapping.mapping.param,
+                    )
+            {
+                return Err(vec![Problem::plain(
+                    "unmap incompatible processor parameters in the same transaction before replacing DSP",
+                )]);
+            }
+        }
         let program = routing
             .materialize(&definitions)
             .map_err(|e| vec![Problem::plain(e)])?;
@@ -410,8 +507,9 @@ impl Session {
 }
 
 /// How code is compiled here.
-pub(super) fn options(layout: Layout, samples: &Samples) -> CompileOptions {
+pub(super) fn options(layout: Layout, samples: &Samples, sample_rate: f32) -> CompileOptions {
     CompileOptions {
+        sample_rate,
         defer_latency: true,
         default_layout: layout,
         samples: samples.clone(),
@@ -425,5 +523,66 @@ pub(super) fn first_line(text: &str) -> String {
         format!("{}...", line.chars().take(57).collect::<String>())
     } else {
         line.to_string()
+    }
+}
+
+/// Owner zero is the standalone/offline host; network client IDs start at one.
+pub(crate) fn scoped(client: ClientId, name: &str) -> String {
+    if client == 0 || name.starts_with(&format!("__client_{client}::")) {
+        name.to_string()
+    } else {
+        format!("__client_{client}::{name}")
+    }
+}
+pub(crate) fn local(client: ClientId, name: &str) -> Option<&str> {
+    if client == 0 {
+        (!name.starts_with("__client_")).then_some(name)
+    } else {
+        name.strip_prefix("__client_")
+            .and_then(|rest| rest.split_once("::"))
+            .filter(|(id, _)| id.parse::<u64>().ok() == Some(client))
+            .map(|(_, name)| name)
+    }
+}
+fn scoped_key(client: ClientId, key: &str) -> String {
+    key.split_once(':').map_or_else(
+        || format!("config:{}", scoped(client, "config")),
+        |(kind, name)| format!("{kind}:{}", scoped(client, name)),
+    )
+}
+fn owns_key(client: ClientId, key: &str) -> bool {
+    key.split_once(':')
+        .is_some_and(|(_, name)| local(client, name).is_some())
+}
+fn project_namespaces(project: &Project) -> Vec<(usize, usize, String)> {
+    let mut offset = 0;
+    project
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let start = offset;
+            offset += entry.text.len() + 1;
+            let (_, name) = entry.key.split_once(':')?;
+            let (owner, _) = name.split_once("::")?;
+            owner
+                .starts_with("__client_")
+                .then(|| (start, offset, owner.to_string()))
+        })
+        .collect()
+}
+
+pub(crate) fn owner(name: &str) -> u64 {
+    name.strip_prefix("__client_")
+        .and_then(|n| n.split_once("::"))
+        .and_then(|(id, _)| id.parse().ok())
+        .unwrap_or(0)
+}
+pub(crate) fn owns_track(client: u64, name: &str) -> bool {
+    if let Some(rest) = name.strip_prefix("__routing_") {
+        rest.split_once('_')
+            .and_then(|(_, rest)| rest.split_once('_'))
+            .is_some_and(|(id, _)| id.parse::<u64>().ok() == Some(client))
+    } else {
+        local(client, name).is_some()
     }
 }

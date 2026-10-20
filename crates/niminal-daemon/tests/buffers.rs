@@ -106,6 +106,7 @@ fn buffer_protocol_allocates_reads_and_saves_loads() {
             EngineRequest::BuffersAlloc {
                 name: "take".into(),
                 frames: 8,
+                channels: 1,
             },
         )
         .unwrap();
@@ -202,7 +203,7 @@ fn held_voices_keep_buffer_connections_when_unrelated_resources_are_allocated() 
         .program()
         .buffers
         .iter()
-        .find(|(name, _)| name == "data")
+        .find(|(name, _)| name == "__client_1::data")
         .unwrap()
         .1;
     assert!(std::sync::Arc::ptr_eq(&old, current));

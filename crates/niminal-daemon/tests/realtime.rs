@@ -1,9 +1,9 @@
 use niminal_daemon::{RealtimeConfig, RealtimeRenderer, Session};
 mod support;
-use support::Eval;
 use niminal_lang::Layout;
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
 use std::cell::Cell;
+use support::Eval;
 
 struct Allocator;
 thread_local! {
@@ -73,14 +73,22 @@ fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_daemon::Op> {
             dur: Some(Time::Seconds(0.02)),
             id: None,
             tag: None,
-            args: [("freq".to_string(), Value::Hz(200.0 + (i % 12) as f64 * 40.0))].into(),
+            args: [(
+                "freq".to_string(),
+                Value::Hz(200.0 + (i % 12) as f64 * 40.0),
+            )]
+            .into(),
         })
         .collect()
 }
 
 /// Stream `events` in batches, each sent `ahead` frames before its first note, while the renderer plays.
 /// Returns the audio and what the renderer reported.
-fn stream_while_playing(events: &[niminal_daemon::Op], ahead: u64, frames: usize) -> (Vec<f32>, niminal_daemon::RenderMetrics) {
+fn stream_while_playing(
+    events: &[niminal_daemon::Op],
+    ahead: u64,
+    frames: usize,
+) -> (Vec<f32>, niminal_daemon::RenderMetrics) {
     let mut s = session();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = vec![0.0; frames];
@@ -88,7 +96,13 @@ fn stream_while_playing(events: &[niminal_daemon::Op], ahead: u64, frames: usize
     for chunk in out.chunks_mut(256) {
         let clock = r.clock();
         while sent < events.len() {
-            let start = match &events[sent] { niminal_daemon::Op::Note { at: niminal_daemon::At::Sample(t), .. } => *t, _ => unreachable!() };
+            let start = match &events[sent] {
+                niminal_daemon::Op::Note {
+                    at: niminal_daemon::At::Sample(t),
+                    ..
+                } => *t,
+                _ => unreachable!(),
+            };
             if start > clock + ahead {
                 break;
             }
@@ -150,17 +164,49 @@ fn voice_script() -> Vec<(u64, niminal_daemon::Op)> {
     vec![
         held(1, 4_800, 110.0, None),
         held(2, 9_600, 165.0, Some(0.3)),
-        (14_400, Op::Set { id: 1, at: At::Sample(14_400), args: [("cut".to_string(), Value::Hz(6000.0))].into(), glide: Some(Time::Seconds(0.2)), tag: None }),
-        (20_000, Op::Set { id: 2, at: At::Sample(20_000), args: [("cut".to_string(), Value::Hz(300.0))].into(), glide: None, tag: None }),
-        (28_800, Op::Off { id: 1, at: At::Sample(28_800), tag: None }),
+        (
+            14_400,
+            Op::Set {
+                id: 1,
+                at: At::Sample(14_400),
+                args: [("cut".to_string(), Value::Hz(6000.0))].into(),
+                glide: Some(Time::Seconds(0.2)),
+                tag: None,
+            },
+        ),
+        (
+            20_000,
+            Op::Set {
+                id: 2,
+                at: At::Sample(20_000),
+                args: [("cut".to_string(), Value::Hz(300.0))].into(),
+                glide: None,
+                tag: None,
+            },
+        ),
+        (
+            28_800,
+            Op::Off {
+                id: 1,
+                at: At::Sample(28_800),
+                tag: None,
+            },
+        ),
         held(3, 30_000, 220.0, None),
-        (33_000, Op::Off { id: 3, at: At::Sample(33_000), tag: None }),
+        (
+            33_000,
+            Op::Off {
+                id: 3,
+                at: At::Sample(33_000),
+                tag: None,
+            },
+        ),
     ]
 }
 
 fn organ_session() -> Session {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
-    s.eval("instr organ(freq: hz, cut: hz = 100hz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 100ms 0] * 0.3 }", Some("now")).unwrap();
+    s.eval_as(1,"instr organ(freq: hz, cut: hz = 100hz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 100ms 0] * 0.3 }").unwrap();
     s
 }
 
@@ -169,7 +215,9 @@ fn held_notes_sets_and_offs_sound_the_same_prepared_as_offline_wherever_they_are
     let script = voice_script();
     let frames = 60_000;
     let mut offline = organ_session();
-    offline.send_events(1, script.iter().map(|(_, op)| op.clone()).collect()).unwrap();
+    offline
+        .send_events(1, script.iter().map(|(_, op)| op.clone()).collect())
+        .unwrap();
     let expected = offline.process(frames).remove(0);
     assert!(expected.iter().any(|s| s.abs() > 0.05));
 
@@ -248,7 +296,8 @@ fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_pr
 fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
     use niminal_daemon::{At, Op};
     use niminal_score::{Time, Value};
-    const SINE: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(sine, freq) * env[1 | 100ms 0] * 0.3 }";
+    const SINE: &str =
+        "instr organ(freq: hz, cut: hz = 100hz) { osc(sine, freq) * env[1 | 100ms 0] * 0.3 }";
     const SAW: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(saw, freq).lpf(cutoff: 3000hz) * env[1 | 100ms 0] * 0.3 }";
     let note = |at: At, hz: f64| Op::Note {
         to: None,
@@ -262,14 +311,22 @@ fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
     let script = [
         (0u64, note(At::Sample(24_000), 220.0)),
         (0, note(At::Sample(120_000), 330.0)),
-        (0, Op::Define { source: SAW.into(), at: At::Sample(72_000), dir: None, tag: None }),
+        (
+            0,
+            Op::Define {
+                source: SAW.into(),
+                at: At::Sample(72_000),
+                dir: None,
+                tag: None,
+            },
+        ),
         (30_000, note(At::Sample(192_000), 440.0)),
         (60_000, note(At::Sample(96_000), 110.0)),
         (60_000, note(At::Sample(150_000), 550.0)),
     ];
     let session = || {
         let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
-        s.eval(&format!("tempo 120bpm\n{SINE}"), Some("now")).unwrap();
+        s.eval_as(1, &format!("tempo 120bpm\n{SINE}")).unwrap();
         s
     };
     let frames = 4 * 48_000;
@@ -279,7 +336,9 @@ fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
     while expected.len() < frames {
         // the same things at the same clock as the prepared run sends them
         while sent < script.len() && script[sent].0 <= expected.len() as u64 {
-            offline.send_events(1, vec![script[sent].1.clone()]).unwrap();
+            offline
+                .send_events(1, vec![script[sent].1.clone()])
+                .unwrap();
             sent += 1;
         }
         expected.extend(offline.process(256).remove(0));
@@ -305,11 +364,16 @@ fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
 #[test]
 fn a_timed_panic_sounds_the_same_prepared_as_offline() {
     use niminal_daemon::{At, Op};
-    let script = |at: u64| Op::Panic { at: At::Sample(at), tag: None };
+    let script = |at: u64| Op::Panic {
+        at: At::Sample(at),
+        tag: None,
+    };
     let held = voice_script();
     let frames = 60_000;
     let mut offline = organ_session();
-    offline.send_events(1, held.iter().map(|(_, op)| op.clone()).collect()).unwrap();
+    offline
+        .send_events(1, held.iter().map(|(_, op)| op.clone()).collect())
+        .unwrap();
     offline.send_events(1, vec![script(18_000)]).unwrap();
     let expected = offline.process(frames).remove(0);
     for ahead in [20_000u64, 500] {
@@ -371,8 +435,8 @@ fn instrument_scopes_and_buffer_events_allocate_nothing_while_rendering() {
 #[test]
 fn rich_parameters_and_dynamic_mapping_allocate_nothing_on_audio() {
     use niminal_daemon::{At, Op};
-    use niminal_score::{Time,Value};
-    let mut s=Session::new(48000.0,Layout::Mono).without_limiter();
+    use niminal_score::{Time, Value};
+    let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
     s.send_events(0,vec![Op::Define{source:"buffer one = zeros(8)\nbuffer two = zeros(8)\nctl level = 0.25\ninstr a(weights: [num] = [0.1, 0.2], source: buffer = one, value: num = 0) { spawn(osc(square, 100hz), dur: 1ms) { oversample(4) { osc(sine, 440hz) * env[1 | 1ms 0] } } + weights.sum + source[0] + value }".into(),at:At::Now,dir:None,tag:None}]).unwrap();
     s.send_events(
         0,
@@ -600,19 +664,45 @@ fn crossfades_and_actual_transaction_acknowledgements_do_no_heap_work_on_audio()
 #[test]
 fn a_graph_missed_during_starvation_is_applied_and_acknowledged_when_planning_resumes() {
     use serde_json::json;
-    let mut s=routing_session(); let mut r=s.start_realtime(RealtimeConfig::default());
-    let result=s.send_events(1,serde_json::from_value(json!([{"op":"routing","at":32,"edits":[
-        {"op":"processor","name":"double","source":"() { out = it * 2 }"},
-        {"op":"replace","id":"a","processor":"double"}
-    ]}])).unwrap()).unwrap();
-    let receipt=result.transactions[0].id;
-    let mut before=vec![0.0;128]; measured(&mut r,128,&mut before);
+    let mut s = routing_session();
+    let mut r = s.start_realtime(RealtimeConfig::default());
+    let result = s
+        .send_events(
+            1,
+            serde_json::from_value(json!([{"op":"routing","at":32,"edits":[
+                {"op":"processor","name":"double","source":"() { out = it * 2 }"},
+                {"op":"replace","id":"a","processor":"double"}
+            ]}]))
+            .unwrap(),
+        )
+        .unwrap();
+    let receipt = result.transactions[0].id;
+    let mut before = vec![0.0; 128];
+    measured(&mut r, 128, &mut before);
     s.prepare_realtime();
-    assert_eq!(s.transaction_status(1).as_array().unwrap().iter().find(|t|t["id"]==receipt).unwrap()["status"],"queued");
-    let mut after=vec![0.0;32]; measured(&mut r,32,&mut after); s.sync_realtime();
-    assert!(after.iter().all(|v|(*v-0.4).abs()<1e-6));
-    let status=s.transaction_status(1);
-    assert_eq!(status.as_array().unwrap().iter().find(|t|t["id"]==receipt).unwrap()["applied_at"],128);
+    assert_eq!(
+        s.transaction_status(1)
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == receipt)
+            .unwrap()["status"],
+        "queued"
+    );
+    let mut after = vec![0.0; 32];
+    measured(&mut r, 32, &mut after);
+    s.sync_realtime();
+    assert!(after.iter().all(|v| (*v - 0.4).abs() < 1e-6));
+    let status = s.transaction_status(1);
+    assert_eq!(
+        status
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == receipt)
+            .unwrap()["applied_at"],
+        128
+    );
 }
 
 #[test]

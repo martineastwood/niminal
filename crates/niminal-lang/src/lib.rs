@@ -6,16 +6,17 @@ mod ast;
 mod compile;
 mod diag;
 mod dsp;
-pub use dsp::{dsp_source, dsp_value, validate_dsp, LIVE_BPM, LIVE_ORIGIN, LIVE_METER};
+pub use dsp::{LIVE_BPM, LIVE_METER, LIVE_ORIGIN, dsp_source, dsp_value, validate_dsp};
 mod env_shortcut;
 mod funcs;
 mod ide;
 mod kernel;
-mod layout;
 mod latency;
+mod layout;
 mod lexer;
 mod lower;
 mod modules;
+mod namespace;
 mod opcodes;
 mod parser;
 mod perform;
@@ -32,7 +33,7 @@ pub use analysis::{
     CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_entries,
 };
 pub use ast::{ControlInput, InputSource};
-pub use compile::{CompileOptions, compile, compile_with, compile_dsp_with};
+pub use compile::{CompileOptions, compile, compile_dsp_with, compile_with};
 pub use diag::{Diagnostic, Span, closest};
 pub use ide::{
     OpInfo, ParamInfo, RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, builtin_ops, pattern_ops,

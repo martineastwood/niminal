@@ -26,6 +26,39 @@ pub enum Endpoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoutingEdit {
+    Array {
+        id: String,
+        param: String,
+        values: Vec<Value>,
+        #[serde(default)]
+        glide: f64,
+    },
+    BindBuffer {
+        id: String,
+        param: String,
+        buffer: String,
+    },
+    Player {
+        id: String,
+        #[serde(flatten)]
+        player: crate::Player,
+    },
+    Seek {
+        id: String,
+        seconds: f64,
+    },
+    Map {
+        id: String,
+        param: String,
+        #[serde(default)]
+        source: Option<ModSource>,
+        #[serde(default = "one")]
+        channel: usize,
+        #[serde(default = "unity32")]
+        scale: f32,
+        #[serde(default)]
+        offset: f32,
+    },
     /// A reusable processor signature and body, e.g. `(wet: num = 0.5) { out = it * wet }`.
     Processor {
         name: String,
@@ -111,12 +144,34 @@ pub enum RoutingEdit {
     },
     Clear,
 }
+fn one() -> usize {
+    1
+}
+fn unity32() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ModSource {
+    Control {
+        name: String,
+    },
+    Bus {
+        id: String,
+        #[serde(default)]
+        owner: Option<u64>,
+    },
+}
+
 fn unity() -> f64 {
     1.0
 }
 
 #[derive(Clone)]
 struct Processor {
+    resources: BTreeMap<String, u64>,
+    arrays: BTreeMap<String, Vec<String>>,
     track: TrackInfo,
     controls: Vec<ControlDef>,
     buses: Vec<String>,
@@ -196,7 +251,7 @@ fn smoothing(seconds: f64) -> Result<(), String> {
 fn param_name(control: &ControlDef) -> &str {
     control
         .name
-        .split_once("::")
+        .rsplit_once("::")
         .map_or(control.name.as_str(), |(_, param)| param)
 }
 /// A value sent by a client, as the finite f32 a control holds.
@@ -204,7 +259,9 @@ fn control_value(control: &ControlDef, value: Value, tempo: Tempo) -> Result<f32
     if matches!(value, Value::Beats(_) | Value::Bars(_)) {
         return Err("resolve musical units in the client".into());
     }
-    let value = control.from_value(value, tempo).map_err(|e| e.to_string())?;
+    let value = control
+        .from_value(value, tempo)
+        .map_err(|e| e.to_string())?;
     if value.is_finite() {
         Ok(value)
     } else {
@@ -213,6 +270,134 @@ fn control_value(control: &ControlDef, value: Value, tempo: Tempo) -> Result<f32
 }
 
 impl Routing {
+    pub fn player_keys(&self, owner: Option<u64>) -> Vec<String> {
+        self.clients
+            .iter()
+            .filter(|(client, _)| owner.is_none_or(|id| id == **client))
+            .flat_map(|(client, patch)| {
+                patch
+                    .nodes
+                    .iter()
+                    .filter(|(_, node)| {
+                        node.processor
+                            .as_ref()
+                            .is_some_and(|(name, _)| name == "file_player")
+                    })
+                    .map(move |(id, _)| format!("{}::playing", node_name(*client, id)))
+            })
+            .collect()
+    }
+    pub fn buffer_binding(
+        &self,
+        client: u64,
+        id: &str,
+        param: &str,
+    ) -> Result<(u64, usize, usize), String> {
+        let processor = &self
+            .clients
+            .get(&client)
+            .and_then(|p| p.nodes.get(id))
+            .and_then(|n| n.processor.as_ref())
+            .ok_or("no processor node")?
+            .1;
+        let key = *processor
+            .resources
+            .get(param)
+            .ok_or("no buffer parameter")?;
+        let count = processor
+            .track
+            .def
+            .chain
+            .as_ref()
+            .map_or(0, |g| g.buffer_bindings(key));
+        Ok((
+            key,
+            count,
+            processor
+                .track
+                .def
+                .chain
+                .as_ref()
+                .map_or(0, |g| g.buffer_channels(key)),
+        ))
+    }
+    pub fn parameter_unit(&self, client: u64, id: &str, param: &str) -> Option<Unit> {
+        self.clients
+            .get(&client)?
+            .nodes
+            .get(id)?
+            .processor
+            .as_ref()?
+            .1
+            .controls
+            .iter()
+            .find(|c| param_name(c) == param)
+            .map(|c| c.unit)
+    }
+    pub fn parameter(&self, client: u64, id: &str, param: &str) -> Result<String, String> {
+        let node = self
+            .clients
+            .get(&client)
+            .and_then(|p| p.nodes.get(id))
+            .ok_or("no such node")?;
+        let processor = node
+            .processor
+            .as_ref()
+            .ok_or("collection node has no parameters")?;
+        if processor.0 == "file_player" && param != "rate" {
+            return Err("only file-player rate supports modulation".into());
+        }
+        if processor.1.resources.contains_key(param) {
+            return Err("use bind_buffer for resource parameters".into());
+        }
+        if !processor.1.controls.iter().any(|c| param_name(c) == param) {
+            return Err(format!("no parameter `{param}`"));
+        }
+        Ok(format!("{}::{param}", node_name(client, id)))
+    }
+    pub fn source(&self, client: u64, source: &ModSource) -> Result<String, String> {
+        match source {
+            ModSource::Control { name } => Ok(crate::session::definitions::scoped(client, name)),
+            ModSource::Bus { id, owner } => {
+                let owner = owner.unwrap_or(client);
+                let bus = self
+                    .clients
+                    .get(&owner)
+                    .and_then(|p| p.buses.get(id))
+                    .filter(|b| owner == client || b.shared)
+                    .ok_or("no accessible bus")?;
+                Ok(bus
+                    .source
+                    .clone()
+                    .unwrap_or_else(|| format!("__routing_bus_{owner}_{id}")))
+            }
+        }
+    }
+    pub fn meter(
+        &self,
+        client: u64,
+        endpoint: &Endpoint,
+    ) -> Result<Arc<niminal_engine::Meter>, String> {
+        match endpoint {
+            Endpoint::Node { id } => self
+                .clients
+                .get(&client)
+                .and_then(|p| p.nodes.get(id))
+                .map(|n| n.meter.clone())
+                .ok_or_else(|| format!("no node `{id}`")),
+            Endpoint::Bus { id, owner } => {
+                let owner = owner.unwrap_or(client);
+                self.clients
+                    .get(&owner)
+                    .and_then(|p| p.buses.get(id))
+                    .filter(|b| owner == client || b.shared)
+                    .map(|b| b.meter.clone())
+                    .ok_or_else(|| format!("no accessible bus `{id}`"))
+            }
+            Endpoint::Master => Err("master meter belongs to the session".into()),
+        }
+    }
+
     pub fn has_node(&self, client: u64, id: &str) -> bool {
         self.clients
             .get(&client)
@@ -239,6 +424,62 @@ impl Routing {
         let patch = self.clients.entry(client).or_default();
         for edit in edits {
             match edit {
+                RoutingEdit::Player { id, player } => {
+                    valid(id)?;
+                    let prefix = format!("__routing_template_{client}_{id}");
+                    let (graph, controls) = crate::streaming::prepare(player, &prefix)?;
+                    let processor = Processor {
+                        resources: BTreeMap::new(),
+                        arrays: BTreeMap::new(),
+                        track: TrackInfo {
+                            def: TrackDef {
+                                chain: Some(graph),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        controls,
+                        buses: Vec::new(),
+                        imported: None,
+                        instrument: None,
+                    };
+                    let previous = patch.nodes.get(id);
+                    let node = Node {
+                        meter: previous.map(|n| n.meter.clone()).unwrap_or_default(),
+                        generation: previous.map_or(1, |n| n.generation + 1),
+                        fade: 0.,
+                        fade_until: 0,
+                        processor: Some(("file_player".into(), processor)),
+                        instrument: None,
+                        args: BTreeMap::new(),
+                        glide: 0.,
+                        draining: false,
+                    };
+                    patch.nodes.insert(id.clone(), node);
+                }
+                RoutingEdit::Seek { id, seconds } => {
+                    if !seconds.is_finite() || *seconds < 0. {
+                        return Err("seek position is nonnegative seconds".into());
+                    }
+                    let node = patch
+                        .nodes
+                        .get_mut(id)
+                        .filter(|n| {
+                            n.processor
+                                .as_ref()
+                                .is_some_and(|(name, _)| name == "file_player")
+                        })
+                        .ok_or("seek requires a file player")?;
+                    node.generation += 1;
+                    node.args.insert("seek".into(), Value::Seconds(*seconds));
+                    node.args.insert(
+                        "seek_trigger".into(),
+                        Value::Num((node.generation % (1 << 24)) as f64),
+                    );
+                }
+                RoutingEdit::Map { .. }
+                | RoutingEdit::Array { .. }
+                | RoutingEdit::BindBuffer { .. } => {}
                 RoutingEdit::Processor { name, source } => {
                     valid(name)?;
                     let internal = format!("__routing_template_{client}_{name}");
@@ -252,6 +493,15 @@ impl Routing {
                     let text = format!("{}\n{declaration}", definitions.source);
                     let mut options = options.clone();
                     options.buffers = definitions.buffers.iter().cloned().collect();
+                    options.namespaces = definitions.namespaces.clone();
+                    options.namespace_samples = definitions.namespace_samples.clone();
+                    if client != 0 {
+                        options.namespaces.push((
+                            definitions.source.len() + 1,
+                            text.len(),
+                            format!("__client_{client}"),
+                        ));
+                    }
                     let compiled = compile_dsp_with(&text, &options).map_err(|ds| {
                         ds.into_iter()
                             .map(|d| d.message)
@@ -275,6 +525,22 @@ impl Routing {
                     patch.processors.insert(
                         name.clone(),
                         Processor {
+                            resources: compiled
+                                .resource_controls
+                                .iter()
+                                .filter_map(|(n, k)| {
+                                    n.strip_prefix(&format!("{internal}::"))
+                                        .map(|n| (n.to_string(), *k))
+                                })
+                                .collect(),
+                            arrays: compiled
+                                .array_controls
+                                .iter()
+                                .filter_map(|(n, k)| {
+                                    n.strip_prefix(&format!("{internal}::"))
+                                        .map(|n| (n.to_string(), k.clone()))
+                                })
+                                .collect(),
                             track: template.clone(),
                             controls,
                             buses: compiled.buses,
@@ -300,6 +566,22 @@ impl Routing {
                     patch.processors.insert(
                         name.clone(),
                         Processor {
+                            resources: definitions
+                                .resource_controls
+                                .iter()
+                                .filter_map(|(n, k)| {
+                                    n.strip_prefix(&format!("{track}::"))
+                                        .map(|n| (n.to_string(), *k))
+                                })
+                                .collect(),
+                            arrays: definitions
+                                .array_controls
+                                .iter()
+                                .filter_map(|(n, k)| {
+                                    n.strip_prefix(&format!("{track}::"))
+                                        .map(|n| (n.to_string(), k.clone()))
+                                })
+                                .collect(),
                             track: template.clone(),
                             controls,
                             buses: definitions.buses.clone(),
@@ -338,7 +620,11 @@ impl Routing {
                     patch.buses.insert(
                         id.clone(),
                         Bus {
-                            meter: patch.buses.get(id).map(|b| b.meter.clone()).unwrap_or_default(),
+                            meter: patch
+                                .buses
+                                .get(id)
+                                .map(|b| b.meter.clone())
+                                .unwrap_or_default(),
                             channels: *channels,
                             shared: *shared,
                             source: source.clone(),
@@ -365,7 +651,11 @@ impl Routing {
                     patch.nodes.insert(
                         id.clone(),
                         Node {
-                            meter: patch.nodes.get(id).map(|n| n.meter.clone()).unwrap_or_default(),
+                            meter: patch
+                                .nodes
+                                .get(id)
+                                .map(|n| n.meter.clone())
+                                .unwrap_or_default(),
                             generation: patch.nodes.get(id).map_or(1, |n| n.generation + 1),
                             fade: 0.0,
                             fade_until: 0,
@@ -581,7 +871,7 @@ impl Routing {
             .retain(|t| !consumed.contains(t.name.as_str()));
         program.controls.retain(|c| {
             !c.name
-                .split_once("::")
+                .rsplit_once("::")
                 .is_some_and(|(track, _)| consumed.contains(track))
         });
         let channels = program.master.channels();
@@ -687,8 +977,38 @@ impl Routing {
                         track
                             .def
                             .controls
-                            .push((exposed.key.clone(), control.key.clone()));
+                            .push((exposed.key.clone(), exposed.key.clone()));
                         program.controls.push(exposed);
+                    }
+                    if let Some(graph) = &track.def.chain {
+                        let mut graph = graph.expose_controls(
+                            &processor
+                                .controls
+                                .iter()
+                                .map(|c| {
+                                    (
+                                        c.key.as_str(),
+                                        program
+                                            .controls
+                                            .iter()
+                                            .rev()
+                                            .find(|p| {
+                                                p.name == format!("{name}::{}", param_name(c))
+                                            })
+                                            .unwrap()
+                                            .key
+                                            .as_str(),
+                                    )
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                        for control in &processor.controls {
+                            graph.set_param_range(
+                                &format!("{name}::{}", param_name(control)),
+                                control.range.map(|(lo, hi)| (lo as f32, hi as f32)),
+                            );
+                        }
+                        track.def.chain = Some(Arc::new(graph));
                     }
                     for arg in node.args.keys() {
                         if !processor
@@ -822,6 +1142,7 @@ impl Routing {
                 }
                 let graph = Arc::new(graph.build_channels(&result));
                 program.controls.push(ControlDef {
+                    range: None,
                     name: key.clone(),
                     key,
                     unit: Unit::Num,
@@ -873,9 +1194,16 @@ impl Routing {
 
     pub fn is_control_edit(edits: &[RoutingEdit]) -> bool {
         !edits.is_empty()
-            && edits
-                .iter()
-                .all(|e| matches!(e, RoutingEdit::Set { .. } | RoutingEdit::Gain { .. }))
+            && edits.iter().all(|e| {
+                matches!(
+                    e,
+                    RoutingEdit::Set { .. }
+                        | RoutingEdit::Gain { .. }
+                        | RoutingEdit::Map { .. }
+                        | RoutingEdit::Array { .. }
+                        | RoutingEdit::BindBuffer { .. }
+                )
+            })
     }
 
     pub fn updates(
@@ -890,7 +1218,38 @@ impl Routing {
             .ok_or("this connection has no routing graph")?;
         let mut updates = Vec::new();
         for edit in edits {
+            if let RoutingEdit::Array {
+                id,
+                param,
+                values,
+                glide,
+            } = edit
+            {
+                let node = self
+                    .clients
+                    .get(&client)
+                    .and_then(|p| p.nodes.get(id))
+                    .ok_or("no node")?;
+                let processor = &node.processor.as_ref().ok_or("no processor")?.1;
+                let paths = processor.arrays.get(param).ok_or("no array parameter")?;
+                if paths.len() != values.len() {
+                    return Err("array shape differs".into());
+                }
+                updates.extend(self.updates(
+                    client,
+                    &[RoutingEdit::Set {
+                        id: id.clone(),
+                        args: paths.iter().cloned().zip(values.iter().copied()).collect(),
+                        glide: *glide,
+                    }],
+                    program,
+                )?);
+                continue;
+            }
             match edit {
+                RoutingEdit::Map { .. }
+                | RoutingEdit::Array { .. }
+                | RoutingEdit::BindBuffer { .. } => {}
                 RoutingEdit::Set { id, args, glide } => {
                     smoothing(*glide)?;
                     if !patch.nodes.contains_key(id) {
@@ -948,7 +1307,7 @@ impl Routing {
                                 let (value, target) =
                                     control(&format!("{}::{param}", node_name(*client, id))).unzip();
                                 serde_json::json!({
-                                    "name": param, "unit": c.unit.suffix(), "default": c.initial, "smooth": c.smooth_seconds,
+                                    "name": param, "range":c.range,"unit": c.unit.suffix(), "default": c.initial, "smooth": c.smooth_seconds,
                                     "value": value, "target": target,
                                 })
                             })
@@ -956,8 +1315,11 @@ impl Routing {
                     });
                     serde_json::json!({
                         "id": id, "processor": node.processor.as_ref().map(|(name, _)| name),
+                        "player":node.processor.as_ref().and_then(|(_,p)|p.track.def.chain.as_ref()).and_then(|g|g.stream_cache()).map(|cache|serde_json::json!({"frames":cache.frames,"channels":cache.channels,"sample_rate":cache.sample_rate,"position":cache.requested.load(std::sync::atomic::Ordering::Relaxed)as f64/cache.sample_rate as f64,"underrun_frames":cache.underruns.load(std::sync::atomic::Ordering::Relaxed),"failed":cache.failed.load(std::sync::atomic::Ordering::Acquire)})),
                         "instrument": node.instrument, "args": node.args, "draining": node.draining,
                         "params": params.unwrap_or_default(),
+                        "arrays":node.processor.as_ref().map(|(_,p)|&p.arrays),
+                        "buffers":node.processor.as_ref().map(|(_,p)|p.resources.keys().collect::<Vec<_>>()),
                     })
                 })
                 .collect::<Vec<_>>();

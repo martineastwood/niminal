@@ -15,15 +15,20 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use niminal_engine::{BLOCK, DEFAULT_CEILING, DEFAULT_MAX_VOICES, MAX_CHANNELS, Master, Mixer, Transfer};
-use niminal_lang::{CompileOptions, Expanded, Layout, Program, Samples, Statement, StatementKind, analyze, compile_dsp_with as compile_with};
+use niminal_engine::{
+    BLOCK, DEFAULT_CEILING, DEFAULT_MAX_VOICES, MAX_CHANNELS, Master, Mixer, Transfer,
+};
+use niminal_lang::{
+    CompileOptions, Expanded, Layout, Program, Samples, Statement, StatementKind, analyze,
+    compile_dsp_with as compile_with,
+};
 use niminal_score::{Event, Time, Value};
 
 use crate::engine_server::ClientId;
 use crate::events::{At, Cancelled, Op, Sent};
 use crate::log::{LogEntry, LogInput};
-use niminal_lang::{Entry, Located, Problem, Project};
 use crate::sounding::Sounding;
+use niminal_lang::{Entry, Located, Problem, Project};
 
 /// How many MIDI messages are kept waiting to be taken, at most.
 const MAX_MIDI_QUEUE: usize = 65_536;
@@ -33,6 +38,7 @@ pub(crate) const NO_KEY: u32 = u32::MAX;
 
 /// A note waiting for its moment.
 struct Upcoming {
+    activity: Option<Arc<niminal_engine::Activity>>,
     start: u64,
     dur: u64,
     event: Event,
@@ -78,7 +84,7 @@ pub(crate) struct VoiceMap {
     channel: usize,
     scale: f32,
     offset: f32,
-    range: Option<(f32,f32)>,
+    range: Option<(f32, f32)>,
     at: u64,
     client: ClientId,
     tag: Option<String>,
@@ -118,6 +124,37 @@ struct TimedPanic {
     done: bool,
 }
 
+#[derive(Clone)]
+struct ChainMap {
+    client: u64,
+    node: String,
+    param: String,
+    mapping: VoiceMap,
+}
+impl ChainMap {
+    fn track(&self) -> String {
+        format!("__routing_processor_{}_{}", self.client, self.node)
+    }
+}
+#[derive(Clone)]
+struct BufferBind {
+    param: String,
+    target: Option<String>,
+    key: u32,
+    resource: u64,
+    bank: niminal_engine::BufferBank,
+    count: usize,
+    at: u64,
+    client: u64,
+    tag: Option<String>,
+    done: bool,
+}
+impl BufferBind {
+    fn banks(&self) -> Vec<niminal_engine::BufferBank> {
+        vec![self.bank.clone(); self.count]
+    }
+}
+
 /// A waiting release of the note a key holds.
 struct KeyOff {
     key: u32,
@@ -133,11 +170,11 @@ struct ControlOwner {
     tag: Option<String>,
 }
 
-mod transactions;
-mod definitions;
+pub(crate) mod definitions;
 mod input;
 mod parameters;
 pub mod realtime;
+mod transactions;
 
 use definitions::{Meta, Pending, What, options};
 
@@ -169,6 +206,12 @@ pub struct EngineState {
 }
 
 pub struct Session {
+    buffer_budgets: HashMap<u64, usize>,
+    buffer_allocations: std::cell::RefCell<Vec<(u64, std::sync::Weak<niminal_engine::Buffer>)>>,
+    hidden_buffers: std::collections::HashSet<String>,
+    pub(crate) activities: Vec<super::activity::Note>,
+    pub(crate) voice_sequence: HashMap<u64, u64>,
+    next_note: u64,
     controls: Vec<crate::controls::State>,
     control_changes: Vec<crate::controls::Change>,
     next_control: u64,
@@ -182,6 +225,7 @@ pub struct Session {
     panic_epoch: Arc<AtomicU64>,
     /// Where the project's sample files are found, and the ones already read.
     samples: Samples,
+    client_samples: HashMap<u64, Samples>,
     sample_dirs: Vec<std::path::PathBuf>,
     clock: u64,
 
@@ -192,6 +236,7 @@ pub struct Session {
     definitions: Arc<Program>,
     routing: crate::routing::Routing,
     mixer: Mixer,
+    master_meter: Arc<niminal_engine::Meter>,
     limiter: Option<Master>,
 
     upcoming: VecDeque<Upcoming>,
@@ -216,6 +261,8 @@ pub struct Session {
     closed: Vec<VoiceEntry>,
     voice_sets: Vec<VoiceSet>,
     voice_maps: Vec<VoiceMap>,
+    buffer_binds: Vec<BufferBind>,
+    chain_maps: Vec<ChainMap>,
     /// Sorted by sample; recent applied entries remain available for replanning.
     track_sets: Vec<TrackSet>,
     buffer_sets: Vec<BufferSet>,
@@ -234,13 +281,21 @@ pub struct Session {
 impl Session {
     /// An engine that outputs `layout` at `sample_rate`, with the limiter on.
     pub fn new(sample_rate: f32, layout: Layout) -> Session {
-        let program = compile_with("", &options(layout, &Samples::default())).expect("an empty project compiles");
+        let program = compile_with("", &options(layout, &Samples::default(), sample_rate))
+            .expect("an empty project compiles");
         let mixer = program.mixer(sample_rate);
         Session {
+            buffer_budgets: HashMap::new(),
+            buffer_allocations: Default::default(),
+            hidden_buffers: Default::default(),
+            activities: Vec::new(),
+            next_note: 1,
+            voice_sequence: HashMap::new(),
             sample_rate,
             layout,
             panic_epoch: Arc::new(AtomicU64::new(0)),
             samples: Samples::default(),
+            client_samples: HashMap::new(),
             controls: Vec::new(),
             control_changes: Vec::new(),
             next_control: 0,
@@ -249,14 +304,19 @@ impl Session {
             midi_out: Vec::new(),
             sample_dirs: Vec::new(),
             clock: 0,
-            transactions:VecDeque::new(),
-            current_transaction:None,
+            transactions: VecDeque::new(),
+            current_transaction: None,
             project: Project::default(),
             definitions: Arc::new(program.clone()),
             routing: Default::default(),
             program: Arc::new(program),
             mixer,
-            limiter: Some(Master::with_channels(sample_rate, DEFAULT_CEILING, layout.channels())),
+            master_meter: Arc::default(),
+            limiter: Some(Master::with_channels(
+                sample_rate,
+                DEFAULT_CEILING,
+                layout.channels(),
+            )),
             upcoming: VecDeque::new(),
             sounding: Sounding::default(),
             pending: Vec::new(),
@@ -274,6 +334,8 @@ impl Session {
             closed: Vec::new(),
             voice_sets: Vec::new(),
             voice_maps: Vec::new(),
+            buffer_binds: Vec::new(),
+            chain_maps: Vec::new(),
             track_sets: Vec::new(),
             buffer_sets: Vec::new(),
             timed_panics: Vec::new(),
@@ -286,6 +348,60 @@ impl Session {
     }
 
     /// The sample files this session has read.
+    pub fn buffer_budget(&self, client: u64) -> (usize, usize) {
+        let mut allocations = self.buffer_allocations.borrow_mut();
+        allocations.retain(|(_, b)| b.strong_count() > 0);
+        let bytes = allocations
+            .iter()
+            .filter(|(owner, _)| *owner == client)
+            .filter_map(|(_, b)| b.upgrade())
+            .map(|b| b.len() * b.channels() * 4)
+            .sum();
+        (
+            self.buffer_budgets
+                .get(&client)
+                .copied()
+                .unwrap_or(256 * 1024 * 1024),
+            bytes,
+        )
+    }
+    pub fn set_buffer_budget(&mut self, client: u64, bytes: usize) -> Result<(), String> {
+        if bytes < self.buffer_budget(client).1 {
+            return Err("budget is below retained buffer storage".into());
+        }
+        self.buffer_budgets.insert(client, bytes);
+        Ok(())
+    }
+    pub fn buffer_is_hidden(&self, name: &str) -> bool {
+        self.hidden_buffers.contains(name)
+    }
+    pub fn hide_buffer(&mut self, name: String) {
+        self.log.push(LogEntry {
+            sample: self.clock,
+            input: LogInput::FreeBuffer { name: name.clone() },
+        });
+        self.hidden_buffers.insert(name);
+    }
+    pub fn publish_buffer(&mut self, name: &str) {
+        self.hidden_buffers.remove(name);
+    }
+    pub fn sample_files_for(&self, client: u64) -> &Samples {
+        self.client_samples.get(&client).unwrap_or(&self.samples)
+    }
+    fn set_client_sample_dir(&mut self, client: u64, dir: &std::path::Path) {
+        if client == 0 {
+            self.set_sample_dir(dir);
+            return;
+        }
+        let current = self
+            .client_samples
+            .entry(client)
+            .or_insert_with(|| Samples::new(dir));
+        let mut bases = current.bases().to_vec();
+        bases.retain(|d| d != dir);
+        bases.insert(0, dir.to_path_buf());
+        *current = current.with_bases(bases);
+    }
     pub fn sample_files(&self) -> &Samples {
         &self.samples
     }
@@ -356,7 +472,25 @@ impl Session {
             .map_or(&self.routing, |p| &p.routing)
     }
 
-    pub fn routing_meters(&self, take: bool) -> serde_json::Value { self.routing.meters(take) }
+    pub fn master_meter(&self) -> Arc<niminal_engine::Meter> {
+        self.master_meter.clone()
+    }
+
+    pub fn endpoint_meter(
+        &self,
+        client: u64,
+        endpoint: &crate::Endpoint,
+    ) -> Result<Arc<niminal_engine::Meter>, String> {
+        if matches!(endpoint, crate::Endpoint::Master) {
+            Ok(self.master_meter())
+        } else {
+            self.routing.meter(client, endpoint)
+        }
+    }
+
+    pub fn routing_meters(&self, take: bool) -> serde_json::Value {
+        self.routing.meters(take)
+    }
 
     pub fn routing_status(&self) -> serde_json::Value {
         self.routing.status(&self.control_values())
@@ -381,31 +515,106 @@ impl Session {
     /// Stop everything at once, including effect tails, and forget what was waiting.
     pub fn panic(&mut self) {
         self.sync_realtime();
+        for key in self.routing.player_keys(None) {
+            if let Some(control) = self.controls.iter_mut().find(|c| c.key == key) {
+                control.set(self.clock, 0., 0);
+            }
+        }
         self.panic_epoch.fetch_add(1, Ordering::Release);
         self.invalidate_live();
-        self.log.push(LogEntry { sample: self.clock, input: LogInput::Panic });
+        self.log.push(LogEntry {
+            sample: self.clock,
+            input: LogInput::Panic,
+        });
         self.upcoming.clear();
         self.track_sets.clear();
         self.buffer_sets.clear();
         self.voice_sets.clear();
         self.voice_maps.clear();
+        self.buffer_binds.clear();
+        self.chain_maps.clear();
         self.key_offs.clear();
         self.voices.clear();
         self.closed.clear();
         self.silence();
     }
 
+    pub fn panic_client(&mut self, client: ClientId) {
+        let exclusive = self.client_status().iter().all(|(id, _, _)| *id == client)
+            && self
+                .program
+                .instruments
+                .iter()
+                .all(|i| definitions::local(client, &i.name).is_some())
+            && self
+                .program
+                .tracks
+                .iter()
+                .skip(1)
+                .all(|t| definitions::owns_track(client, &t.name))
+            && self.program.controls.iter().all(|c| {
+                definitions::local(client, &c.name).is_some()
+                    || definitions::owns_track(client, &c.name)
+            });
+        // With no other owner's audio, the mixed limiter history can also be discarded.
+        if exclusive {
+            self.panic();
+            return;
+        }
+
+        self.cancel_events(client, None, At::Now, true);
+        let _ = self.send_events(
+            client,
+            vec![Op::Panic {
+                at: At::Now,
+                tag: None,
+            }],
+        );
+    }
+    fn silence_client(&mut self, client: ClientId) {
+        if self.detached {
+            return;
+        }
+        let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sounding.midi)
+            .into_iter()
+            .partition(|m| m.3 == client);
+        self.sounding.midi = kept;
+        for (_, _, note, _) in ended {
+            self.send_midi(false, &note, self.clock);
+        }
+        for key in self.routing.player_keys(Some(client)) {
+            if let Some(control) = self.controls.iter_mut().find(|c| c.key == key) {
+                control.set(self.clock, 0., 0);
+            }
+        }
+        let mut mixer = self.program.mixer(self.sample_rate);
+        let mut transfers = Vec::new();
+        plan_transfers(&self.program, &self.program, &mut transfers);
+        self.mixer.silence_owner(client);
+        for (track, transfer) in self.program.tracks.iter().zip(&mut transfers) {
+            if !track.name.is_empty() && definitions::owns_track(client, &track.name) {
+                transfer.chain_from = None;
+                transfer.voices_from = None;
+            }
+        }
+        mixer.adopt(&mut self.mixer, &transfers);
+        crate::controls::sync_mixer(&self.controls, &mut mixer, self.clock);
+        self.mixer = mixer;
+    }
+
     /// Stop every voice and clear the memory of every effect.
     fn silence(&mut self) {
         if !self.detached {
+            self.mixer.finish_activities(self.clock, 2);
             self.mixer.panic();
             crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
         }
         if let Some(limiter) = &mut self.limiter {
             limiter.clear();
         }
+        self.mixer.finish_activities(self.clock, 2);
         self.sounding.held.clear();
-        for (_, _, note) in std::mem::take(&mut self.sounding.midi) {
+        for (_, _, note, _) in std::mem::take(&mut self.sounding.midi) {
             if self.midi_out.len() < MAX_MIDI_QUEUE {
                 self.midi_out.push(crate::MidiEvent {
                     at: self.clock,
@@ -424,7 +633,14 @@ impl Session {
             .controls
             .iter()
             .zip(&self.controls)
-            .map(|(def, state)| (def.name.clone(), state.value(self.clock), state.target, def.unit.suffix()))
+            .map(|(def, state)| {
+                (
+                    def.name.clone(),
+                    state.value(self.clock),
+                    state.target,
+                    def.unit.suffix(),
+                )
+            })
             .collect()
     }
 
@@ -449,7 +665,12 @@ impl Session {
     pub fn definitions(&self) -> (Vec<niminal_lang::Instrument>, Vec<String>, Vec<String>) {
         (
             self.program.instruments.clone(),
-            self.program.tracks.iter().skip(1).map(|t| t.name.clone()).collect(),
+            self.program
+                .tracks
+                .iter()
+                .skip(1)
+                .map(|t| t.name.clone())
+                .collect(),
             self.program.buses.clone(),
         )
     }
@@ -460,21 +681,51 @@ impl Session {
         clients.extend(self.upcoming.iter().filter_map(|u| u.client));
         clients.extend(self.control_owners.iter().map(|o| o.client));
         clients.extend(self.pending.iter().map(|p| p.meta.client));
-        clients.extend(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.client));
+        clients.extend(
+            self.buffer_sets
+                .iter()
+                .filter(|s| !s.done)
+                .map(|s| s.client),
+        );
         clients.extend(self.voice_maps.iter().filter(|s| !s.done).map(|s| s.client));
         clients.sort_unstable();
         clients.dedup();
         clients
             .into_iter()
             .map(|c| {
-                let ids = self.voices.iter().filter(|v| v.client == c).map(|v| v.id).collect();
-                let waiting = self.upcoming.iter().filter(|u| u.client == Some(c) && u.start >= self.clock).count()
+                let ids = self
+                    .voices
+                    .iter()
+                    .filter(|v| v.client == c)
+                    .map(|v| v.id)
+                    .collect();
+                let waiting = self
+                    .upcoming
+                    .iter()
+                    .filter(|u| u.client == Some(c) && u.start >= self.clock)
+                    .count()
                     + self.control_owners.iter().filter(|o| o.client == c).count()
-                    + self.voice_sets.iter().filter(|s| s.client == c && !s.done).count()
-                    + self.track_sets.iter().filter(|s| s.client == Some(c) && !s.done).count()
+                    + self
+                        .voice_sets
+                        .iter()
+                        .filter(|s| s.client == c && !s.done)
+                        .count()
+                    + self
+                        .track_sets
+                        .iter()
+                        .filter(|s| s.client == Some(c) && !s.done)
+                        .count()
                     + self.pending.iter().filter(|p| p.meta.client == c).count()
-                    + self.buffer_sets.iter().filter(|s| s.client == c && !s.done).count()
-                    + self.voice_maps.iter().filter(|s| s.client == c && !s.done).count();
+                    + self
+                        .buffer_sets
+                        .iter()
+                        .filter(|s| s.client == c && !s.done)
+                        .count()
+                    + self
+                        .voice_maps
+                        .iter()
+                        .filter(|s| s.client == c && !s.done)
+                        .count();
                 (c, ids, waiting)
             })
             .collect()
@@ -489,7 +740,10 @@ impl Session {
         EngineState {
             sample: self.clock,
             seconds: self.seconds(self.clock),
-            voices: self.live.as_ref().map_or_else(|| self.mixer.active_voices(), |p| p.state.voices.load(Ordering::Relaxed)),
+            voices: self.live.as_ref().map_or_else(
+                || self.mixer.active_voices(),
+                |p| p.state.voices.load(Ordering::Relaxed),
+            ),
             pending: self.pending.len(),
         }
     }
@@ -498,8 +752,11 @@ impl Session {
     /// recurs every fraction of a second must not bury everything else.
     pub(crate) fn notify(&mut self, notice: String) {
         let quiet_until = u64::from(self.sample_rate as u32) * NOTICE_REPEAT_SECONDS;
-        self.recent_notices.retain(|(_, at)| self.clock.saturating_sub(*at) < quiet_until);
-        if self.notices.len() < MAX_NOTICES && !self.recent_notices.iter().any(|(n, _)| *n == notice) {
+        self.recent_notices
+            .retain(|(_, at)| self.clock.saturating_sub(*at) < quiet_until);
+        if self.notices.len() < MAX_NOTICES
+            && !self.recent_notices.iter().any(|(n, _)| *n == notice)
+        {
             self.recent_notices.push((notice.clone(), self.clock));
             self.notices.push(notice);
         }
@@ -552,7 +809,11 @@ impl Session {
     // ---- landing ------------------------------------------------------------------------
 
     fn land_due(&mut self, before: u64) {
-        while self.pending.first().is_some_and(|p| p.lands_at <= self.clock && (p.lands_at < before || p.applied.load(Ordering::Acquire) != transactions::WAITING)) {
+        while self.pending.first().is_some_and(|p| {
+            p.lands_at <= self.clock
+                && (p.lands_at < before
+                    || p.applied.load(Ordering::Acquire) != transactions::WAITING)
+        }) {
             let pending = self.pending.remove(0);
             self.land(pending);
         }
@@ -571,9 +832,16 @@ impl Session {
             applied,
             ..
         } = p;
-        if !self.detached { applied.store(self.clock,Ordering::Release); }
-        self.current_transaction=Some(applied);
+        if !self.detached {
+            applied.store(self.clock, Ordering::Release);
+        }
+        self.current_transaction = Some(applied);
         self.reconcile_transactions();
+        for statement in &statements {
+            if let Some(name) = statement.key().and_then(|key| key.strip_prefix("buffer:")) {
+                self.hidden_buffers.remove(name);
+            }
+        }
         self.definitions = definitions;
         self.routing = routing;
         let released = self
@@ -639,9 +907,10 @@ impl Session {
         plan_transfers(&self.program, &program, &mut transfers);
         mixer.adopt(&mut self.mixer, &transfers);
         crate::controls::sync_mixer(&self.controls, &mut mixer, self.clock);
-        carry_buffers(&self.program, &program);
+        self.mixer.finish_activities(self.clock, 4);
         self.mixer = mixer;
         self.program = program;
+        self.restore_chain_bindings();
         self.project = project;
     }
 
@@ -673,6 +942,8 @@ impl Session {
         let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];
 
         while self.clock < end {
+            self.mixer
+                .set_clock(niminal_engine::Clock { sample: self.clock });
             self.land_due(self.clock.saturating_add(1));
             self.apply_controls();
             self.release_due();
@@ -680,9 +951,17 @@ impl Session {
             self.apply_track_sets(self.clock.saturating_add(1));
             for set in &mut self.buffer_sets {
                 if !set.done && set.at <= self.clock {
-                    if let Some((_, buffer)) = self.program.buffers.iter().find(|(name, _)| *name == set.name)
-                        && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
-                        for (i, value) in set.values.iter().enumerate() { buffer.write(set.offset + i, *value); }
+                    if let Some((_, buffer)) = self
+                        .program
+                        .buffers
+                        .iter()
+                        .find(|(name, _)| *name == set.name)
+                        && set.offset <= buffer.len()
+                        && set.values.len() <= (buffer.len() - set.offset) * buffer.channels()
+                    {
+                        for (i, value) in set.values.iter().enumerate() {
+                            buffer.write_sample(set.offset * buffer.channels() + i, *value);
+                        }
                     }
                     set.done = true;
                 }
@@ -700,7 +979,19 @@ impl Session {
                 n = n.min(change.at.saturating_sub(self.clock).max(1));
             }
             n = self.sounding.limit(self.clock, n);
-            let upcoming = self.key_offs.iter().map(|k| k.at).chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at)).chain(self.track_sets.iter().filter(|s| !s.done).map(|s| s.at))
+            let upcoming = self
+                .key_offs
+                .iter()
+                .map(|k| k.at)
+                .chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at))
+                .chain(self.track_sets.iter().filter(|s| !s.done).map(|s| s.at))
+                .chain(
+                    self.chain_maps
+                        .iter()
+                        .filter(|m| !m.mapping.done)
+                        .map(|m| m.mapping.at),
+                )
+                .chain(self.buffer_binds.iter().filter(|b| !b.done).map(|b| b.at))
                 .chain(self.timed_panics.iter().filter(|p| !p.done).map(|p| p.at))
                 .chain(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.at))
                 .chain(self.voice_maps.iter().filter(|s| !s.done).map(|s| s.at));
@@ -711,6 +1002,8 @@ impl Session {
                 n = n.min(next.start - self.clock);
             }
             self.start_due();
+            self.apply_buffer_binds();
+            self.apply_chain_maps();
             self.apply_voice_maps();
 
             let n = n.max(1) as usize;
@@ -724,7 +1017,8 @@ impl Session {
                 self.mixer
                     .set_audio_input(c, &samples[from..(from + n).min(samples.len())]);
             }
-            self.mixer.set_clock(niminal_engine::Clock { sample: self.clock });
+            self.mixer
+                .set_clock(niminal_engine::Clock { sample: self.clock });
             self.mixer.process(&mut block[..channels], n);
             self.silenced += self.mixer.take_silenced();
             if let Some(limiter) = &mut self.limiter {
@@ -733,6 +1027,7 @@ impl Session {
             for (peak, b) in self.peaks.iter_mut().zip(&block) {
                 *peak = b[..n].iter().fold(*peak, |m, s| m.max(s.abs()));
             }
+            self.master_meter.observe(&block[..channels], n, self.clock);
             sink(&block[..channels], n);
             self.clock += n as u64;
         }
@@ -743,7 +1038,13 @@ impl Session {
     /// samples of it. Because inputs are applied at the sample they were first
     /// applied at, this is the audio the original produced, however it was
     /// divided into blocks.
-    pub fn replay(sample_rate: f32, layout: Layout, log: &[LogEntry], frames: u64, limiter: bool) -> Vec<Vec<f32>> {
+    pub fn replay(
+        sample_rate: f32,
+        layout: Layout,
+        log: &[LogEntry],
+        frames: u64,
+        limiter: bool,
+    ) -> Vec<Vec<f32>> {
         let mut session = Session::new(sample_rate, layout);
         if !limiter {
             session = session.without_limiter();
@@ -762,10 +1063,16 @@ impl Session {
                 LogInput::Send { client, ops } => {
                     let _ = session.send_events(*client, ops.clone());
                 }
-                LogInput::CancelEvents { client, tag, from, release } => {
+                LogInput::CancelEvents {
+                    client,
+                    tag,
+                    from,
+                    release,
+                } => {
                     session.cancel_events(*client, tag.as_deref(), At::Sample(*from), *release);
                 }
                 LogInput::Panic => session.panic(),
+                LogInput::FreeBuffer { name } => session.hide_buffer(name.clone()),
             }
         }
         extend(&mut session, frames);
@@ -806,8 +1113,19 @@ impl Session {
                         plan.choke,
                         plan.rule,
                     );
+                    if let Some(activity) = note.activity {
+                        self.mixer.attach_voice_activity(id, activity, self.clock);
+                    }
+                    self.mixer.set_voice_owner(id, note.client.unwrap_or(0));
                     self.mixer.set_voice_pan(id, plan.pan);
-                    self.mixer.set_voice_dur(id, if note.key.is_some() && note.dur == 0 { 0.0 } else { note.dur as f32 / self.sample_rate });
+                    self.mixer.set_voice_dur(
+                        id,
+                        if note.key.is_some() && note.dur == 0 {
+                            0.0
+                        } else {
+                            note.dur as f32 / self.sample_rate
+                        },
+                    );
                     crate::controls::sync_note(&self.controls, &mut self.mixer, id, self.clock);
                     let off = if note.key.is_some() && note.dur == 0 {
                         u64::MAX
@@ -819,9 +1137,12 @@ impl Session {
                         .push((off, id, note.key.unwrap_or(NO_KEY)));
                     if let Some(midi) = plan.midi {
                         self.send_midi(true, &midi, self.clock);
-                        self.sounding
-                            .midi
-                            .push((off, note.key.unwrap_or(NO_KEY), midi));
+                        self.sounding.midi.push((
+                            off,
+                            note.key.unwrap_or(NO_KEY),
+                            midi,
+                            note.client.unwrap_or(0),
+                        ));
                     }
                     if self.mixer.take_stolen() > 0 {
                         self.notify(format!("too many notes at once: the oldest are ended early to keep to {} voices", DEFAULT_MAX_VOICES));
@@ -856,15 +1177,19 @@ impl Session {
     /// Silence everything at the samples panics were asked for.
     fn apply_timed_panics(&mut self) {
         let now = self.clock;
-        let mut any = false;
-        for panic in self.timed_panics.iter_mut().filter(|p| !p.done && p.at <= now) {
-            panic.done = true;
-            any = true;
-        }
+        let clients: Vec<_> = self
+            .timed_panics
+            .iter_mut()
+            .filter(|p| !p.done && p.at <= now)
+            .map(|p| {
+                p.done = true;
+                p.client
+            })
+            .collect();
         let stale = now.saturating_sub(self.sample_rate as u64 * 2);
         self.timed_panics.retain(|p| !p.done || p.at + 1 > stale);
-        if any {
-            self.silence();
+        for client in clients {
+            self.silence_client(client);
         }
     }
 
@@ -873,11 +1198,21 @@ impl Session {
     fn apply_track_sets(&mut self, before: u64) {
         let now = self.clock;
         for set in &mut self.track_sets {
-            if set.at >= before { break; }
-            if set.done { continue; }
+            if set.at >= before {
+                break;
+            }
+            if set.done {
+                continue;
+            }
             if let Some(state) = self.controls.iter_mut().find(|c| c.key == set.key) {
                 state.set(set.at, set.value, set.frames);
-                self.mixer.set_control(&state.key, state.start, state.target, state.frames, now.saturating_sub(set.at));
+                self.mixer.set_control(
+                    &state.key,
+                    state.start,
+                    state.target,
+                    state.frames,
+                    now.saturating_sub(set.at),
+                );
             }
             set.done = true;
         }
@@ -894,7 +1229,8 @@ impl Session {
                 continue;
             }
             for held in self.sounding.held.iter().filter(|h| h.2 == set.key) {
-                self.mixer.set_voice_param_glide(held.1,&set.name,set.value,set.frames);
+                self.mixer
+                    .set_voice_param_glide(held.1, &set.name, set.value, set.frames);
             }
             self.voice_sets[i].done = true;
         }
@@ -913,7 +1249,7 @@ impl Session {
             .into_iter()
             .partition(|h| h.0 <= now);
         self.sounding.midi = kept;
-        for (_, _, note) in &ended {
+        for (_, _, note, _) in &ended {
             self.send_midi(false, note, now);
         }
         let mixer = &mut self.mixer;
@@ -940,14 +1276,6 @@ pub(super) fn plan_transfers(old: &Program, new: &Program, out: &mut Vec<Transfe
             voices_from: from,
             chain_from: from.filter(|_| i > 0),
         });
-    }
-}
-
-/// Keep shared buffer contents across a live re-eval when name and length match.
-pub(super) fn carry_buffers(old: &Program, new: &Program) {
-    for (name, next) in &new.buffers {
-        if let Some((_, prev)) = old.buffers.iter().find(|(n, b)| n == name && b.len() == next.len())
-            && !Arc::ptr_eq(prev, next) { prev.copy_into(next); }
     }
 }
 

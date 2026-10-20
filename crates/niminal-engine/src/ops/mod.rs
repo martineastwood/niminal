@@ -23,15 +23,17 @@ pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
 pub use compress::Compressor;
 pub use control::Control;
-pub use custom::{BinOp, Cmp, Custom, Fn1, Func, Instr, Interp, Kernel, ResetScope, ArraySource, Native, NativeInput, read_array, read_at, rem};
+pub use custom::{
+    ArraySource, BinOp, Cmp, Custom, Fn1, Func, Instr, Interp, Kernel, Native, NativeInput,
+    ResetScope, read_array, read_at, rem,
+};
 pub use delay::Delay;
 pub use env::{Curve, Env, EnvField, Segment, shape};
 pub use filter::{FilterMode, Svf};
 pub use fold::{Clip, Fold};
 pub use math::{
-    Add, BlockHold, Compare, Context, Delay1, Div, Gain, Hold, Max, Min, Mul, NoteStart, NoteTime, Pow, ReadContext, Released, Rem, SampleRate,
-    Select, Sub,
-    ArrayRead, TableRead, Waveshape,
+    Add, ArrayRead, BlockHold, Compare, Context, Delay1, Div, Gain, Hold, Max, Min, Mul, NoteStart,
+    NoteTime, Pow, ReadContext, Released, Rem, SampleRate, Select, Sub, TableRead, Waveshape,
 };
 pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
@@ -55,3 +57,9 @@ pub use oversample::Oversample;
 mod latency;
 pub use latency::SampleDelay;
 mod kernel_latency;
+
+mod report;
+pub use report::{Report, ReportOut};
+
+mod stream;
+pub use stream::{STREAM_PAGE, StreamCache, StreamOut};

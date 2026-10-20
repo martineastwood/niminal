@@ -16,9 +16,9 @@ use niminal_daemon::{
     At, ClockInfo, Endpoint, EngineError, EngineReply, EngineRequest, Op, RoutingEdit,
 };
 use niminal_lang::{
-    Entry, Located, Origin, Piece, Problem, Project,
-    Action, Clip, CommandAction, CompileOptions, Expanded, InputSource, Layout, PlayInfo, Program, Quantize,
-    Samples, Schedule, Scheduled, Statement, StatementData, StatementKind, analyze, compile_with,
+    Action, Clip, CommandAction, CompileOptions, Entry, Expanded, InputSource, Layout, Located,
+    Origin, Piece, PlayInfo, Problem, Program, Project, Quantize, Samples, Schedule, Scheduled,
+    Statement, StatementData, StatementKind, analyze, compile_with,
 };
 use niminal_score::{Event, Tempo, Time, Value};
 
@@ -33,8 +33,8 @@ mod playing;
 
 use eval::options;
 pub use eval::{Begin, CancelDone, CancelJob, EvalDone, EvalJob, ParsedEval};
-use playing::{Playing, apply_launch, apply_to_playing, join_edit, mentions_any};
 pub use input::ControlSignal;
+use playing::{Playing, apply_launch, apply_to_playing, join_edit, mentions_any};
 
 /// A command that has happened, by track name so that it survives the program being replaced.
 #[derive(Clone)]
@@ -234,14 +234,16 @@ const NOTICE_REPEAT_SECONDS: u64 = 10;
 impl Live {
     /// A sequencer for an engine that outputs `layout` at `sample_rate`.
     pub fn new(link: Box<dyn EngineLink>, sample_rate: f32, layout: Layout) -> Live {
-        let program = compile_with("", &options(layout, &Samples::default())).expect("an empty project compiles");
+        let program = compile_with("", &options(layout, &Samples::default()))
+            .expect("an empty project compiles");
         let schedule = program.schedule();
         Live {
             link,
             clock_names: {
                 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                 let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                ["bpm", "origin", "meter"].map(|name| format!("__live_{}_{}_{name}", std::process::id(), id))
+                ["bpm", "origin", "meter"]
+                    .map(|name| format!("__live_{}_{}_{name}", std::process::id(), id))
             },
             sample_rate,
             layout,
@@ -257,7 +259,10 @@ impl Live {
             learned_out: Vec::new(),
             project: Project::default(),
             program: Arc::new(program),
-            history: vec![HistoryEntry { at: 0.0, action: NamedAction::Origin }],
+            history: vec![HistoryEntry {
+                at: 0.0,
+                action: NamedAction::Origin,
+            }],
             schedule,
             fetched_until: 0,
             overloaded: Vec::new(),
@@ -346,11 +351,15 @@ impl Live {
     /// that one that can't play doesn't keep the rest from sounding.
     fn send(&mut self, ops: Vec<Op>) {
         for batch in ops.chunks(BATCH) {
-            match self.link.request(EngineRequest::EventsSend { events: batch.to_vec() }) {
+            match self.link.request(EngineRequest::EventsSend {
+                events: batch.to_vec(),
+            }) {
                 Ok(_) => {}
                 Err(_) if batch.len() > 1 => {
                     for op in batch {
-                        if let Err(e) = self.link.request(EngineRequest::EventsSend { events: vec![op.clone()] }) {
+                        if let Err(e) = self.link.request(EngineRequest::EventsSend {
+                            events: vec![op.clone()],
+                        }) {
                             self.notify(describe(&e));
                         }
                     }
@@ -362,7 +371,11 @@ impl Live {
 
     /// Take back the events the engine is waiting on that carry `tag`, from sample `from`.
     fn take_back(&mut self, tag: &str, from: u64) {
-        let request = EngineRequest::EventsCancel { tag: Some(tag.to_string()), from: Some(At::Sample(from)), release: false };
+        let request = EngineRequest::EventsCancel {
+            tag: Some(tag.to_string()),
+            from: Some(At::Sample(from)),
+            release: false,
+        };
         if let Err(e) = self.link.request(request) {
             self.notify(describe(&e));
         }
@@ -417,10 +430,16 @@ impl Live {
         if !self.look() {
             return;
         }
-        let horizon = horizon.unwrap_or(self.clock + self.lookahead).max(self.clock);
+        let horizon = horizon
+            .unwrap_or(self.clock + self.lookahead)
+            .max(self.clock);
         // the engine knows of every change before it is sent notes that depend on one
         self.sync_pending();
-        while let Some(i) = self.pending.iter().position(|p| !p.done && p.lands_at <= horizon) {
+        while let Some(i) = self
+            .pending
+            .iter()
+            .position(|p| !p.done && p.lands_at <= horizon)
+        {
             // what falls before the change is as the project was
             self.fetch_until(self.pending[i].lands_at);
             self.land(i);
@@ -430,7 +449,8 @@ impl Live {
         let clock = self.clock;
         self.pending.retain(|p| !p.done || p.lands_at > clock);
         self.asked.retain(|a| a.lands_at > clock);
-        self.written.retain(|w| w.start + w.dur + 1 > clock.saturating_sub(self.sample_rate as u64 * 64));
+        self.written
+            .retain(|w| w.start + w.dur + 1 > clock.saturating_sub(self.sample_rate as u64 * 64));
         self.sync_pending();
     }
 
@@ -504,7 +524,9 @@ impl Live {
     /// Changes that have landed since this was last called.
     pub fn take_landed(&mut self) -> Vec<Landed> {
         let clock = self.clock;
-        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.landed).into_iter().partition(|l| l.at <= clock);
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.landed)
+            .into_iter()
+            .partition(|l| l.at <= clock);
         self.landed = later;
         due
     }
@@ -513,8 +535,11 @@ impl Live {
     /// second must not bury everything else.
     pub(crate) fn notify(&mut self, notice: String) {
         let quiet_until = u64::from(self.sample_rate as u32) * NOTICE_REPEAT_SECONDS;
-        self.recent_notices.retain(|(_, at)| self.clock.saturating_sub(*at) < quiet_until);
-        if self.notices.len() < MAX_NOTICES && !self.recent_notices.iter().any(|(n, _)| *n == notice) {
+        self.recent_notices
+            .retain(|(_, at)| self.clock.saturating_sub(*at) < quiet_until);
+        if self.notices.len() < MAX_NOTICES
+            && !self.recent_notices.iter().any(|(n, _)| *n == notice)
+        {
             self.recent_notices.push((notice.clone(), self.clock));
             self.notices.push(notice);
         }
@@ -529,7 +554,11 @@ impl Live {
     /// Ask the engine for its meters, or not. Reading them resets them, so it is only done for someone who listens.
     pub fn set_metering(&mut self, on: bool) {
         let topics = vec!["meters".to_string()];
-        let request = if on { EngineRequest::Subscribe { topics } } else { EngineRequest::Unsubscribe { topics } };
+        let request = if on {
+            EngineRequest::Subscribe { topics }
+        } else {
+            EngineRequest::Unsubscribe { topics }
+        };
         let _ = self.link.request(request);
     }
 
@@ -567,6 +596,9 @@ impl Live {
     }
 
     pub(crate) fn control_name(&self, name: &str, client: u64) -> Option<String> {
+        let name = name
+            .strip_prefix(&format!("__client_{client}::"))
+            .unwrap_or(name);
         if !name.starts_with("__routing_") {
             return Some(name.to_string());
         }
@@ -638,7 +670,12 @@ impl Live {
             }
         }
         let position = self.grid().position(at);
-        self.landed.push(Landed { id, at, position, changes });
+        self.landed.push(Landed {
+            id,
+            at,
+            position,
+            changes,
+        });
     }
 
     /// Carry out one `play`, `mute`, note... statement that has landed. It was compiled when it was
@@ -658,7 +695,11 @@ impl Live {
                 at + self.samples(offset)
             };
             let dur = self.samples(event.dur.to_seconds(tempo));
-            self.written.push(Written { start: start.max(at), dur, event: event.clone() });
+            self.written.push(Written {
+                start: start.max(at),
+                dur,
+                event: event.clone(),
+            });
             if let Some(op) = self.note_op(event, start.max(at), dur, WRITTEN) {
                 ops.push(op);
             }
@@ -669,11 +710,18 @@ impl Live {
                 continue;
             }
             let after = scheduled.at.to_seconds(tempo);
-            let when = if statement.has_at() { origin + after } else { landing_seconds + after };
+            let when = if statement.has_at() {
+                origin + after
+            } else {
+                landing_seconds + after
+            };
             let Some(named) = name_action(program, &scheduled.action) else {
                 continue;
             };
-            self.history.push(HistoryEntry { at: when, action: named });
+            self.history.push(HistoryEntry {
+                at: when,
+                action: named,
+            });
         }
         captures
     }
@@ -692,7 +740,7 @@ impl Live {
                 event.target.clone()
             },
             at: At::Sample(start),
-            args: event.args.iter().map(|(name, value)| (name.clone(), niminal_lang::dsp_value(*value, self.program.tempo))).collect(),
+            args: self.program.dsp_args(event).expect("event validated above"),
             dur: Some(Time::Seconds(dur as f64 / f64::from(self.sample_rate))),
             id: None,
             tag: Some(tag.to_string()),
@@ -731,7 +779,11 @@ impl Live {
             event.at = beat(at);
             event.dur = beat(dur);
         }
-        let section = niminal_score::Section { name: name.to_string(), length: Time::Bars(bars), events };
+        let section = niminal_score::Section {
+            name: name.to_string(),
+            length: Time::Bars(bars),
+            events,
+        };
         let dir = std::path::Path::new("score");
         if let Err(e) = std::fs::create_dir_all(dir) {
             return Some(format!("capture failed: could not create score/: {e}"));
@@ -739,7 +791,10 @@ impl Live {
         let path = dir.join(format!("{name}.nms"));
         let count = section.events.len();
         if let Err(e) = std::fs::write(&path, section.to_json()) {
-            return Some(format!("capture failed: could not write {}: {e}", path.display()));
+            return Some(format!(
+                "capture failed: could not write {}: {e}",
+                path.display()
+            ));
         }
         Some(format!("wrote {} ({count} events)", path.display()))
     }
@@ -793,7 +848,11 @@ impl Live {
             }
         }
         let mut ops = Vec::new();
-        for origin in self.history.iter().filter(|h| h.at >= from && h.at < to && matches!(h.action, NamedAction::Reset | NamedAction::Origin)) {
+        for origin in self.history.iter().filter(|h| {
+            h.at >= from
+                && h.at < to
+                && matches!(h.action, NamedAction::Reset | NamedAction::Origin)
+        }) {
             ops.extend(self.clock_ops(self.samples(origin.at)));
         }
         // panics
@@ -803,7 +862,10 @@ impl Live {
             if at >= horizon {
                 break;
             }
-            ops.push(Op::Panic { at: At::Sample(at), tag: Some(SCHEDULED.into()) });
+            ops.push(Op::Panic {
+                at: At::Sample(at),
+                tag: Some(SCHEDULED.into()),
+            });
             // notes written out before a panic that start after it never sound
             self.take_back(WRITTEN, at);
             self.next_panic += 1;
@@ -881,7 +943,10 @@ impl Live {
                 Ok(_) => self.asked.push(Asked { id, lands_at }),
                 Err(e) => {
                     // the engine would not take it, so it must not land here either
-                    self.notify(format!("change {id} was refused by the engine: {}", describe(&e)));
+                    self.notify(format!(
+                        "change {id} was refused by the engine: {}",
+                        describe(&e)
+                    ));
                     self.pending.remove(index);
                     self.version += 1;
                     return;
@@ -899,9 +964,23 @@ impl Live {
         let mut ops = definition_ops(statements, program, at, self.sample_dirs.first());
         for op in &mut ops {
             if let Op::Define { source, .. } = op {
-                let names = [niminal_lang::LIVE_BPM, niminal_lang::LIVE_ORIGIN, niminal_lang::LIVE_METER];
+                let names = [
+                    niminal_lang::LIVE_BPM,
+                    niminal_lang::LIVE_ORIGIN,
+                    niminal_lang::LIVE_METER,
+                ];
                 let tempo = program.map_or(self.program.tempo, |p| p.tempo);
-                let values = [tempo.bpm.to_string(), format!("{}sec", self.clock_origin(match at { At::Sample(n) => n, At::Now => self.clock })), tempo.beats_per_bar.to_string()];
+                let values = [
+                    tempo.bpm.to_string(),
+                    format!(
+                        "{}sec",
+                        self.clock_origin(match at {
+                            At::Sample(n) => n,
+                            At::Now => self.clock,
+                        })
+                    ),
+                    tempo.beats_per_bar.to_string(),
+                ];
                 let mut controls = String::new();
                 for ((old, name), value) in names.iter().zip(&self.clock_names).zip(values) {
                     if source.contains(old) {
@@ -964,27 +1043,59 @@ impl Live {
                 buses,
                 connections,
             });
-            let (source,dir) = if let Some(i)=ops.iter().position(|op|matches!(op,Op::Define {..})) {
-                let Op::Define {source,dir,..}=ops.remove(i) else {unreachable!()}; (source,dir)
-            } else { (String::new(),None) };
-            ops.push(Op::Transaction { at, source, dir, edits, tag:None });
+            let (source, dir) =
+                if let Some(i) = ops.iter().position(|op| matches!(op, Op::Define { .. })) {
+                    let Op::Define { source, dir, .. } = ops.remove(i) else {
+                        unreachable!()
+                    };
+                    (source, dir)
+                } else {
+                    (String::new(), None)
+                };
+            ops.push(Op::Transaction {
+                at,
+                source,
+                dir,
+                edits,
+                tag: None,
+            });
         }
         ops
     }
 
     fn clock_origin(&self, at: u64) -> f64 {
-        self.history.iter().rev().find(|h| self.samples(h.at) <= at && matches!(h.action, NamedAction::Reset | NamedAction::Origin)).map_or(0.0, |h| h.at)
+        self.history
+            .iter()
+            .rev()
+            .find(|h| {
+                self.samples(h.at) <= at
+                    && matches!(h.action, NamedAction::Reset | NamedAction::Origin)
+            })
+            .map_or(0.0, |h| h.at)
     }
 
     fn clock_ops(&self, at: u64) -> Vec<Op> {
         let tempo = self.program.tempo;
-        let source = niminal_lang::dsp_source(&self.program.source, tempo).expect("compiled source projects");
+        let source = niminal_lang::dsp_source(&self.program.source, tempo)
+            .expect("compiled source projects");
         let values = [tempo.bpm, self.clock_origin(at), tempo.beats_per_bar];
-        [niminal_lang::LIVE_BPM, niminal_lang::LIVE_ORIGIN, niminal_lang::LIVE_METER].iter().enumerate()
-            .filter(|(_, name)| source.contains(**name)).map(|(i, _)| Op::Control {
-                name: self.clock_names[i].clone(), at: At::Sample(at), value: values[i],
-                unit: None, glide: Some(Time::Seconds(0.0)), tag: Some(SCHEDULED.into()),
-            }).collect()
+        [
+            niminal_lang::LIVE_BPM,
+            niminal_lang::LIVE_ORIGIN,
+            niminal_lang::LIVE_METER,
+        ]
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| source.contains(**name))
+        .map(|(i, _)| Op::Control {
+            name: self.clock_names[i].clone(),
+            at: At::Sample(at),
+            value: values[i],
+            unit: None,
+            glide: Some(Time::Seconds(0.0)),
+            tag: Some(SCHEDULED.into()),
+        })
+        .collect()
     }
 
     /// Play `program` as it is compiled: the notes it writes out, and `schedule` (usually
@@ -1010,7 +1121,11 @@ impl Live {
         for event in self.program.notes.clone() {
             let start = self.samples(event.at.to_seconds(tempo)).max(at);
             let dur = self.samples(event.dur.to_seconds(tempo));
-            self.written.push(Written { start, dur, event: event.clone() });
+            self.written.push(Written {
+                start,
+                dur,
+                event: event.clone(),
+            });
             ops.extend(self.note_op(&event, start, dur, WRITTEN));
         }
         self.send(ops);
@@ -1031,29 +1146,31 @@ impl Live {
         let tempo = self.program.tempo;
         let ops: Vec<Op> = events
             .iter()
-            .map(|e| Op::Note {
-                to: None,
-                target: if self.program.track_index(&e.target).is_some() {
-                    routing_id(&e.target)
-                } else {
-                    e.target.clone()
-                },
-                at: At::Sample(self.samples(e.at.to_seconds(tempo))),
-                args: e
-                    .args
-                    .iter()
-                    .map(|(n, v)| (n.clone(), niminal_lang::dsp_value(*v, tempo)))
-                    .collect(),
-                dur: Some(Time::Seconds(e.dur.to_seconds(tempo))),
-                id: None,
-                tag: Some(WRITTEN.into()),
+            .map(|e| {
+                Ok(Op::Note {
+                    to: None,
+                    target: if self.program.track_index(&e.target).is_some() {
+                        routing_id(&e.target)
+                    } else {
+                        e.target.clone()
+                    },
+                    at: At::Sample(self.samples(e.at.to_seconds(tempo))),
+                    args: self
+                        .program
+                        .dsp_args(e)
+                        .map_err(|e| vec![Problem::plain(e.to_string())])?,
+                    dur: Some(Time::Seconds(e.dur.to_seconds(tempo))),
+                    id: None,
+                    tag: Some(WRITTEN.into()),
+                })
             })
-            .collect();
+            .collect::<Result<_, Vec<Problem>>>()?;
         self.link
             .request(EngineRequest::EventsSend { events: ops })
             .map(|_| ())
             .map_err(|e| {
-                let mut problems: Vec<Problem> = e.problems().into_iter().map(Problem::plain).collect();
+                let mut problems: Vec<Problem> =
+                    e.problems().into_iter().map(Problem::plain).collect();
                 if problems.is_empty() {
                     problems.push(Problem::plain(e.message));
                 }
@@ -1063,12 +1180,27 @@ impl Live {
 }
 
 /// Send DSP definitions only. Implicit clip tracks and musical literals are resolved in this client.
-fn definition_ops(statements: &[Statement], program: Option<&Program>, at: At, dir: Option<&std::path::PathBuf>) -> Vec<Op> {
+fn definition_ops(
+    statements: &[Statement],
+    program: Option<&Program>,
+    at: At,
+    dir: Option<&std::path::PathBuf>,
+) -> Vec<Op> {
     let mut ops = Vec::new();
-    if statements.iter().any(Statement::clears) { ops.push(Op::Forget { at, tag: None }); }
+    if statements.iter().any(Statement::clears) {
+        ops.push(Op::Forget { at, tag: None });
+    }
     if let Some(program) = program {
-        let source = niminal_lang::dsp_source(&program.source, program.tempo).expect("compiled source can be projected to DSP");
-        if !source.is_empty() { ops.push(Op::Define { source, at, dir: dir.map(|d| d.display().to_string()), tag: None }); }
+        let source = niminal_lang::dsp_source(&program.source, program.tempo)
+            .expect("compiled source can be projected to DSP");
+        if !source.is_empty() {
+            ops.push(Op::Define {
+                source,
+                at,
+                dir: dir.map(|d| d.display().to_string()),
+                tag: None,
+            });
+        }
     }
     ops
 }
@@ -1089,9 +1221,10 @@ fn change_tag(id: u64) -> String {
 
 fn tag_op(op: &mut Op, tag: &str) {
     match op {
-        Op::Define { tag: t, .. } | Op::Forget { tag: t, .. } | Op::Routing { tag: t, .. } | Op::Transaction { tag:t, .. } => {
-            *t = Some(tag.to_string())
-        }
+        Op::Define { tag: t, .. }
+        | Op::Forget { tag: t, .. }
+        | Op::Routing { tag: t, .. }
+        | Op::Transaction { tag: t, .. } => *t = Some(tag.to_string()),
         _ => {}
     }
 }
@@ -1123,10 +1256,18 @@ pub(super) fn landing_factor(by_bar: bool, old: Tempo, new: Tempo) -> f64 {
 }
 
 fn is_timing(p: &Pending) -> bool {
-    p.statements.iter().any(|s| matches!(s.key(), Some("tempo" | "meter")))
+    p.statements
+        .iter()
+        .any(|s| matches!(s.key(), Some("tempo" | "meter")))
 }
 
-fn rescale_pending(pending: &mut [Pending], now: u64, old: Tempo, new: Tempo, by_bar: impl Fn(&Pending) -> bool) {
+fn rescale_pending(
+    pending: &mut [Pending],
+    now: u64,
+    old: Tempo,
+    new: Tempo,
+    by_bar: impl Fn(&Pending) -> bool,
+) {
     if old == new {
         return;
     }
@@ -1162,7 +1303,10 @@ pub(crate) fn origin_of(history: &[HistoryEntry]) -> f64 {
 pub(crate) fn name_action(program: &Program, action: &Action) -> Option<NamedAction> {
     let name = |t: &usize| program.tracks[*t].name.clone();
     Some(match action {
-        Action::Play { track, clip } => NamedAction::Play { track: name(track), clip: clip.clone() },
+        Action::Play { track, clip } => NamedAction::Play {
+            track: name(track),
+            clip: clip.clone(),
+        },
         Action::Stop { track } => NamedAction::Stop(name(track)),
         Action::Mute { track } => NamedAction::Mute(name(track)),
         Action::Unmute { track } => NamedAction::Unmute(name(track)),
@@ -1182,18 +1326,27 @@ pub(crate) fn schedule_for(program: &Program, history: &[HistoryEntry]) -> Sched
         .iter()
         .filter_map(|h| {
             let action = match &h.action {
-                NamedAction::Play { track, clip } => Action::Play { track: index(track)?, clip: clip.clone() },
+                NamedAction::Play { track, clip } => Action::Play {
+                    track: index(track)?,
+                    clip: clip.clone(),
+                },
                 NamedAction::Stop(t) => Action::Stop { track: index(t)? },
                 NamedAction::Mute(t) => Action::Mute { track: index(t)? },
                 NamedAction::Unmute(t) => Action::Unmute { track: index(t)? },
                 NamedAction::Solo(t) => Action::Solo { track: index(t)? },
-                NamedAction::Unsolo(t) => Action::Unsolo { track: t.as_ref().and_then(index) },
+                NamedAction::Unsolo(t) => Action::Unsolo {
+                    track: t.as_ref().and_then(index),
+                },
                 NamedAction::Hush => Action::Hush,
                 NamedAction::Panic => Action::Panic,
                 NamedAction::Reset => Action::Reset,
                 NamedAction::Origin => return None,
             };
-            Some(Scheduled { at: Time::Seconds(h.at), action, quantize: None })
+            Some(Scheduled {
+                at: Time::Seconds(h.at),
+                action,
+                quantize: None,
+            })
         })
         .collect::<Vec<_>>();
     Schedule::from_commands(program.tempo, names, &commands)

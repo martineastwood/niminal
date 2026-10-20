@@ -27,6 +27,12 @@ const DEFAULT_BPM: f64 = 120.0;
 /// Settings for compiling a project.
 #[derive(Clone)]
 pub struct CompileOptions {
+    /// Source ranges belonging to private engine namespaces. Spans remain in original source.
+    pub namespaces: Vec<(usize, usize, String)>,
+    pub namespace_samples: HashMap<String, Samples>,
+    pub sample_rate: f32,
+    pub buffer_budgets: HashMap<String, usize>,
+    pub retained_buffer_bytes: HashMap<String, usize>,
     /// Defer topology-dependent compensation until the host has connected processor instances.
     pub defer_latency: bool,
     /// The output layout when the source has no `config { channels: ... }`.
@@ -40,6 +46,11 @@ pub struct CompileOptions {
 impl Default for CompileOptions {
     fn default() -> Self {
         CompileOptions {
+            namespaces: Vec::new(),
+            namespace_samples: HashMap::new(),
+            sample_rate: 48000.,
+            buffer_budgets: HashMap::new(),
+            retained_buffer_bytes: HashMap::new(),
             defer_latency: false,
             default_layout: Layout::Mono,
             samples: Samples::default(),
@@ -243,7 +254,10 @@ fn expand_score_fors(items: Vec<Item>) -> Result<Vec<Item>, Diagnostic> {
             } => {
                 let values = const_list(&iter)?;
                 if values.len() > 10_000 {
-                    return Err(Diagnostic::new("this `for` expands to too many items", span));
+                    return Err(Diagnostic::new(
+                        "this `for` expands to too many items",
+                        span,
+                    ));
                 }
                 for value in values {
                     let mut body = body.clone();
@@ -406,13 +420,169 @@ fn substitute_expr(e: &mut Expr, name: &str, value: &Expr) {
 }
 
 /// Compile only sound-server definitions. Musical structure must be lowered by a client first.
-pub fn compile_dsp_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
+pub fn compile_dsp_with(
+    source: &str,
+    options: &CompileOptions,
+) -> Result<Program, Vec<Diagnostic>> {
     crate::validate_dsp(source).map_err(|d| vec![d])?;
     compile_with(source, options)
 }
 
 pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
-    let mut items = desugar(parser::parse(source).map_err(|d| vec![d])?);
+    let mut parsed = parser::parse(source).map_err(|d| vec![d])?;
+    crate::namespace::qualify(&mut parsed, &options.namespaces);
+    let mut namespace_tempos = HashMap::new();
+    let mut configs_by_owner: HashMap<&str, Vec<Item>> = HashMap::new();
+    for (start, end, owner) in &options.namespaces {
+        configs_by_owner.entry(owner).or_default().extend(parsed.iter().filter(|item|matches!(item,Item::Config(c) if c.span.start>=*start && c.span.start<*end)).cloned());
+    }
+    for (owner, configs) in configs_by_owner {
+        let tuning = tuning_of(&configs).map_err(|d| vec![d])?;
+        namespace_tempos.insert(
+            owner,
+            Tempo {
+                tuning,
+                ..Tempo::new(DEFAULT_BPM)
+            },
+        );
+    }
+    let owned_tempo = |name: &str, fallback: Tempo| {
+        name.split_once("::")
+            .and_then(|(owner, _)| namespace_tempos.get(owner))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    if !options.namespaces.is_empty() {
+        for item in &parsed {
+            if let Item::Config(config) = item {
+                if options
+                    .namespaces
+                    .iter()
+                    .any(|(start, end, _)| config.span.start >= *start && config.span.start < *end)
+                {
+                    for (key, value) in &config.entries {
+                        if key.name == "channels"
+                            && layout_from_expr(value).map_err(|d| vec![d])?
+                                != options.default_layout
+                        {
+                            return Err(vec![Diagnostic::new(
+                                "client output layout must match the running engine",
+                                value.span,
+                            )]);
+                        }
+                    }
+                }
+            }
+        }
+        parsed.retain(|item|!matches!(item,Item::Config(config) if options.namespaces.iter().any(|(start,end,_)|config.span.start>=*start&&config.span.start<*end)));
+    }
+    let mut buffer_controls = Vec::new();
+    let mut array_controls = BTreeMap::new();
+    let mut control_types = BTreeMap::new();
+    for item in &mut parsed {
+        if let Item::Track(track) = item {
+            let mut params = Vec::new();
+            for mut param in std::mem::take(&mut track.params) {
+                if matches!(&param.ty,Some(TypeSpec::Unit(t)) if t.name=="buffer") {
+                    if let Some(default) = param.default.take() {
+                        buffer_controls
+                            .push((format!("{}::{}", track.name.name, param.name.name), default));
+                        param.default = Some(Expr {
+                            kind: ExprKind::Num {
+                                value: 0.,
+                                unit: None,
+                            },
+                            span: param.name.span,
+                        });
+                    }
+                    params.push(param);
+                } else if matches!(&param.ty, Some(TypeSpec::Array(..))) {
+                    if let Some(default) = param.default.clone() {
+                        fn expand(
+                            value: &Expr,
+                            path: &str,
+                            track: &str,
+                            template: &ParamDef,
+                            params: &mut Vec<ParamDef>,
+                            paths: &mut Vec<String>,
+                        ) -> Expr {
+                            if let ExprKind::Array(values) = &value.kind {
+                                let mut inner = template.clone();
+                                if let Some(TypeSpec::Array(ty, _)) = &template.ty {
+                                    inner.ty = Some((**ty).clone());
+                                }
+                                return Expr {
+                                    kind: ExprKind::Array(
+                                        values
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(i, v)| {
+                                                expand(
+                                                    v,
+                                                    &format!("{path}[{i}]"),
+                                                    track,
+                                                    &inner,
+                                                    params,
+                                                    paths,
+                                                )
+                                            })
+                                            .collect(),
+                                    ),
+                                    span: value.span,
+                                };
+                            }
+                            let mut param = template.clone();
+                            param.name.name = path.to_string();
+                            param.default = Some(value.clone());
+                            params.push(param);
+                            paths.push(path.to_string());
+                            Expr {
+                                kind: ExprKind::Name(format!("{track}::{path}")),
+                                span: value.span,
+                            }
+                        }
+                        let mut paths = Vec::new();
+                        let replacement = expand(
+                            &default,
+                            &param.name.name,
+                            &track.name.name,
+                            &param,
+                            &mut params,
+                            &mut paths,
+                        );
+                        fn replace(e: &mut Expr, name: &str, value: &Expr) {
+                            if matches!(&e.kind,ExprKind::Name(n) if n==name) {
+                                *e = value.clone();
+                            } else {
+                                e.for_each_child_mut(&mut |c| replace(c, name, value));
+                            }
+                        }
+                        for statement in &mut track.body {
+                            for e in statement.exprs_mut() {
+                                replace(e, &param.name.name, &replacement);
+                            }
+                        }
+                        array_controls
+                            .insert(format!("{}::{}", track.name.name, param.name.name), paths);
+                    }
+                } else {
+                    params.push(param);
+                }
+            }
+            for param in &params {
+                if let Some(ty) = &param.ty {
+                    if !matches!(ty,TypeSpec::Unit(t) if t.name=="buffer") {
+                        control_types.insert(
+                            format!("{}::{}", track.name.name, param.name.name),
+                            ty.clone(),
+                        );
+                    }
+                }
+            }
+            track.params = params;
+        }
+    }
+    let mut items = desugar(parsed);
     items = expand_score_fors(items).map_err(|d| vec![d])?;
     let mut errors = Vec::new();
 
@@ -487,7 +657,11 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                     format!(
                         "`{}` is already the name of {} {existing}",
                         ident.name,
-                        if existing.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" }
+                        if existing.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                            "an"
+                        } else {
+                            "a"
+                        }
                     ),
                     ident.span,
                 ));
@@ -505,9 +679,14 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let mut fns: HashMap<String, FnDef> = HashMap::new();
     for item in &items {
         let Item::Fn(def) = item else { continue };
-        if registry.find(&def.name.name).is_some() || matches!(def.name.name.as_str(), "reset_on" | "after") {
+        if registry.find(&def.name.name).is_some()
+            || matches!(def.name.name.as_str(), "reset_on" | "after")
+        {
             errors.push(Diagnostic::new(
-                format!("`{}` is a built-in function, so it can't be defined again", def.name.name),
+                format!(
+                    "`{}` is a built-in function, so it can't be defined again",
+                    def.name.name
+                ),
                 def.name.span,
             ));
         } else if fns.insert(def.name.name.clone(), def.clone()).is_some() {
@@ -542,8 +721,31 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             ));
             continue;
         }
-        match crate::lower::compile_control(name, value, input.as_ref(), tempo, &registry, &names) {
-            Ok(control) => names.controls.push(control),
+        match crate::lower::compile_control(
+            name,
+            value,
+            input.as_ref(),
+            owned_tempo(&name.name, tempo),
+            &registry,
+            &names,
+        ) {
+            Ok(mut control) => {
+                if let Some(ty) = control_types.get(&control.name) {
+                    match crate::funcs::kind_of(ty, tempo) {
+                        Ok(crate::funcs::Kind::Range { unit, lo, hi }) if unit == control.unit => {
+                            control.range = Some((lo, hi));
+                            control.initial = control.initial.clamp(lo as f32, hi as f32);
+                        }
+                        Ok(kind) if kind.unit().is_none_or(|u| u == control.unit) => {}
+                        Ok(_) => errors.push(Diagnostic::new(
+                            "track parameter default has the wrong unit",
+                            name.span,
+                        )),
+                        Err(error) => errors.push(error),
+                    }
+                }
+                names.controls.push(control);
+            }
             Err(d) => errors.push(d),
         }
     }
@@ -559,7 +761,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             ));
             continue;
         }
-        match compile_const(value, tempo, &registry, &names) {
+        names.samples = owned_samples(options, &name.name);
+        match compile_const(value, owned_tempo(&name.name, tempo), &registry, &names) {
             Ok(v) => {
                 names.consts.insert(name.name.clone(), v);
             }
@@ -569,7 +772,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
 
     for item in &items {
         let Item::Fn(def) = item else { continue };
-        if let Err(d) = check_fn(def, tempo, &registry, &names) {
+        if let Err(d) = check_fn(def, owned_tempo(&def.name.name, tempo), &registry, &names) {
             errors.push(d);
             names.failed_fns.push(def.name.name.clone());
         }
@@ -609,11 +812,25 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             ));
             continue;
         }
-        match compile_buffer(decl, tempo, &registry, &names) {
+        names.samples = owned_samples(options, &decl.name.name);
+        match compile_buffer(
+            decl,
+            owned_tempo(&decl.name.name, tempo),
+            &registry,
+            &names,
+            options,
+        ) {
             Ok((name, buffer)) => {
-                let buffer = options.buffers.get(&name)
-                    .filter(|old| old.len() == buffer.len() && old.sample_rate() == buffer.sample_rate())
-                    .cloned().unwrap_or(buffer);
+                let buffer = options
+                    .buffers
+                    .get(&name)
+                    .filter(|old| {
+                        old.len() == buffer.len()
+                            && old.channels() == buffer.channels()
+                            && old.sample_rate() == buffer.sample_rate()
+                    })
+                    .cloned()
+                    .unwrap_or(buffer);
                 let id = names.buffers.len();
                 names.add(&name, "buffer");
                 names.buffers.insert(name, (id, buffer));
@@ -621,14 +838,53 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Err(d) => errors.push(d),
         }
     }
+    for (name, default) in buffer_controls {
+        let ExprKind::Name(resource) = &default.kind else {
+            errors.push(Diagnostic::new(
+                "buffer parameter default is a named buffer",
+                default.span,
+            ));
+            continue;
+        };
+        let Some((_, data)) = names.buffers.get(resource) else {
+            errors.push(Diagnostic::new(
+                "buffer parameter default does not exist",
+                default.span,
+            ));
+            continue;
+        };
+        let owner = resource
+            .split_once("::")
+            .map(|(owner, _)| owner)
+            .unwrap_or("");
+        let mut choices: Vec<_> = names
+            .buffers
+            .iter()
+            .filter(|(n, _)| n.split_once("::").map(|(o, _)| o).unwrap_or("") == owner)
+            .map(|(n, (id, b))| (*id, n.clone(), b.clone()))
+            .collect();
+        choices.sort_by_key(|v| v.0);
+        let index = choices
+            .iter()
+            .position(|(_, _, b)| Arc::ptr_eq(b, data))
+            .unwrap();
+        if let Some(control) = names.controls.iter_mut().find(|c| c.name == name) {
+            control.initial = index as f32;
+        }
+        let choices = crate::lower::Choices::named(
+            choices.into_iter().map(|(_, n, b)| (n, b)).collect(),
+            &name,
+        );
+        names.buffer_controls.insert(name, choices);
+    }
     // Samples before instruments so `kick.data` and table-as-sample are available.
     for item in &items {
         let Item::Sample(decl) = item else { continue };
         defined.add(&decl.name, &mut errors, || {
             compile_sample(
                 decl,
-                &options.samples,
-                tempo,
+                &owned_samples(options, &decl.name.name),
+                owned_tempo(&decl.name.name, tempo),
                 &registry,
                 &names,
                 &mut samples_state,
@@ -640,8 +896,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     }
     for item in &items {
         let Item::Instr(def) = item else { continue };
+        names.samples = owned_samples(options, &def.name.name);
         defined.add(&def.name, &mut errors, || {
-            compile_instr(def, tempo, &registry, &names)
+            compile_instr(def, owned_tempo(&def.name.name, tempo), &registry, &names)
                 .and_then(|mut i| voice_options(def, &mut i, &mut samples_state).map(|()| i))
         });
     }
@@ -664,7 +921,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         instrument: None,
         defaults: BTreeMap::new(),
         notes: None,
-        def: TrackDef { meter: None, transition: (0,0.0),
+        def: TrackDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             chain: None,
             inputs: Vec::new(),
@@ -710,12 +969,13 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             ));
             continue;
         }
+        names.samples = owned_samples(options, &decl.name.name);
         match compile_track(
             decl,
             &instruments,
             &failed,
             &samples_state.names,
-            tempo,
+            owned_tempo(&decl.name.name, tempo),
             &registry,
             &names,
         ) {
@@ -780,11 +1040,23 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     errors.retain(|d| !d.is_quiet());
     if errors.is_empty() {
         let mut program = Program {
+            namespaces: options.namespaces.clone(),
+            namespace_samples: options.namespace_samples.clone(),
+            resource_controls: names
+                .buffer_controls
+                .iter()
+                .map(|(name, choices)| (name.clone(), choices.key))
+                .collect(),
+            array_controls,
             bus_meters: Vec::new(),
             source: source.to_string(),
             samples: options.samples.clone(),
             quantize,
-            taps: tracks.iter().flat_map(|t| t.taps.clone()).chain(instruments.iter().flat_map(|i| i.taps.clone())).collect(),
+            taps: tracks
+                .iter()
+                .flat_map(|t| t.taps.clone())
+                .chain(instruments.iter().flat_map(|i| i.taps.clone()))
+                .collect(),
             controls: names.controls,
             tempo,
             master: names.master,
@@ -798,7 +1070,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                     .map(|(name, (id, buffer))| (id, name, buffer))
                     .collect();
                 bufs.sort_by_key(|(id, _, _)| *id);
-                bufs.into_iter().map(|(_, name, buffer)| (name, buffer)).collect()
+                bufs.into_iter()
+                    .map(|(_, name, buffer)| (name, buffer))
+                    .collect()
             },
             tracks,
             sample_names: samples_state.names,
@@ -906,7 +1180,9 @@ fn compile_track(
         instrument,
         defaults,
         notes: notes_line.cloned(),
-        def: TrackDef { meter: None, transition: (0,0.0),
+        def: TrackDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             chain: chain.graph,
             inputs: chain.inputs,
@@ -967,18 +1243,22 @@ fn resolve_instrument(
     let instr = &instruments[index];
     let mut defaults = literal_args(args, instr, sample_names, tempo)?;
     if let Some(member) = member {
-        let local = instr.members.iter().position(|m| m == member).ok_or_else(|| {
-            let mut d = Diagnostic::new(
-                format!("there is no sample `{member}` in the kit `{name}`"),
-                span,
-            );
-            if instr.members.is_empty() {
-                d = d.with_help(format!("`{name}` isn't a kit"));
-            } else if let Some(c) = closest(member, instr.members.iter().map(String::as_str)) {
-                d = d.with_help(format!("did you mean `{c}`?"));
-            }
-            d
-        })?;
+        let local = instr
+            .members
+            .iter()
+            .position(|m| m == member)
+            .ok_or_else(|| {
+                let mut d = Diagnostic::new(
+                    format!("there is no sample `{member}` in the kit `{name}`"),
+                    span,
+                );
+                if instr.members.is_empty() {
+                    d = d.with_help(format!("`{name}` isn't a kit"));
+                } else if let Some(c) = closest(member, instr.members.iter().map(String::as_str)) {
+                    d = d.with_help(format!("did you mean `{c}`?"));
+                }
+                d
+            })?;
         if defaults.contains_key("sample") {
             return Err(Diagnostic::new(
                 "the sample is already chosen by the name after the kit",
@@ -1051,15 +1331,11 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
             },
             "choke" => match &value.kind {
                 ExprKind::Name(group) => {
-                    let id = state
-                        .groups
-                        .iter()
-                        .position(|g| g == group)
-                        .unwrap_or_else(|| {
-                            state.groups.push(group.clone());
-                            state.groups.len() - 1
-                        });
-                    instrument.chokes = vec![Some(id as u32)];
+                    let name = scoped_group(&instrument.name, group);
+                    if !state.groups.contains(&name) {
+                        state.groups.push(name.clone());
+                    }
+                    instrument.chokes = vec![Some(niminal_engine::instance_id(&name))];
                 }
                 _ => {
                     return Err(
@@ -1113,7 +1389,10 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
                     ));
                 };
                 if param.unit != crate::Unit::Hz {
-                    return Err(Diagnostic::new(format!("`{name}` is the pitch, so it is in `hz`"), value.span));
+                    return Err(Diagnostic::new(
+                        format!("`{name}` is the pitch, so it is in `hz`"),
+                        value.span,
+                    ));
                 }
                 instrument.pitch = name.clone();
             }
@@ -1138,10 +1417,7 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
         }
     }
     if let Some(option) = mono_option
-        && !instrument
-            .params
-            .iter()
-            .any(|p| p.name == instrument.pitch)
+        && !instrument.params.iter().any(|p| p.name == instrument.pitch)
     {
         return Err(Diagnostic::new(
             format!(
@@ -1244,16 +1520,20 @@ fn compile_sample(
         };
         match key.name.as_str() {
             "root" => {
-                root = literal_value(&arg.value)?.as_hz_in(&tempo.tuning).map_err(|e| {
-                    Diagnostic::new(
-                        format!("`root` should be a note or a frequency: {e}"),
-                        arg.value.span,
-                    )
-                })? as f32;
+                root = literal_value(&arg.value)?
+                    .as_hz_in(&tempo.tuning)
+                    .map_err(|e| {
+                        Diagnostic::new(
+                            format!("`root` should be a note or a frequency: {e}"),
+                            arg.value.span,
+                        )
+                    })? as f32;
             }
             "choke" => chokes.push(arg),
             "beats" => match &arg.value.kind {
-                ExprKind::Num { value, unit: None } if *value > 0.0 => duration = Some(*value * 60.0 / tempo.bpm),
+                ExprKind::Num { value, unit: None } if *value > 0.0 => {
+                    duration = Some(*value * 60.0 / tempo.bpm)
+                }
                 _ => {
                     return Err(Diagnostic::new(
                         "`beats` is how many beats the loop lasts, such as `4`",
@@ -1263,7 +1543,12 @@ fn compile_sample(
             },
             "duration" => {
                 let seconds = literal_time(&arg.value)?.to_seconds(tempo);
-                if !seconds.is_finite() || seconds <= 0.0 { return Err(Diagnostic::new("sample duration must be positive", arg.value.span)); }
+                if !seconds.is_finite() || seconds <= 0.0 {
+                    return Err(Diagnostic::new(
+                        "sample duration must be positive",
+                        arg.value.span,
+                    ));
+                }
                 duration = Some(seconds);
             }
             "fit" => fit = Some(arg),
@@ -1273,7 +1558,9 @@ fn compile_sample(
                     Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
                 d = match closest(other, ["root", "choke", "beats", "duration", "fit", "loop"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
-                    None => d.with_help("the options are `root`, `choke`, `beats`, `duration`, `fit` and `loop`"),
+                    None => d.with_help(
+                        "the options are `root`, `choke`, `beats`, `duration`, `fit` and `loop`",
+                    ),
                 };
                 return Err(d);
             }
@@ -1336,9 +1623,7 @@ fn compile_sample(
                 .map_or(48_000.0, |c| c.sample_rate_or(48_000.0));
             // Fitting to the tempo: the loop's own length in seconds against the time its beats take.
             let speed = match (fit, duration) {
-                (Some(_), Some(b)) => {
-                    (frames as f64 / f64::from(rate)) / b
-                }
+                (Some(_), Some(b)) => (frames as f64 / f64::from(rate)) / b,
                 _ => 1.0,
             };
             state
@@ -1408,16 +1693,12 @@ fn compile_sample(
 
     // `choke: hats` for a sample; `choke: hats(open, closed)` for samples in a kit.
     instrument.chokes = vec![None; members.len()];
-    let mut group_of = |name: &str| -> u32 {
-        let id = state
-            .groups
-            .iter()
-            .position(|g| g == name)
-            .unwrap_or_else(|| {
-                state.groups.push(name.to_string());
-                state.groups.len() - 1
-            });
-        id as u32
+    let mut group_of = |name: &str| -> u64 {
+        let name = scoped_group(&decl.name.name, name);
+        if !state.groups.contains(&name) {
+            state.groups.push(name.clone());
+        }
+        niminal_engine::instance_id(&name)
     };
     for arg in chokes {
         let value = &arg.value;
@@ -1466,7 +1747,6 @@ fn compile_sample(
 const DEFAULT_ROOT_HZ: f32 = 261.625_56;
 
 /// Default sample rate used when sizing buffers from musical time.
-const BUFFER_SAMPLE_RATE: f32 = 48_000.0;
 
 fn loop_mode_of(options: &[Arg]) -> Res<niminal_engine::ops::LoopMode> {
     for arg in options {
@@ -1526,7 +1806,48 @@ fn compile_buffer(
     tempo: Tempo,
     registry: &Registry,
     names: &Names,
+    options: &CompileOptions,
 ) -> Res<(String, Arc<niminal_engine::Buffer>)> {
+    if let ExprKind::Call { name, args } = &decl.value.kind {
+        if name.name == "zeros" {
+            let mut frames = None;
+            let mut channels = 1usize;
+            for arg in args {
+                let Datum::Sig(value) = compile_const(&arg.value, tempo, registry, names)? else {
+                    return Err(Diagnostic::new(
+                        "buffer size is a constant number",
+                        arg.value.span,
+                    ));
+                };
+                let Some(n) = value.konst() else {
+                    return Err(Diagnostic::new("buffer size is constant", arg.value.span));
+                };
+                if value.unit() != crate::unit::Unit::Num
+                    || !n.is_finite()
+                    || n < 1.
+                    || n.fract() != 0.
+                {
+                    return Err(Diagnostic::new(
+                        "buffer dimensions are positive integers",
+                        arg.value.span,
+                    ));
+                }
+                match arg.name.as_ref().map(|a| a.name.as_str()) {
+                    None if frames.is_none() => frames = Some(n as usize),
+                    Some("channels") if n <= 16. => channels = n as usize,
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "zeros takes frames and channels: 1–16",
+                            arg.value.span,
+                        ));
+                    }
+                }
+            }
+            let frames =
+                frames.ok_or_else(|| Diagnostic::new("zeros needs a frame count", decl.span))?;
+            return allocate_buffer(decl, frames, channels, None, names, options);
+        }
+    }
     let value = compile_const(&decl.value, tempo, registry, names)?;
     let buffer = match value {
         Datum::Table(t) => niminal_engine::Buffer::from_table(&t),
@@ -1535,7 +1856,7 @@ fn compile_buffer(
             niminal_engine::Buffer::from_table(&table)
         }
         Datum::Sig(s) => {
-            // A duration becomes that many samples at 48 kHz.
+            // Durations use the running engine sample rate.
             if s.unit() == crate::unit::Unit::Time {
                 let Some(secs) = s.konst() else {
                     return Err(Diagnostic::new(
@@ -1543,8 +1864,8 @@ fn compile_buffer(
                         decl.value.span,
                     ));
                 };
-                let len = (secs * f64::from(BUFFER_SAMPLE_RATE)).round().max(1.0) as usize;
-                niminal_engine::Buffer::zeros(len, Some(BUFFER_SAMPLE_RATE))
+                let len = (secs * f64::from(options.sample_rate)).round().max(1.0) as usize;
+                return allocate_buffer(decl, len, 1, Some(options.sample_rate), names, options);
             } else if s.unit() == crate::unit::Unit::Num {
                 let Some(n) = s.konst() else {
                     return Err(Diagnostic::new(
@@ -1558,7 +1879,7 @@ fn compile_buffer(
                         decl.value.span,
                     ));
                 }
-                niminal_engine::Buffer::zeros(n as usize, None)
+                return allocate_buffer(decl, n as usize, 1, None, names, options);
             } else {
                 return Err(Diagnostic::new(
                     "a buffer is sized with `zeros(n)`, a table, or a duration such as `4bars`",
@@ -1574,6 +1895,64 @@ fn compile_buffer(
         }
     };
     Ok((decl.name.name.clone(), Arc::new(buffer)))
+}
+
+fn allocate_buffer(
+    decl: &BufferDecl,
+    frames: usize,
+    channels: usize,
+    rate: Option<f32>,
+    names: &Names,
+    options: &CompileOptions,
+) -> Res<(String, Arc<niminal_engine::Buffer>)> {
+    let owner = decl
+        .name
+        .name
+        .split_once("::")
+        .map(|(n, _)| n)
+        .unwrap_or("");
+    if let Some(old) = options
+        .buffers
+        .get(&decl.name.name)
+        .filter(|b| b.len() == frames && b.channels() == channels && b.sample_rate() == rate)
+    {
+        return Ok((decl.name.name.clone(), old.clone()));
+    }
+    let budget = options
+        .buffer_budgets
+        .get(owner)
+        .copied()
+        .unwrap_or(256 * 1024 * 1024);
+    let retained = options
+        .retained_buffer_bytes
+        .get(owner)
+        .copied()
+        .unwrap_or(0);
+    let used: usize = names
+        .buffers
+        .iter()
+        .filter(|(n, (_, b))| {
+            n.split_once("::").map(|(n, _)| n).unwrap_or("") == owner
+                && !options.buffers.values().any(|old| Arc::ptr_eq(old, b))
+        })
+        .map(|(_, (_, b))| b.len() * b.channels() * 4)
+        .sum();
+    if frames
+        .checked_mul(channels)
+        .and_then(|n| n.checked_mul(4))
+        .is_none_or(|n| n > budget.saturating_sub(retained.saturating_add(used)))
+    {
+        return Err(Diagnostic::new(
+            "client buffer memory budget exceeded",
+            decl.span,
+        ));
+    }
+    Ok((
+        decl.name.name.clone(),
+        Arc::new(niminal_engine::Buffer::zeros_channels(
+            frames, channels, rate,
+        )),
+    ))
 }
 
 // ---- program-level statements -------------------------------------------
@@ -1726,10 +2105,33 @@ fn tempo_of(items: &[Item], beats_per_bar: f64, tuning: Tuning) -> Res<Tempo> {
 
 /// Cents above the root (c) for the twelve notes of each named scale.
 const NAMED_SCALES: [(&str, [f64; 12]); 4] = [
-    ("equal", [0.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0, 1100.0]),
-    ("just", [0.0, 111.73, 203.91, 315.64, 386.31, 498.04, 590.22, 701.96, 813.69, 884.36, 1017.60, 1088.27]),
-    ("pythagorean", [0.0, 113.69, 203.91, 294.13, 407.82, 498.04, 611.73, 701.96, 815.64, 905.87, 996.09, 1109.78]),
-    ("meantone", [0.0, 76.05, 193.16, 310.26, 386.31, 503.42, 579.47, 696.58, 772.63, 889.74, 1006.84, 1082.89]),
+    (
+        "equal",
+        [
+            0.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0, 1100.0,
+        ],
+    ),
+    (
+        "just",
+        [
+            0.0, 111.73, 203.91, 315.64, 386.31, 498.04, 590.22, 701.96, 813.69, 884.36, 1017.60,
+            1088.27,
+        ],
+    ),
+    (
+        "pythagorean",
+        [
+            0.0, 113.69, 203.91, 294.13, 407.82, 498.04, 611.73, 701.96, 815.64, 905.87, 996.09,
+            1109.78,
+        ],
+    ),
+    (
+        "meantone",
+        [
+            0.0, 76.05, 193.16, 310.26, 386.31, 503.42, 579.47, 696.58, 772.63, 889.74, 1006.84,
+            1082.89,
+        ],
+    ),
 ];
 
 /// `config { tuning: { a4: 432hz, scale: just, period: 1200ct } }`: how note names become frequencies.
@@ -1743,7 +2145,10 @@ fn tuning_of(items: &[Item]) -> Res<Tuning> {
         for (key, value) in &config.tuning {
             match key.name.as_str() {
                 "a4" => match &value.kind {
-                    ExprKind::Num { value: v, unit: Some(u) } if (u == "hz" || u == "khz") && *v > 0.0 => {
+                    ExprKind::Num {
+                        value: v,
+                        unit: Some(u),
+                    } if (u == "hz" || u == "khz") && *v > 0.0 => {
                         a4 = if u == "khz" { v * 1000.0 } else { *v };
                     }
                     _ => {
@@ -1760,8 +2165,11 @@ fn tuning_of(items: &[Item]) -> Res<Tuning> {
                 }
                 "scale" => scale = scale_of(value)?,
                 other => {
-                    return Err(Diagnostic::new(format!("unknown tuning setting `{other}`"), key.span)
-                        .with_help("the settings are: a4, scale, period"));
+                    return Err(Diagnostic::new(
+                        format!("unknown tuning setting `{other}`"),
+                        key.span,
+                    )
+                    .with_help("the settings are: a4, scale, period"));
                 }
             }
         }
@@ -1772,20 +2180,35 @@ fn tuning_of(items: &[Item]) -> Res<Tuning> {
 /// An interval written in cents (`702ct`) or semitones (`7st`), as cents.
 fn cents_of(e: &Expr) -> Res<f64> {
     match &e.kind {
-        ExprKind::Num { value, unit: Some(u) } if u == "ct" => Ok(*value),
-        ExprKind::Num { value, unit: Some(u) } if u == "st" => Ok(*value * 100.0),
+        ExprKind::Num {
+            value,
+            unit: Some(u),
+        } if u == "ct" => Ok(*value),
+        ExprKind::Num {
+            value,
+            unit: Some(u),
+        } if u == "st" => Ok(*value * 100.0),
         ExprKind::Neg(inner) => cents_of(inner).map(|c| -c),
-        _ => Err(Diagnostic::new("expected an interval in cents, such as `702ct`", e.span)),
+        _ => Err(Diagnostic::new(
+            "expected an interval in cents, such as `702ct`",
+            e.span,
+        )),
     }
 }
 
 fn scale_of(e: &Expr) -> Res<Vec<f64>> {
     let check = |degrees: Vec<f64>, span| -> Res<Vec<f64>> {
         if degrees.is_empty() || degrees.len() > MAX_DEGREES {
-            return Err(Diagnostic::new(format!("a scale has between 1 and {MAX_DEGREES} degrees"), span));
+            return Err(Diagnostic::new(
+                format!("a scale has between 1 and {MAX_DEGREES} degrees"),
+                span,
+            ));
         }
         if degrees[0] != 0.0 {
-            return Err(Diagnostic::new("a scale starts at the root: its first degree is 0 cents (or a ratio of 1)", span));
+            return Err(Diagnostic::new(
+                "a scale starts at the root: its first degree is 0 cents (or a ratio of 1)",
+                span,
+            ));
         }
         Ok(degrees)
     };
@@ -1815,21 +2238,40 @@ fn scale_of(e: &Expr) -> Res<Vec<f64>> {
             let ratio = |a: &Arg| -> Res<f64> {
                 let value = match &a.value.kind {
                     ExprKind::Num { value, unit: None } => Some(*value),
-                    ExprKind::Binary { op: BinOp::Div, lhs, rhs } => match (&lhs.kind, &rhs.kind) {
-                        (ExprKind::Num { value: n, unit: None }, ExprKind::Num { value: d, unit: None }) if *d != 0.0 => Some(n / d),
+                    ExprKind::Binary {
+                        op: BinOp::Div,
+                        lhs,
+                        rhs,
+                    } => match (&lhs.kind, &rhs.kind) {
+                        (
+                            ExprKind::Num {
+                                value: n,
+                                unit: None,
+                            },
+                            ExprKind::Num {
+                                value: d,
+                                unit: None,
+                            },
+                        ) if *d != 0.0 => Some(n / d),
                         _ => None,
                     },
                     _ => None,
                 };
                 match value {
                     Some(r) if r > 0.0 => Ok(1200.0 * r.log2()),
-                    _ => Err(Diagnostic::new("expected a ratio above 0, such as `3/2`", a.value.span)),
+                    _ => Err(Diagnostic::new(
+                        "expected a ratio above 0, such as `3/2`",
+                        a.value.span,
+                    )),
                 }
             };
             check(args.iter().map(ratio).collect::<Res<_>>()?, e.span)
         }
-        _ => Err(Diagnostic::new("a scale is a name, `cents(...)` or `ratios(...)`", e.span)
-            .with_help("for example `scale: just` or `scale: ratios(1, 9/8, 5/4, 4/3, 3/2, 5/3, 15/8)`")),
+        _ => Err(
+            Diagnostic::new("a scale is a name, `cents(...)` or `ratios(...)`", e.span).with_help(
+                "for example `scale: just` or `scale: ratios(1, 9/8, 5/4, 4/3, 3/2, 5/3, 15/8)`",
+            ),
+        ),
     }
 }
 
@@ -1851,23 +2293,47 @@ fn literal_args(
         if let Some(paths) = instr.arrays.get(&arg_name.name) {
             fn leaves(e: &Expr, out: &mut Vec<Expr>) -> Res<()> {
                 match &e.kind {
-                    ExprKind::Array(items) => { for item in items { leaves(item,out)?; } }
+                    ExprKind::Array(items) => {
+                        for item in items {
+                            leaves(item, out)?;
+                        }
+                    }
                     ExprKind::Pattern(raw) => {
                         let text = format!("const __argument = [{raw}]");
-                        let parsed = parser::parse(&text).map_err(|_| Diagnostic::new("array arguments use comma-separated values",e.span))?;
-                        let Some(Item::Const { value, .. }) = parsed.first() else { unreachable!() };
-                        leaves(value,out)?;
+                        let parsed = parser::parse(&text).map_err(|_| {
+                            Diagnostic::new("array arguments use comma-separated values", e.span)
+                        })?;
+                        let Some(Item::Const { value, .. }) = parsed.first() else {
+                            unreachable!()
+                        };
+                        leaves(value, out)?;
                     }
                     _ => out.push(e.clone()),
                 }
                 Ok(())
             }
-            let mut values = Vec::new(); leaves(&arg.value,&mut values)?;
-            if values.len() != paths.len() { return Err(Diagnostic::new(format!("array `{}` needs {} values",arg_name.name, paths.len()),arg.value.span)); }
-            for (path,e) in paths.iter().zip(values) {
-                let value = literal_value(&e).map_err(|mut d| { d.span = arg.value.span; d })?;
-                instr.param_value(instr.param(path).unwrap().1,value,tempo).map_err(|e| arg_error(e,arg.value.span))?;
-                if out.insert(path.clone(),value).is_some() { return Err(Diagnostic::new("array argument given more than once",arg_name.span)); }
+            let mut values = Vec::new();
+            leaves(&arg.value, &mut values)?;
+            if values.len() != paths.len() {
+                return Err(Diagnostic::new(
+                    format!("array `{}` needs {} values", arg_name.name, paths.len()),
+                    arg.value.span,
+                ));
+            }
+            for (path, e) in paths.iter().zip(values) {
+                let value = literal_value(&e).map_err(|mut d| {
+                    d.span = arg.value.span;
+                    d
+                })?;
+                instr
+                    .param_value(instr.param(path).unwrap().1, value, tempo)
+                    .map_err(|e| arg_error(e, arg.value.span))?;
+                if out.insert(path.clone(), value).is_some() {
+                    return Err(Diagnostic::new(
+                        "array argument given more than once",
+                        arg_name.span,
+                    ));
+                }
             }
             continue;
         }
@@ -1896,8 +2362,16 @@ fn literal_arg_value(
     _sample_names: &[String],
 ) -> Res<Value> {
     if let Some(resources) = instr.resources.get(param) {
-        let ExprKind::Name(name) = &e.kind else { return Err(Diagnostic::new("buffer arguments are named shared buffers",e.span)); };
-        let index = resources.iter().position(|n| n == name).ok_or_else(|| Diagnostic::new(format!("unknown buffer `{name}`"),e.span))?;
+        let ExprKind::Name(name) = &e.kind else {
+            return Err(Diagnostic::new(
+                "buffer arguments are named shared buffers",
+                e.span,
+            ));
+        };
+        let index = resources
+            .iter()
+            .position(|n| n == name)
+            .ok_or_else(|| Diagnostic::new(format!("unknown buffer `{name}`"), e.span))?;
         return Ok(Value::Num(index as f64));
     }
     if param == "sample"
@@ -2453,10 +2927,7 @@ saw_lead(freq: a3) for 1beat
         );
         // Constant arithmetic folds: c4 + 1st is midi 61 (c#4).
         let transposed = ok(&note("lead(freq: c4 + 1st) for 1beat"));
-        assert_eq!(
-            transposed.notes[0].args.get("freq"),
-            Some(&Value::Note(61))
-        );
+        assert_eq!(transposed.notes[0].args.get("freq"), Some(&Value::Note(61)));
         assert_eq!(
             msg(&note("lead(freq: c4 + bright) for 1beat")),
             "note arguments must be literal values"
@@ -2549,7 +3020,10 @@ a(freq: 110hz) for 1beat"
             "`pan` can't be used inside a function with state"
         );
         assert_eq!(msg(&state("x.exxp + s")), "unknown function `exxp`");
-        assert_eq!(help(&state("x.exxp + s")).as_deref(), Some("did you mean `exp`?"));
+        assert_eq!(
+            help(&state("x.exxp + s")).as_deref(),
+            Some("did you mean `exp`?")
+        );
         assert_eq!(msg(&state("exp(x, x) + s")), "`exp` takes one value");
         assert_eq!(
             msg(&state("env[0 1sec 1] + s")),
@@ -2612,19 +3086,28 @@ a(f: 100hz) for 1beat
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert_eq!(errs[0].message, "`undefined_thing` is not defined");
         // even when nothing calls it
-        assert_eq!(msg("fn bad(x) { x + undefined_thing }"), "`undefined_thing` is not defined");
+        assert_eq!(
+            msg("fn bad(x) { x + undefined_thing }"),
+            "`undefined_thing` is not defined"
+        );
     }
 
     #[test]
     fn rates_on_parameters_are_checked() {
         // `const` needs a value known while compiling
-        ok("fn rep(x, n: const int = 2) { (for i in 0..<n { x }).sum }\ninstr a(f: hz) { osc(saw, f).rep(n: 3) }");
+        ok(
+            "fn rep(x, n: const int = 2) { (for i in 0..<n { x }).sum }\ninstr a(f: hz) { osc(saw, f).rep(n: 3) }",
+        );
         assert_eq!(
-            msg("fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: f / 1hz) }"),
+            msg(
+                "fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: f / 1hz) }"
+            ),
             "`n` must be known while compiling"
         );
         assert_eq!(
-            msg("fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: 2.5) }"),
+            msg(
+                "fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: 2.5) }"
+            ),
             "`n` expects a whole number, found 2.5"
         );
         // Structural parameters need defaults; scalar parameters retain their rate.
@@ -2642,10 +3125,20 @@ a(f: 100hz) for 1beat
     #[test]
     fn choices_and_arrays_specialize_functions_and_instruments() {
         ok("instr a(mode: (x | y) = x) { if mode == x { 0.5 } else { 0.25 } }");
-        ok("instr a(freq: hz, partials: [num] = [1, 0.5], count: const int = 2) { (for i in 0..<count { osc(sine, freq * (i + 1)) * partials[i] }).sum }\ninstr b(freq: hz) { a(freq, partials: [1, 0.2, 0.1], count: 3) }");
-        ok("fn sine(f: hz) { osc(sine, f) }\ninstr a(freq: hz, make: fn = sine) { make(freq) }\ninstr b(freq: hz) { a(freq, make: fn(f) { osc(saw, f) }) }");
-        assert_eq!(msg("fn f(m: (a | b) = c) { 1 }"), "the default for `m` is one of a, b");
-        assert_eq!(msg("fn f(m: (a) = a) { 1 }"), "a choice lists at least two names");
+        ok(
+            "instr a(freq: hz, partials: [num] = [1, 0.5], count: const int = 2) { (for i in 0..<count { osc(sine, freq * (i + 1)) * partials[i] }).sum }\ninstr b(freq: hz) { a(freq, partials: [1, 0.2, 0.1], count: 3) }",
+        );
+        ok(
+            "fn sine(f: hz) { osc(sine, f) }\ninstr a(freq: hz, make: fn = sine) { make(freq) }\ninstr b(freq: hz) { a(freq, make: fn(f) { osc(saw, f) }) }",
+        );
+        assert_eq!(
+            msg("fn f(m: (a | b) = c) { 1 }"),
+            "the default for `m` is one of a, b"
+        );
+        assert_eq!(
+            msg("fn f(m: (a) = a) { 1 }"),
+            "a choice lists at least two names"
+        );
         ok("fn f(xs: [num]) { xs.sum }\ninstr a() { f([0.1, 0.2]) * osc(sine, 100hz) }");
         ok("fn f(xs: [num]) { xs.sum }\ninstr a() { f(0.5) * osc(sine, 100hz) }");
     }
@@ -2661,7 +3154,9 @@ a(f: 100hz) for 1beat
             "`note` is only available in an instrument"
         );
         // a function's locals may share a name with an instrument, which it can't read
-        ok("instr y(f: hz) { osc(saw, f) }\nfn g(x) {\n y = x * 2\n y\n}\ninstr a(f: hz) { osc(saw, f).g }");
+        ok(
+            "instr y(f: hz) { osc(saw, f) }\nfn g(x) {\n y = x * 2\n y\n}\ninstr a(f: hz) { osc(saw, f).g }",
+        );
     }
 
     #[test]
@@ -2673,12 +3168,18 @@ a(f: 100hz) for 1beat
             "a send inside an `if` that changes while playing would always be made"
         );
         // a name first bound in a block stays in it
-        assert!(msg("instr a(f: hz) {\n if f > 1khz { g = 0.5 }\n osc(saw, f) * g\n}").contains("`g` is not defined"));
+        assert!(
+            msg("instr a(f: hz) {\n if f > 1khz { g = 0.5 }\n osc(saw, f) * g\n}")
+                .contains("`g` is not defined")
+        );
         assert_eq!(
             msg("fn f(x) {\n if x > 0 { state s = 0 }\n x\n}\ninstr a(f: hz) { osc(saw, f).f }"),
             "state is declared at the top of a function, not inside a block"
         );
-        assert_eq!(msg("instr a() { if 1 > 0 { 0.5 } }"), "an `if` used as a value needs an `else`");
+        assert_eq!(
+            msg("instr a() { if 1 > 0 { 0.5 } }"),
+            "an `if` used as a value needs an `else`"
+        );
     }
 
     #[test]
@@ -2692,7 +3193,9 @@ a(f: 100hz) for 1beat
 
     #[test]
     fn constants() {
-        let p = ok("const k = 2\nconst ratios = (1..3).map(it * k)\ninstr a(f: hz) { osc(saw, f * ratios).sum * 0.1 }");
+        let p = ok(
+            "const k = 2\nconst ratios = (1..3).map(it * k)\ninstr a(f: hz) { osc(saw, f * ratios).sum * 0.1 }",
+        );
         assert_eq!(p.instruments[0].graph.channels(), 1);
         assert_eq!(msg("const k = 1\nconst k = 2"), "`k` is defined twice");
         assert_eq!(
@@ -2954,7 +3457,10 @@ track b { out = y.lpf(cutoff: 1khz).to(x) }
         // outside a send, `prev` is one sample earlier
         ok("bus x\ntrack a { out = prev(x) }");
         let d = first_error("bus x\ntrack a { out = x.to(x) }");
-        assert_eq!(d.message, "tracks feed back through buses or buffers: a -> a");
+        assert_eq!(
+            d.message,
+            "tracks feed back through buses or buffers: a -> a"
+        );
     }
 
     #[test]
@@ -3151,26 +3657,32 @@ bad() for 1beat
         ));
         assert_eq!(p.instruments[0].graph.channels(), 1);
         // a list literal maps too, and the parameter can be used in a unit
-        ok(&mono("[1, 2, 3].map(fn(h) { osc(sine, f * h) * (1 / h) }).sum"));
+        ok(&mono(
+            "[1, 2, 3].map(fn(h) { osc(sine, f * h) * (1 / h) }).sum",
+        ));
         // mapping to a list keeps it a list
-        let p = ok("config { channels: stereo }\ninstr a(f: hz) { [1, 1.01].map(fn(r) { osc(saw, f * r) }) }");
+        let p = ok(
+            "config { channels: stereo }\ninstr a(f: hz) { [1, 1.01].map(fn(r) { osc(saw, f * r) }) }",
+        );
         assert_eq!(p.instruments[0].graph.channels(), 2);
 
-        assert_eq!(msg(&mono("(3..<3).map(fn(i) { osc(saw, f) }).sum")), "this array is empty");
+        assert_eq!(
+            msg(&mono("(3..<3).map(fn(i) { osc(saw, f) }).sum")),
+            "this array is empty"
+        );
         // `..` includes its end
         ok(&mono("(1..8).map(fn(n) { osc(sine, f * n) / n }).sum"));
         // a list is not limited by the channel count until it becomes a signal
-        ok(&mono("(0..40).map(fn(i) { osc(saw, f * (1 + i * 0.001)) }).sum"));
+        ok(&mono(
+            "(0..40).map(fn(i) { osc(saw, f * (1 + i * 0.001)) }).sum",
+        ));
         assert_eq!(
             msg(&mono("(0..17).map(fn(i) { osc(saw, f) })")),
             "audio output supports at most 16 channels"
         );
         // an expression of `it` is a function of one parameter
         ok(&mono("[1, 2].map(osc(saw, f * it)).sum"));
-        assert_eq!(
-            msg(&mono("fn(x) { x }")),
-            "a function is not a signal"
-        );
+        assert_eq!(msg(&mono("fn(x) { x }")), "a function is not a signal");
         assert_eq!(
             msg(&mono("[1, 2].map(fn(f) { osc(saw, f) }).sum")),
             "`f` is already in use, so it can't be this function's parameter"
@@ -3178,7 +3690,9 @@ bad() for 1beat
         // the parameter is not visible after the map
         assert!(msg(&mono("[1].map(fn(x) { x }).sum + x")).contains("x"));
         // functions take and give lists
-        ok("fn spread(f, n: const int = 3) { for i in 0..<n { f * (1 + i * 0.01) } }\ninstr a(f: hz) { osc(saw, spread(f)).sum }");
+        ok(
+            "fn spread(f, n: const int = 3) { for i in 0..<n { f * (1 + i * 0.01) } }\ninstr a(f: hz) { osc(saw, spread(f)).sum }",
+        );
     }
 
     #[test]
@@ -3192,7 +3706,9 @@ bad() for 1beat
         ok(&mono("for h in [1, 2, 3] { osc(sine, f * h) }.sum"));
         // indexing picks one entry; the index can come from a loop
         ok(&mono("bank = [osc(saw, f), osc(sine, f)]\nbank[1] * 0.5"));
-        ok(&mono("bank = [osc(saw, f), osc(sine, f)]\n(for i in 0..2 { bank[i] * (i + 1) }).sum"));
+        ok(&mono(
+            "bank = [osc(saw, f), osc(sine, f)]\n(for i in 0..2 { bank[i] * (i + 1) }).sum",
+        ));
         // a unit survives an index
         ok(&mono("osc(saw, [f, f * 2][1])"));
 
@@ -3220,14 +3736,20 @@ bad() for 1beat
         // a list holds entries of different units; only a signal needs one
         ok(&mono("pair = [f, 0.5]\nosc(saw, pair[0]) * pair[1]"));
         // `channels` makes a list of a signal's channels
-        let p = ok("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan.channels.map(fn(c) { c * 0.5 }) }");
+        let p = ok(
+            "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan.channels.map(fn(c) { c * 0.5 }) }",
+        );
         assert_eq!(p.instruments[0].graph.channels(), 2);
-        ok("config { channels: stereo }\ninstr a(f: hz) { [l, r] = [osc(saw, f), osc(sine, f)]\n[r, l] }");
+        ok(
+            "config { channels: stereo }\ninstr a(f: hz) { [l, r] = [osc(saw, f), osc(sine, f)]\n[r, l] }",
+        );
 
         ok(&mono("osc(saw, f).pan.map(fn(c) { c }).sum"));
         ok(&mono("osc(saw, f)[0]"));
         assert_eq!(
-            msg(&mono("[[osc(saw, f), osc(saw, f)], [osc(saw, f), osc(saw, f)]]")),
+            msg(&mono(
+                "[[osc(saw, f), osc(saw, f)], [osc(saw, f), osc(saw, f)]]"
+            )),
             "an array of arrays can't be used as a signal"
         );
         assert_eq!(
@@ -4093,7 +4615,14 @@ at bar 3 bass.unsolo",
         assert_eq!(note.notes[0].args["gain"], Value::Db(-6.0));
         // an instrument can take the note's gain over, and use it as it likes
         let p = ok("instr a(freq: hz, gain: db = 0db) { osc(saw, freq).lpf(freq * 4).gain(gain) }");
-        assert_eq!(p.instruments[0].params.iter().filter(|q| q.name == "gain").count(), 1);
+        assert_eq!(
+            p.instruments[0]
+                .params
+                .iter()
+                .filter(|q| q.name == "gain")
+                .count(),
+            1
+        );
         assert_eq!(
             msg("instr a(gain: hz) { osc(sine, 100hz) }"),
             "an instrument's own `gain` is in db, like the one every note has"
@@ -4345,5 +4874,24 @@ a() for 1beat
         ok(
             "instr pluck(freq: hz) { osc(saw, freq) }\ntrack pluck { instrument = pluck }\npluck.play([c2])",
         );
+    }
+}
+
+fn owned_samples(options: &CompileOptions, name: &str) -> Samples {
+    name.split_once("::")
+        .and_then(|(owner, _)| options.namespace_samples.get(owner))
+        .cloned()
+        .unwrap_or_else(|| options.samples.clone())
+}
+
+fn scoped_group(context: &str, name: &str) -> String {
+    if let Some((owner, _)) = context.split_once("::") {
+        if name.starts_with(&format!("{owner}::")) {
+            name.to_string()
+        } else {
+            format!("{owner}::{name}")
+        }
+    } else {
+        name.to_string()
     }
 }

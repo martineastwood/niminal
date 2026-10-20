@@ -9,6 +9,7 @@ use niminal_score::Time;
 /// Put a project in place at once, with the engine's own events: its definitions with `define`, its tempo
 /// with `transport`, and the notes it writes out with `note`.
 pub trait Eval {
+    fn eval_as(&mut self, client: u64, source: &str) -> Result<(), Vec<Problem>>;
     fn eval(&mut self, source: &str, quantize: Option<&str>) -> Result<(), Vec<Problem>>;
 
     /// Like `eval`, and the notes its clips play over the next `seconds` as well.
@@ -16,6 +17,9 @@ pub trait Eval {
 }
 
 impl Eval for Session {
+    fn eval_as(&mut self, client: u64, source: &str) -> Result<(), Vec<Problem>> {
+        install_as(self, source, 0.0, client)
+    }
     fn eval(&mut self, source: &str, _: Option<&str>) -> Result<(), Vec<Problem>> {
         install(self, source, 0.0)
     }
@@ -26,11 +30,29 @@ impl Eval for Session {
 }
 
 fn install(session: &mut Session, source: &str, play_seconds: f64) -> Result<(), Vec<Problem>> {
-    let program = compile(source).map_err(|ds| ds.into_iter().map(|d| Problem::plain(d.message)).collect::<Vec<_>>())?;
+    install_as(session, source, play_seconds, 0)
+}
+fn install_as(
+    session: &mut Session,
+    source: &str,
+    play_seconds: f64,
+    client: u64,
+) -> Result<(), Vec<Problem>> {
+    let program = compile(source).map_err(|ds| {
+        ds.into_iter()
+            .map(|d| Problem::plain(d.message))
+            .collect::<Vec<_>>()
+    })?;
     let mut ops = Vec::new();
-    let definitions = niminal_lang::dsp_source(source, program.tempo).map_err(|d| vec![Problem::plain(d.message)])?;
+    let definitions = niminal_lang::dsp_source(source, program.tempo)
+        .map_err(|d| vec![Problem::plain(d.message)])?;
     if !definitions.is_empty() {
-        ops.push(Op::Define { source: definitions, at: At::Now, dir: None, tag: None });
+        ops.push(Op::Define {
+            source: definitions,
+            at: At::Now,
+            dir: None,
+            tag: None,
+        });
     }
     // notes written out in the code, and what clips play
     let start = session.clock();
@@ -38,7 +60,12 @@ fn install(session: &mut Session, source: &str, play_seconds: f64) -> Result<(),
     let sample = |seconds: f64| At::Sample(start + (seconds * rate).round() as u64);
     let mut events = program.notes.clone();
     if play_seconds > 0.0 {
-        events.extend(program.schedule().events(0.0, play_seconds).map_err(|e| vec![Problem::plain(e.to_string())])?);
+        events.extend(
+            program
+                .schedule()
+                .events(0.0, play_seconds)
+                .map_err(|e| vec![Problem::plain(e.to_string())])?,
+        );
     }
     for e in events {
         let at = sample(e.at.to_seconds(program.tempo));
@@ -56,7 +83,7 @@ fn install(session: &mut Session, source: &str, play_seconds: f64) -> Result<(),
             tag: None,
         });
     }
-    session.send_events(0, ops).map(|_| ())
+    session.send_events(client, ops).map(|_| ())
 }
 
 /// Move a control at sample `at` (now if none), over `smooth_ms` (the control's own smoothing if none).

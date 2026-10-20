@@ -77,10 +77,13 @@ instr scrub(pos) {
 }
 ```
 
-Buffers are declared at the top level. Write with `buf[i] = x` or `buf.record(sig, loop:)`. Read with `[i]`, `.at`, `.phase`, or play via a sample. Functions cannot write shared buffers. Live re-evaluation keeps a buffer's contents when the name and length are unchanged.
+Buffers are declared at the top level. Write with `buf[i] = x` or `buf.record(sig, loop:)`. Read with `[i]`, `.at`, `.phase`, or play via a sample. Functions cannot write shared buffers. Live re-evaluation keeps a buffer's contents when the name, frame count and channel layout are unchanged.
 
 ### Buffer resources from a client
 
-The engine API can allocate, inspect, load and save shared buffers without editing instrument source. `buffers.load` loads one WAV channel and resamples it to the engine rate; `buffers.save` writes a mono float WAV snapshot. Updating buffer samples uses the timed `buffer_write` event, so writes participate in atomic batches, cancellation and replay. See [Engine API](/reference/engine-api/#buffers).
+The engine API can allocate, inspect, load and save shared buffers without editing instrument source. `buffers.load` loads all WAV channels by default (or one selected channel) and resamples to the engine rate; `buffers.save` writes a multichannel float WAV snapshot. Updating buffer samples uses the timed `buffer_write` event, so writes participate in atomic batches, cancellation and replay. See [Engine API](/reference/engine-api/#buffers).
 
 A buffer's length is fixed. Redefine it to resize it; matching names and lengths preserve contents across live redefinitions. Read/save snapshots may span concurrent audio-thread writes.
+
+
+Use `buffer stereo = zeros(48000, channels: 2)` for multichannel storage. Positions measure frames. `stereo.at(0, channel: 2)` reads channel two; channel selectors are 1-based. `stereo.record([left, right])` records both channels, or `stereo.record(right, channel: 2)` selects a starting channel. Buffer API values are interleaved. `buffers.free` unpublishes a name while prepared voices retain their storage; a new allocation of the same name is a distinct generation. All retained generations count against the connection’s configurable memory budget (256 MiB by default).

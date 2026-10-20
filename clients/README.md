@@ -6,7 +6,7 @@
 
 | Path | Language |
 | --- | --- |
-| [`js/`](js/) | Node (`niminal-client`); the [VS Code extension](../editors/vscode/) depends on it |
+| [`js/`](js/) | Browser ESM and Node (`niminal-client`); the [VS Code extension](../editors/vscode/) depends on it |
 | [`python/`](python/) | Python (`pip install -e clients/python`) |
 
 ```js
@@ -48,3 +48,12 @@ Protocol version 2 removes engine transport events and musical timestamps. Engin
 Protocol version 3 adds private routing graphs and `note.to`. Use `client.routing(edits, { at })` in JavaScript or `client.routing(edits, at=sample)` in Python to edit processors, instances, buses and connections. [`examples/routing.js`](examples/routing.js) demonstrates two independent instances of one effect. Processor definitions and routing IDs are connection-owned; sharing a bus requires `shared: true` and its owner’s `client_id` from `hello`.
 
 Use `transaction` to compile DSP definitions and edit routing as one graph change. Use routing `set` and `gain` edits for lightweight live controls, and `replace` with `fade` for processor crossfades. Subscribe to `transactions` for actual DSP application acknowledgements; `meters` includes public node and bus peaks. See the [Engine API](../docs/src/content/docs/reference/engine-api.md#live-graph-updates).
+
+
+Protocol **4** makes all definitions, controls, samples and buffers connection-owned. `panic()` silences your connection; `panicEngine()` / `panic_engine()` silences everyone. Reconnecting requires resubmitting your project.
+
+Both SDKs wrap scopes, multichannel buffers, buffer budgets, chunked file transfer, offline render jobs, live capture and audio-device configuration. JavaScript uses camelCase (`uploadFile`, `jobStatus`); Python uses snake_case (`upload_file`, `job_status`). Resource handles and jobs are private and cleaned up on disconnect.
+
+Runnable export examples: [`examples/export.js`](examples/export.js) and [`examples/export.py`](examples/export.py). To try the browser client, serve the repository (`python3 -m http.server 8000` from its root), start the daemon and open [`http://localhost:8000/clients/examples/browser.html`](http://localhost:8000/clients/examples/browser.html). It uses native WebSocket, uploads WAVs and downloads offline exports without Node polyfills. Bundlers can import `niminal-client/browser`.
+
+Subscribe to `voices`, `reports`, `scopes` and `jobs` for renderer lifecycle, DSP reports, waveform windows and background work. See the [Engine API](../docs/src/content/docs/reference/engine-api.md) for wire formats, sample timing, ownership and limits. Audio configuration requires explicit `restart: true` and disconnects every client.

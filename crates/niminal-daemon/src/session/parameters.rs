@@ -28,8 +28,14 @@ impl Session {
                     ..
                 } => {
                     let program = self.program_at(self.resolve(at));
-                    let local = if self.routing_at(self.resolve(at)).has_node(client, target) {
-                        crate::routing::node_name(client, target)
+                    let local = if self
+                        .routing_at(self.resolve(at))
+                        .has_node(client, definitions::local(client, target).unwrap_or(target))
+                    {
+                        crate::routing::node_name(
+                            client,
+                            definitions::local(client, target).unwrap_or(target),
+                        )
                     } else {
                         target.clone()
                     };
@@ -71,31 +77,6 @@ impl Session {
                         at,
                         args: paths.iter().cloned().zip(values).collect(),
                         glide,
-                        tag,
-                    });
-                }
-                Op::BindBuffer {
-                    id,
-                    at,
-                    param,
-                    buffer,
-                    tag,
-                } => {
-                    let schema = schemas
-                        .get(&id)
-                        .ok_or_else(|| fail(format!("no note with id {id} is sounding")))?;
-                    let choices = schema
-                        .resources
-                        .get(&param)
-                        .ok_or_else(|| fail(format!("`{param}` is not a live buffer parameter")))?;
-                    let index = choices.iter().position(|n| *n == buffer).ok_or_else(|| {
-                        fail(format!("buffer `{buffer}` was not prepared for this voice"))
-                    })?;
-                    expanded.push(Op::Set {
-                        id,
-                        at,
-                        args: [(param, Value::Num(index as f64))].into(),
-                        glide: None,
                         tag,
                     });
                 }
@@ -143,5 +124,162 @@ impl Session {
         }
         let stale = self.clock.saturating_sub(self.sample_rate as u64 * 2);
         self.voice_maps.retain(|s| !s.done || s.at > stale);
+    }
+}
+
+impl Session {
+    pub(super) fn apply_buffer_binds(&mut self) {
+        for bind in &mut self.buffer_binds {
+            if !bind.done && bind.at <= self.clock {
+                if let Some(track) = &bind.target {
+                    if let Some(index) = self.program.track_index(track) {
+                        self.mixer
+                            .swap_chain_buffers(index, bind.resource, &mut bind.banks());
+                    }
+                } else if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == bind.key)
+                {
+                    self.mixer
+                        .swap_voice_buffers(*id, bind.resource, &mut bind.banks());
+                }
+                bind.done = true;
+            }
+        }
+        let stale = self.clock.saturating_sub(self.sample_rate as u64 * 2);
+        self.prune_buffer_binds(stale);
+    }
+}
+
+impl Session {
+    pub(super) fn apply_chain_maps(&mut self) {
+        for map in &mut self.chain_maps {
+            if !map.mapping.done && map.mapping.at <= self.clock {
+                if let Some(track) = self.program.track_index(&map.track()) {
+                    if map.mapping.source.is_none() {
+                        if let Some(value) = self.mixer.chain_param_value(track, &map.param) {
+                            if let Some(control) =
+                                self.controls.iter_mut().find(|c| c.key == map.param)
+                            {
+                                control.set(self.clock, value, 0);
+                            }
+                        }
+                    }
+                    let mut prepared = prepare_mapping(&self.program, &map.mapping);
+                    self.mixer
+                        .swap_chain_mapping(track, &map.param, &mut prepared);
+                    crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
+                }
+                map.mapping.done = true;
+            }
+        }
+        self.prune_chain_maps();
+    }
+}
+
+impl Session {
+    pub(super) fn prune_buffer_binds(&mut self, stale: u64) {
+        let mut latest = std::collections::BTreeMap::new();
+        for (index, bind) in self.buffer_binds.iter().enumerate() {
+            if bind.done && bind.target.is_some() {
+                let key = (bind.client, bind.target.clone(), bind.param.clone());
+                if latest
+                    .get(&key)
+                    .is_none_or(|old: &usize| self.buffer_binds[*old].at <= bind.at)
+                {
+                    latest.insert(key, index);
+                }
+            }
+        }
+        let mut index = 0;
+        self.buffer_binds.retain(|b| {
+            let target_exists = b
+                .target
+                .as_ref()
+                .is_none_or(|track| self.program.track_index(track).is_some());
+            let keep = !b.done
+                || (target_exists
+                    && (b.at > stale
+                        || (b.target.is_some()
+                            && latest.get(&(b.client, b.target.clone(), b.param.clone()))
+                                == Some(&index))));
+            index += 1;
+            keep
+        });
+    }
+    pub(super) fn prune_chain_maps(&mut self) {
+        let mut latest = std::collections::BTreeMap::new();
+        for (i, map) in self.chain_maps.iter().enumerate() {
+            if map.mapping.done {
+                let key = (map.client, map.node.clone(), map.param.clone());
+                if latest
+                    .get(&key)
+                    .is_none_or(|old: &usize| self.chain_maps[*old].mapping.at <= map.mapping.at)
+                {
+                    latest.insert(key, i);
+                }
+            }
+        }
+        let mut index = 0;
+        self.chain_maps.retain(|map| {
+            let keep = !map.mapping.done
+                || (self.program.track_index(&map.track()).is_some()
+                    && latest.get(&(map.client, map.node.clone(), map.param.clone()))
+                        == Some(&index));
+            index += 1;
+            keep
+        });
+    }
+    pub(super) fn restore_chain_bindings(&mut self) {
+        let mut latest = std::collections::BTreeMap::new();
+        for map in &self.chain_maps {
+            if map.mapping.at <= self.clock {
+                let key = (map.client, map.node.clone(), map.param.clone());
+                if latest
+                    .get(&key)
+                    .is_none_or(|old: &&super::ChainMap| old.mapping.at <= map.mapping.at)
+                {
+                    latest.insert(key, map);
+                }
+            }
+        }
+        for map in latest.values() {
+            if map.mapping.source.is_some() {
+                if let Some(track) = self.program.track_index(&map.track()) {
+                    let mut mapping = prepare_mapping(&self.program, &map.mapping);
+                    self.mixer
+                        .swap_chain_mapping(track, &map.param, &mut mapping);
+                }
+            }
+        }
+        let mut latest = std::collections::BTreeMap::new();
+        for bind in &self.buffer_binds {
+            if bind.at <= self.clock && bind.target.is_some() {
+                let key = (bind.client, bind.target.clone(), bind.param.clone());
+                if latest
+                    .get(&key)
+                    .is_none_or(|old: &&super::BufferBind| old.at <= bind.at)
+                {
+                    latest.insert(key, bind);
+                }
+            }
+        }
+        for bind in latest.values() {
+            let track = bind.target.as_ref().unwrap();
+            let Some(index) = self.program.track_index(track) else {
+                continue;
+            };
+            let Some(node) = track
+                .strip_prefix("__routing_processor_")
+                .and_then(|r| r.split_once('_'))
+                .map(|(_, id)| id)
+            else {
+                continue;
+            };
+            if let Ok((key, count, _)) = self.routing.buffer_binding(bind.client, node, &bind.param)
+            {
+                self.mixer
+                    .swap_chain_buffers(index, key, &mut vec![bind.bank.clone(); count]);
+            }
+        }
+        crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
     }
 }

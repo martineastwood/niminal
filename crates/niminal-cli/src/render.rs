@@ -34,7 +34,13 @@ pub struct RenderOptions {
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        RenderOptions { limiter: true, until: None, arrangement: None, stems: false, input: Vec::new() }
+        RenderOptions {
+            limiter: true,
+            until: None,
+            arrangement: None,
+            stems: false,
+            input: Vec::new(),
+        }
     }
 }
 
@@ -65,7 +71,10 @@ impl RenderOutput {
 
     /// The loudest sample on any channel.
     pub fn peak(&self) -> f32 {
-        self.channels.iter().flatten().fold(0.0, |p, s| p.max(s.abs()))
+        self.channels
+            .iter()
+            .flatten()
+            .fold(0.0, |p, s| p.max(s.abs()))
     }
 }
 
@@ -83,7 +92,11 @@ impl std::error::Error for RenderError {}
 /// Render the program's own notes plus `extra` events (for example from a
 /// `.nms` score). Voices run until their envelopes finish, and effect tails
 /// ring out, so the result includes every release.
-pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Result<RenderOutput, RenderError> {
+pub fn render(
+    program: &Program,
+    extra: &[Event],
+    options: &RenderOptions,
+) -> Result<RenderOutput, RenderError> {
     let sr = f64::from(SAMPLE_RATE);
     let error = |e: &dyn fmt::Display| RenderError(e.to_string());
 
@@ -103,12 +116,17 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
         performed = schedule.events(0.0, until).map_err(|e| error(&e))?;
     }
     // mistakes in a note are reported before anything is rendered
-    for event in program.notes.iter().chain(&performed) {
-        program.plan(event).map_err(|e| RenderError(format!("note for `{}`: {e}", event.target)))?;
+    for event in program.notes.iter().chain(&performed).chain(extra) {
+        program
+            .plan(event)
+            .map_err(|e| RenderError(format!("note for `{}`: {e}", event.target)))?;
     }
 
     // the notes written out in the file and sent in count towards how long it plays, as the schedule does
-    let note_end = program.notes.iter().chain(extra)
+    let note_end = program
+        .notes
+        .iter()
+        .chain(extra)
         .map(|e| (e.at.to_seconds(program.tempo) + e.dur.to_seconds(program.tempo)) * sr)
         .fold(0.0, f64::max);
     let input_len = options.input.iter().map(Vec::len).max().unwrap_or(0);
@@ -116,7 +134,10 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
 
     let mut session = Offline::new(SAMPLE_RATE as f32, program.master).without_limiter();
     session.play_program(program.clone(), schedule);
-    session.sequencer().send_notes(extra).map_err(|ps| problems(&ps))?;
+    session
+        .sequencer()
+        .send_notes(extra)
+        .map_err(|ps| problems(&ps))?;
     if options.stems {
         session.capture_stems();
     }
@@ -132,7 +153,12 @@ pub fn render(program: &Program, extra: &[Event], options: &RenderOptions) -> Re
 }
 
 fn problems(ps: &[niminal_daemon::Problem]) -> RenderError {
-    RenderError(ps.iter().map(|p| p.message.clone()).collect::<Vec<_>>().join("\n"))
+    RenderError(
+        ps.iter()
+            .map(|p| p.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// Play `session` on, adding to `out`, until `done`.
@@ -168,7 +194,10 @@ fn ring_out(out: &mut Vec<Vec<f32>>, mut more: impl FnMut(&mut Vec<Vec<f32>>)) {
     let limit = out[0].len() + (MAX_TAIL_SECONDS * SAMPLE_RATE as f32) as usize;
     let quiet_at = |out: &[Vec<f32>], i: usize| out.iter().all(|c| c[i].abs() < TAIL_THRESHOLD);
 
-    let mut silent = (0..out[0].len()).rev().take_while(|&i| quiet_at(out, i)).count();
+    let mut silent = (0..out[0].len())
+        .rev()
+        .take_while(|&i| quiet_at(out, i))
+        .count();
     while silent < needed && out[0].len() < limit {
         let start = out[0].len();
         more(out);
@@ -182,7 +211,12 @@ fn ring_out(out: &mut Vec<Vec<f32>>, mut more: impl FnMut(&mut Vec<Vec<f32>>)) {
 
 /// Apply the master stage, removing the limiter's lookahead delay so notes
 /// still land exactly where they were scheduled.
-fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, stems: Vec<Stem>, limiter: bool) -> RenderOutput {
+fn finish(
+    mut channels: Vec<Vec<f32>>,
+    silenced_voices: usize,
+    stems: Vec<Stem>,
+    limiter: bool,
+) -> RenderOutput {
     if limiter {
         let mut master = Master::with_channels(SAMPLE_RATE as f32, DEFAULT_CEILING, channels.len());
         let latency = master.latency();
@@ -195,15 +229,31 @@ fn finish(mut channels: Vec<Vec<f32>>, silenced_voices: usize, stems: Vec<Stem>,
             c.drain(..latency);
         }
     }
-    RenderOutput { channels, silenced_voices, stems }
+    RenderOutput {
+        channels,
+        silenced_voices,
+        stems,
+    }
 }
 
 /// The captured stems, named for their track or bus and cut to `len` samples. The track that plays
 /// bare instruments is left out if it was never heard.
 fn name_stems(program: &Program, captured: Option<niminal_engine::Stems>, len: usize) -> Vec<Stem> {
-    let Some(captured) = captured else { return Vec::new() };
-    let named = captured.tracks.into_iter().enumerate().map(|(i, c)| (program.tracks[i].name.clone(), c))
-        .chain(captured.buses.into_iter().enumerate().map(|(i, c)| (program.buses[i].clone(), c)));
+    let Some(captured) = captured else {
+        return Vec::new();
+    };
+    let named = captured
+        .tracks
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| (program.tracks[i].name.clone(), c))
+        .chain(
+            captured
+                .buses
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| (program.buses[i].clone(), c)),
+        );
     let mut stems = Vec::new();
     for (i, (name, mut channels)) in named.enumerate() {
         channels.iter_mut().for_each(|c| c.resize(len, 0.0));
@@ -211,7 +261,10 @@ fn name_stems(program: &Program, captured: Option<niminal_engine::Stems>, len: u
         // the implicit track has no name; say what it is
         match (i, name.is_empty()) {
             (0, true) if silent => continue,
-            (0, true) => stems.push(Stem { name: "direct".into(), channels }),
+            (0, true) => stems.push(Stem {
+                name: "direct".into(),
+                channels,
+            }),
             _ => stems.push(Stem { name, channels }),
         }
     }
@@ -243,7 +296,11 @@ pub fn split_ramps(source: &str) -> Result<(String, Vec<String>), niminal_lang::
     let mut rest = source.to_string();
     let mut ramps = Vec::new();
     for ramp in statements.iter().filter(|s| s.ramp().is_some()) {
-        let blank: String = ramp.text.chars().map(|c| if c == '\n' { '\n' } else { ' ' }).collect();
+        let blank: String = ramp
+            .text
+            .chars()
+            .map(|c| if c == '\n' { '\n' } else { ' ' })
+            .collect();
         rest.replace_range(ramp.offset..ramp.offset + ramp.text.len(), &blank);
         ramps.push(ramp.text.clone());
     }
@@ -263,13 +320,25 @@ pub enum End {
 ///
 /// `source` has its `use` lines already joined in. The file's own `tempo` stays the starting tempo; each
 /// ramp is sent after the rest, so it sets off from there at the boundary it names.
-pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: End, limiter: bool, stems: bool, input: Vec<Vec<f32>>) -> Result<RenderOutput, RenderError> {
+pub fn render_session(
+    source: &str,
+    dir: &std::path::Path,
+    layout: Layout,
+    end: End,
+    limiter: bool,
+    stems: bool,
+    input: Vec<Vec<f32>>,
+) -> Result<RenderOutput, RenderError> {
     let (rest, ramps) = split_ramps(source).map_err(|d| RenderError(d.message))?;
     let mut session = Offline::new(SAMPLE_RATE as f32, layout).without_limiter();
     session.set_sample_dir(dir);
-    session.eval(&rest, Some("now")).map_err(|ps| problems(&ps))?;
+    session
+        .eval(&rest, Some("now"))
+        .map_err(|ps| problems(&ps))?;
     for ramp in &ramps {
-        session.eval(ramp, Some("now")).map_err(|ps| problems(&ps))?;
+        session
+            .eval(ramp, Some("now"))
+            .map_err(|ps| problems(&ps))?;
     }
     if stems {
         session.capture_stems();
@@ -280,10 +349,14 @@ pub fn render_session(source: &str, dir: &std::path::Path, layout: Layout, end: 
     run_until(&mut session, &mut out, |session| {
         let t = session.transport();
         match end {
-            End::Bars(bars) => (t.bar - 1) as f64 + (t.beat - 1.0) / session.program().tempo.beats_per_bar >= bars,
+            End::Bars(bars) => {
+                (t.bar - 1) as f64 + (t.beat - 1.0) / session.program().tempo.beats_per_bar >= bars
+            }
             End::Seconds(s) => t.seconds >= s,
         }
     });
-    session.hush().map_err(|_| RenderError("couldn't stop the piece".into()))?;
+    session
+        .hush()
+        .map_err(|_| RenderError("couldn't stop the piece".into()))?;
     Ok(collect(session, out, limiter))
 }

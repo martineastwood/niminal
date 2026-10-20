@@ -28,6 +28,7 @@ pub fn status_json(session: &Session) -> Value {
         "processing_latency": session.program().processing_latency(),
         "instruments": instruments.iter().map(|i| json!({
             "name": i.name,
+            "members":i.members,
             "arrays": i.arrays,
             "buffers": i.resources,
             "params": i.params.iter().map(|p| json!({
@@ -50,4 +51,55 @@ fn state_json(session: &Session) -> Value {
     json!({
         "sample": t.sample, "seconds": t.seconds, "voices": t.voices,
     })
+}
+
+/// Public inspection is owner-scoped; health and clock remain engine-wide.
+pub(crate) fn client_status_json(session: &Session, client: u64) -> Value {
+    let mut status = status_json(session);
+    for field in ["instruments", "controls"] {
+        if let Some(entries) = status[field].as_array_mut() {
+            entries.retain(|entry| {
+                entry["name"]
+                    .as_str()
+                    .is_some_and(|name| crate::session::definitions::local(client, name).is_some())
+            });
+        }
+    }
+    for field in ["tracks", "buses"] {
+        if let Some(entries) = status[field].as_array_mut() {
+            entries.retain(|entry| {
+                entry
+                    .as_str()
+                    .is_some_and(|name| crate::session::definitions::local(client, name).is_some())
+            });
+        }
+    }
+    for field in ["routing", "routing_meters"] {
+        if let Some(entries) = status[field].as_array_mut() {
+            entries.retain(|entry| entry["client"].as_u64() == Some(client));
+        }
+    }
+    if let Some(entries) = status["clients"].as_array_mut() {
+        entries.retain(|entry| entry["id"].as_u64() == Some(client));
+    }
+    public_names(&mut status, client);
+    status
+}
+pub(crate) fn public_names(value: &mut Value, client: u64) {
+    match value {
+        Value::String(s) => {
+            *s = s.replace(&format!("__client_{client}::"), "");
+        }
+        Value::Array(a) => {
+            for v in a {
+                public_names(v, client);
+            }
+        }
+        Value::Object(o) => {
+            for v in o.values_mut() {
+                public_names(v, client);
+            }
+        }
+        _ => {}
+    }
 }

@@ -137,7 +137,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
             b'[' if is_raw_bracket(
                 &tokens,
                 braces.last().copied().unwrap_or(false)
-                    || matches!(statement_keyword.as_deref(), Some("const" | "fn" | "instr" | "mono")),
+                    || matches!(
+                        statement_keyword.as_deref(),
+                        Some("const" | "fn" | "instr" | "mono" | "track")
+                    ),
             ) =>
             {
                 let is_grid =
@@ -168,7 +171,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 };
                 let text = src[i + 1..i + len].to_string();
                 let kind = match tokens.last() {
-                    Some(Token { tok: Tok::Ident(n), .. }) if n == "events" => "events",
+                    Some(Token {
+                        tok: Tok::Ident(n), ..
+                    }) if n == "events" => "events",
                     _ => "grid",
                 };
                 start = tokens.pop().map_or(start, |t| t.span.start);
@@ -214,7 +219,15 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                             let inherited = braces.last().copied().unwrap_or(false);
                             let signal = matches!(
                                 statement_keyword.as_deref(),
-                                Some("instr" | "mono" | "fn" | "const" | "track" | "arrangement" | "bus")
+                                Some(
+                                    "instr"
+                                        | "mono"
+                                        | "fn"
+                                        | "const"
+                                        | "track"
+                                        | "arrangement"
+                                        | "bus"
+                                )
                             );
                             braces.push(inherited || signal);
                         }
@@ -513,7 +526,11 @@ mod tests {
     fn percent_and_units_that_never_follow_a_space() {
         assert_eq!(toks("30%")[0], num(30.0, Some("%")));
         assert_eq!(toks("2bars")[0], num(2.0, Some("bars")));
-        assert_eq!(toks("2 bars")[0], num(2.0, None), "a unit is attached or it is a name");
+        assert_eq!(
+            toks("2 bars")[0],
+            num(2.0, None),
+            "a unit is attached or it is a name"
+        );
         assert_eq!(toks("2 bars")[1], Tok::Ident("bars".into()));
         assert_eq!(
             toks("1/2 beat")[0],

@@ -10,8 +10,8 @@ The **engine** is a sound server. It holds the instruments, effects, tracks, bus
 ## Connection
 
 1. Open a WebSocket to `ws://127.0.0.1:7401/`.
-2. Send **`hello`** first, with `{ "protocol": 3, "client": "my-app" }` (and `token` if the daemon needs one). The result has `sample_rate`, `channels` and the `topics`.
-3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels), **`notices`** (warnings) and **`transactions`** (graph change acknowledgements).
+2. Send **`hello`** first, with `{ "protocol": 4, "client": "my-app" }` (and `token` if the daemon needs one). The result has `sample_rate`, `channels` and the `topics`.
+3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels), **`notices`** (warnings) and **`transactions`** (graph change acknowledgements), **`voices`**, **`reports`**, **`scopes`** and **`jobs`**. The hello result also advertises capabilities and limits.
 
 ## Requests
 
@@ -54,7 +54,7 @@ Anything wrong in the batch → **-32001** and nothing is queued; each entry of 
 
 ### Processor instances, buses and connections
 
-Protocol **3** adds a timed `routing` operation inside `events.send`. Each connection owns its routing IDs, processor definitions and instances. Two clients can use the same IDs without collisions. `hello` returns `client_id`; a client can deliberately expose a bus with `shared: true`, and another client can address it using that owner ID. DSP library definitions sent through `define` remain shared by name.
+Protocol **4** includes a timed `routing` operation inside `events.send`. Each connection owns its routing IDs, processor definitions and instances. Two clients can use the same IDs without collisions. `hello` returns `client_id`; a client can deliberately expose a bus with `shared: true`, and another client can address it using that owner ID. All definitions and buffers sent through `define` are private to the connection, including functions, instruments, samples and controls. Reconnecting starts a fresh namespace. Only buses explicitly marked `shared` cross that boundary.
 
 ```json
 { "method": "events.send", "params": { "events": [
@@ -104,7 +104,7 @@ These are timed `events.send` operations. Each uses a note `id` owned by the con
 | `op` | Fields | Meaning |
 | --- | --- | --- |
 | `array` | `id`, `at`, `param`, `values`, optional `glide`, `tag` | Update every numeric element of a fixed-shape array. `values` is a flat list in row order; count, units and ranges must match. |
-| `bind_buffer` | `id`, `at`, `param`, `buffer`, optional `tag` | Select a shared buffer prepared with this voice's original instrument graph. |
+| `bind_buffer` | `id`, `at`, `param`, `buffer`, optional `tag` | Bind any currently published, compatible buffer owned by this client, including one allocated after the voice began. |
 | `map` | `id`, `at`, `param`, optional `source`, `channel`, `scale`, `offset`, `tag` | Connect a parameter to a named control or bus. `source: null` disconnects and holds the last rendered value. |
 
 ```json
@@ -119,7 +119,7 @@ These are timed `events.send` operations. Each uses a note `id` owned by the con
 
 A scalar `set` does not disconnect an active mapping; explicitly unmap first. A component such as `weights[0]` can be mapped independently. Disconnecting and reconnecting moves prepared storage between the command and voice; rendering never allocates or frees it.
 
-Array and buffer updates use the original voice's parameter schema even after the instrument is redefined. Array/buffer events are recorded as equivalent named scalar updates for deterministic replay. All three operations participate in batch validation, cancellation and disconnect cleanup. `status.instruments` includes `arrays` (element paths) and `buffers` (available resource names), alongside scalar `params`.
+Array and buffer updates use the original voice's parameter schema even after the instrument is redefined. Array updates expand to scalar updates; buffer bindings retain their resource identity in the log. All three operations participate in batch validation, cancellation and disconnect cleanup. `status.instruments` includes `arrays` (element paths) and `buffers` (available resource names), alongside scalar `params`.
 
 ### `clock`
 
@@ -140,11 +140,11 @@ Where the engine is in time, for a client that schedules against it.
 
 | Method | Parameters | Result |
 | --- | --- | --- |
-| `buffers.list` | none | `buffers`: each resource's `name`, `frames`, `sample_rate` |
-| `buffers.alloc` | `name`, `frames` | Allocate a new named buffer (1–4194304 frames) through a logged definition |
+| `buffers.list` | none | `buffers`: each resource's `name`, `frames`, `channels`, `sample_rate` |
+| `buffers.alloc` | `name`, `frames`, optional `channels` (default 1) | Allocate a new named buffer within the client memory budget through a logged definition |
 | `buffers.read` | `name`, `offset` (default 0), `count` | `name`, `offset`, `values` (at most 65536 samples) |
-| `buffers.load` | `name`, `path`, `channel` (1-based, default 1) | Load a WAV channel, resample to the engine rate, allocate if absent, and queue logged writes; an existing buffer must have the resulting length |
-| `buffers.save` | `name`, `path` | Save a mono 32-bit float WAV snapshot; returns `name`, `path`, `frames` |
+| `buffers.load` | `name`, `path`, `channel` (0 for all channels, otherwise 1-based; default 0) | Load WAV audio, resample to the engine rate, allocate if absent, and queue logged writes; an existing buffer must have the resulting frame and channel counts |
+| `buffers.save` | `name`, `path` | Save a multichannel 32-bit float WAV snapshot; returns `name`, `path`, `frames` |
 
 Sample updates go in `events.send`:
 
@@ -154,18 +154,58 @@ Sample updates go in `events.send`:
 
 A write contains at most 65536 finite samples within the declared length. It applies before notes at that sample, is validated with the rest of the batch, and supports cancellation and disconnect cleanup. Longer updates use several writes at the same time. `buffers.load` records the decoded values in the session log, so replay does not need the original WAV. Writes apply when rendering reaches their time; reading immediately after queuing a write may still return the previous contents. Snapshots do not stop concurrent recording.
 
-### Instrument reporting
+`offset` and `count` measure frames; values are interleaved by frame. Buffers support 1–16 channels. `buffers.read` and `buffer_write` accept at most 65536 samples, including all channels. `buffers.free {name}` removes the published name. Prepared voices keep their references; allocating the same name creates a new generation. `buffers.budget {bytes?}` reads or changes the connection’s memory budget (default 256 MiB), returning `bytes` and `retained_bytes`. Retained generations count until their final reference disappears.
 
-Instruments and tracks can report a changing signal through `.osc_out("/address", port: 9000)`. Add `on: trigger` to capture a value on each positive edge:
+In DSP, `buffer take = zeros(48000, channels: 2)` allocates stereo storage. Read a channel with `take.at(position, channel: 2)`. `take.record(signal, channel: 1, loop: true)` records consecutive samples; multichannel signals write consecutive channels starting at `channel`.
+
+### Reports, scopes and voice lifecycle
+
+Subscribe to `reports`, then use a signal tap in an instrument or processor:
 
 ```nml
 instr tone(freq: hz) {
-  report = (freq / 1hz).osc_out("/note/frequency", port: 9000, on: note.start)
-  osc(sine, freq) * env[1 | 20ms 0] + report * 0
+  out = (osc(sine, freq) * env[1 | 20ms 0]).report("wave", rate: 30hz)
 }
 ```
 
-Triggered reports preserve repeated equal values. Each tap has a bounded queue of 256 scalar events shared by its voices; overflow discards the oldest. `rate` (default 30hz, 0.5–200hz) controls how often the sender drains the queue, rather than limiting the trigger rate. Network sending happens outside the audio thread. Offline rendering/replay does not send OSC. Reports currently carry one float and no note ID or timestamp.
+`.report("name", rate: 30hz, on: trigger)` passes through its input and emits scalar or array values (up to 64 elements). With `on`, every positive edge is retained, including repeated values. Each tap has a 256-event ring; overflow is counted in `dropped`. `report` notifications carry `name`, `source`, `token` (for notes), absolute `sample`, `values` and cumulative `dropped`. Audio threads only publish to bounded storage. Existing `.osc_out` remains available for external OSC destinations.
+
+`scopes.create {id, endpoint, frames?, rate?}` watches master, a node or an accessible bus. Defaults are 1024 frames at 20 updates/second; limits are 4096 frames, 30 updates/second and eight scopes per connection. Subscribe to `scopes` for `scope` notifications containing `id`, `sample`, `channels` and interleaved `values`. Remove with `scopes.remove {id}`. Windows are sampled from the current rendered audio and can overlap or skip; use capture for continuous audio.
+
+Every accepted note returns a server `token` in the `events.send` result’s `notes` list, paired with its input `event` index. Subscribe to `voices` for `voice` notifications: `state` (`started`, `released`, `ended`, `dropped`), actual renderer `sample`, `token`, optional client `id`, `target`, `reason` and connection-local `sequence`. Reasons distinguish normal completion, choke, panic, invalid DSP, graph removal and capacity drops. `status.active_voices` supplies the current snapshot and sequence for resynchronization. A notification describes actual playback rather than acceptance into the queue.
+
+### Processor resource controls and file players
+
+Processor signatures accept scalar, range, fixed array and buffer parameters. Routing edits `array {id,param,values,glide?}`, `bind_buffer {id,param,buffer}` and `map {id,param,source?,channel?,scale?,offset?}` update a node at the enclosing routing event’s sample. Mapping sources are `{kind:"control",name:"lfo"}` or `{kind:"bus",id:"mod",owner?:7}`. A null source unmaps and holds the last rendered value. Bus modulation has the same 32-sample delay as note modulation. Bindings accept resources created after the processor, and compatible bindings survive replacement. A replacement that removes or changes the unit of a mapped parameter requires an explicit unmap in the same transaction.
+
+A routing `player` edit creates a disk-backed source node:
+
+```json
+{"op":"routing","at":"now","edits":[
+  {"op":"player","id":"music","path":"file:1","looping":true},
+  {"op":"connect","id":"music_out","from":{"kind":"node","id":"music"},"to":{"kind":"master"}}
+]}
+```
+
+Player fields: `path`, optional 1-based `channels` selection, `rate` (0.25–4, default 1), `position` in seconds, `playing` (default true), `looping`, `loop_start` and `loop_end` in seconds. `seek {id,seconds}` seeks at the enclosing event time. Node `set` edits control `rate`, `playing`, `loop`, `loop_start` and `loop_end`; modulation supports `rate`. Decoding and seeking run on a worker with a fixed page cache. A realtime cache miss produces silence and increments the player’s `underruns`; offline rendering waits for data. Status exposes player position and failure state. Files must remain unchanged during playback. Reverse and granular disk access are outside this transport player’s contract.
+
+### File transfer, export and live capture
+
+Browser clients upload WAV files with `files.upload {id?,offset?,data?,finish?}`. `data` is base64, at most 256 KiB decoded per chunk; start without `id`, then append using the returned handle and byte offset. Set `finish:true` on the final chunk. Ready handles can replace local paths in buffer loads and player edits. `files.read {id,offset?,count}` returns base64 bytes and `eof`, up to 256 KiB per read. `files.remove {id}` deletes the handle. Handles belong to the connection and temporary files are removed on disconnect.
+
+`render.start` runs an independent offline session with `{source,events,frames,sample_rate?,channels?,limiter?,tail?,resources?,outputs?}`. Defaults: 48000 Hz, stereo, limiter and tail enabled. Events contain explicit engine sample times; the client supplies its project and schedule. This does not replay the live session’s history. Resources are `{name,path,channel?}` buffer imports. Outputs are `{id,endpoint,path?}`; default output is master. Selected stem endpoints must exist at render start. A missing path produces a downloadable file handle. WAV output is streamed with bounded memory and promotes to RF64 past 4 GiB. Tail rendering stops after one second below −90 dB, capped at 60 seconds.
+
+`capture.start {output,at?}` records an existing live endpoint from an absolute sample or `"now"`; `capture.stop {id,at?}` sets the exact exclusive end sample. Capture includes the actual live performance, with the master after its limiter. A worker drains bounded audio storage; overflow or removal of a source fails visibly instead of silently dropping audio.
+
+Both return a job `id`. Use `jobs.status {id}`, `jobs.cancel {id}` or subscribe to `jobs` for `job` notifications. States are `running`, `completed`, `failed` and `cancelled`; completed results include output file handles. At most two jobs run per connection, and at most four offline renders engine-wide. The most recent 64 terminal jobs per connection are retained. Disconnect cancels outstanding work. Local output paths refer to the daemon’s filesystem.
+
+### Audio devices
+
+`audio.devices` lists input/output devices and supported formats. `audio.status` reports host state and selected settings. `audio.configure {settings,restart:true}` queues an explicit engine restart; settings include `output`, `input`, `sample_rate`, `channels`, optional `buffer_size` and `no_audio`. Use device IDs from enumeration or `"default"`. Restart resets the sample clock and disconnects all clients; reconnect and resubmit the project. Unsupported formats fail preflight, and device loss remains visible in host status. An embedded engine without an audio host rejects configuration.
+
+### Transport limits
+
+Messages are limited to 4 MiB. Each connection has a bounded notification queue (256 messages / 4 MiB); clock, meter and scope updates coalesce. `transport_dropped` reports coalescing/drops. If reliable notifications cannot fit, the slow connection closes so its client can reconnect and rebuild state. There are no resumable server sessions.
 
 ### `events.cancel`
 
@@ -184,11 +224,11 @@ A control change that has already reached the audio thread when the cancel arriv
 
 ### `panic`
 
-Silence everything at once: every voice and the memory of every effect. **Result:** `{}`. To do it at a given time, send a `panic` event in `events.send`:
+Silence this connection’s voices, players and effect memory. Use `engine.panic` to silence the entire engine. **Result:** `{}`. To do it at a given time, send a `panic` event in `events.send`:
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
-| `panic` | `at`, optional `tag` | Silence everything at `at`. Events waiting for later still play. |
+| `panic` | `at`, optional `tag` | Silence this connection at `at`. Events waiting for later still play. |
 
 ### `status`
 
@@ -200,8 +240,8 @@ The engine's state. **Result** includes:
 - **`controls`** — each `ctl` and track parameter (named `track::param`): `name`, `value`, `target`, `unit` (db shown in dB)
 - **`instruments`** — each instrument's `name` and `params` (`name`, `unit`, `default`, `range`)
 - **`tracks`**, **`buses`** — their names
-- **`routing`** — each owner’s processor definitions, buses, instances and connections
-- **`clients`** — each connected client that has something going: `id`, `voices` (the ids of its held notes) and `waiting` (how many of its events are still waiting)
+- **`routing`** — this connection’s processor definitions, buses, instances and connections
+- **`clients`** — this connection, when it has something going: `id`, `voices` (the ids of its held notes) and `waiting` (how many of its events are still waiting)
 
 ## Error codes
 
@@ -224,8 +264,8 @@ The engine records every accepted `events.send` and `events.cancel`, with the ti
 ## Minimal client flow
 
 ```json
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":3,"client":"example"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":3,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices","transactions"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":4,"client":"example"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":4,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices","transactions"]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"events.send","params":{"events":[
     {"op":"define","at":"now","source":"instr x(freq: hz) { osc(sine, freq) * env[1 | 20ms 0] }\ntrack t { instrument = x }"},

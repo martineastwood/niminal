@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use crate::{Array, wrapped_index};
 use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx};
+use crate::{Array, wrapped_index};
 
 /// Scalar math functions, usable inside kernels and as the [`Func`] opcode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,8 +29,18 @@ pub enum Fn1 {
 impl Fn1 {
     /// Every function, for lookup by name.
     pub const ALL: [Fn1; 12] = [
-        Fn1::Sin, Fn1::Cos, Fn1::Tanh, Fn1::Exp, Fn1::Abs, Fn1::Tan,
-        Fn1::Floor, Fn1::Ceil, Fn1::Sqrt, Fn1::Log, Fn1::Sign, Fn1::Fract,
+        Fn1::Sin,
+        Fn1::Cos,
+        Fn1::Tanh,
+        Fn1::Exp,
+        Fn1::Abs,
+        Fn1::Tan,
+        Fn1::Floor,
+        Fn1::Ceil,
+        Fn1::Sqrt,
+        Fn1::Log,
+        Fn1::Sign,
+        Fn1::Fract,
     ];
 }
 
@@ -48,7 +58,15 @@ impl Fn1 {
             Fn1::Sqrt => x.max(0.0).sqrt(),
             // the natural log, kept finite for a silent or negative input
             Fn1::Log => x.max(1e-30).ln(),
-            Fn1::Sign => if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 },
+            Fn1::Sign => {
+                if x > 0.0 {
+                    1.0
+                } else if x < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }
             Fn1::Fract => x - x.floor(),
         }
     }
@@ -115,7 +133,13 @@ impl BinOp {
             BinOp::Add => x + y,
             BinOp::Sub => x - y,
             BinOp::Mul => x * y,
-            BinOp::Div => if y == 0.0 { 0.0 } else { x / y },
+            BinOp::Div => {
+                if y == 0.0 {
+                    0.0
+                } else {
+                    x / y
+                }
+            }
             BinOp::Min => x.min(y),
             BinOp::Max => x.max(y),
             BinOp::Pow => x.powf(y),
@@ -126,7 +150,11 @@ impl BinOp {
 
 /// `x.mod(y)`.
 pub fn rem(x: f64, y: f64) -> f64 {
-    if y == 0.0 { 0.0 } else { x - y * (x / y).floor() }
+    if y == 0.0 {
+        0.0
+    } else {
+        x - y * (x / y).floor()
+    }
 }
 
 impl Cmp {
@@ -158,28 +186,90 @@ pub enum Cmp {
 /// is straight-line single-assignment code.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Instr {
-    Reset { scope: usize, trigger: usize, previous: usize, guard: Option<usize> },
-    Const { dst: usize, value: f64 },
+    Reset {
+        scope: usize,
+        trigger: usize,
+        previous: usize,
+        guard: Option<usize>,
+    },
+    Const {
+        dst: usize,
+        value: f64,
+    },
     /// Input port `port`: its current sample, or its first one in the note-start and block sections.
-    Input { dst: usize, port: usize },
-    SampleRate { dst: usize },
-    LoadState { dst: usize, slot: usize },
-    StoreState { slot: usize, src: usize },
-    Bin { dst: usize, op: BinOp, a: usize, b: usize },
-    Neg { dst: usize, a: usize },
-    Copy { dst: usize, src: usize },
-    Cmp { dst: usize, op: Cmp, a: usize, b: usize },
+    Input {
+        dst: usize,
+        port: usize,
+    },
+    SampleRate {
+        dst: usize,
+    },
+    LoadState {
+        dst: usize,
+        slot: usize,
+    },
+    StoreState {
+        slot: usize,
+        src: usize,
+    },
+    Bin {
+        dst: usize,
+        op: BinOp,
+        a: usize,
+        b: usize,
+    },
+    Neg {
+        dst: usize,
+        a: usize,
+    },
+    Copy {
+        dst: usize,
+        src: usize,
+    },
+    Cmp {
+        dst: usize,
+        op: Cmp,
+        a: usize,
+        b: usize,
+    },
     /// `a` if `cond` is not 0, otherwise `b`.
-    Select { dst: usize, cond: usize, a: usize, b: usize },
-    Call { dst: usize, f: Fn1, a: usize },
+    Select {
+        dst: usize,
+        cond: usize,
+        a: usize,
+        b: usize,
+    },
+    Call {
+        dst: usize,
+        f: Fn1,
+        a: usize,
+    },
     /// One sample of the kernel's `index`th built-in opcode.
-    Native { dst: usize, index: usize, guard: Option<usize> },
+    Native {
+        dst: usize,
+        index: usize,
+        guard: Option<usize>,
+    },
     /// Entry `idx` of a list, wrapping at both ends.
-    Read { dst: usize, list: ArraySource, idx: usize },
+    Read {
+        dst: usize,
+        list: ArraySource,
+        idx: usize,
+    },
     /// A list read at a fractional position, wrapping.
-    ReadAt { dst: usize, list: ArraySource, pos: usize, interp: Interp },
+    ReadAt {
+        dst: usize,
+        list: ArraySource,
+        pos: usize,
+        interp: Interp,
+    },
     /// Write entry `idx` (wrapping) of state list `list`, if `cond` is absent or not 0.
-    Write { list: usize, idx: usize, src: usize, cond: Option<usize> },
+    Write {
+        list: usize,
+        idx: usize,
+        src: usize,
+        cond: Option<usize>,
+    },
 }
 
 /// Which list an instruction reads.
@@ -218,7 +308,10 @@ pub struct Native {
 
 impl Clone for Native {
     fn clone(&self) -> Self {
-        Native { op: self.op.box_clone(), inputs: self.inputs.clone() }
+        Native {
+            op: self.op.box_clone(),
+            inputs: self.inputs.clone(),
+        }
     }
 }
 
@@ -294,8 +387,18 @@ pub struct Custom {
 
 impl Custom {
     pub fn new(kernel: Arc<Kernel>) -> Self {
-        let inputs = kernel.natives.iter().map(|n| n.inputs.len()).max().unwrap_or(0);
-        let outputs = kernel.natives.iter().map(|n| n.op.outputs()).max().unwrap_or(1);
+        let inputs = kernel
+            .natives
+            .iter()
+            .map(|n| n.inputs.len())
+            .max()
+            .unwrap_or(0);
+        let outputs = kernel
+            .natives
+            .iter()
+            .map(|n| n.op.outputs())
+            .max()
+            .unwrap_or(1);
         Custom {
             native_inputs: vec![[0.0; BLOCK]; inputs],
             native_outputs: vec![[0.0; BLOCK]; outputs],
@@ -311,7 +414,13 @@ impl Custom {
         }
     }
 
-    fn run(&mut self, section: Section, ctx: &ProcessCtx, input: &impl Fn(usize, usize) -> f32, i: usize) {
+    fn run(
+        &mut self,
+        section: Section,
+        ctx: &ProcessCtx,
+        input: &impl Fn(usize, usize) -> f32,
+        i: usize,
+    ) {
         let kernel = self.kernel.clone();
         let code = match section {
             Section::Init => &kernel.init,
@@ -321,9 +430,22 @@ impl Custom {
         self.run_code(code, section, ctx, input, i);
     }
 
-    fn run_code(&mut self, code: &[Instr], section: Section, ctx: &ProcessCtx, input: &impl Fn(usize, usize) -> f32, i: usize) {
+    fn run_code(
+        &mut self,
+        code: &[Instr],
+        section: Section,
+        ctx: &ProcessCtx,
+        input: &impl Fn(usize, usize) -> f32,
+        i: usize,
+    ) {
         for instr in code {
-            if let Instr::Reset { scope, trigger, previous, guard } = *instr {
+            if let Instr::Reset {
+                scope,
+                trigger,
+                previous,
+                guard,
+            } = *instr
+            {
                 if guard.is_none_or(|g| self.regs[g] != 0.0) {
                     let positive = self.regs[trigger] > 0.0;
                     let edge = positive && self.state[previous] <= 0.0;
@@ -332,9 +454,14 @@ impl Custom {
                         let kernel = self.kernel.clone();
                         let k = &*kernel;
                         let scope = &k.resets[scope];
-                        self.state[scope.states.clone()].copy_from_slice(&k.state_init[scope.states.clone()]);
-                        for index in scope.buffers.clone() { self.buffers[index].copy_from_slice(&k.buffers[index]); }
-                        for &index in &scope.natives { self.natives[index].reset(); }
+                        self.state[scope.states.clone()]
+                            .copy_from_slice(&k.state_init[scope.states.clone()]);
+                        for index in scope.buffers.clone() {
+                            self.buffers[index].copy_from_slice(&k.buffers[index]);
+                        }
+                        for &index in &scope.natives {
+                            self.natives[index].reset();
+                        }
                         let carried = self.carried;
                         self.carried = false;
                         self.run_code(&scope.init, Section::Init, ctx, input, i);
@@ -368,7 +495,9 @@ impl Custom {
                 Instr::Copy { dst, src } => regs[dst] = regs[src],
                 Instr::Call { dst, f, a } => regs[dst] = f.apply(regs[a]),
                 Instr::Native { dst, index, guard } => {
-                    if guard.is_some_and(|g| regs[g] == 0.0) { continue; }
+                    if guard.is_some_and(|g| regs[g] == 0.0) {
+                        continue;
+                    }
                     let call = &k.natives[index];
                     for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
                         value[0] = match *input {
@@ -377,20 +506,48 @@ impl Custom {
                         };
                     }
                     let op = &mut self.natives[index];
-                    op.process_slots(ctx, &self.native_inputs, &self.native_indices[..call.inputs.len()], &mut self.native_outputs[..op.outputs()], 1);
-                    for (k, output) in self.native_outputs.iter().take(op.outputs()).enumerate() { regs[dst + k] = f64::from(output[0]); }
+                    op.process_slots(
+                        ctx,
+                        &self.native_inputs,
+                        &self.native_indices[..call.inputs.len()],
+                        &mut self.native_outputs[..op.outputs()],
+                        1,
+                    );
+                    for (k, output) in self.native_outputs.iter().take(op.outputs()).enumerate() {
+                        regs[dst + k] = f64::from(output[0]);
+                    }
                 }
-                Instr::Read { dst, list, idx } | Instr::ReadAt { dst, list, pos: idx, .. } => {
-                    let interp = match *instr { Instr::ReadAt { interp, .. } => interp, _ => Interp::None };
+                Instr::Read { dst, list, idx }
+                | Instr::ReadAt {
+                    dst,
+                    list,
+                    pos: idx,
+                    ..
+                } => {
+                    let interp = match *instr {
+                        Instr::ReadAt { interp, .. } => interp,
+                        _ => Interp::None,
+                    };
                     let value = match list {
                         ArraySource::Table(t) => k.tables[t].read_at(regs[idx], interp),
                         ArraySource::State(s) => read_at(&buffers[s], regs[idx], interp),
-                        ArraySource::Values(a) => read_array(k.values[a].len(), regs[idx], interp, |i| regs[k.values[a][i]]),
+                        ArraySource::Values(a) => {
+                            read_array(k.values[a].len(), regs[idx], interp, |i| {
+                                regs[k.values[a][i]]
+                            })
+                        }
                     };
                     regs[dst] = value;
                 }
-                Instr::Write { list, idx, src, cond } => {
-                    if !(section == Section::Init && self.carried) && cond.is_none_or(|c| regs[c] != 0.0) {
+                Instr::Write {
+                    list,
+                    idx,
+                    src,
+                    cond,
+                } => {
+                    if !(section == Section::Init && self.carried)
+                        && cond.is_none_or(|c| regs[c] != 0.0)
+                    {
                         let data = &mut buffers[list];
                         let n = data.len();
                         data[wrapped_index(regs[idx], n)] = regs[src];
@@ -399,8 +556,16 @@ impl Custom {
             }
         }
     }
-    fn process_with(&mut self, ctx: &ProcessCtx, input: impl Fn(usize, usize) -> f32, outs: &mut [[f32; BLOCK]], frames: usize) {
-        if frames == 0 { return; }
+    fn process_with(
+        &mut self,
+        ctx: &ProcessCtx,
+        input: impl Fn(usize, usize) -> f32,
+        outs: &mut [[f32; BLOCK]],
+        frames: usize,
+    ) {
+        if frames == 0 {
+            return;
+        }
         if !self.started {
             self.run(Section::Init, ctx, &input, 0);
             self.started = true;
@@ -414,7 +579,6 @@ impl Custom {
             }
         }
     }
-
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -429,7 +593,9 @@ enum Section {
 /// gathering their elements or allocating on the audio thread.
 pub fn read_array(len: usize, pos: f64, interp: Interp, element: impl Fn(usize) -> f64) -> f64 {
     assert!(len > 0, "cannot read an empty array");
-    if !pos.is_finite() { return element(0); }
+    if !pos.is_finite() {
+        return element(0);
+    }
     let base = pos.floor();
     let t = pos - base;
     let at = |k: f64| element(wrapped_index(base + k, len));
@@ -451,10 +617,36 @@ pub fn read_at(data: &[f64], pos: f64, interp: Interp) -> f64 {
 }
 
 impl Opcode for Custom {
-    fn input_is_init(&self, index: usize) -> bool {
-        self.kernel.init.iter().any(|i| matches!(i, Instr::Input { port, .. } if *port == index))
+    fn buffer_channels(&self, key: u64) -> usize {
+        self.natives
+            .iter()
+            .map(|n| n.buffer_channels(key))
+            .max()
+            .unwrap_or(0)
     }
-    fn latency(&self) -> usize { self.kernel.latency }
+    fn buffer_bindings(&self, key: u64) -> usize {
+        self.natives.iter().map(|n| n.buffer_bindings(key)).sum()
+    }
+    fn swap_buffers(&mut self, key: u64, banks: &mut [crate::BufferBank], cursor: &mut usize) {
+        for n in &mut self.natives {
+            n.swap_buffers(key, banks, cursor);
+        }
+    }
+
+    fn reports(&self, visit: &mut dyn FnMut(&std::sync::Arc<crate::ops::Report>)) {
+        for n in &self.natives {
+            n.reports(visit);
+        }
+    }
+    fn input_is_init(&self, index: usize) -> bool {
+        self.kernel
+            .init
+            .iter()
+            .any(|i| matches!(i, Instr::Input { port, .. } if *port == index))
+    }
+    fn latency(&self) -> usize {
+        self.kernel.latency
+    }
 
     fn name(&self) -> &str {
         &self.kernel.name
@@ -475,10 +667,15 @@ impl Opcode for Custom {
 
     fn reset(&mut self) {
         self.state.copy_from_slice(&self.kernel.state_init);
-        for (buffer, initial) in self.buffers.iter_mut().zip(&self.kernel.buffers) { buffer.copy_from_slice(initial); }
+        for (buffer, initial) in self.buffers.iter_mut().zip(&self.kernel.buffers) {
+            buffer.copy_from_slice(initial);
+        }
         self.regs.fill(0.0);
-        self.started = false; self.carried = false;
-        for native in &mut self.natives { native.reset(); }
+        self.started = false;
+        self.carried = false;
+        for native in &mut self.natives {
+            native.reset();
+        }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
@@ -490,16 +687,22 @@ impl Opcode for Custom {
         self.kernel.natives.iter().any(|n| n.op.has_side_effects())
     }
 
-    fn is_envelope(&self) -> bool { self.natives.iter().any(|n| n.is_envelope()) }
+    fn is_envelope(&self) -> bool {
+        self.natives.iter().any(|n| n.is_envelope())
+    }
 
-    fn has_active_envelope(&self) -> bool { self.natives.iter().any(|n| n.has_active_envelope()) }
+    fn has_active_envelope(&self) -> bool {
+        self.natives.iter().any(|n| n.has_active_envelope())
+    }
 
     fn is_active(&self) -> bool {
         self.natives.iter().any(|n| n.is_active())
     }
 
     fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
-        self.natives.iter_mut().for_each(|n| n.set_control(key, start, target, frames, elapsed));
+        self.natives
+            .iter_mut()
+            .for_each(|n| n.set_control(key, start, target, frames, elapsed));
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -524,13 +727,28 @@ impl Opcode for Custom {
         out.copy_from_slice(&block[0][..frames]);
     }
 
-    fn process_outputs(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outs: &mut [[f32; BLOCK]], frames: usize) {
+    fn process_outputs(
+        &mut self,
+        ctx: &ProcessCtx,
+        inputs: &[&[f32]],
+        outs: &mut [[f32; BLOCK]],
+        frames: usize,
+    ) {
         self.process_with(ctx, |port, i| inputs[port][i], outs, frames);
     }
 
-    fn max_inputs(&self) -> usize { self.ports().len() }
+    fn max_inputs(&self) -> usize {
+        self.ports().len()
+    }
 
-    fn process_slots(&mut self, ctx: &ProcessCtx, slots: &[[f32; BLOCK]], indices: &[usize], outs: &mut [[f32; BLOCK]], frames: usize) {
+    fn process_slots(
+        &mut self,
+        ctx: &ProcessCtx,
+        slots: &[[f32; BLOCK]],
+        indices: &[usize],
+        outs: &mut [[f32; BLOCK]],
+        frames: usize,
+    ) {
         self.process_with(ctx, |port, i| slots[indices[port]][i], outs, frames);
     }
 }

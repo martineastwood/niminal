@@ -124,10 +124,14 @@ impl Command {
         (
             self.at,
             match self.kind {
-                Kind::Reset { .. } => 0,
+                Kind::Reset { .. } | Kind::ClientPanic { .. } => 0,
                 Kind::Swap { .. } | Kind::Control { .. } | Kind::Buffer { .. } => 1,
                 Kind::Note { .. } => 2,
-                Kind::Release { .. } | Kind::SetParam { .. } | Kind::Map { .. } => 3,
+                Kind::Release { .. }
+                | Kind::SetParam { .. }
+                | Kind::Map { .. }
+                | Kind::Bind { .. }
+                | Kind::ChainMap { .. } => 3,
             },
         )
     }
@@ -137,8 +141,32 @@ impl Command {
 // mean freeing it on the audio thread.
 #[allow(clippy::large_enum_variant)]
 enum Kind {
-    Map { key: u32, param: String, mapping: Option<Box<niminal_engine::ParamMapping>> },
-    Buffer { buffer: Arc<niminal_engine::Buffer>, offset: usize, values: Arc<[f32]> },
+    ChainMap {
+        track: String,
+        param: String,
+        mapping: Option<Box<niminal_engine::ParamMapping>>,
+    },
+    Bind {
+        track: Option<String>,
+        key: u32,
+        resource: u64,
+        banks: Vec<niminal_engine::BufferBank>,
+    },
+    ClientPanic {
+        client: u64,
+        change: GraphChange,
+        transfers: Vec<Transfer>,
+    },
+    Map {
+        key: u32,
+        param: String,
+        mapping: Option<Box<niminal_engine::ParamMapping>>,
+    },
+    Buffer {
+        buffer: Arc<niminal_engine::Buffer>,
+        offset: usize,
+        values: Arc<[f32]>,
+    },
     Note {
         track: Option<String>,
         program: Arc<Program>,
@@ -148,7 +176,9 @@ enum Kind {
         midi: Option<niminal_lang::MidiNote>,
     },
     /// Let go of the notes a key is holding open.
-    Release { key: u32 },
+    Release {
+        key: u32,
+    },
     /// Move a parameter, by its index, of the notes a key is holding, over `frames`.
     SetParam {
         key: u32,
@@ -175,7 +205,20 @@ enum Kind {
 
 /// A mixer and the program it plays, with the controls that belong to it: everything a graph change
 /// puts in place at once.
+struct BufferRestore {
+    track: String,
+    key: u64,
+    banks: Vec<niminal_engine::BufferBank>,
+}
+struct ChainRestore {
+    track: String,
+    param: String,
+    mapping: Option<Box<niminal_engine::ParamMapping>>,
+}
 struct GraphChange {
+    mappings: Vec<ChainRestore>,
+    buffers: Vec<BufferRestore>,
+    stop_players: Vec<String>,
     /// Set when a client is waiting for a receipt for this change.
     applied: Option<Arc<AtomicU64>>,
     mixer: Box<Mixer>,
@@ -186,11 +229,36 @@ struct GraphChange {
 /// The command that moves a parameter of a held note, if `program` has the instrument and the parameter.
 fn set_command(program: &Program, set: &super::VoiceSet, at: u64, frames: u64) -> Option<Command> {
     let _ = program;
-    Some(Command { at, kind: Kind::SetParam { key: set.key, name: set.name.clone(), value: set.value, frames } })
+    Some(Command {
+        at,
+        kind: Kind::SetParam {
+            key: set.key,
+            name: set.name.clone(),
+            value: set.value,
+            frames,
+        },
+    })
 }
 
+fn chain_map_command(program: &Program, map: &super::ChainMap, at: u64) -> Command {
+    Command {
+        at,
+        kind: Kind::ChainMap {
+            track: map.track(),
+            param: map.param.clone(),
+            mapping: super::parameters::prepare_mapping(program, &map.mapping),
+        },
+    }
+}
 fn map_command(program: &Program, set: &super::VoiceMap, at: u64) -> Command {
-    Command { at, kind: Kind::Map { key: set.key, param: set.param.clone(), mapping: super::parameters::prepare_mapping(program,set) } }
+    Command {
+        at,
+        kind: Kind::Map {
+            key: set.key,
+            param: set.param.clone(),
+            mapping: super::parameters::prepare_mapping(program, set),
+        },
+    }
 }
 
 /// A `midi_out` note on or off, if anyone is listening. Allocates nothing.
@@ -202,15 +270,19 @@ fn send_midi(
     note: &niminal_lang::MidiNote,
 ) {
     if let Some(tx) = tx {
-        let sent = tx.push(crate::MidiEvent {
-            at,
-            on,
-            port: note.port.clone(),
-            channel: note.channel,
-            note: note.note,
-            velocity: note.velocity,
-        }).is_ok();
-        if sent && let Some(thread) = wake { thread.unpark(); }
+        let sent = tx
+            .push(crate::MidiEvent {
+                at,
+                on,
+                port: note.port.clone(),
+                channel: note.channel,
+                note: note.note,
+                velocity: note.velocity,
+            })
+            .is_ok();
+        if sent && let Some(thread) = wake {
+            thread.unpark();
+        }
     }
 }
 
@@ -230,12 +302,23 @@ struct Injected {
 
 /// Something added since the planner last looked.
 pub(super) enum Fresh {
-    Note { event: Event, start: u64, dur: u64, key: Option<u32> },
-    Release { key: u32, at: u64 },
+    Note {
+        event: Event,
+        start: u64,
+        dur: u64,
+        key: Option<u32>,
+        activity: Option<Arc<niminal_engine::Activity>>,
+    },
+    Release {
+        key: u32,
+        at: u64,
+    },
     Set(super::VoiceSet),
     Track(super::TrackSet),
     Buffer(super::BufferSet),
     Map(super::VoiceMap),
+    Bind(super::BufferBind),
+    ChainMap(super::ChainMap),
 }
 
 impl Fresh {
@@ -247,6 +330,8 @@ impl Fresh {
             Fresh::Track(set) => set.at,
             Fresh::Buffer(set) => set.at,
             Fresh::Map(set) => set.at,
+            Fresh::Bind(set) => set.at,
+            Fresh::ChainMap(map) => map.mapping.at,
         }
     }
 }
@@ -282,6 +367,7 @@ impl Planner {
 /// The render thread owns all running DSP state. Construction, pattern queries,
 /// graph compilation, and resource destruction never take place in `render`.
 pub struct RealtimeRenderer {
+    master_meter: Arc<niminal_engine::Meter>,
     ready: Consumer<Box<Window>>,
     inject_rx: Consumer<Box<Injected>>,
     /// Commands for stretches prepared already, in the order they run.
@@ -372,6 +458,7 @@ impl Session {
             panic_epoch: self.panic_epoch.clone(),
             seen_panic: self.panic_epoch.load(Ordering::Acquire),
             mixer: Box::new(mixer),
+            master_meter: self.master_meter.clone(),
             program: self.program.clone(),
             limiter: self.limiter.take(),
             channels: self.channels(),
@@ -461,7 +548,8 @@ impl Session {
         while let Ok(applied) = planner.control_applied.pop() {
             if let Some(entry) = self.log.get_mut(applied.log_index)
                 && let LogInput::Send { ops, .. } = &mut entry.input
-                && let Some(Op::Control { at, .. } | Op::Track { at, .. }) = ops.get_mut(applied.log_op)
+                && let Some(Op::Control { at, .. } | Op::Track { at, .. }) =
+                    ops.get_mut(applied.log_op)
             {
                 if *at != At::Sample(applied.at) {
                     self.log_corrections += 1;
@@ -482,7 +570,9 @@ impl Session {
         let now = planner.state.clock.load(Ordering::Acquire);
         // Metadata can reach a graph boundary before DSP receives its prepared window.
         // Refresh once when consuming such a change, so it cannot disappear from planning.
-        let unapplied_graph = self.pending.iter().any(|p| p.lands_at < now && p.applied.load(Ordering::Acquire) == super::transactions::WAITING);
+        let unapplied_graph = self.pending.iter().any(|p| {
+            p.lands_at < now && p.applied.load(Ordering::Acquire) == super::transactions::WAITING
+        });
         self.silenced += planner.state.silenced.swap(0, Ordering::Relaxed);
         for (peak, value) in self.peaks.iter_mut().zip(&planner.state.peaks) {
             *peak = peak.max(f32::from_bits(value.swap(0, Ordering::Relaxed)));
@@ -495,22 +585,50 @@ impl Session {
             if let Some(change) = self.control_changes.iter().find(|c| c.applied) {
                 next = next.min(change.at.max(self.clock));
             }
-            if let Some(set) = self.track_sets.iter().find(|s| !s.done) && set.at < now {
+            if let Some(set) = self.track_sets.iter().find(|s| !s.done)
+                && set.at < now
+            {
                 next = next.min(set.at.max(self.clock));
             }
             self.clock = next;
             self.land_due(now);
             self.apply_controls();
-            self.apply_track_sets(if self.clock<now {self.clock.saturating_add(1)} else {self.clock});
+            self.apply_track_sets(if self.clock < now {
+                self.clock.saturating_add(1)
+            } else {
+                self.clock
+            });
         }
         self.land_due(now);
         self.apply_controls();
         self.apply_track_sets(self.clock);
-        if unapplied_graph { self.invalidate_live(); }
-        for set in &mut self.buffer_sets { if set.at < self.clock { set.done = true; } }
+        if unapplied_graph {
+            self.invalidate_live();
+        }
+        for set in &mut self.buffer_sets {
+            if set.at < self.clock {
+                set.done = true;
+            }
+        }
         let stale = self.clock.saturating_sub(self.sample_rate as u64 * 2);
         self.buffer_sets.retain(|s| !s.done || s.at > stale);
-        for set in &mut self.voice_maps { if set.at < self.clock { set.done = true; } }
+        for bind in &mut self.buffer_binds {
+            if bind.at < self.clock {
+                bind.done = true;
+            }
+        }
+        self.prune_buffer_binds(stale);
+        for map in &mut self.chain_maps {
+            if map.mapping.at < self.clock {
+                map.mapping.done = true;
+            }
+        }
+        self.prune_chain_maps();
+        for set in &mut self.voice_maps {
+            if set.at < self.clock {
+                set.done = true;
+            }
+        }
         self.voice_maps.retain(|s| !s.done || s.at > stale);
         let Some(planner) = &self.live else { return };
         if planner.revision == planner.state.revision.load(Ordering::Acquire) {
@@ -712,24 +830,75 @@ impl Session {
                 dropped: 0,
             };
             match item {
-                Fresh::Note { event, start, dur, key, .. } => {
-                    let hold = Hold { at: start.max(self.clock), dur, key };
+                Fresh::Note {
+                    event,
+                    start,
+                    dur,
+                    key,
+                    activity,
+                } => {
+                    let hold = Hold {
+                        at: start.max(self.clock),
+                        dur,
+                        key,
+                        activity,
+                    };
                     self.prepare_note(&program, &event, hold, config, &mut window);
                 }
-                Fresh::Release { key, at } => window.commands.push(Command { at: at.max(self.clock), kind: Kind::Release { key } }),
-                Fresh::Map(set) => window.commands.push(map_command(self.program_at(set.at),&set,set.at.max(self.clock))),
+                Fresh::Release { key, at } => window.commands.push(Command {
+                    at: at.max(self.clock),
+                    kind: Kind::Release { key },
+                }),
+                Fresh::ChainMap(map) => window.commands.push(chain_map_command(
+                    self.program_at(map.mapping.at),
+                    &map,
+                    map.mapping.at.max(self.clock),
+                )),
+                Fresh::Bind(set) => window.commands.push(Command {
+                    at: set.at.max(self.clock),
+                    kind: Kind::Bind {
+                        track: set.target.clone(),
+                        key: set.key,
+                        resource: set.resource,
+                        banks: set.banks(),
+                    },
+                }),
+                Fresh::Map(set) => window.commands.push(map_command(
+                    self.program_at(set.at),
+                    &set,
+                    set.at.max(self.clock),
+                )),
                 Fresh::Buffer(set) => {
-                    if let Some((_, buffer)) = self.program_at(set.at).buffers.iter().find(|(name, _)| *name == set.name)
-                        && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
-                        window.commands.push(Command { at: set.at.max(self.clock), kind: Kind::Buffer { buffer: buffer.clone(), offset: set.offset, values: set.values } });
+                    if let Some((_, buffer)) = self
+                        .program_at(set.at)
+                        .buffers
+                        .iter()
+                        .find(|(name, _)| *name == set.name)
+                        && set.offset <= buffer.len()
+                        && set.values.len() <= (buffer.len() - set.offset) * buffer.channels()
+                    {
+                        window.commands.push(Command {
+                            at: set.at.max(self.clock),
+                            kind: Kind::Buffer {
+                                buffer: buffer.clone(),
+                                offset: set.offset,
+                                values: set.values,
+                            },
+                        });
                     }
                 }
                 Fresh::Track(set) => window.commands.push(Command {
                     at: set.at.max(self.clock),
-                    kind: Kind::Control { key: set.key, value: set.value, frames: set.frames },
+                    kind: Kind::Control {
+                        key: set.key,
+                        value: set.value,
+                        frames: set.frames,
+                    },
                 }),
                 Fresh::Set(set) => {
-                    if let Some(command) = set_command(&program, &set, set.at.max(self.clock), set.frames) {
+                    if let Some(command) =
+                        set_command(&program, &set, set.at.max(self.clock), set.frames)
+                    {
                         window.commands.push(command);
                     }
                 }
@@ -738,7 +907,10 @@ impl Session {
             for notice in window.notices.drain(..) {
                 self.notify(notice);
             }
-            planner.state.capacity_drops.fetch_add(window.dropped, Ordering::Relaxed);
+            planner
+                .state
+                .capacity_drops
+                .fetch_add(window.dropped, Ordering::Relaxed);
             if full {
                 // the windows are made again, which the next step will see (the planner is out of the
                 // session while it works, so this can't go through `invalidate_windows`)
@@ -747,7 +919,10 @@ impl Session {
                 return;
             }
             for command in window.commands {
-                let injected = Box::new(Injected { revision: planner.revision, command });
+                let injected = Box::new(Injected {
+                    revision: planner.revision,
+                    command,
+                });
                 let _ = planner.inject_tx.push(injected);
             }
         }
@@ -787,15 +962,20 @@ impl Session {
                 dur: n.dur.saturating_sub(self.clock.saturating_sub(n.start)),
                 event: n.event.clone(),
                 key: n.key,
+                activity: n.activity.clone(),
             })
             .collect();
         let mut position = from;
         match mode {
             PlanMode::Reset => {
-                window.commands.push(self.reset_command(from, &program, config));
+                window
+                    .commands
+                    .push(self.reset_command(from, &program, config));
             }
             PlanMode::Refresh => {
-                window.commands.push(self.swap_command(from, &program, config));
+                window
+                    .commands
+                    .push(self.swap_command(from, &program, config));
             }
             PlanMode::Replan | PlanMode::Advance => {}
         }
@@ -854,6 +1034,9 @@ impl Session {
             at,
             kind: Kind::Swap {
                 change: GraphChange {
+                    mappings: self.chain_restores(program, at),
+                    buffers: self.chain_buffer_restores(at),
+                    stop_players: Vec::new(),
                     applied: self.acknowledged(program),
                     mixer,
                     program: program.clone(),
@@ -885,12 +1068,73 @@ impl Session {
         states
     }
 
+    fn chain_buffer_restores(&self, at: u64) -> Vec<BufferRestore> {
+        let mut latest = std::collections::BTreeMap::new();
+        for bind in &self.buffer_binds {
+            if bind.at <= at && bind.target.is_some() {
+                let key = (bind.client, bind.target.clone(), bind.param.clone());
+                if latest
+                    .get(&key)
+                    .is_none_or(|old: &&super::BufferBind| old.at <= bind.at)
+                {
+                    latest.insert(key, bind);
+                }
+            }
+        }
+        latest
+            .values()
+            .filter_map(|bind| {
+                let track = bind.target.as_ref()?;
+                let node = track
+                    .strip_prefix("__routing_processor_")?
+                    .split_once('_')?
+                    .1;
+                let (key, count, _) = self
+                    .routing_at(at)
+                    .buffer_binding(bind.client, node, &bind.param)
+                    .ok()?;
+                Some(BufferRestore {
+                    track: track.clone(),
+                    key,
+                    banks: vec![bind.bank.clone(); count],
+                })
+            })
+            .collect()
+    }
+    fn chain_restores(&self, program: &Program, at: u64) -> Vec<ChainRestore> {
+        let mut latest = std::collections::BTreeMap::new();
+        for map in &self.chain_maps {
+            if map.mapping.at <= at {
+                let key = (map.client, map.node.clone(), map.param.clone());
+                if latest
+                    .get(&key)
+                    .is_none_or(|old: &&super::ChainMap| old.mapping.at <= map.mapping.at)
+                {
+                    latest.insert(key, map);
+                }
+            }
+        }
+        latest
+            .values()
+            .filter(|m| {
+                m.mapping.source.is_some() && program.controls.iter().any(|c| c.key == m.param)
+            })
+            .map(|m| ChainRestore {
+                track: m.track(),
+                param: m.param.clone(),
+                mapping: super::parameters::prepare_mapping(program, &m.mapping),
+            })
+            .collect()
+    }
     fn reset_command(&self, at: u64, program: &Arc<Program>, config: RealtimeConfig) -> Command {
         let mixer = self.fresh_mixer(program, config);
         Command {
             at,
             kind: Kind::Reset {
                 change: GraphChange {
+                    mappings: self.chain_restores(program, at),
+                    buffers: self.chain_buffer_restores(at),
+                    stop_players: self.routing_at(at).player_keys(None),
                     applied: self.acknowledged(program),
                     mixer,
                     program: program.clone(),
@@ -912,7 +1156,15 @@ impl Session {
         let (from, to) = (range.start, range.end);
         for panic in &self.timed_panics {
             if panic.at >= from && panic.at < to {
-                window.commands.push(self.reset_command(panic.at, program, config));
+                let mut change = self.reset_command(panic.at, program, config);
+                if let Kind::Reset { change: graph, .. } = change.kind {
+                    change.kind = Kind::ClientPanic {
+                        client: panic.client,
+                        change: graph,
+                        transfers: Vec::with_capacity(program.tracks.len()),
+                    };
+                }
+                window.commands.push(change);
             }
         }
         for note in explicit {
@@ -920,7 +1172,12 @@ impl Session {
                 self.prepare_note(
                     program,
                     &note.event,
-                    Hold { at: note.start, dur: note.dur, key: note.key },
+                    Hold {
+                        at: note.start,
+                        dur: note.dur,
+                        key: note.key,
+                        activity: note.activity.clone(),
+                    },
                     config,
                     window,
                 );
@@ -935,12 +1192,47 @@ impl Session {
                 window.commands.push(command);
             }
         }
-        for set in &self.voice_maps { if set.at >= from && set.at < to { window.commands.push(map_command(program,set,set.at)); } }
+        for map in &self.chain_maps {
+            if map.mapping.at >= from && map.mapping.at < to {
+                window
+                    .commands
+                    .push(chain_map_command(program, map, map.mapping.at));
+            }
+        }
+        for set in &self.buffer_binds {
+            if set.at >= from && set.at < to {
+                window.commands.push(Command {
+                    at: set.at,
+                    kind: Kind::Bind {
+                        track: set.target.clone(),
+                        key: set.key,
+                        resource: set.resource,
+                        banks: set.banks(),
+                    },
+                });
+            }
+        }
+        for set in &self.voice_maps {
+            if set.at >= from && set.at < to {
+                window.commands.push(map_command(program, set, set.at));
+            }
+        }
         for set in &self.buffer_sets {
-            if set.at >= from && set.at < to
-                && let Some((_, buffer)) = program.buffers.iter().find(|(name, _)| *name == set.name)
-                && set.offset <= buffer.len() && set.values.len() <= buffer.len() - set.offset {
-                window.commands.push(Command { at: set.at, kind: Kind::Buffer { buffer: buffer.clone(), offset: set.offset, values: set.values.clone() } });
+            if set.at >= from
+                && set.at < to
+                && let Some((_, buffer)) =
+                    program.buffers.iter().find(|(name, _)| *name == set.name)
+                && set.offset <= buffer.len()
+                && set.values.len() <= (buffer.len() - set.offset) * buffer.channels()
+            {
+                window.commands.push(Command {
+                    at: set.at,
+                    kind: Kind::Buffer {
+                        buffer: buffer.clone(),
+                        offset: set.offset,
+                        values: set.values.clone(),
+                    },
+                });
             }
         }
         // track parameters moved by `track` events
@@ -954,14 +1246,21 @@ impl Session {
                 }
                 window.commands.push(Command {
                     at: set.at,
-                    kind: Kind::Control { key: set.key.clone(), value: set.value, frames: set.frames },
+                    kind: Kind::Control {
+                        key: set.key.clone(),
+                        value: set.value,
+                        frames: set.frames,
+                    },
                 });
             }
         }
         // releases: each key is its own note, so a release that is repeated in a later window does no harm
         for off in &self.key_offs {
             if off.at < to {
-                window.commands.push(Command { at: off.at.max(from), kind: Kind::Release { key: off.key } });
+                window.commands.push(Command {
+                    at: off.at.max(from),
+                    kind: Kind::Release { key: off.key },
+                });
             }
         }
     }
@@ -974,8 +1273,16 @@ impl Session {
         config: RealtimeConfig,
         window: &mut Window,
     ) {
-        let Hold { at, dur, key } = when;
+        let Hold {
+            at,
+            dur,
+            key,
+            activity,
+        } = when;
         if window.commands.len() >= config.max_voices * 4 {
+            if let Some(a) = activity {
+                a.drop_at(at);
+            }
             window.dropped += 1;
             window.notice("prepared event window reached capacity; extra notes were dropped");
             return;
@@ -997,10 +1304,21 @@ impl Session {
             for &(i, value) in &plan.params {
                 voice.set_param(i, value);
             }
+            if let Some(activity) = activity {
+                voice.attach_activity(activity);
+            }
+            voice.set_realtime();
+            voice.set_owner(super::definitions::owner(
+                &program.instruments[plan.instrument].name,
+            ));
             voice.set_group(plan.choke);
             voice.set_rule(plan.rule);
             voice.set_pan(plan.pan);
-            voice.set_dur(if key.is_some() && dur == 0 { 0.0 } else { dur as f32 / self.sample_rate });
+            voice.set_dur(if key.is_some() && dur == 0 {
+                0.0
+            } else {
+                dur as f32 / self.sample_rate
+            });
             for (key, value, smooth) in &plan.controls {
                 window.commands.push(Command {
                     at,
@@ -1032,6 +1350,7 @@ impl Session {
 
 /// When a note starts, how long it lasts, and the key holding it open if there is one.
 struct Hold {
+    activity: Option<Arc<niminal_engine::Activity>>,
     at: u64,
     dur: u64,
     key: Option<u32>,
@@ -1039,6 +1358,7 @@ struct Hold {
 
 /// A note the engine was handed: when and how long, what, and the key holding it open.
 struct Explicit {
+    activity: Option<Arc<niminal_engine::Activity>>,
     start: u64,
     dur: u64,
     event: Event,
@@ -1047,14 +1367,18 @@ struct Explicit {
 
 impl RealtimeRenderer {
     /// Send the notes of `midi_out` instruments down `tx`, stamped with the sample they belong to.
-    pub fn set_midi_output(&mut self, tx: Producer<crate::MidiEvent>, wake: Option<std::thread::Thread>) {
+    pub fn set_midi_output(
+        &mut self,
+        tx: Producer<crate::MidiEvent>,
+        wake: Option<std::thread::Thread>,
+    ) {
         self.midi_tx = Some(tx);
         self.midi_wake = wake;
     }
 
     /// Every sounding `midi_out` note off, as `panic` and a reset do.
     fn all_midi_off(&mut self) {
-        for (_, _, note) in self.sounding.midi.drain(..) {
+        for (_, _, note, _) in self.sounding.midi.drain(..) {
             send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
         }
     }
@@ -1064,7 +1388,7 @@ impl RealtimeRenderer {
         let mut i = 0;
         while i < self.sounding.midi.len() {
             if self.sounding.midi[i].0 <= self.clock {
-                let (_, _, note) = self.sounding.midi.swap_remove(i);
+                let (_, _, note, _) = self.sounding.midi.swap_remove(i);
                 send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
             } else {
                 i += 1;
@@ -1139,9 +1463,13 @@ impl RealtimeRenderer {
     /// commands go back to the planner thread to be destroyed.
     fn run_injected(&mut self, revision: u64) {
         while self.injected.len() < self.injected.capacity() {
-            let Ok(injected) = self.inject_rx.pop() else { break };
+            let Ok(injected) = self.inject_rx.pop() else {
+                break;
+            };
             let order = injected.command.order();
-            let place = self.injected.partition_point(|i| i.command.order() <= order);
+            let place = self
+                .injected
+                .partition_point(|i| i.command.order() <= order);
             self.injected.insert(place, injected);
         }
         let mut i = 0;
@@ -1154,7 +1482,9 @@ impl RealtimeRenderer {
             let _ = self.retired.push(Retired::Injected(stale));
         }
         while self.retired.slots() > 0 {
-            let Some(first) = self.injected.first() else { break };
+            let Some(first) = self.injected.first() else {
+                break;
+            };
             if first.command.at > self.clock {
                 break;
             }
@@ -1177,10 +1507,28 @@ impl RealtimeRenderer {
             self.clock,
             self.sample_rate,
         );
+        for key in &change.stop_players {
+            if let Some(control) = change.controls.iter_mut().find(|c| c.key == *key) {
+                control.set(self.clock, 0., 0);
+            }
+        }
         crate::controls::sync_mixer(&change.controls, &mut change.mixer, self.clock);
         std::mem::swap(&mut self.controls, &mut change.controls);
         std::mem::swap(&mut self.mixer, &mut change.mixer);
         std::mem::swap(&mut self.program, &mut change.program);
+        for restore in &mut change.mappings {
+            if let Some(index) = self.program.track_index(&restore.track) {
+                self.mixer
+                    .swap_chain_mapping(index, &restore.param, &mut restore.mapping);
+            }
+        }
+        for restore in &mut change.buffers {
+            if let Some(index) = self.program.track_index(&restore.track) {
+                self.mixer
+                    .swap_chain_buffers(index, restore.key, &mut restore.banks);
+            }
+        }
+        crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
         if let Some(applied) = change.applied.take() {
             let _ = applied.compare_exchange(
                 super::transactions::WAITING,
@@ -1193,9 +1541,80 @@ impl RealtimeRenderer {
 
     /// Carry out one prepared command at the current sample.
     fn apply(&mut self, kind: &mut Kind) {
+        self.mixer
+            .set_clock(niminal_engine::Clock { sample: self.clock });
         match kind {
-            Kind::Buffer { buffer, offset, values } => {
-                for (i, value) in values.iter().enumerate() { buffer.write(*offset + i, *value); }
+            Kind::ClientPanic {
+                client,
+                change,
+                transfers,
+            } => {
+                change
+                    .stop_players
+                    .retain(|key| super::definitions::owns_track(*client, key));
+                let mut i = 0;
+                while i < self.sounding.midi.len() {
+                    if self.sounding.midi[i].3 == *client {
+                        let (_, _, note, _) = self.sounding.midi.remove(i);
+                        send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
+                    } else {
+                        i += 1;
+                    }
+                }
+                super::plan_transfers(&self.program, &change.program, transfers);
+                self.mixer.silence_owner(*client);
+                for (track, transfer) in change.program.tracks.iter().zip(transfers.iter_mut()) {
+                    if !track.name.is_empty()
+                        && super::definitions::owns_track(*client, &track.name)
+                    {
+                        transfer.chain_from = None;
+                        transfer.voices_from = None;
+                    }
+                }
+                change.mixer.adopt(&mut self.mixer, transfers);
+                self.install(change);
+            }
+            Kind::ChainMap {
+                track,
+                param,
+                mapping,
+            } => {
+                if let Some(index) = self.program.track_index(track) {
+                    if mapping.is_none() {
+                        if let Some(value) = self.mixer.chain_param_value(index, param) {
+                            if let Some(control) =
+                                self.controls.iter_mut().find(|c| c.key == *param)
+                            {
+                                control.set(self.clock, value, 0);
+                            }
+                        }
+                    }
+                    self.mixer.swap_chain_mapping(index, param, mapping);
+                    crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
+                }
+            }
+            Kind::Bind {
+                track,
+                key,
+                resource,
+                banks,
+            } => {
+                if let Some(track) = track {
+                    if let Some(index) = self.program.track_index(track) {
+                        self.mixer.swap_chain_buffers(index, *resource, banks);
+                    }
+                } else if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == *key) {
+                    self.mixer.swap_voice_buffers(*id, *resource, banks);
+                }
+            }
+            Kind::Buffer {
+                buffer,
+                offset,
+                values,
+            } => {
+                for (i, value) in values.iter().enumerate() {
+                    buffer.write_sample(*offset * buffer.channels() + i, *value);
+                }
             }
             Kind::Release { key } => {
                 self.sounding.release_key(*key, self.clock);
@@ -1207,14 +1626,26 @@ impl RealtimeRenderer {
                         .set_control(&c.key, c.start, c.target, c.frames, 0);
                 }
             }
-            Kind::Map { key, param, mapping } => {
-                if let Some((_,id,_)) = self.sounding.held.iter().find(|h| h.2 == *key) {
-                    self.mixer.swap_voice_mapping(*id,param,mapping);
-                    crate::controls::sync_note(&self.controls,&mut self.mixer,*id,self.clock);
+            Kind::Map {
+                key,
+                param,
+                mapping,
+            } => {
+                if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == *key) {
+                    self.mixer.swap_voice_mapping(*id, param, mapping);
+                    crate::controls::sync_note(&self.controls, &mut self.mixer, *id, self.clock);
                 }
             }
-            Kind::SetParam { key, name, value, frames } => {
-                for held in self.sounding.held.iter().filter(|h| h.2 == *key) { self.mixer.set_voice_param_glide(held.1,name,*value,*frames); }
+            Kind::SetParam {
+                key,
+                name,
+                value,
+                frames,
+            } => {
+                for held in self.sounding.held.iter().filter(|h| h.2 == *key) {
+                    self.mixer
+                        .set_voice_param_glide(held.1, name, *value, *frames);
+                }
             }
             Kind::Note {
                 track,
@@ -1229,7 +1660,12 @@ impl RealtimeRenderer {
                     && self.sounding.midi.len() < self.sounding.midi.capacity()
                 {
                     send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, true, &note);
-                    self.sounding.midi.push((*off, *key, note));
+                    self.sounding.midi.push((
+                        *off,
+                        *key,
+                        note,
+                        voice.as_ref().map_or(0, |v| v.owner()),
+                    ));
                 }
                 let target = track
                     .as_ref()
@@ -1256,12 +1692,16 @@ impl RealtimeRenderer {
                         match self.mixer.note_prepared(target, prepared) {
                             Ok(id) => self.sounding.held.push((*off, id, *key)),
                             Err(rejected) => {
+                                rejected.drop_activities(self.clock);
                                 *voice = Some(rejected);
                                 self.state.capacity_drops.fetch_add(1, Ordering::Relaxed);
                             }
                         }
                     }
                 } else {
+                    if let Some(voice) = voice {
+                        voice.drop_activities(self.clock);
+                    }
                     self.state.capacity_drops.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -1275,15 +1715,16 @@ impl RealtimeRenderer {
                         .filter(|&j| self.program.bus_layouts[i] == change.program.bus_layouts[j])
                 });
                 change.mixer.adopt(&mut self.mixer, transfers);
-                super::carry_buffers(&self.program, &change.program);
+                self.mixer.finish_activities(self.clock, 4);
                 self.install(change);
             }
             Kind::Reset { change, epoch } => {
+                self.mixer.finish_activities(self.clock, 2);
                 if let Some(limiter) = &mut self.limiter {
                     limiter.clear();
                 }
                 self.sounding.held.clear();
-                for (_, _, note) in self.sounding.midi.drain(..) {
+                for (_, _, note, _) in self.sounding.midi.drain(..) {
                     send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
                 }
                 self.state.reset_epoch.store(*epoch, Ordering::Release);
@@ -1319,9 +1760,12 @@ impl RealtimeRenderer {
                 self.control_pending
                     .sort_unstable_by_key(|c| (c.at, c.serial));
             }
+            self.mixer
+                .set_clock(niminal_engine::Clock { sample: self.clock });
             let panic = self.panic_epoch.load(Ordering::Acquire);
             if panic != self.seen_panic {
                 self.seen_panic = panic;
+                self.mixer.finish_activities(self.clock, 2);
                 self.mixer.silence();
                 if let Some(limiter) = &mut self.limiter {
                     limiter.clear();
@@ -1457,7 +1901,8 @@ impl RealtimeRenderer {
                     self.mixer.set_audio_input(c, &samples[..n]);
                 }
             }
-            self.mixer.set_clock(niminal_engine::Clock { sample: self.clock });
+            self.mixer
+                .set_clock(niminal_engine::Clock { sample: self.clock });
             self.mixer
                 .process_retained(&mut block[..self.channels], n, &mut self.finished);
             self.state
@@ -1470,6 +1915,8 @@ impl RealtimeRenderer {
                 let value = channel[..n].iter().fold(0.0f32, |m, s| m.max(s.abs()));
                 peak.fetch_max(value.to_bits(), Ordering::Relaxed);
             }
+            self.master_meter
+                .observe(&block[..self.channels], n, self.clock);
             sink(&block[..self.channels], n);
             self.clock += n as u64;
             self.state.clock.store(self.clock, Ordering::Release);

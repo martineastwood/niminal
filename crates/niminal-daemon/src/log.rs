@@ -9,7 +9,10 @@ use crate::events::Op;
 #[serde(rename_all = "snake_case")]
 pub enum LogInput {
     /// A batch of events a client sent, with every timestamp resolved to a sample.
-    Send { client: u64, ops: Vec<Op> },
+    Send {
+        client: u64,
+        ops: Vec<Op>,
+    },
     /// A client took back its waiting events.
     CancelEvents {
         client: u64,
@@ -19,6 +22,9 @@ pub enum LogInput {
         release: bool,
     },
     Panic,
+    FreeBuffer {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,7 +44,10 @@ pub fn to_lines(log: &[LogEntry]) -> String {
 }
 
 pub fn from_lines(text: &str) -> Result<Vec<LogEntry>, serde_json::Error> {
-    text.lines().filter(|l| !l.trim().is_empty()).map(serde_json::from_str).collect()
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect()
 }
 
 #[cfg(test)]
@@ -48,10 +57,18 @@ mod tests {
     #[test]
     fn logs_round_trip_as_lines() {
         let log = vec![
-            LogEntry { sample: 0, input: LogInput::Panic },
+            LogEntry {
+                sample: 0,
+                input: LogInput::Panic,
+            },
             LogEntry {
                 sample: 96_001,
-                input: LogInput::CancelEvents { client: 1, tag: Some("a".into()), from: 5, release: false },
+                input: LogInput::CancelEvents {
+                    client: 1,
+                    tag: Some("a".into()),
+                    from: 5,
+                    release: false,
+                },
             },
         ];
         let text = to_lines(&log);

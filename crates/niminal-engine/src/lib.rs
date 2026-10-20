@@ -5,22 +5,38 @@
 //! business of the language and score layers, which convert before building a
 //! graph. There is no OS-specific code here, so the crate builds for WebAssembly.
 
+mod activity;
 mod array;
+pub use activity::{Activity, WAITING_SAMPLE};
 pub mod denormals;
 mod graph;
-mod master;
 mod mapping;
+mod master;
 pub use mapping::ParamMapping;
 mod mixer;
 mod opcode;
 pub mod ops;
 mod table;
 mod voice;
+mod waveform;
+pub use waveform::{WAVEFORM_FRAMES, Waveform};
 
 pub use array::{Array, wrapped_index};
-pub use master::{DEFAULT_CEILING, Master};
-pub use mixer::{Meter, Buses, DEFAULT_MAX_VOICES, ChainInput, MAX_CHANNELS, Mixer, Route, Stems, TrackDef, Transfer, VoiceId, execution_order};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
+pub use master::{DEFAULT_CEILING, Master};
+pub use mixer::{
+    Buses, ChainInput, DEFAULT_MAX_VOICES, MAX_CHANNELS, Meter, Mixer, Route, Stems, TrackDef,
+    Transfer, VoiceId, execution_order,
+};
 pub use opcode::{BLOCK, Clock, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};
 pub use table::{Buffer, Edge, Table};
 pub use voice::{Priority, Voice, VoiceRule};
+
+/// Stable identity for a processor source across prepared graph replacements.
+pub fn instance_id(name: &str) -> u64 {
+    name.bytes().fold(14695981039346656037u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(1099511628211)
+    })
+}
+
+pub type BufferBank = std::sync::Arc<Vec<std::sync::Arc<Buffer>>>;

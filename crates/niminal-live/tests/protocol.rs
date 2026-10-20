@@ -31,7 +31,10 @@ impl Daemon {
     fn new(session: Session) -> Daemon {
         let engine = Arc::new(Mutex::new(EngineServer::new(session)));
         let live = Live::new(Box::new(InProcess::new(engine.clone())), SR, Layout::Mono);
-        Daemon { server: LiveServer::new(live), engine }
+        Daemon {
+            server: LiveServer::new(live),
+            engine,
+        }
     }
 
     /// Mix `frames` samples, with the sequencer sending the engine what falls in them first.
@@ -109,7 +112,7 @@ fn a_client_must_say_hello_with_the_right_version() {
         wrong["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("protocol 3")
+            .contains("protocol 4")
     );
     assert_eq!(
         call(&mut d, c, 3, "status", json!({}))["error"]["code"],
@@ -117,7 +120,7 @@ fn a_client_must_say_hello_with_the_right_version() {
         "still not greeted"
     );
 
-    let ok = call(&mut d, c, 4, "hello", json!({"protocol": 3}));
+    let ok = call(&mut d, c, 4, "hello", json!({"protocol": 4}));
     assert_eq!(ok["result"]["sample_rate"], 48_000.0);
     assert_eq!(ok["result"]["channels"], 1);
     assert_eq!(ok["result"]["topics"].as_array().unwrap().len(), 6);
@@ -257,7 +260,7 @@ fn cancel_hush_and_panic() {
 fn subscribers_hear_about_changes_landing() {
     let (mut d, c) = ready();
     let other = d.connect();
-    call(&mut d, other, 1, "hello", json!({"protocol": 3}));
+    call(&mut d, other, 1, "hello", json!({"protocol": 4}));
     let ok = call(
         &mut d,
         c,
@@ -447,7 +450,7 @@ fn subscription_requests_are_checked() {
 fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
     let (mut d, a) = ready();
     let b = d.connect();
-    call(&mut d, b, 1, "hello", json!({"protocol": 3}));
+    call(&mut d, b, 1, "hello", json!({"protocol": 4}));
     call(
         &mut d,
         a,
@@ -465,12 +468,7 @@ fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
     );
     assert!(r["result"].is_object());
     d.disconnect(a);
-    assert!(
-        d.process(10_000)
-            .remove(0)
-            .iter()
-            .any(|s| s.abs() > 0.1)
-    );
+    assert!(d.process(10_000).remove(0).iter().any(|s| s.abs() > 0.1));
     assert!(
         call(&mut d, b, 3, "status", json!({}))["result"]["transport"]["voices"]
             .as_u64()
@@ -650,7 +648,16 @@ fn hush_uses_the_background_compilation_path() {
 #[test]
 fn typed_clip_define_launch_and_edit() {
     let (mut d, c) = ready();
-    assert!(call(&mut d, c, 10, "eval", json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}))["result"].is_object());
+    assert!(
+        call(
+            &mut d,
+            c,
+            10,
+            "eval",
+            json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"})
+        )["result"]
+            .is_object()
+    );
 
     let defined = call(
         &mut d,
@@ -695,10 +702,11 @@ fn typed_clip_define_launch_and_edit() {
             .any(|e| e.as_str() == Some("reverse")),
         "{riff}"
     );
-    assert!(status["result"]["clips"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|n| n.as_str() == Some("riff")));
+    assert!(
+        status["result"]["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str() == Some("riff"))
+    );
 }
-

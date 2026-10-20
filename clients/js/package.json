@@ -9,5 +9,16 @@
   },
   "dependencies": {
     "ws": "8.18.0"
+  },
+  "exports": {
+    ".": {
+      "browser": "./browser.mjs",
+      "require": "./index.js",
+      "default": "./index.js"
+    },
+    "./browser": "./browser.mjs"
+  },
+  "browser": {
+    "ws": false
   }
 }

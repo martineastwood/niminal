@@ -12,12 +12,27 @@ impl Session {
         event: Event,
         key: Option<u32>,
         owner: Option<(ClientId, Option<String>)>,
+        activity: Option<Arc<niminal_engine::Activity>>,
     ) {
         if self.live.is_some() {
-            self.fresh.push(realtime::Fresh::Note { event: event.clone(), start, dur, key });
+            self.fresh.push(realtime::Fresh::Note {
+                event: event.clone(),
+                start,
+                dur,
+                key,
+                activity: activity.clone(),
+            });
         }
         let (client, tag) = owner.map_or((None, None), |(c, t)| (Some(c), t));
-        self.insert_upcoming(Upcoming { start, dur, event, key, client, tag });
+        self.insert_upcoming(Upcoming {
+            start,
+            dur,
+            event,
+            key,
+            client,
+            tag,
+            activity,
+        });
     }
 
     /// Move the control `name` to `value` (in the engine's unit) at sample `at`, over `frames`, in the program
@@ -79,16 +94,64 @@ impl Session {
         Ok(())
     }
 
-    fn logged(&self, at: At) -> At { At::Sample(self.resolve(at)) }
+    fn logged(&self, at: At) -> At {
+        At::Sample(self.resolve(at))
+    }
 
     pub(super) fn resolve(&self, at: At) -> u64 {
-        match at { At::Sample(n) => n, At::Now => self.clock }
+        match at {
+            At::Sample(n) => n,
+            At::Now => self.clock,
+        }
     }
 
     /// Do what a batch of events from `client` says. All of it is checked first: if any is wrong none of it is
     /// done. Times come out as samples in the log, so that replaying it gives the same sound.
-    pub fn send_events(&mut self, client: ClientId, ops: Vec<Op>) -> Result<Sent, Vec<Problem>> {
+    pub fn send_events(
+        &mut self,
+        client: ClientId,
+        mut ops: Vec<Op>,
+    ) -> Result<Sent, Vec<Problem>> {
         self.sync_realtime();
+        for op in &mut ops {
+            match op {
+                Op::Note { target, to, at, .. } => {
+                    if to.is_some() || !self.routing_at(self.resolve(*at)).has_node(client, target)
+                    {
+                        *target = definitions::scoped(client, target);
+                    }
+                }
+                Op::Control { name, .. }
+                | Op::Track { name, .. }
+                | Op::BufferWrite { name, .. } => *name = definitions::scoped(client, name),
+                Op::BindBuffer { buffer, .. } => *buffer = definitions::scoped(client, buffer),
+                Op::Map {
+                    source: Some(name), ..
+                } => *name = definitions::scoped(client, name),
+                Op::Routing { edits, .. } | Op::Transaction { edits, .. } => {
+                    for edit in edits {
+                        match edit {
+                            crate::RoutingEdit::BindBuffer { buffer, .. } => {
+                                *buffer = definitions::scoped(client, buffer)
+                            }
+                            crate::RoutingEdit::Import { track, .. } => {
+                                *track = definitions::scoped(client, track)
+                            }
+                            crate::RoutingEdit::Bus {
+                                source: Some(source),
+                                ..
+                            } => *source = definitions::scoped(client, source),
+                            crate::RoutingEdit::Node {
+                                instrument: Some(instrument),
+                                ..
+                            } => *instrument = definitions::scoped(client, instrument),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         let has_changes = ops.iter().any(|op| {
             matches!(
                 op,
@@ -107,17 +170,19 @@ impl Session {
                 self.recent_notices.clone(),
                 self.samples.clone(),
                 self.sample_dirs.clone(),
+                self.client_samples.clone(),
             )
         });
         let result = self.send_events_inner(client, ops, has_changes);
         if result.is_err()
-            && let Some((pending, notices, recent, samples, dirs)) = backup
+            && let Some((pending, notices, recent, samples, dirs, client_samples)) = backup
         {
             self.pending = pending;
             self.notices = notices;
             self.recent_notices = recent;
             self.samples = samples;
             self.sample_dirs = dirs;
+            self.client_samples = client_samples;
         }
         result
     }
@@ -134,28 +199,46 @@ impl Session {
                 Op::Note { dur, args, .. } => (*dur, Some(args)),
                 Op::Set { glide, args, .. } | Op::Track { glide, args, .. } => (*glide, Some(args)),
                 Op::Control { glide, unit, .. } => {
-                    if unit.as_deref().is_some_and(|u| matches!(u, "beat" | "beats" | "bar" | "bars" | "bpm")) {
+                    if unit
+                        .as_deref()
+                        .is_some_and(|u| matches!(u, "beat" | "beats" | "bar" | "bars" | "bpm"))
+                    {
                         invalid.push(problem_at(index, "resolve musical units in the client"));
                     }
                     (*glide, None)
                 }
                 Op::Array { glide, values, .. } => {
-                    if values.iter().any(|v| matches!(v, Value::Beats(_) | Value::Bars(_))) {
+                    if values
+                        .iter()
+                        .any(|v| matches!(v, Value::Beats(_) | Value::Bars(_)))
+                    {
                         invalid.push(problem_at(index, "resolve musical units in the client"));
                     }
                     (*glide, None)
                 }
                 _ => (None, None),
             };
-            if duration.is_some_and(|t| !matches!(t, Time::Seconds(n) if n.is_finite() && n >= 0.0)) ||
-                args.is_some_and(|a| a.values().any(|v| matches!(v, Value::Beats(_) | Value::Bars(_)))) {
+            if duration.is_some_and(|t| !matches!(t, Time::Seconds(n) if n.is_finite() && n >= 0.0))
+                || args.is_some_and(|a| {
+                    a.values()
+                        .any(|v| matches!(v, Value::Beats(_) | Value::Bars(_)))
+                })
+            {
                 invalid.push(problem_at(index, "durations must be finite, nonnegative seconds; resolve musical time in the client"));
             }
         }
-        if !invalid.is_empty() { return Err(invalid); }
+        if !invalid.is_empty() {
+            return Err(invalid);
+        }
+        if self.activities.len() + ops.iter().filter(|o| matches!(o, Op::Note { .. })).count()
+            > 4096
+        {
+            return Err(vec![Problem::plain(
+                "note receipt capacity reached; drain voice updates",
+            )]);
+        }
         let rate = f64::from(self.sample_rate);
         let clock = self.clock;
-
 
         // Changes of definitions go first: they are compiled, which can fail, and the
         // rest of the batch is checked against the program they leave. If anything later is wrong they are
@@ -165,33 +248,105 @@ impl Session {
         let mut accepted = Vec::new();
         for (n, op) in ops.iter().enumerate() {
             let (source, dir, at, what, edits, tag) = match op {
-                Op::Routing { edits, .. } if crate::routing::Routing::is_control_edit(edits) => continue,
-                Op::Routing { at, edits, tag } => {
-                    resolved[n] = Some(Op::Routing { at: self.logged(*at), edits: edits.clone(), tag: tag.clone() });
-                    (String::new(), None, self.resolve(*at), What::Definitions, edits.clone(), tag.clone())
+                Op::Routing { edits, .. } if crate::routing::Routing::is_control_edit(edits) => {
+                    continue;
                 }
-                Op::Define { source, at, dir, tag } => {
-                    if source.trim().is_empty() { early.push(problem_at(n,"there is nothing to define")); break; }
-                    resolved[n] = Some(Op::Define { source: source.clone(), at: self.logged(*at), dir: dir.clone(), tag: tag.clone() });
-                    (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, Vec::new(), tag.clone())
+                Op::Routing { at, edits, tag } => {
+                    resolved[n] = Some(Op::Routing {
+                        at: self.logged(*at),
+                        edits: edits.clone(),
+                        tag: tag.clone(),
+                    });
+                    (
+                        String::new(),
+                        None,
+                        self.resolve(*at),
+                        What::Definitions,
+                        edits.clone(),
+                        tag.clone(),
+                    )
+                }
+                Op::Define {
+                    source,
+                    at,
+                    dir,
+                    tag,
+                } => {
+                    if source.trim().is_empty() {
+                        early.push(problem_at(n, "there is nothing to define"));
+                        break;
+                    }
+                    resolved[n] = Some(Op::Define {
+                        source: source.clone(),
+                        at: self.logged(*at),
+                        dir: dir.clone(),
+                        tag: tag.clone(),
+                    });
+                    (
+                        source.clone(),
+                        dir.as_deref(),
+                        self.resolve(*at),
+                        What::Definitions,
+                        Vec::new(),
+                        tag.clone(),
+                    )
                 }
                 Op::Forget { at, tag } => {
-                    resolved[n] = Some(Op::Forget { at: self.logged(*at), tag: tag.clone() });
-                    ("new".to_string(), None, self.resolve(*at), What::Forget, Vec::new(), tag.clone())
+                    resolved[n] = Some(Op::Forget {
+                        at: self.logged(*at),
+                        tag: tag.clone(),
+                    });
+                    (
+                        "new".to_string(),
+                        None,
+                        self.resolve(*at),
+                        What::Forget,
+                        Vec::new(),
+                        tag.clone(),
+                    )
                 }
-                Op::Transaction { source, dir, at, edits, tag } => {
-                    resolved[n] = Some(Op::Transaction { source:source.clone(), dir:dir.clone(), at:self.logged(*at), edits:edits.clone(), tag:tag.clone() });
-                    (source.clone(), dir.as_deref(), self.resolve(*at), What::Definitions, edits.clone(), tag.clone())
+                Op::Transaction {
+                    source,
+                    dir,
+                    at,
+                    edits,
+                    tag,
+                } => {
+                    resolved[n] = Some(Op::Transaction {
+                        source: source.clone(),
+                        dir: dir.clone(),
+                        at: self.logged(*at),
+                        edits: edits.clone(),
+                        tag: tag.clone(),
+                    });
+                    (
+                        source.clone(),
+                        dir.as_deref(),
+                        self.resolve(*at),
+                        What::Definitions,
+                        edits.clone(),
+                        tag.clone(),
+                    )
                 }
                 _ => continue,
             };
             if let Some(dir) = dir {
-                self.set_sample_dir(std::path::Path::new(dir));
+                self.set_client_sample_dir(client, std::path::Path::new(dir));
             }
             match self.queue_transaction(&source, dir, at, what, edits, Meta { client, tag }) {
                 Ok(id) => {
-                    let pending = self.pending.iter().find(|p| p.id == id).expect("a queued change is waiting to land");
-                    accepted.push((crate::events::TransactionReceipt { id, at: pending.lands_at }, pending.applied.clone()));
+                    let pending = self
+                        .pending
+                        .iter()
+                        .find(|p| p.id == id)
+                        .expect("a queued change is waiting to land");
+                    accepted.push((
+                        crate::events::TransactionReceipt {
+                            id,
+                            at: pending.lands_at,
+                        },
+                        pending.applied.clone(),
+                    ));
                 }
                 Err(mut problems) => {
                     for p in &mut problems {
@@ -208,14 +363,78 @@ impl Session {
 
         let ops = self.expand_parameter_events(client, ops)?;
         enum Plan {
-            Buffer { set: BufferSet, start: u64 },
-            Map { id: u64, start: u64, param: String, source: Option<String>, channel: usize, scale: f32, offset: f32, tag: Option<String> },
-            Note { event: Event, instrument: String, start: u64, dur: u64, id: Option<u64>, tag: Option<String> },
-            Control { name: String, value: f32, frames: u64, at: u64, op: usize, tag: Option<String> },
-            Track { key: String, value: f32, frames: u64, at: u64, tag: Option<String> },
-            Panic { at: u64, tag: Option<String> },
-            Set { id: u64, args: Vec<(String, Value, f32)>, frames: u64, at: u64, tag: Option<String> },
-            Off { id: u64, at: u64, tag: Option<String> },
+            NodeBind {
+                id: String,
+                param: String,
+                resource: u64,
+                bank: niminal_engine::BufferBank,
+                count: usize,
+                at: u64,
+                tag: Option<String>,
+            },
+            ChainMap(ChainMap),
+            Bind {
+                id: u64,
+                param: String,
+                resource: u64,
+                bank: niminal_engine::BufferBank,
+                count: usize,
+                at: u64,
+                tag: Option<String>,
+            },
+            Buffer {
+                set: BufferSet,
+                start: u64,
+            },
+            Map {
+                id: u64,
+                start: u64,
+                param: String,
+                source: Option<String>,
+                channel: usize,
+                scale: f32,
+                offset: f32,
+                tag: Option<String>,
+            },
+            Note {
+                event: Event,
+                instrument: String,
+                start: u64,
+                dur: u64,
+                id: Option<u64>,
+                tag: Option<String>,
+            },
+            Control {
+                name: String,
+                value: f32,
+                frames: u64,
+                at: u64,
+                op: usize,
+                tag: Option<String>,
+            },
+            Track {
+                key: String,
+                value: f32,
+                frames: u64,
+                at: u64,
+                tag: Option<String>,
+            },
+            Panic {
+                at: u64,
+                tag: Option<String>,
+            },
+            Set {
+                id: u64,
+                args: Vec<(String, Value, f32)>,
+                frames: u64,
+                at: u64,
+                tag: Option<String>,
+            },
+            Off {
+                id: u64,
+                at: u64,
+                tag: Option<String>,
+            },
         }
         // the notes this client holds, as the batch goes on opening and releasing them
         let mut open: Vec<(u64, String)> = self
@@ -273,8 +492,14 @@ impl Session {
                             "{target}@{}",
                             crate::routing::node_name(client, destination)
                         )
-                    } else if self.routing_at(start).has_node(client, target) {
-                        crate::routing::node_name(client, target)
+                    } else if self
+                        .routing_at(start)
+                        .has_node(client, definitions::local(client, target).unwrap_or(target))
+                    {
+                        crate::routing::node_name(
+                            client,
+                            definitions::local(client, target).unwrap_or(target),
+                        )
                     } else {
                         target.clone()
                     };
@@ -316,7 +541,14 @@ impl Session {
                     }
                     let raw = at;
                     let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Control { name: name.clone(), at: self.logged(*raw), value: *value, unit: unit.clone(), glide: *glide, tag: tag.clone() });
+                    resolved[n] = Some(Op::Control {
+                        name: name.clone(),
+                        at: self.logged(*raw),
+                        value: *value,
+                        unit: unit.clone(),
+                        glide: *glide,
+                        tag: tag.clone(),
+                    });
                     let program = self.program_at(at);
                     let Some(def) = program.controls.iter().find(|c| c.name == *name) else {
                         fail(format!("unknown control `{name}`"));
@@ -335,9 +567,22 @@ impl Session {
                         continue;
                     }
                     controls += 1;
-                    plans.push(Plan::Control { name: name.clone(), value: converted, frames: (seconds * rate).round() as u64, at, op: n, tag: tag.clone() });
+                    plans.push(Plan::Control {
+                        name: name.clone(),
+                        value: converted,
+                        frames: (seconds * rate).round() as u64,
+                        at,
+                        op: n,
+                        tag: tag.clone(),
+                    });
                 }
-                Op::Track { name, at, args, glide, tag } => {
+                Op::Track {
+                    name,
+                    at,
+                    args,
+                    glide,
+                    tag,
+                } => {
                     let raw = at;
                     let at = self.resolve(*at);
                     resolved[n] = Some(Op::Track {
@@ -351,8 +596,14 @@ impl Session {
                         fail("use a local node ID".into());
                         continue;
                     }
-                    let local_name = if self.routing_at(at).has_node(client, name) {
-                        crate::routing::node_name(client, name)
+                    let local_name = if self
+                        .routing_at(at)
+                        .has_node(client, definitions::local(client, name).unwrap_or(name))
+                    {
+                        crate::routing::node_name(
+                            client,
+                            definitions::local(client, name).unwrap_or(name),
+                        )
                     } else {
                         name.clone()
                     };
@@ -364,25 +615,147 @@ impl Session {
                             fail(format!("`{name}` has no parameter `{param}`"));
                             continue;
                         };
-                        let seconds = glide.map_or(def.smooth_seconds, |g| g.to_seconds(program.tempo));
+                        let seconds =
+                            glide.map_or(def.smooth_seconds, |g| g.to_seconds(program.tempo));
                         if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
                             fail("`glide` must be between 0 and 60sec".into());
                             continue;
                         }
                         match def.from_value(*value, program.tempo) {
                             Ok(v) => {
-                                plans.push(Plan::Track { key: def.key.clone(), value: v, frames: (seconds * rate).round() as u64, at, tag: tag.clone() });
+                                plans.push(Plan::Track {
+                                    key: def.key.clone(),
+                                    value: v,
+                                    frames: (seconds * rate).round() as u64,
+                                    at,
+                                    tag: tag.clone(),
+                                });
                             }
                             Err(e) => fail(format!("parameter `{param}`: {e}")),
                         }
                     }
                 }
                 Op::Routing { at, edits, tag } => {
-                    let start=self.resolve(*at);
+                    let start = self.resolve(*at);
+                    for edit in edits {
+                        if let crate::RoutingEdit::BindBuffer { id, param, buffer } = edit {
+                            let result = (|| -> Result<_, String> {
+                                let routing = self.routing_at(start);
+                                let program = self.program_at(start);
+                                let (resource, count, width) =
+                                    routing.buffer_binding(client, id, param)?;
+                                let (_, data) = program
+                                    .buffers
+                                    .iter()
+                                    .find(|(n, _)| n == buffer && !self.buffer_is_hidden(n))
+                                    .ok_or("no buffer")?;
+                                if data.channels() < width {
+                                    return Err(
+                                        "buffer has too few channels for the processor".into()
+                                    );
+                                }
+                                Ok(Plan::NodeBind {
+                                    id: id.clone(),
+                                    param: param.clone(),
+                                    resource,
+                                    count,
+                                    bank: Arc::new(vec![data.clone()]),
+                                    at: start,
+                                    tag: tag.clone(),
+                                })
+                            })();
+                            match result {
+                                Ok(plan) => plans.push(plan),
+                                Err(error) => fail(error),
+                            }
+                        }
+                        if let crate::RoutingEdit::Map {
+                            id,
+                            param,
+                            source,
+                            channel,
+                            scale,
+                            offset,
+                        } = edit
+                        {
+                            let result = (|| -> Result<ChainMap, String> {
+                                let routing = self.routing_at(start);
+                                let program = self.program_at(start);
+                                let key = match routing.parameter(client, id, param) {
+                                    Ok(key) => key,
+                                    Err(_) if source.is_none() => {
+                                        self.routing.parameter(client, id, param)?
+                                    }
+                                    Err(error) => return Err(error),
+                                };
+                                let name = source
+                                    .as_ref()
+                                    .map(|s| routing.source(client, s))
+                                    .transpose()?;
+                                if *channel == 0 || !scale.is_finite() || !offset.is_finite() {
+                                    return Err("invalid modulation channel/scale/offset".into());
+                                }
+                                if let Some(name) = &name {
+                                    if program.controls.iter().any(|c| c.name == *name) {
+                                        if *channel != 1 {
+                                            return Err("control sources have one channel".into());
+                                        }
+                                    } else if let Some(i) =
+                                        program.buses.iter().position(|b| b == name)
+                                    {
+                                        if *channel > program.bus_layouts[i].channels() {
+                                            return Err("bus channel does not exist".into());
+                                        }
+                                    } else {
+                                        return Err("modulation source does not exist".into());
+                                    }
+                                }
+                                Ok(ChainMap {
+                                    client,
+                                    node: id.clone(),
+                                    param: key,
+                                    mapping: VoiceMap {
+                                        key: 0,
+                                        param: param.clone(),
+                                        source: name,
+                                        channel: channel - 1,
+                                        scale: *scale,
+                                        offset: *offset,
+                                        range: None,
+                                        at: start,
+                                        client,
+                                        tag: tag.clone(),
+                                        done: false,
+                                    },
+                                })
+                            })();
+                            match result {
+                                Ok(map) => plans.push(Plan::ChainMap(map)),
+                                Err(error) => fail(error),
+                            }
+                        }
+                    }
                     if crate::routing::Routing::is_control_edit(edits) {
-                        resolved[n]=Some(Op::Routing { at:self.logged(*at), edits:edits.clone(), tag:tag.clone() });
-                        match self.routing_at(start).updates(client,edits,self.program_at(start)) {
-                            Ok(updates) => for (key,value,glide) in updates { plans.push(Plan::Track {key,value,frames:(glide*rate).round() as u64,at:start,tag:tag.clone()}); },
+                        resolved[n] = Some(Op::Routing {
+                            at: self.logged(*at),
+                            edits: edits.clone(),
+                            tag: tag.clone(),
+                        });
+                        match self
+                            .routing_at(start)
+                            .updates(client, edits, self.program_at(start))
+                        {
+                            Ok(updates) => {
+                                for (key, value, glide) in updates {
+                                    plans.push(Plan::Track {
+                                        key,
+                                        value,
+                                        frames: (glide * rate).round() as u64,
+                                        at: start,
+                                        tag: tag.clone(),
+                                    });
+                                }
+                            }
                             Err(e) => fail(e),
                         }
                     }
@@ -434,25 +807,75 @@ impl Session {
                     }
                     if let Some(source) = source {
                         if let Some(bus) = program.buses.iter().position(|n| n == source) {
-                            if *channel > program.bus_layouts[bus].channels() { fail("mapping channel is outside the bus".into()); continue; }
-                        } else if !program.controls.iter().any(|c| c.name == *source) || *channel != 1 { fail(format!("no control or bus `{source}` with that channel")); continue; }
+                            if *channel > program.bus_layouts[bus].channels() {
+                                fail("mapping channel is outside the bus".into());
+                                continue;
+                            }
+                        } else if !program.controls.iter().any(|c| c.name == *source)
+                            || *channel != 1
+                        {
+                            fail(format!("no control or bus `{source}` with that channel"));
+                            continue;
+                        }
                     }
-                    if self.voice_maps.len() + plans.len() >= 4096 { fail("the modulation mapping queue is full".into()); continue; }
-                    resolved[n] = Some(Op::Map { id: *id, at: self.logged(*at), param: param.clone(), source: source.clone(), channel: *channel, scale: *scale, offset: *offset, tag: tag.clone() });
-                    plans.push(Plan::Map { id: *id, start, param: param.clone(), source: source.clone(), channel: *channel, scale: *scale, offset: *offset, tag: tag.clone() });
+                    if self.voice_maps.len() + plans.len() >= 4096 {
+                        fail("the modulation mapping queue is full".into());
+                        continue;
+                    }
+                    resolved[n] = Some(Op::Map {
+                        id: *id,
+                        at: self.logged(*at),
+                        param: param.clone(),
+                        source: source.clone(),
+                        channel: *channel,
+                        scale: *scale,
+                        offset: *offset,
+                        tag: tag.clone(),
+                    });
+                    plans.push(Plan::Map {
+                        id: *id,
+                        start,
+                        param: param.clone(),
+                        source: source.clone(),
+                        channel: *channel,
+                        scale: *scale,
+                        offset: *offset,
+                        tag: tag.clone(),
+                    });
                 }
-                Op::Set { id, at, args, glide, tag } => {
+                Op::Set {
+                    id,
+                    at,
+                    args,
+                    glide,
+                    tag,
+                } => {
                     let raw = at;
                     let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Set { id: *id, at: self.logged(*raw), args: args.clone(), glide: *glide, tag: tag.clone() });
+                    resolved[n] = Some(Op::Set {
+                        id: *id,
+                        at: self.logged(*raw),
+                        args: args.clone(),
+                        glide: *glide,
+                        tag: tag.clone(),
+                    });
                     let Some((_, instrument)) = open.iter().find(|(open, _)| open == id) else {
                         fail(format!("no note with id {id} is sounding"));
                         continue;
                     };
                     let program = self.program_at(at);
-                    let schema = self.voices.iter().find(|v| v.client == client && v.id == *id).map(|v| v.schema.clone())
+                    let schema = self
+                        .voices
+                        .iter()
+                        .find(|v| v.client == client && v.id == *id)
+                        .map(|v| v.schema.clone())
                         .or_else(|| program.instrument(instrument).map(|i| Arc::new(i.clone())));
-                    let Some(instrument) = schema else { fail(format!("the instrument of note {id} is not defined any more")); continue; };
+                    let Some(instrument) = schema else {
+                        fail(format!(
+                            "the instrument of note {id} is not defined any more"
+                        ));
+                        continue;
+                    };
                     let seconds = glide.map_or(0.0, |g| g.to_seconds(program.tempo));
                     if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
                         fail("`glide` must be between 0 and 60sec".into());
@@ -461,49 +884,156 @@ impl Session {
                     let mut converted = Vec::new();
                     for (name, value) in args {
                         // a note's pitch is `freq` to the score, and whatever `with(pitch: ...)` named it to the instrument
-                        let actual = if name == niminal_lang::PITCH_PARAM { &instrument.pitch } else { name };
-                        match instrument.param(actual).and_then(|(_, p)| instrument.param_value(p, *value, program.tempo)) {
+                        let actual = if name == niminal_lang::PITCH_PARAM {
+                            &instrument.pitch
+                        } else {
+                            name
+                        };
+                        match instrument
+                            .param(actual)
+                            .and_then(|(_, p)| instrument.param_value(p, *value, program.tempo))
+                        {
                             Ok(v) => converted.push((actual.clone(), *value, v)),
                             Err(e) => fail(e.to_string()),
                         }
                     }
-                    plans.push(Plan::Set { id: *id, args: converted, frames: (seconds * rate).round() as u64, at, tag: tag.clone() });
+                    plans.push(Plan::Set {
+                        id: *id,
+                        args: converted,
+                        frames: (seconds * rate).round() as u64,
+                        at,
+                        tag: tag.clone(),
+                    });
                 }
                 Op::Off { id, at, tag } => {
                     let raw = at;
                     let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Off { id: *id, at: self.logged(*raw), tag: tag.clone() });
+                    resolved[n] = Some(Op::Off {
+                        id: *id,
+                        at: self.logged(*raw),
+                        tag: tag.clone(),
+                    });
                     let Some(i) = open.iter().position(|(open, _)| open == id) else {
                         fail(format!("no note with id {id} is sounding"));
                         continue;
                     };
                     open.remove(i);
-                    plans.push(Plan::Off { id: *id, at, tag: tag.clone() });
+                    plans.push(Plan::Off {
+                        id: *id,
+                        at,
+                        tag: tag.clone(),
+                    });
                 }
-                Op::BufferWrite { name, at, offset, values, tag } => {
+                Op::BufferWrite {
+                    name,
+                    at,
+                    offset,
+                    values,
+                    tag,
+                } => {
                     let start = self.resolve(*at);
-                    resolved[n] = Some(Op::BufferWrite { name: name.clone(), at: self.logged(*at), offset: *offset, values: values.clone(), tag: tag.clone() });
+                    resolved[n] = Some(Op::BufferWrite {
+                        name: name.clone(),
+                        at: self.logged(*at),
+                        offset: *offset,
+                        values: values.clone(),
+                        tag: tag.clone(),
+                    });
                     let program = self.program_at(start);
                     let Some((_, buffer)) = program.buffers.iter().find(|(n, _)| n == name) else {
-                        fail(format!("no buffer `{name}`")); continue;
+                        fail(format!("no buffer `{name}`"));
+                        continue;
                     };
-                    if *offset > buffer.len() || values.len() > buffer.len() - offset {
-                        fail("buffer write is outside its length".into()); continue;
+                    if *offset > buffer.len()
+                        || values.len() > (buffer.len() - offset) * buffer.channels()
+                        || values.len() % buffer.channels() != 0
+                    {
+                        fail("buffer write is outside its length".into());
+                        continue;
                     }
                     if values.len() > 65536 || values.iter().any(|v| !v.is_finite()) {
-                        fail("a buffer write has at most 65536 finite samples".into()); continue;
+                        fail("a buffer write has at most 65536 finite samples".into());
+                        continue;
                     }
                     if self.buffer_sets.len() + plans.len() >= 4096 {
-                        fail("the buffer write queue is full".into()); continue;
+                        fail("the buffer write queue is full".into());
+                        continue;
                     }
-                    plans.push(Plan::Buffer { start, set: BufferSet { name: name.clone(), offset: *offset, values: values.clone().into(), at: start.max(clock), client, tag: tag.clone(), done: false } });
+                    plans.push(Plan::Buffer {
+                        start,
+                        set: BufferSet {
+                            name: name.clone(),
+                            offset: *offset,
+                            values: values.clone().into(),
+                            at: start.max(clock),
+                            client,
+                            tag: tag.clone(),
+                            done: false,
+                        },
+                    });
                 }
                 Op::Panic { at, tag } => {
                     let start = self.resolve(*at);
-                    resolved[n] = Some(Op::Panic { at: self.logged(*at), tag: tag.clone() });
-                    plans.push(Plan::Panic { at: start, tag: tag.clone() });
+                    resolved[n] = Some(Op::Panic {
+                        at: self.logged(*at),
+                        tag: tag.clone(),
+                    });
+                    plans.push(Plan::Panic {
+                        at: start,
+                        tag: tag.clone(),
+                    });
                 }
-                Op::Array { .. } | Op::BindBuffer { .. } => unreachable!("parameter events expanded"),
+                Op::BindBuffer {
+                    id,
+                    at,
+                    param,
+                    buffer,
+                    tag,
+                } => {
+                    let at = self.resolve(*at);
+                    let program = self.program_at(at);
+                    let schema = self
+                        .voices
+                        .iter()
+                        .find(|v| v.client == client && v.id == *id)
+                        .map(|v| v.schema.as_ref())
+                        .or_else(|| {
+                            open.iter()
+                                .find(|(i, _)| i == id)
+                                .and_then(|(_, n)| program.instrument(n))
+                        });
+                    let Some(schema) = schema else {
+                        fail(format!("no note with id {id}"));
+                        continue;
+                    };
+                    let Some(&resource) = schema.resource_keys.get(param) else {
+                        fail(format!("`{param}` is not a buffer parameter"));
+                        continue;
+                    };
+                    let Some((_, data)) = program
+                        .buffers
+                        .iter()
+                        .find(|(n, _)| n == buffer && !self.buffer_is_hidden(n))
+                    else {
+                        fail(format!("no buffer `{buffer}`"));
+                        continue;
+                    };
+                    if data.channels() < schema.graph.buffer_channels(resource) {
+                        fail("buffer has too few channels for this voice".into());
+                        continue;
+                    }
+                    plans.push(Plan::Bind {
+                        id: *id,
+                        param: param.clone(),
+                        resource,
+                        bank: Arc::new(vec![data.clone()]),
+                        count: schema.graph.buffer_bindings(resource),
+                        at,
+                        tag: tag.clone(),
+                    });
+                    resolved[n] = Some(op.clone());
+                }
+                Op::Array { .. } => unreachable!("parameter events expanded"),
                 Op::Define { .. } | Op::Forget { .. } | Op::Transaction { .. } => {}
             }
         }
@@ -517,17 +1047,30 @@ impl Session {
         let log_index = self.log.len();
         self.log.push(LogEntry {
             sample: clock,
-            input: LogInput::Send { client, ops: resolved.into_iter().flatten().collect() },
+            input: LogInput::Send {
+                client,
+                ops: resolved.into_iter().flatten().collect(),
+            },
         });
-        self.accept_transactions(&accepted,client);
-        let mut sent = Sent { transactions:accepted.into_iter().map(|(r,_)|r).collect(), accepted: ops.len(), late: 0, first: None };
+        self.accept_transactions(&accepted, client);
+        let mut sent = Sent {
+            notes: Vec::new(),
+            transactions: accepted.into_iter().map(|(r, _)| r).collect(),
+            accepted: ops.len(),
+            late: 0,
+            first: None,
+        };
         // definitions, which are queued already
         for op in &ops {
             let at = match op {
                 Op::Define { at, .. } | Op::Forget { at, .. } | Op::Transaction { at, .. } => {
                     self.resolve(*at)
                 }
-                Op::Routing {at,edits,..} if !crate::routing::Routing::is_control_edit(edits) => self.resolve(*at),
+                Op::Routing { at, edits, .. }
+                    if !crate::routing::Routing::is_control_edit(edits) =>
+                {
+                    self.resolve(*at)
+                }
                 _ => continue,
             };
             sent.late += usize::from(at < clock);
@@ -535,21 +1078,130 @@ impl Session {
         }
         for plan in plans {
             let at = match plan {
-                Plan::Map { id, start, param, source, channel, scale, offset, tag } => {
-                    if let Some(entry) = self.voices.iter().find(|v| v.client == client && v.id == id) {
-                        let range = entry.schema.param(&param).ok().and_then(|(_,p)| p.range).map(|(lo,hi)| (lo as f32,hi as f32));
-                        let set = VoiceMap { range, key: entry.key, param, source, channel: channel-1, scale, offset, at: start.max(clock), client, tag, done: false };
-                        if self.live.is_some() { self.fresh.push(realtime::Fresh::Map(set.clone())); }
+                Plan::NodeBind {
+                    id,
+                    param,
+                    resource,
+                    bank,
+                    count,
+                    at,
+                    tag,
+                } => {
+                    let bind = BufferBind {
+                        param,
+                        target: Some(format!("__routing_processor_{client}_{id}")),
+                        key: 0,
+                        resource,
+                        bank,
+                        count,
+                        at,
+                        client,
+                        tag,
+                        done: false,
+                    };
+                    if self.live.is_some() {
+                        self.fresh.push(realtime::Fresh::Bind(bind.clone()));
+                    }
+                    self.buffer_binds.push(bind);
+                    at
+                }
+                Plan::ChainMap(map) => {
+                    let at = map.mapping.at;
+                    if self.live.is_some() {
+                        self.fresh.push(realtime::Fresh::ChainMap(map.clone()));
+                    }
+                    self.chain_maps.push(map);
+                    at
+                }
+                Plan::Bind {
+                    id,
+                    param,
+                    resource,
+                    bank,
+                    count,
+                    at,
+                    tag,
+                } => {
+                    if let Some(entry) = self
+                        .voices
+                        .iter()
+                        .find(|v| v.client == client && v.id == id)
+                    {
+                        let bind = BufferBind {
+                            param,
+                            target: None,
+                            key: entry.key,
+                            resource,
+                            bank,
+                            count,
+                            at,
+                            client,
+                            tag,
+                            done: false,
+                        };
+                        if self.live.is_some() {
+                            self.fresh.push(realtime::Fresh::Bind(bind.clone()));
+                        }
+                        self.buffer_binds.push(bind);
+                    }
+                    at
+                }
+                Plan::Map {
+                    id,
+                    start,
+                    param,
+                    source,
+                    channel,
+                    scale,
+                    offset,
+                    tag,
+                } => {
+                    if let Some(entry) = self
+                        .voices
+                        .iter()
+                        .find(|v| v.client == client && v.id == id)
+                    {
+                        let range = entry
+                            .schema
+                            .param(&param)
+                            .ok()
+                            .and_then(|(_, p)| p.range)
+                            .map(|(lo, hi)| (lo as f32, hi as f32));
+                        let set = VoiceMap {
+                            range,
+                            key: entry.key,
+                            param,
+                            source,
+                            channel: channel - 1,
+                            scale,
+                            offset,
+                            at: start.max(clock),
+                            client,
+                            tag,
+                            done: false,
+                        };
+                        if self.live.is_some() {
+                            self.fresh.push(realtime::Fresh::Map(set.clone()));
+                        }
                         self.voice_maps.push(set);
                     }
                     start
                 }
                 Plan::Buffer { set, start } => {
-                    if self.live.is_some() { self.fresh.push(realtime::Fresh::Buffer(set.clone())); }
+                    if self.live.is_some() {
+                        self.fresh.push(realtime::Fresh::Buffer(set.clone()));
+                    }
                     self.buffer_sets.push(set);
                     start
                 }
-                Plan::Note { event, instrument, start, dur, id, tag } => {
+                Plan::Note {
+                    event,
+                    instrument,
+                    start,
+                    dur,
+                    id,
+                    tag,
+                } => {
                     let key = id.map(|_| self.new_key());
                     if let (Some(id), Some(key)) = (id, key) {
                         let schema = Arc::new(
@@ -573,24 +1225,74 @@ impl Session {
                             client,
                             id,
                             key,
-                            instrument,
+                            instrument: instrument.clone(),
                             schema,
                             tag: tag.clone(),
                         });
                     }
-                    self.add_explicit(start.max(clock), dur, event, key, Some((client, tag)));
+                    let token = self.next_note;
+                    self.next_note += 1;
+                    let activity = Arc::new(niminal_engine::Activity::new(token, client));
+                    self.activities.push(crate::activity::Note::new(
+                        activity.clone(),
+                        id,
+                        instrument.clone(),
+                        key,
+                    ));
+                    sent.notes.push(crate::events::NoteReceipt {
+                        event: ops
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, op)| matches!(op, Op::Note { .. }))
+                            .nth(sent.notes.len())
+                            .map_or(0, |(i, _)| i),
+                        token,
+                    });
+                    self.add_explicit(
+                        start.max(clock),
+                        dur,
+                        event,
+                        key,
+                        Some((client, tag)),
+                        Some(activity),
+                    );
                     start
                 }
-                Plan::Control { name, value, frames, at, op, tag } => {
+                Plan::Control {
+                    name,
+                    value,
+                    frames,
+                    at,
+                    op,
+                    tag,
+                } => {
                     let serial = self.next_control;
                     match self.queue_control(&name, value, frames, at.max(clock), (log_index, op)) {
-                        Ok(()) => self.control_owners.push(ControlOwner { serial, client, tag }),
+                        Ok(()) => self.control_owners.push(ControlOwner {
+                            serial,
+                            client,
+                            tag,
+                        }),
                         Err(e) => self.notify(e.into()),
                     }
                     at
                 }
-                Plan::Track { key, value, frames, at, tag } => {
-                    let set = TrackSet { key, value, frames, at: at.max(clock), client: Some(client), tag, done: false };
+                Plan::Track {
+                    key,
+                    value,
+                    frames,
+                    at,
+                    tag,
+                } => {
+                    let set = TrackSet {
+                        key,
+                        value,
+                        frames,
+                        at: at.max(clock),
+                        client: Some(client),
+                        tag,
+                        done: false,
+                    };
                     if self.live.is_some() {
                         self.fresh.push(realtime::Fresh::Track(set.clone()));
                     }
@@ -598,17 +1300,32 @@ impl Session {
                     self.track_sets.insert(place, set);
                     at
                 }
-                Plan::Set { id, args, frames, at, tag } => {
+                Plan::Set {
+                    id,
+                    args,
+                    frames,
+                    at,
+                    tag,
+                } => {
                     self.set_voice(client, id, args, frames, at.max(clock), tag);
                     at
                 }
                 Plan::Panic { at, tag } => {
-                    self.timed_panics.push(TimedPanic { at: at.max(clock), client, tag, done: false });
+                    self.timed_panics.push(TimedPanic {
+                        at: at.max(clock),
+                        client,
+                        tag,
+                        done: false,
+                    });
                     self.invalidate_windows();
                     at
                 }
                 Plan::Off { id, at, tag } => {
-                    if let Some(i) = self.voices.iter().position(|v| v.client == client && v.id == id) {
+                    if let Some(i) = self
+                        .voices
+                        .iter()
+                        .position(|v| v.client == client && v.id == id)
+                    {
                         let entry = self.voices.remove(i);
                         self.release_at(entry.key, at.max(clock), Some((client, tag)));
                         self.closed.push(entry);
@@ -623,7 +1340,11 @@ impl Session {
         }
         // a change that was asked for at once happens at once, and the renderer is told
         let waiting = self.pending.len();
-        self.land_due(if self.detached { self.clock } else { self.clock.saturating_add(1) });
+        self.land_due(if self.detached {
+            self.clock
+        } else {
+            self.clock.saturating_add(1)
+        });
         if self.pending.len() != waiting {
             self.invalidate_live();
         } else if has_changes {
@@ -634,13 +1355,28 @@ impl Session {
     }
 
     /// Change parameters of the note a client holds by `id`: now, if it is sounding, or as it starts.
-    fn set_voice(&mut self, client: ClientId, id: u64, args: Vec<(String, Value, f32)>, frames: u64, at: u64, tag: Option<String>) {
-        let Some(entry) = self.voices.iter().find(|v| v.client == client && v.id == id) else {
+    fn set_voice(
+        &mut self,
+        client: ClientId,
+        id: u64,
+        args: Vec<(String, Value, f32)>,
+        frames: u64,
+        at: u64,
+        tag: Option<String>,
+    ) {
+        let Some(entry) = self
+            .voices
+            .iter()
+            .find(|v| v.client == client && v.id == id)
+        else {
             return;
         };
         let key = entry.key;
         // a note that has not started by then starts with the value
-        let waiting = self.upcoming.iter().any(|u| u.key == Some(key) && u.start >= at);
+        let waiting = self
+            .upcoming
+            .iter()
+            .any(|u| u.key == Some(key) && u.start >= at);
         if waiting {
             for note in self.upcoming.iter_mut().filter(|u| u.key == Some(key)) {
                 for (name, value, _) in &args {
@@ -652,7 +1388,16 @@ impl Session {
             return;
         }
         for (name, _, value) in args {
-            let set = VoiceSet { key, name, value, frames, at, done: false, client, tag: tag.clone() };
+            let set = VoiceSet {
+                key,
+                name,
+                value,
+                frames,
+                at,
+                done: false,
+                client,
+                tag: tag.clone(),
+            };
             if self.live.is_some() {
                 self.fresh.push(realtime::Fresh::Set(set.clone()));
             }
@@ -662,16 +1407,30 @@ impl Session {
 
     /// Let go of the note a key holds, at sample `at`. A note that is not to start before then is played as a
     /// blip instead, long enough to hear.
-    pub(super) fn release_at(&mut self, key: u32, at: u64, owner: Option<(ClientId, Option<String>)>) {
+    pub(super) fn release_at(
+        &mut self,
+        key: u32,
+        at: u64,
+        owner: Option<(ClientId, Option<String>)>,
+    ) {
         let stale = self.clock.saturating_sub(self.samples(2.0));
         self.key_offs.retain(|k| k.at > stale);
         let offs = &self.key_offs;
         self.closed.retain(|c| offs.iter().any(|k| k.key == c.key));
         let (client, tag) = owner.map_or((None, None), |(c, t)| (Some(c), t));
-        self.key_offs.push(KeyOff { key, at, client, tag });
+        self.key_offs.push(KeyOff {
+            key,
+            at,
+            client,
+            tag,
+        });
         let blip = self.samples(0.01);
         let mut waiting = false;
-        for note in self.upcoming.iter_mut().filter(|u| u.key == Some(key) && u.start >= at) {
+        for note in self
+            .upcoming
+            .iter_mut()
+            .filter(|u| u.key == Some(key) && u.start >= at)
+        {
             note.key = None;
             note.dur = blip;
             waiting = true;
@@ -689,29 +1448,48 @@ impl Session {
 
     /// Take back this client's events that are still waiting, those with `tag` if one is given, at or after
     /// `from`. With `release`, held notes of the same tag that are already sounding are let go of at `from`.
-    pub fn cancel_events(&mut self, client: ClientId, tag: Option<&str>, from: At, release: bool) -> Cancelled {
+    pub fn cancel_events(
+        &mut self,
+        client: ClientId,
+        tag: Option<&str>,
+        from: At,
+        release: bool,
+    ) -> Cancelled {
         self.sync_realtime();
         let from = self.resolve(from);
         self.log.push(LogEntry {
             sample: self.clock,
-            input: LogInput::CancelEvents { client, tag: tag.map(str::to_owned), from, release },
+            input: LogInput::CancelEvents {
+                client,
+                tag: tag.map(str::to_owned),
+                from,
+                release,
+            },
         });
         let mut done = Cancelled::default();
         let mut replan = false;
-        let mine = |owner: Option<ClientId>, t: &Option<String>| owner == Some(client) && tag.is_none_or(|x| t.as_deref() == Some(x));
+        let mine = |owner: Option<ClientId>, t: &Option<String>| {
+            owner == Some(client) && tag.is_none_or(|x| t.as_deref() == Some(x))
+        };
 
         // notes still to start
         let mut dropped_keys = Vec::new();
+        let mut dropped_tokens = Vec::new();
         self.upcoming.retain(|u| {
             let drop = u.start >= from && mine(u.client, &u.tag);
             if drop {
                 done.cancelled += 1;
                 dropped_keys.extend(u.key);
+                if let Some(activity) = &u.activity {
+                    dropped_tokens.push(activity.token);
+                }
             }
             !drop
         });
         replan |= done.cancelled > 0;
         self.voices.retain(|v| !dropped_keys.contains(&v.key));
+        self.activities
+            .retain(|n| !dropped_tokens.contains(&n.activity.token));
 
         // changes of a note's parameters, and releases, still to come
         let before = done.cancelled;
@@ -735,7 +1513,11 @@ impl Session {
         for key in reopened {
             if let Some(i) = self.closed.iter().position(|c| c.key == key) {
                 let entry = self.closed.remove(i);
-                if !self.voices.iter().any(|v| v.client == entry.client && v.id == entry.id) {
+                if !self
+                    .voices
+                    .iter()
+                    .any(|v| v.client == entry.client && v.id == entry.id)
+                {
                     self.voices.push(entry);
                 }
             }
@@ -751,9 +1533,21 @@ impl Session {
             done.cancelled += usize::from(drop);
             !drop
         });
+        self.chain_maps.retain(|s| {
+            let drop =
+                !s.mapping.done && s.mapping.at >= from && mine(Some(s.client), &s.mapping.tag);
+            done.cancelled += usize::from(drop);
+            !drop
+        });
+        self.buffer_binds.retain(|s| {
+            let drop = !s.done && s.at >= from && mine(Some(s.client), &s.tag);
+            done.cancelled += usize::from(drop);
+            !drop
+        });
         self.voice_maps.retain(|s| {
-            let drop = !s.done && s.at >= from && mine(Some(s.client),&s.tag);
-            done.cancelled += usize::from(drop); !drop
+            let drop = !s.done && s.at >= from && mine(Some(s.client), &s.tag);
+            done.cancelled += usize::from(drop);
+            !drop
         });
         self.buffer_sets.retain(|s| {
             let drop = !s.done && s.at >= from && mine(Some(s.client), &s.tag);
@@ -768,15 +1562,23 @@ impl Session {
         let detached = self.detached;
         let mut withdrawn = Vec::new();
         let owners = std::mem::take(&mut self.control_owners);
-        let (mine_owned, rest): (Vec<_>, Vec<_>) = owners.into_iter().partition(|o| {
-            tag.is_none_or(|x| o.tag.as_deref() == Some(x)) && o.client == client
-        });
+        let (mine_owned, rest): (Vec<_>, Vec<_>) = owners
+            .into_iter()
+            .partition(|o| tag.is_none_or(|x| o.tag.as_deref() == Some(x)) && o.client == client);
         self.control_owners = rest;
         for owner in mine_owned {
-            let Some(change) = self.control_changes.iter().find(|c| c.serial == owner.serial) else {
+            let Some(change) = self
+                .control_changes
+                .iter()
+                .find(|c| c.serial == owner.serial)
+            else {
                 continue; // it has happened
             };
-            let waiting = if detached { !change.applied } else { change.at > clock };
+            let waiting = if detached {
+                !change.applied
+            } else {
+                change.at > clock
+            };
             if change.at >= from && waiting {
                 withdrawn.push(owner.serial);
             } else {
@@ -841,18 +1643,19 @@ impl Session {
     /// A client has gone: its held notes are let go of and its notes still waiting never sound.
     pub fn drop_client(&mut self, client: ClientId) {
         self.cancel_events(client, None, At::Now, true);
-        if !self.routing.is_empty(client)
-            && let Err(problems) = self.send_events(
-                client,
-                vec![Op::Routing {
-                    at: At::Now,
-                    edits: vec![crate::RoutingEdit::Clear],
-                    tag: None,
-                }],
-            )
-        {
+        if let Err(problems) = self.send_events(
+            client,
+            vec![Op::Forget {
+                at: At::Now,
+                tag: None,
+            }],
+        ) {
             self.notify(format!("routing cleanup failed: {}", problems[0].message));
         }
+        self.client_samples.remove(&client);
+        self.buffer_budgets.remove(&client);
+        self.hidden_buffers
+            .retain(|name| definitions::owner(name) != client);
     }
 
     pub(super) fn apply_controls(&mut self) {

@@ -49,13 +49,36 @@ impl Spawn {
 }
 
 impl Opcode for Spawn {
+    fn buffer_channels(&self, key: u64) -> usize {
+        self.template.buffer_channels(key)
+    }
+    fn buffer_bindings(&self, key: u64) -> usize {
+        self.template.buffer_bindings(key)
+            + self
+                .layers
+                .iter()
+                .map(|l| l.op.buffer_bindings(key))
+                .sum::<usize>()
+    }
+    fn swap_buffers(&mut self, key: u64, banks: &mut [crate::BufferBank], cursor: &mut usize) {
+        self.template.swap_buffers(key, banks, cursor);
+        for l in &mut self.layers {
+            l.op.swap_buffers(key, banks, cursor);
+        }
+    }
+
+    fn reports(&self, visit: &mut dyn FnMut(&std::sync::Arc<crate::ops::Report>)) {
+        self.template.reports(visit);
+    }
     fn name(&self) -> &str {
         "spawn"
     }
     fn ports(&self) -> &[Port] {
         &self.ports
     }
-    fn latency(&self) -> usize { self.template.latency() }
+    fn latency(&self) -> usize {
+        self.template.latency()
+    }
     fn outputs(&self) -> usize {
         self.template.outputs()
     }

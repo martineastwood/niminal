@@ -62,6 +62,7 @@ The language server (`niminal lsp`) works without a daemon for hover, completion
 ## What you get
 
 - **Live** — WebSocket daemon, REPL, `send`, and editor integration; quantize changes to musical time. The daemon is a sound server (the engine) with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
+- **Frontend API** — Browser, Node and Python clients can own private DSP definitions, route and modulate processors, stream WAV files, inspect voice lifecycle and DSP reports, view waveform scopes, capture live output and run independent offline exports. See the [engine API](docs/src/content/docs/reference/engine-api.md) and [client examples](clients/examples/).
 - **Offline** — Same `.nml` files render to audio; session logs replay to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
 - **Routing** — Independent processor instances, private buses and sample-timed connection edits; client-owned mixer models.

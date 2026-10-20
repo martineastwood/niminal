@@ -161,7 +161,10 @@ impl Table {
         let mut data = Vec::with_capacity(self.data.len() + other.data.len());
         data.extend_from_slice(&self.data);
         data.extend_from_slice(&other.data);
-        Table::from_f32(data.into_boxed_slice(), self.sample_rate.or(other.sample_rate))
+        Table::from_f32(
+            data.into_boxed_slice(),
+            self.sample_rate.or(other.sample_rate),
+        )
     }
 
     pub fn integrate(&self) -> Self {
@@ -200,7 +203,10 @@ impl Table {
         let end = end.min(self.data.len());
         let start = start.min(end);
         assert!(end > start, "a table slice must not be empty");
-        Table::from_f32(self.data[start..end].to_vec().into_boxed_slice(), self.sample_rate)
+        Table::from_f32(
+            self.data[start..end].to_vec().into_boxed_slice(),
+            self.sample_rate,
+        )
     }
 }
 
@@ -247,73 +253,98 @@ fn read_clamped(data: &[f32], pos: f64, interp: Interp) -> f64 {
 #[derive(Debug)]
 pub struct Buffer {
     data: Box<[AtomicU32]>,
+    channels: usize,
     sample_rate: Option<f32>,
 }
-
 impl Buffer {
-    pub fn zeros(len: usize, sample_rate: Option<f32>) -> Self {
-        assert!(len > 0, "a buffer has at least one entry");
-        Buffer {
-            data: (0..len).map(|_| AtomicU32::new(0f32.to_bits())).collect(),
+    pub fn zeros(len: usize, rate: Option<f32>) -> Self {
+        Self::zeros_channels(len, 1, rate)
+    }
+    pub fn zeros_channels(frames: usize, channels: usize, sample_rate: Option<f32>) -> Self {
+        assert!(frames > 0 && (1..=16).contains(&channels));
+        Self {
+            data: (0..frames.checked_mul(channels).expect("buffer length"))
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+            channels,
             sample_rate,
         }
     }
-
     pub fn from_table(table: &Table) -> Self {
-        Buffer {
+        Self {
             data: table
                 .data
                 .iter()
                 .map(|v| AtomicU32::new(v.to_bits()))
                 .collect(),
+            channels: 1,
             sample_rate: table.sample_rate,
         }
     }
-
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.data.len() / self.channels
     }
-
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
-
     pub fn sample_rate(&self) -> Option<f32> {
         self.sample_rate
     }
-
     pub fn sample_rate_or(&self, fallback: f32) -> f32 {
         self.sample_rate.unwrap_or(fallback)
     }
-
-    pub fn read(&self, i: usize) -> f32 {
+    pub fn read_sample(&self, i: usize) -> f32 {
         f32::from_bits(self.data[i].load(Ordering::Relaxed))
     }
-
-    pub fn write(&self, i: usize, value: f32) {
+    pub fn write_sample(&self, i: usize, value: f32) {
         self.data[i].store(value.to_bits(), Ordering::Relaxed);
     }
-
+    pub fn read(&self, i: usize) -> f32 {
+        self.read_channel(i, 0)
+    }
+    pub fn write(&self, i: usize, value: f32) {
+        self.write_channel(i, 0, value);
+    }
+    pub fn read_channel(&self, i: usize, channel: usize) -> f32 {
+        if channel >= self.channels {
+            0.
+        } else {
+            self.read_sample(i * self.channels + channel)
+        }
+    }
+    pub fn write_channel(&self, i: usize, channel: usize, value: f32) {
+        if channel < self.channels {
+            self.write_sample(i * self.channels + channel, value);
+        }
+    }
     pub fn read_at(&self, pos: f64, interp: Interp) -> f64 {
-        let n = self.data.len();
-        crate::ops::read_array(n, pos, interp, |i| f64::from(self.read(i)))
+        self.read_at_channel(pos, interp, 0)
     }
-
+    pub fn read_at_channel(&self, pos: f64, interp: Interp, channel: usize) -> f64 {
+        crate::ops::read_array(self.len(), pos, interp, |i| {
+            f64::from(self.read_channel(i, channel))
+        })
+    }
     pub fn write_at(&self, pos: f64, value: f32) {
-        let n = self.data.len();
-        self.write(wrapped_index(pos, n), value);
+        self.write(wrapped_index(pos, self.len()), value);
     }
-
-    /// Snapshot as an immutable table (for `osc`, wavetable banks, etc.).
     pub fn snapshot(&self) -> Table {
-        let data: Box<[f32]> = (0..self.data.len()).map(|i| self.read(i)).collect();
-        Table::from_f32(data, self.sample_rate)
+        self.snapshot_channel(0)
     }
-
-    /// Copy contents into an existing buffer of the same length (live re-eval carry).
+    pub fn snapshot_channel(&self, channel: usize) -> Table {
+        Table::from_f32(
+            (0..self.len())
+                .map(|i| self.read_channel(i, channel))
+                .collect::<Box<[f32]>>(),
+            self.sample_rate,
+        )
+    }
     pub fn copy_into(&self, other: &Buffer) {
-        assert_eq!(self.len(), other.len());
-        for (src, dst) in self.data.iter().zip(other.data.iter()) {
+        assert_eq!((self.len(), self.channels), (other.len(), other.channels));
+        for (src, dst) in self.data.iter().zip(&other.data) {
             dst.store(src.load(Ordering::Relaxed), Ordering::Relaxed);
         }
     }

@@ -93,6 +93,19 @@ impl Oversample {
     }
 }
 impl Opcode for Oversample {
+    fn buffer_channels(&self, key: u64) -> usize {
+        self.op.buffer_channels(key)
+    }
+    fn buffer_bindings(&self, key: u64) -> usize {
+        self.op.buffer_bindings(key)
+    }
+    fn swap_buffers(&mut self, key: u64, banks: &mut [crate::BufferBank], cursor: &mut usize) {
+        self.op.swap_buffers(key, banks, cursor);
+    }
+
+    fn reports(&self, visit: &mut dyn FnMut(&std::sync::Arc<crate::ops::Report>)) {
+        self.op.reports(visit);
+    }
     fn name(&self) -> &str {
         "oversample"
     }
@@ -135,7 +148,9 @@ impl Opcode for Oversample {
     fn has_side_effects(&self) -> bool {
         self.op.has_side_effects()
     }
-    fn input_is_init(&self, index: usize) -> bool { self.op.input_is_init(index) }
+    fn input_is_init(&self, index: usize) -> bool {
+        self.op.input_is_init(index)
+    }
     fn latency(&self) -> usize {
         16 + self.op.latency().div_ceil(self.factor)
     }

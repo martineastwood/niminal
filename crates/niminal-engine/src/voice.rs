@@ -8,6 +8,11 @@ use crate::opcode::{BLOCK, Opcode, ProcessCtx, TAIL_LEVEL};
 /// One running note: a private copy of every opcode's state plus the signal
 /// buffers that connect them.
 pub struct Voice {
+    owner: u64,
+    instance: u64,
+    realtime: bool,
+    activities: Vec<Arc<crate::Activity>>,
+    sample: u64,
     graph: Arc<Graph>,
     ops: Vec<Box<dyn Opcode>>,
     slots: Vec<[f32; BLOCK]>,
@@ -15,7 +20,7 @@ pub struct Voice {
     released: bool,
     poisoned: bool,
     /// The choke group this note belongs to, if any.
-    group: Option<u32>,
+    group: Option<u64>,
     bus_map: Vec<Option<usize>>,
     /// Samples of fade-out left once the voice has been choked.
     choke_left: Option<usize>,
@@ -60,7 +65,9 @@ impl Ramp {
         if done >= self.frames {
             self.to
         } else {
-            self.from + (self.to - self.from) * (done as f32 / self.frames as f32)
+            (f64::from(self.from)
+                + (f64::from(self.to) - f64::from(self.from)) * (done as f64 / self.frames as f64))
+                as f32
         }
     }
 }
@@ -78,7 +85,7 @@ pub enum Priority {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoiceRule {
     /// Which instrument the notes are of, so the notes can be counted.
-    pub instrument: u32,
+    pub instrument: u64,
     /// A new note ends one of them if this many already sound.
     pub max: usize,
     /// The one it ends is the quietest, not the oldest.
@@ -122,7 +129,11 @@ impl Glide {
         let value = self.now;
         if self.left > 0 {
             self.left -= 1;
-            self.now = if self.left == 0 { self.target } else { self.now * self.ratio };
+            self.now = if self.left == 0 {
+                self.target
+            } else {
+                self.now * self.ratio
+            };
         }
         value
     }
@@ -183,11 +194,40 @@ impl Voice {
             slots[graph.params.len() + i] = [c; BLOCK];
         }
 
-        let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0)).map(Some).collect();
+        let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0))
+            .map(Some)
+            .collect();
         let shaped = ops.iter().any(|op| op.is_envelope());
         let tail_left = (graph.tail * sample_rate) as usize;
         let graph_params = graph.params.len();
-        Voice { mappings: (0..graph_params).map(|_|None).collect(), last_frames: 1, graph, ops, slots, sample_rate, released: false, poisoned: false, group: None, bus_map, choke_left: None, rule: None, glide: Glide::default(), held: None, level: f32::MAX, pan: None, shaped, tail_left, dur: 0.0, index: 0, ramps: Vec::with_capacity(graph_params) }
+        Voice {
+            owner: 0,
+            instance: 0,
+            realtime: false,
+            activities: Vec::new(),
+            sample: 0,
+            mappings: (0..graph_params).map(|_| None).collect(),
+            last_frames: 1,
+            graph,
+            ops,
+            slots,
+            sample_rate,
+            released: false,
+            poisoned: false,
+            group: None,
+            bus_map,
+            choke_left: None,
+            rule: None,
+            glide: Glide::default(),
+            held: None,
+            level: f32::MAX,
+            pan: None,
+            shaped,
+            tail_left,
+            dur: 0.0,
+            index: 0,
+            ramps: Vec::with_capacity(graph_params),
+        }
     }
 
     /// Keep memory at matching call sites while retaining the new graph's
@@ -196,12 +236,28 @@ impl Voice {
         if self.sample_rate != old.sample_rate || old.poisoned {
             return;
         }
+        for (index, param) in self.graph.params.iter().enumerate() {
+            if let Some(previous) = old.graph.param_index(&param.name) {
+                if self.mappings[index].is_none() && old.mappings[previous].is_some() {
+                    self.mappings[index] = old.mappings[previous].take();
+                    self.mappings[index]
+                        .as_mut()
+                        .unwrap()
+                        .set_range(param.range);
+                    self.slots[index] = old.slots[previous];
+                }
+            }
+        }
         let old_keys = old.graph.state_keys();
         let keys = self.graph.state_keys();
         for (new_index, (op, key)) in self.ops.iter_mut().zip(keys).enumerate() {
             let occurrence = keys[..new_index].iter().filter(|k| *k == key).count();
-            if let Some(i) = old_keys.iter().enumerate().filter(|(_, k)| *k == key)
-                .nth(occurrence).map(|(i, _)| i)
+            if let Some(i) = old_keys
+                .iter()
+                .enumerate()
+                .filter(|(_, k)| *k == key)
+                .nth(occurrence)
+                .map(|(i, _)| i)
             {
                 op.carry_state(&mut *old.ops[i]);
             }
@@ -215,9 +271,16 @@ impl Voice {
     }
 
     pub fn remap_buses_with(&mut self, mapping: &mut impl FnMut(usize) -> Option<usize>) {
-        for bus in &mut self.bus_map { *bus = bus.and_then(&mut *mapping); }
-        for (index,map) in self.mappings.iter_mut().enumerate() {
-            if let Some(map) = map && map.remap(mapping) { let value = self.slots[index][self.last_frames-1]; self.slots[index].fill(value); }
+        for bus in &mut self.bus_map {
+            *bus = bus.and_then(&mut *mapping);
+        }
+        for (index, map) in self.mappings.iter_mut().enumerate() {
+            if let Some(map) = map
+                && map.remap(mapping)
+            {
+                let value = self.slots[index][self.last_frames - 1];
+                self.slots[index].fill(value);
+            }
         }
     }
 
@@ -229,17 +292,54 @@ impl Voice {
     }
 
     pub fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
-        for op in &mut self.ops { op.set_control(key, start, target, frames, elapsed); }
-        for map in self.mappings.iter_mut().flatten() { map.set_control(key,start,target,frames,elapsed); }
+        if let Some(index) = self.graph.param_index(key) {
+            self.ramps.retain(|r| r.index != index);
+            let ramp = Ramp {
+                index,
+                from: start,
+                to: target,
+                frames,
+                done: elapsed.min(frames),
+            };
+            self.slots[index].fill(ramp.at(ramp.done));
+            if elapsed < frames {
+                self.ramps.push(ramp);
+            }
+        }
+        for op in &mut self.ops {
+            op.set_control(key, start, target, frames, elapsed);
+        }
+        for map in self.mappings.iter_mut().flatten() {
+            map.set_control(key, start, target, frames, elapsed);
+        }
     }
 
-    pub fn param_index(&self, name: &str) -> Option<usize> { self.graph.param_index(name) }
+    pub fn param_value(&self, name: &str) -> Option<f32> {
+        self.graph
+            .param_index(name)
+            .map(|i| self.slots[i][self.last_frames - 1])
+    }
+    pub fn param_index(&self, name: &str) -> Option<usize> {
+        self.graph.param_index(name)
+    }
 
+    pub fn swap_buffers(&mut self, key: u64, banks: &mut [crate::BufferBank]) {
+        let mut cursor = 0;
+        for op in &mut self.ops {
+            op.swap_buffers(key, banks, &mut cursor);
+        }
+    }
     pub fn swap_mapping(&mut self, name: &str, mapping: &mut Option<Box<crate::ParamMapping>>) {
         if let Some(index) = self.graph.param_index(name) {
-            if mapping.is_none() { let value = self.slots[index][self.last_frames-1]; self.slots[index].fill(value); }
+            if mapping.is_none() {
+                let value = self.slots[index][self.last_frames - 1];
+                self.slots[index].fill(value);
+            }
             self.ramps.retain(|r| r.index != index);
-            std::mem::swap(&mut self.mappings[index],mapping);
+            if let Some(mapping) = mapping.as_mut() {
+                mapping.set_range(self.graph.params[index].range);
+            }
+            std::mem::swap(&mut self.mappings[index], mapping);
         }
     }
 
@@ -259,7 +359,13 @@ impl Voice {
         if frames == 0 {
             self.set_param(index, value);
         } else {
-            self.ramps.push(Ramp { index, from, to: value, frames, done: 0 });
+            self.ramps.push(Ramp {
+                index,
+                from,
+                to: value,
+                frames,
+                done: 0,
+            });
         }
     }
 
@@ -294,15 +400,18 @@ impl Voice {
 
     /// Note off. Envelopes with a sustain point begin their release.
     pub fn release(&mut self) {
+        for a in &self.activities {
+            a.release(self.sample);
+        }
         self.released = true;
     }
 
     /// Put the note in a choke group: a later note in the same group ends it.
-    pub fn set_group(&mut self, group: Option<u32>) {
+    pub fn set_group(&mut self, group: Option<u64>) {
         self.group = group;
     }
 
-    pub fn group(&self) -> Option<u32> {
+    pub fn group(&self) -> Option<u64> {
         self.group
     }
 
@@ -315,7 +424,12 @@ impl Voice {
     pub fn set_rule(&mut self, rule: Option<VoiceRule>) {
         self.rule = rule;
         if let Some(rule) = rule {
-            self.glide = Glide { now: rule.pitch, target: rule.pitch, ratio: 1.0, left: 0 };
+            self.glide = Glide {
+                now: rule.pitch,
+                target: rule.pitch,
+                ratio: 1.0,
+                left: 0,
+            };
             self.held = rule.legato.then(Box::<Held>::default);
         }
     }
@@ -349,17 +463,29 @@ impl Voice {
 
     /// Whether this voice is playing a note as `serial`, one it took over from a later note.
     pub fn holds(&self, serial: u64) -> bool {
-        self.held.as_ref().is_some_and(|h| h.notes[..h.len].iter().any(|n| n.0 == serial))
+        self.held
+            .as_ref()
+            .is_some_and(|h| h.notes[..h.len].iter().any(|n| n.0 == serial))
     }
 
     /// Whether a new legato note can take this voice over.
     pub fn is_legato_open(&self) -> bool {
-        self.held.is_some() && !self.released && self.choke_left.is_none() && !self.poisoned
+        self.activities.len() < 64
+            && self.held.is_some()
+            && !self.released
+            && self.choke_left.is_none()
+            && !self.poisoned
     }
 
     /// A later note, as `serial`, takes over this legato voice: its parameters apply, the envelopes
     /// carry on, and the pitch moves to whichever held note the priority picks.
     pub fn legato_on(&mut self, serial: u64, note: &Voice) {
+        for a in &note.activities {
+            if self.activities.len() < self.activities.capacity() {
+                a.start(self.sample, serial);
+                self.activities.push(a.clone());
+            }
+        }
         let Some(rule) = self.rule else { return };
         for i in 0..self.graph.params.len().min(note.graph.params.len()) {
             if Some(i) != rule.pitch_param {
@@ -374,6 +500,11 @@ impl Voice {
 
     /// Note `serial` ended. A legato voice goes back to a note still held, or lets go if there is none.
     pub fn note_off(&mut self, serial: u64) {
+        for a in &self.activities {
+            if a.serial.load(Ordering::Relaxed) == serial {
+                a.release(self.sample);
+            }
+        }
         let Some(held) = &mut self.held else {
             self.release();
             return;
@@ -394,12 +525,67 @@ impl Voice {
         }
     }
 
+    pub fn attach_activity(&mut self, activity: Arc<crate::Activity>) {
+        if self.activities.capacity() == 0 {
+            self.activities.reserve(64);
+        }
+        self.activities.push(activity);
+    }
+    pub fn drop_activities(&self, sample: u64) {
+        for a in &self.activities {
+            a.drop_at(sample);
+        }
+    }
+    pub fn start_activities(&self, sample: u64, serial: u64) {
+        for a in &self.activities {
+            a.start(sample, serial);
+        }
+    }
+    pub fn end_reason(&self) -> u32 {
+        if self.poisoned {
+            3
+        } else {
+            self.activities
+                .first()
+                .map_or(0, |a| a.reason.load(Ordering::Relaxed))
+        }
+    }
+    pub fn finish_activities(&self, sample: u64, reason: u32) {
+        for a in &self.activities {
+            a.finish(sample, reason);
+        }
+    }
+    pub fn set_activity_sample(&mut self, sample: u64) {
+        self.sample = sample;
+    }
+    pub fn set_realtime(&mut self) {
+        self.realtime = true;
+    }
+    pub fn set_instance(&mut self, instance: u64) {
+        self.instance = instance;
+    }
+    pub fn set_owner(&mut self, owner: u64) {
+        self.owner = owner;
+    }
+    pub fn owner(&self) -> u64 {
+        self.owner
+    }
+    pub fn silence(&mut self) {
+        self.finish_activities(self.sample, 2);
+        self.released = true;
+        self.choke_left = Some(0);
+    }
+
     pub fn rule(&self) -> Option<VoiceRule> {
         self.rule
     }
 
     /// End the note now, with a short fade so it doesn't click.
     pub fn choke(&mut self) {
+        for a in &self.activities {
+            a.reason.store(1, Ordering::Relaxed);
+            a.release(self.sample);
+        }
         self.released = true;
         if self.choke_left.is_none() {
             self.choke_left = Some(((self.sample_rate * CHOKE_FADE) as usize).max(1));
@@ -432,7 +618,11 @@ impl Voice {
     /// Whether the last `frames` samples put nothing audible out (to the outputs or the buses) and no
     /// opcode has a tail left to ring out.
     pub fn is_quiet(&self, frames: usize) -> bool {
-        let quiet = |slot: usize| self.slots[slot][..frames].iter().all(|s| s.abs() < TAIL_LEVEL);
+        let quiet = |slot: usize| {
+            self.slots[slot][..frames]
+                .iter()
+                .all(|s| s.abs() < TAIL_LEVEL)
+        };
         self.level < TAIL_LEVEL
             && !self.ops.iter().any(|op| op.is_active())
             && self.graph.sends.iter().all(|&(_, _, slot, _)| quiet(slot))
@@ -461,8 +651,14 @@ impl Voice {
 
     /// Like [`Voice::process`], adding the graph's sends into `buses`.
     pub fn process_routed(&mut self, out: &mut [f32], buses: &mut Buses) {
-        assert_eq!(self.channels(), 1, "this graph has {} channels; use process_blocks", self.channels());
+        assert_eq!(
+            self.channels(),
+            1,
+            "this graph has {} channels; use process_blocks",
+            self.channels()
+        );
         let frames = out.len();
+        self.sample = buses.clock.sample;
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
         let mut block = [[0.0f32; BLOCK]; 1];
         self.process_blocks(&mut block, frames, buses);
@@ -473,9 +669,10 @@ impl Voice {
     /// `out`, which must have one block per channel, and add the graph's sends
     /// to `buses`.
     pub fn process_blocks(&mut self, out: &mut [[f32; BLOCK]], frames: usize, buses: &mut Buses) {
+        self.sample = buses.clock.sample;
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
         assert_eq!(out.len(), self.channels(), "one output block per channel");
-        if self.poisoned {
+        if self.poisoned || self.choke_left == Some(0) {
             out.iter_mut().for_each(|c| c[..frames].fill(0.0));
             return;
         }
@@ -493,19 +690,22 @@ impl Voice {
                 self.choke();
             }
         }
-        let ctx = ProcessCtx { sample_rate: self.sample_rate, gate: !self.released, dur: self.dur, index: self.index, clock: buses.clock };
+        let ctx = ProcessCtx {
+            realtime: self.realtime,
+            note_token: self.activities.last().map_or(0, |a| a.token),
+            instance: self.instance,
+            sample_rate: self.sample_rate,
+            gate: !self.released,
+            dur: self.dur,
+            index: self.index,
+            clock: buses.clock,
+        };
 
         for ramp in &mut self.ramps {
             for (n, sample) in self.slots[ramp.index][..frames].iter_mut().enumerate() {
                 *sample = ramp.at(ramp.done + n as u64 + 1);
             }
             ramp.done += frames as u64;
-        }
-        for i in (0..self.ramps.len()).rev() {
-            if self.ramps[i].done >= self.ramps[i].frames {
-                let Ramp { index, to, .. } = self.ramps.swap_remove(i);
-                self.slots[index] = [to; BLOCK];
-            }
         }
 
         if let Some(param) = self.rule.and_then(|r| r.pitch_param)
@@ -516,8 +716,10 @@ impl Voice {
             }
         }
 
-        for (index,mapping) in self.mappings.iter_mut().enumerate() {
-            if let Some(mapping) = mapping { mapping.process(&ctx,buses,&mut self.slots[index][..frames]); }
+        for (index, mapping) in self.mappings.iter_mut().enumerate() {
+            if let Some(mapping) = mapping {
+                mapping.process(&ctx, buses, &mut self.slots[index][..frames]);
+            }
         }
         self.last_frames = frames.max(1);
         let base = self.graph.node_slot_base();
@@ -525,7 +727,13 @@ impl Voice {
             let node = &self.graph.nodes[i];
             let (before, after) = self.slots.split_at_mut(base + node.first);
 
-            op.process_slots(&ctx, before, &node.inputs, &mut after[..node.outputs], frames);
+            op.process_slots(
+                &ctx,
+                before,
+                &node.inputs,
+                &mut after[..node.outputs],
+                frames,
+            );
         }
 
         let finite = |slot: usize| self.slots[slot][..frames].iter().all(|s| s.is_finite());
@@ -550,7 +758,10 @@ impl Voice {
         for (channel, &slot) in out.iter_mut().zip(&self.graph.output_slots) {
             channel[..frames].copy_from_slice(&self.slots[slot][..frames]);
             if let Some(g) = &fade {
-                channel[..frames].iter_mut().zip(g).for_each(|(y, g)| *y *= g);
+                channel[..frames]
+                    .iter_mut()
+                    .zip(g)
+                    .for_each(|(y, g)| *y *= g);
             }
         }
         if let Some(gains) = self.pan.as_deref()
@@ -568,19 +779,31 @@ impl Voice {
         }
         self.level = level;
         for &(bus, channel, slot, delayed) in &self.graph.sends {
-            let Some(bus) = self.bus_map.get(bus).copied().flatten() else { continue };
+            let Some(bus) = self.bus_map.get(bus).copied().flatten() else {
+                continue;
+            };
             match &fade {
                 None if delayed => buses.add_delayed(bus, channel, &self.slots[slot][..frames]),
                 None => buses.add(bus, channel, &self.slots[slot][..frames]),
                 Some(g) => {
                     let mut faded = [0.0f32; BLOCK];
-                    faded[..frames].iter_mut().zip(&self.slots[slot]).zip(g).for_each(|((y, x), g)| *y = x * g);
+                    faded[..frames]
+                        .iter_mut()
+                        .zip(&self.slots[slot])
+                        .zip(g)
+                        .for_each(|((y, x), g)| *y = x * g);
                     if delayed {
                         buses.add_delayed(bus, channel, &faded[..frames]);
                     } else {
                         buses.add(bus, channel, &faded[..frames]);
                     }
                 }
+            }
+        }
+        for i in (0..self.ramps.len()).rev() {
+            if self.ramps[i].done >= self.ramps[i].frames {
+                let Ramp { index, to, .. } = self.ramps.swap_remove(i);
+                self.slots[index] = [to; BLOCK];
             }
         }
     }

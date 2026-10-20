@@ -6,7 +6,10 @@
 //! The order is worked out from the graphs themselves, so the order tracks are
 //! declared in never matters.
 
-use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 
 use crate::graph::Graph;
 use crate::opcode::BLOCK;
@@ -20,14 +23,21 @@ pub const MAX_CHANNELS: usize = 16;
 pub struct Meter {
     peaks: [AtomicU32; MAX_CHANNELS],
     channels: AtomicU32,
+    waveform: std::sync::OnceLock<crate::Waveform>,
 }
 impl Meter {
-    fn observe(&self, blocks: &[[f32; BLOCK]], frames: usize) {
+    pub fn observe(&self, blocks: &[[f32; BLOCK]], frames: usize, sample: u64) {
+        if let Some(waveform) = self.waveform.get() {
+            waveform.observe(blocks, frames, sample);
+        }
         self.channels.store(blocks.len() as u32, Ordering::Relaxed);
         for (peak, block) in self.peaks.iter().zip(blocks) {
             let value = block[..frames].iter().fold(0.0_f32, |a, b| a.max(b.abs()));
             peak.fetch_max(value.to_bits(), Ordering::Relaxed);
         }
+    }
+    pub fn waveform(&self) -> &crate::Waveform {
+        self.waveform.get_or_init(crate::Waveform::default)
     }
     pub fn read(&self, take: bool) -> Vec<f32> {
         self.peaks[..self.channels.load(Ordering::Relaxed) as usize]
@@ -66,14 +76,20 @@ impl Buses {
             late: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
             staged: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
             late_pos: 0,
-            history: channels.iter().map(|&n| vec![[0.0; BLOCK];n]).collect(),
+            history: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
             clock: crate::Clock::default(),
         }
     }
 
     /// Empty every bus, including what is on its way.
     pub fn clear(&mut self) {
-        for bus in self.data.iter_mut().chain(&mut self.late).chain(&mut self.staged).chain(&mut self.history) {
+        for bus in self
+            .data
+            .iter_mut()
+            .chain(&mut self.late)
+            .chain(&mut self.staged)
+            .chain(&mut self.history)
+        {
             bus.iter_mut().for_each(|c| *c = [0.0; BLOCK]);
         }
         self.late_pos = 0;
@@ -82,7 +98,12 @@ impl Buses {
     /// Start a block of `frames` samples: the buses hold what delayed sends put in a block ago
     /// (exactly `BLOCK` samples ago, whatever the length of the blocks in between).
     pub fn begin_block(&mut self, frames: usize) {
-        for ((data, late), staged) in self.data.iter_mut().zip(&mut self.late).zip(&mut self.staged) {
+        for ((data, late), staged) in self
+            .data
+            .iter_mut()
+            .zip(&mut self.late)
+            .zip(&mut self.staged)
+        {
             for ((d, l), s) in data.iter_mut().zip(late.iter_mut()).zip(staged.iter_mut()) {
                 *s = [0.0; BLOCK];
                 *d = [0.0; BLOCK];
@@ -97,8 +118,12 @@ impl Buses {
 
     /// Finish the block: what delayed sends staged waits to arrive in `BLOCK` samples.
     pub fn end_block(&mut self, frames: usize) {
-        for (history,data) in self.history.iter_mut().zip(&self.data) {
-            for (h,d) in history.iter_mut().zip(data) { for i in 0..frames { h[(self.late_pos+i)%BLOCK] = d[i]; } }
+        for (history, data) in self.history.iter_mut().zip(&self.data) {
+            for (h, d) in history.iter_mut().zip(data) {
+                for i in 0..frames {
+                    h[(self.late_pos + i) % BLOCK] = d[i];
+                }
+            }
         }
         for (late, staged) in self.late.iter_mut().zip(&self.staged) {
             for (l, s) in late.iter_mut().zip(staged) {
@@ -134,7 +159,12 @@ impl Buses {
     }
 
     /// Runtime bus mappings intentionally read exactly one block behind, avoiding dynamic cycles.
-    pub fn previous(&self, bus: usize, channel: usize, i: usize) -> f32 { self.history.get(bus).and_then(|b| b.get(channel)).map_or(0.0,|c| c[(self.late_pos+i)%BLOCK]) }
+    pub fn previous(&self, bus: usize, channel: usize, i: usize) -> f32 {
+        self.history
+            .get(bus)
+            .and_then(|b| b.get(channel))
+            .map_or(0.0, |c| c[(self.late_pos + i) % BLOCK])
+    }
 
     pub fn channels(&self, bus: usize) -> usize {
         self.data[bus].len()
@@ -279,7 +309,11 @@ pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
     let mut path = vec![stuck[0]];
     loop {
         let here = *path.last().unwrap();
-        let before = stuck.iter().copied().find(|&w| edges[w].contains(&here)).unwrap();
+        let before = stuck
+            .iter()
+            .copied()
+            .find(|&w| edges[w].contains(&here))
+            .unwrap();
         if let Some(at) = path.iter().position(|&p| p == before) {
             let mut cycle = path[at..].to_vec();
             cycle.reverse();
@@ -371,7 +405,10 @@ impl Mixer {
         channels: usize,
         sample_rate: f32,
     ) -> Result<Mixer, Vec<usize>> {
-        assert!((1..=MAX_CHANNELS).contains(&channels), "unsupported channel count {channels}");
+        assert!(
+            (1..=MAX_CHANNELS).contains(&channels),
+            "unsupported channel count {channels}"
+        );
         let order = execution_order(&defs)?;
         for def in &defs {
             let wanted = match def.route {
@@ -379,13 +416,22 @@ impl Mixer {
                 Route::Bus(b) => bus_channels[b],
             };
             let got = def.chain.as_ref().map_or(channels, |g| g.channels());
-            assert_eq!(got, wanted, "a track produces {got} channels but its destination has {wanted}");
+            assert_eq!(
+                got, wanted,
+                "a track produces {got} channels but its destination has {wanted}"
+            );
         }
         let tracks = defs
             .into_iter()
             .map(|def| Track {
-                fade: ChainFade { frames: (def.transition.1 * f64::from(sample_rate)).round() as usize, ..Default::default() },
-                chain: def.chain.as_ref().map(|g| Voice::new(g.clone(), sample_rate)),
+                fade: ChainFade {
+                    frames: (def.transition.1 * f64::from(sample_rate)).round() as usize,
+                    ..Default::default()
+                },
+                chain: def
+                    .chain
+                    .as_ref()
+                    .map(|g| Voice::new(g.clone(), sample_rate)),
                 def,
                 voices: Vec::new(),
                 chain_silenced: false,
@@ -413,17 +459,68 @@ impl Mixer {
         })
     }
 
-    pub fn set_bus_meters(&mut self, meters: Vec<(usize, Arc<Meter>)>) { self.bus_meters = meters; }
+    pub fn set_bus_meters(&mut self, meters: Vec<(usize, Arc<Meter>)>) {
+        self.bus_meters = meters;
+    }
 
     /// Where the session's clock is at the start of the next block, for `clock.time`.
+    pub fn set_track_instance(&mut self, index: usize, instance: u64) {
+        if let Some(chain) = self.tracks.get_mut(index).and_then(|t| t.chain.as_mut()) {
+            chain.set_instance(instance);
+        }
+    }
     pub fn set_clock(&mut self, clock: crate::Clock) {
         self.buses.clock = clock;
     }
 
     /// How long a sounding note is scheduled to last; see [`Voice::set_dur`].
+    pub fn silence_owner(&mut self, owner: u64) {
+        for track in &mut self.tracks {
+            for (_, voice) in &mut track.voices {
+                if voice.owner() == owner {
+                    voice.set_activity_sample(self.buses.clock.sample);
+                    voice.silence();
+                }
+            }
+        }
+    }
+    pub fn attach_voice_activity(
+        &mut self,
+        id: VoiceId,
+        activity: Arc<crate::Activity>,
+        sample: u64,
+    ) {
+        activity.start(sample, id.serial);
+        if let Some(track) = self.tracks.get_mut(id.track) {
+            if let Some((_, voice)) = track
+                .voices
+                .iter_mut()
+                .find(|(s, v)| *s == id.serial || v.holds(id.serial))
+            {
+                voice.attach_activity(activity);
+            }
+        }
+    }
+    pub fn finish_activities(&self, sample: u64, reason: u32) {
+        for track in &self.tracks {
+            for (_, voice) in &track.voices {
+                voice.finish_activities(sample, reason);
+            }
+        }
+    }
+    pub fn set_voice_owner(&mut self, id: VoiceId, owner: u64) {
+        if let Some(track) = self.tracks.get_mut(id.track) {
+            if let Some((_, voice)) = track.voices.iter_mut().find(|(s, _)| *s == id.serial) {
+                voice.set_owner(owner);
+            }
+        }
+    }
     pub fn set_voice_dur(&mut self, id: VoiceId, seconds: f32) {
         if let Some(track) = self.tracks.get_mut(id.track)
-            && let Some((_, voice)) = track.voices.iter_mut().find(|(serial, _)| *serial == id.serial)
+            && let Some((_, voice)) = track
+                .voices
+                .iter_mut()
+                .find(|(serial, _)| *serial == id.serial)
         {
             voice.set_dur(seconds);
         }
@@ -441,7 +538,15 @@ impl Mixer {
 
     /// Reserve bounded voice storage before handing the mixer to rendering.
     pub fn prepare_realtime(&mut self, capacity: usize) {
-        for track in &mut self.tracks { track.voices.reserve(capacity); }
+        for track in &mut self.tracks {
+            track.voices.reserve(capacity);
+            if let Some(chain) = &mut track.chain {
+                chain.set_realtime();
+            }
+            for (_, voice) in &mut track.voices {
+                voice.set_realtime();
+            }
+        }
     }
 
     /// Admit an already constructed voice without allocating. Capacity is a
@@ -449,12 +554,18 @@ impl Mixer {
     // the voice comes back in the error so that its owner can retire it without allocating
     #[allow(clippy::result_large_err)]
     pub fn note_prepared(&mut self, track: usize, voice: Voice) -> Result<VoiceId, Voice> {
-        if self.muted || track >= self.tracks.len() || voice.channels() != self.channels
+        if self.muted
+            || track >= self.tracks.len()
+            || voice.channels() != self.channels
             || self.tracks[track].voices.len() == self.tracks[track].voices.capacity()
-        { return Err(voice); }
+        {
+            return Err(voice);
+        }
         if let Some(group) = voice.group() {
             for (_, other) in self.tracks.iter_mut().flat_map(|t| t.voices.iter_mut()) {
-                if other.group() == Some(group) { other.choke(); }
+                if other.group() == Some(group) {
+                    other.choke();
+                }
             }
         }
         let mut voice = voice;
@@ -465,28 +576,50 @@ impl Mixer {
         self.steal_if_full();
         let serial = self.next_serial;
         self.next_serial += 1;
+        voice.start_activities(self.buses.clock.sample, serial);
         voice.start_note();
-        if voice.rule().is_some_and(|r| r.legato) { voice.hold(serial); }
+        if voice.rule().is_some_and(|r| r.legato) {
+            voice.hold(serial);
+        }
         self.tracks[track].voices.push((serial, voice));
         Ok(VoiceId { track, serial })
     }
 
     /// Immediate panic without destroying owned resources. A prepared clean
     /// mixer replaces this one, and the old mixer is freed in the background.
-    pub fn silence(&mut self) { self.muted = true; }
+    pub fn silence(&mut self) {
+        self.muted = true;
+    }
 
     /// Start a note on `track`, setting `(parameter index, value)` pairs. The
     /// graph must produce as many channels as the mixer's master has.
     ///
     /// A note in a choke `group` ends every sounding note in the same group
     /// (on any track), with a short fade.
-    pub fn note_on(&mut self, track: usize, graph: Arc<Graph>, params: &[(usize, f32)], group: Option<u32>) -> VoiceId {
+    pub fn note_on(
+        &mut self,
+        track: usize,
+        graph: Arc<Graph>,
+        params: &[(usize, f32)],
+        group: Option<u64>,
+    ) -> VoiceId {
         self.note_on_with(track, graph, params, group, None)
     }
 
     /// Like [`Mixer::note_on`], for an instrument that limits its own voices.
-    pub fn note_on_with(&mut self, track: usize, graph: Arc<Graph>, params: &[(usize, f32)], group: Option<u32>, rule: Option<VoiceRule>) -> VoiceId {
-        assert_eq!(graph.channels(), self.channels, "an instrument must output the master's channel count");
+    pub fn note_on_with(
+        &mut self,
+        track: usize,
+        graph: Arc<Graph>,
+        params: &[(usize, f32)],
+        group: Option<u64>,
+        rule: Option<VoiceRule>,
+    ) -> VoiceId {
+        assert_eq!(
+            graph.channels(),
+            self.channels,
+            "an instrument must output the master's channel count"
+        );
         if group.is_some() {
             for (_, v) in self.tracks.iter_mut().flat_map(|t| t.voices.iter_mut()) {
                 if v.group() == group {
@@ -501,15 +634,20 @@ impl Mixer {
             voice.set_param(index, value);
         }
         if let Some(rule) = &rule {
-            if let Some(id) = self.merge_legato(track, &voice) { return id; }
+            if let Some(id) = self.merge_legato(track, &voice) {
+                return id;
+            }
             self.glide_into(track, rule, &mut voice);
             self.make_room(track, rule);
         }
         self.steal_if_full();
         let serial = self.next_serial;
         self.next_serial += 1;
+        voice.start_activities(self.buses.clock.sample, serial);
         voice.start_note();
-        if rule.is_some_and(|r| r.legato) { voice.hold(serial); }
+        if rule.is_some_and(|r| r.legato) {
+            voice.hold(serial);
+        }
         self.tracks[track].voices.push((serial, voice));
         VoiceId { track, serial }
     }
@@ -520,8 +658,14 @@ impl Mixer {
     pub fn merge_legato(&mut self, track: usize, note: &Voice) -> Option<VoiceId> {
         let rule = note.rule().filter(|r| r.legato && !self.muted)?;
         let serial = self.next_serial;
-        let (_, voice) = self.tracks.get_mut(track)?.voices.iter_mut()
-            .find(|(_, v)| v.is_legato_open() && v.rule().is_some_and(|r| r.instrument == rule.instrument))?;
+        let (_, voice) = self
+            .tracks
+            .get_mut(track)?
+            .voices
+            .iter_mut()
+            .find(|(_, v)| {
+                v.is_legato_open() && v.rule().is_some_and(|r| r.instrument == rule.instrument)
+            })?;
         voice.legato_on(serial, note);
         self.next_serial += 1;
         Some(VoiceId { track, serial })
@@ -529,22 +673,36 @@ impl Mixer {
 
     /// A glissando into `voice`: it starts at the pitch the instrument's newest note had reached.
     fn glide_into(&self, track: usize, rule: &VoiceRule, voice: &mut Voice) {
-        if rule.glide <= 0.0 { return; }
-        let Some(track) = self.tracks.get(track) else { return };
-        let previous = track.voices.iter()
-            .filter(|(_, v)| !v.is_choked() && v.rule().is_some_and(|r| r.instrument == rule.instrument))
+        if rule.glide <= 0.0 {
+            return;
+        }
+        let Some(track) = self.tracks.get(track) else {
+            return;
+        };
+        let previous = track
+            .voices
+            .iter()
+            .filter(|(_, v)| {
+                !v.is_choked() && v.rule().is_some_and(|r| r.instrument == rule.instrument)
+            })
             .max_by_key(|(serial, _)| *serial);
-        if let Some((_, v)) = previous { voice.glide_from(v.pitch_now(), self.sample_rate); }
+        if let Some((_, v)) = previous {
+            voice.glide_from(v.pitch_now(), self.sample_rate);
+        }
     }
 
     /// Make room for a note under `rule`: release the sounding note of the same pitch if asked, and
     /// end the oldest notes of the instrument until fewer than `max` are left. Allocates nothing.
     fn make_room(&mut self, track: usize, rule: &VoiceRule) {
-        let Some(track) = self.tracks.get_mut(track) else { return };
+        let Some(track) = self.tracks.get_mut(track) else {
+            return;
+        };
         let mine = |v: &Voice| v.rule().is_some_and(|r| r.instrument == rule.instrument);
         if rule.release_same_pitch {
             for (_, v) in track.voices.iter_mut() {
-                if mine(v) && !v.is_released() && v.rule().is_some_and(|r| r.pitch == rule.pitch) { v.release(); }
+                if mine(v) && !v.is_released() && v.rule().is_some_and(|r| r.pitch == rule.pitch) {
+                    v.release();
+                }
             }
         }
         loop {
@@ -554,11 +712,17 @@ impl Mixer {
                 if mine(v) && !v.is_choked() {
                     count += 1;
                     let level = if rule.steal_quietest { v.level() } else { 0.0 };
-                    if ends.is_none_or(|(s, l)| level < l || (level == l && *serial < s)) { ends = Some((*serial, level)); }
+                    if ends.is_none_or(|(s, l)| level < l || (level == l && *serial < s)) {
+                        ends = Some((*serial, level));
+                    }
                 }
             }
-            let Some((ends, _)) = ends.filter(|_| count >= rule.max.max(1)) else { break };
-            if let Some((_, v)) = track.voices.iter_mut().find(|(serial, _)| *serial == ends) { v.choke(); }
+            let Some((ends, _)) = ends.filter(|_| count >= rule.max.max(1)) else {
+                break;
+            };
+            if let Some((_, v)) = track.voices.iter_mut().find(|(serial, _)| *serial == ends) {
+                v.choke();
+            }
         }
     }
 
@@ -580,8 +744,9 @@ impl Mixer {
                     .controls
                     .iter()
                     .any(|(_, template)| template == key)
-                    || local != key
+                    || track.def.controls.iter().any(|(public, _)| public == key)
                 {
+                    track.chain_quiet = 0;
                     chain.set_control(local, start, target, frames, elapsed);
                 }
             }
@@ -591,16 +756,32 @@ impl Mixer {
     /// Place a sounding note among the speakers; see [`Voice::set_pan`].
     pub fn set_voice_pan(&mut self, id: VoiceId, gains: Option<[f32; MAX_CHANNELS]>) {
         if let Some(track) = self.tracks.get_mut(id.track)
-            && let Some((_, voice)) = track.voices.iter_mut().find(|(serial, _)| *serial == id.serial)
+            && let Some((_, voice)) = track
+                .voices
+                .iter_mut()
+                .find(|(serial, _)| *serial == id.serial)
         {
             voice.set_pan(gains);
         }
     }
 
-    pub fn set_voice_control(&mut self, id: VoiceId, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
+    pub fn set_voice_control(
+        &mut self,
+        id: VoiceId,
+        key: &str,
+        start: f32,
+        target: f32,
+        frames: u64,
+        elapsed: u64,
+    ) {
         if let Some(track) = self.tracks.get_mut(id.track)
-            && let Some((_, voice)) = track.voices.iter_mut().find(|(serial, _)| *serial == id.serial)
-        { voice.set_control(key, start, target, frames, elapsed); }
+            && let Some((_, voice)) = track
+                .voices
+                .iter_mut()
+                .find(|(serial, _)| *serial == id.serial)
+        {
+            voice.set_control(key, start, target, frames, elapsed);
+        }
     }
 
     /// Release a note. A voice that has already finished is ignored. Voices keep
@@ -608,13 +789,19 @@ impl Mixer {
     /// track it started on is only a hint.
     pub fn release(&mut self, id: VoiceId) {
         let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
-        let hinted = self.tracks.get_mut(id.track).and_then(|t| t.voices.iter_mut().find(|n| ends(n)));
+        let sample = self.buses.clock.sample;
+        let hinted = self
+            .tracks
+            .get_mut(id.track)
+            .and_then(|t| t.voices.iter_mut().find(|n| ends(n)));
         if let Some((_, v)) = hinted {
+            v.set_activity_sample(sample);
             v.note_off(id.serial);
             return;
         }
         for track in &mut self.tracks {
             if let Some((_, v)) = track.voices.iter_mut().find(|n| ends(n)) {
+                v.set_activity_sample(sample);
                 v.note_off(id.serial);
                 return;
             }
@@ -645,18 +832,59 @@ impl Mixer {
         }
     }
 
-    pub fn swap_voice_mapping(&mut self, id: VoiceId, name: &str, mapping: &mut Option<Box<crate::ParamMapping>>) {
-        let ends = |(s,v): &(u64,Voice)| *s == id.serial || v.holds(id.serial);
+    pub fn swap_voice_buffers(&mut self, id: VoiceId, key: u64, banks: &mut [crate::BufferBank]) {
         for track in &mut self.tracks {
-            if let Some((_,voice)) = track.voices.iter_mut().find(|v| ends(v)) { voice.swap_mapping(name,mapping); return; }
+            if let Some((_, voice)) = track
+                .voices
+                .iter_mut()
+                .find(|(s, v)| *s == id.serial || v.holds(id.serial))
+            {
+                voice.swap_buffers(key, banks);
+                return;
+            }
+        }
+    }
+    pub fn swap_chain_buffers(&mut self, track: usize, key: u64, banks: &mut [crate::BufferBank]) {
+        if let Some(chain) = self.tracks.get_mut(track).and_then(|t| t.chain.as_mut()) {
+            chain.swap_buffers(key, banks);
+        }
+    }
+    pub fn chain_param_value(&self, track: usize, param: &str) -> Option<f32> {
+        self.tracks.get(track)?.chain.as_ref()?.param_value(param)
+    }
+    pub fn swap_chain_mapping(
+        &mut self,
+        track: usize,
+        param: &str,
+        mapping: &mut Option<Box<crate::ParamMapping>>,
+    ) {
+        if let Some(chain) = self.tracks.get_mut(track).and_then(|t| t.chain.as_mut()) {
+            chain.swap_mapping(param, mapping);
+        }
+    }
+    pub fn swap_voice_mapping(
+        &mut self,
+        id: VoiceId,
+        name: &str,
+        mapping: &mut Option<Box<crate::ParamMapping>>,
+    ) {
+        let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
+        for track in &mut self.tracks {
+            if let Some((_, voice)) = track.voices.iter_mut().find(|v| ends(v)) {
+                voice.swap_mapping(name, mapping);
+                return;
+            }
         }
     }
 
     pub fn set_voice_param_glide(&mut self, id: VoiceId, name: &str, value: f32, frames: u64) {
-        let ends = |(s,v): &(u64,Voice)| *s == id.serial || v.holds(id.serial);
+        let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
         for track in &mut self.tracks {
-            if let Some((_,voice)) = track.voices.iter_mut().find(|v| ends(v)) {
-                if let Some(index) = voice.param_index(name) { voice.set_param_glide(index,value,frames); } return;
+            if let Some((_, voice)) = track.voices.iter_mut().find(|v| ends(v)) {
+                if let Some(index) = voice.param_index(name) {
+                    voice.set_param_glide(index, value, frames);
+                }
+                return;
             }
         }
     }
@@ -668,7 +896,11 @@ impl Mixer {
         for track in &mut self.tracks {
             track.voices.clear();
             track.fade = ChainFade::default();
-            track.chain = track.def.chain.as_ref().map(|g| Voice::new(g.clone(), rate));
+            track.chain = track
+                .def
+                .chain
+                .as_ref()
+                .map(|g| Voice::new(g.clone(), rate));
             track.chain_silenced = false;
             track.chain_quiet = 0;
         }
@@ -679,15 +911,25 @@ impl Mixer {
     /// Start keeping what every track puts out (after its effects, before the master) and what every
     /// bus carries. Only for offline renders: it grows without bound.
     pub fn capture_stems(&mut self) {
-        self.stems = Some(Stems { tracks: vec![Vec::new(); self.tracks.len()], buses: vec![Vec::new(); self.bus_channels.len()] });
+        self.stems = Some(Stems {
+            tracks: vec![Vec::new(); self.tracks.len()],
+            buses: vec![Vec::new(); self.bus_channels.len()],
+        });
     }
 
     /// Fill the captured stems with silence up to `len` samples each, for stretches the caller skipped
     /// mixing because nothing could be heard.
     pub fn pad_stems(&mut self, len: usize) {
         if let Some(stems) = &mut self.stems {
-            for channel in stems.tracks.iter_mut().chain(stems.buses.iter_mut()).flatten() {
-                if channel.len() < len { channel.resize(len, 0.0); }
+            for channel in stems
+                .tracks
+                .iter_mut()
+                .chain(stems.buses.iter_mut())
+                .flatten()
+            {
+                if channel.len() < len {
+                    channel.resize(len, 0.0);
+                }
             }
         }
     }
@@ -747,13 +989,27 @@ impl Mixer {
 
     /// Render while retaining finished voices for off-thread destruction.
     /// `retired` must have been reserved by the caller before rendering.
-    pub fn process_retained(&mut self, out: &mut [[f32; BLOCK]], frames: usize, retired: &mut Vec<Voice>) {
+    pub fn process_retained(
+        &mut self,
+        out: &mut [[f32; BLOCK]],
+        frames: usize,
+        retired: &mut Vec<Voice>,
+    ) {
         self.process_inner(out, frames, Some(retired));
     }
 
-    fn process_inner(&mut self, out: &mut [[f32; BLOCK]], frames: usize, mut retired: Option<&mut Vec<Voice>>) {
+    fn process_inner(
+        &mut self,
+        out: &mut [[f32; BLOCK]],
+        frames: usize,
+        mut retired: Option<&mut Vec<Voice>>,
+    ) {
         assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
-        assert_eq!(out.len(), self.channels, "one output block per master channel");
+        assert_eq!(
+            out.len(),
+            self.channels,
+            "one output block per master channel"
+        );
         // every way of rendering audio comes through here, so they all treat tiny numbers alike
         let _flush = crate::denormals::FlushToZero::new();
         out.iter_mut().for_each(|c| c[..frames].fill(0.0));
@@ -764,15 +1020,20 @@ impl Mixer {
         self.buses.begin_block(frames);
 
         let n = self.channels;
-        let (summed, scratch, processed) = (&mut self.summed, &mut self.scratch, &mut self.processed);
+        let (summed, scratch, processed) =
+            (&mut self.summed, &mut self.scratch, &mut self.processed);
         let rest_after = (CHAIN_REST_SECONDS * self.sample_rate) as usize;
 
         for &t in &self.order {
             let track = &mut self.tracks[t];
             if track.fade.elapsed >= track.fade.frames && track.fade.previous.is_some() {
                 if let Some(retired) = retired.as_deref_mut() {
-                    if retired.len() < retired.capacity() { retired.push(track.fade.previous.take().unwrap()); }
-                } else { track.fade.previous = None; }
+                    if retired.len() < retired.capacity() {
+                        retired.push(track.fade.previous.take().unwrap());
+                    }
+                } else {
+                    track.fade.previous = None;
+                }
             }
 
             summed[..n].iter_mut().for_each(|c| c[..frames].fill(0.0));
@@ -789,13 +1050,29 @@ impl Mixer {
                 while i < track.voices.len() {
                     if track.voices[i].1.is_finished() && retired.len() < retired.capacity() {
                         let (_, voice) = track.voices.remove(i);
+                        voice.finish_activities(
+                            self.buses.clock.sample + frames as u64,
+                            voice.end_reason(),
+                        );
                         self.silenced += usize::from(voice.is_poisoned());
                         retired.push(voice);
-                    } else { i += 1; }
+                    } else {
+                        i += 1;
+                    }
                 }
             } else {
                 self.silenced += track.voices.iter().filter(|(_, v)| v.is_poisoned()).count();
-                track.voices.retain(|(_, v)| !v.is_finished());
+                track.voices.retain(|(_, v)| {
+                    if v.is_finished() {
+                        v.finish_activities(
+                            self.buses.clock.sample + frames as u64,
+                            v.end_reason(),
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                });
             }
 
             let result: &[[f32; BLOCK]] = match &mut track.chain {
@@ -806,25 +1083,56 @@ impl Mixer {
                         match *input {
                             ChainInput::It { channel } => &summed[channel][..frames],
                             ChainInput::Audio { channel } => &self.audio_in[channel][..frames],
-                            ChainInput::Bus { bus, channel } => self.buses.get(bus, channel, frames),
+                            ChainInput::Bus { bus, channel } => {
+                                self.buses.get(bus, channel, frames)
+                            }
                         }
                     };
-                    let silent_in = track.def.inputs.iter().all(|input| heard(input).iter().all(|s| *s == 0.0));
-                    if silent_in && track.chain_quiet >= rest_after && !(track.fade.previous.is_some() && track.fade.elapsed < track.fade.frames) {
+                    let silent_in = track
+                        .def
+                        .inputs
+                        .iter()
+                        .all(|input| heard(input).iter().all(|s| *s == 0.0));
+                    if silent_in
+                        && track.chain_quiet >= rest_after
+                        && !(track.fade.previous.is_some()
+                            && track.fade.elapsed < track.fade.frames)
+                    {
                         // nothing to ring out and nothing coming in: the chain stays as it is, and says nothing
-                        processed[..out_channels].iter_mut().for_each(|c| c[..frames].fill(0.0));
+                        processed[..out_channels]
+                            .iter_mut()
+                            .for_each(|c| c[..frames].fill(0.0));
                     } else {
                         for (i, input) in track.def.inputs.iter().enumerate() {
                             chain.set_input(i, heard(input));
                         }
-                        if let Some(previous) = &mut track.fade.previous { for (i,input) in track.fade.inputs.iter().enumerate() { previous.set_input(i, heard(input)); } }
-                        chain.process_blocks(&mut processed[..out_channels], frames, &mut self.buses);
-                        if track.fade.elapsed < track.fade.frames && let Some(previous) = &mut track.fade.previous {
-                            previous.process_blocks(&mut scratch[..out_channels], frames, &mut self.buses);
-                            for (next,old) in processed[..out_channels].iter_mut().zip(&scratch[..out_channels]) {
+                        if let Some(previous) = &mut track.fade.previous {
+                            for (i, input) in track.fade.inputs.iter().enumerate() {
+                                previous.set_input(i, heard(input));
+                            }
+                        }
+                        chain.process_blocks(
+                            &mut processed[..out_channels],
+                            frames,
+                            &mut self.buses,
+                        );
+                        if track.fade.elapsed < track.fade.frames
+                            && let Some(previous) = &mut track.fade.previous
+                        {
+                            previous.process_blocks(
+                                &mut scratch[..out_channels],
+                                frames,
+                                &mut self.buses,
+                            );
+                            for (next, old) in processed[..out_channels]
+                                .iter_mut()
+                                .zip(&scratch[..out_channels])
+                            {
                                 for i in 0..frames {
-                                    let mix = ((track.fade.elapsed + i) as f32 / track.fade.frames as f32).min(1.0);
-                                    next[i] = old[i] * (1.0-mix) + next[i] * mix;
+                                    let mix = ((track.fade.elapsed + i) as f32
+                                        / track.fade.frames as f32)
+                                        .min(1.0);
+                                    next[i] = old[i] * (1.0 - mix) + next[i] * mix;
                                 }
                             }
                             track.fade.elapsed = track.fade.elapsed.saturating_add(frames);
@@ -833,13 +1141,19 @@ impl Mixer {
                             track.chain_silenced = true;
                             self.silenced += 1;
                         }
-                        track.chain_quiet = if silent_in && chain.is_quiet(frames) { track.chain_quiet + frames } else { 0 };
+                        track.chain_quiet = if silent_in && chain.is_quiet(frames) {
+                            track.chain_quiet + frames
+                        } else {
+                            0
+                        };
                     }
                     &processed[..out_channels]
                 }
             };
 
-            if let Some(meter) = &track.def.meter { meter.observe(result,frames); }
+            if let Some(meter) = &track.def.meter {
+                meter.observe(result, frames, self.buses.clock.sample);
+            }
             if let Some(stems) = &mut self.stems {
                 keep(&mut stems.tracks[t], result, frames);
             }
@@ -858,7 +1172,9 @@ impl Mixer {
                 }
             }
         }
-        for (bus,meter) in &self.bus_meters { meter.observe(&self.buses.data[*bus], frames); }
+        for (bus, meter) in &self.bus_meters {
+            meter.observe(&self.buses.data[*bus], frames, self.buses.clock.sample);
+        }
         self.buses.end_block(frames);
         if let Some(stems) = &mut self.stems {
             for (bus, kept) in stems.buses.iter_mut().enumerate() {
@@ -879,11 +1195,25 @@ impl Mixer {
 
     pub fn remap_buses_with(&mut self, mapping: &mut impl FnMut(usize) -> Option<usize>) {
         for track in &mut self.tracks {
-            for (_, voice) in &mut track.voices { voice.remap_buses_with(mapping); }
-            for input in &mut track.def.inputs { if let ChainInput::Bus { bus, .. } = input && let Some(next) = mapping(*bus) { *bus = next; } }
+            for (_, voice) in &mut track.voices {
+                voice.remap_buses_with(mapping);
+            }
+            for input in &mut track.def.inputs {
+                if let ChainInput::Bus { bus, .. } = input
+                    && let Some(next) = mapping(*bus)
+                {
+                    *bus = next;
+                }
+            }
             if let Some(previous) = &mut track.fade.previous {
                 previous.remap_buses_with(mapping);
-                for input in &mut track.fade.inputs { if let ChainInput::Bus { bus, .. } = input && let Some(next) = mapping(*bus) { *bus = next; } }
+                for input in &mut track.fade.inputs {
+                    if let ChainInput::Bus { bus, .. } = input
+                        && let Some(next) = mapping(*bus)
+                    {
+                        *bus = next;
+                    }
+                }
             }
         }
     }
@@ -918,15 +1248,22 @@ impl Mixer {
                     track.fade.inputs = std::mem::take(&mut previous.def.inputs);
                 } else {
                     // the same DSP, or one that cannot crossfade: its memory comes straight across
-                    if let (Some(chain),Some(old_chain)) = (&mut track.chain,&mut previous.chain) { chain.carry_state(old_chain); }
-                    if !changed { std::mem::swap(&mut track.fade, &mut previous.fade); }
+                    if let (Some(chain), Some(old_chain)) = (&mut track.chain, &mut previous.chain)
+                    {
+                        chain.carry_state(old_chain);
+                    }
+                    if !changed {
+                        std::mem::swap(&mut track.fade, &mut previous.fade);
+                    }
                 }
             }
         }
         self.next_serial = self.next_serial.max(old.next_serial);
         self.silenced += std::mem::take(&mut old.silenced);
         // stems being kept carry on, if the new mixer has the same tracks and buses
-        if let Some(stems) = old.stems.take_if(|s| s.tracks.len() == self.tracks.len() && s.buses.len() == self.bus_channels.len()) {
+        if let Some(stems) = old.stems.take_if(|s| {
+            s.tracks.len() == self.tracks.len() && s.buses.len() == self.bus_channels.len()
+        }) {
             self.stems = Some(stems);
         }
     }

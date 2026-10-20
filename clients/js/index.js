@@ -1,8 +1,8 @@
 // Generic daemon client. LiveClient controls a separate client-side live sequencer.
 
-const WebSocket = require("ws");
+const WebSocket = globalThis.WebSocket ?? (typeof require === "function" ? require("ws") : undefined);
 
-const PROTOCOL = 3;
+const PROTOCOL = 4;
 
 class NiminalError extends Error {
   constructor(message, problems) {
@@ -38,18 +38,18 @@ class Client {
   async connect() {
     const ws = new WebSocket(this.url);
     await new Promise((resolve, reject) => {
-      ws.once("open", resolve);
-      ws.once("error", () => reject(new Error(`can't reach a niminal daemon at ${this.url}`)));
+      ws.addEventListener("open", resolve, { once: true });
+      ws.addEventListener("error", () => reject(new Error(`can't reach a niminal daemon at ${this.url}`)), { once: true });
     });
     this.ws = ws;
-    ws.on("message", (data) => this.#receive(data.toString()));
-    ws.on("close", () => {
+    ws.addEventListener("message", (event) => this.#receive(event.data.toString()));
+    ws.addEventListener("close", () => {
       for (const { reject } of this.waiting.values()) reject(new Error("the daemon closed the connection"));
       this.waiting.clear();
       this.ws = null;
       this.onClose();
     });
-    ws.on("error", () => {});
+    ws.addEventListener("error", () => {});
     const params = { protocol: PROTOCOL, client: this.client };
     if (this.token) params.token = this.token;
     return this.call("hello", params);
@@ -123,6 +123,60 @@ class Client {
 
   subscribe(topics) {
     return this.call("subscribe", { topics });
+  }
+
+  panic() { return this.call("panic"); }
+  panicEngine() { return this.call("engine.panic"); }
+  createScope(id, endpoint, { frames = 1024, rate = 20 } = {}) { return this.call("scopes.create", { id, endpoint, frames, rate }); }
+  removeScope(id) { return this.call("scopes.remove", { id }); }
+  bufferBudget(bytes) { return this.call("buffers.budget", bytes === undefined ? {} : { bytes }); }
+  listBuffers() { return this.call("buffers.list"); }
+  allocBuffer(name, frames, channels = 1) { return this.call("buffers.alloc", { name, frames, channels }); }
+  freeBuffer(name) { return this.call("buffers.free", { name }); }
+  loadBuffer(name, path, channel = 0) { return this.call("buffers.load", { name, path, channel }); }
+  readBuffer(name, count, offset = 0) { return this.call("buffers.read", { name, count, offset }); }
+  saveBuffer(name, path) { return this.call("buffers.save", { name, path }); }
+  render(spec) { return this.call("render.start", spec); }
+  jobStatus(id) { return this.call("jobs.status", { id }); }
+  cancelJob(id) { return this.call("jobs.cancel", { id }); }
+  capture(output, at = "now") { return this.call("capture.start", { output, at }); }
+  stopCapture(id, at = "now") { return this.call("capture.stop", { id, at }); }
+  audioDevices() { return this.call("audio.devices"); }
+  audioStatus() { return this.call("audio.status"); }
+  configureAudio(settings, { restart = false } = {}) { return this.call("audio.configure", { settings, restart }); }
+  removeFile(id) { return this.call("files.remove", { id }); }
+
+  /** Upload a browser File/Blob, ArrayBuffer, Uint8Array or Node Buffer. */
+  async uploadFile(file) {
+    const blob = typeof file.arrayBuffer === "function" && typeof file.slice === "function";
+    const bytes = blob ? null : file instanceof ArrayBuffer ? new Uint8Array(file) : file;
+    const size = blob ? file.size : bytes.byteLength;
+    let id;
+    for (let offset = 0; offset < size || id === undefined; offset += 262144) {
+      const chunk = blob ? new Uint8Array(await file.slice(offset, offset + 262144).arrayBuffer()) : bytes.subarray(offset, offset + 262144);
+      const data = typeof Buffer !== "undefined" ? Buffer.from(chunk).toString("base64") : btoa(Array.from(chunk, x => String.fromCharCode(x)).join(""));
+      const result = await this.call("files.upload", { ...(id === undefined ? {} : { id }), offset, data, finish: offset + chunk.byteLength >= size });
+      id = result.id;
+    }
+    return id;
+  }
+
+  /** Stream downloaded bytes to a callback; omit it to collect a Uint8Array. */
+  async downloadFile(id, onChunk) {
+    const chunks = [];
+    let offset = 0;
+    while (true) {
+      const result = await this.call("files.read", { id, offset, count: 262144 });
+      const chunk = typeof Buffer !== "undefined" ? new Uint8Array(Buffer.from(result.data, "base64")) : Uint8Array.from(atob(result.data), x => x.charCodeAt(0));
+      if (onChunk) await onChunk(chunk); else chunks.push(chunk);
+      offset += chunk.byteLength;
+      if (result.eof) break;
+    }
+    if (onChunk) return;
+    const data = new Uint8Array(offset);
+    offset = 0;
+    for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.length; }
+    return data;
   }
 
   /** Build a version-2 `.nms` project JSON string for offline render. */
@@ -206,4 +260,5 @@ class LiveClient extends Client {
 
 }
 
-module.exports = { Client, LiveClient, NiminalError, PROTOCOL };
+if (typeof module === "object" && module.exports) module.exports = { Client, LiveClient, NiminalError, PROTOCOL };
+else globalThis.niminal = { Client, LiveClient, NiminalError, PROTOCOL };

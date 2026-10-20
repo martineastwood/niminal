@@ -19,16 +19,25 @@ pub struct Port {
 
 impl Port {
     pub const fn required(name: &'static str) -> Self {
-        Port { name: Cow::Borrowed(name), default: None }
+        Port {
+            name: Cow::Borrowed(name),
+            default: None,
+        }
     }
 
     pub const fn optional(name: &'static str, default: f32) -> Self {
-        Port { name: Cow::Borrowed(name), default: Some(default) }
+        Port {
+            name: Cow::Borrowed(name),
+            default: Some(default),
+        }
     }
 
     /// For opcodes whose ports are only known at run time (user-defined ones).
     pub fn named(name: impl Into<String>, default: Option<f32>) -> Self {
-        Port { name: Cow::Owned(name.into()), default }
+        Port {
+            name: Cow::Owned(name.into()),
+            default,
+        }
     }
 }
 
@@ -42,6 +51,9 @@ pub struct Clock {
 /// What an opcode needs to know about the block being processed.
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessCtx {
+    pub realtime: bool,
+    pub note_token: u64,
+    pub instance: u64,
     pub sample_rate: f32,
     /// True while the note is held; false once it has been released.
     pub gate: bool,
@@ -54,7 +66,16 @@ pub struct ProcessCtx {
 
 impl ProcessCtx {
     pub fn new(sample_rate: f32, gate: bool) -> Self {
-        ProcessCtx { sample_rate, gate, dur: 0.0, index: 0, clock: Clock::default() }
+        ProcessCtx {
+            realtime: false,
+            note_token: 0,
+            instance: 0,
+            sample_rate,
+            gate,
+            dur: 0.0,
+            index: 0,
+            clock: Clock::default(),
+        }
     }
 }
 
@@ -65,6 +86,20 @@ impl ProcessCtx {
 /// [`Opcode::box_clone`], which must return a freshly initialised instance.
 pub trait Opcode: Send + Sync + std::any::Any {
     fn name(&self) -> &str;
+    fn control_info(&self) -> Option<(&str, f32)> {
+        None
+    }
+    fn buffer_bindings(&self, _key: u64) -> usize {
+        0
+    }
+    fn buffer_channels(&self, _key: u64) -> usize {
+        0
+    }
+    fn stream_cache(&self) -> Option<&std::sync::Arc<crate::ops::StreamCache>> {
+        None
+    }
+    fn swap_buffers(&mut self, _key: u64, _banks: &mut [crate::BufferBank], _cursor: &mut usize) {}
+    fn reports(&self, _visit: &mut dyn FnMut(&std::sync::Arc<crate::ops::Report>)) {}
 
     /// Input ports, in the order `process` receives them.
     fn ports(&self) -> &[Port];
@@ -88,18 +123,36 @@ pub trait Opcode: Send + Sync + std::any::Any {
 
     /// Fill the first `frames` samples of one block per result. Only opcodes with several results
     /// need this.
-    fn process_outputs(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outs: &mut [[f32; BLOCK]], frames: usize) {
+    fn process_outputs(
+        &mut self,
+        ctx: &ProcessCtx,
+        inputs: &[&[f32]],
+        outs: &mut [[f32; BLOCK]],
+        frames: usize,
+    ) {
         self.process(ctx, inputs, &mut outs[0][..frames]);
     }
 
     /// Input capacity of the processing adapter. Array-aware opcodes override
     /// this alongside `process_slots`, so invalid graphs fail before playback.
-    fn max_inputs(&self) -> usize { MAX_INPUTS }
+    fn max_inputs(&self) -> usize {
+        MAX_INPUTS
+    }
 
     /// Process directly from graph slots. Array inputs can have any fixed
     /// length; scalar built-ins use the small stack adapter below.
-    fn process_slots(&mut self, ctx: &ProcessCtx, slots: &[[f32; BLOCK]], indices: &[usize], outs: &mut [[f32; BLOCK]], frames: usize) {
-        assert!(indices.len() <= MAX_INPUTS, "scalar opcode has too many ports");
+    fn process_slots(
+        &mut self,
+        ctx: &ProcessCtx,
+        slots: &[[f32; BLOCK]],
+        indices: &[usize],
+        outs: &mut [[f32; BLOCK]],
+        frames: usize,
+    ) {
+        assert!(
+            indices.len() <= MAX_INPUTS,
+            "scalar opcode has too many ports"
+        );
         let mut inputs: [&[f32]; MAX_INPUTS] = [&[]; MAX_INPUTS];
         for (input, &index) in inputs.iter_mut().zip(indices) {
             *input = &slots[index][..frames];
@@ -109,7 +162,9 @@ pub trait Opcode: Send + Sync + std::any::Any {
 
     /// True when processing has an observable effect beyond its output, such
     /// as an OSC tap. These nodes remain live even without an audio consumer.
-    fn has_side_effects(&self) -> bool { false }
+    fn has_side_effects(&self) -> bool {
+        false
+    }
 
     /// True while this opcode still has sound to produce after the note ends
     /// (an envelope that has not finished, or a delay still ringing).
@@ -123,7 +178,9 @@ pub trait Opcode: Send + Sync + std::any::Any {
     }
 
     /// Envelope activity separately from effect tails in compound processors.
-    fn has_active_envelope(&self) -> bool { self.is_envelope() && self.is_active() }
+    fn has_active_envelope(&self) -> bool {
+        self.is_envelope() && self.is_active()
+    }
 
     /// Carry compatible runtime state into a newly compiled instance. Settings
     /// and wiring belong to the new instance; implementations only copy memory.
@@ -133,7 +190,9 @@ pub trait Opcode: Send + Sync + std::any::Any {
     fn set_control(&mut self, _key: &str, _start: f32, _target: f32, _frames: u64, _elapsed: u64) {}
 
     /// Whether this input is sampled during processor initialization.
-    fn input_is_init(&self, _index: usize) -> bool { false }
+    fn input_is_init(&self, _index: usize) -> bool {
+        false
+    }
 
     /// Samples of delay the opcode introduces, for latency compensation.
     fn latency(&self) -> usize {
@@ -143,6 +202,25 @@ pub trait Opcode: Send + Sync + std::any::Any {
 
 /// Lets a boxed opcode be added to a graph like any other.
 impl Opcode for Box<dyn Opcode> {
+    fn buffer_channels(&self, key: u64) -> usize {
+        (**self).buffer_channels(key)
+    }
+    fn stream_cache(&self) -> Option<&std::sync::Arc<crate::ops::StreamCache>> {
+        (**self).stream_cache()
+    }
+    fn control_info(&self) -> Option<(&str, f32)> {
+        (**self).control_info()
+    }
+    fn buffer_bindings(&self, key: u64) -> usize {
+        (**self).buffer_bindings(key)
+    }
+    fn swap_buffers(&mut self, key: u64, banks: &mut [crate::BufferBank], cursor: &mut usize) {
+        (**self).swap_buffers(key, banks, cursor);
+    }
+    fn reports(&self, visit: &mut dyn FnMut(&std::sync::Arc<crate::ops::Report>)) {
+        (**self).reports(visit);
+    }
+
     fn name(&self) -> &str {
         (**self).name()
     }
@@ -159,7 +237,9 @@ impl Opcode for Box<dyn Opcode> {
         (**self).prepare(sample_rate);
     }
 
-    fn reset(&mut self) { (**self).reset(); }
+    fn reset(&mut self) {
+        (**self).reset();
+    }
 
     fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
         (**self).set_control(key, start, target, frames, elapsed);
@@ -173,17 +253,34 @@ impl Opcode for Box<dyn Opcode> {
         (**self).outputs()
     }
 
-    fn process_outputs(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outs: &mut [[f32; BLOCK]], frames: usize) {
+    fn process_outputs(
+        &mut self,
+        ctx: &ProcessCtx,
+        inputs: &[&[f32]],
+        outs: &mut [[f32; BLOCK]],
+        frames: usize,
+    ) {
         (**self).process_outputs(ctx, inputs, outs, frames);
     }
 
-    fn max_inputs(&self) -> usize { (**self).max_inputs() }
+    fn max_inputs(&self) -> usize {
+        (**self).max_inputs()
+    }
 
-    fn process_slots(&mut self, ctx: &ProcessCtx, slots: &[[f32; BLOCK]], indices: &[usize], outs: &mut [[f32; BLOCK]], frames: usize) {
+    fn process_slots(
+        &mut self,
+        ctx: &ProcessCtx,
+        slots: &[[f32; BLOCK]],
+        indices: &[usize],
+        outs: &mut [[f32; BLOCK]],
+        frames: usize,
+    ) {
         (**self).process_slots(ctx, slots, indices, outs, frames);
     }
 
-    fn has_side_effects(&self) -> bool { (**self).has_side_effects() }
+    fn has_side_effects(&self) -> bool {
+        (**self).has_side_effects()
+    }
 
     fn is_active(&self) -> bool {
         (**self).is_active()
@@ -193,13 +290,17 @@ impl Opcode for Box<dyn Opcode> {
         (**self).is_envelope()
     }
 
-    fn has_active_envelope(&self) -> bool { (**self).has_active_envelope() }
+    fn has_active_envelope(&self) -> bool {
+        (**self).has_active_envelope()
+    }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         (**self).carry_state(old);
     }
 
-    fn input_is_init(&self, index: usize) -> bool { (**self).input_is_init(index) }
+    fn input_is_init(&self, index: usize) -> bool {
+        (**self).input_is_init(index)
+    }
 
     fn latency(&self) -> usize {
         (**self).latency()

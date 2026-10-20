@@ -55,6 +55,7 @@ pub(crate) struct NodeDef {
 pub(crate) struct ParamDef {
     pub(crate) name: String,
     pub(crate) default: f32,
+    pub(crate) range: Option<(f32, f32)>,
 }
 
 /// Collects nodes in dependency order. A node can only read nodes added before
@@ -83,7 +84,9 @@ impl GraphBuilder {
         Self::default()
     }
 
-    pub fn node_count(&self) -> usize { self.nodes.len() }
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
 
     /// Wrap just the nodes built inside a lexical reset scope.
     pub fn reset_since(&mut self, first: usize, trigger: Src) {
@@ -100,12 +103,21 @@ impl GraphBuilder {
         if self.params.iter().any(|p| p.name == name) {
             return Err(GraphError::DuplicateParam(name.to_string()));
         }
-        self.params.push(ParamDef { name: name.to_string(), default });
+        self.params.push(ParamDef {
+            name: name.to_string(),
+            default,
+            range: None,
+        });
         Ok(Src::Param(self.params.len() - 1))
     }
 
     /// How long a voice of this graph may ring after its release when nothing in it (an envelope or
     /// a sample) decides when it ends.
+    pub fn set_param_range(&mut self, name: &str, range: Option<(f32, f32)>) {
+        if let Some(param) = self.params.iter_mut().find(|p| p.name == name) {
+            param.range = range;
+        }
+    }
     pub fn set_tail(&mut self, seconds: f32) {
         self.tail = seconds.max(0.0);
     }
@@ -117,7 +129,8 @@ impl GraphBuilder {
     }
 
     pub fn input_with_latency(&mut self, latency: usize) -> Src {
-        self.n_inputs += 1; self.input_latencies.push(latency);
+        self.n_inputs += 1;
+        self.input_latencies.push(latency);
         Src::Input(self.n_inputs - 1)
     }
 
@@ -158,27 +171,50 @@ impl GraphBuilder {
     /// Add an opcode, wiring its ports by name. Ports left out take their
     /// default; a port with no default must be given. For an opcode with several
     /// results, this is the first; see [`GraphBuilder::add_outputs`].
-    pub fn add(&mut self, op: impl Opcode + 'static, args: &[(&str, Src)]) -> Result<Src, GraphError> {
+    pub fn add(
+        &mut self,
+        op: impl Opcode + 'static,
+        args: &[(&str, Src)],
+    ) -> Result<Src, GraphError> {
         Ok(self.add_outputs(op, args)?[0])
     }
 
     /// Like [`GraphBuilder::add`], giving every result of the opcode.
-    pub fn add_outputs(&mut self, op: impl Opcode + 'static, args: &[(&str, Src)]) -> Result<Vec<Src>, GraphError> {
+    pub fn add_outputs(
+        &mut self,
+        op: impl Opcode + 'static,
+        args: &[(&str, Src)],
+    ) -> Result<Vec<Src>, GraphError> {
         let ports = op.ports().to_vec();
-        assert!(ports.len() <= op.max_inputs(), "`{}` declares too many ports for its processing adapter", op.name());
+        assert!(
+            ports.len() <= op.max_inputs(),
+            "`{}` declares too many ports for its processing adapter",
+            op.name()
+        );
 
         let mut wired: Vec<Option<Src>> = vec![None; ports.len()];
         for &(name, src) in args {
             let Some(i) = ports.iter().position(|p| p.name == name) else {
-                return Err(GraphError::UnknownPort { opcode: op.name().to_string(), port: name.to_string() });
+                return Err(GraphError::UnknownPort {
+                    opcode: op.name().to_string(),
+                    port: name.to_string(),
+                });
             };
             if wired[i].is_some() {
-                return Err(GraphError::DuplicatePort { opcode: op.name().to_string(), port: name.to_string() });
+                return Err(GraphError::DuplicatePort {
+                    opcode: op.name().to_string(),
+                    port: name.to_string(),
+                });
             }
             wired[i] = Some(src);
         }
 
-        let input_latency = wired.iter().flatten().map(|s| self.source_latency(*s)).max().unwrap_or(0);
+        let input_latency = wired
+            .iter()
+            .flatten()
+            .map(|s| self.source_latency(*s))
+            .max()
+            .unwrap_or(0);
         let mut inputs = Vec::with_capacity(ports.len());
         for (port_index, (port, src)) in ports.iter().zip(wired).enumerate() {
             let src = match (src, port.default) {
@@ -198,19 +234,35 @@ impl GraphBuilder {
         let outputs = op.outputs().max(1);
         let first = self.results;
         self.results += outputs;
-        self.latencies.extend(std::iter::repeat_n(input_latency + op.latency(), outputs));
-        self.nodes.push(NodeDef { op: Box::new(op), inputs, first, outputs });
+        self.latencies
+            .extend(std::iter::repeat_n(input_latency + op.latency(), outputs));
+        self.nodes.push(NodeDef {
+            op: Box::new(op),
+            inputs,
+            first,
+            outputs,
+        });
         Ok((first..first + outputs).map(Src::Node).collect())
     }
 
     fn source_latency(&self, source: Src) -> usize {
-        match source { Src::Node(i) => self.latencies[i], Src::Input(i) => self.input_latencies[i], _ => 0 }
+        match source {
+            Src::Node(i) => self.latencies[i],
+            Src::Input(i) => self.input_latencies[i],
+            _ => 0,
+        }
     }
 
     fn align_source(&mut self, source: Src, target: usize, init: bool) -> Src {
         let delay = target.saturating_sub(self.source_latency(source));
-        if delay == 0 || matches!(source, Src::Const(_)) { return source; }
-        let delay = if init || matches!(source,Src::Param(_)) { crate::ops::SampleDelay::warm(delay) } else { crate::ops::SampleDelay::new(delay) };
+        if delay == 0 || matches!(source, Src::Const(_)) {
+            return source;
+        }
+        let delay = if init || matches!(source, Src::Param(_)) {
+            crate::ops::SampleDelay::warm(delay)
+        } else {
+            crate::ops::SampleDelay::new(delay)
+        };
         self.add(delay, &[("x", source)]).expect("delay port")
     }
 
@@ -247,57 +299,115 @@ impl GraphBuilder {
 
     /// Finish a graph with one output per channel.
     pub fn build_channels(mut self, outputs: &[Src]) -> Graph {
-        assert!(!outputs.is_empty(), "a graph needs at least one output channel");
+        assert!(
+            !outputs.is_empty(),
+            "a graph needs at least one output channel"
+        );
         let source = |slot: usize| {
-            if slot >= INPUT_BASE { Src::Input(slot-INPUT_BASE) }
-            else if slot >= NODE_BASE { Src::Node(slot-NODE_BASE) }
-            else if slot >= CONST_BASE { Src::Const(self.consts[slot-CONST_BASE]) }
-            else { Src::Param(slot) }
+            if slot >= INPUT_BASE {
+                Src::Input(slot - INPUT_BASE)
+            } else if slot >= NODE_BASE {
+                Src::Node(slot - NODE_BASE)
+            } else if slot >= CONST_BASE {
+                Src::Const(self.consts[slot - CONST_BASE])
+            } else {
+                Src::Param(slot)
+            }
         };
-        let sends: Vec<_> = self.sends.iter().map(|&(b,c,s,d)| (b,c,source(s),d)).collect();
-        let latency = outputs.iter().copied().chain(sends.iter().filter(|s| !s.3).map(|s|s.2)).map(|o| self.source_latency(o)).max().unwrap_or(0);
+        let sends: Vec<_> = self
+            .sends
+            .iter()
+            .map(|&(b, c, s, d)| (b, c, source(s), d))
+            .collect();
+        let latency = outputs
+            .iter()
+            .copied()
+            .chain(sends.iter().filter(|s| !s.3).map(|s| s.2))
+            .map(|o| self.source_latency(o))
+            .max()
+            .unwrap_or(0);
         self.sends.clear();
-        for (b,c,s,d) in sends {
-            let s = if d { s } else { self.align_source(s,latency,false) };
-            if d { self.send_channel_delayed(b,c,s); } else { self.send_channel(b,c,s); }
+        for (b, c, s, d) in sends {
+            let s = if d {
+                s
+            } else {
+                self.align_source(s, latency, false)
+            };
+            if d {
+                self.send_channel_delayed(b, c, s);
+            } else {
+                self.send_channel(b, c, s);
+            }
         }
-        let outputs: Vec<_> = outputs.iter().map(|&o| self.align_source(o, latency,false)).collect();
+        let outputs: Vec<_> = outputs
+            .iter()
+            .map(|&o| self.align_source(o, latency, false))
+            .collect();
         let output_enc: Vec<usize> = outputs.iter().map(|&o| self.slot_for(o)).collect();
         // Nodes are topologically ordered, so one backwards pass retains
         // exactly the dependencies of outputs, sends and observable effects.
         let mut used = vec![false; self.results];
         let mut constants = vec![false; self.consts.len()];
         let mark = |slot: usize, used: &mut [bool], constants: &mut [bool]| {
-            if (NODE_BASE..INPUT_BASE).contains(&slot) { used[slot - NODE_BASE] = true; }
-            else if (CONST_BASE..NODE_BASE).contains(&slot) { constants[slot - CONST_BASE] = true; }
+            if (NODE_BASE..INPUT_BASE).contains(&slot) {
+                used[slot - NODE_BASE] = true;
+            } else if (CONST_BASE..NODE_BASE).contains(&slot) {
+                constants[slot - CONST_BASE] = true;
+            }
         };
-        for &slot in &output_enc { mark(slot, &mut used, &mut constants); }
-        for &(_, _, slot, _) in &self.sends { mark(slot, &mut used, &mut constants); }
+        for &slot in &output_enc {
+            mark(slot, &mut used, &mut constants);
+        }
+        for &(_, _, slot, _) in &self.sends {
+            mark(slot, &mut used, &mut constants);
+        }
         let mut keep = vec![false; self.nodes.len()];
         for (i, node) in self.nodes.iter().enumerate().rev() {
-            if node.op.has_side_effects() || used[node.first..node.first + node.outputs].iter().any(|v| *v) {
+            if node.op.has_side_effects()
+                || used[node.first..node.first + node.outputs]
+                    .iter()
+                    .any(|v| *v)
+            {
                 keep[i] = true;
-                for &slot in &node.inputs { mark(slot, &mut used, &mut constants); }
+                for &slot in &node.inputs {
+                    mark(slot, &mut used, &mut constants);
+                }
             }
         }
         let mut result_map = vec![usize::MAX; self.results];
         let mut results = 0;
-        self.nodes = self.nodes.into_iter().zip(keep).filter_map(|(mut node, keep)| {
-            if !keep { return None; }
-            for k in 0..node.outputs { result_map[node.first + k] = results + k; }
-            node.first = results;
-            results += node.outputs;
-            Some(node)
-        }).collect();
+        self.nodes = self
+            .nodes
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(mut node, keep)| {
+                if !keep {
+                    return None;
+                }
+                for k in 0..node.outputs {
+                    result_map[node.first + k] = results + k;
+                }
+                node.first = results;
+                results += node.outputs;
+                Some(node)
+            })
+            .collect();
         self.results = results;
         let mut constant_map = vec![usize::MAX; self.consts.len()];
         let mut count = 0;
-        self.consts = self.consts.into_iter().enumerate().filter_map(|(i, value)| {
-            if !constants[i] { return None; }
-            constant_map[i] = count;
-            count += 1;
-            Some(value)
-        }).collect();
+        self.consts = self
+            .consts
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, value)| {
+                if !constants[i] {
+                    return None;
+                }
+                constant_map[i] = count;
+                count += 1;
+                Some(value)
+            })
+            .collect();
         let n_params = self.params.len();
         let n_consts = self.consts.len();
         let n_inputs = self.n_inputs;
@@ -324,7 +434,11 @@ impl GraphBuilder {
                 n
             })
             .collect();
-        let sends = self.sends.iter().map(|&(bus, channel, slot, delayed)| (bus, channel, resolve(slot), delayed)).collect();
+        let sends = self
+            .sends
+            .iter()
+            .map(|&(bus, channel, slot, delayed)| (bus, channel, resolve(slot), delayed))
+            .collect();
 
         let mut buffer_writes = self.buffer_writes;
         buffer_writes.sort_unstable();
@@ -380,6 +494,94 @@ pub struct Graph {
 
 impl Graph {
     /// Reuse a compiled processor after the surrounding bus registry changes.
+    /// Processor controls become ordinary live parameters, sharing note modulation machinery.
+    pub fn expose_controls(&self, keys: &[(&str, &str)]) -> Graph {
+        let mut g = GraphBuilder::new();
+        let mut slots = Vec::new();
+        for p in &self.params {
+            let name = keys
+                .iter()
+                .find(|(old, _)| *old == p.name)
+                .map_or(p.name.as_str(), |(_, new)| *new);
+            slots.push(g.param(name, p.default).unwrap());
+        }
+        slots.extend(self.consts.iter().map(|v| Src::Const(*v)));
+        for _ in 0..self.n_inputs {
+            slots.push(g.input());
+        }
+        for node in &self.nodes {
+            if let Some((key, value)) = node
+                .op
+                .control_info()
+                .filter(|(key, _)| keys.iter().any(|(old, _)| old == key))
+            {
+                let public = keys.iter().find(|(old, _)| *old == key).unwrap().1;
+                let src = g
+                    .params
+                    .iter()
+                    .position(|p| p.name == public)
+                    .map(Src::Param)
+                    .unwrap_or_else(|| g.param(public, value).unwrap());
+                slots.push(src);
+            } else {
+                let ports: Vec<_> = node
+                    .op
+                    .ports()
+                    .iter()
+                    .zip(&node.inputs)
+                    .map(|(p, s)| (p.name.as_ref(), slots[*s]))
+                    .collect();
+                slots.extend(
+                    g.add_outputs(node.op.box_clone(), &ports)
+                        .expect("valid graph"),
+                );
+            }
+        }
+        for &(bus, channel, slot, late) in &self.sends {
+            if late {
+                g.send_channel_delayed(bus, channel, slots[slot]);
+            } else {
+                g.send_channel(bus, channel, slots[slot]);
+            }
+        }
+        for &id in &self.buffer_reads {
+            g.touch_buffer_read(id);
+        }
+        for &id in &self.buffer_writes {
+            g.touch_buffer_write(id);
+        }
+        g.set_tail(self.tail);
+        g.build_channels(
+            &self
+                .output_slots
+                .iter()
+                .map(|s| slots[*s])
+                .collect::<Vec<_>>(),
+        )
+    }
+    pub fn set_param_range(&mut self, name: &str, range: Option<(f32, f32)>) {
+        if let Some(param) = self.params.iter_mut().find(|p| p.name == name) {
+            param.range = range;
+        }
+    }
+    pub fn buffer_channels(&self, key: u64) -> usize {
+        self.nodes
+            .iter()
+            .map(|n| n.op.buffer_channels(key))
+            .max()
+            .unwrap_or(0)
+    }
+    pub fn stream_cache(&self) -> Option<&std::sync::Arc<crate::ops::StreamCache>> {
+        self.nodes.iter().find_map(|n| n.op.stream_cache())
+    }
+    pub fn buffer_bindings(&self, key: u64) -> usize {
+        self.nodes.iter().map(|n| n.op.buffer_bindings(key)).sum()
+    }
+    pub fn reports(&self, visit: &mut dyn FnMut(&std::sync::Arc<crate::ops::Report>)) {
+        for node in &self.nodes {
+            node.op.reports(visit);
+        }
+    }
     pub fn with_bus_mapping(&self, mapping: &[Option<usize>]) -> Graph {
         let mut graph = self.with_input_latencies(&vec![0; self.input_count()]);
         graph.sends.retain_mut(|(bus, _, _, _)| {
@@ -399,44 +601,86 @@ impl Graph {
 
     /// Rebuild with the known timing of external inputs, aligning them before processing.
     pub fn with_input_latencies(&self, latencies: &[usize]) -> Graph {
-        assert_eq!(latencies.len(),self.n_inputs);
+        assert_eq!(latencies.len(), self.n_inputs);
         let mut g = GraphBuilder::new();
         let mut slots = Vec::new();
-        for p in &self.params { slots.push(g.param(&p.name,p.default).unwrap()); }
+        for p in &self.params {
+            slots.push(g.param(&p.name, p.default).unwrap());
+            g.params.last_mut().unwrap().range = p.range;
+        }
         slots.extend(self.consts.iter().map(|&v| Src::Const(v)));
         let target = latencies.iter().copied().max().unwrap_or(0);
-        for &latency in latencies { let input = g.input_with_latency(latency); slots.push(g.align_source(input,target,false)); }
+        for &latency in latencies {
+            let input = g.input_with_latency(latency);
+            slots.push(g.align_source(input, target, false));
+        }
         for node in &self.nodes {
-            let ports: Vec<_> = node.op.ports().iter().zip(&node.inputs).map(|(p,&s)| (p.name.as_ref(),slots[s])).collect();
-            slots.extend(g.add_outputs(node.op.box_clone(),&ports).expect("valid graph ports"));
+            let ports: Vec<_> = node
+                .op
+                .ports()
+                .iter()
+                .zip(&node.inputs)
+                .map(|(p, &s)| (p.name.as_ref(), slots[s]))
+                .collect();
+            slots.extend(
+                g.add_outputs(node.op.box_clone(), &ports)
+                    .expect("valid graph ports"),
+            );
         }
-        for &(bus,channel,slot,late) in &self.sends {
-            if late { g.send_channel_delayed(bus,channel,slots[slot]); } else { g.send_channel(bus,channel,slots[slot]); }
+        for &(bus, channel, slot, late) in &self.sends {
+            if late {
+                g.send_channel_delayed(bus, channel, slots[slot]);
+            } else {
+                g.send_channel(bus, channel, slots[slot]);
+            }
         }
-        for &id in &self.buffer_reads { g.touch_buffer_read(id); }
-        for &id in &self.buffer_writes { g.touch_buffer_write(id); }
+        for &id in &self.buffer_reads {
+            g.touch_buffer_read(id);
+        }
+        for &id in &self.buffer_writes {
+            g.touch_buffer_write(id);
+        }
         g.set_tail(self.tail);
-        g.build_channels(&self.output_slots.iter().map(|&s| slots[s]).collect::<Vec<_>>())
+        g.build_channels(
+            &self
+                .output_slots
+                .iter()
+                .map(|&s| slots[s])
+                .collect::<Vec<_>>(),
+        )
     }
 
     fn delay_slot(&mut self, slot: usize, frames: usize) -> usize {
-        if frames == 0 { return slot; }
-        let first = self.results; self.results += 1;
-        self.nodes.push(NodeDef { op: Box::new(crate::ops::SampleDelay::new(frames)), inputs: vec![slot], first, outputs:1 });
+        if frames == 0 {
+            return slot;
+        }
+        let first = self.results;
+        self.results += 1;
+        self.nodes.push(NodeDef {
+            op: Box::new(crate::ops::SampleDelay::new(frames)),
+            inputs: vec![slot],
+            first,
+            outputs: 1,
+        });
         self.node_slot_base() + first
     }
 
     pub fn pad_outputs(&mut self, latency: usize) {
         let delay = latency.saturating_sub(self.latency);
-        for i in 0..self.output_slots.len() { self.output_slots[i] = self.delay_slot(self.output_slots[i],delay); }
+        for i in 0..self.output_slots.len() {
+            self.output_slots[i] = self.delay_slot(self.output_slots[i], delay);
+        }
         self.latency = self.latency.max(latency);
         self.state_keys = self.compute_state_keys();
     }
 
     pub fn pad_sends(&mut self, bus_latencies: &[usize]) {
         for i in 0..self.sends.len() {
-            let (bus,_,slot,late) = self.sends[i];
-            if !late { self.sends[i].2 = self.delay_slot(slot,bus_latencies[bus].saturating_sub(self.latency)); }
+            let (bus, _, slot, late) = self.sends[i];
+            if !late {
+                self.sends[i].2 =
+                    self.delay_slot(slot, bus_latencies[bus].saturating_sub(self.latency));
+            }
         }
         self.state_keys = self.compute_state_keys();
     }
@@ -489,7 +733,9 @@ impl Graph {
     }
 
     /// Number of DSP nodes that contribute audio or observable effects.
-    pub fn node_count(&self) -> usize { self.nodes.len() }
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
 
     /// Number of output channels.
     pub fn channels(&self) -> usize {
@@ -503,7 +749,12 @@ impl Graph {
     /// The buses this graph sends to, once each, in ascending order, that must be written before
     /// they are read. Delayed sends are left out: they do not constrain the order.
     pub fn send_buses(&self) -> Vec<usize> {
-        let mut buses: Vec<usize> = self.sends.iter().filter(|s| !s.3).map(|&(b, _, _, _)| b).collect();
+        let mut buses: Vec<usize> = self
+            .sends
+            .iter()
+            .filter(|s| !s.3)
+            .map(|&(b, _, _, _)| b)
+            .collect();
         buses.sort_unstable();
         buses.dedup();
         buses

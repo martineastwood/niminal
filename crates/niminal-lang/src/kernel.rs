@@ -9,10 +9,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use niminal_engine::{Array, Port, Table};
 use niminal_engine::ops::{
-    BinOp as Op, Cmp, Fn1, Instr, Interp, Kernel, ArraySource, Native, NativeInput,
+    ArraySource, BinOp as Op, Cmp, Fn1, Instr, Interp, Kernel, Native, NativeInput,
 };
+use niminal_engine::{Array, Port, Table};
 use niminal_score::Tempo;
 
 use crate::ast::*;
@@ -27,14 +27,29 @@ type Res<T> = Result<T, Diagnostic>;
 /// What a call gives one parameter of a function compiled to a kernel.
 #[derive(Clone, Debug)]
 pub(crate) enum KArg {
-    Buffer { selector: Box<KArg>, choices: crate::lower::BufferChoices },
-    Function { def: FnDef, captures: Vec<(String, KArg)> },
+    Buffer {
+        selector: Box<KArg>,
+        choices: crate::lower::BufferChoices,
+    },
+    Function {
+        def: FnDef,
+        captures: Vec<(String, KArg)>,
+    },
     /// A signal wired into one of the kernel's ports.
-    Port { unit: Unit, rate: Rate },
+    Port {
+        unit: Unit,
+        rate: Rate,
+    },
     /// A value known while compiling.
-    Const { unit: Unit, value: f64 },
+    Const {
+        unit: Unit,
+        value: f64,
+    },
     /// A list of numbers known while compiling.
-    Table { unit: Unit, values: Arc<Table> },
+    Table {
+        unit: Unit,
+        values: Arc<Table>,
+    },
     /// A range known while compiling.
     Range {
         unit: Unit,
@@ -58,8 +73,14 @@ struct Value {
 
 #[derive(Clone, Debug)]
 enum KVal {
-    Buffer { selector: Value, choices: crate::lower::BufferChoices },
-    Function { def: FnDef, captures: HashMap<String, KVal> },
+    Buffer {
+        selector: Value,
+        choices: crate::lower::BufferChoices,
+    },
+    Function {
+        def: FnDef,
+        captures: HashMap<String, KVal>,
+    },
     Num(Value),
     /// A list known while compiling.
     Array(Array<KVal>),
@@ -70,7 +91,11 @@ enum KVal {
         values: Arc<Table>,
     },
     /// A list this kernel writes.
-    State { id: usize, unit: Unit, len: usize },
+    State {
+        id: usize,
+        unit: Unit,
+        len: usize,
+    },
     Range {
         unit: Unit,
         lo: f64,
@@ -179,13 +204,39 @@ pub(crate) fn compile_kernel(
 }
 
 pub(crate) fn compile_scoped_kernel(
-    def: &FnDef, args: &[KArg], registry: &Registry, names: &Names, tempo: Tempo, instrument_scope: bool,
+    def: &FnDef,
+    args: &[KArg],
+    registry: &Registry,
+    names: &Names,
+    tempo: Tempo,
+    instrument_scope: bool,
 ) -> Res<(Kernel, KernelResult)> {
-    compile_scope_depth(def, args, registry, names, tempo, instrument_scope, usize::from(instrument_scope))
+    compile_scope_depth(
+        def,
+        args,
+        registry,
+        names,
+        tempo,
+        instrument_scope,
+        usize::from(instrument_scope),
+    )
 }
 
-fn compile_scope_depth(def: &FnDef, args: &[KArg], registry: &Registry, names: &Names, tempo: Tempo, instrument_scope: bool, scope_depth: usize) -> Res<(Kernel, KernelResult)> {
-    if scope_depth > 16 { return Err(Diagnostic::new("processor scopes nest at most 16 levels", def.span)); }
+fn compile_scope_depth(
+    def: &FnDef,
+    args: &[KArg],
+    registry: &Registry,
+    names: &Names,
+    tempo: Tempo,
+    instrument_scope: bool,
+    scope_depth: usize,
+) -> Res<(Kernel, KernelResult)> {
+    if scope_depth > 16 {
+        return Err(Diagnostic::new(
+            "processor scopes nest at most 16 levels",
+            def.span,
+        ));
+    }
     let params = funcs::signature(&def.params, tempo)?;
     let mut kb = Kb {
         instrument_scope,
@@ -215,7 +266,13 @@ fn compile_scope_depth(def: &FnDef, args: &[KArg], registry: &Registry, names: &
     for (param, arg) in params.iter().zip(args) {
         let v = if matches!(arg, KArg::Missing) {
             let Some(default) = &param.default else {
-                return Err(Diagnostic::new(format!("`{}` needs an argument `{}`", def.name.name, param.name.name), def.name.span));
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` needs an argument `{}`",
+                        def.name.name, param.name.name
+                    ),
+                    def.name.span,
+                ));
             };
             kb.arg_value(param, default)?
         } else {
@@ -256,58 +313,124 @@ fn not_a_number(e: &Expr) -> Diagnostic {
 }
 
 impl KVal {
-    fn array(items: Vec<KVal>) -> Self { Self::Array(items.into()) }
+    fn array(items: Vec<KVal>) -> Self {
+        Self::Array(items.into())
+    }
 }
 
 impl Kb<'_> {
     fn input_arg(&mut self, name: &str, arg: &KArg) -> KVal {
         match arg {
             KArg::Buffer { selector, choices } => {
-                let KVal::Num(selector) = self.input_arg(name,selector) else { unreachable!() };
-                KVal::Buffer { selector, choices: choices.clone() }
+                let KVal::Num(selector) = self.input_arg(name, selector) else {
+                    unreachable!()
+                };
+                KVal::Buffer {
+                    selector,
+                    choices: choices.clone(),
+                }
             }
-            KArg::Function { def, captures } => KVal::Function { def: def.clone(), captures: captures.iter().map(|(n,v)| (n.clone(), self.input_arg(&format!("{name}::{n}"), v))).collect() },
+            KArg::Function { def, captures } => KVal::Function {
+                def: def.clone(),
+                captures: captures
+                    .iter()
+                    .map(|(n, v)| (n.clone(), self.input_arg(&format!("{name}::{n}"), v)))
+                    .collect(),
+            },
             KArg::Port { unit, rate } => {
                 let port = self.ports.len();
                 self.ports.push(Port::named(name.to_string(), None));
                 let reg = self.emit(*rate, |dst| Instr::Input { dst, port });
-                KVal::Num(Value { reg, unit: *unit, rate: *rate, port: Some(port) })
+                KVal::Num(Value {
+                    reg,
+                    unit: *unit,
+                    rate: *rate,
+                    port: Some(port),
+                })
             }
             KArg::Const { unit, value } => KVal::Num(self.constant(*unit, *value)),
             KArg::Table { unit, values } => self.table(*unit, values.clone()),
-            KArg::Array(items) => KVal::Array(items.iter().enumerate()
-                .map(|(i, item)| self.input_arg(&format!("{name}[{i}]"), item)).collect()),
-            KArg::Range { unit, lo, hi, inclusive } => KVal::Range { unit: *unit, lo: *lo, hi: *hi, inclusive: *inclusive },
+            KArg::Array(items) => KVal::Array(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, item)| self.input_arg(&format!("{name}[{i}]"), item))
+                    .collect(),
+            ),
+            KArg::Range {
+                unit,
+                lo,
+                hi,
+                inclusive,
+            } => KVal::Range {
+                unit: *unit,
+                lo: *lo,
+                hi: *hi,
+                inclusive: *inclusive,
+            },
             KArg::Missing => unreachable!("defaults are evaluated in the callee"),
         }
     }
 
-    fn output_shape(&mut self, value: KVal, name: &str, outputs: &mut Vec<(String, usize)>, span: Span) -> Res<KernelResult> {
+    fn output_shape(
+        &mut self,
+        value: KVal,
+        name: &str,
+        outputs: &mut Vec<(String, usize)>,
+        span: Span,
+    ) -> Res<KernelResult> {
         match value {
             KVal::Num(v) => {
                 let index = outputs.len();
                 outputs.push((name.to_string(), v.reg));
-                Ok(KernelResult::Scalar { index, unit: v.unit })
+                Ok(KernelResult::Scalar {
+                    index,
+                    unit: v.unit,
+                })
             }
-            KVal::Record(fields) => Ok(KernelResult::Record(fields.into_iter().map(|(name, value)| {
-                let shape = self.output_shape(value, &name, outputs, span)?;
-                Ok((name, shape))
-            }).collect::<Res<_>>()?)),
+            KVal::Record(fields) => Ok(KernelResult::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, value)| {
+                        let shape = self.output_shape(value, &name, outputs, span)?;
+                        Ok((name, shape))
+                    })
+                    .collect::<Res<_>>()?,
+            )),
             other if Self::is_array(&other) => {
                 let items = self.array_elements(other, span)?;
-                Ok(KernelResult::Array(items.into_iter().enumerate().map(|(i, value)|
-                    self.output_shape(value, &format!("{name}[{i}]"), outputs, span)).collect::<Res<_>>()?))
+                Ok(KernelResult::Array(
+                    items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, value)| {
+                            self.output_shape(value, &format!("{name}[{i}]"), outputs, span)
+                        })
+                        .collect::<Res<_>>()?,
+                ))
             }
-            _ => Err(Diagnostic::new("a function returns a number or an array", span)),
+            _ => Err(Diagnostic::new(
+                "a function returns a number or an array",
+                span,
+            )),
         }
     }
 
     fn snapshot(&mut self, value: KVal, span: Span) -> Res<KVal> {
         match value {
             state @ KVal::State { .. } => Ok(KVal::array(self.array_elements(state, span)?)),
-            KVal::Array(items) => Ok(KVal::Array(items.into_iter().map(|v| self.snapshot(v, span)).collect::<Res<_>>()?)),
-            KVal::Record(fields) => Ok(KVal::Record(fields.into_iter().map(|(name, v)|
-                Ok((name, self.snapshot(v, span)?))).collect::<Res<_>>()?)),
+            KVal::Array(items) => Ok(KVal::Array(
+                items
+                    .into_iter()
+                    .map(|v| self.snapshot(v, span))
+                    .collect::<Res<_>>()?,
+            )),
+            KVal::Record(fields) => Ok(KVal::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, v)| Ok((name, self.snapshot(v, span)?)))
+                    .collect::<Res<_>>()?,
+            )),
             other => Ok(other),
         }
     }
@@ -378,7 +501,9 @@ impl Kb<'_> {
             }
             None => Err(Diagnostic::new(
                 match forced {
-                    Section::Init => "this changes while the note plays, so it isn't known at note start",
+                    Section::Init => {
+                        "this changes while the note plays, so it isn't known at note start"
+                    }
                     _ => "this changes every sample, so it can't be read once per block",
                 },
                 span,
@@ -509,8 +634,14 @@ impl Kb<'_> {
             b: v.reg,
         });
         let one = self.emit(Rate::Audio, |dst| Instr::Const { dst, value: 1.0 });
-        self.code.push(Instr::StoreState { slot: held, src: reg });
-        self.code.push(Instr::StoreState { slot: flag, src: one });
+        self.code.push(Instr::StoreState {
+            slot: held,
+            src: reg,
+        });
+        self.code.push(Instr::StoreState {
+            slot: flag,
+            src: one,
+        });
         Value {
             reg,
             unit: v.unit,
@@ -558,7 +689,13 @@ impl Kb<'_> {
                 let mut fields = Vec::with_capacity(outputs.len());
                 for out in outputs {
                     let Some(v) = self.frame.scope.get(&out.name).cloned() else {
-                        return Err(Diagnostic::new(format!("`{}` is a result of `{}`, but the body never defines it", out.name, def.name.name), out.span));
+                        return Err(Diagnostic::new(
+                            format!(
+                                "`{}` is a result of `{}`, but the body never defines it",
+                                out.name, def.name.name
+                            ),
+                            out.span,
+                        ));
                     };
                     fields.push((out.name.clone(), v));
                 }
@@ -600,8 +737,16 @@ impl Kb<'_> {
         match value {
             KVal::Num(v) if v.unit == unit => Ok(()),
             KVal::Table { unit: u, .. } | KVal::State { unit: u, .. } if *u == unit => Ok(()),
-            KVal::Array(items) => { for item in items { self.check_result_unit(item, unit, span)?; } Ok(()) },
-            _ => Err(Diagnostic::new(format!("the result must have unit {}", unit.describe()), span)),
+            KVal::Array(items) => {
+                for item in items {
+                    self.check_result_unit(item, unit, span)?;
+                }
+                Ok(())
+            }
+            _ => Err(Diagnostic::new(
+                format!("the result must have unit {}", unit.describe()),
+                span,
+            )),
         }
     }
 
@@ -687,27 +832,43 @@ impl Kb<'_> {
             (Kind::Buffer, _) | (_, KVal::Buffer { .. }) => return Err(mismatch("a value")),
             (Kind::Function, KVal::Function { .. }) => return Ok(v.clone()),
             (Kind::Function, _) => return Err(mismatch("a value")),
-            (_, KVal::Function { .. }) if !matches!(param.kind, Kind::Any) => return Err(mismatch("a function")),
+            (_, KVal::Function { .. }) if !matches!(param.kind, Kind::Any) => {
+                return Err(mismatch("a function"));
+            }
             (Kind::Array(inner), value) => {
                 if let Kind::Unit { unit, whole } = **inner {
                     match value {
-                        KVal::Table { unit: found, values, .. } => {
-                            if *found != unit { return Err(mismatch(found.describe())); }
+                        KVal::Table {
+                            unit: found,
+                            values,
+                            ..
+                        } => {
+                            if *found != unit {
+                                return Err(mismatch(found.describe()));
+                            }
                             if whole && values.as_f64().iter().any(|v| v.fract() != 0.0) {
                                 return Err(mismatch("a fractional array element"));
                             }
                             return Ok(value.clone());
                         }
                         KVal::State { unit: found, .. } if param.rate().is_none() => {
-                            if *found != unit { return Err(mismatch(found.describe())); }
+                            if *found != unit {
+                                return Err(mismatch(found.describe()));
+                            }
                             return Ok(value.clone());
                         }
                         _ => {}
                     }
                 }
                 let entries = self.array_elements(value.clone(), span)?;
-                let element_param = Param { kind: *inner.clone(), ..param.clone() };
-                let checked = entries.into_iter().map(|v| self.check_param(callee, &element_param, &v, span)).collect::<Res<_>>()?;
+                let element_param = Param {
+                    kind: *inner.clone(),
+                    ..param.clone()
+                };
+                let checked = entries
+                    .into_iter()
+                    .map(|v| self.check_param(callee, &element_param, &v, span))
+                    .collect::<Res<_>>()?;
                 return Ok(KVal::array(checked));
             }
             (_, KVal::Num(value)) => {
@@ -750,7 +911,12 @@ impl Kb<'_> {
             (Kind::Any, _) => {}
             (_, other) if Self::is_array(other) => {
                 let entries = self.array_elements(other.clone(), span)?;
-                return Ok(KVal::Array(entries.into_iter().map(|v| self.check_param(callee, param, &v, span)).collect::<Res<_>>()?));
+                return Ok(KVal::Array(
+                    entries
+                        .into_iter()
+                        .map(|v| self.check_param(callee, param, &v, span))
+                        .collect::<Res<_>>()?,
+                ));
             }
             (_, KVal::Range { .. }) => return Err(mismatch("a range")),
             (_, _) => return Err(mismatch("an array")),
@@ -763,7 +929,13 @@ impl Kb<'_> {
         self.call_captured(def, name, args, HashMap::new())
     }
 
-    fn call_captured(&mut self, def: &FnDef, name: &Ident, args: &[Arg], captures: HashMap<String,KVal>) -> Res<KVal> {
+    fn call_captured(
+        &mut self,
+        def: &FnDef,
+        name: &Ident,
+        args: &[Arg],
+        captures: HashMap<String, KVal>,
+    ) -> Res<KVal> {
         if self.stack.contains(&def.name.name) {
             let mut path = self.stack.clone();
             path.push(def.name.name.clone());
@@ -782,7 +954,7 @@ impl Kb<'_> {
                 Some(arg) => {
                     let value = self.arg_value(param, &arg.value)?;
                     Some((self.snapshot(value, arg.value.span)?, arg.value.span))
-                },
+                }
                 None => None,
             });
         }
@@ -836,7 +1008,9 @@ impl Kb<'_> {
 
     /// A parameter with a rate sees its value at that rate.
     fn fit_rate(&mut self, param: &Param, v: KVal, span: Span) -> Res<KVal> {
-        let Some(rate) = param.rate() else { return Ok(v); };
+        let Some(rate) = param.rate() else {
+            return Ok(v);
+        };
         match v {
             KVal::Num(value) => Ok(KVal::Num(match rate {
                 Rate::Init => self.at_init(value),
@@ -845,7 +1019,12 @@ impl Kb<'_> {
             })),
             other if Self::is_array(&other) => {
                 let entries = self.array_elements(other, span)?;
-                Ok(KVal::Array(entries.into_iter().map(|v| self.fit_rate(param, v, span)).collect::<Res<_>>()?))
+                Ok(KVal::Array(
+                    entries
+                        .into_iter()
+                        .map(|v| self.fit_rate(param, v, span))
+                        .collect::<Res<_>>()?,
+                ))
             }
             other => Ok(other),
         }
@@ -887,17 +1066,28 @@ impl Kb<'_> {
             }
             Stmt::IndexAssign { name, index, value } => {
                 if !self.frame.buffers.contains(&name.name) {
-                    return Err(Diagnostic::new(format!("`{}` is not a state array, so it can't be written", name.name), name.span));
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`{}` is not a state array, so it can't be written",
+                            name.name
+                        ),
+                        name.span,
+                    ));
                 }
                 let Some(KVal::State { id, unit, len }) = self.frame.scope.get(&name.name).cloned()
                 else {
                     return Err(Diagnostic::new(
-                        format!("`{}` is not a state array, so it can't be written", name.name),
+                        format!(
+                            "`{}` is not a state array, so it can't be written",
+                            name.name
+                        ),
                         name.span,
                     )
                     .with_help(format!("declare it with `state {} = zeros(64)`", name.name)));
                 };
-                if len == 0 { return Err(Diagnostic::new("this array is empty", name.span)); }
+                if len == 0 {
+                    return Err(Diagnostic::new("this array is empty", name.span));
+                }
                 let i = self.num(index)?;
                 if i.unit != Unit::Num {
                     return Err(Diagnostic::new("an index is a plain number", index.span));
@@ -952,9 +1142,9 @@ impl Kb<'_> {
                     e.span,
                 )
                 .with_help("it makes a value, so both ways need one: `if x > 0 { a } else { b }`")),
-                ExprKind::If { otherwise, then, .. }
-                    if !(last && otherwise.is_some() && ends_with_value(then)) =>
-                {
+                ExprKind::If {
+                    otherwise, then, ..
+                } if !(last && otherwise.is_some() && ends_with_value(then)) => {
                     self.if_stmt(e)?;
                     Ok(None)
                 }
@@ -970,7 +1160,19 @@ impl Kb<'_> {
     }
 
     fn check_name(&self, name: &Ident) -> Res<()> {
-        if matches!(name.name.as_str(), "it" | "note" | "clock" | "state" | "pi" | "sample_rate" | "true" | "false" | "reset_on" | "spawn" | "oversample") {
+        if matches!(
+            name.name.as_str(),
+            "it" | "note"
+                | "clock"
+                | "state"
+                | "pi"
+                | "sample_rate"
+                | "true"
+                | "false"
+                | "reset_on"
+                | "spawn"
+                | "oversample"
+        ) {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
                 name.span,
@@ -989,7 +1191,10 @@ impl Kb<'_> {
         let v = self.value(value)?;
         if let Some(KVal::State { .. }) = self.frame.scope.get(&name.name) {
             return Err(Diagnostic::new(
-                format!("`{0}` is a state array: write its entries with `{0}[i] = ...`", name.name),
+                format!(
+                    "`{0}` is a state array: write its entries with `{0}[i] = ...`",
+                    name.name
+                ),
                 name.span,
             ));
         }
@@ -1068,22 +1273,48 @@ impl Kb<'_> {
                 );
             }
             KVal::Array(items) => {
-                let unit = match items.first() { Some(KVal::Num(first)) => first.unit, None => Unit::Num, _ => return Err(Diagnostic::new("a state array needs numeric elements", init.span)) };
+                let unit = match items.first() {
+                    Some(KVal::Num(first)) => first.unit,
+                    None => Unit::Num,
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "a state array needs numeric elements",
+                            init.span,
+                        ));
+                    }
+                };
                 let id = self.buffers.len();
                 let len = items.len();
                 let mut values = Vec::with_capacity(len);
                 for (i, item) in items.into_iter().enumerate() {
-                    let KVal::Num(value) = item else { return Err(Diagnostic::new("a state array needs numeric elements", init.span)); };
-                    if value.unit != unit { return Err(Diagnostic::new("state array elements must have the same unit", init.span)); }
+                    let KVal::Num(value) = item else {
+                        return Err(Diagnostic::new(
+                            "a state array needs numeric elements",
+                            init.span,
+                        ));
+                    };
+                    if value.unit != unit {
+                        return Err(Diagnostic::new(
+                            "state array elements must have the same unit",
+                            init.span,
+                        ));
+                    }
                     values.push(self.konst(&value).unwrap_or(0.0));
                     if self.konst(&value).is_none() {
                         let index = self.constant(Unit::Num, i as f64);
-                        self.init.push(Instr::Write { list: id, idx: index.reg, src: value.reg, cond: None });
+                        self.init.push(Instr::Write {
+                            list: id,
+                            idx: index.reg,
+                            src: value.reg,
+                            cond: None,
+                        });
                     }
                 }
                 self.buffers.push(values.into());
                 self.frame.buffers.insert(name.name.clone());
-                self.frame.scope.insert(name.name.clone(), KVal::State { id, unit, len });
+                self.frame
+                    .scope
+                    .insert(name.name.clone(), KVal::State { id, unit, len });
             }
             _ => {
                 return Err(Diagnostic::new(
@@ -1100,7 +1331,9 @@ impl Kb<'_> {
         let mut tail = None;
         for (i, s) in stmts.iter().enumerate() {
             if matches!(s, Stmt::State { .. }) {
-                let Stmt::State { name, .. } = s else { unreachable!() };
+                let Stmt::State { name, .. } = s else {
+                    unreachable!()
+                };
                 return Err(Diagnostic::new(
                     "state is declared at the top of a function, not inside a block",
                     name.span,
@@ -1129,7 +1362,11 @@ impl Kb<'_> {
         };
         let c = self.num(cond)?;
         if let Some(k) = self.konst(&c) {
-            let taken = if k != 0.0 { Some(then) } else { otherwise.as_ref() };
+            let taken = if k != 0.0 {
+                Some(then)
+            } else {
+                otherwise.as_ref()
+            };
             if let Some(stmts) = taken {
                 self.block(stmts, false, e.span)?;
             }
@@ -1162,7 +1399,11 @@ impl Kb<'_> {
         let names: Vec<String> = self.frame.scope.keys().cloned().collect();
         for name in names {
             let (a, b) = (&then_scope[&name], &else_scope[&name]);
-            let merged = if same(a, b) { a.clone() } else { self.select_value(c, a.clone(), b.clone(), e.span)? };
+            let merged = if same(a, b) {
+                a.clone()
+            } else {
+                self.select_value(c, a.clone(), b.clone(), e.span)?
+            };
             self.frame.scope.insert(name, merged);
         }
         self.frame.out = match (then_out, else_out) {
@@ -1191,25 +1432,45 @@ impl Kb<'_> {
                 .into_iter()
                 .map(|k| KVal::Num(self.constant(unit, k)))
                 .collect()),
-            KVal::State { id, unit, len } => Ok((0..len).map(|k| {
-                let index = self.constant(Unit::Num, k as f64);
-                KVal::Num(self.read_array(ArraySource::State(id), unit, index, None))
-            }).collect()),
+            KVal::State { id, unit, len } => Ok((0..len)
+                .map(|k| {
+                    let index = self.constant(Unit::Num, k as f64);
+                    KVal::Num(self.read_array(ArraySource::State(id), unit, index, None))
+                })
+                .collect()),
             KVal::Num(v) => Ok(vec![KVal::Num(v)]),
-            KVal::Range { unit, lo, hi, inclusive } => Ok(range_numbers(lo, hi, inclusive, span)?.into_iter().map(|k| KVal::Num(self.constant(unit, k))).collect()),
+            KVal::Range {
+                unit,
+                lo,
+                hi,
+                inclusive,
+            } => Ok(range_numbers(lo, hi, inclusive, span)?
+                .into_iter()
+                .map(|k| KVal::Num(self.constant(unit, k)))
+                .collect()),
             _ => Err(Diagnostic::new("expected an array here", span)),
         }
     }
 
     fn is_array(value: &KVal) -> bool {
-        matches!(value, KVal::Array(_) | KVal::Table { .. } | KVal::State { .. })
+        matches!(
+            value,
+            KVal::Array(_) | KVal::Table { .. } | KVal::State { .. }
+        )
     }
 
     fn entries(&mut self, e: &Expr) -> Res<Vec<KVal>> {
         let value = self.value(e)?;
         match value {
-            KVal::Range { unit, lo, hi, inclusive } => Ok(range_numbers(lo, hi, inclusive, e.span)?
-                .into_iter().map(|k| KVal::Num(self.constant(unit, k))).collect()),
+            KVal::Range {
+                unit,
+                lo,
+                hi,
+                inclusive,
+            } => Ok(range_numbers(lo, hi, inclusive, e.span)?
+                .into_iter()
+                .map(|k| KVal::Num(self.constant(unit, k)))
+                .collect()),
             other => self.array_elements(other, e.span),
         }
     }
@@ -1239,7 +1500,10 @@ impl Kb<'_> {
     fn num(&mut self, e: &Expr) -> Res<Value> {
         match self.value(e)? {
             KVal::Num(v) => Ok(v),
-            KVal::Record(fields) => match &fields[0].1 { KVal::Num(v) => Ok(*v), _ => Err(not_a_number(e)) },
+            KVal::Record(fields) => match &fields[0].1 {
+                KVal::Num(v) => Ok(*v),
+                _ => Err(not_a_number(e)),
+            },
             _ => Err(not_a_number(e)),
         }
     }
@@ -1262,7 +1526,16 @@ impl Kb<'_> {
             ExprKind::Compare { op, lhs, rhs } => {
                 let (a, b) = (self.value(lhs)?, self.value(rhs)?);
                 self.zip_values(a, b, e.span, |this, a, b| {
-                    if a.unit != b.unit { return Err(Diagnostic::new(format!("can't compare {} and {}", a.unit.describe(), b.unit.describe()), e.span)); }
+                    if a.unit != b.unit {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "can't compare {} and {}",
+                                a.unit.describe(),
+                                b.unit.describe()
+                            ),
+                            e.span,
+                        ));
+                    }
                     Ok(this.cmp(cmp_op(*op), a, b))
                 })
             }
@@ -1354,16 +1627,23 @@ impl Kb<'_> {
             ExprKind::Call { name, args } => self.call(name, args, e.span),
             ExprKind::Lambda { params, body } => {
                 let def = funcs::lambda(params, body, e.span);
-                let captures = self.frame.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
+                let captures = self
+                    .frame
+                    .scope
+                    .iter()
+                    .filter(|(n, _)| funcs::reads(&def, n))
+                    .map(|(n, v)| (n.clone(), v.clone()))
+                    .collect();
                 Ok(KVal::Function { def, captures })
             }
             ExprKind::Pattern(_)
             | ExprKind::Grid(_)
             | ExprKind::Rows(_)
             | ExprKind::Events(_)
-            | ExprKind::Rest => Err(
-                Diagnostic::new("patterns can't be used inside a function with state", e.span),
-            ),
+            | ExprKind::Rest => Err(Diagnostic::new(
+                "patterns can't be used inside a function with state",
+                e.span,
+            )),
             ExprKind::ClipBlock(_) | ExprKind::SceneBlock(_) => Err(Diagnostic::new(
                 "clips and scenes belong in the score, not in a function with state",
                 e.span,
@@ -1381,12 +1661,22 @@ impl Kb<'_> {
         }
     }
 
-    fn emit_native(&mut self, op: Box<dyn niminal_engine::Opcode>, inputs: Vec<NativeInput>, unit: Unit) -> KVal {
+    fn emit_native(
+        &mut self,
+        op: Box<dyn niminal_engine::Opcode>,
+        inputs: Vec<NativeInput>,
+        unit: Unit,
+    ) -> KVal {
         let index = self.natives.len();
         self.natives.push(Native { op, inputs });
         let guard = self.guard;
         let reg = self.emit(Rate::Audio, |dst| Instr::Native { dst, index, guard });
-        KVal::Num(Value { reg, unit, rate: Rate::Audio, port: None })
+        KVal::Num(Value {
+            reg,
+            unit,
+            rate: Rate::Audio,
+            port: None,
+        })
     }
 
     fn envelope(&mut self, env: &EnvLit, span: Span) -> Res<KVal> {
@@ -1394,44 +1684,96 @@ impl Kb<'_> {
         let mut values = Vec::new();
         for step in env.values() {
             let value = match step {
-                EnvValue::Lit(n) => { let (unit, value) = literal_sig(n.value, n.unit.as_deref(), self.tempo, n.span)?; self.constant(unit, value) }
+                EnvValue::Lit(n) => {
+                    let (unit, value) =
+                        literal_sig(n.value, n.unit.as_deref(), self.tempo, n.span)?;
+                    self.constant(unit, value)
+                }
                 EnvValue::Expr(e) => self.num(e)?,
             };
             values.push(value);
         }
         let start = values[0];
-        if start.unit == Unit::Time || start.unit == Unit::Db { return Err(Diagnostic::new("an envelope level cannot be a duration or db", span)); }
+        if start.unit == Unit::Time || start.unit == Unit::Db {
+            return Err(Diagnostic::new(
+                "an envelope level cannot be a duration or db",
+                span,
+            ));
+        }
         let mut fields = Vec::new();
         let mut inputs = Vec::new();
-        if self.konst(&start).is_none() { fields.push(EnvField::Start); inputs.push(NativeInput::Reg(start.reg)); }
+        if self.konst(&start).is_none() {
+            fields.push(EnvField::Start);
+            inputs.push(NativeInput::Reg(start.reg));
+        }
         let mut segments = Vec::new();
         for (i, segment) in env.segments.iter().enumerate() {
-            if values[1 + i * 2].unit != Unit::Time { return Err(Diagnostic::new("an envelope duration needs a time", segment.dur.span())); }
-            if values[2 + i * 2].unit != start.unit { return Err(Diagnostic::new("envelope levels need the same unit", segment.level.span())); }
+            if values[1 + i * 2].unit != Unit::Time {
+                return Err(Diagnostic::new(
+                    "an envelope duration needs a time",
+                    segment.dur.span(),
+                ));
+            }
+            if values[2 + i * 2].unit != start.unit {
+                return Err(Diagnostic::new(
+                    "envelope levels need the same unit",
+                    segment.level.span(),
+                ));
+            }
             let duration = values[1 + i * 2];
             let level = values[2 + i * 2];
-            if self.konst(&duration).is_none() { fields.push(EnvField::Dur(i)); inputs.push(NativeInput::Reg(duration.reg)); }
-            if self.konst(&level).is_none() { fields.push(EnvField::Level(i)); inputs.push(NativeInput::Reg(level.reg)); }
-            segments.push(Segment::new(self.konst(&duration).unwrap_or(0.0) as f32, self.konst(&level).unwrap_or(0.0) as f32, crate::lower::curve_of(segment.curve)));
+            if self.konst(&duration).is_none() {
+                fields.push(EnvField::Dur(i));
+                inputs.push(NativeInput::Reg(duration.reg));
+            }
+            if self.konst(&level).is_none() {
+                fields.push(EnvField::Level(i));
+                inputs.push(NativeInput::Reg(level.reg));
+            }
+            segments.push(Segment::new(
+                self.konst(&duration).unwrap_or(0.0) as f32,
+                self.konst(&level).unwrap_or(0.0) as f32,
+                crate::lower::curve_of(segment.curve),
+            ));
         }
-        if fields.len() > niminal_engine::MAX_INPUTS { return Err(Diagnostic::new("too many envelope inputs in a processor scope", span)); }
-        let mut op = Env::new(self.konst(&start).unwrap_or(0.0) as f32, segments, env.sustain_at).with_inputs(fields);
-        if env.looped { op = op.looped(); }
+        if fields.len() > niminal_engine::MAX_INPUTS {
+            return Err(Diagnostic::new(
+                "too many envelope inputs in a processor scope",
+                span,
+            ));
+        }
+        let mut op = Env::new(
+            self.konst(&start).unwrap_or(0.0) as f32,
+            segments,
+            env.sustain_at,
+        )
+        .with_inputs(fields);
+        if env.looped {
+            op = op.looped();
+        }
         Ok(self.emit_native(Box::new(op), inputs, start.unit))
     }
 
     fn name(&mut self, name: &str, span: Span) -> Res<KVal> {
         if let Some(v) = self.frame.scope.get(name).cloned() {
             return match v {
-                other if self.force.is_some() => self.map_value(other, span, |this, value| this.read(value, span)),
+                other if self.force.is_some() => {
+                    self.map_value(other, span, |this, value| this.read(value, span))
+                }
                 other => Ok(other),
             };
         }
-        if let Some((_,buffer)) = self.names.buffers.get(name).cloned() {
-            return Ok(KVal::Buffer { selector: self.constant(Unit::Num,0.0), choices: Arc::new(vec![(name.to_string(),buffer)]) });
+        if let Some((_, buffer)) = self.names.buffers.get(name).cloned() {
+            return Ok(KVal::Buffer {
+                selector: self.constant(Unit::Num, 0.0),
+                choices: crate::lower::Choices::new(vec![(name.to_string(), buffer)]),
+            });
         }
         if let Some(def) = self.names.fns.get(name) {
-            return Ok(KVal::Function { def: def.clone(), captures: HashMap::new() });
+            return Ok(KVal::Function {
+                def: def.clone(),
+                captures: HashMap::new(),
+            });
         }
         match name {
             "pi" => return Ok(KVal::Num(self.constant(Unit::Num, std::f64::consts::PI))),
@@ -1447,12 +1789,17 @@ impl Kb<'_> {
                 }));
             }
             "note" => {
-                return Err(Diagnostic::new("`note` is only available in an instrument", span)
-                    .with_help("pass `note.time` or `note.released` in as an argument"));
+                return Err(
+                    Diagnostic::new("`note` is only available in an instrument", span)
+                        .with_help("pass `note.time` or `note.released` in as an argument"),
+                );
             }
             "clock" => {
-                return Err(Diagnostic::new("`clock` is only available in an instrument, track or bus", span)
-                    .with_help("pass `clock.beat` in as an argument"));
+                return Err(Diagnostic::new(
+                    "`clock` is only available in an instrument, track or bus",
+                    span,
+                )
+                .with_help("pass `clock.beat` in as an argument"));
             }
             _ => {}
         }
@@ -1467,7 +1814,9 @@ impl Kb<'_> {
             return Ok(v);
         }
         if let Ok(note @ niminal_score::Value::Note(_)) = name.parse::<niminal_score::Value>() {
-            let value = note.as_hz_in(&self.tempo.tuning).expect("a note is a frequency");
+            let value = note
+                .as_hz_in(&self.tempo.tuning)
+                .expect("a note is a frequency");
             return Ok(KVal::Num(self.constant(Unit::Hz, value)));
         }
         let known = self
@@ -1482,8 +1831,16 @@ impl Kb<'_> {
     /// A constant from a `const` definition.
     fn const_value(&mut self, d: &Datum, span: Span) -> Res<KVal> {
         match d {
-            Datum::Function { .. } => Err(Diagnostic::new("a function is not a numeric constant", span)),
-            Datum::Record(fields) => Ok(KVal::Record(fields.iter().map(|(name, v)| Ok((name.clone(), self.const_value(v, span)?))).collect::<Res<_>>()?)),
+            Datum::Function { .. } => Err(Diagnostic::new(
+                "a function is not a numeric constant",
+                span,
+            )),
+            Datum::Record(fields) => Ok(KVal::Record(
+                fields
+                    .iter()
+                    .map(|(name, v)| Ok((name.clone(), self.const_value(v, span)?)))
+                    .collect::<Res<_>>()?,
+            )),
             Datum::Sig(s) => match s.konst() {
                 Some(k) => Ok(KVal::Num(self.constant(s.unit(), k))),
                 None => Err(Diagnostic::new("this constant isn't a number", span)),
@@ -1500,7 +1857,10 @@ impl Kb<'_> {
                     hi: b,
                     inclusive: *inclusive,
                 }),
-                _ => Err(Diagnostic::new("this range isn't known while compiling", span)),
+                _ => Err(Diagnostic::new(
+                    "this range isn't known while compiling",
+                    span,
+                )),
             },
             Datum::Array(items) => {
                 let numbers: Option<Vec<(Unit, f64)>> = items
@@ -1529,30 +1889,59 @@ impl Kb<'_> {
 
     fn extreme_value(&mut self, a: KVal, b: KVal, minimum: bool, span: Span) -> Res<KVal> {
         self.zip_values(a, b, span, |this, a, b| {
-            if a.unit != b.unit { return Err(Diagnostic::new("array elements must have the same unit", span)); }
+            if a.unit != b.unit {
+                return Err(Diagnostic::new(
+                    "array elements must have the same unit",
+                    span,
+                ));
+            }
             Ok(this.bin(if minimum { Op::Min } else { Op::Max }, a, b, a.unit))
         })
     }
 
     fn math_value(&mut self, f: Fn1, value: KVal, span: Span) -> Res<KVal> {
         self.map_value(value, span, |this, value| {
-            if value.unit != Unit::Num { return Err(Diagnostic::new(format!("`{}` expects a plain number, found {}", f.name(), value.unit.describe()), span)); }
+            if value.unit != Unit::Num {
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` expects a plain number, found {}",
+                        f.name(),
+                        value.unit.describe()
+                    ),
+                    span,
+                ));
+            }
             Ok(this.call1(f, value))
         })
     }
 
     fn select_value(&mut self, condition: Value, a: KVal, b: KVal, span: Span) -> Res<KVal> {
         if let (KVal::Num(a), KVal::Num(b)) = (&a, &b) {
-            if a.unit != b.unit { return Err(Diagnostic::new("both branches need the same unit", span)); }
+            if a.unit != b.unit {
+                return Err(Diagnostic::new("both branches need the same unit", span));
+            }
             return Ok(KVal::Num(self.select(condition, *a, *b)));
         }
         if Self::is_array(&a) && Self::is_array(&b) {
             let a = self.array_elements(a, span)?;
             let b = self.array_elements(b, span)?;
-            if a.len() != b.len() { return Err(Diagnostic::new("both branches need the same array shape", span)); }
-            return Ok(KVal::Array(a.into_iter().zip(b).map(|(a, b)| self.select_value(condition, a, b, span)).collect::<Res<_>>()?));
+            if a.len() != b.len() {
+                return Err(Diagnostic::new(
+                    "both branches need the same array shape",
+                    span,
+                ));
+            }
+            return Ok(KVal::Array(
+                a.into_iter()
+                    .zip(b)
+                    .map(|(a, b)| self.select_value(condition, a, b, span))
+                    .collect::<Res<_>>()?,
+            ));
         }
-        Err(Diagnostic::new("both branches need matching numbers or array shapes", span))
+        Err(Diagnostic::new(
+            "both branches need matching numbers or array shapes",
+            span,
+        ))
     }
 
     fn negate_value(&mut self, value: KVal, span: Span) -> Res<KVal> {
@@ -1561,10 +1950,17 @@ impl Kb<'_> {
                 let one = this.constant(Unit::Num, 1.0);
                 return Ok(this.bin(Op::Div, one, v, Unit::Db));
             }
-            if let Some(k) = this.konst(&v) { return Ok(this.constant(v.unit, -k)); }
+            if let Some(k) = this.konst(&v) {
+                return Ok(this.constant(v.unit, -k));
+            }
             let rate = this.rate(v.rate);
             let reg = this.emit(rate, |dst| Instr::Neg { dst, a: v.reg });
-            Ok(Value { reg, unit: v.unit, rate, port: None })
+            Ok(Value {
+                reg,
+                unit: v.unit,
+                rate,
+                port: None,
+            })
         })
     }
 
@@ -1576,32 +1972,81 @@ impl Kb<'_> {
         self.zip_values(a, b, span, |this, a, b| this.binary(op, a, b, span))
     }
 
-    fn zip_values(&mut self, a: KVal, b: KVal, span: Span, operation: impl Fn(&mut Self, Value, Value) -> Res<Value> + Copy) -> Res<KVal> {
-        let a = if Self::is_array(&a) { KVal::array(self.array_elements(a, span)?) } else { a };
-        let b = if Self::is_array(&b) { KVal::array(self.array_elements(b, span)?) } else { b };
+    fn zip_values(
+        &mut self,
+        a: KVal,
+        b: KVal,
+        span: Span,
+        operation: impl Fn(&mut Self, Value, Value) -> Res<Value> + Copy,
+    ) -> Res<KVal> {
+        let a = if Self::is_array(&a) {
+            KVal::array(self.array_elements(a, span)?)
+        } else {
+            a
+        };
+        let b = if Self::is_array(&b) {
+            KVal::array(self.array_elements(b, span)?)
+        } else {
+            b
+        };
         match (a, b) {
             (KVal::Num(a), KVal::Num(b)) => operation(self, a, b).map(KVal::Num),
             (KVal::Record(fields), b) => self.zip_values(fields[0].1.clone(), b, span, operation),
             (a, KVal::Record(fields)) => self.zip_values(a, fields[0].1.clone(), span, operation),
             (KVal::Array(a), KVal::Array(b)) => {
-                if a.len() != b.len() { return Err(Diagnostic::new(format!("can't combine an array of {} with an array of {}", a.len(), b.len()), span)); }
-                Ok(KVal::Array(a.into_iter().zip(b).map(|(a,b)| self.zip_values(a,b,span,operation)).collect::<Res<_>>()?))
+                if a.len() != b.len() {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "can't combine an array of {} with an array of {}",
+                            a.len(),
+                            b.len()
+                        ),
+                        span,
+                    ));
+                }
+                Ok(KVal::Array(
+                    a.into_iter()
+                        .zip(b)
+                        .map(|(a, b)| self.zip_values(a, b, span, operation))
+                        .collect::<Res<_>>()?,
+                ))
             }
-            (KVal::Array(a), b @ KVal::Num(_)) => Ok(KVal::Array(a.into_iter().map(|a| self.zip_values(a,b.clone(),span,operation)).collect::<Res<_>>()?)),
-            (a @ KVal::Num(_), KVal::Array(b)) => Ok(KVal::Array(b.into_iter().map(|b| self.zip_values(a.clone(),b,span,operation)).collect::<Res<_>>()?)),
+            (KVal::Array(a), b @ KVal::Num(_)) => Ok(KVal::Array(
+                a.into_iter()
+                    .map(|a| self.zip_values(a, b.clone(), span, operation))
+                    .collect::<Res<_>>()?,
+            )),
+            (a @ KVal::Num(_), KVal::Array(b)) => Ok(KVal::Array(
+                b.into_iter()
+                    .map(|b| self.zip_values(a.clone(), b, span, operation))
+                    .collect::<Res<_>>()?,
+            )),
             _ => Err(Diagnostic::new("arithmetic doesn't work on ranges", span)),
         }
     }
 
-    fn map_value(&mut self, value: KVal, span: Span, operation: impl Fn(&mut Self, Value) -> Res<Value> + Copy) -> Res<KVal> {
+    fn map_value(
+        &mut self,
+        value: KVal,
+        span: Span,
+        operation: impl Fn(&mut Self, Value) -> Res<Value> + Copy,
+    ) -> Res<KVal> {
         match value {
             KVal::Num(value) => operation(self, value).map(KVal::Num),
             KVal::Record(fields) => self.map_value(fields[0].1.clone(), span, operation),
             other if Self::is_array(&other) => {
                 let items = self.array_elements(other, span)?;
-                Ok(KVal::Array(items.into_iter().map(|v| self.map_value(v, span, operation)).collect::<Res<_>>()?))
+                Ok(KVal::Array(
+                    items
+                        .into_iter()
+                        .map(|v| self.map_value(v, span, operation))
+                        .collect::<Res<_>>()?,
+                ))
             }
-            _ => Err(Diagnostic::new("this operation needs a number or an array", span)),
+            _ => Err(Diagnostic::new(
+                "this operation needs a number or an array",
+                span,
+            )),
         }
     }
 
@@ -1664,25 +2109,38 @@ impl Kb<'_> {
     }
 
     fn index(&mut self, list: &Expr, index: &Expr, span: Span) -> Res<KVal> {
-        if self.instrument_scope && let ExprKind::Name(name) = &list.kind
-            && let Some((_, buffer)) = self.names.buffers.get(name).cloned() {
+        if self.instrument_scope
+            && let ExprKind::Name(name) = &list.kind
+            && let Some((_, buffer)) = self.names.buffers.get(name).cloned()
+        {
             let index = self.num(index)?;
-            if index.unit != Unit::Num { return Err(Diagnostic::new("a buffer index is a plain number", span)); }
-            return Ok(self.emit_native(Box::new(niminal_engine::ops::BufferRead::new(buffer, Interp::None)), vec![NativeInput::Reg(index.reg)], Unit::Num));
+            if index.unit != Unit::Num {
+                return Err(Diagnostic::new("a buffer index is a plain number", span));
+            }
+            return Ok(self.emit_native(
+                Box::new(niminal_engine::ops::BufferRead::new(buffer, Interp::None)),
+                vec![NativeInput::Reg(index.reg)],
+                Unit::Num,
+            ));
         }
         let l = self.value(list)?;
         if let KVal::Buffer { selector, choices } = l {
             let pos = self.num(index)?;
-            return self.read_buffer_ref(selector,choices,pos,Interp::None,span);
+            return self.read_buffer_ref(selector, choices, pos, Interp::None, span);
         }
         if let ExprKind::Range { .. } = index.kind {
-            let KVal::Range { lo, hi, inclusive, .. } = self.value(index)? else {
+            let KVal::Range {
+                lo, hi, inclusive, ..
+            } = self.value(index)?
+            else {
                 unreachable!()
             };
             let picks = range_numbers(lo, hi, inclusive, index.span)?;
             let entries = self.array_elements(l, list.span)?;
             let n = entries.len();
-            if n == 0 && !picks.is_empty() { return Err(Diagnostic::new("this array is empty", span)); }
+            if n == 0 && !picks.is_empty() {
+                return Err(Diagnostic::new("this array is empty", span));
+            }
             return Ok(KVal::Array(
                 picks
                     .into_iter()
@@ -1709,7 +2167,9 @@ impl Kb<'_> {
                 self.index_values(items.into_vec(), i, span)
             }
             KVal::Table { id, unit, values } => {
-                if values.is_empty() { return Err(Diagnostic::new("this array is empty", span)); }
+                if values.is_empty() {
+                    return Err(Diagnostic::new("this array is empty", span));
+                }
                 if let Some(k) = self.konst(&i) {
                     let n = values.len();
                     return Ok(KVal::Num(self.constant(
@@ -1717,11 +2177,23 @@ impl Kb<'_> {
                         f64::from(values.get(niminal_engine::wrapped_index(k, n))),
                     )));
                 }
-                Ok(KVal::Num(self.read_array(ArraySource::Table(id), unit, i, None)))
+                Ok(KVal::Num(self.read_array(
+                    ArraySource::Table(id),
+                    unit,
+                    i,
+                    None,
+                )))
             }
             KVal::State { id, unit, len } => {
-                if len == 0 { return Err(Diagnostic::new("this array is empty", span)); }
-                Ok(KVal::Num(self.read_array(ArraySource::State(id), unit, i, None)))
+                if len == 0 {
+                    return Err(Diagnostic::new("this array is empty", span));
+                }
+                Ok(KVal::Num(self.read_array(
+                    ArraySource::State(id),
+                    unit,
+                    i,
+                    None,
+                )))
             }
             KVal::Num(v) => Ok(KVal::Num(v)),
             _ => Err(Diagnostic::new("only an array can be indexed", list.span)),
@@ -1733,22 +2205,43 @@ impl Kb<'_> {
             let (array, unit) = self.numeric_array(KVal::array(items), span)?;
             return Ok(KVal::Num(self.read_array(array, unit, index, None)));
         }
-        let rows = items.into_iter().map(|v| {
-            if !Self::is_array(&v) { return Err(Diagnostic::new("an index that changes needs matching element shapes", span)); }
-            self.array_elements(v, span)
-        }).collect::<Res<Vec<_>>>()?;
-        let Some(first) = rows.first() else { return Err(Diagnostic::new("this array is empty", span)); };
+        let rows = items
+            .into_iter()
+            .map(|v| {
+                if !Self::is_array(&v) {
+                    return Err(Diagnostic::new(
+                        "an index that changes needs matching element shapes",
+                        span,
+                    ));
+                }
+                self.array_elements(v, span)
+            })
+            .collect::<Res<Vec<_>>>()?;
+        let Some(first) = rows.first() else {
+            return Err(Diagnostic::new("this array is empty", span));
+        };
         let width = first.len();
-        if rows.iter().any(|row| row.len() != width) { return Err(Diagnostic::new("an index that changes needs matching element shapes", span)); }
-        Ok(KVal::Array((0..width).map(|column| {
-            let elements = rows.iter().map(|row| row[column].clone()).collect();
-            self.index_values(elements, index, span)
-        }).collect::<Res<_>>()?))
+        if rows.iter().any(|row| row.len() != width) {
+            return Err(Diagnostic::new(
+                "an index that changes needs matching element shapes",
+                span,
+            ));
+        }
+        Ok(KVal::Array(
+            (0..width)
+                .map(|column| {
+                    let elements = rows.iter().map(|row| row[column].clone()).collect();
+                    self.index_values(elements, index, span)
+                })
+                .collect::<Res<_>>()?,
+        ))
     }
 
     fn numeric_array(&mut self, value: KVal, span: Span) -> Res<(ArraySource, Unit)> {
         match value {
-            KVal::Table { values, .. } if values.is_empty() => Err(Diagnostic::new("this array is empty", span)),
+            KVal::Table { values, .. } if values.is_empty() => {
+                Err(Diagnostic::new("this array is empty", span))
+            }
             KVal::State { len: 0, .. } => Err(Diagnostic::new("this array is empty", span)),
             KVal::Table { id, unit, .. } => Ok((ArraySource::Table(id), unit)),
             KVal::State { id, unit, .. } => Ok((ArraySource::State(id), unit)),
@@ -1759,16 +2252,24 @@ impl Kb<'_> {
                 let mut rate = Rate::Const;
                 for item in items {
                     let KVal::Num(v) = item else {
-                        return Err(Diagnostic::new("this operation needs a one-dimensional numeric array", span));
+                        return Err(Diagnostic::new(
+                            "this operation needs a one-dimensional numeric array",
+                            span,
+                        ));
                     };
                     if unit.is_some_and(|unit| unit != v.unit) {
-                        return Err(Diagnostic::new("array elements must have the same unit", span));
+                        return Err(Diagnostic::new(
+                            "array elements must have the same unit",
+                            span,
+                        ));
                     }
                     unit = Some(v.unit);
                     rate = rate.max(v.rate);
                     registers.push(v.reg);
                 }
-                let Some(unit) = unit else { return Err(Diagnostic::new("this array is empty", span)); };
+                let Some(unit) = unit else {
+                    return Err(Diagnostic::new("this array is empty", span));
+                };
                 let id = self.values.len();
                 self.values.push(registers.into());
                 self.value_rates.push(rate);
@@ -1777,15 +2278,27 @@ impl Kb<'_> {
         }
     }
 
-    fn read_array(&mut self, list: ArraySource, unit: Unit, i: Value, interp: Option<Interp>) -> Value {
+    fn read_array(
+        &mut self,
+        list: ArraySource,
+        unit: Unit,
+        i: Value,
+        interp: Option<Interp>,
+    ) -> Value {
         if let Some(pos) = self.konst(&i) {
             let data = match list {
                 ArraySource::Table(id) => Some(self.tables[id].as_f64()),
-                ArraySource::Values(id) => self.values[id].iter().map(|reg| self.consts.get(reg).copied()).collect::<Option<Vec<_>>>(),
+                ArraySource::Values(id) => self.values[id]
+                    .iter()
+                    .map(|reg| self.consts.get(reg).copied())
+                    .collect::<Option<Vec<_>>>(),
                 ArraySource::State(_) => None,
             };
             if let Some(data) = data {
-                return self.constant(unit, niminal_engine::ops::read_at(&data, pos, interp.unwrap_or(Interp::None)));
+                return self.constant(
+                    unit,
+                    niminal_engine::ops::read_at(&data, pos, interp.unwrap_or(Interp::None)),
+                );
             }
         }
         let rate = match list {
@@ -1795,7 +2308,11 @@ impl Kb<'_> {
             ArraySource::Values(id) => self.rate(i.rate.max(self.value_rates[id])),
         };
         let reg = match interp {
-            None => self.emit(rate, |dst| Instr::Read { dst, list, idx: i.reg }),
+            None => self.emit(rate, |dst| Instr::Read {
+                dst,
+                list,
+                idx: i.reg,
+            }),
             Some(interp) => self.emit(rate, |dst| Instr::ReadAt {
                 dst,
                 list,
@@ -1817,7 +2334,10 @@ impl Kb<'_> {
     fn receiver<'e>(&self, name: &Ident, args: &'e [Arg]) -> Res<&'e Arg> {
         args.first().filter(|a| a.receiver).ok_or_else(|| {
             Diagnostic::new(
-                format!("`{}` is called on a value, as in `x.{}`", name.name, name.name),
+                format!(
+                    "`{}` is called on a value, as in `x.{}`",
+                    name.name, name.name
+                ),
                 name.span,
             )
         })
@@ -1825,82 +2345,221 @@ impl Kb<'_> {
 
     fn capture_arg(&mut self, value: KVal, wires: &mut Vec<NativeInput>, span: Span) -> Res<KArg> {
         Ok(match value {
-            KVal::Buffer { selector, choices } => KArg::Buffer { selector: Box::new(self.capture_arg(KVal::Num(selector),wires,span)?), choices },
+            KVal::Buffer { selector, choices } => KArg::Buffer {
+                selector: Box::new(self.capture_arg(KVal::Num(selector), wires, span)?),
+                choices,
+            },
             KVal::Num(v) => match self.konst(&v) {
-                Some(value) => KArg::Const { unit: v.unit, value },
-                None => { wires.push(NativeInput::Reg(v.reg)); KArg::Port { unit: v.unit, rate: v.rate } }
+                Some(value) => KArg::Const {
+                    unit: v.unit,
+                    value,
+                },
+                None => {
+                    wires.push(NativeInput::Reg(v.reg));
+                    KArg::Port {
+                        unit: v.unit,
+                        rate: v.rate,
+                    }
+                }
             },
             KVal::Function { def, captures } => {
-                let mut captures: Vec<_> = captures.into_iter().collect(); captures.sort_by(|a,b| a.0.cmp(&b.0));
-                KArg::Function { def, captures: captures.into_iter().map(|(n,v)| Ok((n, self.capture_arg(v, wires, span)?))).collect::<Res<_>>()? }
+                let mut captures: Vec<_> = captures.into_iter().collect();
+                captures.sort_by(|a, b| a.0.cmp(&b.0));
+                KArg::Function {
+                    def,
+                    captures: captures
+                        .into_iter()
+                        .map(|(n, v)| Ok((n, self.capture_arg(v, wires, span)?)))
+                        .collect::<Res<_>>()?,
+                }
             }
             KVal::Table { unit, values, .. } => KArg::Table { unit, values },
-            KVal::Range { unit, lo, hi, inclusive } => KArg::Range { unit, lo, hi, inclusive },
+            KVal::Range {
+                unit,
+                lo,
+                hi,
+                inclusive,
+            } => KArg::Range {
+                unit,
+                lo,
+                hi,
+                inclusive,
+            },
             KVal::Record(fields) => return self.capture_arg(fields[0].1.clone(), wires, span),
             other => {
                 let values = self.array_elements(other, span)?;
-                KArg::Array(values.into_iter().map(|v| self.capture_arg(v, wires, span)).collect::<Res<_>>()?)
+                KArg::Array(
+                    values
+                        .into_iter()
+                        .map(|v| self.capture_arg(v, wires, span))
+                        .collect::<Res<_>>()?,
+                )
             }
         })
     }
 
-    fn read_buffer_ref(&mut self, selector: Value, choices: crate::lower::BufferChoices, pos: Value, interp: Interp, span: Span) -> Res<KVal> {
-        if pos.unit != Unit::Num { return Err(Diagnostic::new("a buffer position is a plain number",span)); }
-        let buffers = Arc::new(choices.iter().map(|(_,b)| b.clone()).collect());
-        Ok(self.emit_native(Box::new(niminal_engine::ops::BufferReadBank::new(buffers,interp)),vec![NativeInput::Reg(selector.reg),NativeInput::Reg(pos.reg)],Unit::Num))
+    fn read_buffer_ref(
+        &mut self,
+        selector: Value,
+        choices: crate::lower::BufferChoices,
+        pos: Value,
+        interp: Interp,
+        span: Span,
+    ) -> Res<KVal> {
+        if pos.unit != Unit::Num {
+            return Err(Diagnostic::new("a buffer position is a plain number", span));
+        }
+        let buffers = Arc::new(choices.iter().map(|(_, b)| b.clone()).collect());
+        Ok(self.emit_native(
+            Box::new(niminal_engine::ops::BufferReadBank::new(
+                buffers,
+                interp,
+                choices.key,
+            )),
+            vec![NativeInput::Reg(selector.reg), NativeInput::Reg(pos.reg)],
+            Unit::Num,
+        ))
     }
 
     fn processor_scope(&mut self, name: &str, args: &[Arg], span: Span) -> Res<KVal> {
-        let usage = || Diagnostic::new(if name == "spawn" { "write `spawn(trigger, dur: 100ms, max: 8) { ... }`" } else { "write `oversample(4) { ... }`" }, span);
-        let Some((body, options)) = args.split_last() else { return Err(usage()); };
-        let ExprKind::Lambda { params, body } = &body.value.kind else { return Err(usage()); };
-        if !params.is_empty() { return Err(usage()); }
-        let Some((first, options)) = options.split_first() else { return Err(usage()); };
-        if first.name.is_some() { return Err(usage()); }
+        let usage = || {
+            Diagnostic::new(
+                if name == "spawn" {
+                    "write `spawn(trigger, dur: 100ms, max: 8) { ... }`"
+                } else {
+                    "write `oversample(4) { ... }`"
+                },
+                span,
+            )
+        };
+        let Some((body, options)) = args.split_last() else {
+            return Err(usage());
+        };
+        let ExprKind::Lambda { params, body } = &body.value.kind else {
+            return Err(usage());
+        };
+        if !params.is_empty() {
+            return Err(usage());
+        }
+        let Some((first, options)) = options.split_first() else {
+            return Err(usage());
+        };
+        if first.name.is_some() {
+            return Err(usage());
+        }
         let first = self.num(&first.value)?;
-        if first.unit != Unit::Num { return Err(usage()); }
+        if first.unit != Unit::Num {
+            return Err(usage());
+        }
         let mut duration = None;
         let mut max = None;
         for option in options {
             match option.name.as_ref().map(|n| n.name.as_str()) {
                 Some("dur") if name == "spawn" && duration.is_none() => {
                     let value = self.num(&option.value)?;
-                    if value.unit != Unit::Time || self.konst(&value).is_some_and(|v| !(0.0..=600.0).contains(&v) || v == 0.0) { return Err(usage()); }
+                    if value.unit != Unit::Time
+                        || self
+                            .konst(&value)
+                            .is_some_and(|v| !(0.0..=600.0).contains(&v) || v == 0.0)
+                    {
+                        return Err(usage());
+                    }
                     duration = Some(value);
                 }
                 Some("max") if name == "spawn" && max.is_none() => {
                     let value = self.num(&option.value)?;
-                    max = self.konst(&value).filter(|v| value.unit == Unit::Num && v.fract() == 0.0 && (1.0..=64.0).contains(v)).map(|v| v as usize);
-                    if max.is_none() { return Err(usage()); }
+                    max = self
+                        .konst(&value)
+                        .filter(|v| {
+                            value.unit == Unit::Num && v.fract() == 0.0 && (1.0..=64.0).contains(v)
+                        })
+                        .map(|v| v as usize);
+                    if max.is_none() {
+                        return Err(usage());
+                    }
                 }
                 _ => return Err(usage()),
             }
         }
-        let factor = if name == "oversample" { self.konst(&first).filter(|f| [2.0,4.0,8.0].contains(f)).ok_or_else(usage)? as usize } else { 1 };
-        if name == "spawn" && duration.is_none() { return Err(usage()); }
+        let factor = if name == "oversample" {
+            self.konst(&first)
+                .filter(|f| [2.0, 4.0, 8.0].contains(f))
+                .ok_or_else(usage)? as usize
+        } else {
+            1
+        };
+        if name == "spawn" && duration.is_none() {
+            return Err(usage());
+        }
         let mut def = funcs::lambda(&[], body, span);
-        let mut captures: Vec<_> = self.frame.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
-        captures.sort_by(|a,b| a.0.cmp(&b.0));
-        let mut wires = Vec::new(); let mut kargs = Vec::new();
-        for (n,v) in captures {
-            def.params.push(ParamDef { name: Ident { name: n, span }, rate: None, ty: None, default: None });
+        let mut captures: Vec<_> = self
+            .frame
+            .scope
+            .iter()
+            .filter(|(n, _)| funcs::reads(&def, n))
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect();
+        captures.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut wires = Vec::new();
+        let mut kargs = Vec::new();
+        for (n, v) in captures {
+            def.params.push(ParamDef {
+                name: Ident { name: n, span },
+                rate: None,
+                ty: None,
+                default: None,
+            });
             kargs.push(self.capture_arg(v, &mut wires, span)?);
         }
-        let (kernel, shape) = compile_scope_depth(&def, &kargs, self.registry, self.names, self.tempo, true, self.scope_depth + 1)?;
+        let (kernel, shape) = compile_scope_depth(
+            &def,
+            &kargs,
+            self.registry,
+            self.names,
+            self.tempo,
+            true,
+            self.scope_depth + 1,
+        )?;
         let custom = Box::new(niminal_engine::ops::Custom::new(Arc::new(kernel)));
         let op: Box<dyn niminal_engine::Opcode> = if name == "spawn" {
-            wires.extend([NativeInput::Reg(first.reg), NativeInput::Reg(duration.unwrap().reg)]);
+            wires.extend([
+                NativeInput::Reg(first.reg),
+                NativeInput::Reg(duration.unwrap().reg),
+            ]);
             Box::new(niminal_engine::ops::Spawn::new(custom, max.unwrap_or(8)))
-        } else { Box::new(niminal_engine::ops::Oversample::new(custom, factor)) };
-        let outputs = op.outputs(); let index = self.natives.len();
+        } else {
+            Box::new(niminal_engine::ops::Oversample::new(custom, factor))
+        };
+        let outputs = op.outputs();
+        let index = self.natives.len();
         self.natives.push(Native { op, inputs: wires });
-        let first = self.registers; self.registers += outputs;
-        self.push(Rate::Audio, Instr::Native { dst: first, index, guard: self.guard });
+        let first = self.registers;
+        self.registers += outputs;
+        self.push(
+            Rate::Audio,
+            Instr::Native {
+                dst: first,
+                index,
+                guard: self.guard,
+            },
+        );
         fn result(shape: KernelResult, first: usize) -> KVal {
             match shape {
-                KernelResult::Scalar { index, unit } => KVal::Num(Value { reg: first + index, unit, rate: Rate::Audio, port: None }),
-                KernelResult::Array(values) => KVal::Array(values.into_iter().map(|v| result(v,first)).collect()),
-                KernelResult::Record(values) => KVal::Record(values.into_iter().map(|(n,v)| (n,result(v,first))).collect()),
+                KernelResult::Scalar { index, unit } => KVal::Num(Value {
+                    reg: first + index,
+                    unit,
+                    rate: Rate::Audio,
+                    port: None,
+                }),
+                KernelResult::Array(values) => {
+                    KVal::Array(values.into_iter().map(|v| result(v, first)).collect())
+                }
+                KernelResult::Record(values) => KVal::Record(
+                    values
+                        .into_iter()
+                        .map(|(n, v)| (n, result(v, first)))
+                        .collect(),
+                ),
             }
         }
         Ok(result(shape, first))
@@ -1909,30 +2568,61 @@ impl Kb<'_> {
     fn reset_scope(&mut self, args: &[Arg], span: Span) -> Res<KVal> {
         let (trigger, body) = funcs::reset_args(args, span)?;
         let trigger = self.num(trigger)?;
-        if trigger.unit != Unit::Num { return Err(Diagnostic::new("a reset trigger is one plain signal", span)); }
+        if trigger.unit != Unit::Num {
+            return Err(Diagnostic::new("a reset trigger is one plain signal", span));
+        }
         let previous = self.state_init.len();
         self.state_init.push(0.0);
-        let (states, buffers, natives) = (self.state_init.len(), self.buffers.len(), self.natives.len());
+        let (states, buffers, natives) = (
+            self.state_init.len(),
+            self.buffers.len(),
+            self.natives.len(),
+        );
         let (init, block, code) = (self.init.len(), self.block.len(), self.code.len());
         let registers = self.registers;
         let def = funcs::lambda(&[], body, span);
-        let captures = self.frame.scope.iter().filter(|(n,_)| funcs::reads(&def,n)).map(|(n,v)| (n.clone(),v.clone())).collect();
+        let captures = self
+            .frame
+            .scope
+            .iter()
+            .filter(|(n, _)| funcs::reads(&def, n))
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect();
         let result = self.call_captured(&def, &def.name, &[], captures)?;
         let scope = self.resets.len();
         self.resets.push(niminal_engine::ops::ResetScope {
-            states: states..self.state_init.len(), buffers: buffers..self.buffers.len(), natives: (natives..self.natives.len()).collect(), registers: registers..self.registers,
-            init: self.init[init..].to_vec(), block: self.block[block..].to_vec(),
+            states: states..self.state_init.len(),
+            buffers: buffers..self.buffers.len(),
+            natives: (natives..self.natives.len()).collect(),
+            registers: registers..self.registers,
+            init: self.init[init..].to_vec(),
+            block: self.block[block..].to_vec(),
         });
-        self.code.insert(code, Instr::Reset { scope, trigger: trigger.reg, previous, guard: self.guard });
+        self.code.insert(
+            code,
+            Instr::Reset {
+                scope,
+                trigger: trigger.reg,
+                previous,
+                guard: self.guard,
+            },
+        );
         Ok(result)
     }
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
         let n = name.name.as_str();
-        if matches!(n, "spawn" | "oversample") { return self.processor_scope(n, args, span); }
-        if n == "reset_on" { return self.reset_scope(args, span); }
-        if self.instrument_scope && let [receiver] = args && receiver.receiver {
-            use niminal_engine::ops::{Context, NoteTime, NoteStart, ReadContext, Released};
+        if matches!(n, "spawn" | "oversample") {
+            return self.processor_scope(n, args, span);
+        }
+        if n == "reset_on" {
+            return self.reset_scope(args, span);
+        }
+        if self.instrument_scope
+            && let [receiver] = args
+            && receiver.receiver
+        {
+            use niminal_engine::ops::{Context, NoteStart, NoteTime, ReadContext, Released};
             if matches!(&receiver.value.kind, ExprKind::Name(n) if n == "note") {
                 let (op, unit): (Box<dyn niminal_engine::Opcode>, Unit) = match n {
                     "time" => (Box::new(NoteTime::default()), Unit::Time),
@@ -1945,63 +2635,133 @@ impl Kb<'_> {
                 return Ok(self.emit_native(op, Vec::new(), unit));
             }
         }
-        if self.instrument_scope && let Some(def) = self.names.instrs.get(n).cloned() {
+        if self.instrument_scope
+            && let Some(def) = self.names.instrs.get(n).cloned()
+        {
             let own_gain = def.params.iter().any(|p| p.name.name == "gain");
-            let (gains, rest): (Vec<_>, Vec<_>) = args.iter().cloned().partition(|a| !own_gain && a.name.as_ref().is_some_and(|n| n.name == "gain"));
-            if gains.len() > 1 { return Err(Diagnostic::new("gain given more than once", span)); }
+            let (gains, rest): (Vec<_>, Vec<_>) = args
+                .iter()
+                .cloned()
+                .partition(|a| !own_gain && a.name.as_ref().is_some_and(|n| n.name == "gain"));
+            if gains.len() > 1 {
+                return Err(Diagnostic::new("gain given more than once", span));
+            }
             let gain = if let Some(arg) = gains.first() {
                 let mut value = self.num(&arg.value)?;
-                if !matches!(value.unit, Unit::Num | Unit::Db) { return Err(Diagnostic::new("gain needs db or a plain factor", arg.value.span)); }
+                if !matches!(value.unit, Unit::Num | Unit::Db) {
+                    return Err(Diagnostic::new(
+                        "gain needs db or a plain factor",
+                        arg.value.span,
+                    ));
+                }
                 value.unit = Unit::Num;
                 Some(value)
-            } else { None };
-            let as_fn = FnDef { name: def.name, params: def.params, body: def.body, result: FnResult::Inferred, span: def.span };
+            } else {
+                None
+            };
+            let as_fn = FnDef {
+                name: def.name,
+                params: def.params,
+                body: def.body,
+                result: FnResult::Inferred,
+                span: def.span,
+            };
             let result = self.call_fn(&as_fn, name, &rest)?;
             return match gain {
                 Some(gain) => self.binary_value(BinOp::Mul, result, KVal::Num(gain), span),
                 None => Ok(result),
             };
         }
-        if self.instrument_scope && n == "at" && let Some(receiver) = args.first().filter(|a| a.receiver)
+        if self.instrument_scope
+            && n == "at"
+            && let Some(receiver) = args.first().filter(|a| a.receiver)
             && let ExprKind::Name(buffer) = &receiver.value.kind
-            && let Some((_, buffer)) = self.names.buffers.get(buffer).cloned() {
+            && let Some((_, buffer)) = self.names.buffers.get(buffer).cloned()
+        {
             let mut position = None;
             let mut interp = None;
             for arg in &args[1..] {
                 match arg.name.as_ref().map(|n| n.name.as_str()) {
-                    None | Some("pos") if position.is_none() => position = Some(self.num(&arg.value)?),
+                    None | Some("pos") if position.is_none() => {
+                        position = Some(self.num(&arg.value)?)
+                    }
                     Some("interp") if interp.is_none() => interp = Some(interp_of(&arg.value)?),
-                    _ => return Err(Diagnostic::new("write `buffer.at(pos, interp: linear)`", arg.value.span)),
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "write `buffer.at(pos, interp: linear)`",
+                            arg.value.span,
+                        ));
+                    }
                 }
             }
-            let position = position.ok_or_else(|| Diagnostic::new("buffer.at needs a position", span))?;
-            if position.unit != Unit::Num { return Err(Diagnostic::new("a buffer position is a plain number", span)); }
-            return Ok(self.emit_native(Box::new(niminal_engine::ops::BufferRead::new(buffer, interp.unwrap_or(Interp::Linear))), vec![NativeInput::Reg(position.reg)], Unit::Num));
+            let position =
+                position.ok_or_else(|| Diagnostic::new("buffer.at needs a position", span))?;
+            if position.unit != Unit::Num {
+                return Err(Diagnostic::new("a buffer position is a plain number", span));
+            }
+            return Ok(self.emit_native(
+                Box::new(niminal_engine::ops::BufferRead::new(
+                    buffer,
+                    interp.unwrap_or(Interp::Linear),
+                )),
+                vec![NativeInput::Reg(position.reg)],
+                Unit::Num,
+            ));
         }
-        if n == "at" && let Some(receiver) = args.first().filter(|a| a.receiver)
+        if n == "at"
+            && let Some(receiver) = args.first().filter(|a| a.receiver)
             && let ExprKind::Name(id) = &receiver.value.kind
-            && let Some(KVal::Buffer { selector, choices }) = self.frame.scope.get(id).cloned() {
-            let mut pos = None; let mut interp = None;
+            && let Some(KVal::Buffer { selector, choices }) = self.frame.scope.get(id).cloned()
+        {
+            let mut pos = None;
+            let mut interp = None;
             for arg in &args[1..] {
                 match arg.name.as_ref().map(|n| n.name.as_str()) {
                     None if pos.is_none() => pos = Some(self.num(&arg.value)?),
                     Some("interp") if interp.is_none() => interp = Some(interp_of(&arg.value)?),
-                    _ => return Err(Diagnostic::new("write `source.at(pos, interp: linear)`",span)),
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "write `source.at(pos, interp: linear)`",
+                            span,
+                        ));
+                    }
                 }
             }
-            return self.read_buffer_ref(selector,choices,pos.ok_or_else(|| Diagnostic::new("at needs a position",span))?,interp.unwrap_or(Interp::Linear),span);
+            return self.read_buffer_ref(
+                selector,
+                choices,
+                pos.ok_or_else(|| Diagnostic::new("at needs a position", span))?,
+                interp.unwrap_or(Interp::Linear),
+                span,
+            );
         }
         // Named result lookup must preserve an array field's shape.
-        if let [receiver] = args && receiver.receiver && !self.names.fns.contains_key(n) {
+        if let [receiver] = args
+            && receiver.receiver
+            && !self.names.fns.contains_key(n)
+        {
             let record = match &receiver.value.kind {
                 ExprKind::Name(name) => self.frame.scope.get(name).cloned(),
-                ExprKind::Call { name, .. } if self.names.fns.get(&name.name).is_some_and(|def| matches!(def.result, FnResult::Named(_)))
-                    || matches!(self.frame.scope.get(&name.name), Some(KVal::Function { def, .. }) if matches!(def.result, FnResult::Named(_))) => Some(self.value(&receiver.value)?),
+                ExprKind::Call { name, .. }
+                    if self
+                        .names
+                        .fns
+                        .get(&name.name)
+                        .is_some_and(|def| matches!(def.result, FnResult::Named(_)))
+                        || matches!(self.frame.scope.get(&name.name), Some(KVal::Function { def, .. }) if matches!(def.result, FnResult::Named(_))) =>
+                {
+                    Some(self.value(&receiver.value)?)
+                }
                 _ => None,
             };
             if let Some(KVal::Record(fields)) = record {
-                return fields.iter().find(|(field, _)| field == n).map(|(_, value)| value.clone())
-                    .ok_or_else(|| Diagnostic::new(format!("this has no result `{n}`"), name.span));
+                return fields
+                    .iter()
+                    .find(|(field, _)| field == n)
+                    .map(|(_, value)| value.clone())
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!("this has no result `{n}`"), name.span)
+                    });
             }
         }
         if let Some(KVal::Function { def, captures }) = self.frame.scope.get(n).cloned() {
@@ -2013,22 +2773,34 @@ impl Kb<'_> {
         }
         match n {
             "prev" => return self.prev(name, args).map(KVal::Num),
-            "min" | "max" if args.len() == 1 && args[0].receiver => return self.array_call(name, args, span),
+            "min" | "max" if args.len() == 1 && args[0].receiver => {
+                return self.array_call(name, args, span);
+            }
             "min" | "max" | "pow" | "mod" => return self.combine(name, args),
             "clamp" => return self.clamp(name, args),
             "range" => return self.range(name, args, span),
             "init" | "control" if args.len() == 1 && args[0].receiver => {
                 let value = self.value(&args[0].value)?;
-                return self.map_value(value, span, |this, v| if n == "init" { Ok(this.at_init(v)) } else { this.at_control(v, args[0].value.span) });
+                return self.map_value(value, span, |this, v| {
+                    if n == "init" {
+                        Ok(this.at_init(v))
+                    } else {
+                        this.at_control(v, args[0].value.span)
+                    }
+                });
             }
-            "len" | "sum" | "map" | "indices" | "at" | "channels" | "step" => return self.array_call(name, args, span),
+            "len" | "sum" | "map" | "indices" | "at" | "channels" | "step" => {
+                return self.array_call(name, args, span);
+            }
             "zeros" => {
                 let [count] = args else {
                     return Err(Diagnostic::new("`zeros` takes a count", name.span));
                 };
                 let c = self.num(&count.value)?;
                 let n = match self.konst(&c) {
-                    Some(k) if k.fract() == 0.0 && (0.0..=(1 << 22) as f64).contains(&k) => k as usize,
+                    Some(k) if k.fract() == 0.0 && (0.0..=(1 << 22) as f64).contains(&k) => {
+                        k as usize
+                    }
                     _ => {
                         return Err(Diagnostic::new(
                             "`zeros` takes a whole number known while compiling",
@@ -2109,14 +2881,29 @@ impl Kb<'_> {
     fn unit_method(&mut self, name: &Ident, args: &[Arg]) -> Res<Option<KVal>> {
         let scale = matches!(
             name.name.as_str(),
-            "num" | "hz" | "khz" | "db" | "sec" | "ms" | "beat" | "beats" | "bar" | "bars" | "deg" | "st" | "ct"
+            "num"
+                | "hz"
+                | "khz"
+                | "db"
+                | "sec"
+                | "ms"
+                | "beat"
+                | "beats"
+                | "bar"
+                | "bars"
+                | "deg"
+                | "st"
+                | "ct"
         );
         if !scale || !(args.len() == 1 && args[0].receiver) {
             return Ok(None);
         }
         let value = self.value(&args[0].value)?;
         let span = args[0].value.span;
-        self.map_value(value, span, |this, value| this.unit_value(name, value, span)).map(Some)
+        self.map_value(value, span, |this, value| {
+            this.unit_value(name, value, span)
+        })
+        .map(Some)
     }
 
     fn unit_value(&mut self, name: &Ident, v: Value, span: Span) -> Res<Value> {
@@ -2124,11 +2911,20 @@ impl Kb<'_> {
             return Ok(match v.unit {
                 Unit::Db => {
                     // a db value is held as a gain factor
-                    let ln = self.call1(Fn1::Log, Value { unit: Unit::Num, ..v });
+                    let ln = self.call1(
+                        Fn1::Log,
+                        Value {
+                            unit: Unit::Num,
+                            ..v
+                        },
+                    );
                     let k = self.constant(Unit::Num, 20.0 / std::f64::consts::LN_10);
                     self.bin(Op::Mul, ln, k, Unit::Num)
                 }
-                _ => Value { unit: Unit::Num, ..v },
+                _ => Value {
+                    unit: Unit::Num,
+                    ..v
+                },
             });
         }
         if v.unit != Unit::Num {
@@ -2147,7 +2943,10 @@ impl Kb<'_> {
             let k = self.constant(Unit::Num, std::f64::consts::LN_10 / 20.0);
             let e = self.bin(Op::Mul, v, k, Unit::Num);
             let g = self.call1(Fn1::Exp, e);
-            return Ok(Value { unit: Unit::Db, ..g });
+            return Ok(Value {
+                unit: Unit::Db,
+                ..g
+            });
         }
         let f = self.constant(Unit::Num, factor);
         Ok(self.bin(Op::Mul, v, f, unit))
@@ -2159,7 +2958,10 @@ impl Kb<'_> {
             return Err(Diagnostic::new("`prev` takes one value", name.span));
         };
         if let Some(n) = &arg.name {
-            return Err(Diagnostic::new("`prev` takes its value without a name", n.span));
+            return Err(Diagnostic::new(
+                "`prev` takes its value without a name",
+                n.span,
+            ));
         }
         if self.force.is_some() {
             return Err(Diagnostic::new(
@@ -2230,17 +3032,16 @@ impl Kb<'_> {
         let mut values = self.plain_args(name, args, 2)?;
         let (b, b_span) = values.pop().unwrap();
         let (a, _) = values.pop().unwrap();
-        self.zip_values(a, b, b_span, |this, a, b| this.combine_scalar(name, a, b, b_span))
+        self.zip_values(a, b, b_span, |this, a, b| {
+            this.combine_scalar(name, a, b, b_span)
+        })
     }
 
     fn combine_scalar(&mut self, name: &Ident, a: Value, b: Value, b_span: Span) -> Res<Value> {
         match name.name.as_str() {
             "pow" => {
                 if a.unit != Unit::Num || b.unit != Unit::Num {
-                    return Err(Diagnostic::new(
-                        "`pow` expects plain numbers",
-                        b_span,
-                    ));
+                    return Err(Diagnostic::new("`pow` expects plain numbers", b_span));
                 }
                 Ok(self.bin(Op::Pow, a, b, Unit::Num))
             }
@@ -2274,12 +3075,26 @@ impl Kb<'_> {
     }
 
     fn range(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
-        let [x, range] = args else { return Err(Diagnostic::new("`range` takes a range", name.span)); };
-        if range.name.is_some() { return Err(Diagnostic::new("`range` takes its range without a name", range.value.span)); }
+        let [x, range] = args else {
+            return Err(Diagnostic::new("`range` takes a range", name.span));
+        };
+        if range.name.is_some() {
+            return Err(Diagnostic::new(
+                "`range` takes its range without a name",
+                range.value.span,
+            ));
+        }
         let value = self.value(&x.value)?;
-        let KVal::Range { unit, lo, hi, .. } = self.value(&range.value)? else { return Err(Diagnostic::new("`range` takes a range", range.value.span)); };
+        let KVal::Range { unit, lo, hi, .. } = self.value(&range.value)? else {
+            return Err(Diagnostic::new("`range` takes a range", range.value.span));
+        };
         self.map_value(value, span, |this, x| {
-            if x.unit != Unit::Num { return Err(Diagnostic::new("`range` maps plain numbers from 0 to 1", span)); }
+            if x.unit != Unit::Num {
+                return Err(Diagnostic::new(
+                    "`range` maps plain numbers from 0 to 1",
+                    span,
+                ));
+            }
             if unit == Unit::Db {
                 let scale = this.constant(Unit::Num, (hi / lo).ln());
                 let exponent = this.bin(Op::Mul, x, scale, Unit::Num);
@@ -2302,7 +3117,10 @@ impl Kb<'_> {
         };
         let v = self.value(&x.value)?;
         let ExprKind::Range { lo, hi, .. } = &range.value.kind else {
-            return Err(Diagnostic::new("`clamp` takes a range, such as `20hz..18khz`", range.value.span));
+            return Err(Diagnostic::new(
+                "`clamp` takes a range, such as `20hz..18khz`",
+                range.value.span,
+            ));
         };
         let (l, h) = (self.num(lo)?, self.num(hi)?);
         let up = self.extreme_value(v, KVal::Num(l), false, name.span)?;
@@ -2314,28 +3132,54 @@ impl Kb<'_> {
         let receiver = self.receiver(name, args)?;
         let l = self.value(&receiver.value)?;
         if name.name == "step" {
-            let KVal::Range { unit, lo, hi, inclusive } = l else {
-                return Err(Diagnostic::new("`step` is called on a range", receiver.value.span)
-                    .with_help("for example `(0..1).step(0.25)`"));
+            let KVal::Range {
+                unit,
+                lo,
+                hi,
+                inclusive,
+            } = l
+            else {
+                return Err(
+                    Diagnostic::new("`step` is called on a range", receiver.value.span)
+                        .with_help("for example `(0..1).step(0.25)`"),
+                );
             };
             let [_, step] = args else {
-                return Err(Diagnostic::new("`step` takes the size of a step", name.span));
+                return Err(Diagnostic::new(
+                    "`step` takes the size of a step",
+                    name.span,
+                ));
             };
             let size = self.num(&step.value)?;
             let size_unit = size.unit;
             let Some(size) = self.konst(&size) else {
-                return Err(Diagnostic::new("the size of a step must be known while compiling", step.value.span));
+                return Err(Diagnostic::new(
+                    "the size of a step must be known while compiling",
+                    step.value.span,
+                ));
             };
             if size_unit != unit || unit == Unit::Db {
-                return Err(Diagnostic::new("a step has the same unit as the range, and a db range can't be stepped", step.value.span));
+                return Err(Diagnostic::new(
+                    "a step has the same unit as the range, and a db range can't be stepped",
+                    step.value.span,
+                ));
             }
             let values = step_numbers(lo, hi, inclusive, size, span)?;
-            return Ok(KVal::array(values.into_iter().map(|v| KVal::Num(self.constant(unit, v))).collect()));
+            return Ok(KVal::array(
+                values
+                    .into_iter()
+                    .map(|v| KVal::Num(self.constant(unit, v)))
+                    .collect(),
+            ));
         }
         let l = if matches!(l, KVal::Range { .. }) {
-            if name.name == "channels" { return Err(Diagnostic::new("a range has no channels", span)); }
+            if name.name == "channels" {
+                return Err(Diagnostic::new("a range has no channels", span));
+            }
             KVal::array(self.array_elements(l, span)?)
-        } else { l };
+        } else {
+            l
+        };
         let len = |l: &KVal| match l {
             KVal::Array(items) => Some(items.len()),
             KVal::Table { values, .. } => Some(values.len()),
@@ -2349,8 +3193,15 @@ impl Kb<'_> {
                 receiver.value.span,
             ));
         };
-        if matches!(name.name.as_str(), "len" | "indices" | "sum" | "min" | "max" | "channels") && args.len() != 1 {
-            return Err(Diagnostic::new(format!("`{}` takes no arguments", name.name), name.span));
+        if matches!(
+            name.name.as_str(),
+            "len" | "indices" | "sum" | "min" | "max" | "channels"
+        ) && args.len() != 1
+        {
+            return Err(Diagnostic::new(
+                format!("`{}` takes no arguments", name.name),
+                name.span,
+            ));
         }
         match name.name.as_str() {
             "channels" => Ok(KVal::array(self.array_elements(l, span)?)),
@@ -2367,7 +3218,9 @@ impl Kb<'_> {
                 for item in entries {
                     total = Some(match total {
                         None => item,
-                        Some(t) if name.name == "sum" => self.binary_value(BinOp::Add, t, item, span)?,
+                        Some(t) if name.name == "sum" => {
+                            self.binary_value(BinOp::Add, t, item, span)?
+                        }
                         Some(t) => self.extreme_value(t, item, name.name == "min", span)?,
                     });
                 }
@@ -2392,7 +3245,9 @@ impl Kb<'_> {
                 let Some(pos) = pos else {
                     return Err(Diagnostic::new("`at` takes a position", name.span));
                 };
-                if pos.unit != Unit::Num { return Err(Diagnostic::new("a position is a plain number", span)); }
+                if pos.unit != Unit::Num {
+                    return Err(Diagnostic::new("a position is a plain number", span));
+                }
                 Ok(KVal::Num(self.read_array(list, unit, pos, Some(interp))))
             }
             _ => {
@@ -2401,20 +3256,37 @@ impl Kb<'_> {
                     return Err(Diagnostic::new("`map` takes a function", name.span));
                 };
                 let mapped = match &f.value.kind {
-                    ExprKind::Name(n) if self.names.fns.contains_key(n) || matches!(self.frame.scope.get(n), Some(KVal::Function { .. })) => Some(funcs::mapped_call(n, f.value.span)),
+                    ExprKind::Name(n)
+                        if self.names.fns.contains_key(n)
+                            || matches!(self.frame.scope.get(n), Some(KVal::Function { .. })) =>
+                    {
+                        Some(funcs::mapped_call(n, f.value.span))
+                    }
                     _ => None,
                 };
                 let (param, body) = lambda_of(mapped.as_ref().unwrap_or(&f.value))?;
-                if param != "it" { self.check_name(&Ident { name: param.clone(), span: f.value.span })?; }
+                if param != "it" {
+                    self.check_name(&Ident {
+                        name: param.clone(),
+                        span: f.value.span,
+                    })?;
+                }
                 if self.frame.scope.contains_key(&param) {
-                    return Err(Diagnostic::new(format!("`{param}` is already in use, so it can't be this function's parameter"), f.value.span));
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`{param}` is already in use, so it can't be this function's parameter"
+                        ),
+                        f.value.span,
+                    ));
                 }
                 let entries = self.array_elements(l, receiver.value.span)?;
                 let mut out = Vec::with_capacity(entries.len());
                 for entry in entries {
                     self.frame.scope.insert(param.clone(), entry);
                     let v = match &body {
-                        Body::Block(stmts) => self.block(stmts, true, f.value.span).map(|v| v.expect("a value")),
+                        Body::Block(stmts) => self
+                            .block(stmts, true, f.value.span)
+                            .map(|v| v.expect("a value")),
                         Body::Expr(e) => self.value(e),
                     };
                     self.frame.scope.remove(&param);
@@ -2430,7 +3302,10 @@ impl Kb<'_> {
     fn native(&mut self, name: &Ident, spec: &opcodes::OpSpec, args: &[Arg]) -> Res<KVal> {
         if self.force.is_some() {
             return Err(Diagnostic::new(
-                format!("`{}` changes every sample, so it can't be used here", name.name),
+                format!(
+                    "`{}` changes every sample, so it can't be used here",
+                    name.name
+                ),
                 name.span,
             ));
         }
@@ -2474,25 +3349,46 @@ impl Kb<'_> {
         }
         let not_a_wave = || {
             let names: Vec<_> = opcodes::WAVES.iter().map(|(n, _)| *n).collect();
-            Diagnostic::new("expected a waveform or a table", e.span)
-                .with_help(format!("one of {}, or an array of numbers", names.join(", ")))
+            Diagnostic::new("expected a waveform or a table", e.span).with_help(format!(
+                "one of {}, or an array of numbers",
+                names.join(", ")
+            ))
         };
         let value = match self.value(e) {
             Err(_) if matches!(e.kind, ExprKind::Name(_)) => return Err(not_a_wave()),
             value => value?,
         };
         let cycle = match value {
-            KVal::Table { unit: Unit::Num, values, .. } => values.as_f64(),
-            KVal::Table { .. } => return Err(Diagnostic::new("a table is a one-dimensional array of plain numbers", e.span)),
+            KVal::Table {
+                unit: Unit::Num,
+                values,
+                ..
+            } => values.as_f64(),
+            KVal::Table { .. } => {
+                return Err(Diagnostic::new(
+                    "a table is a one-dimensional array of plain numbers",
+                    e.span,
+                ));
+            }
             KVal::Array(_) => {
                 let mut cycle = Vec::new();
                 for item in self.array_elements(value, e.span)? {
                     match item {
                         KVal::Num(v) if v.unit == Unit::Num => match self.konst(&v) {
                             Some(k) => cycle.push(k),
-                            None => return Err(Diagnostic::new("the table must be known while compiling", e.span)),
+                            None => {
+                                return Err(Diagnostic::new(
+                                    "the table must be known while compiling",
+                                    e.span,
+                                ));
+                            }
                         },
-                        _ => return Err(Diagnostic::new("a table is a one-dimensional array of plain numbers", e.span)),
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "a table is a one-dimensional array of plain numbers",
+                                e.span,
+                            ));
+                        }
                     }
                 }
                 cycle
@@ -2502,31 +3398,92 @@ impl Kb<'_> {
         opcodes::WaveArg::table(&cycle).map_err(|m| Diagnostic::new(m, e.span))
     }
 
-    fn native_arrays(&mut self, name: &Ident, spec: &opcodes::OpSpec, wave: Option<opcodes::WaveArg>, values: &[Option<KVal>]) -> Res<KVal> {
-        if values.iter().any(|v| v.as_ref().is_some_and(Self::is_array)) {
-            let arrays = values.iter().map(|v| match v {
-                Some(v) if Self::is_array(v) => self.array_elements(v.clone(), name.span).map(KVal::array).map(Some),
-                other => Ok(other.clone()),
-            }).collect::<Res<Vec<_>>>()?;
-            let lengths: Vec<_> = arrays.iter().filter_map(|v| match v { Some(KVal::Array(items)) => Some(items.len()), _ => None }).collect();
+    fn native_arrays(
+        &mut self,
+        name: &Ident,
+        spec: &opcodes::OpSpec,
+        wave: Option<opcodes::WaveArg>,
+        values: &[Option<KVal>],
+    ) -> Res<KVal> {
+        if values
+            .iter()
+            .any(|v| v.as_ref().is_some_and(Self::is_array))
+        {
+            let arrays = values
+                .iter()
+                .map(|v| match v {
+                    Some(v) if Self::is_array(v) => self
+                        .array_elements(v.clone(), name.span)
+                        .map(KVal::array)
+                        .map(Some),
+                    other => Ok(other.clone()),
+                })
+                .collect::<Res<Vec<_>>>()?;
+            let lengths: Vec<_> = arrays
+                .iter()
+                .filter_map(|v| match v {
+                    Some(KVal::Array(items)) => Some(items.len()),
+                    _ => None,
+                })
+                .collect();
             let count = lengths[0];
-            if lengths.iter().any(|&len| len != count) { return Err(Diagnostic::new("opcode array arguments must have matching shapes", name.span)); }
-            return Ok(KVal::Array((0..count).map(|i| {
-                let row: Vec<_> = arrays.iter().map(|v| match v {
-                    Some(KVal::Array(items)) => Some(items[i].clone()), other => other.clone(),
-                }).collect();
-                self.native_arrays(name, spec, wave.clone(), &row)
-            }).collect::<Res<_>>()?));
+            if lengths.iter().any(|&len| len != count) {
+                return Err(Diagnostic::new(
+                    "opcode array arguments must have matching shapes",
+                    name.span,
+                ));
+            }
+            return Ok(KVal::Array(
+                (0..count)
+                    .map(|i| {
+                        let row: Vec<_> = arrays
+                            .iter()
+                            .map(|v| match v {
+                                Some(KVal::Array(items)) => Some(items[i].clone()),
+                                other => other.clone(),
+                            })
+                            .collect();
+                        self.native_arrays(name, spec, wave.clone(), &row)
+                    })
+                    .collect::<Res<_>>()?,
+            ));
         }
-        let mut build = BuildArgs { wave, salt: self.natives.len() as u32, ..Default::default() };
+        let mut build = BuildArgs {
+            wave,
+            salt: self.natives.len() as u32,
+            ..Default::default()
+        };
         let mut inputs = Vec::new();
         for (index, (param, value)) in spec.params.iter().zip(values).enumerate() {
-            let Some(value) = value else { continue; };
-            let KVal::Num(v) = value else { return Err(Diagnostic::new("opcode arguments must be numbers or arrays", name.span)); };
-            let wanted = match param.kind { opcodes::Kind::Signal(u) => u, _ => Unit::Db };
+            let Some(value) = value else {
+                continue;
+            };
+            let KVal::Num(v) = value else {
+                return Err(Diagnostic::new(
+                    "opcode arguments must be numbers or arrays",
+                    name.span,
+                ));
+            };
+            let wanted = match param.kind {
+                opcodes::Kind::Signal(u) => u,
+                _ => Unit::Db,
+            };
             let fits = v.unit == wanted || (wanted == Unit::Db && v.unit == Unit::Num);
-            if !fits { return Err(Diagnostic::new(format!("`{}` expects {} for `{}`, found {}", name.name, wanted.describe(), param.name, v.unit.describe()), name.span)); }
-            if let Some(c) = self.konst(v) { build.consts.insert(param.name.clone(), c); }
+            if !fits {
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` expects {} for `{}`, found {}",
+                        name.name,
+                        wanted.describe(),
+                        param.name,
+                        v.unit.describe()
+                    ),
+                    name.span,
+                ));
+            }
+            if let Some(c) = self.konst(v) {
+                build.consts.insert(param.name.clone(), c);
+            }
             inputs.push((index, NativeInput::Reg(v.reg)));
         }
         let op = spec
@@ -2576,9 +3533,13 @@ fn same(a: &KVal, b: &KVal) -> bool {
         (KVal::Num(x), KVal::Num(y)) => x.reg == y.reg,
         (KVal::Table { id: a, .. }, KVal::Table { id: b, .. })
         | (KVal::State { id: a, .. }, KVal::State { id: b, .. }) => a == b,
-        (KVal::Array(a), KVal::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same(x, y)),
+        (KVal::Array(a), KVal::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same(x, y))
+        }
         (KVal::Range { lo: a, hi: b, .. }, KVal::Range { lo: c, hi: d, .. }) => a == c && b == d,
-        (KVal::Record(a), KVal::Record(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.0 == y.0 && same(&x.1, &y.1)),
+        (KVal::Record(a), KVal::Record(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.0 == y.0 && same(&x.1, &y.1))
+        }
         _ => false,
     }
 }
@@ -2592,7 +3553,9 @@ pub(crate) fn ends_with_value(stmts: &[Stmt]) -> bool {
                 otherwise: Some(o),
                 ..
             } => ends_with_value(then) && ends_with_value(o),
-            ExprKind::If { otherwise: None, .. } => false,
+            ExprKind::If {
+                otherwise: None, ..
+            } => false,
             ExprKind::For { body, .. } => ends_with_value(body),
             _ => true,
         },
@@ -2642,7 +3605,13 @@ pub(crate) fn range_numbers(lo: f64, hi: f64, inclusive: bool, span: Span) -> Re
 }
 
 /// The values a range takes in steps of `step`: `(0..1).step(0.25)` is 0, 0.25, 0.5, 0.75 and 1.
-pub(crate) fn step_numbers(lo: f64, hi: f64, inclusive: bool, step: f64, span: Span) -> Res<Vec<f64>> {
+pub(crate) fn step_numbers(
+    lo: f64,
+    hi: f64,
+    inclusive: bool,
+    step: f64,
+    span: Span,
+) -> Res<Vec<f64>> {
     if step <= 0.0 {
         return Err(Diagnostic::new("a step must be above 0", span));
     }
@@ -2655,7 +3624,11 @@ pub(crate) fn step_numbers(lo: f64, hi: f64, inclusive: bool, step: f64, span: S
     }
     let mut values: Vec<f64> = (0..=count as usize).map(|i| lo + i as f64 * step).collect();
     // `..<` leaves the end out, even when a step lands on it
-    if !inclusive && values.last().is_some_and(|last| (hi - last).abs() < step * 1e-9) {
+    if !inclusive
+        && values
+            .last()
+            .is_some_and(|last| (hi - last).abs() < step * 1e-9)
+    {
         values.pop();
     }
     Ok(values)
@@ -2726,20 +3699,51 @@ mod tests {
 }";
 
     fn has_exp(code: &[Instr]) -> bool {
-        code.iter().any(|i| matches!(i, Instr::Call { f: Fn1::Exp, .. }))
+        code.iter()
+            .any(|i| matches!(i, Instr::Call { f: Fn1::Exp, .. }))
     }
 
     #[test]
     fn work_runs_at_the_rate_of_what_it_depends_on() {
-        let x = KArg::Port { unit: Unit::Num, rate: Rate::Audio };
+        let x = KArg::Port {
+            unit: Unit::Num,
+            rate: Rate::Audio,
+        };
         // a cutoff known while compiling: the coefficient is worked out once, at note start
-        let k = kernel(ONE_POLE, &[x.clone(), KArg::Const { unit: Unit::Hz, value: 800.0 }]);
+        let k = kernel(
+            ONE_POLE,
+            &[
+                x.clone(),
+                KArg::Const {
+                    unit: Unit::Hz,
+                    value: 800.0,
+                },
+            ],
+        );
         assert!(has_exp(&k.init) && !has_exp(&k.block) && !has_exp(&k.code));
         // a cutoff that changes once per block: once per block
-        let k = kernel(ONE_POLE, &[x.clone(), KArg::Port { unit: Unit::Hz, rate: Rate::Control }]);
+        let k = kernel(
+            ONE_POLE,
+            &[
+                x.clone(),
+                KArg::Port {
+                    unit: Unit::Hz,
+                    rate: Rate::Control,
+                },
+            ],
+        );
         assert!(has_exp(&k.block) && !has_exp(&k.code));
         // one that changes every sample: every sample
-        let k = kernel(ONE_POLE, &[x, KArg::Port { unit: Unit::Hz, rate: Rate::Audio }]);
+        let k = kernel(
+            ONE_POLE,
+            &[
+                x,
+                KArg::Port {
+                    unit: Unit::Hz,
+                    rate: Rate::Audio,
+                },
+            ],
+        );
         assert!(has_exp(&k.code));
     }
 
@@ -2747,9 +3751,24 @@ mod tests {
     fn several_results_come_from_one_kernel() {
         let k = kernel(
             "fn split(x, c: hz) -> (low, high) {\n state y = 0\n y = y + (x - y) * 0.1\n low = y\n high = x - y\n}",
-            &[KArg::Port { unit: Unit::Num, rate: Rate::Audio }, KArg::Const { unit: Unit::Hz, value: 1.0 }],
+            &[
+                KArg::Port {
+                    unit: Unit::Num,
+                    rate: Rate::Audio,
+                },
+                KArg::Const {
+                    unit: Unit::Hz,
+                    value: 1.0,
+                },
+            ],
         );
-        assert_eq!(k.outputs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["low", "high"]);
+        assert_eq!(
+            k.outputs
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["low", "high"]
+        );
         assert_eq!(k.state_init.len(), 1, "the body ran once for both results");
     }
 
@@ -2757,9 +3776,18 @@ mod tests {
     fn a_state_starts_from_a_note_start_value() {
         let k = kernel(
             "fn glide(x: hz) {\n state y = x\n y = y + (x - y) * 0.01\n y\n}",
-            &[KArg::Port { unit: Unit::Hz, rate: Rate::Audio }],
+            &[KArg::Port {
+                unit: Unit::Hz,
+                rate: Rate::Audio,
+            }],
         );
-        assert!(k.init.iter().any(|i| matches!(i, Instr::StoreState { .. })), "the start is stored at note start");
-        assert!(k.init.iter().any(|i| matches!(i, Instr::Input { .. })), "from the input's first sample");
+        assert!(
+            k.init.iter().any(|i| matches!(i, Instr::StoreState { .. })),
+            "the start is stored at note start"
+        );
+        assert!(
+            k.init.iter().any(|i| matches!(i, Instr::Input { .. })),
+            "from the input's first sample"
+        );
     }
 }

@@ -7,7 +7,7 @@ pub(crate) struct Sounding {
     /// Each sounding note: when it is released, its voice, and the key holding it open (or `NO_KEY`).
     pub held: Vec<(u64, VoiceId, u32)>,
     /// Each `midi_out` note: when it ends, the key holding it, and the note.
-    pub midi: Vec<(u64, u32, niminal_lang::MidiNote)>,
+    pub midi: Vec<(u64, u32, niminal_lang::MidiNote, u64)>,
 }
 
 impl Sounding {

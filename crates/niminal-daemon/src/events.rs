@@ -24,7 +24,9 @@ impl<'de> Deserialize<'de> for At {
                 .map(At::Sample)
                 .ok_or_else(|| de::Error::custom("`at` as a number is a whole sample count")),
             serde_json::Value::String(s) if s == "now" => Ok(At::Now),
-            _ => Err(de::Error::custom("`at` must be an absolute sample count or \"now\"")),
+            _ => Err(de::Error::custom(
+                "`at` must be an absolute sample count or \"now\"",
+            )),
         }
     }
 }
@@ -45,10 +47,14 @@ pub enum Op {
     /// Compile definitions and edit routing as one graph change, with no intermediate graph.
     Transaction {
         at: At,
-        #[serde(default)] source: String,
-        #[serde(default)] dir: Option<String>,
-        #[serde(default)] edits: Vec<crate::RoutingEdit>,
-        #[serde(default)] tag: Option<String>,
+        #[serde(default)]
+        source: String,
+        #[serde(default)]
+        dir: Option<String>,
+        #[serde(default)]
+        edits: Vec<crate::RoutingEdit>,
+        #[serde(default)]
+        tag: Option<String>,
     },
     /// Atomically edit this connection's processor instances, buses and audio connections.
     Routing {
@@ -58,12 +64,41 @@ pub enum Op {
         tag: Option<String>,
     },
     /// Map a parameter to a control or a block-delayed bus; null disconnects it.
-    Map { id: u64, at: At, param: String, #[serde(default)] source: Option<String>, #[serde(default = "first_channel")] channel: usize,
-        #[serde(default = "unity")] scale: f32, #[serde(default)] offset: f32, #[serde(default)] tag: Option<String> },
+    Map {
+        id: u64,
+        at: At,
+        param: String,
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default = "first_channel")]
+        channel: usize,
+        #[serde(default = "unity")]
+        scale: f32,
+        #[serde(default)]
+        offset: f32,
+        #[serde(default)]
+        tag: Option<String>,
+    },
     /// Replace a fixed-shape array control on a held note.
-    Array { id: u64, at: At, param: String, values: Vec<Value>, #[serde(default)] glide: Option<Time>, #[serde(default)] tag: Option<String> },
+    Array {
+        id: u64,
+        at: At,
+        param: String,
+        values: Vec<Value>,
+        #[serde(default)]
+        glide: Option<Time>,
+        #[serde(default)]
+        tag: Option<String>,
+    },
     /// Select a prepared shared buffer for a held note.
-    BindBuffer { id: u64, at: At, param: String, buffer: String, #[serde(default)] tag: Option<String> },
+    BindBuffer {
+        id: u64,
+        at: At,
+        param: String,
+        buffer: String,
+        #[serde(default)]
+        tag: Option<String>,
+    },
     /// Replace a range of a declared shared buffer, before notes at this sample.
     BufferWrite {
         name: String,
@@ -161,6 +196,7 @@ pub enum Op {
 /// What came of a batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sent {
+    pub notes: Vec<NoteReceipt>,
     pub transactions: Vec<TransactionReceipt>,
     pub accepted: usize,
     /// Events whose time had passed: they sounded at once.
@@ -178,9 +214,22 @@ pub struct Cancelled {
     pub released: usize,
 }
 
-fn first_channel() -> usize { 1 }
-fn unity() -> f32 { 1.0 }
+fn first_channel() -> usize {
+    1
+}
+fn unity() -> f32 {
+    1.0
+}
 
 /// An accepted graph transaction and its effective scheduled sample.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TransactionReceipt { pub id: u64, pub at: u64 }
+pub struct TransactionReceipt {
+    pub id: u64,
+    pub at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NoteReceipt {
+    pub event: usize,
+    pub token: u64,
+}

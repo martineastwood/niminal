@@ -181,6 +181,16 @@ fn graph_objects_are_private_and_shared_buses_are_explicit() {
         )],
     )
     .unwrap();
+    s.send_events(
+        2,
+        vec![Op::Define {
+            source: "instr flat() { 1 }".into(),
+            at: At::Now,
+            dir: None,
+            tag: None,
+        }],
+    )
+    .unwrap();
     let shared = Endpoint::Bus {
         id: "shared".into(),
         owner: Some(1),

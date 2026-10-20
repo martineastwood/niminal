@@ -141,7 +141,7 @@ impl Offline {
                 program
                     .buses
                     .iter()
-                    .position(|n| n == name)
+                    .position(|n| n == &format!("__client_{}::{name}", self.client))
                     .and_then(|i| captured.buses.get_mut(i))
                     .map(std::mem::take)
                     .unwrap_or_default()
@@ -157,7 +157,10 @@ impl Offline {
 
     /// Hand the engine's mixer to a renderer of its own, which the caller drives. The engine's audio is then
     /// made by that renderer, not by [`Offline::process`].
-    pub fn start_realtime(&mut self, config: niminal_daemon::RealtimeConfig) -> niminal_daemon::RealtimeRenderer {
+    pub fn start_realtime(
+        &mut self,
+        config: niminal_daemon::RealtimeConfig,
+    ) -> niminal_daemon::RealtimeRenderer {
         self.engine().session_mut().start_realtime(config)
     }
 
@@ -170,7 +173,9 @@ impl Offline {
     /// Like [`Offline::prepare_realtime`], but plans at most `max_windows`. Returns whether more is waiting.
     pub fn prepare_realtime_step(&mut self, max_windows: usize) -> bool {
         self.live.advance();
-        self.engine().session_mut().prepare_realtime_step(max_windows)
+        self.engine()
+            .session_mut()
+            .prepare_realtime_step(max_windows)
     }
 
     /// The sample up to which the engine has prepared audio.
@@ -210,8 +215,11 @@ impl Offline {
     }
 
     /// Send the engine events directly, as a client of its own, the way a program next to the sequencer would.
-    pub fn send_events(&mut self, ops: Vec<niminal_daemon::Op>) -> Result<niminal_daemon::Sent, Vec<niminal_daemon::Problem>> {
-        self.engine().session_mut().send_events(0, ops)
+    pub fn send_events(
+        &mut self,
+        ops: Vec<niminal_daemon::Op>,
+    ) -> Result<niminal_daemon::Sent, Vec<niminal_daemon::Problem>> {
+        self.engine().session_mut().send_events(self.client, ops)
     }
 
     pub fn sequencer(&mut self) -> &mut Live {
