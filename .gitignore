@@ -7,3 +7,4 @@ score/
 !examples/**/*.wav
 TODO.md
 goals.md
+design/
