@@ -58,7 +58,7 @@ The **niminal** sidebar lists scenes and tracks (mute, solo, stop). Compile erro
 
 | Setting | Purpose |
 | --- | --- |
-| `niminal.path` | Path to the `niminal` binary (the sound server) |
+| `niminal.path` | Path to the `niminal` binary (the audio server) |
 | `niminal.livePath` | Path to the `nimlive` binary (live sequencer + LSP) |
 | `niminal.port` | Server WebSocket port (default `7401`) |
 | `niminal.token` | Token if the server was started with `--token` |

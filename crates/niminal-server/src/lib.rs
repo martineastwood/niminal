@@ -1,4 +1,4 @@
-//! The niminal engine: a sound server. It holds the instruments, effects, tracks, buses and controls that
+//! The niminal engine: an audio server. It holds the instruments, effects, tracks, buses and controls that
 //! niminal code defines, and plays timestamped events (notes, parameter changes, control changes,
 //! definitions) sent to it through a public API. It knows nothing of clips, scenes or patterns:
 //! those are for the sequencer, which is one client among others.

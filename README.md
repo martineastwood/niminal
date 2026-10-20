@@ -2,12 +2,12 @@
 
 **Alpha.** APIs, syntax, and behavior change without notice. Expect rough edges, missing pieces, and the occasional crash. Not ready for production or long-term projects yet.
 
-niminal is a sound server with its own DSP language. It compiles instruments, effects and routing, and plays timestamped events sent to it by any client. It knows nothing of clips, scenes, patterns or tempo.
+niminal is an audio server with its own DSP language. It compiles instruments, effects and routing, and plays timestamped events sent to it by any client. It knows nothing of clips, scenes, patterns or tempo.
 
 `nimlive` is the first client: a live-coding sequencer (the text-based Ableton) that adds clips, scenes, mini-notation patterns, tempo and quantized changes on top, and a VS Code extension to drive it. A tracker or a richer UI would be other clients of the same API.
 
 ```
-crates/      the sound server: engine, DSP language, WebSocket API, `niminal` CLI
+crates/      the audio server: engine, DSP language, WebSocket API, `niminal` CLI
 sequencer/   a client: the composition language, patterns, `nimlive`
 editors/     the VS Code extension, a client of `nimlive`
 clients/     JS and Python SDKs for the server's API
@@ -21,7 +21,7 @@ The server's crates never depend on `sequencer/`; it is a separate Cargo workspa
 
 You need a recent [Rust toolchain](https://rustup.rs/).
 
-From a clone of this repo, install the sound server and the live sequencer:
+From a clone of this repo, install the audio server and the live sequencer:
 
 ```sh
 cargo install --path crates/niminal-cli      # niminal
@@ -40,7 +40,7 @@ Open `saw_lead.nml` to see the language: tempo, instruments with units (`hz`, `d
 
 ## Live coding
 
-Start the sound server, then the live sequencer client:
+Start the audio server, then the live sequencer client:
 
 ```sh
 niminal server
@@ -67,7 +67,7 @@ The language server (`nimlive lsp`) works without a server for hover, completion
 
 ## What you get
 
-- **Live** — WebSocket server, REPL, `send`, and editor integration; quantize changes to musical time. `niminal server` is the sound server (the engine), with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
+- **Live** — WebSocket server, REPL, `send`, and editor integration; quantize changes to musical time. `niminal server` is the audio server (the engine), with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
 - **Frontend API** — Browser, Node and Python clients can own private DSP definitions, route and modulate processors, stream WAV files, inspect voice lifecycle and DSP reports, view waveform scopes, capture live output and run independent offline exports. See the [engine API](docs/src/content/docs/reference/engine-api.md) and [client examples](clients/examples/).
 - **Offline** — `nimlive render` renders a piece to audio; `niminal replay` plays a log of timestamped engine events to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
@@ -79,7 +79,7 @@ The language server (`nimlive lsp`) works without a server for hover, completion
 | Path | Purpose |
 | --- | --- |
 | `crates/niminal-cli` | `niminal` command-line tool |
-| `crates/niminal-server` | The engine: a sound server that plays events stamped in absolute samples |
+| `crates/niminal-server` | The engine: an audio server that plays events stamped in absolute samples |
 | `crates/niminal-live` | The live sequencer: clips, scenes, quantize, keyboards; a client of the engine's API |
 | `crates/niminal-*` | Language, DSP, LSP, and related libraries |
 | `examples/` | Example `.nml` pieces |

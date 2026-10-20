@@ -15,7 +15,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      # the sequencer is a client of the sound server above and has its own workspace
+      # the sequencer is a client of the audio server above and has its own workspace
       - run: cargo clippy --all-targets -- -D warnings
         working-directory: sequencer
       - run: cargo test

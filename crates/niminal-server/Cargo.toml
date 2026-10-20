@@ -3,7 +3,7 @@ name = "niminal-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The niminal sound server: generic timestamped events and DSP definitions"
+description = "The niminal audio server: generic timestamped events and DSP definitions"
 
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }

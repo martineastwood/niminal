@@ -239,7 +239,7 @@
         "niminal.path": {
           "type": "string",
           "default": "niminal",
-          "description": "The niminal executable, the sound server that \"niminal: Start Server in a Terminal\" runs."
+          "description": "The niminal executable, the audio server that \"niminal: Start Server in a Terminal\" runs."
         },
         "niminal.livePath": {
           "type": "string",

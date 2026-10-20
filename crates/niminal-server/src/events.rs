@@ -1,4 +1,4 @@
-//! The engine's event API: timestamped things a client asks the sound server to do.
+//! The engine's event API: timestamped things a client asks the audio server to do.
 
 use std::collections::BTreeMap;
 

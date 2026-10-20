@@ -3,7 +3,7 @@ name = "niminal-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The niminal command line: the sound server, the language server and offline tools"
+description = "The niminal command line: the audio server, the language server and offline tools"
 
 [[bin]]
 name = "niminal"

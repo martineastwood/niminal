@@ -78,7 +78,7 @@ struct ServerArgs {
 enum Command {
     /// Re-render a session to a WAV file from the log a server recorded.
     Replay(ReplayArgs),
-    /// Run the sound server: schedule generic events from any client.
+    /// Run the audio server: schedule generic events from any client.
     Server(ServerArgs),
     /// Print the built-in opcode reference as Markdown, for the docs site.
     Docs,

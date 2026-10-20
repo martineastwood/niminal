@@ -1,4 +1,4 @@
-//! The boundary between a client and the sound server: the server takes DSP definitions, with
+//! The boundary between a client and the audio server: the server takes DSP definitions, with
 //! musical time resolved by the client.
 
 use crate::ast::{Item, Stmt};
@@ -6,7 +6,7 @@ use crate::parser::parse_spanned;
 use crate::{Diagnostic, Tok, lex};
 use niminal_score::{Tempo, Value};
 
-/// Resolve musical parameter values before sending them to the sound server.
+/// Resolve musical parameter values before sending them to the audio server.
 pub fn dsp_value(value: Value, tempo: Tempo) -> Value {
     match value {
         Value::Beats(n) => Value::Seconds(n * 60.0 / tempo.bpm),
@@ -34,7 +34,7 @@ pub fn validate_dsp(source: &str) -> Result<(), Diagnostic> {
         };
         if !allowed {
             return Err(Diagnostic::new(
-                "the sound server accepts only DSP definitions; sequencing and musical timing belong to the client",
+                "the audio server accepts only DSP definitions; sequencing and musical timing belong to the client",
                 span,
             ));
         }

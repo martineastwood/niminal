@@ -3,7 +3,7 @@ title: Command line
 description: The niminal subcommands.
 ---
 
-There are two programs. `niminal` is the sound server. `nimlive` is a live-coding sequencer that is one client of it; it owns clips, scenes, patterns and tempo. Install from source (needs a [Rust toolchain](https://rustup.rs/)):
+There are two programs. `niminal` is the audio server. `nimlive` is a live-coding sequencer that is one client of it; it owns clips, scenes, patterns and tempo. Install from source (needs a [Rust toolchain](https://rustup.rs/)):
 
 ```sh
 cargo install --path crates/niminal-cli   # niminal
@@ -16,7 +16,7 @@ Run `niminal <command> --help` or `nimlive <command> --help` for every flag.
 
 | Command | What it does |
 | --- | --- |
-| `niminal server` | Generic sound server and [events API](/reference/engine-api/) on port 7401 (`--port`), with audio, `--log`, `--token`, `--no-audio`. |
+| `niminal server` | Generic audio server and [events API](/reference/engine-api/) on port 7401 (`--port`), with audio, `--log`, `--token`, `--no-audio`. |
 | `niminal replay` | Render a session log (what a server recorded with `--log`, or any client wrote) to WAV. |
 | `nimlive render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, `--stems` (one file per track and bus into the `--out` folder). |
 | `nimlive live [FILE]` | Separate live sequencer client: clips, scenes, quantized edits, file watch, `--midi`, `--osc-port`. Connects to `--engine-port` (7401); live-control API on `--port` (7400). |

@@ -306,7 +306,7 @@ impl Parser {
         } else {
             Err(self
                 .unexpected("a definition such as `instr`, `track` or `bus`")
-                .with_help("the sound server takes DSP definitions only; sequencing belongs to the client"))
+                .with_help("the audio server takes DSP definitions only; sequencing belongs to the client"))
         }
     }
 
