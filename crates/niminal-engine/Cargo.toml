@@ -5,5 +5,8 @@ edition.workspace = true
 license.workspace = true
 description = "niminal DSP runtime: graph execution, opcodes, voices"
 
+[dependencies]
+realfft = "3.4"
+
 [dev-dependencies]
 hound = "3"

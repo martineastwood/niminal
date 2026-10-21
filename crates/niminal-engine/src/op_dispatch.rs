@@ -301,5 +301,10 @@ op_enum! {
         PitchShift(ops::PitchShift),
         Formant(ops::Formant),
         Resonator(ops::Resonator),
+        Convolve(ops::Convolve),
+        Fft(ops::Fft),
+        Ifft(ops::Ifft),
+        SpectralFreeze(ops::SpectralFreeze),
+        SpectralDelay(ops::SpectralDelay),
     }
 }

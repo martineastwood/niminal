@@ -32,6 +32,8 @@ mod pitch_shift;
 mod formant;
 mod distortion;
 mod resonator;
+mod convolve;
+mod spectral;
 
 pub use bitcrush::Bitcrush;
 pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
@@ -71,6 +73,8 @@ pub use pitch_shift::PitchShift;
 pub use formant::Formant;
 pub use distortion::Distortion;
 pub use resonator::Resonator;
+pub use convolve::{Convolve, IrSpectrum};
+pub use spectral::{Fft, Ifft, SpectralChain, SpectralDelay, SpectralFreeze};
 
 mod lifetime;
 pub use lifetime::FinishWhen;

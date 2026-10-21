@@ -159,6 +159,16 @@ pub enum Build {
     Pan,
     /// `to_layout`: converts between layouts.
     ToLayout,
+    /// `convolve`: the compiler loads the IR buffer and builds the IrSpectrum.
+    Convolve,
+    /// `fft`: the compiler creates the SpectralChain shared with downstream ops.
+    Fft,
+    /// `ifft`: the compiler wires the SpectralChain from the upstream FFT.
+    Ifft,
+    /// `freeze`: the compiler wires the SpectralChain from the upstream FFT.
+    SpectralFreeze,
+    /// `spectral_delay`: per-bin delay with spread and feedback, compiler wires SpectralChain.
+    SpectralDelay,
 }
 
 pub struct OpSpec {
@@ -188,6 +198,7 @@ impl OpSpec {
         match &self.build {
             Build::Builtin(f) => f(args).map(Some),
             Build::Pan | Build::ToLayout => Ok(None),
+            Build::Convolve | Build::Fft | Build::Ifft | Build::SpectralFreeze | Build::SpectralDelay => Ok(None),
         }
     }
 }
@@ -536,6 +547,52 @@ impl Registry {
                     opt("decay", Kind::Signal(Unit::Time)),
                 ],
                 Build::Builtin(|_| Ok(Box::new(Resonator::default()))),
+            ),
+            OpSpec::new(
+                "convolve",
+                "Convolution with an impulse response buffer: `x.convolve(ir)`. Partitioned for real-time use; `mix` blends wet with dry. Latency is one block.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("mix", SIGNAL),
+                ],
+                Build::Convolve,
+            ),
+            OpSpec::new(
+                "fft",
+                "Forward STFT: `x.fft(1024)`. Analyses the signal into spectral bins for downstream spectral ops. The output is passed to `ifft` or spectral ops like `freeze`. Size must be a power of two, 128\u{2013}8192.",
+                vec![
+                    req("x", SIGNAL),
+                    setting("size", SIGNAL),
+                ],
+                Build::Fft,
+            ),
+            OpSpec::new(
+                "ifft",
+                "Inverse STFT: resynthesises a spectral chain back to audio. `chain.ifft()` where `chain` is the output of `fft` or a spectral op.",
+                vec![
+                    req("chain", SIGNAL),
+                ],
+                Build::Ifft,
+            ),
+            OpSpec::new(
+                "freeze",
+                "Holds the current spectral frame when `freeze` > 0: `chain.freeze(trigger)`. While frozen, magnitudes are locked but phases keep advancing to avoid clicks.",
+                vec![
+                    req("chain", SIGNAL),
+                    opt("freeze", SIGNAL),
+                ],
+                Build::SpectralFreeze,
+            ),
+            OpSpec::new(
+                "spectral_delay",
+                "Per-bin spectral delay: `chain.spectral_delay(time: 0.2, spread: 0.5, feedback: 0.4)`. Higher bins are delayed more when `spread` > 0. Feedback re-injects delayed energy.",
+                vec![
+                    req("chain", SIGNAL),
+                    opt("time", SIGNAL),
+                    opt("spread", SIGNAL),
+                    opt("feedback", SIGNAL),
+                ],
+                Build::SpectralDelay,
             ),
         ];
         Registry { ops }
