@@ -205,6 +205,9 @@ fn plays_its_namesake(node: &NodeDecl) -> bool {
 }
 
 /// Every use of the name `from` in `e` becomes `to`.
+// inline(never): rename and for_each_child_mut recurse through each other; letting LLVM inline them
+// made `codegen-units = 1` builds (release-fast) take 10+ minutes instead of seconds.
+#[inline(never)]
 fn rename(e: &mut Expr, from: &str, to: &str) {
     if let ExprKind::Name(name) = &mut e.kind
         && name == from

@@ -323,6 +323,7 @@ pub enum ExprKind {
 
 impl Expr {
     /// Call `f` on each expression directly inside this one, including those in nested blocks.
+    #[inline(never)]
     pub fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Expr)) {
         let block = |stmts: &mut Vec<Stmt>, f: &mut dyn FnMut(&mut Expr)| {
             for s in stmts {
