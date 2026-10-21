@@ -764,8 +764,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
         names.samples = owned_samples(options, &decl.name.name);
         match compile_node(
-            decl,
-            matches!(item, Item::Node(_)),
+            item,
             &instruments,
             &failed,
             &samples_state.names,
@@ -859,8 +858,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
 /// A node's chain, plus the instrument named by its `instrument = ...` line.
 /// `None` when that instrument failed to compile, which is already reported.
 fn compile_node(
-    decl: &NodeDecl,
-    collection: bool,
+    item: &Item,
     instruments: &[Instrument],
     failed: &[&str],
     sample_names: &[String],
@@ -868,6 +866,11 @@ fn compile_node(
     registry: &Registry,
     names: &Names,
 ) -> Res<Option<NodeInfo>> {
+    let (decl, collection) = match item {
+        Item::Node(decl) => (decl, true),
+        Item::Processor(decl) => (decl, false),
+        _ => unreachable!("only nodes and processors have playback chains"),
+    };
     let mut instrument_line: Option<&Expr> = None;
     let mut mixer = Mixer::default();
     let mut rest: Vec<&Stmt> = Vec::new();
