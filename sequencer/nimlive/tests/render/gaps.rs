@@ -267,7 +267,7 @@ fn pitch_option_names_the_parameter_notes_set() {
 fn clips_play_through_the_renamed_pitch() {
     let play = |def: &str| {
         let p = program(&format!(
-            "{def}\nclip t {{ instrument: a }}\nclip c {{ notes: [c4 e4] }}\nt.play(c)"
+            "{def}\nc = [c4 e4]\nclip t {{ instrument: a, notes: c }}\nt.start"
         ));
         mono(
             render_with(

@@ -3,11 +3,9 @@ title: Performance
 description: Clips, scenes, live commands, quantization, and control.
 ---
 
-The performance layer is built around **clips** and **scenes**: clips carry an instrument and lanes on a timeline, and scenes start sets of clips. Instruments route audio to buses and persistent fx instances. Arrangements sequence the same structures for offline renders.
+The performance layer is built around **clips**. A clip is bound to an instrument and holds **lanes** on a timeline: notes that trigger it, and parameters it automates. You start, stop, mute, solo and transform clips, and a **scene** is a list of clips to do that to several at once. An **arrangement** is a timeline of those commands.
 
-## Playing clips
-
-Start, stop, mute, solo and transform a clip by its name:
+## Clips
 
 ```nml
 clip bass {
@@ -15,20 +13,21 @@ clip bass {
   notes:  [c2 ~ c2 eb2 ~ g1 bb1 ~]
   gain:   [0db -6db -3db]
 }
-clip lead {
-  instrument: pluck(bright: 0.8)
-  notes:  [c4 e4 g4 b4]
-}
 
-scene verse { bass, lead }       // short for { bass: bass, lead: lead }
-
-verse.start
+bass.start
 bass.reverse
-lead.transpose(+5st)
 bass.mute
 bass.unmute
-verse.stop
+bass.stop
 ```
+
+Start, stop, mute, solo and transform a clip by its name. The commands are written after the thing they act on: `start`, `stop`, `mute`, `unmute`, `solo` and `unsolo`. Anything else after the dot is a change to what the clip plays (see [Live commands](#live-commands)). `hush`, `panic`, `reset`, `new` and `unsolo` (every solo at once) act on everything. `capture last 32bars as jam` writes the notes that played in that window to `score/jam.nms`.
+
+- **Starting a clip that is already playing does nothing.** It carries on. To begin again, `stop` it and `start` it.
+- **A clip has an instrument.** A clip without one can exist, but it plays nothing, and the language server says so. There is no way to play an instrument by naming it: declare a clip that plays it.
+- **A clip can be made from another**, keeping its instrument and lanes and applying a change: `clip bass_chorus = bass.transpose(+5st)`. It is a clip of its own, with its own mute and solo.
+- **Mute and solo belong to the clip** and stay until you `unmute` or `unsolo` it: `stop`, `start`, `hush`, `panic` and starting a scene do not clear them. `reset` and `new` do. The editor shows them in the status bar (`SOLO bass · 2 muted`) so a clip that has gone quiet is easy to find.
+- Voice limits belong to instruments and are counted separately for each clip.
 
 Shared effects live in fx declarations. Buses collect audio from explicit sends:
 
@@ -39,18 +38,13 @@ fx room {
 }
 ```
 
-The commands are written after the thing they act on: `start`, `stop`, `mute`, `unmute`, `solo` and `unsolo` on a clip, `start` and `stop` on a scene. Anything else after the dot is a change to what the clip plays (below). Put other material on a clip with `lead.play(answer)`. `hush`, `panic`, `reset`, `new` and `unsolo` (every solo at once) act on everything. `capture last 32bars as jam` writes the notes that played in that window to `score/jam.nms`.
-
-Naming an instrument in a play command or scene creates an implicit clip of that name. `pluck.play(pattern)` and `bass.play(pattern)` start anonymous clips on the named instrument or clip. Voice limits belong to instruments and are counted separately for each clip name. Mute and live edits belong to the clip; switching to another clip does not carry them over.
-
 See [Routing](/reference/language/routing/) for shared effects, sends and continuous generators.
 
-## Clips
-
-A clip combines an instrument with **lanes** on one timeline. A clip without an instrument is reusable material. Define shared grids and patterns outside the clip, then reference them as `notes: my_grid`.
+### Lanes
 
 ```nml
 clip riff {
+  instrument: pluck
   length: 2bars
   notes:  [c2 ~ eb2 g1 ~ c2 bb1 ~]
   gain:   [0db -6db -3db -9db]
@@ -59,29 +53,63 @@ clip riff {
 }
 ```
 
-- An arrangement can carry envelope lanes on an fx parameter, `bass_filter.tone: env[800hz 88bars 3khz]`, over the whole piece (applied when the arrangement is rendered).
+Define shared grids and patterns outside the clip, then reference them as `notes: my_grid`. A pattern such as `theme = [c4 e4 g4 b4]` is just notes: it has no instrument, so it is not a clip.
+
 - Envelope lanes, such as `bass_filter.tone: env[300hz 1bar.exp 3khz]`, move an fx parameter over the clip's timeline with the same literal and curves as an instrument envelope; they hold their last level, `.loop` repeats them, and they need no `|`.
 - Lane targets: `notes`, instrument parameters, qualified fx parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Bare lanes target the clip’s notes. Qualified lanes can target an fx shared by several clips.
 - **Step lanes** read at note start and cycle (polymeter); **`.per_note`** maps nth note → nth value.
 - Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip. A signal lane is a signal naming an fx parameter, as in `bass_filter.tone: sine.range(300hz, 3khz)`: the parameter follows it continuously (50 readings a second), one cycle per clip length, with or without notes.
-- Shorthand: `[c2 ~ eb2]` → `clip { notes: [...] }`.
+- **Length:** `length:` is a number of bars or beats (`2bars`, `6beats`, `3/2bars`; seconds are not accepted). Every lane spans the whole length, and the clip loops at that length, or plays once with `loop: false` and is then finished (not running, and free to be started again). Without a `length:` the clip runs freely, one bar per cycle, and `<a b>` alternates every bar. `riff.over(4bars)` stretches a clip without changing its definition, as a live change you can `undo`.
 - **`riff.set(bright: [0.9])`** — lanes are fields.
-- **Longer than a bar:** with `length: 2bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`). Without a `length:` a lane's cycle is one bar. `riff.over(4bars)` stretches the whole clip, and `riff.set(...)` lanes span it too.
+- **Longer than a bar:** with `length: 2bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`).
 
-## Scenes and arrangement
+## Scenes
+
+A scene is a list of clips that are started and stopped together:
 
 ```nml
-scene verse  { bass: riff, drums: groove, keys: ~ }
-scene chorus { bass: riff.transpose(+5st), drums: groove, keys: chords }
+scene verse  { bass, drums, lead }
+scene chorus { bass_chorus, drums, lead, chords }
+scene break  { drums }
 
+verse.start
+verse.mute
+verse.unmute
+verse.stop
+```
+
+A scene has no state of its own, and `verse.start` is `bass.start`, `drums.start` and `lead.start`: clips that are already playing carry on, and **nothing outside the scene is touched**. `stop`, `mute`, `unmute`, `solo` and `unsolo` work the same way. A clip can be in several scenes, and you can still address it directly while a scene has started it: `bass.mute`.
+
+To swap one scene for another, stop one and start the other. They land together, and a clip they share keeps playing with what had been done to it, because a stop and a start of the same clip at the same moment cancel out:
+
+```nml
+verse.stop
 chorus.start @ next 4bars
 ```
 
-A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only a `notes` lane, and everything below works the same on both. A clip with no `length:` runs freely: its cycles keep counting, so `<a b>` and `every` alternate. Give it a `length:` and its lanes span that length and it loops, starting over each time.
+Stopping a scene stops all its clips, even one that another running scene also lists. A scene can set when it lands, which then holds for every clip it starts: `scene verse { bass, lead, quantize: 4bars }`.
 
-Launching a scene starts the clips it lists and **stops every other clip** that has an instrument, so a scene is the whole picture: leave a clip out and it falls silent. `~` still works for a clip you want to name as silent. To add a fill for a bar, write it as a `play` line instead of a scene.
+## Arrangements
 
-An `arrangement` plays scenes in order, each for a length, and sections can have a tempo and meter of their own, one for each section:
+An arrangement is a timeline of commands, counted from when it is started. It is launched and stopped like a clip:
+
+```nml
+arrangement song {
+  at +0bars  verse.start
+  at +16bars verse.stop
+  at +16bars chorus.start
+  at +24bars bass_chorus.mute
+  at +26bars bass_chorus.unmute
+  at +32bars hush
+}
+
+song.start
+song.stop        // drops the lines that have not come yet; what is playing carries on
+```
+
+Starting an arrangement again while it runs adds another copy, so stop it first. Lines are the same commands as anywhere else, with the times written before them.
+
+`sections` is shorthand for scenes one after another. Each section stops the clips of the one before that it does not use, starts its own, and the arrangement stops everything when the last one ends:
 
 ```nml
 arrangement song {
@@ -91,22 +119,22 @@ arrangement song {
 }
 ```
 
-A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move an fx parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
+A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move an fx parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Per-section tempo and meter, and these envelopes, apply when an arrangement is rendered (`nimlive render file.nml song`); a live session takes the tempo from `tempo` commands. Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
 
 See [Score model](/reference/score-model/) for arrangement-level lanes.
 
 ## Live commands
 
-While a scene is playing you can change what a clip plays by writing the change after its name. It lands on the next boundary, like a `play`, and the clip's clip starts over there:
+While a clip is playing you can change what it plays by writing the change after its name. The change lands on the next loop point of the clip, and the clip **keeps its place in the loop**: a four-bar clip changed in its third bar goes on with the third bar, changed.
 
 ```nml
-verse.start
+bass.start
 bass.reverse            // the bass clip now plays backwards
 lead.transpose(+5st).thin(25%)
 verse.stop              // every clip in the scene stops together
 ```
 
-Each change builds on what the clip is playing, in the order you made them, and the clips panel shows the stack (`▶ riff · reverse → thin(25%)`):
+Each change builds on what the clip is playing, in the order you made them, and the clips panel shows the stack (`▶ · reverse → thin(25%)`):
 
 ```nml
 bass.reverse
@@ -119,33 +147,34 @@ bass.clear              // takes off all of them
 
 - `set` gives the clip a lane in place of its own, so typing `bass.set(` offers the lanes the clip's instrument has. Setting the same lane again just replaces the earlier value, and `undo` brings the earlier one back.
 - One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A clip carries at most 16.
-- Redefining the clip itself (`riff = …`) keeps your changes and applies them to the new clip.
-- `lead.play(…)`, `lead.start` or starting a scene that has it starts the clip fresh, with no changes.
+- These changes are the one way the clip's source and what plays can differ, and they are always visible in the panel and one `clear` away from gone. To change what a clip plays for good, edit the clip and evaluate it: the clip carries on in place, with your changes on top. Evaluating a pattern the clip uses does the same.
+- Stopping a clip and starting it again begins from the clip as written, with no changes.
 - `thin` drops the same notes for the same amount wherever it is written, so undoing something else doesn't change which notes it drops.
-- Only a live session can do this. In a file these lines do nothing, so you can keep them in a scratch file next to your song: write the change into the play line to make it part of the piece.
+- A scene is a list of clips and takes no changes: change one of its clips.
+- Only a live session can do this. In a file these lines do nothing, so you can keep them in a scratch file next to your song: put the change into the clip to make it part of the piece.
 
 ## Timed commands and the transport
 
 Two small pieces of syntax say *when*, and they answer different questions:
 
 - **`@ next 4bars`, written after a command, is when the change lands.** It is a musical boundary, counted from now. Use it live: `bass.reverse @ next 4bars`.
-- **`at +4bars`, written before a command, is when in the timeline it happens,** counted from when the code lands. Use it to lay out a section; the times line up down the left of the file.
+- **`at +4bars`, written before a command, is when in the timeline it happens,** counted from when the code lands. Use it to lay out a section; the times line up down the left of the file. Put them in an [arrangement](#arrangements) to start, stop and cancel the whole timeline by name.
 
 ```nml
 verse.start
-verse.start then chorus after 4bars   // follow action: chorus 4 bars after verse
+at +4bars verse.stop
 at +4bars chorus.start
 at +8bars bass.mute
 at +12bars hush
 ```
 
-`then` after a `start` queues another launch relative to the first (or to `at +N` when both are used). Live, the same form works, or the `launch` RPC with a `then` object. Named undo is `bass.undo(reverse)` (also via `edit` with `change: "undo(reverse)"`).
+A command can be written for an absolute time in a file (`at 8bars hush`), counted from the start of the file or from the last `reset`. In a live session the clock keeps counting, so submitting such a line again after its time does nothing. Prefer `at +N` in anything you will submit more than once.
 
-`at bar 5 chorus.start` is at bar 5 on the session's clock, which keeps counting while the server runs, so submitting it again after bar 5 does nothing. Prefer `at +N` in anything you will submit more than once.
-
-`reset` stops everything (like `hush`) and makes the next bar line bar 1, so `at bar 5` and the bar numbers in the status bar count from there again. It lands on the next bar like other commands: send it on its own, then the timeline. In a render, `reset` is a `hush`.
+`reset` stops everything (like `hush`), clears every mute and solo, and makes the next bar line bar 1. It lands on the next bar like other commands: send it on its own, then the timeline. In a render, `reset` is a `hush`.
 
 `new` is `reset` for starting another piece in the same live session: it also forgets every definition sent so far (instruments, kits, clips, scenes, tempo), so the next code starts from nothing. Put the new piece's definitions after it in the same evaluation, or send them afterwards. The output layout (`config { channels: ... }`) is kept, because it can only be chosen when the server starts. In a render `new` is a `hush`.
+
+`hush` stops every clip and lets what is sounding ring out. `panic` stops everything at once, effect tails and pending changes included. Neither touches mute or solo.
 
 `capture last 32bars as jam` writes the notes that clips and scored events played in that window to `score/jam.nms`, as a section you can load again. Times are rebased so the window starts at beat 0. In a render or session replay the command does nothing.
 
@@ -155,16 +184,16 @@ Code compiles immediately; changes **land** on a musical boundary. Most specific
 
 1. `@ next 4bars` (or similar) on the statement
 2. `--quantize` / REPL `:quantize` for that evaluation
-3. `quantize` in a definition (`quantize: 1beat` in a `clip` or `scene`, `quantize = 1beat` in an `instr`)
+3. `quantize` in what the command is about (`quantize: 1beat` in a `scene`, else in a `clip`), or in the definition being changed (`quantize = 1beat` in an `instr`). A scene's setting beats its clips' for that start, so the scene lands as one.
 4. `config { quantize: { ... } }` for a whole kind of change
-5. Built-in defaults by kind: plays on the next **cycle**, instrument redefinitions on the next **beat**, tempo and most other changes on the next **bar**
+5. Built-in defaults by kind: starting a clip on the next **cycle**, changing or redefining a clip on its next **cycle**, instrument redefinitions on the next **beat**, tempo and most other changes on the next **bar**
 
 ```nml
 tempo 124bpm @ next bar over 2bars
 bass.reverse @ next 4bars
 ```
 
-Boundaries: `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. One evaluation is one transaction. Last write wins for pending changes.
+Boundaries: `now`, `beat`, `bar`, `N beats`, `N bars`, `cycle`. A **cycle** is the clip's own length: a change to a clip that is playing lands at its next loop point, counted from when it began (one bar for a clip with no `length:`), and anything else waits for the next bar. One evaluation is one transaction. Last write wins for pending changes.
 
 A project sets the quantum of a kind of change in `config`, and one definition can set its own:
 
@@ -172,22 +201,22 @@ A project sets the quantum of a kind of change in `config`, and one definition c
 config {
   quantize: {
     default: 1bar     // commands and everything not named below
-    play:    cycle     // starting a clip
+    play:    cycle     // starting a clip or scene, and changing a clip
     instr:   1beat    // instrument redefinitions
-    clip:   1bar
+    clip:    cycle    // redefining a clip
     ctl:     now
     tempo:   1bar
   }
 }
 
-clip fill { notes: [c4 e4 g4 b4], quantize: 1beat }
+clip fill { instrument: pluck, notes: [c4 e4 g4 b4], quantize: 1beat }
 ```
 
 Each quantum is `now`, `beat`, `bar`, `cycle`, `1beat` or `4bars`; a kind left out keeps its built-in one. The settings take effect once the `config` has landed (they are changes like any other), and `config` also takes `channels` (see [Routing](/reference/language/routing/)).
 
 ### Tempo and meter
 
-A new tempo keeps every running clip where it is in its bar: a bar that was three eighths played is still three eighths played, only shorter or longer. Commands set for later (`at +8bars …`, `at bar 9 …`) keep their place in the music too, and so do the bar lines: if it was bar 4, beat 2.5, it still is.
+A new tempo keeps every running clip where it is in its bar: a bar that was three eighths played is still three eighths played, only shorter or longer. Commands set for later (`at +8bars …`) keep their place in the music too, and so do the bar lines: if it was bar 4, beat 2.5, it still is.
 
 A new `meter` does the same. Going from `4/4` to `3/4` halfway through a bar leaves you halfway through a bar that is now three beats long, and the clips carry on from there with their cycles squeezed into it. Nothing restarts. (A `meter` and a `tempo` that change together keep the bar the same length, so nothing needs to move.)
 
@@ -228,14 +257,16 @@ clip riff {
   notes: cat(motif(c3), stairs(4))
 }
 
-// anonymous clips inside a def
-def fill() {
-  clip {
-    length: 1bar
-    notes: [c4 e4 g4]
-  }
+// a def can build a lane for a clip
+def fill(root) {
+  [root e4 g4]
 }
-lead.play(fill())
+
+clip fill_clip {
+  instrument: pluck
+  length: 1bar
+  notes: fill(c4)
+}
 ```
 
 Pattern atoms resolve `def` parameters (`[root ~]`), `for` / `if` / arithmetic work on notes and numbers, and `stack` / `cat` / `seq` combine patterns. Top-level `for` and `if` expand notes and commands while compiling:
@@ -246,9 +277,9 @@ for i in 0..<8 {
 }
 
 if 1 > 0 {
-  lead.play([c4 e4 g4])
+  verse.start
 } else {
-  lead.play([c3])
+  chorus.start
 }
 ```
 

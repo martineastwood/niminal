@@ -27,6 +27,7 @@ instr bass_voice(freq: hz) {
 }
 clip bass {
   instrument: bass_voice
+  notes: [c2 ~ c2 eb2 ~ g1 bb1 ~]
 }
 
 fx lead_fx {
@@ -39,8 +40,11 @@ instr lead_voice(freq: hz) {
   voice = pluck(bright: 0.8, freq: freq)
   lead_fx_audio += voice
 }
-clip lead { instrument: lead_voice }
+clip lead {
+  instrument: lead_voice
+  notes: [c4 e4 g4 b4].every(2, it.reverse)
+}
 
-bass.play([c2 ~ c2 eb2 ~ g1 bb1 ~])
-lead.play([c4 e4 g4 b4].every(2, it.reverse))
+bass.start
+lead.start
 at +4bars hush

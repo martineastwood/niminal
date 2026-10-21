@@ -36,12 +36,16 @@ mod playing;
 use eval::options;
 pub use eval::{Begin, CancelDone, CancelJob, EvalDone, EvalJob, ParsedEval};
 pub use input::ControlSignal;
-use playing::{Playing, apply_launch, apply_to_playing, join_edit, mentions_any};
+use playing::{Playing, apply_to_playing, depends_on, join_edit, mentions_any};
 
 /// A command that has happened, by node name so that it survives the program being replaced.
 #[derive(Clone)]
 pub(crate) enum NamedAction {
-    Play {
+    Start {
+        node: String,
+        clip: Clip,
+    },
+    Update {
         node: String,
         clip: Clip,
     },
@@ -63,6 +67,8 @@ pub(crate) enum NamedAction {
 pub(crate) struct HistoryEntry {
     pub at: f64,
     pub action: NamedAction,
+    /// The arrangement whose lines put this here, so that stopping it can take back what is still to come.
+    pub arrangement: Option<String>,
 }
 
 /// A tempo ramp changes the tempo this many times a beat.
@@ -141,18 +147,31 @@ pub struct PendingInfo {
     pub changes: Vec<String>,
 }
 
-/// A node as an editor shows it.
+/// A clip as an editor shows it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PartStatus {
+pub struct ClipStatus {
     pub name: String,
-    /// The clip playing on it now.
-    pub clip: Option<String>,
-    /// What the node was told to play (base clip text before live edits).
-    pub playing: Option<String>,
+    /// Is it playing? A clip that plays once is not, once it has finished.
+    pub running: bool,
     pub muted: bool,
     pub soloed: bool,
     /// The changes made to it live (`reverse`, `thin(25%)`), oldest first.
     pub edits: Vec<String>,
+}
+
+/// A scene as an editor shows it: a list of clips. It has no state of its own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneStatus {
+    pub name: String,
+    pub clips: Vec<String>,
+    /// How many of its clips are playing. A scene is active when all of them are.
+    pub running: usize,
+}
+
+impl SceneStatus {
+    pub fn active(&self) -> bool {
+        !self.clips.is_empty() && self.running == self.clips.len()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,6 +283,7 @@ impl Live {
             history: vec![HistoryEntry {
                 at: 0.0,
                 action: NamedAction::Origin,
+                arrangement: None,
             }],
             schedule,
             fetched_until: 0,
@@ -448,6 +468,15 @@ impl Live {
             self.sync_pending();
         }
         self.fetch_until(horizon);
+        // a clip that plays once and has finished is no longer running, and forgets what was done to it
+        let at = self.seconds(horizon);
+        let (schedule, nodes) = (&self.schedule, &self.program.nodes);
+        self.playing.retain(|name, _| {
+            nodes
+                .iter()
+                .position(|n| n.name == *name)
+                .is_some_and(|i| schedule.node_state(i, at).clip.is_some())
+        });
         let clock = self.clock;
         self.pending.retain(|p| !p.done || p.lands_at > clock);
         self.asked.retain(|a| a.lands_at > clock);
@@ -487,27 +516,50 @@ impl Live {
         }
     }
 
-    /// The project's nodes and what they are doing now.
-    pub fn parts(&self) -> Vec<PartStatus> {
+    /// The project's clips and what they are doing now.
+    pub fn clips(&self) -> Vec<ClipStatus> {
         let now = self.seconds(self.clock);
         self.program
             .nodes
             .iter()
             .enumerate()
             .skip(1)
-            // nodes that only process buses are not parts to play
+            // a node that only processes buses is not a clip to play
             .filter(|(_, t)| t.instrument.is_some())
             .map(|(i, t)| {
                 let state = self.schedule.node_state(i, now);
-                let record = self.playing.get(&t.name);
-                PartStatus {
+                let running = state.clip.is_some();
+                let record = self.playing.get(&t.name).filter(|p| running && p.running());
+                ClipStatus {
                     name: t.name.clone(),
-                    clip: state.clip,
-                    playing: record.map(|p| p.base.clone()),
+                    running,
                     muted: state.muted,
                     soloed: state.soloed,
                     edits: record.map(|p| p.edits.clone()).unwrap_or_default(),
                 }
+            })
+            .collect()
+    }
+
+    /// The project's scenes, with how many of their clips are playing.
+    pub fn scenes(&self) -> Vec<SceneStatus> {
+        let running: Vec<String> = self
+            .clips()
+            .into_iter()
+            .filter(|c| c.running)
+            .map(|c| c.name)
+            .collect();
+        self.project
+            .entries
+            .iter()
+            .filter_map(|e| {
+                let name = e.key.strip_prefix("scene:")?;
+                let clips = niminal_compose::scene_clips(&e.text);
+                Some(SceneStatus {
+                    name: name.to_string(),
+                    running: clips.iter().filter(|c| running.contains(c)).count(),
+                    clips,
+                })
             })
             .collect()
     }
@@ -613,6 +665,14 @@ impl Live {
 
     // ---- the project --------------------------------------------------------------
 
+    /// Like [`Live::projected`], without copying.
+    fn projected_ref(&self) -> (&Project, &BTreeMap<String, Playing>) {
+        match self.pending.last() {
+            Some(p) => (&p.project, &p.playing),
+            None => (&self.project, &self.playing),
+        }
+    }
+
     /// The project and what is playing as they will be once everything waiting has landed.
     fn projected(&self) -> (Project, BTreeMap<String, Playing>) {
         match self.pending.last() {
@@ -706,9 +766,20 @@ impl Live {
                 ops.push(op);
             }
         }
+        // starting an arrangement puts its lines into the history, each marked with its name
+        let arrangement = statement
+            .target()
+            .filter(|t| statement.starts() && program.arrangements.iter().any(|a| a.name == *t))
+            .map(str::to_string);
         for scheduled in &program.performance {
             if let Action::Capture { bars, name } = &scheduled.action {
                 captures.push((*bars, name.clone()));
+                continue;
+            }
+            if let Action::Cancel { arrangement } = &scheduled.action {
+                self.history.retain(|h| {
+                    h.arrangement.as_deref() != Some(arrangement) || h.at <= landing_seconds
+                });
                 continue;
             }
             let after = scheduled.at.to_seconds(tempo);
@@ -723,6 +794,7 @@ impl Live {
             self.history.push(HistoryEntry {
                 at: when,
                 action: named,
+                arrangement: arrangement.clone(),
             });
         }
         captures
@@ -806,7 +878,7 @@ impl Live {
         use niminal_compose::QuantizeUnit;
         p.statements.iter().any(|s| {
             matches!(
-                self.quantums().for_statement(s, None).unit,
+                self.quantum_of(s, None).unit,
                 QuantizeUnit::Bar | QuantizeUnit::Cycle
             )
         })
@@ -1307,7 +1379,11 @@ pub(crate) fn origin_of(history: &[HistoryEntry]) -> f64 {
 pub(crate) fn name_action(program: &Composition, action: &Action) -> Option<NamedAction> {
     let name = |t: &usize| program.nodes[*t].name.clone();
     Some(match action {
-        Action::Play { node, clip } => NamedAction::Play {
+        Action::Start { node, clip } => NamedAction::Start {
+            node: name(node),
+            clip: clip.clone(),
+        },
+        Action::Update { node, clip } => NamedAction::Update {
             node: name(node),
             clip: clip.clone(),
         },
@@ -1319,7 +1395,7 @@ pub(crate) fn name_action(program: &Composition, action: &Action) -> Option<Name
         Action::Hush => NamedAction::Hush,
         Action::Panic => NamedAction::Panic,
         Action::Reset => NamedAction::Reset,
-        Action::Capture { .. } => return None,
+        Action::Capture { .. } | Action::Cancel { .. } => return None,
     })
 }
 
@@ -1330,7 +1406,11 @@ pub(crate) fn schedule_for(program: &Composition, history: &[HistoryEntry]) -> S
         .iter()
         .filter_map(|h| {
             let action = match &h.action {
-                NamedAction::Play { node, clip } => Action::Play {
+                NamedAction::Start { node, clip } => Action::Start {
+                    node: index(node)?,
+                    clip: clip.clone(),
+                },
+                NamedAction::Update { node, clip } => Action::Update {
                     node: index(node)?,
                     clip: clip.clone(),
                 },

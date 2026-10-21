@@ -107,19 +107,15 @@ struct Piece {
 /// never accepts the composition constructs it removes.
 pub fn dsp_source(source: &str, tempo: Tempo) -> Result<String, Diagnostic> {
     let items = parse_spanned(source)?;
-    let definitions: Vec<_> = items.iter().map(|(item, _)| item.clone()).collect();
-    let implicit = crate::compile::implicit_nodes(&definitions);
-    Ok(project(source, &items, tempo, &implicit, false)?.text)
+    Ok(project(source, &items, tempo, false)?.text)
 }
 
-/// Like [`dsp_source`], for items already parsed. `implicit` names the instruments that are played
-/// directly and so get a node of their own. With `standalone`, the controls that `clock.beat` and the
+/// Like [`dsp_source`], for items already parsed. With `standalone`, the controls that `clock.beat` and the
 /// like are made from are defined too, at the tempo given; otherwise whoever plays the DSP defines them.
 pub fn project(
     source: &str,
     items: &[(Item, Span)],
     tempo: Tempo,
-    implicit: &[String],
     standalone: bool,
 ) -> Result<DspSource, Diagnostic> {
     let mut pieces = Vec::new();
@@ -147,9 +143,7 @@ pub fn project(
             | Item::For { .. }
             | Item::If { .. } => {}
             Item::Clip(c) => {
-                if let Some((_, instrument)) =
-                    c.entries.iter().find(|(n, _)| n.name == "instrument")
-                {
+                if let Some(instrument) = instrument_of(c, items, 0) {
                     pieces.push(derived(format!(
                         "node {} {{ instrument = {} }}",
                         c.name.name,
@@ -238,13 +232,6 @@ pub fn project(
             _ => pieces.push(verbatim(text.to_string())),
         }
     }
-    for name in implicit {
-        pieces.push(Piece {
-            text: format!("node {name} {{ instrument = {name} }}"),
-            verbatim_at: None,
-            span: Span::new(0, 0),
-        });
-    }
 
     // Musical time becomes seconds. Tokens preserve strings, comments and paths, including words
     // that resemble musical units.
@@ -330,6 +317,51 @@ pub fn project(
         }
     }
     Ok(DspSource { text, segments })
+}
+
+/// What is worth a second look in `source` without being wrong: a clip with no instrument exists but plays
+/// nothing.
+pub fn warnings(source: &str) -> Vec<Diagnostic> {
+    let Ok(items) = parse_spanned(source) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|(item, _)| match item {
+            Item::Clip(c) if instrument_of(c, &items, 0).is_none() => Some(
+                Diagnostic::new(
+                    format!(
+                        "clip `{}` has no instrument, so it plays nothing",
+                        c.name.name
+                    ),
+                    c.name.span,
+                )
+                .with_help(format!("add `instrument: ...` to `{}`", c.name.name)),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The instrument a clip plays: its own `instrument:`, or its base's when it is made from another clip
+/// (`clip bass_chorus = bass.transpose(+5st)`).
+fn instrument_of<'a>(
+    clip: &'a crate::ast::NamedBlock,
+    items: &'a [(Item, Span)],
+    depth: usize,
+) -> Option<&'a Expr> {
+    if let Some((_, instrument)) = clip.entries.iter().find(|(n, _)| n.name == "instrument") {
+        return Some(instrument);
+    }
+    let root = clip.base.as_deref()?.root_name()?;
+    // a clip made from itself, or a long chain of them, has no instrument to find
+    if depth > 16 || root == clip.name.name {
+        return None;
+    }
+    items.iter().find_map(|(item, _)| match item {
+        Item::Clip(base) if base.name.name == root => instrument_of(base, items, depth + 1),
+        _ => None,
+    })
 }
 
 /// The musical units in `text`, each with what stands for it in seconds.

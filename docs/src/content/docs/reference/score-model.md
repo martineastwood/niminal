@@ -12,7 +12,7 @@ The engine can play **score events** that do not come from niminal source: a `.n
 | **Event** | Target (instrument or clip), start, duration, named arguments with units |
 | **Section** | Named finite list of events with a length (`.nms` version 1) |
 | **ClipDef** | Named clip: mini-notation lanes and/or a finite event list (`.nms` version 2 / wire API) |
-| **SceneDef** | Named set of clips, one per clip |
+| **SceneDef** | Named list of clips, started and stopped together |
 | **Project** | Clips, scenes and an optional arrangement (`.nms` version 2) |
 | **Arrangement** | Scenes over time — in `.nml` or in a v2 project |
 
@@ -61,7 +61,7 @@ Clips, scenes and an optional arrangement. The CLI compiles them to `.nml` and r
     { "name": "theme", "lanes": { "notes": "c4 e4 g4 b4" } }
   ],
   "scenes": [
-    { "name": "verse", "entries": { "lead": "theme" } }
+    { "name": "verse", "clips": ["theme"] }
   ],
   "arrangement": {
     "name": "song",

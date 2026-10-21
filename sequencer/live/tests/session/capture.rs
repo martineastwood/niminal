@@ -45,8 +45,13 @@ fn capture_writes_the_last_bars_as_a_score() {
         "expected notes from the looping clip, got {}",
         section.events.len()
     );
-    let first = section.events[0].at.to_seconds(niminal_score::Tempo::new(120.0));
-    assert!((0.0..4.0).contains(&first), "first note at {first}s into the section");
+    let first = section.events[0]
+        .at
+        .to_seconds(niminal_score::Tempo::new(120.0));
+    assert!(
+        (0.0..4.0).contains(&first),
+        "first note at {first}s into the section"
+    );
 
     std::env::set_current_dir(prev).unwrap();
     let _ = std::fs::remove_dir_all(dir);
@@ -54,7 +59,7 @@ fn capture_writes_the_last_bars_as_a_score() {
 
 #[test]
 fn capture_compiles_as_a_side_effect_action() {
-    let src = "\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip t { instrument: p }\nt.play([c4])\ncapture last 1bar as unused\nat +1bars hush\n";
+    let src = "\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip t { instrument: p }\nt.__update([c4])\ncapture last 1bar as unused\nat +1bars hush\n";
     let program = niminal_compose::compile(src).unwrap();
     assert!(
         program

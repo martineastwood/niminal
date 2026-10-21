@@ -1202,7 +1202,7 @@ fn events(p: &Pattern<crate::performance::Step>, cycles: i64) -> Vec<(Rational, 
 fn played(src: &str) -> Clip {
     let p = ok(&stage(src));
     match &p.performance[0].action {
-        Action::Play { clip, .. } => clip.clone(),
+        Action::Update { clip, .. } => clip.clone(),
         _ => panic!("expected a play command"),
     }
 }
@@ -1222,67 +1222,77 @@ fn values_of(src: &str, cycles: i64) -> Vec<Value> {
 #[test]
 fn mini_notation_has_weights_repeats_polymeter_and_euclid() {
     assert_eq!(
-        values_of("lead.play([c4!2 e4])", 1),
+        values_of("lead.__update([c4!2 e4])", 1),
         [midi(60), midi(60), midi(64)]
     );
-    assert_eq!(notes_of("lead.play([c4@3 e4])", 1)[1].0, r(3, 4));
-    assert_eq!(notes_of("lead.play([c4(3,8)])", 1).len(), 3);
+    assert_eq!(notes_of("lead.__update([c4@3 e4])", 1)[1].0, r(3, 4));
+    assert_eq!(notes_of("lead.__update([c4(3,8)])", 1).len(), 3);
     assert_eq!(
-        values_of("lead.play([{c4 e4 g4}%2])", 2),
+        values_of("lead.__update([{c4 e4 g4}%2])", 2),
         [midi(60), midi(64), midi(67), midi(60)]
     );
-    assert_eq!(notes_of("lead.play([c4/2 e4])", 2).len(), 3);
+    assert_eq!(notes_of("lead.__update([c4/2 e4])", 2).len(), 3);
 }
 
 #[test]
 fn numeric_arguments_can_be_patterns() {
-    assert_eq!(notes_of("lead.play([c4 e4].fast([<1 2>]))", 2).len(), 2 + 4);
     assert_eq!(
-        notes_of("lead.play([c4].euclid(hits: [<3 5>], steps: 8))", 2).len(),
+        notes_of("lead.__update([c4 e4].fast([<1 2>]))", 2).len(),
+        2 + 4
+    );
+    assert_eq!(
+        notes_of("lead.__update([c4].euclid(hits: [<3 5>], steps: 8))", 2).len(),
         8
     );
     assert_eq!(
-        notes_of("lead.play([c4 e4].every([<1 2>], it.fast(2)))", 2).len(),
+        notes_of("lead.__update([c4 e4].every([<1 2>], it.fast(2)))", 2).len(),
         4 + 2
     );
-    assert_eq!(notes_of("lead.play([c4].repeat_each([1 2]))", 1).len(), 2);
+    assert_eq!(
+        notes_of("lead.__update([c4].repeat_each([1 2]))", 1).len(),
+        2
+    );
 }
 
 #[test]
 fn new_pattern_operations() {
-    assert!(notes_of("lead.play([c4*8].sometimes(50%, it.fast(2)))", 8).len() > 64);
+    assert!(notes_of("lead.__update([c4*8].sometimes(50%, it.fast(2)))", 8).len() > 64);
     assert_eq!(
-        values_of("lead.play([c4 e4 g4 b4].rotate(4))", 2)[4..],
+        values_of("lead.__update([c4 e4 g4 b4].rotate(4))", 2)[4..],
         [midi(64), midi(67), midi(71), midi(60)]
     );
     assert_eq!(
-        values_of("lead.play([c4 e4 g4 b4].repeat_start(50%))", 1),
+        values_of("lead.__update([c4 e4 g4 b4].repeat_start(50%))", 1),
         [midi(60), midi(64), midi(60), midi(64)]
     );
     assert_eq!(
-        values_of("lead.play([c4 e4].palindrome)", 2),
+        values_of("lead.__update([c4 e4].palindrome)", 2),
         [midi(60), midi(64), midi(64), midi(60)]
     );
     assert_eq!(
-        notes_of("lead.play([c4 e4 g4 b4].within(0%, 50%, it.fast(2)))", 1).len(),
+        notes_of(
+            "lead.__update([c4 e4 g4 b4].within(0%, 50%, it.fast(2)))",
+            1
+        )
+        .len(),
         6
     );
-    let mut swung = notes_of("lead.play([c4*8].swing(amount: 25%, every: 1/4))", 1);
+    let mut swung = notes_of("lead.__update([c4*8].swing(amount: 25%, every: 1/4))", 1);
     swung.sort_by_key(|e| e.0);
     assert_eq!(
         swung[1].0,
         r(3, 16),
         "the second eighth of each quarter waits a quarter of a quarter"
     );
-    let mut shuffled = values_of("lead.play([c4 e4 g4 b4].shuffle(4))", 1);
+    let mut shuffled = values_of("lead.__update([c4 e4 g4 b4].shuffle(4))", 1);
     shuffled.sort_by(|a, b| format!("{a}").cmp(&format!("{b}")));
     assert_eq!(shuffled.len(), 4);
     assert_eq!(
-        notes_of("lead.play([c4 e4 g4 b4].in_turn(4, it.fast(2)))", 1).len(),
+        notes_of("lead.__update([c4 e4 g4 b4].in_turn(4, it.fast(2)))", 1).len(),
         5
     );
     assert_eq!(
-        notes_of("lead.play([c4 e4 g4 b4].pick_random(4))", 1).len(),
+        notes_of("lead.__update([c4 e4 g4 b4].pick_random(4))", 1).len(),
         4
     );
 }
@@ -1352,7 +1362,7 @@ fn osc_out_sends_a_nodes_signal() {
 
 #[test]
 fn midi_out_is_an_instrument_that_sends_notes() {
-    let src = "tempo 120bpm\nmidi_out drums(port: \"IAC\", channel: 10)\nclip beat { instrument: drums }\nbeat.play([c4 g4])";
+    let src = "tempo 120bpm\nmidi_out drums(port: \"IAC\", channel: 10)\nclip beat { instrument: drums }\nbeat.__update([c4 g4])";
     let p = ok(src);
     let instrument = p.instrument("drums").expect("it is an instrument");
     let target = instrument.midi.as_ref().expect("it goes to a port");
@@ -1449,19 +1459,19 @@ fn part_declarations_give_a_migration_error() {
 fn where_changes_only_the_notes_that_pass() {
     assert_eq!(
         values_of(
-            "lead.play([c3 e4 g2 c5].where(it < c4, it.transpose(+12st)))",
+            "lead.__update([c3 e4 g2 c5].where(it < c4, it.transpose(+12st)))",
             1
         ),
         [midi(60), midi(64), midi(55), midi(72)]
     );
     assert_eq!(
         values_of(
-            "lead.play([c3 e4].where(it.freq >= e4, it.transpose(-12st)))",
+            "lead.__update([c3 e4].where(it.freq >= e4, it.transpose(-12st)))",
             1
         ),
         [midi(48), midi(52)]
     );
-    assert!(msg(&stage("lead.play([c3].where(c3, it))")).contains("takes a test on the note"));
+    assert!(msg(&stage("lead.__update([c3].where(c3, it))")).contains("takes a test on the note"));
 }
 
 /// The notes of a clip with the controls each carries, in time order.
@@ -1480,34 +1490,39 @@ fn steps_of(src: &str, cycles: i64) -> Vec<(Rational, crate::performance::Step)>
 
 #[test]
 fn notes_carry_their_own_controls() {
-    let s = steps_of("lead.play([c4 e4].gain([-6db -12db]).pan(-30deg))", 1);
+    let s = steps_of("lead.__update([c4 e4].gain([-6db -12db]).pan(-30deg))", 1);
     assert_eq!((s[0].1.gain, s[1].1.gain), (Some(-6.0), Some(-12.0)));
     assert_eq!((s[0].1.pan, s[1].1.pan), (Some(-30.0), Some(-30.0)));
     // a control keeps the structure of the notes, not of its own pattern
-    let s = steps_of("lead.play([c4 e4 g4 b4].pan([-30deg 30deg]))", 1);
+    let s = steps_of("lead.__update([c4 e4 g4 b4].pan([-30deg 30deg]))", 1);
     assert_eq!(
         s.iter().map(|e| e.1.pan.unwrap()).collect::<Vec<_>>(),
         [-30.0, -30.0, 30.0, 30.0]
     );
     // and survives other changes to the notes
-    let s = steps_of("lead.play([c4 e4].pan(20deg).transpose(+12st).reverse)", 1);
+    let s = steps_of(
+        "lead.__update([c4 e4].pan(20deg).transpose(+12st).reverse)",
+        1,
+    );
     assert_eq!((s[0].1.value, s[0].1.pan), (midi(76), Some(20.0)));
     assert_eq!(
-        steps_of("lead.play([c4].gain(0.5))", 1)[0]
+        steps_of("lead.__update([c4].gain(0.5))", 1)[0]
             .1
             .gain
             .map(|g| (g * 10.0).round()),
         Some(-60.0)
     );
-    assert!(msg(&stage("lead.play([c4].pan(3hz))")).contains("`pan` takes a direction in degrees"));
     assert!(
-        msg(&stage("lead.play([c4].begin(2))")).contains("`begin` takes a share of the sample")
+        msg(&stage("lead.__update([c4].pan(3hz))")).contains("`pan` takes a direction in degrees")
+    );
+    assert!(
+        msg(&stage("lead.__update([c4].begin(2))")).contains("`begin` takes a share of the sample")
     );
 }
 
 #[test]
 fn left_right_places_the_original_and_the_change_apart() {
-    let s = steps_of("lead.play([c4 e4].left_right(it.reverse))", 1);
+    let s = steps_of("lead.__update([c4 e4].left_right(it.reverse))", 1);
     assert_eq!(s.len(), 4);
     let left: Vec<_> = s
         .iter()
@@ -1521,20 +1536,20 @@ fn left_right_places_the_original_and_the_change_apart() {
         .collect();
     assert_eq!(left, [midi(60), midi(64)]);
     assert_eq!(right, [midi(64), midi(60)]);
-    let wide = steps_of("lead.play([c4].left_right(it, angle: 60deg))", 1);
+    let wide = steps_of("lead.__update([c4].left_right(it, angle: 60deg))", 1);
     assert!(wide.iter().any(|e| e.1.pan == Some(60.0)));
 }
 
 #[test]
 fn chop_walks_through_the_sample() {
-    let s = steps_of("lead.play([c4 e4].chop(4))", 1);
+    let s = steps_of("lead.__update([c4 e4].chop(4))", 1);
     assert_eq!(s.len(), 8);
     assert_eq!(
         s.iter().map(|e| e.1.begin.unwrap()).collect::<Vec<_>>(),
         [0.0, 0.25, 0.5, 0.75, 0.0, 0.25, 0.5, 0.75]
     );
     assert_eq!(s[1].0, r(1, 8), "each piece takes its share of the note");
-    let s = steps_of("lead.play([c4 e4].interleave_chops(2))", 1);
+    let s = steps_of("lead.__update([c4 e4].interleave_chops(2))", 1);
     assert_eq!(
         s.iter()
             .map(|e| (e.0, e.1.begin.unwrap()))
@@ -1546,7 +1561,7 @@ fn chop_walks_through_the_sample() {
             (r(3, 4), 0.5)
         ]
     );
-    let s = steps_of("lead.play([c4].begin(50%).chop(2))", 1);
+    let s = steps_of("lead.__update([c4].begin(50%).chop(2))", 1);
     assert_eq!(
         s.iter().map(|e| e.1.begin.unwrap()).collect::<Vec<_>>(),
         [0.5, 0.75],
@@ -1556,56 +1571,56 @@ fn chop_walks_through_the_sample() {
 
 #[test]
 fn grids_invert() {
-    let hits = notes_of("lead.play([c4].rhythm(grid[x.x. x...].invert))", 1);
+    let hits = notes_of("lead.__update([c4].rhythm(grid[x.x. x...].invert))", 1);
     assert_eq!(
         hits.iter().map(|e| e.0).collect::<Vec<_>>(),
         [r(1, 8), r(3, 8), r(5, 8), r(3, 4), r(7, 8)]
     );
-    assert!(msg(&stage("lead.play([c4].invert)")).contains("`invert` works on grids"));
+    assert!(msg(&stage("lead.__update([c4].invert)")).contains("`invert` works on grids"));
 }
 
 #[test]
 fn signals_scale_and_sample_into_values() {
-    let v = notes_of("lead.play(saw.range(100hz, 200hz).to_steps(4))", 1);
+    let v = notes_of("lead.__update(saw.range(100hz, 200hz).to_steps(4))", 1);
     assert_eq!(v.len(), 4);
     let Value::Hz(h) = v[0].1 else { panic!() };
     assert!((h - 112.5).abs() < 1e-9, "{h}");
     let Value::Hz(h) = v[3].1 else { panic!() };
     assert!((h - 187.5).abs() < 1e-9, "{h}");
-    assert!(msg(&stage("lead.play(sine.range(1hz, 2db))")).contains("same unit"));
+    assert!(msg(&stage("lead.__update(sine.range(1hz, 2db))")).contains("same unit"));
 }
 
 #[test]
 fn composition_tools() {
     assert_eq!(
-        values_of("lead.play([0 1 2 7].in_scale(minor, root: c3))", 1),
+        values_of("lead.__update([0 1 2 7].in_scale(minor, root: c3))", 1),
         [midi(48), midi(50), midi(51), midi(60)]
     );
     assert_eq!(
-        values_of("lead.play([-1].in_scale(major, root: c4))", 1),
+        values_of("lead.__update([-1].in_scale(major, root: c4))", 1),
         [midi(59)]
     );
-    let chord = notes_of("lead.play([c4].chord(minor7))", 1);
+    let chord = notes_of("lead.__update([c4].chord(minor7))", 1);
     assert_eq!(chord.iter().map(|e| e.1).collect::<Vec<_>>().len(), 4);
     assert!(chord.iter().all(|e| e.0 == r(0, 1)));
     assert_eq!(
-        values_of("lead.play([c4].chord(major).arpeggiate(up))", 1),
+        values_of("lead.__update([c4].chord(major).arpeggiate(up))", 1),
         [midi(60), midi(64), midi(67)]
     );
     assert_eq!(
-        values_of("lead.play([c4].chord(major).arpeggiate(updown))", 1),
+        values_of("lead.__update([c4].chord(major).arpeggiate(updown))", 1),
         [midi(60), midi(64), midi(67), midi(64)]
     );
     assert_eq!(
-        values_of("lead.play([c4].chord(major).arpeggiate(converge))", 1),
+        values_of("lead.__update([c4].chord(major).arpeggiate(converge))", 1),
         [midi(60), midi(67), midi(64)]
     );
     assert_eq!(
-        values_of("lead.play([c4 e4 g4].invert_melody(around: c4))", 1),
+        values_of("lead.__update([c4 e4 g4].invert_melody(around: c4))", 1),
         [midi(60), midi(56), midi(53)]
     );
     // the second chord is moved to sit by the first
-    let led = values_of("lead.play([[c4,e4,g4] [f4,a4,c5]].voice_lead)", 1);
+    let led = values_of("lead.__update([[c4,e4,g4] [f4,a4,c5]].voice_lead)", 1);
     assert_eq!(
         led.iter()
             .filter(|v| matches!(v, Value::Note(m) if *m >= 72))
@@ -1614,25 +1629,25 @@ fn composition_tools() {
         "{led:?}"
     );
     // markov and random_walk keep the rhythm and start where the source does
-    let m = notes_of("lead.play([c4 e4 g4 e4].markov)", 4);
+    let m = notes_of("lead.__update([c4 e4 g4 e4].markov)", 4);
     assert_eq!(m.len(), 16);
     assert_eq!(m[4].1, midi(60));
-    let w = values_of("lead.play([c4*8].random_walk(step: 2st))", 3);
+    let w = values_of("lead.__update([c4*8].random_walk(step: 2st))", 3);
     assert_eq!(w[0], midi(60));
     assert!(
         w.iter()
             .all(|v| matches!(v, Value::Note(m) if (m - 60).abs() <= 24))
     );
     assert!(w.iter().any(|v| *v != midi(60)));
-    assert!(msg(&stage("lead.play([0].in_scale(nonsense))")).contains("isn't a scale"));
-    assert!(msg(&stage("lead.play([c4].chord(nonsense))")).contains("isn't a chord"));
+    assert!(msg(&stage("lead.__update([0].in_scale(nonsense))")).contains("isn't a scale"));
+    assert!(msg(&stage("lead.__update([c4].chord(nonsense))")).contains("isn't a chord"));
 }
 
 #[test]
 fn a_pattern_of_notes_plays_on_a_node() {
-    let p = ok(&stage("riff = [c4 ~ e4 g4]\nlead.play(riff)"));
+    let p = ok(&stage("riff = [c4 ~ e4 g4]\nlead.__update(riff)"));
     assert_eq!(p.performance.len(), 1);
-    let Action::Play { node, clip } = &p.performance[0].action else {
+    let Action::Update { node, clip } = &p.performance[0].action else {
         panic!()
     };
     assert_eq!(*node, 1, "node 0 is the implicit one");
@@ -1650,14 +1665,14 @@ fn a_pattern_of_notes_plays_on_a_node() {
 
 #[test]
 fn a_pattern_can_be_written_inline_and_used_before_it_is_defined() {
-    assert_eq!(notes_of("lead.play([a3 b3])", 1).len(), 2);
-    let p = ok(&stage("lead.play(riff)\nriff = [c4]"));
+    assert_eq!(notes_of("lead.__update([a3 b3])", 1).len(), 2);
+    let p = ok(&stage("lead.__update(riff)\nriff = [c4]"));
     assert_eq!(p.performance.len(), 1);
 }
 
 #[test]
 fn atoms_carry_units_and_note_names() {
-    let c = played("lead.play([c#4 -6db 440hz 1/8beat 0.5 7st])");
+    let c = played("lead.__update([c#4 -6db 440hz 1/8beat 0.5 7st])");
     let values: Vec<_> = events(c.lane("notes").unwrap(), 1)
         .into_iter()
         .map(|e| e.1)
@@ -1677,65 +1692,74 @@ fn atoms_carry_units_and_note_names() {
 
 #[test]
 fn time_operations() {
-    assert_eq!(notes_of("lead.play([c4 e4].fast(2))", 1).len(), 4);
-    let slow = notes_of("lead.play([c4 e4].slow(2))", 2);
+    assert_eq!(notes_of("lead.__update([c4 e4].fast(2))", 1).len(), 4);
+    let slow = notes_of("lead.__update([c4 e4].slow(2))", 2);
     assert_eq!(slow, [(r(0, 1), midi(60)), (r(1, 1), midi(64))]);
-    assert_eq!(notes_of("lead.play([c4 e4 g4].reverse)", 1)[0].1, midi(67));
-    let shifted = notes_of("lead.play([c4 e4].shift(1/4))", 1);
+    assert_eq!(
+        notes_of("lead.__update([c4 e4 g4].reverse)", 1)[0].1,
+        midi(67)
+    );
+    let shifted = notes_of("lead.__update([c4 e4].shift(1/4))", 1);
     assert_eq!(
         shifted.iter().map(|e| e.0).collect::<Vec<_>>(),
         [r(1, 4), r(3, 4)]
     );
     // beats are a share of a bar: a quarter of 4/4 is a quarter cycle
-    let by_beat = notes_of("lead.play([c4 e4].shift(1beat))", 1);
+    let by_beat = notes_of("lead.__update([c4 e4].shift(1beat))", 1);
     assert_eq!(by_beat[0].0, r(1, 4));
-    let over = notes_of("lead.play([c4 e4].over(2bars))", 2);
+    let over = notes_of("lead.__update([c4 e4].over(2bars))", 2);
     assert_eq!(over.len(), 2);
     assert_eq!(over[1].0, r(1, 1));
 }
 
 #[test]
 fn every_applies_a_change_on_some_cycles() {
-    let n = notes_of("lead.play([c4 e4 g4 b4].every(2, it.reverse))", 2);
+    let n = notes_of("lead.__update([c4 e4 g4 b4].every(2, it.reverse))", 2);
     assert_eq!(n[0].1, midi(71), "reversed on cycle 0");
     assert_eq!(n[4].1, midi(60), "plain on cycle 1");
     // the change can use any operation, including others that use `it`
     assert_eq!(
-        notes_of("lead.play([c4 e4].every(1, it.fast(2).reverse))", 1).len(),
+        notes_of("lead.__update([c4 e4].every(1, it.fast(2).reverse))", 1).len(),
         4
     );
 }
 
 #[test]
 fn value_operations() {
-    let up = notes_of("lead.play([c4 e4].transpose(+5st))", 1);
+    let up = notes_of("lead.__update([c4 e4].transpose(+5st))", 1);
     assert_eq!(
         up.iter().map(|e| e.1).collect::<Vec<_>>(),
         [midi(65), midi(69)]
     );
-    let down = notes_of("lead.play([c4].transpose(-12st))", 1);
+    let down = notes_of("lead.__update([c4].transpose(-12st))", 1);
     assert_eq!(down[0].1, midi(48));
-    let detuned = notes_of("lead.play([a4].transpose(0.5st))", 1);
+    let detuned = notes_of("lead.__update([a4].transpose(0.5st))", 1);
     let Value::Hz(hz) = detuned[0].1 else {
         panic!("a fractional interval gives a frequency")
     };
     assert!((hz - 440.0 * 2f64.powf(0.5 / 12.0)).abs() < 1e-9);
 
-    let e = notes_of("lead.play([c2].euclid(hits: 3, steps: 8))", 1);
+    let e = notes_of("lead.__update([c2].euclid(hits: 3, steps: 8))", 1);
     assert_eq!(
         e.iter().map(|e| e.0).collect::<Vec<_>>(),
         [r(0, 1), r(3, 8), r(3, 4)]
     );
-    let rhythm = notes_of("lead.play([c4 e4 g4].rhythm(grid[x.x. x.x.]))", 1);
+    let rhythm = notes_of("lead.__update([c4 e4 g4].rhythm(grid[x.x. x.x.]))", 1);
     assert_eq!(rhythm.len(), 4);
     assert_eq!(rhythm[0].0, r(0, 1));
-    let masked = notes_of("lead.play([c4 e4 g4 b4].mask(grid[x.x.]))", 1);
+    let masked = notes_of("lead.__update([c4 e4 g4 b4].mask(grid[x.x.]))", 1);
     assert_eq!(
         masked.iter().map(|e| e.1).collect::<Vec<_>>(),
         [midi(60), midi(67)]
     );
-    assert_eq!(notes_of("lead.play([c4 e4].repeat_each(2))", 1).len(), 4);
-    let layered = notes_of("lead.play([c4].layer(after: 1/2, it.transpose(+12st)))", 1);
+    assert_eq!(
+        notes_of("lead.__update([c4 e4].repeat_each(2))", 1).len(),
+        4
+    );
+    let layered = notes_of(
+        "lead.__update([c4].layer(after: 1/2, it.transpose(+12st)))",
+        1,
+    );
     assert_eq!(
         layered.iter().map(|e| e.1).collect::<Vec<_>>(),
         [midi(60), midi(72)]
@@ -1744,7 +1768,7 @@ fn value_operations() {
 
 #[test]
 fn thinning_is_seeded_by_the_source() {
-    let src = "lead.play([c4*16].thin(50%))";
+    let src = "lead.__update([c4*16].thin(50%))";
     let a = notes_of(src, 8).len();
     assert_eq!(
         a,
@@ -1752,16 +1776,16 @@ fn thinning_is_seeded_by_the_source() {
         "the same source thins the same way"
     );
     assert!((40..90).contains(&a), "about half of 128 survive: {a}");
-    assert_eq!(notes_of("lead.play([c4*4].thin(0%))", 1).len(), 4);
-    assert!(notes_of("lead.play([c4*4].thin(100%))", 1).is_empty());
+    assert_eq!(notes_of("lead.__update([c4*4].thin(0%))", 1).len(), 4);
+    assert!(notes_of("lead.__update([c4*4].thin(100%))", 1).is_empty());
 }
 
 #[test]
 fn clips_have_a_length_and_lanes() {
     let p = ok(&stage(
-        "\nclip riff {\n  length: 2bars\n  notes: [c2 ~ eb2 g1]\n  bright: [0.2 0.8]\n  gain: [0db -6db]\n}\nbass.play(riff)",
+        "\nclip riff {\n  length: 2bars\n  notes: [c2 ~ eb2 g1]\n  bright: [0.2 0.8]\n  gain: [0db -6db]\n}\nbass.__update(riff)",
     ));
-    let Action::Play { clip, .. } = &p.performance[0].action else {
+    let Action::Update { clip, .. } = &p.performance[0].action else {
         panic!()
     };
     assert_eq!(clip.length, Rational::int(2));
@@ -1774,15 +1798,16 @@ fn clips_have_a_length_and_lanes() {
     );
     // length in beats is a share of a bar
     assert_eq!(
-        played("clip c { length: 6beats\nnotes: [c4] }\nlead.play(c)").length,
+        played("clip c { length: 6beats\nnotes: [c4] }\nlead.__update(c)").length,
         r(3, 2)
     );
 }
 
 #[test]
 fn operations_apply_to_whole_clips() {
-    let sped =
-        played("clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.fast(2))");
+    let sped = played(
+        "clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.__update(c.fast(2))",
+    );
     assert_eq!(sped.length, Rational::ONE, "fast shortens the clip");
     assert_eq!(
         events(sped.lane("notes").unwrap(), 1).len(),
@@ -1796,7 +1821,7 @@ fn operations_apply_to_whole_clips() {
     );
 
     let stretched = played(
-        "clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.over(4bars))",
+        "clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.__update(c.over(4bars))",
     );
     assert_eq!(stretched.length, Rational::int(4));
     assert_eq!(
@@ -1805,7 +1830,7 @@ fn operations_apply_to_whole_clips() {
         "over stretches the lanes with the clip"
     );
 
-    let up = played("clip c { notes: [c4]\nbright: [0.3] }\nlead.play(c.transpose(+12st))");
+    let up = played("clip c { notes: [c4]\nbright: [0.3] }\nlead.__update(c.transpose(+12st))");
     assert_eq!(events(up.lane("notes").unwrap(), 1)[0].1, midi(72));
     assert_eq!(
         events(up.lane("bright").unwrap(), 1)[0].1,
@@ -1815,34 +1840,107 @@ fn operations_apply_to_whole_clips() {
 }
 
 #[test]
-fn scenes_launch_clips_and_stop_nodes() {
+fn a_scene_starts_stops_and_mutes_each_of_its_clips() {
     let p = ok(&stage(
-        "\nclip riff { notes: [c2 g2] }\nverse = [c4 e4]\nscene intro { bass: riff, lead: verse, pad: ~ }\nintro.start",
+        "\nclip hat { instrument: pluck, notes: [c2 g2] }\nscene intro { bass, hat }\nintro.start\nintro.mute\nintro.stop",
     ));
-    assert_eq!(p.performance.len(), 3);
     let kinds: Vec<_> = p
         .performance
         .iter()
         .map(|s| match &s.action {
-            Action::Play { node, clip } => format!("play {node} {}", clip.name),
+            Action::Start { node, clip } => format!("start {node} {}", clip.name),
+            Action::Mute { node } => format!("mute {node}"),
             Action::Stop { node } => format!("stop {node}"),
             _ => "other".into(),
         })
         .collect();
-    assert_eq!(kinds, ["play 2 riff", "play 1 lead", "stop 3"]);
+    assert_eq!(
+        kinds,
+        [
+            "start 2 bass",
+            "start 4 hat",
+            "mute 2",
+            "mute 4",
+            "stop 2",
+            "stop 4"
+        ]
+    );
+}
+
+#[test]
+fn a_scene_lists_clips_and_nothing_else() {
+    assert_eq!(
+        msg(&stage("scene s { lead: [c4] }")),
+        "a scene is a list of clips, so `lead` has nothing after it"
+    );
+    assert_eq!(
+        msg(&stage("scene s { lead, lead }")),
+        "clip `lead` appears twice in this scene"
+    );
+}
+
+#[test]
+fn removed_forms_say_what_to_write_instead() {
+    assert!(msg(&stage("lead.play([c4])")).starts_with("there is no `play`"));
+    assert!(
+        msg(&stage(
+            "clip a { instrument: pluck }\na.start then a after 4bars"
+        ))
+        .starts_with("`then` is gone")
+    );
+    assert!(
+        msg(&stage("at bar 5 lead.mute")).starts_with("a command can't be placed at a bar number")
+    );
+}
+
+#[test]
+fn a_clip_can_be_made_from_another() {
+    let p = ok(
+        "instr tone(freq: hz) { osc(sine, freq) }\nclip bass { instrument: tone(freq: 100hz)\nnotes: [c2] }\nclip higher = bass.transpose(+12st)\nclip higher_still = higher.transpose(+12st)\nhigher_still.start",
+    );
+    let names: Vec<_> = p.nodes.iter().skip(1).map(|n| n.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["bass", "higher", "higher_still"],
+        "each has the instrument of the first"
+    );
+    let Action::Start { clip, .. } = &p.performance[0].action else {
+        panic!("a start")
+    };
+    assert_eq!(clip.name, "higher_still");
+    assert_eq!(events(clip.lane("notes").unwrap(), 1)[0].1, midi(60));
+    assert!(
+        msg("clip a = 5").starts_with("a clip is made from another clip"),
+        "{}",
+        msg("clip a = 5")
+    );
+}
+
+#[test]
+fn naming_an_instrument_to_start_it_points_to_a_clip() {
+    let d = first_error("instr pluck(freq: hz) { osc(saw, freq) }\npluck.start");
+    assert_eq!(d.message, "`pluck` is an instrument, not a clip");
+    let d = first_error("riff = [c4]\nriff.start");
+    assert!(
+        d.message.contains("is a pattern, not a clip"),
+        "{}",
+        d.message
+    );
+    let d = first_error("clip loose { notes: [c4] }\nloose.start");
+    assert!(d.message.contains("has no instrument"), "{}", d.message);
 }
 
 #[test]
 fn commands_carry_times_and_quantization() {
     let p = ok(&stage(
-        "\ntempo 120bpm\nclip riff { notes: [c2] }\nbass.play(riff)\nat 4bars lead.play(riff)\nat bar 5 beat 3 bass.stop\nat 2beats lead.mute @ next bar\nlead.unmute @ in 2bars\nbass.solo @ 4bars\nhush @ now\npanic\nunsolo\nat bar 3 bass.unsolo",
+        "\ntempo 120bpm\nclip riff { notes: [c2] }\nbass.__update(riff)\nat 4bars lead.__update(riff)\nat 18beats bass.stop\nat 2beats lead.mute @ next bar\nlead.unmute @ in 2bars\nbass.solo @ 4bars\nhush @ now\npanic\nunsolo\nat 8beats bass.unsolo",
     ));
     let acts = &p.performance;
     assert_eq!(acts[1].at, Time::Bars(4.0));
     assert_eq!(
         acts[2].at,
         Time::Beats(18.0),
-        "bar 5 beat 3 in 4/4 is 4bars and 2beats in"
+        "18 beats in 4/4 is 4bars and 2beats in"
     );
     assert_eq!(acts[3].at, Time::Beats(2.0));
     let q = acts[3].quantize.unwrap();
@@ -1871,18 +1969,19 @@ fn commands_carry_times_and_quantization() {
 #[test]
 fn meter_changes_what_a_bar_is() {
     let p = ok(&stage(
-        "meter 3/4\nclip c { notes: [c4] }\nat bar 3 lead.play(c)\nat 1bar lead.mute",
+        "meter 3/4\nclip c { notes: [c4] }\nat 2bars lead.__update(c)\nat 1bar lead.mute",
     ));
     assert_eq!(p.tempo.beats_per_bar, 3.0);
-    assert_eq!(p.performance[0].at, Time::Beats(6.0));
+    // a bar of 3/4 at 120bpm is a second and a half
+    assert_eq!(p.performance[0].at.to_seconds(p.tempo), 3.0);
     let waltz = ok(&stage(
-        "meter 7/8\nclip c { notes: [c4] }\nat bar 2 lead.play(c)",
+        "meter 7/8\nclip c { notes: [c4] }\nat 1bar lead.__update(c)",
     ));
-    assert_eq!(waltz.performance[0].at, Time::Beats(3.5));
+    assert_eq!(waltz.performance[0].at.to_seconds(waltz.tempo), 1.75);
     assert_eq!(msg("meter 3"), "meter is a fraction of whole numbers");
     assert_eq!(msg("meter 3/4\nmeter 4/4"), "meter is set more than once");
     // a beat is a quarter of a bar in 4/4 and a third of one in 3/4
-    let pat = played("meter 3/4\nlead.play([c4 e4].shift(1beat))");
+    let pat = played("meter 3/4\nlead.__update([c4 e4].shift(1beat))");
     assert_eq!(events(pat.lane("notes").unwrap(), 1)[0].0, r(1, 3));
 }
 
@@ -1916,33 +2015,37 @@ fn instruments_accept_a_gain_control() {
 
 #[test]
 fn clips_are_checked_against_the_node_they_play_on() {
-    let d = first_error(&stage("clip c { notes: [c4]\ntone: [1] }\nlead.play(c)"));
+    let d = first_error(&stage(
+        "clip c { notes: [c4]\ntone: [1] }\nlead.__update(c)",
+    ));
     assert_eq!(
         d.message,
         "clip `c` has a lane `tone`, but `pluck` has no such parameter"
     );
     let d = first_error(&stage(
-        "clip c { notes: [c4]\nbrigth: [0.1] }\nlead.play(c)",
+        "clip c { notes: [c4]\nbrigth: [0.1] }\nlead.__update(c)",
     ));
     assert_eq!(d.help.as_deref(), Some("did you mean `bright`?"));
     ok(&stage(
-        "clip c { notes: [c4]\nbright: [0.1]\ngain: [-3db]\ndur: [1/4beat]\nnudge: [10ms] }\nlead.play(c)",
+        "clip c { notes: [c4]\nbright: [0.1]\ngain: [-3db]\ndur: [1/4beat]\nnudge: [10ms] }\nlead.__update(c)",
     ));
     ok(&stage(
-        "clip c { notes: [c4]\npan: [-30deg 30deg] }\nlead.play(c)",
+        "clip c { notes: [c4]\npan: [-30deg 30deg] }\nlead.__update(c)",
     ));
     assert_eq!(
-        msg(&stage("clip c { notes: [c4]\nto: [0deg] }\nlead.play(c)")),
+        msg(&stage(
+            "clip c { notes: [c4]\nto: [0deg] }\nlead.__update(c)"
+        )),
         "the `to` lane isn't supported yet"
     );
 
     let no_pitch =
-        "instr drone(amp: db) { osc(sine, 100hz) }\nclip t { instrument: drone }\nt.play([c4])";
+        "instr drone(amp: db) { osc(sine, 100hz) }\nclip t { instrument: drone }\nt.__update([c4])";
     assert_eq!(
         msg(no_pitch),
         "`drone` has no `freq` parameter for the notes to set"
     );
-    let silent = "instr a(freq: hz) { osc(sine, freq) }\nfx room { out = it }\nroom.play([c4])";
+    let silent = "instr a(freq: hz) { osc(sine, freq) }\nfx room { out = it }\nroom.__update([c4])";
     assert_eq!(
         msg(silent),
         "node `room` has no instrument to play a clip on"
@@ -1952,10 +2055,10 @@ fn clips_are_checked_against_the_node_they_play_on() {
 #[test]
 fn performance_errors_are_clear_and_located() {
     // unknown names, with suggestions
-    let d = first_error(&stage("leed.play([c4])"));
+    let d = first_error(&stage("leed.__update([c4])"));
     assert_eq!(d.message, "no clip named `leed`");
     assert_eq!(d.help.as_deref(), Some("did you mean `lead`?"));
-    let d = first_error(&stage("riff = [c4]\nlead.play(rif)"));
+    let d = first_error(&stage("riff = [c4]\nlead.__update(rif)"));
     assert_eq!(d.message, "`rif` is not defined");
     assert_eq!(d.help.as_deref(), Some("did you mean `riff`?"));
     assert_eq!(
@@ -1963,21 +2066,21 @@ fn performance_errors_are_clear_and_located() {
         "no scene or clip named `nothing`"
     );
     assert_eq!(
-        first_error(&stage("lead.play([c4].set(0.9))")).message,
+        first_error(&stage("lead.__update([c4].set(0.9))")).message,
         "`set` takes a lane and its value, as in `set(bright: 0.9)`"
     );
     assert_eq!(
-        first_error(&stage("lead.play([c4].set(length: 2))")).message,
+        first_error(&stage("lead.__update([c4].set(length: 2))")).message,
         "a clip's length can't be set; use `over(…)`"
     );
-    let d = first_error(&stage("lead.play([c4].set(wobble: 1))"));
+    let d = first_error(&stage("lead.__update([c4].set(wobble: 1))"));
     assert!(d.message.contains("wobble"), "{}", d.message);
-    let d = first_error(&stage("lead.play([c4].fsat(2))"));
+    let d = first_error(&stage("lead.__update([c4].fsat(2))"));
     assert_eq!(d.message, "unknown pattern operation `fsat`");
     assert_eq!(d.help.as_deref(), Some("did you mean `fast`?"));
 
     // bad atoms are pointed at, even inside brackets and alternations
-    let src = stage("lead.play([c4 [e4 kick] g4])");
+    let src = stage("lead.__update([c4 [e4 kick] g4])");
     let d = first_error(&src);
     assert!(
         d.message
@@ -1986,56 +2089,53 @@ fn performance_errors_are_clear_and_located() {
         d.message
     );
     assert_eq!(&src[d.span.start..d.span.start + 4], "kick");
-    let d = first_error(&stage("lead.play([c4 e4)"));
+    let d = first_error(&stage("lead.__update([c4 e4)"));
     assert_eq!(d.message, "this `[` is never closed");
 
     // operation arguments
     assert_eq!(
-        msg(&stage("lead.play([c4].fast(0))")),
+        msg(&stage("lead.__update([c4].fast(0))")),
         "`fast` must be above zero"
     );
     assert_eq!(
-        msg(&stage("lead.play([c4].fast)")),
+        msg(&stage("lead.__update([c4].fast)")),
         "`fast` needs an argument `by`"
     );
     assert_eq!(
-        msg(&stage("lead.play([c4].transpose(5))")),
+        msg(&stage("lead.__update([c4].transpose(5))")),
         "`transpose` takes an interval in semitones"
     );
     assert_eq!(
-        msg(&stage("lead.play([c4].thin(150%))")),
+        msg(&stage("lead.__update([c4].thin(150%))")),
         "`thin` takes an amount from 0% to 100%"
     );
     assert_eq!(
-        msg(&stage("lead.play([c4].shift(1sec))")),
+        msg(&stage("lead.__update([c4].shift(1sec))")),
         "expected a length in beats or bars, found `sec`"
     );
     assert_eq!(
-        msg(&stage("lead.play([c4].every(2, it.nonsense))")),
+        msg(&stage("lead.__update([c4].every(2, it.nonsense))")),
         "unknown pattern operation `nonsense`"
     );
     assert_eq!(
-        msg(&stage("lead.play(it)")),
+        msg(&stage("lead.__update(it)")),
         "`it` is only available inside an argument, as in `every(4, it.reverse)`"
     );
     assert_eq!(
-        msg(&stage("lead.play(fast(2))")),
+        msg(&stage("lead.__update(fast(2))")),
         "`fast` works on a pattern: write it after one, as in `riff.fast`"
     );
 
     // kinds of value
     assert_eq!(
-        msg(&stage("g = grid[x.x.]\nlead.play(g)")),
+        msg(&stage("g = grid[x.x.]\nlead.__update(g)")),
         "a grid has no pitches to play"
     );
     assert_eq!(
-        msg(&stage("scene s { lead: [c4] }\nlead.play(s)")),
+        msg(&stage("scene s { lead }\nlead.__update(s)")),
         "a scene is launched, not played"
     );
-    assert_eq!(
-        msg(&stage("scene s { nobody: [c4] }")),
-        "no clip named `nobody`"
-    );
+    assert_eq!(msg(&stage("scene s { nobody }")), "no clip named `nobody`");
     assert_eq!(
         msg(&stage("clip c { notes: env[0 1sec 1] }")),
         "the `notes` lane holds notes, not an envelope"
@@ -2060,7 +2160,10 @@ fn performance_errors_are_clear_and_located() {
     );
     assert_eq!(msg(&stage("lead = [c4]")), "`lead` is defined twice");
     assert_eq!(msg(&stage("it = [c4]")), "`it` is a reserved word");
-    assert_eq!(msg("at bar 0 hush"), "bars and beats count from 1");
+    assert_eq!(
+        msg(&stage("at bar 0 lead(freq: c4) for 1beat")),
+        "bars and beats are numbers counting from 1"
+    );
     // a file starts at its tempo; how a live session gets there is not the compiler's concern
     assert_eq!(
         ok(&stage("tempo 90bpm @ next bar over 2bars")).tempo.bpm,
@@ -2101,66 +2204,84 @@ fn clips_transform_their_own_notes() {
     let p = ok(&format!(
         "{STAGE}\nclip lead2 {{ instrument: pluck\n notes: [c4 e4 g4].reverse }}\nlead2.start"
     ));
-    let Action::Play { clip, .. } = &p.performance[0].action else {
+    let Action::Start { clip, .. } = &p.performance[0].action else {
         panic!()
     };
     assert_eq!(events(clip.lane("notes").unwrap(), 1)[0].1, midi(67));
 }
 
 #[test]
-fn clips_select_instrument_defaults_and_bare_instruments_get_a_node() {
+fn clips_select_instrument_defaults() {
     let one = ok(
-        "instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq) }\nclip bass { instrument: pluck(bright: 0.2) }\nbass.play([c2])",
+        "instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq) }\nclip bass { instrument: pluck(bright: 0.2) }\nbass.__update([c2])",
     );
     assert_eq!(one.nodes[1].name, "bass");
     assert_eq!(one.nodes[1].instrument, Some(0));
     assert_eq!(one.nodes[1].defaults.len(), 1);
 
-    let implicit = ok(
-        "instr pluck(freq: hz) { osc(saw, freq) }\npluck.play([c2 e2])\nscene verse { pluck: [c4] }",
-    );
-    assert_eq!(implicit.nodes.len(), 2, "one node, made once");
+    // naming something that is not a clip says so
     assert_eq!(
-        (
-            implicit.nodes[1].name.as_str(),
-            implicit.nodes[1].instrument
-        ),
-        ("pluck", Some(0))
-    );
-    assert!(matches!(
-        implicit.performance[0].action,
-        Action::Play { node: 1, .. }
-    ));
-    // naming something that is not an instrument still says so
-    assert_eq!(
-        msg("instr pluck(freq: hz) { osc(saw, freq) }\nnope.play([c2])"),
+        msg("instr pluck(freq: hz) { osc(saw, freq) }\nnope.__update([c2])"),
         "no clip named `nope`"
     );
     // An explicit clip selects an instrument too.
     ok(
-        "instr pluck(freq: hz) { osc(saw, freq) }\nclip bass { instrument: pluck }\nbass.play([c2])",
+        "instr pluck(freq: hz) { osc(saw, freq) }\nclip bass { instrument: pluck }\nbass.__update([c2])",
     );
 }
 
 #[test]
-fn scenes_resolve_clip_names_and_stop_clips_left_out() {
+fn a_scene_starts_the_clips_it_names_and_nothing_else() {
     let p = ok(
-        "instr tone(freq: hz) { osc(sine, freq) }\nclip bass { instrument: tone\nnotes: [c2] }\nclip lead { instrument: tone\nnotes: [c4] }\nbass.start\nscene chorus { lead: lead.transpose(+5st) }\nchorus.start",
+        "instr tone(freq: hz) { osc(sine, freq) }\nclip bass { instrument: tone\nnotes: [c2] }\nclip lead { instrument: tone\nnotes: [c4] }\nbass.start\nscene chorus { lead }\nchorus.start",
     );
-    assert_eq!(p.performance.len(), 3);
+    assert_eq!(p.performance.len(), 2, "bass is left alone");
     assert!(matches!(
         &p.performance[0].action,
-        Action::Play { node: 1, .. }
+        Action::Start { node: 1, .. }
     ));
-    let Action::Play { node: 2, clip } = &p.performance[1].action else {
+    let Action::Start { node: 2, clip } = &p.performance[1].action else {
         panic!("scene starts lead")
     };
-    assert_eq!(events(clip.lane("notes").unwrap(), 1)[0].1, midi(65));
-    assert!(matches!(&p.performance[2].action, Action::Stop { node: 1 }));
+    assert_eq!(events(clip.lane("notes").unwrap(), 1)[0].1, midi(60));
 }
 
 #[test]
 fn non_finite_note_times_are_rejected() {
     let d = first_error("instr tone(freq: hz) { osc(sine, freq) }\ntone(freq: c4) for 1/0beat");
     assert_eq!(d.message, "a time must be finite");
+}
+
+#[test]
+fn an_arrangement_can_hold_timed_lines() {
+    let p = ok(
+        "instr tone(freq: hz) { osc(sine, freq) }\nclip a { instrument: tone\nnotes: [c4] }\nclip b { instrument: tone\nnotes: [e4] }\nscene one { a }\nscene two { b }\narrangement song {\n  at +0bars one.start\n  at +4bars one.stop\n  at +4bars two.start\n}\nsong.start\nsong.stop",
+    );
+    let song = &p.arrangements[0];
+    assert_eq!(song.actions.len(), 3);
+    assert_eq!(song.actions[1].at, Time::Bars(4.0));
+    // starting it puts its lines where it was started; stopping it drops what is still to come
+    assert_eq!(p.performance.len(), 4);
+    assert!(matches!(
+        &p.performance[0].action,
+        Action::Start { node: 1, .. }
+    ));
+    assert!(
+        matches!(&p.performance[3].action, Action::Cancel { arrangement } if arrangement == "song")
+    );
+    // a tempo of its own can only be followed by a render of the arrangement
+    let d = first_error(
+        "instr tone(freq: hz) { osc(sine, freq) }\nclip a { instrument: tone\nnotes: [c4] }\nscene one { a }\narrangement song { sections: [one.over(2bars)]\n tempo: [90bpm] }\nsong.start",
+    );
+    assert!(d.message.contains("sets its own tempo"), "{}", d.message);
+    assert_eq!(
+        msg("instr tone(freq: hz) { osc(sine, freq) }\narrangement song {\n}"),
+        "arrangement `song` has nothing in it"
+    );
+    assert!(
+        msg("clip a { }\narrangement song {\n  at bar 3 hush\n}")
+            .starts_with("expected a command placed"),
+        "{}",
+        msg("clip a { }\narrangement song {\n  at bar 3 hush\n}")
+    );
 }

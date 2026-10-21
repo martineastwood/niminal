@@ -23,8 +23,11 @@ fx room {
   out = space.reverb(room: 0.8, damp: 0.4)
 }
 
-clip lead { instrument: pluck }
-lead.play([c4 e4 g4])
+clip lead {
+  instrument: pluck
+  notes: [c4 e4 g4]
+}
+lead.start
 ```
 
 `space += out` sends a copy while the instrument also outputs to master. For an entirely wet signal, send a local signal to the bus and omit `out` and a final value. Several instruments can send to the same bus to share one fx instance. Declare separate buses and fx instances for independent effect state.

@@ -161,27 +161,27 @@ use Step::*;
 
 const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, cut: hz = 3khz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 120ms 0] * 0.3 }\ninstr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] * 0.3 }\nbus space\ninstr click(freq: hz) { space += osc(sine, freq) * env[1 0.5ms 0] * 0.3 }\nfx hall { out = space.reverb(room: 0.6, damp: 0.5) }\nclip lead { instrument: pluck }\nclip bass { instrument: pluck(cut: 800hz) }\nclip clicks { instrument: click }\nclip pad { instrument: organ\n  keys: midi.keys(channel: 1) }\nctl bright = 3khz\n";
 
-/// Quantized evals, `launch ... then`, live commands, undo, a tempo ramp, cancel, hush, reset, held keys.
+/// Quantized evals, a scene swapped for another, live commands, undo, a tempo ramp, cancel, hush, reset, held keys.
 fn live_script() -> Vec<(u64, Step)> {
     vec![
         (0, Eval(SETUP, Some("now"))),
         (
             0,
             Eval(
-                "lead.play([c4 e4 g4 b4])\nbass.play([c2 ~ g2 ~])",
+                "lead.__update([c4 e4 g4 b4])\nbass.__update([c2 ~ g2 ~])",
                 Some("next beat"),
             ),
         ),
         (
             BAR / 2,
-            Eval("clicks.play([a5 a5 a5 a5])", Some("next bar")),
+            Eval("clicks.__update([a5 a5 a5 a5])", Some("next bar")),
         ),
         (BAR, Eval("lead.reverse", Some("next beat"))),
         (BAR + BAR / 3, Eval("lead.undo", Some("next bar"))),
         (
             2 * BAR,
             Eval(
-                "scene one { lead: [c5 e5], bass: [c2] }\nscene two { lead: [g4 b4], bass: [g2] }\none.start then two after 1bar",
+                "clip lead2 { instrument: pluck\n notes: [g4 b4] }\nclip bass2 { instrument: pluck(cut: 800hz)\n notes: [g2] }\nscene one { lead, bass }\nscene two { lead2, bass2 }\none.start\nat +1bar one.stop\nat +1bar two.start",
                 Some("next bar"),
             ),
         ),
@@ -192,13 +192,16 @@ fn live_script() -> Vec<(u64, Step)> {
         ),
         (
             3 * BAR + 5000,
-            Eval("lead.play([c4 d4 e4 f4 g4 a4 b4 c5])", Some("next bar")),
+            Eval("lead.__update([c4 d4 e4 f4 g4 a4 b4 c5])", Some("next bar")),
         ),
         (
             3 * BAR + 5100,
-            Eval("bass.unmute\nbass.play([c3 c3])", Some("next 2bars")),
+            Eval("bass.unmute\nbass.__update([c3 c3])", Some("next 2bars")),
         ),
-        (4 * BAR, Eval("clicks.play([a5 a5])", Some("next 4bars"))),
+        (
+            4 * BAR,
+            Eval("clicks.__update([a5 a5])", Some("next 4bars")),
+        ),
         (4 * BAR + 100, Cancel(None)),
         (4 * BAR + 20_000, Key(1, 60, 100)),
         (4 * BAR + 40_000, Key(1, 64, 90)),
@@ -208,11 +211,11 @@ fn live_script() -> Vec<(u64, Step)> {
         (5 * BAR + 30_000, Key(1, 67, 110)),
         (5 * BAR + 90_000, Key(1, 67, 0)),
         (6 * BAR, Eval("hush", Some("next beat"))),
-        (7 * BAR, Eval("lead.play([c4 e4])", Some("now"))),
+        (7 * BAR, Eval("lead.__update([c4 e4])", Some("now"))),
         (7 * BAR + 10_000, Eval("reset", Some("now"))),
         (
             7 * BAR + 40_000,
-            Eval("lead.play([g4 g4])", Some("next bar")),
+            Eval("lead.__update([g4 g4])", Some("next bar")),
         ),
         (8 * BAR, Panic),
     ]

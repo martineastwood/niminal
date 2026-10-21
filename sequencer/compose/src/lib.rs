@@ -21,11 +21,11 @@ mod score_prog;
 mod tests;
 
 pub use analysis::{
-    CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_entries,
+    CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_clips,
 };
 pub use ast::{ControlInput, InputSource};
 pub use compile::{Composition, ControlBinding, QuantizeConfig, compile, compile_with};
-pub use dsp::{LIVE_BPM, LIVE_METER, LIVE_ORIGIN, dsp_source};
+pub use dsp::{LIVE_BPM, LIVE_METER, LIVE_ORIGIN, dsp_source, warnings};
 pub use ide::{RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, pattern_ops, symbols};
 pub use lexer::{Tok, Token, lex};
 pub use modules::expand;
@@ -36,6 +36,6 @@ pub use performance::{
 };
 pub use schedule::{ControlSet, Found, PartState, Schedule, ScheduleError};
 pub use score_file::{
-    ArrangementDef, ArrangementSection, ClipDef, ClipEvent, Project, SceneDef, SceneEntry,
-    ScoreError, ScoreFile, Section, VERSION, VERSION_2,
+    ArrangementDef, ArrangementSection, ClipDef, ClipEvent, Project, SceneDef, ScoreError,
+    ScoreFile, Section, VERSION, VERSION_2,
 };

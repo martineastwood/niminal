@@ -34,7 +34,7 @@ mod tests {
     #[test]
     fn def_fills_pattern_atoms_from_params() {
         let s = schedule(
-            "\ndef motif(root) {\n  [root ~]\n}\nclip riff {\n  notes: motif(c4)\n}\nlead.play(riff)\n",
+            "\ndef motif(root) {\n  [root ~]\n}\nclip riff {\n  notes: motif(c4)\n}\nlead.__update(riff)\n",
         );
         // `[root ~]` is one note then a rest in each bar
         assert_eq!(midis(&s, 0.0, 2.0), vec![60]);
@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn def_with_if_picks_a_branch() {
         let s = schedule(
-            "\ndef pick(n) {\n  if n > 0 { [c5] } else { [c3] }\n}\nclip riff { notes: pick(1) }\nlead.play(riff)\n",
+            "\ndef pick(n) {\n  if n > 0 { [c5] } else { [c3] }\n}\nclip riff { notes: pick(1) }\nlead.__update(riff)\n",
         );
         assert_eq!(midis(&s, 0.0, 1.0)[0], 72);
     }
@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn for_in_def_builds_a_list_pattern() {
         let s = schedule(
-            "\ndef stairs(n) {\n  for i in 0..<n {\n    c4 + i * 1st\n  }\n}\nclip riff { notes: stairs(4) }\nlead.play(riff)\n",
+            "\ndef stairs(n) {\n  for i in 0..<n {\n    c4 + i * 1st\n  }\n}\nclip riff { notes: stairs(4) }\nlead.__update(riff)\n",
         );
         // one bar at 120bpm is 2 seconds
         assert_eq!(midis(&s, 0.0, 2.0), vec![60, 61, 62, 63]);
@@ -74,18 +74,19 @@ mod tests {
 
     #[test]
     fn anonymous_clip_from_def() {
-        let s =
-            schedule("\ndef make() {\n  clip {\n    notes: [c4 e4]\n  }\n}\nlead.play(make())\n");
+        let s = schedule(
+            "\ndef make() {\n  clip {\n    notes: [c4 e4]\n  }\n}\nlead.__update(make())\n",
+        );
         assert_eq!(midis(&s, 0.0, 2.0), vec![60, 64]);
     }
 
     #[test]
     fn stack_and_cat_combine_patterns() {
-        let stacked = schedule("lead.play(stack([c4], [e4]))");
+        let stacked = schedule("lead.__update(stack([c4], [e4]))");
         let notes = midis(&stacked, 0.0, 2.0);
         assert!(notes.contains(&60) && notes.contains(&64));
 
-        let cat = schedule("lead.play(cat([c4], [d4]))");
+        let cat = schedule("lead.__update(cat([c4], [d4]))");
         assert_eq!(midis(&cat, 0.0, 2.0), vec![60, 62]);
     }
 

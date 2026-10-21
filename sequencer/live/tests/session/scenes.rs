@@ -15,7 +15,7 @@ fn used_modules_play_and_replay_without_their_files() {
     );
     let mut s = session();
     s.eval_parsed(niminal_live::ParsedEval::from_dir(
-        "use rig\nlead.play([c4])",
+        "use rig\nlead.__update([c4])",
         &dir,
         Some("now"),
     ))
@@ -50,7 +50,8 @@ fn a_problem_in_a_used_module_points_at_the_use_line() {
 fn at_plus_counts_from_where_the_code_lands() {
     let mut s = ready();
     run(&mut s, 3 * BAR + 1000);
-    s.eval("at +2bars lead.play([c4])", Some("now")).unwrap();
+    s.eval("at +2bars lead.__update([c4])", Some("now"))
+        .unwrap();
     let before = run(&mut s, 2 * BAR - 1000);
     let after = run(&mut s, BAR);
     assert!(peak(&before) < 1e-6, "nothing before bar 6");
@@ -66,24 +67,23 @@ fn reset_makes_the_next_bar_line_bar_one() {
     run(&mut s, BAR - 900);
     // bar 5 on the old grid is bar 1 of the new one
     assert_eq!(s.transport().bar, 1);
-    let accepted = s.eval("at bar 3 lead.play([c4])", Some("now")).unwrap();
+    let accepted = s.eval("at 2bars lead.__update([c4])", Some("now")).unwrap();
     assert_eq!(accepted.position.0, 1);
     let before = run(&mut s, 2 * BAR - 100);
     let after = run(&mut s, BAR);
     assert!(
         peak(&before) < 1e-6 && peak(&after) > 0.1,
-        "bar 3 is two bars after the reset, not 3bars after the start"
+        "two bars after the reset, not after the start"
     );
 }
 
+/// `lead` and `bass` play the same four notes, and a scene has both.
+const RIFF: &str = "riff = [c4 e4 g4 b4]\nclip lead { instrument: pluck\n notes: riff }\nclip bass { instrument: pluck\n notes: riff }\nscene verse { lead, bass }\n";
+
 #[test]
-fn a_node_playing_a_launched_scene_can_be_changed_by_name() {
+fn a_clip_started_by_a_scene_can_be_changed_by_name() {
     let mut s = ready();
-    s.eval(
-        "riff = [c4 e4 g4 b4]\nscene verse { lead: riff, bass: riff }\nverse.start",
-        Some("now"),
-    )
-    .unwrap();
+    s.eval(&format!("{RIFF}verse.start"), Some("now")).unwrap();
     let first = run(&mut s, BAR);
     assert!(
         (hz(&first[2000..22_000]) - 262.0).abs() < 10.0,
@@ -109,7 +109,7 @@ fn a_node_playing_a_launched_scene_can_be_changed_by_name() {
 fn a_clip_that_a_scene_plays_follows_a_redefinition() {
     let mut s = ready();
     s.eval(
-        "riff = [a3]\nscene verse { lead: riff }\nverse.start",
+        "riff = [a3]\nclip lead { instrument: pluck\n notes: riff }\nscene verse { lead }\nverse.start",
         Some("now"),
     )
     .unwrap();
@@ -124,13 +124,9 @@ fn a_clip_that_a_scene_plays_follows_a_redefinition() {
 }
 
 #[test]
-fn stopping_a_scene_stops_its_nodes_and_a_node_with_nothing_playing_cannot_be_changed() {
+fn stopping_a_scene_stops_its_clips_and_a_clip_with_nothing_playing_cannot_be_changed() {
     let mut s = ready();
-    s.eval(
-        "riff = [c4]\nscene verse { lead: riff, bass: riff }\nverse.start",
-        Some("now"),
-    )
-    .unwrap();
+    s.eval(&format!("{RIFF}verse.start"), Some("now")).unwrap();
     run(&mut s, BAR);
     s.eval("verse.stop", Some("now")).unwrap();
     run(&mut s, 24_000);
@@ -150,11 +146,7 @@ fn stopping_a_scene_stops_its_nodes_and_a_node_with_nothing_playing_cannot_be_ch
 fn changes_stack_and_can_be_undone_or_cleared() {
     let first_beat = |s: &mut Offline| hz(&run(s, BAR)[2000..22_000]);
     let mut s = ready();
-    s.eval(
-        "riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nverse.start",
-        Some("now"),
-    )
-    .unwrap();
+    s.eval(&format!("{RIFF}verse.start"), Some("now")).unwrap();
     assert!((first_beat(&mut s) - 262.0).abs() < 10.0);
 
     s.eval("lead.reverse", Some("now")).unwrap();
@@ -186,19 +178,23 @@ fn changes_stack_and_can_be_undone_or_cleared() {
     s.eval("lead.reverse", Some("now")).unwrap();
     s.eval("verse.start", Some("now")).unwrap();
     assert!(
+        (first_beat(&mut s) - 494.0).abs() < 15.0,
+        "starting a scene whose clips are running leaves them as they are"
+    );
+    s.eval("verse.stop", Some("now")).unwrap();
+    run(&mut s, 24_000);
+    s.eval("verse.start", Some("now")).unwrap();
+    assert!(
         (first_beat(&mut s) - 262.0).abs() < 10.0,
-        "launching the scene again starts from its clips"
+        "stopped and started, it begins again from the clip as written"
     );
 }
 
 #[test]
 fn a_redefined_clip_keeps_the_changes_made_to_a_node() {
     let mut s = ready();
-    s.eval(
-        "riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nverse.start\nlead.reverse",
-        Some("now"),
-    )
-    .unwrap();
+    s.eval(&format!("{RIFF}verse.start\nlead.reverse"), Some("now"))
+        .unwrap();
     run(&mut s, BAR);
     s.eval("riff = [a3 a4 a4 a4]", Some("now")).unwrap();
     let out = run(&mut s, BAR);
@@ -216,15 +212,21 @@ fn thin_drops_the_same_notes_wherever_it_is_written() {
         s.eval(code, Some("now")).unwrap();
         run(&mut s, 4 * BAR)
     };
-    let a = thinned("lead.play([c4 e4 g4 b4 c5 e5 g5 b5].thin(50%))");
-    let b = thinned("riff = [c3]\nlead.play([c4 e4 g4 b4 c5 e5 g5 b5].thin(50%))");
+    let a = thinned("lead.__update([c4 e4 g4 b4 c5 e5 g5 b5].thin(50%))");
+    let b = thinned("riff = [c3]\nlead.__update([c4 e4 g4 b4 c5 e5 g5 b5].thin(50%))");
     assert_eq!(a, b);
 }
 
 #[test]
 fn changes_work_on_a_project_that_has_timed_commands_in_it() {
     let mut s = ready();
-    s.eval("riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nscene chorus { lead: riff }\nverse.start\nat +4bars chorus.start\nat +8bars hush", Some("now")).unwrap();
+    s.eval(
+        &format!(
+            "{RIFF}scene chorus {{ lead }}\nverse.start\nat +4bars chorus.start\nat +8bars hush"
+        ),
+        Some("now"),
+    )
+    .unwrap();
     run(&mut s, BAR);
     s.eval("lead.reverse", Some("now")).unwrap();
     assert!(
@@ -269,22 +271,89 @@ fn clips_with_instruments_are_started_changed_muted_and_stopped_by_name() {
 }
 
 #[test]
-fn launching_a_scene_replaces_the_parts_it_does_not_list() {
+fn starting_a_scene_leaves_the_other_clips_alone() {
+    let mut s = session();
+    s.eval(PARTS, Some("now")).unwrap();
+    s.eval("bass.start", Some("now")).unwrap();
+    run(&mut s, BAR);
+    s.eval("bridge.start", Some("now")).unwrap();
+    run(&mut s, 24_000);
+    let status = s.clips();
+    let names: Vec<_> = status
+        .iter()
+        .map(|t| (t.name.as_str(), t.running))
+        .collect();
+    assert_eq!(names, [("lead", true), ("bass", true)]);
+    let scenes: Vec<_> = s
+        .scenes()
+        .iter()
+        .map(|c| (c.name.clone(), c.running, c.active()))
+        .collect();
+    assert_eq!(
+        scenes,
+        [("verse".into(), 2, true), ("bridge".into(), 1, true)],
+        "both are active, and a clip can be in both"
+    );
+    s.eval("bridge.stop", Some("now")).unwrap();
+    run(&mut s, 24_000);
+    let scenes: Vec<_> = s.scenes().iter().map(|c| (c.running, c.active())).collect();
+    assert_eq!(
+        scenes,
+        [(1, false), (0, false)],
+        "stopping one scene stops its clips"
+    );
+}
+
+#[test]
+fn swapping_one_scene_for_another_keeps_a_clip_they_share_running() {
     let mut s = session();
     s.eval(PARTS, Some("now")).unwrap();
     s.eval("verse.start", Some("now")).unwrap();
     run(&mut s, BAR);
-    s.eval("bridge.start", Some("now")).unwrap();
+    s.eval("lead.reverse", Some("now")).unwrap();
+    run(&mut s, BAR);
+    s.eval("verse.stop\nbridge.start", Some("now")).unwrap();
     run(&mut s, 24_000);
-    let status = s.parts();
-    let names: Vec<_> = status
-        .iter()
-        .map(|t| (t.name.as_str(), t.clip.is_some()))
-        .collect();
-    assert_eq!(names, [("lead", true), ("bass", false)]);
-    let problems = s.eval("bass.reverse", Some("now")).unwrap_err();
+    let status = s.clips();
+    assert_eq!(
+        status.iter().map(|t| t.running).collect::<Vec<_>>(),
+        [true, false],
+        "bass stopped, lead carried on"
+    );
+    assert_eq!(
+        status[0].edits,
+        ["reverse"],
+        "and kept what had been done to it"
+    );
+}
+
+#[test]
+fn a_scene_can_be_muted_and_soloed_as_a_whole() {
+    let mut s = session();
+    s.eval(PARTS, Some("now")).unwrap();
+    s.eval("verse.start\nverse.mute", Some("now")).unwrap();
+    run(&mut s, 24_000);
+    assert!(s.clips().iter().all(|c| c.muted));
+    s.eval("verse.unmute\nbridge.solo", Some("now")).unwrap();
+    run(&mut s, 24_000);
+    let status = s.clips();
+    assert_eq!(
+        status
+            .iter()
+            .map(|c| (c.muted, c.soloed))
+            .collect::<Vec<_>>(),
+        [(false, true), (false, false)]
+    );
+}
+
+#[test]
+fn a_scene_cannot_be_changed_like_a_clip() {
+    let mut s = session();
+    s.eval(PARTS, Some("now")).unwrap();
+    s.eval("verse.start", Some("now")).unwrap();
+    let problems = s.eval("verse.reverse", Some("now")).unwrap_err();
     assert!(
-        problems[0].message.contains("isn't playing"),
+        problems[0].message.contains("is a scene"),
         "{}",
         problems[0].message
     );
@@ -300,7 +369,7 @@ fn a_bus_with_a_body_processes_what_instruments_send_to_it() {
         s.eval(&code, Some("now")).unwrap();
         let out = s.process(BAR);
         assert!(
-            s.parts().iter().all(|t| t.name != "space.fx"),
+            s.clips().iter().all(|t| t.name != "space.fx"),
             "the bus's processing is not a part to play"
         );
         peak(&out[0])
@@ -325,7 +394,7 @@ fn set_changes_a_lane_live_and_undo_puts_it_back() {
     s.eval("lead.set(amp: 0.25)", Some("now")).unwrap();
     let quiet = level(&mut s);
     assert!((quiet - 0.25).abs() < 0.03, "{quiet}");
-    assert_eq!(s.parts()[0].edits, ["set(amp: 0.25)"]);
+    assert_eq!(s.clips()[0].edits, ["set(amp: 0.25)"]);
     s.eval("lead.set(amp: 0.5)", Some("now")).unwrap();
     assert!((level(&mut s) - 0.5).abs() < 0.03, "the newer set wins");
     s.eval("lead.undo\nlead.undo", Some("now")).unwrap();
@@ -341,23 +410,19 @@ fn set_changes_a_lane_live_and_undo_puts_it_back() {
 #[test]
 fn undo_can_name_the_change_to_take_off() {
     let mut s = ready();
-    s.eval(
-        "riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nverse.start",
-        Some("now"),
-    )
-    .unwrap();
+    s.eval(&format!("{RIFF}verse.start"), Some("now")).unwrap();
     s.eval(
         "lead.reverse\nlead.transpose(+12st)\nlead.thin(10%)",
         Some("now"),
     )
     .unwrap();
     assert_eq!(
-        s.parts()[0].edits,
+        s.clips()[0].edits,
         ["reverse", "transpose(+12st)", "thin(10%)"]
     );
     s.eval("lead.undo(reverse)", Some("now")).unwrap();
     assert_eq!(
-        s.parts()[0].edits,
+        s.clips()[0].edits,
         ["transpose(+12st)", "thin(10%)"],
         "the middle one went, order kept"
     );
@@ -370,32 +435,221 @@ fn undo_can_name_the_change_to_take_off() {
 }
 
 #[test]
-fn a_change_named_for_a_clip_goes_to_every_part_playing_it() {
-    let mut s = ready();
-    s.eval("answer = [c4 e4 g4 b4]\nother = [c3]\nscene chorus { lead: answer, bass: answer.fast(2) }\nchorus.start", Some("now")).unwrap();
-    s.eval("answer.reverse", Some("now")).unwrap();
-    let edits: Vec<_> = s.parts().iter().map(|t| t.edits.clone()).collect();
-    assert_eq!(
-        edits,
-        [vec!["reverse"], vec!["reverse"]],
-        "both parts play `answer`"
-    );
-    s.eval("answer.clear", Some("now")).unwrap();
-    assert!(s.parts().iter().all(|t| t.edits.is_empty()));
-    let problems = s.eval("other.reverse", Some("now")).unwrap_err();
-    assert!(
-        problems[0].message.contains("isn't playing anything"),
-        "{}",
-        problems[0].message
-    );
-}
-
-#[test]
-fn a_bare_instrument_plays_and_keeps_running_across_control_changes() {
+fn a_clip_keeps_running_across_control_changes() {
     let mut s = session();
-    s.eval("tempo 120bpm\nctl level = 0.2\ninstr tone(freq: hz) { osc(sine, freq) * level * env[1 | 1ms 0] }\ntone.play([c4])", Some("now")).unwrap();
+    s.eval("tempo 120bpm\nctl level = 0.2\ninstr tone(freq: hz) { osc(sine, freq) * level * env[1 | 1ms 0] }\nclip t { instrument: tone\n notes: [c4] }\nt.start", Some("now")).unwrap();
     assert!(peak(&run(&mut s, BAR)) > 0.1);
     s.eval("ctl level = 0.4", Some("now")).unwrap();
     assert!(peak(&run(&mut s, BAR)) > 0.3);
     assert!(s.take_notices().is_empty());
+}
+
+#[test]
+fn a_scene_lands_at_its_own_quantum_over_its_clips_and_the_default() {
+    let mut s = session();
+    s.eval(PARTS, Some("now")).unwrap();
+    s.eval(
+        "scene slow { lead, bass, quantize: 2bars }\nscene quick { lead, quantize: 1beat }\nclip fill { instrument: pluck\n notes: [c4]\n quantize: 1beat }",
+        Some("now"),
+    )
+    .unwrap();
+    run(&mut s, 1000);
+    let beat = BAR as u64 / 4;
+    assert_eq!(
+        s.eval("verse.start", None).unwrap().lands_at,
+        BAR as u64,
+        "the default is the bar"
+    );
+    assert_eq!(
+        s.eval("slow.start", None).unwrap().lands_at,
+        2 * BAR as u64,
+        "the scene's own"
+    );
+    assert_eq!(s.eval("quick.start", None).unwrap().lands_at, beat);
+    assert_eq!(
+        s.eval("fill.start", None).unwrap().lands_at,
+        beat,
+        "a clip's own, when started alone"
+    );
+    assert_eq!(
+        s.eval("slow.start @ now", None).unwrap().lands_at,
+        1000,
+        "an `@` on the statement beats it"
+    );
+    assert_eq!(
+        s.eval("slow.start", Some("beat")).unwrap().lands_at,
+        beat,
+        "so does an override for the whole evaluation"
+    );
+}
+
+#[test]
+fn a_change_to_a_running_clip_lands_at_its_next_loop_point() {
+    let mut s = ready();
+    s.eval(
+        "clip long { instrument: pluck\n notes: [c4 e4 g4 b4]\n length: 4bars }\nlong.start",
+        Some("now"),
+    )
+    .unwrap();
+    run(&mut s, 2 * BAR + BAR / 2);
+    let at = s.eval("long.reverse", None).unwrap();
+    assert_eq!(
+        at.lands_at,
+        4 * BAR as u64,
+        "not at the next bar line, which is bar 3"
+    );
+    let at = s.eval("long.transpose(+12st) @ next cycle", None).unwrap();
+    assert_eq!(at.lands_at, 4 * BAR as u64);
+    // a clip that has not got going has no loop points, so it waits for a bar
+    s.eval(
+        "clip other { instrument: pluck\n notes: [c4]\n length: 4bars }",
+        Some("now"),
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval("other.start", None).unwrap().lands_at,
+        3 * BAR as u64
+    );
+}
+
+#[test]
+fn redefining_a_running_clip_keeps_its_place_in_the_loop() {
+    let first_of_bar = |s: &mut Offline| hz(&run(s, BAR)[2000..22_000]);
+    let mut s = ready();
+    s.eval(
+        "clip long { instrument: pluck\n notes: [c4 e4 g4 b4]\n length: 4bars }\nlong.start",
+        Some("now"),
+    )
+    .unwrap();
+    run(&mut s, 2 * BAR);
+    // two bars in, the lane's third step is playing: a restart would begin on c5 instead
+    s.eval(
+        "clip long { instrument: pluck\n notes: [c5 e5 g5 b5]\n length: 4bars }",
+        Some("now"),
+    )
+    .unwrap();
+    let heard = first_of_bar(&mut s);
+    assert!(
+        (heard - 784.0).abs() < 20.0,
+        "the new notes sound from the third step, not from the start: {heard}"
+    );
+    assert!(s.clips().iter().any(|c| c.name == "long" && c.running));
+}
+
+#[test]
+fn mute_and_solo_survive_stop_and_hush_and_go_with_reset() {
+    let mut s = session();
+    s.eval(PARTS, Some("now")).unwrap();
+    s.eval("verse.start\nlead.mute\nbass.solo", Some("now"))
+        .unwrap();
+    run(&mut s, 24_000);
+    let state = |s: &Offline| {
+        s.clips()
+            .iter()
+            .map(|c| (c.muted, c.soloed))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(state(&s), [(true, false), (false, true)]);
+    s.eval("verse.stop", Some("now")).unwrap();
+    run(&mut s, 24_000);
+    s.eval("hush", Some("now")).unwrap();
+    run(&mut s, 24_000);
+    assert_eq!(state(&s), [(true, false), (false, true)], "still there");
+    s.eval("reset", Some("now")).unwrap();
+    run(&mut s, 2 * BAR);
+    assert_eq!(
+        state(&s),
+        [(false, false), (false, false)],
+        "reset clears them"
+    );
+}
+
+#[test]
+fn a_clip_that_plays_once_stops_running_when_it_is_over() {
+    let mut s = ready();
+    s.eval(
+        "clip once { instrument: pluck\n notes: [c4]\n length: 1bar\n loop: false }\nonce.start",
+        Some("now"),
+    )
+    .unwrap();
+    run(&mut s, BAR / 2);
+    s.eval("once.set(gain: -6db)", Some("now")).unwrap();
+    let status = |s: &Offline| s.clips().into_iter().find(|c| c.name == "once").unwrap();
+    assert!(status(&s).running);
+    assert_eq!(status(&s).edits, ["set(gain: -6db)"]);
+    run(&mut s, 2 * BAR);
+    s.advance();
+    assert!(!status(&s).running, "finished");
+    assert!(status(&s).edits.is_empty(), "and the changes with it");
+    s.eval("once.start", Some("now")).unwrap();
+    run(&mut s, 2000);
+    assert!(status(&s).running, "it can be started again");
+    assert!(status(&s).edits.is_empty(), "from the clip as written");
+}
+
+const SONG_PARTS: &str = "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip a { instrument: pluck\n notes: [c4] }\nclip b { instrument: pluck\n notes: [e4] }\nscene one { a }\nscene two { b }\narrangement song {\n  at +0bars one.start\n  at +1bar one.stop\n  at +1bar two.start\n  at +3bars two.stop\n}\n";
+
+#[test]
+fn an_arrangement_runs_its_lines_from_when_it_is_started() {
+    let mut s = session();
+    s.eval(SONG_PARTS, Some("now")).unwrap();
+    run(&mut s, 5 * BAR / 2);
+    assert!(
+        s.clips().iter().all(|c| !c.running),
+        "defining it plays nothing"
+    );
+    s.eval("song.start", Some("now")).unwrap();
+    let first = run(&mut s, BAR / 2);
+    assert!(
+        (hz(&first[2000..22_000]) - 262.0).abs() < 10.0,
+        "scene one: c4"
+    );
+    assert!(s.clips().iter().find(|c| c.name == "a").unwrap().running);
+    run(&mut s, BAR / 2);
+    let second = run(&mut s, BAR);
+    assert!(
+        (hz(&second[2000..22_000]) - 330.0).abs() < 12.0,
+        "scene two: e4"
+    );
+    run(&mut s, 2 * BAR);
+    s.advance();
+    assert!(
+        s.clips().iter().all(|c| !c.running),
+        "and it stopped itself"
+    );
+    assert_eq!(s.defined("arrangement"), ["song"]);
+}
+
+#[test]
+fn stopping_an_arrangement_drops_what_it_has_not_got_to() {
+    let mut s = session();
+    s.eval(SONG_PARTS, Some("now")).unwrap();
+    s.eval("song.start", Some("now")).unwrap();
+    run(&mut s, BAR / 2);
+    s.eval("song.stop", Some("now")).unwrap();
+    // the clip that had started carries on, and nothing after it happens: not scene two, not the stops
+    let rest = run(&mut s, 3 * BAR);
+    s.advance();
+    let status = s.clips();
+    assert!(
+        status.iter().find(|c| c.name == "a").unwrap().running,
+        "still going"
+    );
+    assert!(
+        !status.iter().find(|c| c.name == "b").unwrap().running,
+        "never started"
+    );
+    assert!(peak(&rest[2 * BAR..]) > 0.05, "it did not stop either");
+}
+
+#[test]
+fn an_arrangement_can_only_be_started_and_stopped() {
+    let mut s = session();
+    s.eval(SONG_PARTS, Some("now")).unwrap();
+    let problems = s.eval("song.mute", Some("now")).unwrap_err();
+    assert!(
+        problems[0].message.contains("is an arrangement"),
+        "{}",
+        problems[0].message
+    );
 }

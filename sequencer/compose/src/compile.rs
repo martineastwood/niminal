@@ -166,7 +166,6 @@ pub fn compile_with(
             tuning: Tuning::default(),
         }
     });
-    let implicit = implicit_nodes(&items);
     // Instrument selection is lowered to DSP nodes, leaving just the clip lanes.
     for item in &mut items {
         if let Item::Clip(block) = item
@@ -179,7 +178,7 @@ pub fn compile_with(
         }
     }
 
-    let dsp = project(source, &parsed, tempo, &implicit, true).map_err(|d| vec![d])?;
+    let dsp = project(source, &parsed, tempo, true).map_err(|d| vec![d])?;
     let program = match niminal_lang::compile_with(&dsp.text, options) {
         Ok(program) => program,
         Err(found) => {
@@ -465,7 +464,7 @@ fn substitute_item(item: &mut Item, name: &str, value: &Expr) {
             if let Some(at) = &mut c.at {
                 substitute_at(at, name, value);
             }
-            if let Command::Play { what, .. } = &mut c.command {
+            if let Command::Update { what, .. } = &mut c.command {
                 substitute_expr(what, name, value);
             }
         }
@@ -508,47 +507,6 @@ fn substitute_expr(e: &mut Expr, name: &str, value: &Expr) {
         return;
     }
     e.for_each_child_mut(&mut |child| substitute_expr(child, name, value));
-}
-
-/// Instruments used in live commands or scenes get a playback node of their own name.
-pub(crate) fn implicit_nodes(items: &[Item]) -> Vec<String> {
-    let mut used: Vec<Ident> = Vec::new();
-    for item in items {
-        match item {
-            Item::Command(c) => match &c.command {
-                Command::Play { node: t, .. }
-                | Command::Stop(t)
-                | Command::Mute(t)
-                | Command::Unmute(t)
-                | Command::Solo(t)
-                | Command::Unsolo(Some(t))
-                | Command::Edit { node: t, .. }
-                | Command::Start { name: t, .. } => used.push(t.clone()),
-                _ => {}
-            },
-            Item::Scene(block) => used.extend(block.entries.iter().map(|(t, _)| t.clone())),
-            _ => {}
-        }
-    }
-    let mut names: Vec<String> = Vec::new();
-    for name in used {
-        let is_instrument = items.iter().any(|i| match i {
-            Item::Instr(d) => d.name.name == name.name,
-            Item::Sample(d) => d.name.name == name.name,
-            Item::MidiOut(d) => d.name.name == name.name,
-            _ => false,
-        });
-        let taken = items.iter().any(|i| match i {
-            Item::Clip(b) => b.name.name == name.name,
-            Item::Scene(b) => b.name.name == name.name,
-            Item::Bind { name: n, .. } => n.name == name.name,
-            _ => false,
-        });
-        if is_instrument && !taken && !names.contains(&name.name) {
-            names.push(name.name);
-        }
-    }
-    names
 }
 
 /// `config { quantize: { default: 1bar  play: cycle } }`, and the `quantize` of definitions checked.

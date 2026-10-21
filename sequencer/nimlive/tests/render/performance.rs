@@ -26,7 +26,7 @@ fn raw(body: &str, bars: f64) -> Vec<f32> {
 
 #[test]
 fn a_played_pattern_renders_exactly_like_the_same_notes_written_out() {
-    let played = raw("lead.play([c4 e4])", 2.0);
+    let played = raw("lead.__update([c4 e4])", 2.0);
     // two bars of two one-second steps: four notes, two beats each
     let written = raw(
         "lead(freq: c4) for 2beats\nat 2beats lead(freq: e4) for 2beats\nat 4beats lead(freq: c4) for 2beats\nat 6beats lead(freq: e4) for 2beats",
@@ -39,7 +39,7 @@ fn a_played_pattern_renders_exactly_like_the_same_notes_written_out() {
 #[test]
 fn lanes_become_note_parameters() {
     let lane = raw(
-        "clip c { notes: [c4 e4]\nbright: [0.1 0.9]\ngain: [-6db] }\nlead.play(c)",
+        "clip c { notes: [c4 e4]\nbright: [0.1 0.9]\ngain: [-6db] }\nlead.__update(c)",
         1.0,
     );
     let written = raw(
@@ -66,8 +66,8 @@ fn a_lane_can_set_a_node_parameter_as_each_note_starts() {
         .map(mono)
         .unwrap()
     };
-    let dull = render("pad.play([c5 c5])");
-    let bright = render("clip c { notes: [c5 c5]\npad_fx.cut: [300hz 8khz] }\npad.play(c)");
+    let dull = render("pad.__update([c5 c5])");
+    let bright = render("clip c { notes: [c5 c5]\npad_fx.cut: [300hz 8khz] }\npad.__update(c)");
     let half = dull.len() / 2;
     // the first note is the same, the second is brighter (more of the saw gets through)
     assert_eq!(&dull[..half - 4800], &bright[..half - 4800]);
@@ -79,13 +79,13 @@ fn a_lane_can_set_a_node_parameter_as_each_note_starts() {
     );
     // with no notes there is nothing to step on, which is said rather than ignored
     let p = compile(&format!(
-        "{stage}clip c {{ pad_fx.cut: [300hz 8khz] }}\npad.play(c)"
+        "{stage}clip c {{ pad_fx.cut: [300hz 8khz] }}\npad.__update(c)"
     ));
     let e = p.err().expect("a lane without notes is refused");
     assert!(e[0].message.contains("has no notes"), "{}", e[0].message);
     // a mistake in the lane's unit is reported
     let p = program(&format!(
-        "{stage}clip c {{ notes: [c5]\npad_fx.cut: [0.5] }}\npad.play(c)"
+        "{stage}clip c {{ notes: [c5]\npad_fx.cut: [0.5] }}\npad.__update(c)"
     ));
     let Err(e) = render_with(
         &p,
@@ -125,9 +125,12 @@ fn eighths(x: &[f32]) -> Vec<f32> {
 #[test]
 fn an_envelope_lane_sweeps_a_node_parameter_over_the_clip() {
     let notes = "notes: [c5 c5 c5 c5 c5 c5 c5 c5]";
-    let steady = eighths(&sweep(&format!("clip c {{ {notes} }}\npad.play(c)"), 2.0));
+    let steady = eighths(&sweep(
+        &format!("clip c {{ {notes} }}\npad.__update(c)"),
+        2.0,
+    ));
     let swept = eighths(&sweep(
-        &format!("clip c {{ {notes}\npad_fx.cut: env[300hz 1bar 8khz] }}\npad.play(c)"),
+        &format!("clip c {{ {notes}\npad_fx.cut: env[300hz 1bar 8khz] }}\npad.__update(c)"),
         2.0,
     ));
     assert!(
@@ -143,7 +146,7 @@ fn the_shape_of_an_envelope_lane_is_the_envelopes_shape() {
     let mid = |curve: &str| {
         let x = sweep(
             &format!(
-                "clip c {{ notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1bar{curve} 8khz] }}\npad.play(c)"
+                "clip c {{ notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1bar{curve} 8khz] }}\npad.__update(c)"
             ),
             2.0,
         );
@@ -163,11 +166,11 @@ fn the_shape_of_an_envelope_lane_is_the_envelopes_shape() {
 fn an_envelope_lane_needs_no_notes_and_holds_its_last_level_or_loops() {
     // two bars of notes under a one-bar envelope that has finished by the second
     let held = eighths(&sweep(
-        "clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar 8khz] }\npad.play(c)",
+        "clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar 8khz] }\npad.__update(c)",
         2.0,
     ));
     let steady = eighths(&sweep(
-        "clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5] }\npad.play(c)",
+        "clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5] }\npad.__update(c)",
         2.0,
     ));
     assert!(
@@ -175,7 +178,7 @@ fn an_envelope_lane_needs_no_notes_and_holds_its_last_level_or_loops() {
         "{held:?}"
     );
     let looped = eighths(&sweep(
-        "clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar 700hz 0sec 300hz].loop }\npad.play(c)",
+        "clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar 700hz 0sec 300hz].loop }\npad.__update(c)",
         2.0,
     ));
     // the lane starts over, so it keeps dipping back to the dull start
@@ -185,7 +188,7 @@ fn an_envelope_lane_needs_no_notes_and_holds_its_last_level_or_loops() {
     );
     // a clip with only an envelope lane is allowed: it moves the parameter for notes played elsewhere
     let p = compile(&format!(
-        "{SWEEP_STAGE}clip c {{ pad_fx.cut: env[300hz 1bar 8khz] }}\npad.play(c)"
+        "{SWEEP_STAGE}clip c {{ pad_fx.cut: env[300hz 1bar 8khz] }}\npad.__update(c)"
     ));
     assert!(p.is_ok(), "{:?}", p.err());
 }
@@ -200,16 +203,19 @@ fn envelope_lane_mistakes_are_reported() {
             .message
     };
     assert!(
-        error("clip c { notes: [c5]\nnope: env[1 1bar 2] }\npad.play(c)")
+        error("clip c { notes: [c5]\nnope: env[1 1bar 2] }\npad.__update(c)")
             .contains("no such parameter")
     );
     assert!(
-        error("clip c { notes: [c5]\npad_fx.cut: env[0.5 1bar 1] }\npad.play(c)").contains("cut"),
+        error("clip c { notes: [c5]\npad_fx.cut: env[0.5 1bar 1] }\npad.__update(c)")
+            .contains("cut"),
         "a number is not a frequency"
     );
     assert!(
-        error("clip c { notes: [c5]\npad_fx.cut: env[300hz 1bar 1khz | 1bar 300hz] }\npad.play(c)")
-            .contains("sustain")
+        error(
+            "clip c { notes: [c5]\npad_fx.cut: env[300hz 1bar 1khz | 1bar 300hz] }\npad.__update(c)"
+        )
+        .contains("sustain")
     );
     assert!(error("clip c { notes: env[300hz 1bar 1khz] }").contains("holds notes"));
 }
@@ -239,7 +245,7 @@ fn a_looping_envelope_in_an_instrument_repeats() {
 
 #[test]
 fn a_node_applies_its_instrument_defaults_to_played_notes() {
-    let played = raw("bass.play([c2])", 1.0);
+    let played = raw("bass.__update([c2])", 1.0);
     let written = raw("bass(freq: c2) for 4beats", 0.0);
     assert_eq!(played, written);
     let explicit = raw("lead(freq: c2, bright: 0.1) for 4beats", 0.0);
@@ -251,13 +257,13 @@ fn a_node_applies_its_instrument_defaults_to_played_notes() {
 
 #[test]
 fn an_open_ended_piece_needs_a_length() {
-    let err = render_with_bars("lead.play([c4])", None).unwrap_err();
+    let err = render_with_bars("lead.__update([c4])", None).unwrap_err();
     assert!(
         err.0.contains("plays until it is stopped") && err.0.contains("--bars"),
         "{err}"
     );
     // but one that ends itself doesn't
-    let out = render_with_bars("lead.play([c4])\nat 2bars hush", None).unwrap();
+    let out = render_with_bars("lead.__update([c4])\nat 2bars hush", None).unwrap();
     assert!(
         out.len() > (3.9 * SR) as usize && out.len() < (4.5 * SR) as usize,
         "{}",
@@ -267,7 +273,7 @@ fn an_open_ended_piece_needs_a_length() {
 
 #[test]
 fn the_notes_after_the_length_are_not_started_but_ringing_ones_finish() {
-    let out = raw("lead.play([c4])", 1.0);
+    let out = raw("lead.__update([c4])", 1.0);
     // one note starts at 0; the one at 2s is past the end of the render
     let sound = |from: f64, to: f64| rms(&out[(from * SR) as usize..(to * SR) as usize]);
     assert!(sound(0.2, 1.5) > 0.05);
@@ -277,7 +283,7 @@ fn the_notes_after_the_length_are_not_started_but_ringing_ones_finish() {
 #[test]
 fn muting_silences_a_node_for_a_while() {
     let out = raw(
-        "lead.play([c4])\nat 1bar lead.mute\nat 3bars lead.unmute",
+        "lead.__update([c4])\nat 1bar lead.mute\nat 3bars lead.unmute",
         4.0,
     );
     let loud = |s: f64| rms(&out[(s * SR) as usize..((s + 1.0) * SR) as usize]) > 0.05;
@@ -289,16 +295,16 @@ fn muting_silences_a_node_for_a_while() {
 
 #[test]
 fn solo_isolates_a_node() {
-    let both = raw("lead.play([c4])\nbass.play([c2])", 1.0);
-    let solo = raw("lead.play([c4])\nbass.play([c2])\nbass.solo", 1.0);
-    let bass_only = raw("bass.play([c2])", 1.0);
+    let both = raw("lead.__update([c4])\nbass.__update([c2])", 1.0);
+    let solo = raw("lead.__update([c4])\nbass.__update([c2])\nbass.solo", 1.0);
+    let bass_only = raw("bass.__update([c2])", 1.0);
     assert!(rms(&both) > rms(&bass_only));
     assert_eq!(solo, bass_only);
 }
 
 #[test]
 fn panic_cuts_everything_including_effect_tails() {
-    let base = "\nbus space\ninstr ping(freq: hz) { space += osc(sine, freq) * env[1 5ms 0] }\nfx echo { out = space.delay(time: 100ms, feedback: 0.9) }\nclip src { instrument: ping }\nsrc.play([c4*2])\n";
+    let base = "\nbus space\ninstr ping(freq: hz) { space += osc(sine, freq) * env[1 5ms 0] }\nfx echo { out = space.delay(time: 100ms, feedback: 0.9) }\nclip src { instrument: ping, notes: [c4*2] }\nsrc.start\n";
     let ringing = raw(base, 2.0);
     let cut = raw(&format!("{base}at 1bar panic"), 2.0);
     assert!(
@@ -318,7 +324,7 @@ fn panic_cuts_everything_including_effect_tails() {
 #[test]
 fn scenes_play_in_sequence() {
     let out = raw(
-        "\nclip a { notes: [c4] }\nclip b { notes: [c2] }\nscene one { lead: a }\nscene two { lead: b }\none.start\nat 1bar two.start",
+        "\nclip a { instrument: pluck, notes: [c4] }\nclip b { instrument: pluck, notes: [c2] }\nscene one { a }\nscene two { b }\none.start\nat 1bar one.stop\nat 1bar two.start",
         2.0,
     );
     let written = raw(

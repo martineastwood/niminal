@@ -3,7 +3,7 @@ use crate::common::*;
 #[test]
 fn a_new_tempo_keeps_the_clip_in_place_in_its_bar() {
     let mut s = ready();
-    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4 g4 b4])", Some("now")).unwrap();
     // at 120bpm a note lasts half a second: 0.75s in, the second note is half done
     run(&mut s, 36_000);
     s.eval("tempo 240bpm", Some("now")).unwrap();
@@ -20,7 +20,7 @@ fn a_new_tempo_keeps_the_clip_in_place_in_its_bar() {
 #[test]
 fn a_new_meter_keeps_the_clip_in_place_in_its_bar_and_the_bar_count_going() {
     let mut s = ready();
-    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4 g4 b4])", Some("now")).unwrap();
     // at 120bpm a bar is 2s: 0.75s in, the second note is half done
     run(&mut s, 36_000);
     s.eval("meter 2/4", Some("now")).unwrap();
@@ -47,7 +47,7 @@ fn a_new_meter_keeps_the_clip_in_place_in_its_bar_and_the_bar_count_going() {
 #[test]
 fn a_meter_change_late_in_a_piece_keeps_the_bar_number_and_bar_lines_in_step_with_the_clips() {
     let mut s = ready();
-    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4 g4 b4])", Some("now")).unwrap();
     // three and a half bars of 4/4
     run(&mut s, 7 * BAR / 2);
     assert_eq!(s.transport().bar, 4);
@@ -109,7 +109,7 @@ fn a_tempo_change_can_name_when_it_lands_and_ramp_over_a_stretch() {
 #[test]
 fn a_tempo_ramp_replays_to_the_same_audio() {
     let mut s = ready();
-    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4 g4 b4])", Some("now")).unwrap();
     let mut original = run(&mut s, 20_000);
     s.eval("tempo 200bpm @ now over 2beats", Some("now"))
         .unwrap();
@@ -137,7 +137,7 @@ fn a_ramp_that_is_too_long_is_refused() {
 #[test]
 fn a_change_waiting_for_a_bar_line_stays_on_it_when_the_meter_changes_first() {
     let mut s = ready();
-    s.eval("lead.play([c4 e4 g4 b4])", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4 g4 b4])", Some("now")).unwrap();
     // the meter lands at the next bar (2s), the mute is meant for the one after (4s at 4/4)
     s.eval("lead.mute", Some("next 2bars")).unwrap();
     s.eval("meter 2/4", Some("next bar")).unwrap();

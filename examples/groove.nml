@@ -1,6 +1,6 @@
 // The performance layer: clips that carry their instrument, scenes, and live commands.
 // Render with:  niminal render examples/groove.nml --out groove.wav
-// Live, try:  verse.start   then   bass.reverse   then   lead.transpose(+5st)   then   bass.set(bright: 0.9)   then   bass.undo   then   verse.stop
+// Live, try:  song.start   or   verse.start   then   bass.reverse   then   lead.transpose(+5st)   then   bass.set(bright: 0.9)   then   bass.undo   then   verse.stop
 // The `at +N bars` lines count from when the code lands, so you can submit it again at any time in a live session.
 config { channels: stereo }
 tempo 110bpm
@@ -18,7 +18,7 @@ instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {
   space += out.gain(-18db)
 }
 
-// A clip with an `instrument:` is playable: start it, stop it, mute it and change it by name.
+// A clip has an instrument and lanes: start it, stop it, mute it and change it by name.
 clip bass {
   instrument: pluck(bright: 0.2)
   notes:  [c2 ~ c2 eb2 ~ g1 bb1 ~]
@@ -31,20 +31,39 @@ clip lead {
   notes: [c4 e4 g4 b4].every(2, it.reverse)
 }
 
-// Without an instrument these are just material, to play on an instrument.
+// A clip can be made from another: it keeps the instrument and lanes, and applies the change.
+clip bass_chorus = bass.transpose(+5st)
+
+// A pattern is just notes. Give it to a clip as its `notes:`.
 answer = [c4 e4 g4 b4].every(2, it.reverse).transpose(+5st).thin(25%)
 spread = [c5].euclid(hits: 4, steps: 8)
 
-// Starting a scene starts what it lists and stops the other parts.
+clip lead_chorus {
+  instrument: pluck(bright: 0.8)
+  notes: answer
+}
+
+clip lead_outro {
+  instrument: pluck(bright: 0.8)
+  notes: spread
+}
+
+// A scene is a list of clips, started and stopped together. It leaves every other clip alone.
 scene verse  { bass, lead }
-scene chorus { bass: bass.transpose(+5st), lead: answer }
-scene outro  { lead: spread }
+scene chorus { bass_chorus, lead_chorus }
+scene outro  { lead_outro }
 
-verse.start
-at +4bars chorus.start
-at +8bars bass.mute
-at +10bars bass.unmute
-at +12bars outro.start
-at +14bars hush
+// An arrangement is a timeline of its own: `at +4bars` counts from when it is started.
+// Swapping one scene for another is a stop and a start that land together.
+arrangement song {
+  at +0bars  verse.start
+  at +4bars  verse.stop
+  at +4bars  chorus.start
+  at +8bars  bass_chorus.mute
+  at +10bars bass_chorus.unmute
+  at +12bars chorus.stop
+  at +12bars outro.start
+  at +14bars hush
+}
 
-
+song.start

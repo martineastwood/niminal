@@ -71,26 +71,36 @@ impl Project {
         dropped
     }
 
-    /// Add or replace definitions. A replaced definition keeps its place, since
-    /// later definitions may depend on it being earlier.
+    /// Add or replace definitions. A replaced definition keeps its place, since later definitions may
+    /// depend on it being earlier. New definitions that come before a replaced one in what was sent go
+    /// just before it, so that it can use them.
     pub fn apply(&mut self, delta: &[Entry]) {
+        let mut waiting: Vec<Entry> = Vec::new();
         for e in delta {
             // a name is used once: defining it as something else replaces what had it before
             if let Some((kind, name)) = e.key.split_once(':').filter(|(k, _)| SHARED.contains(k)) {
-                self.entries.retain(|x| {
+                let keeps = |x: &Entry| {
                     x.key.split_once(':').is_none_or(|(k, n)| {
                         n != name
                             || k == kind
                             || !SHARED.contains(&k)
                             || is_instrument_and_node(k, kind)
                     })
-                });
+                };
+                self.entries.retain(keeps);
+                waiting.retain(keeps);
             }
-            match self.entries.iter_mut().find(|x| x.key == e.key) {
-                Some(existing) => existing.text.clone_from(&e.text),
-                None => self.entries.push(e.clone()),
+            if let Some(w) = waiting.iter_mut().find(|x| x.key == e.key) {
+                w.text.clone_from(&e.text);
+            } else if let Some(at) = self.entries.iter().position(|x| x.key == e.key) {
+                let count = waiting.len();
+                self.entries.splice(at..at, waiting.drain(..));
+                self.entries[at + count].text.clone_from(&e.text);
+            } else {
+                waiting.push(e.clone());
             }
         }
+        self.entries.append(&mut waiting);
     }
 
     pub fn text_of(&self, key: &str) -> Option<&str> {
@@ -262,6 +272,22 @@ mod tests {
         assert_eq!(keys, [("a", "A1"), ("b", "B2"), ("c", "C1"), ("d", "D1")]);
         assert_eq!(p.text_of("b"), Some("B2"));
         assert_eq!(p.text_of("zz"), None);
+    }
+
+    #[test]
+    fn new_definitions_go_before_a_replaced_one_that_follows_them() {
+        let mut p = Project::default();
+        p.apply(&[entry("a", "A1"), entry("b", "B1"), entry("c", "C1")]);
+        // `b` now uses `x` and `y`, which are new and come before it in what was sent
+        p.apply(&[
+            entry("x", "X1"),
+            entry("y", "Y1"),
+            entry("b", "B2"),
+            entry("z", "Z1"),
+        ]);
+        let keys: Vec<_> = p.entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(keys, ["a", "x", "y", "b", "c", "z"]);
+        assert_eq!(p.text_of("b"), Some("B2"));
     }
 
     #[test]

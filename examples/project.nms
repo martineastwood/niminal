@@ -11,9 +11,7 @@
   "scenes": [
     {
       "name": "verse",
-      "entries": {
-        "lead": "theme"
-      }
+      "clips": ["theme"]
     }
   ],
   "arrangement": {

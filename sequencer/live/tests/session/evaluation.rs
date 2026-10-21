@@ -3,7 +3,7 @@ use crate::common::*;
 #[test]
 fn code_evaluated_for_now_sounds_immediately() {
     let mut s = ready();
-    let accepted = s.eval("lead.play([c4])", Some("now")).unwrap();
+    let accepted = s.eval("lead.__update([c4])", Some("now")).unwrap();
     assert_eq!(accepted.lands_at, 0);
     let out = run(&mut s, 24_000);
     assert!(rms(&out[1000..20_000]) > 0.1);
@@ -15,7 +15,7 @@ fn a_change_waits_for_its_boundary_and_lands_on_exactly_that_sample() {
     let mut s = ready();
     run(&mut s, 10_000);
     // starting a clip defaults to the next cycle: the next bar
-    let accepted = s.eval("lead.play([c4])", None).unwrap();
+    let accepted = s.eval("lead.__update([c4])", None).unwrap();
     assert_eq!(accepted.lands_at, BAR as u64);
     assert_eq!(accepted.position, (2, 1.0));
     let pending = s.pending();
@@ -50,18 +50,23 @@ fn evaluating_exactly_on_a_boundary_with_next_waits_for_the_following_one() {
 #[test]
 fn code_that_does_not_compile_changes_nothing() {
     let mut s = ready();
-    let problems = s.eval("riff = [c4]\nlead.play(nope)", None).unwrap_err();
+    let problems = s
+        .eval(
+            "riff = [c4]\nclip lead { instrument: pluck\n notes: nope }",
+            None,
+        )
+        .unwrap_err();
     assert_eq!(problems.len(), 1);
     assert_eq!(problems[0].message, "`nope` is not defined");
     assert_eq!(
         (problems[0].line, problems[0].column),
-        (Some(2), Some(11)),
+        (Some(3), Some(9)),
         "located in what was sent"
     );
     assert!(problems[0].help.is_none());
     assert!(s.pending().is_empty());
     // and the good half of the snippet did not sneak in
-    assert!(s.eval("lead.play(riff)", Some("now")).is_err());
+    assert!(s.eval("lead.__update(riff)", Some("now")).is_err());
     // nor did anything sound
     assert_eq!(peak(&run(&mut s, 5000)), 0.0);
 }
@@ -69,7 +74,7 @@ fn code_that_does_not_compile_changes_nothing() {
 #[test]
 fn syntax_errors_are_located_too() {
     let mut s = ready();
-    let problems = s.eval("\n\nlead.play([c4)", None).unwrap_err();
+    let problems = s.eval("\n\nlead.__update([c4)", None).unwrap_err();
     assert_eq!(problems[0].message, "this `[` is never closed");
     assert_eq!(problems[0].line, Some(3));
     assert!(s.eval("hush @ sometime", None).is_err());
@@ -92,7 +97,7 @@ fn problems_in_earlier_definitions_say_so() {
     // instrument change that breaks it is accepted; its notes then say why they
     // can't play.
     let mut s = ready();
-    s.eval("lead.play([c4*4])", Some("now")).unwrap();
+    s.eval("lead.__update([c4*4])", Some("now")).unwrap();
     s.eval("instr pluck(pitch: hz) { osc(sine, pitch) }", Some("now"))
         .unwrap();
     run(&mut s, BAR);
@@ -109,7 +114,7 @@ fn a_transaction_lands_together_at_the_coarsest_boundary() {
     s.eval("bass.mute", Some("now")).unwrap();
     let accepted = s
         .eval(
-            "bass.unmute @ next beat\nlead.play([c4]) @ next 4bars",
+            "bass.unmute @ next beat\nlead.__update([c4]) @ next 4bars",
             None,
         )
         .unwrap();
@@ -121,7 +126,7 @@ fn a_transaction_lands_together_at_the_coarsest_boundary() {
 #[test]
 fn independent_changes_land_at_their_own_boundaries() {
     let mut s = ready();
-    let first = s.eval("lead.play([c4]) @ next 4bars", None).unwrap();
+    let first = s.eval("lead.__update([c4]) @ next 4bars", None).unwrap();
     // This write is independent of the play, so it keeps its nearer boundary.
     let second = s.eval("lead.mute @ next beat", None).unwrap();
     assert!(second.lands_at < first.lands_at);
@@ -135,7 +140,7 @@ fn a_later_evaluation_sees_what_is_still_waiting() {
     let mut s = ready();
     s.eval("riff = [c4]", Some("next 4bars")).unwrap();
     // `riff` is not defined yet, but it will be by the time this lands
-    let ok = s.eval("lead.play(riff)", None);
+    let ok = s.eval("lead.__update(riff)", None);
     assert!(ok.is_ok(), "{ok:?}");
     run(&mut s, 5 * BAR);
     assert!(s.take_notices().is_empty());
@@ -145,8 +150,8 @@ fn a_later_evaluation_sees_what_is_still_waiting() {
 fn cancelling_removes_what_is_waiting() {
     let mut s = ready();
     run(&mut s, 1000); // off the bar line, so these have to wait
-    let a = s.eval("lead.play([c4])", None).unwrap();
-    s.eval("bass.play([c2])", None).unwrap();
+    let a = s.eval("lead.__update([c4])", None).unwrap();
+    s.eval("bass.__update([c2])", None).unwrap();
     assert_eq!(s.cancel(a.id), 1);
     assert_eq!(s.pending().len(), 1);
     assert_eq!(s.cancel(None), 1);
@@ -160,7 +165,7 @@ fn cancelling_a_change_drops_later_ones_that_depended_on_it() {
     let mut s = ready();
     run(&mut s, 1000);
     let first = s.eval("riff = [c4]", None).unwrap();
-    s.eval("lead.play(riff)", None).unwrap(); // uses riff, so it only works with the first
+    s.eval("lead.__update(riff)", None).unwrap(); // uses riff, so it only works with the first
     s.eval("bass.mute", None).unwrap(); // independent
     assert_eq!(s.pending().len(), 3);
 
@@ -182,7 +187,7 @@ fn cancelling_a_change_drops_later_ones_that_depended_on_it() {
         "the setup and the independent change"
     );
     // and nothing is half-applied
-    assert!(s.eval("lead.play(riff)", Some("now")).is_err());
+    assert!(s.eval("lead.__update(riff)", Some("now")).is_err());
 }
 
 #[test]
@@ -230,7 +235,7 @@ fn written_notes_play_when_evaluated() {
 #[test]
 fn at_places_a_command_at_an_absolute_time() {
     let mut s = ready();
-    s.eval("at bar 3 lead.play([c4])", Some("now")).unwrap();
+    s.eval("at 2bars lead.__update([c4])", Some("now")).unwrap();
     let out = run(&mut s, 3 * BAR);
     assert_eq!(peak(&out[..2 * BAR - 1]), 0.0);
     assert!(peak(&out[2 * BAR..2 * BAR + 3000]) > 0.1);
@@ -268,7 +273,11 @@ fn redefining_an_instrument_leaves_sounding_notes_alone_and_changes_new_ones() {
 #[test]
 fn redefining_a_pattern_changes_the_nodes_playing_it() {
     let mut s = ready();
-    s.eval("riff = [a3]\nlead.play(riff)", Some("now")).unwrap();
+    s.eval(
+        "riff = [a3]\nclip lead { instrument: pluck\n notes: riff }\nlead.start",
+        Some("now"),
+    )
+    .unwrap();
     let before = run(&mut s, 2 * BAR);
     let hz = |x: &[f32]| crossings(x) as f32 / (x.len() as f32 / SR);
     assert!(
@@ -281,7 +290,7 @@ fn redefining_a_pattern_changes_the_nodes_playing_it() {
     let after = run(&mut s, 2 * BAR);
     assert!(
         (hz(&after[2000..BAR - 2000]) - 440.0).abs() < 12.0,
-        "now A4, with no new `play`: {}",
+        "now A4, though the clip was not touched: {}",
         hz(&after[2000..BAR - 2000])
     );
 }
@@ -290,7 +299,7 @@ fn redefining_a_pattern_changes_the_nodes_playing_it() {
 fn changing_the_tempo_retimes_running_clips() {
     let hz = |x: &[f32]| crossings(x) as f32 / (x.len() as f32 / SR);
     let mut s = ready();
-    s.eval("lead.play([a3 a4])", Some("now")).unwrap();
+    s.eval("lead.__update([a3 a4])", Some("now")).unwrap();
     // at 120bpm each of the two steps lasts a second
     let slow = run(&mut s, 2 * 48_000);
     assert!((hz(&slow[2000..46_000]) - 220.0).abs() < 8.0);
@@ -356,7 +365,7 @@ fn adding_a_bus_keeps_sounding_voices() {
 #[test]
 fn hush_stops_clips_but_lets_notes_ring_and_panic_stops_everything() {
     let mut s = ready();
-    s.eval("lead.play([a3*8])", Some("now")).unwrap();
+    s.eval("lead.__update([a3*8])", Some("now")).unwrap();
     run(&mut s, 20_000);
     s.hush().unwrap();
     let after = run(&mut s, BAR);
@@ -374,7 +383,7 @@ fn hush_stops_clips_but_lets_notes_ring_and_panic_stops_everything() {
 #[test]
 fn mute_and_solo_work_live() {
     let mut s = ready();
-    s.eval("lead.play([a3])\nbass.play([a2])", Some("now"))
+    s.eval("lead.__update([a3])\nbass.__update([a2])", Some("now"))
         .unwrap();
     let both = rms(&run(&mut s, 20_000)[2000..]);
     s.eval("lead.mute", Some("now")).unwrap();
@@ -431,7 +440,7 @@ fn the_output_layout_is_fixed_for_the_session() {
     assert!(e[0].message.contains("outputs stereo"), "{e:?}");
     // a project that says nothing about channels takes the session's
     s.eval(
-        "instr a(freq: hz) { osc(sine, freq) }\nclip t { instrument: a }\nt.play([c4])",
+        "instr a(freq: hz) { osc(sine, freq) }\nclip t { instrument: a }\nt.__update([c4])",
         Some("now"),
     )
     .unwrap();
@@ -472,6 +481,6 @@ fn quantize_defaults_can_be_changed() {
         ..QuantizeDefaults::default()
     });
     s.eval(SETUP, Some("now")).unwrap();
-    let accepted = s.eval("lead.play([c4])", None).unwrap();
+    let accepted = s.eval("lead.__update([c4])", None).unwrap();
     assert_eq!(accepted.lands_at, 0);
 }

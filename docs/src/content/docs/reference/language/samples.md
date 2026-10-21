@@ -41,8 +41,11 @@ A sample or kit is an instrument. Call it with playback settings, or select it i
 ```nml
 kick(pitch: -2st)
 snare(pitch: +2st)
-clip chop { instrument: chops }
-chop.play([s0 s1 s2 s3 s4 s5 s6 s7])
+clip chop {
+  instrument: chops
+  notes: [s0 s1 s2 s3 s4 s5 s6 s7]
+}
+chop.start
 ```
 
 A kit member is an instrument too: `drums.snare` means the kit with that sample chosen (the same as `drums(sample: snare)`). Give it its own clip when you want effects, sends, mute or solo on that drum alone:
@@ -55,8 +58,11 @@ instr snare_voice(freq: hz) {
   voice = drums.snare(freq: freq)
   snare_audio += voice
 }
-clip snare { instrument: snare_voice }
-snare.play([~ c4 ~ c4])
+clip snare {
+  instrument: snare_voice
+  notes: [~ c4 ~ c4]
+}
+snare.start
 ```
 
 ### Calling samplers inside an instrument
@@ -100,17 +106,23 @@ Parameters you can set on a hit:
 Chop a break with a grid — a row per slice, columns are steps. `X` accents, `o` ghosts. A row can take note controls, use mini-notation, or name a drum node so its hits go through that strip:
 
 ```nml
-drums.play(grid {
-  s0:  x... .... x... ....
-  s4:  .... x... .... x..x
-  s2:  ..x. ..o. ..X. ....
-})
+clip chop {
+  instrument: chops
+  notes: grid {
+    s0:  x... .... x... ....
+    s4:  .... x... .... x..x
+    s2:  ..x. ..o. ..X. ....
+  }
+}
 
-beat.play(grid {
-  kick:              x... x... x... x..x
-  snare(pan: 10deg): [~ x ~ [x o]]
-  hat(gain: -6db):   [x*2 x x(3,8)]
-})
+clip beat {
+  instrument: drum_voice
+  notes: grid {
+    kick:              x... x... x... x..x
+    snare(pan: 10deg): [~ x ~ [x o]]
+    hat(gain: -6db):   [x*2 x x(3,8)]
+  }
+}
 ```
 
 See `examples/drums.nml` and `examples/breakbeat.nml`.

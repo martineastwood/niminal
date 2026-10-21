@@ -377,7 +377,7 @@ pub(super) fn prepare_pending(
         })
     };
 
-    let mut program = check(&project, &[])?;
+    let program = check(&project, &[])?;
     if program.master != cfg.layout {
         return Err(vec![Problem::plain(format!(
             "this session outputs {}, but the project says {}; the output layout can only be chosen when the server starts",
@@ -398,19 +398,14 @@ pub(super) fn prepare_pending(
                 origin: Origin::Snippet { offset: s.offset },
             };
             let program = check(&project, &[piece])?;
-            // A command for later (`at +4bars chorus.start`) is not what is playing now.
+            apply_to_playing(&mut playing, lands_at, &program);
+            // a change timed for later (`at +4bars bass.reverse`) is not what the clip carries now
             let later = program
                 .performance
                 .iter()
                 .any(|p| p.at.to_seconds(program.tempo) > 0.0);
-            if !later {
-                apply_to_playing(&mut playing, &program, &s);
-                if let Some(scene) = s.launch() {
-                    apply_launch(&mut playing, &program, &project, scene);
-                }
-                if let Some((node, edited)) = edited {
-                    playing.insert(node, edited);
-                }
+            if let Some((node, edited)) = edited.filter(|_| !later) {
+                playing.insert(node, edited);
             }
             actions.push(Compiled {
                 statement: s,
@@ -421,22 +416,31 @@ pub(super) fn prepare_pending(
 
     let changed: Vec<String> = definitions
         .iter()
-        .filter_map(|s| s.binding().map(str::to_string))
+        .filter_map(|s| {
+            let (kind, name) = s.key()?.split_once(':')?;
+            ["bind", "clip", "def", "scene"]
+                .contains(&kind)
+                .then(|| name.to_string())
+        })
         .collect();
-    // Nodes that play something this change touches start it over, unless the commands
-    // here already start them.
-    let relaunched = actions.iter().any(|a| a.statement.launch().is_some());
+    // Clips that carry on from a pattern or clip this change redefines take the new version, in place, unless
+    // the commands here start or change them anyway.
     let mut replays = Vec::new();
-    for (node, now) in playing.clone() {
-        let started = relaunched
-            || actions
-                .iter()
-                .any(|a| a.statement.plays().is_some_and(|p| p.node == node));
-        let what = now.text();
-        if started || !mentions_any(&what, &changed) {
+    for (node, now) in playing.clone().into_iter().filter(|(_, p)| p.running()) {
+        let started = actions.iter().any(|a| {
+            a.program.performance.iter().any(|s| {
+                matches!(
+                    name_action(&a.program, &s.action),
+                    Some(NamedAction::Start { node: n, .. } | NamedAction::Update { node: n, .. })
+                        if n == node
+                )
+            })
+        });
+        let what = now.text(&node);
+        if started || !mentions_any(&depends_on(&what, &project).join(" "), &changed) {
             continue;
         }
-        let text = format!("{node}.play({what})");
+        let text = format!("{node}.__update({what})");
         let Some(statement) = analyze(&text).ok().and_then(|mut s| s.pop()) else {
             continue;
         };
@@ -444,40 +448,13 @@ pub(super) fn prepare_pending(
             text: text.clone(),
             origin: Origin::Snippet { offset: 0 },
         };
-        // If the new version no longer works for the node, leave it playing as it was.
+        // If the new version no longer works for the clip, leave it playing as it was.
         if let Ok(program) = check(&project, &[piece]) {
             replays.push(Compiled { statement, program });
         }
     }
 
-    // A bare instrument used by a command becomes a persistent clip, so subsequent
-    // evaluations keep its playback slot even when they only change a control.
-    let mut implicit = Vec::new();
-    for action in &actions {
-        for node in action.program.nodes.iter().skip(1) {
-            if program.nodes.iter().any(|known| known.name == node.name)
-                || implicit
-                    .iter()
-                    .any(|entry: &Entry| entry.key == format!("clip:{}", node.name))
-            {
-                continue;
-            }
-            if node
-                .instrument
-                .is_some_and(|i| action.program.instruments[i].name == node.name)
-            {
-                implicit.push(Entry {
-                    key: format!("clip:{}", node.name),
-                    text: format!("clip {} {{ instrument: {} }}", node.name, node.name),
-                });
-            }
-        }
-    }
-    if !implicit.is_empty() {
-        project.apply(&implicit);
-        program = check(&project, &[])?;
-    }
-    let has_definitions = !definitions.is_empty() || !implicit.is_empty() || clears;
+    let has_definitions = !definitions.is_empty() || clears;
     Ok(Pending {
         id,
         group: None,
@@ -670,9 +647,50 @@ impl Live {
         let grid = self.grid();
         statements
             .iter()
-            .map(|s| grid.landing(self.quantums().for_statement(s, fallback), self.clock))
+            .map(|s| {
+                let q = self.quantum_of(s, fallback);
+                self.loop_landing(s, q)
+                    .unwrap_or_else(|| grid.landing(q, self.clock))
+            })
             .max()
             .expect("an evaluation has statements")
+    }
+
+    /// The quantum a statement waits for: see [`QuantizeDefaults::for_statement`]. A command on a scene
+    /// or a clip takes the `quantize` the scene or the clip was defined with, the scene's first.
+    pub(super) fn quantum_of(&self, s: &Statement, fallback: Option<Quantize>) -> Quantize {
+        let target = s
+            .target()
+            .filter(|_| s.kind() == StatementKind::Command)
+            .and_then(|name| {
+                let (project, _) = self.projected_ref();
+                ["scene", "clip"].into_iter().find_map(|kind| {
+                    let text = project.text_of(&format!("{kind}:{name}"))?;
+                    analyze(text).ok()?.first()?.definition_quantize()
+                })
+            });
+        self.quantums().for_statement(s, fallback, target)
+    }
+
+    /// Where a `cycle` lands for a clip that is playing: at its next loop point, counted from when it began, not
+    /// from the bar line. `None` for anything else, which waits for a bar.
+    pub(super) fn loop_landing(&self, s: &Statement, q: Quantize) -> Option<u64> {
+        if q.unit != niminal_compose::QuantizeUnit::Cycle {
+            return None;
+        }
+        let node = self.program.node_index(s.target()?)?;
+        let now = self.seconds(self.clock);
+        let (cycles, length) = self.schedule.loop_position(node, now)?;
+        let grid = q.count * length;
+        // a hair of slack, so that a clip a rounding error past its loop point is not made to wait a whole loop
+        let at = cycles / grid;
+        let target = match q.relation {
+            niminal_compose::QuantizeRelation::OnGrid => (at - 1e-9).ceil() * grid,
+            niminal_compose::QuantizeRelation::Next => ((at + 1e-9).floor() + 1.0) * grid,
+            niminal_compose::QuantizeRelation::In => cycles + grid,
+        };
+        let seconds = self.schedule.time_at_cycles(node, now, target)?;
+        Some(self.samples(seconds).max(self.clock))
     }
 
     /// Return a fresh compilation job when the project changed while compiling.
@@ -748,8 +766,7 @@ impl Live {
         if accepted.lands_at > job.lands_at
             && self.clock > job.lands_at
             && job.statements.iter().any(|s| {
-                self.quantums().for_statement(s, job.fallback).unit
-                    != niminal_compose::QuantizeUnit::Now
+                self.quantum_of(s, job.fallback).unit != niminal_compose::QuantizeUnit::Now
             })
         {
             self.notify(format!(

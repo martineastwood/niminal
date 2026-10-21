@@ -26,4 +26,4 @@
   clip chop { instrument: chops, notes: straight }
 
   chop.start
-  // live, swap the grid in with:  chop.play(rearranged)
+  // live, swap the grid in by changing `notes: straight` to `notes: rearranged` and evaluating the clip again

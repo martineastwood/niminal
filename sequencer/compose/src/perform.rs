@@ -145,6 +145,8 @@ pub(crate) struct Context<'a> {
 struct Perform<'a> {
     cx: &'a Context<'a>,
     bindings: HashMap<String, PerfValue>,
+    /// The arrangements compiled so far, which `song.start` and `song.stop` name.
+    arrangements: HashMap<String, Arrangement>,
 }
 
 pub(crate) fn compile_performance(
@@ -154,6 +156,7 @@ pub(crate) fn compile_performance(
     let mut p = Perform {
         cx,
         bindings: HashMap::new(),
+        arrangements: HashMap::new(),
     };
     let mut errors = Vec::new();
 
@@ -182,15 +185,7 @@ pub(crate) fn compile_performance(
         }
     }
 
-    let mut actions = Vec::new();
-    for item in items {
-        let Item::Command(stmt) = item else { continue };
-        match p.command(stmt) {
-            Ok(mut a) => actions.append(&mut a),
-            Err(d) => errors.push(d),
-        }
-    }
-
+    // Arrangements next, so that commands can start them.
     let mut arrangements: Vec<Arrangement> = Vec::new();
     for item in items {
         let Item::Arrangement(decl) = item else {
@@ -204,7 +199,19 @@ pub(crate) fn compile_performance(
             continue;
         }
         match p.arrangement(decl) {
-            Ok(a) => arrangements.push(a),
+            Ok(a) => {
+                p.arrangements.insert(a.name.clone(), a.clone());
+                arrangements.push(a);
+            }
+            Err(d) => errors.push(d),
+        }
+    }
+
+    let mut actions = Vec::new();
+    for item in items {
+        let Item::Command(stmt) = item else { continue };
+        match p.command(stmt) {
+            Ok(mut a) => actions.append(&mut a),
             Err(d) => errors.push(d),
         }
     }
@@ -664,6 +671,7 @@ impl Perform<'_> {
                     let mut child = Perform {
                         cx: self.cx,
                         bindings: self.bindings.clone(),
+                        arrangements: HashMap::new(),
                     };
                     child.bindings.insert(var.name.clone(), item);
                     out.push(child.block_value(body, None)?);
@@ -1012,6 +1020,7 @@ impl Perform<'_> {
                     name: String::new(),
                     length: Rational::ONE,
                     endless: true,
+                    looped: true,
                     lanes: vec![("notes".to_string(), p)],
                     scored: Vec::new(),
                     keys: None,
@@ -1441,6 +1450,7 @@ impl Perform<'_> {
                 name: clip.name,
                 length,
                 endless: false,
+                looped: clip.looped,
                 lanes,
                 scored: clip.scored,
                 keys: clip.keys,
@@ -1499,6 +1509,7 @@ impl Perform<'_> {
             name: clip.name,
             length,
             endless: clip.endless && name.name != "over",
+            looped: clip.looped,
             lanes,
             scored: clip.scored,
             keys: clip.keys,
@@ -1957,6 +1968,7 @@ impl Perform<'_> {
         let mut local = Perform {
             cx: self.cx,
             bindings: self.bindings.clone(),
+            arrangements: HashMap::new(),
         };
         let mut last = PerfValue::Rest;
         for stmt in body {
@@ -2011,6 +2023,7 @@ impl Perform<'_> {
         let mut child = Perform {
             cx: self.cx,
             bindings: HashMap::new(),
+            arrangements: HashMap::new(),
         };
         // copy defs and outer bindings except the active call stack marker
         for (k, v) in &self.bindings {
@@ -2102,6 +2115,22 @@ impl Perform<'_> {
     // ---- clips and scenes ------------------------------------------------------
 
     fn clip(&self, block: &NamedBlock) -> Res<Clip> {
+        if let Some(base) = &block.base {
+            return match self.eval(base, None)? {
+                PerfValue::Clip(mut clip) => {
+                    clip.name = block.name.name.clone();
+                    Ok(clip)
+                }
+                other => Err(Diagnostic::new(
+                    format!(
+                        "a clip is made from another clip, but this is {}",
+                        other.describe()
+                    ),
+                    base.span,
+                )
+                .with_help("for example `clip bass_chorus = bass.transpose(+5st)`")),
+            };
+        }
         let mut length = None;
         let mut keys = None;
         let mut lanes: Vec<(String, Pattern<Step>)> = Vec::new();
@@ -2204,6 +2233,7 @@ impl Perform<'_> {
             name: block.name.name.clone(),
             length: length.unwrap_or(Rational::ONE),
             endless,
+            looped,
             lanes,
             scored,
             keys,
@@ -2271,24 +2301,29 @@ impl Perform<'_> {
     }
 
     fn scene(&self, block: &NamedBlock) -> Res<Scene> {
-        let mut entries: Vec<(usize, Option<Clip>)> = Vec::new();
+        let mut clips: Vec<usize> = Vec::new();
         for (key, value) in &block.entries {
-            let node = self.node(key)?;
-            if entries.iter().any(|(t, _)| *t == node) {
+            if !matches!(&value.kind, ExprKind::Name(n) if *n == key.name) {
                 return Err(Diagnostic::new(
-                    format!("node `{}` appears twice in this scene", key.name),
+                    format!("a scene is a list of clips, so `{}` has nothing after it", key.name),
+                    value.span,
+                )
+                .with_help(
+                    "write `scene verse { bass, lead }`; for a different bass in this scene, declare another clip",
+                ));
+            }
+            let node = self.node(key)?;
+            if clips.contains(&node) {
+                return Err(Diagnostic::new(
+                    format!("clip `{}` appears twice in this scene", key.name),
                     key.span,
                 ));
             }
-            let clip = match self.eval(value, None)? {
-                PerfValue::Rest => None,
-                other => Some(self.to_clip(other, &key.name, value.span)?),
-            };
-            entries.push((node, clip));
+            clips.push(node);
         }
         Ok(Scene {
             name: block.name.name.clone(),
-            entries,
+            clips,
         })
     }
 
@@ -2300,6 +2335,7 @@ impl Perform<'_> {
                 name: hint.to_string(),
                 length: Rational::ONE,
                 endless: true,
+                looped: true,
                 lanes: vec![("notes".to_string(), p)],
                 scored: Vec::new(),
                 keys: None,
@@ -2311,6 +2347,7 @@ impl Perform<'_> {
                 name: hint.to_string(),
                 length: Rational::ONE,
                 endless: true,
+                looped: true,
                 lanes: vec![("notes".to_string(), Pattern::pure(Step::from(v)))],
                 scored: Vec::new(),
                 keys: None,
@@ -2389,121 +2426,87 @@ impl Perform<'_> {
             action,
             quantize,
         };
+        // an arrangement is started to run its lines from now, and stopped to drop the ones still to come
+        match &stmt.command {
+            Command::Start { name, .. } if self.arrangements.contains_key(&name.name) => {
+                let arrangement = &self.arrangements[&name.name];
+                if !arrangement.tempos.is_empty() || !arrangement.lanes.is_empty() {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`{0}` sets its own tempo or moves a parameter over the whole piece, which only a render of it can follow",
+                            name.name
+                        ),
+                        name.span,
+                    )
+                    .with_help(format!("render it with `nimlive render file.nml {}`", name.name)));
+                }
+                let tempo = self.cx.tempo;
+                let base = at.to_seconds(tempo);
+                return Ok(self.arrangements[&name.name]
+                    .actions
+                    .iter()
+                    .filter(|a| !matches!(a.action, Action::Hush) || a.at.to_seconds(tempo) > 0.0)
+                    .map(|a| Scheduled {
+                        at: Time::Seconds(base + a.at.to_seconds(tempo)),
+                        action: a.action.clone(),
+                        quantize,
+                    })
+                    .collect());
+            }
+            Command::Stop(name) if self.arrangements.contains_key(&name.name) => {
+                return Ok(vec![schedule(Action::Cancel {
+                    arrangement: name.name.clone(),
+                })]);
+            }
+            _ => {}
+        }
 
         Ok(match &stmt.command {
-            Command::Play { node, what } => {
+            Command::Update { node, what } => {
                 if self.cx.failed.contains(&node.name.as_str()) {
                     return Ok(Vec::new());
                 }
                 let t = self.node(node)?;
                 let clip = self.to_clip(self.eval(what, None)?, &node.name, what.span)?;
                 let clip = self.on_node(clip, t, node, what.span)?;
-                vec![schedule(Action::Play { node: t, clip })]
+                vec![schedule(Action::Update { node: t, clip })]
             }
-            Command::Start { name, then, .. } => {
-                let mut actions = if matches!(
-                    self.bindings.get(&name.name),
-                    Some(PerfValue::Scene(_))
-                ) {
-                    self.launch(name, &schedule)?
-                } else {
-                    if self.cx.failed.contains(&name.name.as_str()) {
-                        return Ok(Vec::new());
-                    }
-                    let Ok(t) = self.node(name) else {
-                        let scenes = self
-                            .bindings
-                            .iter()
-                            .filter(|(_, v)| matches!(v, PerfValue::Scene(_)))
-                            .map(|(k, _)| k.as_str());
-                        let parts = self.cx.nodes.iter().map(|t| t.name.as_str());
-                        let mut d = Diagnostic::new(
-                            format!("no scene or clip named `{}`", name.name),
-                            name.span,
-                        );
-                        if let Some(c) = closest(&name.name, scenes.chain(parts)) {
-                            d = d.with_help(format!("did you mean `{c}`?"));
-                        }
-                        return Err(d);
-                    };
-                    if !matches!(
-                        self.bindings.get(&name.name),
-                        Some(PerfValue::Clip(_) | PerfValue::Pattern(_))
-                    ) {
-                        return Err(Diagnostic::new(
-                            format!(
-                                "`{0}` is not a scene or a clip, so `{0}.start` has nothing to start",
-                                name.name
-                            ),
-                            name.span,
-                        ));
-                    }
-                    let what = Expr {
-                        kind: ExprKind::Name(name.name.clone()),
-                        span: name.span,
-                    };
-                    let clip = self.to_clip(self.eval(&what, None)?, &name.name, name.span)?;
-                    let clip = self.on_node(clip, t, name, name.span)?;
-                    vec![schedule(Action::Play { node: t, clip })]
-                };
-                if let Some((next, after)) = then {
-                    let follow_at = match &stmt.at {
-                        None => AtPos::After(after.clone()),
-                        Some(AtPos::After(base)) => {
-                            // stack the delays: at +A then B after C → at +(A+C)
-                            AtPos::After(Expr {
-                                kind: ExprKind::Binary {
-                                    op: BinOp::Add,
-                                    lhs: Box::new(base.clone()),
-                                    rhs: Box::new(after.clone()),
-                                },
-                                span: after.span,
-                            })
-                        }
-                        Some(other) => {
-                            // absolute `at bar 5`: follow is still relative from that point
-                            let _ = other;
-                            AtPos::After(after.clone())
-                        }
-                    };
-                    let follow = CommandStmt {
-                        at: Some(follow_at),
-                        command: Command::Start {
-                            name: next.clone(),
-                            verb: next.span,
-                            then: None,
-                        },
-                        quantize: stmt.quantize,
-                        span: next.span,
-                    };
-                    actions.extend(self.command(&follow)?);
+            Command::Start { name, .. } => {
+                if self.cx.failed.contains(&name.name.as_str()) {
+                    return Ok(Vec::new());
+                }
+                let mut actions = Vec::new();
+                for node in self.targets(name, "start")? {
+                    actions.push(schedule(self.start(node, name)?));
                 }
                 actions
             }
-            Command::Stop(t) => match self.bindings.get(&t.name) {
-                // stopping a scene stops the nodes it plays on
-                Some(PerfValue::Scene(scene)) => scene
-                    .entries
-                    .iter()
-                    .map(|(node, _)| schedule(Action::Stop { node: *node }))
-                    .collect(),
-                _ => vec![schedule(Action::Stop {
-                    node: self.node(t)?,
-                })],
-            },
-            Command::Mute(t) => vec![schedule(Action::Mute {
-                node: self.node(t)?,
-            })],
-            Command::Unmute(t) => vec![schedule(Action::Unmute {
-                node: self.node(t)?,
-            })],
-            Command::Solo(t) => vec![schedule(Action::Solo {
-                node: self.node(t)?,
-            })],
-            Command::Unsolo(t) => {
-                let node = t.as_ref().map(|t| self.node(t)).transpose()?;
-                vec![schedule(Action::Unsolo { node })]
-            }
+            Command::Stop(t) => self
+                .targets(t, "stop")?
+                .into_iter()
+                .map(|node| schedule(Action::Stop { node }))
+                .collect(),
+            Command::Mute(t) => self
+                .targets(t, "mute")?
+                .into_iter()
+                .map(|node| schedule(Action::Mute { node }))
+                .collect(),
+            Command::Unmute(t) => self
+                .targets(t, "unmute")?
+                .into_iter()
+                .map(|node| schedule(Action::Unmute { node }))
+                .collect(),
+            Command::Solo(t) => self
+                .targets(t, "solo")?
+                .into_iter()
+                .map(|node| schedule(Action::Solo { node }))
+                .collect(),
+            Command::Unsolo(Some(t)) => self
+                .targets(t, "unsolo")?
+                .into_iter()
+                .map(|node| schedule(Action::Unsolo { node: Some(node) }))
+                .collect(),
+            Command::Unsolo(None) => vec![schedule(Action::Unsolo { node: None })],
             Command::Hush => vec![schedule(Action::Hush)],
             Command::Panic => vec![schedule(Action::Panic)],
             Command::Reset | Command::New => vec![schedule(Action::Reset)],
@@ -2525,41 +2528,81 @@ impl Perform<'_> {
         })
     }
 
-    /// The commands that launch the scene called `name`: its clips start, and
-    /// every other clip with an instrument stops.
-    fn launch(&self, name: &Ident, schedule: &dyn Fn(Action) -> Scheduled) -> Res<Vec<Scheduled>> {
-        let Some(PerfValue::Scene(scene)) = self.bindings.get(&name.name) else {
-            let mut d = Diagnostic::new(format!("no scene named `{}`", name.name), name.span);
+    /// The clips a command on `name` is about: the clips of a scene, or the one clip.
+    fn targets(&self, name: &Ident, verb: &str) -> Res<Vec<usize>> {
+        if let Some(PerfValue::Scene(scene)) = self.bindings.get(&name.name) {
+            return Ok(scene.clips.clone());
+        }
+        if let Ok(node) = self.node(name) {
+            return Ok(vec![node]);
+        }
+        if self.arrangements.contains_key(&name.name) {
+            return Err(Diagnostic::new(
+                format!(
+                    "`{}` is an arrangement, which can only be started and stopped, not `{verb}`",
+                    name.name
+                ),
+                name.span,
+            ));
+        }
+        let mut d = match self.bindings.get(&name.name) {
+            Some(PerfValue::Clip(_)) => Diagnostic::new(
+                format!(
+                    "clip `{0}` has no instrument, so `{0}.{verb}` has nothing to {verb}",
+                    name.name
+                ),
+                name.span,
+            )
+            .with_help(format!(
+                "give it one: `clip {} {{ instrument: ... }}`",
+                name.name
+            )),
+            Some(PerfValue::Pattern(_)) => Diagnostic::new(
+                format!(
+                    "`{0}` is a pattern, not a clip, so `{0}.{verb}` has nothing to {verb}",
+                    name.name
+                ),
+                name.span,
+            )
+            .with_help("a clip has an instrument and a `notes:` lane"),
+            _ if self.cx.instruments.iter().any(|i| i.name == name.name) => Diagnostic::new(
+                format!("`{}` is an instrument, not a clip", name.name),
+                name.span,
+            )
+            .with_help(format!(
+                "a clip plays it: `clip riff {{ instrument: {}, notes: [c4 e4] }}`",
+                name.name
+            )),
+            _ => Diagnostic::new(format!("no scene or clip named `{}`", name.name), name.span),
+        };
+        if d.help.is_none() {
             let scenes = self
                 .bindings
                 .iter()
                 .filter(|(_, v)| matches!(v, PerfValue::Scene(_)))
                 .map(|(k, _)| k.as_str());
-            if let Some(c) = closest(&name.name, scenes) {
+            let clips = self.cx.nodes.iter().skip(1).map(|t| t.name.as_str());
+            if let Some(c) = closest(&name.name, scenes.chain(clips)) {
                 d = d.with_help(format!("did you mean `{c}`?"));
             }
-            return Err(d);
+        }
+        Ok(d).and_then(Err)
+    }
+
+    /// The action that starts the clip on `node`.
+    fn start(&self, node: usize, id: &Ident) -> Res<Action> {
+        let name = self.cx.nodes[node].name.clone();
+        let at = Ident {
+            name: name.clone(),
+            span: id.span,
         };
-        let mut out = Vec::new();
-        for (node, clip) in &scene.entries {
-            match clip {
-                Some(clip) => {
-                    let id = Ident {
-                        name: self.cx.nodes[*node].name.clone(),
-                        span: name.span,
-                    };
-                    let clip = self.on_node(clip.clone(), *node, &id, name.span)?;
-                    out.push(schedule(Action::Play { node: *node, clip }));
-                }
-                None => out.push(schedule(Action::Stop { node: *node })),
-            }
-        }
-        for (node, info) in self.cx.nodes.iter().enumerate() {
-            if info.instrument.is_some() && !scene.entries.iter().any(|(t, _)| *t == node) {
-                out.push(schedule(Action::Stop { node }));
-            }
-        }
-        Ok(out)
+        let value = match self.bindings.get(&name) {
+            Some(v) => v.clone(),
+            None => return Err(Diagnostic::new(format!("no clip named `{name}`"), id.span)),
+        };
+        let clip = self.to_clip(value, &name, id.span)?;
+        let clip = self.on_node(clip, node, &at, id.span)?;
+        Ok(Action::Start { node, clip })
     }
 
     /// Scenes one after another, each for its length, then everything stops. A section may have its own
@@ -2585,6 +2628,7 @@ impl Perform<'_> {
         let mut seconds = 0.0;
         let mut bars_so_far = 0.0;
         let mut actions = Vec::new();
+        let mut previous: Vec<usize> = Vec::new();
         let mut tempos: Vec<(f64, Tempo)> = Vec::new();
         for (i, section) in decl.sections.iter().enumerate() {
             let mut tempo = self.cx.tempo;
@@ -2602,11 +2646,23 @@ impl Perform<'_> {
                 ));
             }
             let at = Time::Seconds(seconds);
-            actions.extend(self.launch(&section.scene, &|action| Scheduled {
-                at,
-                action,
-                quantize: None,
-            })?);
+            let now = self.targets(&section.scene, "start")?;
+            // a section stops what the one before it had going and this one does not, and starts its own
+            for node in previous.iter().filter(|n| !now.contains(n)) {
+                actions.push(Scheduled {
+                    at,
+                    action: Action::Stop { node: *node },
+                    quantize: None,
+                });
+            }
+            for node in &now {
+                actions.push(Scheduled {
+                    at,
+                    action: self.start(*node, &section.scene)?,
+                    quantize: None,
+                });
+            }
+            previous = now;
             let bars = length.to_f64();
             match &ramp {
                 None => {
@@ -2634,11 +2690,17 @@ impl Perform<'_> {
             }
             bars_so_far += bars;
         }
-        actions.push(Scheduled {
-            at: Time::Seconds(seconds),
-            action: Action::Hush,
-            quantize: None,
-        });
+        if !decl.sections.is_empty() {
+            actions.push(Scheduled {
+                at: Time::Seconds(seconds),
+                action: Action::Hush,
+                quantize: None,
+            });
+        }
+        // lines placed from the start of the arrangement, such as `at +4bars bass.mute`
+        for stmt in &decl.commands {
+            actions.extend(self.command(stmt)?);
+        }
         let mut lanes = Vec::new();
         for lane in &decl.lanes {
             let (node, param) = (&lane.node, &lane.param);
@@ -3509,6 +3571,7 @@ fn section_to_clip(section: crate::Section, tempo: Tempo) -> Res<Clip> {
             Rational::ONE
         },
         endless: false,
+        looped: true,
         lanes: Vec::new(),
         scored,
         keys: None,
@@ -3537,6 +3600,7 @@ fn clipdef_to_clip(def: &crate::ClipDef, cx: &Context) -> Res<Clip> {
     let p = Perform {
         cx,
         bindings: HashMap::new(),
+        arrangements: HashMap::new(),
     };
     p.clip(&block)
 }

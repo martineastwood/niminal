@@ -183,23 +183,12 @@ fn is_true(v: &bool) -> bool {
     *v
 }
 
-/// What a scene puts on a node: a named clip or an inline clip.
-/// Silence is `null` / `None` in the entries map.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum SceneEntry {
-    /// Play the clip of this name.
-    Name(String),
-    /// An inline clip definition.
-    Clip(ClipDef),
-}
-
-/// A named set of clips, one per node.
+/// A named list of clips, started and stopped together.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SceneDef {
     pub name: String,
-    pub entries: BTreeMap<String, Option<SceneEntry>>,
+    pub clips: Vec<String>,
 }
 
 /// One scene in an arrangement, and how long it lasts.
@@ -387,34 +376,10 @@ fn event_line(e: &ClipEvent) -> String {
 impl SceneDef {
     /// Canonical `.nml` text for this scene.
     pub fn to_source(&self) -> String {
-        let mut parts = Vec::new();
-        // Inline clips first, so the scene can name them.
-        let mut preamble = String::new();
-        for (node, entry) in &self.entries {
-            match entry {
-                None => parts.push(format!("{node}: ~")),
-                Some(SceneEntry::Name(name)) if name == node => parts.push(node.clone()),
-                Some(SceneEntry::Name(name)) => parts.push(format!("{node}: {name}")),
-                Some(SceneEntry::Clip(clip)) => {
-                    preamble.push_str(&clip.to_source());
-                    preamble.push('\n');
-                    if clip.name == *node {
-                        parts.push(node.clone());
-                    } else {
-                        parts.push(format!("{node}: {}", clip.name));
-                    }
-                }
-            }
-        }
-        let body = if parts.is_empty() {
+        if self.clips.is_empty() {
             format!("scene {} {{}}", self.name)
         } else {
-            format!("scene {} {{ {} }}", self.name, parts.join(", "))
-        };
-        if preamble.is_empty() {
-            body
-        } else {
-            format!("{preamble}{body}")
+            format!("scene {} {{ {} }}", self.name, self.clips.join(", "))
         }
     }
 }
@@ -487,10 +452,7 @@ mod project_tests {
             }],
             scenes: vec![SceneDef {
                 name: "verse".into(),
-                entries: BTreeMap::from([
-                    ("bass".into(), Some(SceneEntry::Name("bassline".into()))),
-                    ("lead".into(), None),
-                ]),
+                clips: vec!["bassline".into()],
             }],
             arrangement: Some(ArrangementDef {
                 name: "song".into(),
@@ -507,7 +469,7 @@ mod project_tests {
         assert_eq!(back, project);
         let src = project.to_source();
         assert!(src.contains("clip bassline"), "{src}");
-        assert!(src.contains("scene verse"), "{src}");
+        assert!(src.contains("scene verse { bassline }"), "{src}");
         assert!(src.contains("arrangement song"), "{src}");
         assert!(src.contains("verse.over(8bars)"), "{src}");
     }

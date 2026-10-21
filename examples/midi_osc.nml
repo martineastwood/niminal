@@ -20,6 +20,9 @@ instr lead_voice(freq: hz) {
   voice = tone(freq: freq)
   lead_fx_audio += voice
 }
-clip lead { instrument: lead_voice }
+clip lead {
+  instrument: lead_voice
+  notes: [c3 e3 g3 b3]
+}
 
-lead.play([c3 e3 g3 b3])
+lead.start

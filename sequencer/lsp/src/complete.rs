@@ -263,10 +263,12 @@ pub fn symbol_items(symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -
 enum Receiver {
     /// A pattern, clip, grid or node: `riff.`, `[c4 e4].`, `it.`, `bass.`
     Pattern,
-    /// A clip or instrument at the start of a statement: `bass.` gives a command, or a change to what it plays.
+    /// A clip at the start of a statement: `bass.` gives a command, or a change to what it plays.
     Clip,
     /// A scene at the start of a statement: `verse.start`
     SceneCommand,
+    /// An arrangement at the start of a statement: `song.start`
+    ArrangementCommand,
     /// A scene: `verse.`
     Scene,
     /// A signal, or anything else.
@@ -343,11 +345,10 @@ fn receiver_and_root<'a>(text: &'a str, symbols: &[Symbol]) -> (Receiver, Option
             .trim();
         let command = !called && !chained && (line.is_empty() || line.starts_with("at "));
         let kind = match symbols.iter().find(|s| s.name == name).map(|s| s.kind) {
-            Some(
-                SymbolKind::Clip | SymbolKind::Instrument | SymbolKind::Sample | SymbolKind::Kit,
-            ) if command => Receiver::Clip,
+            Some(SymbolKind::Clip) if command => Receiver::Clip,
             Some(SymbolKind::Pattern | SymbolKind::Clip) => Receiver::Pattern,
             Some(SymbolKind::Scene) if command => Receiver::SceneCommand,
+            Some(SymbolKind::Arrangement) if command => Receiver::ArrangementCommand,
             Some(SymbolKind::Scene) => Receiver::Scene,
             _ => Receiver::Signal,
         };
@@ -404,7 +405,7 @@ pub fn items(
                         "start",
                         FUNCTION,
                         "start()",
-                        "Play this clip, from its beginning, on the next boundary.",
+                        "Start this clip on the next boundary. Nothing happens if it is already playing.",
                     ),
                     item("stop", FUNCTION, "stop()", "Stop it."),
                     item(
@@ -438,14 +439,35 @@ pub fn items(
                 return out;
             }
             Receiver::SceneCommand => {
+                let each = |what: &str| format!("{what} every clip in this scene.");
+                return vec![
+                    item("start", FUNCTION, "start()", &each("Start")),
+                    item("stop", FUNCTION, "stop()", &each("Stop")),
+                    item("mute", FUNCTION, "mute()", &each("Mute")),
+                    item("unmute", FUNCTION, "unmute()", &each("Unmute")),
+                    item("solo", FUNCTION, "solo()", &each("Solo")),
+                    item(
+                        "unsolo",
+                        FUNCTION,
+                        "unsolo()",
+                        &each("Take out of the solo"),
+                    ),
+                ];
+            }
+            Receiver::ArrangementCommand => {
                 return vec![
                     item(
                         "start",
                         FUNCTION,
                         "start()",
-                        "Play every clip in this scene and stop the rest.",
+                        "Run this arrangement's lines, counting from now.",
                     ),
-                    item("stop", FUNCTION, "stop()", "Stop every clip in this scene."),
+                    item(
+                        "stop",
+                        FUNCTION,
+                        "stop()",
+                        "Drop the lines of this arrangement that have not come yet.",
+                    ),
                 ];
             }
             Receiver::Scene => {
@@ -691,11 +713,22 @@ mod tests {
         assert_eq!(&l[..3], ["start", "stop", "mute"]);
         assert!(l.contains(&"undo".to_string()) && l.contains(&"every".to_string()));
         assert!(labels_in(SONG, "at +2bars c.").contains(&"mute".to_string()));
-        assert_eq!(labels_in(SONG, "verse."), ["start", "stop"]);
-        assert!(labels_in(SONG, "pluck.").contains(&"mute".to_string()));
+        assert_eq!(
+            labels_in(SONG, "verse."),
+            ["start", "stop", "mute", "unmute", "solo", "unsolo"]
+        );
+        assert_eq!(
+            labels_in(
+                "scene s { a }\narrangement song { at +0bars s.start }",
+                "song."
+            ),
+            ["start", "stop"]
+        );
+        // an instrument is not a clip: it has nothing to start
+        assert!(!labels_in(SONG, "pluck.").contains(&"mute".to_string()));
         let samples = "s = sample(\"s.wav\")\nk = s.slices(4)";
-        assert!(labels_in(samples, "s.").contains(&"mute".to_string()));
-        assert!(labels_in(samples, "k.").contains(&"mute".to_string()));
+        assert!(!labels_in(samples, "s.").contains(&"mute".to_string()));
+        assert!(!labels_in(samples, "k.").contains(&"mute".to_string()));
         // inside an expression the same names are values
         assert!(!labels_in(SONG, "x = c.").contains(&"mute".to_string()));
         assert!(!labels_in(SONG, "bass.reverse.").contains(&"mute".to_string()));

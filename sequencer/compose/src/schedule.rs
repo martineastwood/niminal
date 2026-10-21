@@ -104,6 +104,22 @@ impl Clock {
     }
 }
 
+/// The passes of a clip, counting from 0, that overlap the cycles `first..last` since it began. An endless
+/// clip is one long pass, and a clip that does not loop has just the one.
+fn loops(clip: &Clip, first: f64, last: f64) -> (i64, i64) {
+    if clip.endless {
+        return (0, 1);
+    }
+    let length = clip.length.to_f64();
+    let first_loop = (first / length).floor().max(0.0) as i64;
+    let last_loop = ((last / length).ceil() as i64).max(1);
+    if clip.looped {
+        (first_loop, last_loop)
+    } else {
+        (first_loop.min(1), last_loop.min(1))
+    }
+}
+
 /// A clip playing on a part from `start` until `end` (seconds).
 struct Segment {
     /// The tempo and meter it plays in when it starts.
@@ -113,6 +129,18 @@ struct Segment {
     clip: Clip,
     start: f64,
     end: Option<f64>,
+    /// When the clip first began, which is earlier than `start` if it was changed while it played:
+    /// its cycles are counted from here.
+    origin: f64,
+}
+
+impl Segment {
+    /// Has a clip that plays once come to its end by `at`?
+    fn finished(&self, at: f64) -> bool {
+        !self.clip.looped
+            && !self.clip.endless
+            && self.clock.cycles_at(at) >= self.clip.length.to_f64()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -121,6 +149,8 @@ enum Gate {
     Unmute(usize),
     Solo(usize),
     Unsolo(Option<usize>),
+    /// `reset` and `new`: nothing is muted or soloed any more.
+    Clear,
 }
 
 /// What a part is doing at a moment, for showing in an editor.
@@ -267,10 +297,24 @@ impl Schedule {
                 s.end = Some(at.max(s.start));
             }
         };
+        // Clips that a `stop` closed, and where: a `start` for the same clip at the very same moment
+        // undoes it, so a clip in two scenes carries on when one is swapped for the other.
+        let mut stopped: Vec<(usize, f64, usize)> = Vec::new();
 
         for (at, action) in timed {
             match action {
-                Action::Play { node, clip } => {
+                Action::Start { node, clip } => {
+                    if let Some(k) = stopped.iter().position(|(n, t, _)| n == node && *t == at) {
+                        let (_, _, i) = stopped.remove(k);
+                        segments[i].end = None;
+                        continue;
+                    }
+                    let running = segments
+                        .iter()
+                        .any(|s| s.node == *node && s.end.is_none() && !s.finished(at));
+                    if running {
+                        continue;
+                    }
                     close(&mut segments, Some(*node), at);
                     segments.push(Segment {
                         node: *node,
@@ -279,10 +323,41 @@ impl Schedule {
                         end: None,
                         tempo: tempo_at(at),
                         clock: Clock::new(at, tempo_at(at), sections),
+                        origin: at,
                     });
                 }
-                Action::Stop { node } => close(&mut segments, Some(*node), at),
-                Action::Hush | Action::Reset => close(&mut segments, None, at),
+                Action::Update { node, clip } => {
+                    // the new version carries on from where the old one had got to
+                    let (origin, begun) = segments
+                        .iter()
+                        .rev()
+                        .find(|s| s.node == *node && s.end.is_none())
+                        .map_or((at, tempo_at(at)), |s| (s.origin, s.tempo));
+                    close(&mut segments, Some(*node), at);
+                    segments.push(Segment {
+                        node: *node,
+                        clip: clip.clone(),
+                        start: at,
+                        end: None,
+                        tempo: begun,
+                        clock: Clock::new(origin, begun, sections),
+                        origin,
+                    });
+                }
+                Action::Stop { node } => {
+                    if let Some(i) = segments
+                        .iter()
+                        .rposition(|s| s.node == *node && s.end.is_none())
+                    {
+                        stopped.push((*node, at, i));
+                    }
+                    close(&mut segments, Some(*node), at);
+                }
+                Action::Hush => close(&mut segments, None, at),
+                Action::Reset => {
+                    close(&mut segments, None, at);
+                    gates.push((at, Gate::Clear));
+                }
                 Action::Panic => {
                     close(&mut segments, None, at);
                     panics.push(at);
@@ -291,7 +366,7 @@ impl Schedule {
                 Action::Unmute { node } => gates.push((at, Gate::Unmute(*node))),
                 Action::Solo { node } => gates.push((at, Gate::Solo(*node))),
                 Action::Unsolo { node } => gates.push((at, Gate::Unsolo(*node))),
-                Action::Capture { .. } => {}
+                Action::Capture { .. } | Action::Cancel { .. } => {}
             }
         }
         Schedule {
@@ -347,6 +422,10 @@ impl Schedule {
                 }
                 Gate::Unsolo(None) => soloed.clear(),
                 Gate::Unsolo(Some(t)) => soloed.retain(|s| *s != t),
+                Gate::Clear => {
+                    muted.clear();
+                    soloed.clear();
+                }
             }
         }
         (muted, soloed)
@@ -357,6 +436,28 @@ impl Schedule {
         !muted.contains(&node) && (soloed.is_empty() || soloed.contains(&node))
     }
 
+    /// How far into its loops the clip running on `node` is at `at` seconds: the cycles since it began
+    /// and the length of a loop in cycles. `None` if nothing is running there.
+    pub fn loop_position(&self, node: usize, at: f64) -> Option<(f64, f64)> {
+        let s = self
+            .segments
+            .iter()
+            .rev()
+            .find(|s| s.node == node && s.start <= at && s.end.is_none_or(|e| at < e))
+            .filter(|s| !s.finished(at))?;
+        Some((s.clock.cycles_at(at), s.clip.length.to_f64()))
+    }
+
+    /// The time in seconds when the clip running on `node` at `at` has been going for `cycles`.
+    pub fn time_at_cycles(&self, node: usize, at: f64, cycles: f64) -> Option<f64> {
+        let s = self
+            .segments
+            .iter()
+            .rev()
+            .find(|s| s.node == node && s.start <= at && s.end.is_none_or(|e| at < e))?;
+        Some(s.clock.seconds_at(cycles))
+    }
+
     /// What `node` is doing at `at` seconds: the clip playing on it, and
     /// whether it was muted or soloed.
     pub fn node_state(&self, node: usize, at: f64) -> PartState {
@@ -365,7 +466,8 @@ impl Schedule {
             .segments
             .iter()
             .rev()
-            .find(|s| s.node == node && s.start <= at && s.end.is_none_or(|e| at < e));
+            .find(|s| s.node == node && s.start <= at && s.end.is_none_or(|e| at < e))
+            .filter(|s| !s.finished(at));
         PartState {
             clip: playing.map(|s| s.clip.name.clone()),
             muted: muted.contains(&node),
@@ -555,14 +657,7 @@ impl Schedule {
 
         // The window in cycles since the clip started, and the loops of the clip that overlap it.
         let (first_cycle, last_cycle) = (clock.cycles_at(window_start), clock.cycles_at(until));
-        let (first_loop, last_loop) = if segment.clip.endless {
-            (0, 1)
-        } else {
-            (
-                (first_cycle / length).floor().max(0.0) as i64,
-                ((last_cycle / length).ceil() as i64).max(1),
-            )
-        };
+        let (first_loop, last_loop) = loops(&segment.clip, first_cycle, last_cycle);
 
         for k in first_loop..last_loop {
             let base = if segment.clip.endless {
@@ -726,14 +821,7 @@ impl Schedule {
             return Ok(());
         }
         let (first_cycle, last_cycle) = (clock.cycles_at(window_start), clock.cycles_at(until));
-        let (first_loop, last_loop) = if segment.clip.endless {
-            (0, 1)
-        } else {
-            (
-                (first_cycle / length).floor().max(0.0) as i64,
-                ((last_cycle / length).ceil() as i64).max(1),
-            )
-        };
+        let (first_loop, last_loop) = loops(&segment.clip, first_cycle, last_cycle);
         let name = &self.node_names[segment.node];
         let clip = &segment.clip;
 
@@ -765,10 +853,12 @@ impl Schedule {
                         into.rem_euclid(length)
                     };
                     let place = Rational::from_f64(in_loop);
+                    let over = !clip.looped && !clip.endless && into >= length;
                     if let Some(hap) = pattern
                         .query(CycleSpan::new(place, place))
                         .into_iter()
                         .next()
+                        .filter(|_| !over)
                     {
                         let target =
                             niminal_lang::engine_value(*unit, hap.value.value, segment.tempo)
@@ -821,7 +911,7 @@ impl Schedule {
 
             for k in first_loop..last_loop {
                 let loop_start = if clip.endless {
-                    segment.start
+                    segment.origin
                 } else {
                     clock.seconds_at(k as f64 * length)
                 };
@@ -1073,7 +1163,9 @@ mod tests {
     }
 
     fn song(body: &str) -> Schedule {
-        let src = format!("{STAGE}scene s {{ lead: [c4 c4 c4 c4] }}\n{body}");
+        let src = format!(
+            "{STAGE}clip lead4 {{ instrument: pluck, notes: [c4 c4 c4 c4] }}\nscene s {{ lead4 }}\n{body}"
+        );
         compile(&src)
             .unwrap_or_else(|e| {
                 panic!(
@@ -1150,7 +1242,9 @@ mod tests {
     #[test]
     fn a_tempo_envelope_is_checked() {
         let error = |body: &str| {
-            let src = format!("{STAGE}scene s {{ lead: [c4] }}\n{body}");
+            let src = format!(
+                "{STAGE}clip lead1 {{ instrument: pluck, notes: [c4] }}\nscene s {{ lead1 }}\n{body}"
+            );
             compile(&src)
                 .err()
                 .map(|e| e.iter().map(|d| d.message.clone()).collect::<String>())
@@ -1169,18 +1263,18 @@ mod tests {
     }
 
     #[test]
-    fn start_then_queues_a_follow_launch() {
+    fn timed_lines_follow_one_start_with_another() {
         let s = schedule(
             r#"
-            scene a { lead: [c4] }
-            scene b { lead: [e4] }
-            a.start then b after 1bar
+            clip a { instrument: pluck, notes: [c4] }
+            clip b { instrument: pluck, notes: [e4] }
+            a.start
+            at +1bar a.stop
+            at +1bar b.start
             "#,
         );
         let early = notes(&s, 0.0, 1.9);
         let later = notes(&s, 2.0, 3.9);
-        assert!(!early.is_empty());
-        assert!(!later.is_empty());
         assert_eq!(early[0].2, 60);
         assert_eq!(later[0].2, 64);
     }
@@ -1196,7 +1290,7 @@ mod tests {
                 1/2beat e4 for 1/2beat
               }
             }
-            lead.play(fill)
+            lead.__update(fill)
             "#,
         );
         let found = notes(&s, 0.0, 2.0);
@@ -1208,7 +1302,7 @@ mod tests {
     #[test]
     fn a_looping_pattern_produces_notes_on_the_beat() {
         // 120bpm in 4/4: a bar is 2 seconds, so two steps are 1 second apart
-        let s = schedule("lead.play([c4 e4])");
+        let s = schedule("lead.__update([c4 e4])");
         let n = notes(&s, 0.0, 4.0);
         assert_eq!(
             n,
@@ -1226,7 +1320,7 @@ mod tests {
 
     #[test]
     fn windows_select_the_notes_that_start_in_them() {
-        let s = schedule("lead.play([c4 e4 g4 b4])");
+        let s = schedule("lead.__update([c4 e4 g4 b4])");
         assert_eq!(times(&s, 0.5, 2.0), [0.5, 1.0, 1.5]);
         assert_eq!(times(&s, 2.0, 2.0), Vec::<f64>::new());
         assert_eq!(times(&s, 0.0, 0.5), [0.0]);
@@ -1242,18 +1336,18 @@ mod tests {
     #[test]
     fn a_clip_loops_every_length_and_restarts_its_alternations() {
         // the lane spans the three bars, so it is one cycle of the clip: it restarts every 6s
-        let s = schedule("clip c { length: 3bars\nnotes: [<c4 e4>] }\nlead.play(c)");
+        let s = schedule("clip c { length: 3bars\nnotes: [<c4 e4>] }\nlead.__update(c)");
         let n: Vec<i32> = notes(&s, 0.0, 12.0).into_iter().map(|e| e.2).collect();
         assert_eq!(n, [60, 60]);
         // a short pattern in a long clip is spread over it
-        let s = schedule("clip c { length: 2bars\nnotes: [c4 e4] }\nlead.play(c)");
+        let s = schedule("clip c { length: 2bars\nnotes: [c4 e4] }\nlead.__update(c)");
         assert_eq!(times(&s, 0.0, 8.0), [0.0, 2.0, 4.0, 6.0]);
     }
 
     #[test]
     fn lanes_span_a_longer_clip_and_line_up() {
         let s = schedule(
-            "clip c { length: 2bars\nnotes: [c4 e4 g4 b4]\ngain: [0db -6db -12db -18db] }\nlead.play(c)",
+            "clip c { length: 2bars\nnotes: [c4 e4 g4 b4]\ngain: [0db -6db -12db -18db] }\nlead.__update(c)",
         );
         // four notes spread over the two bars (4s), then the clip starts again
         assert_eq!(
@@ -1285,27 +1379,30 @@ mod tests {
                 .map(|e| e.2)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(order(&schedule("lead.play([<c4 e4>])")), [60, 64, 60, 64]);
         assert_eq!(
-            order(&schedule("lead.play([c4 e4].every(2, it.reverse))")),
+            order(&schedule("lead.__update([<c4 e4>])")),
+            [60, 64, 60, 64]
+        );
+        assert_eq!(
+            order(&schedule("lead.__update([c4 e4].every(2, it.reverse))")),
             [64, 60, 60, 64, 64, 60, 60, 64]
         );
         assert_eq!(
-            order(&schedule("clip c { notes: [<c4 e4>] }\nlead.play(c)")),
+            order(&schedule("clip c { notes: [<c4 e4>] }\nlead.__update(c)")),
             [60, 64, 60, 64]
         );
         assert_eq!(
             order(&schedule(
-                "clip c { length: 1bar\nnotes: [<c4 e4>] }\nlead.play(c)"
+                "clip c { length: 1bar\nnotes: [<c4 e4>] }\nlead.__update(c)"
             )),
             [60, 60, 60, 60]
         );
     }
 
     #[test]
-    fn launching_a_scene_stops_the_nodes_it_does_not_name() {
+    fn starting_a_scene_leaves_the_clips_it_does_not_name_alone() {
         let s = schedule(
-            "scene a { lead: [c4], bass: [c2] }\nscene b { lead: [e4] }\na.start\nat +2bars b.start",
+            "clip l1 { instrument: pluck, notes: [c4] }\nclip b1 { instrument: pluck, notes: [c2] }\nscene a { l1, b1 }\nscene b { l1 }\na.start\nat +2bars b.start",
         );
         let nodes = |from, to| {
             notes(&s, from, to)
@@ -1313,8 +1410,94 @@ mod tests {
                 .map(|e| e.1)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(nodes(0.0, 2.0), ["lead", "bass"]);
-        assert_eq!(nodes(4.0, 6.0), ["lead"], "bass was not in scene b");
+        assert_eq!(nodes(0.0, 2.0), ["l1", "b1"]);
+        assert_eq!(
+            nodes(4.0, 6.0),
+            ["l1", "b1"],
+            "b1 plays on: scene b did not stop it"
+        );
+    }
+
+    #[test]
+    fn starting_a_clip_that_is_running_does_nothing() {
+        // [<c4 e4>] alternates each cycle, and a restart would begin on c4 again
+        let s =
+            schedule("clip c { instrument: pluck, notes: [<c4 e4>] }\nc.start\nat +1bar c.start");
+        let n: Vec<i32> = notes(&s, 0.0, 4.0).into_iter().map(|e| e.2).collect();
+        assert_eq!(n, [60, 64], "it carried on: c4, then e4");
+    }
+
+    #[test]
+    fn a_stop_and_a_start_at_the_same_moment_leave_the_clip_running() {
+        let s = schedule(
+            "clip c { instrument: pluck, notes: [<c4 e4>] }\nc.start\nat +1bar c.stop\nat +1bar c.start",
+        );
+        let n: Vec<i32> = notes(&s, 0.0, 4.0).into_iter().map(|e| e.2).collect();
+        assert_eq!(n, [60, 64]);
+        // but a stop on its own stops it, and a later start begins again
+        let s = schedule(
+            "clip c { instrument: pluck, notes: [<c4 e4>] }\nc.start\nat +1bar c.stop\nat +2bars c.start",
+        );
+        let n: Vec<i32> = notes(&s, 0.0, 6.0).into_iter().map(|e| e.2).collect();
+        assert_eq!(n, [60, 60]);
+    }
+
+    #[test]
+    fn changing_a_running_clip_keeps_its_place_in_the_loop() {
+        // a four-bar clip changed during its third bar goes on with the third bar
+        let s = schedule(
+            "clip c { instrument: pluck, notes: [c4 d4 e4 f4], length: 4bars }\nc.start\nat +5bars c.__update(c.transpose(+12st))",
+        );
+        let n: Vec<i32> = notes(&s, 0.0, 16.0).into_iter().map(|e| e.2).collect();
+        // bar 1..4: c4 d4 e4 f4; the change at bar 6 (second bar of the second pass) is d4 an octave up
+        assert_eq!(n, [60, 62, 64, 65, 60, 74, 76, 77]);
+    }
+
+    #[test]
+    fn a_clip_that_does_not_loop_plays_once() {
+        let s = schedule(
+            "clip c { instrument: pluck, notes: [c4], length: 1bar, loop: false }\nc.start",
+        );
+        assert_eq!(notes(&s, 0.0, 10.0).len(), 1);
+        let s = schedule("clip c { instrument: pluck, notes: [c4], loop: false }\nc.start");
+        assert_eq!(notes(&s, 0.0, 10.0).len(), 1);
+    }
+
+    #[test]
+    fn a_clip_that_has_finished_can_be_started_again() {
+        let s = schedule(
+            "clip c { instrument: pluck, notes: [c4], length: 1bar, loop: false }\nc.start\nat +3bars c.start",
+        );
+        assert_eq!(notes(&s, 0.0, 10.0).len(), 2);
+        let c = s.node_names.iter().position(|n| n == "c").unwrap();
+        assert!(s.node_state(c, 1.0).clip.is_some());
+        assert!(s.node_state(c, 3.0).clip.is_none(), "it is over");
+    }
+
+    #[test]
+    fn reset_clears_mute_and_solo() {
+        let s = schedule(
+            "clip c { instrument: pluck, notes: [c4] }\nc.start\nc.mute\nat +1bar reset\nat +1bar c.start",
+        );
+        let c = s.node_names.iter().position(|n| n == "c").unwrap();
+        assert!(s.node_state(c, 1.0).muted);
+        assert!(!s.node_state(c, 3.0).muted);
+    }
+
+    #[test]
+    fn scene_commands_act_on_each_clip() {
+        let s = schedule(
+            "clip x { instrument: pluck, notes: [c4] }\nclip y { instrument: pluck, notes: [e4] }\nscene z { x, y }\nz.start\nat +1bar z.mute\nat +2bars z.unmute\nat +3bars z.stop",
+        );
+        let n: Vec<_> = notes(&s, 0.0, 10.0)
+            .into_iter()
+            .map(|e| (e.0, e.2))
+            .collect();
+        // bar 1 (0..2s) sounds, bar 2 (2..4s) is muted, bar 3 (4..6s) sounds, then it stops
+        assert_eq!(n.iter().filter(|e| e.0 < 2.0).count(), 2);
+        assert_eq!(n.iter().filter(|e| (2.0..4.0).contains(&e.0)).count(), 0);
+        assert_eq!(n.iter().filter(|e| (4.0..6.0).contains(&e.0)).count(), 2);
+        assert_eq!(n.iter().filter(|e| e.0 >= 6.0).count(), 0);
     }
 
     #[test]
@@ -1326,25 +1509,26 @@ mod tests {
                 .map(|e| e.args["bright"])
                 .collect()
         };
-        let s = schedule("clip c { notes: [c4 e4]\nbright: [0.2] }\nlead.play(c.set(bright: 0.9))");
+        let s =
+            schedule("clip c { notes: [c4 e4]\nbright: [0.2] }\nlead.__update(c.set(bright: 0.9))");
         assert_eq!(
             bright(&s)[..2],
             [Value::Num(0.9), Value::Num(0.9)],
             "replaced"
         );
-        let s = schedule("lead.play([c4 e4].set(bright: [0.1 0.7]))");
+        let s = schedule("lead.__update([c4 e4].set(bright: [0.1 0.7]))");
         assert_eq!(
             bright(&s)[..2],
             [Value::Num(0.1), Value::Num(0.7)],
             "added to a bare pattern"
         );
-        let s = schedule("lead.play([c4].reverse.set(gain: -6db))");
+        let s = schedule("lead.__update([c4].reverse.set(gain: -6db))");
         assert_eq!(s.events(0.0, 1.0).unwrap()[0].args["gain"], Value::Db(-6.0));
     }
 
     #[test]
     fn other_lanes_are_read_where_each_note_starts() {
-        let s = schedule("clip c { notes: [c4 e4 g4 b4]\nbright: [0.2 0.8] }\nlead.play(c)");
+        let s = schedule("clip c { notes: [c4 e4 g4 b4]\nbright: [0.2 0.8] }\nlead.__update(c)");
         let e = s.events(0.0, 2.0).unwrap();
         let brights: Vec<_> = e.iter().map(|e| e.args["bright"]).collect();
         assert_eq!(
@@ -1361,8 +1545,9 @@ mod tests {
 
     #[test]
     fn dur_and_nudge_lanes_shape_each_note() {
-        let s =
-            schedule("clip c { notes: [c4 e4]\ndur: [1/4beat]\nnudge: [0ms 100ms] }\nlead.play(c)");
+        let s = schedule(
+            "clip c { notes: [c4 e4]\ndur: [1/4beat]\nnudge: [0ms 100ms] }\nlead.__update(c)",
+        );
         let e = s.events(0.0, 2.0).unwrap();
         assert_eq!(e[0].dur, Time::Beats(0.25));
         assert_eq!(e[0].at, Time::Seconds(0.0));
@@ -1372,13 +1557,13 @@ mod tests {
             "they aren't instrument arguments"
         );
         // a nudge never pushes a note before the start
-        let early = schedule("clip c { notes: [c4]\nnudge: [-50ms] }\nlead.play(c)");
+        let early = schedule("clip c { notes: [c4]\nnudge: [-50ms] }\nlead.__update(c)");
         assert_eq!(early.events(0.0, 1.0).unwrap()[0].at, Time::Seconds(0.0));
     }
 
     #[test]
     fn commands_start_replace_and_stop_clips() {
-        let s = schedule("\nlead.play([c4])\nat 2bars lead.play([e4])\nat 3bars lead.stop");
+        let s = schedule("\nlead.__update([c4])\nat 2bars lead.__update([e4])\nat 3bars lead.stop");
         // bar = 2s: c4 for the first 4s, e4 for 4s..6s, then silence
         let n = notes(&s, 0.0, 20.0);
         assert_eq!(n.iter().map(|e| e.2).collect::<Vec<_>>(), [60, 60, 64]);
@@ -1388,15 +1573,15 @@ mod tests {
 
     #[test]
     fn a_clip_started_later_starts_its_own_cycle_there() {
-        let s = schedule("at bar 3 lead.play([c4 e4])");
+        let s = schedule("at 2bars lead.__update([c4 e4])");
         assert_eq!(times(&s, 0.0, 8.0), [4.0, 5.0, 6.0, 7.0]);
-        let mid_beat = schedule("at 1beat lead.play([c4 e4])");
+        let mid_beat = schedule("at 1beat lead.__update([c4 e4])");
         assert_eq!(times(&mid_beat, 0.0, 3.0), [0.5, 1.5, 2.5]);
     }
 
     #[test]
     fn nodes_play_independently_and_hush_ends_them_all() {
-        let s = schedule("lead.play([c4])\nbass.play([c2 g2])\nat 2bars hush");
+        let s = schedule("lead.__update([c4])\nbass.__update([c2 g2])\nat 2bars hush");
         let n = notes(&s, 0.0, 20.0);
         assert_eq!(n.iter().filter(|e| e.1 == "lead").count(), 2);
         assert_eq!(n.iter().filter(|e| e.1 == "bass").count(), 4);
@@ -1406,8 +1591,9 @@ mod tests {
 
     #[test]
     fn mute_and_solo_silence_nodes_without_stopping_them() {
-        let s =
-            schedule("lead.play([c4])\nbass.play([c2])\nat 1bar lead.mute\nat 3bars lead.unmute");
+        let s = schedule(
+            "lead.__update([c4])\nbass.__update([c2])\nat 1bar lead.mute\nat 3bars lead.unmute",
+        );
         let lead: Vec<f64> = notes(&s, 0.0, 10.0)
             .into_iter()
             .filter(|e| e.1 == "lead")
@@ -1426,7 +1612,9 @@ mod tests {
             5
         );
 
-        let solo = schedule("lead.play([c4])\nbass.play([c2])\nat 1bar bass.solo\nat 2bars unsolo");
+        let solo = schedule(
+            "lead.__update([c4])\nbass.__update([c2])\nat 1bar bass.solo\nat 2bars unsolo",
+        );
         let who = |t0, t1| {
             notes(&solo, t0, t1)
                 .into_iter()
@@ -1436,8 +1624,9 @@ mod tests {
         assert_eq!(who(0.0, 2.0), ["lead", "bass"]);
         assert_eq!(who(2.0, 4.0), ["bass"], "only the soloed node");
         assert_eq!(who(4.0, 6.0), ["lead", "bass"]);
-        let one =
-            schedule("lead.play([c4])\nbass.play([c2])\nlead.solo\nbass.solo\nat 1bar bass.unsolo");
+        let one = schedule(
+            "lead.__update([c4])\nbass.__update([c2])\nlead.solo\nbass.solo\nat 1bar bass.unsolo",
+        );
         assert_eq!(
             notes(&one, 2.0, 4.0)
                 .iter()
@@ -1449,7 +1638,7 @@ mod tests {
 
     #[test]
     fn panic_is_reported_and_ends_every_clip() {
-        let s = schedule("lead.play([c4])\nat 3bars panic");
+        let s = schedule("lead.__update([c4])\nat 3bars panic");
         assert_eq!(s.panics(), [6.0]);
         assert_eq!(s.end(), Some(6.0));
         assert_eq!(times(&s, 0.0, 20.0), [0.0, 2.0, 4.0]);
@@ -1458,18 +1647,22 @@ mod tests {
     #[test]
     fn scenes_launch_whole_sets_of_clips() {
         let s = schedule(
-            "\nclip riff { notes: [c2 g2] }\nscene verse { bass: riff, lead: [c4] }\nscene bridge { bass: ~, lead: [e4] }\nverse.start\nat 2bars bridge.start",
+            "\nclip bass2 { instrument: pluck, notes: [c2 g2] }\nclip lead2 { instrument: pluck, notes: [c4] }\nclip lead3 { instrument: pluck, notes: [e4] }\nscene verse { bass2, lead2 }\nscene bridge { lead3 }\nverse.start\nat 2bars bass2.stop\nat 2bars lead2.stop\nat 2bars bridge.start",
         );
         let n = notes(&s, 0.0, 8.0);
-        let bass = n.iter().filter(|e| e.1 == "bass").count();
+        let bass = n.iter().filter(|e| e.1 == "bass2").count();
         assert_eq!(bass, 4, "two bars of two notes, then stopped");
-        let lead: Vec<i32> = n.iter().filter(|e| e.1 == "lead").map(|e| e.2).collect();
+        let lead: Vec<i32> = n
+            .iter()
+            .filter(|e| e.1 == "lead2" || e.1 == "lead3")
+            .map(|e| e.2)
+            .collect();
         assert_eq!(lead, [60, 60, 64, 64]);
     }
 
     #[test]
     fn thinned_patterns_are_the_same_whichever_way_they_are_asked_for() {
-        let s = schedule("lead.play([c4*8].thin(40%))");
+        let s = schedule("lead.__update([c4*8].thin(40%))");
         let whole = times(&s, 0.0, 16.0);
         let mut pieces = Vec::new();
         for i in 0..8 {
@@ -1481,10 +1674,10 @@ mod tests {
 
     #[test]
     fn notes_that_are_not_pitches_are_errors() {
-        let s = schedule("lead.play([0.5])");
+        let s = schedule("lead.__update([0.5])");
         let e = s.events(0.0, 2.0).unwrap_err();
         assert!(e.0.contains("must be a note name or a frequency"), "{e}");
-        let s = schedule("clip c { notes: [c4]\ndur: [440hz] }\nlead.play(c)");
+        let s = schedule("clip c { notes: [c4]\ndur: [440hz] }\nlead.__update(c)");
         assert!(s.events(0.0, 2.0).unwrap_err().0.contains("lane `dur`"));
     }
 
@@ -1498,7 +1691,7 @@ mod tests {
 
     #[test]
     fn other_meters_change_the_length_of_a_cycle() {
-        let src = "meter 3/4\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) }\nclip t { instrument: p }\nt.play([c4 e4 g4])";
+        let src = "meter 3/4\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) }\nclip t { instrument: p }\nt.__update([c4 e4 g4])";
         let s = compile(src).unwrap().schedule();
         // a 3/4bar at 120bpm is 1.5 seconds, so three steps are half a second apart
         assert_eq!(times(&s, 0.0, 1.6), [0.0, 0.5, 1.0, 1.5]);

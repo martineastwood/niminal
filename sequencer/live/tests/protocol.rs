@@ -176,7 +176,13 @@ fn eval_replies_with_where_the_change_lands() {
     assert_eq!(r["result"]["changes"].as_array().unwrap().len(), 3);
 
     d.process(10_000);
-    let r = call(&mut d, c, 3, "eval", json!({"source": "lead.play([c4])"}));
+    let r = call(
+        &mut d,
+        c,
+        3,
+        "eval",
+        json!({"source": "lead.__update([c4])"}),
+    );
     assert_eq!(r["result"]["lands_at"], 96_000);
     assert_eq!(r["result"]["position"], json!({"bar": 2, "beat": 1.0}));
     let secs = r["result"]["in_seconds"].as_f64().unwrap();
@@ -199,14 +205,14 @@ fn a_rejected_eval_carries_located_problems() {
         c,
         3,
         "eval",
-        json!({"source": "riff = [c4]\nlead.play(nope)"}),
+        json!({"source": "riff = [c4]\nlead.__update(nope)"}),
     );
     assert_eq!(r["error"]["code"], -32001);
     assert_eq!(r["error"]["message"], "`nope` is not defined");
     let p = &r["error"]["data"]["problems"][0];
     assert_eq!(p["line"], 2);
-    assert_eq!(p["column"], 11);
-    assert_eq!(p["span"]["start"], 22);
+    assert_eq!(p["column"], 15);
+    assert_eq!(p["span"]["start"], 26);
     assert_eq!(p["message"], "`nope` is not defined");
 
     let bad_quantum = call(
@@ -236,7 +242,13 @@ fn cancel_hush_and_panic() {
         json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}),
     );
     d.process(1000);
-    call(&mut d, c, 3, "eval", json!({"source": "lead.play([c4])"}));
+    call(
+        &mut d,
+        c,
+        3,
+        "eval",
+        json!({"source": "lead.__update([c4])"}),
+    );
     assert_eq!(
         call(&mut d, c, 4, "status", json!({}))["result"]["pending"]
             .as_array()
@@ -280,7 +292,13 @@ fn subscribers_hear_about_changes_landing() {
         json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}),
     );
     d.process(1000);
-    call(&mut d, c, 4, "eval", json!({"source": "lead.play([c4])"}));
+    call(
+        &mut d,
+        c,
+        4,
+        "eval",
+        json!({"source": "lead.__update([c4])"}),
+    );
 
     // the evaluation that is waiting is announced to subscribers, not to others
     let messages = d.notifications();
@@ -311,7 +329,7 @@ fn subscribers_hear_about_changes_landing() {
     assert!(!landed.is_empty());
     assert_eq!(
         landed.last().unwrap()["params"]["changes"][0],
-        "lead.play([c4])"
+        "lead.__update([c4])"
     );
     assert_eq!(landed.last().unwrap()["params"]["at"], 96_000);
     let empties: Vec<Value> = after
@@ -399,7 +417,7 @@ fn notices_tell_subscribers_what_went_wrong_while_playing() {
         c,
         4,
         "eval",
-        json!({"source": "lead.play([c4*2])", "quantize": "now"}),
+        json!({"source": "lead.__update([c4*2])", "quantize": "now"}),
     );
     call(
         &mut d,
@@ -464,7 +482,7 @@ fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
         b,
         2,
         "eval",
-        json!({"source": "lead.play([c4])", "quantize": "now"}),
+        json!({"source": "lead.__update([c4])", "quantize": "now"}),
     );
     assert!(r["result"].is_object());
     d.disconnect(a);
@@ -481,7 +499,7 @@ fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
 fn status_lists_scenes_clips_and_what_each_node_is_doing() {
     let (mut d, c) = ready();
     let code = format!(
-        "{SETUP}\\nclip bass {{ instrument: pluck }}\\nclip riff {{ notes: [c2 ~] }}\\nscene verse {{ lead: [c4 e4], bass: riff }}"
+        "{SETUP}\\nclip lead {{ instrument: pluck\\n notes: [c4 e4] }}\\nclip bass {{ instrument: pluck\\n notes: [c2 ~] }}\\nclip riff {{ notes: [c2 ~] }}\\nscene verse {{ lead, bass }}"
     );
     assert!(
         call(
@@ -495,11 +513,14 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
     );
 
     let before = call(&mut d, c, 3, "status", json!({}))["result"].clone();
-    assert_eq!(before["scenes"], json!(["verse"]));
+    assert_eq!(
+        before["scenes"],
+        json!([{"name": "verse", "clips": ["lead", "bass"], "running": 0, "active": false}])
+    );
     assert_eq!(before["defined_clips"], json!(["lead", "bass", "riff"]));
     assert_eq!(
         before["clips"][0],
-        json!({"name": "lead", "clip": null, "playing": null, "muted": false, "soloed": false, "edits": []})
+        json!({"name": "lead", "running": false, "muted": false, "soloed": false, "edits": []})
     );
 
     call(
@@ -510,17 +531,17 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
         json!({"source": "verse.start\nbass.mute\nlead.solo", "quantize": "now"}),
     );
     let after = call(&mut d, c, 5, "status", json!({}))["result"].clone();
-    assert_eq!(
-        after["clips"][0]["clip"], "lead",
-        "a bare pattern is named for its node"
-    );
+    assert_eq!(after["clips"][0]["running"], true);
     assert_eq!(after["clips"][0]["soloed"], true);
     assert_eq!(after["clips"][1]["name"], "bass");
-    assert_eq!(after["clips"][1]["clip"], "riff");
+    assert_eq!(after["clips"][1]["running"], true);
     assert_eq!(after["clips"][1]["muted"], true);
     assert_eq!(after["clips"][1]["soloed"], false);
     assert_eq!(after["clips"][1]["edits"], json!([]));
-    assert!(after["clips"][1]["playing"].is_string() || after["clips"][1]["playing"].is_null());
+    assert_eq!(
+        after["scenes"][0],
+        json!({"name": "verse", "clips": ["lead", "bass"], "running": 2, "active": true})
+    );
 
     call(
         &mut d,
@@ -547,7 +568,7 @@ fn begin_and_finish_answer_an_eval_like_handle_does() {
     assert!(reply["result"]["id"].is_u64());
 
     // a mistake is an error reply, still with the request's id
-    let bad = json!({"jsonrpc": "2.0", "id": 3, "method": "eval", "params": {"source": "lead.play([zz])"}});
+    let bad = json!({"jsonrpc": "2.0", "id": 3, "method": "eval", "params": {"source": "lead.__update([zz])"}});
     let Request::Compile(ticket) = d.begin(c, &bad.to_string()) else {
         panic!()
     };
@@ -589,7 +610,7 @@ fn cancellation_compiles_outside_the_session_and_retries_if_it_became_stale() {
         c,
         3,
         "eval",
-        json!({"source": "lead.play([c4])", "quantize": "next 4bars"}),
+        json!({"source": "lead.__update([c4])", "quantize": "next 4bars"}),
     );
     let request = json!({"jsonrpc": "2.0", "id": 4, "method": "cancel", "params": {"id": first["result"]["id"]}}).to_string();
     let Request::Compile(ticket) = d.begin(c, &request) else {
@@ -629,7 +650,7 @@ fn hush_uses_the_background_compilation_path() {
         c,
         3,
         "eval",
-        json!({"source": "lead.play([c4])", "quantize": "now"}),
+        json!({"source": "lead.__update([c4])", "quantize": "now"}),
     );
     let request = json!({"jsonrpc": "2.0", "id": 4, "method": "hush", "params": {}}).to_string();
     let parsed = LiveServer::prepare_eval(&request);
@@ -639,7 +660,7 @@ fn hush_uses_the_background_compilation_path() {
     let reply: Value = serde_json::from_str(&d.finish(ticket.compile())[0]).unwrap();
     assert_eq!(reply["id"], 4);
     assert!(reply["result"]["id"].is_u64());
-    assert!(d.live().parts().iter().all(|t| t.clip.is_none()));
+    assert!(d.live().clips().iter().all(|t| !t.running));
 }
 
 #[test]

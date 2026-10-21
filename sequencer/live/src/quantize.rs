@@ -31,7 +31,7 @@ impl Default for QuantizeDefaults {
             default: every(1.0, QuantizeUnit::Bar),
             play: every(1.0, QuantizeUnit::Cycle),
             instrument: every(1.0, QuantizeUnit::Beat),
-            clip: every(1.0, QuantizeUnit::Bar),
+            clip: every(1.0, QuantizeUnit::Cycle),
             tempo: every(1.0, QuantizeUnit::Bar),
             control: None,
         }
@@ -52,19 +52,29 @@ impl QuantizeDefaults {
     }
 
     /// The quantum for a statement: its own `@`, else `fallback` (an override
-    /// for the whole evaluation), else its definition's `quantize` setting, else the
-    /// default for its kind.
-    pub fn for_statement(&self, s: &Statement, fallback: Option<Quantize>) -> Quantize {
-        if let Some(q) = s.quantize.or(fallback).or(s.definition_quantize()) {
+    /// for the whole evaluation), else its definition's `quantize` setting, else `target`'s
+    /// (the `quantize` of the scene or clip a command is about), else the default for its kind.
+    pub fn for_statement(
+        &self,
+        s: &Statement,
+        fallback: Option<Quantize>,
+        target: Option<Quantize>,
+    ) -> Quantize {
+        if let Some(q) = s
+            .quantize
+            .or(fallback)
+            .or(s.definition_quantize())
+            .or(target)
+        {
             return q;
         }
         match s.kind() {
             StatementKind::Note => every(1.0, QuantizeUnit::Now),
-            StatementKind::Command if s.plays().is_some() => self.play,
+            StatementKind::Command if s.plays().is_some() || s.starts() => self.play,
             StatementKind::Command => self.default,
             StatementKind::Definition => match s.key().and_then(|k| k.split(':').next()) {
                 Some("instr") => self.instrument,
-                Some("clip" | "fx") => self.clip,
+                Some("clip") => self.clip,
                 Some("tempo") => self.tempo,
                 Some("ctl") => self.control.unwrap_or(self.default),
                 _ => self.default,
@@ -215,19 +225,28 @@ mod tests {
     fn defaults_follow_the_kind_of_change() {
         let d = QuantizeDefaults::default();
         let first = |src: &str| analyze(src).unwrap().remove(0);
-        let unit = |src: &str| d.for_statement(&first(src), None).unit;
+        let unit = |src: &str| d.for_statement(&first(src), None, None).unit;
         assert_eq!(unit("instr a(f: hz) { osc(sine, f) }"), QuantizeUnit::Beat);
         assert_eq!(unit("fx t { out = it }"), QuantizeUnit::Bar);
-        assert_eq!(unit("t.play([c4])"), QuantizeUnit::Cycle);
+        assert_eq!(unit("t.__update([c4])"), QuantizeUnit::Cycle);
         assert_eq!(unit("t.mute"), QuantizeUnit::Bar);
+        assert_eq!(unit("t.start"), QuantizeUnit::Cycle);
+        assert_eq!(unit("clip c { instrument: a }"), QuantizeUnit::Cycle);
         assert_eq!(unit("a(f: 1hz) for 1beat"), QuantizeUnit::Now);
         assert_eq!(unit("riff = [c4]"), QuantizeUnit::Bar);
         // a statement's own `@` wins, then an override, then the kind's default
         let own = first("t.mute @ next beat");
         let over = Some(q("now"));
-        assert_eq!(d.for_statement(&own, over).unit, QuantizeUnit::Beat);
+        assert_eq!(d.for_statement(&own, over, None).unit, QuantizeUnit::Beat);
         assert_eq!(
-            d.for_statement(&first("t.mute"), over).unit,
+            d.for_statement(&first("t.mute"), over, None).unit,
+            QuantizeUnit::Now
+        );
+        // what a scene or clip was defined with stands in for the kind's default, but not for an override
+        let defined = Some(q("4bars"));
+        assert_eq!(d.for_statement(&first("t.start"), None, defined).count, 4.0);
+        assert_eq!(
+            d.for_statement(&first("t.start"), over, defined).unit,
             QuantizeUnit::Now
         );
     }

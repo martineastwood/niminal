@@ -31,4 +31,8 @@ scene verse { line }
 scene break { fill }
 
 verse.start
-break.start then verse after 1bar @ next 2bars
+// two bars in, the fill takes over for a bar, then the line comes back
+at +2bars verse.stop
+at +2bars break.start
+at +3bars break.stop
+at +3bars verse.start

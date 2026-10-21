@@ -69,6 +69,8 @@ pub struct Clip {
     pub length: Rational,
     /// Never starts over, because no `length` was given: `length` is only the first cycle.
     pub endless: bool,
+    /// Starts over when it ends. A clip with `loop: false` plays once and is then finished.
+    pub looped: bool,
     /// `notes` is the pitch lane; other lanes set parameters or universal
     /// controls note by note.
     pub lanes: Vec<(String, Pattern<Step>)>,
@@ -129,17 +131,23 @@ impl Clip {
     }
 }
 
-/// A named set of clips, one per node. `None` stops that node.
+/// A named list of clips, started and stopped together. Clips are nodes, by index.
 #[derive(Clone)]
 pub struct Scene {
     pub name: String,
-    pub entries: Vec<(usize, Option<Clip>)>,
+    pub clips: Vec<usize>,
 }
 
 /// What a command does. Nodes are indices into `Program::nodes`.
 #[derive(Clone)]
 pub enum Action {
-    Play {
+    /// Start a clip. Nothing happens if it is already running.
+    Start {
+        node: usize,
+        clip: Clip,
+    },
+    /// Change what a running clip plays, keeping its place in the loop. A clip that is not running starts.
+    Update {
         node: usize,
         clip: Clip,
     },
@@ -166,6 +174,11 @@ pub enum Action {
     /// Stop every node, and count bars from here. Only a live session can do the
     /// counting; a render treats it as `hush`.
     Reset,
+    /// `song.stop`: drop what the arrangement `song` has not got to yet. Only a live session can; a render
+    /// has nothing to drop.
+    Cancel {
+        arrangement: String,
+    },
     /// Write the last `bars` of playing clips to `score/{name}.nms`. Only a live
     /// session does the write; a render ignores it.
     Capture {

@@ -13,7 +13,16 @@ fx room_return {
 drums = kit("drums")
 
 instr drum_voice(sample, gain: db = 0db) { out = drums(sample: sample, gain: gain) }
-clip beat { instrument: drum_voice }
+hits = grid {
+  kick:             x... x... x... x..x
+  snare(pan: 8deg): [~ x ~ [x o]]
+  hat(gain: -4db):  [x*2 x x(3,8)]
+}
+
+clip beat {
+  instrument: drum_voice
+  notes: hits
+}
 fx snare_fx {
   out = snare_audio.gain(-1db)
   room += out.gain(-12db)
@@ -35,10 +44,4 @@ instr hat_voice(sample, freq: hz = c4, gain: db = 0db, pan: deg = 0deg) {
 }
 clip hat { instrument: hat_voice }
 
-hits = grid {
-  kick:             x... x... x... x..x
-  snare(pan: 8deg): [~ x ~ [x o]]
-  hat(gain: -4db):  [x*2 x x(3,8)]
-}
-
-beat.play(hits)
+beat.start

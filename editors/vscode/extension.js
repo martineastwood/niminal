@@ -4,7 +4,7 @@ const { LanguageClient } = require("vscode-languageclient/node");
 const { LiveClient: Client } = require("./live-client");
 const { startLive } = require("./live");
 const { blockAround } = require("./blocks");
-const { clipDescription } = require("./panel");
+const { clipDescription, sceneDescription, silencers } = require("./panel");
 const { rewriteLearned } = require("./learn");
 
 let client = null;
@@ -59,7 +59,8 @@ function showStatus() {
   }
   const meter = peakBar(peaks);
   const pending = transport.pending ? ` · ${transport.pending} pending` : "";
-  status.text = `$(unmute) ${transport.bar}.${Math.floor(transport.beat)} · ${Math.round(transport.bpm)} bpm · ${transport.voices} voices${meter ? ` ${meter}` : ""}${pending}`;
+  const silenced = silencers(performance.clips);
+  status.text = `$(unmute) ${transport.bar}.${Math.floor(transport.beat)} · ${Math.round(transport.bpm)} bpm · ${transport.voices} voices${meter ? ` ${meter}` : ""}${pending}${silenced ? ` · ${silenced}` : ""}`;
 }
 
 /** The server heard a control change for `midi.learn`: write it into the code that asked. */
@@ -180,6 +181,7 @@ async function refreshPerformance() {
     performance = { scenes: status.scenes ?? [], clips: status.clips ?? [] };
     scenesChanged.fire();
     clipsChanged.fire();
+    showStatus();
   } catch {
     // the connection went away; onClose clears the panel
   }
@@ -375,12 +377,15 @@ function activate(context) {
     command("niminal.restartLanguageServer", restartLanguageServer),
     vscode.window.registerTreeDataProvider("niminal.scenes", {
       onDidChangeTreeData: scenesChanged.event,
-      getChildren: () => performance.scenes.map((name, i) => ({ name, number: i + 1 })),
-      getTreeItem: ({ name, number }) => {
+      getChildren: () => performance.scenes.map((scene, i) => ({ ...scene, number: i + 1 })),
+      getTreeItem: (scene) => {
+        const { name, number } = scene;
         const item = new vscode.TreeItem(name);
-        item.description = number <= 9 ? `${process.platform === "darwin" ? "⌘" : "Ctrl+"}${number}` : "";
+        const shortcut = number <= 9 ? `${process.platform === "darwin" ? "⌘" : "Ctrl+"}${number}` : "";
+        item.description = sceneDescription(scene, shortcut);
+        item.tooltip = `${name}: ${scene.clips.join(", ") || "no clips"}`;
         item.command = { command: "niminal.launchScene", title: "Launch", arguments: [{ name }] };
-        item.iconPath = new vscode.ThemeIcon("play");
+        item.iconPath = new vscode.ThemeIcon(scene.active ? "debug-start" : "play");
         return item;
       },
     }),
@@ -390,16 +395,25 @@ function activate(context) {
       getTreeItem: (node) => {
         const item = new vscode.TreeItem(node.name);
         item.description = clipDescription(node);
-        item.iconPath = new vscode.ThemeIcon(node.muted ? "mute" : node.clip ? "play" : "circle-outline");
+        item.iconPath = new vscode.ThemeIcon(node.muted ? "mute" : node.running ? "play" : "circle-outline");
         return item;
       },
     }),
     command("niminal.launchScene", (scene) => scene && sendApi(`${scene.name}.start`, (c, q) => c.launch(scene.name, { quantize: q }))),
     command("niminal.launchNth", (n) => {
-      const name = performance.scenes[n - 1];
+      const name = performance.scenes[n - 1]?.name;
       if (name) return sendApi(`${name}.start`, (c, q) => c.launch(name, { quantize: q }));
       vscode.window.setStatusBarMessage(`niminal: no scene number ${n}`, 2000);
     }),
+    command("niminal.stopScene", (scene) => scene && sendApi(`${scene.name}.stop`, (c, q) => c.stop(scene.name, { quantize: q }))),
+    command("niminal.toggleSceneMute", (scene) => {
+      if (!scene) return;
+      const clips = performance.clips.filter((c) => scene.clips.includes(c.name));
+      return clips.length > 0 && clips.every((c) => c.muted)
+        ? sendApi(`${scene.name}.unmute`, (c, q) => c.unmute(scene.name, { quantize: q }))
+        : sendApi(`${scene.name}.mute`, (c, q) => c.mute(scene.name, { quantize: q }));
+    }),
+    command("niminal.soloScene", (scene) => scene && sendApi(`${scene.name}.solo`, (c, q) => c.solo(scene.name, { quantize: q }))),
     command("niminal.toggleMute", (node) => {
       if (!node) return;
       return node.muted
@@ -412,7 +426,7 @@ function activate(context) {
         ? sendApi(`${node.name}.unsolo`, (c, q) => c.unsolo(node.name, { quantize: q }))
         : sendApi(`${node.name}.solo`, (c, q) => c.solo(node.name, { quantize: q }));
     }),
-    command("niminal.stopPart", (node) => node && sendApi(`${node.name}.stop`, (c, q) => c.stop(node.name, { quantize: q }))),
+    command("niminal.stopClip", (node) => node && sendApi(`${node.name}.stop`, (c, q) => c.stop(node.name, { quantize: q }))),
     command("niminal.cancelPending", async (change) => {
       if (!change || !client?.connected) return;
       try {

@@ -644,20 +644,13 @@ fn api_source(method: &str, params: &Value) -> Result<String, RpcError> {
             scene.to_source()
         }
         "launch" => {
-            let mut src = format!("{}.start", target()?);
-            if let Some(then) = params.get("then") {
-                let next = then.get("target").and_then(Value::as_str).ok_or_else(|| {
-                    RpcError::new(INVALID_PARAMS, "`then` needs a string `target`")
-                })?;
-                let after = then.get("after").and_then(Value::as_str).ok_or_else(|| {
-                    RpcError::new(
-                        INVALID_PARAMS,
-                        "`then` needs a string `after`, as in `4bars`",
-                    )
-                })?;
-                src.push_str(&format!(" then {next} after {after}"));
+            if params.get("then").is_some() {
+                return Err(RpcError::new(
+                    INVALID_PARAMS,
+                    "`launch` no longer takes `then`: put the follow-up in an arrangement, or launch it later",
+                ));
             }
-            src
+            format!("{}.start", target()?)
         }
         "stop" => format!("{}.stop", target()?),
         "mute" => format!("{}.mute", target()?),
@@ -697,15 +690,20 @@ fn status_json(live: &mut Live) -> Value {
         "realtime": engine["realtime"],
         "controls": engine["controls"],
         "instruments": engine["instruments"],
-        "scenes": live.defined("scene"),
+        "scenes": live.scenes().iter().map(|s| json!({
+            "name": s.name,
+            "clips": s.clips,
+            "running": s.running,
+            "active": s.active(),
+        })).collect::<Vec<_>>(),
+        "arrangements": live.defined("arrangement"),
         "defined_clips": live.defined("clip"),
-        "clips": live.parts().iter().map(|t| json!({
-            "name": t.name,
-            "clip": t.clip,
-            "playing": t.playing,
-            "muted": t.muted,
-            "soloed": t.soloed,
-            "edits": t.edits,
+        "clips": live.clips().iter().map(|c| json!({
+            "name": c.name,
+            "running": c.running,
+            "muted": c.muted,
+            "soloed": c.soloed,
+            "edits": c.edits,
         })).collect::<Vec<_>>(),
     })
 }

@@ -25,9 +25,12 @@ instr keys_voice(freq: hz) {
   voice = lead(freq: freq)
   keys_fx_audio += voice
 }
-clip keys { instrument: keys_voice }
+clip keys {
+  instrument: keys_voice
+  notes: [c3 e3 g3 b3]
+}
 
-keys.play([c3 e3 g3 b3])
+keys.start
 
 // 1. ERRORS: change `saw` above to `sawz`, or `lpf(cutoff: cutoff` to `lpf(cutof: cutoff`,
 //    or write `lpf(cutoff: 3)` (a plain number where hz is wanted). Undo clears them.

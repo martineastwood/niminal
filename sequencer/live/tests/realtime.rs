@@ -63,7 +63,7 @@ fn measured(r: &mut RealtimeRenderer, n: usize, out: &mut [f32]) {
 
 #[test]
 fn prepared_audio_matches_direct_rendering_and_retires_without_heap_work() {
-    let source = "lead.play([c4 e4 g4].fast(64))";
+    let source = "lead.__update([c4 e4 g4].fast(64))";
     let mut expected = session();
     expected.eval(source, Some("now")).unwrap();
     let expected = expected.process(48_000).remove(0);
@@ -83,7 +83,8 @@ fn prepared_audio_matches_direct_rendering_and_retires_without_heap_work() {
 #[test]
 fn live_graph_edits_and_panic_do_no_heap_work() {
     let mut s = session();
-    s.eval("lead.play([c4 e4].fast(8))", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4].fast(8))", Some("now"))
+        .unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     measured(&mut r, 256, &mut out);
@@ -122,7 +123,7 @@ fn notes_wait_for_the_exact_sample_and_future_preparation_is_separate() {
 
 #[test]
 fn delayed_notes_do_not_hold_up_earlier_notes_in_later_windows() {
-    let source = "clip c { notes: [c4 e4 g4 b4].fast(16)\n nudge: [100ms 0ms] }\nlead.play(c)";
+    let source = "clip c { notes: [c4 e4 g4 b4].fast(16)\n nudge: [100ms 0ms] }\nlead.__update(c)";
     let mut direct = session();
     direct.eval(source, Some("now")).unwrap();
     let expected = direct.process(12_000).remove(0);
@@ -178,7 +179,7 @@ fn cancelled_quantized_changes_never_reach_the_renderer() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     measured(&mut r, 256, &mut out);
-    let pending = s.eval("lead.play([c4])", Some("next beat")).unwrap();
+    let pending = s.eval("lead.__update([c4])", Some("next beat")).unwrap();
     s.prepare_realtime();
     assert_eq!(s.cancel(pending.id), 1);
     for _ in 0..110 {
@@ -194,7 +195,7 @@ fn quantized_definitions_and_notes_land_inside_prepared_windows() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = vec![0.0; 24_512];
     measured(&mut r, 128, &mut out[..128]);
-    let accepted = s.eval("instr new(freq: hz) { osc(saw, freq) }\nclip newnode { instrument: new }\nnewnode.play([c4])", Some("next beat")).unwrap();
+    let accepted = s.eval("instr new(freq: hz) { osc(saw, freq) }\nclip newnode { instrument: new }\nnewnode.__update([c4])", Some("next beat")).unwrap();
     assert_eq!(accepted.lands_at, 24_000);
     let mut pos = 128;
     while pos < out.len() {
@@ -258,7 +259,7 @@ fn overload_is_bounded_and_does_no_heap_work_during_rendering() {
 #[test]
 fn repeated_edits_keep_audio_finite_and_render_without_heap_work() {
     let mut s = session();
-    s.eval("lead.play([c4 e4 g4 b4].fast(32))", Some("now"))
+    s.eval("lead.__update([c4 e4 g4 b4].fast(32))", Some("now"))
         .unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
@@ -304,11 +305,11 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
         "ctl level = 1.0\nk = kit(\"kit\")\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n",
     );
     for i in 0..8 {
-        source.push_str(&format!("bus audio{i}\nfx room{i} {{ out = audio{i}.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\ninstr voice{i}(freq: hz) {{ v = poly(freq: freq)\naudio{i} += v }}\nclip lead{i} {{ instrument: voice{i} }}\nlead{i}.play([c4 e4 g4 b4].fast(64))\n"));
+        source.push_str(&format!("bus audio{i}\nfx room{i} {{ out = audio{i}.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\ninstr voice{i}(freq: hz) {{ v = poly(freq: freq)\naudio{i} += v }}\nclip lead{i} {{ instrument: voice{i} }}\nlead{i}.__update([c4 e4 g4 b4].fast(64))\n"));
     }
     for i in 0..4 {
         source.push_str(&format!(
-            "clip drums{i} {{ instrument: k }}\ndrums{i}.play([kick].fast(128))\n"
+            "clip drums{i} {{ instrument: k }}\ndrums{i}.__update([kick].fast(128))\n"
         ));
     }
     source.push_str(&"poly(freq: 220hz) for 2beats\n".repeat(128));
@@ -340,7 +341,8 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
 #[test]
 fn retirement_backpressure_retains_resources_until_the_planner_returns() {
     let mut s = session();
-    s.eval("lead.play([c4 e4].fast(128))", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4].fast(128))", Some("now"))
+        .unwrap();
     // the sequencer has sent the notes by the time the engine prepares them
     s.advance_to(20_000);
     let mut r = s.start_realtime(RealtimeConfig {
@@ -411,7 +413,7 @@ fn timestamped_controls_match_offline_audio_and_do_no_heap_work() {
 #[test]
 fn turning_controls_does_not_invalidate_prepared_notes_or_allocate_in_render() {
     let mut s = session();
-    s.eval("ctl cutoff = 2000hz\nbus lead_audio\nfx lead_fx {out = lead_audio.lpf(cutoff: cutoff)}\ninstr lead_voice(freq: hz) { voice = tone(freq: freq)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nlead.play([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
+    s.eval("ctl cutoff = 2000hz\nbus lead_audio\nfx lead_fx {out = lead_audio.lpf(cutoff: cutoff)}\ninstr lead_voice(freq: hz) { voice = tone(freq: freq)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nlead.__update([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     for i in 0..100 {
@@ -566,7 +568,7 @@ fn a_held_key_sounds_through_the_prepared_path_until_it_is_let_go() {
 
 #[test]
 fn a_tempo_ramp_sounds_the_same_through_the_prepared_path() {
-    let code = "lead.play([c4 e4 g4 b4].fast(2))";
+    let code = "lead.__update([c4 e4 g4 b4].fast(2))";
     let ramp = "tempo 180bpm @ now over 1bar";
     let mut expected = session();
     expected.eval(code, Some("now")).unwrap();
@@ -666,7 +668,7 @@ fn bend_pressure_and_the_pedal_sound_the_same_through_the_prepared_path() {
 #[test]
 fn a_lane_that_sets_a_node_parameter_sounds_the_same_prepared_as_direct_and_without_heap_work() {
     let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
-    let play = |lane: &str| format!("clip c {{ notes: [c5 c5]\n{lane} }}\npad.play(c)");
+    let play = |lane: &str| format!("clip c {{ notes: [c5 c5]\n{lane} }}\npad.__update(c)");
     let direct = |lane: &str| {
         let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
         s.eval(setup, Some("now")).unwrap();
@@ -697,7 +699,7 @@ fn a_lane_that_sets_a_node_parameter_sounds_the_same_prepared_as_direct_and_with
 fn an_envelope_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_without_heap_work() {
     let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
     // a looping, curved sweep so that many short glides and restarts cross window edges
-    let play = "clip c { notes: [c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar.exp 6khz 1/8bar.log 300hz].loop }\npad.play(c)";
+    let play = "clip c { notes: [c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar.exp 6khz 1/8bar.log 300hz].loop }\npad.__update(c)";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
     direct.eval(setup, Some("now")).unwrap();
     direct.eval(play, Some("now")).unwrap();
@@ -729,7 +731,8 @@ fn an_envelope_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_witho
 fn a_signal_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_without_heap_work() {
     let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
     // an LFO across a bar, with no notes of its own to step on, under a held pad
-    let play = "clip c { notes: [c5 c5 c5 c5]\npad_fx.cut: sine.range(300hz, 6khz) }\npad.play(c)";
+    let play =
+        "clip c { notes: [c5 c5 c5 c5]\npad_fx.cut: sine.range(300hz, 6khz) }\npad.__update(c)";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
     direct.eval(setup, Some("now")).unwrap();
     direct.eval(play, Some("now")).unwrap();
@@ -789,7 +792,7 @@ fn a_device_input_reaches_a_node_that_reads_it_through_the_prepared_path() {
 
 #[test]
 fn midi_out_notes_leave_the_prepared_path_at_the_samples_they_belong_to() {
-    let code = "tempo 120bpm\nmidi_out synth(port: \"IAC\", channel: 2)\nclip lead { instrument: synth }\nlead.play([c4 e4 ~ g4])";
+    let code = "tempo 120bpm\nmidi_out synth(port: \"IAC\", channel: 2)\nclip lead { instrument: synth }\nlead.__update([c4 e4 ~ g4])";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
     direct.eval(code, Some("now")).unwrap();
     direct.process(100_000);
@@ -840,9 +843,9 @@ const TWO_NODES: &str = "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0]
 #[test]
 fn random_live_edits_sound_the_same_prepared_as_direct() {
     const EDITS: [&str; 14] = [
-        "lead.play([c4 e4 g4 b4].fast(16))",
-        "lead.play([c4 [e4 g4]].fast(8))",
-        "bass.play([c2 g2 c3].fast(4))",
+        "lead.__update([c4 e4 g4 b4].fast(16))",
+        "lead.__update([c4 [e4 g4]].fast(8))",
+        "bass.__update([c2 g2 c3].fast(4))",
         "lead.mute",
         "lead.unmute",
         "bass.mute",

@@ -69,7 +69,7 @@ fn pan_places_the_sound_between_the_speakers() {
 /// A stereo render of a pattern played on a tone.
 fn played(pattern: &str) -> Vec<Vec<f32>> {
     let src = format!(
-        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\nclip lead {{ instrument: tone }}\nlead.play({pattern})"
+        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\nclip lead {{ instrument: tone, notes: {pattern} }}\nlead.start"
     );
     render_with(
         &program(&src),
@@ -101,7 +101,7 @@ fn a_note_can_have_a_pan_of_its_own() {
     let centred = played("[c4]");
     assert_eq!(centred[0][..first], centred[1][..first]);
     // the lane form works the same way
-    let lane = played("[c4].set(pan: 30deg)");
+    let lane = mixed("pan: 30deg\n");
     assert!(
         peak(&lane[1][..first]) > 0.9 && peak(&lane[0][..first]) < 1e-6,
         "right from a lane"

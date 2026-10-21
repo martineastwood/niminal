@@ -482,10 +482,23 @@ impl Parser {
             } else {
                 "a scene name"
             })?;
+            // `clip bass_chorus = bass.transpose(+5st)`
+            if is_clip && self.eat(&Tok::Eq) {
+                let base = self.expr()?;
+                let block = NamedBlock {
+                    name,
+                    base: Some(Box::new(base)),
+                    entries: Vec::new(),
+                    options: Vec::new(),
+                    span: start.to(self.prev_span()),
+                };
+                return Ok(Item::Clip(block));
+            }
             let (mut entries, end) = self.entries(!is_clip)?;
             let options = take_entry_options(&mut entries);
             let block = NamedBlock {
                 name,
+                base: None,
                 entries,
                 options,
                 span: start.to(end),
@@ -498,10 +511,19 @@ impl Parser {
         } else if self.is_keyword("at") {
             self.bump();
             let at = self.at_pos()?;
-            if self.at_command() {
-                self.command(Some(at)).map(Item::Command)
-            } else if self.is_edit() {
-                self.edit(Some(at)).map(Item::Command)
+            let at_bar = matches!(at, AtPos::Bar { .. });
+            if self.at_command() || self.is_edit() {
+                if at_bar {
+                    return Err(Diagnostic::new(
+                        "a command can't be placed at a bar number, which counts on a clock that keeps running: write `at +4bars` instead",
+                        self.span(),
+                    ));
+                }
+                if self.at_command() {
+                    self.command(Some(at)).map(Item::Command)
+                } else {
+                    self.edit(Some(at)).map(Item::Command)
+                }
             } else {
                 self.note(Some(at)).map(Item::Note)
             }
@@ -530,10 +552,27 @@ impl Parser {
         let (mut tempos, mut meters) = (None, None);
         let mut tempo_env: Option<EnvLit> = None;
         let mut lanes: Vec<ArrangementLane> = Vec::new();
+        let mut commands: Vec<CommandStmt> = Vec::new();
         loop {
             self.skip_newlines();
             if self.peek() == &Tok::RBrace {
                 break;
+            }
+            if self.is_keyword("at") {
+                self.bump();
+                let at = self.at_pos()?;
+                if matches!(at, AtPos::Bar { .. }) || !(self.at_command() || self.is_edit()) {
+                    return Err(self.unexpected(
+                        "a command placed with `at +4bars`, such as `at +4bars chorus.start`",
+                    ));
+                }
+                let command = if self.at_command() {
+                    self.command(Some(at))?
+                } else {
+                    self.edit(Some(at))?
+                };
+                commands.push(command);
+                continue;
             }
             let key = self.ident("`sections`")?;
             if self.peek() == &Tok::Dot {
@@ -608,7 +647,7 @@ impl Parser {
             }
             if key.name != "sections" {
                 return Err(Diagnostic::new(format!("`{}` isn't supported in an arrangement yet", key.name), key.span)
-                    .with_help("an arrangement has `sections`, `tempo` and `meter` for each of them, and envelope lanes such as `bass.tone: env[...]`"));
+                    .with_help("an arrangement has `at +4bars chorus.start` lines, or `sections`, with `tempo` and `meter` for each of them, and envelope lanes such as `bass.tone: env[...]`"));
             }
             self.expect(&Tok::Colon)?;
             if sections.is_some() {
@@ -639,16 +678,20 @@ impl Parser {
             }
         }
         let end = self.expect(&Tok::RBrace)?;
-        let sections = sections.ok_or_else(|| {
-            Diagnostic::new(
-                format!("arrangement `{}` has no sections", name.name),
+        if sections.is_none() && commands.is_empty() {
+            return Err(Diagnostic::new(
+                format!("arrangement `{}` has nothing in it", name.name),
                 name.span,
             )
-            .with_help("add `sections: [scene.over(8bars) ...]`")
-        })?;
+            .with_help(
+                "add `at +0bars verse.start` lines, or `sections: [scene.over(8bars) ...]`",
+            ));
+        }
+        let sections = sections.unwrap_or_default();
         Ok(ArrangementDecl {
             name,
             sections,
+            commands,
             tempos,
             tempo_env,
             meters,
@@ -1193,7 +1236,6 @@ impl Parser {
                 "start" => Some(Command::Start {
                     name: node.clone(),
                     verb: first,
-                    then: None,
                 }),
                 "stop" => Some(Command::Stop(node.clone())),
                 "mute" => Some(Command::Mute(node.clone())),
@@ -1202,19 +1244,13 @@ impl Parser {
                 "unsolo" => Some(Command::Unsolo(Some(node.clone()))),
                 _ => None,
             };
-            if let Some(mut command) = command {
+            if let Some(command) = command {
                 self.bump();
                 if matches!(&command, Command::Start { .. }) && self.is_keyword("then") {
-                    self.bump();
-                    let next = self.ident("what to launch next")?;
-                    if !self.is_keyword("after") {
-                        return Err(self.unexpected("`after`, as in `then fill after 4bars`"));
-                    }
-                    self.bump();
-                    let after = self.expr()?;
-                    if let Command::Start { then, .. } = &mut command {
-                        *then = Some((next, after));
-                    }
+                    return Err(Diagnostic::new(
+                        "`then` is gone: time the next start with `at +4bars chorus.start`",
+                        self.span(),
+                    ));
                 }
                 let quantize = self.quantize()?;
                 return Ok(CommandStmt {
@@ -1225,22 +1261,28 @@ impl Parser {
                 });
             }
         }
-        // `lead.play(answer)`: put this on the part
         if let Tok::Ident(verb) = self.peek().clone()
-            && verb == "play"
             && self.peek_at(1) == &Tok::LParen
         {
-            self.bump();
-            self.bump();
-            let what = self.expr()?;
-            self.expect(&Tok::RParen)?;
-            let quantize = self.quantize()?;
-            return Ok(CommandStmt {
-                at,
-                command: Command::Play { node, what },
-                quantize,
-                span: start.to(self.prev_span()),
-            });
+            if verb == "play" {
+                return Err(Diagnostic::new(
+                    "there is no `play`: edit the clip and evaluate it, or change it with `set`, `reverse` and the like",
+                    self.span(),
+                ));
+            }
+            if verb == "__update" {
+                self.bump();
+                self.bump();
+                let what = self.expr()?;
+                self.expect(&Tok::RParen)?;
+                let quantize = self.quantize()?;
+                return Ok(CommandStmt {
+                    at,
+                    command: Command::Update { node, what },
+                    quantize,
+                    span: start.to(self.prev_span()),
+                });
+            }
         }
         let change = self.expr()?;
         let quantize = self.quantize()?;
@@ -1909,6 +1951,7 @@ impl Parser {
                             name: String::new(),
                             span: start,
                         },
+                        base: None,
                         entries,
                         options,
                         span: start.to(end),

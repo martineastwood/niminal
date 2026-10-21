@@ -94,7 +94,7 @@ Compile and queue niminal source. Failed compile returns **-32001** with **`erro
   "lands_at": 96000,
   "position": { "bar": 2, "beat": 1.0 },
   "in_seconds": 1.79,
-  "changes": ["lead.play([c4])"]
+  "changes": ["lead.reverse"]
 }
 ```
 
@@ -142,9 +142,9 @@ Typed calls that compile to the same `.nml` source as `eval`, so quantize, the s
 | Method | Params | Source form |
 | --- | --- | --- |
 | `clip.define` | a [ClipDef](/reference/score-model/) (`name`, optional `instrument`, `length`, `loop`, `lanes`, `events`) | `clip name { … }` |
-| `scene.define` | a SceneDef (`name`, `entries`) | `scene name { … }` |
-| `launch` | `{ "target": "verse" }` | `verse.start` |
-| `stop` / `mute` / `unmute` / `solo` | `{ "target": "bass" }` | `bass.stop` / `.mute` / … |
+| `scene.define` | a SceneDef (`name`, `clips`: a list of clip names) | `scene name { … }` |
+| `launch` | `{ "target": "verse" }`: a scene, a clip or an arrangement | `verse.start` |
+| `stop` / `mute` / `unmute` / `solo` | `{ "target": "bass" }`: a clip, or a scene for all its clips | `bass.stop` / `.mute` / … |
 | `unsolo` | optional `target` | `bass.unsolo` or `unsolo` |
 | `edit` | `{ "clip": "bass", "change": "reverse" }` | `bass.reverse` (`undo`, `clear`, `undo(reverse)` also work) |
 
@@ -185,13 +185,13 @@ The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%
 → {"jsonrpc":"2.0","id":2,"method":"subscribe","params":{"topics":["landed","pending","transport"]}}
 ← {"jsonrpc":"2.0","id":2,"result":{"topics":["landed","pending","transport"]}}
 
-→ {"jsonrpc":"2.0","id":3,"method":"eval","params":{"source":"tempo 120bpm\ninstr x(freq: hz) { osc(sine, freq) }\nclip t { instrument: x }","quantize":"now"}}
+→ {"jsonrpc":"2.0","id":3,"method":"eval","params":{"source":"tempo 120bpm\ninstr x(freq: hz) { osc(sine, freq) }\nclip t { instrument: x, notes: [c4 e4 g4] }\nt.start","quantize":"now"}}
 ← {"jsonrpc":"2.0","id":3,"result":{"id":1,"lands_at":0,...}}
 
-→ {"jsonrpc":"2.0","id":4,"method":"eval","params":{"source":"t.play([c4 e4 g4])","quantize":"next bar"}}
+→ {"jsonrpc":"2.0","id":4,"method":"eval","params":{"source":"t.transpose(+12st)","quantize":"next bar"}}
 ← {"jsonrpc":"2.0","id":4,"result":{"id":2,"lands_at":96000,"position":{"bar":2,"beat":1.0},...}}
 
-← {"jsonrpc":"2.0","method":"landed","params":{"id":2,"at":96000,"changes":["t.play([c4 e4 g4])"],...}}
+← {"jsonrpc":"2.0","method":"landed","params":{"id":2,"at":96000,"changes":["t.transpose(+12st)"],...}}
 ```
 
 See also [Command line](/reference/cli/) (`send`, `repl`), [Editor and LSP](/reference/editor/), and [Live coding](/guide/live-coding/).

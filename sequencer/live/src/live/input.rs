@@ -406,6 +406,7 @@ impl Live {
         self.history.push(HistoryEntry {
             at,
             action: NamedAction::Panic,
+            arrangement: None,
         });
         self.playing.clear();
         self.rebuild_schedule(self.clock);

@@ -134,7 +134,11 @@ A lane such as `gain: [..]` is read where each note starts. These operations ins
 `sine`, `saw`, `tri`, `square`, `rand` and `perlin` are patterns with no events of their own: they have a value at every moment, from 0 to 1. Scale them with `range`, and use them as a clip lane (the value at each note's start) or cut them into steps with `to_steps`:
 
 ```nml
-lead.play([c3 e3 g3 b3].set(bright: sine.range(0.2, 0.9)))
+clip lead {
+  instrument: pluck
+  notes: [c3 e3 g3 b3]
+  bright: sine.range(0.2, 0.9)
+}
 cutoffs = saw.range(300hz, 3khz).to_steps(8)
 ```
 

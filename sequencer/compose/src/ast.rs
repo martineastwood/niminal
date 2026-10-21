@@ -87,10 +87,12 @@ pub struct TempoStmt {
     pub span: Span,
 }
 
-/// `clip name { key: value ... }` or `scene name { node: clip ... }`
+/// `clip name { key: value ... }`, `clip name = other.transpose(+5st)` or `scene name { clip, clip ... }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct NamedBlock {
     pub name: Ident,
+    /// `clip bass_chorus = bass.transpose(+5st)`: the clip it is made from, with its instrument and lanes.
+    pub base: Option<Box<Expr>>,
     pub entries: Vec<(Ident, Expr)>,
     /// `quantize: 1bar` in the block.
     pub options: Vec<Arg>,
@@ -112,7 +114,9 @@ pub enum AtPos {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    Play {
+    /// What a live change to a clip compiles to: `bass.__update(bass.reverse)` changes the clip that is running,
+    /// keeping its place in the loop. Not something to write; there is no `play`.
+    Update {
         node: Ident,
         what: Expr,
     },
@@ -133,15 +137,13 @@ pub enum Command {
         length: Expr,
         name: Ident,
     },
-    /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its node.
-    /// `verb` is the `start`. Optional `then fill after 4bars` queues another launch later.
+    /// `verse.start` or `bass.start`: start the clips of a scene, or the clip of that name.
+    /// `verb` is the `start`.
     Start {
         name: Ident,
         verb: Span,
-        /// `(next, after)` from `then next after 4bars`.
-        then: Option<(Ident, Expr)>,
     },
-    /// `bass.reverse`: change what a part is playing. `change` is `reverse`, in the source.
+    /// `bass.reverse`: change what a clip is playing. `change` is `reverse`, in the source.
     Edit {
         node: Ident,
         change: Span,
@@ -192,6 +194,8 @@ pub struct MidiOutDecl {
 pub struct ArrangementDecl {
     pub name: Ident,
     pub sections: Vec<SectionRef>,
+    /// `at +4bars chorus.start`: commands placed from the start of the arrangement.
+    pub commands: Vec<CommandStmt>,
     /// `tempo: [84bpm 96bpm]`: the tempo of each section, if it has its own.
     pub tempos: Option<Vec<Expr>>,
     /// `tempo: env[84bpm 64bars 96bpm]`: the tempo over the whole piece, in bars of music.
@@ -496,6 +500,22 @@ pub enum ExprKind {
 }
 
 impl Expr {
+    /// The name a chain of changes starts from: `bass` in `bass.transpose(+5st).reverse`.
+    pub fn root_name(&self) -> Option<&str> {
+        match &self.kind {
+            ExprKind::Name(n) => Some(n),
+            ExprKind::Call { args, .. } => match args.first() {
+                Some(Arg {
+                    receiver: true,
+                    value,
+                    ..
+                }) => value.root_name(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Call `f` on each expression directly inside this one, including those in nested blocks.
     pub fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Expr)) {
         let block = |stmts: &mut Vec<Stmt>, f: &mut dyn FnMut(&mut Expr)| {
@@ -555,6 +575,9 @@ impl Expr {
             }
             ExprKind::Lambda { body, .. } => block(body, f),
             ExprKind::ClipBlock(b) | ExprKind::SceneBlock(b) => {
+                if let Some(base) = &mut b.base {
+                    f(base.as_mut());
+                }
                 for (_, e) in &mut b.entries {
                     f(e);
                 }
@@ -624,6 +647,9 @@ impl Expr {
             }
             ExprKind::Lambda { body, .. } => block(body, f),
             ExprKind::ClipBlock(b) | ExprKind::SceneBlock(b) => {
+                if let Some(base) = &b.base {
+                    f(base.as_ref());
+                }
                 for (_, e) in &b.entries {
                     f(e);
                 }

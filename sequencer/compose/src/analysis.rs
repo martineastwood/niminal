@@ -60,6 +60,10 @@ pub enum StatementData {
         has_at: bool,
         /// `new`: a live session forgets what it was sent before this statement.
         clears: bool,
+        /// The clip or scene the command is about: `bass` in `bass.reverse`, `verse` in `verse.start`.
+        target: Option<String>,
+        /// `verse.start`, `bass.start`.
+        starts: bool,
         /// Before join_edit: Play / Edit{plays, range} / Plain; after: may become Launch.
         action: CommandAction,
     },
@@ -71,12 +75,13 @@ pub enum StatementData {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandAction {
     Plain,
+    /// A live change that has been put into the form that compiles (`bass.__update(...)`).
     Play(PlayInfo),
+    /// `bass.reverse`: a change to what a running clip plays, before it is put into that form.
     Edit {
         plays: PlayInfo,
         range: std::ops::Range<usize>,
     },
-    Launch(String),
 }
 
 impl Statement {
@@ -93,6 +98,11 @@ impl Statement {
             StatementData::Command { has_at, .. } | StatementData::Note { has_at } => has_at,
             StatementData::Definition { .. } => false,
         }
+    }
+
+    /// Is this a `start`?
+    pub fn starts(&self) -> bool {
+        matches!(self.data, StatementData::Command { starts: true, .. })
     }
 
     pub fn clears(&self) -> bool {
@@ -123,22 +133,25 @@ impl Statement {
         }
     }
 
+    /// The clip or scene this statement is about: what a command acts on, or the clip a definition makes.
+    pub fn target(&self) -> Option<&str> {
+        match &self.data {
+            StatementData::Command { target, .. } => target.as_deref(),
+            StatementData::Definition {
+                key,
+                binding: Some(b),
+                ..
+            } if key.starts_with("clip:") => Some(b),
+            _ => None,
+        }
+    }
+
     pub fn plays(&self) -> Option<&PlayInfo> {
         match &self.data {
             StatementData::Command {
                 action: CommandAction::Play(p) | CommandAction::Edit { plays: p, .. },
                 ..
             } => Some(p),
-            _ => None,
-        }
-    }
-
-    pub fn launch(&self) -> Option<&str> {
-        match &self.data {
-            StatementData::Command {
-                action: CommandAction::Launch(name),
-                ..
-            } => Some(name),
             _ => None,
         }
     }
@@ -230,7 +243,8 @@ fn command_write_key(c: &CommandStmt) -> Option<String> {
         return None;
     }
     match &c.command {
-        Command::Play { node, .. } | Command::Stop(node) => Some(format!("play:{}", node.name)),
+        Command::Update { node, .. } => Some(format!("play:{}", node.name)),
+        Command::Start { name, .. } | Command::Stop(name) => Some(format!("run:{}", name.name)),
         Command::Mute(node) | Command::Unmute(node) => Some(format!("mute:{}", node.name)),
         Command::Solo(_) | Command::Unsolo(_) => Some("solo".into()),
         Command::Hush
@@ -238,20 +252,28 @@ fn command_write_key(c: &CommandStmt) -> Option<String> {
         | Command::Reset
         | Command::New
         | Command::Capture { .. }
-        | Command::Edit { .. }
-        | Command::Start { .. } => None,
+        | Command::Edit { .. } => None,
+    }
+}
+
+fn command_target(c: &CommandStmt) -> Option<String> {
+    match &c.command {
+        Command::Update { node, .. } | Command::Edit { node, .. } => Some(node.name.clone()),
+        Command::Start { name, .. } => Some(name.name.clone()),
+        Command::Stop(t) | Command::Mute(t) | Command::Unmute(t) | Command::Solo(t) => {
+            Some(t.name.clone())
+        }
+        Command::Unsolo(t) => t.as_ref().map(|t| t.name.clone()),
+        Command::Hush
+        | Command::Panic
+        | Command::Reset
+        | Command::New
+        | Command::Capture { .. } => None,
     }
 }
 
 fn command_action(c: &CommandStmt, source: &str, span_start: usize) -> CommandAction {
     match &c.command {
-        Command::Start { name, verb, .. } => CommandAction::Edit {
-            plays: PlayInfo {
-                node: name.name.clone(),
-                what: "start".into(),
-            },
-            range: name.span.start - span_start..verb.end - span_start,
-        },
         Command::Edit { node, change } => CommandAction::Edit {
             plays: PlayInfo {
                 node: node.name.clone(),
@@ -259,7 +281,7 @@ fn command_action(c: &CommandStmt, source: &str, span_start: usize) -> CommandAc
             },
             range: node.span.start - span_start..change.end - span_start,
         },
-        Command::Play { node, what } => CommandAction::Play(PlayInfo {
+        Command::Update { node, what } => CommandAction::Play(PlayInfo {
             node: node.name.clone(),
             what: source[what.span.start..what.span.end].to_string(),
         }),
@@ -267,8 +289,8 @@ fn command_action(c: &CommandStmt, source: &str, span_start: usize) -> CommandAc
     }
 }
 
-/// What each part plays in the scene defined by `source`, as written: `None` for `~`.
-pub fn scene_entries(source: &str) -> Vec<(String, Option<String>)> {
+/// The clips of the scene defined by `source`, in the order it lists them.
+pub fn scene_clips(source: &str) -> Vec<String> {
     let Ok(items) = parse_spanned(source) else {
         return Vec::new();
     };
@@ -279,11 +301,7 @@ pub fn scene_entries(source: &str) -> Vec<(String, Option<String>)> {
                 block
                     .entries
                     .iter()
-                    .map(|(node, e)| {
-                        let what = (!matches!(e.kind, ExprKind::Rest))
-                            .then(|| source[e.span.start..e.span.end].to_string());
-                        (node.name.clone(), what)
-                    })
+                    .map(|(clip, _)| clip.name.clone())
                     .collect(),
             ),
             _ => None,
@@ -413,6 +431,8 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                 data: StatementData::Command {
                     has_at: matches!(c.at, Some(AtPos::Time(_) | AtPos::Bar { .. })),
                     clears: matches!(c.command, Command::New),
+                    target: command_target(c),
+                    starts: matches!(c.command, Command::Start { .. }),
                     action: command_action(c, source, span.start),
                 },
             },
@@ -437,7 +457,7 @@ mod tests {
 
     #[test]
     fn statements_are_classified_with_their_source() {
-        let src = "\ntempo 120bpm @ next bar\ninstr a(f: hz) { osc(sine, f) }\nriff = [c4 e4]\nclip c { notes: [c4] }\nlead.play(riff.fast(2)) @ next 4bars\nlead.mute\na(f: 440hz) for 1beat\n";
+        let src = "\ntempo 120bpm @ next bar\ninstr a(f: hz) { osc(sine, f) }\nriff = [c4 e4]\nclip c { notes: [c4] }\nlead.__update(riff.fast(2)) @ next 4bars\nlead.mute\na(f: 440hz) for 1beat\n";
         let s = analyze(src).unwrap();
         assert_eq!(s.len(), 7);
         assert_eq!(s[0].key(), Some("tempo"));

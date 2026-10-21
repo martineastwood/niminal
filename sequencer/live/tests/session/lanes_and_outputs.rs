@@ -3,21 +3,21 @@ use crate::common::*;
 #[test]
 fn new_forgets_the_old_piece_so_another_can_start() {
     let mut s = ready();
-    s.eval("lead.play([c4 e4])", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4])", Some("now")).unwrap();
     run(&mut s, 4_800);
     s.eval("new", Some("now")).unwrap();
     let silent = run(&mut s, BAR);
     assert!(peak(&silent) < 1e-6, "everything stopped");
     assert!(
-        s.parts()
+        s.clips()
             .iter()
             .all(|t| t.name != "lead" && t.name != "bass"),
         "the old nodes are gone"
     );
-    s.eval("instr pluck(freq: hz) { osc(saw, freq) }\nclip drone { instrument: pluck }\ndrone.play([a2])", Some("now")).unwrap();
+    s.eval("instr pluck(freq: hz) { osc(saw, freq) }\nclip drone { instrument: pluck }\ndrone.__update([a2])", Some("now")).unwrap();
     assert!(peak(&run(&mut s, BAR)) > 1e-3, "the new piece plays");
     assert_eq!(
-        s.parts()
+        s.clips()
             .iter()
             .map(|t| t.name.as_str())
             .collect::<Vec<_>>(),
@@ -28,10 +28,10 @@ fn new_forgets_the_old_piece_so_another_can_start() {
 #[test]
 fn new_and_the_next_piece_can_arrive_together() {
     let mut s = ready();
-    s.eval("new\ninstr pluck(freq: hz) { osc(saw, freq) }\nclip drone { instrument: pluck }\ndrone.play([a2])", Some("now")).unwrap();
+    s.eval("new\ninstr pluck(freq: hz) { osc(saw, freq) }\nclip drone { instrument: pluck }\ndrone.__update([a2])", Some("now")).unwrap();
     assert!(peak(&run(&mut s, BAR)) > 1e-3);
     assert_eq!(
-        s.parts()
+        s.clips()
             .iter()
             .map(|t| t.name.as_str())
             .collect::<Vec<_>>(),
@@ -44,7 +44,7 @@ fn an_envelope_lane_moves_a_node_parameter_as_the_clip_plays() {
     let mut s = session();
     s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }", Some("now")).unwrap();
     s.eval(
-        "clip c { notes: [c5]\npad_fx.cut: env[300hz 1bar 1300hz] }\npad.play(c)",
+        "clip c { notes: [c5]\npad_fx.cut: env[300hz 1bar 1300hz] }\npad.__update(c)",
         Some("now"),
     )
     .unwrap();
@@ -72,7 +72,7 @@ fn a_signal_lane_moves_a_node_parameter_continuously_even_without_notes() {
     let mut s = session();
     s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }", Some("now")).unwrap();
     s.eval(
-        "clip c { pad_fx.cut: saw.range(300hz, 1300hz) }\npad.play(c)",
+        "clip c { pad_fx.cut: saw.range(300hz, 1300hz) }\npad.__update(c)",
         Some("now"),
     )
     .unwrap();
@@ -104,8 +104,8 @@ fn a_signal_lane_moves_a_node_parameter_continuously_even_without_notes() {
 #[test]
 fn set_can_give_a_part_a_node_parameter_lane_and_a_signal() {
     let mut s = session();
-    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }", Some("now")).unwrap();
-    s.eval("pad.play([c5])", Some("now")).unwrap();
+    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice\n notes: [c5] }", Some("now")).unwrap();
+    s.eval("pad.start", Some("now")).unwrap();
     let cut = |s: &Offline| {
         s.control_values()
             .into_iter()
@@ -304,7 +304,7 @@ mod quantize_settings {
         .unwrap();
         run(&mut s, 10_000);
         // starting a clip now waits for the next beat (24000 samples), not the next bar
-        let play = s.eval("lead.play([c4])", None).unwrap();
+        let play = s.eval("lead.__update([c4])", None).unwrap();
         assert_eq!(play.lands_at, 24_000);
         let clip = s.eval("clip second { instrument: pluck }", None).unwrap();
         assert_eq!(clip.lands_at, 24_000);
@@ -381,7 +381,7 @@ fn an_osc_out_tap_holds_the_latest_value_of_its_signal_while_audio_runs() {
     run(&mut s, 2_000);
     assert_eq!(knob.value.read(), 0.25, "a control's value, as it is");
     assert_eq!(lead.value.read(), 0.0, "silence until a note");
-    s.eval("lead.play([a4])", Some("now")).unwrap();
+    s.eval("lead.__update([a4])", Some("now")).unwrap();
     let mut seen = 0.0f32;
     for _ in 0..40 {
         run(&mut s, 128);
@@ -419,7 +419,7 @@ fn a_midi_out_instrument_sends_notes_with_their_times_and_stays_silent() {
         Some("now"),
     )
     .unwrap();
-    s.eval("lead.play([c4 e4 ~ g4])", Some("now")).unwrap();
+    s.eval("lead.__update([c4 e4 ~ g4])", Some("now")).unwrap();
     let out = run(&mut s, BAR);
     assert!(peak(&out) == 0.0, "the sound is outside");
     let events = s.take_midi();
@@ -454,7 +454,7 @@ fn a_midi_out_instrument_sends_notes_with_their_times_and_stays_silent() {
 #[test]
 fn panic_and_hush_end_midi_notes_that_are_sounding() {
     let mut s = session();
-    s.eval("tempo 120bpm\nmidi_out synth(port: \"IAC\")\nclip lead { instrument: synth }\nlead.play([c4])", Some("now")).unwrap();
+    s.eval("tempo 120bpm\nmidi_out synth(port: \"IAC\")\nclip lead { instrument: synth }\nlead.__update([c4])", Some("now")).unwrap();
     run(&mut s, 1_000);
     assert_eq!(s.take_midi().len(), 1);
     s.eval("panic", Some("now")).unwrap();

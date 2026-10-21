@@ -83,22 +83,22 @@ fn a_client_evaluates_code_and_is_told_when_it_lands() {
         .unwrap();
 
     let reply = c
-        .call("eval", json!({"source": "lead.play([c4])"}))
+        .call("eval", json!({"source": "lead.__update([c4])"}))
         .unwrap();
     assert!(reply["lands_at"].as_u64().is_some());
-    assert_eq!(reply["changes"][0], "lead.play([c4])");
+    assert_eq!(reply["changes"][0], "lead.__update([c4])");
 
     // it waits for its boundary, and the server says so
     let landed = c.wait_for("landed", WAIT).unwrap();
     assert!(
         landed["changes"].to_string().contains("tempo 120bpm")
-            || landed["changes"].to_string().contains("lead.play")
+            || landed["changes"].to_string().contains("lead.__update")
     );
-    let mut saw_play = landed["changes"].to_string().contains("lead.play");
+    let mut saw_play = landed["changes"].to_string().contains("lead.__update");
     while !saw_play {
         saw_play = c.wait_for("landed", WAIT).unwrap()["changes"]
             .to_string()
-            .contains("lead.play");
+            .contains("lead.__update");
     }
     r.server.stop();
 }
@@ -110,7 +110,7 @@ fn code_that_does_not_compile_is_refused_with_its_problems() {
     c.call("eval", json!({"source": SETUP, "quantize": "now"}))
         .unwrap();
     let refusal = c
-        .call_raw("eval", json!({"source": "lead.play([c4)\n"}))
+        .call_raw("eval", json!({"source": "lead.__update([c4)\n"}))
         .unwrap()
         .unwrap_err();
     assert_eq!(refusal["code"], -32001);
@@ -156,7 +156,7 @@ fn clients_share_one_session() {
     // `b` builds on what `a` defined
     b.call(
         "eval",
-        json!({"source": "lead.play([c4])", "quantize": "now"}),
+        json!({"source": "lead.__update([c4])", "quantize": "now"}),
     )
     .unwrap();
     let started = std::time::Instant::now();

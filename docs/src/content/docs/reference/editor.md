@@ -57,7 +57,7 @@ Open a `.nml` file. The first evaluation starts a private `nimlive live --port 0
 | Cmd+. / Ctrl+. | Hush: stop every clip, letting what's sounding ring out |
 | Cmd+1..9 | Launch the Nth scene from the sidebar (while a `.nml` file has focus) |
 
-The **niminal** sidebar lists scenes and nodes (mute, solo, stop) and the file's scenes launch with Cmd/Ctrl+1..9. Compile errors show as squiggles at the right place and in the **niminal** output channel; the status bar shows bar, beat, tempo, voices and pending changes, and clicking it hushes. **niminal: Connect to Server** and **niminal: Panic** are in the command palette. Evaluating starts the window's live sequencer; if the server isn't answering, the extension offers to start it in a terminal.
+The **niminal** sidebar lists scenes and clips. A scene shows how many of its clips are playing, and starts, mutes, solos and stops them as a group; a clip shows what has been done to it and can be muted, soloed and stopped. The file's scenes launch with Cmd/Ctrl+1..9. The status bar flags a soloed or muted clip (`SOLO bass · 2 muted`), since either silences something that is playing. Compile errors show as squiggles at the right place and in the **niminal** output channel; the status bar shows bar, beat, tempo, voices and pending changes, and clicking it hushes. **niminal: Connect to Server** and **niminal: Panic** are in the command palette. Evaluating starts the window's live sequencer; if the server isn't answering, the extension offers to start it in a terminal.
 
 ### Settings
 

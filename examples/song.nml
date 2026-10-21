@@ -1,4 +1,5 @@
-// A finished piece: scenes in order, each for a length.
+// A finished piece: scenes in order, each for a length. Each section stops the clips the one before it had going
+// that it does not use, and starts its own.
 // Render with:  niminal render examples/song.nml song --out song.wav
 // ...or just a passage:  niminal render examples/song.nml song --from "bar 5" --to "bar 9" --out passage.wav
 config { channels: stereo }
@@ -14,19 +15,20 @@ instr pluck(freq: hz, bright: 0..1 = 0.5) {
 }
 
 fx hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
-clip beat { instrument: drums }
-clip hats { instrument: drums(gain: -8db) }
-clip bass { instrument: pluck(bright: 0.2) }
-clip lead { instrument: pluck(bright: 0.7) }
-
 bassline = [c2 ~ c2 eb2 ~ g1 bb1 ~]
 groove   = [kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare]
 tune     = [c4 e4 g4 b4].every(2, it.reverse)
 
-scene intro  { bass: bassline }
-scene verse  { bass: bassline, beat: groove, hats: [hat hat hat hat hat hat hat hat] }
-scene chorus { bass: bassline.transpose(+5st), beat: groove, hats: [hat hat hat hat hat hat hat hat], lead: tune }
-scene outro  { bass: bassline }
+clip beat { instrument: drums, notes: groove }
+clip hats { instrument: drums(gain: -8db), notes: [hat hat hat hat hat hat hat hat] }
+clip bass { instrument: pluck(bright: 0.2), notes: bassline }
+clip bass_chorus = bass.transpose(+5st)
+clip lead { instrument: pluck(bright: 0.7), notes: tune }
+
+scene intro  { bass }
+scene verse  { bass, beat, hats }
+scene chorus { bass_chorus, beat, hats, lead }
+scene outro  { bass }
 
 arrangement song {
   sections: [intro.over(2bars) verse.over(4bars) chorus.over(4bars) verse.over(4bars) outro.over(2bars)]

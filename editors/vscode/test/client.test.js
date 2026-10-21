@@ -34,7 +34,8 @@ async function withServer(run) {
 
 const setup = `tempo 100bpm
 instr tone(freq: hz) { osc(sine, freq) }
-clip t { instrument: tone }`;
+clip t { instrument: tone
+  notes: [c4] }`;
 
 test("evaluates code, reports problems with positions, and hears transport", async () => {
   await withServer(async (port) => {
@@ -46,9 +47,9 @@ test("evaluates code, reports problems with positions, and hears transport", asy
     const ok = await client.eval(setup, { quantize: "now" });
     assert.ok(ok.id !== undefined);
 
-    await assert.rejects(client.eval("t.play([c4 zz])"), (e) => {
-      assert.strictEqual(e.problems[0].line, 1);
-      assert.strictEqual(e.problems[0].column, 12);
+    await assert.rejects(client.eval("clip bad { instrument: tone\n  notes: [c4 zz] }"), (e) => {
+      assert.strictEqual(e.problems[0].line, 2);
+      assert.strictEqual(e.problems[0].column, 14);
       assert.match(e.message, /zz/);
       return true;
     });
@@ -66,8 +67,7 @@ test("typed launch and mute go through the performance API", async () => {
     await client.connect();
     await client.eval(
       `${setup}
-clip riff { notes: [c4] }
-scene verse { t: riff }
+scene verse { t }
 `,
       { quantize: "now" },
     );
@@ -104,8 +104,8 @@ test("server stays generic while two editor sequencers keep separate scenes", as
       clients.push(client);
       await client.connect();
     }
-    await clients[0].eval(`${setup}\nclip riff { notes: [c4] }\nscene verse { t: riff }`, { quantize: "now" });
-    assert.deepEqual((await clients[0].status()).scenes, ["verse"]);
+    await clients[0].eval(`${setup}\nscene verse { t }`, { quantize: "now" });
+    assert.deepEqual((await clients[0].status()).scenes.map((s) => s.name), ["verse"]);
     assert.deepEqual((await clients[1].status()).scenes, []);
     assert.ok((await engine.clock()).sample >= 0);
   } finally {

@@ -12,7 +12,7 @@ lsp_tour.nml: 2x369682
 midi_osc.nml: 2x369169
 room.nml: 1x222063
 saw_lead.nml: 1x158399
-score_prog.nml: 1x360240
+score_prog.nml: 1x384240
 song.nml: 2x583731
 stereo.nml: 2x280705
 synth_drums.nml: 2x356382

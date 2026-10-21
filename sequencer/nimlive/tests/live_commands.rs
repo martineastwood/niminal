@@ -153,7 +153,7 @@ fn send_evaluates_code_in_a_running_server() {
     assert_eq!(stdout(&applied).trim(), "applied");
 
     std::thread::sleep(Duration::from_millis(100));
-    let waiting = d.send("lead.play([c4])", None);
+    let waiting = d.send("lead.__update([c4])", None);
     assert!(waiting.status.success());
     assert!(
         stdout(&waiting).starts_with("lands at bar 2 beat 1.00"),
@@ -169,12 +169,15 @@ fn send_evaluates_code_in_a_running_server() {
 fn send_shows_what_is_wrong_with_the_code_sent() {
     let d = Server::start(&[]);
     d.send(SETUP, Some("now"));
-    let bad = d.send("riff = [c4]\nlead.play(riif)", None);
+    let bad = d.send(
+        "riff = [c4]\nclip lead { instrument: pluck\n notes: riif }",
+        None,
+    );
     assert!(!bad.status.success());
     let text = stderr(&bad);
     assert!(text.contains("error: `riif` is not defined"), "{text}");
-    assert!(text.contains("--> <code>:2:11"), "{text}");
-    assert!(text.contains("lead.play(riif)"), "{text}");
+    assert!(text.contains("--> <code>:3:9"), "{text}");
+    assert!(text.contains("notes: riif }"), "{text}");
     assert!(
         text.contains("help: did you mean `riff`?") || !text.contains("help"),
         "{text}"
@@ -237,7 +240,11 @@ fn sending_to_nothing_says_so() {
 fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
     let dir = scratch("watch");
     let project = dir.join("set.nml");
-    std::fs::write(&project, format!("{SETUP}\nriff = [c4]\nlead.play(riff)\n")).unwrap();
+    std::fs::write(
+        &project,
+        format!("{SETUP}\nriff = [c4]\nlead.__update(riff)\n"),
+    )
+    .unwrap();
     let d = Server::start(&[project.to_str().unwrap()]);
 
     let mut c = Client::connect(d.port, None).unwrap();
@@ -259,12 +266,16 @@ fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
 
     // saving it again evaluates it again; the change waits for a boundary and lands
     std::thread::sleep(Duration::from_millis(1100)); // so the modification time differs
-    std::fs::write(&project, format!("{SETUP}\nriff = [e4]\nlead.play(riff)\n")).unwrap();
+    std::fs::write(
+        &project,
+        format!("{SETUP}\nriff = [e4]\nlead.__update(riff)\n"),
+    )
+    .unwrap();
     let landed = c.wait_for("landed", Duration::from_secs(8)).unwrap();
     assert!(landed["changes"].to_string().contains("riff"), "{landed}");
 
     // a mistake in the file is reported and changes nothing
-    std::fs::write(&project, format!("{SETUP}\nlead.play(nothing_here)\n")).unwrap();
+    std::fs::write(&project, format!("{SETUP}\nlead.__update(nothing_here)\n")).unwrap();
     std::thread::sleep(Duration::from_millis(800));
     assert!(
         c.call("status", serde_json::json!({})).unwrap()["pending"]
@@ -291,7 +302,7 @@ fn repl_runs_multiline_blocks_and_reports_errors_without_stopping() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let input = "tempo 100bpm\ninstr tone(freq: hz) {\n  osc(sine, freq)\n}\nclip t { instrument: tone }\nt.play([c4 zz])\nt.play([c4])\n";
+    let input = "tempo 100bpm\ninstr tone(freq: hz) {\n  osc(sine, freq)\n}\nclip t { instrument: tone }\nt.__update([c4 zz])\nt.__update([c4])\n";
     repl.stdin
         .take()
         .unwrap()

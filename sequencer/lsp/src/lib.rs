@@ -415,27 +415,36 @@ fn diagnostics(
     };
     let expanded = match expanded {
         Ok(e) => e,
-        Err(d) => return vec![diagnostic(text, &d)],
+        Err(d) => return vec![diagnostic(text, &d, 1)],
     };
     // a compiler bug must not take the editor's language support down with it
     let result = std::panic::catch_unwind(|| compile_with(&expanded.text, &options));
     let errors = match result {
-        Ok(Ok(_)) => return Vec::new(),
+        Ok(Ok(_)) => Vec::new(),
         Ok(Err(errors)) => errors
             .into_iter()
             .map(|d| expanded.locate(d))
             .collect::<Vec<_>>(),
         Err(_) => return Vec::new(),
     };
-    errors.iter().map(|d| diagnostic(text, d)).collect()
+    // a warning in a module is the module's to show, not this file's
+    let warnings = niminal_compose::warnings(&expanded.text)
+        .into_iter()
+        .filter(|d| d.span.end <= expanded.root_len)
+        .map(|d| expanded.locate(d));
+    errors
+        .iter()
+        .map(|d| diagnostic(text, d, 1))
+        .chain(warnings.map(|d| diagnostic(text, &d, 2)))
+        .collect()
 }
 
-fn diagnostic(text: &str, d: &niminal_lang::Diagnostic) -> Value {
+fn diagnostic(text: &str, d: &niminal_lang::Diagnostic, severity: u8) -> Value {
     let message = match &d.help {
         Some(help) => format!("{}\nhelp: {help}", d.message),
         None => d.message.clone(),
     };
-    json!({ "range": text::range(text, d.span.start, d.span.end), "severity": 1, "source": "niminal", "message": message })
+    json!({ "range": text::range(text, d.span.start, d.span.end), "severity": severity, "source": "niminal", "message": message })
 }
 
 /// Serve LSP over `reader` and `writer` until the editor says `exit` or hangs up.
@@ -571,6 +580,32 @@ mod tests {
     }
 
     #[test]
+    fn a_clip_with_no_instrument_gets_a_warning_not_an_error() {
+        let mut server = Server::new();
+        let out = open(
+            &mut server,
+            "instr tone(freq: hz) { osc(sine, freq) }\nclip quiet { notes: [c4] }\nclip loud { instrument: tone }\nclip louder = loud.transpose(+12st)\nclip fainter = quiet.reverse\n",
+        );
+        let found = out[0]["params"]["diagnostics"].as_array().unwrap();
+        let named: Vec<_> = found
+            .iter()
+            .map(|d| {
+                (
+                    d["severity"].as_u64().unwrap(),
+                    d["message"].as_str().unwrap().lines().next().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                (2, "clip `quiet` has no instrument, so it plays nothing"),
+                (2, "clip `fainter` has no instrument, so it plays nothing"),
+            ]
+        );
+    }
+
+    #[test]
     fn hover_shows_signatures_and_doc_comments() {
         let mut server = Server::new();
         open(&mut server, SOURCE);
@@ -635,7 +670,7 @@ mod tests {
         );
     }
 
-    const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\nclip lead { instrument: tone }\nlead.play([c4])\nlead.start\n";
+    const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\nclip lead { instrument: tone }\nlead.mute\nlead.start\n";
 
     #[test]
     fn rename_changes_every_use_of_a_name_and_refuses_bad_names() {
@@ -653,7 +688,7 @@ mod tests {
             json!({ "textDocument": { "uri": URI }, "position": { "line": 1, "character": 7 }, "newName": "pad" }),
         );
         let edits = edit["changes"][URI].as_array().unwrap();
-        // the node's name, `lead.play`, `lead.start`; `lead` isn't touched inside `tone`
+        // the clip's name, `lead.mute`, `lead.start`; `lead` isn't touched inside `tone`
         assert_eq!(edits.len(), 3, "{edit}");
         assert!(edits.iter().all(|e| e["newText"] == "pad"));
         assert_eq!(

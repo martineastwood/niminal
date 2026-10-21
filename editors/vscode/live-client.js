@@ -21,8 +21,8 @@ class LiveClient extends Client {
     return this.call("scene.define", withQuantize(scene, quantize));
   }
 
-  launch(target, { quantize, then } = {}) {
-    return this.call("launch", withQuantize({ target, ...(then ? { then } : {}) }, quantize)); // then: { target, after: "4bars" }
+  launch(target, { quantize } = {}) {
+    return this.call("launch", withQuantize({ target }, quantize));
   }
 
   stop(target, { quantize } = {}) {

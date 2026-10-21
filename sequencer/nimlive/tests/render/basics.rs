@@ -197,6 +197,29 @@ fn an_arrangement_plays_its_scenes_in_order_and_then_stops() {
 }
 
 #[test]
+fn an_arrangement_can_be_lines_placed_from_its_start() {
+    let src = format!(
+        "{SONG}arrangement lines {{\n  at +0bars one.start\n  at +1bar one.stop\n  at +1bar two.start\n  at +2bars two.stop\n}}"
+    );
+    let p = program(&src);
+    let out = mono(render_with(&p, &[], &arrangement("lines")).unwrap());
+    let freq_in = |from: f64, to: f64| {
+        let x = &out[(from * SR) as usize..(to * SR) as usize];
+        x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (to - from)
+    };
+    assert!(
+        (freq_in(0.2, 1.9) - 261.6).abs() < 6.0,
+        "one plays c4 for a bar"
+    );
+    assert!(freq_in(2.2, 3.9) > 280.0, "then two plays e4 and g4");
+    assert!(
+        (out.len() as f64 / SR) < 4.5,
+        "and it ends at its last line: {}",
+        out.len() as f64 / SR
+    );
+}
+
+#[test]
 fn sections_can_have_their_own_tempo_and_meter() {
     let song = |lanes: &str| {
         format!(
@@ -253,7 +276,7 @@ fn an_arrangement_tempo_can_change_gradually_through_a_section() {
 
 #[test]
 fn render_with_an_arrangement_ignores_the_files_own_timeline() {
-    let src = format!("{SONG}\na.play([c6])");
+    let src = format!("{SONG}\nclip z {{ instrument: tone, notes: [c6] }}\nz.start");
     let p = program(&src);
     // c6 is 1046hz; the arrangement alone never plays it
     let out = mono(render_with(&p, &[], &arrangement("song")).unwrap());
@@ -274,12 +297,12 @@ fn arrangement_mistakes_are_reported() {
             })
             .unwrap_or_default()
     };
-    let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\nclip a { instrument: t }\nscene one { a: [c4] }\n";
+    let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\nclip a { instrument: t, notes: [c4] }\nscene one { a }\n";
     assert!(
         err(&format!(
             "{base}arrangement s {{ sections: [on.over(1bar)] }}"
         ))
-        .contains("no scene named `on`did you mean `one`?")
+        .contains("no scene or clip named `on`did you mean `one`?")
     );
     assert!(
         err(&format!("{base}arrangement s {{ sections: [one] }}"))
