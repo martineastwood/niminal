@@ -3,19 +3,43 @@ on:
   push:
   pull_request:
 
+# a newer push supersedes the run in flight
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  test:
+  # Clippy and the engine tests are one job per workspace so a failure in one doesn't hide the other.
+  engine:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
       # the audio library needs the ALSA headers on Linux
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      # the sequencer is a client of the audio server above and has its own workspace
+
+  # The sequencer is a client of the audio server above and has its own workspace.
+  sequencer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            sequencer
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo clippy --all-targets -- -D warnings
         working-directory: sequencer
       - run: cargo test
@@ -29,4 +53,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
       - run: cargo build -p niminal-engine --target wasm32-unknown-unknown

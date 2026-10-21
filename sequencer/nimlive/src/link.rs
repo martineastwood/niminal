@@ -8,14 +8,22 @@ use niminal_ws::Client;
 
 pub struct WsLink {
     client: Client,
+    /// What the engine said when this link said hello: its audio format.
+    pub hello: EngineReply,
 }
 
 impl WsLink {
-    /// Connect to the engine listening on `port` of this machine.
+    /// Connect to the engine listening on `port` of this machine, saying hello as `nimlive`.
     pub fn connect(port: u16, token: Option<&str>) -> Result<WsLink, String> {
-        let mut client = Client::connect(port, token)?;
+        let (mut client, reply) = Client::connect_as(port, token, "nimlive")?;
+        let request = EngineRequest::Hello {
+            protocol: niminal_server::PROTOCOL_VERSION,
+            client: None,
+            token: None,
+        };
+        let hello = EngineReply::from_json(&request, &reply)?;
         client.call("subscribe", json!({ "topics": ["notices"] }))?;
-        Ok(WsLink { client })
+        Ok(WsLink { client, hello })
     }
 }
 
@@ -37,11 +45,12 @@ impl EngineLink for WsLink {
                 })
             }
             Ok(Err(error)) => Err(EngineError::from_json(&error)),
-            Err(message) => Err(EngineError {
-                code: -32603,
-                message: format!("the engine can't be reached: {message}"),
-                data: None,
-            }),
+            Err(message) => {
+                // There is no reconnecting: exiting closes our clients' connections so that
+                // an editor notices and starts a fresh sequencer against the restarted engine.
+                eprintln!("the engine can't be reached: {message}");
+                std::process::exit(1);
+            }
         }
     }
 

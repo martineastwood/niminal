@@ -5,7 +5,7 @@ use std::time::Duration;
 use niminal_cli::audio::{NullClock, Shared};
 use niminal_lang::Layout;
 use niminal_live::{Live, LiveServer};
-use niminal_server::{EngineServer, Session};
+use niminal_server::{EngineServer, RealtimeConfig, Session};
 use niminal_ws::worker::Worker;
 use niminal_ws::{Client, Server, ServerConfig, lock};
 use nimlive::input::LiveShared;
@@ -18,12 +18,13 @@ const WAIT: Duration = Duration::from_secs(5);
 
 /// An engine, a sequencer playing through it over a WebSocket, and the servers for both.
 struct Running {
+    // dropped first: a link that finds the engine gone exits the process
+    _ticker: Worker,
     engine: Shared,
     live: LiveShared,
     server: Server,
     engine_server: Server,
     _clock: NullClock,
-    _ticker: Worker,
 }
 
 fn start(token: Option<&str>) -> Running {
@@ -36,7 +37,7 @@ fn start_at(token: Option<&str>, speed: f64, lookahead: f64) -> Running {
         Session::new(48_000.0, Layout::Mono).without_limiter(),
     )));
     // a bar is two seconds of music: at 4x that is half a second
-    let clock = NullClock::start(engine.clone(), speed);
+    let clock = NullClock::start(engine.clone(), speed, RealtimeConfig::default());
     let engine_config = ServerConfig {
         port: 0,
         token: token.map(str::to_string),
@@ -61,12 +62,12 @@ fn start_at(token: Option<&str>, speed: f64, lookahead: f64) -> Running {
         }
     });
     Running {
+        _ticker: ticker,
         engine,
         live,
         server,
         engine_server,
         _clock: clock,
-        _ticker: ticker,
     }
 }
 

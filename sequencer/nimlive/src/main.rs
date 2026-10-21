@@ -346,8 +346,7 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
 }
 
 fn run_live(args: LiveArgs) -> Result<(), String> {
-    use niminal_live::EngineLink;
-    use niminal_server::{EngineReply, EngineRequest};
+    use niminal_server::EngineReply;
     let LiveArgs {
         file,
         port,
@@ -357,19 +356,12 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
         midi,
         osc_port,
     } = args;
-    let mut link = nimlive::link::WsLink::connect(engine_port, token.as_deref())?;
-    let hello = link
-        .request(EngineRequest::Hello {
-            protocol: niminal_server::PROTOCOL_VERSION,
-            client: Some("niminal-live".into()),
-            token: token.clone(),
-        })
-        .map_err(|e| e.message)?;
+    let link = nimlive::link::WsLink::connect(engine_port, token.as_deref())?;
     let EngineReply::Hello {
         sample_rate,
         channels,
         ..
-    } = hello
+    } = link.hello.clone()
     else {
         return Err("the server did not return its audio format".into());
     };

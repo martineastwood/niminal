@@ -8,3 +8,7 @@ members = ["pattern", "compose", "live", "lsp", "nimlive"]
 version = "0.0.1"
 license = "MIT"
 edition = "2024"
+
+# Full debuginfo made target/debug tens of GB; line tables keep backtraces readable.
+[profile.dev]
+debug = "line-tables-only"

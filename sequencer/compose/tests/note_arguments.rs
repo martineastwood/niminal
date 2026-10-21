@@ -1,12 +1,12 @@
 use niminal_compose::compile;
-use niminal_engine::{BLOCK, Buses, Voice};
+use niminal_engine::{Buses, MAX_BLOCK, Voice};
 
 fn render(voice: &mut Voice, frames: usize, block: usize) -> Vec<f32> {
     let mut buses = Buses::new(&[]);
     let mut result = Vec::new();
     for start in (0..frames).step_by(block) {
         let n = block.min(frames - start);
-        let mut out = [[0.0; BLOCK]; 1];
+        let mut out = vec![vec![0.0; MAX_BLOCK]];
         voice.process_blocks(&mut out, n, &mut buses);
         result.extend_from_slice(&out[0][..n]);
     }

@@ -33,7 +33,7 @@ impl InProcess {
             let client = s.connect_local();
             let hello = EngineRequest::Hello {
                 protocol: PROTOCOL_VERSION,
-                client: Some("niminal-live".into()),
+                client: Some("nimlive".into()),
                 token: None,
             };
             s.request(client, hello)

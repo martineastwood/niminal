@@ -20,8 +20,8 @@ mono acid(freq: hz, cutoff: hz = 400hz, envmod: hz = 2khz, res: 0..1 = 0.9, acce
   // an accent opens the filter further and plays louder
   open = cutoff + sweep * envmod * (0.5 + accent * 0.5)
   voice = osc(saw, freq).lpf(cutoff: open, res: res).tanh * amp * (0.55 + accent * 0.45)
-  out = voice.pan(azimuth: 0deg)
-  echo += out.gain(-50db)
+  out = voice.pan(azimuth: 0deg).gain(-10db)
+  echo += out.gain(-6db)
 }
 
 // Two bars of sixteenths: every lane spans the clip's `length`. A `dur` longer than a step overlaps

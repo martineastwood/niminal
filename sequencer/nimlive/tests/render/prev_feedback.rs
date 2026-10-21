@@ -20,7 +20,7 @@ fn a_late_send_makes_a_feedback_loop_one_block_long() {
     .unwrap()
     .channels
     .remove(0);
-    let block = niminal_engine::BLOCK;
+    let block = niminal_engine::DEFAULT_BLOCK;
     let echo = |k: usize| peak(&out[k * block..(k + 1) * block]);
     assert!(echo(0) > 0.2, "the click, at half level");
     for k in 1..5 {

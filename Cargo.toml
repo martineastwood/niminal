@@ -15,3 +15,7 @@ lto = false
 inherits = "release"
 lto = "thin"
 codegen-units = 1
+
+# Full debuginfo made target/debug tens of GB; line tables keep backtraces readable.
+[profile.dev]
+debug = "line-tables-only"

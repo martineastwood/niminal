@@ -1,7 +1,7 @@
 use std::fmt;
 
 use niminal_compose::Composition;
-use niminal_engine::{BLOCK, DEFAULT_CEILING, Master};
+use niminal_engine::{DEFAULT_CEILING, Master, block_size};
 use niminal_lang::Layout;
 use niminal_live::Offline;
 use niminal_score::Event;
@@ -9,7 +9,9 @@ use niminal_score::Event;
 pub const SAMPLE_RATE: u32 = 48_000;
 
 /// How much a session is asked for at a time.
-const STEP: usize = BLOCK * 8;
+fn step() -> usize {
+    block_size() * 8
+}
 
 /// Once nothing is playing, rendering carries on until the output has stayed
 /// quieter than this (-90db) for [`TAIL_SILENCE`] seconds, so echoes and reverb
@@ -146,7 +148,7 @@ pub fn render(
     let mut out = vec![Vec::new(); session.channels()];
     // exactly to `stop`, so that no note starts after it
     while session.clock() < stop {
-        let frames = ((stop - session.clock()) as usize).min(STEP);
+        let frames = ((stop - session.clock()) as usize).min(step());
         run(&mut session, &mut out, frames);
     }
     session.end_schedule();
@@ -165,7 +167,7 @@ fn problems(ps: &[niminal_server::Problem]) -> RenderError {
 /// Play `session` on, adding to `out`, until `done`.
 fn run_until(session: &mut Offline, out: &mut [Vec<f32>], mut done: impl FnMut(&Offline) -> bool) {
     loop {
-        run(session, out, STEP);
+        run(session, out, step());
         if done(session) {
             return;
         }
@@ -180,7 +182,7 @@ fn run(session: &mut Offline, out: &mut [Vec<f32>], frames: usize) {
 
 /// Let what is still sounding ring out, then name the stems and apply the master stage.
 fn collect(mut session: Offline, mut out: Vec<Vec<f32>>, limiter: bool) -> RenderOutput {
-    ring_out(&mut out, |out| run(&mut session, out, STEP));
+    ring_out(&mut out, |out| run(&mut session, out, step()));
     let len = out[0].len();
     let silenced = session.take_silenced();
     let captured = session.take_stems();

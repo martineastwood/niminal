@@ -424,6 +424,15 @@ pub struct Client {
 
 impl Client {
     pub fn connect(port: u16, token: Option<&str>) -> Result<Client, String> {
+        Ok(Client::connect_as(port, token, "niminal-cli")?.0)
+    }
+
+    /// Connect and say hello as `name`, returning the server's reply to the hello too.
+    pub fn connect_as(
+        port: u16,
+        token: Option<&str>,
+        name: &str,
+    ) -> Result<(Client, Value), String> {
         let stream = TcpStream::connect(("127.0.0.1", port))
             .map_err(|e| format!("can't reach the server on port {port}: {e}"))?;
         stream
@@ -436,13 +445,12 @@ impl Client {
             next_id: 1,
             notifications: Vec::new(),
         };
-        let mut params =
-            json!({"protocol": niminal_server::PROTOCOL_VERSION, "client": "niminal-cli"});
+        let mut params = json!({"protocol": niminal_server::PROTOCOL_VERSION, "client": name});
         if let Some(t) = token {
             params["token"] = json!(t);
         }
-        client.call("hello", params)?;
-        Ok(client)
+        let hello = client.call("hello", params)?;
+        Ok((client, hello))
     }
 
     /// Make a request and wait for its reply, setting aside any notifications
