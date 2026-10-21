@@ -1,4 +1,4 @@
-use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx};
+use crate::opcode::{Opcode, Port, ProcessCtx};
 use crate::ops;
 
 macro_rules! op_enum {
@@ -141,7 +141,7 @@ macro_rules! op_enum {
                 &mut self,
                 ctx: &ProcessCtx,
                 inputs: &[&[f32]],
-                outs: &mut [[f32; BLOCK]],
+                outs: &mut [Vec<f32>],
                 frames: usize,
             ) {
                 match self {
@@ -160,9 +160,9 @@ macro_rules! op_enum {
             fn process_slots(
                 &mut self,
                 ctx: &ProcessCtx,
-                slots: &[[f32; BLOCK]],
+                slots: &[Vec<f32>],
                 indices: &[usize],
-                outs: &mut [[f32; BLOCK]],
+                outs: &mut [Vec<f32>],
                 frames: usize,
             ) {
                 match self {

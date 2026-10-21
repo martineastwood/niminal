@@ -553,9 +553,9 @@ impl Opcode for ArrayRead {
     fn process_slots(
         &mut self,
         _ctx: &ProcessCtx,
-        slots: &[[f32; crate::BLOCK]],
+        slots: &[Vec<f32>],
         indices: &[usize],
-        outs: &mut [[f32; crate::BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         for i in 0..frames {

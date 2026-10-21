@@ -1,5 +1,5 @@
 //! Numeric behavior at compiler/runtime boundaries, not only compile success.
-use niminal_engine::{BLOCK, Buses, Voice};
+use niminal_engine::{Buses, Voice, block_size};
 use niminal_lang::{Program, compile};
 
 fn program(source: &str) -> Program {
@@ -23,7 +23,7 @@ fn render(source: &str, frames: usize, block: usize) -> Vec<Vec<f32>> {
     let mut result = vec![Vec::new(); channels];
     for start in (0..frames).step_by(block) {
         let n = block.min(frames - start);
-        let mut out = vec![[0.0; BLOCK]; channels];
+        let mut out = vec![vec![0.0; block_size()]; channels];
         voice.process_blocks(&mut out, n, &mut buses);
         for (result, out) in result.iter_mut().zip(out) {
             result.extend_from_slice(&out[..n]);
@@ -354,14 +354,14 @@ fn carried_buffer_state_is_not_reset_by_note_start_initialization() {
     let mut voice = Voice::new(new.instruments[0].graph.clone(), 48_000.0);
     let mut fresh = Voice::new(new.instruments[0].graph.clone(), 48_000.0);
     let mut buses = Buses::new(&[]);
-    let mut output = [[0.0; BLOCK]; 1];
-    old_voice.process_blocks(&mut output, BLOCK, &mut buses);
-    assert_eq!(output[0], [6.0; BLOCK]);
+    let mut output = vec![vec![0.0; block_size()]; 1];
+    old_voice.process_blocks(&mut output, block_size(), &mut buses);
+    assert_eq!(output[0], vec![6.0; block_size()]);
     voice.carry_state(&mut old_voice);
-    voice.process_blocks(&mut output, BLOCK, &mut buses);
-    assert_eq!(output[0], [6.0; BLOCK]);
-    fresh.process_blocks(&mut output, BLOCK, &mut buses);
-    assert_eq!(output[0], [15.0; BLOCK]);
+    voice.process_blocks(&mut output, block_size(), &mut buses);
+    assert_eq!(output[0], vec![6.0; block_size()]);
+    fresh.process_blocks(&mut output, block_size(), &mut buses);
+    assert_eq!(output[0], vec![15.0; block_size()]);
 }
 
 #[test]

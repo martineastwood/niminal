@@ -53,7 +53,7 @@ pub fn status_json(session: &Session) -> Value {
 /// node's voices (summed over every thread that helped, so it can pass 1), `chain` its effect chain.
 fn load_json(session: &Session) -> Value {
     let program = session.program();
-    let budget = niminal_engine::BLOCK as f64 / f64::from(session.sample_rate()) * 1e9;
+    let budget = niminal_engine::block_size() as f64 / f64::from(session.sample_rate()) * 1e9;
     let share = |nanos: &AtomicU32| f64::from(nanos.load(Ordering::Relaxed)) / budget;
     program
         .nodes

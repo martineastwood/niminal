@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use niminal_engine::ops::{Env, FilterMode, Gain, Mul, Osc, Svf, Wave};
-use niminal_engine::{BLOCK, GraphBuilder, Src, Voice};
+use niminal_engine::{GraphBuilder, Src, Voice, block_size};
 
 const SR: u32 = 48_000;
 
@@ -42,13 +42,13 @@ fn main() {
     let mut voice = Voice::new(graph, SR as f32);
     let note_off = SR as usize / 2;
     let mut pos = 0;
-    let mut buf = [0.0f32; BLOCK];
+    let mut buf = vec![0.0f32; block_size()];
     while !voice.is_finished() {
         // Split the block at the note-off so the release is sample-accurate.
         let n = if pos < note_off {
-            BLOCK.min(note_off - pos)
+            block_size().min(note_off - pos)
         } else {
-            BLOCK
+            block_size()
         };
         voice.process(&mut buf[..n]);
         buf[..n]

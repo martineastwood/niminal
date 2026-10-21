@@ -1,4 +1,4 @@
-use niminal_engine::{BLOCK, Buses, Voice};
+use niminal_engine::{Buses, Voice, block_size};
 use niminal_lang::compile;
 
 fn voice(source: &str) -> Voice {
@@ -20,7 +20,7 @@ fn render(source: &str, frames: usize, block: usize) -> Vec<f32> {
     let mut result = Vec::new();
     for start in (0..frames).step_by(block) {
         let n = block.min(frames - start);
-        let mut out = [[0.0; BLOCK]; 1];
+        let mut out = vec![vec![0.0; block_size()]; 1];
         voice.process_blocks(&mut out, n, &mut buses);
         result.extend_from_slice(&out[0][..n]);
     }
@@ -103,7 +103,7 @@ fn completion_waits_for_release_and_every_layer() {
         "instr a() { out = 1.finish_when(note.time > 1ms)\nout += 2.finish_when(note.time > 2ms) }";
     let mut v = voice(source);
     let mut buses = Buses::new(&[]);
-    let mut out = [[0.0; BLOCK]; 1];
+    let mut out = vec![vec![0.0; block_size()]; 1];
     v.process_blocks(&mut out, 32, &mut buses);
     assert!(!v.is_finished());
     v.release();
@@ -123,7 +123,7 @@ fn completion_in_custom_functions_controls_voice_lifetime() {
     let mut v = voice(source);
     v.release();
     let mut buses = Buses::new(&[]);
-    let mut out = [[0.0; BLOCK]; 1];
+    let mut out = vec![vec![0.0; block_size()]; 1];
     v.process_blocks(&mut out, 32, &mut buses);
     assert!(!v.is_finished());
     v.process_blocks(&mut out, 32, &mut buses);
@@ -186,7 +186,7 @@ fn completed_layers_keep_downstream_delay_tails_alive() {
     let mut v = voice(source);
     v.release();
     let mut buses = Buses::new(&[]);
-    let mut out = [[0.0; BLOCK]; 1];
+    let mut out = vec![vec![0.0; block_size()]; 1];
     for _ in 0..4 {
         v.process_blocks(&mut out, 32, &mut buses);
     }
@@ -250,7 +250,7 @@ fn explicit_tail_can_end_effects_inside_a_custom_fx_after_completion() {
     let mut v = voice(source);
     v.release();
     let mut buses = Buses::new(&[]);
-    let mut out = [[0.0; BLOCK]; 1];
+    let mut out = vec![vec![0.0; block_size()]; 1];
     for _ in 0..32 {
         v.process_blocks(&mut out, 32, &mut buses);
     }

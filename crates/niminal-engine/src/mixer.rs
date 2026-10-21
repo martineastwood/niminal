@@ -12,7 +12,7 @@ use std::sync::{
 };
 
 use crate::graph::Graph;
-use crate::opcode::BLOCK;
+use crate::opcode::{block_size, blocks};
 use crate::voice::{Voice, VoiceRule};
 
 /// The most channels any signal path may carry (7.1.4 needs 12).
@@ -26,7 +26,7 @@ pub struct Meter {
     waveform: std::sync::OnceLock<crate::Waveform>,
 }
 impl Meter {
-    pub fn observe(&self, blocks: &[[f32; BLOCK]], frames: usize, sample: u64) {
+    pub fn observe(&self, blocks: &[Vec<f32>], frames: usize, sample: u64) {
         if let Some(waveform) = self.waveform.get() {
             waveform.observe(blocks, frames, sample);
         }
@@ -56,14 +56,14 @@ impl Meter {
 /// Block-sized, possibly multichannel buffers that are summed into and cleared
 /// every block.
 pub struct Buses {
-    data: Vec<Vec<[f32; BLOCK]>>,
+    data: Vec<Vec<Vec<f32>>>,
     /// What delayed sends put in over the last `BLOCK` samples, as a ring: a sample comes out
     /// where it went in, `BLOCK` samples later.
-    late: Vec<Vec<[f32; BLOCK]>>,
+    late: Vec<Vec<Vec<f32>>>,
     /// What delayed sends have put in during the current block.
-    staged: Vec<Vec<[f32; BLOCK]>>,
+    staged: Vec<Vec<Vec<f32>>>,
     late_pos: usize,
-    history: Vec<Vec<[f32; BLOCK]>>,
+    history: Vec<Vec<Vec<f32>>>,
     /// Where the session's clock is, for the block being mixed.
     pub clock: crate::Clock,
 }
@@ -72,11 +72,11 @@ impl Buses {
     /// One bus per entry, with that many channels.
     pub fn new(channels: &[usize]) -> Self {
         Buses {
-            data: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
-            late: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
-            staged: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
+            data: channels.iter().map(|&n| blocks(n)).collect(),
+            late: channels.iter().map(|&n| blocks(n)).collect(),
+            staged: channels.iter().map(|&n| blocks(n)).collect(),
             late_pos: 0,
-            history: channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect(),
+            history: channels.iter().map(|&n| blocks(n)).collect(),
             clock: crate::Clock::default(),
         }
     }
@@ -90,7 +90,7 @@ impl Buses {
             .chain(&mut self.staged)
             .chain(&mut self.history)
         {
-            bus.iter_mut().for_each(|c| *c = [0.0; BLOCK]);
+            bus.iter_mut().for_each(|c| c.fill(0.0));
         }
         self.late_pos = 0;
     }
@@ -105,10 +105,10 @@ impl Buses {
             .zip(&mut self.staged)
         {
             for ((d, l), s) in data.iter_mut().zip(late.iter_mut()).zip(staged.iter_mut()) {
-                *s = [0.0; BLOCK];
-                *d = [0.0; BLOCK];
+                s.fill(0.0);
+                d.fill(0.0);
                 for (i, out) in d[..frames].iter_mut().enumerate() {
-                    let at = (self.late_pos + i) % BLOCK;
+                    let at = (self.late_pos + i) % block_size();
                     *out = l[at];
                     l[at] = 0.0;
                 }
@@ -121,18 +121,18 @@ impl Buses {
         for (history, data) in self.history.iter_mut().zip(&self.data) {
             for (h, d) in history.iter_mut().zip(data) {
                 for i in 0..frames {
-                    h[(self.late_pos + i) % BLOCK] = d[i];
+                    h[(self.late_pos + i) % block_size()] = d[i];
                 }
             }
         }
         for (late, staged) in self.late.iter_mut().zip(&self.staged) {
             for (l, s) in late.iter_mut().zip(staged) {
                 for i in 0..frames {
-                    l[(self.late_pos + i) % BLOCK] += s[i];
+                    l[(self.late_pos + i) % block_size()] += s[i];
                 }
             }
         }
-        self.late_pos = (self.late_pos + frames) % BLOCK;
+        self.late_pos = (self.late_pos + frames) % block_size();
     }
 
     /// Add `samples` to the start of one channel of a bus. A bus or channel that
@@ -163,7 +163,7 @@ impl Buses {
         self.history
             .get(bus)
             .and_then(|b| b.get(channel))
-            .map_or(0.0, |c| c[(self.late_pos + i) % BLOCK])
+            .map_or(0.0, |c| c[(self.late_pos + i) % block_size()])
     }
 
     pub fn channels(&self, bus: usize) -> usize {
@@ -174,15 +174,15 @@ impl Buses {
 /// What a few voices send to the buses over one block, kept apart from the buses until it is added
 /// to them in a fixed order, so the result does not depend on which voices ran when.
 pub(crate) struct Sends {
-    data: Vec<Vec<[f32; BLOCK]>>,
-    staged: Vec<Vec<[f32; BLOCK]>>,
+    data: Vec<Vec<Vec<f32>>>,
+    staged: Vec<Vec<Vec<f32>>>,
     /// Per bus: whether anything arrived this block, in `data` and in `staged`.
     touched: Vec<(bool, bool)>,
 }
 
 impl Sends {
     fn new(channels: &[usize]) -> Self {
-        let shape = || channels.iter().map(|&n| vec![[0.0; BLOCK]; n]).collect();
+        let shape = || channels.iter().map(|&n| blocks(n)).collect();
         Sends {
             data: shape(),
             staged: shape(),
@@ -215,11 +215,11 @@ impl Sends {
             {
                 if now {
                     buses.add(bus, c, &data[..frames]);
-                    *data = [0.0; BLOCK];
+                    data.fill(0.0);
                 }
                 if later {
                     buses.add_delayed(bus, c, &staged[..frames]);
-                    *staged = [0.0; BLOCK];
+                    staged.fill(0.0);
                 }
             }
         }
@@ -424,7 +424,7 @@ struct Node {
     /// How many voices the node has taken in, which gives each its chunk.
     admitted: u64,
     /// What its voices added up to in the block being mixed.
-    summed: Vec<[f32; BLOCK]>,
+    summed: Vec<Vec<f32>>,
     /// How long a voice takes to make a frame of sound, in nanoseconds, as timed lately; 0 if never.
     rate: f32,
     /// Nanoseconds spent on its voices in the block being mixed.
@@ -506,7 +506,7 @@ pub struct Mixer {
     profile: Option<Arc<Profile>>,
     stems: Option<Stems>,
     /// The audio input for the block being mixed, one buffer per channel.
-    audio_in: Vec<[f32; BLOCK]>,
+    audio_in: Vec<Vec<f32>>,
     buses: Buses,
     nodes: Vec<Node>,
     order: Vec<usize>,
@@ -522,8 +522,8 @@ pub struct Mixer {
     stolen: usize,
     muted: bool,
     /// Block-sized working buffers for `process_inner`, kept so they are not cleared again every block.
-    scratch: Vec<[f32; BLOCK]>,
-    processed: Vec<[f32; BLOCK]>,
+    scratch: Vec<Vec<f32>>,
+    processed: Vec<Vec<f32>>,
     /// Working space for chunks of voices that run side by side, one lane for each.
     lanes: Vec<LaneCell>,
     /// Runs the jobs of a wave of chunks on several threads; without it they run one after another.
@@ -543,8 +543,8 @@ pub trait Fork: Send + Sync {
 
 /// What one chunk of voices puts out and sends while it runs.
 struct Lane {
-    summed: Vec<[f32; BLOCK]>,
-    scratch: Vec<[f32; BLOCK]>,
+    summed: Vec<Vec<f32>>,
+    scratch: Vec<Vec<f32>>,
     sends: Sends,
     /// How long the last job on this lane took, if timed.
     nanos: u64,
@@ -553,8 +553,8 @@ struct Lane {
 impl Lane {
     fn new(bus_channels: &[usize]) -> Self {
         Lane {
-            summed: vec![[0.0; BLOCK]; MAX_CHANNELS],
-            scratch: vec![[0.0; BLOCK]; MAX_CHANNELS],
+            summed: blocks(MAX_CHANNELS),
+            scratch: blocks(MAX_CHANNELS),
             sends: Sends::new(bus_channels),
             nanos: 0,
         }
@@ -645,7 +645,7 @@ impl Mixer {
                 def,
                 voices: Vec::new(),
                 admitted: 0,
-                summed: vec![[0.0; BLOCK]; MAX_CHANNELS],
+                summed: blocks(MAX_CHANNELS),
                 rate: 0.0,
                 voice_nanos: 0,
                 chain_silenced: false,
@@ -656,7 +656,7 @@ impl Mixer {
         Ok(Mixer {
             profile: None,
             stems: None,
-            audio_in: vec![[0.0; BLOCK]; MAX_CHANNELS],
+            audio_in: blocks(MAX_CHANNELS),
             buses: Buses::new(&bus_channels),
             nodes,
             order,
@@ -670,8 +670,8 @@ impl Mixer {
             max_voices: DEFAULT_MAX_VOICES,
             stolen: 0,
             muted: false,
-            scratch: vec![[0.0; BLOCK]; MAX_CHANNELS],
-            processed: vec![[0.0; BLOCK]; MAX_CHANNELS],
+            scratch: blocks(MAX_CHANNELS),
+            processed: blocks(MAX_CHANNELS),
             lanes,
             fork: None,
         })
@@ -752,7 +752,7 @@ impl Mixer {
     /// is silent, and what is set stays until it is set again.
     pub fn set_audio_input(&mut self, channel: usize, samples: &[f32]) {
         if let Some(buffer) = self.audio_in.get_mut(channel) {
-            let n = samples.len().min(BLOCK);
+            let n = samples.len().min(block_size());
             buffer[..n].copy_from_slice(&samples[..n]);
             buffer[n..].fill(0.0);
         }
@@ -1207,7 +1207,7 @@ impl Mixer {
 
     /// Mix `frames` samples (at most [`BLOCK`]) of everything into `out`, one
     /// block per master channel.
-    pub fn process(&mut self, out: &mut [[f32; BLOCK]], frames: usize) {
+    pub fn process(&mut self, out: &mut [Vec<f32>], frames: usize) {
         self.process_inner(out, frames, None);
     }
 
@@ -1215,7 +1215,7 @@ impl Mixer {
     /// `retired` must have been reserved by the caller before rendering.
     pub fn process_retained(
         &mut self,
-        out: &mut [[f32; BLOCK]],
+        out: &mut [Vec<f32>],
         frames: usize,
         retired: &mut Vec<Voice>,
     ) {
@@ -1338,7 +1338,7 @@ impl Mixer {
             sends.drain_into(buses, frames);
             node.voice_nanos += *nanos;
             // short blocks are mostly fixed costs, which say little about a voice
-            if timer.is_some() && frames >= BLOCK / 2 {
+            if timer.is_some() && frames >= block_size() / 2 {
                 let sample = *nanos as f32 / (r.len * frames) as f32;
                 node.rate = if node.rate == 0.0 {
                     sample
@@ -1351,11 +1351,15 @@ impl Mixer {
 
     fn process_inner(
         &mut self,
-        out: &mut [[f32; BLOCK]],
+        out: &mut [Vec<f32>],
         frames: usize,
         mut retired: Option<&mut Vec<Voice>>,
     ) {
-        assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
+        assert!(
+            frames <= block_size(),
+            "block too long: {frames} > {}",
+            block_size()
+        );
         assert_eq!(
             out.len(),
             self.channels,
@@ -1422,7 +1426,7 @@ impl Mixer {
                 }
 
                 let chain_started = std::time::Instant::now();
-                let result: &[[f32; BLOCK]] = match &mut node.chain {
+                let result: &[Vec<f32>] = match &mut node.chain {
                     None => &node.summed[..n],
                     Some(chain) => {
                         let out_channels = chain.channels();
@@ -1499,7 +1503,7 @@ impl Mixer {
                 };
 
                 if let Some(load) = self.profile.as_ref().and_then(|p| p.nodes.get(t))
-                    && frames >= BLOCK / 2
+                    && frames >= block_size() / 2
                 {
                     let chain_nanos = if node.chain.is_some() {
                         chain_started.elapsed().as_nanos() as u64
@@ -1632,7 +1636,7 @@ impl Mixer {
 }
 
 /// Append the first `frames` samples of every channel of `block` to `kept`.
-fn keep(kept: &mut Vec<Vec<f32>>, block: &[[f32; BLOCK]], frames: usize) {
+fn keep(kept: &mut Vec<Vec<f32>>, block: &[Vec<f32>], frames: usize) {
     kept.resize(block.len(), Vec::new());
     for (channel, samples) in kept.iter_mut().zip(block) {
         channel.extend_from_slice(&samples[..frames]);

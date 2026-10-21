@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx};
+use crate::opcode::{Opcode, Port, ProcessCtx, blocks};
 use crate::{Array, wrapped_index};
 
 /// Scalar math functions, usable inside kernels and as the [`Func`] opcode.
@@ -380,8 +380,10 @@ pub struct Custom {
     carried: bool,
     /// This copy's own built-in opcodes, with their state.
     natives: Vec<Box<dyn Opcode>>,
-    native_inputs: Vec<[f32; BLOCK]>,
-    native_outputs: Vec<[f32; BLOCK]>,
+    native_inputs: Vec<Vec<f32>>,
+    native_outputs: Vec<Vec<f32>>,
+    /// The one-result block `process` renders into.
+    single: Vec<Vec<f32>>,
     native_indices: Vec<usize>,
 }
 
@@ -400,8 +402,9 @@ impl Custom {
             .max()
             .unwrap_or(1);
         Custom {
-            native_inputs: vec![[0.0; BLOCK]; inputs],
-            native_outputs: vec![[0.0; BLOCK]; outputs],
+            native_inputs: blocks(inputs),
+            native_outputs: blocks(outputs),
+            single: blocks(1),
             native_indices: (0..inputs).collect(),
             state: kernel.state_init.clone(),
             buffers: kernel.buffers.clone(),
@@ -560,7 +563,7 @@ impl Custom {
         &mut self,
         ctx: &ProcessCtx,
         input: impl Fn(usize, usize) -> f32,
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         if frames == 0 {
@@ -721,17 +724,18 @@ impl Opcode for Custom {
     }
 
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let mut block = [[0.0f32; BLOCK]; 1];
+        let mut single = std::mem::take(&mut self.single);
         let frames = out.len();
-        self.process_outputs(ctx, inputs, &mut block, frames);
-        out.copy_from_slice(&block[0][..frames]);
+        self.process_outputs(ctx, inputs, &mut single, frames);
+        out.copy_from_slice(&single[0][..frames]);
+        self.single = single;
     }
 
     fn process_outputs(
         &mut self,
         ctx: &ProcessCtx,
         inputs: &[&[f32]],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         self.process_with(ctx, |port, i| inputs[port][i], outs, frames);
@@ -744,9 +748,9 @@ impl Opcode for Custom {
     fn process_slots(
         &mut self,
         ctx: &ProcessCtx,
-        slots: &[[f32; BLOCK]],
+        slots: &[Vec<f32>],
         indices: &[usize],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         self.process_with(ctx, |port, i| slots[indices[port]][i], outs, frames);

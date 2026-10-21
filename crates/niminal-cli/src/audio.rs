@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use niminal_engine::{BLOCK, MAX_CHANNELS};
+use niminal_engine::{MAX_CHANNELS, block_size};
 use niminal_server::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
 use rtrb::{Consumer, Producer, RingBuffer};
 
@@ -350,7 +350,7 @@ impl Playback {
                     .zip(data.chunks_exact_mut(self.channels))
                     .enumerate()
                 {
-                    if i % BLOCK == 0 {
+                    if i % block_size() == 0 {
                         epoch = self.epoch.load(Ordering::Acquire);
                     }
                     if frame.epoch == epoch {
@@ -372,7 +372,7 @@ impl Playback {
         for (i, output) in data.chunks_exact_mut(self.channels).enumerate() {
             // A panic arriving during a large callback takes effect within one
             // engine block rather than waiting for the next device callback.
-            if i % BLOCK == 0 {
+            if i % block_size() == 0 {
                 epoch = self.epoch.load(Ordering::Acquire);
             }
             loop {
@@ -524,7 +524,7 @@ impl RenderWorker {
                 );
                 let _ = ready_tx.send(());
                 // Top the queue up in chunks, and sleep until the sound card has used enough for the next one.
-                let chunk = BLOCK * 8;
+                let chunk = block_size() * 8;
                 while !flag.load(Ordering::Relaxed) {
                     let free = producer.slots();
                     if free >= chunk {
@@ -587,7 +587,7 @@ fn fill_queue(
         // events and DSP still advance to preserve the session's timeline.
         let behind = played
             .saturating_sub(renderer.clock())
-            .min((BLOCK * 8) as u64) as usize;
+            .min((block_size() * 8) as u64) as usize;
         if behind > 0 {
             renderer.render(behind, &mut |_, _| {});
         }

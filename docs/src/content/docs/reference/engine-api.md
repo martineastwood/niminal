@@ -114,7 +114,7 @@ These are timed `events.send` operations. Each uses a note `id` owned by the con
 ] } }
 ```
 
-`channel` is 1-based (default 1). Controls connect directly and follow their smoothing. Bus connections read exactly 32 samples behind, independently of render block splitting, so adding or replacing a connection cannot introduce a routing cycle. `scale` defaults to 1 and `offset` to 0; mapping applies `source * scale + offset` in engine units: Hz, seconds, degrees, semitones or linear gain for dB parameters. Declared parameter ranges clamp the resulting signal. Use `bind_buffer` for resource selection rather than mapping a numeric signal to a resource index.
+`channel` is 1-based (default 1). Controls connect directly and follow their smoothing. Bus connections read exactly one engine block behind (64 samples by default, set with the server's `--block-size`), independently of render block splitting, so adding or replacing a connection cannot introduce a routing cycle. `scale` defaults to 1 and `offset` to 0; mapping applies `source * scale + offset` in engine units: Hz, seconds, degrees, semitones or linear gain for dB parameters. Declared parameter ranges clamp the resulting signal. Use `bind_buffer` for resource selection rather than mapping a numeric signal to a resource index.
 
 A scalar `set` does not disconnect an active mapping; explicitly unmap first. A component such as `weights[0]` can be mapped independently. Disconnecting and reconnecting moves prepared storage between the command and voice; rendering never allocates or frees it.
 
@@ -200,7 +200,7 @@ Both return a job `id`. Use `jobs.status {id}`, `jobs.cancel {id}` or subscribe 
 
 ### Audio devices
 
-`audio.devices` lists input/output devices and supported formats. `audio.status` reports host state and selected settings. `audio.configure {settings,restart:true}` queues an explicit engine restart; settings include `output`, `input`, `sample_rate`, `channels`, optional `buffer_size` and `no_audio`. Use device IDs from enumeration or `"default"`. Restart resets the sample clock and disconnects all clients; reconnect and resubmit the project. Unsupported formats fail preflight, and device loss remains visible in host status. An embedded engine without an audio host rejects configuration.
+`audio.devices` lists input/output devices and supported formats. `audio.status` reports host state and selected settings. `audio.configure {settings,restart:true}` queues an explicit engine restart; settings include `output`, `input`, `sample_rate`, `channels`, optional `buffer_size` (the device callback size in frames, not the DSP block; see `--block-size`) and `no_audio`. Use device IDs from enumeration or `"default"`. Restart resets the sample clock and disconnects all clients; reconnect and resubmit the project. Unsupported formats fail preflight, and device loss remains visible in host status. An embedded engine without an audio host rejects configuration.
 
 ### Transport limits
 

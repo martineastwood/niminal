@@ -3,44 +3,50 @@ use std::sync::Arc;
 use realfft::num_complex::Complex;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 
-use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL};
+use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 use crate::table::Buffer;
 
 /// Partition size matches the engine block so each `process` call handles
 /// exactly one partition with no extra buffering.
-const PART: usize = BLOCK;
+fn part() -> usize {
+    crate::block_size()
+}
 /// FFT length for each partition: double the block for overlap-save.
-const FFT_LEN: usize = PART * 2;
-/// Number of complex bins in a real FFT of `FFT_LEN` samples.
-const BINS: usize = FFT_LEN / 2 + 1;
+fn fft_len() -> usize {
+    part() * 2
+}
+/// Number of complex bins in a real FFT of `fft_len()` samples.
+fn nbins() -> usize {
+    fft_len() / 2 + 1
+}
 
 /// Pre-transformed IR partitions, shared across voices.
 pub struct IrSpectrum {
-    parts: Vec<[Complex<f32>; BINS]>,
+    parts: Vec<Vec<Complex<f32>>>,
 }
 
 impl IrSpectrum {
     /// Build from an IR buffer (mono, channel 0). The IR is split into
-    /// `PART`-sample partitions, each zero-padded to `FFT_LEN` and transformed.
+    /// block-sized partitions, each zero-padded to twice that and transformed.
     pub fn from_buffer(buffer: &Buffer) -> Self {
         let n = buffer.len();
-        let num_parts = n.div_ceil(PART);
+        let num_parts = n.div_ceil(part());
         let mut planner = RealFftPlanner::<f32>::new();
-        let fwd = planner.plan_fft_forward(FFT_LEN);
+        let fwd = planner.plan_fft_forward(fft_len());
 
-        let mut time = vec![0.0f32; FFT_LEN];
-        let mut spectrum = vec![Complex::new(0.0, 0.0); BINS];
+        let mut time = vec![0.0f32; fft_len()];
+        let mut spectrum = vec![Complex::new(0.0, 0.0); nbins()];
         let mut parts = Vec::with_capacity(num_parts);
 
         for p in 0..num_parts {
             time.fill(0.0);
-            let start = p * PART;
-            let end = (start + PART).min(n);
+            let start = p * part();
+            let end = (start + part()).min(n);
             for i in start..end {
                 time[i - start] = buffer.read(i);
             }
             fwd.process(&mut time, &mut spectrum).expect("fft forward");
-            let mut bins = [Complex::new(0.0, 0.0); BINS];
+            let mut bins = vec![Complex::new(0.0, 0.0); nbins()];
             bins.copy_from_slice(&spectrum);
             parts.push(bins);
         }
@@ -71,12 +77,12 @@ pub struct Convolve {
     fwd: Arc<dyn RealToComplex<f32>>,
     inv: Arc<dyn ComplexToReal<f32>>,
     /// Ring buffer of input spectra, length = number of IR partitions.
-    input_spectra: Vec<[Complex<f32>; BINS]>,
+    input_spectra: Vec<Vec<Complex<f32>>>,
     /// Which slot in `input_spectra` the next block writes to.
     head: usize,
     /// Scratch for the forward FFT input (overlap-save: last PART samples of
     /// the previous block followed by the current PART samples).
-    prev_tail: [f32; PART],
+    prev_tail: Vec<f32>,
     /// Scratch for accumulating the frequency-domain product.
     accum: Vec<Complex<f32>>,
     /// Scratch for the inverse FFT output.
@@ -95,20 +101,20 @@ impl Convolve {
     pub fn new(ir: Arc<IrSpectrum>) -> Self {
         let np = ir.num_parts().max(1);
         let mut planner = RealFftPlanner::<f32>::new();
-        let fwd = planner.plan_fft_forward(FFT_LEN);
-        let inv = planner.plan_fft_inverse(FFT_LEN);
-        let ir_samples = ir.num_parts() * PART;
+        let fwd = planner.plan_fft_forward(fft_len());
+        let inv = planner.plan_fft_inverse(fft_len());
+        let ir_samples = ir.num_parts() * part();
         Convolve {
             ir,
             fwd,
             inv,
-            input_spectra: vec![[Complex::new(0.0, 0.0); BINS]; np],
+            input_spectra: vec![vec![Complex::new(0.0, 0.0); nbins()]; np],
             head: 0,
-            prev_tail: [0.0; PART],
-            accum: vec![Complex::new(0.0, 0.0); BINS],
-            time_out: vec![0.0; FFT_LEN],
-            time_in: vec![0.0; FFT_LEN],
-            spec_scratch: vec![Complex::new(0.0, 0.0); BINS],
+            prev_tail: vec![0.0; part()],
+            accum: vec![Complex::new(0.0, 0.0); nbins()],
+            time_out: vec![0.0; fft_len()],
+            time_in: vec![0.0; fft_len()],
+            spec_scratch: vec![Complex::new(0.0, 0.0); nbins()],
             quiet_run: ir_samples,
             ir_samples,
         }
@@ -134,7 +140,7 @@ impl Opcode for Convolve {
             s.fill(Complex::new(0.0, 0.0));
         }
         self.head = 0;
-        self.prev_tail = [0.0; PART];
+        self.prev_tail.fill(0.0);
         self.quiet_run = self.ir_samples;
     }
 
@@ -144,7 +150,7 @@ impl Opcode for Convolve {
         {
             std::mem::swap(&mut self.input_spectra, &mut old.input_spectra);
             self.head = old.head;
-            self.prev_tail = old.prev_tail;
+            self.prev_tail.copy_from_slice(&old.prev_tail);
             self.quiet_run = old.quiet_run;
         }
     }
@@ -157,9 +163,9 @@ impl Opcode for Convolve {
         }
 
         // Build the overlap-save input: [prev_tail | current block].
-        self.time_in[..PART].copy_from_slice(&self.prev_tail);
-        self.time_in[PART..FFT_LEN].copy_from_slice(&inputs[0][..PART]);
-        self.prev_tail.copy_from_slice(&inputs[0][..PART]);
+        self.time_in[..part()].copy_from_slice(&self.prev_tail);
+        self.time_in[part()..fft_len()].copy_from_slice(&inputs[0][..part()]);
+        self.prev_tail.copy_from_slice(&inputs[0][..part()]);
 
         // Forward FFT of the input block.
         self.fwd
@@ -184,10 +190,10 @@ impl Opcode for Convolve {
             .expect("fft inverse");
 
         // The valid output is the second half (overlap-save).
-        let scale = 1.0 / FFT_LEN as f32;
+        let scale = 1.0 / fft_len() as f32;
         let mut loudest: f32 = 0.0;
         for (i, o) in out.iter_mut().enumerate() {
-            let wet = self.time_out[PART + i] * scale;
+            let wet = self.time_out[part() + i] * scale;
             let mix = inputs[1][i];
             *o = inputs[0][i] * (1.0 - mix) + wet * mix;
             loudest = loudest.max(wet.abs());
@@ -202,11 +208,11 @@ impl Opcode for Convolve {
     }
 
     fn is_active(&self) -> bool {
-        self.quiet_run < self.ir_samples / PART + 1
+        self.quiet_run < self.ir_samples / part() + 1
     }
 
     fn latency(&self) -> usize {
-        PART
+        part()
     }
 }
 
@@ -224,13 +230,15 @@ mod tests {
 
     #[test]
     fn identity_ir_passes_signal_through() {
-        let ir_buf = dirac_ir(PART);
+        let ir_buf = dirac_ir(part());
         let ir = Arc::new(IrSpectrum::from_buffer(&ir_buf));
         let mut conv = Convolve::new(ir);
 
-        let input: Vec<f32> = (0..PART).map(|i| (i as f32 + 1.0) / PART as f32).collect();
-        let mix = vec![1.0f32; PART];
-        let mut out = vec![0.0f32; PART];
+        let input: Vec<f32> = (0..part())
+            .map(|i| (i as f32 + 1.0) / part() as f32)
+            .collect();
+        let mix = vec![1.0f32; part()];
+        let mut out = vec![0.0f32; part()];
 
         conv.process(&ProcessCtx::new(48_000.0, true), &[&input, &mix], &mut out);
 
@@ -247,13 +255,13 @@ mod tests {
 
     #[test]
     fn mix_zero_is_dry_signal() {
-        let ir_buf = dirac_ir(PART * 4);
+        let ir_buf = dirac_ir(part() * 4);
         let ir = Arc::new(IrSpectrum::from_buffer(&ir_buf));
         let mut conv = Convolve::new(ir);
 
-        let input: Vec<f32> = (0..PART).map(|i| (i as f32) * 0.01).collect();
-        let mix = vec![0.0f32; PART];
-        let mut out = vec![0.0f32; PART];
+        let input: Vec<f32> = (0..part()).map(|i| (i as f32) * 0.01).collect();
+        let mix = vec![0.0f32; part()];
+        let mut out = vec![0.0f32; part()];
 
         conv.process(&ProcessCtx::new(48_000.0, true), &[&input, &mix], &mut out);
 

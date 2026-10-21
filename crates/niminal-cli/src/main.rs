@@ -44,6 +44,10 @@ struct ServerArgs {
     channels: u16,
     #[arg(long)]
     sample_rate: Option<u32>,
+    /// Samples per DSP block, a power of two from 16 to 1024. Control changes and bus sends
+    /// land on block boundaries; smaller blocks are tighter, larger ones cheaper.
+    #[arg(long, default_value_t = niminal_engine::DEFAULT_BLOCK)]
+    block_size: usize,
     /// Run without a sound card, at real speed, throwing the audio away.
     #[arg(long)]
     no_audio: bool,
@@ -200,6 +204,7 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
         port,
         channels,
         sample_rate,
+        block_size,
         no_audio,
         log,
         token,
@@ -209,6 +214,7 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
         render_fork,
         ..
     } = args;
+    niminal_engine::set_block_size(block_size)?;
     let threads = render_threads
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(4)))
         .max(1);

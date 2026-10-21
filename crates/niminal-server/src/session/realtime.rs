@@ -394,6 +394,9 @@ pub struct RealtimeRenderer {
     config: RealtimeConfig,
     /// Audio from a device, for nodes that read `input(..)`.
     audio_in: Option<crate::AudioInput>,
+    /// What the renderer mixes into, and what the audio input delivered, kept so rendering never allocates.
+    block: Vec<Vec<f32>>,
+    heard: Vec<Vec<f32>>,
     /// Where notes for `midi_out` instruments go, and those still sounding: when they end and the key that holds them.
     midi_tx: Option<Producer<crate::MidiEvent>>,
     midi_wake: Option<std::thread::Thread>,
@@ -471,6 +474,8 @@ impl Session {
             finished: Vec::with_capacity(config.max_voices * 2),
             config,
             audio_in: None,
+            block: niminal_engine::blocks(MAX_CHANNELS),
+            heard: niminal_engine::blocks(MAX_CHANNELS),
             midi_tx: None,
             midi_wake: None,
         };
@@ -1734,11 +1739,12 @@ impl RealtimeRenderer {
 
     /// This entire path is bounded, lock-free, allocation-free and free of
     /// heap destruction, including voice completion, edits and panic.
-    pub fn render(&mut self, frames: usize, sink: &mut dyn FnMut(&[[f32; BLOCK]], usize)) {
+    pub fn render(&mut self, frames: usize, sink: &mut dyn FnMut(&[Vec<f32>], usize)) {
         let started = std::time::Instant::now();
         let _flush = niminal_engine::denormals::FlushToZero::new();
         let end = self.clock.saturating_add(frames as u64);
-        let mut block = [[0.0; BLOCK]; MAX_CHANNELS];
+        let mut block = std::mem::take(&mut self.block);
+        let max_block = niminal_engine::block_size() as u64;
         let mut stale_budget = self.config.queued_windows;
         while self.clock < end {
             self.return_voices();
@@ -1869,7 +1875,7 @@ impl RealtimeRenderer {
                 }
             });
             self.release_midi_due();
-            let mut n = (end - self.clock).min(BLOCK as u64);
+            let mut n = (end - self.clock).min(max_block);
             if ready && let Some(window) = &self.current {
                 if let Some(command) = window.commands.get(self.cursor) {
                     n = n.min(command.at.saturating_sub(self.clock).max(1));
@@ -1894,9 +1900,8 @@ impl RealtimeRenderer {
                 self.state.starved_frames.fetch_add(n, Ordering::Relaxed);
             }
             if let Some(input) = &mut self.audio_in {
-                let mut heard = [[0.0; BLOCK]; MAX_CHANNELS];
-                input.read(n, &mut heard);
-                for (c, samples) in heard.iter().enumerate().take(input.channels()) {
+                input.read(n, &mut self.heard);
+                for (c, samples) in self.heard.iter().enumerate().take(input.channels()) {
                     self.mixer.set_audio_input(c, &samples[..n]);
                 }
             }
@@ -1923,6 +1928,7 @@ impl RealtimeRenderer {
                 .voices
                 .store(self.mixer.active_voices(), Ordering::Relaxed);
         }
+        self.block = block;
         self.return_voices();
         if self.retired.slots() == 0 {
             self.state.retire_pressure.fetch_add(1, Ordering::Relaxed);

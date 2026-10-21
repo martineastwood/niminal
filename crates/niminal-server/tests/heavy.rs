@@ -55,7 +55,7 @@ fn render(
 }
 
 fn time(label: &str, source: &str, notes: &[(String, usize)]) {
-    let blocks = (SR as usize * SECONDS) as f64 / niminal_engine::BLOCK as f64;
+    let blocks = (SR as usize * SECONDS) as f64 / niminal_engine::block_size() as f64;
     let (base, reference) = render(source, notes, 0, Policy::Never);
     print!("{label:<34} serial {:>6.1}", base * 1e6 / blocks);
     for (name, workers, policy) in [

@@ -15,9 +15,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use niminal_engine::{
-    BLOCK, DEFAULT_CEILING, DEFAULT_MAX_VOICES, MAX_CHANNELS, Master, Mixer, Transfer,
-};
+use niminal_engine::{DEFAULT_CEILING, DEFAULT_MAX_VOICES, MAX_CHANNELS, Master, Mixer, Transfer};
 use niminal_lang::{
     CompileOptions, Expanded, Layout, Program, Samples, Statement, analyze, compile_with,
 };
@@ -944,7 +942,7 @@ impl Session {
 
     /// Mix `frames` samples, calling `sink` with each piece (a block per
     /// channel and how many of its samples are valid).
-    pub fn render(&mut self, frames: usize, sink: &mut dyn FnMut(&[[f32; BLOCK]], usize)) {
+    pub fn render(&mut self, frames: usize, sink: &mut dyn FnMut(&[Vec<f32>], usize)) {
         assert!(
             !self.detached,
             "a detached session is driven by its renderer"
@@ -953,7 +951,7 @@ impl Session {
         let _flush = niminal_engine::denormals::FlushToZero::new();
         let end = self.clock + frames as u64;
         let channels = self.layout.channels();
-        let mut block = [[0.0f32; BLOCK]; MAX_CHANNELS];
+        let mut block = niminal_engine::blocks(MAX_CHANNELS);
 
         while self.clock < end {
             self.mixer
@@ -985,7 +983,7 @@ impl Session {
             self.apply_timed_panics();
 
             // How far we can go before something needs doing.
-            let mut n = (end - self.clock).min(BLOCK as u64);
+            let mut n = (end - self.clock).min(niminal_engine::block_size() as u64);
             if let Some(p) = self.pending.first() {
                 n = n.min(p.lands_at - self.clock);
             }

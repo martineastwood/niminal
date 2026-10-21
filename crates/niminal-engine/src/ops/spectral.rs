@@ -4,10 +4,10 @@ use std::sync::Arc;
 use realfft::num_complex::Complex;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 
-use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL};
+use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
 fn valid_fft_size(n: usize) -> bool {
-    n.is_power_of_two() && (BLOCK * 2..=8192).contains(&n)
+    n.is_power_of_two() && (crate::block_size() * 2..=8192).contains(&n)
 }
 
 fn bins(n: usize) -> usize {
@@ -526,9 +526,10 @@ impl Opcode for SpectralDelay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::opcode::{BLOCK, ProcessCtx};
+    use crate::opcode::ProcessCtx;
 
     const SR: f32 = 48_000.0;
+    const BLOCK: usize = 64;
     const FFT_SIZE: usize = BLOCK * 2;
 
     fn make_chain() -> Arc<SpectralChain> {

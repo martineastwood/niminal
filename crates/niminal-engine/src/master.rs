@@ -163,7 +163,7 @@ impl Master {
 
     /// Process the first `frames` samples of every channel's block in place,
     /// without allocating, for the real-time path.
-    pub fn process_block(&mut self, block: &mut [[f32; crate::opcode::BLOCK]], frames: usize) {
+    pub fn process_block(&mut self, block: &mut [Vec<f32>], frames: usize) {
         assert_eq!(block.len(), self.channels.len(), "one block per channel");
         // Silence into a master that has nothing left to say comes out as silence: skip the work.
         if block.iter().all(|b| b[..frames].iter().all(|s| *s == 0.0)) {
@@ -311,20 +311,21 @@ fn interpolation_weights(phase: f64) -> [f64; TAPS] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block_size;
 
     #[test]
     fn a_master_that_was_limiting_comes_to_rest_in_silence() {
         let mut master = Master::with_channels(48_000.0, DEFAULT_CEILING, 2);
-        let mut block = [[1.5f32; crate::opcode::BLOCK]; 2];
+        let mut block = vec![vec![1.5f32; block_size()]; 2];
         for _ in 0..200 {
-            master.process_block(&mut block, crate::opcode::BLOCK);
-            block = [[1.5; crate::opcode::BLOCK]; 2];
+            master.process_block(&mut block, block_size());
+            block = vec![vec![1.5; block_size()]; 2];
         }
         assert!(!master.at_rest());
         let seconds = 30;
-        for _ in 0..seconds * 48_000 / crate::opcode::BLOCK {
-            block = [[0.0; crate::opcode::BLOCK]; 2];
-            master.process_block(&mut block, crate::opcode::BLOCK);
+        for _ in 0..seconds * 48_000 / block_size() {
+            block = vec![vec![0.0; block_size()]; 2];
+            master.process_block(&mut block, block_size());
         }
         assert!(
             master.at_rest(),

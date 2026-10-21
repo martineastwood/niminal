@@ -1,8 +1,8 @@
-use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx};
+use crate::opcode::{Opcode, Port, ProcessCtx, blocks};
 
 struct Layer {
     op: Box<dyn Opcode>,
-    inputs: Vec<[f32; BLOCK]>,
+    inputs: Vec<Vec<f32>>,
     age: u64,
     duration: u64,
     serial: u64,
@@ -15,7 +15,7 @@ pub struct Spawn {
     layers: Vec<Layer>,
     ports: Vec<Port>,
     indices: Vec<usize>,
-    scratch: Vec<[f32; BLOCK]>,
+    scratch: Vec<Vec<f32>>,
     positive: bool,
     serial: u64,
 }
@@ -29,7 +29,7 @@ impl Spawn {
         let layers = (0..max)
             .map(|_| Layer {
                 op: template.box_clone(),
-                inputs: vec![[0.0; BLOCK]; inputs],
+                inputs: blocks(inputs),
                 age: 0,
                 duration: 0,
                 serial: 0,
@@ -37,7 +37,7 @@ impl Spawn {
             })
             .collect();
         Self {
-            scratch: vec![[0.0; BLOCK]; template.outputs()],
+            scratch: blocks(template.outputs()),
             template,
             layers,
             ports,
@@ -116,9 +116,9 @@ impl Opcode for Spawn {
     fn process_slots(
         &mut self,
         ctx: &ProcessCtx,
-        slots: &[[f32; BLOCK]],
+        slots: &[Vec<f32>],
         indices: &[usize],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         for out in outs.iter_mut() {

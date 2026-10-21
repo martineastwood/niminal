@@ -154,9 +154,9 @@ impl Opcode for ReportOut {
     fn process_slots(
         &mut self,
         ctx: &ProcessCtx,
-        slots: &[[f32; crate::BLOCK]],
+        slots: &[Vec<f32>],
         indices: &[usize],
-        outs: &mut [[f32; crate::BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         let mut inputs: [&[f32]; 65] = [&[]; 65];

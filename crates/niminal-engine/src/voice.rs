@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use crate::graph::Graph;
 use crate::mixer::{Buses, MAX_CHANNELS, Sends};
 use crate::op_dispatch::Op;
-use crate::opcode::{BLOCK, Opcode, ProcessCtx, TAIL_LEVEL};
+use crate::opcode::{Opcode, ProcessCtx, TAIL_LEVEL, block_size, blocks};
 
 /// One running note: a private copy of every opcode's state plus the signal
 /// buffers that connect them.
@@ -18,7 +18,10 @@ pub struct Voice {
     sample: u64,
     graph: Arc<Graph>,
     ops: Vec<Op>,
-    slots: Vec<[f32; BLOCK]>,
+    slots: Vec<Vec<f32>>,
+    /// The choke fade of the block being rendered, and the faded copy of a send.
+    fade: Vec<f32>,
+    faded: Vec<f32>,
     sample_rate: f32,
     released: bool,
     poisoned: bool,
@@ -195,12 +198,12 @@ impl Voice {
             op.prepare(sample_rate);
         }
 
-        let mut slots = vec![[0.0; BLOCK]; graph.node_slot_base() + graph.results];
+        let mut slots = blocks(graph.node_slot_base() + graph.results);
         for (i, p) in graph.params.iter().enumerate() {
-            slots[i] = [p.default; BLOCK];
+            slots[i].fill(p.default);
         }
         for (i, &c) in graph.consts.iter().enumerate() {
-            slots[graph.params.len() + i] = [c; BLOCK];
+            slots[graph.params.len() + i].fill(c);
         }
 
         let bus_map = (0..graph.sends.iter().map(|s| s.0 + 1).max().unwrap_or(0))
@@ -228,6 +231,8 @@ impl Voice {
             group: None,
             bus_map,
             choke_left: None,
+            fade: vec![0.0; block_size()],
+            faded: vec![0.0; block_size()],
             rule: None,
             glide: Glide::default(),
             held: None,
@@ -258,7 +263,7 @@ impl Voice {
                     .as_mut()
                     .unwrap()
                     .set_range(param.range);
-                self.slots[index] = old.slots[previous];
+                self.slots[index].copy_from_slice(&old.slots[previous]);
             }
         }
         let old_keys = old.graph.state_keys();
@@ -366,7 +371,7 @@ impl Voice {
 
     /// Set a parameter by index. Takes effect from the next block.
     pub fn set_param(&mut self, index: usize, value: f32) {
-        self.slots[index] = [value; BLOCK];
+        self.slots[index].fill(value);
     }
 
     /// Move a parameter to `value` in a straight line over `frames`. A glide is carried out as the voice is
@@ -510,7 +515,7 @@ impl Voice {
         let Some(rule) = self.rule else { return };
         for i in 0..self.graph.params.len().min(note.graph.params.len()) {
             if Some(i) != rule.pitch_param {
-                self.slots[i] = note.slots[i];
+                self.slots[i].copy_from_slice(&note.slots[i]);
             }
         }
         if let Some(held) = &mut self.held {
@@ -660,7 +665,7 @@ impl Voice {
         self.graph.channels()
     }
 
-    /// Render `out.len()` samples (at most [`BLOCK`]) of a one-channel graph.
+    /// Render `out.len()` samples (at most [`block_size`]) of a one-channel graph.
     /// Output is identical however a stretch of audio is divided into calls, so
     /// a host can split blocks at event times for sample-accurate timing.
     ///
@@ -680,28 +685,28 @@ impl Voice {
         );
         let frames = out.len();
         self.sample = buses.clock.sample;
-        assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
-        let mut block = [[0.0f32; BLOCK]; 1];
+        assert!(
+            frames <= block_size(),
+            "block too long: {frames} > {}",
+            block_size()
+        );
+        let mut block = blocks(1);
         self.process_blocks(&mut block, frames, buses);
         out.copy_from_slice(&block[0][..frames]);
     }
 
-    /// Render `frames` samples (at most [`BLOCK`]) of every output channel into
+    /// Render `frames` samples (at most [`block_size`]) of every output channel into
     /// `out`, which must have one block per channel, and add the graph's sends
     /// to `buses`.
-    pub fn process_blocks(&mut self, out: &mut [[f32; BLOCK]], frames: usize, buses: &mut Buses) {
-        if let Some(fade) = self.render(out, frames, buses) {
-            self.send(
-                frames,
-                fade.as_ref(),
-                &mut |bus, channel, delayed, samples| {
-                    if delayed {
-                        buses.add_delayed(bus, channel, samples);
-                    } else {
-                        buses.add(bus, channel, samples);
-                    }
-                },
-            );
+    pub fn process_blocks(&mut self, out: &mut [Vec<f32>], frames: usize, buses: &mut Buses) {
+        if let Some(fading) = self.render(out, frames, buses) {
+            self.send(frames, fading, &mut |bus, channel, delayed, samples| {
+                if delayed {
+                    buses.add_delayed(bus, channel, samples);
+                } else {
+                    buses.add(bus, channel, samples);
+                }
+            });
             self.settle_ramps();
         }
     }
@@ -710,37 +715,32 @@ impl Voice {
     /// buses later, so voices that run side by side never write to the same place.
     pub(crate) fn process_sending(
         &mut self,
-        out: &mut [[f32; BLOCK]],
+        out: &mut [Vec<f32>],
         frames: usize,
         buses: &Buses,
         sends: &mut Sends,
     ) {
-        if let Some(fade) = self.render(out, frames, buses) {
-            self.send(
-                frames,
-                fade.as_ref(),
-                &mut |bus, channel, delayed, samples| {
-                    if delayed {
-                        sends.add_delayed(bus, channel, samples);
-                    } else {
-                        sends.add(bus, channel, samples);
-                    }
-                },
-            );
+        if let Some(fading) = self.render(out, frames, buses) {
+            self.send(frames, fading, &mut |bus, channel, delayed, samples| {
+                if delayed {
+                    sends.add_delayed(bus, channel, samples);
+                } else {
+                    sends.add(bus, channel, samples);
+                }
+            });
             self.settle_ramps();
         }
     }
 
     /// Everything but the sends. `None` when the voice has nothing to send; otherwise the choke fade
     /// the sends must be given, if there is one.
-    fn render(
-        &mut self,
-        out: &mut [[f32; BLOCK]],
-        frames: usize,
-        buses: &Buses,
-    ) -> Option<Option<[f32; BLOCK]>> {
+    fn render(&mut self, out: &mut [Vec<f32>], frames: usize, buses: &Buses) -> Option<bool> {
         self.sample = buses.clock.sample;
-        assert!(frames <= BLOCK, "block too long: {frames} > {BLOCK}");
+        assert!(
+            frames <= block_size(),
+            "block too long: {frames} > {}",
+            block_size()
+        );
         assert_eq!(out.len(), self.channels(), "one output block per channel");
         if self.poisoned || self.choke_left == Some(0) {
             out.iter_mut().for_each(|c| c[..frames].fill(0.0));
@@ -816,22 +816,21 @@ impl Voice {
             return None;
         }
         // A choked voice fades linearly to nothing over `CHOKE_FADE`.
-        let fade = self.choke_left.map(|left| {
+        let fading = self.choke_left.is_some();
+        if let Some(left) = self.choke_left {
             let total = ((self.sample_rate * CHOKE_FADE) as usize).max(1) as f32;
-            let mut gains = [0.0f32; BLOCK];
-            for (n, g) in gains[..frames].iter_mut().enumerate() {
+            for (n, g) in self.fade[..frames].iter_mut().enumerate() {
                 *g = (left.saturating_sub(n) as f32 / total).max(0.0);
             }
             self.choke_left = Some(left.saturating_sub(frames));
-            gains
-        });
+        }
         let mut level = 0.0f32;
         for (channel, &slot) in out.iter_mut().zip(&self.graph.output_slots) {
             channel[..frames].copy_from_slice(&self.slots[slot][..frames]);
-            if let Some(g) = &fade {
+            if fading {
                 channel[..frames]
                     .iter_mut()
-                    .zip(g)
+                    .zip(&self.fade)
                     .for_each(|(y, g)| *y *= g);
             }
         }
@@ -849,30 +848,28 @@ impl Voice {
             level = channel[..frames].iter().fold(level, |l, y| l.max(y.abs()));
         }
         self.level = level;
-        Some(fade)
+        Some(fading)
     }
 
     fn send(
-        &self,
+        &mut self,
         frames: usize,
-        fade: Option<&[f32; BLOCK]>,
+        fading: bool,
         add: &mut impl FnMut(usize, usize, bool, &[f32]),
     ) {
         for &(bus, channel, slot, delayed) in &self.graph.sends {
             let Some(bus) = self.bus_map.get(bus).copied().flatten() else {
                 continue;
             };
-            match fade {
-                None => add(bus, channel, delayed, &self.slots[slot][..frames]),
-                Some(g) => {
-                    let mut faded = [0.0f32; BLOCK];
-                    faded[..frames]
-                        .iter_mut()
-                        .zip(&self.slots[slot])
-                        .zip(g)
-                        .for_each(|((y, x), g)| *y = x * g);
-                    add(bus, channel, delayed, &faded[..frames]);
-                }
+            if fading {
+                self.faded[..frames]
+                    .iter_mut()
+                    .zip(&self.slots[slot])
+                    .zip(&self.fade)
+                    .for_each(|((y, x), g)| *y = x * g);
+                add(bus, channel, delayed, &self.faded[..frames]);
+            } else {
+                add(bus, channel, delayed, &self.slots[slot][..frames]);
             }
         }
     }
@@ -881,7 +878,7 @@ impl Voice {
         for i in (0..self.ramps.len()).rev() {
             if self.ramps[i].done >= self.ramps[i].frames {
                 let Ramp { index, to, .. } = self.ramps.swap_remove(i);
-                self.slots[index] = [to; BLOCK];
+                self.slots[index].fill(to);
             }
         }
     }

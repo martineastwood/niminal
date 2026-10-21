@@ -29,7 +29,10 @@ pub use mixer::{
     Buses, ChainInput, DEFAULT_MAX_VOICES, Fork, MAX_CHANNELS, Meter, Mixer, NodeDef, NodeLoad,
     Profile, Route, Stems, Transfer, VoiceId, execution_order,
 };
-pub use opcode::{BLOCK, Clock, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};
+pub use opcode::{
+    Clock, DEFAULT_BLOCK, MAX_BLOCK, MAX_INPUTS, MIN_BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL,
+    block_size, blocks, set_block_size,
+};
 pub use table::{Buffer, Edge, Table};
 pub use voice::{Priority, Voice, VoiceRule};
 

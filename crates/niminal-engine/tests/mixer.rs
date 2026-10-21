@@ -1,6 +1,6 @@
 use niminal_engine::ops::{Gain, Mul};
 use niminal_engine::{
-    BLOCK, ChainInput, GraphBuilder, Mixer, NodeDef, Route, Src, execution_order,
+    ChainInput, GraphBuilder, Mixer, NodeDef, Route, Src, block_size, execution_order,
 };
 use std::sync::Arc;
 
@@ -57,8 +57,8 @@ fn reader(bus: usize, factor: f32) -> NodeDef {
 }
 
 fn block(m: &mut Mixer) -> Vec<f32> {
-    let mut out = [[0.0; BLOCK]; 1];
-    m.process(&mut out, BLOCK);
+    let mut out = vec![vec![0.0; block_size()]; 1];
+    m.process(&mut out, block_size());
     out[0].to_vec()
 }
 
@@ -322,8 +322,8 @@ mod stereo {
     }
 
     fn stereo_block(m: &mut Mixer) -> [Vec<f32>; 2] {
-        let mut out = [[0.0; BLOCK]; 2];
-        m.process(&mut out, BLOCK);
+        let mut out = vec![vec![0.0; block_size()]; 2];
+        m.process(&mut out, block_size());
         [out[0].to_vec(), out[1].to_vec()]
     }
 
@@ -331,8 +331,8 @@ mod stereo {
     fn a_voice_renders_every_channel() {
         let mut v = Voice::new(two_channels(0.25, -0.5), SR);
         assert_eq!(v.channels(), 2);
-        let mut out = [[0.0; BLOCK]; 2];
-        v.process_blocks(&mut out, BLOCK, &mut niminal_engine::Buses::new(&[]));
+        let mut out = vec![vec![0.0; block_size()]; 2];
+        v.process_blocks(&mut out, block_size(), &mut niminal_engine::Buses::new(&[]));
         assert!(out[0].iter().all(|s| *s == 0.25));
         assert!(out[1].iter().all(|s| *s == -0.5));
     }
@@ -754,7 +754,7 @@ fn a_choke_fade_also_covers_what_a_voice_sends_to_a_bus() {
 
 #[test]
 fn a_delayed_send_arrives_exactly_one_block_of_samples_later_whatever_the_call_sizes() {
-    use niminal_engine::{BLOCK, Buses};
+    use niminal_engine::{Buses, block_size};
     // an impulse every 100 samples, written in calls of uneven length
     let mut buses = Buses::new(&[1]);
     let mut seen = Vec::new();
@@ -784,8 +784,8 @@ fn a_delayed_send_arrives_exactly_one_block_of_samples_later_whatever_the_call_s
         .collect();
     assert_eq!(
         arrivals,
-        [BLOCK, 100 + BLOCK, 200 + BLOCK],
-        "each impulse comes out BLOCK samples after it went in"
+        [block_size(), 100 + block_size(), 200 + block_size()],
+        "each impulse comes out block_size() samples after it went in"
     );
 }
 
@@ -831,7 +831,7 @@ fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arr
     };
     let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
     let seconds = |m: &mut Mixer, s: f32| -> f32 {
-        (0..(s * SR) as usize / BLOCK)
+        (0..(s * SR) as usize / block_size())
             .flat_map(|_| block(m))
             .fold(0.0, |peak, x| peak.max(x.abs()))
     };
@@ -887,7 +887,7 @@ fn a_resting_reverb_chain_still_rings_out_its_tail_and_wakes_for_the_next_note()
     let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
     let id = m.note_on(0, source(0.5, None), &[], None);
     let heard = |m: &mut Mixer, seconds: usize| -> Vec<f32> {
-        (0..seconds * SR as usize / BLOCK)
+        (0..seconds * SR as usize / block_size())
             .flat_map(|_| block(m))
             .collect()
     };

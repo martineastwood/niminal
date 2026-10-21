@@ -27,7 +27,7 @@ Run `niminal <command> --help` or `nimlive <command> --help` for every flag.
 
 ## Common flags
 
-**Server** — default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6 (5.1), 8 (7.1). `nimlive live [FILE]` loads a project and reloads it on save. Session logs default to `~/.niminal/sessions/` (newest 20 kept) unless `--no-log` or `--log PATH`. Crashes append to `~/.niminal/crash.log`.
+**Server** — default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6 (5.1), 8 (7.1). `--sample-rate HZ` defaults to the output device's rate. `--block-size N` sets the samples per DSP block (a power of two from 16 to 1024, default 64): control changes and bus sends land on block boundaries, so smaller blocks are tighter and larger ones cheaper. It is fixed at start-up, and `late`, bus mappings and `convolve` latency all scale with it; session logs don't record it, so replay with the same value for identical audio. `nimlive live [FILE]` loads a project and reloads it on save. Session logs default to `~/.niminal/sessions/` (newest 20 kept) unless `--no-log` or `--log PATH`. Crashes append to `~/.niminal/crash.log`.
 
 **Render** (`nimlive`) — `--out` is required. Live pieces without a fixed end use `--bars` or `--seconds`. Offline renders can use `--no-limiter`. Replay: `niminal replay <log> --out set.wav --channels 2`. Score: `nimlive render file.nml --score events.nms --out out.wav`.
 

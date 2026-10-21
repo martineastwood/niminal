@@ -3,9 +3,49 @@ use std::borrow::Cow;
 /// The level (-90db) below which a fading tail counts as finished.
 pub const TAIL_LEVEL: f32 = 3.162_277_7e-5;
 
+/// Samples per processing block unless the server is started with another size.
+pub const DEFAULT_BLOCK: usize = 64;
+pub const MIN_BLOCK: usize = 16;
+pub const MAX_BLOCK: usize = 1024;
+
+static BLOCK_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Samples per processing block. Control changes and bus sends are
 /// block-aligned; stateful opcodes still run per sample inside a block.
-pub const BLOCK: usize = 64;
+/// Fixed for the life of the process: it is whatever [`set_block_size`] chose
+/// before the first call here, else [`DEFAULT_BLOCK`].
+pub fn block_size() -> usize {
+    use std::sync::atomic::Ordering::Relaxed;
+    match BLOCK_SIZE.load(Relaxed) {
+        0 => match BLOCK_SIZE.compare_exchange(0, DEFAULT_BLOCK, Relaxed, Relaxed) {
+            Ok(_) => DEFAULT_BLOCK,
+            Err(set) => set,
+        },
+        n => n,
+    }
+}
+
+/// Choose the block size. It must be a power of two between [`MIN_BLOCK`] and
+/// [`MAX_BLOCK`], and must happen before anything is built, since buffers are
+/// sized from it.
+pub fn set_block_size(n: usize) -> Result<(), String> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if !n.is_power_of_two() || !(MIN_BLOCK..=MAX_BLOCK).contains(&n) {
+        return Err(format!(
+            "block size must be a power of two from {MIN_BLOCK} to {MAX_BLOCK}, not {n}"
+        ));
+    }
+    match BLOCK_SIZE.compare_exchange(0, n, Relaxed, Relaxed) {
+        Ok(_) => Ok(()),
+        Err(set) if set == n => Ok(()),
+        Err(set) => Err(format!("the block size is already {set}")),
+    }
+}
+
+/// `count` silent blocks.
+pub fn blocks(count: usize) -> Vec<Vec<f32>> {
+    vec![vec![0.0; block_size()]; count]
+}
 
 /// Stack input capacity for scalar opcodes. Array opcodes read graph slots directly.
 pub const MAX_INPUTS: usize = 16;
@@ -127,7 +167,7 @@ pub trait Opcode: Send + Sync + std::any::Any {
         &mut self,
         ctx: &ProcessCtx,
         inputs: &[&[f32]],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         self.process(ctx, inputs, &mut outs[0][..frames]);
@@ -144,9 +184,9 @@ pub trait Opcode: Send + Sync + std::any::Any {
     fn process_slots(
         &mut self,
         ctx: &ProcessCtx,
-        slots: &[[f32; BLOCK]],
+        slots: &[Vec<f32>],
         indices: &[usize],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         assert!(
@@ -257,7 +297,7 @@ impl Opcode for Box<dyn Opcode> {
         &mut self,
         ctx: &ProcessCtx,
         inputs: &[&[f32]],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         (**self).process_outputs(ctx, inputs, outs, frames);
@@ -270,9 +310,9 @@ impl Opcode for Box<dyn Opcode> {
     fn process_slots(
         &mut self,
         ctx: &ProcessCtx,
-        slots: &[[f32; BLOCK]],
+        slots: &[Vec<f32>],
         indices: &[usize],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         (**self).process_slots(ctx, slots, indices, outs, frames);

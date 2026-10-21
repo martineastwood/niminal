@@ -632,7 +632,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "fft",
-                "Forward STFT: `x.fft(1024)`. Analyses the signal into spectral bins for downstream spectral ops. The output is passed to `ifft` or spectral ops like `freeze`. Size must be a power of two, 128\u{2013}8192.",
+                "Forward STFT: `x.fft(1024)`. Analyses the signal into spectral bins for downstream spectral ops. The output is passed to `ifft` or spectral ops like `freeze`. Size must be a power of two from twice the block size (128 at the default) to 8192.",
                 vec![req("x", SIGNAL), setting("size", SIGNAL)],
                 Build::Fft,
             ),

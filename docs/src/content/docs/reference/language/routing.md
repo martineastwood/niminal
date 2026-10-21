@@ -38,7 +38,7 @@ An fx can also generate audio or process `input(1)`. Fx output goes to master un
 
 The compiler builds a dependency graph from bus reads and writes and sorts it: all writers to a bus run before readers in the same block. File order is irrelevant; redefinition re-sorts the graph.
 
-**Feedback between buses** has no valid order — the compiler rejects it and names the loop. Break it with **`late`**, which costs one block (32 samples by default):
+**Feedback between buses** has no valid order — the compiler rejects it and names the loop. Break it with **`late`**, which costs one block (64 samples by default, set with the server's `--block-size`):
 
 ```nml
 fx room {

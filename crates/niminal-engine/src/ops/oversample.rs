@@ -1,4 +1,4 @@
-use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx};
+use crate::opcode::{Opcode, Port, ProcessCtx, blocks};
 use std::f64::consts::PI;
 
 struct Fir {
@@ -42,9 +42,9 @@ pub struct Oversample {
     up_taps: Vec<f32>,
     up: Vec<Fir>,
     down: Vec<Fir>,
-    inputs: Vec<[f32; BLOCK]>,
+    inputs: Vec<Vec<f32>>,
     indices: Vec<usize>,
-    scratch: Vec<[f32; BLOCK]>,
+    scratch: Vec<Vec<f32>>,
     started: bool,
 }
 impl Oversample {
@@ -85,9 +85,9 @@ impl Oversample {
             up_taps,
             up: (0..inputs).map(|_| Fir::new(len)).collect(),
             down: (0..outputs).map(|_| Fir::new(len)).collect(),
-            inputs: vec![[0.0; BLOCK]; inputs],
+            inputs: blocks(inputs),
             indices: (0..inputs).collect(),
-            scratch: vec![[0.0; BLOCK]; outputs],
+            scratch: blocks(outputs),
             started: false,
         }
     }
@@ -160,9 +160,9 @@ impl Opcode for Oversample {
     fn process_slots(
         &mut self,
         ctx: &ProcessCtx,
-        slots: &[[f32; BLOCK]],
+        slots: &[Vec<f32>],
         indices: &[usize],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         let sub = ProcessCtx {

@@ -1,6 +1,6 @@
 //! Audio coming in from a device, for nodes that read `input(1)`.
 
-use niminal_engine::{BLOCK, MAX_CHANNELS};
+use niminal_engine::{MAX_CHANNELS, block_size};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 /// The receiving end of the audio input: frames of every channel, interleaved, put there by whatever
@@ -14,7 +14,7 @@ impl AudioInput {
     /// A ring that holds `frames` frames of `channels` channels. The producer takes interleaved samples.
     pub fn ring(channels: usize, frames: usize) -> (Producer<f32>, AudioInput) {
         let channels = channels.clamp(1, MAX_CHANNELS);
-        let (tx, rx) = RingBuffer::new(channels * frames.max(BLOCK));
+        let (tx, rx) = RingBuffer::new(channels * frames.max(block_size()));
         (tx, AudioInput { rx, channels })
     }
 
@@ -24,8 +24,8 @@ impl AudioInput {
 
     /// The next `n` frames, a buffer for each channel. A frame the device hasn't delivered yet is silence;
     /// a frame is never split across channels.
-    pub fn read(&mut self, n: usize, out: &mut [[f32; BLOCK]; MAX_CHANNELS]) {
-        for i in 0..n.min(BLOCK) {
+    pub fn read(&mut self, n: usize, out: &mut [Vec<f32>]) {
+        for i in 0..n.min(block_size()) {
             let ready = self.rx.slots() >= self.channels;
             for channel in out.iter_mut().take(self.channels) {
                 channel[i] = if ready {
@@ -49,7 +49,7 @@ mod tests {
             tx.push(i as f32).unwrap();
             tx.push(10.0 + i as f32).unwrap();
         }
-        let mut out = [[1.0; BLOCK]; MAX_CHANNELS];
+        let mut out = vec![vec![1.0; block_size()]; MAX_CHANNELS];
         input.read(5, &mut out);
         assert_eq!(&out[0][..5], &[0.0, 1.0, 2.0, 0.0, 0.0]);
         assert_eq!(&out[1][..5], &[10.0, 11.0, 12.0, 0.0, 0.0]);

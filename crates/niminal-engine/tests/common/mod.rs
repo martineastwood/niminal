@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::sync::Arc;
 
-use niminal_engine::{BLOCK, Graph, Voice};
+use niminal_engine::{Graph, Voice, block_size};
 
 pub const SR: f32 = 48_000.0;
 
@@ -17,7 +17,7 @@ pub fn render(
     let mut out = vec![0.0; frames];
     let mut pos = 0;
     while pos < frames {
-        let mut n = chunk.min(BLOCK).min(frames - pos);
+        let mut n = chunk.min(block_size()).min(frames - pos);
         if let Some(r) = release_at {
             if pos < r {
                 n = n.min(r - pos);

@@ -1,12 +1,12 @@
-use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx};
+use crate::opcode::{Opcode, Port, ProcessCtx, blocks};
 
 /// Restarts a node at positive trigger edges. Storage is allocated with the voice.
 pub struct ResetOn {
     op: Box<dyn Opcode>,
     ports: Vec<Port>,
-    slots: Vec<[f32; BLOCK]>,
+    slots: Vec<Vec<f32>>,
     indices: Vec<usize>,
-    scratch: Vec<[f32; BLOCK]>,
+    scratch: Vec<Vec<f32>>,
     positive: bool,
 }
 
@@ -16,10 +16,10 @@ impl ResetOn {
         let inputs = ports.len();
         ports.push(Port::required("__reset"));
         Self {
-            scratch: vec![[0.0; BLOCK]; op.outputs()],
+            scratch: blocks(op.outputs()),
             op,
             ports,
-            slots: vec![[0.0; BLOCK]; inputs],
+            slots: blocks(inputs),
             indices: (0..inputs).collect(),
             positive: false,
         }
@@ -95,9 +95,9 @@ impl Opcode for ResetOn {
     fn process_slots(
         &mut self,
         ctx: &ProcessCtx,
-        slots: &[[f32; BLOCK]],
+        slots: &[Vec<f32>],
         indices: &[usize],
-        outs: &mut [[f32; BLOCK]],
+        outs: &mut [Vec<f32>],
         frames: usize,
     ) {
         let trigger = &slots[*indices.last().expect("reset input")];

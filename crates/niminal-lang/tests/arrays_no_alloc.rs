@@ -1,5 +1,5 @@
 //! The array path must allocate before rendering, never on the audio thread.
-use niminal_engine::{BLOCK, Buses, Voice};
+use niminal_engine::{Buses, Voice, block_size};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -48,11 +48,11 @@ fn large_computed_arrays_and_buffers_do_not_allocate_while_processing() {
     });
     let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
     let mut buses = Buses::new(&[]);
-    let mut output = [[0.0; BLOCK]; 1];
+    let mut output = vec![vec![0.0; block_size()]; 1];
     ALLOCATIONS.with(|count| count.set(0));
     NODE.with(|node| node.set(true));
     for _ in 0..128 {
-        voice.process_blocks(&mut output, BLOCK, &mut buses);
+        voice.process_blocks(&mut output, block_size(), &mut buses);
     }
     NODE.with(|node| node.set(false));
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
@@ -63,14 +63,22 @@ fn large_computed_arrays_and_buffers_do_not_allocate_while_processing() {
 fn reset_scopes_callbacks_and_completion_do_not_allocate_while_processing() {
     let source = "fn apply(x, make: fn) { state unused = 0\nmake(x) }\nfn custom(t, x) { reset_on(t) { state buf = zeros(128)\nbuf[0] = x\napply(buf[0], fn(v) { v.delay(1ms) }).finish_when(0) } }\ninstr a(attack: sec = 10ms) { trigger = osc(square, 1khz)\nout = custom(trigger, 1)\nout += reset_on(trigger) { osc(saw, 440hz).reverb() * env[1 attack 0] } }";
     let program = niminal_lang::compile(source).unwrap_or_else(|errors| {
-        panic!("{}", errors.iter().map(|e| e.render("composition", source)).collect::<String>())
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("composition", source))
+                .collect::<String>()
+        )
     });
     let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
     let mut buses = Buses::new(&[]);
-    let mut output = [[0.0; BLOCK]; 1];
+    let mut output = vec![vec![0.0; block_size()]; 1];
     ALLOCATIONS.with(|count| count.set(0));
     NODE.with(|node| node.set(true));
-    for _ in 0..128 { voice.process_blocks(&mut output, BLOCK, &mut buses); }
+    for _ in 0..128 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+    }
     NODE.with(|node| node.set(false));
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(output[0].iter().all(|value| value.is_finite()));

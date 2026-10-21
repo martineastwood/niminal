@@ -1,5 +1,5 @@
 //! Bounded, single-renderer waveform capture; readers never hold up audio.
-use crate::{BLOCK, MAX_CHANNELS};
+use crate::MAX_CHANNELS;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 pub const WAVEFORM_FRAMES: usize = 4096;
@@ -32,7 +32,7 @@ impl Waveform {
     pub fn end_sample(&self) -> u64 {
         self.end.load(Ordering::Acquire)
     }
-    pub fn observe(&self, blocks: &[[f32; BLOCK]], frames: usize, sample: u64) {
+    pub fn observe(&self, blocks: &[Vec<f32>], frames: usize, sample: u64) {
         if !self.enabled.load(Ordering::Relaxed) && self.consumers.load(Ordering::Relaxed) == 0 {
             return;
         }
