@@ -600,6 +600,76 @@ pub fn signature_help(doc: &Document, offset: usize) -> Value {
 
 // ---- semantic tokens ----------------------------------------------------------------------------
 
+/// For each token, whether it names a parameter or a local (or `out`) of the instrument, function or fx
+/// it sits in. Parameters are the names in the header's parentheses; locals are the names bound
+/// in the body with `=`, `+=`, `for` or `state`.
+fn local_kinds(tokens: &[Token]) -> Vec<Option<u32>> {
+    let mut kinds = vec![None; tokens.len()];
+    let ident = |i: usize| match tokens.get(i).map(|t| &t.tok) {
+        Some(Tok::Ident(n)) if n == "out" || !RESERVED_WORDS.contains(&n.as_str()) => {
+            Some(n.as_str())
+        }
+        _ => None,
+    };
+    let is = |i: usize, tok: Tok| tokens.get(i).map(|t| &t.tok) == Some(&tok);
+    let mut i = 0;
+    while i < tokens.len() {
+        let Tok::Ident(word) = &tokens[i].tok else {
+            i += 1;
+            continue;
+        };
+        if !matches!(word.as_str(), "instr" | "mono" | "fn" | "def" | "fx")
+            || (i > 0 && is(i - 1, Tok::Dot))
+        {
+            i += 1;
+            continue;
+        }
+        let Some(open) = (i..tokens.len()).find(|&j| is(j, Tok::LBrace)) else {
+            break;
+        };
+        let close = {
+            let mut depth = 0;
+            (open..tokens.len())
+                .find(|&j| {
+                    depth += is(j, Tok::LBrace) as i32 - is(j, Tok::RBrace) as i32;
+                    depth == 0
+                })
+                .unwrap_or(tokens.len() - 1)
+        };
+        let mut names: Vec<(&str, u32)> = Vec::new();
+        let mut depth = 0;
+        for j in i..open {
+            depth += is(j, Tok::LParen) as i32 - is(j, Tok::RParen) as i32;
+            if let Some(n) = ident(j)
+                && depth == 1
+                && (is(j - 1, Tok::LParen) || is(j - 1, Tok::Comma))
+            {
+                names.push((n, PARAMETER));
+            }
+        }
+        for j in open..close {
+            let Some(n) = ident(j) else { continue };
+            let binds = is(j + 1, Tok::Eq)
+                || (is(j + 1, Tok::Plus) && is(j + 2, Tok::Eq))
+                || (j > 0
+                    && matches!(&tokens[j - 1].tok, Tok::Ident(w) if w == "for" || w == "state"));
+            if binds && !is(j - 1, Tok::Dot) && !names.iter().any(|(m, _)| *m == n) {
+                names.push((n, PARAMETER));
+            }
+        }
+        for (j, slot) in kinds.iter_mut().enumerate().take(close + 1).skip(i) {
+            if let Some(n) = ident(j)
+                && !is(j - 1, Tok::Dot)
+                && let Some((_, kind)) = names.iter().find(|(m, _)| *m == n)
+            {
+                *slot = Some(*kind);
+            }
+        }
+        i = close + 1;
+    }
+    kinds
+}
+
 /// The whole file's highlighted names, in the encoding LSP uses: for each, how far from the last
 /// one it is (lines, then columns), its length, its type and its modifiers.
 pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
@@ -613,6 +683,7 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
         .chain(doc.text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
 
+    let locals = local_kinds(&tokens);
     let mut data = Vec::new();
     let (mut last_line, mut last_char) = (0usize, 0usize);
     for (i, t) in tokens.iter().enumerate() {
@@ -620,7 +691,7 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
         let before = i.checked_sub(1).map(|i| &tokens[i].tok);
         let after = tokens.get(i + 1).map(|t| &t.tok);
         let kind = if RESERVED_WORDS.contains(&name.as_str()) {
-            None
+            locals[i]
         } else if let Some((symbol, ..)) = doc.find(name) {
             Some(match symbol.kind {
                 SymbolKind::Instrument | SymbolKind::Function => FUNCTION,
@@ -644,7 +715,7 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
         } else if after == Some(&Tok::Colon) && before != Some(&Tok::Dot) {
             Some(PARAMETER)
         } else {
-            None
+            locals[i]
         };
         let Some(kind) = kind else { continue };
 

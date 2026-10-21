@@ -17,7 +17,7 @@ fx slap { out = echo.lpf(cutoff: 6khz).gain(-1db) }
 
 // Each instrument routes its summed voices through a dedicated fx.
 fx bass_fx {
-  out        = bass_fx_audio.lpf(cutoff: 1500hz).gain(-3db)
+  out = bass_fx_audio.lpf(cutoff: 1500hz).gain(-3db)
   space     += out.gain(-16db)
 }
 bus bass_fx_audio: stereo
@@ -25,7 +25,9 @@ instr bass_voice(freq: hz) {
   voice = pluck(bright: 0.2, freq: freq)
   bass_fx_audio += voice
 }
-clip bass { instrument: bass_voice }
+clip bass {
+  instrument: bass_voice
+}
 
 fx lead_fx {
   out        = lead_fx_audio.gain(-6db)

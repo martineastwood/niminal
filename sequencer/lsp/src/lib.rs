@@ -3,6 +3,7 @@
 
 mod complete;
 mod features;
+mod format;
 mod text;
 
 use std::collections::HashMap;
@@ -58,6 +59,7 @@ impl Server {
                     "hoverProvider": true,
                     "definitionProvider": true,
                     "documentSymbolProvider": true,
+                    "documentFormattingProvider": true,
                     "renameProvider": { "prepareProvider": true },
                     "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
                     "semanticTokensProvider": {
@@ -134,6 +136,7 @@ impl Server {
                     return out;
                 }
             },
+            "textDocument/formatting" => Some(self.formatting(params)),
             "textDocument/signatureHelp" => Some(self.signature_help(params)),
             "textDocument/semanticTokens/full" => Some(self.semantic_tokens(params)),
             _ if id.is_some() => {
@@ -296,6 +299,20 @@ impl Server {
             return Value::Null;
         };
         features::signature_help(doc, offset)
+    }
+
+    fn formatting(&self, params: &Value) -> Value {
+        let Some(doc) = params["textDocument"]["uri"]
+            .as_str()
+            .and_then(|u| self.documents.get(u))
+        else {
+            return Value::Null;
+        };
+        let formatted = format::format(&doc.text);
+        if formatted == doc.text {
+            return json!([]);
+        }
+        json!([{ "range": text::range(&doc.text, 0, doc.text.len()), "newText": formatted }])
     }
 
     fn semantic_tokens(&self, params: &Value) -> Value {
@@ -766,6 +783,72 @@ mod tests {
         // words of the language itself are left to the grammar
         assert_eq!(kind("instr", 0), None);
         assert_eq!(kind("node", 0), None);
+    }
+
+    #[test]
+    fn semantic_tokens_colour_parameters_and_locals_inside_their_definition() {
+        let text = "instr tone(size, freq: hz = 440hz) {\n  voice = osc(saw, freq: freq)\n  out = voice\n}\nfn other(x) {\n  voice = x\n}\n";
+        let mut server = Server::new();
+        open(&mut server, text);
+        let reply = request(
+            &mut server,
+            1,
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        let data: Vec<u64> = reply["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
+        let (mut line, mut column) = (0, 0);
+        let mut found = Vec::new();
+        for t in data.chunks(5) {
+            line += t[0];
+            column = if t[0] == 0 { column + t[1] } else { t[1] };
+            let word = &text.lines().nth(line as usize).unwrap()
+                [column as usize..(column + t[2]) as usize];
+            found.push((line, word.to_string(), features::TOKEN_TYPES[t[3] as usize]));
+        }
+        let kind = |line: u64, word: &str| {
+            found
+                .iter()
+                .find(|(l, w, _)| *l == line && w == word)
+                .map(|(.., k)| *k)
+        };
+        assert_eq!(kind(0, "size"), Some("parameter"), "{found:?}");
+        assert_eq!(kind(1, "voice"), Some("parameter"));
+        assert_eq!(kind(2, "voice"), Some("parameter"));
+        assert_eq!(kind(2, "out"), Some("parameter"));
+        // the second `freq` is a use of the parameter, the first a label
+        let freqs: Vec<_> = found
+            .iter()
+            .filter(|(l, w, _)| *l == 1 && w == "freq")
+            .collect();
+        assert_eq!(freqs.len(), 2, "{found:?}");
+        assert!(freqs.iter().all(|(.., k)| *k == "parameter"));
+        // another definition's local of the same name is its own
+        assert_eq!(kind(5, "voice"), Some("parameter"));
+        assert_eq!(kind(5, "x"), Some("parameter"));
+    }
+
+    #[test]
+    fn formatting_replaces_the_document_only_when_it_changes() {
+        let ask = |text: &str| {
+            let mut server = Server::new();
+            open(&mut server, text);
+            request(
+                &mut server,
+                1,
+                "textDocument/formatting",
+                json!({ "textDocument": { "uri": URI }, "options": { "tabSize": 2, "insertSpaces": true } }),
+            )
+        };
+        let edits = ask("fn f(x) {\n x\n}\n");
+        assert_eq!(edits[0]["newText"], "fn f(x) {\n  x\n}\n", "{edits}");
+        assert_eq!(edits[0]["range"]["start"]["line"], 0);
+        assert_eq!(ask("fn f(x) {\n  x\n}\n"), json!([]));
     }
 
     fn rename_at(server: &mut Server, uri: &str, line: u32, character: u32, new: &str) -> Value {
