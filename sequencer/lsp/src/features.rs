@@ -624,8 +624,12 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
         } else if let Some((symbol, ..)) = doc.find(name) {
             Some(match symbol.kind {
                 SymbolKind::Instrument | SymbolKind::Function => FUNCTION,
-                SymbolKind::Fx | SymbolKind::Bus | SymbolKind::Sample | SymbolKind::Kit => CLASS,
-                SymbolKind::Control | SymbolKind::Pattern => VARIABLE,
+                SymbolKind::Fx
+                | SymbolKind::Bus
+                | SymbolKind::Sample
+                | SymbolKind::Kit
+                | SymbolKind::Pattern => CLASS,
+                SymbolKind::Control => VARIABLE,
                 SymbolKind::Clip | SymbolKind::Scene | SymbolKind::Arrangement => NAMESPACE,
             })
         } else if (after == Some(&Tok::LParen) || before == Some(&Tok::Dot))

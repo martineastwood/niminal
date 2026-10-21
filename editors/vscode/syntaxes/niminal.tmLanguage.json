@@ -6,6 +6,12 @@
     { "name": "string.quoted.double.niminal", "begin": "\"", "end": "\"", "patterns": [
       { "name": "constant.character.escape.niminal", "match": "\\\\." }
     ]},
+    { "begin": "\\b(grid)\\s*(\\{)", "end": "\\}", "beginCaptures": { "1": { "name": "keyword.control.niminal" } }, "patterns": [
+      { "name": "comment.line.double-slash.niminal", "match": "//.*$" },
+      { "name": "variable.parameter.niminal", "match": "^\\s*[A-Za-z_][A-Za-z0-9_]*(?=\\s*:)" },
+      { "name": "constant.character.niminal", "match": "[xXo]" },
+      { "name": "punctuation.definition.rest.niminal", "match": "\\." }
+    ]},
     { "name": "keyword.control.niminal", "match": "\\b(instr|mono|fn|def|const|bus|buffer|ctl|node|fx|config|clip|scene|arrangement|sample|kit|midi_out|over|meter|tempo|state|use|unsolo|hush|panic|reset|reset_on|after|new|at|next|now|if|else|match|for|in|and|or|not|init|control|as|capture|last|spawn|oversample|env|cycle)\\b" },
     { "name": "keyword.control.command.niminal", "match": "(?<=\\.)(start|stop|play|mute|unmute|solo|unsolo|undo|clear|set)\\b" },
     { "name": "variable.language.niminal", "match": "\\b(out|it|note|clock)\\b" },
