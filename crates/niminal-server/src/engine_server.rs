@@ -415,6 +415,8 @@ pub struct EngineServer {
     reports: crate::reports::Reports,
     files: crate::files::Files,
     jobs: crate::jobs::Jobs,
+    /// Verbosity and where log lines go. A separate thread prints them, so a slow terminal never holds up the engine.
+    trace: Option<(u8, std::sync::mpsc::Sender<String>)>,
 }
 
 impl EngineServer {
@@ -432,6 +434,21 @@ impl EngineServer {
             reports: Default::default(),
             files: Default::default(),
             jobs: Default::default(),
+            trace: None,
+        }
+    }
+
+    /// Send a line to `lines` for each thing that happens at or below `level`: 1 covers clients
+    /// coming and going and requests that fail, 2 every request.
+    pub fn set_trace(&mut self, level: u8, lines: std::sync::mpsc::Sender<String>) {
+        self.trace = Some((level, lines));
+    }
+
+    fn trace(&self, level: u8, line: impl FnOnce() -> String) {
+        if let Some((max, lines)) = &self.trace
+            && level <= *max
+        {
+            let _ = lines.send(line());
         }
     }
 
@@ -468,6 +485,7 @@ impl EngineServer {
         let id = self.next_client;
         self.next_client += 1;
         self.clients.insert(id, Client::default());
+        self.trace(1, || format!("client {id} connected"));
         id
     }
 
@@ -479,6 +497,7 @@ impl EngineServer {
     }
 
     pub fn disconnect(&mut self, client: ClientId) {
+        self.trace(1, || format!("client {client} disconnected"));
         self.clients.remove(&client);
         self.outbox.retain(|(id, _)| *id != client);
         self.jobs.disconnect(client);
@@ -514,6 +533,7 @@ impl EngineServer {
             None | Some(Value::Null) => json!({}),
             Some(p) => p.clone(),
         };
+        let started = std::time::Instant::now();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let parsed: EngineRequest = serde_json::from_value(
                 json!({ "method": method, "params": params }),
@@ -532,6 +552,17 @@ impl EngineServer {
             self.request(client, parsed)
         }))
         .unwrap_or_else(|_| Err(internal_error()));
+        match &outcome {
+            // the clock is polled several times a second, which would drown everything else
+            Ok(_) if method == "clock" => {}
+            Ok(_) => self.trace(2, || {
+                format!(
+                    "client {client} {method} ok in {:.1} ms",
+                    started.elapsed().as_secs_f64() * 1e3
+                )
+            }),
+            Err(e) => self.trace(1, || format!("client {client} {method} failed: {}", e.message)),
+        }
         match (id, outcome) {
             (None, _) => Vec::new(), // a notification from the client gets no reply
             (Some(id), Ok(reply)) => {
@@ -559,6 +590,13 @@ impl EngineServer {
             if let Some(c) = self.clients.get_mut(&client) {
                 c.greeted = true;
             }
+            self.trace(1, || {
+                let name = match &request {
+                    EngineRequest::Hello { client: Some(name), .. } => name.as_str(),
+                    _ => "unnamed",
+                };
+                format!("client {client} said hello as {name}")
+            });
             return Ok(EngineReply::Hello {
                 client_id: client,
                 sample_rate: self.session.sample_rate(),

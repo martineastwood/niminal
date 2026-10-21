@@ -28,6 +28,7 @@ pub struct Output {
     name: String,
     health: Arc<Health>,
     queue_frames: usize,
+    requested_buffer: Option<u32>,
 }
 
 /// What has gone wrong with the audio so far, for the server to report without
@@ -111,6 +112,7 @@ impl Output {
             config,
             health: Arc::default(),
             queue_frames,
+            requested_buffer,
         })
     }
 
@@ -122,12 +124,25 @@ impl Output {
         &self.name
     }
 
+    /// The device callback size in frames, if one was asked for or the device reports one.
+    pub fn buffer_frames(&self) -> Option<u32> {
+        match self.config.buffer_size {
+            cpal::BufferSize::Fixed(frames) => Some(frames),
+            cpal::BufferSize::Default => None,
+        }
+    }
+
     pub fn health(&self) -> Arc<Health> {
         self.health.clone()
     }
 
     /// Start playing the server's session. Audio stops when the result is dropped.
-    pub fn start(self, server: Shared, input: Option<AudioInput>) -> Result<Running, String> {
+    pub fn start(
+        self,
+        server: Shared,
+        input: Option<AudioInput>,
+        config: RealtimeConfig,
+    ) -> Result<Running, String> {
         let channels = usize::from(self.config.channels);
         let (playback, worker) = RenderWorker::start(
             server,
@@ -135,11 +150,13 @@ impl Output {
             self.queue_frames,
             self.health.clone(),
             input,
+            config,
         )?;
         let playback = Arc::new(Mutex::new(playback));
         let stream = build_stream(&self.device, self.config, &playback, &self.health)?;
         Ok(Running {
             selection: self.selection,
+            requested_buffer: self.requested_buffer,
             stream: Some(stream),
             playback,
             health: self.health,
@@ -204,20 +221,22 @@ impl Listening {
         ring_frames: usize,
         health: Arc<Health>,
     ) -> Result<(Listening, AudioInput), String> {
-        Self::open_selected(sample_rate, ring_frames, health, None)
+        Self::open_selected(sample_rate, ring_frames, health, None, None)
     }
+    /// Like [`Listening::open`] on the device `id`, keeping only the first `channels` channels it has.
     pub fn open_selected(
         sample_rate: u32,
         ring_frames: usize,
         health: Arc<Health>,
         id: Option<&str>,
+        channels: Option<usize>,
     ) -> Result<(Listening, AudioInput), String> {
         let device = select_device(true, id)?;
         let default = device
             .default_input_config()
             .map_err(|e| format!("can't query the audio input: {e}"))?;
         let all = usize::from(default.channels());
-        let kept = all.min(MAX_CHANNELS);
+        let kept = all.min(MAX_CHANNELS).min(channels.unwrap_or(usize::MAX)).max(1);
         let (mut producer, ring) = AudioInput::ring(kept, ring_frames);
         let config = cpal::StreamConfig {
             channels: default.channels(),
@@ -267,6 +286,7 @@ impl Listening {
 
 pub struct Running {
     selection: Option<String>,
+    requested_buffer: Option<u32>,
     stream: Option<cpal::Stream>,
     playback: Arc<Mutex<Playback>>,
     health: Arc<Health>,
@@ -289,7 +309,7 @@ impl Running {
             self.channels,
             Some(self.sample_rate),
             self.selection.as_deref(),
-            None,
+            self.requested_buffer,
         )?;
         let stream = build_stream(&output.device, output.config, &self.playback, &self.health)?;
         self.health.lost.store(false, Ordering::Release);
@@ -474,6 +494,7 @@ impl RenderWorker {
         queue_frames: usize,
         health: Arc<Health>,
         input: Option<AudioInput>,
+        config: RealtimeConfig,
     ) -> Result<(Playback, Self), String> {
         let (producer, consumer) = RingBuffer::new(queue_frames);
         let (next, epoch, mut renderer, probe) = {
@@ -481,7 +502,7 @@ impl RenderWorker {
             let probe = d.session().clock_probe();
             let next = d.session().clock();
             let epoch = d.session().panic_epoch();
-            let mut renderer = d.session_mut().start_realtime(RealtimeConfig::default());
+            let mut renderer = d.session_mut().start_realtime(config);
             if let Some(input) = input {
                 renderer.set_audio_input(input);
             }
@@ -643,14 +664,14 @@ pub struct NullClock {
 }
 
 impl NullClock {
-    pub fn start(server: Shared, speed: f64) -> NullClock {
+    pub fn start(server: Shared, speed: f64, config: RealtimeConfig) -> NullClock {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let (rate, mut renderer) = {
             let mut d = lock(&server);
             (
                 f64::from(d.session().sample_rate()),
-                d.session_mut().start_realtime(RealtimeConfig::default()),
+                d.session_mut().start_realtime(config),
             )
         };
         let planner =
@@ -689,19 +710,24 @@ fn select_device(input: bool, id: Option<&str>) -> Result<cpal::Device, String> 
     let host = cpal::default_host();
     if let Some(id) = id.filter(|id| *id != "default") {
         let kind = if input { "input:" } else { "output:" };
-        let index = id
-            .strip_prefix(kind)
-            .and_then(|i| i.parse::<usize>().ok())
-            .ok_or("invalid device id")?;
         let mut devices = if input {
             host.input_devices()
         } else {
             host.output_devices()
         }
         .map_err(|e| e.to_string())?;
+        // an id from `audio.devices` such as `output:1`, else part of a device's name
+        if let Some(index) = id.strip_prefix(kind).and_then(|i| i.parse::<usize>().ok()) {
+            return devices
+                .nth(index)
+                .ok_or_else(|| "audio device is no longer available".into());
+        }
+        let wanted = id.to_lowercase();
         devices
-            .nth(index)
-            .ok_or_else(|| "audio device is no longer available".into())
+            .find(|d| d.to_string().to_lowercase().contains(&wanted))
+            .ok_or_else(|| {
+                format!("no audio {} device matches `{id}`; `niminal devices` lists them", if input { "input" } else { "output" })
+            })
     } else {
         if input {
             host.default_input_device()
@@ -866,7 +892,7 @@ mod tests {
         .join();
         assert!(server.is_poisoned());
         let (mut playback, _worker) =
-            RenderWorker::start(server, 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
+            RenderWorker::start(server, 2, QUEUE_FRAMES, Arc::default(), None, RealtimeConfig::default()).unwrap();
         // the planner keeps feeding the renderer, so the tone is still heard
         let mut heard = false;
         for _ in 0..50 {
@@ -910,7 +936,7 @@ mod tests {
         let expected = reference.process(QUEUE_FRAMES * 4);
         let server = Arc::new(Mutex::new(EngineServer::new(session)));
         let (mut playback, worker) =
-            RenderWorker::start(server.clone(), 2, QUEUE_FRAMES, Arc::default(), None).unwrap();
+            RenderWorker::start(server.clone(), 2, QUEUE_FRAMES, Arc::default(), None, RealtimeConfig::default()).unwrap();
         let guard = lock(&server);
         let mut audio = vec![0.0; QUEUE_FRAMES * 2];
         for batch in 0..4 {

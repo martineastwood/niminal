@@ -48,6 +48,31 @@ struct ServerArgs {
     /// land on block boundaries; smaller blocks are tighter, larger ones cheaper.
     #[arg(long, default_value_t = niminal_engine::DEFAULT_BLOCK)]
     block_size: usize,
+    /// Frames in each sound card callback: smaller is lower latency but less forgiving. By default 256,
+    /// or what the device allows nearest to it. Not the same as `--block-size`.
+    #[arg(long)]
+    buffer_size: Option<u32>,
+    /// The sound card for both output and input, by part of its name. `--out-device` and
+    /// `--in-device` choose one side; `niminal devices` lists them.
+    #[arg(long)]
+    device: Option<String>,
+    /// The output device: an id such as `output:1`, or part of its name.
+    #[arg(long)]
+    out_device: Option<String>,
+    /// The input device: an id such as `input:0`, or part of its name.
+    #[arg(long, requires = "audio_input")]
+    in_device: Option<String>,
+    /// Use only the first N channels of the input device.
+    #[arg(long, requires = "audio_input")]
+    input_channels: Option<usize>,
+    /// Most notes that may sound at once; past it the oldest are ended early.
+    #[arg(long, default_value_t = niminal_server::RealtimeConfig::default().max_voices)]
+    max_voices: usize,
+    /// Say more about what the server is doing: `-v` for the settings it starts with and for clients
+    /// coming, going and failing, `-vv` for every request and a status line every few seconds.
+    /// None of it runs on the audio thread.
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
     /// Run without a sound card, at real speed, throwing the audio away.
     #[arg(long)]
     no_audio: bool,
@@ -86,6 +111,8 @@ enum Command {
     Server(ServerArgs),
     /// Print the built-in opcode reference as Markdown, for the docs site.
     Docs,
+    /// List the sound cards, with the ids `--out-device` and `--in-device` take.
+    Devices,
 }
 
 fn main() -> ExitCode {
@@ -108,6 +135,10 @@ fn main() -> ExitCode {
         }
         Command::Docs => {
             print!("{}", opcode_reference());
+            Ok(())
+        }
+        Command::Devices => {
+            print_devices();
             Ok(())
         }
     };
@@ -199,12 +230,33 @@ fn run_replay(log: &Path, out: &Path, channels: u16, no_limiter: bool) -> Result
     Ok(())
 }
 
+fn print_devices() {
+    let devices = niminal_cli::audio::devices();
+    for (heading, key) in [("Outputs", "outputs"), ("Inputs", "inputs")] {
+        println!("{heading}:");
+        for device in devices[key].as_array().into_iter().flatten() {
+            println!(
+                "  {:<10} {}",
+                device["id"].as_str().unwrap_or("?"),
+                device["name"].as_str().unwrap_or("?")
+            );
+        }
+    }
+}
+
 fn run_server(args: ServerArgs) -> Result<(), String> {
     let ServerArgs {
         port,
         channels,
         sample_rate,
         block_size,
+        buffer_size,
+        device,
+        out_device,
+        in_device,
+        input_channels,
+        max_voices,
+        verbose,
         no_audio,
         log,
         token,
@@ -215,6 +267,15 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
         ..
     } = args;
     niminal_engine::set_block_size(block_size)?;
+    if max_voices == 0 {
+        return Err("error: --max-voices must be at least 1".into());
+    }
+    let realtime = niminal_server::RealtimeConfig {
+        max_voices,
+        ..Default::default()
+    };
+    let out_device = out_device.or(device.clone());
+    let in_device = in_device.or(device);
     let threads = render_threads
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(4)))
         .max(1);
@@ -235,7 +296,12 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
     let output = if no_audio {
         None
     } else {
-        Some(Output::open(channels, sample_rate)?)
+        Some(Output::open_selected(
+            channels,
+            sample_rate,
+            out_device.as_deref(),
+            buffer_size,
+        )?)
     };
     let rate = output
         .as_ref()
@@ -251,6 +317,25 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
         rate as f32,
         layout,
     ))));
+    // lines for `-v` go through a thread of their own, so a slow terminal never holds up the engine
+    if verbose > 0 {
+        let (lines, printed) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            for line in printed {
+                eprintln!("{line}");
+            }
+        });
+        niminal_cli::audio::lock(&engine).set_trace(verbose, lines);
+        eprintln!(
+            "settings: {rate} Hz, block {} samples, device buffer {}, up to {max_voices} voices, {threads} render thread{}",
+            niminal_engine::block_size(),
+            output
+                .as_ref()
+                .and_then(Output::buffer_frames)
+                .map_or("default".to_string(), |f| format!("{f} frames")),
+            plural(threads),
+        );
+    }
     let mut health = output.as_ref().map(Output::health);
     let audio_control = niminal_server::AudioControl::default();
     audio_control.publish_devices(niminal_cli::audio::devices());
@@ -262,10 +347,12 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
         if no_audio {
             return Err("error: --audio-input needs audio output; leave out --no-audio".into());
         }
-        let (device, ring) = niminal_cli::audio::Listening::open(
+        let (device, ring) = niminal_cli::audio::Listening::open_selected(
             rate,
             usize::try_from(rate).unwrap_or(48_000) / 4,
             health.clone().unwrap_or_default(),
+            in_device.as_deref(),
+            input_channels,
         )
         .map_err(|e| format!("error: {e}"))?;
         println!(
@@ -279,10 +366,10 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
     }
     let _ = &listening;
     let mut audio = match output {
-        Some(o) => Some(o.start(engine.clone(), input)?),
+        Some(o) => Some(o.start(engine.clone(), input, realtime)?),
         None => None,
     };
-    let mut virtual_clock = no_audio.then(|| NullClock::start(engine.clone(), 1.0));
+    let mut virtual_clock = no_audio.then(|| NullClock::start(engine.clone(), 1.0, realtime));
     let engine_server = Server::start(
         engine.clone(),
         ServerConfig {
@@ -303,6 +390,7 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
     let mut reported = (0, 0, 0, 0, 0);
     let mut last_reopen = std::time::Instant::now();
     let mut last_report = std::time::Instant::now();
+    let mut last_stats = std::time::Instant::now();
     loop {
         std::thread::sleep(Duration::from_millis(250));
         if let Some((id, settings)) = audio_control.take_restart() {
@@ -325,6 +413,12 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
                     .map(Some)
                 }
             })();
+            if verbose > 0 {
+                match &prepared {
+                    Ok(_) => eprintln!("audio: restarting with {}", serde_json::to_string(&settings).unwrap_or_default()),
+                    Err(error) => eprintln!("audio: new settings rejected: {error}"),
+                }
+            }
             match prepared {
                 Err(error)=>audio_control.publish_status(serde_json::json!({"state":"configuration_rejected","id":id,"error":error,"previous_audio_running":audio.is_some()})),
                 Ok(output)=>{
@@ -334,8 +428,8 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
                     let restarted=(||->Result<(),String>{
                         health=output.as_ref().map(Output::health);
                         let mut input=None;
-                        if let Some(device)=&settings.input {let (opened,ring)=niminal_cli::audio::Listening::open_selected(settings.sample_rate,settings.sample_rate as usize/4,health.clone().unwrap_or_default(),Some(device))?;listening=Some(opened);input=Some(ring);}
-                        if let Some(output)=output{audio=Some(output.start(engine.clone(),input)?);}else{virtual_clock=Some(NullClock::start(engine.clone(),1.0));}
+                        if let Some(device)=&settings.input {let (opened,ring)=niminal_cli::audio::Listening::open_selected(settings.sample_rate,settings.sample_rate as usize/4,health.clone().unwrap_or_default(),Some(device),input_channels)?;listening=Some(opened);input=Some(ring);}
+                        if let Some(output)=output{audio=Some(output.start(engine.clone(),input,realtime)?);}else{virtual_clock=Some(NullClock::start(engine.clone(),1.0,realtime));}
                         Ok(())
                     })();
                     audio_control.publish_status(match restarted {Ok(())=>serde_json::json!({"state":if settings.no_audio{"virtual"}else{"running"},"id":id,"settings":settings}),Err(error)=>serde_json::json!({"state":"error","id":id,"error":error})});
@@ -397,6 +491,23 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
             if now != reported {
                 reported = now;
                 last_report = std::time::Instant::now();
+            }
+        }
+        if verbose >= 2 && last_stats.elapsed() >= Duration::from_secs(5) {
+            last_stats = std::time::Instant::now();
+            let (voices, metrics) = {
+                let e = niminal_cli::audio::lock(&engine);
+                (e.session().state().voices, e.session().realtime_metrics())
+            };
+            let underruns = health
+                .as_ref()
+                .map_or(0, |h| h.underruns.load(std::sync::atomic::Ordering::Relaxed));
+            match metrics {
+                Some(m) => eprintln!(
+                    "status: {voices} voices, slowest render {} us, {} late events, {} starved frames, {} deadline misses, {underruns} underruns",
+                    m.max_render_micros, m.late_events, m.starved_frames, m.deadline_misses
+                ),
+                None => eprintln!("status: {voices} voices"),
             }
         }
         if let Some(path) = log {
