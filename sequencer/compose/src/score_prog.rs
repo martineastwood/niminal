@@ -4,11 +4,7 @@ mod tests {
     use crate::schedule::Schedule;
     use niminal_score::{Tempo, Time, Value};
 
-    const STAGE: &str = "
-tempo 120bpm
-instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }
-track lead { instrument = pluck }
-";
+    const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }\npart lead { instrument = pluck }\n";
 
     fn schedule(body: &str) -> Schedule {
         let src = format!("{STAGE}{body}");
@@ -38,15 +34,7 @@ track lead { instrument = pluck }
     #[test]
     fn def_fills_pattern_atoms_from_params() {
         let s = schedule(
-            "
-def motif(root) {
-  [root ~]
-}
-clip riff {
-  notes: motif(c4)
-}
-lead.play(riff)
-",
+            "\ndef motif(root) {\n  [root ~]\n}\nclip riff {\n  notes: motif(c4)\n}\nlead.play(riff)\n",
         );
         // `[root ~]` is one note then a rest in each bar
         assert_eq!(midis(&s, 0.0, 2.0), vec![60]);
@@ -56,13 +44,7 @@ lead.play(riff)
     #[test]
     fn def_with_if_picks_a_branch() {
         let s = schedule(
-            "
-def pick(n) {
-  if n > 0 { [c5] } else { [c3] }
-}
-clip riff { notes: pick(1) }
-lead.play(riff)
-",
+            "\ndef pick(n) {\n  if n > 0 { [c5] } else { [c3] }\n}\nclip riff { notes: pick(1) }\nlead.play(riff)\n",
         );
         assert_eq!(midis(&s, 0.0, 1.0)[0], 72);
     }
@@ -70,11 +52,7 @@ lead.play(riff)
     #[test]
     fn top_level_for_expands_notes() {
         let src = format!(
-            "{STAGE}
-for i in 0..<4 {{
-  at i * 1beat pluck(freq: c4) for 1/2beat
-}}
-"
+            "{STAGE}\nfor i in 0..<4 {{\n  at i * 1beat pluck(freq: c4) for 1/2beat\n}}\n"
         );
         let p = compile(&src).unwrap_or_else(|e| {
             panic!(
@@ -89,15 +67,7 @@ for i in 0..<4 {{
     #[test]
     fn for_in_def_builds_a_list_pattern() {
         let s = schedule(
-            "
-def stairs(n) {
-  for i in 0..<n {
-    c4 + i * 1st
-  }
-}
-clip riff { notes: stairs(4) }
-lead.play(riff)
-",
+            "\ndef stairs(n) {\n  for i in 0..<n {\n    c4 + i * 1st\n  }\n}\nclip riff { notes: stairs(4) }\nlead.play(riff)\n",
         );
         // one bar at 120bpm is 2 seconds
         assert_eq!(midis(&s, 0.0, 2.0), vec![60, 61, 62, 63]);
@@ -106,14 +76,7 @@ lead.play(riff)
     #[test]
     fn anonymous_clip_from_def() {
         let s = schedule(
-            "
-def make() {
-  clip {
-    notes: [c4 e4]
-  }
-}
-lead.play(make())
-",
+            "\ndef make() {\n  clip {\n    notes: [c4 e4]\n  }\n}\nlead.play(make())\n",
         );
         assert_eq!(midis(&s, 0.0, 2.0), vec![60, 64]);
     }
@@ -139,13 +102,7 @@ lead.play(make())
     #[test]
     fn top_level_if_picks_a_branch() {
         let src = format!(
-            "{STAGE}
-if 1 > 0 {{
-  at 0beats pluck(freq: c5) for 1beat
-}} else {{
-  at 0beats pluck(freq: c3) for 1beat
-}}
-"
+            "{STAGE}\nif 1 > 0 {{\n  at 0beats pluck(freq: c5) for 1beat\n}} else {{\n  at 0beats pluck(freq: c3) for 1beat\n}}\n"
         );
         let p = compile(&src).unwrap_or_else(|e| {
             panic!(

@@ -27,9 +27,9 @@ pub struct RenderOptions {
     pub until: Option<f64>,
     /// Play this arrangement instead of the file's own `play` and `launch` commands.
     pub arrangement: Option<String>,
-    /// Also keep what each track put out and what each bus carried.
+    /// Also keep what each node put out and what each bus carried.
     pub stems: bool,
-    /// What tracks that read `input(..)` hear: a buffer for each channel, from the start.
+    /// What nodes that read `input(..)` hear: a buffer for each channel, from the start.
     pub input: Vec<Vec<f32>>,
 }
 
@@ -50,11 +50,11 @@ pub struct RenderOutput {
     pub channels: Vec<Vec<f32>>,
     /// Voices that produced NaN or infinity and were silenced.
     pub silenced_voices: usize,
-    /// With `RenderOptions::stems`: each track and bus, before the master stage, as long as `channels`.
+    /// With `RenderOptions::stems`: each node and bus, before the master stage, as long as `channels`.
     pub stems: Vec<Stem>,
 }
 
-/// One track's or bus's sound on its own.
+/// One node's or bus's sound on its own.
 pub struct Stem {
     pub name: String,
     pub channels: Vec<Vec<f32>>,
@@ -188,7 +188,7 @@ fn collect(mut session: Offline, mut out: Vec<Vec<f32>>, limiter: bool) -> Rende
     finish(out, silenced, stems, limiter)
 }
 
-/// Keep mixing after the last voice has ended, until the tracks' effects have
+/// Keep mixing after the last voice has ended, until the nodes' effects have
 /// died away, then trim the trailing silence. `more` adds audio to the end of `out`.
 fn ring_out(out: &mut Vec<Vec<f32>>, mut more: impl FnMut(&mut Vec<Vec<f32>>)) {
     let needed = (TAIL_SILENCE * SAMPLE_RATE as f32) as usize;
@@ -237,17 +237,17 @@ fn finish(
     }
 }
 
-/// The captured stems, named for their track or bus and cut to `len` samples. The track that plays
+/// The captured stems, named for their node or bus and cut to `len` samples. The node that plays
 /// bare instruments is left out if it was never heard.
 fn name_stems(program: &Composition, captured: Option<niminal_engine::Stems>, len: usize) -> Vec<Stem> {
     let Some(captured) = captured else {
         return Vec::new();
     };
     let named = captured
-        .tracks
+        .nodes
         .into_iter()
         .enumerate()
-        .map(|(i, c)| (program.tracks[i].name.clone(), c))
+        .map(|(i, c)| (program.nodes[i].name.clone(), c))
         .chain(
             captured
                 .buses
@@ -259,7 +259,7 @@ fn name_stems(program: &Composition, captured: Option<niminal_engine::Stems>, le
     for (i, (name, mut channels)) in named.enumerate() {
         channels.iter_mut().for_each(|c| c.resize(len, 0.0));
         let silent = channels.iter().flatten().all(|s| *s == 0.0);
-        // the implicit track has no name; say what it is
+        // the implicit node has no name; say what it is
         match (i, name.is_empty()) {
             (0, true) if silent => continue,
             (0, true) => stems.push(Stem {

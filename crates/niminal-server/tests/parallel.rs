@@ -41,22 +41,13 @@ unsafe impl GlobalAlloc for Allocator {
 }
 
 /// Voices that send to a bus, one with a tail that dies away into tiny numbers, and a bus effect.
-const SETUP: &str = "bus space
-instr pad(freq: hz) {
-  out = (osc(saw, freq) + osc(saw, freq * 1.01)).lpf(cutoff: freq * 4, res: 0.3) * env[0 3ms 1 | 400ms.exp 0]
-  space += out.gain(-9db)
-}
-track pads { instrument = pad }
-track room {
-  out = space.delay(time: 130ms, feedback: 0.5).lpf(cutoff: 3khz)
-}
-";
+const SETUP: &str = "bus space\ninstr pad(freq: hz) {\n  out = (osc(saw, freq) + osc(saw, freq * 1.01)).lpf(cutoff: freq * 4, res: 0.3) * env[0 3ms 1 | 400ms.exp 0]\n  space += out.gain(-9db)\n}\nnode pads { instrument = pad }\nprocessor room {\n  out = space.delay(time: 130ms, feedback: 0.5).lpf(cutoff: 3khz)\n}\n";
 
-fn notes(track: &str, count: usize) -> Vec<Op> {
+fn notes(node: &str, count: usize) -> Vec<Op> {
     (0..count)
         .map(|i| Op::Note {
             to: None,
-            target: track.into(),
+            target: node.into(),
             // off the block grid, so that blocks are split at odd places
             at: At::Sample(7 + 131 * i as u64),
             dur: Some(Time::Seconds(0.05 + 0.002 * i as f64)),
@@ -86,15 +77,15 @@ fn define(source: &str) -> Op {
     }
 }
 
-/// Render `source` with `notes` notes on each of `tracks`, with this many helper threads.
-fn render(source: &str, tracks: &[&str], notes_each: usize, workers: usize) -> Vec<Vec<f32>> {
+/// Render `source` with `notes` notes on each of `nodes`, with this many helper threads.
+fn render(source: &str, nodes: &[&str], notes_each: usize, workers: usize) -> Vec<Vec<f32>> {
     let mut s = Session::new(48_000.0, Layout::Stereo).without_limiter();
     if workers > 0 {
         s.set_fork(Some(Arc::new(Pool::new(workers, Policy::Always, || {}))));
     }
     s.send_events(0, vec![define(source)]).unwrap();
-    for track in tracks {
-        s.send_events(0, notes(track, notes_each)).unwrap();
+    for node in nodes {
+        s.send_events(0, notes(node, notes_each)).unwrap();
     }
     s.process(24_000)
 }
@@ -135,16 +126,16 @@ fn the_sound_is_the_same_however_many_threads_share_the_voices() {
     assert_eq!(workers, 0, "the workers used the heap");
 }
 
-/// Ten tracks of ten voices: no track has many, but a wave takes chunks from all of them.
+/// Ten nodes of ten voices: no node has many, but a wave takes chunks from all of them.
 #[test]
-fn chunks_of_different_tracks_share_waves_without_changing_the_sound() {
-    let mut source = String::from(SETUP.split("track pads").next().unwrap());
-    let tracks: Vec<String> = (0..10).map(|t| format!("t{t}")).collect();
-    for t in &tracks {
-        source += &format!("track {t} {{ instrument = pad }}\n");
+fn chunks_of_different_nodes_share_waves_without_changing_the_sound() {
+    let mut source = String::from(SETUP.split("node pads").next().unwrap());
+    let nodes: Vec<String> = (0..10).map(|t| format!("t{t}")).collect();
+    for t in &nodes {
+        source += &format!("node {t} {{ instrument = pad }}\n");
     }
-    source += "track room {\n  out = space.delay(time: 130ms, feedback: 0.5).lpf(cutoff: 3khz)\n}\n";
-    let names: Vec<&str> = tracks.iter().map(String::as_str).collect();
+    source += "processor room {\n  out = space.delay(time: 130ms, feedback: 0.5).lpf(cutoff: 3khz)\n}\n";
+    let names: Vec<&str> = nodes.iter().map(String::as_str).collect();
     let serial = render(&source, &names, 10, 0);
     assert!(serial[0].iter().any(|x| x.abs() > 0.05), "silent");
     for workers in [1, 3, 7] {
@@ -156,15 +147,7 @@ fn chunks_of_different_tracks_share_waves_without_changing_the_sound() {
 /// forty voices each store their own number, and a reader sounds whichever is left.
 #[test]
 fn voices_that_write_a_buffer_still_make_the_same_sound() {
-    let source = "buffer last = zeros(1)
-instr scribe(freq: hz, tag: num = 0) {
-  if note.start { last[0] = tag }
-  osc(sine, freq) * env[0 2ms 1 | 100ms 0] * 0.01
-}
-instr look() { osc(sine, 220hz) * env[0 2ms 1 | 300ms 0] * 0.01 + last[0] * 0.001 }
-track writers { instrument = scribe }
-track reader { instrument = look }
-";
+    let source = "buffer last = zeros(1)\ninstr scribe(freq: hz, tag: num = 0) {\n  if note.start { last[0] = tag }\n  osc(sine, freq) * env[0 2ms 1 | 100ms 0] * 0.01\n}\ninstr look() { osc(sine, 220hz) * env[0 2ms 1 | 300ms 0] * 0.01 + last[0] * 0.001 }\nnode writers { instrument = scribe }\nnode reader { instrument = look }\n";
     let run = |workers| {
         let mut s = Session::new(48_000.0, Layout::Stereo).without_limiter();
         if workers > 0 {

@@ -12,9 +12,12 @@ instr tone(freq: hz) {
   osc(saw, freq).lpf(cutoff: cutoff, res: 0.2).pan(azimuth: pan) * env[0 2ms 1 200ms 0]
 }
 
-track lead {
-  instrument = tone
+processor lead_fx {
   out = it.gain(volume)
+}
+part lead {
+  instrument = tone
+  output = lead_fx
 }
 
 lead.play([c3 e3 g3 b3])

@@ -112,7 +112,7 @@ fn a_live_eval_plays_a_kit_from_the_sample_folder_and_picks_up_a_changed_file() 
     let mut s = session();
     s.set_sample_dir(&dir);
     s.eval(
-        "tempo 120bpm\nk = kit(\"kit\")\ntrack t { instrument = k }",
+        "tempo 120bpm\nk = kit(\"kit\")\npart t { instrument = k }",
         Some("now"),
     )
     .unwrap();
@@ -203,7 +203,7 @@ fn a_rejected_evaluation_through_the_two_step_path_changes_nothing() {
 }
 
 #[test]
-fn a_new_play_replaces_a_pending_play_for_the_same_track() {
+fn a_new_play_replaces_a_pending_play_for_the_same_node() {
     let mut s = ready();
     run(&mut s, 1000);
     let old = s.eval("lead.play([c4]) @ next 4bars", None).unwrap();
@@ -225,8 +225,7 @@ fn replacing_one_write_preserves_the_rest_of_an_older_transaction() {
     run(&mut s, 1000);
     let old = s
         .eval(
-            "lead.play([c4])
-bass.play([c2])",
+            "lead.play([c4])\nbass.play([c2])",
             Some("next 4bars"),
         )
         .unwrap();
@@ -248,8 +247,7 @@ fn a_later_definition_snapshot_cannot_revert_a_newer_write() {
     let mut s = ready();
     run(&mut s, 1000);
     s.eval(
-        "instr pluck(freq: hz) { osc(sine, freq) * 0.1 }
-clip extra { notes: [c4] }",
+        "instr pluck(freq: hz) { osc(sine, freq) * 0.1 }\nclip extra { notes: [c4] }",
         Some("next 4bars"),
     )
     .unwrap();
@@ -279,7 +277,7 @@ fn an_effect_parameter_edit_keeps_its_tail_and_uses_the_new_setting() {
     let mut live = with_tail();
     run(&mut live, 5000);
     live.eval(
-        "track hall { out = space.reverb(room: 0.95, damp: 0.2) }",
+        "processor hall { out = space.reverb(room: 0.95, damp: 0.2) }",
         Some("now"),
     )
     .unwrap();
@@ -299,13 +297,13 @@ fn panic_clears_the_limiter_lookahead_as_well_as_the_mixer() {
 }
 
 #[test]
-fn a_track_edit_keeps_memory_but_applies_the_new_output_gain() {
+fn a_node_edit_keeps_memory_but_applies_the_new_output_gain() {
     let mut live = with_tail();
     let mut reference = with_tail();
     run(&mut live, 5000);
     run(&mut reference, 5000);
     live.eval(
-        "track hall { out = space.reverb(room: 0.8, damp: 0.5) * 0.5 }",
+        "processor hall { out = space.reverb(room: 0.8, damp: 0.5) * 0.5 }",
         Some("now"),
     )
     .unwrap();
@@ -346,8 +344,7 @@ fn replacing_a_pending_definition_moves_its_dependent_play_to_the_new_boundary()
     run(&mut reference, 1000);
     reference
         .eval(
-            "riff = [a4]
-lead.play(riff)",
+            "riff = [a4]\nlead.play(riff)",
             Some("next 4bars"),
         )
         .unwrap();
@@ -377,14 +374,12 @@ fn superseded_pending_changes_replay_to_the_same_audio() {
     let mut s = ready();
     let mut original = run(&mut s, 1000);
     s.eval(
-        "riff = [c4]
-bass.play([c2])",
+        "riff = [c4]\nbass.play([c2])",
         Some("next 4bars"),
     )
     .unwrap();
     s.eval(
-        "riff = [a4]
-lead.play(riff)",
+        "riff = [a4]\nlead.play(riff)",
         Some("now"),
     )
     .unwrap();

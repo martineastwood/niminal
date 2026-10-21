@@ -122,7 +122,6 @@ impl Session {
                     }
                 }
                 Op::Control { name, .. }
-                | Op::Track { name, .. }
                 | Op::BufferWrite { name, .. } => *name = definitions::scoped(client, name),
                 Op::BindBuffer { buffer, .. } => *buffer = definitions::scoped(client, buffer),
                 Op::Map {
@@ -134,8 +133,8 @@ impl Session {
                             crate::RoutingEdit::BindBuffer { buffer, .. } => {
                                 *buffer = definitions::scoped(client, buffer)
                             }
-                            crate::RoutingEdit::Import { track, .. } => {
-                                *track = definitions::scoped(client, track)
+                            crate::RoutingEdit::Import { node, .. } => {
+                                *node = definitions::scoped(client, node)
                             }
                             crate::RoutingEdit::Bus {
                                 source: Some(source),
@@ -197,7 +196,7 @@ impl Session {
         for (index, op) in ops.iter().enumerate() {
             let (duration, args) = match op {
                 Op::Note { dur, args, .. } => (*dur, Some(args)),
-                Op::Set { glide, args, .. } | Op::Track { glide, args, .. } => (*glide, Some(args)),
+                Op::Set { glide, args, .. } => (*glide, Some(args)),
                 Op::Control { glide, unit, .. } => {
                     if unit
                         .as_deref()
@@ -412,7 +411,7 @@ impl Session {
                 op: usize,
                 tag: Option<String>,
             },
-            Track {
+            Node {
                 key: String,
                 value: f32,
                 frames: u64,
@@ -576,65 +575,6 @@ impl Session {
                         tag: tag.clone(),
                     });
                 }
-                Op::Track {
-                    name,
-                    at,
-                    args,
-                    glide,
-                    tag,
-                } => {
-                    let raw = at;
-                    let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Track {
-                        name: name.clone(),
-                        at: self.logged(*raw),
-                        args: args.clone(),
-                        glide: *glide,
-                        tag: tag.clone(),
-                    });
-                    if name.starts_with("__routing_") {
-                        fail("use a local node ID".into());
-                        continue;
-                    }
-                    let local_name = if self
-                        .routing_at(at)
-                        .has_node(client, definitions::local(client, name).unwrap_or(name))
-                    {
-                        crate::routing::node_name(
-                            client,
-                            definitions::local(client, name).unwrap_or(name),
-                        )
-                    } else {
-                        name.clone()
-                    };
-                    let name = &local_name;
-                    let program = self.program_at(at);
-                    for (param, value) in args {
-                        let full = format!("{name}::{param}");
-                        let Some(def) = program.controls.iter().find(|c| c.name == full) else {
-                            fail(format!("`{name}` has no parameter `{param}`"));
-                            continue;
-                        };
-                        let seconds =
-                            glide.map_or(def.smooth_seconds, |g| g.to_seconds(program.tempo));
-                        if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
-                            fail("`glide` must be between 0 and 60sec".into());
-                            continue;
-                        }
-                        match def.from_value(*value, program.tempo) {
-                            Ok(v) => {
-                                plans.push(Plan::Track {
-                                    key: def.key.clone(),
-                                    value: v,
-                                    frames: (seconds * rate).round() as u64,
-                                    at,
-                                    tag: tag.clone(),
-                                });
-                            }
-                            Err(e) => fail(format!("parameter `{param}`: {e}")),
-                        }
-                    }
-                }
                 Op::Routing { at, edits, tag } => {
                     let start = self.resolve(*at);
                     for edit in edits {
@@ -747,7 +687,7 @@ impl Session {
                         {
                             Ok(updates) => {
                                 for (key, value, glide) in updates {
-                                    plans.push(Plan::Track {
+                                    plans.push(Plan::Node {
                                         key,
                                         value,
                                         frames: (glide * rate).round() as u64,
@@ -1277,14 +1217,14 @@ impl Session {
                     }
                     at
                 }
-                Plan::Track {
+                Plan::Node {
                     key,
                     value,
                     frames,
                     at,
                     tag,
                 } => {
-                    let set = TrackSet {
+                    let set = NodeSet {
                         key,
                         value,
                         frames,
@@ -1294,10 +1234,10 @@ impl Session {
                         done: false,
                     };
                     if self.live.is_some() {
-                        self.fresh.push(realtime::Fresh::Track(set.clone()));
+                        self.fresh.push(realtime::Fresh::Node(set.clone()));
                     }
-                    let place = self.track_sets.partition_point(|s| s.at <= set.at);
-                    self.track_sets.insert(place, set);
+                    let place = self.node_sets.partition_point(|s| s.at <= set.at);
+                    self.node_sets.insert(place, set);
                     at
                 }
                 Plan::Set {
@@ -1527,8 +1467,8 @@ impl Session {
             done.cancelled += usize::from(drop);
             !drop
         });
-        let mut tracks = std::mem::take(&mut self.track_sets);
-        tracks.retain(|s| {
+        let mut nodes = std::mem::take(&mut self.node_sets);
+        nodes.retain(|s| {
             let drop = !s.done && s.at >= from && mine(s.client, &s.tag);
             done.cancelled += usize::from(drop);
             !drop
@@ -1554,7 +1494,7 @@ impl Session {
             done.cancelled += usize::from(drop);
             !drop
         });
-        self.track_sets = tracks;
+        self.node_sets = nodes;
         replan |= done.cancelled > before;
 
         // control changes the renderer has not carried out

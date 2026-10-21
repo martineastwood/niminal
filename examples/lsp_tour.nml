@@ -17,9 +17,12 @@ instr lead(freq: hz, amp: db = -12db) {
 
 bus space
 
-track keys {
-  instrument = lead
+processor keys_fx {
   out = it.gain(-3db)
+}
+part keys {
+  instrument = lead
+  output = keys_fx
 }
 
 keys.play([c3 e3 g3 b3])
@@ -37,7 +40,7 @@ keys.play([c3 e3 g3 b3])
 //      osc(saw, 440hz).drive(  -> amount:
 //      800   -> unit suffixes (hz khz db ms sec beat bar deg st)
 //      lea   -> lead (an instrument you defined) next to keywords and functions
-// 6. HALF-TYPED CODE: add a line `track bass { instrument = ` and ask for completion
+// 6. HALF-TYPED CODE: add a line `node bass { instrument = ` and ask for completion
 //    after the `=`. `lead` should still be offered even though the file doesn't parse.
-// 7. DOC COMMENTS: add a `// text` line above `track keys` or edit the one above `lead`,
+// 7. DOC COMMENTS: add a `// text` line above `node keys` or edit the one above `lead`,
 //    and hover to see it update.

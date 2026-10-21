@@ -26,7 +26,7 @@ impl Reports {
         graphs.extend(
             session
                 .program()
-                .tracks
+                .nodes
                 .iter()
                 .filter_map(|t| t.def.chain.as_ref().map(|g| (&t.name, g))),
         );

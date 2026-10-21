@@ -12,9 +12,12 @@ instr tone(freq: hz) {
   .pan(azimuth: 0deg) * env[0 2ms 1 200ms 0]
 }
 
-track lead {
-  instrument = tone
+processor lead_fx {
   out = it.gain(volume)
+}
+part lead {
+  instrument = tone
+  output = lead_fx
 }
 
 lead.play([c4 e4 g4 b4])

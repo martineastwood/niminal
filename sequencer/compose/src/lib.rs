@@ -35,4 +35,4 @@ pub use score_file::{
     ArrangementDef, ArrangementSection, ClipDef, ClipEvent, Project, SceneDef, SceneEntry, ScoreError, ScoreFile, Section,
     VERSION, VERSION_2,
 };
-pub use schedule::{ControlSet, Found, Schedule, ScheduleError, TrackState};
+pub use schedule::{ControlSet, Found, Schedule, ScheduleError, PartState};

@@ -25,7 +25,8 @@ pub enum Item {
     Bus(BusDecl),
     /// `buffer take = zeros(48000)` or `buffer take = 4bars`: shared writable table.
     Buffer(BufferDecl),
-    Track(TrackDecl),
+    Part(PartDecl),
+    Processor(PartDecl),
     Sample(SampleDecl),
     MidiOut(MidiOutDecl),
     Arrangement(ArrangementDecl),
@@ -87,7 +88,7 @@ pub struct TempoStmt {
     pub span: Span,
 }
 
-/// `clip name { key: value ... }` or `scene name { track: clip ... }`
+/// `clip name { key: value ... }` or `scene name { node: clip ... }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct NamedBlock {
     pub name: Ident,
@@ -113,7 +114,7 @@ pub enum AtPos {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Play {
-        track: Ident,
+        node: Ident,
         what: Expr,
     },
     Stop(Ident),
@@ -133,7 +134,7 @@ pub enum Command {
         length: Expr,
         name: Ident,
     },
-    /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its track.
+    /// `verse.start` or `bass.start`: launch a scene, or play the clip of that name on its node.
     /// `verb` is the `start`. Optional `then fill after 4bars` queues another launch later.
     Start {
         name: Ident,
@@ -141,9 +142,9 @@ pub enum Command {
         /// `(next, after)` from `then next after 4bars`.
         then: Option<(Ident, Expr)>,
     },
-    /// `bass.reverse`: change what a track is playing. `change` is `reverse`, in the source.
+    /// `bass.reverse`: change what a part is playing. `change` is `reverse`, in the source.
     Edit {
-        track: Ident,
+        node: Ident,
         change: Span,
     },
 }
@@ -198,7 +199,7 @@ pub struct ArrangementDecl {
     pub tempo_env: Option<EnvLit>,
     /// `meter: [4/4 7/8]`: the meter of each section.
     pub meters: Option<Vec<Expr>>,
-    /// `bass.tone: env[...]`: a track's parameter, moved over the whole piece.
+    /// `bass.tone: env[...]`: a node's parameter, moved over the whole piece.
     pub lanes: Vec<ArrangementLane>,
     pub span: Span,
 }
@@ -206,7 +207,7 @@ pub struct ArrangementDecl {
 /// `bass.tone: env[800hz 8bars 3khz]` in an arrangement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrangementLane {
-    pub track: Ident,
+    pub node: Ident,
     pub param: Ident,
     pub value: EnvLit,
 }
@@ -235,9 +236,6 @@ pub struct BusDecl {
     pub name: Ident,
     /// A layout such as `stereo` or `surround(5.1)`.
     pub layout: Option<Expr>,
-    /// `bus space: stereo { out = it.reverb(room: 0.8) }`: what the bus is processed by.
-    /// `it` is what the bus has collected.
-    pub body: Option<Vec<Stmt>>,
 }
 
 /// `buffer take = zeros(48000)` or `buffer take = 4bars`
@@ -259,11 +257,11 @@ pub struct ConfigDecl {
     pub span: Span,
 }
 
-/// `track name { instrument = ...  out = ... }`
+/// `part name { instrument = ...  out = ... }`
 #[derive(Debug, Clone, PartialEq)]
-pub struct TrackDecl {
+pub struct PartDecl {
     pub name: Ident,
-    /// `track bass(tone: hz = 2khz)`: each is a control, set from outside, that the track's body can read.
+    /// Live controls on processor declarations; musical parts have no DSP parameters.
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,

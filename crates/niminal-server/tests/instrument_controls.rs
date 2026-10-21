@@ -2,7 +2,7 @@ use niminal_server::{At, Op, RealtimeConfig, Session};
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
 
-const SOURCE: &str = "const first = [0.25, 0.5]\nconst second = [-0.25, -0.5]\nbuffer one = first\nbuffer two = second\nctl level = 0.5.smooth(0ms)\nbus modulator\ntrack lfo { modulator += osc(sine, 1khz)\n out = 0 }\ninstr a(weights: [num] = [0.25, 0.5], source: buffer = one, value: num = 0) { weights.sum + source[0] + value }";
+const SOURCE: &str = "const first = [0.25, 0.5]\nconst second = [-0.25, -0.5]\nbuffer one = first\nbuffer two = second\nctl level = 0.5.smooth(0ms)\nbus modulator\nprocessor lfo { modulator += osc(sine, 1khz)\n out = 0 }\ninstr a(weights: [num] = [0.25, 0.5], source: buffer = one, value: num = 0) { weights.sum + source[0] + value }";
 fn session(source: &str) -> Session {
     let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
     s.send_events(
@@ -139,7 +139,7 @@ fn malformed_array_update_rolls_back_the_entire_batch() {
 }
 #[test]
 fn bus_mapping_is_one_block_delayed_and_independent_of_render_chunk_size() {
-    let source = "bus modulation\ntrack generator { modulation += osc(sine, 1khz)\n out = 0 }\ninstr a(value: num = 0) { value }";
+    let source = "bus modulation\nprocessor generator { modulation += osc(sine, 1khz)\n out = 0 }\ninstr a(value: num = 0) { value }";
     let run = |chunk: usize| {
         let mut s = session(source);
         s.send_events(1, vec![note(), map(0, Some("modulation"))])
@@ -158,10 +158,10 @@ fn bus_mapping_is_one_block_delayed_and_independent_of_render_chunk_size() {
 }
 
 #[test]
-fn parallel_tracks_and_bus_sends_are_latency_compensated() {
+fn parallel_nodes_and_bus_sends_are_latency_compensated() {
     for source in [
-        "instr tone() { osc(sine, 1khz) }\ntrack dry { instrument = tone }\ntrack wet { instrument = tone\nout = -oversample(4) { it } }",
-        "bus sum\ninstr tone() { osc(sine, 1khz) }\ntrack dry { instrument = tone\nsum += it\nout = 0 }\ntrack wet { instrument = tone\nsum += -oversample(4) { it }\nout = 0 }\ntrack result { out = sum }",
+        "instr tone() { osc(sine, 1khz) }\nnode dry { instrument = tone }\nprocessor wet_fx {out = -oversample(4) { it }}\nnode wet { instrument = tone\noutput = wet_fx}",
+        "bus sum\ninstr tone() { osc(sine, 1khz) }\nbus dry_audio\nprocessor dry_fx {sum += dry_audio\nout = 0}\nnode dry { instrument = tone\noutput = dry_audio}\nprocessor wet_fx {sum += -oversample(4) { it }\nout = 0}\nnode wet { instrument = tone\noutput = wet_fx}\nprocessor result { out = sum }",
     ] {
         let mut s = session(source);
         let notes = ["dry", "wet"]

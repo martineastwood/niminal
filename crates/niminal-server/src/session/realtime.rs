@@ -142,12 +142,12 @@ impl Command {
 #[allow(clippy::large_enum_variant)]
 enum Kind {
     ChainMap {
-        track: String,
+        node: String,
         param: String,
         mapping: Option<Box<niminal_engine::ParamMapping>>,
     },
     Bind {
-        track: Option<String>,
+        node: Option<String>,
         key: u32,
         resource: u64,
         banks: Vec<niminal_engine::BufferBank>,
@@ -168,7 +168,7 @@ enum Kind {
         values: Arc<[f32]>,
     },
     Note {
-        track: Option<String>,
+        node: Option<String>,
         program: Arc<Program>,
         off: u64,
         key: u32,
@@ -206,12 +206,12 @@ enum Kind {
 /// A mixer and the program it plays, with the controls that belong to it: everything a graph change
 /// puts in place at once.
 struct BufferRestore {
-    track: String,
+    node: String,
     key: u64,
     banks: Vec<niminal_engine::BufferBank>,
 }
 struct ChainRestore {
-    track: String,
+    node: String,
     param: String,
     mapping: Option<Box<niminal_engine::ParamMapping>>,
 }
@@ -244,7 +244,7 @@ fn chain_map_command(program: &Program, map: &super::ChainMap, at: u64) -> Comma
     Command {
         at,
         kind: Kind::ChainMap {
-            track: map.track(),
+            node: map.node(),
             param: map.param.clone(),
             mapping: super::parameters::prepare_mapping(program, &map.mapping),
         },
@@ -314,7 +314,7 @@ pub(super) enum Fresh {
         at: u64,
     },
     Set(super::VoiceSet),
-    Track(super::TrackSet),
+    Node(super::NodeSet),
     Buffer(super::BufferSet),
     Map(super::VoiceMap),
     Bind(super::BufferBind),
@@ -327,7 +327,7 @@ impl Fresh {
             Fresh::Note { start, .. } => *start,
             Fresh::Release { at, .. } => *at,
             Fresh::Set(set) => set.at,
-            Fresh::Track(set) => set.at,
+            Fresh::Node(set) => set.at,
             Fresh::Buffer(set) => set.at,
             Fresh::Map(set) => set.at,
             Fresh::Bind(set) => set.at,
@@ -392,7 +392,7 @@ pub struct RealtimeRenderer {
     sounding: Sounding,
     finished: Vec<Voice>,
     config: RealtimeConfig,
-    /// Audio from a device, for tracks that read `input(..)`.
+    /// Audio from a device, for nodes that read `input(..)`.
     audio_in: Option<crate::AudioInput>,
     /// Where notes for `midi_out` instruments go, and those still sounding: when they end and the key that holds them.
     midi_tx: Option<Producer<crate::MidiEvent>>,
@@ -549,7 +549,7 @@ impl Session {
         while let Ok(applied) = planner.control_applied.pop() {
             if let Some(entry) = self.log.get_mut(applied.log_index)
                 && let LogInput::Send { ops, .. } = &mut entry.input
-                && let Some(Op::Control { at, .. } | Op::Track { at, .. }) =
+                && let Some(Op::Control { at, .. }) =
                     ops.get_mut(applied.log_op)
             {
                 if *at != At::Sample(applied.at) {
@@ -586,7 +586,7 @@ impl Session {
             if let Some(change) = self.control_changes.iter().find(|c| c.applied) {
                 next = next.min(change.at.max(self.clock));
             }
-            if let Some(set) = self.track_sets.iter().find(|s| !s.done)
+            if let Some(set) = self.node_sets.iter().find(|s| !s.done)
                 && set.at < now
             {
                 next = next.min(set.at.max(self.clock));
@@ -594,7 +594,7 @@ impl Session {
             self.clock = next;
             self.land_due(now);
             self.apply_controls();
-            self.apply_track_sets(if self.clock < now {
+            self.apply_node_sets(if self.clock < now {
                 self.clock.saturating_add(1)
             } else {
                 self.clock
@@ -602,7 +602,7 @@ impl Session {
         }
         self.land_due(now);
         self.apply_controls();
-        self.apply_track_sets(self.clock);
+        self.apply_node_sets(self.clock);
         if unapplied_graph {
             self.invalidate_live();
         }
@@ -858,7 +858,7 @@ impl Session {
                 Fresh::Bind(set) => window.commands.push(Command {
                     at: set.at.max(self.clock),
                     kind: Kind::Bind {
-                        track: set.target.clone(),
+                        node: set.target.clone(),
                         key: set.key,
                         resource: set.resource,
                         banks: set.banks(),
@@ -888,7 +888,7 @@ impl Session {
                         });
                     }
                 }
-                Fresh::Track(set) => window.commands.push(Command {
+                Fresh::Node(set) => window.commands.push(Command {
                     at: set.at.max(self.clock),
                     kind: Kind::Control {
                         key: set.key,
@@ -1044,7 +1044,7 @@ impl Session {
                     program: program.clone(),
                     controls: states,
                 },
-                transfers: Vec::with_capacity(program.tracks.len()),
+                transfers: Vec::with_capacity(program.nodes.len()),
             },
         }
     }
@@ -1086,8 +1086,8 @@ impl Session {
         latest
             .values()
             .filter_map(|bind| {
-                let track = bind.target.as_ref()?;
-                let node = track
+                let render_node = bind.target.as_ref()?;
+                let node = render_node
                     .strip_prefix("__routing_processor_")?
                     .split_once('_')?
                     .1;
@@ -1096,7 +1096,7 @@ impl Session {
                     .buffer_binding(bind.client, node, &bind.param)
                     .ok()?;
                 Some(BufferRestore {
-                    track: track.clone(),
+                    node: render_node.clone(),
                     key,
                     banks: vec![bind.bank.clone(); count],
                 })
@@ -1122,7 +1122,7 @@ impl Session {
                 m.mapping.source.is_some() && program.controls.iter().any(|c| c.key == m.param)
             })
             .map(|m| ChainRestore {
-                track: m.track(),
+                node: m.node(),
                 param: m.param.clone(),
                 mapping: super::parameters::prepare_mapping(program, &m.mapping),
             })
@@ -1163,7 +1163,7 @@ impl Session {
                     change.kind = Kind::ClientPanic {
                         client: panic.client,
                         change: graph,
-                        transfers: Vec::with_capacity(program.tracks.len()),
+                        transfers: Vec::with_capacity(program.nodes.len()),
                     };
                 }
                 window.commands.push(change);
@@ -1206,7 +1206,7 @@ impl Session {
                 window.commands.push(Command {
                     at: set.at,
                     kind: Kind::Bind {
-                        track: set.target.clone(),
+                        node: set.target.clone(),
                         key: set.key,
                         resource: set.resource,
                         banks: set.banks(),
@@ -1237,9 +1237,9 @@ impl Session {
                 });
             }
         }
-        // track parameters moved by `track` events
+        // render_node parameters moved by `node` events
         let mut moved = 0;
-        for set in &self.track_sets {
+        for set in &self.node_sets {
             if set.at >= from && set.at < to {
                 moved += 1;
                 if moved > MAX_WINDOW_CONTROLS {
@@ -1334,7 +1334,7 @@ impl Session {
             window.commands.push(Command {
                 at,
                 kind: Kind::Note {
-                    track: (plan.track != 0).then(|| program.tracks[plan.track].name.clone()),
+                    node: (plan.node != 0).then(|| program.nodes[plan.node].name.clone()),
                     program: program.clone(),
                     off: if key.is_some() && dur == 0 {
                         u64::MAX
@@ -1398,7 +1398,7 @@ impl RealtimeRenderer {
         }
     }
 
-    /// Feed tracks that read `input(..)` from this device audio from now on.
+    /// Feed nodes that read `input(..)` from this device audio from now on.
     pub fn set_audio_input(&mut self, input: crate::AudioInput) {
         self.audio_in = Some(input);
     }
@@ -1519,13 +1519,13 @@ impl RealtimeRenderer {
         std::mem::swap(&mut self.mixer, &mut change.mixer);
         std::mem::swap(&mut self.program, &mut change.program);
         for restore in &mut change.mappings {
-            if let Some(index) = self.program.track_index(&restore.track) {
+            if let Some(index) = self.program.node_index(&restore.node) {
                 self.mixer
                     .swap_chain_mapping(index, &restore.param, &mut restore.mapping);
             }
         }
         for restore in &mut change.buffers {
-            if let Some(index) = self.program.track_index(&restore.track) {
+            if let Some(index) = self.program.node_index(&restore.node) {
                 self.mixer
                     .swap_chain_buffers(index, restore.key, &mut restore.banks);
             }
@@ -1553,7 +1553,7 @@ impl RealtimeRenderer {
             } => {
                 change
                     .stop_players
-                    .retain(|key| super::definitions::owns_track(*client, key));
+                    .retain(|key| super::definitions::owns_node(*client, key));
                 let mut i = 0;
                 while i < self.sounding.midi.len() {
                     if self.sounding.midi[i].3 == *client {
@@ -1565,9 +1565,9 @@ impl RealtimeRenderer {
                 }
                 super::plan_transfers(&self.program, &change.program, transfers);
                 self.mixer.silence_owner(*client);
-                for (track, transfer) in change.program.tracks.iter().zip(transfers.iter_mut()) {
-                    if !track.name.is_empty()
-                        && super::definitions::owns_track(*client, &track.name)
+                for (render_node, transfer) in change.program.nodes.iter().zip(transfers.iter_mut()) {
+                    if !render_node.name.is_empty()
+                        && super::definitions::owns_node(*client, &render_node.name)
                     {
                         transfer.chain_from = None;
                         transfer.voices_from = None;
@@ -1577,11 +1577,11 @@ impl RealtimeRenderer {
                 self.install(change);
             }
             Kind::ChainMap {
-                track,
+                node: render_node,
                 param,
                 mapping,
             } => {
-                if let Some(index) = self.program.track_index(track) {
+                if let Some(index) = self.program.node_index(render_node) {
                     if mapping.is_none()
                         && let Some(value) = self.mixer.chain_param_value(index, param)
                             && let Some(control) =
@@ -1594,13 +1594,13 @@ impl RealtimeRenderer {
                 }
             }
             Kind::Bind {
-                track,
+                node: render_node,
                 key,
                 resource,
                 banks,
             } => {
-                if let Some(track) = track {
-                    if let Some(index) = self.program.track_index(track) {
+                if let Some(render_node) = render_node {
+                    if let Some(index) = self.program.node_index(render_node) {
                         self.mixer.swap_chain_buffers(index, *resource, banks);
                     }
                 } else if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == *key) {
@@ -1648,7 +1648,7 @@ impl RealtimeRenderer {
                 }
             }
             Kind::Note {
-                track,
+                node: render_node,
                 program,
                 off,
                 key,
@@ -1667,9 +1667,9 @@ impl RealtimeRenderer {
                         voice.as_ref().map_or(0, |v| v.owner()),
                     ));
                 }
-                let target = track
+                let target = render_node
                     .as_ref()
-                    .map_or(Some(0), |name| self.program.track_index(name));
+                    .map_or(Some(0), |name| self.program.node_index(name));
                 if let Some(target) = target
                     && *off > self.clock
                     && self.sounding.held.len() < self.sounding.held.capacity()

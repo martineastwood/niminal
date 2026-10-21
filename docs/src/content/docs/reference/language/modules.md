@@ -26,7 +26,7 @@ Installed packages are the `.nml` files in `$NIMINAL_PACKAGES`, or in `~/.nimina
 - `use rig as r` brings them in only as `r::name`, so two modules can define the same name. Write `r::shimmer`, also after a dot: `sig.r::shimmer()`.
 - A name that starts with `_` is private to its module. Another file can't use it, and it never clashes with a name of yours.
 - A module loads once, however many files use it, and its definitions come before the file that uses it. Use a module under one name only: `use rig` and `use rig as r` together is an error.
-- A module's tracks, patterns and `play` lines start with it.
+- A module's nodes, patterns and `play` lines start with it.
 - A module that uses itself, directly or through another module, is an error.
 
 ## Errors and reloading

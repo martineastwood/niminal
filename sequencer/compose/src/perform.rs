@@ -12,7 +12,7 @@ use niminal_lang::{Diagnostic, Span, closest};
 use crate::compile::Names;
 use niminal_lang::GAIN_PARAM;
 use crate::performance::*;
-use niminal_lang::{Instrument, TrackInfo};
+use niminal_lang::{Instrument, NodeInfo};
 use niminal_lang::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
@@ -130,11 +130,11 @@ pub(crate) struct Compiled {
 pub(crate) struct Context<'a> {
     pub tempo: Tempo,
     pub names: &'a Names<'a>,
-    /// The `notes` line of each track, which changes the notes of every clip played on it.
-    pub track_notes: &'a HashMap<String, Expr>,
+    /// The `notes` line of each node, which changes the notes of every clip played on it.
+    pub node_notes: &'a HashMap<String, Expr>,
     pub instruments: &'a [Instrument],
-    pub tracks: &'a [TrackInfo],
-    /// Tracks whose definition failed to compile; mentions of them are not
+    pub nodes: &'a [NodeInfo],
+    /// Nodes whose definition failed to compile; mentions of them are not
     /// reported again.
     pub failed: &'a [&'a str],
     /// The names of the samples in kits, which a pattern may use as steps.
@@ -827,7 +827,7 @@ impl Perform<'_> {
     }
 
     /// `grid { kick: x... snare: .x.. }`: each row plays the sample it names on its hits,
-    /// and the rows play together. A row can name a track to send its hits there, take
+    /// and the rows play together. A row can name a part to send its hits there, take
     /// parameters (`snare(pan: 10deg): ...`), and use mini-notation (`hat: [x*2 x]`).
     fn rows(&self, raw: &str, span: Span) -> Res<Pattern<Step>> {
         let base = span.end - 1 - raw.len();
@@ -848,9 +848,9 @@ impl Perform<'_> {
             };
             let row = parse_grid_row(code).map_err(|(offset, message)| here(offset, message))?;
             let member = row.name.rsplit_once('.').map_or(row.name, |(_, m)| m);
-            let track = self
+            let node = self
                 .cx
-                .tracks
+                .nodes
                 .iter()
                 .position(|t| t.name == row.name || t.name == member);
             let id = self
@@ -859,13 +859,13 @@ impl Perform<'_> {
                 .iter()
                 .position(|n| n == member)
                 .or_else(|| {
-                    // A row that only names a track takes the track's default sample.
-                    track.and_then(|t| {
-                        self.cx.tracks[t].defaults.get("sample").and_then(|v| match *v {
+                    // A row that only names a part takes the node's default sample.
+                    node.and_then(|t| {
+                        self.cx.nodes[t].defaults.get("sample").and_then(|v| match *v {
                             Value::Sample(id) => Some(id as usize),
                             Value::Num(n) if n >= 0.0 => {
                                 let local = n as usize;
-                                self.cx.tracks[t]
+                                self.cx.nodes[t]
                                     .instrument
                                     .and_then(|i| self.cx.instruments[i].members.get(local))
                                     .and_then(|name| {
@@ -878,9 +878,9 @@ impl Perform<'_> {
                 });
             let Some(id) = id else {
                 let mut message = format!("`{}` isn't a sample in a kit", row.name);
-                if track.is_some() {
+                if node.is_some() {
                     message = format!(
-                        "`{}` is a track, but it has no kit sample to play",
+                        "`{}` is a node, but it has no kit sample to play",
                         row.name
                     );
                 } else if let Some(c) =
@@ -910,7 +910,7 @@ impl Perform<'_> {
             let pitch = row.pitch;
             layers.push(hits.map(move |hit| {
                 let mut step = Step::from(Value::Sample(id));
-                step.track = track;
+                step.node = node;
                 step.pan = pan;
                 step.begin = begin;
                 step.pitch = pitch;
@@ -1018,6 +1018,7 @@ impl Perform<'_> {
                     keys: None,
                     curves: Vec::new(),
                     signals: Vec::new(),
+            processor_params: Vec::new(),
                 };
                 self.on_clip(name, rest, clip, span, it)
                     .map(PerfValue::Clip)
@@ -1446,6 +1447,7 @@ impl Perform<'_> {
                 keys: clip.keys,
                 curves: clip.curves,
                 signals: Vec::new(),
+            processor_params: Vec::new(),
             });
         }
         // Pitch operations touch only the notes; time operations touch every lane.
@@ -1503,6 +1505,7 @@ impl Perform<'_> {
             keys: clip.keys,
             curves: clip.curves,
             signals: Vec::new(),
+            processor_params: Vec::new(),
         })
     }
 
@@ -2003,7 +2006,7 @@ impl Perform<'_> {
     ) -> Res<PerfValue> {
         if self.bindings.values().any(|v| {
             matches!(v, PerfValue::Def(d) if d.name == def.name)
-                && false // recursion tracked below
+                && false // recursion recorded below
         }) {
             // fall through
         }
@@ -2174,7 +2177,7 @@ impl Perform<'_> {
                             value.span,
                         )
                         .with_help(
-                            "an envelope moves a track's parameter: `cut: env[300hz 1bar 3khz]`",
+                            "an envelope moves a node's parameter: `cut: env[300hz 1bar 3khz]`",
                         ));
                     }
                     curves.push((key.name.clone(), curve));
@@ -2215,6 +2218,7 @@ impl Perform<'_> {
             keys,
             curves,
             signals: Vec::new(),
+            processor_params: Vec::new(),
         })
     }
 
@@ -2278,10 +2282,10 @@ impl Perform<'_> {
     fn scene(&self, block: &NamedBlock) -> Res<Scene> {
         let mut entries: Vec<(usize, Option<Clip>)> = Vec::new();
         for (key, value) in &block.entries {
-            let track = self.track(key)?;
-            if entries.iter().any(|(t, _)| *t == track) {
+            let node = self.node(key)?;
+            if entries.iter().any(|(t, _)| *t == node) {
                 return Err(Diagnostic::new(
-                    format!("track `{}` appears twice in this scene", key.name),
+                    format!("node `{}` appears twice in this scene", key.name),
                     key.span,
                 ));
             }
@@ -2289,7 +2293,7 @@ impl Perform<'_> {
                 PerfValue::Rest => None,
                 other => Some(self.to_clip(other, &key.name, value.span)?),
             };
-            entries.push((track, clip));
+            entries.push((node, clip));
         }
         Ok(Scene {
             name: block.name.name.clone(),
@@ -2310,6 +2314,7 @@ impl Perform<'_> {
                 keys: None,
                 curves: Vec::new(),
                 signals: Vec::new(),
+            processor_params: Vec::new(),
             }),
             PerfValue::Num(v) => Ok(Clip {
                 name: hint.to_string(),
@@ -2320,6 +2325,7 @@ impl Perform<'_> {
                 keys: None,
                 curves: Vec::new(),
                 signals: Vec::new(),
+            processor_params: Vec::new(),
             }),
             PerfValue::Grid(_) => Err(Diagnostic::new("a grid has no pitches to play", span)
                 .with_help("give it notes with `.rhythm(grid[...])` on a pattern instead")),
@@ -2331,7 +2337,7 @@ impl Perform<'_> {
             )
             .with_help("for example `clip c { notes: [c4] cut: env[300hz 1bar 3khz] }`")),
             PerfValue::Rest => Err(Diagnostic::new(
-                "`~` stops a track in a scene; to stop one, write `track.stop`",
+                "`~` stops a part in a scene; to stop one, write `node.stop`",
                 span,
             )),
             PerfValue::List(_) => Err(Diagnostic::new(
@@ -2347,21 +2353,21 @@ impl Perform<'_> {
 
     // ---- commands ----------------------------------------------------------------
 
-    /// A track by name; the implicit track 0 can't be named.
-    fn track(&self, id: &Ident) -> Res<usize> {
+    /// A part by name; the implicit node 0 can't be named.
+    fn node(&self, id: &Ident) -> Res<usize> {
         match self
             .cx
-            .tracks
+            .nodes
             .iter()
             .skip(1)
             .position(|t| t.name == id.name)
         {
             Some(i) => Ok(i + 1),
             None => {
-                let mut d = Diagnostic::new(format!("no track named `{}`", id.name), id.span);
+                let mut d = Diagnostic::new(format!("no part named `{}`", id.name), id.span);
                 if let Some(c) = closest(
                     &id.name,
-                    self.cx.tracks.iter().skip(1).map(|t| t.name.as_str()),
+                    self.cx.nodes.iter().skip(1).map(|t| t.name.as_str()),
                 ) {
                     d = d.with_help(format!("did you mean `{c}`?"));
                 }
@@ -2397,14 +2403,14 @@ impl Perform<'_> {
         };
 
         Ok(match &stmt.command {
-            Command::Play { track, what } => {
-                if self.cx.failed.contains(&track.name.as_str()) {
+            Command::Play { node, what } => {
+                if self.cx.failed.contains(&node.name.as_str()) {
                     return Ok(Vec::new());
                 }
-                let t = self.track(track)?;
-                let clip = self.to_clip(self.eval(what, None)?, &track.name, what.span)?;
-                let clip = self.on_track(clip, t, track, what.span)?;
-                vec![schedule(Action::Play { track: t, clip })]
+                let t = self.node(node)?;
+                let clip = self.to_clip(self.eval(what, None)?, &node.name, what.span)?;
+                let clip = self.on_node(clip, t, node, what.span)?;
+                vec![schedule(Action::Play { node: t, clip })]
             }
             Command::Start { name, then, .. } => {
                 let mut actions = if matches!(self.bindings.get(&name.name), Some(PerfValue::Scene(_)))
@@ -2414,13 +2420,13 @@ impl Perform<'_> {
                     if self.cx.failed.contains(&name.name.as_str()) {
                         return Ok(Vec::new());
                     }
-                    let Ok(t) = self.track(name) else {
+                    let Ok(t) = self.node(name) else {
                         let scenes = self
                             .bindings
                             .iter()
                             .filter(|(_, v)| matches!(v, PerfValue::Scene(_)))
                             .map(|(k, _)| k.as_str());
-                        let parts = self.cx.tracks.iter().map(|t| t.name.as_str());
+                        let parts = self.cx.nodes.iter().map(|t| t.name.as_str());
                         let mut d = Diagnostic::new(
                             format!("no scene or part named `{}`", name.name),
                             name.span,
@@ -2447,8 +2453,8 @@ impl Perform<'_> {
                         span: name.span,
                     };
                     let clip = self.to_clip(self.eval(&what, None)?, &name.name, name.span)?;
-                    let clip = self.on_track(clip, t, name, name.span)?;
-                    vec![schedule(Action::Play { track: t, clip })]
+                    let clip = self.on_node(clip, t, name, name.span)?;
+                    vec![schedule(Action::Play { node: t, clip })]
                 };
                 if let Some((next, after)) = then {
                     let follow_at = match &stmt.at {
@@ -2485,28 +2491,28 @@ impl Perform<'_> {
                 actions
             }
             Command::Stop(t) => match self.bindings.get(&t.name) {
-                // stopping a scene stops the tracks it plays on
+                // stopping a scene stops the nodes it plays on
                 Some(PerfValue::Scene(scene)) => scene
                     .entries
                     .iter()
-                    .map(|(track, _)| schedule(Action::Stop { track: *track }))
+                    .map(|(node, _)| schedule(Action::Stop { node: *node }))
                     .collect(),
                 _ => vec![schedule(Action::Stop {
-                    track: self.track(t)?,
+                    node: self.node(t)?,
                 })],
             },
             Command::Mute(t) => vec![schedule(Action::Mute {
-                track: self.track(t)?,
+                node: self.node(t)?,
             })],
             Command::Unmute(t) => vec![schedule(Action::Unmute {
-                track: self.track(t)?,
+                node: self.node(t)?,
             })],
             Command::Solo(t) => vec![schedule(Action::Solo {
-                track: self.track(t)?,
+                node: self.node(t)?,
             })],
             Command::Unsolo(t) => {
-                let track = t.as_ref().map(|t| self.track(t)).transpose()?;
-                vec![schedule(Action::Unsolo { track })]
+                let node = t.as_ref().map(|t| self.node(t)).transpose()?;
+                vec![schedule(Action::Unsolo { node })]
             }
             Command::Hush => vec![schedule(Action::Hush)],
             Command::Panic => vec![schedule(Action::Panic)],
@@ -2524,13 +2530,13 @@ impl Perform<'_> {
                     name: name.name.clone(),
                 })]
             }
-            // changing what a track plays is for a live session; in a file it does nothing
+            // changing what a part plays is for a live session; in a file it does nothing
             Command::Edit { .. } => Vec::new(),
         })
     }
 
     /// The commands that launch the scene called `name`: its clips start, and
-    /// every other track with an instrument stops.
+    /// every other part with an instrument stops.
     fn launch(&self, name: &Ident, schedule: &dyn Fn(Action) -> Scheduled) -> Res<Vec<Scheduled>> {
         let Some(PerfValue::Scene(scene)) = self.bindings.get(&name.name) else {
             let mut d = Diagnostic::new(format!("no scene named `{}`", name.name), name.span);
@@ -2545,25 +2551,25 @@ impl Perform<'_> {
             return Err(d);
         };
         let mut out = Vec::new();
-        for (track, clip) in &scene.entries {
+        for (node, clip) in &scene.entries {
             match clip {
                 Some(clip) => {
                     let id = Ident {
-                        name: self.cx.tracks[*track].name.clone(),
+                        name: self.cx.nodes[*node].name.clone(),
                         span: name.span,
                     };
-                    let clip = self.on_track(clip.clone(), *track, &id, name.span)?;
+                    let clip = self.on_node(clip.clone(), *node, &id, name.span)?;
                     out.push(schedule(Action::Play {
-                        track: *track,
+                        node: *node,
                         clip,
                     }));
                 }
-                None => out.push(schedule(Action::Stop { track: *track })),
+                None => out.push(schedule(Action::Stop { node: *node })),
             }
         }
-        for (track, info) in self.cx.tracks.iter().enumerate() {
-            if info.instrument.is_some() && !scene.entries.iter().any(|(t, _)| *t == track) {
-                out.push(schedule(Action::Stop { track }));
+        for (node, info) in self.cx.nodes.iter().enumerate() {
+            if info.instrument.is_some() && !scene.entries.iter().any(|(t, _)| *t == node) {
+                out.push(schedule(Action::Stop { node }));
             }
         }
         Ok(out)
@@ -2648,12 +2654,12 @@ impl Perform<'_> {
         });
         let mut lanes = Vec::new();
         for lane in &decl.lanes {
-            let (track, param) = (&lane.track, &lane.param);
-            if !self.cx.tracks.iter().skip(1).any(|t| t.name == track.name) {
-                let mut d = Diagnostic::new(format!("no track named `{}`", track.name), track.span);
+            let (node, param) = (&lane.node, &lane.param);
+            if !self.cx.nodes.iter().skip(1).any(|t| t.name == node.name) {
+                let mut d = Diagnostic::new(format!("no part named `{}`", node.name), node.span);
                 if let Some(c) = closest(
-                    &track.name,
-                    self.cx.tracks.iter().skip(1).map(|t| t.name.as_str()),
+                    &node.name,
+                    self.cx.nodes.iter().skip(1).map(|t| t.name.as_str()),
                 ) {
                     d = d.with_help(format!("did you mean `{c}`?"));
                 }
@@ -2661,11 +2667,11 @@ impl Perform<'_> {
             }
             let mut curve = env_lane(&lane.value)?;
             let who = format!(
-                "arrangement `{}` moves `{}.{}`, but track `{}`",
-                decl.name.name, track.name, param.name, track.name
+                "arrangement `{}` moves `{}.{}`, but node `{}`",
+                decl.name.name, node.name, param.name, node.name
             );
-            self.bind_env(&mut curve, &track.name, &param.name, &who, param.span)?;
-            lanes.push((format!("{}::{}", track.name, param.name), curve));
+            self.bind_env(&mut curve, &node.name, &param.name, &who, param.span)?;
+            lanes.push((format!("{}::{}", node.name, param.name), curve));
         }
         Ok(Arrangement {
             name: decl.name.name.clone(),
@@ -2675,16 +2681,16 @@ impl Perform<'_> {
         })
     }
 
-    /// The clip as `track` plays it: its `notes` line, if it has one, changes the clip's notes. It also
-    /// has to make sense on the track's instrument.
-    fn on_track(&self, mut clip: Clip, track: usize, id: &Ident, span: Span) -> Res<Clip> {
-        if let Some(effect) = self.cx.track_notes.get(&self.cx.tracks[track].name)
+    /// The clip as `node` plays it: its `notes` line, if it has one, changes the clip's notes. It also
+    /// has to make sense on the node's instrument.
+    fn on_node(&self, mut clip: Clip, node: usize, id: &Ident, span: Span) -> Res<Clip> {
+        if let Some(effect) = self.cx.node_notes.get(&self.cx.nodes[node].name)
             && let Some(at) = clip.lanes.iter().position(|(lane, _)| lane == "notes")
         {
             let it = PerfValue::Pattern(clip.lanes[at].1.clone());
             match self.eval(effect, Some(&it)).map_err(|d| {
                 Diagnostic::new(
-                    format!("the `notes` line of track `{}`: {}", id.name, d.message),
+                    format!("the `notes` line of part `{}`: {}", id.name, d.message),
                     effect.span,
                 )
             })? {
@@ -2692,7 +2698,7 @@ impl Perform<'_> {
                 other => {
                     return Err(Diagnostic::new(
                         format!(
-                            "the `notes` line of track `{}` makes {}, not a pattern",
+                            "the `notes` line of part `{}` makes {}, not a pattern",
                             id.name,
                             other.describe()
                         ),
@@ -2702,22 +2708,26 @@ impl Perform<'_> {
                 }
             }
         }
-        self.bind_curves(&mut clip, track, id, span)?;
-        self.check_clip(&clip, track, id, span)?;
+        self.bind_curves(&mut clip, node, id, span)?;
+        self.check_clip(&clip, node, id, span)?;
         Ok(clip)
     }
 
-    /// Envelope lanes move a parameter of the track: find it, and check the levels fit its unit.
-    fn bind_curves(&self, clip: &mut Clip, track: usize, id: &Ident, span: Span) -> Res<()> {
-        let name = &self.cx.tracks[track].name;
+    /// Envelope lanes move a parameter of the node: find it, and check the levels fit its unit.
+    fn bind_curves(&self, clip: &mut Clip, node: usize, id: &Ident, span: Span) -> Res<()> {
+        let name = &self.cx.nodes[node].name;
+        clip.processor_params = clip.lanes.iter().filter_map(|(lane, _)| {
+            lane.contains("::").then(|| self.cx.names.controls.iter().find(|c| c.name == *lane)).flatten()
+                .map(|c| (lane.clone(), c.unit, c.smooth_seconds))
+        }).collect();
         for (lane, curve) in &mut clip.curves {
             let who = format!(
-                "clip `{}` has an envelope lane `{lane}`, but track `{}`",
+                "clip `{}` has an envelope lane `{lane}`, but node `{}`",
                 clip.name, id.name
             );
             self.bind_env(curve, name, lane, &who, span)?;
         }
-        // a lane that is a signal and named after a parameter of the track moves it continuously
+        // a lane that is a signal and named after a parameter of the part moves it continuously
         clip.signals.clear();
         let probe = niminal_pattern::Span::new(Rational::ZERO, Rational::ZERO);
         for (lane, pattern) in &clip.lanes {
@@ -2725,7 +2735,7 @@ impl Perform<'_> {
                 .query(probe)
                 .first()
                 .is_some_and(|h| h.whole.is_none());
-            let control = format!("{name}::{lane}");
+            let control = if lane.contains("::") { lane.clone() } else { format!("{name}::{lane}") };
             if let Some(def) = self
                 .cx
                 .names
@@ -2740,27 +2750,27 @@ impl Perform<'_> {
         Ok(())
     }
 
-    /// Point `curve` at the track parameter `track::param` and check its levels fit that parameter's unit.
+    /// Point `curve` at the part parameter `node::param` and check its levels fit that parameter's unit.
     /// `who` starts the message if there is no such parameter.
     fn bind_env(
         &self,
         curve: &mut EnvLane,
-        track: &str,
+        node: &str,
         param: &str,
         who: &str,
         span: Span,
     ) -> Res<()> {
-        let control = format!("{track}::{param}");
+        let control = if param.contains("::") { param.to_string() } else { format!("{node}::{param}") };
         let Some(def) = self.cx.names.controls.iter().find(|c| c.name == control) else {
             let params: Vec<&str> = self
                 .cx
                 .names
                 .controls
                 .iter()
-                .filter_map(|c| c.name.strip_prefix(&format!("{track}::")))
+                .filter_map(|c| c.name.strip_prefix(&format!("{node}::")))
                 .collect();
             let mut d = Diagnostic::new(format!("{who} has no such parameter"), span)
-                .with_help("only a track's parameters can be moved by an envelope, as in `track bass(tone: hz = 2khz)`");
+                .with_help("name the processor parameter explicitly, as in `filter.cut: env[300hz 1bar 3khz]`");
             if let Some(c) = closest(param, params) {
                 d = d.with_help(format!("did you mean `{c}`?"));
             }
@@ -2781,15 +2791,15 @@ impl Perform<'_> {
         Ok(())
     }
 
-    /// Does `clip`'s notes and lanes make sense on `track`'s instrument?
-    fn check_clip(&self, clip: &Clip, track: usize, id: &Ident, span: Span) -> Res<()> {
-        let info = &self.cx.tracks[track];
+    /// Does `clip`'s notes and lanes make sense on `node`'s instrument?
+    fn check_clip(&self, clip: &Clip, node: usize, id: &Ident, span: Span) -> Res<()> {
+        let info = &self.cx.nodes[node];
         let Some(instrument) = info.instrument.map(|i| &self.cx.instruments[i]) else {
             return Err(Diagnostic::new(
-                format!("track `{}` has no instrument to play a clip on", id.name),
+                format!("node `{}` has no instrument to play a clip on", id.name),
                 id.span,
             )
-            .with_help("add `instrument = ...` to the track"));
+            .with_help("add `instrument = ...` to the node"));
         };
         if clip.keys.is_some() {
             if clip.lane("notes").is_some() || !clip.scored.is_empty() {
@@ -2856,7 +2866,7 @@ impl Perform<'_> {
                 .names
                 .controls
                 .iter()
-                .any(|c| c.name == format!("{}::{lane}", info.name))
+                .any(|c| c.name == if lane.contains("::") { lane.clone() } else { format!("{}::{lane}", info.name) })
             {
                 if clip.lane("notes").is_none()
                     && clip.scored.is_empty()
@@ -2864,7 +2874,7 @@ impl Perform<'_> {
                     && !clip.signals.iter().any(|(l, _)| l == lane)
                 {
                     return Err(Diagnostic::new(
-                        format!("lane `{lane}` sets a parameter of track `{}` as each note starts, but clip `{}` has no notes", info.name, clip.name),
+                        format!("lane `{lane}` sets a parameter of node `{}` as each note starts, but clip `{}` has no notes", info.name, clip.name),
                         span,
                     )
                     .with_help("add a `notes` lane to step on, or change it as the control instead"));
@@ -2924,7 +2934,7 @@ fn quantum_error(span: Span) -> Diagnostic {
         .with_help("for example `now`, `beat`, `bar`, `cycle`, `1beat` or `4bars`")
 }
 
-/// The one setting a clip, scene or track takes besides its body: `quantize: 1bar`.
+/// The one setting a clip, scene or part takes besides its body: `quantize: 1bar`.
 pub(crate) fn definition_quantum(options: &[Arg]) -> Res<Option<Quantize>> {
     options
         .iter()
@@ -2954,7 +2964,7 @@ fn at_offset(message: String, token: Span, offset: usize) -> Diagnostic {
     Diagnostic::new(message, Span::new(at, (at + 1).min(token.end)))
 }
 
-/// One row of `grid { ... }`: a sample or track name, optional note controls, and a body.
+/// One row of `grid { ... }`: a sample or part name, optional note controls, and a body.
 struct GridRow<'a> {
     name: &'a str,
     name_offset: usize,
@@ -2985,13 +2995,13 @@ fn parse_grid_row(code: &str) -> Result<GridRow<'_>, (usize, String)> {
     if i == 0 {
         return Err(err(
             0,
-            "a grid row starts with a sample or track name".into(),
+            "a grid row starts with a sample or part name".into(),
         ));
     }
     let name = &s[..i];
     let name_offset = trim_start;
     if name.starts_with('.') || name.ends_with('.') || name.matches('.').count() > 1 {
-        return Err(err(0, format!("`{name}` isn't a sample or track name")));
+        return Err(err(0, format!("`{name}` isn't a sample or part name")));
     }
 
     let mut gain = None;
@@ -3521,6 +3531,7 @@ fn section_to_clip(section: crate::Section, tempo: Tempo) -> Res<Clip> {
         keys: None,
         curves: Vec::new(),
         signals: Vec::new(),
+            processor_params: Vec::new(),
     })
 }
 

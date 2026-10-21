@@ -4,13 +4,13 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 thread_local! {
-    static TRACK: Cell<bool> = const { Cell::new(false) };
+    static NODE: Cell<bool> = const { Cell::new(false) };
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 struct Allocator;
 fn count() {
-    if TRACK.try_with(Cell::get).unwrap_or(false) {
+    if NODE.try_with(Cell::get).unwrap_or(false) {
         let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
     }
 }
@@ -50,11 +50,11 @@ fn large_computed_arrays_and_buffers_do_not_allocate_while_processing() {
     let mut buses = Buses::new(&[]);
     let mut output = [[0.0; BLOCK]; 1];
     ALLOCATIONS.with(|count| count.set(0));
-    TRACK.with(|track| track.set(true));
+    NODE.with(|node| node.set(true));
     for _ in 0..128 {
         voice.process_blocks(&mut output, BLOCK, &mut buses);
     }
-    TRACK.with(|track| track.set(false));
+    NODE.with(|node| node.set(false));
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(output[0].iter().all(|value| value.is_finite()));
 }
@@ -69,9 +69,9 @@ fn reset_scopes_callbacks_and_completion_do_not_allocate_while_processing() {
     let mut buses = Buses::new(&[]);
     let mut output = [[0.0; BLOCK]; 1];
     ALLOCATIONS.with(|count| count.set(0));
-    TRACK.with(|track| track.set(true));
+    NODE.with(|node| node.set(true));
     for _ in 0..128 { voice.process_blocks(&mut output, BLOCK, &mut buses); }
-    TRACK.with(|track| track.set(false));
+    NODE.with(|node| node.set(false));
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(output[0].iter().all(|value| value.is_finite()));
 }

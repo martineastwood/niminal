@@ -11,7 +11,7 @@ fn rig_dir(rig: &str) -> std::path::PathBuf {
 #[test]
 fn used_modules_play_and_replay_without_their_files() {
     let dir = rig_dir(
-        "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\ntrack lead { instrument = pluck }\n",
+        "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart lead { instrument = pluck }\n",
     );
     let mut s = session();
     s.eval_parsed(niminal_live::ParsedEval::from_dir(
@@ -83,7 +83,7 @@ fn reset_makes_the_next_bar_line_bar_one() {
 }
 
 #[test]
-fn a_track_playing_a_launched_scene_can_be_changed_by_name() {
+fn a_node_playing_a_launched_scene_can_be_changed_by_name() {
     let mut s = ready();
     s.eval(
         "riff = [c4 e4 g4 b4]\nscene verse { lead: riff, bass: riff }\nverse.start",
@@ -130,7 +130,7 @@ fn a_clip_that_a_scene_plays_follows_a_redefinition() {
 }
 
 #[test]
-fn stopping_a_scene_stops_its_tracks_and_a_track_with_nothing_playing_cannot_be_changed() {
+fn stopping_a_scene_stops_its_nodes_and_a_node_with_nothing_playing_cannot_be_changed() {
     let mut s = ready();
     s.eval(
         "riff = [c4]\nscene verse { lead: riff, bass: riff }\nverse.start",
@@ -198,7 +198,7 @@ fn changes_stack_and_can_be_undone_or_cleared() {
 }
 
 #[test]
-fn a_redefined_clip_keeps_the_changes_made_to_a_track() {
+fn a_redefined_clip_keeps_the_changes_made_to_a_node() {
     let mut s = ready();
     s.eval(
         "riff = [c4 e4 g4 b4]\nscene verse { lead: riff }\nverse.start\nlead.reverse",
@@ -240,16 +240,7 @@ fn changes_work_on_a_project_that_has_timed_commands_in_it() {
     s.eval("lead.clear", Some("now")).unwrap();
 }
 
-const PARTS: &str = "
-tempo 120bpm
-instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
-clip lead { instrument: pluck
-  notes: [c4 e4 g4 b4] }
-clip bass { instrument: pluck
-  notes: [c2] }
-scene verse { lead, bass }
-scene bridge { lead }
-";
+const PARTS: &str = "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip lead { instrument: pluck\n  notes: [c4 e4 g4 b4] }\nclip bass { instrument: pluck\n  notes: [c2] }\nscene verse { lead, bass }\nscene bridge { lead }\n";
 
 #[test]
 fn clips_with_instruments_are_started_changed_muted_and_stopped_by_name() {
@@ -291,7 +282,7 @@ fn launching_a_scene_replaces_the_parts_it_does_not_list() {
     run(&mut s, BAR);
     s.eval("bridge.start", Some("now")).unwrap();
     run(&mut s, 24_000);
-    let status = s.tracks();
+    let status = s.parts();
     let names: Vec<_> = status
         .iter()
         .map(|t| (t.name.as_str(), t.clip.is_some()))
@@ -310,12 +301,12 @@ fn a_bus_with_a_body_processes_what_instruments_send_to_it() {
     let heard = |gain: &str| {
         let mut s = Offline::new(SR, Layout::Stereo).without_limiter();
         let code = format!(
-            "tempo 120bpm\nbus space: stereo {{ out = it.gain({gain}) }}\ninstr ping(freq: hz) {{ out = osc(sine, freq) * env[1 | 10ms 0]\n space += out }}\nclip p {{ instrument: ping\n notes: [c4] }}\np.start"
+            "tempo 120bpm\nbus space: stereo\nprocessor space_return {{ out = space.gain({gain}) }}\ninstr ping(freq: hz) {{ out = osc(sine, freq) * env[1 | 10ms 0]\n space += out }}\nclip p {{ instrument: ping\n notes: [c4] }}\np.start"
         );
         s.eval(&code, Some("now")).unwrap();
         let out = s.process(BAR);
         assert!(
-            s.tracks().iter().all(|t| t.name != "space.fx"),
+            s.parts().iter().all(|t| t.name != "space.fx"),
             "the bus's processing is not a part to play"
         );
         peak(&out[0])
@@ -340,7 +331,7 @@ fn set_changes_a_lane_live_and_undo_puts_it_back() {
     s.eval("lead.set(amp: 0.25)", Some("now")).unwrap();
     let quiet = level(&mut s);
     assert!((quiet - 0.25).abs() < 0.03, "{quiet}");
-    assert_eq!(s.tracks()[0].edits, ["set(amp: 0.25)"]);
+    assert_eq!(s.parts()[0].edits, ["set(amp: 0.25)"]);
     s.eval("lead.set(amp: 0.5)", Some("now")).unwrap();
     assert!((level(&mut s) - 0.5).abs() < 0.03, "the newer set wins");
     s.eval("lead.undo\nlead.undo", Some("now")).unwrap();
@@ -367,12 +358,12 @@ fn undo_can_name_the_change_to_take_off() {
     )
     .unwrap();
     assert_eq!(
-        s.tracks()[0].edits,
+        s.parts()[0].edits,
         ["reverse", "transpose(+12st)", "thin(10%)"]
     );
     s.eval("lead.undo(reverse)", Some("now")).unwrap();
     assert_eq!(
-        s.tracks()[0].edits,
+        s.parts()[0].edits,
         ["transpose(+12st)", "thin(10%)"],
         "the middle one went, order kept"
     );
@@ -389,14 +380,14 @@ fn a_change_named_for_a_clip_goes_to_every_part_playing_it() {
     let mut s = ready();
     s.eval("answer = [c4 e4 g4 b4]\nother = [c3]\nscene chorus { lead: answer, bass: answer.fast(2) }\nchorus.start", Some("now")).unwrap();
     s.eval("answer.reverse", Some("now")).unwrap();
-    let edits: Vec<_> = s.tracks().iter().map(|t| t.edits.clone()).collect();
+    let edits: Vec<_> = s.parts().iter().map(|t| t.edits.clone()).collect();
     assert_eq!(
         edits,
         [vec!["reverse"], vec!["reverse"]],
         "both parts play `answer`"
     );
     s.eval("answer.clear", Some("now")).unwrap();
-    assert!(s.tracks().iter().all(|t| t.edits.is_empty()));
+    assert!(s.parts().iter().all(|t| t.edits.is_empty()));
     let problems = s.eval("other.reverse", Some("now")).unwrap_err();
     assert!(
         problems[0].message.contains("isn't playing anything"),

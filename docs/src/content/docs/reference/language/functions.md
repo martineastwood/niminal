@@ -234,7 +234,7 @@ instr driven(freq: hz) {
 }
 ```
 
-Create generators and nonlinear processors inside the scope to run them at its sample rate. A signal calculated outside is upsampled; its generator still runs at the original rate. `sample_rate` inside is the higher rate, keeping oscillators, delays, filters and user-written DSP at the intended pitch and time scale. Input conversion preserves constant values. The conversion filters add 16 samples at the enclosing scope’s rate. The compiler aligns parallel paths automatically, including across instruments, tracks and feed-forward buses. See [Latency compensation](/reference/language/routing/#latency-compensation).
+Create generators and nonlinear processors inside the scope to run them at its sample rate. A signal calculated outside is upsampled; its generator still runs at the original rate. `sample_rate` inside is the higher rate, keeping oscillators, delays, filters and user-written DSP at the intended pitch and time scale. Input conversion preserves constant values. The conversion filters add 16 samples at the enclosing scope’s rate. The compiler aligns parallel paths automatically, including across instruments, nodes and feed-forward buses. See [Latency compensation](/reference/language/routing/#latency-compensation).
 
 The body supports state, arrays, envelopes and DSP functions. It follows the sample DSP function restrictions on channel-layout processing and side effects. Scopes can nest up to 16 levels and return arrays or named results. An oversampled spawned voice keeps independent state and release behavior. Capture transport or other parent context in a local before entering the scope. Read slow controls with `.control` outside the scope when they must retain the parent's block cadence; processing inside is sample by sample.
 
@@ -248,4 +248,4 @@ instr cloud(freq: hz) {
 }
 ```
 
-A track can use `oversample(4) { it.tanh }` directly. Each nested scope uses the sample rate of its immediate parent; two nested 2x scopes run the inner DSP at 4x the project rate. `spawn` captures the values it reads when a layer starts; placing a processor inside that layer gives it independent state.
+A node can use `oversample(4) { it.tanh }` directly. Each nested scope uses the sample rate of its immediate parent; two nested 2x scopes run the inner DSP at 4x the project rate. `spawn` captures the values it reads when a layer starts; placing a processor inside that layer gives it independent state.

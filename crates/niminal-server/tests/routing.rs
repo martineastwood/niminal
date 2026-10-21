@@ -456,7 +456,7 @@ fn rejecting_a_batch_restores_previously_accepted_future_graph_changes() {
 }
 
 #[test]
-fn node_ids_cannot_alias_processor_instances_or_the_implicit_track() {
+fn node_ids_cannot_alias_processor_instances_or_the_implicit_node() {
     let mut s = ready();
     setup(&mut s);
     assert!(
@@ -466,7 +466,7 @@ fn node_ids_cannot_alias_processor_instances_or_the_implicit_track() {
                 0,
                 vec![Edit::Import {
                     name: "bad".into(),
-                    track: String::new()
+                    node: String::new()
                 }]
             )]
         )
@@ -495,7 +495,7 @@ fn node_ids_cannot_alias_processor_instances_or_the_implicit_track() {
                 32,
                 vec![Edit::Processor {
                     name: "bad".into(),
-                    source: "() { out = it }\ntrack injected { out = 1 }".into()
+                    source: "() { out = it }\nprocessor injected { out = 1 }".into()
                 }]
             )]
         )

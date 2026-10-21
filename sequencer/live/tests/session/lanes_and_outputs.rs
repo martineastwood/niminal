@@ -9,15 +9,15 @@ fn new_forgets_the_old_piece_so_another_can_start() {
     let silent = run(&mut s, BAR);
     assert!(peak(&silent) < 1e-6, "everything stopped");
     assert!(
-        s.tracks()
+        s.parts()
             .iter()
             .all(|t| t.name != "lead" && t.name != "bass"),
-        "the old tracks are gone"
+        "the old nodes are gone"
     );
-    s.eval("instr pluck(freq: hz) { osc(saw, freq) }\ntrack drone { instrument = pluck }\ndrone.play([a2])", Some("now")).unwrap();
+    s.eval("instr pluck(freq: hz) { osc(saw, freq) }\npart drone { instrument = pluck }\ndrone.play([a2])", Some("now")).unwrap();
     assert!(peak(&run(&mut s, BAR)) > 1e-3, "the new piece plays");
     assert_eq!(
-        s.tracks()
+        s.parts()
             .iter()
             .map(|t| t.name.as_str())
             .collect::<Vec<_>>(),
@@ -28,10 +28,10 @@ fn new_forgets_the_old_piece_so_another_can_start() {
 #[test]
 fn new_and_the_next_piece_can_arrive_together() {
     let mut s = ready();
-    s.eval("new\ninstr pluck(freq: hz) { osc(saw, freq) }\ntrack drone { instrument = pluck }\ndrone.play([a2])", Some("now")).unwrap();
+    s.eval("new\ninstr pluck(freq: hz) { osc(saw, freq) }\npart drone { instrument = pluck }\ndrone.play([a2])", Some("now")).unwrap();
     assert!(peak(&run(&mut s, BAR)) > 1e-3);
     assert_eq!(
-        s.tracks()
+        s.parts()
             .iter()
             .map(|t| t.name.as_str())
             .collect::<Vec<_>>(),
@@ -40,18 +40,18 @@ fn new_and_the_next_piece_can_arrive_together() {
 }
 
 #[test]
-fn an_envelope_lane_moves_a_track_parameter_as_the_clip_plays() {
+fn an_envelope_lane_moves_a_node_parameter_as_the_clip_plays() {
     let mut s = session();
-    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }", Some("now")).unwrap();
+    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}", Some("now")).unwrap();
     s.eval(
-        "clip c { notes: [c5]\ncut: env[300hz 1bar 1300hz] }\npad.play(c)",
+        "clip c { notes: [c5]\npad_fx.cut: env[300hz 1bar 1300hz] }\npad.play(c)",
         Some("now"),
     )
     .unwrap();
     let cut = |s: &Offline| {
         s.control_values()
             .into_iter()
-            .find(|v| v.0 == "pad::cut")
+            .find(|v| v.0 == "pad_fx::cut")
             .unwrap()
             .1
     };
@@ -68,18 +68,18 @@ fn an_envelope_lane_moves_a_track_parameter_as_the_clip_plays() {
 }
 
 #[test]
-fn a_signal_lane_moves_a_track_parameter_continuously_even_without_notes() {
+fn a_signal_lane_moves_a_node_parameter_continuously_even_without_notes() {
     let mut s = session();
-    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }", Some("now")).unwrap();
+    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}", Some("now")).unwrap();
     s.eval(
-        "clip c { cut: saw.range(300hz, 1300hz) }\npad.play(c)",
+        "clip c { pad_fx.cut: saw.range(300hz, 1300hz) }\npad.play(c)",
         Some("now"),
     )
     .unwrap();
     let cut = |s: &Offline| {
         s.control_values()
             .into_iter()
-            .find(|v| v.0 == "pad::cut")
+            .find(|v| v.0 == "pad_fx::cut")
             .unwrap()
             .1
     };
@@ -102,26 +102,26 @@ fn a_signal_lane_moves_a_track_parameter_continuously_even_without_notes() {
 }
 
 #[test]
-fn set_can_give_a_part_a_track_parameter_lane_and_a_signal() {
+fn set_can_give_a_part_a_node_parameter_lane_and_a_signal() {
     let mut s = session();
-    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }", Some("now")).unwrap();
+    s.eval("tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}", Some("now")).unwrap();
     s.eval("pad.play([c5])", Some("now")).unwrap();
     let cut = |s: &Offline| {
         s.control_values()
             .into_iter()
-            .find(|v| v.0 == "pad::cut")
+            .find(|v| v.0 == "pad_fx::cut")
             .unwrap()
             .1
     };
     run(&mut s, 1_000);
-    s.eval("pad.set(cut: 900hz)", Some("now")).unwrap();
+    s.eval("pad.set(pad_fx.cut: 900hz)", Some("now")).unwrap();
     run(&mut s, BAR + 1_000);
     assert!(
         (cut(&s) - 900.0).abs() < 1.0,
         "a note sets it as it starts: {}",
         cut(&s)
     );
-    s.eval("pad.set(cut: saw.range(300hz, 1300hz))", Some("now"))
+    s.eval("pad.set(pad_fx.cut: saw.range(300hz, 1300hz))", Some("now"))
         .unwrap();
     run(&mut s, BAR / 2);
     assert!(
@@ -321,11 +321,11 @@ mod quantize_settings {
     fn a_definition_can_say_when_it_lands() {
         let mut s = ready();
         run(&mut s, 10_000);
-        // a track redefinition lands on the bar unless it says otherwise
-        let plain = s.eval("track fx { instrument = pluck }", None).unwrap();
+        // a node redefinition lands on the bar unless it says otherwise
+        let plain = s.eval("part fx { instrument = pluck }", None).unwrap();
         assert_eq!(plain.lands_at, BAR as u64);
         let now = s
-            .eval("track fx2 { instrument = pluck\nquantize = now }", None)
+            .eval("part fx2 { instrument = pluck\nquantize = now}", None)
             .unwrap();
         assert_eq!(now.lands_at, 10_000, "it says now");
         let beat = s
@@ -342,7 +342,7 @@ mod quantize_settings {
         // the evaluation's own setting still wins over the definition's
         let over = s
             .eval(
-                "track fx4 { instrument = pluck\nquantize = now }",
+                "part fx4 { instrument = pluck\nquantize = now}",
                 Some("next 4bars"),
             )
             .unwrap();
@@ -365,7 +365,7 @@ mod quantize_settings {
         assert_eq!(
             message(
                 &mut s,
-                "track t2 { instrument = pluck\nquantize = 2hz }"
+                "part t2 { instrument = pluck\nquantize = 2hz}"
             ),
             "expected when a change lands"
         );
@@ -375,7 +375,7 @@ mod quantize_settings {
 #[test]
 fn an_osc_out_tap_holds_the_latest_value_of_its_signal_while_audio_runs() {
     let mut s = session();
-    s.eval("tempo 120bpm\ninstr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ntrack lead {\n instrument = tone\n out = it.osc_out(\"/level\", port: 9000)\n}\nctl k = 0.25\ntrack ctl_track {\n out = k.osc_out(\"/knob\", port: 9000)\n}", Some("now")).unwrap();
+    s.eval("tempo 120bpm\ninstr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.osc_out(\"/level\", port: 9000)}\npart lead { instrument = tone\noutput = lead_audio}\nctl k = 0.25\nprocessor ctl_node {\n out = k.osc_out(\"/knob\", port: 9000)\n}", Some("now")).unwrap();
     let taps = s.engine().session().program().taps.clone();
     assert_eq!(taps.len(), 2);
     let (lead, knob) = (taps[0].clone(), taps[1].clone());
@@ -388,7 +388,7 @@ fn an_osc_out_tap_holds_the_latest_value_of_its_signal_while_audio_runs() {
         run(&mut s, 128);
         seen = seen.max(lead.value.read().abs());
     }
-    assert!(seen > 0.3, "the track's signal reaches the tap: {seen}");
+    assert!(seen > 0.3, "the node's signal reaches the tap: {seen}");
     s.eval("ctl k = 0.75", Some("now")).unwrap();
     run(&mut s, 4_000);
     let knob = s.engine().session().program().taps[1].value.read();
@@ -396,10 +396,10 @@ fn an_osc_out_tap_holds_the_latest_value_of_its_signal_while_audio_runs() {
 }
 
 #[test]
-fn a_session_can_be_given_audio_for_tracks_that_read_input() {
+fn a_session_can_be_given_audio_for_nodes_that_read_input() {
     let mut s = session();
     s.eval(
-        "tempo 120bpm\ntrack mic { out = input(1) * 0.5 }",
+        "tempo 120bpm\nprocessor mic { out = input(1) * 0.5 }",
         Some("now"),
     )
     .unwrap();
@@ -418,7 +418,7 @@ fn a_session_can_be_given_audio_for_tracks_that_read_input() {
 #[test]
 fn a_midi_out_instrument_sends_notes_with_their_times_and_stays_silent() {
     let mut s = session();
-    s.eval("tempo 120bpm\nmidi_out synth(port: \"IAC\", channel: 3)\ntrack lead { instrument = synth }", Some("now")).unwrap();
+    s.eval("tempo 120bpm\nmidi_out synth(port: \"IAC\", channel: 3)\npart lead { instrument = synth }", Some("now")).unwrap();
     s.eval("lead.play([c4 e4 ~ g4])", Some("now")).unwrap();
     let out = run(&mut s, BAR);
     assert!(peak(&out) == 0.0, "the sound is outside");
@@ -454,7 +454,7 @@ fn a_midi_out_instrument_sends_notes_with_their_times_and_stays_silent() {
 #[test]
 fn panic_and_hush_end_midi_notes_that_are_sounding() {
     let mut s = session();
-    s.eval("tempo 120bpm\nmidi_out synth(port: \"IAC\")\ntrack lead { instrument = synth }\nlead.play([c4])", Some("now")).unwrap();
+    s.eval("tempo 120bpm\nmidi_out synth(port: \"IAC\")\npart lead { instrument = synth }\nlead.play([c4])", Some("now")).unwrap();
     run(&mut s, 1_000);
     assert_eq!(s.take_midi().len(), 1);
     s.eval("panic", Some("now")).unwrap();

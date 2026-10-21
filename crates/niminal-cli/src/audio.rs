@@ -188,7 +188,7 @@ fn build_stream(
     Ok(stream)
 }
 
-/// The default input device, listened to for tracks that read `input(..)`.
+/// The default input device, listened to for nodes that read `input(..)`.
 pub struct Listening {
     _stream: cpal::Stream,
     channels: usize,

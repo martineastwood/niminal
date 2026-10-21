@@ -18,7 +18,7 @@ Run `niminal <command> --help` or `nimlive <command> --help` for every flag.
 | --- | --- |
 | `niminal server` | Generic audio server and [events API](/reference/engine-api/) on port 7401 (`--port`), with audio, `--log`, `--token`, `--no-audio`. |
 | `niminal replay` | Render a session log (what a server recorded with `--log`, or any client wrote) to WAV. |
-| `nimlive render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, `--stems` (one file per track and bus into the `--out` folder). |
+| `nimlive render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, `--stems` (one file per node and bus into the `--out` folder). |
 | `nimlive live [FILE]` | Separate live sequencer client: clips, scenes, quantized edits, file watch, `--midi`, `--osc-port`. Connects to `--engine-port` (7401); live-control API on `--port` (7400). |
 | `nimlive repl` | REPL connected to a running server (`--port`, `--quantize`, `--token`). |
 | `nimlive send` | One-shot eval to the server (code argument, `--file`, or stdin). |

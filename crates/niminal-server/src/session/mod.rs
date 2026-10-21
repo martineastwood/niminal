@@ -91,10 +91,10 @@ pub(crate) struct VoiceMap {
     done: bool,
 }
 
-/// A track parameter, which is a control, moving at a sample: a lane or the `track` event. Planned
+/// A node parameter, which is a control, moving at a sample: a lane or the `node` event. Planned
 /// into the windows like notes, since a lane can move one a great many times.
 #[derive(Clone)]
-pub(crate) struct TrackSet {
+pub(crate) struct NodeSet {
     pub key: String,
     pub value: f32,
     pub frames: u64,
@@ -132,7 +132,7 @@ struct ChainMap {
     mapping: VoiceMap,
 }
 impl ChainMap {
-    fn track(&self) -> String {
+    fn node(&self) -> String {
         format!("__routing_processor_{}_{}", self.client, self.node)
     }
 }
@@ -216,7 +216,7 @@ pub struct Session {
     control_changes: Vec<crate::controls::Change>,
     next_control: u64,
     key_offs: Vec<KeyOff>,
-    /// Audio for tracks that read `input(..)`, from a file being rendered: a buffer for each channel, from sample 0.
+    /// Audio for nodes that read `input(..)`, from a file being rendered: a buffer for each channel, from sample 0.
     audio_input: Vec<Vec<f32>>,
     /// Notes sent to `midi_out` instruments and not yet taken.
     midi_out: Vec<crate::MidiEvent>,
@@ -264,7 +264,7 @@ pub struct Session {
     buffer_binds: Vec<BufferBind>,
     chain_maps: Vec<ChainMap>,
     /// Sorted by sample; recent applied entries remain available for replanning.
-    track_sets: Vec<TrackSet>,
+    node_sets: Vec<NodeSet>,
     buffer_sets: Vec<BufferSet>,
     timed_panics: Vec<TimedPanic>,
     control_owners: Vec<ControlOwner>,
@@ -338,7 +338,7 @@ impl Session {
             voice_maps: Vec::new(),
             buffer_binds: Vec::new(),
             chain_maps: Vec::new(),
-            track_sets: Vec::new(),
+            node_sets: Vec::new(),
             buffer_sets: Vec::new(),
             timed_panics: Vec::new(),
             control_owners: Vec::new(),
@@ -542,7 +542,7 @@ impl Session {
             input: LogInput::Panic,
         });
         self.upcoming.clear();
-        self.track_sets.clear();
+        self.node_sets.clear();
         self.buffer_sets.clear();
         self.voice_sets.clear();
         self.voice_maps.clear();
@@ -563,13 +563,13 @@ impl Session {
                 .all(|i| definitions::local(client, &i.name).is_some())
             && self
                 .program
-                .tracks
+                .nodes
                 .iter()
                 .skip(1)
-                .all(|t| definitions::owns_track(client, &t.name))
+                .all(|t| definitions::owns_node(client, &t.name))
             && self.program.controls.iter().all(|c| {
                 definitions::local(client, &c.name).is_some()
-                    || definitions::owns_track(client, &c.name)
+                    || definitions::owns_node(client, &c.name)
             });
         // With no other owner's audio, the mixed limiter history can also be discarded.
         if exclusive {
@@ -606,8 +606,8 @@ impl Session {
         let mut transfers = Vec::new();
         plan_transfers(&self.program, &self.program, &mut transfers);
         self.mixer.silence_owner(client);
-        for (track, transfer) in self.program.tracks.iter().zip(&mut transfers) {
-            if !track.name.is_empty() && definitions::owns_track(client, &track.name) {
+        for (node, transfer) in self.program.nodes.iter().zip(&mut transfers) {
+            if !node.name.is_empty() && definitions::owns_node(client, &node.name) {
                 transfer.chain_from = None;
                 transfer.voices_from = None;
             }
@@ -676,12 +676,12 @@ impl Session {
         }
     }
 
-    /// The instruments and tracks that are defined, with their parameters, for a client that wants to offer them.
+    /// The instruments and nodes that are defined, with their parameters, for a client that wants to offer them.
     pub fn definitions(&self) -> (Vec<niminal_lang::Instrument>, Vec<String>, Vec<String>) {
         (
             self.program.instruments.clone(),
             self.program
-                .tracks
+                .nodes
                 .iter()
                 .skip(1)
                 .map(|t| t.name.clone())
@@ -726,7 +726,7 @@ impl Session {
                         .filter(|s| s.client == c && !s.done)
                         .count()
                     + self
-                        .track_sets
+                        .node_sets
                         .iter()
                         .filter(|s| s.client == Some(c) && !s.done)
                         .count()
@@ -783,13 +783,13 @@ impl Session {
         std::mem::take(&mut self.notices)
     }
 
-    /// The audio that tracks reading `input(..)` hear, a buffer for each channel starting at sample 0 of the
+    /// The audio that nodes reading `input(..)` hear, a buffer for each channel starting at sample 0 of the
     /// session. For rendering a file; a live session listens to a device instead.
     pub fn set_audio_input(&mut self, channels: Vec<Vec<f32>>) {
         self.audio_input = channels;
     }
 
-    /// Start keeping what each track and bus puts out, for an offline render's stems. Only for renders:
+    /// Start keeping what each node and bus puts out, for an offline render's stems. Only for renders:
     /// it grows without bound.
     pub fn capture_stems(&mut self) {
         self.mixer.capture_stems();
@@ -865,7 +865,7 @@ impl Session {
             .filter(|v| {
                 v.destination.as_ref().is_some_and(|name| {
                     !program
-                        .tracks
+                        .nodes
                         .iter()
                         .any(|t| t.name == *name && t.accepts_notes)
                 })
@@ -963,7 +963,7 @@ impl Session {
             self.apply_controls();
             self.release_due();
             self.apply_voice_sets();
-            self.apply_track_sets(self.clock.saturating_add(1));
+            self.apply_node_sets(self.clock.saturating_add(1));
             for set in &mut self.buffer_sets {
                 if !set.done && set.at <= self.clock {
                     if let Some((_, buffer)) = self
@@ -999,7 +999,7 @@ impl Session {
                 .iter()
                 .map(|k| k.at)
                 .chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at))
-                .chain(self.track_sets.iter().filter(|s| !s.done).map(|s| s.at))
+                .chain(self.node_sets.iter().filter(|s| !s.done).map(|s| s.at))
                 .chain(
                     self.chain_maps
                         .iter()
@@ -1122,7 +1122,7 @@ impl Session {
                         }
                     }
                     let id = self.mixer.note_on_with(
-                        plan.track,
+                        plan.node,
                         graph,
                         &plan.params,
                         plan.choke,
@@ -1208,11 +1208,11 @@ impl Session {
         }
     }
 
-    /// Move the track parameters that `track` events say should move by now.
+    /// Move the node parameters that `node` events say should move by now.
     // `before` is exclusive: metadata must not consume a control at the renderer's next, unrendered sample.
-    fn apply_track_sets(&mut self, before: u64) {
+    fn apply_node_sets(&mut self, before: u64) {
         let now = self.clock;
-        for set in &mut self.track_sets {
+        for set in &mut self.node_sets {
             if set.at >= before {
                 break;
             }
@@ -1232,7 +1232,7 @@ impl Session {
             set.done = true;
         }
         let stale = now.saturating_sub(self.samples(2.0));
-        self.track_sets.retain(|s| !s.done || s.at > stale);
+        self.node_sets.retain(|s| !s.done || s.at > stale);
     }
 
     /// Move the parameters of held notes that their changes say should move by now.
@@ -1277,17 +1277,17 @@ impl Session {
     }
 }
 
-/// Which running voices and effect chains the new program's tracks take over from the old one's.
+/// Which running voices and effect chains the new program's nodes take over from the old one's.
 pub(super) fn plan_transfers(old: &Program, new: &Program, out: &mut Vec<Transfer>) {
     out.clear();
-    for (i, track) in new.tracks.iter().enumerate() {
+    for (i, node) in new.nodes.iter().enumerate() {
         let from = if i == 0 {
             Some(0)
         } else {
-            old.track_index(&track.name)
+            old.node_index(&node.name)
         };
         out.push(Transfer {
-            release: !track.accepts_notes && from.is_some_and(|i| old.tracks[i].accepts_notes),
+            release: !node.accepts_notes && from.is_some_and(|i| old.nodes[i].accepts_notes),
             voices_from: from,
             chain_from: from.filter(|_| i > 0),
         });

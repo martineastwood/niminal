@@ -10,7 +10,7 @@ use crate::diag::{Diagnostic, Span, closest};
 
 type Res<T> = Result<T, Diagnostic>;
 
-/// Rewrite `adsr` / `perc` calls in instrument, function, track and control bodies.
+/// Rewrite `adsr` / `perc` calls in instrument, function, node and control bodies.
 /// Skips a name that is a user function. Binding mistakes become diagnostics;
 /// the call is still replaced so later stages do not re-report it.
 pub fn desugar(items: &mut [Item], fns: &HashMap<String, FnDef>) -> Vec<Diagnostic> {
@@ -19,7 +19,7 @@ pub fn desugar(items: &mut [Item], fns: &HashMap<String, FnDef>) -> Vec<Diagnost
     for item in items {
         let stmts = match item {
             Item::Instr(d) => &mut d.body,
-            Item::Track(d) => &mut d.body,
+            Item::Node(d) | Item::Processor(d) => &mut d.body,
             Item::Fn(d) => &mut d.body,
             Item::Control { value, .. } | Item::Const { value, .. } | Item::Buffer(BufferDecl { value, .. }) => {
                 rewrite_expr(value, &skip, &mut errors);

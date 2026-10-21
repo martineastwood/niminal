@@ -42,7 +42,7 @@ unsafe impl GlobalAlloc for Allocator {
 }
 
 const SETUP: &str =
-    "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ntrack lead { instrument = tone }";
+    "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\nnode lead { instrument = tone }";
 fn session() -> Session {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(SETUP, Some("now")).unwrap();

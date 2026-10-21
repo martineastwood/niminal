@@ -1,4 +1,4 @@
-//! Audio coming in from a device, for tracks that read `input(1)`.
+//! Audio coming in from a device, for nodes that read `input(1)`.
 
 use niminal_engine::{BLOCK, MAX_CHANNELS};
 use rtrb::{Consumer, Producer, RingBuffer};

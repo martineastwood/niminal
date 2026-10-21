@@ -1,7 +1,7 @@
 //! Turning the performance layer into notes.
 //!
-//! A [`Schedule`] knows which clip plays on which track and when, and which
-//! tracks are muted, and can say what notes fall in any stretch of time. It is
+//! A [`Schedule`] knows which clip plays on which part and when, and which
+//! nodes are muted, and can say what notes fall in any stretch of time. It is
 //! stateless between calls, so a renderer can ask for the whole piece at once
 //! and a live session can ask for a short lookahead window, and both get the
 //! same notes.
@@ -40,7 +40,7 @@ const CHUNK_SECONDS: f64 = 8.0;
 /// How often a signal lane is read, in seconds: the parameter glides from one reading to the next.
 const SIGNAL_STEP: f64 = 0.02;
 
-/// A track parameter moving because an envelope lane says so: from `at` seconds it glides to
+/// A part parameter moving because an envelope lane says so: from `at` seconds it glides to
 /// `target` (in the control's engine units) over `glide` seconds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ControlSet {
@@ -104,12 +104,12 @@ impl Clock {
     }
 }
 
-/// A clip playing on a track from `start` until `end` (seconds).
+/// A clip playing on a part from `start` until `end` (seconds).
 struct Segment {
     /// The tempo and meter it plays in when it starts.
     tempo: Tempo,
     clock: Clock,
-    track: usize,
+    node: usize,
     clip: Clip,
     start: f64,
     end: Option<f64>,
@@ -123,9 +123,9 @@ enum Gate {
     Unsolo(Option<usize>),
 }
 
-/// What a track is doing at a moment, for showing in an editor.
+/// What a part is doing at a moment, for showing in an editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrackState {
+pub struct PartState {
     pub clip: Option<String>,
     pub muted: bool,
     pub soloed: bool,
@@ -160,15 +160,15 @@ fn micro_cycles(micro: i64) -> Rational {
 /// What a search of the schedule found.
 pub struct Found {
     pub events: Vec<Event>,
-    /// Envelope lanes moving track parameters in the same stretch, in time order.
+    /// Envelope lanes moving part parameters in the same stretch, in time order.
     pub controls: Vec<ControlSet>,
     pub problem: Option<ScheduleError>,
-    /// Tracks whose clips used up their allowance.
+    /// Nodes whose clips used up their allowance.
     pub overloaded: Vec<usize>,
 }
 
 pub struct Schedule {
-    track_names: Vec<String>,
+    node_names: Vec<String>,
     segments: Vec<Segment>,
     /// Mute and solo changes, in time order.
     gates: Vec<(f64, Gate)>,
@@ -185,7 +185,7 @@ impl Composition {
     pub fn schedule(&self) -> Schedule {
         Schedule::new(
             self.tempo,
-            self.tracks.iter().map(|t| t.name.clone()).collect(),
+            self.nodes.iter().map(|t| t.name.clone()).collect(),
             &self.performance,
             &[],
             &[],
@@ -213,7 +213,7 @@ impl Composition {
         };
         Ok(Schedule::new(
             self.tempo,
-            self.tracks.iter().map(|t| t.name.clone()).collect(),
+            self.nodes.iter().map(|t| t.name.clone()).collect(),
             &arrangement.actions,
             &arrangement.tempos,
             &arrangement.lanes,
@@ -222,21 +222,21 @@ impl Composition {
 }
 
 impl Schedule {
-    /// A schedule from commands directly. Track indices in `commands` index
-    /// `track_names`. The commands' `at` times are what they are; their
+    /// A schedule from commands directly. Node indices in `commands` index
+    /// `node_names`. The commands' `at` times are what they are; their
     /// `quantize` is ignored (a live session has already applied it).
     pub fn from_commands(
         tempo: Tempo,
-        track_names: Vec<String>,
+        node_names: Vec<String>,
         commands: &[Scheduled],
     ) -> Schedule {
-        Schedule::new(tempo, track_names, commands, &[], &[])
+        Schedule::new(tempo, node_names, commands, &[], &[])
     }
 
     /// `sections` says where the tempo and meter change from `tempo`, as seconds and what they become.
     fn new(
         tempo: Tempo,
-        track_names: Vec<String>,
+        node_names: Vec<String>,
         commands: &[Scheduled],
         sections: &[(f64, Tempo)],
         lanes: &[(String, EnvLane)],
@@ -259,10 +259,10 @@ impl Schedule {
         let mut gates = Vec::new();
         let mut panics = Vec::new();
 
-        let close = |segments: &mut Vec<Segment>, track: Option<usize>, at: f64| {
+        let close = |segments: &mut Vec<Segment>, node: Option<usize>, at: f64| {
             for s in segments
                 .iter_mut()
-                .filter(|s| s.end.is_none() && track.is_none_or(|t| t == s.track))
+                .filter(|s| s.end.is_none() && node.is_none_or(|t| t == s.node))
             {
                 s.end = Some(at.max(s.start));
             }
@@ -270,10 +270,10 @@ impl Schedule {
 
         for (at, action) in timed {
             match action {
-                Action::Play { track, clip } => {
-                    close(&mut segments, Some(*track), at);
+                Action::Play { node, clip } => {
+                    close(&mut segments, Some(*node), at);
                     segments.push(Segment {
-                        track: *track,
+                        node: *node,
                         clip: clip.clone(),
                         start: at,
                         end: None,
@@ -281,21 +281,21 @@ impl Schedule {
                         clock: Clock::new(at, tempo_at(at), sections),
                     });
                 }
-                Action::Stop { track } => close(&mut segments, Some(*track), at),
+                Action::Stop { node } => close(&mut segments, Some(*node), at),
                 Action::Hush | Action::Reset => close(&mut segments, None, at),
                 Action::Panic => {
                     close(&mut segments, None, at);
                     panics.push(at);
                 }
-                Action::Mute { track } => gates.push((at, Gate::Mute(*track))),
-                Action::Unmute { track } => gates.push((at, Gate::Unmute(*track))),
-                Action::Solo { track } => gates.push((at, Gate::Solo(*track))),
-                Action::Unsolo { track } => gates.push((at, Gate::Unsolo(*track))),
+                Action::Mute { node } => gates.push((at, Gate::Mute(*node))),
+                Action::Unmute { node } => gates.push((at, Gate::Unmute(*node))),
+                Action::Solo { node } => gates.push((at, Gate::Solo(*node))),
+                Action::Unsolo { node } => gates.push((at, Gate::Unsolo(*node))),
                 Action::Capture { .. } => {}
             }
         }
         Schedule {
-            track_names,
+            node_names,
             segments,
             gates,
             panics,
@@ -325,7 +325,7 @@ impl Schedule {
         self.segments.is_empty()
     }
 
-    /// The tracks that are muted and soloed at `at`.
+    /// The nodes that are muted and soloed at `at`.
     fn gate_state(&self, at: f64) -> (Vec<usize>, Vec<usize>) {
         let mut muted: Vec<usize> = Vec::new();
         let mut soloed: Vec<usize> = Vec::new();
@@ -352,41 +352,41 @@ impl Schedule {
         (muted, soloed)
     }
 
-    fn audible(&self, track: usize, at: f64) -> bool {
+    fn audible(&self, node: usize, at: f64) -> bool {
         let (muted, soloed) = self.gate_state(at);
-        !muted.contains(&track) && (soloed.is_empty() || soloed.contains(&track))
+        !muted.contains(&node) && (soloed.is_empty() || soloed.contains(&node))
     }
 
-    /// What `track` is doing at `at` seconds: the clip playing on it, and
+    /// What `node` is doing at `at` seconds: the clip playing on it, and
     /// whether it was muted or soloed.
-    pub fn track_state(&self, track: usize, at: f64) -> TrackState {
+    pub fn node_state(&self, node: usize, at: f64) -> PartState {
         let (muted, soloed) = self.gate_state(at);
         let playing = self
             .segments
             .iter()
             .rev()
-            .find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e));
-        TrackState {
+            .find(|s| s.node == node && s.start <= at && s.end.is_none_or(|e| at < e));
+        PartState {
             clip: playing.map(|s| s.clip.name.clone()),
-            muted: muted.contains(&track),
-            soloed: soloed.contains(&track),
+            muted: muted.contains(&node),
+            soloed: soloed.contains(&node),
         }
     }
 
-    /// Is a clip played from an MPE keyboard playing on any track at `at` seconds?
+    /// Is a clip played from an MPE keyboard playing on any part at `at` seconds?
     pub fn plays_mpe(&self, at: f64) -> bool {
         self.segments.iter().any(|s| {
             s.start <= at && s.end.is_none_or(|e| at < e) && s.clip.keys.is_some_and(|k| k.mpe)
         })
     }
 
-    /// The note a key press plays on `track` at `at` seconds, if a clip played from a keyboard is
-    /// playing there, on this MIDI channel, and the track is audible. `note` is the MIDI note
+    /// The note a key press plays on `node` at `at` seconds, if a clip played from a keyboard is
+    /// playing there, on this MIDI channel, and the part is audible. `note` is the MIDI note
     /// number and `gain` how loud, in db. The clip's other lanes give the note their value at the
     /// start of a cycle.
     pub fn key_event(
         &self,
-        track: usize,
+        node: usize,
         at: f64,
         channel: u8,
         note: i32,
@@ -396,9 +396,9 @@ impl Schedule {
             .segments
             .iter()
             .rev()
-            .find(|s| s.track == track && s.start <= at && s.end.is_none_or(|e| at < e))?;
+            .find(|s| s.node == node && s.start <= at && s.end.is_none_or(|e| at < e))?;
         segment.clip.keys.filter(|k| k.accepts(channel))?;
-        if !self.audible(track, at) {
+        if !self.audible(node, at) {
             return None;
         }
         let mut args = std::collections::BTreeMap::new();
@@ -419,14 +419,14 @@ impl Schedule {
         args.insert(crate::perform::PITCH_PARAM.to_string(), Value::Note(note));
         args.insert(niminal_lang::GAIN_PARAM.to_string(), Value::Db(gain));
         Some(Event {
-            target: self.track_names[track].clone(),
+            target: self.node_names[node].clone(),
             at: Time::Seconds(at),
             dur: Time::Seconds(0.0),
             args,
         })
     }
 
-    /// Every change an envelope lane makes to a track parameter in `from..to` seconds, in time order.
+    /// Every change an envelope lane makes to a part parameter in `from..to` seconds, in time order.
     pub fn controls(&self, from: f64, to: f64) -> Result<Vec<ControlSet>, ScheduleError> {
         // a long stretch is searched a piece at a time, each with its own limit
         let mut all = Vec::new();
@@ -465,9 +465,9 @@ impl Schedule {
 
     /// Like [`Schedule::events`], but a live session would rather play what
     /// it can than nothing: this returns the notes found, the problem that
-    /// cut the search short if any, and the tracks whose clips asked for more
+    /// cut the search short if any, and the nodes whose clips asked for more
     /// than they are allowed (which the caller should stop searching, since
-    /// searching again costs the same). Tracks in `skip` are not searched.
+    /// searching again costs the same). Nodes in `skip` are not searched.
     pub fn events_lenient(&self, from: f64, to: f64, skip: &[usize]) -> Found {
         let mut out: Vec<(f64, Event)> = Vec::new();
         let mut controls: Vec<ControlSet> = Vec::new();
@@ -477,7 +477,7 @@ impl Schedule {
             problem.get_or_insert(e);
         }
         let work = BASE_WORK + (WORK_PER_SECOND * (to - from).max(0.0)) as usize;
-        for segment in self.segments.iter().filter(|s| !skip.contains(&s.track)) {
+        for segment in self.segments.iter().filter(|s| !skip.contains(&s.node)) {
             if let Err(e) = self.segment_controls(segment, from, to, &mut controls) {
                 problem.get_or_insert(e);
             }
@@ -488,17 +488,27 @@ impl Schedule {
             if let Err(e) = result {
                 problem.get_or_insert(e);
             }
+            for (at, event) in &mut out[before..] {
+                for (name, unit, glide) in &segment.clip.processor_params {
+                    if let Some(value) = event.args.remove(name) {
+                        match niminal_lang::engine_value(*unit, value, segment.tempo) {
+                            Ok(target) => controls.push(ControlSet { at: *at, name: name.clone(), target, glide: *glide }),
+                            Err(e) => { problem.get_or_insert_with(|| ScheduleError(format!("processor lane `{name}`: {e}"))); }
+                        }
+                    }
+                }
+            }
             let allowed = EVENTS_BASE + (EVENTS_PER_SECOND * (to - from).max(0.0)) as usize;
             let too_many = out.len() - before > allowed;
             if too_many {
                 out.truncate(before + allowed);
             }
             if exhausted || too_many {
-                overloaded.push(segment.track);
+                overloaded.push(segment.node);
                 problem.get_or_insert_with(|| {
                     ScheduleError(format!(
-                        "the clip on track `{}` plays more notes than niminal can schedule; it is stopped until you evaluate again",
-                        self.track_names[segment.track]
+                        "the clip on node `{}` plays more notes than niminal can schedule; it is stopped until you evaluate again",
+                        self.node_names[segment.node]
                     ))
                 });
             }
@@ -582,8 +592,8 @@ impl Schedule {
                     if segment.end.is_some_and(|end| onset >= end - END_SLACK) {
                         continue;
                     }
-                    let track = segment.track;
-                    if !self.audible(track, onset) {
+                    let node = segment.node;
+                    if !self.audible(node, onset) {
                         continue;
                     }
                     out.push((onset, self.note(segment, whole, base, &hap.value, onset)?));
@@ -600,7 +610,7 @@ impl Schedule {
                 if segment.end.is_some_and(|end| onset >= end - END_SLACK) {
                     continue;
                 }
-                if !self.audible(segment.track, onset) {
+                if !self.audible(segment.node, onset) {
                     continue;
                 }
                 let whole = CycleSpan::new(note.at, note.at + note.dur);
@@ -618,7 +628,7 @@ impl Schedule {
         Ok(())
     }
 
-    /// What the piece's own envelope lanes (an arrangement's) do to track parameters in `from..to`.
+    /// What the piece's own envelope lanes (an arrangement's) do to part parameters in `from..to`.
     fn lane_controls(
         &self,
         from: f64,
@@ -688,7 +698,7 @@ impl Schedule {
         }
     }
 
-    /// What `segment`'s envelope lanes do to their track's parameters in `from..to` seconds. A curved
+    /// What `segment`'s envelope lanes do to their node's parameters in `from..to` seconds. A curved
     /// segment becomes a few straight glides that follow the same curve an `env` in an instrument does.
     fn segment_controls(
         &self,
@@ -716,7 +726,7 @@ impl Schedule {
                 ((last_cycle / length).ceil() as i64).max(1),
             )
         };
-        let name = &self.track_names[segment.track];
+        let name = &self.node_names[segment.node];
         let clip = &segment.clip;
 
         // signal lanes: the parameter follows the signal, read every SIGNAL_STEP seconds
@@ -726,11 +736,11 @@ impl Schedule {
             };
             let fail = |why: String| {
                 ScheduleError(format!(
-                    "clip `{}` on track `{name}`, lane `{lane}`: {why}",
+                    "clip `{}` on node `{name}`, lane `{lane}`: {why}",
                     clip.name
                 ))
             };
-            let control = format!("{name}::{lane}");
+            let control = if lane.contains("::") { lane.clone() } else { format!("{name}::{lane}") };
             let first = ((window_start / SIGNAL_STEP).floor() * SIGNAL_STEP).max(segment.start);
             let mut at = first;
             while at < until {
@@ -772,13 +782,13 @@ impl Schedule {
         for (lane, curve) in &clip.curves {
             let fail = |why: String| {
                 ScheduleError(format!(
-                    "clip `{}` on track `{name}`, lane `{lane}`: {why}",
+                    "clip `{}` on node `{name}`, lane `{lane}`: {why}",
                     clip.name
                 ))
             };
             let unit = curve
                 .unit
-                .ok_or_else(|| fail("the envelope was never placed on a track".into()))?;
+                .ok_or_else(|| fail("the envelope was never placed on a node".into()))?;
             let level = |v: Value| {
                 niminal_lang::engine_value(unit, v, segment.tempo)
                     .map_err(|e| fail(e.to_string()))
@@ -792,7 +802,7 @@ impl Schedule {
                     level(*to_level)?,
                 ));
             }
-            let control = format!("{name}::{lane}");
+            let control = if lane.contains("::") { lane.clone() } else { format!("{name}::{lane}") };
 
             for k in first_loop..last_loop {
                 let loop_start = if clip.endless {
@@ -838,7 +848,7 @@ impl Schedule {
         onset: f64,
     ) -> Result<Event, ScheduleError> {
         let pitch = &step.value;
-        let name = &self.track_names[segment.track];
+        let name = &self.node_names[segment.node];
         let clip = &segment.clip;
 
         let mut args = std::collections::BTreeMap::new();
@@ -849,7 +859,7 @@ impl Schedule {
             Value::Sample(_) => args.insert("sample".to_string(), *pitch),
             other => {
                 return Err(ScheduleError(format!(
-                    "clip `{}` on track `{name}`: a note must be a note name or a frequency, found `{other}`",
+                    "clip `{}` on node `{name}`: a note must be a note name or a frequency, found `{other}`",
                     clip.name
                 )));
             }
@@ -900,8 +910,8 @@ impl Schedule {
             args.insert("pitch".to_string(), Value::Semitones(st));
         }
         let target = step
-            .track
-            .map(|t| self.track_names[t].clone())
+            .node
+            .map(|t| self.node_names[t].clone())
             .unwrap_or_else(|| name.clone());
         Ok(Event {
             target,
@@ -978,9 +988,9 @@ fn emit_envelope(
     }
 }
 
-fn lane_error(clip: &Clip, track: &str, lane: &str, why: &str) -> ScheduleError {
+fn lane_error(clip: &Clip, node: &str, lane: &str, why: &str) -> ScheduleError {
     ScheduleError(format!(
-        "clip `{}` on track `{track}`, lane `{lane}`: {why}",
+        "clip `{}` on node `{node}`, lane `{lane}`: {why}",
         clip.name
     ))
 }
@@ -990,12 +1000,7 @@ mod tests {
     use super::*;
     use crate::compile;
 
-    const STAGE: &str = "
-tempo 120bpm
-instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }
-track lead { instrument = pluck }
-track bass { instrument = pluck }
-";
+    const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }\npart lead { instrument = pluck }\npart bass { instrument = pluck }\n";
 
     #[test]
     fn musical_durations_follow_the_tempo_of_the_sections_they_cross() {
@@ -1024,7 +1029,7 @@ track bass { instrument = pluck }
             .schedule()
     }
 
-    /// (seconds, track, freq as MIDI) of each note starting in the window.
+    /// (seconds, node, freq as MIDI) of each note starting in the window.
     fn notes(s: &Schedule, from: f64, to: f64) -> Vec<(f64, String, i32)> {
         s.events(from, to)
             .unwrap()
@@ -1283,18 +1288,18 @@ track bass { instrument = pluck }
     }
 
     #[test]
-    fn launching_a_scene_stops_the_tracks_it_does_not_name() {
+    fn launching_a_scene_stops_the_nodes_it_does_not_name() {
         let s = schedule(
             "scene a { lead: [c4], bass: [c2] }\nscene b { lead: [e4] }\na.start\nat +2bars b.start",
         );
-        let tracks = |from, to| {
+        let nodes = |from, to| {
             notes(&s, from, to)
                 .into_iter()
                 .map(|e| e.1)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(tracks(0.0, 2.0), ["lead", "bass"]);
-        assert_eq!(tracks(4.0, 6.0), ["lead"], "bass was not in scene b");
+        assert_eq!(nodes(0.0, 2.0), ["lead", "bass"]);
+        assert_eq!(nodes(4.0, 6.0), ["lead"], "bass was not in scene b");
     }
 
     #[test]
@@ -1359,10 +1364,7 @@ track bass { instrument = pluck }
     #[test]
     fn commands_start_replace_and_stop_clips() {
         let s = schedule(
-            "
-lead.play([c4])
-at 2bars lead.play([e4])
-at 3bars lead.stop",
+            "\nlead.play([c4])\nat 2bars lead.play([e4])\nat 3bars lead.stop",
         );
         // bar = 2s: c4 for the first 4s, e4 for 4s..6s, then silence
         let n = notes(&s, 0.0, 20.0);
@@ -1380,7 +1382,7 @@ at 3bars lead.stop",
     }
 
     #[test]
-    fn tracks_play_independently_and_hush_ends_them_all() {
+    fn nodes_play_independently_and_hush_ends_them_all() {
         let s = schedule("lead.play([c4])\nbass.play([c2 g2])\nat 2bars hush");
         let n = notes(&s, 0.0, 20.0);
         assert_eq!(n.iter().filter(|e| e.1 == "lead").count(), 2);
@@ -1390,7 +1392,7 @@ at 3bars lead.stop",
     }
 
     #[test]
-    fn mute_and_solo_silence_tracks_without_stopping_them() {
+    fn mute_and_solo_silence_nodes_without_stopping_them() {
         let s =
             schedule("lead.play([c4])\nbass.play([c2])\nat 1bar lead.mute\nat 3bars lead.unmute");
         let lead: Vec<f64> = notes(&s, 0.0, 10.0)
@@ -1420,7 +1422,7 @@ at 3bars lead.stop",
                 .collect::<Vec<_>>()
         };
         assert_eq!(who(0.0, 2.0), ["lead", "bass"]);
-        assert_eq!(who(2.0, 4.0), ["bass"], "only the soloed track");
+        assert_eq!(who(2.0, 4.0), ["bass"], "only the soloed node");
         assert_eq!(who(4.0, 6.0), ["lead", "bass"]);
         let one = schedule(
             "lead.play([c4])\nbass.play([c2])\nlead.solo\nbass.solo\nat 1bar bass.unsolo",
@@ -1445,12 +1447,7 @@ at 3bars lead.stop",
     #[test]
     fn scenes_launch_whole_sets_of_clips() {
         let s = schedule(
-            "
-clip riff { notes: [c2 g2] }
-scene verse { bass: riff, lead: [c4] }
-scene bridge { bass: ~, lead: [e4] }
-verse.start
-at 2bars bridge.start",
+            "\nclip riff { notes: [c2 g2] }\nscene verse { bass: riff, lead: [c4] }\nscene bridge { bass: ~, lead: [e4] }\nverse.start\nat 2bars bridge.start",
         );
         let n = notes(&s, 0.0, 8.0);
         let bass = n.iter().filter(|e| e.1 == "bass").count();
@@ -1490,7 +1487,7 @@ at 2bars bridge.start",
 
     #[test]
     fn other_meters_change_the_length_of_a_cycle() {
-        let src = "meter 3/4\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) }\ntrack t { instrument = p }\nt.play([c4 e4 g4])";
+        let src = "meter 3/4\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) }\npart t { instrument = p }\nt.play([c4 e4 g4])";
         let s = compile(src).unwrap().schedule();
         // a 3/4bar at 120bpm is 1.5 seconds, so three steps are half a second apart
         assert_eq!(times(&s, 0.0, 1.6), [0.0, 0.5, 1.0, 1.5]);

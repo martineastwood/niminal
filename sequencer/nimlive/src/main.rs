@@ -32,10 +32,10 @@ struct RenderArgs {
     /// A WAV file, or with `--stems` a folder.
     #[arg(long)]
     out: PathBuf,
-    /// Write a file for every track and bus as well as the mix, into the folder given by `--out`.
+    /// Write a file for every node and bus as well as the mix, into the folder given by `--out`.
     #[arg(long)]
     stems: bool,
-    /// A WAV file for tracks that read `input(..)` to hear. The render lasts as long as it does,
+    /// A WAV file for processors that read `input(..)` to hear. The render lasts as long as it does,
     /// unless `--bars` or `--seconds` says otherwise.
     #[arg(long)]
     input: Option<PathBuf>,
@@ -236,7 +236,7 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
             instrument.name
         );
     }
-    // audio for tracks that read `input(..)`
+    // audio for processors that read `input(..)`
     let audio = match input {
         None => Vec::new(),
         Some(path) => {

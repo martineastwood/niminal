@@ -3,8 +3,9 @@
 config { channels: stereo }
 tempo 128bpm
 
-bus glue: stereo {
-  out = it.compress(threshold: -18db, ratio: 3, attack: 5ms, release: 80ms, makeup: 2db)
+bus glue: stereo
+processor glue_return {
+  out = glue.compress(threshold: -18db, ratio: 3, attack: 5ms, release: 80ms, makeup: 2db)
 }
 
 instr bd(freq: hz = 55hz) {

@@ -197,7 +197,7 @@ pub(crate) fn layout_from_expr(e: &Expr) -> Res<Layout> {
 }
 
 /// Every top-level name, so locals can be kept from shadowing them, plus the
-/// layouts that tracks and buses use.
+/// layouts that nodes and buses use.
 pub(crate) struct Names {
     pub controls: Vec<ControlDef>,
     /// Functions, by name.
@@ -211,7 +211,7 @@ pub(crate) struct Names {
     entries: Vec<(String, &'static str)>,
     pub buses: Vec<String>,
     pub bus_layouts: Vec<Layout>,
-    /// The layout of the master, and so of every voice and track.
+    /// The layout of the master, and so of every voice and node.
     pub master: Layout,
     /// Where `file()` and sample paths are resolved from.
     pub samples: crate::Samples,
@@ -316,7 +316,7 @@ enum Mode {
     /// Evaluating constants such as parameter defaults.
     Plain,
     Instrument,
-    Track,
+    Node,
 }
 
 /// A value in the graph: one source per channel.
@@ -439,11 +439,11 @@ pub(crate) struct Lower<'a> {
     sends: usize,
     /// Set while lowering a bus send. `Some(true)` means `prev` marked it one block late.
     in_send: Option<bool>,
-    /// In a track: what feeds each external input, and the bundles made so far.
+    /// In a node: what feeds each external input, and the bundles made so far.
     chain_inputs: Vec<ChainInput>,
     input_sigs: HashMap<String, Sig>,
     route: Route,
-    /// In a track: the signals sent over OSC.
+    /// In a node: the signals sent over OSC.
     taps: Vec<crate::program::OscTap>,
     /// The rate of each node result that is slower than audio.
     rates: HashMap<usize, Rate>,
@@ -1030,7 +1030,7 @@ pub(crate) fn curve_of(kind: Option<CurveKind>) -> Curve {
     }
 }
 
-/// A compiled track: its processing, what feeds that processing, and where
+/// A compiled node: its processing, what feeds that processing, and where
 /// the result goes.
 pub(crate) struct Chain {
     pub graph: Option<Arc<Graph>>,
@@ -1039,16 +1039,16 @@ pub(crate) struct Chain {
     pub taps: Vec<crate::program::OscTap>,
 }
 
-/// A track's mixer lines: `gain = -3db` and `pan = 20deg`, applied to what the track puts out.
+/// A node's mixer lines: `gain = -3db` and `pan = 20deg`, applied to what the node puts out.
 #[derive(Default)]
 pub(crate) struct Mixer<'a> {
     pub gain: Option<&'a Expr>,
     pub pan: Option<&'a Expr>,
 }
 
-/// Compile a track's statements (everything except its `instrument` line).
+/// Compile a node's statements (everything except its `instrument` line).
 pub(crate) fn compile_chain(
-    track: &Ident,
+    node: &Ident,
     body: &[&Stmt],
     has_instrument: bool,
     mixer: &Mixer,
@@ -1057,7 +1057,7 @@ pub(crate) fn compile_chain(
     names: &Names,
 ) -> Res<Chain> {
     let mut lower = Lower::new(registry, names, tempo);
-    lower.mode = Mode::Track;
+    lower.mode = Mode::Node;
 
     let mixed = mixer.gain.is_some() || mixer.pan.is_some();
     if body.is_empty() && !mixed {
@@ -1070,7 +1070,7 @@ pub(crate) fn compile_chain(
             })
         } else {
             Err(
-                Diagnostic::new(format!("track `{}` does nothing", track.name), track.span)
+                Diagnostic::new(format!("node `{}` does nothing", node.name), node.span)
                     .with_help("give it an `instrument = ...`, or an `out = ...` that reads a bus"),
             )
         };
@@ -1083,8 +1083,8 @@ pub(crate) fn compile_chain(
         None if lower.sends > 0 => Sig::constant(Unit::Num, 0.0),
         None => {
             return Err(Diagnostic::new(
-                format!("track `{}` never sets `out`", track.name),
-                track.span,
+                format!("node `{}` never sets `out`", node.name),
+                node.span,
             )
             .with_help(
                 "add `out = it` to pass its sound through, or send to a bus with `bus += ...`",
@@ -1118,7 +1118,7 @@ pub(crate) fn compile_chain(
             value,
             receiver: true,
         };
-        let mut signal = at(ExprKind::Name("out".into()), track.span);
+        let mut signal = at(ExprKind::Name("out".into()), node.span);
         if let Some(g) = mixer.gain {
             signal = call(
                 "gain",
@@ -1127,7 +1127,7 @@ pub(crate) fn compile_chain(
             );
         }
         if let Some(p) = mixer.pan {
-            // a pan places one signal, so a wider track is mixed down first, as loud as one of its channels
+            // a pan places one signal, so a wider node is mixed down first, as loud as one of its channels
             let mono = if names.master.channels() > 1 {
                 let to_mono = call(
                     "to_layout",
@@ -1165,7 +1165,7 @@ pub(crate) fn compile_chain(
         Route::Master => names.master,
         Route::Bus(b) => names.bus_layouts[b],
     };
-    let out = lower.convert(&out, destination, track.span)?;
+    let out = lower.convert(&out, destination, node.span)?;
     Ok(Chain {
         graph: Some(Arc::new(lower.g.build_channels(&out.srcs))),
         inputs: lower.chain_inputs,
@@ -1348,7 +1348,7 @@ impl<'a> Lower<'a> {
                             "a shared buffer can't be written inside a function",
                             name.span,
                         )
-                        .with_help("write it from an instrument or track"));
+                        .with_help("write it from an instrument or node"));
                     }
                     let idx = self.expr(index)?;
                     let val = self.expr(value)?;
@@ -1403,8 +1403,8 @@ impl<'a> Lower<'a> {
                 ExprKind::For { body, .. } if !(last && ends_with_value(body)) => {
                     self.for_stmt(e).map(|()| None)
                 }
-                _ if self.mode == Mode::Track => {
-                    Err(Diagnostic::new("a track makes sound through `out`", e.span)
+                _ if self.mode == Mode::Node => {
+                    Err(Diagnostic::new("a node makes sound through `out`", e.span)
                         .with_help("write `out = ...`"))
                 }
                 _ if last => Ok(Some((self.value(e)?, e.span))),
@@ -1648,7 +1648,7 @@ impl<'a> Lower<'a> {
                 name.span,
             )),
             "instrument" => Err(Diagnostic::new(
-                "`instrument` is only available in a track",
+                "`instrument` is only available in a node",
                 name.span,
             )),
             _ => {
@@ -1871,13 +1871,13 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
-    /// The value assigned to `out`. In a track, `x.to(bus)` routes the track's
+    /// The value assigned to `out`. In a node, `x.to(bus)` routes the node's
     /// output to a bus instead of the master.
     fn out_value(&mut self, value: &Expr) -> Res<Sig> {
         let ExprKind::Call { name, args } = &value.kind else {
             return self.expr(value);
         };
-        if name.name != "to" || self.mode != Mode::Track {
+        if name.name != "to" || self.mode != Mode::Node {
             return self.expr(value);
         }
         let [source, target] = args.as_slice() else {
@@ -1903,7 +1903,7 @@ impl<'a> Lower<'a> {
         self.expr(&source.value)
     }
 
-    /// A bundle of a track chain's external inputs, made on first use. Each
+    /// A bundle of a node chain's external inputs, made on first use. Each
     /// channel is its own mono input.
     fn input_bundle(
         &mut self,
@@ -1925,7 +1925,7 @@ impl<'a> Lower<'a> {
         sig
     }
 
-    /// `it`: what the track's voices produced, in the master's layout.
+    /// `it`: what the node's voices produced, in the master's layout.
     fn it(&mut self) -> Sig {
         self.input_bundle("it", self.names.master, |channel| ChainInput::It {
             channel,
@@ -3394,9 +3394,9 @@ impl<'a> Lower<'a> {
             }
             "it" => {
                 return match self.mode {
-                    Mode::Track => Ok(self.it()),
+                    Mode::Node => Ok(self.it()),
                     _ => Err(Diagnostic::new(
-                        "`it` is only available inside a track, or a function given to `map`",
+                        "`it` is only available inside a node, or a function given to `map`",
                         span,
                     )),
                 };
@@ -3453,12 +3453,12 @@ impl<'a> Lower<'a> {
         }
         if let Some(bus) = self.names.bus(name) {
             return match self.mode {
-                Mode::Track => {
+                Mode::Node => {
                     let layout = self.names.bus_layouts[bus];
                     Ok(self.input_bundle(name, layout, |channel| ChainInput::Bus { bus, channel }))
                 }
                 _ => Err(Diagnostic::new(
-                    format!("`{name}` is a bus, and only a track can read a bus"),
+                    format!("`{name}` is a bus, and only a processor can read a bus"),
                     span,
                 )
                 .with_help(format!("an instrument can send to it with `{name} += ...`"))),
@@ -3856,12 +3856,12 @@ impl<'a> Lower<'a> {
         if self.in_fn {
             return Err(
                 Diagnostic::new("`input` can't be used inside a function", name.span)
-                    .with_help("read it in the track, and pass it in as an argument"),
+                    .with_help("read it in the node, and pass it in as an argument"),
             );
         }
-        if self.mode != Mode::Track {
-            return Err(Diagnostic::new("`input` is read in a track", name.span)
-                .with_help("for example `track voice { out = input(1).lpf(cutoff: 2khz) }`"));
+        if self.mode != Mode::Node {
+            return Err(Diagnostic::new("`input` is read in a node", name.span)
+                .with_help("for example `processor voice { out = input(1).lpf(cutoff: 2khz) }`"));
         }
         let channel = |arg: &Arg| -> Res<usize> {
             match &arg.value.kind {
@@ -4028,7 +4028,7 @@ impl<'a> Lower<'a> {
         if self.in_fn {
             return Err(
                 Diagnostic::new("`osc_out` can't be used inside a function", name.span)
-                    .with_help("send from the track that calls it"),
+                    .with_help("send from the node that calls it"),
             );
         }
         let Some(signal) = args.first().filter(|a| a.receiver) else {
@@ -4287,7 +4287,7 @@ impl<'a> Lower<'a> {
     fn scope_kernel(&mut self, body: &[Stmt], span: Span) -> (FnDef, Vec<PParam>, BoundFnArgs) {
         let mut def = funcs::lambda(&[], body, span);
         let capture_it =
-            self.mode == Mode::Track && !self.scope.contains_key("it") && funcs::reads(&def, "it");
+            self.mode == Mode::Node && !self.scope.contains_key("it") && funcs::reads(&def, "it");
         if capture_it {
             let it = self.it();
             self.scope.insert("it".into(), Datum::Sig(it));
@@ -4579,7 +4579,7 @@ impl<'a> Lower<'a> {
         }
         if name.name == "to" {
             return Err(Diagnostic::new(
-                "`to` can only end the line that sets a track's `out`",
+                "`to` can only end the line that sets a node's `out`",
                 name.span,
             )
             .with_help("for example `out = it.lpf(cutoff: 1khz).to(space)`"));
@@ -5453,7 +5453,7 @@ impl Lower<'_> {
             )?);
         }
         if processor.is_some() {
-            // Shared reads hidden in a subvoice still participate in cross-track ordering.
+            // Shared reads hidden in a subvoice still participate in cross-node ordering.
             let mut pending = vec![def.clone()];
             let mut visited = std::collections::HashSet::new();
             while let Some(body) = pending.pop() {
@@ -6367,7 +6367,7 @@ impl Lower<'_> {
     fn clock_context(&mut self, name: &Ident) -> Res<Sig> {
         if self.mode == Mode::Plain || self.in_fn {
             return Err(Diagnostic::new(
-                "`clock` is only available in an instrument, track or bus",
+                "`clock` is only available in an instrument, node or bus",
                 name.span,
             )
             .with_help("pass `clock.time` to a function as an argument"));

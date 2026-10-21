@@ -11,7 +11,7 @@ pub struct QuantizeDefaults {
     /// Starting a clip: at the next cycle of the bar grid.
     pub play: Quantize,
     pub instrument: Quantize,
-    pub track: Quantize,
+    pub part: Quantize,
     pub tempo: Quantize,
     /// Defining a `ctl`; the default if none.
     pub control: Option<Quantize>,
@@ -31,7 +31,7 @@ impl Default for QuantizeDefaults {
             default: every(1.0, QuantizeUnit::Bar),
             play: every(1.0, QuantizeUnit::Cycle),
             instrument: every(1.0, QuantizeUnit::Beat),
-            track: every(1.0, QuantizeUnit::Bar),
+            part: every(1.0, QuantizeUnit::Bar),
             tempo: every(1.0, QuantizeUnit::Bar),
             control: None,
         }
@@ -45,7 +45,7 @@ impl QuantizeDefaults {
             default: config.default.unwrap_or(self.default),
             play: config.play.unwrap_or(self.play),
             instrument: config.instrument.unwrap_or(self.instrument),
-            track: config.track.unwrap_or(self.track),
+            part: config.part.unwrap_or(self.part),
             tempo: config.tempo.unwrap_or(self.tempo),
             control: config.control.or(self.control),
         }
@@ -64,7 +64,7 @@ impl QuantizeDefaults {
             StatementKind::Command => self.default,
             StatementKind::Definition => match s.key().and_then(|k| k.split(':').next()) {
                 Some("instr") => self.instrument,
-                Some("track") => self.track,
+                Some("part" | "processor") => self.part,
                 Some("tempo") => self.tempo,
                 Some("ctl") => self.control.unwrap_or(self.default),
                 _ => self.default,
@@ -217,7 +217,7 @@ mod tests {
         let first = |src: &str| analyze(src).unwrap().remove(0);
         let unit = |src: &str| d.for_statement(&first(src), None).unit;
         assert_eq!(unit("instr a(f: hz) { osc(sine, f) }"), QuantizeUnit::Beat);
-        assert_eq!(unit("track t { out = it }"), QuantizeUnit::Bar);
+        assert_eq!(unit("processor t { out = it }"), QuantizeUnit::Bar);
         assert_eq!(unit("t.play([c4])"), QuantizeUnit::Cycle);
         assert_eq!(unit("t.mute"), QuantizeUnit::Bar);
         assert_eq!(unit("a(f: 1hz) for 1beat"), QuantizeUnit::Now);

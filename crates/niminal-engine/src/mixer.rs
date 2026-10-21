@@ -1,9 +1,9 @@
-//! Tracks, buses and the master: everything between voices and the speakers.
+//! Nodes, buses and the master: everything between voices and the speakers.
 //!
-//! Each block, buses are cleared; then tracks run in dependency order, so
+//! Each block, buses are cleared; then nodes run in dependency order, so
 //! everything that writes a bus runs before anything that reads it. That is
 //! why a send reaches its reader in the same block, with no added latency.
-//! The order is worked out from the graphs themselves, so the order tracks are
+//! The order is worked out from the graphs themselves, so the order nodes are
 //! declared in never matters.
 
 use std::sync::{
@@ -222,7 +222,7 @@ impl Sends {
     }
 }
 
-/// Where a track's output goes.
+/// Where a node's output goes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     #[default]
@@ -230,10 +230,10 @@ pub enum Route {
     Bus(usize),
 }
 
-/// What feeds one of a track chain's external (mono) inputs.
+/// What feeds one of a node chain's external (mono) inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChainInput {
-    /// One channel of the summed output of the track's voices.
+    /// One channel of the summed output of the node's voices.
     It { channel: usize },
     /// One channel of a bus.
     Bus { bus: usize, channel: usize },
@@ -242,7 +242,7 @@ pub enum ChainInput {
 }
 
 #[derive(Clone, Default)]
-pub struct TrackDef {
+pub struct NodeDef {
     pub meter: Option<Arc<Meter>>,
     /// Replacement generation and crossfade duration in seconds.
     pub transition: (u64, f64),
@@ -253,15 +253,15 @@ pub struct TrackDef {
     /// What each of the chain graph's inputs receives, in input order.
     pub inputs: Vec<ChainInput>,
     pub route: Route,
-    /// Buses that this track's voices may send to.
+    /// Buses that this node's voices may send to.
     pub voice_sends: Vec<usize>,
-    /// Shared buffers that this track's voices may write.
+    /// Shared buffers that this node's voices may write.
     pub voice_buffer_writes: Vec<usize>,
-    /// Shared buffers that this track's voices may read.
+    /// Shared buffers that this node's voices may read.
     pub voice_buffer_reads: Vec<usize>,
 }
 
-impl TrackDef {
+impl NodeDef {
     fn reads(&self) -> Vec<usize> {
         self.inputs
             .iter()
@@ -306,13 +306,13 @@ impl TrackDef {
     }
 }
 
-/// For each track, the tracks that must run after it: those that read a bus or buffer it writes.
-fn dependencies(tracks: &[TrackDef]) -> Vec<Vec<usize>> {
-    let n = tracks.len();
-    let reads: Vec<_> = tracks.iter().map(TrackDef::reads).collect();
-    let writes: Vec<_> = tracks.iter().map(TrackDef::writes).collect();
-    let buf_reads: Vec<_> = tracks.iter().map(TrackDef::buffer_reads).collect();
-    let buf_writes: Vec<_> = tracks.iter().map(TrackDef::buffer_writes).collect();
+/// For each node, the nodes that must run after it: those that read a bus or buffer it writes.
+fn dependencies(nodes: &[NodeDef]) -> Vec<Vec<usize>> {
+    let n = nodes.len();
+    let reads: Vec<_> = nodes.iter().map(NodeDef::reads).collect();
+    let writes: Vec<_> = nodes.iter().map(NodeDef::writes).collect();
+    let buf_reads: Vec<_> = nodes.iter().map(NodeDef::buffer_reads).collect();
+    let buf_writes: Vec<_> = nodes.iter().map(NodeDef::buffer_writes).collect();
     (0..n)
         .map(|w| {
             (0..n)
@@ -325,9 +325,9 @@ fn dependencies(tracks: &[TrackDef]) -> Vec<Vec<usize>> {
         .collect()
 }
 
-/// `order` cut into the longest runs of tracks in which none depends on an earlier one.
-fn independent_runs(tracks: &[TrackDef], order: &[usize]) -> Vec<std::ops::Range<usize>> {
-    let edges = dependencies(tracks);
+/// `order` cut into the longest runs of nodes in which none depends on an earlier one.
+fn independent_runs(nodes: &[NodeDef], order: &[usize]) -> Vec<std::ops::Range<usize>> {
+    let edges = dependencies(nodes);
     let mut runs = Vec::new();
     let mut start = 0;
     for k in 0..order.len() {
@@ -342,14 +342,14 @@ fn independent_runs(tracks: &[TrackDef], order: &[usize]) -> Vec<std::ops::Range
     runs
 }
 
-/// An order in which to run tracks so that every bus and shared buffer is
-/// written before it is read. A cycle comes back as the tracks that form it, in
-/// order; a track that both writes and reads one bus is a cycle of one. A track
+/// An order in which to run nodes so that every bus and shared buffer is
+/// written before it is read. A cycle comes back as the nodes that form it, in
+/// order; a node that both writes and reads one bus is a cycle of one. A node
 /// that both writes and reads the same buffer does not count as a cycle (the
 /// write and read order inside its graph already decides that).
-pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
-    let n = tracks.len();
-    let edges = dependencies(tracks);
+pub fn execution_order(nodes: &[NodeDef]) -> Result<Vec<usize>, Vec<usize>> {
+    let n = nodes.len();
+    let edges = dependencies(nodes);
     let mut waiting_on = vec![0usize; n];
     for targets in &edges {
         for &r in targets {
@@ -374,9 +374,9 @@ pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
         return Ok(order);
     }
 
-    // Everything left is on or downstream of a cycle. Each such track is still
+    // Everything left is on or downstream of a cycle. Each such node is still
     // waiting on another unfinished one, so walking backwards must repeat a
-    // track, and the repeated stretch is the cycle.
+    // node, and the repeated stretch is the cycle.
     let stuck: Vec<usize> = (0..n).filter(|i| !order.contains(i)).collect();
     let mut path = vec![stuck[0]];
     loop {
@@ -397,7 +397,7 @@ pub fn execution_order(tracks: &[TrackDef]) -> Result<Vec<usize>, Vec<usize>> {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VoiceId {
-    track: usize,
+    node: usize,
     serial: u64,
 }
 
@@ -409,12 +409,12 @@ struct ChainFade {
     elapsed: usize,
 }
 
-struct Track {
+struct Node {
     fade: ChainFade,
-    def: TrackDef,
+    def: NodeDef,
     chain: Option<Voice>,
     voices: Vec<(u64, Voice)>,
-    /// How many voices the track has taken in, which gives each its chunk.
+    /// How many voices the node has taken in, which gives each its chunk.
     admitted: u64,
     /// What its voices added up to in the block being mixed.
     summed: Vec<[f32; BLOCK]>,
@@ -427,7 +427,7 @@ struct Track {
     chain_quiet: usize,
 }
 
-impl Track {
+impl Node {
     /// Take in a voice. Voices are summed in chunks of [`VOICE_CHUNK`] taken in one after another, so
     /// which voices are summed together depends on when notes start and never on when voices end.
     fn admit(&mut self, serial: u64, mut voice: Voice) {
@@ -440,49 +440,49 @@ impl Track {
 /// Voices that may sound at once unless told otherwise.
 pub const DEFAULT_MAX_VOICES: usize = 256;
 
-/// How a new mixer's track takes over from an old mixer's tracks.
+/// How a new mixer's node takes over from an old mixer's nodes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Transfer {
     /// Release transferred voices while keeping their processor tails.
     pub release: bool,
-    /// The old track whose sounding voices continue on this one.
+    /// The old node whose sounding voices continue on this one.
     pub voices_from: Option<usize>,
-    /// The old track whose effect chain, with its state, this one keeps.
+    /// The old node whose effect chain, with its state, this one keeps.
     pub chain_from: Option<usize>,
 }
 
-/// What each track put out, and what each bus carried, kept for an offline render's stems:
+/// What each node put out, and what each bus carried, kept for an offline render's stems:
 /// one buffer per channel for each, grown block by block.
 #[derive(Default)]
 pub struct Stems {
-    pub tracks: Vec<Vec<Vec<f32>>>,
+    pub nodes: Vec<Vec<Vec<f32>>>,
     pub buses: Vec<Vec<Vec<f32>>>,
 }
 
-/// How much work each track of a program has been doing, shared with the control thread.
+/// How much work each node of a program has been doing, shared with the control thread.
 /// Costs are nanoseconds per block of [`BLOCK`] frames, smoothed over recent blocks.
 #[derive(Debug, Default)]
 pub struct Profile {
-    pub tracks: Vec<TrackLoad>,
+    pub nodes: Vec<NodeLoad>,
 }
 
 #[derive(Debug, Default)]
-pub struct TrackLoad {
+pub struct NodeLoad {
     pub voices: AtomicU32,
-    /// Making and summing the track's voices, added up over every thread that helped.
+    /// Making and summing the node's voices, added up over every thread that helped.
     pub voice_nanos: AtomicU32,
     pub chain_nanos: AtomicU32,
 }
 
 impl Profile {
-    pub fn new(tracks: usize) -> Self {
+    pub fn new(nodes: usize) -> Self {
         Profile {
-            tracks: (0..tracks).map(|_| TrackLoad::default()).collect(),
+            nodes: (0..nodes).map(|_| NodeLoad::default()).collect(),
         }
     }
 }
 
-impl TrackLoad {
+impl NodeLoad {
     fn observe(&self, voices: usize, voice_nanos: u64, chain_nanos: u64) {
         let smooth = |cell: &AtomicU32, sample: u64| {
             let old = u64::from(cell.load(Ordering::Relaxed));
@@ -501,9 +501,9 @@ pub struct Mixer {
     /// The audio input for the block being mixed, one buffer per channel.
     audio_in: Vec<[f32; BLOCK]>,
     buses: Buses,
-    tracks: Vec<Track>,
+    nodes: Vec<Node>,
     order: Vec<usize>,
-    /// Runs of tracks in `order` that do not depend on each other, which are rendered side by side.
+    /// Runs of nodes in `order` that do not depend on each other, which are rendered side by side.
     groups: Vec<std::ops::Range<usize>>,
     channels: usize,
     bus_channels: Vec<usize>,
@@ -557,21 +557,21 @@ impl Lane {
 /// Chunks of voices that can run at once.
 const LANES: usize = 16;
 
-/// Some of a track's voices, which one job runs: voices `ptr[..len]`.
+/// Some of a node's voices, which one job runs: voices `ptr[..len]`.
 #[derive(Clone, Copy)]
 struct ChunkRef {
-    track: usize,
+    node: usize,
     ptr: *mut (u64, Voice),
     len: usize,
 }
 
-// SAFETY: the chunks of a wave are different voices (of different tracks, or different stretches of
-// one track's), and nothing else touches a track's voices until the wave is done.
+// SAFETY: the chunks of a wave are different voices (of different nodes, or different stretches of
+// one node's), and nothing else touches a node's voices until the wave is done.
 unsafe impl Send for ChunkRef {}
 unsafe impl Sync for ChunkRef {}
 
 const NO_CHUNK: ChunkRef = ChunkRef {
-    track: 0,
+    node: 0,
     ptr: std::ptr::null_mut(),
     len: 0,
 };
@@ -593,16 +593,16 @@ impl LaneCell {
 /// floating-point sums are made depends only on the notes played and never on how they are scheduled.
 pub const VOICE_CHUNK: usize = 8;
 
-/// How long a track's effect chain must have had nothing going in and nothing coming out before it is
+/// How long a node's effect chain must have had nothing going in and nothing coming out before it is
 /// left alone until something arrives, in seconds.
 const CHAIN_REST_SECONDS: f32 = 0.1;
 
 impl Mixer {
     /// `bus_channels` gives the channel count of each bus; voices and the master
-    /// have `channels`. A track's chain must produce as many channels as its
+    /// have `channels`. A node's chain must produce as many channels as its
     /// destination has.
     pub fn new(
-        defs: Vec<TrackDef>,
+        defs: Vec<NodeDef>,
         bus_channels: Vec<usize>,
         channels: usize,
         sample_rate: f32,
@@ -621,12 +621,12 @@ impl Mixer {
             let got = def.chain.as_ref().map_or(channels, |g| g.channels());
             assert_eq!(
                 got, wanted,
-                "a track produces {got} channels but its destination has {wanted}"
+                "a processor produces {got} channels but its destination has {wanted}"
             );
         }
-        let tracks = defs
+        let nodes = defs
             .into_iter()
-            .map(|def| Track {
+            .map(|def| Node {
                 fade: ChainFade {
                     frames: (def.transition.1 * f64::from(sample_rate)).round() as usize,
                     ..Default::default()
@@ -651,7 +651,7 @@ impl Mixer {
             stems: None,
             audio_in: vec![[0.0; BLOCK]; MAX_CHANNELS],
             buses: Buses::new(&bus_channels),
-            tracks,
+            nodes,
             order,
             groups,
             channels,
@@ -670,7 +670,7 @@ impl Mixer {
         })
     }
 
-    /// Report each track's cost to `profile`, whose tracks are numbered as this mixer's are.
+    /// Report each node's cost to `profile`, whose nodes are numbered as this mixer's are.
     pub fn set_profile(&mut self, profile: Arc<Profile>) {
         self.profile = Some(profile);
     }
@@ -680,8 +680,8 @@ impl Mixer {
     }
 
     /// Where the session's clock is at the start of the next block, for `clock.time`.
-    pub fn set_track_instance(&mut self, index: usize, instance: u64) {
-        if let Some(chain) = self.tracks.get_mut(index).and_then(|t| t.chain.as_mut()) {
+    pub fn set_node_instance(&mut self, index: usize, instance: u64) {
+        if let Some(chain) = self.nodes.get_mut(index).and_then(|t| t.chain.as_mut()) {
             chain.set_instance(instance);
         }
     }
@@ -691,8 +691,8 @@ impl Mixer {
 
     /// How long a sounding note is scheduled to last; see [`Voice::set_dur`].
     pub fn silence_owner(&mut self, owner: u64) {
-        for track in &mut self.tracks {
-            for (_, voice) in &mut track.voices {
+        for node in &mut self.nodes {
+            for (_, voice) in &mut node.voices {
                 if voice.owner() == owner {
                     voice.set_activity_sample(self.buses.clock.sample);
                     voice.silence();
@@ -707,8 +707,8 @@ impl Mixer {
         sample: u64,
     ) {
         activity.start(sample, id.serial);
-        if let Some(track) = self.tracks.get_mut(id.track)
-            && let Some((_, voice)) = track
+        if let Some(node) = self.nodes.get_mut(id.node)
+            && let Some((_, voice)) = node
                 .voices
                 .iter_mut()
                 .find(|(s, v)| *s == id.serial || v.holds(id.serial))
@@ -717,21 +717,21 @@ impl Mixer {
             }
     }
     pub fn finish_activities(&self, sample: u64, reason: u32) {
-        for track in &self.tracks {
-            for (_, voice) in &track.voices {
+        for node in &self.nodes {
+            for (_, voice) in &node.voices {
                 voice.finish_activities(sample, reason);
             }
         }
     }
     pub fn set_voice_owner(&mut self, id: VoiceId, owner: u64) {
-        if let Some(track) = self.tracks.get_mut(id.track)
-            && let Some((_, voice)) = track.voices.iter_mut().find(|(s, _)| *s == id.serial) {
+        if let Some(node) = self.nodes.get_mut(id.node)
+            && let Some((_, voice)) = node.voices.iter_mut().find(|(s, _)| *s == id.serial) {
                 voice.set_owner(owner);
             }
     }
     pub fn set_voice_dur(&mut self, id: VoiceId, seconds: f32) {
-        if let Some(track) = self.tracks.get_mut(id.track)
-            && let Some((_, voice)) = track
+        if let Some(node) = self.nodes.get_mut(id.node)
+            && let Some((_, voice)) = node
                 .voices
                 .iter_mut()
                 .find(|(serial, _)| *serial == id.serial)
@@ -763,12 +763,12 @@ impl Mixer {
 
     /// Reserve bounded voice storage before handing the mixer to rendering.
     pub fn prepare_realtime(&mut self, capacity: usize) {
-        for track in &mut self.tracks {
-            track.voices.reserve(capacity);
-            if let Some(chain) = &mut track.chain {
+        for node in &mut self.nodes {
+            node.voices.reserve(capacity);
+            if let Some(chain) = &mut node.chain {
                 chain.set_realtime();
             }
-            for (_, voice) in &mut track.voices {
+            for (_, voice) in &mut node.voices {
                 voice.set_realtime();
             }
         }
@@ -778,16 +778,16 @@ impl Mixer {
     /// hard limit; rejected voices remain owned by the caller for retirement.
     // the voice comes back in the error so that its owner can retire it without allocating
     #[allow(clippy::result_large_err)]
-    pub fn note_prepared(&mut self, track: usize, voice: Voice) -> Result<VoiceId, Voice> {
+    pub fn note_prepared(&mut self, node: usize, voice: Voice) -> Result<VoiceId, Voice> {
         if self.muted
-            || track >= self.tracks.len()
+            || node >= self.nodes.len()
             || voice.channels() != self.channels
-            || self.tracks[track].voices.len() == self.tracks[track].voices.capacity()
+            || self.nodes[node].voices.len() == self.nodes[node].voices.capacity()
         {
             return Err(voice);
         }
         if let Some(group) = voice.group() {
-            for (_, other) in self.tracks.iter_mut().flat_map(|t| t.voices.iter_mut()) {
+            for (_, other) in self.nodes.iter_mut().flat_map(|t| t.voices.iter_mut()) {
                 if other.group() == Some(group) {
                     other.choke();
                 }
@@ -795,8 +795,8 @@ impl Mixer {
         }
         let mut voice = voice;
         if let Some(rule) = voice.rule() {
-            self.glide_into(track, &rule, &mut voice);
-            self.make_room(track, &rule);
+            self.glide_into(node, &rule, &mut voice);
+            self.make_room(node, &rule);
         }
         self.steal_if_full();
         let serial = self.next_serial;
@@ -806,8 +806,8 @@ impl Mixer {
         if voice.rule().is_some_and(|r| r.legato) {
             voice.hold(serial);
         }
-        self.tracks[track].admit(serial, voice);
-        Ok(VoiceId { track, serial })
+        self.nodes[node].admit(serial, voice);
+        Ok(VoiceId { node, serial })
     }
 
     /// Immediate panic without destroying owned resources. A prepared clean
@@ -816,25 +816,25 @@ impl Mixer {
         self.muted = true;
     }
 
-    /// Start a note on `track`, setting `(parameter index, value)` pairs. The
+    /// Start a note on `node`, setting `(parameter index, value)` pairs. The
     /// graph must produce as many channels as the mixer's master has.
     ///
     /// A note in a choke `group` ends every sounding note in the same group
-    /// (on any track), with a short fade.
+    /// (on any node), with a short fade.
     pub fn note_on(
         &mut self,
-        track: usize,
+        node: usize,
         graph: Arc<Graph>,
         params: &[(usize, f32)],
         group: Option<u64>,
     ) -> VoiceId {
-        self.note_on_with(track, graph, params, group, None)
+        self.note_on_with(node, graph, params, group, None)
     }
 
     /// Like [`Mixer::note_on`], for an instrument that limits its own voices.
     pub fn note_on_with(
         &mut self,
-        track: usize,
+        node: usize,
         graph: Arc<Graph>,
         params: &[(usize, f32)],
         group: Option<u64>,
@@ -846,7 +846,7 @@ impl Mixer {
             "an instrument must output the master's channel count"
         );
         if group.is_some() {
-            for (_, v) in self.tracks.iter_mut().flat_map(|t| t.voices.iter_mut()) {
+            for (_, v) in self.nodes.iter_mut().flat_map(|t| t.voices.iter_mut()) {
                 if v.group() == group {
                     v.choke();
                 }
@@ -859,11 +859,11 @@ impl Mixer {
             voice.set_param(index, value);
         }
         if let Some(rule) = &rule {
-            if let Some(id) = self.merge_legato(track, &voice) {
+            if let Some(id) = self.merge_legato(node, &voice) {
                 return id;
             }
-            self.glide_into(track, rule, &mut voice);
-            self.make_room(track, rule);
+            self.glide_into(node, rule, &mut voice);
+            self.make_room(node, rule);
         }
         self.steal_if_full();
         let serial = self.next_serial;
@@ -873,19 +873,19 @@ impl Mixer {
         if rule.is_some_and(|r| r.legato) {
             voice.hold(serial);
         }
-        self.tracks[track].admit(serial, voice);
-        VoiceId { track, serial }
+        self.nodes[node].admit(serial, voice);
+        VoiceId { node, serial }
     }
 
     /// A legato note that starts while its instrument's voice is held takes that voice over, so the
     /// envelopes carry on and only the pitch moves. The `note` it came from is only read, so a caller
     /// that must not free memory can retire it afterwards. Allocates nothing.
-    pub fn merge_legato(&mut self, track: usize, note: &Voice) -> Option<VoiceId> {
+    pub fn merge_legato(&mut self, node: usize, note: &Voice) -> Option<VoiceId> {
         let rule = note.rule().filter(|r| r.legato && !self.muted)?;
         let serial = self.next_serial;
         let (_, voice) = self
-            .tracks
-            .get_mut(track)?
+            .nodes
+            .get_mut(node)?
             .voices
             .iter_mut()
             .find(|(_, v)| {
@@ -893,18 +893,18 @@ impl Mixer {
             })?;
         voice.legato_on(serial, note);
         self.next_serial += 1;
-        Some(VoiceId { track, serial })
+        Some(VoiceId { node, serial })
     }
 
     /// A glissando into `voice`: it starts at the pitch the instrument's newest note had reached.
-    fn glide_into(&self, track: usize, rule: &VoiceRule, voice: &mut Voice) {
+    fn glide_into(&self, node: usize, rule: &VoiceRule, voice: &mut Voice) {
         if rule.glide <= 0.0 {
             return;
         }
-        let Some(track) = self.tracks.get(track) else {
+        let Some(node) = self.nodes.get(node) else {
             return;
         };
-        let previous = track
+        let previous = node
             .voices
             .iter()
             .filter(|(_, v)| {
@@ -918,13 +918,13 @@ impl Mixer {
 
     /// Make room for a note under `rule`: release the sounding note of the same pitch if asked, and
     /// end the oldest notes of the instrument until fewer than `max` are left. Allocates nothing.
-    fn make_room(&mut self, track: usize, rule: &VoiceRule) {
-        let Some(track) = self.tracks.get_mut(track) else {
+    fn make_room(&mut self, node: usize, rule: &VoiceRule) {
+        let Some(node) = self.nodes.get_mut(node) else {
             return;
         };
         let mine = |v: &Voice| v.rule().is_some_and(|r| r.instrument == rule.instrument);
         if rule.release_same_pitch {
-            for (_, v) in track.voices.iter_mut() {
+            for (_, v) in node.voices.iter_mut() {
                 if mine(v) && !v.is_released() && v.rule().is_some_and(|r| r.pitch == rule.pitch) {
                     v.release();
                 }
@@ -933,7 +933,7 @@ impl Mixer {
         loop {
             // the voice to end: the quietest (the oldest of equals), or just the oldest
             let (mut count, mut ends) = (0usize, None::<(u64, f32)>);
-            for (serial, v) in track.voices.iter() {
+            for (serial, v) in node.voices.iter() {
                 if mine(v) && !v.is_choked() {
                     count += 1;
                     let level = if rule.steal_quietest { v.level() } else { 0.0 };
@@ -945,33 +945,33 @@ impl Mixer {
             let Some((ends, _)) = ends.filter(|_| count >= rule.max.max(1)) else {
                 break;
             };
-            if let Some((_, v)) = track.voices.iter_mut().find(|(serial, _)| *serial == ends) {
+            if let Some((_, v)) = node.voices.iter_mut().find(|(serial, _)| *serial == ends) {
                 v.choke();
             }
         }
     }
 
     pub fn set_control(&mut self, key: &str, start: f32, target: f32, frames: u64, elapsed: u64) {
-        for track in &mut self.tracks {
-            for (_, voice) in &mut track.voices {
+        for node in &mut self.nodes {
+            for (_, voice) in &mut node.voices {
                 voice.set_control(key, start, target, frames, elapsed);
             }
-            if let Some(chain) = &mut track.chain {
-                let local = track
+            if let Some(chain) = &mut node.chain {
+                let local = node
                     .def
                     .controls
                     .iter()
                     .find(|(public, _)| public == key)
                     .map_or(key, |(_, local)| local.as_str());
                 // A template's private controls are changed through its instance keys only.
-                if !track
+                if !node
                     .def
                     .controls
                     .iter()
                     .any(|(_, template)| template == key)
-                    || track.def.controls.iter().any(|(public, _)| public == key)
+                    || node.def.controls.iter().any(|(public, _)| public == key)
                 {
-                    track.chain_quiet = 0;
+                    node.chain_quiet = 0;
                     chain.set_control(local, start, target, frames, elapsed);
                 }
             }
@@ -980,8 +980,8 @@ impl Mixer {
 
     /// Place a sounding note among the speakers; see [`Voice::set_pan`].
     pub fn set_voice_pan(&mut self, id: VoiceId, gains: Option<[f32; MAX_CHANNELS]>) {
-        if let Some(track) = self.tracks.get_mut(id.track)
-            && let Some((_, voice)) = track
+        if let Some(node) = self.nodes.get_mut(id.node)
+            && let Some((_, voice)) = node
                 .voices
                 .iter_mut()
                 .find(|(serial, _)| *serial == id.serial)
@@ -999,8 +999,8 @@ impl Mixer {
         frames: u64,
         elapsed: u64,
     ) {
-        if let Some(track) = self.tracks.get_mut(id.track)
-            && let Some((_, voice)) = track
+        if let Some(node) = self.nodes.get_mut(id.node)
+            && let Some((_, voice)) = node
                 .voices
                 .iter_mut()
                 .find(|(serial, _)| *serial == id.serial)
@@ -1010,22 +1010,22 @@ impl Mixer {
     }
 
     /// Release a note. A voice that has already finished is ignored. Voices keep
-    /// their id when they move between tracks (see [`Mixer::adopt`]), so the
-    /// track it started on is only a hint.
+    /// their id when they move between nodes (see [`Mixer::adopt`]), so the
+    /// node it started on is only a hint.
     pub fn release(&mut self, id: VoiceId) {
         let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
         let sample = self.buses.clock.sample;
         let hinted = self
-            .tracks
-            .get_mut(id.track)
+            .nodes
+            .get_mut(id.node)
             .and_then(|t| t.voices.iter_mut().find(|n| ends(n)));
         if let Some((_, v)) = hinted {
             v.set_activity_sample(sample);
             v.note_off(id.serial);
             return;
         }
-        for track in &mut self.tracks {
-            if let Some((_, v)) = track.voices.iter_mut().find(|n| ends(n)) {
+        for node in &mut self.nodes {
+            if let Some((_, v)) = node.voices.iter_mut().find(|n| ends(n)) {
                 v.set_activity_sample(sample);
                 v.note_off(id.serial);
                 return;
@@ -1037,8 +1037,8 @@ impl Mixer {
     /// ended, or an instrument without the parameter, ignores it. Allocates nothing.
     pub fn set_voice_param(&mut self, id: VoiceId, name: &str, value: f32) {
         let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
-        for track in &mut self.tracks {
-            if let Some((_, v)) = track.voices.iter_mut().find(|n| ends(n)) {
+        for node in &mut self.nodes {
+            if let Some((_, v)) = node.voices.iter_mut().find(|n| ends(n)) {
                 v.set_param_by_name(name, value);
                 return;
             }
@@ -1049,8 +1049,8 @@ impl Mixer {
     /// that has ended is ignored. Allocates nothing.
     pub fn set_voice_param_index(&mut self, id: VoiceId, index: usize, value: f32, frames: u64) {
         let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
-        for track in &mut self.tracks {
-            if let Some((_, v)) = track.voices.iter_mut().find(|n| ends(n)) {
+        for node in &mut self.nodes {
+            if let Some((_, v)) = node.voices.iter_mut().find(|n| ends(n)) {
                 v.set_param_glide(index, value, frames);
                 return;
             }
@@ -1058,8 +1058,8 @@ impl Mixer {
     }
 
     pub fn swap_voice_buffers(&mut self, id: VoiceId, key: u64, banks: &mut [crate::BufferBank]) {
-        for track in &mut self.tracks {
-            if let Some((_, voice)) = track
+        for node in &mut self.nodes {
+            if let Some((_, voice)) = node
                 .voices
                 .iter_mut()
                 .find(|(s, v)| *s == id.serial || v.holds(id.serial))
@@ -1069,21 +1069,21 @@ impl Mixer {
             }
         }
     }
-    pub fn swap_chain_buffers(&mut self, track: usize, key: u64, banks: &mut [crate::BufferBank]) {
-        if let Some(chain) = self.tracks.get_mut(track).and_then(|t| t.chain.as_mut()) {
+    pub fn swap_chain_buffers(&mut self, node: usize, key: u64, banks: &mut [crate::BufferBank]) {
+        if let Some(chain) = self.nodes.get_mut(node).and_then(|t| t.chain.as_mut()) {
             chain.swap_buffers(key, banks);
         }
     }
-    pub fn chain_param_value(&self, track: usize, param: &str) -> Option<f32> {
-        self.tracks.get(track)?.chain.as_ref()?.param_value(param)
+    pub fn chain_param_value(&self, node: usize, param: &str) -> Option<f32> {
+        self.nodes.get(node)?.chain.as_ref()?.param_value(param)
     }
     pub fn swap_chain_mapping(
         &mut self,
-        track: usize,
+        node: usize,
         param: &str,
         mapping: &mut Option<Box<crate::ParamMapping>>,
     ) {
-        if let Some(chain) = self.tracks.get_mut(track).and_then(|t| t.chain.as_mut()) {
+        if let Some(chain) = self.nodes.get_mut(node).and_then(|t| t.chain.as_mut()) {
             chain.swap_mapping(param, mapping);
         }
     }
@@ -1094,8 +1094,8 @@ impl Mixer {
         mapping: &mut Option<Box<crate::ParamMapping>>,
     ) {
         let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
-        for track in &mut self.tracks {
-            if let Some((_, voice)) = track.voices.iter_mut().find(|v| ends(v)) {
+        for node in &mut self.nodes {
+            if let Some((_, voice)) = node.voices.iter_mut().find(|v| ends(v)) {
                 voice.swap_mapping(name, mapping);
                 return;
             }
@@ -1104,8 +1104,8 @@ impl Mixer {
 
     pub fn set_voice_param_glide(&mut self, id: VoiceId, name: &str, value: f32, frames: u64) {
         let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
-        for track in &mut self.tracks {
-            if let Some((_, voice)) = track.voices.iter_mut().find(|v| ends(v)) {
+        for node in &mut self.nodes {
+            if let Some((_, voice)) = node.voices.iter_mut().find(|v| ends(v)) {
                 if let Some(index) = voice.param_index(name) {
                     voice.set_param_glide(index, value, frames);
                 }
@@ -1118,26 +1118,26 @@ impl Mixer {
     /// memory (delay lines, reverb tails) and empty the buses.
     pub fn panic(&mut self) {
         let rate = self.sample_rate;
-        for track in &mut self.tracks {
-            track.voices.clear();
-            track.fade = ChainFade::default();
-            track.chain = track
+        for node in &mut self.nodes {
+            node.voices.clear();
+            node.fade = ChainFade::default();
+            node.chain = node
                 .def
                 .chain
                 .as_ref()
                 .map(|g| Voice::new(g.clone(), rate));
-            track.chain_silenced = false;
-            track.chain_quiet = 0;
+            node.chain_silenced = false;
+            node.chain_quiet = 0;
         }
         self.buses.clear();
         self.muted = false;
     }
 
-    /// Start keeping what every track puts out (after its effects, before the master) and what every
+    /// Start keeping what every node puts out (after its effects, before the master) and what every
     /// bus carries. Only for offline renders: it grows without bound.
     pub fn capture_stems(&mut self) {
         self.stems = Some(Stems {
-            tracks: vec![Vec::new(); self.tracks.len()],
+            nodes: vec![Vec::new(); self.nodes.len()],
             buses: vec![Vec::new(); self.bus_channels.len()],
         });
     }
@@ -1147,7 +1147,7 @@ impl Mixer {
     pub fn pad_stems(&mut self, len: usize) {
         if let Some(stems) = &mut self.stems {
             for channel in stems
-                .tracks
+                .nodes
                 .iter_mut()
                 .chain(stems.buses.iter_mut())
                 .flatten()
@@ -1181,7 +1181,7 @@ impl Mixer {
             return;
         }
         let oldest = self
-            .tracks
+            .nodes
             .iter_mut()
             .flat_map(|t| t.voices.iter_mut())
             .filter(|(_, v)| !v.is_choked())
@@ -1193,7 +1193,7 @@ impl Mixer {
     }
 
     pub fn active_voices(&self) -> usize {
-        self.tracks.iter().map(|t| t.voices.len()).sum()
+        self.nodes.iter().map(|t| t.voices.len()).sum()
     }
 
     /// How many voices and chains were silenced for producing NaN or infinity
@@ -1223,17 +1223,17 @@ impl Mixer {
         self.process_inner(out, frames, Some(retired));
     }
 
-    /// Make the voices of the tracks `order[group]` sound, leaving each track's sum in its `summed`.
+    /// Make the voices of the nodes `order[group]` sound, leaving each node's sum in its `summed`.
     /// Chunks of voices run side by side in waves, one lane each, and their sums and sends are added
-    /// in track and chunk order afterwards: the output is the same however many threads help.
+    /// in node and chunk order afterwards: the output is the same however many threads help.
     fn render_voices(&mut self, group: std::ops::Range<usize>, frames: usize) {
         let n = self.channels;
         for k in group.clone() {
             let t = self.order[k];
-            self.tracks[t].summed[..n]
+            self.nodes[t].summed[..n]
                 .iter_mut()
                 .for_each(|c| c[..frames].fill(0.0));
-            self.tracks[t].voice_nanos = 0;
+            self.nodes[t].voice_nanos = 0;
         }
         let width = self.lanes.len();
         let mut refs = [NO_CHUNK; LANES];
@@ -1241,21 +1241,21 @@ impl Mixer {
         for k in group {
             let t = self.order[k];
             // voices that write a shared buffer must not run side by side: who writes last would be luck
-            let alone = !self.tracks[t].def.voice_buffer_writes.is_empty();
+            let alone = !self.nodes[t].def.voice_buffer_writes.is_empty();
             if alone && count > 0 {
                 self.run_wave(&refs[..count], frames, true);
                 count = 0;
             }
-            let (len, mut start) = (self.tracks[t].voices.len(), 0);
+            let (len, mut start) = (self.nodes[t].voices.len(), 0);
             while start < len {
-                let voices = &mut self.tracks[t].voices;
+                let voices = &mut self.nodes[t].voices;
                 let key = voices[start].1.chunk();
                 let take = voices[start..]
                     .iter()
                     .position(|(_, v)| v.chunk() != key)
                     .unwrap_or(len - start);
                 refs[count] = ChunkRef {
-                    track: t,
+                    node: t,
                     ptr: voices[start..].as_mut_ptr(),
                     len: take,
                 };
@@ -1272,7 +1272,7 @@ impl Mixer {
         }
     }
 
-    /// Run chunks of voices, one lane each, and add what they made to their tracks' sums and the buses,
+    /// Run chunks of voices, one lane each, and add what they made to their nodes' sums and the buses,
     /// in order. With `share` they may be shared out among threads, if that is worth it.
     fn run_wave(&mut self, refs: &[ChunkRef], frames: usize, share: bool) {
         let n = self.channels;
@@ -1280,14 +1280,14 @@ impl Mixer {
             fork,
             lanes,
             buses,
-            tracks,
+            nodes,
             ..
         } = self;
         let timer = fork.as_deref();
         let shared = timer.filter(|fork| {
             let work: f32 = refs
                 .iter()
-                .map(|r| r.len as f32 * frames as f32 * tracks[r.track].rate)
+                .map(|r| r.len as f32 * frames as f32 * nodes[r.node].rate)
                 .sum();
             share && refs.len() > 1 && fork.worth_it(work as u64, refs.len())
         });
@@ -1320,21 +1320,21 @@ impl Mixer {
         }
         for (i, r) in refs.iter().enumerate() {
             let Lane { summed: lane_sum, sends, nanos, .. } = lanes[i].0.get_mut();
-            let track = &mut tracks[r.track];
-            for (sum, chunk) in track.summed[..n].iter_mut().zip(&lane_sum[..n]) {
+            let node = &mut nodes[r.node];
+            for (sum, chunk) in node.summed[..n].iter_mut().zip(&lane_sum[..n]) {
                 for (s, v) in sum[..frames].iter_mut().zip(&chunk[..frames]) {
                     *s += v;
                 }
             }
             sends.drain_into(buses, frames);
-            track.voice_nanos += *nanos;
+            node.voice_nanos += *nanos;
             // short blocks are mostly fixed costs, which say little about a voice
             if timer.is_some() && frames >= BLOCK / 2 {
                 let sample = *nanos as f32 / (r.len * frames) as f32;
-                track.rate = if track.rate == 0.0 {
+                node.rate = if node.rate == 0.0 {
                     sample
                 } else {
-                    track.rate + (sample - track.rate) / 8.0
+                    node.rate + (sample - node.rate) / 8.0
                 };
             }
         }
@@ -1366,27 +1366,27 @@ impl Mixer {
 
         for g in 0..self.groups.len() {
             let group = self.groups[g].clone();
-            // the voices of every track in the run first, side by side, then each track's chain in turn
+            // the voices of every node in the run first, side by side, then each node's chain in turn
             self.render_voices(group.clone(), frames);
         for k in group {
             let t = self.order[k];
             let (scratch, processed) = (&mut self.scratch, &mut self.processed);
-            let track = &mut self.tracks[t];
-            if track.fade.elapsed >= track.fade.frames && track.fade.previous.is_some() {
+            let node = &mut self.nodes[t];
+            if node.fade.elapsed >= node.fade.frames && node.fade.previous.is_some() {
                 if let Some(retired) = retired.as_deref_mut() {
                     if retired.len() < retired.capacity() {
-                        retired.push(track.fade.previous.take().unwrap());
+                        retired.push(node.fade.previous.take().unwrap());
                     }
                 } else {
-                    track.fade.previous = None;
+                    node.fade.previous = None;
                 }
             }
 
             if let Some(retired) = retired.as_deref_mut() {
                 let mut i = 0;
-                while i < track.voices.len() {
-                    if track.voices[i].1.is_finished() && retired.len() < retired.capacity() {
-                        let (_, voice) = track.voices.remove(i);
+                while i < node.voices.len() {
+                    if node.voices[i].1.is_finished() && retired.len() < retired.capacity() {
+                        let (_, voice) = node.voices.remove(i);
                         voice.finish_activities(
                             self.buses.clock.sample + frames as u64,
                             voice.end_reason(),
@@ -1398,8 +1398,8 @@ impl Mixer {
                     }
                 }
             } else {
-                self.silenced += track.voices.iter().filter(|(_, v)| v.is_poisoned()).count();
-                track.voices.retain(|(_, v)| {
+                self.silenced += node.voices.iter().filter(|(_, v)| v.is_poisoned()).count();
+                node.voices.retain(|(_, v)| {
                     if v.is_finished() {
                         v.finish_activities(
                             self.buses.clock.sample + frames as u64,
@@ -1413,39 +1413,39 @@ impl Mixer {
             }
 
             let chain_started = std::time::Instant::now();
-            let result: &[[f32; BLOCK]] = match &mut track.chain {
-                None => &track.summed[..n],
+            let result: &[[f32; BLOCK]] = match &mut node.chain {
+                None => &node.summed[..n],
                 Some(chain) => {
                     let out_channels = chain.channels();
                     let heard = |input: &ChainInput| -> &[f32] {
                         match *input {
-                            ChainInput::It { channel } => &track.summed[channel][..frames],
+                            ChainInput::It { channel } => &node.summed[channel][..frames],
                             ChainInput::Audio { channel } => &self.audio_in[channel][..frames],
                             ChainInput::Bus { bus, channel } => {
                                 self.buses.get(bus, channel, frames)
                             }
                         }
                     };
-                    let silent_in = track
+                    let silent_in = node
                         .def
                         .inputs
                         .iter()
                         .all(|input| heard(input).iter().all(|s| *s == 0.0));
                     if silent_in
-                        && track.chain_quiet >= rest_after
-                        && !(track.fade.previous.is_some()
-                            && track.fade.elapsed < track.fade.frames)
+                        && node.chain_quiet >= rest_after
+                        && !(node.fade.previous.is_some()
+                            && node.fade.elapsed < node.fade.frames)
                     {
                         // nothing to ring out and nothing coming in: the chain stays as it is, and says nothing
                         processed[..out_channels]
                             .iter_mut()
                             .for_each(|c| c[..frames].fill(0.0));
                     } else {
-                        for (i, input) in track.def.inputs.iter().enumerate() {
+                        for (i, input) in node.def.inputs.iter().enumerate() {
                             chain.set_input(i, heard(input));
                         }
-                        if let Some(previous) = &mut track.fade.previous {
-                            for (i, input) in track.fade.inputs.iter().enumerate() {
+                        if let Some(previous) = &mut node.fade.previous {
+                            for (i, input) in node.fade.inputs.iter().enumerate() {
                                 previous.set_input(i, heard(input));
                             }
                         }
@@ -1454,8 +1454,8 @@ impl Mixer {
                             frames,
                             &mut self.buses,
                         );
-                        if track.fade.elapsed < track.fade.frames
-                            && let Some(previous) = &mut track.fade.previous
+                        if node.fade.elapsed < node.fade.frames
+                            && let Some(previous) = &mut node.fade.previous
                         {
                             previous.process_blocks(
                                 &mut scratch[..out_channels],
@@ -1467,20 +1467,20 @@ impl Mixer {
                                 .zip(&scratch[..out_channels])
                             {
                                 for i in 0..frames {
-                                    let mix = ((track.fade.elapsed + i) as f32
-                                        / track.fade.frames as f32)
+                                    let mix = ((node.fade.elapsed + i) as f32
+                                        / node.fade.frames as f32)
                                         .min(1.0);
                                     next[i] = old[i] * (1.0 - mix) + next[i] * mix;
                                 }
                             }
-                            track.fade.elapsed = track.fade.elapsed.saturating_add(frames);
+                            node.fade.elapsed = node.fade.elapsed.saturating_add(frames);
                         }
-                        if chain.is_poisoned() && !track.chain_silenced {
-                            track.chain_silenced = true;
+                        if chain.is_poisoned() && !node.chain_silenced {
+                            node.chain_silenced = true;
                             self.silenced += 1;
                         }
-                        track.chain_quiet = if silent_in && chain.is_quiet(frames) {
-                            track.chain_quiet + frames
+                        node.chain_quiet = if silent_in && chain.is_quiet(frames) {
+                            node.chain_quiet + frames
                         } else {
                             0
                         };
@@ -1489,23 +1489,23 @@ impl Mixer {
                 }
             };
 
-            if let Some(load) = self.profile.as_ref().and_then(|p| p.tracks.get(t))
+            if let Some(load) = self.profile.as_ref().and_then(|p| p.nodes.get(t))
                 && frames >= BLOCK / 2
             {
-                let chain_nanos = if track.chain.is_some() {
+                let chain_nanos = if node.chain.is_some() {
                     chain_started.elapsed().as_nanos() as u64
                 } else {
                     0
                 };
-                load.observe(track.voices.len(), track.voice_nanos, chain_nanos);
+                load.observe(node.voices.len(), node.voice_nanos, chain_nanos);
             }
-            if let Some(meter) = &track.def.meter {
+            if let Some(meter) = &node.def.meter {
                 meter.observe(result, frames, self.buses.clock.sample);
             }
             if let Some(stems) = &mut self.stems {
-                keep(&mut stems.tracks[t], result, frames);
+                keep(&mut stems.nodes[t], result, frames);
             }
-            match track.def.route {
+            match node.def.route {
                 Route::Master => {
                     for (o, r) in out.iter_mut().zip(result) {
                         for (d, s) in o[..frames].iter_mut().zip(&r[..frames]) {
@@ -1543,20 +1543,20 @@ impl Mixer {
     }
 
     pub fn remap_buses_with(&mut self, mapping: &mut impl FnMut(usize) -> Option<usize>) {
-        for track in &mut self.tracks {
-            for (_, voice) in &mut track.voices {
+        for node in &mut self.nodes {
+            for (_, voice) in &mut node.voices {
                 voice.remap_buses_with(mapping);
             }
-            for input in &mut track.def.inputs {
+            for input in &mut node.def.inputs {
                 if let ChainInput::Bus { bus, .. } = input
                     && let Some(next) = mapping(*bus)
                 {
                     *bus = next;
                 }
             }
-            if let Some(previous) = &mut track.fade.previous {
+            if let Some(previous) = &mut node.fade.previous {
                 previous.remap_buses_with(mapping);
-                for input in &mut track.fade.inputs {
+                for input in &mut node.fade.inputs {
                     if let ChainInput::Bus { bus, .. } = input
                         && let Some(next) = mapping(*bus)
                     {
@@ -1568,50 +1568,50 @@ impl Mixer {
     }
 
     /// Take over running state from `old`, which this mixer replaces: for each
-    /// of this mixer's tracks, `transfers` says which of the old tracks' voices
+    /// of this mixer's nodes, `transfers` says which of the old nodes' voices
     /// to continue with and whose effect chain (with its delay lines and filter
     /// memory) to keep. Voices keep playing on the instrument definition they
-    /// started with. Old tracks that nothing claims are dropped.
+    /// started with. Old nodes that nothing claims are dropped.
     ///
     /// Chains carry memory at compatible nodes into the new definition.
     /// The caller must only carry state where bus identities are unchanged.
     pub fn adopt(&mut self, old: &mut Mixer, transfers: &[Transfer]) {
-        assert_eq!(transfers.len(), self.tracks.len(), "one transfer per track");
-        for (track, transfer) in self.tracks.iter_mut().zip(transfers) {
+        assert_eq!(transfers.len(), self.nodes.len(), "one transfer per node");
+        for (node, transfer) in self.nodes.iter_mut().zip(transfers) {
             if let Some(from) = transfer.voices_from
                 && old.channels == self.channels
             {
-                track.voices.append(&mut old.tracks[from].voices);
+                node.voices.append(&mut old.nodes[from].voices);
                 if transfer.release {
-                    for (_, voice) in &mut track.voices {
+                    for (_, voice) in &mut node.voices {
                         voice.release();
                     }
                 }
             }
             if let Some(from) = transfer.chain_from {
-                let previous = &mut old.tracks[from];
-                let changed = track.def.transition.0 != previous.def.transition.0;
-                if changed && track.fade.frames > 0 {
+                let previous = &mut old.nodes[from];
+                let changed = node.def.transition.0 != previous.def.transition.0;
+                if changed && node.fade.frames > 0 {
                     // a different DSP: fade it in from the chain that was playing
-                    track.fade.previous = previous.chain.take();
-                    track.fade.inputs = std::mem::take(&mut previous.def.inputs);
+                    node.fade.previous = previous.chain.take();
+                    node.fade.inputs = std::mem::take(&mut previous.def.inputs);
                 } else {
                     // the same DSP, or one that cannot crossfade: its memory comes straight across
-                    if let (Some(chain), Some(old_chain)) = (&mut track.chain, &mut previous.chain)
+                    if let (Some(chain), Some(old_chain)) = (&mut node.chain, &mut previous.chain)
                     {
                         chain.carry_state(old_chain);
                     }
                     if !changed {
-                        std::mem::swap(&mut track.fade, &mut previous.fade);
+                        std::mem::swap(&mut node.fade, &mut previous.fade);
                     }
                 }
             }
         }
         self.next_serial = self.next_serial.max(old.next_serial);
         self.silenced += std::mem::take(&mut old.silenced);
-        // stems being kept carry on, if the new mixer has the same tracks and buses
+        // stems being kept carry on, if the new mixer has the same nodes and buses
         if let Some(stems) = old.stems.take_if(|s| {
-            s.tracks.len() == self.tracks.len() && s.buses.len() == self.bus_channels.len()
+            s.nodes.len() == self.nodes.len() && s.buses.len() == self.bus_channels.len()
         }) {
             self.stems = Some(stems);
         }

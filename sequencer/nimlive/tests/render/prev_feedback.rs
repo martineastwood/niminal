@@ -4,15 +4,8 @@ fn peak(x: &[f32]) -> f32 {
     x.iter().fold(0.0f32, |m, s| m.max(s.abs()))
 }
 
-// A click into a bus. The track reads the bus at half level and sends its own output back to the bus a block late.
-const LOOP: &str = "
-tempo 120bpm
-bus fb
-instr click() { fb += osc(sine, 1000hz) * env[1 0.5ms 0] }
-track again { out = fb.gain(0.5)
-  fb += late(out) }
-click() for 1beat
-";
+// A click into a bus. The node reads the bus at half level and sends its own output back to the bus a block late.
+const LOOP: &str = "\ntempo 120bpm\nbus fb\ninstr click() { fb += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor again { out = fb.gain(0.5)\n  fb += late(out) }\nclick() for 1beat\n";
 
 #[test]
 fn a_late_send_makes_a_feedback_loop_one_block_long() {

@@ -41,7 +41,7 @@ pub enum Tok {
     Tilde,
     At,
     /// The raw text of a mini-notation pattern, between `[` and `]`. Outside
-    /// instruments, opcodes and tracks a bracket is a pattern, not a channel list.
+    /// instruments, opcodes and nodes a bracket is a pattern, not a channel list.
     Pattern(String),
     /// The raw text of `grid[...]`.
     Grid(String),
@@ -67,7 +67,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
     // Newlines separate statements, except inside ( ) and [ ].
     let mut brackets: Vec<u8> = Vec::new();
     // Whether each open brace is a signal context (an instrument, function or
-    // track body), where a bracket is a channel list or envelope.
+    // part body), where a bracket is a channel list or envelope.
     let mut braces: Vec<bool> = Vec::new();
     let mut statement_start = true;
     let mut statement_keyword: Option<String> = None;
@@ -139,7 +139,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 braces.last().copied().unwrap_or(false)
                     || matches!(
                         statement_keyword.as_deref(),
-                        Some("const" | "fn" | "instr" | "mono" | "track")
+                        Some("const" | "fn" | "instr" | "mono" | "part" | "processor")
                     ),
             ) =>
             {
@@ -224,7 +224,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                                         | "mono"
                                         | "fn"
                                         | "const"
-                                        | "track"
+                                        | "part" | "processor"
                                         | "arrangement"
                                         | "bus"
                                 )
@@ -503,8 +503,8 @@ mod tests {
             toks("clip c { notes: [a b] }")[5],
             Tok::Pattern("a b".into())
         );
-        // instruments, functions and tracks are
-        for head in ["instr a(f: hz)", "fn o(x)", "track t"] {
+        // instruments, functions and nodes are
+        for head in ["instr a(f: hz)", "fn o(x)", "part t"] {
             let t = toks(&format!("{head} {{ [x, y] }}"));
             assert!(t.contains(&Tok::LBracket), "{head}: {t:?}");
             assert!(!t.iter().any(|t| matches!(t, Tok::Pattern(_))), "{head}");

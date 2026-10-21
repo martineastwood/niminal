@@ -12,7 +12,7 @@ try:
 except ImportError as e:  # pragma: no cover
     raise ImportError("install websocket-client: pip install websocket-client") from e
 
-PROTOCOL = 4
+PROTOCOL = 5
 
 
 class NiminalError(Exception):
@@ -68,7 +68,7 @@ class Client:
         return self.call("status")
 
     def send_events(self, events: list[dict]) -> Any:
-        """Send timed events: `{"op": "note" | "control" | "track", "at": ..., ...}`.
+        """Send timed events: `{"op": "note" | "control" | "routing", "at": ..., ...}`.
 
         `at` is an absolute sample count or "now".
         """

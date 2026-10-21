@@ -1784,7 +1784,7 @@ impl Kb<'_> {
             }
             "clock" => {
                 return Err(Diagnostic::new(
-                    "`clock` is only available in an instrument, track or bus",
+                    "`clock` is only available in an instrument, node or bus",
                     span,
                 )
                 .with_help("pass `clock.time` in as an argument"));
@@ -3679,12 +3679,7 @@ mod tests {
             .0
     }
 
-    const ONE_POLE: &str = "fn one_pole(x, cutoff: hz) {
-  state y = 0
-  a = exp(-2 * pi * cutoff / sample_rate)
-  y = x * (1 - a) + y * a
-  y
-}";
+    const ONE_POLE: &str = "fn one_pole(x, cutoff: hz) {\n  state y = 0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}";
 
     fn has_exp(code: &[Instr]) -> bool {
         code.iter()

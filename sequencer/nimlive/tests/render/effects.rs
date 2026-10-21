@@ -8,14 +8,8 @@ fn peak(x: &[f32]) -> f32 {
     x.iter().fold(0.0f32, |m, s| m.max(s.abs()))
 }
 
-// A short click sent only to a bus, which a track delays.
-const ECHO: &str = "
-tempo 120bpm
-bus space
-instr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }
-track fx { out = space.delay(time: 1/4beat, feedback: 0.5) }
-click() for 1/8beat
-";
+// A short click sent only to a bus, which a node delays.
+const ECHO: &str = "\ntempo 120bpm\nbus space\ninstr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor fx { out = space.delay(time: 1/4beat, feedback: 0.5) }\nclick() for 1/8beat\n";
 
 #[test]
 fn echoes_land_on_the_beat_and_decay() {
@@ -40,12 +34,8 @@ fn rendering_waits_for_the_tail_and_trims_the_silence() {
 }
 
 #[test]
-fn a_reverb_track_rings_after_the_notes_stop() {
-    let out = raw("
-bus space
-instr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }
-track hall { out = space.reverb(room: 0.8, damp: 0.5) }
-click() for 1/8beat");
+fn a_reverb_node_rings_after_the_notes_stop() {
+    let out = raw("\nbus space\ninstr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor hall { out = space.reverb(room: 0.8, damp: 0.5) }\nclick() for 1/8beat");
     assert!(out.len() > SR as usize, "a reverb tail is longer than a second: {}", out.len() as f64 / SR);
     assert!(out.iter().all(|s| s.is_finite()));
     assert!(peak(&out) > 0.001);
@@ -53,38 +43,25 @@ click() for 1/8beat");
 
 #[test]
 fn a_delay_time_given_as_a_parameter_matches_the_same_literal_time() {
-    let with_param = raw("
-instr echo(t: sec) { out = (osc(saw, 220hz) * env[1 | 10ms 0]).delay(time: t, max: 1sec, feedback: 0.3) }
-echo(t: 100ms) for 1beat");
-    let with_literal = raw("
-instr echo() { out = (osc(saw, 220hz) * env[1 | 10ms 0]).delay(time: 100ms, feedback: 0.3) }
-echo() for 1beat");
+    let with_param = raw("\ninstr echo(t: sec) { out = (osc(saw, 220hz) * env[1 | 10ms 0]).delay(time: t, max: 1sec, feedback: 0.3) }\necho(t: 100ms) for 1beat");
+    let with_literal = raw("\ninstr echo() { out = (osc(saw, 220hz) * env[1 | 10ms 0]).delay(time: 100ms, feedback: 0.3) }\necho() for 1beat");
     assert!(peak(&with_param) > 0.1);
     assert_eq!(with_param, with_literal);
 }
 
 #[test]
-fn a_reverb_inside_an_instrument_rings_out_as_it_does_on_a_track() {
-    let in_instrument = raw("
-instr click() { out = (osc(sine, 1000hz) * env[1 0.5ms 0]).reverb(room: 0.8, damp: 0.5) }
-click() for 1/8beat");
-    let on_track = raw("
-bus space
-instr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }
-track hall { out = space.reverb(room: 0.8, damp: 0.5) }
-click() for 1/8beat");
+fn a_reverb_inside_an_instrument_rings_out_as_it_does_on_a_node() {
+    let in_instrument = raw("\ninstr click() { out = (osc(sine, 1000hz) * env[1 0.5ms 0]).reverb(room: 0.8, damp: 0.5) }\nclick() for 1/8beat");
+    let on_node = raw("\nbus space\ninstr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor hall { out = space.reverb(room: 0.8, damp: 0.5) }\nclick() for 1/8beat");
     assert!(in_instrument.len() > SR as usize, "the voice outlived its note: {}", in_instrument.len());
-    assert_eq!(in_instrument.len(), on_track.len());
-    let worst = in_instrument.iter().zip(&on_track).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+    assert_eq!(in_instrument.len(), on_node.len());
+    let worst = in_instrument.iter().zip(&on_node).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
     assert!(worst < 1e-6, "largest difference {worst}");
 }
 
 #[test]
 fn a_delay_inside_an_instrument_is_not_cut_off_at_note_end() {
-    let out = raw("
-tempo 120bpm
-instr click() { out = (osc(sine, 1000hz) * env[1 0.5ms 0]).delay(time: 1/2beat, feedback: 0.5) }
-click() for 1/16beat");
+    let out = raw("\ntempo 120bpm\ninstr click() { out = (osc(sine, 1000hz) * env[1 0.5ms 0]).delay(time: 1/2beat, feedback: 0.5) }\nclick() for 1/16beat");
     // the note ends after 1/16beat (~31ms); echoes at 250ms intervals still sound
     let at = |n: usize| peak(&out[n..n + 200]);
     assert!(at(12_000) > 0.5, "first echo {}", at(12_000));
@@ -109,33 +86,15 @@ fn noise_and_pinknoise_make_sound() {
 
 #[test]
 fn fold_clip_chorus_bitcrush_and_compress_render() {
-    let out = raw("
-instr tone() {
-  s = osc(saw, 110hz) * env[1 | 80ms 0]
-  s = s.wavefold(drive: 3) * 0.3
-  s = s.clip(level: 0.8)
-  s = s.chorus(rate: 0.8hz, depth: 0.4, time: 8ms, mix: 0.4)
-  s = s.bitcrush(rate: 8khz, bits: 8)
-  s.compress(threshold: -12db, ratio: 4, attack: 5ms, release: 40ms, makeup: 3db)
-}
-tone() for 1beat");
+    let out = raw("\ninstr tone() {\n  s = osc(saw, 110hz) * env[1 | 80ms 0]\n  s = s.wavefold(drive: 3) * 0.3\n  s = s.clip(level: 0.8)\n  s = s.chorus(rate: 0.8hz, depth: 0.4, time: 8ms, mix: 0.4)\n  s = s.bitcrush(rate: 8khz, bits: 8)\n  s.compress(threshold: -12db, ratio: 4, attack: 5ms, release: 40ms, makeup: 3db)\n}\ntone() for 1beat");
     assert!(out.iter().all(|s| s.is_finite()));
     assert!(peak(&out) > 0.05, "{}", peak(&out));
 }
 
 #[test]
 fn compress_with_a_sidechain_ducks_the_signal() {
-    // a track ducks a pad bus when a click hits the key bus
-    let ducked = raw("
-bus pad
-bus key
-instr tone() { pad += osc(sine, 220hz) * env[1 200ms 1] }
-instr click() { key += osc(sine, 1000hz) * env[1 2ms 0] }
-track ducked {
-  out = pad.compress(threshold: -24db, ratio: 20, attack: 1ms, release: 50ms, sidechain: key)
-}
-tone() for 1beat
-at 50ms click() for 10ms");
+    // a node ducks a pad bus when a click hits the key bus
+    let ducked = raw("\nbus pad\nbus key\ninstr tone() { pad += osc(sine, 220hz) * env[1 200ms 1] }\ninstr click() { key += osc(sine, 1000hz) * env[1 2ms 0] }\nprocessor ducked {\n  out = pad.compress(threshold: -24db, ratio: 20, attack: 1ms, release: 50ms, sidechain: key)\n}\ntone() for 1beat\nat 50ms click() for 10ms");
     assert!(ducked.iter().all(|s| s.is_finite()));
     assert!(peak(&ducked) > 0.01);
     // around the click the pad should be quieter than before it

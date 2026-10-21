@@ -165,10 +165,10 @@ pub fn symbol_items(symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -
 /// What a `.` is after, as far as the text before it says.
 #[derive(Debug, PartialEq)]
 enum Receiver {
-    /// A pattern, clip, grid or track: `riff.`, `[c4 e4].`, `it.`, `bass.`
+    /// A pattern, clip, grid or node: `riff.`, `[c4 e4].`, `it.`, `bass.`
     Pattern,
-    /// A part (a clip or track) at the start of a statement: `bass.` gives a command, or a change to what it plays.
-    Track,
+    /// A part (a clip or node) at the start of a statement: `bass.` gives a command, or a change to what it plays.
+    Part,
     /// A scene at the start of a statement: `verse.start`
     SceneCommand,
     /// A scene: `verse.`
@@ -228,8 +228,8 @@ fn receiver_and_root<'a>(text: &'a str, symbols: &[Symbol]) -> (Receiver, Option
         let line = text[..name_start].rsplit('\n').next().unwrap_or_default().trim();
         let command = !chained && (line.is_empty() || line.starts_with("at "));
         let kind = match symbols.iter().find(|s| s.name == name).map(|s| s.kind) {
-            Some(SymbolKind::Clip | SymbolKind::Track) if command => Receiver::Track,
-            Some(SymbolKind::Pattern | SymbolKind::Clip | SymbolKind::Track) => Receiver::Pattern,
+            Some(SymbolKind::Clip | SymbolKind::Part) if command => Receiver::Part,
+            Some(SymbolKind::Pattern | SymbolKind::Clip | SymbolKind::Part) => Receiver::Pattern,
             Some(SymbolKind::Scene) if command => Receiver::SceneCommand,
             Some(SymbolKind::Scene) => Receiver::Scene,
             _ => Receiver::Signal,
@@ -257,9 +257,14 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
     // after a dot: methods
     if before[..word_start].trim_end().ends_with('.') && !before[..word_start].trim_end().ends_with("..") {
         let dot = before[..word_start].trim_end();
+        if let Some(root) = receiver_and_root(&dot[..dot.len() - 1], symbols).1
+            && let Some(processor) = symbols.iter().find(|s| s.name == root && s.kind == SymbolKind::Processor)
+        {
+            return processor.params.iter().map(|p| item(&p.name, PROPERTY, &p.label, "Processor automation parameter.")).collect();
+        }
         match receiver(&dot[..dot.len() - 1], symbols) {
             Receiver::Pattern => return pattern_ops().iter().map(op_item).collect(),
-            Receiver::Track => {
+            Receiver::Part => {
                 let mut out = vec![
                     item("start", FUNCTION, "start()", "Play this clip, from its beginning, on the next boundary."),
                     item("stop", FUNCTION, "stop()", "Stop it."),
@@ -396,7 +401,13 @@ mod tests {
     #[test]
     fn elsewhere_offers_names_and_keywords() {
         let l = labels("");
-        assert!(l.contains(&"tone".to_string()) && l.contains(&"track".to_string()) && l.contains(&"lpf".to_string()));
+        assert!(l.contains(&"tone".to_string()) && l.contains(&"part".to_string()) && l.contains(&"lpf".to_string()));
+    }
+
+    #[test]
+    fn a_processor_offers_its_automation_parameters() {
+        let labels = labels_in("processor filter(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }", "clip c { filter.");
+        assert_eq!(labels, ["cut"]);
     }
 
     fn labels_in(code: &str, before: &str) -> Vec<String> {
@@ -404,7 +415,7 @@ mod tests {
         items(before, &symbols, &|_| String::new()).iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
     }
 
-    const SONG: &str = "fn wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\ninstr pluck(freq: hz) { freq }\ntrack bass { instrument = pluck }\n";
+    const SONG: &str = "fn wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\ninstr pluck(freq: hz) { freq }\npart bass { instrument = pluck }\n";
 
     #[test]
     fn a_dot_after_a_pattern_offers_pattern_operations_only() {

@@ -61,7 +61,7 @@ pub fn set_control(
     session.send_events(0, vec![op]).map(|_| ())
 }
 
-/// Play `target` (an instrument or track, no arguments) `at` seconds from now, for `dur` seconds.
+/// Play `target` (an instrument or node, no arguments) `at` seconds from now, for `dur` seconds.
 pub fn play(session: &mut Session, target: &str, at: f64, dur: f64) {
     let start = session.clock() + (at * f64::from(session.sample_rate())).round() as u64;
     let op = Op::Note {

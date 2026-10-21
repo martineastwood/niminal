@@ -125,20 +125,7 @@ enum Step {
 }
 use Step::*;
 
-const SETUP: &str = "
-tempo 120bpm
-instr pluck(freq: hz, cut: hz = 3khz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 120ms 0] * 0.3 }
-instr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] * 0.3 }
-bus space
-instr click(freq: hz) { space += osc(sine, freq) * env[1 0.5ms 0] * 0.3 }
-track hall { out = space.reverb(room: 0.6, damp: 0.5) }
-track lead { instrument = pluck }
-track bass { instrument = pluck(cut: 800hz) }
-track clicks { instrument = click }
-clip pad { instrument: organ
-  keys: midi.keys(channel: 1) }
-ctl bright = 3khz
-";
+const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, cut: hz = 3khz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 120ms 0] * 0.3 }\ninstr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] * 0.3 }\nbus space\ninstr click(freq: hz) { space += osc(sine, freq) * env[1 0.5ms 0] * 0.3 }\nprocessor hall { out = space.reverb(room: 0.6, damp: 0.5) }\npart lead { instrument = pluck }\npart bass { instrument = pluck(cut: 800hz) }\npart clicks { instrument = click }\nclip pad { instrument: organ\n  keys: midi.keys(channel: 1) }\nctl bright = 3khz\n";
 
 /// Quantized evals, `launch ... then`, live commands, undo, a tempo ramp, cancel, hush, reset, held keys.
 fn live_script() -> Vec<(u64, Step)> {

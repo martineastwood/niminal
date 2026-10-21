@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use niminal_engine::{Graph, Mixer, TrackDef};
+use niminal_engine::{Graph, Mixer, NodeDef};
 use niminal_score::{Event, Tempo, Value};
 
 use crate::diag::closest;
@@ -29,7 +29,7 @@ pub struct Instrument {
     /// The choke group of each sample: one entry per kit member, or at most
     /// one for a lone sample.
     pub chokes: Vec<Option<u64>>,
-    /// `max = 8`, or `mono`: the most notes of this instrument sounding on a track at once.
+    /// `max = 8`, or `mono`: the most notes of this instrument sounding on a node at once.
     pub max_voices: Option<usize>,
     /// `same_note = release`: a note releases the sounding note of the same pitch.
     pub release_same_note: bool,
@@ -115,19 +115,19 @@ pub struct OscTap {
     pub value: std::sync::Arc<niminal_engine::ops::Tap>,
 }
 
-/// A track as the mixer sees it, plus what the language knows about it.
+/// A node as the mixer sees it, plus what the language knows about it.
 #[derive(Clone, Default)]
-pub struct TrackInfo {
+pub struct NodeInfo {
     pub accepts_notes: bool,
     /// Its signals sent over OSC.
     pub taps: Vec<OscTap>,
-    /// Empty for the implicit track that plays bare instruments.
+    /// Empty for the implicit node that plays bare instruments.
     pub name: String,
     /// Index into `Program::instruments`.
     pub instrument: Option<usize>,
     /// Arguments given in `instrument = name(...)`, applied to every note.
     pub defaults: BTreeMap<String, Value>,
-    pub def: TrackDef,
+    pub def: NodeDef,
 }
 
 /// A named scalar control. Values in graphs use engine units (db is gain).
@@ -193,7 +193,7 @@ pub struct Program {
     pub namespaces: Vec<(usize, usize, String)>,
     pub namespace_samples: std::collections::HashMap<String, crate::Samples>,
     pub bus_meters: Vec<(usize, Arc<niminal_engine::Meter>)>,
-    /// What each track costs to render, shared by every mixer built from this program.
+    /// What each node costs to render, shared by every mixer built from this program.
     pub profile: Arc<niminal_engine::Profile>,
     /// The text it was compiled from.
     pub source: String,
@@ -203,32 +203,32 @@ pub struct Program {
     pub taps: Vec<OscTap>,
     pub controls: Vec<ControlDef>,
     pub tempo: Tempo,
-    /// The layout of the output, and of every voice and track.
+    /// The layout of the output, and of every voice and node.
     pub master: Layout,
     pub instruments: Vec<Instrument>,
     pub buses: Vec<String>,
     pub bus_layouts: Vec<Layout>,
     /// Shared writable tables, by name.
     pub buffers: Vec<(String, std::sync::Arc<niminal_engine::Buffer>)>,
-    /// Track 0 is the implicit one that plays instruments named directly.
-    pub tracks: Vec<TrackInfo>,
+    /// Node 0 is the implicit one that plays instruments named directly.
+    pub nodes: Vec<NodeInfo>,
     /// Every sample name used by a kit, which is what a `Value::Sample` counts.
     pub sample_names: Vec<String>,
     /// The names of the choke groups, which an instrument's `chokes` count.
     pub choke_groups: Vec<String>,
 }
 
-/// A note ready to play: which track, which instrument, and its parameters.
+/// A note ready to play: which node, which instrument, and its parameters.
 #[derive(Debug, PartialEq)]
 pub struct NotePlan {
-    pub track: usize,
+    pub node: usize,
     pub instrument: usize,
     pub params: Vec<(usize, f32)>,
     /// The choke group of the sample this note plays: it ends other notes in the group.
     pub choke: Option<u64>,
     /// How many notes of the instrument may sound at once, if limited.
     pub rule: Option<niminal_engine::VoiceRule>,
-    /// Track parameters the note's clip sets as it starts: control key, value, and how long it glides.
+    /// Node parameters the note's clip sets as it starts: control key, value, and how long it glides.
     pub controls: Vec<(String, f32, f64)>,
     /// How the note is spread over the master's speakers, if it has a pan of its own.
     pub pan: Option<[f32; niminal_engine::MAX_CHANNELS]>,
@@ -238,33 +238,33 @@ pub struct NotePlan {
 
 /// What a note's target resolves to.
 pub struct Target<'a> {
-    pub track: usize,
+    pub node: usize,
     pub instrument: usize,
-    /// Arguments a track applies to all its notes.
+    /// Arguments a node applies to all its notes.
     pub defaults: Option<&'a BTreeMap<String, Value>>,
 }
 
 /// Find what a note's target plays: an instrument by name (on the implicit
-/// track), or a track (with its instrument and default arguments).
+/// node), or a node (with its instrument and default arguments).
 pub fn resolve_target<'a>(
     instruments: &[Instrument],
-    tracks: &'a [TrackInfo],
+    nodes: &'a [NodeInfo],
     target: &str,
 ) -> Result<Target<'a>, ArgError> {
-    if let Some(t) = tracks.iter().skip(1).position(|t| t.name == target) {
-        let track = &tracks[t + 1];
-        if !track.accepts_notes && track.instrument.is_some() {
+    if let Some(t) = nodes.iter().skip(1).position(|t| t.name == target) {
+        let node = &nodes[t + 1];
+        if !node.accepts_notes && node.instrument.is_some() {
             return Err(ArgError::new("destination node is draining".into()));
         }
-        return match track.instrument {
+        return match node.instrument {
             Some(i) => Ok(Target {
-                track: t + 1,
+                node: t + 1,
                 instrument: i,
-                defaults: Some(&track.defaults),
+                defaults: Some(&node.defaults),
             }),
             None => Err(ArgError {
-                message: format!("track `{target}` has no instrument to play"),
-                help: Some("add `instrument = ...` to the track".into()),
+                message: format!("node `{target}` has no instrument to play"),
+                help: Some("add `instrument = ...` to the node".into()),
             }),
         };
     }
@@ -273,19 +273,19 @@ pub fn resolve_target<'a>(
             .iter()
             .position(|i| i.name == instrument)
             .ok_or_else(|| ArgError::new("unknown routed instrument".into()))?;
-        let track = tracks
+        let node = nodes
             .iter()
             .position(|t| t.name == destination && t.accepts_notes)
             .ok_or_else(|| ArgError::new("destination node is absent or draining".into()))?;
         return Ok(Target {
-            track,
+            node,
             instrument,
             defaults: None,
         });
     }
     if let Some(i) = instruments.iter().position(|i| i.name == target) {
         return Ok(Target {
-            track: 0,
+            node: 0,
             instrument: i,
             defaults: None,
         });
@@ -293,9 +293,9 @@ pub fn resolve_target<'a>(
     let known = instruments
         .iter()
         .map(|i| i.name.as_str())
-        .chain(tracks.iter().skip(1).map(|t| t.name.as_str()));
+        .chain(nodes.iter().skip(1).map(|t| t.name.as_str()));
     Err(ArgError {
-        message: format!("no instrument or track named `{target}`"),
+        message: format!("no instrument or node named `{target}`"),
         help: closest(target, known).map(|c| format!("did you mean `{c}`?")),
     })
 }
@@ -318,9 +318,9 @@ impl Program {
             })
             .collect()
     }
-    /// The index of the track called `name`.
-    pub fn track_index(&self, name: &str) -> Option<usize> {
-        self.tracks
+    /// The index of the node called `name`.
+    pub fn node_index(&self, name: &str) -> Option<usize> {
+        self.nodes
             .iter()
             .skip(1)
             .position(|t| t.name == name)
@@ -360,10 +360,10 @@ impl Program {
     /// Check an event against its target and resolve it to a note to play.
     pub fn plan(&self, event: &Event) -> Result<NotePlan, ArgError> {
         let Target {
-            track,
+            node,
             instrument,
             defaults,
-        } = resolve_target(&self.instruments, &self.tracks, &event.target)?;
+        } = resolve_target(&self.instruments, &self.nodes, &event.target)?;
         let mut args = defaults.cloned().unwrap_or_default();
         args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
         // a note's pitch is `freq` to the score, and whatever `pitch = ...` named it to the instrument
@@ -373,10 +373,10 @@ impl Program {
         {
             args.insert(pitch_name.clone(), pitch);
         }
-        // a lane that is a parameter of the track, not of the instrument, sets that control
+        // a lane that is a parameter of the node, not of the instrument, sets that control
         let mut controls = Vec::new();
-        if track != 0 {
-            let owner = &self.tracks[track].name;
+        if node != 0 {
+            let owner = &self.nodes[node].name;
             let found: Vec<String> = args
                 .keys()
                 .filter(|k| {
@@ -484,7 +484,7 @@ impl Program {
             }
         });
         Ok(NotePlan {
-            track,
+            node,
             instrument,
             params,
             choke,
@@ -495,16 +495,16 @@ impl Program {
         })
     }
 
-    /// A mixer for this program's tracks and buses.
+    /// A mixer for this program's nodes and buses.
     pub fn mixer(&self, sample_rate: f32) -> Mixer {
-        let defs = self.tracks.iter().map(|t| t.def.clone()).collect();
+        let defs = self.nodes.iter().map(|t| t.def.clone()).collect();
         let bus_channels = self.bus_layouts.iter().map(|l| l.channels()).collect();
         let mut mixer = Mixer::new(defs, bus_channels, self.master.channels(), sample_rate)
             .expect("feedback is rejected when compiling");
         mixer.set_bus_meters(self.bus_meters.clone());
         mixer.set_profile(self.profile.clone());
-        for (i, track) in self.tracks.iter().enumerate() {
-            mixer.set_track_instance(i, niminal_engine::instance_id(&track.name));
+        for (i, node) in self.nodes.iter().enumerate() {
+            mixer.set_node_instance(i, niminal_engine::instance_id(&node.name));
         }
         mixer
     }

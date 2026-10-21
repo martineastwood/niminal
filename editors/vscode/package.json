@@ -101,19 +101,19 @@
       },
       {
         "command": "niminal.toggleMute",
-        "title": "Mute or Unmute Track",
+        "title": "Mute or Unmute Part",
         "category": "niminal",
         "icon": "$(mute)"
       },
       {
         "command": "niminal.toggleSolo",
-        "title": "Solo or Unsolo Track",
+        "title": "Solo or Unsolo Part",
         "category": "niminal",
         "icon": "$(star)"
       },
       {
-        "command": "niminal.stopTrack",
-        "title": "Stop Track",
+        "command": "niminal.stopPart",
+        "title": "Stop Part",
         "category": "niminal",
         "icon": "$(debug-stop)"
       },
@@ -270,8 +270,8 @@
           "name": "Scenes"
         },
         {
-          "id": "niminal.tracks",
-          "name": "Tracks"
+          "id": "niminal.parts",
+          "name": "Parts"
         },
         {
           "id": "niminal.pending",
@@ -288,17 +288,17 @@
         },
         {
           "command": "niminal.toggleMute",
-          "when": "view == niminal.tracks",
+          "when": "view == niminal.parts",
           "group": "inline@1"
         },
         {
           "command": "niminal.toggleSolo",
-          "when": "view == niminal.tracks",
+          "when": "view == niminal.parts",
           "group": "inline@2"
         },
         {
-          "command": "niminal.stopTrack",
-          "when": "view == niminal.tracks",
+          "command": "niminal.stopPart",
+          "when": "view == niminal.parts",
           "group": "inline@3"
         },
         {
@@ -321,7 +321,7 @@
           "when": "false"
         },
         {
-          "command": "niminal.stopTrack",
+          "command": "niminal.stopPart",
           "when": "false"
         },
         {

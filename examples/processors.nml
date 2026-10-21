@@ -1,0 +1,40 @@
+// Parts select instruments. Processors own persistent effects. Buses collect shared sends.
+// Render with:  nimlive render examples/processors.nml --out processors.wav
+config { channels: stereo }
+tempo 110bpm
+
+bus space: stereo
+bus echo: stereo
+
+instr pluck(freq: hz, bright: 0..1 = 0.5) {
+  voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * perc(decay: 400ms)
+  voice.pan(azimuth: 0deg)
+}
+
+// Persistent processors read the shared buses.
+processor hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
+processor slap { out = echo.lpf(cutoff: 6khz).gain(-1db) }
+
+// Each part routes its summed voices through a dedicated processor.
+processor bass_fx {
+  out        = it.lpf(cutoff: 1500hz).gain(-3db)
+  space     += out.gain(-16db)
+}
+part bass {
+  instrument = pluck(bright: 0.2)
+  output = bass_fx
+}
+
+processor lead_fx {
+  out        = it.gain(-6db)
+  space     += out.gain(-1db)
+  echo      += out.delay(time: 3/8beat, feedback: 0.6).gain(-8db)
+}
+part lead {
+  instrument = pluck(bright: 0.8)
+  output = lead_fx
+}
+
+bass.play([c2 ~ c2 eb2 ~ g1 bb1 ~])
+lead.play([c4 e4 g4 b4].every(2, it.reverse))
+at +4bars hush

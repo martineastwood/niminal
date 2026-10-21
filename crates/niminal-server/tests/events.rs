@@ -8,17 +8,9 @@ use support::Eval;
 
 const SR: f32 = 48_000.0;
 
-const SETUP: &str = "
-ctl level = 0.0.smooth(0ms)
-instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }
-instr flat(freq: hz) { level }
-track lead { instrument = tone }
-track pad(cut: hz = 300hz) { instrument = tone
-  out = it.lpf(cutoff: cut) }
-track held { instrument = flat }
-";
+const SETUP: &str = "\nctl level = 0.0.smooth(0ms)\ninstr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ninstr flat(freq: hz) { level }\nnode lead { instrument = tone }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\nnode pad { instrument = tone\noutput = pad_audio}\nnode held { instrument = flat }\n";
 
-/// A note on the `held` track that lasts the whole test.
+/// A note on the `held` node that lasts the whole test.
 fn hold(s: &mut Session) {
     let args = [("freq".to_string(), Value::Hz(100.0))].into();
     s.send_events(
@@ -146,16 +138,17 @@ fn a_control_moves_at_its_sample_with_a_glide() {
 }
 
 #[test]
-fn a_track_op_sets_a_track_parameter() {
-    let render = |cutoff: &str| {
+fn a_control_op_sets_a_processor_parameter() {
+    let render = |cutoff: f64| {
         let mut s = session();
         s.send_events(
             0,
             vec![
-                Op::Track {
-                    name: "pad".into(),
+                Op::Control {
+                    name: "pad_fx::cut".into(),
                     at: At::Sample(0),
-                    args: [("cut".to_string(), cutoff.parse().unwrap())].into(),
+                    value: cutoff,
+                    unit: Some("hz".into()),
                     glide: None,
                     tag: None,
                 },
@@ -165,7 +158,7 @@ fn a_track_op_sets_a_track_parameter() {
         .unwrap();
         s.process(4_800).remove(0)
     };
-    let (dull, bright) = (render("100hz"), render("8khz"));
+    let (dull, bright) = (render(100.0), render(8_000.0));
     assert!(
         peak(&bright) > peak(&dull) * 2.0,
         "{} vs {}",
@@ -176,17 +169,18 @@ fn a_track_op_sets_a_track_parameter() {
     let problems = s
         .send_events(
             0,
-            vec![Op::Track {
-                name: "pad".into(),
+            vec![Op::Control {
+                name: "pad_fx::nope".into(),
                 at: At::Now,
-                args: [("nope".to_string(), Value::Num(1.0))].into(),
+                value: 1.0,
+                unit: None,
                 glide: None,
                 tag: None,
             }],
         )
         .unwrap_err();
     assert!(
-        problems[0].message.contains("no parameter"),
+        problems[0].message.contains("unknown control"),
         "{}",
         problems[0].message
     );
@@ -221,10 +215,7 @@ fn the_log_replays_to_the_same_audio() {
     assert_eq!(live, replayed[3_000..]);
 }
 
-const VOICE: &str = "
-instr organ(freq: hz, cut: hz = 40hz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 100ms 0] }
-track lead { instrument = organ }
-";
+const VOICE: &str = "\ninstr organ(freq: hz, cut: hz = 40hz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 100ms 0] }\nnode lead { instrument = organ }\n";
 
 fn voices() -> Session {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
@@ -654,9 +645,9 @@ fn first_sound(x: &[f32]) -> Option<usize> {
 }
 
 const SINE: &str =
-    "instr a(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ntrack lead { instrument = a }";
+    "instr a(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\nnode lead { instrument = a }";
 const SAW: &str =
-    "instr a(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\ntrack lead { instrument = a }";
+    "instr a(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\nnode lead { instrument = a }";
 
 fn tone(at: At, hz: f64) -> Op {
     Op::Note {
@@ -777,8 +768,8 @@ fn notes_after_a_define_are_checked_against_the_program_it_makes() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
     s.eval(SINE, Some("now"))
         .unwrap();
-    let new_track =
-        "instr b(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\ntrack extra { instrument = b }";
+    let new_node =
+        "instr b(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\nnode extra { instrument = b }";
     let note = |at| Op::Note {
         to: None,
         target: "extra".into(),
@@ -788,12 +779,12 @@ fn notes_after_a_define_are_checked_against_the_program_it_makes() {
         id: None,
         tag: None,
     };
-    // the track exists only once the define lands
+    // the node exists only once the define lands
     assert!(s.send_events(1, vec![note(At::Sample(60_000))]).is_err());
     s.send_events(
         1,
         vec![
-            define(new_track, At::Sample(48_000)),
+            define(new_node, At::Sample(48_000)),
             note(At::Sample(60_000)),
         ],
     )

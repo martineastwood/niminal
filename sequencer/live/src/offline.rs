@@ -98,12 +98,12 @@ impl Offline {
         self.engine().session_mut().take_silenced()
     }
 
-    /// The audio that tracks reading `input(..)` hear, a buffer for each channel starting at sample 0.
+    /// The audio that nodes reading `input(..)` hear, a buffer for each channel starting at sample 0.
     pub fn set_audio_input(&mut self, channels: Vec<Vec<f32>>) {
         self.engine().session_mut().set_audio_input(channels);
     }
 
-    /// Start keeping what each track and bus puts out, for stems. Only for renders: it grows without bound.
+    /// Start keeping what each node and bus puts out, for stems. Only for renders: it grows without bound.
     pub fn capture_stems(&mut self) {
         self.engine().session_mut().capture_stems();
     }
@@ -113,25 +113,25 @@ impl Offline {
         let mut engine = self.engine();
         let mut captured = engine.session_mut().take_stems()?;
         let program = engine.session().program();
-        let tracks = self
+        let nodes = self
             .live
             .program()
-            .tracks
+            .nodes
             .iter()
             .enumerate()
-            .map(|(i, track)| {
+            .map(|(i, node)| {
                 let index = if i == 0 {
                     Some(0)
                 } else {
                     let name = format!(
                         "__routing_processor_{}_{}",
                         self.client,
-                        crate::live::routing_id(&track.name)
+                        crate::live::routing_id(&node.name)
                     );
-                    program.track_index(&name)
+                    program.node_index(&name)
                 };
                 index
-                    .and_then(|i| captured.tracks.get_mut(i))
+                    .and_then(|i| captured.nodes.get_mut(i))
                     .map(std::mem::take)
                     .unwrap_or_default()
             })
@@ -151,7 +151,7 @@ impl Offline {
                     .unwrap_or_default()
             })
             .collect();
-        Some(niminal_engine::Stems { tracks, buses })
+        Some(niminal_engine::Stems { nodes, buses })
     }
 
     /// Changes on an immediate panic.

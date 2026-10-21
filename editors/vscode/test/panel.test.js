@@ -1,12 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { trackDescription } = require("../panel");
+const { partDescription } = require("../panel");
 
-test("a track says what it plays and whether it is muted or soloed", () => {
-  assert.strictEqual(trackDescription({ name: "a", clip: null, muted: false, soloed: false }), "stopped");
-  assert.strictEqual(trackDescription({ name: "a", clip: "riff", muted: true, soloed: true }), "▶ riff · muted · solo");
+test("a node says what it plays and whether it is muted or soloed", () => {
+  assert.strictEqual(partDescription({ name: "a", clip: null, muted: false, soloed: false }), "stopped");
+  assert.strictEqual(partDescription({ name: "a", clip: "riff", muted: true, soloed: true }), "▶ riff · muted · solo");
   assert.strictEqual(
-    trackDescription({ name: "a", clip: "riff", muted: false, soloed: false, edits: ["reverse", "thin(25%)"] }),
+    partDescription({ name: "a", clip: "riff", muted: false, soloed: false, edits: ["reverse", "thin(25%)"] }),
     "▶ riff · reverse → thin(25%)",
   );
 });

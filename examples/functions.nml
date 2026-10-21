@@ -3,8 +3,9 @@
 config { channels: stereo }
 tempo 96bpm
 
-bus space: stereo {
-  out = it.reverb(room: 0.8, damp: 0.4)
+bus space: stereo
+processor space_return {
+  out = space.reverb(room: 0.8, damp: 0.4)
 }
 
 /// A plucked string: a delay line fed back through an averaging low-pass (Karplus-Strong).

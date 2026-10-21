@@ -42,8 +42,8 @@ impl Session {
                     let target = &local;
                     let instrument = program.instrument(target).or_else(|| {
                         program
-                            .track_index(target)
-                            .and_then(|t| program.tracks[t].instrument)
+                            .node_index(target)
+                            .and_then(|t| program.nodes[t].instrument)
                             .map(|i| &program.instruments[i])
                     });
                     if let Some(i) = instrument {
@@ -131,8 +131,8 @@ impl Session {
     pub(super) fn apply_buffer_binds(&mut self) {
         for bind in &mut self.buffer_binds {
             if !bind.done && bind.at <= self.clock {
-                if let Some(track) = &bind.target {
-                    if let Some(index) = self.program.track_index(track) {
+                if let Some(node) = &bind.target {
+                    if let Some(index) = self.program.node_index(node) {
                         self.mixer
                             .swap_chain_buffers(index, bind.resource, &mut bind.banks());
                     }
@@ -153,9 +153,9 @@ impl Session {
     pub(super) fn apply_chain_maps(&mut self) {
         for map in &mut self.chain_maps {
             if !map.mapping.done && map.mapping.at <= self.clock {
-                if let Some(track) = self.program.track_index(&map.track()) {
+                if let Some(node) = self.program.node_index(&map.node()) {
                     if map.mapping.source.is_none()
-                        && let Some(value) = self.mixer.chain_param_value(track, &map.param)
+                        && let Some(value) = self.mixer.chain_param_value(node, &map.param)
                             && let Some(control) =
                                 self.controls.iter_mut().find(|c| c.key == map.param)
                             {
@@ -163,7 +163,7 @@ impl Session {
                             }
                     let mut prepared = prepare_mapping(&self.program, &map.mapping);
                     self.mixer
-                        .swap_chain_mapping(track, &map.param, &mut prepared);
+                        .swap_chain_mapping(node, &map.param, &mut prepared);
                     crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
                 }
                 map.mapping.done = true;
@@ -192,7 +192,7 @@ impl Session {
             let target_exists = b
                 .target
                 .as_ref()
-                .is_none_or(|track| self.program.track_index(track).is_some());
+                .is_none_or(|node| self.program.node_index(node).is_some());
             let keep = !b.done
                 || (target_exists
                     && (b.at > stale
@@ -219,7 +219,7 @@ impl Session {
         let mut index = 0;
         self.chain_maps.retain(|map| {
             let keep = !map.mapping.done
-                || (self.program.track_index(&map.track()).is_some()
+                || (self.program.node_index(&map.node()).is_some()
                     && latest.get(&(map.client, map.node.clone(), map.param.clone()))
                         == Some(&index));
             index += 1;
@@ -241,10 +241,10 @@ impl Session {
         }
         for map in latest.values() {
             if map.mapping.source.is_some()
-                && let Some(track) = self.program.track_index(&map.track()) {
+                && let Some(node) = self.program.node_index(&map.node()) {
                     let mut mapping = prepare_mapping(&self.program, &map.mapping);
                     self.mixer
-                        .swap_chain_mapping(track, &map.param, &mut mapping);
+                        .swap_chain_mapping(node, &map.param, &mut mapping);
                 }
         }
         let mut latest = std::collections::BTreeMap::new();
@@ -260,11 +260,11 @@ impl Session {
             }
         }
         for bind in latest.values() {
-            let track = bind.target.as_ref().unwrap();
-            let Some(index) = self.program.track_index(track) else {
+            let node = bind.target.as_ref().unwrap();
+            let Some(index) = self.program.node_index(node) else {
                 continue;
             };
-            let Some(node) = track
+            let Some(node) = node
                 .strip_prefix("__routing_processor_")
                 .and_then(|r| r.split_once('_'))
                 .map(|(_, id)| id)

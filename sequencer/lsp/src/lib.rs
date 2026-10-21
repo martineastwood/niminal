@@ -246,7 +246,7 @@ impl Server {
                 "kind": match s.kind {
                     SymbolKind::Instrument | SymbolKind::Function => 12, // Function
                     SymbolKind::Control => 13,                          // Variable
-                    SymbolKind::Bus | SymbolKind::Track => 5,           // Class
+                    SymbolKind::Bus | SymbolKind::Part | SymbolKind::Processor => 5,           // Class
                     SymbolKind::Sample | SymbolKind::Kit => 19,         // Object
                     SymbolKind::Clip | SymbolKind::Scene | SymbolKind::Arrangement => 2, // Module
                     SymbolKind::Pattern => 14,                          // Constant
@@ -426,7 +426,7 @@ mod tests {
         // two edits in one message: the second sees the first (add a line, then a word on it)
         let out = change(json!([
             { "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 0 } }, "text": "x = [c4 e4]\n" },
-            { "range": { "start": { "line": 1, "character": 5 }, "end": { "line": 1, "character": 6 } }, "text": "[c4 zz" },
+            { "range": { "start": { "line": 1, "character": 5 }, "end": { "line": 1, "character": 5 } }, "text": "[c4 zz" },
         ]));
         let diagnostics = out[0]["params"]["diagnostics"].as_array().unwrap();
         assert_eq!(diagnostics.len(), 1, "{out:?}");
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn definition_jumps_to_the_name_and_symbols_list_the_file() {
         let mut server = Server::new();
-        open(&mut server, &format!("{SOURCE}track lead {{ instrument = tone }}\n"));
+        open(&mut server, &format!("{SOURCE}part lead {{ instrument = tone }}\n"));
         let location = request(&mut server, 1, "textDocument/definition", at(5, 28));
         assert_eq!(location["range"]["start"], json!({ "line": 2, "character": 6 }));
         let symbols = request(&mut server, 2, "textDocument/documentSymbol", json!({ "textDocument": { "uri": URI } }));
@@ -468,13 +468,13 @@ mod tests {
         let mut server = Server::new();
         open(&mut server, SOURCE);
         // the file no longer parses, but `tone` is still known
-        open(&mut server, &format!("{SOURCE}track lead {{ instrument = to"));
+        open(&mut server, &format!("{SOURCE}part lead {{ instrument = to"));
         let completion = request(&mut server, 1, "textDocument/completion", at(5, 28));
         let labels: Vec<_> = completion["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
         assert!(labels.contains(&"tone") && labels.contains(&"lpf"), "{labels:?}");
     }
 
-    const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\ntrack lead { instrument = tone }\nlead.play([c4])\nlead.start\n";
+    const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\npart lead { instrument = tone }\nlead.play([c4])\nlead.start\n";
 
     #[test]
     fn rename_changes_every_use_of_a_name_and_refuses_bad_names() {
@@ -487,10 +487,10 @@ mod tests {
         }
         let edit = request(&mut server, 2, "textDocument/rename", json!({ "textDocument": { "uri": URI }, "position": { "line": 1, "character": 7 }, "newName": "pad" }));
         let edits = edit["changes"][URI].as_array().unwrap();
-        // the track's name, `lead.play`, `lead.start`; `lead` isn't touched inside `tone`
+        // the node's name, `lead.play`, `lead.start`; `lead` isn't touched inside `tone`
         assert_eq!(edits.len(), 3, "{edit}");
         assert!(edits.iter().all(|e| e["newText"] == "pad"));
-        assert_eq!(edits[0]["range"]["start"], json!({ "line": 1, "character": 6 }));
+        assert_eq!(edits[0]["range"]["start"], json!({ "line": 1, "character": 5 }));
 
         let mut error = |new: &str| {
             let reply = server.handle(&json!({ "jsonrpc": "2.0", "id": 9, "method": "textDocument/rename",
@@ -561,10 +561,10 @@ mod tests {
         assert_eq!(kind("cutoff", 0), Some("parameter"));
         assert_eq!(kind("lead", 0), Some("class"));
         assert_eq!(kind("lead", 1), Some("class"));
-        assert_eq!(kind("tone", 1), Some("function"), "used as the track's instrument");
+        assert_eq!(kind("tone", 1), Some("function"), "used as the node's instrument");
         // words of the language itself are left to the grammar
         assert_eq!(kind("instr", 0), None);
-        assert_eq!(kind("track", 0), None);
+        assert_eq!(kind("node", 0), None);
     }
 
     fn rename_at(server: &mut Server, uri: &str, line: u32, character: u32, new: &str) -> Value {
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn rename_leaves_alone_what_only_shares_the_spelling() {
-        let text = "instr tone(lead: hz, bright: 0..1 = 0.5) { osc(saw, lead) * bright }\ntrack lead { instrument = tone(lead: 440hz) }\nscene verse { lead: lead }\nclip riff { notes: [c4]\n bright: [0.2] }\nbright = [0.1 0.9]\nfn drive(x) { x }\nbass = osc(saw, 100hz).drive\n";
+        let text = "instr tone(lead: hz, bright: 0..1 = 0.5) { osc(saw, lead) * bright }\npart lead { instrument = tone(lead: 440hz) }\nscene verse { lead: lead }\nclip riff { notes: [c4]\n bright: [0.2] }\nbright = [0.1 0.9]\nfn drive(x) { x }\nbass = osc(saw, 100hz).drive\n";
         let mut server = Server::new();
         open(&mut server, text);
         let places = |reply: &Value| -> Vec<(u64, u64)> {
@@ -584,9 +584,9 @@ mod tests {
             all.sort();
             all
         };
-        // the track: its definition, and both words of the scene entry; not the parameter or the argument
-        let track = rename_at(&mut server, URI, 1, 7, "pad");
-        assert_eq!(places(&track), [(1, 6), (2, 14), (2, 20)], "{track}");
+        // the node: its definition, and both words of the scene entry; not the parameter or the argument
+        let node = rename_at(&mut server, URI, 1, 7, "pad");
+        assert_eq!(places(&node), [(1, 5), (2, 14), (2, 20)], "{node}");
         // the pattern: not the parameter (header and body), nor the lane key
         let pattern = rename_at(&mut server, URI, 5, 1, "level");
         assert_eq!(places(&pattern), [(5, 0)], "{pattern}");
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn a_line_that_does_not_read_costs_only_that_line() {
         let mut server = Server::new();
-        let text = "instr tone(freq: hz) { osc(sine, freq) }\nx = \"never closed\ntrack lead { instrument = tone }\n";
+        let text = "instr tone(freq: hz) { osc(sine, freq) }\nx = \"never closed\npart lead { instrument = tone }\n";
         open(&mut server, text);
         let reply = request(&mut server, 1, "textDocument/semanticTokens/full", json!({ "textDocument": { "uri": URI } }));
         let lines: Vec<u64> = {

@@ -73,14 +73,14 @@ fn play(dir: &Path, src: &str) -> Vec<Vec<f32>> {
     .channels
 }
 
-const TRACK: &str = "tempo 120bpm\ns = sample(\"s.wav\")\ntrack t { instrument = s }\n";
+const NODE: &str = "tempo 120bpm\ns = sample(\"s.wav\")\npart t { instrument = s }\n";
 
 #[test]
 fn a_sample_at_its_root_plays_as_recorded() {
     let dir = scratch("root");
     let audio = ramp(2000);
     write_wav(&dir.join("s.wav"), std::slice::from_ref(&audio));
-    let out = play(&dir, &format!("{TRACK}t.play([c4])"));
+    let out = play(&dir, &format!("{NODE}t.play([c4])"));
     assert!(
         (0..2000).all(|i| (out[0][i] - audio[i]).abs() < 1e-3),
         "{:?}",
@@ -97,7 +97,7 @@ fn a_higher_note_plays_faster() {
     let dir = scratch("pitch");
     write_wav(&dir.join("s.wav"), &[block(0.5, 100)]);
     let length = |note: &str| {
-        let out = play(&dir, &format!("{TRACK}t.play([{note}])"));
+        let out = play(&dir, &format!("{NODE}t.play([{note}])"));
         out[0].iter().rposition(|v| v.abs() > 0.1).unwrap()
     };
     let (root, up) = (length("c4"), length("c5"));
@@ -108,7 +108,7 @@ fn a_higher_note_plays_faster() {
 fn the_root_option_shifts_which_note_is_the_original() {
     let dir = scratch("rootopt");
     write_wav(&dir.join("s.wav"), &[block(0.5, 100)]);
-    let src = TRACK.replace("\"s.wav\")", "\"s.wav\").root(a3)") + "t.play([a3])";
+    let src = NODE.replace("\"s.wav\")", "\"s.wav\").root(a3)") + "t.play([a3])";
     let out = play(&dir, &src);
     let end = out[0].iter().rposition(|v| v.abs() > 0.1).unwrap();
     assert!((end as f64 - 4800.0).abs() < 4.0, "{end}");
@@ -120,7 +120,7 @@ fn a_kit_plays_the_samples_a_pattern_names() {
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 100)]);
     write_wav(&dir.join("drums/snare.wav"), &[block(-0.25, 100)]);
-    let src = "tempo 120bpm\ndrums = kit(\"drums\")\ntrack d { instrument = drums }\nd.play([kick ~ snare ~])";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\npart d { instrument = drums }\nd.play([kick ~ snare ~])";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -136,12 +136,12 @@ fn a_kit_plays_the_samples_a_pattern_names() {
 }
 
 #[test]
-fn a_kit_member_is_an_instrument_on_its_own_track() {
+fn a_kit_member_is_an_instrument_on_its_own_node() {
     let dir = scratch("member");
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 100)]);
     write_wav(&dir.join("drums/snare.wav"), &[block(0.5, 100)]);
-    let src = "tempo 120bpm\ndrums = kit(\"drums\")\ntrack snare { instrument = drums.snare }\nsnare.play([c4 ~ ~ ~])";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\npart snare { instrument = drums.snare }\nsnare.play([c4 ~ ~ ~])";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -154,15 +154,12 @@ fn a_kit_member_is_an_instrument_on_its_own_track() {
 }
 
 #[test]
-fn a_grid_row_that_names_a_track_goes_through_its_effects() {
+fn a_grid_row_that_names_a_node_goes_through_its_effects() {
     let dir = scratch("route");
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 80)]);
     write_wav(&dir.join("drums/snare.wav"), &[block(0.5, 80)]);
-    let src = "tempo 120bpm\ndrums = kit(\"drums\")\n\
-               track beat { instrument = drums }\n\
-               track snare { instrument = drums.snare\n  out = it.gain(-6db) }\n\
-               beat.play(grid {\n  kick:  x... ....\n  snare: .... x...\n})";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\n               part beat { instrument = drums }\n               bus snare_audio\nprocessor snare_fx {out = snare_audio.gain(-6db)}\npart snare { instrument = drums.snare\noutput = snare_audio}\n               beat.play(grid {\n  kick:  x... ....\n  snare: .... x...\n})";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -178,7 +175,7 @@ fn a_grid_row_that_names_a_track_goes_through_its_effects() {
     );
     assert!(
         (at(1.0) - quiet).abs() < 1e-3,
-        "snare is quieter through its track: {}",
+        "snare is quieter through its node: {}",
         at(1.0)
     );
 }
@@ -189,8 +186,7 @@ fn a_grid_row_can_take_params_and_mini_notation() {
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/hat.wav"), &[block(0.5, 40)]);
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 40)]);
-    let src = "tempo 120bpm\ndrums = kit(\"drums\")\ntrack d { instrument = drums }\n\
-               d.play(grid {\n  kick(gain: -6db): x...\n  hat: [x*2 ~ ~ ~]\n})";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\npart d { instrument = drums }\n               d.play(grid {\n  kick(gain: -6db): x...\n  hat: [x*2 ~ ~ ~]\n})";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -219,7 +215,7 @@ fn qualified_sample_names_work_in_patterns() {
     write_wav(&dir.join("drums/a.wav"), &[block(0.5, 50)]);
     write_wav(&dir.join("drums/kick.wav"), &[block(0.25, 50)]);
     // bare `a` is a note; `drums.a` is the sample
-    let src = "tempo 120bpm\ndrums = kit(\"drums\")\ntrack d { instrument = drums }\nd.play([drums.a ~ kick ~])";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\npart d { instrument = drums }\nd.play([drums.a ~ kick ~])";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -238,7 +234,7 @@ fn kit_member_mistakes_are_reported() {
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 10)]);
     let e = errors(
         &dir,
-        "drums = kit(\"drums\")\ntrack t { instrument = drums.snare }",
+        "drums = kit(\"drums\")\npart t { instrument = drums.snare }",
     );
     assert!(
         e.contains("there is no sample `snare` in the kit `drums`"),
@@ -246,7 +242,7 @@ fn kit_member_mistakes_are_reported() {
     );
     let e = errors(
         &dir,
-        "drums = kit(\"drums\")\ntrack t { instrument = drums.kick(sample: kick) }",
+        "drums = kit(\"drums\")\npart t { instrument = drums.kick(sample: kick) }",
     );
     assert!(
         e.contains("already chosen by the name after the kit"),
@@ -258,7 +254,7 @@ fn kit_member_mistakes_are_reported() {
 fn a_stereo_sample_keeps_its_sides() {
     let dir = scratch("stereo");
     write_wav(&dir.join("s.wav"), &[block(0.5, 50), block(-0.5, 50)]);
-    let src = format!("config {{ channels: stereo }}\n{TRACK}t.play([c4])");
+    let src = format!("config {{ channels: stereo }}\n{NODE}t.play([c4])");
     let out = play(&dir, &src);
     assert_eq!(out.len(), 2);
     assert!((out[0][100] - 0.5).abs() < 1e-3 && (out[1][100] + 0.5).abs() < 1e-3);
@@ -270,7 +266,7 @@ fn a_mono_sample_is_centred_in_a_stereo_mix() {
     write_wav(&dir.join("s.wav"), &[block(0.5, 50)]);
     let out = play(
         &dir,
-        &format!("config {{ channels: stereo }}\n{TRACK}t.play([c4])"),
+        &format!("config {{ channels: stereo }}\n{NODE}t.play([c4])"),
     );
     assert!((out[0][100] - out[1][100]).abs() < 1e-6 && out[0][100] > 0.3);
 }
@@ -295,7 +291,7 @@ fn file_and_name_mistakes_are_reported_where_they_are() {
 
     let typo = errors(
         &dir,
-        "drums = kit(\"drums\")\ntrack d { instrument = drums }\nd.play([kick ~ snar ~])",
+        "drums = kit(\"drums\")\npart d { instrument = drums }\nd.play([kick ~ snar ~])",
     );
     assert!(
         typo.contains("`snar` isn't a note, a value, or a sample in a kit"),
@@ -303,10 +299,10 @@ fn file_and_name_mistakes_are_reported_where_they_are() {
     );
     assert!(typo.contains("did you mean `snare`?"), "{typo}");
 
-    let wrong_kit = "a = kit(\"drums\")\ns = sample(\"s.wav\")\nb = kit(\"drums\")\ntrack t { instrument = s }\nt.play([kick])";
+    let wrong_kit = "a = kit(\"drums\")\ns = sample(\"s.wav\")\nb = kit(\"drums\")\npart t { instrument = s }\nt.play([kick])";
     let on_sample = {
         let p = compile_in(&dir, wrong_kit);
-        // a sample track has no kit to pick from; found when the note is planned
+        // a sample node has no kit to pick from; found when the note is planned
         let program = p.unwrap();
         let event = program.schedule().events(0.0, 1.0).unwrap();
         program.plan(&event[0]).unwrap_err().to_string()
@@ -333,7 +329,7 @@ fn a_kit_sample_on_the_wrong_kit_is_an_error() {
     write_wav(&dir.join("b/hat.wav"), &[block(0.5, 10)]);
     let program = compile_in(
         &dir,
-        "a = kit(\"a\")\nb = kit(\"b\")\ntrack t { instrument = a }\nt.play([hat])",
+        "a = kit(\"a\")\nb = kit(\"b\")\npart t { instrument = a }\nt.play([hat])",
     )
     .unwrap();
     let events = program.schedule().events(0.0, 1.0).unwrap();
@@ -349,7 +345,7 @@ fn a_choke_group_cuts_off_the_sample_it_replaces() {
     write_wav(&dir.join("hats/closed.wav"), &[block(0.125, 20)]);
     let src = |opts: &str| {
         format!(
-            "tempo 120bpm\nh = kit(\"hats\"){opts}\ntrack t {{ instrument = h }}\nt.play([open ~ closed ~])"
+            "tempo 120bpm\nh = kit(\"hats\"){opts}\npart t {{ instrument = h }}\nt.play([open ~ closed ~])"
         )
     };
     let at =
@@ -409,8 +405,7 @@ fn single_samples_can_share_a_choke_group_with_each_other_and_a_kit() {
     let dir = scratch("chokeshared");
     write_wav(&dir.join("a.wav"), &[block(0.5, 1500)]);
     write_wav(&dir.join("b.wav"), &[block(0.25, 20)]);
-    let src = "tempo 120bpm\na = sample(\"a.wav\").choke(g)\nb = sample(\"b.wav\").choke(g)\n\
-               track ta { instrument = a }\ntrack tb { instrument = b }\nta.play([c4 ~ ~ ~])\ntb.play([~ ~ c4 ~])";
+    let src = "tempo 120bpm\na = sample(\"a.wav\").choke(g)\nb = sample(\"b.wav\").choke(g)\n               part ta { instrument = a }\npart tb { instrument = b }\nta.play([c4 ~ ~ ~])\ntb.play([~ ~ c4 ~])";
     let out = play(&dir, src);
     // `a` would ring until 1.5s; the render ends when `b` ends at 1.02s because `a` was cut off
     assert!(
@@ -433,8 +428,7 @@ fn write_break(dir: &Path) {
 fn slices_of_a_sample_play_in_any_order() {
     let dir = scratch("slices");
     write_break(&dir);
-    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n\
-               track t { instrument = chops }\nt.play([s3 s0 s2 s1])";
+    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n               part t { instrument = chops }\nt.play([s3 s0 s2 s1])";
     let out = play(&dir, src);
     // four steps of half a second; each plays its quarter of the file (100ms) from its start
     let at = |s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
@@ -453,8 +447,7 @@ fn slices_of_a_sample_play_in_any_order() {
 fn a_grid_row_per_slice_plays_slices_together() {
     let dir = scratch("slicegrid");
     write_break(&dir);
-    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n\
-               track t { instrument = chops }\nt.play(grid {\n  s3: x... ....\n  s0: .... x...\n  s1: x... ....\n})";
+    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n               part t { instrument = chops }\nt.play(grid {\n  s3: x... ....\n  s0: .... x...\n  s1: x... ....\n})";
     let out = play(&dir, src);
     let at = |s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
     // the first step plays s3 (0.4) and s1 (0.2) at once, the second step s0 (0.1)
@@ -466,8 +459,7 @@ fn a_grid_row_per_slice_plays_slices_together() {
 fn grid_accents_and_ghosts_change_the_gain() {
     let dir = scratch("gridghost");
     write_break(&dir);
-    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n\
-               track t { instrument = chops }\nt.play(grid {\n  s3: x.o. X...\n})";
+    let src = "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4)\n               part t { instrument = chops }\nt.play(grid {\n  s3: x.o. X...\n})";
     let out = play(&dir, src);
     let at = |s: f64| out[0].get((s * SR as f64) as usize).copied().unwrap_or(0.0);
     let db = |d: f32| 10f32.powf(d / 20.0);
@@ -483,8 +475,7 @@ fn a_grid_follows_the_kits_choke_groups() {
     // 32 steps in a 2s bar: s1 starts 62.5ms in, while s0 (100ms long) is still sounding
     let play_with = |with: &str| {
         let src = format!(
-            "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4){with}\n\
-             track t {{ instrument = chops }}\nt.play(grid {{\n  s0: x...............................\n  s1: .x..............................\n}})"
+            "tempo 120bpm\namen = sample(\"amen.wav\")\nchops = amen.slices(4){with}\n             part t {{ instrument = chops }}\nt.play(grid {{\n  s0: x...............................\n  s1: .x..............................\n}})"
         );
         play(&dir, &src)
     };
@@ -503,7 +494,7 @@ fn a_grid_follows_the_kits_choke_groups() {
 fn grid_rows_must_name_samples() {
     let dir = scratch("gridrows");
     write_break(&dir);
-    let head = "amen = sample(\"amen.wav\")\nc = amen.slices(4)\ntrack t { instrument = c }\n";
+    let head = "amen = sample(\"amen.wav\")\nc = amen.slices(4)\npart t { instrument = c }\n";
     let e = errors(
         &dir,
         &format!("{head}t.play(grid {{\n  s0: x...\n  s7: x...\n}})"),
@@ -540,7 +531,7 @@ fn slicing_mistakes_are_reported() {
     assert!(e.contains("can be cut into 1 to"), "{e}");
     let e = errors(
         &dir,
-        "amen = sample(\"amen.wav\")\nc = amen.slices(4)\ntrack t { instrument = c }\nt.play([s9])",
+        "amen = sample(\"amen.wav\")\nc = amen.slices(4)\npart t { instrument = c }\nt.play([s9])",
     );
     assert!(
         e.contains("`s9` isn't a note, a value, or a sample in a kit"),
@@ -599,7 +590,7 @@ fn a_loop_fitted_to_the_tempo_lasts_its_beats() {
     write_wav(&dir.join("loop.wav"), &[block(0.5, 2400)]);
     let at = |tempo: u32, opts: &str| {
         let src = format!(
-            "tempo {tempo}bpm\nl = sample(\"loop.wav\"){opts}\ntrack t {{ instrument = l }}\nt.play([c4])"
+            "tempo {tempo}bpm\nl = sample(\"loop.wav\"){opts}\npart t {{ instrument = l }}\nt.play([c4])"
         );
         end_of(&play(&dir, &src))
     };
@@ -622,7 +613,7 @@ fn a_loop_fitted_to_the_tempo_lasts_its_beats() {
 fn slices_of_a_fitted_loop_follow_the_tempo_too() {
     let dir = scratch("fitslices");
     write_wav(&dir.join("loop.wav"), &[block(0.5, 2400)]);
-    let src = "tempo 120bpm\nl = sample(\"loop.wav\").beats(4).fit(rate)\nk = l.slices(4)\ntrack t { instrument = k }\nt.play([s3])";
+    let src = "tempo 120bpm\nl = sample(\"loop.wav\").beats(4).fit(rate)\nk = l.slices(4)\npart t { instrument = k }\nt.play([s3])";
     // the last quarter of the loop is a step long (0.5s at 120bpm) once fitted, and starts on the downbeat
     let out = play(&dir, src);
     assert!((end_of(&out) - 0.5).abs() < 0.01, "{}", end_of(&out));
@@ -663,7 +654,7 @@ fn begin_starts_a_note_part_way_into_the_sample() {
     let dir = scratch("begin");
     let audio = ramp(4000);
     write_wav(&dir.join("s.wav"), std::slice::from_ref(&audio));
-    let out = play(&dir, &format!("{TRACK}t.play([c4].begin(50%))"));
+    let out = play(&dir, &format!("{NODE}t.play([c4].begin(50%))"));
     // the ramp climbs to 0.5, so half way in it is at 0.25, and the second half is what plays
     assert!((out[0][0] - 0.25).abs() < 1e-3, "{}", out[0][0]);
     assert!((out[0][1000] - audio[3000]).abs() < 1e-3);
@@ -682,7 +673,7 @@ fn chop_plays_the_next_part_of_the_sample_for_each_piece() {
         .flat_map(|&l| vec![l; 4800])
         .collect();
     write_wav(&dir.join("s.wav"), std::slice::from_ref(&audio));
-    let out = play(&dir, &format!("{TRACK}t.play([c4].chop(4))"));
+    let out = play(&dir, &format!("{NODE}t.play([c4].chop(4))"));
     // a bar is two seconds, so a piece starts every half second
     for (i, level) in [0.1, 0.2, 0.3, 0.4].iter().enumerate() {
         let at = i * SR / 2 + 100;
@@ -702,7 +693,7 @@ fn a_larger_slice_kit_does_not_build_a_larger_audio_graph() {
         let program = compile_in(
             &dir,
             &format!(
-                "s = sample(\"s.wav\")\nk = s.slices({slices})\ntrack t {{ instrument = k }}"
+                "s = sample(\"s.wav\")\nk = s.slices({slices})\npart t {{ instrument = k }}"
             ),
         )
         .unwrap();
@@ -728,11 +719,11 @@ fn a_kit_with_mixed_channel_layouts_matches_individual_sample_playback() {
     );
     let kit = play(
         &dir,
-        "config { channels: stereo }\nk = kit(\"kit\").root(c4)\ntrack t { instrument = k }\nt.play([mono stereo])",
+        "config { channels: stereo }\nk = kit(\"kit\").root(c4)\npart t { instrument = k }\nt.play([mono stereo])",
     );
     let separate = play(
         &dir,
-        "config { channels: stereo }\na = sample(\"kit/mono.wav\").root(c4)\nb = sample(\"kit/stereo.wav\").root(c4)\ntrack x { instrument = a }\ntrack y { instrument = b }\nx.play([c4 ~])\ny.play([~ c4])",
+        "config { channels: stereo }\na = sample(\"kit/mono.wav\").root(c4)\nb = sample(\"kit/stereo.wav\").root(c4)\npart x { instrument = a }\npart y { instrument = b }\nx.play([c4 ~])\ny.play([~ c4])",
     );
     for (a, b) in kit.iter().zip(&separate) {
         let difference = a

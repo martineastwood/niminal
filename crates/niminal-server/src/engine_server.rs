@@ -15,7 +15,7 @@ use crate::session::{ClockInfo, Session};
 use niminal_lang::Problem;
 
 /// The protocol version a client must say it speaks.
-pub const PROTOCOL_VERSION: u64 = 4;
+pub const PROTOCOL_VERSION: u64 = 5;
 
 pub type ClientId = u64;
 
@@ -579,7 +579,7 @@ impl EngineServer {
             EngineRequest::EventsSend { mut events } => {
                 for event in &events {
                     let values = match event {
-                        Op::Note { args, .. } | Op::Set { args, .. } | Op::Track { args, .. } => {
+                        Op::Note { args, .. } | Op::Set { args, .. } => {
                             args.values().collect::<Vec<_>>()
                         }
                         Op::Array { values, .. } => values.iter().collect(),

@@ -5,7 +5,7 @@ use niminal_lang::Layout;
 use serde_json::{Value, json};
 
 const SR: f32 = 48_000.0;
-const SETUP: &str = "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\ntrack lead { instrument = pluck }";
+const SETUP: &str = "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nnode lead { instrument = pluck }";
 
 fn call(d: &mut EngineServer, client: ClientId, id: u64, method: &str, params: Value) -> Value {
     let request =
@@ -147,12 +147,12 @@ fn controls_are_typed_timestamped_and_reported_in_status() {
 }
 
 #[test]
-fn status_load_reports_each_tracks_voices_and_cost() {
+fn status_load_reports_each_nodes_voices_and_cost() {
     let (mut d, c) = ready();
     define(
         &mut d,
         c,
-        "instr x(freq: hz) { osc(sine, freq) * env[1 | 2sec 0] }\ntrack t { instrument = x }",
+        "instr x(freq: hz) { osc(sine, freq) * env[1 | 2sec 0] }\nnode t { instrument = x }",
     );
     d.session_mut().process(64);
     let sent = call(
@@ -312,7 +312,7 @@ fn musical_time_and_composition_are_rejected_at_the_engine_boundary() {
         "arrangement song { sections: [] }",
         "p = [c4 e4]",
         "def riff() { [c4] }",
-        "track lead { instrument = pluck\nnotes = it.reverse }",
+        "node lead { instrument = pluck\nnotes = it.reverse }",
         "instr x() { quantize = 1bar\n 0 }",
         "config { quantize: { default: 1bar } }",
         "ctl x = midi.cc(7).range(0..1)",

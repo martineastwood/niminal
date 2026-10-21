@@ -1,7 +1,7 @@
 //! Client-owned instances and connections, independent of the DSP definitions they use.
-use niminal_engine::{ChainInput, GraphBuilder, Route, Src, TrackDef, execution_order};
+use niminal_engine::{ChainInput, GraphBuilder, Route, Src, NodeDef, execution_order};
 use niminal_lang::{
-    CompileOptions, ControlDef, Layout, Program, TrackInfo, Unit, compile_with,
+    CompileOptions, ControlDef, Layout, Program, NodeInfo, Unit, compile_with,
 };
 use niminal_score::{Tempo, Value};
 use serde::{Deserialize, Serialize};
@@ -64,10 +64,10 @@ pub enum RoutingEdit {
         name: String,
         source: String,
     },
-    /// Use a compiled language track as a template, removing its implicit instance.
+    /// Use a compiled processor or collection as a template, removing its implicit instance.
     Import {
         name: String,
-        track: String,
+        node: String,
     },
     Bus {
         id: String,
@@ -172,7 +172,7 @@ fn unity() -> f64 {
 struct Processor {
     resources: BTreeMap<String, u64>,
     arrays: BTreeMap<String, Vec<String>>,
-    track: TrackInfo,
+    node: NodeInfo,
     controls: Vec<ControlDef>,
     buses: Vec<String>,
     imported: Option<String>,
@@ -247,7 +247,7 @@ fn smoothing(seconds: f64) -> Result<(), String> {
         Err("glide must be finite and between 0 and 60 seconds".into())
     }
 }
-/// A compiled control's name without the track it was compiled from.
+/// A compiled control's name without the declaration it was compiled from.
 fn param_name(control: &ControlDef) -> &str {
     control
         .name
@@ -305,7 +305,7 @@ impl Routing {
             .get(param)
             .ok_or("no buffer parameter")?;
         let count = processor
-            .track
+            .node
             .def
             .chain
             .as_ref()
@@ -314,7 +314,7 @@ impl Routing {
             key,
             count,
             processor
-                .track
+                .node
                 .def
                 .chain
                 .as_ref()
@@ -431,8 +431,8 @@ impl Routing {
                     let processor = Processor {
                         resources: BTreeMap::new(),
                         arrays: BTreeMap::new(),
-                        track: TrackInfo {
-                            def: TrackDef {
+                        node: NodeInfo {
+                            def: NodeDef {
                                 chain: Some(graph),
                                 ..Default::default()
                             },
@@ -483,10 +483,10 @@ impl Routing {
                 RoutingEdit::Processor { name, source } => {
                     valid(name)?;
                     let internal = format!("__routing_template_{client}_{name}");
-                    let declaration = format!("track {internal}{source}");
+                    let declaration = format!("processor {internal}{source}");
                     let statements = niminal_lang::analyze(&declaration).map_err(|d| d.message)?;
                     if statements.len() != 1
-                        || statements[0].key != format!("track:{internal}")
+                        || statements[0].key != format!("processor:{internal}")
                     {
                         return Err("processor source must be one signature and body".into());
                     }
@@ -509,7 +509,7 @@ impl Routing {
                             .join("; ")
                     })?;
                     let template = compiled
-                        .tracks
+                        .nodes
                         .iter()
                         .find(|t| t.name == internal)
                         .expect("the validated processor declaration compiled");
@@ -541,7 +541,7 @@ impl Routing {
                                         .map(|n| (n.to_string(), k.clone()))
                                 })
                                 .collect(),
-                            track: template.clone(),
+                            node: template.clone(),
                             controls,
                             buses: compiled.buses,
                             imported: None,
@@ -549,18 +549,18 @@ impl Routing {
                         },
                     );
                 }
-                RoutingEdit::Import { name, track } => {
+                RoutingEdit::Import { name, node: render_node } => {
                     valid(name)?;
                     let template = definitions
-                        .tracks
+                        .nodes
                         .iter()
                         .skip(1)
-                        .find(|t| t.name == *track)
-                        .ok_or_else(|| format!("no track template `{track}`"))?;
+                        .find(|t| t.name == *render_node)
+                        .ok_or_else(|| format!("no processor or collection template `{render_node}`"))?;
                     let controls = definitions
                         .controls
                         .iter()
-                        .filter(|c| c.name.starts_with(&format!("{track}::")))
+                        .filter(|c| c.name.starts_with(&format!("{render_node}::")))
                         .cloned()
                         .collect();
                     patch.processors.insert(
@@ -570,7 +570,7 @@ impl Routing {
                                 .resource_controls
                                 .iter()
                                 .filter_map(|(n, k)| {
-                                    n.strip_prefix(&format!("{track}::"))
+                                    n.strip_prefix(&format!("{render_node}::"))
                                         .map(|n| (n.to_string(), *k))
                                 })
                                 .collect(),
@@ -578,14 +578,14 @@ impl Routing {
                                 .array_controls
                                 .iter()
                                 .filter_map(|(n, k)| {
-                                    n.strip_prefix(&format!("{track}::"))
+                                    n.strip_prefix(&format!("{render_node}::"))
                                         .map(|n| (n.to_string(), k.clone()))
                                 })
                                 .collect(),
-                            track: template.clone(),
+                            node: template.clone(),
                             controls,
                             buses: definitions.buses.clone(),
-                            imported: Some(track.clone()),
+                            imported: Some(render_node.clone()),
                             instrument: template
                                 .instrument
                                 .map(|i| definitions.instruments[i].name.clone()),
@@ -714,12 +714,12 @@ impl Routing {
                             .as_ref()
                             .ok_or("crossfade requires an existing processor")?;
                         for p in [&previous.1, &template] {
-                            if p.track
+                            if p.node
                                 .def
                                 .inputs
                                 .iter()
                                 .any(|i| !matches!(i, ChainInput::It { .. }))
-                                || p.track
+                                || p.node
                                     .def
                                     .chain
                                     .as_ref()
@@ -728,8 +728,8 @@ impl Routing {
                                 return Err("crossfaded processors must use only incoming audio and explicit output connections".into());
                             }
                         }
-                        if previous.1.track.def.chain.as_ref().map(|g| g.channels())
-                            != template.track.def.chain.as_ref().map(|g| g.channels())
+                        if previous.1.node.def.chain.as_ref().map(|g| g.channels())
+                            != template.node.def.chain.as_ref().map(|g| g.channels())
                         {
                             return Err(
                                 "crossfaded processors must have the same output layout".into()
@@ -867,12 +867,12 @@ impl Routing {
             .filter_map(|p| p.imported.as_deref())
             .collect();
         program
-            .tracks
+            .nodes
             .retain(|t| !consumed.contains(t.name.as_str()));
         program.controls.retain(|c| {
             !c.name
                 .rsplit_once("::")
-                .is_some_and(|(track, _)| consumed.contains(track))
+                .is_some_and(|(render_node, _)| consumed.contains(render_node))
         });
         let channels = program.master.channels();
         let mut buses = BTreeMap::new();
@@ -917,7 +917,7 @@ impl Routing {
                         node.processor
                             .as_ref()
                             .map(|(_, template)| template)
-                            .and_then(|p| p.track.def.chain.as_ref())
+                            .and_then(|p| p.node.def.chain.as_ref())
                             .map_or(channels, |g| g.channels()),
                     ),
                 );
@@ -926,14 +926,14 @@ impl Routing {
         for (&owner, patch) in &self.clients {
             for (id, node) in &patch.nodes {
                 let name = node_name(owner, id);
-                let mut track = if let Some((_, processor)) = &node.processor {
-                    let mut track = processor.track.clone();
+                let mut render_node = if let Some((_, processor)) = &node.processor {
+                    let mut render_node = processor.node.clone();
                     let mapping: Vec<_> = processor
                         .buses
                         .iter()
                         .map(|b| program.buses.iter().position(|n| n == b))
                         .collect();
-                    for input in &mut track.def.inputs {
+                    for input in &mut render_node.def.inputs {
                         if let ChainInput::Bus { bus, .. } = input {
                             *bus = mapping
                                 .get(*bus)
@@ -942,10 +942,10 @@ impl Routing {
                                 .ok_or("processor input bus was removed")?;
                         }
                     }
-                    if let Some(graph) = &track.def.chain {
-                        track.def.chain = Some(Arc::new(graph.with_bus_mapping(&mapping)));
+                    if let Some(graph) = &render_node.def.chain {
+                        render_node.def.chain = Some(Arc::new(graph.with_bus_mapping(&mapping)));
                     }
-                    track.instrument = processor
+                    render_node.instrument = processor
                         .instrument
                         .as_ref()
                         .map(|name| {
@@ -958,13 +958,13 @@ impl Routing {
                                 })
                         })
                         .transpose()?;
-                    track.def.voice_sends = track
+                    render_node.def.voice_sends = render_node
                         .def
                         .voice_sends
                         .iter()
                         .filter_map(|&b| mapping.get(b).copied().flatten())
                         .collect();
-                    track.def.controls.clear();
+                    render_node.def.controls.clear();
                     for control in &processor.controls {
                         let param = param_name(control);
                         let mut exposed = control.clone();
@@ -974,13 +974,13 @@ impl Routing {
                             exposed.initial = control_value(control, *value, program.tempo)?;
                             exposed.smooth_seconds = node.glide;
                         }
-                        track
+                        render_node
                             .def
                             .controls
                             .push((exposed.key.clone(), exposed.key.clone()));
                         program.controls.push(exposed);
                     }
-                    if let Some(graph) = &track.def.chain {
+                    if let Some(graph) = &render_node.def.chain {
                         let mut graph = graph.expose_controls(
                             &processor
                                 .controls
@@ -1008,7 +1008,7 @@ impl Routing {
                                 control.range.map(|(lo, hi)| (lo as f32, hi as f32)),
                             );
                         }
-                        track.def.chain = Some(Arc::new(graph));
+                        render_node.def.chain = Some(Arc::new(graph));
                     }
                     for arg in node.args.keys() {
                         if !processor
@@ -1019,15 +1019,15 @@ impl Routing {
                             return Err(format!("unknown processor parameter `{arg}`"));
                         }
                     }
-                    track
+                    render_node
                 } else {
                     if !node.args.is_empty() {
                         return Err("a collection node has no processor parameters".into());
                     }
-                    TrackInfo::default()
+                    NodeInfo::default()
                 };
                 if let Some(instrument) = &node.instrument {
-                    track.instrument = Some(
+                    render_node.instrument = Some(
                         program
                             .instruments
                             .iter()
@@ -1037,35 +1037,35 @@ impl Routing {
                 }
                 // Voice collection is independent of the processor instance. Both feed the same input bus.
                 let incoming = inputs[&(owner, id.clone())];
-                let collector = TrackInfo {
+                let collector = NodeInfo {
                     name: name.clone(),
-                    instrument: track.instrument,
-                    defaults: track.defaults.clone(),
+                    instrument: render_node.instrument,
+                    defaults: render_node.defaults.clone(),
                     accepts_notes: !node.draining,
-                    def: TrackDef {
+                    def: NodeDef {
                         route: Route::Bus(incoming),
-                        voice_sends: track.def.voice_sends.clone(),
-                        voice_buffer_reads: track.def.voice_buffer_reads.clone(),
-                        voice_buffer_writes: track.def.voice_buffer_writes.clone(),
+                        voice_sends: render_node.def.voice_sends.clone(),
+                        voice_buffer_reads: render_node.def.voice_buffer_reads.clone(),
+                        voice_buffer_writes: render_node.def.voice_buffer_writes.clone(),
                         ..Default::default()
                     },
                     ..Default::default()
                 };
-                program.tracks.push(collector);
-                track.name = format!("__routing_processor_{owner}_{id}");
-                track.instrument = None;
-                track.def.meter = Some(node.meter.clone());
-                track.def.transition = (node.generation, node.fade);
-                track.accepts_notes = false;
-                if track.def.chain.is_none() {
+                program.nodes.push(collector);
+                render_node.name = format!("__routing_processor_{owner}_{id}");
+                render_node.instrument = None;
+                render_node.def.meter = Some(node.meter.clone());
+                render_node.def.transition = (node.generation, node.fade);
+                render_node.accepts_notes = false;
+                if render_node.def.chain.is_none() {
                     let mut graph = GraphBuilder::new();
                     let outputs = (0..channels).map(|_| graph.input()).collect::<Vec<_>>();
-                    track.def.chain = Some(Arc::new(graph.build_channels(&outputs)));
-                    track.def.inputs = (0..channels)
+                    render_node.def.chain = Some(Arc::new(graph.build_channels(&outputs)));
+                    render_node.def.inputs = (0..channels)
                         .map(|channel| ChainInput::It { channel })
                         .collect();
                 }
-                for input in &mut track.def.inputs {
+                for input in &mut render_node.def.inputs {
                     if let ChainInput::It { channel } = *input {
                         *input = ChainInput::Bus {
                             bus: incoming,
@@ -1073,11 +1073,11 @@ impl Routing {
                         };
                     }
                 }
-                track.def.voice_sends.clear();
-                track.def.voice_buffer_reads.clear();
-                track.def.voice_buffer_writes.clear();
-                track.def.route = Route::Bus(outputs[&(owner, id.clone())]);
-                program.tracks.push(track);
+                render_node.def.voice_sends.clear();
+                render_node.def.voice_buffer_reads.clear();
+                render_node.def.voice_buffer_writes.clear();
+                render_node.def.route = Route::Bus(outputs[&(owner, id.clone())]);
+                program.nodes.push(render_node);
             }
             for (id, connection) in &patch.connections {
                 let (source, from_channels) = endpoint_bus(
@@ -1149,9 +1149,9 @@ impl Routing {
                     initial: connection.gain as f32,
                     smooth_seconds: connection.glide,
                 });
-                program.tracks.push(TrackInfo {
+                program.nodes.push(NodeInfo {
                     name: format!("__routing_connection_{owner}_{id}"),
-                    def: TrackDef {
+                    def: NodeDef {
                         chain: Some(graph),
                         inputs: ports,
                         route: if connection.delayed {
@@ -1166,7 +1166,7 @@ impl Routing {
             }
         }
         let defs = program
-            .tracks
+            .nodes
             .iter()
             .map(|t| t.def.clone())
             .collect::<Vec<_>>();
@@ -1175,7 +1175,7 @@ impl Routing {
                 "routing feedback requires a delayed connection: {}",
                 cycle
                     .iter()
-                    .map(|&i| program.tracks[i].name.as_str())
+                    .map(|&i| program.nodes[i].name.as_str())
                     .collect::<Vec<_>>()
                     .join(" -> ")
             )
@@ -1188,7 +1188,7 @@ impl Routing {
             }
         }
         program.compensate_latency();
-        program.profile = Arc::new(niminal_engine::Profile::new(program.tracks.len()));
+        program.profile = Arc::new(niminal_engine::Profile::new(program.nodes.len()));
         Ok(program)
     }
 
@@ -1315,7 +1315,7 @@ impl Routing {
                     });
                     serde_json::json!({
                         "id": id, "processor": node.processor.as_ref().map(|(name, _)| name),
-                        "player":node.processor.as_ref().and_then(|(_,p)|p.track.def.chain.as_ref()).and_then(|g|g.stream_cache()).map(|cache|serde_json::json!({"frames":cache.frames,"channels":cache.channels,"sample_rate":cache.sample_rate,"position":cache.requested.load(std::sync::atomic::Ordering::Relaxed)as f64/cache.sample_rate as f64,"underrun_frames":cache.underruns.load(std::sync::atomic::Ordering::Relaxed),"failed":cache.failed.load(std::sync::atomic::Ordering::Acquire)})),
+                        "player":node.processor.as_ref().and_then(|(_,p)|p.node.def.chain.as_ref()).and_then(|g|g.stream_cache()).map(|cache|serde_json::json!({"frames":cache.frames,"channels":cache.channels,"sample_rate":cache.sample_rate,"position":cache.requested.load(std::sync::atomic::Ordering::Relaxed)as f64/cache.sample_rate as f64,"underrun_frames":cache.underruns.load(std::sync::atomic::Ordering::Relaxed),"failed":cache.failed.load(std::sync::atomic::Ordering::Acquire)})),
                         "instrument": node.instrument, "args": node.args, "draining": node.draining,
                         "params": params.unwrap_or_default(),
                         "arrays":node.processor.as_ref().map(|(_,p)|&p.arrays),

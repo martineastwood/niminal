@@ -664,15 +664,15 @@ fn api_source(method: &str, params: &Value) -> Result<String, RpcError> {
             None => "unsolo".into(),
         },
         "edit" => {
-            let track = params
-                .get("track")
+            let part = params
+                .get("part")
                 .and_then(Value::as_str)
-                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`edit` needs a string `track`"))?;
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`edit` needs a string `part`"))?;
             let change = params
                 .get("change")
                 .and_then(Value::as_str)
                 .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`edit` needs a string `change`"))?;
-            format!("{track}.{change}")
+            format!("{part}.{change}")
         }
         other => {
             return Err(RpcError::new(
@@ -695,7 +695,7 @@ fn status_json(live: &mut Live) -> Value {
         "instruments": engine["instruments"],
         "scenes": live.defined("scene"),
         "clips": live.defined("clip"),
-        "tracks": live.tracks().iter().map(|t| json!({
+        "parts": live.parts().iter().map(|t| json!({
             "name": t.name,
             "clip": t.clip,
             "playing": t.playing,

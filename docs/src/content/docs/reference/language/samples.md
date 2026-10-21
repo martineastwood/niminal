@@ -37,23 +37,23 @@ A sample is a plain binding, and its settings are chained methods: `amen = sampl
 
 ### Playing samples
 
-A sample or kit is an instrument. Call it with playback settings, or put it on a track and play note/sample patterns:
+A sample or kit is an instrument. Call it with playback settings, or put it on a node and play note/sample patterns:
 
 ```nml
 kick(pitch: -2st)
 snare(pitch: +2st)
-track drums { instrument = chops }
+part drums { instrument = chops }
 drums.play([s0 s1 s2 s3 s4 s5 s6 s7])
 ```
 
-A kit member is an instrument too: `drums.snare` means the kit with that sample chosen (the same as `drums(sample: snare)`). Give it its own track when you want effects, sends, mute or solo on that drum alone:
+A kit member is an instrument too: `drums.snare` means the kit with that sample chosen (the same as `drums(sample: snare)`). Give it its own node when you want effects, sends, mute or solo on that drum alone:
 
 ```nml
 drums = kit("drums")
-track snare {
-  instrument = drums.snare
-  out = it.reverb(room: 0.4).gain(-3db)
-}
+bus snare_audio
+processor snare_fx {out = snare_audio.reverb(room: 0.4).gain(-3db)}
+part snare {  instrument = drums.snare
+output = snare_audio}
 snare.play(grid[.... x... .... x...])
 ```
 
@@ -67,7 +67,7 @@ Parameters you can set on a hit:
 | `start:` | Start offset into the file |
 | `gain:` | Level (as for any instrument) |
 
-Chop a break with a grid — a row per slice, columns are steps. `X` accents, `o` ghosts. A row can take note controls, use mini-notation, or name a drum track so its hits go through that strip:
+Chop a break with a grid — a row per slice, columns are steps. `X` accents, `o` ghosts. A row can take note controls, use mini-notation, or name a drum node so its hits go through that strip:
 
 ```nml
 drums.play(grid {

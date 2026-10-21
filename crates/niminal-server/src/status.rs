@@ -9,7 +9,7 @@ use crate::session::Session;
 /// The engine's state: clock, definitions with their parameters, controls, realtime health and, for each
 /// client, its held notes and how many of its events are waiting.
 pub fn status_json(session: &Session) -> Value {
-    let (instruments, tracks, buses) = session.definitions();
+    let (instruments, nodes, buses) = session.definitions();
     json!({
         "clock": state_json(session),
         "routing": session.routing_status(),
@@ -40,7 +40,7 @@ pub fn status_json(session: &Session) -> Value {
                 "range": p.range,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
-        "tracks": tracks,
+        "nodes": nodes,
         "load": load_json(session),
         "buses": buses,
         "clients": session.client_status().iter().map(|(client, voices, waiting)| json!({
@@ -49,20 +49,20 @@ pub fn status_json(session: &Session) -> Value {
     })
 }
 
-/// What each track costs to render, as a share of the time one block has: `voices` is the work of the
-/// track's voices (summed over every thread that helped, so it can pass 1), `chain` its effect chain.
+/// What each node costs to render, as a share of the time one block has: `voices` is the work of the
+/// node's voices (summed over every thread that helped, so it can pass 1), `chain` its effect chain.
 fn load_json(session: &Session) -> Value {
     let program = session.program();
     let budget = niminal_engine::BLOCK as f64 / f64::from(session.sample_rate()) * 1e9;
     let share = |nanos: &AtomicU32| f64::from(nanos.load(Ordering::Relaxed)) / budget;
     program
-        .tracks
+        .nodes
         .iter()
-        .zip(&program.profile.tracks)
-        .filter(|(track, _)| !track.name.is_empty() && !track.name.contains("__routing_"))
-        .map(|(track, load)| {
+        .zip(&program.profile.nodes)
+        .filter(|(node, _)| !node.name.is_empty() && !node.name.contains("__routing_"))
+        .map(|(node, load)| {
             json!({
-                "name": track.name,
+                "name": node.name,
                 "voices": load.voices.load(Ordering::Relaxed),
                 "voice_cpu": share(&load.voice_nanos),
                 "chain_cpu": share(&load.chain_nanos),
@@ -97,7 +97,7 @@ pub(crate) fn client_status_json(session: &Session, client: u64) -> Value {
                 .is_some_and(|name| crate::session::definitions::local(client, name).is_some())
         });
     }
-    for field in ["tracks", "buses"] {
+    for field in ["nodes", "buses"] {
         if let Some(entries) = status[field].as_array_mut() {
             entries.retain(|entry| {
                 entry

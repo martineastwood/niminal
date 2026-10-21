@@ -60,14 +60,14 @@ struct ServerArgs {
     /// The address to listen on. Only local addresses are accepted for now.
     #[arg(long, default_value = "127.0.0.1")]
     listen: IpAddr,
-    /// Listen to the default audio input device, for tracks that read `input(1)`.
+    /// Listen to the default audio input device, for processors that read `input(1)`.
     #[arg(long)]
     audio_input: bool,
     /// Threads that render audio together, counting the render thread itself: 1 renders on one core.
     /// By default the cores there are, up to 4. The sound is the same whatever the number.
     #[arg(long)]
     render_threads: Option<usize>,
-    /// When to share a track's voices among the render threads: `auto` (when it saves more time than it
+    /// When to share a node's voices among the render threads: `auto` (when it saves more time than it
     /// costs, as measured on this machine), `always`, `never`, or a number of microseconds of work a
     /// block must have before it is shared. The sound is the same whichever you choose.
     #[arg(long, default_value = "auto")]
@@ -250,7 +250,7 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
     audio_control.publish_devices(niminal_cli::audio::devices());
     audio_control.publish_status(serde_json::json!({"state":if no_audio{"virtual"}else{"running"},"sample_rate":rate,"channels":channels,"output":where_to}));
     niminal_cli::audio::lock(&engine).set_audio_control(audio_control.clone());
-    // the default input device, if asked for, feeds tracks that read `input(..)`
+    // the default input device, if asked for, feeds processors that read `input(..)`
     let (mut listening, mut input) = (None, None);
     if audio_input {
         if no_audio {

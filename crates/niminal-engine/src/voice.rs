@@ -9,7 +9,7 @@ use crate::opcode::{BLOCK, Opcode, ProcessCtx, TAIL_LEVEL};
 /// One running note: a private copy of every opcode's state plus the signal
 /// buffers that connect them.
 pub struct Voice {
-    /// Which chunk of its track the mixer sums this voice in.
+    /// Which chunk of its node the mixer sums this voice in.
     chunk: u64,
     owner: u64,
     instance: u64,
@@ -86,7 +86,7 @@ pub enum Priority {
     Highest,
 }
 
-/// A limit on the notes one instrument has sounding on a track, and how a mono instrument joins them.
+/// A limit on the notes one instrument has sounding on a node, and how a mono instrument joins them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoiceRule {
     /// Which instrument the notes are of, so the notes can be counted.

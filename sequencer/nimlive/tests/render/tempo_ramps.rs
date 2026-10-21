@@ -1,7 +1,7 @@
 use crate::common::*;
 use nimlive::render::{End, render_session, split_ramps};
 
-const FILE: &str = "tempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) * env[1 | 50ms 0] * 0.3 }\ntrack t { instrument = p }\ntempo 240bpm @ next bar over 2bars\nt.play([c4 e4 g4 c5])";
+const FILE: &str = "tempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) * env[1 | 50ms 0] * 0.3 }\npart t { instrument = p }\ntempo 240bpm @ next bar over 2bars\nt.play([c4 e4 g4 c5])";
 
 #[test]
 fn a_ramp_is_split_from_the_rest_of_the_file() {
@@ -30,13 +30,13 @@ fn a_ramped_render_keeps_stems_through_the_tempo_changes() {
     let (rest, _) = split_ramps(FILE).unwrap();
     let layout = compile(&rest).unwrap().master;
     let out = render_session(FILE, std::path::Path::new("."), layout, End::Bars(4.0), false, true, Vec::new()).unwrap();
-    let track = out.stems.iter().find(|s| s.name == "t").expect("the track's stem");
-    assert_eq!(track.channels[0].len(), out.channels[0].len(), "a stem is as long as the mix");
-    assert!(rms(&track.channels[0]) > 0.01);
+    let node = out.stems.iter().find(|s| s.name == "t").expect("the node's stem");
+    assert_eq!(node.channels[0].len(), out.channels[0].len(), "a stem is as long as the mix");
+    assert!(rms(&node.channels[0]) > 0.01);
     // the whole piece is on the stem, not just the stretch after the last tempo step
-    let third = track.channels[0].len() / 3;
-    assert!(rms(&track.channels[0][..third]) > 0.01 && rms(&track.channels[0][2 * third..]) > 0.01);
-    // the track is the only sound, so the stem is the mix
-    let diff = track.channels[0].iter().zip(&out.channels[0]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    let third = node.channels[0].len() / 3;
+    assert!(rms(&node.channels[0][..third]) > 0.01 && rms(&node.channels[0][2 * third..]) > 0.01);
+    // the node is the only sound, so the stem is the mix
+    let diff = node.channels[0].iter().zip(&out.channels[0]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
     assert!(diff < 1e-4, "{diff}");
 }

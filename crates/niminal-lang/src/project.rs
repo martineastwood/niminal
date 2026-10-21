@@ -17,11 +17,11 @@ pub struct Project {
 }
 
 /// The kinds of definition that share one set of names.
-const SHARED: [&str; 11] = ["ctl", "instr", "fn", "const", "bus", "buffer", "track", "kit", "sample", "arrangement", "def"];
+const SHARED: [&str; 13] = ["ctl", "instr", "fn", "const", "bus", "buffer", "node", "part", "processor", "kit", "sample", "arrangement", "def"];
 
-/// A track may play the instrument of its own name, so the two may share it.
-fn is_instrument_and_track(a: &str, b: &str) -> bool {
-    matches!((a, b), ("instr", "track") | ("track", "instr"))
+/// A node may play the instrument of its own name, so the two may share it.
+fn is_instrument_and_node(a: &str, b: &str) -> bool {
+    matches!((a, b), ("instr", "node" | "part") | ("node" | "part", "instr"))
 }
 
 impl Project {
@@ -60,7 +60,7 @@ impl Project {
                 self.entries.retain(|x| {
                     x.key
                         .split_once(':')
-                        .is_none_or(|(k, n)| n != name || k == kind || !SHARED.contains(&k) || is_instrument_and_track(k, kind))
+                        .is_none_or(|(k, n)| n != name || k == kind || !SHARED.contains(&k) || is_instrument_and_node(k, kind))
                 });
             }
             match self.entries.iter_mut().find(|x| x.key == e.key) {
@@ -275,8 +275,8 @@ mod tests {
     fn a_name_defined_as_something_else_replaces_what_had_it() {
         let entry = |key: &str| Entry { key: key.into(), text: key.into() };
         let mut project = Project::default();
-        project.apply(&[entry("track:drums"), entry("instr:drums"), entry("clip:drums")]);
-        assert_eq!(project.entries.len(), 3, "a track and its instrument share a name; a clip may too");
+        project.apply(&[entry("node:drums"), entry("instr:drums"), entry("clip:drums")]);
+        assert_eq!(project.entries.len(), 3, "a node and its instrument share a name; a clip may too");
         project.apply(&[entry("kit:drums")]);
         let keys: Vec<_> = project.entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(keys, ["clip:drums", "kit:drums"]);

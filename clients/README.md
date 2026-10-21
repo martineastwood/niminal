@@ -14,7 +14,7 @@ const { Client } = require("niminal-client");
 const engine = new Client({ port: 7401 });
 await engine.connect();
 await engine.sendEvents([
-  { op: "define", at: "now", source: "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 50ms 0] }\ntrack lead { instrument = pluck }" },
+  { op: "define", at: "now", source: "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 50ms 0] }\nnode lead { instrument = pluck }" },
   { op: "note", target: "lead", at: 96000, dur: "250ms", args: { freq: "c4" } },
 ]);
 console.log(await engine.clock());

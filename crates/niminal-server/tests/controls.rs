@@ -48,7 +48,7 @@ fn smoothing_is_linear_and_reaches_the_target_at_the_requested_duration() {
 fn one_control_drives_instruments_and_effects_and_initializes_new_notes() {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(
-        "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\ntrack t { instrument = flat\n out = it * level }",
+        "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nbus t_audio\nprocessor t_fx {out = t_audio * level}\nnode t { instrument = flat\noutput = t_audio}",
         Some("now"),
     )
     .unwrap();

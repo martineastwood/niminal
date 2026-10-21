@@ -221,11 +221,11 @@ impl Session {
             }
             let allowed = matches!(
                 kind,
-                "instr" | "fn" | "const" | "ctl" | "bus" | "buffer" | "track" | "sample" | "kit" | "config"
+                "instr" | "fn" | "const" | "ctl" | "bus" | "buffer" | "node" | "processor" | "sample" | "kit" | "config"
             );
             if !allowed {
                 let mut problem = Problem::plain(format!(
-                    "`{}` can't be sent here: `define` takes definitions such as instruments, tracks, effects, buses and controls",
+                    "`{}` can't be sent here: `define` takes definitions such as instruments, processors, collection nodes, buses and controls",
                     first_line(&statement.text)
                 ));
                 problem.span = Some(niminal_lang::Span::new(
@@ -561,7 +561,7 @@ pub(crate) fn owner(name: &str) -> u64 {
         .and_then(|(id, _)| id.parse().ok())
         .unwrap_or(0)
 }
-pub(crate) fn owns_track(client: u64, name: &str) -> bool {
+pub(crate) fn owns_node(client: u64, name: &str) -> bool {
     if let Some(rest) = name.strip_prefix("__routing_") {
         rest.split_once('_')
             .and_then(|(_, rest)| rest.split_once('_'))

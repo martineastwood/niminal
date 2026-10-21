@@ -6,8 +6,9 @@ config { channels: stereo }
 tempo 110bpm
 
 // A bus can process what is sent to it. `it` is what it has collected.
-bus space: stereo {
-  out = it.reverb(room: 0.8, damp: 0.4).gain(0.8)
+bus space: stereo
+processor space_return {
+  out = space.reverb(room: 0.8, damp: 0.4).gain(0.8)
 }
 
 instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {

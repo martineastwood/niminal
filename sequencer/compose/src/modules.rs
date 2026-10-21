@@ -227,11 +227,11 @@ fn rename(source: &str, module: &str, alias: Option<&str>) -> String {
         }) else {
             continue;
         };
-        // `x.name` calls an opcode, and `name:` is an argument unless it is a track in a scene
+        // `x.name` calls an opcode, and `name:` is an argument unless it is a part in a scene
         let after_dot = i > 0 && tokens[i - 1].tok == Tok::Dot;
         let before_colon = tokens.get(i + 1).is_some_and(|n| n.tok == Tok::Colon);
         if (after_dot && def.kind != SymbolKind::Function)
-            || (before_colon && def.kind != SymbolKind::Track)
+            || (before_colon && def.kind != SymbolKind::Part)
         {
             continue;
         }
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(e.locate(own.clone()), own);
     }
 
-    const RIG: &str = "fn shimmer(x, size: 0..1 = 0.5) { x }\ninstr tone(freq: hz) { osc(sine, freq).shimmer(size: 0.2) }\ntrack lead { instrument = tone }\nscene a { lead: riff }\nriff = [c4]\n_secret = [d4]\n";
+    const RIG: &str = "fn shimmer(x, size: 0..1 = 0.5) { x }\ninstr tone(freq: hz) { osc(sine, freq).shimmer(size: 0.2) }\npart lead { instrument = tone }\nscene a { lead: riff }\nriff = [c4]\n_secret = [d4]\n";
 
     #[test]
     fn an_alias_renames_what_the_module_defines() {

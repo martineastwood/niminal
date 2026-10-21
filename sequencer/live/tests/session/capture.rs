@@ -54,14 +54,7 @@ fn capture_writes_the_last_bars_as_a_score() {
 
 #[test]
 fn capture_compiles_as_a_side_effect_action() {
-    let src = "
-tempo 120bpm
-instr p(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
-track t { instrument = p }
-t.play([c4])
-capture last 1bar as unused
-at +1bars hush
-";
+    let src = "\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart t { instrument = p }\nt.play([c4])\ncapture last 1bar as unused\nat +1bars hush\n";
     let program = niminal_compose::compile(src).unwrap();
     assert!(
         program

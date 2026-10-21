@@ -266,7 +266,7 @@ fn redefining_an_instrument_leaves_sounding_notes_alone_and_changes_new_ones() {
 }
 
 #[test]
-fn redefining_a_pattern_changes_the_tracks_playing_it() {
+fn redefining_a_pattern_changes_the_nodes_playing_it() {
     let mut s = ready();
     s.eval("riff = [a3]\nlead.play(riff)", Some("now")).unwrap();
     let before = run(&mut s, 2 * BAR);
@@ -329,18 +329,18 @@ fn an_effect_tail_survives_unrelated_changes() {
 }
 
 #[test]
-fn redefining_a_track_keeps_compatible_effect_memory() {
+fn redefining_a_node_keeps_compatible_effect_memory() {
     let mut live = with_tail();
     run(&mut live, 5000);
     live.eval(
-        "track hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }",
+        "processor hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }",
         Some("now"),
     )
     .unwrap();
     let after = run(&mut live, BAR);
     assert!(
         peak(&after) > 1e-4,
-        "the reverb tail survives the track edit"
+        "the reverb tail survives the part edit"
     );
 }
 
@@ -431,7 +431,7 @@ fn the_output_layout_is_fixed_for_the_session() {
     assert!(e[0].message.contains("outputs stereo"), "{e:?}");
     // a project that says nothing about channels takes the session's
     s.eval(
-        "instr a(freq: hz) { osc(sine, freq) }\ntrack t { instrument = a }\nt.play([c4])",
+        "instr a(freq: hz) { osc(sine, freq) }\npart t { instrument = a }\nt.play([c4])",
         Some("now"),
     )
     .unwrap();

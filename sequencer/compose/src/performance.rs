@@ -19,8 +19,8 @@ pub struct Step {
     pub begin: Option<f64>,
     /// Playback pitch in semitones, for sample notes.
     pub pitch: Option<f64>,
-    /// Play this note on another track (a grid row that names a drum strip).
-    pub track: Option<usize>,
+    /// Play this note on another node (a grid row that names a drum strip).
+    pub node: Option<usize>,
 }
 
 impl From<Value> for Step {
@@ -31,7 +31,7 @@ impl From<Value> for Step {
             pan: None,
             begin: None,
             pitch: None,
-            track: None,
+            node: None,
         }
     }
 }
@@ -76,12 +76,14 @@ pub struct Clip {
     pub scored: Vec<ScoredNote>,
     /// `keys: midi.keys(channel: 1)`: played from a keyboard instead of by `notes`.
     pub keys: Option<Keys>,
-    /// Lanes drawn as an envelope, `cut: env[300hz 1bar 3khz]`: they move a track's
+    /// Lanes drawn as an envelope, `cut: env[300hz 1bar 3khz]`: they move a node's
     /// parameter continuously, on the clip's timeline.
     pub curves: Vec<(String, EnvLane)>,
-    /// Lanes that are signals (`cut: sine.range(300hz, 3khz)`), once placed on a track: the
+    /// Lanes that are signals (`cut: sine.range(300hz, 3khz)`), once placed on a node: the
     /// parameter's unit. They move the parameter continuously instead of stepping it at each note.
     pub signals: Vec<(String, niminal_lang::Unit)>,
+    /// Explicit processor parameter lanes, with their units and default smoothing.
+    pub processor_params: Vec<(String, niminal_lang::Unit, f64)>,
 }
 
 /// An `env[...]` in a lane: a run of glides between levels, from the start of the clip.
@@ -92,7 +94,7 @@ pub struct EnvLane {
     pub segments: Vec<(Time, Curve, Value)>,
     /// Starts over when it ends, instead of holding its last level.
     pub looped: bool,
-    /// The unit of the parameter it moves, once it is placed on a track.
+    /// The unit of the parameter it moves, once it is placed on a node.
     pub unit: Option<niminal_lang::Unit>,
 }
 
@@ -127,41 +129,41 @@ impl Clip {
     }
 }
 
-/// A named set of clips, one per track. `None` stops that track.
+/// A named set of clips, one per node. `None` stops that node.
 #[derive(Clone)]
 pub struct Scene {
     pub name: String,
     pub entries: Vec<(usize, Option<Clip>)>,
 }
 
-/// What a command does. Tracks are indices into `Program::tracks`.
+/// What a command does. Nodes are indices into `Program::nodes`.
 #[derive(Clone)]
 pub enum Action {
     Play {
-        track: usize,
+        node: usize,
         clip: Clip,
     },
     Stop {
-        track: usize,
+        node: usize,
     },
     Mute {
-        track: usize,
+        node: usize,
     },
     Unmute {
-        track: usize,
+        node: usize,
     },
     Solo {
-        track: usize,
+        node: usize,
     },
-    /// Clear all solos, or just this track's.
+    /// Clear all solos, or just this node's.
     Unsolo {
-        track: Option<usize>,
+        node: Option<usize>,
     },
-    /// Stop every track, letting notes ring out.
+    /// Stop every node, letting notes ring out.
     Hush,
     /// Stop everything at once.
     Panic,
-    /// Stop every track, and count bars from here. Only a live session can do the
+    /// Stop every node, and count bars from here. Only a live session can do the
     /// counting; a render treats it as `hush`.
     Reset,
     /// Write the last `bars` of playing clips to `score/{name}.nms`. Only a live
@@ -215,6 +217,6 @@ pub struct Arrangement {
     pub actions: Vec<Scheduled>,
     /// Where each section's own tempo and meter begin, in seconds. Empty if the piece has just the file's.
     pub tempos: Vec<(f64, niminal_score::Tempo)>,
-    /// Envelopes moving track parameters over the piece: the control's name (`bass::tone`) and the shape.
+    /// Envelopes moving part parameters over the piece: the control's name (`bass::tone`) and the shape.
     pub lanes: Vec<(String, EnvLane)>,
 }

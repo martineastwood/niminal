@@ -1,8 +1,8 @@
-//! What each track is playing, kept as text so that redefining a pattern can start the new version.
+//! What each node is playing, kept as text so that redefining a pattern can start the new version.
 
 use super::*;
 
-/// What a track is playing: a clip, as written, and the changes made to it live with
+/// What a node is playing: a clip, as written, and the changes made to it live with
 /// `bass.reverse` and the like, in order.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Playing {
@@ -10,7 +10,7 @@ pub(crate) struct Playing {
     pub(super) edits: Vec<String>,
 }
 
-/// The most changes one track can carry.
+/// The most changes one node can carry.
 pub(super) const MAX_EDITS: usize = 16;
 
 impl Playing {
@@ -31,7 +31,7 @@ impl Playing {
 
 /// `bass.reverse` becomes `bass.play(<what bass is playing>.reverse)`, `bass.undo` takes
 /// the last change off, `bass.undo(reverse)` the last `reverse`, and `bass.clear` all of
-/// them. Returns the statements to compile and what each track is playing after them.
+/// them. Returns the statements to compile and what each node is playing after them.
 ///
 /// The name before the dot is usually a part. For a clip that is only material, such as
 /// `answer`, the change goes to every part playing it.
@@ -47,7 +47,7 @@ pub(super) fn join_edit(
     else {
         return Ok(vec![(statement.clone(), None)]);
     };
-    let (name, change, range) = (plays.track.clone(), plays.what.clone(), range.clone());
+    let (name, change, range) = (plays.node.clone(), plays.what.clone(), range.clone());
     if change.trim() == "start" {
         // `verse.start` launches the scene of that name, `bass.start` plays the clip of that name
         let mut statement = statement.clone();
@@ -57,7 +57,7 @@ pub(super) fn join_edit(
         } else {
             statement.write_key = Some(format!("play:{name}"));
             statement.set_action(CommandAction::Play(PlayInfo {
-                track: name.clone(),
+                node: name.clone(),
                 what: name,
             }));
         }
@@ -69,7 +69,7 @@ pub(super) fn join_edit(
         playing
             .iter()
             .filter(|(_, p)| root_name(&p.base) == name)
-            .map(|(track, _)| track)
+            .map(|(node, _)| node)
             .collect()
     };
     if parts.is_empty() {
@@ -78,27 +78,27 @@ pub(super) fn join_edit(
         ))]);
     }
     let mut out = Vec::new();
-    for track in parts {
-        let next = change_playing(&playing[track], change.trim(), track)?;
+    for node in parts {
+        let next = change_playing(&playing[node], change.trim(), node)?;
         let text = next.text();
         let mut one = statement.clone();
         one.text
-            .replace_range(range.clone(), &format!("{track}.play({text})"));
-        one.write_key = Some(format!("play:{track}"));
+            .replace_range(range.clone(), &format!("{node}.play({text})"));
+        one.write_key = Some(format!("play:{node}"));
         one.set_action(CommandAction::Play(PlayInfo {
-            track: track.clone(),
+            node: node.clone(),
             what: text,
         }));
-        out.push((one, Some((track.clone(), next))));
+        out.push((one, Some((node.clone(), next))));
     }
     Ok(out)
 }
 
-/// What a track plays after `change`: one more change, or `undo`, `undo(name)` or `clear`.
+/// What a node plays after `change`: one more change, or `undo`, `undo(name)` or `clear`.
 pub(super) fn change_playing(
     current: &Playing,
     change: &str,
-    track: &str,
+    node: &str,
 ) -> Result<Playing, Vec<Problem>> {
     let mut next = current.clone();
     let problem = |message: String| Err(vec![Problem::plain(message)]);
@@ -106,7 +106,7 @@ pub(super) fn change_playing(
         "undo" => {
             if next.edits.pop().is_none() {
                 return problem(format!(
-                    "nothing to undo: `{track}` has no changes made to it"
+                    "nothing to undo: `{node}` has no changes made to it"
                 ));
             }
         }
@@ -121,12 +121,12 @@ pub(super) fn change_playing(
                 Some(at) => {
                     next.edits.remove(at);
                 }
-                None => return problem(format!("`{track}` has no `{wanted}` change to undo")),
+                None => return problem(format!("`{node}` has no `{wanted}` change to undo")),
             }
         }
         change if next.edits.len() >= MAX_EDITS => {
             return problem(format!(
-                "`{track}` already has {MAX_EDITS} changes (`{change}` would be one more); `{track}.undo` or `{track}.clear` takes some off"
+                "`{node}` already has {MAX_EDITS} changes (`{change}` would be one more); `{node}.undo` or `{node}.clear` takes some off"
             ));
         }
         change => next.edits.push(change.to_string()),
@@ -143,8 +143,8 @@ pub(super) fn root_name(text: &str) -> &str {
     &text[..end]
 }
 
-/// Record what a launched scene plays: its tracks play what it says, and every other
-/// track with an instrument stops.
+/// Record what a launched scene plays: its nodes play what it says, and every other
+/// node with an instrument stops.
 pub(super) fn apply_launch(
     playing: &mut BTreeMap<String, Playing>,
     program: &Composition,
@@ -155,20 +155,20 @@ pub(super) fn apply_launch(
         return;
     };
     let entries = niminal_compose::scene_entries(text);
-    for track in program.tracks.iter().filter(|t| t.instrument.is_some()) {
-        if !entries.iter().any(|(name, _)| *name == track.name) {
-            playing.remove(&track.name);
+    for node in program.nodes.iter().filter(|t| t.instrument.is_some()) {
+        if !entries.iter().any(|(name, _)| *name == node.name) {
+            playing.remove(&node.name);
         }
     }
-    for (track, what) in entries {
+    for (node, what) in entries {
         match what {
-            Some(what) => playing.insert(track, Playing::new(what)),
-            None => playing.remove(&track),
+            Some(what) => playing.insert(node, Playing::new(what)),
+            None => playing.remove(&node),
         };
     }
 }
 
-/// Update the record of what each track is playing for a statement that has
+/// Update the record of what each node is playing for a statement that has
 /// been compiled: `play` records its source, `stop` and `hush` forget.
 pub(super) fn apply_to_playing(
     playing: &mut BTreeMap<String, Playing>,
@@ -177,13 +177,13 @@ pub(super) fn apply_to_playing(
 ) {
     for scheduled in &program.performance {
         match name_action(program, &scheduled.action) {
-            Some(NamedAction::Play { track, .. }) => {
-                if let Some(plays) = statement.plays().filter(|p| p.track == track) {
-                    playing.insert(track, Playing::new(plays.what.clone()));
+            Some(NamedAction::Play { node, .. }) => {
+                if let Some(plays) = statement.plays().filter(|p| p.node == node) {
+                    playing.insert(node, Playing::new(plays.what.clone()));
                 }
             }
-            Some(NamedAction::Stop(track)) => {
-                playing.remove(&track);
+            Some(NamedAction::Stop(node)) => {
+                playing.remove(&node);
             }
             Some(NamedAction::Hush | NamedAction::Panic | NamedAction::Reset) => playing.clear(),
             _ => {}

@@ -198,8 +198,8 @@ impl Live {
         }
         let now = self.seconds(self.clock);
         let gain = -30.0 + 30.0 * f64::from(velocity.min(127)) / 127.0;
-        let events: Vec<Event> = (1..self.program.tracks.len())
-            .filter_map(|track| self.schedule.key_event(track, now, channel, i32::from(note), gain))
+        let events: Vec<Event> = (1..self.program.nodes.len())
+            .filter_map(|node| self.schedule.key_event(node, now, channel, i32::from(note), gain))
             .collect();
         let mut keys = Vec::new();
         for mut event in events {
@@ -224,7 +224,7 @@ impl Live {
             self.held.insert(id, instrument);
             ops.push(Op::Note {
                 to: None,
-                target: if self.program.track_index(&event.target).is_some() {
+                target: if self.program.node_index(&event.target).is_some() {
                     super::routing_id(&event.target)
                 } else {
                     event.target.clone()

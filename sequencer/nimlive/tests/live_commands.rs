@@ -113,9 +113,7 @@ impl Drop for Server {
     }
 }
 
-const SETUP: &str = "tempo 120bpm
-instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
-track lead { instrument = pluck }";
+const SETUP: &str = "tempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart lead { instrument = pluck }";
 
 fn stdout(o: &std::process::Output) -> String {
     String::from_utf8_lossy(&o.stdout).to_string()
@@ -229,14 +227,14 @@ fn repl_runs_multiline_blocks_and_reports_errors_without_stopping() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let input = "tempo 100bpm\ninstr tone(freq: hz) {\n  osc(sine, freq)\n}\ntrack t { instrument = tone }\nt.play([c4 zz])\nt.play([c4])\n";
+    let input = "tempo 100bpm\ninstr tone(freq: hz) {\n  osc(sine, freq)\n}\npart t { instrument = tone }\nt.play([c4 zz])\nt.play([c4])\n";
     repl.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
     let out = repl.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{stderr}");
     assert!(stderr.contains("`zz` isn't a note"), "{stderr}");
-    // The tempo, the instrument and track, and the final play all went through.
+    // The tempo, the instrument and node, and the final play all went through.
     assert_eq!(stdout.matches("applied").count() + stdout.matches("lands at").count(), 4, "{stdout}");
 }
 

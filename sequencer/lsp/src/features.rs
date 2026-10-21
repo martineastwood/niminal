@@ -166,7 +166,7 @@ fn references(tokens: &[Token], name: &str, kind: SymbolKind, defs: &[Symbol]) -
 
     // the stretches where `name` is something else: inside a definition that has a local of that name
     let mut shadowed: Vec<(usize, usize)> = Vec::new();
-    for def in defs.iter().filter(|d| matches!(d.kind, SymbolKind::Instrument | SymbolKind::Function | SymbolKind::Track | SymbolKind::Bus)) {
+    for def in defs.iter().filter(|d| matches!(d.kind, SymbolKind::Instrument | SymbolKind::Function | SymbolKind::Part | SymbolKind::Processor | SymbolKind::Bus)) {
         let (first, last) = (index_at(def.name_span.end), index_at(def.span.end));
         if locals(tokens, &within, first, last).iter().any(|n| n == name) {
             shadowed.push((def.name_span.end, def.span.end));
@@ -458,7 +458,7 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
         } else if let Some((symbol, ..)) = doc.find(name) {
             Some(match symbol.kind {
                 SymbolKind::Instrument | SymbolKind::Function => FUNCTION,
-                SymbolKind::Track | SymbolKind::Bus | SymbolKind::Sample | SymbolKind::Kit => CLASS,
+                SymbolKind::Part | SymbolKind::Processor | SymbolKind::Bus | SymbolKind::Sample | SymbolKind::Kit => CLASS,
                 SymbolKind::Control | SymbolKind::Pattern => VARIABLE,
                 SymbolKind::Clip | SymbolKind::Scene | SymbolKind::Arrangement => NAMESPACE,
             })

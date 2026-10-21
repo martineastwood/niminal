@@ -36,11 +36,11 @@ pub use eval::{Begin, CancelDone, CancelJob, EvalDone, EvalJob, ParsedEval};
 pub use input::ControlSignal;
 use playing::{Playing, apply_launch, apply_to_playing, join_edit, mentions_any};
 
-/// A command that has happened, by track name so that it survives the program being replaced.
+/// A command that has happened, by node name so that it survives the program being replaced.
 #[derive(Clone)]
 pub(crate) enum NamedAction {
     Play {
-        track: String,
+        node: String,
         clip: Clip,
     },
     Stop(String),
@@ -102,7 +102,7 @@ pub(crate) struct Pending {
     pub actions: Vec<Compiled>,
     /// Plays to start again because a pattern they use was redefined.
     pub replays: Vec<Compiled>,
-    /// What each track is playing once this has landed.
+    /// What each node is playing once this has landed.
     pub playing: BTreeMap<String, Playing>,
     /// Its changes have been made here, though the engine's clock has not reached it yet.
     pub done: bool,
@@ -139,13 +139,13 @@ pub struct PendingInfo {
     pub changes: Vec<String>,
 }
 
-/// A track as an editor shows it.
+/// A node as an editor shows it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TrackStatus {
+pub struct PartStatus {
     pub name: String,
     /// The clip playing on it now.
     pub clip: Option<String>,
-    /// What the track was told to play (base clip text before live edits).
+    /// What the node was told to play (base clip text before live edits).
     pub playing: Option<String>,
     pub muted: bool,
     pub soloed: bool,
@@ -204,7 +204,7 @@ pub struct Live {
     schedule: Schedule,
     /// Notes and parameter changes up to this sample have been taken from the schedule and sent.
     fetched_until: u64,
-    /// Tracks whose clips are not searched for notes because they asked for too many.
+    /// Nodes whose clips are not searched for notes because they asked for too many.
     overloaded: Vec<usize>,
     /// How many of the schedule's panics have been sent.
     next_panic: usize,
@@ -214,7 +214,7 @@ pub struct Live {
 
     pending: Vec<Pending>,
     next_id: u64,
-    /// What each track was last told to play, as source, so that redefining a pattern can start the new
+    /// What each node was last told to play, as source, so that redefining a pattern can start the new
     /// version.
     playing: BTreeMap<String, Playing>,
     landed: Vec<Landed>,
@@ -485,20 +485,20 @@ impl Live {
         }
     }
 
-    /// The project's tracks and what they are doing now.
-    pub fn tracks(&self) -> Vec<TrackStatus> {
+    /// The project's nodes and what they are doing now.
+    pub fn parts(&self) -> Vec<PartStatus> {
         let now = self.seconds(self.clock);
         self.program
-            .tracks
+            .nodes
             .iter()
             .enumerate()
             .skip(1)
-            // tracks that only process buses are not parts to play
+            // nodes that only process buses are not parts to play
             .filter(|(_, t)| t.instrument.is_some())
             .map(|(i, t)| {
-                let state = self.schedule.track_state(i, now);
+                let state = self.schedule.node_state(i, now);
                 let record = self.playing.get(&t.name);
-                TrackStatus {
+                PartStatus {
                     name: t.name.clone(),
                     clip: state.clip,
                     playing: record.map(|p| p.base.clone()),
@@ -602,10 +602,10 @@ impl Live {
         if !name.starts_with("__routing_") {
             return Some(name.to_string());
         }
-        self.program.tracks.iter().skip(1).find_map(|track| {
-            let prefix = format!("__routing_node_{client}_{}::", routing_id(&track.name));
+        self.program.nodes.iter().skip(1).find_map(|node| {
+            let prefix = format!("__routing_node_{client}_{}::", routing_id(&node.name));
             name.strip_prefix(&prefix)
-                .map(|param| format!("{}::{param}", track.name))
+                .map(|param| format!("{}::{param}", node.name))
         })
     }
 
@@ -734,7 +734,7 @@ impl Live {
         }
         Some(Op::Note {
             to: None,
-            target: if self.program.track_index(&event.target).is_some() {
+            target: if self.program.node_index(&event.target).is_some() {
                 routing_id(&event.target)
             } else {
                 event.target.clone()
@@ -842,9 +842,9 @@ impl Live {
     fn fetch_piece(&mut self, horizon: u64) {
         let (from, to) = (self.seconds(self.fetched_until), self.seconds(horizon));
         let found = self.schedule.events_lenient(from, to, &self.overloaded);
-        for track in found.overloaded {
-            if !self.overloaded.contains(&track) {
-                self.overloaded.push(track);
+        for node in found.overloaded {
+            if !self.overloaded.contains(&node) {
+                self.overloaded.push(node);
             }
         }
         let mut ops = Vec::new();
@@ -870,12 +870,12 @@ impl Live {
             self.take_back(WRITTEN, at);
             self.next_panic += 1;
         }
-        // envelope lanes moving track parameters
+        // envelope lanes moving node parameters
         for set in found.controls {
             let Some(def) = self.program.controls.iter().find(|c| c.name == set.name) else {
                 continue;
             };
-            let Some((track, param)) = set.name.split_once("::") else {
+            let Some((node, param)) = set.name.split_once("::") else {
                 continue;
             };
             let value = match def.unit {
@@ -886,11 +886,13 @@ impl Live {
                 niminal_lang::Unit::Angle => Value::Degrees(set.target),
                 niminal_lang::Unit::Semitones => Value::Semitones(set.target),
             };
-            ops.push(Op::Track {
-                name: routing_id(track),
+            ops.push(Op::Routing {
                 at: At::Sample(self.samples(set.at)),
-                args: [(param.to_string(), value)].into(),
-                glide: Some(Time::Seconds(set.glide)),
+                edits: vec![RoutingEdit::Set {
+                    id: routing_id(node),
+                    args: [(param.to_string(), value)].into(),
+                    glide: set.glide,
+                }],
                 tag: Some(SCHEDULED.into()),
             });
         }
@@ -1006,12 +1008,12 @@ impl Live {
                     source: Some(name.clone()),
                 });
             }
-            for track in program.tracks.iter().skip(1) {
-                let id = routing_id(&track.name);
+            for node in program.nodes.iter().skip(1) {
+                let id = routing_id(&node.name);
                 nodes.push(id.clone());
                 edits.push(RoutingEdit::Import {
                     name: id.clone(),
-                    track: track.name.clone(),
+                    node: node.name.clone(),
                 });
                 edits.push(RoutingEdit::Node {
                     id: id.clone(),
@@ -1021,7 +1023,7 @@ impl Live {
                 });
                 let connection = format!("output_{id}");
                 connections.push(connection.clone());
-                let to = match track.def.route {
+                let to = match node.def.route {
                     niminal_engine::Route::Master => Endpoint::Master,
                     niminal_engine::Route::Bus(bus) => Endpoint::Bus {
                         id: routing_id(&program.buses[bus]),
@@ -1134,7 +1136,7 @@ impl Live {
     /// Start no more notes from the schedule; what is sounding carries on. Notes already sent from it that
     /// are still to start are taken back.
     pub fn end_schedule(&mut self) {
-        let names = self.program.tracks.iter().map(|t| t.name.clone()).collect();
+        let names = self.program.nodes.iter().map(|t| t.name.clone()).collect();
         self.schedule = Schedule::from_commands(self.program.tempo, names, &[]);
         self.take_back(SCHEDULED, self.clock);
         self.fetched_until = self.clock;
@@ -1149,7 +1151,7 @@ impl Live {
             .map(|e| {
                 Ok(Op::Note {
                     to: None,
-                    target: if self.program.track_index(&e.target).is_some() {
+                    target: if self.program.node_index(&e.target).is_some() {
                         routing_id(&e.target)
                     } else {
                         e.target.clone()
@@ -1179,7 +1181,7 @@ impl Live {
     }
 }
 
-/// Send DSP definitions only. Implicit clip tracks and musical literals are resolved in this client.
+/// Send DSP definitions only. Implicit clip nodes and musical literals are resolved in this client.
 fn definition_ops(
     statements: &[Statement],
     program: Option<&Composition>,
@@ -1301,17 +1303,17 @@ pub(crate) fn origin_of(history: &[HistoryEntry]) -> f64 {
 }
 
 pub(crate) fn name_action(program: &Composition, action: &Action) -> Option<NamedAction> {
-    let name = |t: &usize| program.tracks[*t].name.clone();
+    let name = |t: &usize| program.nodes[*t].name.clone();
     Some(match action {
-        Action::Play { track, clip } => NamedAction::Play {
-            track: name(track),
+        Action::Play { node, clip } => NamedAction::Play {
+            node: name(node),
             clip: clip.clone(),
         },
-        Action::Stop { track } => NamedAction::Stop(name(track)),
-        Action::Mute { track } => NamedAction::Mute(name(track)),
-        Action::Unmute { track } => NamedAction::Unmute(name(track)),
-        Action::Solo { track } => NamedAction::Solo(name(track)),
-        Action::Unsolo { track } => NamedAction::Unsolo(track.as_ref().map(name)),
+        Action::Stop { node } => NamedAction::Stop(name(node)),
+        Action::Mute { node } => NamedAction::Mute(name(node)),
+        Action::Unmute { node } => NamedAction::Unmute(name(node)),
+        Action::Solo { node } => NamedAction::Solo(name(node)),
+        Action::Unsolo { node } => NamedAction::Unsolo(node.as_ref().map(name)),
         Action::Hush => NamedAction::Hush,
         Action::Panic => NamedAction::Panic,
         Action::Reset => NamedAction::Reset,
@@ -1320,22 +1322,22 @@ pub(crate) fn name_action(program: &Composition, action: &Action) -> Option<Name
 }
 
 pub(crate) fn schedule_for(program: &Composition, history: &[HistoryEntry]) -> Schedule {
-    let names = program.tracks.iter().map(|t| t.name.clone()).collect();
-    let index = |name: &String| program.track_index(name);
+    let names = program.nodes.iter().map(|t| t.name.clone()).collect();
+    let index = |name: &String| program.node_index(name);
     let commands = history
         .iter()
         .filter_map(|h| {
             let action = match &h.action {
-                NamedAction::Play { track, clip } => Action::Play {
-                    track: index(track)?,
+                NamedAction::Play { node, clip } => Action::Play {
+                    node: index(node)?,
                     clip: clip.clone(),
                 },
-                NamedAction::Stop(t) => Action::Stop { track: index(t)? },
-                NamedAction::Mute(t) => Action::Mute { track: index(t)? },
-                NamedAction::Unmute(t) => Action::Unmute { track: index(t)? },
-                NamedAction::Solo(t) => Action::Solo { track: index(t)? },
+                NamedAction::Stop(t) => Action::Stop { node: index(t)? },
+                NamedAction::Mute(t) => Action::Mute { node: index(t)? },
+                NamedAction::Unmute(t) => Action::Unmute { node: index(t)? },
+                NamedAction::Solo(t) => Action::Solo { node: index(t)? },
                 NamedAction::Unsolo(t) => Action::Unsolo {
-                    track: t.as_ref().and_then(index),
+                    node: t.as_ref().and_then(index),
                 },
                 NamedAction::Hush => Action::Hush,
                 NamedAction::Panic => Action::Panic,
@@ -1361,5 +1363,5 @@ fn first_line(text: &str) -> String {
     }
 }
 
-/// A statement to compile, and for a change to a track, what the track is playing after it.
+/// A statement to compile, and for a change to a node, what the node is playing after it.
 type Edited = (Statement, Option<(String, Playing)>);

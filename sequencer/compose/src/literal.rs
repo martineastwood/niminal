@@ -131,7 +131,7 @@ fn literal_arg_value(
 
 /// A note's argument problem as a diagnostic at `span`.
 pub(crate) fn arg_error(e: niminal_lang::ArgError, span: Span) -> Diagnostic {
-    let d = Diagnostic::new(e.message, span);
+    let d = Diagnostic::new(e.message.replace("instrument or node", "instrument or part"), span);
     match e.help {
         Some(h) => d.with_help(h),
         None => d,

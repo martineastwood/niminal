@@ -92,13 +92,7 @@ fn bad_control_inputs_are_explained() {
     );
 }
 
-const SAW_LEAD: &str = "
-instr saw_lead(freq: hz, amp: db = -6db) {
-  level = env[0 5ms 1 200ms 0.6 | 300ms 0]
-  osc(saw, freq).lpf(cutoff: 2khz, res: 0.2).gain(amp) * level
-}
-saw_lead(freq: a3) for 1beat
-";
+const SAW_LEAD: &str = "\ninstr saw_lead(freq: hz, amp: db = -6db) {\n  level = env[0 5ms 1 200ms 0.6 | 300ms 0]\n  osc(saw, freq).lpf(cutoff: 2khz, res: 0.2).gain(amp) * level\n}\nsaw_lead(freq: a3) for 1beat\n";
 
 #[test]
 fn compiles_the_basic_synth() {
@@ -348,7 +342,7 @@ fn note_checking() {
     );
     assert_eq!(
         msg(&note("lede(freq: c4) for 1beat")),
-        "no instrument or track named `lede`"
+        "no instrument or part named `lede`"
     );
     assert_eq!(
         msg(&note("lead(c4) for 1beat")),
@@ -368,40 +362,12 @@ fn note_checking() {
     );
 }
 
-const SPEC_OPCODES: &str = "
-fn one_pole(x, cutoff: hz) {
-  state y = 0.0
-  a = exp(-2 * pi * cutoff / sample_rate)
-  y = x * (1 - a) + y * a
-  y
-}
-
-fn drive(x, amount: 0..1 = 0.5) {
-  (x * (1 + amount * 9)).tanh
-}
-
-fn my_dc_block(x) {
-  state x1 = 0.0
-  state y1 = 0.0
-  y = x - x1 + 0.995 * y1
-  x1 = x
-  y1 = y
-  y
-}
-
-fn fold(x, amount: 0..1 = 0.5) {
-  (x * (1 + amount * 8)).sin
-}
-";
+const SPEC_OPCODES: &str = "\nfn one_pole(x, cutoff: hz) {\n  state y = 0.0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}\n\nfn drive(x, amount: 0..1 = 0.5) {\n  (x * (1 + amount * 9)).tanh\n}\n\nfn my_dc_block(x) {\n  state x1 = 0.0\n  state y1 = 0.0\n  y = x - x1 + 0.995 * y1\n  x1 = x\n  y1 = y\n  y\n}\n\nfn fold(x, amount: 0..1 = 0.5) {\n  (x * (1 + amount * 8)).sin\n}\n";
 
 #[test]
 fn the_specs_example_functions_compile_and_can_be_used() {
     ok(&format!(
-        "{SPEC_OPCODES}
-instr a(freq: hz) {{ osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz) }}
-instr b(freq: hz) {{ osc(sine, freq).fold(amount: env[0 2sec 1 2sec 0]).my_dc_block }}
-instr c(freq: hz) {{ drive(osc(saw, freq)) }}
-a(freq: 110hz) for 1beat"
+        "{SPEC_OPCODES}\ninstr a(freq: hz) {{ osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz) }}\ninstr b(freq: hz) {{ osc(sine, freq).fold(amount: env[0 2sec 1 2sec 0]).my_dc_block }}\ninstr c(freq: hz) {{ drive(osc(saw, freq)) }}\na(freq: 110hz) for 1beat"
     ));
 }
 
@@ -511,11 +477,7 @@ fn state_and_untyped_parameters_belong_to_the_right_definitions() {
 #[test]
 fn a_broken_function_is_reported_once_even_if_it_is_used() {
     let errs = errors(
-        "
-fn bad(x) { x + undefined_thing }
-instr a(f: hz) { osc(saw, f).bad }
-a(f: 100hz) for 1beat
-",
+        "\nfn bad(x) { x + undefined_thing }\ninstr a(f: hz) { osc(saw, f).bad }\na(f: 100hz) for 1beat\n",
     );
     assert_eq!(errs.len(), 1, "{errs:?}");
     assert_eq!(errs[0].message, "`undefined_thing` is not defined");
@@ -644,57 +606,40 @@ fn db_gains_apply_to_plain_values() {
     ok("fn g(x, amp: db = -6db) { x * amp }\ninstr a(f: hz) { osc(saw, f).g(amp: -3db) }");
 }
 
-const ROUTING: &str = "
-bus space
-
-instr pluck(freq: hz, bright: 0..1 = 0.5) {
-  out = osc(saw, freq).lpf(cutoff: 900hz + bright * 1khz)
-  space += out.gain(-14db)
-}
-
-track room {
-  out = space.lpf(cutoff: 4khz).hpf(cutoff: 150hz)
-}
-
-track lead {
-  instrument = pluck(bright: 0.6)
-  out = it.gain(0.5)
-  space += out.gain(-12db)
-}
-";
+const ROUTING: &str = "\nbus space\n\ninstr pluck(freq: hz, bright: 0..1 = 0.5) {\n  out = osc(saw, freq).lpf(cutoff: 900hz + bright * 1khz)\n  space += out.gain(-14db)\n}\n\nprocessor room {\n  out = space.lpf(cutoff: 4khz).hpf(cutoff: 150hz)\n}\n\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.5)\n  space += out.gain(-12db)}\npart lead {  instrument = pluck(bright: 0.6)\noutput = lead_audio}\n";
 
 #[test]
-fn buses_and_tracks_compile() {
+fn buses_and_nodes_compile() {
     let p = ok(&format!(
         "{ROUTING}\nlead(freq: c4) for 1beat\npluck(freq: c4) for 1beat"
     ));
-    assert_eq!(p.buses, ["space"]);
-    assert_eq!(p.tracks.len(), 3, "the implicit track, room and lead");
-    assert_eq!(p.tracks[2].name, "lead");
-    assert_eq!(p.tracks[2].instrument, Some(0));
-    assert_eq!(p.tracks[2].defaults["bright"], Value::Num(0.6));
+    assert_eq!(p.buses, ["space", "lead_audio"]);
+    assert_eq!(p.nodes.len(), 4, "the implicit collection, two processors and the part");
+    assert_eq!(p.nodes[3].name, "lead");
+    assert_eq!(p.nodes[3].instrument, Some(0));
+    assert_eq!(p.nodes[3].defaults["bright"], Value::Num(0.6));
     assert_eq!(
-        p.tracks[0].def.voice_sends,
+        p.nodes[0].def.voice_sends,
         [0],
         "bare instruments may send to the bus"
     );
     assert_eq!(p.notes.len(), 2);
 
-    // the plan for a track note uses the track's defaults, and the note wins over them
+    // the plan for a part note uses the node's defaults, and the note wins over them
     let plan = |e: &Event| p.plan(e).unwrap();
     let bright = p.instruments[0]
         .params
         .iter()
         .position(|q| q.name == "bright")
         .unwrap();
-    let on_track = plan(&p.notes[0]);
-    assert_eq!(on_track.track, 2);
-    assert!(on_track.params.contains(&(bright, 0.6)));
+    let on_node = plan(&p.notes[0]);
+    assert_eq!(on_node.node, 3);
+    assert!(on_node.params.contains(&(bright, 0.6)));
     let bare = plan(&p.notes[1]);
-    assert_eq!(bare.track, 0);
+    assert_eq!(bare.node, 0);
     assert!(
         !bare.params.iter().any(|(i, _)| *i == bright),
-        "no default applied on the implicit track"
+        "no default applied on the implicit node"
     );
     let overridden = p.plan(&Event {
         args: [
@@ -708,16 +653,11 @@ fn buses_and_tracks_compile() {
 }
 
 #[test]
-fn routing_a_track_to_a_bus() {
-    let p = ok("
-bus fx
-track a { instrument = i\n out = it.to(fx) }
-track b { out = fx }
-instr i(f: hz) { osc(sine, f) }
-a(f: 100hz) for 1beat");
-    assert_eq!(p.tracks[1].def.route, niminal_engine::Route::Bus(0));
+fn routing_a_node_to_a_bus() {
+    let p = ok("\nbus fx\npart a { instrument = i\n output = fx }\nprocessor b { out = fx }\ninstr i(f: hz) { osc(sine, f) }\na(f: 100hz) for 1beat");
+    assert_eq!(p.nodes[1].def.route, niminal_engine::Route::Bus(0));
     assert_eq!(
-        p.tracks[2].def.inputs,
+        p.nodes[2].def.inputs,
         [niminal_engine::ChainInput::Bus { bus: 0, channel: 0 }]
     );
 }
@@ -740,7 +680,7 @@ fn out_and_it_rules() {
     );
     assert_eq!(
         msg("instr a(f: hz) { osc(saw, it) }"),
-        "`it` is only available inside a track, or a function given to `map`"
+        "`it` is only available inside a node, or a function given to `map`"
     );
     assert_eq!(
         msg("instr a(f: hz) { it = 1 }"),
@@ -748,7 +688,7 @@ fn out_and_it_rules() {
     );
     assert_eq!(
         msg("instr a(f: hz) { instrument = 1\n0.5 }"),
-        "`instrument` is only available in a track"
+        "`instrument` is only available in a node"
     );
     // only sends: silent but valid
     ok("bus b\ninstr a(f: hz) { b += osc(saw, f) }");
@@ -759,7 +699,7 @@ fn bus_rules() {
     let with = |body: &str| format!("bus space\n{body}");
     assert_eq!(
         msg(&with("instr a(f: hz) { osc(saw, space) }")),
-        "`space` is a bus, and only a track can read a bus"
+        "`space` is a bus, and only a processor can read a bus"
     );
     assert_eq!(
         help(&with("instr a(f: hz) { osc(saw, space) }")).as_deref(),
@@ -817,68 +757,24 @@ fn locals_cannot_shadow_top_level_names() {
 }
 
 #[test]
-fn track_errors() {
-    let base = "bus space\ninstr i(f: hz, b: 0..1 = 0.5) { osc(saw, f) }\n";
-    let track = |body: &str| format!("{base}track t {{ {body} }}");
-    assert_eq!(msg(&track("")), "track `t` does nothing");
-    assert_eq!(msg(&track("x = 1")), "track `t` never sets `out`");
-    ok(&track("out = it")); // valid, though silent: nothing feeds `it`
-    assert_eq!(
-        msg(&track("instrument = i\ninstrument = i")),
-        "a track has only one instrument"
-    );
-    assert_eq!(msg(&track("instrument = j")), "no instrument named `j`");
-    assert_eq!(
-        msg(&track("instrument = i(q: 1)")),
-        "`i` has no parameter `q`"
-    );
-    assert_eq!(
-        msg(&track("instrument = i(b: 2)")),
-        "argument `b` must be between 0 and 1, got 2"
-    );
-    assert_eq!(
-        msg(&track("instrument = i\n0.5")),
-        "a track makes sound through `out`"
-    );
-    assert_eq!(
-        msg(&track("instrument = i\nout = it.to(spce)")),
-        "`spce` is not defined"
-    );
-    assert_eq!(
-        msg(&track("instrument = i\nout = it.to(1)")),
-        "`to` takes the name of a bus"
-    );
-    assert_eq!(
-        msg(&track("instrument = i\nout = it.gain(1).to(space).gain(1)")),
-        "`to` can only end the line that sets a track's `out`"
-    );
-    assert_eq!(
-        msg(&format!(
-            "{base}track t {{ instrument = i }}\ntrack t {{ instrument = i }}"
-        )),
-        "track `t` is defined twice"
-    );
-    // a track with an instrument and nothing else just plays it
-    ok(&track("instrument = i"));
-    // an effect track with no instrument can't be played
-    let e = first_error(&format!(
-        "{base}track fx {{ out = space }}\nfx(f: 100hz) for 1beat"
-    ));
-    assert_eq!(e.message, "track `fx` has no instrument to play");
+fn collections_and_processors_have_distinct_roles() {
+    let base = "instr tone(freq: hz = 440hz) { osc(sine, freq) }\n";
+    ok(&format!("{base}part lead {{ instrument = tone }}"));
+    ok("processor room(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }");
+    assert!(msg(&format!("{base}processor room {{ instrument = tone }}")).contains("cannot select an instrument"));
+    assert!(msg(&format!("{base}part lead {{ instrument = tone\n out = it.lpf(cutoff: 2khz) }}")).contains("put DSP in a processor"));
+    assert!(msg(&format!("{base}part lead(cut: hz = 2khz) {{ instrument = tone }}")).contains("no DSP parameters"));
+    assert!(compile("track lead { instrument = tone }").is_err());
+    assert!(compile("bus room { out = it }").is_err());
 }
 
 #[test]
-fn feedback_between_tracks_is_an_error_naming_them() {
-    let src = "
-bus x
-bus y
-track a { out = x.lpf(cutoff: 1khz).to(y) }
-track b { out = y.lpf(cutoff: 1khz).to(x) }
-";
+fn feedback_between_nodes_is_an_error_naming_them() {
+    let src = "\nbus x\nbus y\nprocessor a { out = x.lpf(cutoff: 1khz).to(y) }\nprocessor b { out = y.lpf(cutoff: 1khz).to(x) }\n";
     let d = first_error(src);
     assert!(
-        d.message == "tracks feed back through buses or buffers: a -> b -> a"
-            || d.message == "tracks feed back through buses or buffers: b -> a -> b",
+        d.message == "nodes feed back through buses or buffers: a -> b -> a"
+            || d.message == "nodes feed back through buses or buffers: b -> a -> b",
         "{}",
         d.message
     );
@@ -886,26 +782,21 @@ track b { out = y.lpf(cutoff: 1khz).to(x) }
 
     // a late send breaks the loop
     ok(
-        "bus x\nbus y\ntrack a { out = x.lpf(cutoff: 1khz).to(y) }\ntrack b { out = y\n x += late(out) }",
+        "bus x\nbus y\nprocessor a { out = x.lpf(cutoff: 1khz).to(y) }\nprocessor b { out = y\n x += late(out) }",
     );
     // outside a send, `prev` is one sample earlier
-    ok("bus x\ntrack a { out = prev(x) }");
-    let d = first_error("bus x\ntrack a { out = x.to(x) }");
+    ok("bus x\nprocessor a { out = prev(x) }");
+    let d = first_error("bus x\nprocessor a { out = x.to(x) }");
     assert_eq!(
         d.message,
-        "tracks feed back through buses or buffers: a -> a"
+        "nodes feed back through buses or buffers: a -> a"
     );
 }
 
 #[test]
-fn a_broken_instrument_does_not_cascade_into_its_tracks_and_notes() {
+fn a_broken_instrument_does_not_cascade_into_its_nodes_and_notes() {
     let errs = errors(
-        "
-instr bad(f: hz) { osc(saw, 440) }
-track t { instrument = bad }
-t() for 1beat
-bad() for 1beat
-",
+        "\ninstr bad(f: hz) { osc(saw, 440) }\npart t { instrument = bad }\nt() for 1beat\nbad() for 1beat\n",
     );
     assert_eq!(errs.len(), 1, "{errs:?}");
 }
@@ -1197,9 +1088,9 @@ fn layouts_convert_automatically_where_the_spec_says_they_do() {
     // mono into 5.1 is centred; stereo into 5.1 takes the front pair
     ok("config { channels: surround(5.1) }\ninstr a(f: hz) { osc(saw, f) }");
     ok("config { channels: surround(5.1) }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f)] }");
-    // 5.1 bus read by a stereo master track folds down
+    // 5.1 bus read by a stereo master part folds down
     ok(
-        "config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\ntrack t { out = hall }",
+        "config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\nprocessor t { out = hall }",
     );
     // unnamed channel lists are taken as whatever layout has that many
     ok(
@@ -1232,32 +1123,20 @@ fn to_layout_converts_explicitly() {
 }
 
 #[test]
-fn buses_and_tracks_carry_their_layouts() {
-    let p = ok("
-config { channels: stereo }
-bus space: stereo
-bus lfe: mono
-instr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }
-track room { out = space.reverb(room: 0.8) }
-track sub { out = lfe.lpf(cutoff: 100hz) }
-a(f: 100hz) for 1beat");
+fn buses_and_nodes_carry_their_layouts() {
+    let p = ok("\nconfig { channels: stereo }\nbus space: stereo\nbus lfe: mono\ninstr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }\nprocessor room { out = space.reverb(room: 0.8) }\nprocessor sub { out = lfe.lpf(cutoff: 100hz) }\na(f: 100hz) for 1beat");
     assert_eq!(p.bus_layouts, [Layout::Stereo, Layout::Mono]);
     assert_eq!(
-        p.tracks[1].def.inputs.len(),
+        p.nodes[1].def.inputs.len(),
         2,
         "a stereo bus is two inputs"
     );
-    assert_eq!(p.tracks[2].def.inputs.len(), 1);
-    // the sub track works in mono but delivers stereo to the master
-    assert_eq!(p.tracks[2].def.chain.as_ref().unwrap().channels(), 2);
+    assert_eq!(p.nodes[2].def.inputs.len(), 1);
+    // the sub part works in mono but delivers stereo to the master
+    assert_eq!(p.nodes[2].def.chain.as_ref().unwrap().channels(), 2);
     // routing to a bus delivers in that bus's layout
-    let routed = ok("
-config { channels: stereo }
-bus mono_bus: mono
-track t { instrument = i\nout = it.to(mono_bus) }
-track u { out = mono_bus }
-instr i(f: hz) { osc(saw, f).pan }");
-    assert_eq!(routed.tracks[1].def.chain.as_ref().unwrap().channels(), 1);
+    let routed = ok("\nconfig { channels: stereo }\nbus mono_bus: mono\npart t { instrument = i\noutput = mono_bus }\nprocessor u { out = mono_bus }\ninstr i(f: hz) { osc(saw, f).pan }");
+    assert_eq!(routed.nodes[1].def.chain.as_ref().unwrap().channels(), 1);
 }
 
 #[test]
@@ -1290,12 +1169,7 @@ fn bars_and_semitones() {
 use crate::performance::{Action, Clip, QuantizeRelation, QuantizeUnit};
 use niminal_pattern::{Pattern, Rational, Span as CycleSpan};
 
-const STAGE: &str = "
-instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }
-track lead { instrument = pluck }
-track bass { instrument = pluck }
-track pad { instrument = pluck }
-";
+const STAGE: &str = "\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }\npart lead { instrument = pluck }\npart bass { instrument = pluck }\npart pad { instrument = pluck }\n";
 
 fn stage(body: &str) -> String {
     format!("{STAGE}{body}")
@@ -1405,13 +1279,13 @@ fn new_pattern_operations() {
 }
 
 #[test]
-fn osc_out_sends_a_tracks_signal() {
-    let track = |body: &str| {
+fn osc_out_sends_a_nodes_signal() {
+    let node = |body: &str| {
         format!(
-            "tempo 120bpm\ninstr pluck(freq: hz) {{ osc(saw, freq) }}\ntrack lead {{\n instrument = pluck\n {body}\n}}\n"
+            "tempo 120bpm\ninstr pluck(freq: hz) {{ osc(saw, freq) }}\nbus lead_audio\nprocessor lead_fx {{{body}}}\npart lead {{ instrument = pluck\noutput = lead_audio}}\n"
         )
     };
-    let p = ok(&track("out = it.osc_out(\"/vj/level\", port: 9000)"));
+    let p = ok(&node("out = it.osc_out(\"/vj/level\", port: 9000)"));
     assert_eq!(p.taps.len(), 1);
     assert_eq!(
         (
@@ -1422,7 +1296,7 @@ fn osc_out_sends_a_tracks_signal() {
         ),
         ("/vj/level", "127.0.0.1", 9000, 30.0)
     );
-    let p = ok(&track(
+    let p = ok(&node(
         "out = it.osc_out(\"/a\", host: \"10.0.0.2\", port: 9001, rate: 5hz).osc_out(\"/b\", port: 9001)",
     ));
     assert_eq!(
@@ -1433,31 +1307,31 @@ fn osc_out_sends_a_tracks_signal() {
         [("/a", "10.0.0.2", 5.0), ("/b", "127.0.0.1", 30.0)]
     );
     assert_eq!(
-        msg(&track("out = it.osc_out(\"vj\", port: 9000)")),
+        msg(&node("out = it.osc_out(\"vj\", port: 9000)")),
         "an OSC address starts with `/`"
     );
     assert_eq!(
-        msg(&track("out = it.osc_out(\"/a\")")),
+        msg(&node("out = it.osc_out(\"/a\")")),
         "`osc_out` needs a `port:`"
     );
     assert_eq!(
-        msg(&track("out = it.osc_out(port: 9000)")),
+        msg(&node("out = it.osc_out(port: 9000)")),
         "`osc_out` needs an address"
     );
     assert_eq!(
-        msg(&track("out = it.osc_out(\"/a\", port: 0)")),
+        msg(&node("out = it.osc_out(\"/a\", port: 0)")),
         "a port is a whole number from 1 to 65535"
     );
     assert_eq!(
-        msg(&track("out = it.osc_out(\"/a\", port: 9000, rate: 900hz)")),
+        msg(&node("out = it.osc_out(\"/a\", port: 9000, rate: 900hz)")),
         "`rate` is from 0.5hz to 200hz"
     );
     assert_eq!(
-        msg(&track("out = it.osc_out(\"/a\", prot: 9000)")),
+        msg(&node("out = it.osc_out(\"/a\", prot: 9000)")),
         "`osc_out` has no argument named `prot`"
     );
     assert_eq!(
-        msg(&track("out = it.osc_out(5, port: 9000)")),
+        msg(&node("out = it.osc_out(5, port: 9000)")),
         "an OSC address is text in quotes"
     );
     ok("instr a(f: hz) { osc(saw, f).osc_out(\"/a\", port: 9000) }");
@@ -1469,7 +1343,7 @@ fn osc_out_sends_a_tracks_signal() {
 
 #[test]
 fn midi_out_is_an_instrument_that_sends_notes() {
-    let src = "tempo 120bpm\nmidi_out drums(port: \"IAC\", channel: 10)\ntrack beat { instrument = drums }\nbeat.play([c4 g4])";
+    let src = "tempo 120bpm\nmidi_out drums(port: \"IAC\", channel: 10)\npart beat { instrument = drums }\nbeat.play([c4 g4])";
     let p = ok(src);
     let instrument = p.instrument("drums").expect("it is an instrument");
     let target = instrument.midi.as_ref().expect("it goes to a port");
@@ -1548,24 +1422,12 @@ fn midi_out_is_an_instrument_that_sends_notes() {
 
 #[test]
 fn mixer_lines_are_checked() {
-    let tracks = |body: &str| {
-        format!(
-            "tempo 120bpm\ninstr pluck(freq: hz) {{ osc(saw, freq) }}\ntrack lead {{\n instrument = pluck\n {body}\n}}\n"
-        )
-    };
-    ok(&tracks("gain = -3db\n pan = 20deg"));
-    ok(&tracks("out = it.lpf(cutoff: 2khz)\n gain = -3db"));
-    assert_eq!(
-        msg(&tracks("gain = -3db\n gain = -1db")),
-        "a track has only one `gain` line"
-    );
-    assert!(msg(&tracks("gain = 20deg")).contains("expects"));
-    assert!(msg(&tracks("pan = 20")).contains("azimuth"));
-    // there is nothing to mix without a sound
-    assert_eq!(
-        msg("track fx {\n gain = -3db\n}"),
-        "track `fx` never sets `out`"
-    );
+    let collection = |body: &str| format!("instr pluck(freq: hz) {{ osc(saw, freq) }}\npart lead {{ instrument = pluck\n{body}\n}}");
+    ok(&collection("gain = -3db\n pan = 20deg"));
+    assert!(msg(&collection("out = it.lpf(cutoff: 2khz)")).contains("put DSP in a processor"));
+    assert_eq!(msg(&collection("gain = -3db\n gain = -1db")), "a part has only one `gain` line");
+    assert!(msg(&collection("gain = 20deg")).contains("expects"));
+    assert!(msg(&collection("pan = 20")).contains("azimuth"));
 }
 
 #[test]
@@ -1754,13 +1616,13 @@ fn composition_tools() {
 }
 
 #[test]
-fn a_pattern_of_notes_plays_on_a_track() {
+fn a_pattern_of_notes_plays_on_a_node() {
     let p = ok(&stage("riff = [c4 ~ e4 g4]\nlead.play(riff)"));
     assert_eq!(p.performance.len(), 1);
-    let Action::Play { track, clip } = &p.performance[0].action else {
+    let Action::Play { node, clip } = &p.performance[0].action else {
         panic!()
     };
-    assert_eq!(*track, 1, "track 0 is the implicit one");
+    assert_eq!(*node, 1, "node 0 is the implicit one");
     assert_eq!(clip.length, Rational::ONE);
     assert_eq!(
         events(clip.lane("notes").unwrap(), 1),
@@ -1884,14 +1746,7 @@ fn thinning_is_seeded_by_the_source() {
 #[test]
 fn clips_have_a_length_and_lanes() {
     let p = ok(&stage(
-        "
-clip riff {
-  length: 2bars
-  notes: [c2 ~ eb2 g1]
-  bright: [0.2 0.8]
-  gain: [0db -6db]
-}
-bass.play(riff)",
+        "\nclip riff {\n  length: 2bars\n  notes: [c2 ~ eb2 g1]\n  bright: [0.2 0.8]\n  gain: [0db -6db]\n}\nbass.play(riff)",
     ));
     let Action::Play { clip, .. } = &p.performance[0].action else {
         panic!()
@@ -1948,21 +1803,17 @@ fn operations_apply_to_whole_clips() {
 }
 
 #[test]
-fn scenes_launch_clips_and_stop_tracks() {
+fn scenes_launch_clips_and_stop_nodes() {
     let p = ok(&stage(
-        "
-clip riff { notes: [c2 g2] }
-verse = [c4 e4]
-scene intro { bass: riff, lead: verse, pad: ~ }
-intro.start",
+        "\nclip riff { notes: [c2 g2] }\nverse = [c4 e4]\nscene intro { bass: riff, lead: verse, pad: ~ }\nintro.start",
     ));
     assert_eq!(p.performance.len(), 3);
     let kinds: Vec<_> = p
         .performance
         .iter()
         .map(|s| match &s.action {
-            Action::Play { track, clip } => format!("play {track} {}", clip.name),
-            Action::Stop { track } => format!("stop {track}"),
+            Action::Play { node, clip } => format!("play {node} {}", clip.name),
+            Action::Stop { node } => format!("stop {node}"),
             _ => "other".into(),
         })
         .collect();
@@ -1972,19 +1823,7 @@ intro.start",
 #[test]
 fn commands_carry_times_and_quantization() {
     let p = ok(&stage(
-        "
-tempo 120bpm
-clip riff { notes: [c2] }
-bass.play(riff)
-at 4bars lead.play(riff)
-at bar 5 beat 3 bass.stop
-at 2beats lead.mute @ next bar
-lead.unmute @ in 2bars
-bass.solo @ 4bars
-hush @ now
-panic
-unsolo
-at bar 3 bass.unsolo",
+        "\ntempo 120bpm\nclip riff { notes: [c2] }\nbass.play(riff)\nat 4bars lead.play(riff)\nat bar 5 beat 3 bass.stop\nat 2beats lead.mute @ next bar\nlead.unmute @ in 2bars\nbass.solo @ 4bars\nhush @ now\npanic\nunsolo\nat bar 3 bass.unsolo",
     ));
     let acts = &p.performance;
     assert_eq!(acts[1].at, Time::Bars(4.0));
@@ -2011,8 +1850,8 @@ at bar 3 bass.unsolo",
     );
     assert_eq!(acts[6].quantize.unwrap().unit, QuantizeUnit::Now);
     assert!(matches!(acts[7].action, Action::Panic));
-    assert!(matches!(acts[8].action, Action::Unsolo { track: None }));
-    assert!(matches!(acts[9].action, Action::Unsolo { track: Some(2) }));
+    assert!(matches!(acts[8].action, Action::Unsolo { node: None }));
+    assert!(matches!(acts[9].action, Action::Unsolo { node: Some(2) }));
     assert_eq!(acts[9].at, Time::Beats(8.0));
     assert!(acts[0].quantize.is_none());
 }
@@ -2064,7 +1903,7 @@ fn instruments_accept_a_gain_control() {
 }
 
 #[test]
-fn clips_are_checked_against_the_track_they_play_on() {
+fn clips_are_checked_against_the_node_they_play_on() {
     let d = first_error(&stage("clip c { notes: [c4]\ntone: [1] }\nlead.play(c)"));
     assert_eq!(
         d.message,
@@ -2085,15 +1924,15 @@ fn clips_are_checked_against_the_track_they_play_on() {
         "the `to` lane isn't supported yet"
     );
 
-    let no_pitch = "instr drone(amp: db) { osc(sine, 100hz) }\ntrack t { instrument = drone }\nt.play([c4])";
+    let no_pitch = "instr drone(amp: db) { osc(sine, 100hz) }\npart t { instrument = drone }\nt.play([c4])";
     assert_eq!(
         msg(no_pitch),
         "`drone` has no `freq` parameter for the notes to set"
     );
-    let silent = "instr a(freq: hz) { osc(sine, freq) }\ntrack fx { out = it }\nfx.play([c4])";
+    let silent = "instr a(freq: hz) { osc(sine, freq) }\nprocessor fx { out = it }\nfx.play([c4])";
     assert_eq!(
         msg(silent),
-        "track `fx` has no instrument to play a clip on"
+        "node `fx` has no instrument to play a clip on"
     );
 }
 
@@ -2101,7 +1940,7 @@ fn clips_are_checked_against_the_track_they_play_on() {
 fn performance_errors_are_clear_and_located() {
     // unknown names, with suggestions
     let d = first_error(&stage("leed.play([c4])"));
-    assert_eq!(d.message, "no track named `leed`");
+    assert_eq!(d.message, "no part named `leed`");
     assert_eq!(d.help.as_deref(), Some("did you mean `lead`?"));
     let d = first_error(&stage("riff = [c4]\nlead.play(rif)"));
     assert_eq!(d.message, "`rif` is not defined");
@@ -2182,7 +2021,7 @@ fn performance_errors_are_clear_and_located() {
     );
     assert_eq!(
         msg(&stage("scene s { nobody: [c4] }")),
-        "no track named `nobody`"
+        "no part named `nobody`"
     );
     assert_eq!(
         msg(&stage("clip c { notes: env[0 1sec 1] }")),
@@ -2208,7 +2047,7 @@ fn performance_errors_are_clear_and_located() {
     );
     assert_eq!(
         msg(&stage("lead = [c4]")),
-        "`lead` is already the name of a track"
+        "`lead` is already the name of a part"
     );
     assert_eq!(msg(&stage("it = [c4]")), "`it` is a reserved word");
     assert_eq!(msg("at bar 0 hush"), "bars and beats count from 1");
@@ -2222,11 +2061,7 @@ fn performance_errors_are_clear_and_located() {
 #[test]
 fn reports_errors_from_several_instruments_without_cascading() {
     let errs = errors(
-        "
-instr a() { osc(saw, 440) }
-instr b() { osc(saw, 440) }
-a() for 1beat
-",
+        "\ninstr a() { osc(saw, 440) }\ninstr b() { osc(saw, 440) }\na() for 1beat\n",
     );
     assert_eq!(
         errs.len(),
@@ -2236,27 +2071,27 @@ a() for 1beat
 }
 
 #[test]
-fn a_track_parameter_is_a_control_the_track_can_read() {
-    let src = "instr p(freq: hz) { osc(saw, freq) }\ntrack hall(tone: hz = 2khz, drive: 0..1 = 0.2) {\n  instrument = p\n  out = it.lpf(cutoff: tone).gain(drive)\n}\n";
+fn a_node_parameter_is_a_control_the_node_can_read() {
+    let src = "instr p(freq: hz) { osc(saw, freq) }\nbus hall_audio\nprocessor hall_fx(tone: hz = 2khz, drive: 0..1 = 0.2) {out = hall_audio.lpf(cutoff: tone).gain(drive)}\npart hall {  instrument = p\noutput = hall_audio}\n";
     let p = ok(src);
     let names: Vec<&str> = p.controls.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, ["hall::tone", "hall::drive"]);
+    assert_eq!(names, ["hall_fx::tone", "hall_fx::drive"]);
     assert_eq!(p.controls[0].initial, 2000.0);
     assert_eq!(
-        msg("track t(tone: hz) { out = it }"),
-        "track parameter `tone` needs a starting value"
+        msg("processor t(tone: hz) { out = it }"),
+        "processor parameter `tone` needs a starting value"
     );
     assert_eq!(
-        help("track t(tone: hz) { out = it }").as_deref(),
-        Some("for example `track bass(tone: hz = 2khz)`")
+        help("processor t(tone: hz) { out = it }").as_deref(),
+        Some("for example `processor bass(tone: hz = 2khz)`")
     );
 }
 
 #[test]
-fn a_tracks_notes_line_changes_every_clip_played_on_it() {
+fn a_nodes_notes_line_changes_every_clip_played_on_it() {
     let song = |notes: &str| {
         format!(
-            "{STAGE}\ntrack lead2 {{ instrument = pluck\n {notes} }}\nlead2.play([c4 e4 g4])"
+            "{STAGE}\npart lead2 {{ instrument = pluck\n{notes} }}\nlead2.play([c4 e4 g4])"
         )
     };
     let plain = ok(&song(""));
@@ -2269,43 +2104,43 @@ fn a_tracks_notes_line_changes_every_clip_played_on_it() {
     assert_eq!(first(&reversed)[0].1, midi(67), "g4 first");
     let e = errors(&song("notes = ~"));
     assert!(
-        e[0].message.contains("the `notes` line of track `lead2`"),
+        e[0].message.contains("the `notes` line of part `lead2`"),
         "{}",
         e[0].message
     );
 }
 
 #[test]
-fn a_track_can_be_one_line_and_an_instrument_named_as_a_part_gets_one() {
+fn a_node_can_be_one_line_and_an_instrument_named_as_a_part_gets_one() {
     let one = ok(
-        "instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq) }\ntrack bass = pluck(bright: 0.2)\nbass.play([c2])",
+        "instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq) }\npart bass = pluck(bright: 0.2)\nbass.play([c2])",
     );
-    assert_eq!(one.tracks[1].name, "bass");
-    assert_eq!(one.tracks[1].instrument, Some(0));
-    assert_eq!(one.tracks[1].defaults.len(), 1);
+    assert_eq!(one.nodes[1].name, "bass");
+    assert_eq!(one.nodes[1].instrument, Some(0));
+    assert_eq!(one.nodes[1].defaults.len(), 1);
 
     let implicit = ok(
         "instr pluck(freq: hz) { osc(saw, freq) }\npluck.play([c2 e2])\nscene verse { pluck: [c4] }",
     );
-    assert_eq!(implicit.tracks.len(), 2, "one track, made once");
+    assert_eq!(implicit.nodes.len(), 2, "one node, made once");
     assert_eq!(
         (
-            implicit.tracks[1].name.as_str(),
-            implicit.tracks[1].instrument
+            implicit.nodes[1].name.as_str(),
+            implicit.nodes[1].instrument
         ),
         ("pluck", Some(0))
     );
     assert!(matches!(
         implicit.performance[0].action,
-        Action::Play { track: 1, .. }
+        Action::Play { node: 1, .. }
     ));
     // naming something that is not an instrument still says so
     assert_eq!(
         msg("instr pluck(freq: hz) { osc(saw, freq) }\nnope.play([c2])"),
-        "no track named `nope`"
+        "no part named `nope`"
     );
-    // a track of the instrument's own name is the same thing, written out
+    // a part of the instrument's own name is the same thing, written out
     ok(
-        "instr pluck(freq: hz) { osc(saw, freq) }\ntrack pluck { instrument = pluck }\npluck.play([c2])",
+        "instr pluck(freq: hz) { osc(saw, freq) }\npart pluck { instrument = pluck }\npluck.play([c2])",
     );
 }

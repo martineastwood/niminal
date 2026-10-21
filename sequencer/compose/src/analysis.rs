@@ -8,7 +8,7 @@ use crate::performance::Quantize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementKind {
-    /// Defines something: an instrument, track, clip, binding, setting...
+    /// Defines something: an instrument, node, clip, binding, setting...
     Definition,
     /// Does something once: `play`, `mute`, `launch`...
     Command,
@@ -23,10 +23,10 @@ pub struct Ramp {
     pub over: niminal_score::Time,
 }
 
-/// A command that starts a clip on a track, and the source of what it plays.
+/// A command that starts a clip on a node, and the source of what it plays.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayInfo {
-    pub track: String,
+    pub node: String,
     pub what: String,
 }
 
@@ -230,8 +230,8 @@ fn command_write_key(c: &CommandStmt) -> Option<String> {
         return None;
     }
     match &c.command {
-        Command::Play { track, .. } | Command::Stop(track) => Some(format!("play:{}", track.name)),
-        Command::Mute(track) | Command::Unmute(track) => Some(format!("mute:{}", track.name)),
+        Command::Play { node, .. } | Command::Stop(node) => Some(format!("play:{}", node.name)),
+        Command::Mute(node) | Command::Unmute(node) => Some(format!("mute:{}", node.name)),
         Command::Solo(_) | Command::Unsolo(_) => Some("solo".into()),
         Command::Hush
         | Command::Panic
@@ -247,27 +247,27 @@ fn command_action(c: &CommandStmt, source: &str, span_start: usize) -> CommandAc
     match &c.command {
         Command::Start { name, verb, .. } => CommandAction::Edit {
             plays: PlayInfo {
-                track: name.name.clone(),
+                node: name.name.clone(),
                 what: "start".into(),
             },
             range: name.span.start - span_start..verb.end - span_start,
         },
-        Command::Edit { track, change } => CommandAction::Edit {
+        Command::Edit { node, change } => CommandAction::Edit {
             plays: PlayInfo {
-                track: track.name.clone(),
+                node: node.name.clone(),
                 what: source[change.start..change.end].to_string(),
             },
-            range: track.span.start - span_start..change.end - span_start,
+            range: node.span.start - span_start..change.end - span_start,
         },
-        Command::Play { track, what } => CommandAction::Play(PlayInfo {
-            track: track.name.clone(),
+        Command::Play { node, what } => CommandAction::Play(PlayInfo {
+            node: node.name.clone(),
             what: source[what.span.start..what.span.end].to_string(),
         }),
         _ => CommandAction::Plain,
     }
 }
 
-/// What each track plays in the scene defined by `source`, as written: `None` for `~`.
+/// What each part plays in the scene defined by `source`, as written: `None` for `~`.
 pub fn scene_entries(source: &str) -> Vec<(String, Option<String>)> {
     let Ok(items) = parse_spanned(source) else {
         return Vec::new();
@@ -279,10 +279,10 @@ pub fn scene_entries(source: &str) -> Vec<(String, Option<String>)> {
                 block
                     .entries
                     .iter()
-                    .map(|(track, e)| {
+                    .map(|(node, e)| {
                         let what = (!matches!(e.kind, ExprKind::Rest))
                             .then(|| source[e.span.start..e.span.end].to_string());
-                        (track.name.clone(), what)
+                        (node.name.clone(), what)
                     })
                     .collect(),
             ),
@@ -340,14 +340,14 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             }
             Item::Bus(d) => simple_def(text, offset, format!("bus:{}", d.name.name)),
             Item::Buffer(d) => simple_def(text, offset, format!("buffer:{}", d.name.name)),
-            Item::Track(d) => {
+            Item::Part(d) | Item::Processor(d) => {
                 let dq = crate::perform::definition_quantum(&d.options)
                     .ok()
                     .flatten();
                 definition(
                     text,
                     offset,
-                    format!("track:{}", d.name.name),
+                    format!("{}:{}", if matches!(item, Item::Part(_)) { "part" } else { "processor" }, d.name.name),
                     DefParts {
                         definition_quantize: dq,
                         ..Default::default()
@@ -437,15 +437,7 @@ mod tests {
 
     #[test]
     fn statements_are_classified_with_their_source() {
-        let src = "
-tempo 120bpm @ next bar
-instr a(f: hz) { osc(sine, f) }
-riff = [c4 e4]
-clip c { notes: [c4] }
-lead.play(riff.fast(2)) @ next 4bars
-lead.mute
-a(f: 440hz) for 1beat
-";
+        let src = "\ntempo 120bpm @ next bar\ninstr a(f: hz) { osc(sine, f) }\nriff = [c4 e4]\nclip c { notes: [c4] }\nlead.play(riff.fast(2)) @ next 4bars\nlead.mute\na(f: 440hz) for 1beat\n";
         let s = analyze(src).unwrap();
         assert_eq!(s.len(), 7);
         assert_eq!(s[0].key(), Some("tempo"));
@@ -462,7 +454,7 @@ a(f: 440hz) for 1beat
         assert_eq!(
             s[4].plays(),
             Some(&PlayInfo {
-                track: "lead".into(),
+                node: "lead".into(),
                 what: "riff.fast(2)".into()
             })
         );

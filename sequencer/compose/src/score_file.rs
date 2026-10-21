@@ -174,7 +174,7 @@ fn is_true(v: &bool) -> bool {
     *v
 }
 
-/// What a scene puts on a track: a named clip or an inline clip.
+/// What a scene puts on a node: a named clip or an inline clip.
 /// Silence is `null` / `None` in the entries map.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -185,7 +185,7 @@ pub enum SceneEntry {
     Clip(ClipDef),
 }
 
-/// A named set of clips, one per track.
+/// A named set of clips, one per node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SceneDef {
@@ -381,18 +381,18 @@ impl SceneDef {
         let mut parts = Vec::new();
         // Inline clips first, so the scene can name them.
         let mut preamble = String::new();
-        for (track, entry) in &self.entries {
+        for (node, entry) in &self.entries {
             match entry {
-                None => parts.push(format!("{track}: ~")),
-                Some(SceneEntry::Name(name)) if name == track => parts.push(track.clone()),
-                Some(SceneEntry::Name(name)) => parts.push(format!("{track}: {name}")),
+                None => parts.push(format!("{node}: ~")),
+                Some(SceneEntry::Name(name)) if name == node => parts.push(node.clone()),
+                Some(SceneEntry::Name(name)) => parts.push(format!("{node}: {name}")),
                 Some(SceneEntry::Clip(clip)) => {
                     preamble.push_str(&clip.to_source());
                     preamble.push('\n');
-                    if clip.name == *track {
-                        parts.push(track.clone());
+                    if clip.name == *node {
+                        parts.push(node.clone());
                     } else {
-                        parts.push(format!("{track}: {}", clip.name));
+                        parts.push(format!("{node}: {}", clip.name));
                     }
                 }
             }

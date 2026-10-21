@@ -136,7 +136,7 @@ Every `noise()` in an instrument, and every note of it, has its own noise, and a
 | `instr` | Spawns a new voice (poly, default) | Most instruments |
 | `mono` | Ends the voice before it and starts its own (one voice at a time, per part) | Bass, leads |
 
-Continuous processors and generators are **tracks** (see [Performance](/reference/language/performance/)), not instruments.
+Continuous processors and generators use **`processor`** declarations (see [Routing](/reference/language/routing/)).
 
 ### Settings
 

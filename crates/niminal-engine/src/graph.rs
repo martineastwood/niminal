@@ -72,9 +72,9 @@ pub struct GraphBuilder {
     input_latencies: Vec<usize>,
     /// (bus, channel, encoded slot)
     sends: Vec<(usize, usize, usize, bool)>,
-    /// Shared buffers this graph writes (for cross-track ordering).
+    /// Shared buffers this graph writes (for cross-node ordering).
     buffer_writes: Vec<usize>,
-    /// Shared buffers this graph reads (for cross-track ordering).
+    /// Shared buffers this graph reads (for cross-node ordering).
     buffer_reads: Vec<usize>,
     tail: f32,
 }
@@ -123,7 +123,7 @@ impl GraphBuilder {
     }
 
     /// Declare an external input. The host fills it before each block, for
-    /// example with a track's incoming audio or the contents of a bus.
+    /// example with a node's incoming audio or the contents of a bus.
     pub fn input(&mut self) -> Src {
         self.input_with_latency(0)
     }
@@ -153,8 +153,8 @@ impl GraphBuilder {
         self.sends.push((bus, channel, slot, true));
     }
 
-    /// Note that this graph writes a shared buffer. Used so tracks that write a
-    /// buffer run before tracks that read it in the same block.
+    /// Note that this graph writes a shared buffer. Used so nodes that write a
+    /// buffer run before nodes that read it in the same block.
     pub fn touch_buffer_write(&mut self, id: usize) {
         if !self.buffer_writes.contains(&id) {
             self.buffer_writes.push(id);
@@ -282,7 +282,7 @@ impl GraphBuilder {
                 CONST_BASE + i
             }
             Src::Node(i) => {
-                assert!(i < self.results, "node result {i} does not exist yet");
+                assert!(i < self.results, "processor result {i} does not exist yet");
                 NODE_BASE + i
             }
             Src::Input(i) => {
@@ -760,12 +760,12 @@ impl Graph {
         buses
     }
 
-    /// Shared buffers this graph writes, for cross-track ordering.
+    /// Shared buffers this graph writes, for cross-node ordering.
     pub fn buffer_writes(&self) -> &[usize] {
         &self.buffer_writes
     }
 
-    /// Shared buffers this graph reads, for cross-track ordering.
+    /// Shared buffers this graph reads, for cross-node ordering.
     pub fn buffer_reads(&self) -> &[usize] {
         &self.buffer_reads
     }

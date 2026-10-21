@@ -1,4 +1,4 @@
-//! The niminal DSP language: lex, parse, unit-check and compile instruments, effects, tracks and buses
+//! The niminal DSP language: lex, parse, unit-check and compile instruments, effects, nodes and buses
 //! to engine graphs. Sequencing (clips, scenes, patterns, tempo) is not part of it: a client does that
 //! and sends timestamped events.
 
@@ -41,7 +41,7 @@ pub use lexer::{Tok, Token, lex};
 pub use modules::{Expanded, Import, Module, expand};
 pub use program::{
     ArgError, ControlDef, Instrument, MidiNote, MidiTarget, NotePlan, OscTap, PITCH_PARAM, Param,
-    Program, TrackInfo, engine_value, resolve_target,
+    Program, NodeInfo, engine_value, resolve_target,
 };
 pub use sample::Samples;
 pub use unit::Unit;

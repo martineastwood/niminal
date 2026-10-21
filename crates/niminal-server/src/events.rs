@@ -109,7 +109,7 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },
-    /// Play a note on a track or instrument. With `dur` and no `id` it is fire-and-forget. With an `id` and
+    /// Play a note on a node or instrument. With `dur` and no `id` it is fire-and-forget. With an `id` and
     /// no `dur` it is held until an `off`. With both it is held for at most `dur`.
     Note {
         target: String,
@@ -137,7 +137,7 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },
-    /// Compile definitions (instruments, tracks, effects, buses, controls, tables, buffers, functions) and
+    /// Compile definitions (instruments, nodes, effects, buses, controls, tables, buffers, functions) and
     /// swap them in at `at`. Performance statements are an error. `dir` is where sample files and
     /// modules named in `source` are looked for.
     Define {
@@ -180,17 +180,7 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },
-    /// Set parameters of a track.
-    Track {
-        name: String,
-        at: At,
-        args: BTreeMap<String, Value>,
-        /// How long to take getting there; the parameter's own smoothing if not given.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        glide: Option<Time>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tag: Option<String>,
-    },
+
 }
 
 /// What came of a batch.

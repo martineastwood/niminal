@@ -406,8 +406,8 @@ pub(super) fn prepare_pending(
                 if let Some(scene) = s.launch() {
                     apply_launch(&mut playing, &program, &project, scene);
                 }
-                if let Some((track, edited)) = edited {
-                    playing.insert(track, edited);
+                if let Some((node, edited)) = edited {
+                    playing.insert(node, edited);
                 }
             }
             actions.push(Compiled {
@@ -421,20 +421,20 @@ pub(super) fn prepare_pending(
         .iter()
         .filter_map(|s| s.binding().map(str::to_string))
         .collect();
-    // Tracks that play something this change touches start it over, unless the commands
+    // Nodes that play something this change touches start it over, unless the commands
     // here already start them.
     let relaunched = actions.iter().any(|a| a.statement.launch().is_some());
     let mut replays = Vec::new();
-    for (track, now) in playing.clone() {
+    for (node, now) in playing.clone() {
         let started = relaunched
             || actions
                 .iter()
-                .any(|a| a.statement.plays().is_some_and(|p| p.track == track));
+                .any(|a| a.statement.plays().is_some_and(|p| p.node == node));
         let what = now.text();
         if started || !mentions_any(&what, &changed) {
             continue;
         }
-        let text = format!("{track}.play({what})");
+        let text = format!("{node}.play({what})");
         let Some(statement) = analyze(&text).ok().and_then(|mut s| s.pop()) else {
             continue;
         };
@@ -442,7 +442,7 @@ pub(super) fn prepare_pending(
             text: text.clone(),
             origin: Origin::Snippet { offset: 0 },
         };
-        // If the new version no longer works for the track, leave it playing as it was.
+        // If the new version no longer works for the node, leave it playing as it was.
         if let Ok(program) = check(&[piece]) {
             replays.push(Compiled { statement, program });
         }

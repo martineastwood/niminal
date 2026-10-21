@@ -8,7 +8,7 @@
   // the loop is four beats long and was recorded at 100bpm; `.fit(rate)` speeds it up to the tempo
   brk = sample("break.wav").beats(4).fit(rate)
   chops = brk.slices(16)
-  track drums { instrument = chops }
+  part drums { instrument = chops }
 
   // the original order plays the break as recorded
   drums.play([s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15])

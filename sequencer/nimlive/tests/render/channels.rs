@@ -47,7 +47,7 @@ fn pan_places_the_sound_between_the_speakers() {
 /// A stereo render of a pattern played on a tone.
 fn played(pattern: &str) -> Vec<Vec<f32>> {
     let src = format!(
-        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\ntrack lead {{ instrument = tone }}\nlead.play({pattern})"
+        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\npart lead {{ instrument = tone }}\nlead.play({pattern})"
     );
     render_with(&program(&src), &[], &RenderOptions { limiter: false, until: Some(1.9), ..Default::default() }).unwrap().channels
 }
@@ -72,16 +72,16 @@ fn a_note_can_have_a_pan_of_its_own() {
     assert!(peak(&each[1][second..second + first]) > 0.9 && peak(&each[0][second..second + first]) < 1e-6);
 }
 
-/// A stereo render of a track with these extra lines, playing one middle C.
+/// A stereo render of a node with these extra lines, playing one middle C.
 fn mixed(lines: &str) -> Vec<Vec<f32>> {
     let src = format!(
-        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\ntrack lead {{\n  instrument = tone\n  {lines}\n}}\nlead.play([c4])"
+        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\npart lead {{ instrument = tone\n{lines}}}\nlead.play([c4])"
     );
     render_with(&program(&src), &[], &RenderOptions { limiter: false, until: Some(1.9), ..Default::default() }).unwrap().channels
 }
 
 #[test]
-fn a_tracks_mixer_lines_set_its_level_and_place() {
+fn a_nodes_mixer_lines_set_its_level_and_place() {
     let plain = mixed("");
     let quiet = mixed("gain = -6db");
     let ratio = peak(&quiet[0][..2000]) / peak(&plain[0][..2000]);
@@ -124,10 +124,7 @@ fn surround_pan_uses_the_right_speakers() {
 
 #[test]
 fn a_channel_list_puts_each_entry_on_its_own_channel() {
-    let out = raw("
-config { channels: stereo }
-instr a() { [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0] }
-a() for 2beats");
+    let out = raw("\nconfig { channels: stereo }\ninstr a() { [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0] }\na() for 2beats");
     let (l, r) = (&out[0], &out[1]);
     assert!((crossings(l) as f32 - 220.0).abs() <= 2.0, "left is 220hz: {}", crossings(l));
     assert!((crossings(r) as f32 - 330.0).abs() <= 2.0, "right is 330hz: {}", crossings(r));
@@ -135,27 +132,15 @@ a() for 2beats");
 
 #[test]
 fn destructuring_and_rebuilding_can_swap_channels() {
-    let plain = raw("
-config { channels: stereo }
-instr a() { [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0] }
-a() for 1beat");
-    let swapped = raw("
-config { channels: stereo }
-instr a() {
-  [l, r] = [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0]
-  [r, l]
-}
-a() for 1beat");
+    let plain = raw("\nconfig { channels: stereo }\ninstr a() { [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0] }\na() for 1beat");
+    let swapped = raw("\nconfig { channels: stereo }\ninstr a() {\n  [l, r] = [osc(sine, 220hz), osc(sine, 330hz)] * env[1 | 1ms 0]\n  [r, l]\n}\na() for 1beat");
     assert_eq!(plain[0], swapped[1]);
     assert_eq!(plain[1], swapped[0]);
 }
 
 #[test]
 fn a_per_channel_argument_gives_each_channel_its_own_value() {
-    let out = raw("
-config { channels: stereo }
-instr a() { [osc(saw, 110hz), osc(saw, 110hz)].lpf(cutoff: [300hz, 4khz]) * env[1 | 1ms 0] }
-a() for 1beat");
+    let out = raw("\nconfig { channels: stereo }\ninstr a() { [osc(saw, 110hz), osc(saw, 110hz)].lpf(cutoff: [300hz, 4khz]) * env[1 | 1ms 0] }\na() for 1beat");
     // the brighter filter keeps the saw's sharp edges: more curvature
     let roughness = |c: &[f32]| {
         let d2: Vec<f32> = c.windows(3).map(|w| w[2] - 2.0 * w[1] + w[0]).collect();
@@ -167,45 +152,26 @@ a() for 1beat");
 #[test]
 fn filters_on_stereo_keep_separate_state_per_channel() {
     // the same filter on a stereo pair, fed silence on the right: nothing leaks across
-    let out = raw("
-config { channels: stereo }
-instr a() { [osc(saw, 110hz), 0 * osc(saw, 110hz)].lpf(cutoff: 500hz) * env[1 | 1ms 0] }
-a() for 1beat");
+    let out = raw("\nconfig { channels: stereo }\ninstr a() { [osc(saw, 110hz), 0 * osc(saw, 110hz)].lpf(cutoff: 500hz) * env[1 | 1ms 0] }\na() for 1beat");
     assert!(peak(&out[0]) > 0.1);
     assert_eq!(peak(&out[1]), 0.0);
 }
 
 #[test]
 fn surround_folds_down_to_stereo_without_the_lfe() {
-    // a bus in 5.1 receives mono (centre) and is read by a stereo-master track
-    let out = raw("
-config { channels: stereo }
-bus hall: surround(5.1)
-instr a() { hall += osc(sine, 220hz) * env[1 | 1ms 0] }
-track t { out = hall }
-a() for 1beat");
+    // a bus in 5.1 receives mono (centre) and is read by a stereo-master node
+    let out = raw("\nconfig { channels: stereo }\nbus hall: surround(5.1)\ninstr a() { hall += osc(sine, 220hz) * env[1 | 1ms 0] }\nprocessor t { out = hall }\na() for 1beat");
     assert_eq!(out.len(), 2);
     assert_eq!(out[0], out[1]);
     assert!((peak(&out[0]) - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "centre folds in at -3db");
 
-    let lfe_only = raw("
-config { channels: stereo }
-bus hall: surround(5.1)
-instr a() { hall += [0, 0, 0, osc(sine, 80hz), 0, 0] }
-track t { out = hall }
-a() for 1beat");
+    let lfe_only = raw("\nconfig { channels: stereo }\nbus hall: surround(5.1)\ninstr a() { hall += [0, 0, 0, osc(sine, 80hz), 0, 0] }\nprocessor t { out = hall }\na() for 1beat");
     assert!(lfe_only.iter().all(|c| peak(c) < 1e-6), "the LFE doesn't reach stereo");
 }
 
 #[test]
 fn routing_to_a_mono_bus_then_back_up() {
-    let out = raw("
-config { channels: stereo }
-bus m: mono
-instr a() { osc(sine, 220hz).pan(azimuth: -30deg) * env[1 | 1ms 0] }
-track t { instrument = a\nout = it.to(m) }
-track back { out = m }
-t() for 1beat");
+    let out = raw("\nconfig { channels: stereo }\nbus m: mono\ninstr a() { osc(sine, 220hz).pan(azimuth: -30deg) * env[1 | 1ms 0] }\npart t { instrument = a\noutput = m }\nprocessor back { out = m }\nt() for 1beat");
     // hard-left stereo averaged to mono (half), then centred in stereo at -3db
     assert_eq!(out[0], out[1]);
     let expected = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
@@ -214,12 +180,7 @@ t() for 1beat");
 
 #[test]
 fn a_stereo_reverb_decorrelates_the_channels() {
-    let out = raw("
-config { channels: stereo }
-bus space: stereo
-instr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }
-track hall { out = space.reverb(room: 0.8, damp: 0.5) }
-click() for 1/8beat");
+    let out = raw("\nconfig { channels: stereo }\nbus space: stereo\ninstr click() { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor hall { out = space.reverb(room: 0.8, damp: 0.5) }\nclick() for 1/8beat");
     assert!(out[0].len() > SR as usize);
     assert_ne!(out[0], out[1]);
     let diff: f32 = out[0].iter().zip(&out[1]).map(|(a, b)| (a - b).abs()).sum();
@@ -228,10 +189,7 @@ click() for 1/8beat");
 
 #[test]
 fn notes_start_on_the_same_sample_on_every_channel() {
-    let out = raw("
-config { channels: surround(5.1) }
-instr click() { osc(sine, 1000hz).pan(azimuth: 70deg) * env[1 0.5ms 0] }
-at 250ms click() for 1beat");
+    let out = raw("\nconfig { channels: surround(5.1) }\ninstr click() { osc(sine, 1000hz).pan(azimuth: 70deg) * env[1 0.5ms 0] }\nat 250ms click() for 1beat");
     let first = |c: &[f32]| c.iter().position(|s| s.abs() > 1e-6);
     let starts: Vec<_> = out.iter().map(|c| first(c)).collect();
     // the sine rises from zero, so the first non-zero sample is one after the note start
@@ -244,10 +202,7 @@ at 250ms click() for 1beat");
 
 #[test]
 fn the_limiter_ducks_all_channels_together() {
-    let src = "
-config { channels: stereo }
-instr a() { [osc(sine, 220hz) * 4, osc(sine, 330hz) * 0.2] * env[1 | 1ms 0] }
-a() for 1beat";
+    let src = "\nconfig { channels: stereo }\ninstr a() { [osc(sine, 220hz) * 4, osc(sine, 330hz) * 0.2] * env[1 | 1ms 0] }\na() for 1beat";
     let quiet_right = |limiter| {
         let out = render_with(&program(src), &[], &RenderOptions { limiter, until: None, ..Default::default() }).unwrap().channels;
         let mid = out[1].len() / 2;

@@ -26,7 +26,7 @@ Open `examples/groove.nml`, then:
 | Cmd+. / Ctrl+. | Hush |
 | Cmd+1..9 | Launch the Nth scene (while a `.nml` file has focus) |
 
-The **niminal** side bar lists your scenes (click one, or press Cmd+1 to Cmd+9 for the Nth, to launch it) and your tracks, with what each is playing and buttons to mute, solo and stop. Cmd+1..9 replace VS Code's group-switching keys while a niminal file has focus.
+The **niminal** side bar lists your scenes (click one, or press Cmd+1 to Cmd+9 for the Nth, to launch it) and your nodes, with what each is playing and buttons to mute, solo and stop. Cmd+1..9 replace VS Code's group-switching keys while a niminal file has focus.
 
 Compile errors appear as squiggles at the right place, the status bar shows the bar, beat, tempo, voices and changes waiting to land, and `niminal: Panic` is in the command palette.
 

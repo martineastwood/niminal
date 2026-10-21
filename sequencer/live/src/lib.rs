@@ -16,7 +16,7 @@ mod service;
 pub use link::{EngineLink, InProcess};
 pub use live::{
     Accepted, Begin, CancelDone, CancelJob, ControlSignal, EvalDone, EvalJob, Landed, Live, ParsedEval,
-    PendingInfo, TrackStatus, Transport,
+    PendingInfo, PartStatus, Transport,
 };
 pub use log::{Expression, LiveInput, LiveLogEntry};
 

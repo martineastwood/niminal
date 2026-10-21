@@ -1,13 +1,13 @@
 ---
 title: Performance
-description: Tracks, clips, scenes, live commands, quantization, and control.
+description: Parts, clips, scenes, live commands, quantization, and control.
 ---
 
-The performance layer is built around **clips**, **scenes**, and **tracks**: clips carry their instrument and are started and stopped by name, scenes start sets of clips, and tracks are there when you need a mixer channel with effects. Arrangements sequence the same structures for offline renders.
+The performance layer is built around **clips**, **scenes**, and **parts**: clips carry their instrument and are started and stopped by name, scenes start sets of clips, and parts own musical playback and route audio to persistent processors. Arrangements sequence the same structures for offline renders.
 
 ## Parts: clips with an instrument
 
-A clip with an `instrument:` is a *part*. It is also a track of the same name, which plays it, so you start, mute and change it by its name:
+A clip with an `instrument:` is a *part*. It is also a part of the same name, which plays it, so you start, mute and change it by its name:
 
 ```nml
 clip bass {
@@ -30,39 +30,45 @@ bass.unmute
 verse.stop
 ```
 
-Instruments send to buses from inside their definition (`space += out.gain(-12db)`), and a bus can process what it collects:
+Shared effects live in processors. Buses collect audio from explicit sends:
 
 ```nml
-bus space: stereo {
-  out = it.reverb(room: 0.8, damp: 0.4).gain(0.8)
+bus space: stereo
+processor room {
+  out = space.reverb(room: 0.8, damp: 0.4).gain(0.8)
 }
 ```
 
 The commands are written after the thing they act on: `start`, `stop`, `mute`, `unmute`, `solo` and `unsolo` on a part, `start` and `stop` on a scene. Anything else after the dot is a change to what the part plays (below). Put other material on a part with `lead.play(answer)`. `hush`, `panic`, `reset`, `new` and `unsolo` (every solo at once) act on everything. `capture last 32bars as jam` writes the notes that played in that window to `score/jam.nms`.
 
-## Tracks
+## Parts
 
-A part's track is made for you. Write a `track` yourself when you want more than an instrument: effects on the part, sends, or a channel that only processes a bus. A track has parameters, default instrument, note effects, audio effects, sends, and a mixer. In each stage, **`it`** is that stage’s input.
+A part owns musical playback: its default instrument, clip, note transformations, mixer gain and pan. It does not own an audio effect chain. Clips with an `instrument:` create a part automatically; declare a part when you need different defaults or routing.
 
 ```nml
-track bass(tone: hz = 2khz) {
+processor bass_filter(tone: hz = 2khz) {
+  out = it.drive(amount: 0.2).lpf(cutoff: tone)
+}
+
+part bass {
   instrument = pluck(bright: 0.4)
-  notes      = it.thin(10%)
-  out        = it.drive(amount: 0.2).lpf(cutoff: tone)
-  space     += out.gain(-14db)
+  notes = it.thin(10%)
+  output = bass_filter
+  gain = -3db
 }
 ```
 
-- Tracks with an instrument play plain note patterns.
-- **Parameters** (`tone: hz = 2khz`) are controls named `bass::tone`, which the track's lines read by their short name. Set one from outside like any `ctl` (a client, or MIDI or OSC bound to it), or change its starting value in the header and re-evaluate: it glides there. A clip lane can't drive one yet, and says so if you try.
-- **`notes`** changes the notes of every clip played on the track, with `it` the clip's notes. `notes = it.thin(10%)` drops a tenth of them whatever is playing. A clip played from keys is left as it is. A mistake in it is reported where a clip is played on the track.
-- **Short forms:** `track bass = pluck(bright: 0.4)` is a track with only an instrument. Naming an instrument where a part goes, as in `pluck.start` or a scene's `{ pluck: riff }`, makes a track of that name playing it.
-- Mixer: `gain = -3db` and `pan = 20deg` lines set the track's fader and placement after `out` (each can be a track parameter or `ctl`; a stereo track is mixed down before it is panned, and sends read `out` before the fader). Mute and solo are the commands `bass.mute` and `bass.solo`.
-- Re-evaluating a track carries effect state without clicks.
+`output` names a processor or bus; omit it to send directly to master. `part bass = pluck(bright: 0.4)` selects only an instrument. Naming an instrument in a play command or scene creates a part of that name.
+
+`notes` transforms the notes of clips played on the part; MIDI keys keep their own notes. `gain` and `pan` mix the part before its output destination. Mute and solo belong to the part.
+
+A processor owns persistent DSP state. Its `it` is the combined audio routed into it. Several parts can name the same processor to share one effect, or name separate processors for independent state. Stopping a part releases its notes; the processor continues so its tail can ring out. Processor parameters are controls named `bass_filter::tone`. Automation lanes name their owner explicitly, as in `bass_filter.tone`. Bare lane names address note parameters.
+
+See [Routing](/reference/language/routing/) for shared effects, sends and continuous generators.
 
 ## Clips
 
-A clip is a section for one track: **lanes** on one timeline.
+A clip is a section for one part: **lanes** on one timeline.
 
 ```nml
 clip riff {
@@ -70,15 +76,15 @@ clip riff {
   notes:  [c2 ~ eb2 g1 ~ c2 bb1 ~]
   gain:   [0db -6db -3db -9db]
   bright: [0.2 0.5 0.8]
-  tone:   env[400hz 2bars.exp 3khz]
+  bass_filter.tone: env[400hz 2bars.exp 3khz]
 }
 ```
 
-- An arrangement can carry envelope lanes on a track's parameter, `bass.tone: env[800hz 88bars 3khz]`, over the whole piece (applied when the arrangement is rendered).
-- Envelope lanes, such as `cut: env[300hz 1bar.exp 3khz]`, move a track parameter over the clip's timeline with the same literal and curves as an instrument envelope; they hold their last level, `.loop` repeats them, and they need no `|`.
-- Lane targets: `notes`, instrument parameters, track parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Clip lanes target only their track; scene/arrangement lanes can target any track.
+- An arrangement can carry envelope lanes on a processor's parameter, `bass_filter.tone: env[800hz 88bars 3khz]`, over the whole piece (applied when the arrangement is rendered).
+- Envelope lanes, such as `bass_filter.tone: env[300hz 1bar.exp 3khz]`, move a processor parameter over the clip's timeline with the same literal and curves as an instrument envelope; they hold their last level, `.loop` repeats them, and they need no `|`.
+- Lane targets: `notes`, instrument parameters, qualified processor parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Bare lanes target the part’s notes. Qualified lanes can target a processor shared by several parts.
 - **Step lanes** read at note start and cycle (polymeter); **`.per_note`** maps nth note → nth value.
-- Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip. A signal lane is a signal named after a track parameter, as in `cut: sine.range(300hz, 3khz)`: the parameter follows it continuously (50 readings a second), one cycle per clip length, with or without notes.
+- Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip. A signal lane is a signal naming a processor parameter, as in `bass_filter.tone: sine.range(300hz, 3khz)`: the parameter follows it continuously (50 readings a second), one cycle per clip length, with or without notes.
 - Shorthand: `[c2 ~ eb2]` → `clip { notes: [...] }`.
 - **`riff.set(bright: [0.9])`** — lanes are fields.
 - **Longer than a bar:** with `length: 2bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`). Without a `length:` a lane's cycle is one bar. `riff.over(4bars)` stretches the whole clip, and `riff.set(...)` lanes span it too.
@@ -94,7 +100,7 @@ chorus.start @ next 4bars
 
 A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only a `notes` lane, and everything below works the same on both. A clip with no `length:` runs freely: its cycles keep counting, so `<a b>` and `every` alternate. Give it a `length:` and its lanes span that length and it loops, starting over each time.
 
-Launching a scene starts the clips it lists and **stops every other track** that has an instrument, so a scene is the whole picture: leave a track out and it falls silent. `~` still works for a track you want to name as silent. To add a fill for a bar, write it as a `play` line instead of a scene.
+Launching a scene starts the clips it lists and **stops every other part** that has an instrument, so a scene is the whole picture: leave a part out and it falls silent. `~` still works for a part you want to name as silent. To add a fill for a bar, write it as a `play` line instead of a scene.
 
 An `arrangement` plays scenes in order, each for a length, and sections can have a tempo and meter of their own, one for each section:
 
@@ -106,13 +112,13 @@ arrangement song {
 }
 ```
 
-A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move a track's parameter over the whole piece (`bass.tone: env[800hz 88bars 3khz]`). Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
+A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move a processor's parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
 
 See [Score model](/reference/score-model/) for arrangement-level lanes.
 
 ## Live commands
 
-While a scene is playing you can change what a part plays by writing the change after its name. It lands on the next boundary, like a `play`, and the track's clip starts over there:
+While a scene is playing you can change what a part plays by writing the change after its name. It lands on the next boundary, like a `play`, and the part's clip starts over there:
 
 ```nml
 verse.start
@@ -121,7 +127,7 @@ lead.transpose(+5st).thin(25%)
 verse.stop              // every part in the scene stops together
 ```
 
-Each change builds on what the track is playing, in the order you made them, and the tracks panel shows the stack (`▶ riff · reverse → thin(25%)`):
+Each change builds on what the part is playing, in the order you made them, and the parts panel shows the stack (`▶ riff · reverse → thin(25%)`):
 
 ```nml
 bass.reverse
@@ -133,7 +139,7 @@ bass.clear              // takes off all of them
 ```
 
 - `set` gives the clip a lane in place of its own, so typing `bass.set(` offers the lanes the part's instrument has. Setting the same lane again just replaces the earlier value, and `undo` brings the earlier one back.
-- One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A track carries at most 16.
+- One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A part carries at most 16.
 - Redefining the clip itself (`riff = …`) keeps your changes and applies them to the new clip.
 - `lead.play(…)`, `lead.start` or starting a scene that has it starts the part fresh, with no changes.
 - `thin` drops the same notes for the same amount wherever it is written, so undoing something else doesn't change which notes it drops.
@@ -160,7 +166,7 @@ at +12bars hush
 
 `reset` stops everything (like `hush`) and makes the next bar line bar 1, so `at bar 5` and the bar numbers in the status bar count from there again. It lands on the next bar like other commands: send it on its own, then the timeline. In a render, `reset` is a `hush`.
 
-`new` is `reset` for starting another piece in the same live session: it also forgets every definition sent so far (instruments, kits, tracks, clips, scenes, tempo), so the next code starts from nothing. Put the new piece's definitions after it in the same evaluation, or send them afterwards. The output layout (`config { channels: ... }`) is kept, because it can only be chosen when the server starts. In a render `new` is a `hush`.
+`new` is `reset` for starting another piece in the same live session: it also forgets every definition sent so far (instruments, kits, parts, clips, scenes, tempo), so the next code starts from nothing. Put the new piece's definitions after it in the same evaluation, or send them afterwards. The output layout (`config { channels: ... }`) is kept, because it can only be chosen when the server starts. In a render `new` is a `hush`.
 
 `capture last 32bars as jam` writes the notes that clips and scored events played in that window to `score/jam.nms`, as a section you can load again. Times are rebased so the window starts at beat 0. In a render or session replay the command does nothing.
 
@@ -170,7 +176,7 @@ Code compiles immediately; changes **land** on a musical boundary. Most specific
 
 1. `@ next 4bars` (or similar) on the statement
 2. `--quantize` / REPL `:quantize` for that evaluation
-3. `quantize` in a definition (`quantize: 1beat` in a `clip` or `scene`, `quantize = 1beat` in a `track` or `instr`)
+3. `quantize` in a definition (`quantize: 1beat` in a `clip` or `scene`, `quantize = 1beat` in a `part` or `instr`)
 4. `config { quantize: { ... } }` for a whole kind of change
 5. Built-in defaults by kind: plays on the next **cycle**, instrument redefinitions on the next **beat**, tempo and most other changes on the next **bar**
 
@@ -189,7 +195,7 @@ config {
     default: 1bar     // commands and everything not named below
     play:    cycle     // starting a clip
     instr:   1beat    // instrument redefinitions
-    track:   1bar
+    part:   1bar
     ctl:     now
     tempo:   1bar
   }
@@ -272,7 +278,7 @@ if 1 > 0 {
 - Evaluate block/line while performing; whole file when rendering.
 - Failed compile changes nothing.
 - Redefinition: new notes use new defs; sounding notes finish on old ones. Redefining a `def` updates every clip that uses it on the next eval.
-- Tracks and effects keep delay/filter state across edits.
+- Parts and effects keep delay/filter state across edits.
 
 ## External control
 
@@ -283,7 +289,7 @@ ctl filth  = midi.cc(21)
 ctl volume = midi.cc(7).range(-60db..0db)
 ctl drive  = 0.3
 
-track bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
+processor bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
 ```
 
 **Learning a controller:** write `midi.learn` and move the knob you want. The next control change binds to it, and the server tells the editor to rewrite the line to what it heard.

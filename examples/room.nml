@@ -1,17 +1,20 @@
-// A pluck that sends part of itself to a bus, a track that turns the bus into
-// echoes and reverb, and a lead track that plays the pluck. Declaration order doesn't matter.
+// A pluck that sends part of itself to a bus, a node that turns the bus into
+// echoes and reverb, and a lead node that plays the pluck. Declaration order doesn't matter.
 tempo 110bpm
 
 bus space
 
-track room {
+processor room {
   echoes = space.delay(time: 3/16beat, feedback: 0.4).lpf(cutoff: 3khz)
   out = (echoes + space.reverb(room: 0.8, damp: 0.4)).gain(0.8)
 }
 
-track lead {
-  instrument = pluck(bright: 0.6)
+processor lead_fx {
   out = it.gain(0.8)
+}
+part lead {
+  instrument = pluck(bright: 0.6)
+  output = lead_fx
 }
 
 instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {

@@ -10,7 +10,7 @@ use crate::parser::parse_spanned;
 pub struct Statement {
     pub text: String,
     pub offset: usize,
-    /// What it defines, as `instr:name`, `track:name`, `config`...: defining a key again replaces it.
+    /// What it defines, as `instr:name`, `node:name`, `config`...: defining a key again replaces it.
     pub key: String,
 }
 
@@ -27,7 +27,8 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Sample(d) => format!("{}:{}", if d.is_kit { "kit" } else { "sample" }, d.name.name),
             Item::Bus(d) => format!("bus:{}", d.name.name),
             Item::Buffer(d) => format!("buffer:{}", d.name.name),
-            Item::Track(d) => format!("track:{}", d.name.name),
+            Item::Node(d) => format!("node:{}", d.name.name),
+            Item::Processor(d) => format!("processor:{}", d.name.name),
             Item::Config(_) => "config".into(),
         };
         out.push(Statement {
@@ -45,18 +46,14 @@ mod tests {
 
     #[test]
     fn statements_are_classified_with_their_source() {
-        let src = "
-instr a(f: hz) { osc(sine, f) }
-ctl bright = 3khz
-track t { instrument = a }
-";
+        let src = "\ninstr a(f: hz) { osc(sine, f) }\nctl bright = 3khz\nnode t { instrument = a }\n";
         let s = analyze(src).unwrap();
         assert_eq!(s.len(), 3);
         assert_eq!(s[0].key, "instr:a");
         assert_eq!(s[0].text, "instr a(f: hz) { osc(sine, f) }");
         assert_eq!(&src[s[0].offset..s[0].offset + 5], "instr");
         assert_eq!(s[1].key, "ctl:bright");
-        assert_eq!(s[2].key, "track:t");
+        assert_eq!(s[2].key, "node:t");
     }
 
     #[test]

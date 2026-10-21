@@ -456,7 +456,7 @@ fn render(
             session.render(n, &mut |_, _| {});
             if session
                 .program()
-                .tracks
+                .nodes
                 .iter()
                 .filter_map(|t| t.def.chain.as_ref())
                 .filter_map(|g| g.stream_cache())

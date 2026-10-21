@@ -23,7 +23,8 @@ pub enum Item {
     Bus(BusDecl),
     /// `buffer take = zeros(48000)` or `buffer take = 4bars`: shared writable table.
     Buffer(BufferDecl),
-    Track(TrackDecl),
+    Node(NodeDecl),
+    Processor(NodeDecl),
     Sample(SampleDecl),
     MidiOut(MidiOutDecl),
     Config(ConfigDecl),
@@ -77,9 +78,6 @@ pub struct BusDecl {
     pub name: Ident,
     /// A layout such as `stereo` or `surround(5.1)`.
     pub layout: Option<Expr>,
-    /// `bus space: stereo { out = it.reverb(room: 0.8) }`: what the bus is processed by.
-    /// `it` is what the bus has collected.
-    pub body: Option<Vec<Stmt>>,
 }
 
 /// `buffer take = zeros(48000)` or `buffer take = 4bars`
@@ -99,11 +97,11 @@ pub struct ConfigDecl {
     pub span: Span,
 }
 
-/// `track name { instrument = ...  out = ... }`
+/// An audio collection (`node`) or persistent DSP instance (`processor`).
 #[derive(Debug, Clone, PartialEq)]
-pub struct TrackDecl {
+pub struct NodeDecl {
     pub name: Ident,
-    /// `track bass(tone: hz = 2khz)`: each is a control, set from outside, that the track's body can read.
+    /// Processor parameters become live controls; collection nodes have none.
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,

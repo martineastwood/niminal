@@ -12,9 +12,7 @@ use niminal_lang::Layout;
 use niminal_live::{Live, LiveServer};
 use serde_json::json;
 
-const SETUP: &str = "tempo 120bpm
-instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
-track lead { instrument = pluck }";
+const SETUP: &str = "tempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart lead { instrument = pluck }";
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -206,7 +204,8 @@ fn only_local_connections_are_accepted_until_there_is_tls() {
 
 #[test]
 fn the_audio_the_clock_produces_is_the_sessions() {
-    let r = start(None);
+    // A short note needs the real-time clock; the 4x clock can outpace preparation.
+    let r = start_at(None, 1.0, 0.4);
     let mut c = connect(&r);
     c.call("eval", json!({"source": SETUP, "quantize": "now"}))
         .unwrap();
@@ -215,9 +214,15 @@ fn the_audio_the_clock_produces_is_the_sessions() {
         json!({"source": "lead(freq: a4) for 1beat", "quantize": "now"}),
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(200));
-    let peaks = r.engine.lock().unwrap().session_mut().take_peaks();
-    assert!(peaks[0] > 0.5, "the note was mixed: {peaks:?}");
+    let started = std::time::Instant::now();
+    loop {
+        let peaks = r.engine.lock().unwrap().session_mut().take_peaks();
+        if peaks[0] > 0.5 {
+            break;
+        }
+        assert!(started.elapsed() < WAIT, "the note never reached the mixer: {peaks:?}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }
 
 #[test]
@@ -225,12 +230,12 @@ fn websocket_controls_reach_the_live_renderer_and_appear_in_status() {
     let r = start(None);
     let mut c = connect(&r);
     c.call("eval", json!({
-        "source": "ctl level = 0.0.smooth(0ms)\ninstr flat(freq: hz) { level }\ntrack t { instrument = flat }\nt(freq: 440hz) for 100bars",
+        "source": "ctl level = 0.0.smooth(0ms)\ninstr flat(freq: hz) { level }\npart t { instrument = flat }\nt(freq: 440hz) for 100bars",
         "quantize": "now"
     })).unwrap();
     // A second connection owns its definitions and controls.
     let mut engine = Client::connect(r.engine_server.port(), None).unwrap();
-    engine.call("events.send", json!({"events":[{"op":"define","at":"now","source":"ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\ntrack own { instrument = flat }"},{"op":"note","target":"own","at":"now","dur":"100sec"}]})).unwrap();
+    engine.call("events.send", json!({"events":[{"op":"define","at":"now","source":"ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nnode own { instrument = flat }"},{"op":"note","target":"own","at":"now","dur":"100sec"}]})).unwrap();
     let reply = engine.call("events.send", json!({ "events": [{ "op": "control", "name": "level", "value": 0.5, "glide": "0ms", "at": "now" }] })).unwrap();
     assert_eq!(reply["accepted"], 1);
     let started = std::time::Instant::now();
@@ -253,7 +258,7 @@ fn osc_over_udp_moves_a_bound_control_and_is_logged() {
     let r = start(None);
     let mut c = connect(&r);
     c.call("eval", json!({
-        "source": "ctl level = osc_in(\"/level\").range(0..1).smooth(0ms)\ninstr flat(freq: hz) { level }\ntrack t { instrument = flat }\nt(freq: 440hz) for 100bars",
+        "source": "ctl level = osc_in(\"/level\").range(0..1).smooth(0ms)\ninstr flat(freq: hz) { level }\npart t { instrument = flat }\nt(freq: 440hz) for 100bars",
         "quantize": "now"
     })).unwrap();
     let osc = OscInput::start(r.live.clone(), 0).unwrap();
@@ -316,7 +321,7 @@ fn an_edit_landing_now_is_heard_within_the_lookahead_and_a_window() {
 fn a_thousand_notes_in_a_batch_cross_the_websocket_quickly() {
     let r = start_at(None, 1.0, 0.1);
     let mut engine = Client::connect(r.engine_server.port(), None).unwrap();
-    engine.call("events.send", json!({"events": [{"op": "define", "at": "now", "source": SETUP.replace("tempo 120bpm\n", "")}]})).unwrap();
+    engine.call("events.send", json!({"events": [{"op": "define", "at": "now", "source": SETUP.replace("tempo 120bpm\n", "").replace("part lead", "node lead")}]})).unwrap();
     let notes: Vec<_> = (0..1000)
         .map(|i| json!({"op": "note", "target": "lead", "at": 48_000 * 30 + i * 100, "dur": "50ms", "args": {"freq": "a4"}}))
         .collect();

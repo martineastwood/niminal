@@ -2,7 +2,7 @@
 //!
 //! A table is one channel of f32 samples, built in f64 then stored as f32.
 //! Multichannel files are arrays of tables at the language level. Buffers are
-//! the same shape, but written from instruments and tracks with atomics so the
+//! the same shape, but written from instruments and nodes with atomics so the
 //! audio thread never locks.
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -247,7 +247,7 @@ fn read_clamped(data: &[f32], pos: f64, interp: Interp) -> f64 {
     }
 }
 
-/// A writable table shared across voices, instruments and tracks.
+/// A writable table shared across voices, instruments and nodes.
 ///
 /// Storage uses atomics so readers and writers on the audio thread never lock.
 #[derive(Debug)]

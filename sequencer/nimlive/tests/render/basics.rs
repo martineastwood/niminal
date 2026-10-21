@@ -28,12 +28,7 @@ fn rendering_is_deterministic() {
 
 #[test]
 fn notes_are_placed_sample_accurately_and_overlap() {
-    let src = "
-tempo 120bpm
-instr click() { osc(sine, 1000hz) * env[1 0.5ms 0] }
-at 250ms click() for 1beat
-at 251ms click() for 1beat
-";
+    let src = "\ntempo 120bpm\ninstr click() { osc(sine, 1000hz) * env[1 0.5ms 0] }\nat 250ms click() for 1beat\nat 251ms click() for 1beat\n";
     let out = render(&program(src), &[]).unwrap();
     let first = (0.250 * SR) as usize;
     assert!(out[..first].iter().all(|s| *s == 0.0), "silent before the first note");
@@ -43,18 +38,9 @@ at 251ms click() for 1beat
 
 #[test]
 fn the_same_music_from_source_or_from_a_score_file() {
-    let instruments = "
-instr lead(freq: hz, amp: db = -6db) {
-  level = env[0 5ms 1 200ms 0.6 | 300ms 0]
-  osc(saw, freq).lpf(cutoff: 2khz, res: 0.2).gain(amp) * level
-}
-";
+    let instruments = "\ninstr lead(freq: hz, amp: db = -6db) {\n  level = env[0 5ms 1 200ms 0.6 | 300ms 0]\n  osc(saw, freq).lpf(cutoff: 2khz, res: 0.2).gain(amp) * level\n}\n";
     let in_source = format!(
-        "{instruments}
-lead(freq: e5, amp: -12db) for 1/2beat
-at 1/2beat lead(freq: g5, amp: -12db) for 1/2beat
-at 1beat lead(freq: b5, amp: -12db) for 1beat
-"
+        "{instruments}\nlead(freq: e5, amp: -12db) for 1/2beat\nat 1/2beat lead(freq: g5, amp: -12db) for 1/2beat\nat 1beat lead(freq: b5, amp: -12db) for 1beat\n"
     );
     let score = PHI.replace("saw_lead", "lead");
     let events = Section::from_json(&score).unwrap().events;
@@ -102,7 +88,7 @@ fn score_events_are_checked_against_the_instrument() {
         )
     };
 
-    assert_eq!(render_score(&score("lede", r#"{"freq": "a3"}"#)), "note for `lede`: no instrument or track named `lede`");
+    assert_eq!(render_score(&score("lede", r#"{"freq": "a3"}"#)), "note for `lede`: no instrument or part named `lede`");
     assert_eq!(
         render_score(&score("lead", r#"{"freq": "440"}"#)),
         "note for `lead`: argument `freq`: expected a frequency (hz or a note name), got `440` (did you mean `440hz`?)"
@@ -202,7 +188,7 @@ fn render_with_an_arrangement_ignores_the_files_own_timeline() {
 #[test]
 fn arrangement_mistakes_are_reported() {
     let err = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default();
-    let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\ntrack a { instrument = t }\nscene one { a: [c4] }\n";
+    let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\npart a { instrument = t }\nscene one { a: [c4] }\n";
     assert!(err(&format!("{base}arrangement s {{ sections: [on.over(1bar)] }}")).contains("no scene named `on`did you mean `one`?"));
     assert!(err(&format!("{base}arrangement s {{ sections: [one] }}")).contains("`one` needs a lengthfor example `one.over(8bars)`"));
     assert!(err(&format!("{base}arrangement s {{ volume: [1] }}")).contains("`volume` isn't supported in an arrangement yet"));
@@ -219,10 +205,10 @@ fn arrangement_mistakes_are_reported() {
 }
 
 #[test]
-fn an_arrangement_lane_moves_a_track_parameter_over_the_whole_piece() {
+fn an_arrangement_lane_moves_a_node_parameter_over_the_whole_piece() {
     let eighths = |x: &[f32]| x.chunks(x.len() / 8).take(8).map(rms).collect::<Vec<_>>();
     let steady = eighths(&lane_song(""));
-    let swept = eighths(&lane_song("pad.cut: env[300hz 2bars 8khz]"));
+    let swept = eighths(&lane_song("pad_fx.cut: env[300hz 2bars 8khz]"));
     assert!(swept[0] < swept[1] && swept[1] < swept[2], "{swept:?}");
     assert!(swept[6] > steady[6] * 2.0, "{swept:?} against {steady:?}");
 }
@@ -233,12 +219,12 @@ fn arrangement_lane_mistakes_are_reported() {
         let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(1bar)]\n{lane} }}");
         compile(&src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default()
     };
-    assert!(err("pd.cut: env[300hz 1bar 1khz]").contains("no track named `pd`did you mean `pad`?"));
-    assert!(err("pad.cutt: env[300hz 1bar 1khz]").contains("has no such parameterdid you mean `cut`?"), "{}", err("pad.cutt: env[300hz 1bar 1khz]"));
-    assert!(err("pad.cut: 300hz").contains("an arrangement lane is an envelope"));
-    assert!(err("pad.cut: env[0.5 1bar 1]").contains("cut"));
-    assert!(err("pad.cut: env[300hz 1bar 1khz | 1bar 300hz]").contains("sustain"));
-    assert!(err("pad.cut: env[300hz 1bar 1khz]\npad.cut: env[300hz 1bar 2khz]").contains("given twice"));
+    assert!(err("pd.cut: env[300hz 1bar 1khz]").contains("no part named `pd`did you mean `pad`?"));
+    assert!(err("pad_fx.cutt: env[300hz 1bar 1khz]").contains("has no such parameterdid you mean `cut`?"), "{}", err("pad_fx.cutt: env[300hz 1bar 1khz]"));
+    assert!(err("pad_fx.cut: 300hz").contains("an arrangement lane is an envelope"));
+    assert!(err("pad_fx.cut: env[0.5 1bar 1]").contains("cut"));
+    assert!(err("pad_fx.cut: env[300hz 1bar 1khz | 1bar 300hz]").contains("sustain"));
+    assert!(err("pad_fx.cut: env[300hz 1bar 1khz]\npad_fx.cut: env[300hz 1bar 2khz]").contains("given twice"));
 }
 
 #[test]

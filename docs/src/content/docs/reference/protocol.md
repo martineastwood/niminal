@@ -31,7 +31,7 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
   "id": 1,
   "method": "hello",
   "params": {
-    "protocol": 4,
+    "protocol": 5,
     "client": "my-app",
     "token": "optional-if-server-requires-it"
   }
@@ -42,7 +42,7 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
 
 ```json
 {
-  "protocol": 4,
+  "protocol": 5,
   "sample_rate": 48000,
   "channels": 2,
   "topics": ["landed", "pending", "transport", "meters", "notices", "learned"]
@@ -133,7 +133,7 @@ Snapshot of the session (no subscription needed).
 - **`sample_rate`**, **`channels`**
 - **`realtime`**, **`controls`**, **`instruments`** — as the [engine reports them](/reference/engine-api/#status)
 - **`scenes`**, **`clips`** — defined names
-- **`tracks`** — `name`, `clip`, `muted`, `soloed`
+- **`parts`** — `name`, `clip`, `muted`, `soloed`
 
 ### Performance API
 
@@ -146,9 +146,9 @@ Typed calls that compile to the same `.nml` source as `eval`, so quantize, the s
 | `launch` | `{ "target": "verse" }` | `verse.start` |
 | `stop` / `mute` / `unmute` / `solo` | `{ "target": "bass" }` | `bass.stop` / `.mute` / … |
 | `unsolo` | optional `target` | `bass.unsolo` or `unsolo` |
-| `edit` | `{ "track": "bass", "change": "reverse" }` | `bass.reverse` (`undo`, `clear`, `undo(reverse)` also work) |
+| `edit` | `{ "part": "bass", "change": "reverse" }` | `bass.reverse` (`undo`, `clear`, `undo(reverse)` also work) |
 
-`status` includes each track's `playing` base, `edits` stack, `clip`, `muted` and `soloed`, plus the defined `scenes` and `clips`.
+`status` includes each part's `playing` base, `edits` stack, `clip`, `muted` and `soloed`, plus the defined `scenes` and `clips`.
 
 ## Error codes
 
@@ -179,13 +179,13 @@ The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%
 ## Minimal client flow
 
 ```json
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":4,"client":"example"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":4,"sample_rate":48000,"channels":2,"topics":[...]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":5,"client":"example"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":5,"sample_rate":48000,"channels":2,"topics":[...]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"subscribe","params":{"topics":["landed","pending","transport"]}}
 ← {"jsonrpc":"2.0","id":2,"result":{"topics":["landed","pending","transport"]}}
 
-→ {"jsonrpc":"2.0","id":3,"method":"eval","params":{"source":"tempo 120bpm\ninstr x(freq: hz) { osc(sine, freq) }\ntrack t { instrument = x }","quantize":"now"}}
+→ {"jsonrpc":"2.0","id":3,"method":"eval","params":{"source":"tempo 120bpm\ninstr x(freq: hz) { osc(sine, freq) }\npart t { instrument = x }","quantize":"now"}}
 ← {"jsonrpc":"2.0","id":3,"result":{"id":1,"lands_at":0,...}}
 
 → {"jsonrpc":"2.0","id":4,"method":"eval","params":{"source":"t.play([c4 e4 g4])","quantize":"next bar"}}

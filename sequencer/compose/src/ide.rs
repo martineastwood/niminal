@@ -57,7 +57,8 @@ pub const RESERVED_WORDS: &[&str] = &[
     "spawn",
     "state",
     "tempo",
-    "track",
+    "part",
+    "processor",
     "true",
     "unsolo",
     "use",
@@ -69,7 +70,8 @@ pub enum SymbolKind {
     Function,
     Control,
     Bus,
-    Track,
+    Part,
+    Processor,
     Sample,
     Kit,
     Clip,
@@ -139,7 +141,11 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Control { name, .. } => (name, SymbolKind::Control, first_line()),
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
             Item::Buffer(d) => (&d.name, SymbolKind::Pattern, format!("buffer {}", d.name.name)),
-            Item::Track(d) => (&d.name, SymbolKind::Track, format!("track {}", d.name.name)),
+            Item::Part(d) => (&d.name, SymbolKind::Part, format!("part {}", d.name.name)),
+            Item::Processor(d) => {
+                param_list = params(source, &d.params);
+                (&d.name, SymbolKind::Processor, format!("processor {}({})", d.name.name, labels(&param_list)))
+            },
             Item::MidiOut(d) => (&d.name, SymbolKind::Instrument, first_line()),
             Item::Sample(d) => {
                 if d.is_kit {
@@ -448,7 +454,7 @@ mod tests {
 
     #[test]
     fn symbols_name_what_a_file_defines() {
-        let src = "ctl cutoff = 1khz\ninstr tone(freq: hz, amp: db = -6db) { osc(sine, freq) }\ntrack lead { instrument = tone }\nriff = [c4 e4]";
+        let src = "ctl cutoff = 1khz\ninstr tone(freq: hz, amp: db = -6db) { osc(sine, freq) }\npart lead { instrument = tone }\nriff = [c4 e4]";
         let s = symbols(src).unwrap();
         let names: Vec<_> = s.iter().map(|s| (s.name.as_str(), s.kind)).collect();
         assert_eq!(
@@ -456,7 +462,7 @@ mod tests {
             [
                 ("cutoff", SymbolKind::Control),
                 ("tone", SymbolKind::Instrument),
-                ("lead", SymbolKind::Track),
+                ("lead", SymbolKind::Part),
                 ("riff", SymbolKind::Pattern)
             ]
         );

@@ -260,7 +260,7 @@ fn rng_seed(rng: &mut Rng) -> &'static str {
 const SETUP: &str = "
 tempo 120bpm
 instr tone(freq: hz) { osc(saw, freq) * env[0 2ms 1 5sec 0] }
-track lead { instrument = tone }
+part lead { instrument = tone }
 ";
 
 /// Programs that are legal but ask for far more than any machine can play.

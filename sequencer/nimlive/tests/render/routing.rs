@@ -12,16 +12,9 @@ fn close(a: &[f32], b: &[f32]) {
 }
 
 #[test]
-fn a_send_reaches_a_track_that_reads_the_bus() {
+fn a_send_reaches_a_node_that_reads_the_bus() {
     let dry = raw("instr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\ntone(f: 220hz) for 1beat");
-    let wet = raw("
-bus space
-instr tone(f: hz) {
-  out = osc(sine, f) * env[1 1sec 1]
-  space += out
-}
-track room { out = space }
-tone(f: 220hz) for 1beat");
+    let wet = raw("\nbus space\ninstr tone(f: hz) {\n  out = osc(sine, f) * env[1 1sec 1]\n  space += out\n}\nprocessor room { out = space }\ntone(f: 220hz) for 1beat");
     // dry plus an identical copy through the bus
     let doubled: Vec<f32> = dry.iter().map(|s| s * 2.0).collect();
     close(&wet, &doubled);
@@ -29,16 +22,8 @@ tone(f: 220hz) for 1beat");
 
 #[test]
 fn declaration_order_makes_no_difference_and_adds_no_latency() {
-    let a = raw("
-bus space
-instr tone(f: hz) { out = osc(sine, f) * env[1 1sec 1]\nspace += out }
-track room { out = space.gain(0.5) }
-tone(f: 220hz) for 1beat");
-    let b = raw("
-track room { out = space.gain(0.5) }
-instr tone(f: hz) { out = osc(sine, f) * env[1 1sec 1]\nspace += out }
-bus space
-tone(f: 220hz) for 1beat");
+    let a = raw("\nbus space\ninstr tone(f: hz) { out = osc(sine, f) * env[1 1sec 1]\nspace += out }\nprocessor room { out = space.gain(0.5) }\ntone(f: 220hz) for 1beat");
+    let b = raw("\nprocessor room { out = space.gain(0.5) }\ninstr tone(f: hz) { out = osc(sine, f) * env[1 1sec 1]\nspace += out }\nbus space\ntone(f: 220hz) for 1beat");
     close(&a, &b);
     // the reader hears the send in the same block: 1.5 x the dry signal from sample 0
     let dry = raw("instr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\ntone(f: 220hz) for 1beat");
@@ -47,38 +32,25 @@ tone(f: 220hz) for 1beat");
 }
 
 #[test]
-fn a_track_chain_processes_its_instrument() {
+fn a_node_chain_processes_its_instrument() {
     let dry = raw("instr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\ntone(f: 220hz) for 1beat");
-    let through = raw("
-instr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }
-track lead { instrument = tone\nout = it.gain(0.25) }
-lead(f: 220hz) for 1beat");
+    let through = raw("\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.25)}\npart lead { instrument = tone\noutput = lead_audio}\nlead(f: 220hz) for 1beat");
     let quarter: Vec<f32> = dry.iter().map(|s| s * 0.25).collect();
     close(&through, &quarter);
 }
 
 #[test]
-fn routing_a_track_to_a_bus_moves_its_sound() {
-    let direct = raw("
-instr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }
-track lead { instrument = tone\nout = it.gain(0.5) }
-lead(f: 220hz) for 1beat");
-    let via_bus = raw("
-bus mix
-instr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }
-track lead { instrument = tone\nout = it.gain(0.5).to(mix) }
-track out_track { out = mix }
-lead(f: 220hz) for 1beat");
+fn routing_a_node_to_a_bus_moves_its_sound() {
+    let direct = raw("\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.5)}\npart lead { instrument = tone\noutput = lead_audio}\nlead(f: 220hz) for 1beat");
+    let via_bus = raw("\nbus mix\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.5).to(mix)}\npart lead { instrument = tone\noutput = lead_audio}\nprocessor out_node { out = mix }\nlead(f: 220hz) for 1beat");
     close(&direct, &via_bus);
 }
 
 #[test]
-fn track_defaults_apply_and_notes_override_them() {
-    let src = |track_arg: &str, note_arg: &str| {
+fn node_defaults_apply_and_notes_override_them() {
+    let src = |node_arg: &str, note_arg: &str| {
         format!(
-            "instr tone(f: hz, amp: db = 0db) {{ osc(sine, f).gain(amp) * env[1 1sec 1] }}
-track lead {{ instrument = tone({track_arg}) }}
-lead({note_arg}) for 1beat"
+            "instr tone(f: hz, amp: db = 0db) {{ osc(sine, f).gain(amp) * env[1 1sec 1] }}\npart lead {{ instrument = tone({node_arg}) }}\nlead({note_arg}) for 1beat"
         )
     };
     let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -91,21 +63,10 @@ lead({note_arg}) for 1beat"
 
 #[test]
 fn a_chains_filter_state_persists_across_notes() {
-    // One track-level filter serves both notes. When the second note
+    // One node-level filter serves both notes. When the second note
     // starts, the filter still holds charge from the first, so its output
     // starts well above where the first note's did.
-    let src = "
-fn one_pole(x, cutoff: hz) {
-  state y = 0.0
-  a = exp(-2 * pi * cutoff / sample_rate)
-  y = x * (1 - a) + y * a
-  y
-}
-instr dc(f: hz) { 1.0 * env[1 | 1ms 0] }
-track lead { instrument = dc\nout = it.one_pole(cutoff: 2hz) }
-lead(f: 1hz) for 1/8beat
-at 1/4beat lead(f: 1hz) for 1/8beat
-";
+    let src = "\nfn one_pole(x, cutoff: hz) {\n  state y = 0.0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}\ninstr dc(f: hz) { 1.0 * env[1 | 1ms 0] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.one_pole(cutoff: 2hz)}\npart lead { instrument = dc\noutput = lead_audio}\nlead(f: 1hz) for 1/8beat\nat 1/4beat lead(f: 1hz) for 1/8beat\n";
     let out = raw(src);
     let second_start = (0.125 * SR) as usize; // 1/4beat at 120bpm
     assert!(out[1] < 0.01, "the filter starts empty: {}", out[1]);
@@ -114,6 +75,6 @@ at 1/4beat lead(f: 1hz) for 1/8beat
 
 #[test]
 fn feedback_is_rejected_when_compiling() {
-    let errs = compile("bus x\nbus y\ntrack a { out = x.to(y) }\ntrack b { out = y.to(x) }").err().unwrap();
-    assert!(errs[0].message.starts_with("tracks feed back through buses"));
+    let errs = compile("bus x\nbus y\nprocessor a { out = x.to(y) }\nprocessor b { out = y.to(x) }").err().unwrap();
+    assert!(errs[0].message.starts_with("nodes feed back through buses"));
 }

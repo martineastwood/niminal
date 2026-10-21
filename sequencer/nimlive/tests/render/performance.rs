@@ -1,11 +1,6 @@
 use crate::common::*;
 
-const STAGE: &str = "
-tempo 120bpm
-instr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) * env[1 | 20ms 0] }
-track lead { instrument = pluck }
-track bass { instrument = pluck(bright: 0.1) }
-";
+const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) * env[1 | 20ms 0] }\npart lead { instrument = pluck }\npart bass { instrument = pluck(bright: 0.1) }\n";
 
 fn render_with_bars(body: &str, bars: Option<f64>) -> Result<Vec<f32>, nimlive::render::RenderError> {
     let p = program(&format!("{STAGE}{body}"));
@@ -40,29 +35,29 @@ fn lanes_become_note_parameters() {
 }
 
 #[test]
-fn a_lane_can_set_a_track_parameter_as_each_note_starts() {
-    let stage = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }\n";
+fn a_lane_can_set_a_node_parameter_as_each_note_starts() {
+    let stage = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}\n";
     let render = |body: &str| {
         let p = program(&format!("{stage}{body}"));
         render_with(&p, &[], &RenderOptions { limiter: false, until: Some(2.0), ..Default::default() }).map(mono).unwrap()
     };
     let dull = render("pad.play([c5 c5])");
-    let bright = render("clip c { notes: [c5 c5]\ncut: [300hz 8khz] }\npad.play(c)");
+    let bright = render("clip c { notes: [c5 c5]\npad_fx.cut: [300hz 8khz] }\npad.play(c)");
     let half = dull.len() / 2;
     // the first note is the same, the second is brighter (more of the saw gets through)
     assert_eq!(&dull[..half - 4800], &bright[..half - 4800]);
     assert!(rms(&bright[half..]) > rms(&dull[half..]) * 1.5, "{} vs {}", rms(&bright[half..]), rms(&dull[half..]));
     // with no notes there is nothing to step on, which is said rather than ignored
-    let p = compile(&format!("{stage}clip c {{ cut: [300hz 8khz] }}\npad.play(c)"));
+    let p = compile(&format!("{stage}clip c {{ pad_fx.cut: [300hz 8khz] }}\npad.play(c)"));
     let e = p.err().expect("a lane without notes is refused");
     assert!(e[0].message.contains("has no notes"), "{}", e[0].message);
     // a mistake in the lane's unit is reported
-    let p = program(&format!("{stage}clip c {{ notes: [c5]\ncut: [0.5] }}\npad.play(c)"));
+    let p = program(&format!("{stage}clip c {{ notes: [c5]\npad_fx.cut: [0.5] }}\npad.play(c)"));
     let Err(e) = render_with(&p, &[], &RenderOptions { limiter: false, until: Some(1.0), ..Default::default() }) else { panic!("a bare number is not a frequency") };
     assert!(e.to_string().contains("cut"), "{e}");
 }
 
-const SWEEP_STAGE: &str = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\ntrack pad(cut: hz = 300hz) { instrument = saw1\n out = it.lpf(cutoff: cut) }\n";
+const SWEEP_STAGE: &str = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}\n";
 
 fn sweep(body: &str, seconds: f64) -> Vec<f32> {
     let p = program(&format!("{SWEEP_STAGE}{body}"));
@@ -74,10 +69,10 @@ fn eighths(x: &[f32]) -> Vec<f32> {
 }
 
 #[test]
-fn an_envelope_lane_sweeps_a_track_parameter_over_the_clip() {
+fn an_envelope_lane_sweeps_a_node_parameter_over_the_clip() {
     let notes = "notes: [c5 c5 c5 c5 c5 c5 c5 c5]";
     let steady = eighths(&sweep(&format!("clip c {{ {notes} }}\npad.play(c)"), 2.0));
-    let swept = eighths(&sweep(&format!("clip c {{ {notes}\ncut: env[300hz 1bar 8khz] }}\npad.play(c)"), 2.0));
+    let swept = eighths(&sweep(&format!("clip c {{ {notes}\npad_fx.cut: env[300hz 1bar 8khz] }}\npad.play(c)"), 2.0));
     assert!((steady[0] - steady[7]).abs() < steady[0] * 0.05, "{steady:?}");
     assert!(swept[0] < swept[1] && swept[1] < swept[2], "{swept:?}");
     assert!(swept[7] > steady[7] * 2.0, "{swept:?} against {steady:?}");
@@ -86,7 +81,7 @@ fn an_envelope_lane_sweeps_a_track_parameter_over_the_clip() {
 #[test]
 fn the_shape_of_an_envelope_lane_is_the_envelopes_shape() {
     let mid = |curve: &str| {
-        let x = sweep(&format!("clip c {{ notes: [c5 c5 c5 c5 c5 c5 c5 c5]\ncut: env[300hz 1bar{curve} 8khz] }}\npad.play(c)"), 2.0);
+        let x = sweep(&format!("clip c {{ notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1bar{curve} 8khz] }}\npad.play(c)"), 2.0);
         eighths(&x)[3]
     };
     // an exponential curve stays low for longer, a logarithmic one gets there early
@@ -96,14 +91,14 @@ fn the_shape_of_an_envelope_lane_is_the_envelopes_shape() {
 #[test]
 fn an_envelope_lane_needs_no_notes_and_holds_its_last_level_or_loops() {
     // two bars of notes under a one-bar envelope that has finished by the second
-    let held = eighths(&sweep("clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\ncut: env[300hz 1/4bar 8khz] }\npad.play(c)", 2.0));
+    let held = eighths(&sweep("clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar 8khz] }\npad.play(c)", 2.0));
     let steady = eighths(&sweep("clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5] }\npad.play(c)", 2.0));
     assert!(held[7] > steady[7] * 2.0 && (held[7] - held[3]).abs() < held[7] * 0.1, "{held:?}");
-    let looped = eighths(&sweep("clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\ncut: env[300hz 1/4bar 700hz 0sec 300hz].loop }\npad.play(c)", 2.0));
+    let looped = eighths(&sweep("clip c { notes: [c5 c5 c5 c5 c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar 700hz 0sec 300hz].loop }\npad.play(c)", 2.0));
     // the lane starts over, so it keeps dipping back to the dull start
     assert!(looped[2] < looped[1] * 0.95 && looped[4] < looped[3] * 0.95, "{looped:?} against {held:?}");
     // a clip with only an envelope lane is allowed: it moves the parameter for notes played elsewhere
-    let p = compile(&format!("{SWEEP_STAGE}clip c {{ cut: env[300hz 1bar 8khz] }}\npad.play(c)"));
+    let p = compile(&format!("{SWEEP_STAGE}clip c {{ pad_fx.cut: env[300hz 1bar 8khz] }}\npad.play(c)"));
     assert!(p.is_ok(), "{:?}", p.err());
 }
 
@@ -111,8 +106,8 @@ fn an_envelope_lane_needs_no_notes_and_holds_its_last_level_or_loops() {
 fn envelope_lane_mistakes_are_reported() {
     let error = |body: &str| compile(&format!("{SWEEP_STAGE}{body}")).err().expect("an error").remove(0).message;
     assert!(error("clip c { notes: [c5]\nnope: env[1 1bar 2] }\npad.play(c)").contains("no such parameter"));
-    assert!(error("clip c { notes: [c5]\ncut: env[0.5 1bar 1] }\npad.play(c)").contains("cut"), "a number is not a frequency");
-    assert!(error("clip c { notes: [c5]\ncut: env[300hz 1bar 1khz | 1bar 300hz] }\npad.play(c)").contains("sustain"));
+    assert!(error("clip c { notes: [c5]\npad_fx.cut: env[0.5 1bar 1] }\npad.play(c)").contains("cut"), "a number is not a frequency");
+    assert!(error("clip c { notes: [c5]\npad_fx.cut: env[300hz 1bar 1khz | 1bar 300hz] }\npad.play(c)").contains("sustain"));
     assert!(error("clip c { notes: env[300hz 1bar 1khz] }").contains("holds notes"));
 }
 
@@ -129,12 +124,12 @@ fn a_looping_envelope_in_an_instrument_repeats() {
 }
 
 #[test]
-fn a_track_applies_its_instrument_defaults_to_played_notes() {
+fn a_node_applies_its_instrument_defaults_to_played_notes() {
     let played = raw("bass.play([c2])", 1.0);
     let written = raw("bass(freq: c2) for 4beats", 0.0);
     assert_eq!(played, written);
     let explicit = raw("lead(freq: c2, bright: 0.1) for 4beats", 0.0);
-    assert_eq!(played, explicit, "the bass track's bright: 0.1 is the same as writing it");
+    assert_eq!(played, explicit, "the bass node's bright: 0.1 is the same as writing it");
 }
 
 #[test]
@@ -156,7 +151,7 @@ fn the_notes_after_the_length_are_not_started_but_ringing_ones_finish() {
 }
 
 #[test]
-fn muting_silences_a_track_for_a_while() {
+fn muting_silences_a_node_for_a_while() {
     let out = raw("lead.play([c4])\nat 1bar lead.mute\nat 3bars lead.unmute", 4.0);
     let loud = |s: f64| rms(&out[(s * SR) as usize..((s + 1.0) * SR) as usize]) > 0.05;
     assert!(loud(0.2), "before the mute");
@@ -166,7 +161,7 @@ fn muting_silences_a_track_for_a_while() {
 }
 
 #[test]
-fn solo_isolates_a_track() {
+fn solo_isolates_a_node() {
     let both = raw("lead.play([c4])\nbass.play([c2])", 1.0);
     let solo = raw("lead.play([c4])\nbass.play([c2])\nbass.solo", 1.0);
     let bass_only = raw("bass.play([c2])", 1.0);
@@ -176,13 +171,7 @@ fn solo_isolates_a_track() {
 
 #[test]
 fn panic_cuts_everything_including_effect_tails() {
-    let base = "
-bus space
-instr ping(freq: hz) { space += osc(sine, freq) * env[1 5ms 0] }
-track echo { out = space.delay(time: 100ms, feedback: 0.9) }
-track src { instrument = ping }
-src.play([c4*2])
-";
+    let base = "\nbus space\ninstr ping(freq: hz) { space += osc(sine, freq) * env[1 5ms 0] }\nprocessor echo { out = space.delay(time: 100ms, feedback: 0.9) }\npart src { instrument = ping }\nsrc.play([c4*2])\n";
     let ringing = raw(base, 2.0);
     let cut = raw(&format!("{base}at 1bar panic"), 2.0);
     assert!(ringing.len() > (4.0 * SR) as usize, "the echoes run on: {}", ringing.len() as f64 / SR);
@@ -193,13 +182,7 @@ src.play([c4*2])
 
 #[test]
 fn scenes_play_in_sequence() {
-    let out = raw("
-clip a { notes: [c4] }
-clip b { notes: [c2] }
-scene one { lead: a }
-scene two { lead: b }
-one.start
-at 1bar two.start", 2.0);
+    let out = raw("\nclip a { notes: [c4] }\nclip b { notes: [c2] }\nscene one { lead: a }\nscene two { lead: b }\none.start\nat 1bar two.start", 2.0);
     let written = raw("lead(freq: c4) for 4beats\nat 4beats lead(freq: c2) for 4beats", 0.0);
     assert_eq!(out, written);
 }

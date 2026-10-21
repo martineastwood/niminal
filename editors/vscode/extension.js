@@ -4,7 +4,7 @@ const { LanguageClient } = require("vscode-languageclient/node");
 const { LiveClient: Client } = require("./live-client");
 const { startLive } = require("./live");
 const { blockAround } = require("./blocks");
-const { trackDescription } = require("./panel");
+const { partDescription } = require("./panel");
 const { rewriteLearned } = require("./learn");
 
 let client = null;
@@ -16,10 +16,10 @@ let diagnostics;
 let channel;
 let transport = null;
 let peaks = null;
-let performance = { scenes: [], tracks: [] };
+let performance = { scenes: [], parts: [] };
 let pendingChanges = [];
 const scenesChanged = new vscode.EventEmitter();
-const tracksChanged = new vscode.EventEmitter();
+const partsChanged = new vscode.EventEmitter();
 const pendingChanged = new vscode.EventEmitter();
 let refreshTimer;
 let intentionalClose = false;
@@ -126,10 +126,10 @@ async function connectLive() {
     onClose() {
       transport = null;
       peaks = null;
-      performance = { scenes: [], tracks: [] };
+      performance = { scenes: [], parts: [] };
       pendingChanges = [];
       scenesChanged.fire();
-      tracksChanged.fire();
+      partsChanged.fire();
       pendingChanged.fire();
       showStatus();
       if (!intentionalClose) scheduleReconnect();
@@ -177,9 +177,9 @@ async function refreshPerformance() {
   if (!client?.connected) return;
   try {
     const status = await client.status();
-    performance = { scenes: status.scenes ?? [], tracks: status.tracks ?? [] };
+    performance = { scenes: status.scenes ?? [], parts: status.parts ?? [] };
     scenesChanged.fire();
-    tracksChanged.fire();
+    partsChanged.fire();
   } catch {
     // the connection went away; onClose clears the panel
   }
@@ -384,13 +384,13 @@ function activate(context) {
         return item;
       },
     }),
-    vscode.window.registerTreeDataProvider("niminal.tracks", {
-      onDidChangeTreeData: tracksChanged.event,
-      getChildren: () => performance.tracks,
-      getTreeItem: (track) => {
-        const item = new vscode.TreeItem(track.name);
-        item.description = trackDescription(track);
-        item.iconPath = new vscode.ThemeIcon(track.muted ? "mute" : track.clip ? "play" : "circle-outline");
+    vscode.window.registerTreeDataProvider("niminal.parts", {
+      onDidChangeTreeData: partsChanged.event,
+      getChildren: () => performance.parts,
+      getTreeItem: (node) => {
+        const item = new vscode.TreeItem(node.name);
+        item.description = partDescription(node);
+        item.iconPath = new vscode.ThemeIcon(node.muted ? "mute" : node.clip ? "play" : "circle-outline");
         return item;
       },
     }),
@@ -400,19 +400,19 @@ function activate(context) {
       if (name) return sendApi(`${name}.start`, (c, q) => c.launch(name, { quantize: q }));
       vscode.window.setStatusBarMessage(`niminal: no scene number ${n}`, 2000);
     }),
-    command("niminal.toggleMute", (track) => {
-      if (!track) return;
-      return track.muted
-        ? sendApi(`${track.name}.unmute`, (c, q) => c.unmute(track.name, { quantize: q }))
-        : sendApi(`${track.name}.mute`, (c, q) => c.mute(track.name, { quantize: q }));
+    command("niminal.toggleMute", (node) => {
+      if (!node) return;
+      return node.muted
+        ? sendApi(`${node.name}.unmute`, (c, q) => c.unmute(node.name, { quantize: q }))
+        : sendApi(`${node.name}.mute`, (c, q) => c.mute(node.name, { quantize: q }));
     }),
-    command("niminal.toggleSolo", (track) => {
-      if (!track) return;
-      return track.soloed
-        ? sendApi(`${track.name}.unsolo`, (c, q) => c.unsolo(track.name, { quantize: q }))
-        : sendApi(`${track.name}.solo`, (c, q) => c.solo(track.name, { quantize: q }));
+    command("niminal.toggleSolo", (node) => {
+      if (!node) return;
+      return node.soloed
+        ? sendApi(`${node.name}.unsolo`, (c, q) => c.unsolo(node.name, { quantize: q }))
+        : sendApi(`${node.name}.solo`, (c, q) => c.solo(node.name, { quantize: q }));
     }),
-    command("niminal.stopTrack", (track) => track && sendApi(`${track.name}.stop`, (c, q) => c.stop(track.name, { quantize: q }))),
+    command("niminal.stopPart", (node) => node && sendApi(`${node.name}.stop`, (c, q) => c.stop(node.name, { quantize: q }))),
     command("niminal.cancelPending", async (change) => {
       if (!change || !client?.connected) return;
       try {
@@ -436,7 +436,7 @@ function activate(context) {
     { dispose: () => clearInterval(refreshTimer) },
     { dispose: () => clearReconnectTimer() },
   );
-  // Tracks change without any evaluation when a timeline command comes due.
+  // Parts change without any evaluation when a timeline command comes due.
   refreshTimer = setInterval(refreshPerformance, 2000);
   startLanguageServer();
 }

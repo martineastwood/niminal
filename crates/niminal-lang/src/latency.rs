@@ -13,7 +13,7 @@ impl Program {
             .unwrap_or(0);
         if voices == 0
             && self
-                .tracks
+                .nodes
                 .iter()
                 .all(|t| t.def.chain.as_ref().is_none_or(|g| g.latency() == 0))
         {
@@ -27,12 +27,12 @@ impl Program {
             graph.pad_outputs(voices);
             i.graph = Arc::new(graph);
         }
-        let defs: Vec<_> = self.tracks.iter().map(|t| t.def.clone()).collect();
+        let defs: Vec<_> = self.nodes.iter().map(|t| t.def.clone()).collect();
         let order = execution_order(&defs).expect("compiler checked routing");
         let mut buses = vec![0usize; self.buses.len()];
-        let mut tracks = vec![0usize; self.tracks.len()];
+        let mut nodes = vec![0usize; self.nodes.len()];
         for &t in &order {
-            let info = &mut self.tracks[t];
+            let info = &mut self.nodes[t];
             let voice_latency = if t == 0 || info.accepts_notes {
                 voices
             } else {
@@ -62,20 +62,20 @@ impl Program {
             } else {
                 voice_latency
             };
-            tracks[t] = latency;
+            nodes[t] = latency;
             if let Route::Bus(bus) = info.def.route {
                 buses[bus] = buses[bus].max(latency);
             }
         }
         let master = self
-            .tracks
+            .nodes
             .iter()
             .enumerate()
             .filter(|(_, t)| t.def.route == Route::Master)
-            .map(|(i, _)| tracks[i])
+            .map(|(i, _)| nodes[i])
             .max()
             .unwrap_or(0);
-        for (t, info) in self.tracks.iter_mut().enumerate() {
+        for (t, info) in self.nodes.iter_mut().enumerate() {
             let target = match info.def.route {
                 Route::Master => master,
                 Route::Bus(bus) => buses[bus],
@@ -102,11 +102,11 @@ impl Program {
                 graph.pad_sends(&buses);
                 graph.pad_outputs(target);
                 info.def.chain = Some(Arc::new(graph));
-            } else if target > tracks[t] {
+            } else if target > nodes[t] {
                 let mut graph = GraphBuilder::new();
                 let mut outputs = Vec::new();
                 for channel in 0..self.master.channels() {
-                    outputs.push(graph.input_with_latency(tracks[t]));
+                    outputs.push(graph.input_with_latency(nodes[t]));
                     info.def.inputs.push(ChainInput::It { channel });
                 }
                 let mut graph = graph.build_channels(&outputs);
@@ -125,7 +125,7 @@ impl Program {
     }
 
     pub fn processing_latency(&self) -> usize {
-        self.tracks
+        self.nodes
             .iter()
             .filter(|t| t.def.route == Route::Master)
             .map(|t| {

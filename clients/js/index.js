@@ -3,7 +3,7 @@
 
 const WebSocket = globalThis.WebSocket ?? (typeof require === "function" ? require("ws") : undefined);
 
-const PROTOCOL = 4;
+const PROTOCOL = 5;
 
 class NiminalError extends Error {
   constructor(message, problems) {
@@ -84,7 +84,7 @@ class Client {
   }
 
   /**
-   * Send timed events to the engine: `{ op: "note" | "control" | "track", at, ... }`.
+   * Send timed events to the engine: `{ op: "note" | "control" | "routing", at, ... }`.
    * `at` is an absolute sample count or "now". See the protocol reference.
    */
   sendEvents(events) {

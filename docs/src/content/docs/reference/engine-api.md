@@ -3,14 +3,14 @@ title: Engine API
 description: "JSON-RPC 2.0 over WebSocket for the niminal server: timestamped notes, parameter changes, definitions."
 ---
 
-The **engine** is the audio server that `niminal server` runs. It holds the instruments, effects, tracks, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns, tempo, meter or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
+The **engine** is the audio server that `niminal server` runs. It holds the instruments, effects, nodes, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns, tempo, meter or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
 
 `niminal server` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the server never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
 
 ## Connection
 
 1. Open a WebSocket to `ws://127.0.0.1:7401/`.
-2. Send **`hello`** first, with `{ "protocol": 4, "client": "my-app" }` (and `token` if the server needs one). The result has `sample_rate`, `channels` and the `topics`.
+2. Send **`hello`** first, with `{ "protocol": 5, "client": "my-app" }` (and `token` if the server needs one). The result has `sample_rate`, `channels` and the `topics`.
 3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels), **`notices`** (warnings) and **`transactions`** (graph change acknowledgements), **`voices`**, **`reports`**, **`scopes`** and **`jobs`**. The hello result also advertises capabilities and limits.
 
 ## Requests
@@ -25,7 +25,7 @@ One batched method for every timed thing a client can do. The whole batch is che
 { "method": "events.send", "params": { "events": [
   { "op": "note", "target": "lead", "at": 1536000, "dur": "250ms", "args": { "freq": "c4" } },
   { "op": "control", "name": "cutoff", "at": 96000, "value": 2, "unit": "khz", "glide": "50ms" },
-  { "op": "track", "name": "pad", "at": "now", "args": { "cut": "800hz" } }
+  { "op": "routing", "at": "now", "edits": [{ "op": "set", "id": "pad", "args": { "cut": "800hz" } }] }
 ] } }
 ```
 
@@ -33,15 +33,14 @@ One batched method for every timed thing a client can do. The whole batch is che
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
-| `note` | `target`, `at`, optional `to`, `args`, `dur`, `id`, `tag` | Play a note on a track or instrument. With `to`, play the named instrument into that connection’s collection/processor node. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
+| `note` | `target`, `at`, optional `to`, `args`, `dur`, `id`, `tag` | Play a note on a node or instrument. With `to`, play the named instrument into that connection’s collection/processor node. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
 | `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide` the parameter moves in a straight line to its new value. |
 | `off` | `id`, `at` | Release a note, so its envelope runs its release stage. An `off` before the note starts makes it a short blip. |
 | `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
-| `track` | `name`, `at`, `args`, optional `glide` | Set parameters of a track (what a clip lane like `cut:` sets). `glide` defaults to the parameter's own smoothing. Planned into prepared audio like notes, so a lane can move a parameter many times a second. |
 
 An **`id`** is a whole number the client picks, and it belongs to that connection: another client can use the same one. Using an id that is still sounding, or one that was never opened or has been let go of, fails the batch. Because the client picks it, a `note`, a `set` and an `off` can go in one batch with no round trip. When a client disconnects its held notes are released and its notes still waiting never sound.
 
-| `define` | `source`, `at`, optional `dir` | Compile definitions (`instr`, `track`, effects, `bus`, `ctl`, `config`, tables, buffers, `fn`, `const`, samples) and swap them in at `at`, sample-exactly: the new mixer is built ahead and running notes carry over. Performance statements, clips, scenes, arrangements, patterns, input bindings, quantize settings and `tempo`/`meter` are errors. DSP source uses physical time units. `clock.time` is elapsed engine time in seconds; musical clock signals must be supplied by a client through controls. Compile problems come back like `eval`'s. `dir` is where sample files and `use` modules are looked for. |
+| `define` | `source`, `at`, optional `dir` | Compile definitions (`instr`, `node`, effects, `bus`, `ctl`, `config`, tables, buffers, `fn`, `const`, samples) and swap them in at `at`, sample-exactly: the new mixer is built ahead and running notes carry over. Performance statements, clips, scenes, arrangements, patterns, input bindings, quantize settings and `tempo`/`meter` are errors. DSP source uses physical time units. `clock.time` is elapsed engine time in seconds; musical clock signals must be supplied by a client through controls. Compile problems come back like `eval`'s. `dir` is where sample files and `use` modules are looked for. |
 | `forget` | `at` | Drop every definition, as `new` does. The output layout is kept. |
 
 **Time ownership.** The engine owns a monotonically increasing sample clock. Each client owns its tempo map, meter, musical origin, looping and quantization. Clients convert their positions to samples and send events ahead of playback. A tempo edit can cancel and replace that client's pending events; another client's events stay at their submitted samples. The engine never retimes accepted events.
@@ -93,7 +92,7 @@ Changes are validated together, including cycle detection and ownership, before 
 
 To remove an effect gracefully, send `drain` at the cutoff, then `free_node` later after the tail you want. There is no inferred tail deadline. Disconnecting the owning client removes its graph and records the cleanup for replay; other clients’ private graphs remain.
 
-The live client lowers each compiled track into a processor template plus a collection and processor instance, then submits explicit output connections. Two lowering edits are also available: `import` (`name`, `track`) imports a compiled DSP track template and consumes its implicit instance; `bus` can take `source` to use a named DSP bus. `retain` (`nodes`, `processors`, `buses`, `connections`, each an ID list) reconciles the owner’s graph without recreating retained instances. DSP expressions may still contain bus sends; those stay part of their compiled processor graph.
+The live client lowers each compiled node into a processor template plus a collection and processor instance, then submits explicit output connections. Two lowering edits are also available: `import` (`name`, `node`) imports a compiled DSP node template and consumes its implicit instance; `bus` can take `source` to use a named DSP bus. `retain` (`nodes`, `processors`, `buses`, `connections`, each an ID list) reconciles the owner’s graph without recreating retained instances. DSP expressions may still contain bus sends; those stay part of their compiled processor graph.
 
 Send routing edits as a `routing` op through `events.send`.
 
@@ -215,7 +214,7 @@ Take back this client's events that are still waiting.
 { "method": "events.cancel", "params": { "tag": "lead", "from": 1536000, "release": true } }
 ```
 
-Any event in an `events.send` batch can carry a **`tag`**, a string of the client's choosing. `events.cancel` drops the waiting events (notes, `set`s, `off`s, `control` and `track` changes) with that tag that are at or after **`from`** (a time as for `at`; default `"now"`). Without `tag` it drops all of this client's waiting events. Other clients' events are never touched. With **`release`: true**, held notes with that tag that are already sounding are also let go of at `from`. A held note whose `off` was taken back is held again.
+Any event in an `events.send` batch can carry a **`tag`**, a string of the client's choosing. `events.cancel` drops the waiting events (notes, `set`s, `off`s, `control` and routing changes) with that tag that are at or after **`from`** (a time as for `at`; default `"now"`). Without `tag` it drops all of this client's waiting events. Other clients' events are never touched. With **`release`: true**, held notes with that tag that are already sounding are also let go of at `from`. A held note whose `off` was taken back is held again.
 
 **Result:** `{ "cancelled": 12, "released": 1 }`
 
@@ -237,10 +236,10 @@ The engine's state. **Result** includes:
 - **`clock`** — `sample`, `seconds`, `voices`
 - **`sample_rate`**, **`channels`**, **`processing_latency`** (DSP samples before the limiter/device)
 - **`realtime`** — counters such as `late_events`, `starved_frames`, `capacity_drops`, `deadline_misses`, `max_render_micros`, `mixer_builds` and `planner_panics`
-- **`controls`** — each `ctl` and track parameter (named `track::param`): `name`, `value`, `target`, `unit` (db shown in dB)
+- **`controls`** — each `ctl` and node parameter (named `node::param`): `name`, `value`, `target`, `unit` (db shown in dB)
 - **`instruments`** — each instrument's `name` and `params` (`name`, `unit`, `default`, `range`)
-- **`tracks`**, **`buses`** — their names
-- **`load`** — what each of this connection's tracks costs to render: `name`, `voices` (sounding now), `voice_cpu` and `chain_cpu`, each a share of the time one block has (smoothed over recent blocks; `voice_cpu` sums every render thread's work, so it can pass 1). Collecting it costs the audio thread a clock read per track per block and never allocates or locks.
+- **`nodes`**, **`buses`** — their names
+- **`load`** — what each of this connection's nodes costs to render: `name`, `voices` (sounding now), `voice_cpu` and `chain_cpu`, each a share of the time one block has (smoothed over recent blocks; `voice_cpu` sums every render thread's work, so it can pass 1). Collecting it costs the audio thread a clock read per node per block and never allocates or locks.
 - **`routing`** — this connection’s processor definitions, buses, instances and connections
 - **`clients`** — this connection, when it has something going: `id`, `voices` (the ids of its held notes) and `waiting` (how many of its events are still waiting)
 
@@ -267,7 +266,7 @@ The engine carries on after a bug rather than going quiet:
 - A voice or effect chain that produces NaN or infinity is silenced alone (voice end reason `invalid_dsp`); a panic inside one voice ends it with reason `panic`.
 - If the process itself dies, the cause is appended to `~/.niminal/crash.log`. The session log written up to that moment is intact: `niminal replay <log> --out set.wav` renders it, and playing it into a new engine restores the same state. Clients reconnect and resubmit their project; there is no automatic restore.
 
-Use `status.load` to find which track is costing the most, and `status.realtime` (`deadline_misses`, `max_render_micros`) to see whether the renderer is keeping up.
+Use `status.load` to find which node is costing the most, and `status.realtime` (`deadline_misses`, `max_render_micros`) to see whether the renderer is keeping up.
 
 ## The engine log
 
@@ -276,11 +275,11 @@ The engine records every accepted `events.send` and `events.cancel`, with the ti
 ## Minimal client flow
 
 ```json
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":4,"client":"example"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":4,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices","transactions"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":5,"client":"example"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":5,"sample_rate":48000,"channels":2,"topics":["clock","meters","notices","transactions"]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"events.send","params":{"events":[
-    {"op":"define","at":"now","source":"instr x(freq: hz) { osc(sine, freq) * env[1 | 20ms 0] }\ntrack t { instrument = x }"},
+    {"op":"define","at":"now","source":"instr x(freq: hz) { osc(sine, freq) * env[1 | 20ms 0] }\nnode t { instrument = x }"},
     {"op":"note","target":"t","at":96000,"dur":"250ms","args":{"freq":"c4"}}]}}
 ← {"jsonrpc":"2.0","id":2,"result":{"accepted":2,"late":0,"first":0,"horizon":8192}}
 

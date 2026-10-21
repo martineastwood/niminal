@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use niminal_engine::{Route, TrackDef, execution_order};
+use niminal_engine::{Route, NodeDef, execution_order};
 use niminal_score::{MAX_DEGREES, Tempo, Time, Tuning, Value};
 
 use crate::ast::*;
@@ -16,7 +16,7 @@ use crate::lower::{
 };
 use crate::opcodes::Registry;
 use crate::parser;
-use crate::program::{Instrument, Program, TrackInfo};
+use crate::program::{Instrument, Program, NodeInfo};
 use crate::sample::Samples;
 
 type Res<T> = Result<T, Diagnostic>;
@@ -58,40 +58,19 @@ impl Default for CompileOptions {
     }
 }
 
-/// Spell out the short forms: a bus with a body is also a track that reads the bus and processes it.
+/// Lower processor parameters to named controls.
 fn desugar(items: Vec<Item>) -> Vec<Item> {
     let mut out = Vec::with_capacity(items.len());
     for mut item in items {
         match &mut item {
-            Item::Bus(bus) => {
-                if let Some(mut body) = bus.body.take() {
-                    for stmt in &mut body {
-                        for e in stmt.exprs_mut() {
-                            rename(e, "it", &bus.name.name);
-                        }
-                    }
-                    // a name no one can type, so it never meets a track of the user's
-                    let name = Ident {
-                        name: format!("{}.fx", bus.name.name),
-                        span: bus.name.span,
-                    };
-                    out.push(Item::Track(TrackDecl {
-                        name,
-                        params: Vec::new(),
-                        body,
-                        options: Vec::new(),
-                        span: bus.name.span,
-                    }));
-                }
-            }
-            Item::Track(track) => {
-                // a parameter is a control called `track::param`, and the body reads it by its short name
-                for param in std::mem::take(&mut track.params) {
+            Item::Node(node) | Item::Processor(node) => {
+                // a parameter is a control called `node::param`, and the body reads it by its short name
+                for param in std::mem::take(&mut node.params) {
                     let Some(default) = param.default else {
                         continue;
                     };
-                    let long = format!("{}::{}", track.name.name, param.name.name);
-                    for stmt in &mut track.body {
+                    let long = format!("{}::{}", node.name.name, param.name.name);
+                    for stmt in &mut node.body {
                         for e in stmt.exprs_mut() {
                             rename(e, &param.name.name, &long);
                         }
@@ -112,10 +91,117 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
     out
 }
 
-/// A track that does nothing but play the instrument of its own name.
-fn plays_its_namesake(track: &TrackDecl) -> bool {
-    matches!(track.body.as_slice(), [Stmt::Bind { name, value }]
-        if name.name == "instrument" && matches!(&value.kind, ExprKind::Name(n) if *n == track.name.name))
+fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
+    // Collections own note defaults and routing. Persistent DSP belongs to processors.
+    let processor_names: Vec<String> = parsed
+        .iter()
+        .filter_map(|item| match item {
+            Item::Processor(d) => Some(d.name.name.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut processor_inputs = BTreeMap::new();
+    for item in parsed.iter_mut() {
+        match item {
+            Item::Processor(d) => {
+                if d.body
+                    .iter()
+                    .any(|s| matches!(s, Stmt::Bind { name, .. } if name.name == "instrument"))
+                {
+                    return Err(Diagnostic::new(
+                        "a processor cannot select an instrument; select it on the part or note",
+                        d.span,
+                    ));
+                }
+            }
+            Item::Node(d) => {
+                if !d.params.is_empty() {
+                    return Err(Diagnostic::new(
+                        "collection nodes have no DSP parameters; declare them on a processor",
+                        d.span,
+                    ));
+                }
+                for stmt in &mut d.body {
+                    let Stmt::Bind { name, value } = stmt else {
+                        return Err(Diagnostic::new(
+                            "a collection accepts instrument, output, gain and pan; put DSP in a processor",
+                            d.span,
+                        ));
+                    };
+                    match name.name.as_str() {
+                        "instrument" | "gain" | "pan" => {}
+                        "output" => {
+                            let ExprKind::Name(destination) = &value.kind else {
+                                return Err(Diagnostic::new(
+                                    "output is the name of a bus or processor",
+                                    value.span,
+                                ));
+                            };
+                            let destination = if processor_names.contains(destination) {
+                                processor_inputs
+                                    .entry(destination.clone())
+                                    .or_insert_with(|| format!("{destination}.__input"))
+                                    .clone()
+                            } else {
+                                destination.clone()
+                            };
+                            name.name = "out".into();
+                            *value = Expr {
+                                span: value.span,
+                                kind: ExprKind::Call {
+                                    name: Ident {
+                                        name: "to".into(),
+                                        span: name.span,
+                                    },
+                                    args: vec![
+                                        Arg {
+                                            name: None,
+                                            receiver: true,
+                                            value: Expr {
+                                                kind: ExprKind::Name("it".into()),
+                                                span: name.span,
+                                            },
+                                        },
+                                        Arg {
+                                            name: None,
+                                            receiver: false,
+                                            value: Expr {
+                                                kind: ExprKind::Name(destination),
+                                                span: name.span,
+                                            },
+                                        },
+                                    ],
+                                },
+                            };
+                        }
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "a collection accepts instrument, output, gain and pan; put DSP in a processor",
+                                name.span,
+                            ));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for input in processor_inputs.values() {
+        parsed.push(Item::Bus(BusDecl {
+            name: Ident {
+                name: input.clone(),
+                span: Span::default(),
+            },
+            layout: None,
+        }));
+    }
+    Ok(processor_inputs)
+}
+
+/// A collection may share the name of its default instrument.
+fn plays_its_namesake(node: &NodeDecl) -> bool {
+    node.body.iter().any(|stmt| matches!(stmt, Stmt::Bind { name, value }
+        if name.name == "instrument" && matches!(&value.kind, ExprKind::Name(n) if *n == node.name.name)))
 }
 
 /// Every use of the name `from` in `e` becomes `to`.
@@ -213,17 +299,18 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
         parsed.retain(|item|!matches!(item,Item::Config(config) if options.namespaces.iter().any(|(start,end,_)|config.span.start>=*start&&config.span.start<*end)));
     }
+    let processor_inputs = prepare_routing(&mut parsed).map_err(|d| vec![d])?;
     let mut buffer_controls = Vec::new();
     let mut array_controls = BTreeMap::new();
     let mut control_types = BTreeMap::new();
     for item in &mut parsed {
-        if let Item::Track(track) = item {
+        if let Item::Node(node) | Item::Processor(node) = item {
             let mut params = Vec::new();
-            for mut param in std::mem::take(&mut track.params) {
+            for mut param in std::mem::take(&mut node.params) {
                 if matches!(&param.ty,Some(TypeSpec::Unit(t)) if t.name=="buffer") {
                     if let Some(default) = param.default.take() {
                         buffer_controls
-                            .push((format!("{}::{}", track.name.name, param.name.name), default));
+                            .push((format!("{}::{}", node.name.name, param.name.name), default));
                         param.default = Some(Expr {
                             kind: ExprKind::Num {
                                 value: 0.,
@@ -238,7 +325,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                         fn expand(
                             value: &Expr,
                             path: &str,
-                            track: &str,
+                            node: &str,
                             template: &ParamDef,
                             params: &mut Vec<ParamDef>,
                             paths: &mut Vec<String>,
@@ -257,7 +344,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                                                 expand(
                                                     v,
                                                     &format!("{path}[{i}]"),
-                                                    track,
+                                                    node,
                                                     &inner,
                                                     params,
                                                     paths,
@@ -274,7 +361,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                             params.push(param);
                             paths.push(path.to_string());
                             Expr {
-                                kind: ExprKind::Name(format!("{track}::{path}")),
+                                kind: ExprKind::Name(format!("{node}::{path}")),
                                 span: value.span,
                             }
                         }
@@ -282,7 +369,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                         let replacement = expand(
                             &default,
                             &param.name.name,
-                            &track.name.name,
+                            &node.name.name,
                             &param,
                             &mut params,
                             &mut paths,
@@ -294,13 +381,13 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                                 e.for_each_child_mut(&mut |c| replace(c, name, value));
                             }
                         }
-                        for statement in &mut track.body {
+                        for statement in &mut node.body {
                             for e in statement.exprs_mut() {
                                 replace(e, &param.name.name, &replacement);
                             }
                         }
                         array_controls
-                            .insert(format!("{}::{}", track.name.name, param.name.name), paths);
+                            .insert(format!("{}::{}", node.name.name, param.name.name), paths);
                     }
                 } else {
                     params.push(param);
@@ -310,12 +397,12 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 if let Some(ty) = &param.ty
                     && !matches!(ty,TypeSpec::Unit(t) if t.name=="buffer") {
                         control_types.insert(
-                            format!("{}::{}", track.name.name, param.name.name),
+                            format!("{}::{}", node.name.name, param.name.name),
                             ty.clone(),
                         );
                     }
             }
-            track.params = params;
+            node.params = params;
         }
     }
     let mut items = desugar(parsed);
@@ -344,14 +431,15 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Item::Const { name, .. } => (name, "constant"),
             Item::Bus(d) => (&d.name, "bus"),
             Item::Buffer(d) => (&d.name, "buffer"),
-            Item::Track(d) => (&d.name, "track"),
+            Item::Node(d) => (&d.name, "node"),
+            Item::Processor(d) => (&d.name, "processor"),
             Item::Sample(d) => (&d.name, if d.is_kit { "kit" } else { "sample" }),
             _ => continue,
         };
         match names.kind_of(&ident.name) {
             None => names.add(&ident.name, kind),
-            // a track may play the instrument of its own name, and share it
-            Some("instrument") if matches!(item, Item::Track(t) if plays_its_namesake(t)) => {}
+            // a node may play the instrument of its own name, and share it
+            Some("instrument") if matches!(item, Item::Node(t) if plays_its_namesake(t)) => {}
             Some(existing) if existing != kind => {
                 errors.push(Diagnostic::new(
                     format!(
@@ -437,7 +525,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                         }
                         Ok(kind) if kind.unit().is_none_or(|u| u == control.unit) => {}
                         Ok(_) => errors.push(Diagnostic::new(
-                            "track parameter default has the wrong unit",
+                            "node parameter default has the wrong unit",
                             name.span,
                         )),
                         Err(error) => errors.push(error),
@@ -498,6 +586,13 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 Err(d) => errors.push(d),
             }
         }
+    }
+
+    // Unlike a declared bus (mono by default), a processor's input preserves the
+    // complete incoming layout, including every channel read by its graph.
+    for input in processor_inputs.values() {
+        let bus = names.bus(input).expect("processor input bus was registered");
+        names.bus_layouts[bus] = names.master;
     }
 
     let mut defined = Defined::default();
@@ -612,14 +707,14 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         mut failed,
     } = defined;
 
-    // Track 0 plays bare instruments, so it may send to any bus an instrument does.
-    let implicit = TrackInfo {
+    // Node 0 plays bare instruments, so it may send to any bus an instrument does.
+    let implicit = NodeInfo {
         accepts_notes: true,
         taps: Vec::new(),
         name: String::new(),
         instrument: None,
         defaults: BTreeMap::new(),
-        def: TrackDef {
+        def: NodeDef {
             meter: None,
             transition: (0, 0.0),
             controls: Vec::new(),
@@ -655,21 +750,22 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             },
         },
     };
-    let mut tracks = vec![implicit];
-    let mut track_spans = vec![Span::default()];
+    let mut nodes = vec![implicit];
+    let mut node_spans = vec![Span::default()];
     for item in &items {
-        let Item::Track(decl) = item else { continue };
+        let (Item::Node(decl) | Item::Processor(decl)) = item else { continue };
         let name = decl.name.name.as_str();
-        if tracks.iter().skip(1).any(|t| t.name == name) || failed.contains(&name) {
+        if nodes.iter().skip(1).any(|t| t.name == name) || failed.contains(&name) {
             errors.push(Diagnostic::new(
-                format!("track `{name}` is defined twice"),
+                format!("node `{name}` is defined twice"),
                 decl.name.span,
             ));
             continue;
         }
         names.samples = owned_samples(options, &decl.name.name);
-        match compile_track(
+        match compile_node(
             decl,
+            matches!(item, Item::Node(_)),
             &instruments,
             &failed,
             &samples_state.names,
@@ -677,9 +773,17 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             &registry,
             &names,
         ) {
-            Ok(Some(t)) => {
-                tracks.push(t);
-                track_spans.push(decl.name.span);
+            Ok(Some(mut t)) => {
+                if let Some(input) = processor_inputs.get(&decl.name.name) {
+                    let bus = names.bus(input).expect("processor input bus was declared");
+                    for source in &mut t.def.inputs {
+                        if let niminal_engine::ChainInput::It { channel } = *source {
+                            *source = niminal_engine::ChainInput::Bus { bus, channel };
+                        }
+                    }
+                }
+                nodes.push(t);
+                node_spans.push(decl.name.span);
             }
             Ok(None) => failed.push(name),
             Err(d) => {
@@ -689,15 +793,15 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
     }
 
-    let defs: Vec<TrackDef> = tracks.iter().map(|t| t.def.clone()).collect();
+    let defs: Vec<NodeDef> = nodes.iter().map(|t| t.def.clone()).collect();
     if let Err(cycle) = execution_order(&defs) {
         let path: Vec<&str> = cycle
             .iter()
             .chain(cycle.first())
-            .map(|&i| tracks[i].name.as_str())
+            .map(|&i| nodes[i].name.as_str())
             .collect();
         errors.push(
-            Diagnostic::new(format!("tracks feed back through buses or buffers: {}", path.join(" -> ")), track_spans[cycle[0]])
+            Diagnostic::new(format!("nodes feed back through buses or buffers: {}", path.join(" -> ")), node_spans[cycle[0]])
                 .with_help("a bus or shared buffer has to be written before it is read; break a bus loop with `late`, by sending a late copy: `echo += late(out)`"),
         );
     }
@@ -714,10 +818,10 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 .collect(),
             array_controls,
             bus_meters: Vec::new(),
-            profile: Arc::new(niminal_engine::Profile::new(tracks.len())),
+            profile: Arc::new(niminal_engine::Profile::new(nodes.len())),
             source: source.to_string(),
             samples: options.samples.clone(),
-            taps: tracks
+            taps: nodes
                 .iter()
                 .flat_map(|t| t.taps.clone())
                 .chain(instruments.iter().flat_map(|i| i.taps.clone()))
@@ -739,7 +843,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                     .map(|(_, name, buffer)| (name, buffer))
                     .collect()
             },
-            tracks,
+            nodes,
             sample_names: samples_state.names,
             choke_groups: samples_state.groups,
         };
@@ -752,17 +856,18 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     }
 }
 
-/// A track's chain, plus the instrument named by its `instrument = ...` line.
+/// A node's chain, plus the instrument named by its `instrument = ...` line.
 /// `None` when that instrument failed to compile, which is already reported.
-fn compile_track(
-    decl: &TrackDecl,
+fn compile_node(
+    decl: &NodeDecl,
+    collection: bool,
     instruments: &[Instrument],
     failed: &[&str],
     sample_names: &[String],
     tempo: Tempo,
     registry: &Registry,
     names: &Names,
-) -> Res<Option<TrackInfo>> {
+) -> Res<Option<NodeInfo>> {
     let mut instrument_line: Option<&Expr> = None;
     let mut mixer = Mixer::default();
     let mut rest: Vec<&Stmt> = Vec::new();
@@ -776,7 +881,7 @@ fn compile_track(
                 };
                 if line.is_some() {
                     return Err(Diagnostic::new(
-                        format!("a track has only one `{}` line", name.name),
+                        format!("a node has only one `{}` line", name.name),
                         name.span,
                     ));
                 }
@@ -785,7 +890,7 @@ fn compile_track(
             Stmt::Bind { name, value } if name.name == "instrument" => {
                 if instrument_line.is_some() {
                     return Err(Diagnostic::new(
-                        "a track has only one instrument",
+                        "a node has only one instrument",
                         name.span,
                     ));
                 }
@@ -810,7 +915,7 @@ fn compile_track(
     let chain = compile_chain(
         &decl.name,
         &rest,
-        instrument.is_some(),
+        collection,
         &mixer,
         tempo,
         registry,
@@ -825,13 +930,13 @@ fn compile_track(
     let voice_buffer_reads = instrument
         .map(|i| instruments[i].graph.buffer_reads().to_vec())
         .unwrap_or_default();
-    Ok(Some(TrackInfo {
-        accepts_notes: instrument.is_some(),
+    Ok(Some(NodeInfo {
+        accepts_notes: collection,
         taps: chain.taps.clone(),
         name: decl.name.name.clone(),
         instrument,
         defaults,
-        def: TrackDef {
+        def: NodeDef {
             meter: None,
             transition: (0, 0.0),
             controls: Vec::new(),
@@ -2299,39 +2404,12 @@ mod tests {
     }
 
 
-    const SPEC_OPCODES: &str = "
-fn one_pole(x, cutoff: hz) {
-  state y = 0.0
-  a = exp(-2 * pi * cutoff / sample_rate)
-  y = x * (1 - a) + y * a
-  y
-}
-
-fn drive(x, amount: 0..1 = 0.5) {
-  (x * (1 + amount * 9)).tanh
-}
-
-fn my_dc_block(x) {
-  state x1 = 0.0
-  state y1 = 0.0
-  y = x - x1 + 0.995 * y1
-  x1 = x
-  y1 = y
-  y
-}
-
-fn fold(x, amount: 0..1 = 0.5) {
-  (x * (1 + amount * 8)).sin
-}
-";
+    const SPEC_OPCODES: &str = "\nfn one_pole(x, cutoff: hz) {\n  state y = 0.0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}\n\nfn drive(x, amount: 0..1 = 0.5) {\n  (x * (1 + amount * 9)).tanh\n}\n\nfn my_dc_block(x) {\n  state x1 = 0.0\n  state y1 = 0.0\n  y = x - x1 + 0.995 * y1\n  x1 = x\n  y1 = y\n  y\n}\n\nfn fold(x, amount: 0..1 = 0.5) {\n  (x * (1 + amount * 8)).sin\n}\n";
 
     #[test]
     fn the_specs_example_functions_compile_and_can_be_used() {
         ok(&format!(
-            "{SPEC_OPCODES}
-instr a(freq: hz) {{ osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz) }}
-instr b(freq: hz) {{ osc(sine, freq).fold(amount: env[0 2sec 1 2sec 0]).my_dc_block }}
-instr c(freq: hz) {{ drive(osc(saw, freq)) }}"
+            "{SPEC_OPCODES}\ninstr a(freq: hz) {{ osc(saw, freq).drive(amount: 0.3).one_pole(cutoff: 800hz) }}\ninstr b(freq: hz) {{ osc(sine, freq).fold(amount: env[0 2sec 1 2sec 0]).my_dc_block }}\ninstr c(freq: hz) {{ drive(osc(saw, freq)) }}"
         ));
     }
 
@@ -2441,10 +2519,7 @@ instr c(freq: hz) {{ drive(osc(saw, freq)) }}"
     #[test]
     fn a_broken_function_is_reported_once_even_if_it_is_used() {
         let errs = errors(
-            "
-fn bad(x) { x + undefined_thing }
-instr a(f: hz) { osc(saw, f).bad }
-",
+            "\nfn bad(x) { x + undefined_thing }\ninstr a(f: hz) { osc(saw, f).bad }\n",
         );
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert_eq!(errs[0].message, "`undefined_thing` is not defined");
@@ -2601,15 +2676,11 @@ instr a(f: hz) { osc(saw, f).bad }
     }
 
     #[test]
-    fn routing_a_track_to_a_bus() {
-        let p = ok("
-bus fx
-track a { instrument = i\n out = it.to(fx) }
-track b { out = fx }
-instr i(f: hz) { osc(sine, f) }");
-        assert_eq!(p.tracks[1].def.route, niminal_engine::Route::Bus(0));
+    fn routing_a_node_to_a_bus() {
+        let p = ok("\nbus fx\nnode a { instrument = i\n output = fx }\nprocessor b { out = fx }\ninstr i(f: hz) { osc(sine, f) }");
+        assert_eq!(p.nodes[1].def.route, niminal_engine::Route::Bus(0));
         assert_eq!(
-            p.tracks[2].def.inputs,
+            p.nodes[2].def.inputs,
             [niminal_engine::ChainInput::Bus { bus: 0, channel: 0 }]
         );
     }
@@ -2632,7 +2703,7 @@ instr i(f: hz) { osc(sine, f) }");
         );
         assert_eq!(
             msg("instr a(f: hz) { osc(saw, it) }"),
-            "`it` is only available inside a track, or a function given to `map`"
+            "`it` is only available inside a node, or a function given to `map`"
         );
         assert_eq!(
             msg("instr a(f: hz) { it = 1 }"),
@@ -2640,7 +2711,7 @@ instr i(f: hz) { osc(sine, f) }");
         );
         assert_eq!(
             msg("instr a(f: hz) { instrument = 1\n0.5 }"),
-            "`instrument` is only available in a track"
+            "`instrument` is only available in a node"
         );
         // only sends: silent but valid
         ok("bus b\ninstr a(f: hz) { b += osc(saw, f) }");
@@ -2651,7 +2722,7 @@ instr i(f: hz) { osc(sine, f) }");
         let with = |body: &str| format!("bus space\n{body}");
         assert_eq!(
             msg(&with("instr a(f: hz) { osc(saw, space) }")),
-            "`space` is a bus, and only a track can read a bus"
+            "`space` is a bus, and only a processor can read a bus"
         );
         assert_eq!(
             help(&with("instr a(f: hz) { osc(saw, space) }")).as_deref(),
@@ -2709,63 +2780,24 @@ instr i(f: hz) { osc(sine, f) }");
     }
 
     #[test]
-    fn track_errors() {
-        let base = "bus space\ninstr i(f: hz, b: 0..1 = 0.5) { osc(saw, f) }\n";
-        let track = |body: &str| format!("{base}track t {{ {body} }}");
-        assert_eq!(msg(&track("")), "track `t` does nothing");
-        assert_eq!(msg(&track("x = 1")), "track `t` never sets `out`");
-        ok(&track("out = it")); // valid, though silent: nothing feeds `it`
-        assert_eq!(
-            msg(&track("instrument = i\ninstrument = i")),
-            "a track has only one instrument"
-        );
-        assert_eq!(msg(&track("instrument = j")), "no instrument named `j`");
-        assert_eq!(
-            msg(&track("instrument = i(q: 1)")),
-            "`i` has no parameter `q`"
-        );
-        assert_eq!(
-            msg(&track("instrument = i(b: 2)")),
-            "argument `b` must be between 0 and 1, got 2"
-        );
-        assert_eq!(
-            msg(&track("instrument = i\n0.5")),
-            "a track makes sound through `out`"
-        );
-        assert_eq!(
-            msg(&track("instrument = i\nout = it.to(spce)")),
-            "`spce` is not defined"
-        );
-        assert_eq!(
-            msg(&track("instrument = i\nout = it.to(1)")),
-            "`to` takes the name of a bus"
-        );
-        assert_eq!(
-            msg(&track("instrument = i\nout = it.gain(1).to(space).gain(1)")),
-            "`to` can only end the line that sets a track's `out`"
-        );
-        assert_eq!(
-            msg(&format!(
-                "{base}track t {{ instrument = i }}\ntrack t {{ instrument = i }}"
-            )),
-            "track `t` is defined twice"
-        );
-        // a track with an instrument and nothing else just plays it
-        ok(&track("instrument = i"));
+    fn collections_and_processors_have_distinct_roles() {
+        let base = "instr tone(freq: hz = 440hz) { osc(sine, freq) }\n";
+        ok(&format!("{base}node lead {{ instrument = tone }}"));
+        ok("processor room(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }");
+        assert!(msg(&format!("{base}processor room {{ instrument = tone }}")).contains("cannot select an instrument"));
+        assert!(msg(&format!("{base}node lead {{ instrument = tone\n out = it.lpf(cutoff: 2khz) }}")).contains("put DSP in a processor"));
+        assert!(msg(&format!("{base}node lead(cut: hz = 2khz) {{ instrument = tone }}")).contains("no DSP parameters"));
+        assert!(compile("track lead { instrument = tone }").is_err());
+        assert!(compile("bus room { out = it }").is_err());
     }
 
     #[test]
-    fn feedback_between_tracks_is_an_error_naming_them() {
-        let src = "
-bus x
-bus y
-track a { out = x.lpf(cutoff: 1khz).to(y) }
-track b { out = y.lpf(cutoff: 1khz).to(x) }
-";
+    fn feedback_between_nodes_is_an_error_naming_them() {
+        let src = "\nbus x\nbus y\nprocessor a { out = x.lpf(cutoff: 1khz).to(y) }\nprocessor b { out = y.lpf(cutoff: 1khz).to(x) }\n";
         let d = first_error(src);
         assert!(
-            d.message == "tracks feed back through buses or buffers: a -> b -> a"
-                || d.message == "tracks feed back through buses or buffers: b -> a -> b",
+            d.message == "nodes feed back through buses or buffers: a -> b -> a"
+                || d.message == "nodes feed back through buses or buffers: b -> a -> b",
             "{}",
             d.message
         );
@@ -2773,24 +2805,21 @@ track b { out = y.lpf(cutoff: 1khz).to(x) }
 
         // a late send breaks the loop
         ok(
-            "bus x\nbus y\ntrack a { out = x.lpf(cutoff: 1khz).to(y) }\ntrack b { out = y\n x += late(out) }",
+            "bus x\nbus y\nprocessor a { out = x.lpf(cutoff: 1khz).to(y) }\nprocessor b { out = y\n x += late(out) }",
         );
         // outside a send, `prev` is one sample earlier
-        ok("bus x\ntrack a { out = prev(x) }");
-        let d = first_error("bus x\ntrack a { out = x.to(x) }");
+        ok("bus x\nprocessor a { out = prev(x) }");
+        let d = first_error("bus x\nprocessor a { out = x.to(x) }");
         assert_eq!(
             d.message,
-            "tracks feed back through buses or buffers: a -> a"
+            "nodes feed back through buses or buffers: a -> a"
         );
     }
 
     #[test]
-    fn a_broken_instrument_does_not_cascade_into_its_tracks_and_notes() {
+    fn a_broken_instrument_does_not_cascade_into_its_nodes_and_notes() {
         let errs = errors(
-            "
-instr bad(f: hz) { osc(saw, 440) }
-track t { instrument = bad }
-",
+            "\ninstr bad(f: hz) { osc(saw, 440) }\nnode t { instrument = bad }\n",
         );
         assert_eq!(errs.len(), 1, "{errs:?}");
     }
@@ -3066,9 +3095,9 @@ track t { instrument = bad }
         // mono into 5.1 is centred; stereo into 5.1 takes the front pair
         ok("config { channels: surround(5.1) }\ninstr a(f: hz) { osc(saw, f) }");
         ok("config { channels: surround(5.1) }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f)] }");
-        // 5.1 bus read by a stereo master track folds down
+        // 5.1 bus read by a stereo master node folds down
         ok(
-            "config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\ntrack t { out = hall }",
+            "config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\nprocessor t { out = hall }",
         );
         // unnamed channel lists are taken as whatever layout has that many
         ok(
@@ -3101,31 +3130,20 @@ track t { instrument = bad }
     }
 
     #[test]
-    fn buses_and_tracks_carry_their_layouts() {
-        let p = ok("
-config { channels: stereo }
-bus space: stereo
-bus lfe: mono
-instr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }
-track room { out = space.reverb(room: 0.8) }
-track sub { out = lfe.lpf(cutoff: 100hz) }");
+    fn buses_and_nodes_carry_their_layouts() {
+        let p = ok("\nconfig { channels: stereo }\nbus space: stereo\nbus lfe: mono\ninstr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }\nprocessor room { out = space.reverb(room: 0.8) }\nprocessor sub { out = lfe.lpf(cutoff: 100hz) }");
         assert_eq!(p.bus_layouts, [Layout::Stereo, Layout::Mono]);
         assert_eq!(
-            p.tracks[1].def.inputs.len(),
+            p.nodes[1].def.inputs.len(),
             2,
             "a stereo bus is two inputs"
         );
-        assert_eq!(p.tracks[2].def.inputs.len(), 1);
-        // the sub track works in mono but delivers stereo to the master
-        assert_eq!(p.tracks[2].def.chain.as_ref().unwrap().channels(), 2);
+        assert_eq!(p.nodes[2].def.inputs.len(), 1);
+        // the sub node works in mono but delivers stereo to the master
+        assert_eq!(p.nodes[2].def.chain.as_ref().unwrap().channels(), 2);
         // routing to a bus delivers in that bus's layout
-        let routed = ok("
-config { channels: stereo }
-bus mono_bus: mono
-track t { instrument = i\nout = it.to(mono_bus) }
-track u { out = mono_bus }
-instr i(f: hz) { osc(saw, f).pan }");
-        assert_eq!(routed.tracks[1].def.chain.as_ref().unwrap().channels(), 1);
+        let routed = ok("\nconfig { channels: stereo }\nbus mono_bus: mono\nnode t { instrument = i\noutput = mono_bus }\nprocessor u { out = mono_bus }\ninstr i(f: hz) { osc(saw, f).pan }");
+        assert_eq!(routed.nodes[1].def.chain.as_ref().unwrap().channels(), 1);
     }
 
 
@@ -3137,13 +3155,13 @@ instr i(f: hz) { osc(saw, f).pan }");
 
 
     #[test]
-    fn osc_out_sends_a_tracks_signal() {
-        let track = |body: &str| {
+    fn osc_out_sends_a_nodes_signal() {
+        let node = |body: &str| {
             format!(
-                "instr pluck(freq: hz) {{ osc(saw, freq) }}\ntrack lead {{\n instrument = pluck\n {body}\n}}\n"
+                "instr pluck(freq: hz) {{ osc(saw, freq) }}\nbus lead_audio\nprocessor lead_fx {{{body}}}\nnode lead {{ instrument = pluck\noutput = lead_audio}}\n"
             )
         };
-        let p = ok(&track("out = it.osc_out(\"/vj/level\", port: 9000)"));
+        let p = ok(&node("out = it.osc_out(\"/vj/level\", port: 9000)"));
         assert_eq!(p.taps.len(), 1);
         assert_eq!(
             (
@@ -3154,7 +3172,7 @@ instr i(f: hz) { osc(saw, f).pan }");
             ),
             ("/vj/level", "127.0.0.1", 9000, 30.0)
         );
-        let p = ok(&track(
+        let p = ok(&node(
             "out = it.osc_out(\"/a\", host: \"10.0.0.2\", port: 9001, rate: 5hz).osc_out(\"/b\", port: 9001)",
         ));
         assert_eq!(
@@ -3165,31 +3183,31 @@ instr i(f: hz) { osc(saw, f).pan }");
             [("/a", "10.0.0.2", 5.0), ("/b", "127.0.0.1", 30.0)]
         );
         assert_eq!(
-            msg(&track("out = it.osc_out(\"vj\", port: 9000)")),
+            msg(&node("out = it.osc_out(\"vj\", port: 9000)")),
             "an OSC address starts with `/`"
         );
         assert_eq!(
-            msg(&track("out = it.osc_out(\"/a\")")),
+            msg(&node("out = it.osc_out(\"/a\")")),
             "`osc_out` needs a `port:`"
         );
         assert_eq!(
-            msg(&track("out = it.osc_out(port: 9000)")),
+            msg(&node("out = it.osc_out(port: 9000)")),
             "`osc_out` needs an address"
         );
         assert_eq!(
-            msg(&track("out = it.osc_out(\"/a\", port: 0)")),
+            msg(&node("out = it.osc_out(\"/a\", port: 0)")),
             "a port is a whole number from 1 to 65535"
         );
         assert_eq!(
-            msg(&track("out = it.osc_out(\"/a\", port: 9000, rate: 900hz)")),
+            msg(&node("out = it.osc_out(\"/a\", port: 9000, rate: 900hz)")),
             "`rate` is from 0.5hz to 200hz"
         );
         assert_eq!(
-            msg(&track("out = it.osc_out(\"/a\", prot: 9000)")),
+            msg(&node("out = it.osc_out(\"/a\", prot: 9000)")),
             "`osc_out` has no argument named `prot`"
         );
         assert_eq!(
-            msg(&track("out = it.osc_out(5, port: 9000)")),
+            msg(&node("out = it.osc_out(5, port: 9000)")),
             "an OSC address is text in quotes"
         );
         ok("instr a(f: hz) { osc(saw, f).osc_out(\"/a\", port: 9000) }");
@@ -3202,56 +3220,18 @@ instr i(f: hz) { osc(saw, f).pan }");
 
     #[test]
     fn mixer_lines_are_checked() {
-        let tracks = |body: &str| {
-            format!(
-                "instr pluck(freq: hz) {{ osc(saw, freq) }}\ntrack lead {{\n instrument = pluck\n {body}\n}}\n"
-            )
-        };
-        ok(&tracks("gain = -3db\n pan = 20deg"));
-        ok(&tracks("out = it.lpf(cutoff: 2khz)\n gain = -3db"));
-        assert_eq!(
-            msg(&tracks("gain = -3db\n gain = -1db")),
-            "a track has only one `gain` line"
-        );
-        assert!(msg(&tracks("gain = 20deg")).contains("expects"));
-        assert!(msg(&tracks("pan = 20")).contains("azimuth"));
-        // there is nothing to mix without a sound
-        assert_eq!(
-            msg("track fx {\n gain = -3db\n}"),
-            "track `fx` never sets `out`"
-        );
+        let collection = |body: &str| format!("instr pluck(freq: hz) {{ osc(saw, freq) }}\nnode lead {{ instrument = pluck\n{body}\n}}");
+        ok(&collection("gain = -3db\n pan = 20deg"));
+        assert!(msg(&collection("out = it.lpf(cutoff: 2khz)")).contains("put DSP in a processor"));
+        assert_eq!(msg(&collection("gain = -3db\n gain = -1db")), "a node has only one `gain` line");
+        assert!(msg(&collection("gain = 20deg")).contains("expects"));
+        assert!(msg(&collection("pan = 20")).contains("azimuth"));
     }
-
-
-    /// The notes of a clip with the controls each carries, in time order.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     #[test]
     fn reports_errors_from_several_instruments_without_cascading() {
         let errs = errors(
-            "
-instr a() { osc(saw, 440) }
-instr b() { osc(saw, 440) }
-",
+            "\ninstr a() { osc(saw, 440) }\ninstr b() { osc(saw, 440) }\n",
         );
         assert_eq!(
             errs.len(),
@@ -3261,19 +3241,19 @@ instr b() { osc(saw, 440) }
     }
 
     #[test]
-    fn a_track_parameter_is_a_control_the_track_can_read() {
-        let src = "instr p(freq: hz) { osc(saw, freq) }\ntrack hall(tone: hz = 2khz, drive: 0..1 = 0.2) {\n  instrument = p\n  out = it.lpf(cutoff: tone).gain(drive)\n}\n";
+    fn a_node_parameter_is_a_control_the_node_can_read() {
+        let src = "instr p(freq: hz) { osc(saw, freq) }\nbus hall_audio\nprocessor hall_fx(tone: hz = 2khz, drive: 0..1 = 0.2) {out = hall_audio.lpf(cutoff: tone).gain(drive)}\nnode hall {  instrument = p\noutput = hall_audio}\n";
         let p = ok(src);
         let names: Vec<&str> = p.controls.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["hall::tone", "hall::drive"]);
+        assert_eq!(names, ["hall_fx::tone", "hall_fx::drive"]);
         assert_eq!(p.controls[0].initial, 2000.0);
         assert_eq!(
-            msg("track t(tone: hz) { out = it }"),
-            "track parameter `tone` needs a starting value"
+            msg("processor t(tone: hz) { out = it }"),
+            "processor parameter `tone` needs a starting value"
         );
         assert_eq!(
-            help("track t(tone: hz) { out = it }").as_deref(),
-            Some("for example `track bass(tone: hz = 2khz)`")
+            help("processor t(tone: hz) { out = it }").as_deref(),
+            Some("for example `processor bass(tone: hz = 2khz)`")
         );
     }
 

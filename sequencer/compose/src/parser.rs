@@ -344,12 +344,7 @@ impl Parser {
             self.bump();
             let name = self.ident("a bus name")?;
             let layout = self.eat(&Tok::Colon).then(|| self.expr()).transpose()?;
-            let body = if self.peek() == &Tok::LBrace {
-                Some(self.block()?.0)
-            } else {
-                None
-            };
-            Ok(Item::Bus(BusDecl { name, layout, body }))
+            Ok(Item::Bus(BusDecl { name, layout }))
         } else if self.is_keyword("buffer") {
             let start = self.bump().span;
             let name = self.ident("a buffer name")?;
@@ -391,18 +386,19 @@ impl Parser {
                 tuning,
                 span: start.to(end),
             }))
-        } else if self.is_keyword("track") {
+        } else if self.is_keyword("part") || self.is_keyword("processor") {
+            let processor = self.is_keyword("processor");
             let start = self.bump().span;
-            let name = self.ident("a track name")?;
-            // `track bass = pluck(bright: 0.4)` is `track bass { instrument = pluck(bright: 0.4) }`
-            if self.eat(&Tok::Eq) {
+            let name = self.ident("a part name")?;
+            // `part bass = pluck(bright: 0.4)` is `part bass { instrument = pluck(bright: 0.4) }`
+            if !processor && self.eat(&Tok::Eq) {
                 let value = self.expr()?;
                 let end = self.prev_span();
                 let key = Ident {
                     name: "instrument".into(),
                     span: start,
                 };
-                return Ok(Item::Track(TrackDecl {
+                return Ok(Item::Part(PartDecl {
                     name,
                     params: Vec::new(),
                     body: vec![Stmt::Bind { name: key, value }],
@@ -417,20 +413,15 @@ impl Parser {
             };
             if let Some(p) = params.iter().find(|p| p.default.is_none()) {
                 return Err(Diagnostic::new(
-                    format!("track parameter `{}` needs a starting value", p.name.name),
+                    format!("processor parameter `{}` needs a starting value", p.name.name),
                     p.name.span,
                 )
-                .with_help("for example `track bass(tone: hz = 2khz)`"));
+                .with_help("for example `processor bass(tone: hz = 2khz)`"));
             }
             let (mut body, end) = self.block()?;
-            let options = take_options(&mut body, TRACK_OPTIONS);
-            Ok(Item::Track(TrackDecl {
-                name,
-                params,
-                body,
-                options,
-                span: start.to(end),
-            }))
+            let options = take_options(&mut body, NODE_OPTIONS);
+            let decl = PartDecl { name, params, body, options, span: start.to(end) };
+            Ok(if processor { Item::Processor(decl) } else { Item::Part(decl) })
         } else if self.is_keyword("fn") {
             if !matches!(self.peek_at(1), Tok::Ident(_)) {
                 self.bump();
@@ -556,7 +547,7 @@ impl Parser {
                 };
                 if lanes
                     .iter()
-                    .any(|l| l.track.name == key.name && l.param.name == param.name)
+                    .any(|l| l.node.name == key.name && l.param.name == param.name)
                 {
                     return Err(Diagnostic::new(
                         format!("lane `{}.{}` is given twice", key.name, param.name),
@@ -564,7 +555,7 @@ impl Parser {
                     ));
                 }
                 lanes.push(ArrangementLane {
-                    track: key,
+                    node: key,
                     param,
                     value: lit,
                 });
@@ -1058,7 +1049,12 @@ impl Parser {
                     },
                 ));
             } else {
-                let key = self.ident("a name")?;
+                let mut key = self.ident("a name")?;
+                if self.eat(&Tok::Dot) {
+                    let param = self.ident("a processor parameter")?;
+                    key.name = format!("{}::{}", key.name, param.name);
+                    key.span = key.span.to(param.span);
+                }
                 if bare && matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::RBrace) {
                     let value = Expr {
                         kind: ExprKind::Name(key.name.clone()),
@@ -1175,7 +1171,7 @@ impl Parser {
     /// `bass.reverse`, `lead.transpose(+5st).thin(10%)`, or a command such as `bass.mute` or `verse.start`.
     fn edit(&mut self, at: Option<AtPos>) -> Res<CommandStmt> {
         let start = self.span();
-        let track = self.ident("a track")?;
+        let node = self.ident("a node")?;
         self.expect(&Tok::Dot)?;
         let first = self.span();
         // `bass.mute`, `verse.start`...: the commands, written after the thing they act on
@@ -1184,15 +1180,15 @@ impl Parser {
         {
             let command = match verb.as_str() {
                 "start" => Some(Command::Start {
-                    name: track.clone(),
+                    name: node.clone(),
                     verb: first,
                     then: None,
                 }),
-                "stop" => Some(Command::Stop(track.clone())),
-                "mute" => Some(Command::Mute(track.clone())),
-                "unmute" => Some(Command::Unmute(track.clone())),
-                "solo" => Some(Command::Solo(track.clone())),
-                "unsolo" => Some(Command::Unsolo(Some(track.clone()))),
+                "stop" => Some(Command::Stop(node.clone())),
+                "mute" => Some(Command::Mute(node.clone())),
+                "unmute" => Some(Command::Unmute(node.clone())),
+                "solo" => Some(Command::Solo(node.clone())),
+                "unsolo" => Some(Command::Unsolo(Some(node.clone()))),
                 _ => None,
             };
             if let Some(mut command) = command {
@@ -1230,7 +1226,7 @@ impl Parser {
             let quantize = self.quantize()?;
             return Ok(CommandStmt {
                 at,
-                command: Command::Play { track, what },
+                command: Command::Play { node, what },
                 quantize,
                 span: start.to(self.prev_span()),
             });
@@ -1240,7 +1236,7 @@ impl Parser {
         Ok(CommandStmt {
             at,
             command: Command::Edit {
-                track,
+                node,
                 change: first.to(change.span),
             },
             quantize,
@@ -1879,8 +1875,13 @@ impl Parser {
         self.expect(&Tok::LParen)?;
         let mut args = Vec::new();
         while self.peek() != &Tok::RParen {
-            let name = if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Colon {
-                let n = self.ident("an argument name")?;
+            let name = if matches!(self.peek(), Tok::Ident(_)) && (self.peek_at(1) == &Tok::Colon || (self.peek_at(1) == &Tok::Dot && self.peek_at(3) == &Tok::Colon)) {
+                let mut n = self.ident("an argument name")?;
+                if self.eat(&Tok::Dot) {
+                    let param = self.ident("a processor parameter")?;
+                    n.name = format!("{}::{}", n.name, param.name);
+                    n.span = n.span.to(param.span);
+                }
                 self.bump();
                 Some(n)
             } else {
@@ -2098,8 +2099,8 @@ const INSTR_OPTIONS: &[&str] = &[
     "max", "steal", "same_note", "legato", "priority", "glide", "pitch", "choke", "compensate", "tail", "quantize",
 ];
 
-/// The settings a `track` takes in its body.
-const TRACK_OPTIONS: &[&str] = &["quantize"];
+/// The settings a `node` takes in its body.
+const NODE_OPTIONS: &[&str] = &["quantize"];
 
 fn with_gone(span: Span) -> Diagnostic {
     Diagnostic::new("`with` is gone", span)
@@ -2229,16 +2230,7 @@ mod tests {
         }
     }
 
-    const SAW_LEAD: &str = "
-instr saw_lead(freq: hz, amp: db = -6db) {
-  level = env[0 5ms 1 200ms 0.6 | 300ms 0]
-  osc(saw, freq)
-    .lpf(cutoff: 2khz, res: 0.2)
-    .gain(amp) * level
-}
-
-saw_lead(freq: a3) for 1beat
-";
+    const SAW_LEAD: &str = "\ninstr saw_lead(freq: hz, amp: db = -6db) {\n  level = env[0 5ms 1 200ms 0.6 | 300ms 0]\n  osc(saw, freq)\n    .lpf(cutoff: 2khz, res: 0.2)\n    .gain(amp) * level\n}\n\nsaw_lead(freq: a3) for 1beat\n";
 
     #[test]
     fn parses_the_basic_synth() {
@@ -2313,13 +2305,7 @@ saw_lead(freq: a3) for 1beat
     #[test]
     fn functions_with_state_untyped_parameters_and_results() {
         let items = parse_ok(
-            "
-fn one_pole(x, cutoff: hz) {
-  state y = 0.0
-  a = exp(-2 * pi * cutoff / sample_rate)
-  y = x * (1 - a) + y * a
-  y
-}",
+            "\nfn one_pole(x, cutoff: hz) {\n  state y = 0.0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}",
         );
         let Item::Fn(f) = &items[0] else { panic!() };
         assert_eq!(f.name.name, "one_pole");
@@ -2365,16 +2351,7 @@ fn one_pole(x, cutoff: hz) {
     #[test]
     fn blocks_in_if_and_for_and_index_writes() {
         let i = only_instr(
-            "instr a() {
-  if x > 0 {
-    y = 1
-    z = 2
-  }
-  for n in 1..8 { out += n }
-  buf[i + 1] = 3
-  v = if c { 1 } else if d { 2 } else { 3 }
-  v
-}",
+            "instr a() {\n  if x > 0 {\n    y = 1\n    z = 2\n  }\n  for n in 1..8 { out += n }\n  buf[i + 1] = 3\n  v = if c { 1 } else if d { 2 } else { 3 }\n  v\n}",
         );
         assert!(matches!(&i.body[0], Stmt::Expr(Expr { kind: ExprKind::If { otherwise: None, then, .. }, .. }) if then.len() == 2));
         assert!(matches!(&i.body[1], Stmt::Expr(Expr { kind: ExprKind::For { .. }, .. })));
@@ -2462,37 +2439,24 @@ fn one_pole(x, cutoff: hz) {
     }
 
     #[test]
-    fn buses_tracks_and_add_assign() {
+    fn buses_nodes_and_add_assign() {
         let items = parse_ok(
-            "
-bus space
-bus hall: stereo
-track lead {
-  instrument = pluck(bright: 0.6)
-  out = it.lpf(cutoff: 1khz)
-  space += out.gain(-12db)
-}",
+            "\nbus space\nbus hall: stereo\nbus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: 1khz)\n  space += out.gain(-12db)}\npart lead {  instrument = pluck(bright: 0.6)\noutput = lead_audio}",
         );
         let Item::Bus(b) = &items[0] else { panic!() };
         assert_eq!((b.name.name.as_str(), b.layout.is_none()), ("space", true));
         let Item::Bus(b) = &items[1] else { panic!() };
         assert!(matches!(&b.layout.as_ref().unwrap().kind, ExprKind::Name(n) if n == "stereo"));
-        let Item::Track(t) = &items[2] else { panic!() };
-        assert_eq!(t.name.name, "lead");
-        assert_eq!(t.body.len(), 3);
-        assert!(matches!(&t.body[2], Stmt::AddAssign { name, .. } if name.name == "space"));
+        let Item::Processor(t) = &items[3] else { panic!() };
+        assert_eq!(t.name.name, "lead_fx");
+        assert_eq!(t.body.len(), 2);
+        assert!(matches!(&t.body[1], Stmt::AddAssign { name, .. } if name.name == "space"));
     }
 
     #[test]
     fn channel_lists_destructuring_and_config() {
         let items = parse_ok(
-            "
-config { channels: surround(5.1) }
-instr a(f: hz) {
-  [l, r] = osc(saw, f).pan(azimuth: 20deg)
-  mid = (l + r) * 0.5
-  [mid + l, mid - r]
-}",
+            "\nconfig { channels: surround(5.1) }\ninstr a(f: hz) {\n  [l, r] = osc(saw, f).pan(azimuth: 20deg)\n  mid = (l + r) * 0.5\n  [mid + l, mid - r]\n}",
         );
         let Item::Config(c) = &items[0] else { panic!() };
         assert_eq!(c.entries[0].0.name, "channels");

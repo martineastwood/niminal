@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 
-use niminal_lang::{CompileOptions, ControlDef, Diagnostic, Instrument, Program, TrackInfo, resolve_target};
+use niminal_lang::{CompileOptions, ControlDef, Diagnostic, Instrument, Program, NodeInfo, resolve_target};
 use niminal_score::{Event, Tempo, Time, Tuning};
 
 use crate::ast::*;
@@ -24,7 +24,7 @@ pub struct QuantizeConfig {
     pub default: Option<Quantize>,
     pub play: Option<Quantize>,
     pub instrument: Option<Quantize>,
-    pub track: Option<Quantize>,
+    pub part: Option<Quantize>,
     pub control: Option<Quantize>,
     pub tempo: Option<Quantize>,
 }
@@ -84,6 +84,14 @@ impl Deref for Composition {
 }
 
 impl Composition {
+    /// Resolve a musical note while keeping engine graph terminology out of diagnostics.
+    pub fn plan(&self, event: &Event) -> Result<niminal_lang::NotePlan, niminal_lang::ArgError> {
+        self.program.plan(event).map_err(|mut error| {
+            error.message = error.message.replace("instrument or node", "instrument or part");
+            error
+        })
+    }
+
     /// What drives the control called `name`, if anything.
     pub fn input(&self, name: &str) -> Option<&ControlBinding> {
         self.inputs.iter().find(|(n, _)| n == name).map(|(_, b)| b)
@@ -103,10 +111,6 @@ impl Names<'_> {
 }
 
 fn names_of<'a>(items: &[Item], controls: &'a [ControlDef]) -> Names<'a> {
-    let clip_names: Vec<&str> = items
-        .iter()
-        .filter_map(|i| if let Item::Clip(b) = i { Some(b.name.name.as_str()) } else { None })
-        .collect();
     let mut kinds: Vec<(String, &'static str)> = Vec::new();
     for item in items {
         let (ident, kind) = match item {
@@ -117,8 +121,9 @@ fn names_of<'a>(items: &[Item], controls: &'a [ControlDef]) -> Names<'a> {
             Item::Const { name, .. } => (name, "constant"),
             Item::Bus(d) => (&d.name, "bus"),
             Item::Buffer(d) => (&d.name, "buffer"),
-            // a clip with an `instrument:` is a track of its own name; the clip may share it
-            Item::Track(d) => (&d.name, if clip_names.contains(&d.name.name.as_str()) { "part" } else { "track" }),
+            // a clip with an `instrument:` is a part of its own name; the clip may share it
+            Item::Processor(d) => (&d.name, "processor"),
+            Item::Part(d) => (&d.name, "part"),
             Item::Sample(d) => (&d.name, if d.is_kit { "kit" } else { "sample" }),
             Item::Arrangement(d) => (&d.name, "arrangement"),
             Item::Def(d) => (&d.name, "score function"),
@@ -128,7 +133,7 @@ fn names_of<'a>(items: &[Item], controls: &'a [ControlDef]) -> Names<'a> {
             kinds.push((ident.name.clone(), kind));
         }
     }
-    // a clip with an `instrument:` is also a track of that name
+    // a clip with an `instrument:` is also a part of that name
     for item in items {
         if let Item::Clip(b) = item
             && b.entries.iter().any(|(k, _)| k.name == "instrument")
@@ -158,8 +163,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
         errors.push(d);
         Tempo { bpm: DEFAULT_BPM, beats_per_bar, tuning: Tuning::default() }
     });
-    let implicit = implicit_tracks(&items);
-    // the clips' `instrument:` is the track they stand for, not something to play
+    let implicit = implicit_nodes(&items);
+    // the clips' `instrument:` is the part they stand for, not something to play
     for item in &mut items {
         if let Item::Clip(block) = item
             && let Some(at) = block.entries.iter().position(|(key, _)| key.name == "instrument")
@@ -179,7 +184,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
     let tempo = Tempo { tuning: program.tempo.tuning, ..tempo };
 
     let names = names_of(&items, &program.controls);
-    let track_notes = match track_notes(&items) {
+    let node_notes = match node_notes(&items) {
         Ok(notes) => notes,
         Err(d) => {
             errors.push(d);
@@ -189,9 +194,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
     let cx = Context {
         tempo,
         names: &names,
-        track_notes: &track_notes,
+        node_notes: &node_notes,
         instruments: &program.instruments,
-        tracks: &program.tracks,
+        nodes: &program.nodes,
         failed: &[],
         sample_names: &program.sample_names,
         samples: &options.samples,
@@ -211,7 +216,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
     let mut notes = Vec::new();
     for item in &items {
         let Item::Note(note) = item else { continue };
-        match check_note(note, &program.instruments, &program.tracks, tempo) {
+        match check_note(note, &program.instruments, &program.nodes, tempo) {
             Ok(e) => notes.push(e),
             Err(d) => errors.push(d),
         }
@@ -231,18 +236,18 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
     Ok(Composition { program, source: source.to_string(), tempo, quantize, inputs, notes, performance, arrangements })
 }
 
-/// The `notes = ...` line of each track that has one.
-fn track_notes(items: &[Item]) -> Res<HashMap<String, Expr>> {
+/// The `notes = ...` line of each part that has one.
+fn node_notes(items: &[Item]) -> Res<HashMap<String, Expr>> {
     let mut out = HashMap::new();
     for item in items {
-        let Item::Track(track) = item else { continue };
-        for stmt in &track.body {
+        let Item::Part(node) = item else { continue };
+        for stmt in &node.body {
             let Stmt::Bind { name, value } = stmt else { continue };
             if name.name != "notes" {
                 continue;
             }
-            if out.insert(track.name.name.clone(), value.clone()).is_some() {
-                return Err(Diagnostic::new("a track has only one `notes` line", name.span));
+            if out.insert(node.name.name.clone(), value.clone()).is_some() {
+                return Err(Diagnostic::new("a part has only one `notes` line", name.span));
             }
         }
     }
@@ -252,6 +257,7 @@ fn track_notes(items: &[Item]) -> Res<HashMap<String, Expr>> {
 /// A diagnostic about the DSP text, placed in the composition it was made from.
 fn locate(dsp: &DspSource, mut d: Diagnostic) -> Diagnostic {
     d.span = dsp.locate(d.span);
+    d.message = d.message.replace("a node has only one", "a part has only one");
     d
 }
 
@@ -495,20 +501,20 @@ fn substitute_expr(e: &mut Expr, name: &str, value: &Expr) {
     e.for_each_child_mut(&mut |child| substitute_expr(child, name, value));
 }
 
-/// Naming an instrument where a part goes (`pluck.play([c4 e4])`, or in a scene) makes a track of that name
+/// Naming an instrument where a part goes (`pluck.play([c4 e4])`, or in a scene) makes a part of that name
 /// playing it, so there is nothing to declare for the simple case. The names of those instruments.
-fn implicit_tracks(items: &[Item]) -> Vec<String> {
+fn implicit_nodes(items: &[Item]) -> Vec<String> {
     let mut used: Vec<Ident> = Vec::new();
     for item in items {
         match item {
             Item::Command(c) => match &c.command {
-                Command::Play { track: t, .. }
+                Command::Play { node: t, .. }
                 | Command::Stop(t)
                 | Command::Mute(t)
                 | Command::Unmute(t)
                 | Command::Solo(t)
                 | Command::Unsolo(Some(t))
-                | Command::Edit { track: t, .. }
+                | Command::Edit { node: t, .. }
                 | Command::Start { name: t, .. } => used.push(t.clone()),
                 _ => {}
             },
@@ -522,7 +528,7 @@ fn implicit_tracks(items: &[Item]) -> Vec<String> {
             .iter()
             .any(|i| matches!(i, Item::Instr(d) if d.name.name == name.name));
         let taken = items.iter().any(|i| match i {
-            Item::Track(t) => t.name.name == name.name,
+            Item::Part(t) => t.name.name == name.name,
             Item::Clip(b) => b.name.name == name.name,
             Item::Scene(b) => b.name.name == name.name,
             Item::Bind { name: n, .. } => n.name == name.name,
@@ -546,7 +552,7 @@ fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
                         "default" => &mut config.default,
                         "play" => &mut config.play,
                         "instr" => &mut config.instrument,
-                        "track" => &mut config.track,
+                        "part" => &mut config.part,
                         "ctl" => &mut config.control,
                         "tempo" => &mut config.tempo,
                         other => {
@@ -555,7 +561,7 @@ fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
                                 key.span,
                             );
                             d = d.with_help(
-                                "the kinds are: default, play, instr, track, ctl, tempo",
+                                "the kinds are: default, play, instr, node, ctl, tempo",
                             );
                             return Err(d);
                         }
@@ -572,7 +578,7 @@ fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
             Item::Clip(b) | Item::Scene(b) => {
                 crate::perform::definition_quantum(&b.options)?;
             }
-            Item::Track(t) => {
+            Item::Part(t) => {
                 crate::perform::definition_quantum(&t.options)?;
             }
             _ => {}
@@ -657,12 +663,12 @@ fn tempo_of(items: &[Item], beats_per_bar: f64, tuning: Tuning) -> Res<Tempo> {
 fn check_note(
     note: &NoteStmt,
     instruments: &[Instrument],
-    tracks: &[TrackInfo],
+    nodes: &[NodeInfo],
     tempo: Tempo,
 ) -> Res<Event> {
     let name = &note.target;
     let target =
-        resolve_target(instruments, tracks, &name.name).map_err(|e| arg_error(e, name.span))?;
+        resolve_target(instruments, nodes, &name.name).map_err(|e| arg_error(e, name.span))?;
     let instr = &instruments[target.instrument];
 
     let at = match &note.at {

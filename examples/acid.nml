@@ -5,8 +5,9 @@
 config { channels: stereo }
 tempo 126bpm
 
-bus echo: stereo {
-  out = it.delay(time: 3/16beat, feedback: 0.45).lpf(cutoff: 2khz).gain(-4db)
+bus echo: stereo
+processor echo_return {
+  out = echo.delay(time: 3/16beat, feedback: 0.45).lpf(cutoff: 2khz).gain(-4db)
 }
 
 // `legato` keeps one voice while notes overlap, and `glide` slides the pitch between them.

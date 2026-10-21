@@ -1,4 +1,4 @@
-// Stereo: each note is panned by its own `az` argument, and the reverb track
+// Stereo: each note is panned by its own `az` argument, and the reverb node
 // turns a stereo bus into decorrelated left and right tails.
 config { channels: stereo }
 tempo 100bpm
@@ -12,7 +12,7 @@ instr pluck(freq: hz, az: deg = 0deg, amp: db = -6db) {
   space += out.gain(-10db)
 }
 
-track hall {
+processor hall {
   out = space.reverb(room: 0.85, damp: 0.4).gain(0.9)
 }
 

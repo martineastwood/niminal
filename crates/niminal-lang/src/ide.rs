@@ -46,7 +46,8 @@ pub const RESERVED_WORDS: &[&str] = &[
     "sample",
     "spawn",
     "state",
-    "track",
+    "node",
+    "processor",
     "true",
     "use",
 ];
@@ -57,7 +58,8 @@ pub enum SymbolKind {
     Function,
     Control,
     Bus,
-    Track,
+    Node,
+    Processor,
     Sample,
     Kit,
     Constant,
@@ -124,7 +126,11 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Control { name, .. } => (name, SymbolKind::Control, first_line()),
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
             Item::Buffer(d) => (&d.name, SymbolKind::Constant, format!("buffer {}", d.name.name)),
-            Item::Track(d) => (&d.name, SymbolKind::Track, format!("track {}", d.name.name)),
+            Item::Node(d) => (&d.name, SymbolKind::Node, format!("node {}", d.name.name)),
+            Item::Processor(d) => {
+                param_list = params(source, &d.params);
+                (&d.name, SymbolKind::Processor, format!("processor {}({})", d.name.name, labels(&param_list)))
+            },
             Item::MidiOut(d) => (&d.name, SymbolKind::Instrument, first_line()),
             Item::Sample(d) => {
                 if d.is_kit {
@@ -384,7 +390,7 @@ fn envelope_ops() -> Vec<OpInfo> {
         ),
         op(
             "osc_out",
-            "Pass an instrument or track signal through and send its value over OSC: `out.osc_out(\"/vj/level\", port: 9000)`. `host` is this computer unless given; `rate` is 30hz unless given.",
+            "Pass an instrument or processor signal through and send its value over OSC: `out.osc_out(\"/vj/level\", port: 9000)`. `host` is this computer unless given; `rate` is 30hz unless given.",
             &[
                 ("x", "number", true),
                 ("address", "text", true),
@@ -396,7 +402,7 @@ fn envelope_ops() -> Vec<OpInfo> {
         ),
         op(
             "input",
-            "Channels of the audio input, in a track: `input(1)` or `input(1..2)`.",
+            "Channels of the audio input, in a processor: `input(1)` or `input(1..2)`.",
             &[("first", "number", true), ("last", "number", false)],
         ),
     ]
@@ -413,7 +419,7 @@ mod tests {
 
     #[test]
     fn symbols_name_what_a_file_defines() {
-        let src = "ctl cutoff = 1khz\ninstr tone(freq: hz, amp: db = -6db) { osc(sine, freq) }\ntrack lead { instrument = tone }\nconst riff = 4";
+        let src = "ctl cutoff = 1khz\ninstr tone(freq: hz, amp: db = -6db) { osc(sine, freq) }\nnode lead { instrument = tone }\nconst riff = 4";
         let s = symbols(src).unwrap();
         let names: Vec<_> = s.iter().map(|s| (s.name.as_str(), s.kind)).collect();
         assert_eq!(
@@ -421,7 +427,7 @@ mod tests {
             [
                 ("cutoff", SymbolKind::Control),
                 ("tone", SymbolKind::Instrument),
-                ("lead", SymbolKind::Track),
+                ("lead", SymbolKind::Node),
                 ("riff", SymbolKind::Constant)
             ]
         );

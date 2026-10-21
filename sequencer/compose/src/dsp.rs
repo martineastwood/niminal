@@ -1,4 +1,4 @@
-//! The part of a composition that is a sound-server definition: instruments, tracks, buses and the
+//! The part of a composition that is a sound-server definition: instruments, nodes, buses and the
 //! rest, with the client's musical time resolved to seconds.
 
 use crate::ast::{Arg, Expr, ExprKind, Item, Stmt};
@@ -107,7 +107,7 @@ pub fn dsp_source(source: &str, tempo: Tempo) -> Result<String, Diagnostic> {
 }
 
 /// Like [`dsp_source`], for items already parsed. `implicit` names the instruments that are played
-/// directly and so get a track of their own. With `standalone`, the controls that `clock.beat` and the
+/// directly and so get a node of their own. With `standalone`, the controls that `clock.beat` and the
 /// like are made from are defined too, at the tempo given; otherwise whoever plays the DSP defines them.
 pub fn project(
     source: &str,
@@ -145,7 +145,7 @@ pub fn project(
                     c.entries.iter().find(|(n, _)| n.name == "instrument")
                 {
                     pieces.push(derived(format!(
-                        "track {} {{ instrument = {} }}",
+                        "node {} {{ instrument = {} }}",
                         c.name.name,
                         &source[instrument.span.start..instrument.span.end]
                     )));
@@ -180,7 +180,7 @@ pub fn project(
                     pieces.push(derived(format!("config {{\n{}\n}}", entries.join("\n"))));
                 }
             }
-            Item::Track(t) => {
+            Item::Part(t) => {
                 // the client's own settings and its `notes` are not the server's
                 let mut cuts: Vec<(usize, usize)> = t
                     .options
@@ -194,8 +194,13 @@ pub fn project(
                         cuts.push((name.span.start, value.span.end));
                     }
                 }
-                pieces.push(without(text, span.start, cuts, verbatim, derived));
+                let piece = without(text, span.start, cuts, verbatim, derived);
+                pieces.push(Piece { text: piece.text.replacen("part", "node", 1), verbatim_at: None, span: *span });
             }
+            Item::Processor(p) => {
+                let cuts = p.options.iter().filter_map(|a| setting_range(a, "quantize")).collect();
+                pieces.push(without(text, span.start, cuts, verbatim, derived));
+            },
             Item::Instr(i) => {
                 let cuts = i.options.iter().filter_map(|a| setting_range(a, "quantize")).collect();
                 pieces.push(without(text, span.start, cuts, verbatim, derived));
@@ -234,7 +239,7 @@ pub fn project(
     }
     for name in implicit {
         pieces.push(Piece {
-            text: format!("track {name} {{ instrument = {name} }}"),
+            text: format!("node {name} {{ instrument = {name} }}"),
             verbatim_at: None,
             span: Span::new(0, 0),
         });

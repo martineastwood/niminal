@@ -6,7 +6,7 @@ fn name(item: &mut Item) -> Option<&mut Ident> {
     match item {
         Item::Instr(d) => Some(&mut d.name),
         Item::Fn(d) => Some(&mut d.name),
-        Item::Track(d) => Some(&mut d.name),
+        Item::Node(d) | Item::Processor(d) => Some(&mut d.name),
         Item::Bus(d) => Some(&mut d.name),
         Item::Buffer(d) => Some(&mut d.name),
         Item::Sample(d) => Some(&mut d.name),
@@ -56,11 +56,9 @@ pub(crate) fn qualify(items: &mut [Item], ranges: &[(usize, usize, String)]) {
         match item {
             Item::Instr(d) => body(&mut d.params, &mut d.body, &mut d.options, globals),
             Item::Fn(d) => body(&mut d.params, &mut d.body, &mut [], globals),
-            Item::Track(d) => body(&mut d.params, &mut d.body, &mut d.options, globals),
+            Item::Node(d) | Item::Processor(d) => body(&mut d.params, &mut d.body, &mut d.options, globals),
             Item::Bus(d) => {
-                if let Some(stmts) = &mut d.body {
-                    block(stmts, &locals, globals);
-                }
+                if let Some(layout) = &mut d.layout { expr(layout, &HashSet::new(), globals); }
             }
             Item::Buffer(d) => expr(&mut d.value, &locals, globals),
             Item::Control { value, .. } => expr(value, &locals, globals),
