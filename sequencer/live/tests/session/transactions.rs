@@ -112,7 +112,7 @@ fn a_live_eval_plays_a_kit_from_the_sample_folder_and_picks_up_a_changed_file() 
     let mut s = session();
     s.set_sample_dir(&dir);
     s.eval(
-        "tempo 120bpm\nk = kit(\"kit\")\npart t { instrument = k }",
+        "tempo 120bpm\nk = kit(\"kit\")\nclip t { instrument: k }",
         Some("now"),
     )
     .unwrap();

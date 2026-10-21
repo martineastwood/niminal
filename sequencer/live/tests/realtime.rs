@@ -41,7 +41,7 @@ unsafe impl GlobalAlloc for Allocator {
 }
 
 const SETUP: &str =
-    "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\npart lead { instrument = tone }";
+    "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\nclip lead { instrument: tone }";
 fn session() -> Offline {
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(SETUP, Some("now")).unwrap();
@@ -88,7 +88,7 @@ fn live_graph_edits_and_panic_do_no_heap_work() {
     let mut out = [0.0; 256];
     measured(&mut r, 256, &mut out);
     s.eval(
-        "bus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: 2000hz)}\npart lead { instrument = tone\noutput = lead_audio}",
+        "bus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: 2000hz)}\ninstr lead_voice(freq: hz) { voice = tone(freq: freq)\nlead_audio += voice }\nclip lead { instrument: lead_voice }",
         Some("now"),
     )
     .unwrap();
@@ -194,7 +194,7 @@ fn quantized_definitions_and_notes_land_inside_prepared_windows() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = vec![0.0; 24_512];
     measured(&mut r, 128, &mut out[..128]);
-    let accepted = s.eval("instr new(freq: hz) { osc(saw, freq) }\npart newnode { instrument = new }\nnewnode.play([c4])", Some("next beat")).unwrap();
+    let accepted = s.eval("instr new(freq: hz) { osc(saw, freq) }\nclip newnode { instrument: new }\nnewnode.play([c4])", Some("next beat")).unwrap();
     assert_eq!(accepted.lands_at, 24_000);
     let mut pos = 128;
     while pos < out.len() {
@@ -212,7 +212,7 @@ fn quantized_definitions_and_notes_land_inside_prepared_windows() {
 
 #[test]
 fn compatible_effect_memory_survives_a_prepared_swap() {
-    const SOURCE: &str = "bus space\ninstr click(freq: hz) { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor hall { out = space.reverb(room: 0.8, damp: 0.5) }\npart src { instrument = click }\nsrc(freq: 100hz) for 1/8beat";
+    const SOURCE: &str = "bus space\ninstr click(freq: hz) { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor hall { out = space.reverb(room: 0.8, damp: 0.5) }\nclip src { instrument: click }\nsrc(freq: 100hz) for 1/8beat";
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(SOURCE, Some("now")).unwrap();
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -270,7 +270,7 @@ fn repeated_edits_keep_audio_finite_and_render_without_heap_work() {
         if i % 5 == 0 {
             s.eval(
                 &format!(
-                    "bus lead_audio\nprocessor lead_fx {{out = lead_audio.lpf(cutoff: {}hz)}}\npart lead {{ instrument = tone\noutput = lead_audio}}",
+                    "bus lead_audio\nprocessor lead_fx {{out = lead_audio.lpf(cutoff: {}hz)}}\ninstr lead_voice(freq: hz) {{ voice = tone(freq: freq)\nlead_audio += voice }}\nclip lead {{ instrument: lead_voice }}",
                     1000 + i * 20
                 ),
                 Some("now"),
@@ -308,11 +308,11 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
         "ctl level = 1.0\nk = kit(\"kit\")\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n",
     );
     for i in 0..8 {
-        source.push_str(&format!("processor fx{i} {{ out = it.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\npart lead{i} {{ instrument = poly\n output = fx{i} }}\nlead{i}.play([c4 e4 g4 b4].fast(64))\n"));
+        source.push_str(&format!("bus audio{i}\nprocessor fx{i} {{ out = audio{i}.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\ninstr voice{i}(freq: hz) {{ v = poly(freq: freq)\naudio{i} += v }}\nclip lead{i} {{ instrument: voice{i} }}\nlead{i}.play([c4 e4 g4 b4].fast(64))\n"));
     }
     for i in 0..4 {
         source.push_str(&format!(
-            "part drums{i} {{ instrument = k }}\ndrums{i}.play([kick].fast(128))\n"
+            "clip drums{i} {{ instrument: k }}\ndrums{i}.play([kick].fast(128))\n"
         ));
     }
     source.push_str(&"poly(freq: 220hz) for 2beats\n".repeat(128));
@@ -325,7 +325,7 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
                 .unwrap();
         }
         if i % 50 == 0 {
-            s.eval(&format!("bus lead0_audio\nprocessor lead0_fx {{out = lead0_audio.lpf(cutoff: {}hz).reverb(room: 0.5, damp: 0.5)}}\npart lead0 {{ instrument = poly\noutput = lead0_audio}}", 2000 + i), Some("next beat")).unwrap();
+            s.eval(&format!("bus lead0_audio\nprocessor lead0_fx {{out = lead0_audio.lpf(cutoff: {}hz).reverb(room: 0.5, damp: 0.5)}}\ninstr lead0_voice(freq: hz) {{ voice = poly(freq: freq)\nlead0_audio += voice }}\nclip lead0 {{ instrument: lead0_voice }}", 2000 + i), Some("next beat")).unwrap();
         }
         s.prepare_realtime();
         measured(&mut r, 256, &mut out);
@@ -421,7 +421,7 @@ fn timestamped_controls_match_offline_audio_and_do_no_heap_work() {
 #[test]
 fn turning_controls_does_not_invalidate_prepared_notes_or_allocate_in_render() {
     let mut s = session();
-    s.eval("ctl cutoff = 2000hz\nbus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: cutoff)}\npart lead { instrument = tone\noutput = lead_audio}\nlead.play([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
+    s.eval("ctl cutoff = 2000hz\nbus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: cutoff)}\ninstr lead_voice(freq: hz) { voice = tone(freq: freq)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nlead.play([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     for i in 0..100 {
@@ -602,7 +602,7 @@ fn a_tempo_ramp_sounds_the_same_through_the_prepared_path() {
 
 #[test]
 fn a_legato_glide_instrument_sounds_the_same_on_the_prepared_path_without_heap_work() {
-    const SOURCE: &str = "tempo 120bpm\nmono bass(freq: hz) { legato = true\nglide = 30ms\npriority = highest\n osc(saw, freq) * env[0 20ms 1 | 20ms 0] }\npart b { instrument = bass }\nb(freq: 110hz) for 4beats\nat 1/4beat b(freq: 165hz) for 1beat\nat 1/2beat b(freq: 82hz) for 2beats";
+    const SOURCE: &str = "tempo 120bpm\nmono bass(freq: hz) { legato = true\nglide = 30ms\npriority = highest\n osc(saw, freq) * env[0 20ms 1 | 20ms 0] }\nclip b { instrument: bass }\nb(freq: 110hz) for 4beats\nat 1/4beat b(freq: 165hz) for 1beat\nat 1/2beat b(freq: 82hz) for 2beats";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
     direct.eval(SOURCE, Some("now")).unwrap();
     let expected = direct.process(60_000).remove(0);
@@ -672,7 +672,7 @@ fn bend_pressure_and_the_pedal_sound_the_same_through_the_prepared_path() {
 
 #[test]
 fn a_lane_that_sets_a_node_parameter_sounds_the_same_prepared_as_direct_and_without_heap_work() {
-    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}";
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
     let play = |lane: &str| format!("clip c {{ notes: [c5 c5]\n{lane} }}\npad.play(c)");
     let direct = |lane: &str| {
         let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -701,7 +701,7 @@ fn a_lane_that_sets_a_node_parameter_sounds_the_same_prepared_as_direct_and_with
 
 #[test]
 fn an_envelope_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_without_heap_work() {
-    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}";
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
     // a looping, curved sweep so that many short glides and restarts cross window edges
     let play = "clip c { notes: [c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar.exp 6khz 1/8bar.log 300hz].loop }\npad.play(c)";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -726,7 +726,7 @@ fn an_envelope_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_witho
 
 #[test]
 fn a_signal_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_without_heap_work() {
-    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}";
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
     // an LFO across a bar, with no notes of its own to step on, under a held pad
     let play = "clip c { notes: [c5 c5 c5 c5]\npad_fx.cut: sine.range(300hz, 6khz) }\npad.play(c)";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -781,7 +781,7 @@ fn a_device_input_reaches_a_node_that_reads_it_through_the_prepared_path() {
 
 #[test]
 fn midi_out_notes_leave_the_prepared_path_at_the_samples_they_belong_to() {
-    let code = "tempo 120bpm\nmidi_out synth(port: \"IAC\", channel: 2)\npart lead { instrument = synth }\nlead.play([c4 e4 ~ g4])";
+    let code = "tempo 120bpm\nmidi_out synth(port: \"IAC\", channel: 2)\nclip lead { instrument: synth }\nlead.play([c4 e4 ~ g4])";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
     direct.eval(code, Some("now")).unwrap();
     direct.process(100_000);
@@ -825,7 +825,7 @@ impl Lcg {
     }
 }
 
-const TWO_NODES: &str = "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\n    part lead { instrument = tone }\npart bass { instrument = tone }";
+const TWO_NODES: &str = "instr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\n    clip lead { instrument: tone }\nclip bass { instrument: tone }";
 
 /// The direct path is the oracle for the prepared one: whatever edits arrive and whenever they land,
 /// the two must make the same audio. This is what stops them drifting apart.

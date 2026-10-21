@@ -4,7 +4,7 @@ const { LanguageClient } = require("vscode-languageclient/node");
 const { LiveClient: Client } = require("./live-client");
 const { startLive } = require("./live");
 const { blockAround } = require("./blocks");
-const { partDescription } = require("./panel");
+const { clipDescription } = require("./panel");
 const { rewriteLearned } = require("./learn");
 
 let client = null;
@@ -16,10 +16,10 @@ let diagnostics;
 let channel;
 let transport = null;
 let peaks = null;
-let performance = { scenes: [], parts: [] };
+let performance = { scenes: [], clips: [] };
 let pendingChanges = [];
 const scenesChanged = new vscode.EventEmitter();
-const partsChanged = new vscode.EventEmitter();
+const clipsChanged = new vscode.EventEmitter();
 const pendingChanged = new vscode.EventEmitter();
 let refreshTimer;
 let intentionalClose = false;
@@ -126,10 +126,10 @@ async function connectLive() {
     onClose() {
       transport = null;
       peaks = null;
-      performance = { scenes: [], parts: [] };
+      performance = { scenes: [], clips: [] };
       pendingChanges = [];
       scenesChanged.fire();
-      partsChanged.fire();
+      clipsChanged.fire();
       pendingChanged.fire();
       showStatus();
       if (!intentionalClose) scheduleReconnect();
@@ -177,9 +177,9 @@ async function refreshPerformance() {
   if (!client?.connected) return;
   try {
     const status = await client.status();
-    performance = { scenes: status.scenes ?? [], parts: status.parts ?? [] };
+    performance = { scenes: status.scenes ?? [], clips: status.clips ?? [] };
     scenesChanged.fire();
-    partsChanged.fire();
+    clipsChanged.fire();
   } catch {
     // the connection went away; onClose clears the panel
   }
@@ -384,12 +384,12 @@ function activate(context) {
         return item;
       },
     }),
-    vscode.window.registerTreeDataProvider("niminal.parts", {
-      onDidChangeTreeData: partsChanged.event,
-      getChildren: () => performance.parts,
+    vscode.window.registerTreeDataProvider("niminal.clips", {
+      onDidChangeTreeData: clipsChanged.event,
+      getChildren: () => performance.clips,
       getTreeItem: (node) => {
         const item = new vscode.TreeItem(node.name);
-        item.description = partDescription(node);
+        item.description = clipDescription(node);
         item.iconPath = new vscode.ThemeIcon(node.muted ? "mute" : node.clip ? "play" : "circle-outline");
         return item;
       },

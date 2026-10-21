@@ -1000,7 +1000,7 @@ mod tests {
     use super::*;
     use crate::compile;
 
-    const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }\npart lead { instrument = pluck }\npart bass { instrument = pluck }\n";
+    const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }\nclip lead { instrument: pluck }\nclip bass { instrument: pluck }\n";
 
     #[test]
     fn musical_durations_follow_the_tempo_of_the_sections_they_cross() {
@@ -1487,7 +1487,7 @@ mod tests {
 
     #[test]
     fn other_meters_change_the_length_of_a_cycle() {
-        let src = "meter 3/4\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) }\npart t { instrument = p }\nt.play([c4 e4 g4])";
+        let src = "meter 3/4\ntempo 120bpm\ninstr p(freq: hz) { osc(sine, freq) }\nclip t { instrument: p }\nt.play([c4 e4 g4])";
         let s = compile(src).unwrap().schedule();
         // a 3/4bar at 120bpm is 1.5 seconds, so three steps are half a second apart
         assert_eq!(times(&s, 0.0, 1.6), [0.0, 0.5, 1.0, 1.5]);

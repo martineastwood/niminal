@@ -34,7 +34,7 @@ async function withServer(run) {
 
 const setup = `tempo 100bpm
 instr tone(freq: hz) { osc(sine, freq) }
-part t { instrument = tone }`;
+clip t { instrument: tone }`;
 
 test("evaluates code, reports problems with positions, and hears transport", async () => {
   await withServer(async (port) => {
@@ -75,7 +75,7 @@ scene verse { t: riff }
     assert.ok(launched.id !== undefined);
     await client.mute("t", { quantize: "now" });
     const status = await client.status();
-    const node = status.parts.find((t) => t.name === "t");
+    const node = status.clips.find((t) => t.name === "t");
     assert.ok(node);
     assert.strictEqual(node.muted, true);
     client.close();

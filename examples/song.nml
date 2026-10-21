@@ -14,10 +14,10 @@ instr pluck(freq: hz, bright: 0..1 = 0.5) {
 }
 
 processor hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
-part beat { instrument = drums }
-part hats { instrument = drums(gain: -8db) }
-part bass { instrument = pluck(bright: 0.2) }
-part lead { instrument = pluck(bright: 0.7) }
+clip beat { instrument: drums }
+clip hats { instrument: drums(gain: -8db) }
+clip bass { instrument: pluck(bright: 0.2) }
+clip lead { instrument: pluck(bright: 0.7) }
 
 bassline = [c2 ~ c2 eb2 ~ g1 bb1 ~]
 groove   = [kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare]

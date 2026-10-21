@@ -246,7 +246,7 @@ impl Server {
                 "kind": match s.kind {
                     SymbolKind::Instrument | SymbolKind::Function => 12, // Function
                     SymbolKind::Control => 13,                          // Variable
-                    SymbolKind::Bus | SymbolKind::Part | SymbolKind::Processor => 5,           // Class
+                    SymbolKind::Bus | SymbolKind::Processor => 5,           // Class
                     SymbolKind::Sample | SymbolKind::Kit => 19,         // Object
                     SymbolKind::Clip | SymbolKind::Scene | SymbolKind::Arrangement => 2, // Module
                     SymbolKind::Pattern => 14,                          // Constant
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn definition_jumps_to_the_name_and_symbols_list_the_file() {
         let mut server = Server::new();
-        open(&mut server, &format!("{SOURCE}part lead {{ instrument = tone }}\n"));
+        open(&mut server, &format!("{SOURCE}clip lead {{ instrument: tone }}\n"));
         let location = request(&mut server, 1, "textDocument/definition", at(5, 28));
         assert_eq!(location["range"]["start"], json!({ "line": 2, "character": 6 }));
         let symbols = request(&mut server, 2, "textDocument/documentSymbol", json!({ "textDocument": { "uri": URI } }));
@@ -468,13 +468,13 @@ mod tests {
         let mut server = Server::new();
         open(&mut server, SOURCE);
         // the file no longer parses, but `tone` is still known
-        open(&mut server, &format!("{SOURCE}part lead {{ instrument = to"));
+        open(&mut server, &format!("{SOURCE}clip lead {{ instrument: to"));
         let completion = request(&mut server, 1, "textDocument/completion", at(5, 28));
         let labels: Vec<_> = completion["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
         assert!(labels.contains(&"tone") && labels.contains(&"lpf"), "{labels:?}");
     }
 
-    const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\npart lead { instrument = tone }\nlead.play([c4])\nlead.start\n";
+    const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\nclip lead { instrument: tone }\nlead.play([c4])\nlead.start\n";
 
     #[test]
     fn rename_changes_every_use_of_a_name_and_refuses_bad_names() {
@@ -559,8 +559,8 @@ mod tests {
         assert_eq!(kind("osc", 0), Some("function"));
         assert_eq!(kind("lpf", 0), Some("function"));
         assert_eq!(kind("cutoff", 0), Some("parameter"));
-        assert_eq!(kind("lead", 0), Some("class"));
-        assert_eq!(kind("lead", 1), Some("class"));
+        assert_eq!(kind("lead", 0), Some("namespace"));
+        assert_eq!(kind("lead", 1), Some("namespace"));
         assert_eq!(kind("tone", 1), Some("function"), "used as the node's instrument");
         // words of the language itself are left to the grammar
         assert_eq!(kind("instr", 0), None);
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn rename_leaves_alone_what_only_shares_the_spelling() {
-        let text = "instr tone(lead: hz, bright: 0..1 = 0.5) { osc(saw, lead) * bright }\npart lead { instrument = tone(lead: 440hz) }\nscene verse { lead: lead }\nclip riff { notes: [c4]\n bright: [0.2] }\nbright = [0.1 0.9]\nfn drive(x) { x }\nbass = osc(saw, 100hz).drive\n";
+        let text = "instr tone(lead: hz, bright: 0..1 = 0.5) { osc(saw, lead) * bright }\nclip lead { instrument: tone(lead: 440hz) }\nscene verse { lead: lead }\nclip riff { notes: [c4]\n bright: [0.2] }\nbright = [0.1 0.9]\nfn drive(x) { x }\nbass = osc(saw, 100hz).drive\n";
         let mut server = Server::new();
         open(&mut server, text);
         let places = |reply: &Value| -> Vec<(u64, u64)> {
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn a_line_that_does_not_read_costs_only_that_line() {
         let mut server = Server::new();
-        let text = "instr tone(freq: hz) { osc(sine, freq) }\nx = \"never closed\npart lead { instrument = tone }\n";
+        let text = "instr tone(freq: hz) { osc(sine, freq) }\nx = \"never closed\nclip lead { instrument: tone }\n";
         open(&mut server, text);
         let reply = request(&mut server, 1, "textDocument/semanticTokens/full", json!({ "textDocument": { "uri": URI } }));
         let lines: Vec<u64> = {

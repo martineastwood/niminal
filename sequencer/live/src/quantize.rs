@@ -11,7 +11,7 @@ pub struct QuantizeDefaults {
     /// Starting a clip: at the next cycle of the bar grid.
     pub play: Quantize,
     pub instrument: Quantize,
-    pub part: Quantize,
+    pub clip: Quantize,
     pub tempo: Quantize,
     /// Defining a `ctl`; the default if none.
     pub control: Option<Quantize>,
@@ -31,7 +31,7 @@ impl Default for QuantizeDefaults {
             default: every(1.0, QuantizeUnit::Bar),
             play: every(1.0, QuantizeUnit::Cycle),
             instrument: every(1.0, QuantizeUnit::Beat),
-            part: every(1.0, QuantizeUnit::Bar),
+            clip: every(1.0, QuantizeUnit::Bar),
             tempo: every(1.0, QuantizeUnit::Bar),
             control: None,
         }
@@ -45,7 +45,7 @@ impl QuantizeDefaults {
             default: config.default.unwrap_or(self.default),
             play: config.play.unwrap_or(self.play),
             instrument: config.instrument.unwrap_or(self.instrument),
-            part: config.part.unwrap_or(self.part),
+            clip: config.clip.unwrap_or(self.clip),
             tempo: config.tempo.unwrap_or(self.tempo),
             control: config.control.or(self.control),
         }
@@ -64,7 +64,7 @@ impl QuantizeDefaults {
             StatementKind::Command => self.default,
             StatementKind::Definition => match s.key().and_then(|k| k.split(':').next()) {
                 Some("instr") => self.instrument,
-                Some("part" | "processor") => self.part,
+                Some("clip" | "processor") => self.clip,
                 Some("tempo") => self.tempo,
                 Some("ctl") => self.control.unwrap_or(self.default),
                 _ => self.default,

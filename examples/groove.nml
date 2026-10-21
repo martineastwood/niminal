@@ -18,7 +18,7 @@ instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {
   space += out.gain(-18db)
 }
 
-// A clip with an `instrument:` is a part: start it, stop it, mute it and change it by name.
+// A clip with an `instrument:` is playable: start it, stop it, mute it and change it by name.
 clip bass {
   instrument: pluck(bright: 0.2)
   notes:  [c2 ~ c2 eb2 ~ g1 bb1 ~]
@@ -31,7 +31,7 @@ clip lead {
   notes: [c4 e4 g4 b4].every(2, it.reverse)
 }
 
-// Without an instrument these are just material, to play on a part.
+// Without an instrument these are just material, to play on an instrument.
 answer = [c4 e4 g4 b4].every(2, it.reverse).transpose(+5st).thin(25%)
 spread = [c5].euclid(hits: 4, steps: 8)
 

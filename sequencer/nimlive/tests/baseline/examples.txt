@@ -1,8 +1,8 @@
 acid.nml: 2x410573
 array_bank.nml: 1x196427
-breakbeat.nml: 2x354462
+breakbeat.nml: 2x352614
 composition.nml: 1x105973
-drums.nml: 2x492612
+drums.nml: 2x488426
 functions.nml: 2x293633
 groove.nml: 2x570512
 instrument_scopes.nml: 1x100807
@@ -12,8 +12,8 @@ midi_osc.nml: 2x369169
 processors.nml: 2x583652
 room.nml: 1x222063
 saw_lead.nml: 1x158399
-score_prog.nml: does not render
-song.nml: does not render
+score_prog.nml: 1x360240
+song.nml: 2x583731
 stereo.nml: 2x280705
 synth_drums.nml: 2x356382
 tables.nml: 2x182400

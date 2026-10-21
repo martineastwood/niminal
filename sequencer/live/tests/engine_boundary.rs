@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 #[test]
 fn composition_is_lowered_to_physical_events_before_it_reaches_the_engine() {
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
-    s.eval("tempo 90bpm\nmeter 3/4\nctl level = midi.cc(7).range(0..1).smooth(10ms)\ninstr x(freq: hz, decay: sec = 1/4beat) { quantize = 1bar\n osc(sine, freq) * env[1 | decay 0] }\nclip part { instrument: x\nnotes: [c4 e4 g4]\nlength: 1bar }\nscene verse { part: part }\nverse.start", Some("now")).unwrap();
+    s.eval("tempo 90bpm\nmeter 3/4\nctl level = midi.cc(7).range(0..1).smooth(10ms)\ninstr x(freq: hz, decay: sec = 1/4beat) { quantize = 1bar\n osc(sine, freq) * env[1 | decay 0] }\nclip riff { instrument: x\nnotes: [c4 e4 g4]\nlength: 1bar }\nscene verse { riff }\nverse.start", Some("now")).unwrap();
     s.process(24_000);
     assert!(s.take_notices().is_empty());
     let mut notes = 0;

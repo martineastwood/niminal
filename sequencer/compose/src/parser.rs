@@ -386,26 +386,13 @@ impl Parser {
                 tuning,
                 span: start.to(end),
             }))
-        } else if self.is_keyword("part") || self.is_keyword("processor") {
-            let processor = self.is_keyword("processor");
+        } else if self.is_keyword("part") {
             let start = self.bump().span;
-            let name = self.ident("a part name")?;
-            // `part bass = pluck(bright: 0.4)` is `part bass { instrument = pluck(bright: 0.4) }`
-            if !processor && self.eat(&Tok::Eq) {
-                let value = self.expr()?;
-                let end = self.prev_span();
-                let key = Ident {
-                    name: "instrument".into(),
-                    span: start,
-                };
-                return Ok(Item::Part(PartDecl {
-                    name,
-                    params: Vec::new(),
-                    body: vec![Stmt::Bind { name: key, value }],
-                    options: Vec::new(),
-                    span: start.to(end),
-                }));
-            }
+            Err(Diagnostic::new("`part` has been removed", start)
+                .with_help("write `clip x { instrument: y }` instead"))
+        } else if self.is_keyword("processor") {
+            let start = self.bump().span;
+            let name = self.ident("a processor name")?;
             let params = if self.peek() == &Tok::LParen {
                 self.params()?
             } else {
@@ -420,8 +407,8 @@ impl Parser {
             }
             let (mut body, end) = self.block()?;
             let options = take_options(&mut body, NODE_OPTIONS);
-            let decl = PartDecl { name, params, body, options, span: start.to(end) };
-            Ok(if processor { Item::Processor(decl) } else { Item::Part(decl) })
+            let decl = ProcessorDecl { name, params, body, options, span: start.to(end) };
+            Ok(Item::Processor(decl))
         } else if self.is_keyword("fn") {
             if !matches!(self.peek_at(1), Tok::Ident(_)) {
                 self.bump();
@@ -2441,7 +2428,7 @@ mod tests {
     #[test]
     fn buses_nodes_and_add_assign() {
         let items = parse_ok(
-            "\nbus space\nbus hall: stereo\nbus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: 1khz)\n  space += out.gain(-12db)}\npart lead {  instrument = pluck(bright: 0.6)\noutput = lead_audio}",
+            "\nbus space\nbus hall: stereo\nbus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: 1khz)\n  space += out.gain(-12db)}\nclip lead { instrument: pluck(bright: 0.6) }",
         );
         let Item::Bus(b) = &items[0] else { panic!() };
         assert_eq!((b.name.name.as_str(), b.layout.is_none()), ("space", true));

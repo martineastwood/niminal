@@ -13,7 +13,7 @@ description: WAV samples, kits, slices, and playing them from patterns.
 
 ```nml
 kick = sample("drums/kick.wav")
-amen = sample("breaks/amen.wav").beats(4).fit(rate)
+amen = sample("breaks/amen.wav").beats(4)
 drums = kit("drums/808")
 chops = amen.slices(16)                // s0 .. s15
 ```
@@ -22,40 +22,70 @@ Paths are resolved relative to the file that declares them (and the project when
 
 ### Settings on a sample
 
-A sample is a plain binding, and its settings are chained methods: `amen = sample("amen.wav").beats(4).fit(rate)`.
+A sample is a plain binding, and its settings are chained methods: `amen = sample("amen.wav").beats(4)`.
 
 | Method | Effect |
 | --- | --- |
-| `.duration(2sec)` | Physical target length for `.fit(rate)`; also available directly in DSP definitions |
-| `.beats(N)` | The loop is N beats long (needed for tempo sync) |
-| `.fit(rate)` | Speed the loop up or down so those beats match the current tempo |
+| `.beats(N)` | The loop is N beats long: it is sped up or down to last N beats at the current tempo |
+| `.duration(2sec)` | The same, to a fixed length that ignores the tempo; also available directly in DSP definitions |
 | `.root(c4)` | The note (or frequency) at which the sample plays as recorded |
 | `.loop(forward)` | Loop the sample while a note is held |
 | `.choke(group)` | On a kit sample: starting this sample ends others in the group |
 
-`.fit(stretch)` and `.fit(slice)` are not supported yet. Only `.fit(rate)` is.
+Fitting changes the playback speed (and so the pitch). Time-stretching and slice-fitting are not supported yet.
 
 ### Playing samples
 
-A sample or kit is an instrument. Call it with playback settings, or put it on a node and play note/sample patterns:
+A sample or kit is an instrument. Call it with playback settings, or select it in a clip and play note/sample patterns:
 
 ```nml
 kick(pitch: -2st)
 snare(pitch: +2st)
-part drums { instrument = chops }
-drums.play([s0 s1 s2 s3 s4 s5 s6 s7])
+clip chop { instrument: chops }
+chop.play([s0 s1 s2 s3 s4 s5 s6 s7])
 ```
 
-A kit member is an instrument too: `drums.snare` means the kit with that sample chosen (the same as `drums(sample: snare)`). Give it its own node when you want effects, sends, mute or solo on that drum alone:
+A kit member is an instrument too: `drums.snare` means the kit with that sample chosen (the same as `drums(sample: snare)`). Give it its own clip when you want effects, sends, mute or solo on that drum alone:
 
 ```nml
 drums = kit("drums")
 bus snare_audio
 processor snare_fx {out = snare_audio.reverb(room: 0.4).gain(-3db)}
-part snare {  instrument = drums.snare
-output = snare_audio}
-snare.play(grid[.... x... .... x...])
+instr snare_voice(freq: hz) {
+  voice = drums.snare(freq: freq)
+  snare_audio += voice
+}
+clip snare { instrument: snare_voice }
+snare.play([~ c4 ~ c4])
 ```
+
+### Calling samplers inside an instrument
+
+A sample, a kit member, or a whole kit can produce audio inside an `instr`:
+
+```nml
+instr snare_voice(freq: hz) {
+  out = drums.snare(freq: freq)
+  room += out.gain(-12db)
+}
+
+instr drum_voice(sample) {
+  out = drums(sample: sample)
+  room += out.gain(-12db)
+}
+
+hits = grid {
+  kick:  x... x...
+  snare: .... x...
+  hat:   x.x. x.x.
+}
+clip beat { instrument: drum_voice, notes: hits }
+beat.start
+```
+
+The `sample` parameter selects a kit member for each hit. Forward it as `sample: sample` to keep the kit's member names and choke groups. One wrapper can route the entire kit; separate wrappers are useful for different effects or sends per drum. A wrapper can also declare parameters such as `freq: hz`, `pitch: st`, or `gain: db` and pass them to the sampler. Playback settings omitted from the call use the sampler's defaults, including its root pitch, fitted duration, slices and looping. Voice policies belong to the wrapper instrument and count per clip name.
+
+Only instruments can call samplers. For an entirely wet route, send the sampler signal to a bus and omit `out` and a final value. The processor reading the bus keeps its effect state across notes.
 
 In patterns, `drums.kick` names the sample when a bare name would clash with a note (`a`, `e`, `c4`).
 

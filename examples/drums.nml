@@ -1,6 +1,6 @@
 // Samples and kits. Every .wav in the folder is a sample you can name in a pattern.
-// Give a drum its own node for effects; name that node in a grid row and the
-// hits go through its strip. Rows can take pan/gain/pitch and mini-notation.
+// One instrument wraps the whole kit; individual drums can use their own routing.
+// Rows can take pan/gain/pitch and mini-notation.
 // Render with:  niminal render examples/drums.nml --out drums.wav --bars 4
 config { channels: stereo }
 tempo 100bpm
@@ -12,25 +12,32 @@ processor room_return {
 
 drums = kit("drums")
 
-part beat { instrument = drums }
+instr drum_voice(sample, gain: db = 0db) { out = drums(sample: sample, gain: gain) }
+clip beat { instrument: drum_voice }
 processor snare_fx {
-  out = it.gain(-1db)
+  out = snare_audio.gain(-1db)
   room += out.gain(-12db)
 }
-part snare {
-  instrument = drums.snare
-  output = snare_fx
+bus snare_audio: stereo
+instr snare_voice(sample, freq: hz = c4, gain: db = 0db, pan: deg = 0deg) {
+  voice = drums(sample: sample, freq: freq, gain: gain).to_layout(mono).pan(azimuth: pan)
+  snare_audio += voice
 }
+clip snare { instrument: snare_voice }
 processor hat_fx {
-  out = it.hpf(cutoff: 6khz)
+  out = hat_audio.hpf(cutoff: 6khz)
 }
-part hat {
-  instrument = drums.hat
-  output = hat_fx
+bus hat_audio: stereo
+instr hat_voice(sample, freq: hz = c4, gain: db = 0db, pan: deg = 0deg) {
+  voice = drums(sample: sample, freq: freq, gain: gain).to_layout(mono).pan(azimuth: pan)
+  hat_audio += voice
 }
+clip hat { instrument: hat_voice }
 
-beat.play(grid {
+hits = grid {
   kick:             x... x... x... x..x
   snare(pan: 8deg): [~ x ~ [x o]]
   hat(gain: -4db):  [x*2 x x(3,8)]
-})
+}
+
+beat.play(hits)

@@ -167,8 +167,8 @@ pub fn symbol_items(symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -
 enum Receiver {
     /// A pattern, clip, grid or node: `riff.`, `[c4 e4].`, `it.`, `bass.`
     Pattern,
-    /// A part (a clip or node) at the start of a statement: `bass.` gives a command, or a change to what it plays.
-    Part,
+    /// A clip or instrument at the start of a statement: `bass.` gives a command, or a change to what it plays.
+    Clip,
     /// A scene at the start of a statement: `verse.start`
     SceneCommand,
     /// A scene: `verse.`
@@ -185,6 +185,7 @@ fn receiver_and_root<'a>(text: &'a str, symbols: &[Symbol]) -> (Receiver, Option
     loop {
         // a call's arguments or a pattern's brackets
         let mut literal = false;
+        let called = rest.ends_with(')');
         if rest.ends_with([')', ']']) {
             literal = rest.ends_with(']');
             let mut depth = 0usize;
@@ -226,10 +227,10 @@ fn receiver_and_root<'a>(text: &'a str, symbols: &[Symbol]) -> (Receiver, Option
         }
         // at the start of a statement, `bass.` is a command to give; inside an expression it is a value
         let line = text[..name_start].rsplit('\n').next().unwrap_or_default().trim();
-        let command = !chained && (line.is_empty() || line.starts_with("at "));
+        let command = !called && !chained && (line.is_empty() || line.starts_with("at "));
         let kind = match symbols.iter().find(|s| s.name == name).map(|s| s.kind) {
-            Some(SymbolKind::Clip | SymbolKind::Part) if command => Receiver::Part,
-            Some(SymbolKind::Pattern | SymbolKind::Clip | SymbolKind::Part) => Receiver::Pattern,
+            Some(SymbolKind::Clip | SymbolKind::Instrument | SymbolKind::Sample | SymbolKind::Kit) if command => Receiver::Clip,
+            Some(SymbolKind::Pattern | SymbolKind::Clip) => Receiver::Pattern,
             Some(SymbolKind::Scene) if command => Receiver::SceneCommand,
             Some(SymbolKind::Scene) => Receiver::Scene,
             _ => Receiver::Signal,
@@ -264,13 +265,13 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
         }
         match receiver(&dot[..dot.len() - 1], symbols) {
             Receiver::Pattern => return pattern_ops().iter().map(op_item).collect(),
-            Receiver::Part => {
+            Receiver::Clip => {
                 let mut out = vec![
                     item("start", FUNCTION, "start()", "Play this clip, from its beginning, on the next boundary."),
                     item("stop", FUNCTION, "stop()", "Stop it."),
                     item("mute", FUNCTION, "mute()", "Silence it without stopping it."),
                     item("unmute", FUNCTION, "unmute()", "Let it be heard again."),
-                    item("solo", FUNCTION, "solo()", "Hear only this and the other soloed parts."),
+                    item("solo", FUNCTION, "solo()", "Hear only this and the other soloed clips."),
                     item("unsolo", FUNCTION, "unsolo()", "Take it out of the solo."),
                     item("undo", FUNCTION, "undo()", "Take the last change made to it off again."),
                     item("clear", FUNCTION, "clear()", "Take every change made to it off, back to what it was started with."),
@@ -280,7 +281,7 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
             }
             Receiver::SceneCommand => {
                 return vec![
-                    item("start", FUNCTION, "start()", "Play every clip in this scene and the.stop rest."),
+                    item("start", FUNCTION, "start()", "Play every clip in this scene and stop the rest."),
                     item("stop", FUNCTION, "stop()", "Stop every clip in this scene."),
                 ];
             }
@@ -313,7 +314,7 @@ pub fn items(before: &str, symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> St
         let in_value = call.current.contains(':');
         let on_pattern = call.receiver && receiver(call.receiver_text, symbols) != Receiver::Signal;
         let patterns = pattern_ops();
-        // `bass.set(`: the lanes this part has, from its instrument
+        // `bass.set(`: the lanes this clip has, from its instrument
         let root = if call.receiver { receiver_and_root(call.receiver_text, symbols).1 } else { None };
         let lanes = root.filter(|_| call.name == "set").and_then(|r| symbols.iter().find(|s| s.name == r && s.kind == SymbolKind::Clip));
         let params: Vec<(String, &str, usize)> = if let Some(clip) = lanes {
@@ -401,7 +402,7 @@ mod tests {
     #[test]
     fn elsewhere_offers_names_and_keywords() {
         let l = labels("");
-        assert!(l.contains(&"tone".to_string()) && l.contains(&"part".to_string()) && l.contains(&"lpf".to_string()));
+        assert!(l.contains(&"tone".to_string()) && !l.contains(&"part".to_string()) && l.contains(&"lpf".to_string()));
     }
 
     #[test]
@@ -415,7 +416,7 @@ mod tests {
         items(before, &symbols, &|_| String::new()).iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
     }
 
-    const SONG: &str = "fn wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\ninstr pluck(freq: hz) { freq }\npart bass { instrument = pluck }\n";
+    const SONG: &str = "fn wobble(x, rate: hz = 2hz) { x }\nriff = [c4 e4]\nclip c { notes: [c4] }\nscene verse { lead: riff }\ninstr pluck(freq: hz) { freq }\nclip bass { instrument: pluck }\n";
 
     #[test]
     fn a_dot_after_a_pattern_offers_pattern_operations_only() {
@@ -431,12 +432,16 @@ mod tests {
     }
 
     #[test]
-    fn a_dot_at_the_start_of_a_statement_offers_commands_for_a_part_or_scene() {
+    fn a_dot_at_the_start_of_a_statement_offers_commands_for_a_clip_or_scene() {
         let l = labels_in(SONG, "bass.");
         assert_eq!(&l[..3], ["start", "stop", "mute"]);
         assert!(l.contains(&"undo".to_string()) && l.contains(&"every".to_string()));
         assert!(labels_in(SONG, "at +2bars c.").contains(&"mute".to_string()));
         assert_eq!(labels_in(SONG, "verse."), ["start", "stop"]);
+        assert!(labels_in(SONG, "pluck.").contains(&"mute".to_string()));
+        let samples = "s = sample(\"s.wav\")\nk = s.slices(4)";
+        assert!(labels_in(samples, "s.").contains(&"mute".to_string()));
+        assert!(labels_in(samples, "k.").contains(&"mute".to_string()));
         // inside an expression the same names are values
         assert!(!labels_in(SONG, "x = c.").contains(&"mute".to_string()));
         assert!(!labels_in(SONG, "bass.reverse.").contains(&"mute".to_string()));

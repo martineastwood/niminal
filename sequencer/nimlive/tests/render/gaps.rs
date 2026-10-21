@@ -182,7 +182,7 @@ fn pitch_option_names_the_parameter_notes_set() {
 #[test]
 fn clips_play_through_the_renamed_pitch() {
     let play = |def: &str| {
-        let p = program(&format!("{def}\npart t {{ instrument = a }}\nclip c {{ notes: [c4 e4] }}\nt.play(c)"));
+        let p = program(&format!("{def}\nclip t {{ instrument: a }}\nclip c {{ notes: [c4 e4] }}\nt.play(c)"));
         mono(render_with(&p, &[], &RenderOptions { limiter: false, until: Some(2.0), ..Default::default() }).unwrap())
     };
     let renamed = play("instr a(tone: hz = 220hz) { pitch = tone\ntail = 10ms\n osc(sine, tone) * env[1 | 10ms 1] * 0.5 }");

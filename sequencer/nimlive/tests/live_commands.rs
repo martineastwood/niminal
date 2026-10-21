@@ -113,7 +113,7 @@ impl Drop for Server {
     }
 }
 
-const SETUP: &str = "tempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart lead { instrument = pluck }";
+const SETUP: &str = "tempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip lead { instrument: pluck }";
 
 fn stdout(o: &std::process::Output) -> String {
     String::from_utf8_lossy(&o.stdout).to_string()
@@ -227,7 +227,7 @@ fn repl_runs_multiline_blocks_and_reports_errors_without_stopping() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let input = "tempo 100bpm\ninstr tone(freq: hz) {\n  osc(sine, freq)\n}\npart t { instrument = tone }\nt.play([c4 zz])\nt.play([c4])\n";
+    let input = "tempo 100bpm\ninstr tone(freq: hz) {\n  osc(sine, freq)\n}\nclip t { instrument: tone }\nt.play([c4 zz])\nt.play([c4])\n";
     repl.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
     let out = repl.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);

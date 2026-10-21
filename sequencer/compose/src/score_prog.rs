@@ -4,7 +4,7 @@ mod tests {
     use crate::schedule::Schedule;
     use niminal_score::{Tempo, Time, Value};
 
-    const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }\npart lead { instrument = pluck }\n";
+    const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) }\nclip lead { instrument: pluck }\n";
 
     fn schedule(body: &str) -> Schedule {
         let src = format!("{STAGE}{body}");

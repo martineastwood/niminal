@@ -38,7 +38,7 @@ Saving a file does nothing by itself — the editor sends what you evaluate. The
 
 - The status bar shows the bar, beat, tempo, voice count, and any changes still waiting to land. Click it to hush.
 - Compile errors become squiggles where they are, and are also written to the **niminal** output channel (View → Output).
-- The **niminal** sidebar lists your scenes (click one, or press Cmd/Ctrl+1..9) and your parts, with what each is playing and buttons to mute, solo and stop. Cmd+1..9 replace VS Code's group-switching keys while a `.nml` file has focus.
+- The **niminal** sidebar lists your scenes (click one, or press Cmd/Ctrl+1..9) and your clips, with what each is playing and buttons to mute, solo and stop. Cmd+1..9 replace VS Code's group-switching keys while a `.nml` file has focus.
 - **niminal: Panic** in the command palette stops everything, pending changes included.
 
 Every command, key and setting is in [Editor and LSP](/reference/editor/).
@@ -104,22 +104,24 @@ A `midi_out` is an instrument that plays external gear. Its notes go to a MIDI o
 
 ```nml
 midi_out drums(port: "IAC Driver", channel: 10)
-part beat { instrument = drums }
+clip beat { instrument: drums }
 beat.play([c2 ~ d2 c2])
 ```
 
 `port` is part of the name of an output; if no output matches, the server makes one of that name for other software to listen to. `channel` is from 1 to 16 (1 if left out). The notes go out when the sound card plays them, so the gear stays with the sound here. A render has no sound from a `midi_out` and says so.
 
-A part's signal can be sent over OSC too. `osc_out` passes the signal through and sends its value to an address, as a float:
+An instrument's signal can be sent over OSC too. `osc_out` passes the signal through and sends its value to an address, as a float:
 
 ```nml
+bus bass_audio
 processor bass_meter {
-  out = it.osc_out("/vj/bass", port: 9000)
+  out = bass_audio.osc_out("/vj/bass", port: 9000)
 }
-part bass {
-  instrument = pluck
-  output = bass_meter
+instr bass_voice(freq: hz) {
+  voice = pluck(freq: freq)
+  bass_audio += voice
 }
+clip bass { instrument: bass_voice }
 ctl k = 0.5
 processor knob { out = k.osc_out("/vj/knob", host: "192.168.1.20", port: 9000, rate: 10hz) }
 ```
@@ -150,6 +152,6 @@ Use `--no-log` on the server to skip recording, or `--log PATH` to choose the fi
 
 The server shares voices among threads. `--render-threads N` sets how many render together, counting the render thread itself (by default your cores, up to 4; `1` renders on one core). Voices are summed in fixed groups of 8, so the sound is bit-for-bit the same whatever the number, and a recorded session still replays to the same bytes.
 
-Groups of voices from parts that do not depend on each other (no bus or buffer passes between them) are shared out together, so ten parts of ten voices benefit as much as one part of a hundred. Each part's effect chain still runs on one thread, and a part whose voices write a shared buffer runs its voices one at a time.
+Groups of voices from clips that do not depend on each other (no bus or buffer passes between them) are shared out together, so ten clips of ten voices benefit as much as one clip of a hundred. Each processor's effect chain still runs on one thread, and a clip whose voices write a shared buffer runs its voices one at a time.
 
 Whether sharing a block out is worth it is decided as the music plays: the server times its own voices, and measures what waking its threads costs when it starts. `--render-fork` overrides that: `always`, `never`, or a number of microseconds of work a block must have before it is shared. The sound is the same whichever you choose; only the speed changes.

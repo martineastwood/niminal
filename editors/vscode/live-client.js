@@ -45,8 +45,8 @@ class LiveClient extends Client {
     return this.call("unsolo", withQuantize(target ? { target } : {}, quantize));
   }
 
-  edit(part, change, { quantize } = {}) {
-    return this.call("edit", withQuantize({ part, change }, quantize));
+  edit(clip, change, { quantize } = {}) {
+    return this.call("edit", withQuantize({ clip, change }, quantize));
   }
 
   hush() {

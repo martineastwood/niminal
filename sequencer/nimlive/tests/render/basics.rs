@@ -88,7 +88,7 @@ fn score_events_are_checked_against_the_instrument() {
         )
     };
 
-    assert_eq!(render_score(&score("lede", r#"{"freq": "a3"}"#)), "note for `lede`: no instrument or part named `lede`");
+    assert_eq!(render_score(&score("lede", r#"{"freq": "a3"}"#)), "note for `lede`: no instrument or clip named `lede`");
     assert_eq!(
         render_score(&score("lead", r#"{"freq": "440"}"#)),
         "note for `lead`: argument `freq`: expected a frequency (hz or a note name), got `440` (did you mean `440hz`?)"
@@ -188,7 +188,7 @@ fn render_with_an_arrangement_ignores_the_files_own_timeline() {
 #[test]
 fn arrangement_mistakes_are_reported() {
     let err = |src: &str| compile(src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default();
-    let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\npart a { instrument = t }\nscene one { a: [c4] }\n";
+    let base = "tempo 120bpm\ninstr t(freq: hz) { osc(sine, freq) }\nclip a { instrument: t }\nscene one { a: [c4] }\n";
     assert!(err(&format!("{base}arrangement s {{ sections: [on.over(1bar)] }}")).contains("no scene named `on`did you mean `one`?"));
     assert!(err(&format!("{base}arrangement s {{ sections: [one] }}")).contains("`one` needs a lengthfor example `one.over(8bars)`"));
     assert!(err(&format!("{base}arrangement s {{ volume: [1] }}")).contains("`volume` isn't supported in an arrangement yet"));
@@ -219,7 +219,7 @@ fn arrangement_lane_mistakes_are_reported() {
         let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(1bar)]\n{lane} }}");
         compile(&src).err().map(|e| e.iter().map(|d| d.message.clone() + &d.help.clone().unwrap_or_default()).collect::<String>()).unwrap_or_default()
     };
-    assert!(err("pd.cut: env[300hz 1bar 1khz]").contains("no part named `pd`did you mean `pad`?"));
+    assert!(err("pd.cut: env[300hz 1bar 1khz]").contains("no clip named `pd`did you mean `pad`?"));
     assert!(err("pad_fx.cutt: env[300hz 1bar 1khz]").contains("has no such parameterdid you mean `cut`?"), "{}", err("pad_fx.cutt: env[300hz 1bar 1khz]"));
     assert!(err("pad_fx.cut: 300hz").contains("an arrangement lane is an envelope"));
     assert!(err("pad_fx.cut: env[0.5 1bar 1]").contains("cut"));

@@ -131,7 +131,7 @@ fn literal_arg_value(
 
 /// A note's argument problem as a diagnostic at `span`.
 pub(crate) fn arg_error(e: niminal_lang::ArgError, span: Span) -> Diagnostic {
-    let d = Diagnostic::new(e.message.replace("instrument or node", "instrument or part"), span);
+    let d = Diagnostic::new(e.message.replace("instrument or node", "instrument or clip"), span);
     match e.help {
         Some(h) => d.with_help(h),
         None => d,
@@ -140,6 +140,9 @@ pub(crate) fn arg_error(e: niminal_lang::ArgError, span: Span) -> Diagnostic {
 
 pub(crate) fn literal_time(e: &Expr) -> Res<Time> {
     if let Ok((value, unit)) = folded_quantity(e) {
+        if !value.is_finite() {
+            return Err(Diagnostic::new("a time must be finite", e.span));
+        }
         return match unit.as_deref() {
             Some("sec") => Ok(Time::Seconds(value)),
             Some("ms") => Ok(Time::Seconds(value / 1000.0)),

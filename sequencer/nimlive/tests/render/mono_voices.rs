@@ -86,3 +86,11 @@ fn mono_only_options_are_checked() {
     assert!(msg("mono x(f: hz) { glide = 1beat\nlegato = true\n osc(sine, f) }").contains("no `freq` parameter"));
     assert!(compile("mono x(freq: hz) { glide = 1beat\nlegato = true\npriority = highest\n osc(sine, freq) }").is_ok());
 }
+
+#[test]
+fn two_clips_with_one_instrument_keep_separate_voice_limits() {
+    for definition in ["mono tone(freq: hz) { 0.2 * env[1 | 1ms 0] }", "instr tone(freq: hz) { max = 1\nsteal = oldest\n0.2 * env[1 | 1ms 0] }"] {
+        let out = raw(&format!("tempo 120bpm\n{definition}\nclip bass {{ instrument: tone\nnotes: [c3,e3] }}\nclip bass2 {{ instrument: tone\nnotes: [g3,b3] }}\nscene both {{ bass, bass2 }}\nboth.start\nat 1bar hush"));
+        assert!((out[2400] - 0.4).abs() < 1e-5, "each clip keeps one voice: {}", out[2400]);
+    }
+}

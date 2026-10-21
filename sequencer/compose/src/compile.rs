@@ -1,7 +1,6 @@
 //! Compiling a composition: its sound-server definitions go to the language compiler, and what is left
 //! (clips, scenes, commands and notes) becomes the timed events a client sends.
 
-use std::collections::HashMap;
 use std::ops::Deref;
 
 use niminal_lang::{CompileOptions, ControlDef, Diagnostic, Instrument, Program, NodeInfo, resolve_target};
@@ -24,7 +23,7 @@ pub struct QuantizeConfig {
     pub default: Option<Quantize>,
     pub play: Option<Quantize>,
     pub instrument: Option<Quantize>,
-    pub part: Option<Quantize>,
+    pub clip: Option<Quantize>,
     pub control: Option<Quantize>,
     pub tempo: Option<Quantize>,
 }
@@ -87,7 +86,7 @@ impl Composition {
     /// Resolve a musical note while keeping engine graph terminology out of diagnostics.
     pub fn plan(&self, event: &Event) -> Result<niminal_lang::NotePlan, niminal_lang::ArgError> {
         self.program.plan(event).map_err(|mut error| {
-            error.message = error.message.replace("instrument or node", "instrument or part");
+            error.message = error.message.replace("instrument or node", "instrument or clip");
             error
         })
     }
@@ -121,9 +120,7 @@ fn names_of<'a>(items: &[Item], controls: &'a [ControlDef]) -> Names<'a> {
             Item::Const { name, .. } => (name, "constant"),
             Item::Bus(d) => (&d.name, "bus"),
             Item::Buffer(d) => (&d.name, "buffer"),
-            // a clip with an `instrument:` is a part of its own name; the clip may share it
             Item::Processor(d) => (&d.name, "processor"),
-            Item::Part(d) => (&d.name, "part"),
             Item::Sample(d) => (&d.name, if d.is_kit { "kit" } else { "sample" }),
             Item::Arrangement(d) => (&d.name, "arrangement"),
             Item::Def(d) => (&d.name, "score function"),
@@ -131,15 +128,6 @@ fn names_of<'a>(items: &[Item], controls: &'a [ControlDef]) -> Names<'a> {
         };
         if !kinds.iter().any(|(n, _)| *n == ident.name) {
             kinds.push((ident.name.clone(), kind));
-        }
-    }
-    // a clip with an `instrument:` is also a part of that name
-    for item in items {
-        if let Item::Clip(b) = item
-            && b.entries.iter().any(|(k, _)| k.name == "instrument")
-            && !kinds.iter().any(|(n, _)| *n == b.name.name)
-        {
-            kinds.push((b.name.name.clone(), "part"));
         }
     }
     Names { kinds, controls }
@@ -164,7 +152,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
         Tempo { bpm: DEFAULT_BPM, beats_per_bar, tuning: Tuning::default() }
     });
     let implicit = implicit_nodes(&items);
-    // the clips' `instrument:` is the part they stand for, not something to play
+    // Instrument selection is lowered to DSP nodes, leaving just the clip lanes.
     for item in &mut items {
         if let Item::Clip(block) = item
             && let Some(at) = block.entries.iter().position(|(key, _)| key.name == "instrument")
@@ -184,17 +172,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
     let tempo = Tempo { tuning: program.tempo.tuning, ..tempo };
 
     let names = names_of(&items, &program.controls);
-    let node_notes = match node_notes(&items) {
-        Ok(notes) => notes,
-        Err(d) => {
-            errors.push(d);
-            HashMap::new()
-        }
-    };
     let cx = Context {
         tempo,
         names: &names,
-        node_notes: &node_notes,
         instruments: &program.instruments,
         nodes: &program.nodes,
         failed: &[],
@@ -236,28 +216,10 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
     Ok(Composition { program, source: source.to_string(), tempo, quantize, inputs, notes, performance, arrangements })
 }
 
-/// The `notes = ...` line of each part that has one.
-fn node_notes(items: &[Item]) -> Res<HashMap<String, Expr>> {
-    let mut out = HashMap::new();
-    for item in items {
-        let Item::Part(node) = item else { continue };
-        for stmt in &node.body {
-            let Stmt::Bind { name, value } = stmt else { continue };
-            if name.name != "notes" {
-                continue;
-            }
-            if out.insert(node.name.name.clone(), value.clone()).is_some() {
-                return Err(Diagnostic::new("a part has only one `notes` line", name.span));
-            }
-        }
-    }
-    Ok(out)
-}
-
 /// A diagnostic about the DSP text, placed in the composition it was made from.
 fn locate(dsp: &DspSource, mut d: Diagnostic) -> Diagnostic {
     d.span = dsp.locate(d.span);
-    d.message = d.message.replace("a node has only one", "a part has only one");
+    d.message = d.message.replace("a node has only one", "a clip has only one");
     d
 }
 
@@ -501,9 +463,8 @@ fn substitute_expr(e: &mut Expr, name: &str, value: &Expr) {
     e.for_each_child_mut(&mut |child| substitute_expr(child, name, value));
 }
 
-/// Naming an instrument where a part goes (`pluck.play([c4 e4])`, or in a scene) makes a part of that name
-/// playing it, so there is nothing to declare for the simple case. The names of those instruments.
-fn implicit_nodes(items: &[Item]) -> Vec<String> {
+/// Instruments used in live commands or scenes get a playback node of their own name.
+pub(crate) fn implicit_nodes(items: &[Item]) -> Vec<String> {
     let mut used: Vec<Ident> = Vec::new();
     for item in items {
         match item {
@@ -526,9 +487,13 @@ fn implicit_nodes(items: &[Item]) -> Vec<String> {
     for name in used {
         let is_instrument = items
             .iter()
-            .any(|i| matches!(i, Item::Instr(d) if d.name.name == name.name));
+            .any(|i| match i {
+                Item::Instr(d) => d.name.name == name.name,
+                Item::Sample(d) => d.name.name == name.name,
+                Item::MidiOut(d) => d.name.name == name.name,
+                _ => false,
+            });
         let taken = items.iter().any(|i| match i {
-            Item::Part(t) => t.name.name == name.name,
             Item::Clip(b) => b.name.name == name.name,
             Item::Scene(b) => b.name.name == name.name,
             Item::Bind { name: n, .. } => n.name == name.name,
@@ -552,7 +517,7 @@ fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
                         "default" => &mut config.default,
                         "play" => &mut config.play,
                         "instr" => &mut config.instrument,
-                        "part" => &mut config.part,
+                        "clip" => &mut config.clip,
                         "ctl" => &mut config.control,
                         "tempo" => &mut config.tempo,
                         other => {
@@ -561,7 +526,7 @@ fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
                                 key.span,
                             );
                             d = d.with_help(
-                                "the kinds are: default, play, instr, node, ctl, tempo",
+                                "the kinds are: default, play, instr, clip, ctl, tempo",
                             );
                             return Err(d);
                         }
@@ -577,9 +542,6 @@ fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
             }
             Item::Clip(b) | Item::Scene(b) => {
                 crate::perform::definition_quantum(&b.options)?;
-            }
-            Item::Part(t) => {
-                crate::perform::definition_quantum(&t.options)?;
             }
             _ => {}
         }

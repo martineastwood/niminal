@@ -11,7 +11,7 @@ use crate::diag::{Diagnostic, Span, closest};
 use crate::env_shortcut;
 use crate::layout::Layout;
 use crate::lower::{
-    Datum, Member, Mixer, Names, check_fn, compile_chain, compile_const, compile_instr,
+    Datum, Member, Mixer, Names, SamplerDef, check_fn, compile_chain, compile_const, compile_instr,
     compile_sampler, layout_from_expr, unknown_unit,
 };
 use crate::opcodes::Registry;
@@ -109,7 +109,7 @@ fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
                     .any(|s| matches!(s, Stmt::Bind { name, .. } if name.name == "instrument"))
                 {
                     return Err(Diagnostic::new(
-                        "a processor cannot select an instrument; select it on the part or note",
+                        "a processor cannot select an instrument; select it on the clip or note",
                         d.span,
                     ));
                 }
@@ -439,7 +439,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         match names.kind_of(&ident.name) {
             None => names.add(&ident.name, kind),
             // a node may play the instrument of its own name, and share it
-            Some("instrument") if matches!(item, Item::Node(t) if plays_its_namesake(t)) => {}
+            Some("instrument" | "sample" | "kit") if matches!(item, Item::Node(t) if plays_its_namesake(t)) => {}
             Some(existing) if existing != kind => {
                 errors.push(Diagnostic::new(
                     format!(
@@ -680,7 +680,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                 &owned_samples(options, &decl.name.name),
                 owned_tempo(&decl.name.name, tempo),
                 &registry,
-                &names,
+                &mut names,
                 &mut samples_state,
             )
         });
@@ -1258,12 +1258,12 @@ fn compile_sample(
     samples: &Samples,
     tempo: Tempo,
     registry: &Registry,
-    names: &Names,
+    names: &mut Names,
     state: &mut SampleState,
 ) -> Res<Instrument> {
     let mut root = DEFAULT_ROOT_HZ;
     let mut chokes: Vec<&Arg> = Vec::new();
-    let (mut duration, mut fit): (Option<f64>, Option<&Arg>) = (None, None);
+    let mut duration: Option<f64> = None;
     for arg in &decl.options {
         let Some(key) = &arg.name else {
             return Err(Diagnostic::new(
@@ -1304,55 +1304,25 @@ fn compile_sample(
                 }
                 duration = Some(seconds);
             }
-            "fit" => fit = Some(arg),
             "loop" => {} // handled by loop_mode_of
             other => {
                 let mut d =
                     Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
-                d = match closest(other, ["root", "choke", "beats", "duration", "fit", "loop"]) {
+                d = match closest(other, ["root", "choke", "beats", "duration", "loop"]) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
                     None => d.with_help(
-                        "the options are `root`, `choke`, `beats`, `duration`, `fit` and `loop`",
+                        "the options are `root`, `choke`, `beats`, `duration` and `loop`",
                     ),
                 };
                 return Err(d);
             }
         }
     }
-    let fit_error = |d: Diagnostic| {
-        d.with_help(
-            "for example `.beats(4).fit(rate)` plays a 4-beat loop in time with the tempo",
-        )
-    };
-    if let Some(arg) = fit {
-        match (&arg.value.kind, duration) {
-            (ExprKind::Name(n), Some(_)) if n == "rate" => {}
-            (ExprKind::Name(n), _) if n == "slice" || n == "stretch" => {
-                return Err(Diagnostic::new(
-                    format!("`fit: {n}` isn't supported yet"),
-                    arg.value.span,
-                )
-                .with_help("`fit: rate` speeds the loop up or down with the tempo"));
-            }
-            (ExprKind::Name(n), None) if n == "rate" => {
-                return Err(fit_error(Diagnostic::new(
-                    "`fit: rate` needs to know the loop's length",
-                    arg.value.span,
-                )));
-            }
-            _ => {
-                return Err(fit_error(Diagnostic::new(
-                    "`fit` should be `rate`",
-                    arg.value.span,
-                )));
-            }
-        }
-        if !matches!(decl.source, SampleSource::Path(_)) || decl.is_kit {
-            return Err(Diagnostic::new(
-                "only a single sample can be fitted to the tempo",
-                arg.value.span,
-            ));
-        }
+    if duration.is_some() && (!matches!(decl.source, SampleSource::Path(_)) || decl.is_kit) {
+        return Err(Diagnostic::new(
+            "only a single sample can be fitted to a length",
+            decl.source_span,
+        ));
     }
     let file_error = |e: String| Diagnostic::new(e, decl.source_span);
     let members: Vec<Member> = match (&decl.source, decl.is_kit) {
@@ -1374,10 +1344,10 @@ fn compile_sample(
             let rate = channels
                 .first()
                 .map_or(48_000.0, |c| c.sample_rate_or(48_000.0));
-            // Fitting to the tempo: the loop's own length in seconds against the time its beats take.
-            let speed = match (fit, duration) {
-                (Some(_), Some(b)) => (frames as f64 / f64::from(rate)) / b,
-                _ => 1.0,
+            // `beats` or `duration` fits the loop to that length: its own length in seconds against the time asked for.
+            let speed = match duration {
+                Some(d) => (frames as f64 / f64::from(rate)) / d,
+                None => 1.0,
             };
             state
                 .loaded
@@ -1493,6 +1463,10 @@ fn compile_sample(
             }
         }
     }
+    names.samplers.insert(
+        decl.name.name.clone(),
+        SamplerDef { members, root_hz: root, instrument: instrument.clone() },
+    );
     Ok(instrument)
 }
 

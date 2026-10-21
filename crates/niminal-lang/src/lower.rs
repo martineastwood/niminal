@@ -217,6 +217,7 @@ pub(crate) struct Names {
     pub samples: crate::Samples,
     /// Sample instruments' underlying tables, for `.data`.
     pub sample_data: HashMap<String, Vec<Arc<Table>>>,
+    pub samplers: HashMap<String, SamplerDef>,
     /// Shared writable buffers, keyed by name with a stable index for graph deps.
     pub buffers: HashMap<String, (usize, Arc<niminal_engine::Buffer>)>,
     pub buffer_controls: HashMap<String, BufferChoices>,
@@ -236,6 +237,7 @@ impl Default for Names {
             master: Layout::Mono,
             samples: crate::Samples::default(),
             sample_data: HashMap::new(),
+            samplers: HashMap::new(),
             buffers: HashMap::new(),
             buffer_controls: HashMap::new(),
         }
@@ -437,6 +439,7 @@ pub(crate) struct Lower<'a> {
     /// The value of `out` so far.
     out: Option<Sig>,
     sends: usize,
+    kit: Option<(Vec<String>, Vec<Option<u64>>)>,
     /// Set while lowering a bus send. `Some(true)` means `prev` marked it one block late.
     in_send: Option<bool>,
     /// In a node: what feeds each external input, and the bundles made so far.
@@ -674,6 +677,7 @@ pub(crate) fn compile_instr(
             PKind::Range { unit, lo, hi } => (*unit, Some((*lo, *hi))),
             PKind::Any => match &p.default {
                 Some(e) => (lower.expr(e)?.unit, None),
+                None if p.name.name == "sample" => (Unit::Num, None),
                 None => {
                     return Err(Diagnostic::new(
                         format!("parameter `{}` needs a type", p.name.name),
@@ -814,6 +818,10 @@ pub(crate) fn compile_instr(
         Arc::new(lower.g.build_channels(&result.srcs)),
         params,
     );
+    if let Some((members, chokes)) = lower.kit {
+        instrument.members = members;
+        instrument.chokes = chokes;
+    }
     instrument.taps = lower.taps;
     instrument.arrays = arrays;
     instrument.resources = resources;
@@ -867,65 +875,15 @@ pub(crate) fn compile_sampler(
     let pick = is_kit.then(|| declare(&mut lower, "sample", Unit::Num, 0.0));
     let gain = declare(&mut lower, GAIN_PARAM, Unit::Db, 1.0);
 
-    let too_many = |n: usize| {
-        Diagnostic::new(
-            format!(
-                "a sample with {n} channels is more than the {MAX_SAMPLE_CHANNELS} niminal supports"
-            ),
-            name.span,
-        )
-    };
-    // Members with the same channel layout share one selectable player per channel. A note
-    // chooses its member once; it does not run and sum every other member's silent graph.
-    let mut layouts = std::collections::BTreeMap::<usize, Vec<usize>>::new();
-    for (i, member) in members.iter().enumerate() {
-        let channels = member.channels.len();
-        if channels > MAX_SAMPLE_CHANNELS {
-            return Err(too_many(channels));
-        }
-        layouts.entry(channels).or_default().push(i);
-    }
-    let mut mix: Option<Sig> = None;
-    for (channels, indices) in layouts {
-        let mut srcs = Vec::with_capacity(channels);
-        for channel in 0..channels {
-            let mut players = vec![None; members.len()];
-            for &i in &indices {
-                let member = &members[i];
-                let mut player = Sampler::new(member.channels[channel].clone(), root_hz, None)
-                    .with_speed(member.speed)
-                    .with_loop(member.loop_mode);
-                if let Some((start, end)) = member.slice {
-                    player = player.slice(start, end);
-                }
-                players[i] = Some(player);
-            }
-            let mut wires = vec![
-                ("freq", freq),
-                ("pitch", pitch),
-                ("rate", rate),
-                ("start", start),
-                ("begin", begin),
-            ];
-            wires.extend(pick.map(|p| ("sample", p)));
-            srcs.push(
-                lower
-                    .g
-                    .add(KitSampler::new(players), &wires)
-                    .map_err(|e| Diagnostic::new(e.to_string(), name.span))?,
-            );
-        }
-        let sig = lower.convert(
-            &Sig::channels(srcs, Layout::from_count(channels)),
-            names.master,
-            name.span,
-        )?;
-        mix = Some(match mix {
-            None => sig,
-            Some(so_far) => lower.binary(BinOp::Add, so_far, sig, name.span)?,
-        });
-    }
-    let result = mix.expect("a sample or kit has at least one sample");
+    let mut wires = vec![
+        ("freq", freq),
+        ("pitch", pitch),
+        ("rate", rate),
+        ("start", start),
+        ("begin", begin),
+    ];
+    wires.extend(pick.map(|p| ("sample", p)));
+    let result = lower.sampler_signal(name, members, root_hz, &wires)?;
     let result = lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, name.span)?;
     let mut instrument = Instrument::new(
         name.name.clone(),
@@ -936,6 +894,158 @@ pub(crate) fn compile_sampler(
         instrument.members = members.iter().map(|m| m.name.clone()).collect();
     }
     Ok(instrument)
+}
+
+/// Loaded sampler data reused when a sampler is called inside an instrument.
+pub(crate) struct SamplerDef {
+    pub members: Vec<Member>,
+    pub root_hz: f32,
+    pub instrument: Instrument,
+}
+
+impl Lower<'_> {
+    fn sampler_signal(
+        &mut self,
+        name: &Ident,
+        members: &[Member],
+        root_hz: f32,
+        wires: &[(&str, Src)],
+    ) -> Res<Sig> {
+        let too_many = |n: usize| {
+            Diagnostic::new(
+                format!(
+                    "a sample with {n} channels is more than the {MAX_SAMPLE_CHANNELS} niminal supports"
+                ),
+                name.span,
+            )
+        };
+        // Members with the same channel layout share one selectable player per channel. A note
+        // chooses its member once; it does not run and sum every other member's silent graph.
+        let mut layouts = std::collections::BTreeMap::<usize, Vec<usize>>::new();
+        for (i, member) in members.iter().enumerate() {
+            let channels = member.channels.len();
+            if channels > MAX_SAMPLE_CHANNELS {
+                return Err(too_many(channels));
+            }
+            layouts.entry(channels).or_default().push(i);
+        }
+        let mut mix: Option<Sig> = None;
+        for (channels, indices) in layouts {
+            let mut srcs = Vec::with_capacity(channels);
+            for channel in 0..channels {
+                let mut players = vec![None; members.len()];
+                for &i in &indices {
+                    let member = &members[i];
+                    let mut player = Sampler::new(member.channels[channel].clone(), root_hz, None)
+                        .with_speed(member.speed)
+                        .with_loop(member.loop_mode);
+                    if let Some((start, end)) = member.slice {
+                        player = player.slice(start, end);
+                    }
+                    players[i] = Some(player);
+                }
+                srcs.push(
+                    self.g
+                        .add(KitSampler::new(players), wires)
+                        .map_err(|e| Diagnostic::new(e.to_string(), name.span))?,
+                );
+            }
+            let sig = self.convert(
+                &Sig::channels(srcs, Layout::from_count(channels)),
+                self.names.master,
+                name.span,
+            )?;
+            mix = Some(match mix {
+                None => sig,
+                Some(so_far) => self.binary(BinOp::Add, so_far, sig, name.span)?,
+            });
+        }
+        Ok(mix.expect("a sample or kit has at least one sample"))
+    }
+
+    fn call_sampler(&mut self, sampler: &SamplerDef, name: &Ident, args: &[Arg]) -> Res<Datum> {
+        if self.mode != Mode::Instrument || self.in_fn {
+            return Err(Diagnostic::new(
+                "a sampler can only be played inside an instrument",
+                name.span,
+            ));
+        }
+        let mut values = HashMap::new();
+        for arg in args {
+            let Some(key) = &arg.name else {
+                return Err(Diagnostic::new(
+                    "name the sampler arguments, as in `freq: freq`",
+                    arg.value.span,
+                ));
+            };
+            let Some(param) = sampler
+                .instrument
+                .params
+                .iter()
+                .find(|p| p.name == key.name)
+            else {
+                return Err(Diagnostic::new(
+                    format!("`{}` has no parameter `{}`", name.name, key.name),
+                    key.span,
+                ));
+            };
+            let value = if key.name == "sample"
+                && let ExprKind::Name(member) = &arg.value.kind
+                && !self.scope.contains_key(member)
+                && let Some(index) = sampler.instrument.members.iter().position(|m| m == member)
+            {
+                Sig::constant(Unit::Num, index as f64)
+            } else {
+                self.expr(&arg.value)?
+            };
+            if value.count() != 1 {
+                return Err(Diagnostic::new(
+                    format!("`{}` expects one value", key.name),
+                    arg.value.span,
+                ));
+            }
+            if value.unit != param.unit && !(key.name == GAIN_PARAM && value.unit == Unit::Num) {
+                return Err(self.unit_mismatch(&key.name, param.unit, value.unit, &arg.value));
+            }
+            if key.name == "sample"
+                && let Some(Datum::Sig(pick)) = self.scope.get("sample")
+                && value.srcs == pick.srcs
+            {
+                let kit = (
+                    sampler.instrument.members.clone(),
+                    sampler.instrument.chokes.clone(),
+                );
+                if self.kit.as_ref().is_some_and(|previous| previous != &kit) {
+                    return Err(Diagnostic::new(
+                        "a forwarded `sample` parameter must select from the same kit",
+                        arg.value.span,
+                    ));
+                }
+                self.kit = Some(kit);
+            }
+            if values.insert(key.name.as_str(), value).is_some() {
+                return Err(Diagnostic::new(
+                    format!("`{}` is given twice", key.name),
+                    key.span,
+                ));
+            }
+        }
+        let mut wires = Vec::new();
+        let mut gain = Sig::constant(Unit::Num, 1.0);
+        for param in &sampler.instrument.params {
+            let value = values.remove(param.name.as_str()).unwrap_or_else(|| {
+                Sig::constant(param.unit, f64::from(param.default.unwrap_or(0.0)))
+            });
+            if param.name == GAIN_PARAM {
+                gain = value;
+            } else {
+                wires.push((param.name.as_str(), value.srcs[0]));
+            }
+        }
+        let signal = self.sampler_signal(name, &sampler.members, sampler.root_hz, &wires)?;
+        self.mul(&signal, &gain, Unit::Num, name.span)
+            .map(Datum::Sig)
+    }
 }
 
 /// `midi_out drums(port: "IAC Driver", channel: 10)`: an instrument whose notes go to external gear.
@@ -1304,6 +1414,7 @@ impl<'a> Lower<'a> {
             scope: HashMap::new(),
             out: None,
             sends: 0,
+            kit: None,
             in_send: None,
             chain_inputs: Vec::new(),
             input_sigs: HashMap::new(),
@@ -4333,6 +4444,28 @@ impl<'a> Lower<'a> {
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
         let n = name.name.as_str();
+        if let Some(receiver) = args.first().filter(|a| a.receiver)
+            && let ExprKind::Name(kit) = &receiver.value.kind
+            && let Some(sampler) = self.names.samplers.get(kit)
+            && sampler.instrument.members.iter().any(|member| member == n)
+        {
+            let mut selected = args[1..].to_vec();
+            selected.push(Arg {
+                name: Some(Ident {
+                    name: "sample".into(),
+                    span: name.span,
+                }),
+                value: Expr {
+                    kind: ExprKind::Name(n.into()),
+                    span: name.span,
+                },
+                receiver: false,
+            });
+            return self.call_sampler(sampler, name, &selected);
+        }
+        if let Some(sampler) = self.names.samplers.get(n) {
+            return self.call_sampler(sampler, name, args);
+        }
         if n == "oversample" {
             let [factor, body] = args else {
                 return Err(Diagnostic::new("write `oversample(4) { ... }`", span));

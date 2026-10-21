@@ -99,9 +99,12 @@ fn examples_render_as_they_did() {
     for file in files {
         let out = dir.join("out.wav");
         let _ = std::fs::remove_file(&out);
-        let run = std::process::Command::new(env!("CARGO_BIN_EXE_nimlive"))
-            .arg("render").arg(&file).args(["--bars", "4", "--out"]).arg(&out)
-            .output().unwrap();
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_nimlive"));
+        command.arg("render").arg(&file);
+        if file.file_name().is_some_and(|name| name == "song.nml") {
+            command.arg("song");
+        }
+        let run = command.args(["--bars", "4", "--out"]).arg(&out).output().unwrap();
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
         let (value, sound) = if run.status.success() {
             let audio = read_wav(&out);
@@ -125,7 +128,7 @@ enum Step {
 }
 use Step::*;
 
-const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, cut: hz = 3khz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 120ms 0] * 0.3 }\ninstr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] * 0.3 }\nbus space\ninstr click(freq: hz) { space += osc(sine, freq) * env[1 0.5ms 0] * 0.3 }\nprocessor hall { out = space.reverb(room: 0.6, damp: 0.5) }\npart lead { instrument = pluck }\npart bass { instrument = pluck(cut: 800hz) }\npart clicks { instrument = click }\nclip pad { instrument: organ\n  keys: midi.keys(channel: 1) }\nctl bright = 3khz\n";
+const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, cut: hz = 3khz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 120ms 0] * 0.3 }\ninstr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] * 0.3 }\nbus space\ninstr click(freq: hz) { space += osc(sine, freq) * env[1 0.5ms 0] * 0.3 }\nprocessor hall { out = space.reverb(room: 0.6, damp: 0.5) }\nclip lead { instrument: pluck }\nclip bass { instrument: pluck(cut: 800hz) }\nclip clicks { instrument: click }\nclip pad { instrument: organ\n  keys: midi.keys(channel: 1) }\nctl bright = 3khz\n";
 
 /// Quantized evals, `launch ... then`, live commands, undo, a tempo ramp, cancel, hush, reset, held keys.
 fn live_script() -> Vec<(u64, Step)> {

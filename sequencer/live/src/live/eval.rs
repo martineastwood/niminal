@@ -365,7 +365,7 @@ pub(super) fn prepare_pending(
     let mut project = base.clone();
     project.apply(&delta);
     project.drop_broken(&from_snippet, |full| compile_with(full, &options(cfg.layout, &cfg.samples)).map(|_| ()));
-    let check = |extra: &[Piece]| -> Result<Composition, Vec<Problem>> {
+    let check = |project: &Project, extra: &[Piece]| -> Result<Composition, Vec<Problem>> {
         let (full, map) = project.source(&from_snippet, extra);
         compile_with(&full, &options(cfg.layout, &cfg.samples)).map_err(|diags| {
             diags
@@ -375,7 +375,7 @@ pub(super) fn prepare_pending(
         })
     };
 
-    let program = check(&[])?;
+    let mut program = check(&project, &[])?;
     if program.master != cfg.layout {
         return Err(vec![Problem::plain(format!(
             "this session outputs {}, but the project says {}; the output layout can only be chosen when the server starts",
@@ -395,7 +395,7 @@ pub(super) fn prepare_pending(
                 text: s.text.clone(),
                 origin: Origin::Snippet { offset: s.offset },
             };
-            let program = check(&[piece])?;
+            let program = check(&project, &[piece])?;
             // A command for later (`at +4bars chorus.start`) is not what is playing now.
             let later = program
                 .performance
@@ -443,12 +443,34 @@ pub(super) fn prepare_pending(
             origin: Origin::Snippet { offset: 0 },
         };
         // If the new version no longer works for the node, leave it playing as it was.
-        if let Ok(program) = check(&[piece]) {
+        if let Ok(program) = check(&project, &[piece]) {
             replays.push(Compiled { statement, program });
         }
     }
 
-    let has_definitions = !definitions.is_empty() || clears;
+    // A bare instrument used by a command becomes a persistent clip, so subsequent
+    // evaluations keep its playback slot even when they only change a control.
+    let mut implicit = Vec::new();
+    for action in &actions {
+        for node in action.program.nodes.iter().skip(1) {
+            if program.nodes.iter().any(|known| known.name == node.name)
+                || implicit.iter().any(|entry: &Entry| entry.key == format!("clip:{}", node.name))
+            {
+                continue;
+            }
+            if node.instrument.is_some_and(|i| action.program.instruments[i].name == node.name) {
+                implicit.push(Entry {
+                    key: format!("clip:{}", node.name),
+                    text: format!("clip {} {{ instrument: {} }}", node.name, node.name),
+                });
+            }
+        }
+    }
+    if !implicit.is_empty() {
+        project.apply(&implicit);
+        program = check(&project, &[])?;
+    }
+    let has_definitions = !definitions.is_empty() || !implicit.is_empty() || clears;
     Ok(Pending {
         id,
         group: None,

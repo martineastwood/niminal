@@ -34,15 +34,15 @@ fn declaration_order_makes_no_difference_and_adds_no_latency() {
 #[test]
 fn a_node_chain_processes_its_instrument() {
     let dry = raw("instr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\ntone(f: 220hz) for 1beat");
-    let through = raw("\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.25)}\npart lead { instrument = tone\noutput = lead_audio}\nlead(f: 220hz) for 1beat");
+    let through = raw("\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.25)}\ninstr lead_voice(f: hz) { voice = tone(f: f)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nlead(f: 220hz) for 1beat");
     let quarter: Vec<f32> = dry.iter().map(|s| s * 0.25).collect();
     close(&through, &quarter);
 }
 
 #[test]
 fn routing_a_node_to_a_bus_moves_its_sound() {
-    let direct = raw("\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.5)}\npart lead { instrument = tone\noutput = lead_audio}\nlead(f: 220hz) for 1beat");
-    let via_bus = raw("\nbus mix\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.5).to(mix)}\npart lead { instrument = tone\noutput = lead_audio}\nprocessor out_node { out = mix }\nlead(f: 220hz) for 1beat");
+    let direct = raw("\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.5)}\ninstr lead_voice(f: hz) { voice = tone(f: f)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nlead(f: 220hz) for 1beat");
+    let via_bus = raw("\nbus mix\ninstr tone(f: hz) { osc(sine, f) * env[1 1sec 1] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.5).to(mix)}\ninstr lead_voice(f: hz) { voice = tone(f: f)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nprocessor out_node { out = mix }\nlead(f: 220hz) for 1beat");
     close(&direct, &via_bus);
 }
 
@@ -50,7 +50,7 @@ fn routing_a_node_to_a_bus_moves_its_sound() {
 fn node_defaults_apply_and_notes_override_them() {
     let src = |node_arg: &str, note_arg: &str| {
         format!(
-            "instr tone(f: hz, amp: db = 0db) {{ osc(sine, f).gain(amp) * env[1 1sec 1] }}\npart lead {{ instrument = tone({node_arg}) }}\nlead({note_arg}) for 1beat"
+            "instr tone(f: hz, amp: db = 0db) {{ osc(sine, f).gain(amp) * env[1 1sec 1] }}\nclip lead {{ instrument: tone({node_arg}) }}\nlead({note_arg}) for 1beat"
         )
     };
     let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -66,7 +66,7 @@ fn a_chains_filter_state_persists_across_notes() {
     // One node-level filter serves both notes. When the second note
     // starts, the filter still holds charge from the first, so its output
     // starts well above where the first note's did.
-    let src = "\nfn one_pole(x, cutoff: hz) {\n  state y = 0.0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}\ninstr dc(f: hz) { 1.0 * env[1 | 1ms 0] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.one_pole(cutoff: 2hz)}\npart lead { instrument = dc\noutput = lead_audio}\nlead(f: 1hz) for 1/8beat\nat 1/4beat lead(f: 1hz) for 1/8beat\n";
+    let src = "\nfn one_pole(x, cutoff: hz) {\n  state y = 0.0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}\ninstr dc(f: hz) { 1.0 * env[1 | 1ms 0] }\nbus lead_audio\nprocessor lead_fx {out = lead_audio.one_pole(cutoff: 2hz)}\ninstr lead_voice(f: hz) { voice = dc(f: f)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nlead(f: 1hz) for 1/8beat\nat 1/4beat lead(f: 1hz) for 1/8beat\n";
     let out = raw(src);
     let second_start = (0.125 * SR) as usize; // 1/4beat at 120bpm
     assert!(out[1] < 0.01, "the filter starts empty: {}", out[1]);

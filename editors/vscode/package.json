@@ -270,8 +270,8 @@
           "name": "Scenes"
         },
         {
-          "id": "niminal.parts",
-          "name": "Parts"
+          "id": "niminal.clips",
+          "name": "Clips"
         },
         {
           "id": "niminal.pending",
@@ -288,17 +288,17 @@
         },
         {
           "command": "niminal.toggleMute",
-          "when": "view == niminal.parts",
+          "when": "view == niminal.clips",
           "group": "inline@1"
         },
         {
           "command": "niminal.toggleSolo",
-          "when": "view == niminal.parts",
+          "when": "view == niminal.clips",
           "group": "inline@2"
         },
         {
           "command": "niminal.stopPart",
-          "when": "view == niminal.parts",
+          "when": "view == niminal.clips",
           "group": "inline@3"
         },
         {

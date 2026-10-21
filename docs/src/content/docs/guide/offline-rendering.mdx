@@ -35,14 +35,14 @@ A file with a tempo ramp (`tempo … @ next … over …`) is played through a s
 
 ## Stems
 
-`--stems` writes a file for every part and every bus as well as the mix, into the folder given by `--out`:
+`--stems` writes a file for every clip and every bus as well as the mix, into the folder given by `--out`:
 
 ```sh
 nimlive render examples/groove.nml --stems --out stems/
 # wrote 5 files into stems/ (33.49s): mix, space.fx, bass, lead, space
 ```
 
-Each stem is what that part put out after its own effects and before the master stage, so it has no limiter on it. The stems of the parts that go to the master add up to the mix, and all files are the same length, so they line up in a mixer. A bus's file is the sum of what was sent to it; the processor that reads a bus (`processor room { out = space.reverb(...) }`) has its own. Parts that play bare instruments with no part of their own are in `direct.wav`.
+Each stem is what that clip put out after its own effects and before the master stage, so it has no limiter on it. The stems of the clips that go to the master add up to the mix, and all files are the same length, so they line up in a mixer. A bus's file is the sum of what was sent to it; the processor that reads a bus (`processor room { out = space.reverb(...) }`) has its own. Notes played directly on an instrument are in `direct.wav`.
 
 ## External scores
 

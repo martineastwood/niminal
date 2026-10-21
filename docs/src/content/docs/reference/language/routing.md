@@ -3,38 +3,19 @@ title: Routing
 description: Buses, execution order, delay, and channel layouts.
 ---
 
-## Instruments, parts and processors
+## Instruments and processors
 
-An instrument is a per-note template. Every note gets its own DSP state. A processor is a persistent audio instance: its state is shared across incoming notes and survives their release. A part chooses an instrument and routes its audio.
-
-```nml
-instr pluck(freq: hz) {
-  osc(saw, freq) * env[1 | 200ms 0]
-}
-
-processor echo {
-  out = it.delay(time: 250ms, feedback: 0.4)
-}
-
-part lead {
-  instrument = pluck
-  output = echo
-}
-```
-
-Here one delay processes the sum of the lead's voices. Putting the delay inside `instr pluck` would create a separate delay for every note. Several parts can output to `echo` to share it. Declare two processors to keep their state independent. A processor declaration creates one running instance; use DSP functions to reuse the processing code. The engine routing API also supports reusable processor definitions and explicit instances.
-
-`it` is a processor's summed incoming audio. A processor can also generate audio, read a bus, or process `input(1)` without a part. Processor output goes to master unless its final `out` is routed with `.to(bus)`.
+An instrument is a per-note template: every note gets its own DSP state. A clip selects the instrument and supplies notes and parameter lanes. A processor is a persistent audio instance: its state is shared across incoming notes and survives their release.
 
 ## Buses and sends
 
-A bus is a summing point, declared once and cleared every block. It owns no effect state. A processor reads the bus and owns the effect:
+A bus sums audio and owns no effect state. Instruments send audio to it, and a processor reads it:
 
 ```nml
 bus space: stereo
 
-processor lead_fx {
-  out = it.gain(-3db)
+instr pluck(freq: hz) {
+  out = (osc(saw, freq) * env[1 | 200ms 0]).pan
   space += out.gain(-14db)
 }
 
@@ -42,15 +23,13 @@ processor room {
   out = space.reverb(room: 0.8, damp: 0.4)
 }
 
-part lead {
-  instrument = pluck
-  output = lead_fx
-}
+clip lead { instrument: pluck }
+lead.play([c4 e4 g4])
 ```
 
-`space += out` sends a copy while `lead_fx` still outputs to master: a parallel effect send. A part's `output = space` routes its entire output into the bus, without a parallel dry path. A part's `output = lead_fx` routes into a processor directly. Omit `output` for direct master output.
+`space += out` sends a copy while the instrument also outputs to master. For an entirely wet signal, send a local signal to the bus and omit `out` and a final value. Several instruments can send to the same bus to share one processor. Declare separate buses and processors for independent effect state.
 
-Declaration order does not matter. Musical parts belong to the sequencer. The DSP language uses collection `node` declarations for low-level destinations; they accept only instrument defaults, output routing, gain and pan. DSP belongs in `processor` bodies.
+A processor can also generate audio or process `input(1)`. Processor output goes to master unless its final `out` is routed with `.to(bus)`. Declaration order does not matter.
 
 ## Execution order
 
@@ -80,12 +59,13 @@ out = sig.delay(time: oscillated, feedback: 0.3, max: 2sec)   // changing time n
 Processing latency declared by DSP processors is propagated through the graph. Faster parallel paths receive exact sample delays before they combine. This includes nested processors, array outputs, instrument voices, processor effects and feed-forward bus sends. Conversion filters in `oversample` participate automatically.
 
 ```nml
-instr tone(freq: hz) { osc(sine, freq) }
-part dry { instrument = tone }
 bus wet_audio
-processor wet_fx {out = oversample(4) { wet_audio.tanh }}
-part wet {  instrument = tone
-output = wet_audio}
+instr tone(freq: hz) {
+  out = osc(sine, freq)
+  wet_audio += out
+}
+processor wet_fx { out = oversample(4) { wet_audio.tanh } }
+clip lead { instrument: tone }
 ```
 
 The dry path is delayed to match the wet path. The engine `status` result reports `processing_latency` in samples; this excludes the master limiter and audio device latency. Compensation adds causal delay to faster paths; it cannot produce audio before the triggering event.
@@ -106,4 +86,4 @@ The server’s `--channels` flag must match the layout you intend to hear (1, 2,
 
 ## Engine routing API
 
-Parts and processors are lowered by the live client into private processor instances and explicit output connections. Other clients can build their own graph with the [Engine API](/reference/engine-api/#processor-instances-buses-and-connections): collection nodes, reusable effects, buses and timed connection edits. DSP-defined sends above remain part of their compiled graph. Musical parts and sequencing stay client-owned.
+Clips and processors are lowered by the live client into private processor instances and explicit output connections. Other clients can build their own graph with the [Engine API](/reference/engine-api/#processor-instances-buses-and-connections): collection nodes, reusable effects, buses and timed connection edits. DSP-defined sends above remain part of their compiled graph. Clips and sequencing stay client-owned.

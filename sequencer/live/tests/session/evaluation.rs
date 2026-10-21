@@ -431,7 +431,7 @@ fn the_output_layout_is_fixed_for_the_session() {
     assert!(e[0].message.contains("outputs stereo"), "{e:?}");
     // a project that says nothing about channels takes the session's
     s.eval(
-        "instr a(freq: hz) { osc(sine, freq) }\npart t { instrument = a }\nt.play([c4])",
+        "instr a(freq: hz) { osc(sine, freq) }\nclip t { instrument: a }\nt.play([c4])",
         Some("now"),
     )
     .unwrap();

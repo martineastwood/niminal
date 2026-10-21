@@ -30,13 +30,13 @@ pub fn rms(x: &[f32]) -> f32 {
 
 pub const ONE_NOTE: &str = "\ntempo 120bpm\ninstr lead(freq: hz, amp: db = -6db) {\n  level = env[0 5ms 1 200ms 0.6 | 300ms 0]\n  osc(saw, freq).lpf(cutoff: 2khz, res: 0.2).gain(amp) * level\n}\nlead(freq: a3) for 1beat\n";
 
-pub const SONG: &str = "\ntempo 120bpm\ninstr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\npart a { instrument = tone }\npart b { instrument = tone }\nscene one { a: [c4], b: ~ }\nscene two { a: [e4], b: [g4] }\narrangement song { sections: [one.over(2bars) two.over(1bar)] }\n";
+pub const SONG: &str = "\ntempo 120bpm\ninstr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\nclip a { instrument: tone }\nclip b { instrument: tone }\nscene one { a: [c4], b: ~ }\nscene two { a: [e4], b: [g4] }\narrangement song { sections: [one.over(2bars) two.over(1bar)] }\n";
 
 pub fn arrangement(name: &str) -> RenderOptions {
     RenderOptions { limiter: false, arrangement: Some(name.into()), ..Default::default() }
 }
 
-pub const LANE_STAGE: &str = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}\nriff = [c5 c5 c5 c5 c5 c5 c5 c5]\nscene s { pad: riff }\n";
+pub const LANE_STAGE: &str = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }\nriff = [c5 c5 c5 c5 c5 c5 c5 c5]\nscene s { pad: riff }\n";
 
 pub fn lane_song(lanes: &str) -> Vec<f32> {
     let src = format!("{LANE_STAGE}arrangement song {{ sections: [s.over(2bars)]\n{lanes} }}");

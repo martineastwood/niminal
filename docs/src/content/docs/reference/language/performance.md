@@ -1,13 +1,13 @@
 ---
 title: Performance
-description: Parts, clips, scenes, live commands, quantization, and control.
+description: Clips, scenes, live commands, quantization, and control.
 ---
 
-The performance layer is built around **clips**, **scenes**, and **parts**: clips carry their instrument and are started and stopped by name, scenes start sets of clips, and parts own musical playback and route audio to persistent processors. Arrangements sequence the same structures for offline renders.
+The performance layer is built around **clips** and **scenes**: clips carry an instrument and lanes on a timeline, and scenes start sets of clips. Instruments route audio to buses and persistent processors. Arrangements sequence the same structures for offline renders.
 
-## Parts: clips with an instrument
+## Playing clips
 
-A clip with an `instrument:` is a *part*. It is also a part of the same name, which plays it, so you start, mute and change it by its name:
+Start, stop, mute, solo and transform a clip by its name:
 
 ```nml
 clip bass {
@@ -39,36 +39,15 @@ processor room {
 }
 ```
 
-The commands are written after the thing they act on: `start`, `stop`, `mute`, `unmute`, `solo` and `unsolo` on a part, `start` and `stop` on a scene. Anything else after the dot is a change to what the part plays (below). Put other material on a part with `lead.play(answer)`. `hush`, `panic`, `reset`, `new` and `unsolo` (every solo at once) act on everything. `capture last 32bars as jam` writes the notes that played in that window to `score/jam.nms`.
+The commands are written after the thing they act on: `start`, `stop`, `mute`, `unmute`, `solo` and `unsolo` on a clip, `start` and `stop` on a scene. Anything else after the dot is a change to what the clip plays (below). Put other material on a clip with `lead.play(answer)`. `hush`, `panic`, `reset`, `new` and `unsolo` (every solo at once) act on everything. `capture last 32bars as jam` writes the notes that played in that window to `score/jam.nms`.
 
-## Parts
-
-A part owns musical playback: its default instrument, clip, note transformations, mixer gain and pan. It does not own an audio effect chain. Clips with an `instrument:` create a part automatically; declare a part when you need different defaults or routing.
-
-```nml
-processor bass_filter(tone: hz = 2khz) {
-  out = it.drive(amount: 0.2).lpf(cutoff: tone)
-}
-
-part bass {
-  instrument = pluck(bright: 0.4)
-  notes = it.thin(10%)
-  output = bass_filter
-  gain = -3db
-}
-```
-
-`output` names a processor or bus; omit it to send directly to master. `part bass = pluck(bright: 0.4)` selects only an instrument. Naming an instrument in a play command or scene creates a part of that name.
-
-`notes` transforms the notes of clips played on the part; MIDI keys keep their own notes. `gain` and `pan` mix the part before its output destination. Mute and solo belong to the part.
-
-A processor owns persistent DSP state. Its `it` is the combined audio routed into it. Several parts can name the same processor to share one effect, or name separate processors for independent state. Stopping a part releases its notes; the processor continues so its tail can ring out. Processor parameters are controls named `bass_filter::tone`. Automation lanes name their owner explicitly, as in `bass_filter.tone`. Bare lane names address note parameters.
+Naming an instrument in a play command or scene creates an implicit clip of that name. `pluck.play(pattern)` and `bass.play(pattern)` start anonymous clips on the named instrument or clip. Voice limits belong to instruments and are counted separately for each clip name. Mute and live edits belong to the clip; switching to another clip does not carry them over.
 
 See [Routing](/reference/language/routing/) for shared effects, sends and continuous generators.
 
 ## Clips
 
-A clip is a section for one part: **lanes** on one timeline.
+A clip combines an instrument with **lanes** on one timeline. A clip without an instrument is reusable material. Define shared grids and patterns outside the clip, then reference them as `notes: my_grid`.
 
 ```nml
 clip riff {
@@ -82,7 +61,7 @@ clip riff {
 
 - An arrangement can carry envelope lanes on a processor's parameter, `bass_filter.tone: env[800hz 88bars 3khz]`, over the whole piece (applied when the arrangement is rendered).
 - Envelope lanes, such as `bass_filter.tone: env[300hz 1bar.exp 3khz]`, move a processor parameter over the clip's timeline with the same literal and curves as an instrument envelope; they hold their last level, `.loop` repeats them, and they need no `|`.
-- Lane targets: `notes`, instrument parameters, qualified processor parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Bare lanes target the part’s notes. Qualified lanes can target a processor shared by several parts.
+- Lane targets: `notes`, instrument parameters, qualified processor parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Bare lanes target the clip’s notes. Qualified lanes can target a processor shared by several clips.
 - **Step lanes** read at note start and cycle (polymeter); **`.per_note`** maps nth note → nth value.
 - Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip. A signal lane is a signal naming a processor parameter, as in `bass_filter.tone: sine.range(300hz, 3khz)`: the parameter follows it continuously (50 readings a second), one cycle per clip length, with or without notes.
 - Shorthand: `[c2 ~ eb2]` → `clip { notes: [...] }`.
@@ -100,7 +79,7 @@ chorus.start @ next 4bars
 
 A bare pattern such as `theme = [c4 e4 g4 b4]` is shorthand for a clip with only a `notes` lane, and everything below works the same on both. A clip with no `length:` runs freely: its cycles keep counting, so `<a b>` and `every` alternate. Give it a `length:` and its lanes span that length and it loops, starting over each time.
 
-Launching a scene starts the clips it lists and **stops every other part** that has an instrument, so a scene is the whole picture: leave a part out and it falls silent. `~` still works for a part you want to name as silent. To add a fill for a bar, write it as a `play` line instead of a scene.
+Launching a scene starts the clips it lists and **stops every other clip** that has an instrument, so a scene is the whole picture: leave a clip out and it falls silent. `~` still works for a clip you want to name as silent. To add a fill for a bar, write it as a `play` line instead of a scene.
 
 An `arrangement` plays scenes in order, each for a length, and sections can have a tempo and meter of their own, one for each section:
 
@@ -118,30 +97,30 @@ See [Score model](/reference/score-model/) for arrangement-level lanes.
 
 ## Live commands
 
-While a scene is playing you can change what a part plays by writing the change after its name. It lands on the next boundary, like a `play`, and the part's clip starts over there:
+While a scene is playing you can change what a clip plays by writing the change after its name. It lands on the next boundary, like a `play`, and the clip's clip starts over there:
 
 ```nml
 verse.start
 bass.reverse            // the bass clip now plays backwards
 lead.transpose(+5st).thin(25%)
-verse.stop              // every part in the scene stops together
+verse.stop              // every clip in the scene stops together
 ```
 
-Each change builds on what the part is playing, in the order you made them, and the parts panel shows the stack (`▶ riff · reverse → thin(25%)`):
+Each change builds on what the clip is playing, in the order you made them, and the clips panel shows the stack (`▶ riff · reverse → thin(25%)`):
 
 ```nml
 bass.reverse
 bass.thin(25%)          // reversed, then thinned
 bass.set(bright: 0.9)   // a lane for every note: a number or a pattern
-bass.set(gain: -6db)    // part volume (replaces the clip's own gain lane)
+bass.set(gain: -6db)    // gain lane (replaces the clip's own gain lane)
 bass.undo               // takes off the last change you made (here, the gain)
 bass.clear              // takes off all of them
 ```
 
-- `set` gives the clip a lane in place of its own, so typing `bass.set(` offers the lanes the part's instrument has. Setting the same lane again just replaces the earlier value, and `undo` brings the earlier one back.
-- One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A part carries at most 16.
+- `set` gives the clip a lane in place of its own, so typing `bass.set(` offers the lanes the clip's instrument has. Setting the same lane again just replaces the earlier value, and `undo` brings the earlier one back.
+- One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A clip carries at most 16.
 - Redefining the clip itself (`riff = …`) keeps your changes and applies them to the new clip.
-- `lead.play(…)`, `lead.start` or starting a scene that has it starts the part fresh, with no changes.
+- `lead.play(…)`, `lead.start` or starting a scene that has it starts the clip fresh, with no changes.
 - `thin` drops the same notes for the same amount wherever it is written, so undoing something else doesn't change which notes it drops.
 - Only a live session can do this. In a file these lines do nothing, so you can keep them in a scratch file next to your song: write the change into the play line to make it part of the piece.
 
@@ -166,7 +145,7 @@ at +12bars hush
 
 `reset` stops everything (like `hush`) and makes the next bar line bar 1, so `at bar 5` and the bar numbers in the status bar count from there again. It lands on the next bar like other commands: send it on its own, then the timeline. In a render, `reset` is a `hush`.
 
-`new` is `reset` for starting another piece in the same live session: it also forgets every definition sent so far (instruments, kits, parts, clips, scenes, tempo), so the next code starts from nothing. Put the new piece's definitions after it in the same evaluation, or send them afterwards. The output layout (`config { channels: ... }`) is kept, because it can only be chosen when the server starts. In a render `new` is a `hush`.
+`new` is `reset` for starting another piece in the same live session: it also forgets every definition sent so far (instruments, kits, clips, scenes, tempo), so the next code starts from nothing. Put the new piece's definitions after it in the same evaluation, or send them afterwards. The output layout (`config { channels: ... }`) is kept, because it can only be chosen when the server starts. In a render `new` is a `hush`.
 
 `capture last 32bars as jam` writes the notes that clips and scored events played in that window to `score/jam.nms`, as a section you can load again. Times are rebased so the window starts at beat 0. In a render or session replay the command does nothing.
 
@@ -176,7 +155,7 @@ Code compiles immediately; changes **land** on a musical boundary. Most specific
 
 1. `@ next 4bars` (or similar) on the statement
 2. `--quantize` / REPL `:quantize` for that evaluation
-3. `quantize` in a definition (`quantize: 1beat` in a `clip` or `scene`, `quantize = 1beat` in a `part` or `instr`)
+3. `quantize` in a definition (`quantize: 1beat` in a `clip` or `scene`, `quantize = 1beat` in an `instr`)
 4. `config { quantize: { ... } }` for a whole kind of change
 5. Built-in defaults by kind: plays on the next **cycle**, instrument redefinitions on the next **beat**, tempo and most other changes on the next **bar**
 
@@ -195,7 +174,7 @@ config {
     default: 1bar     // commands and everything not named below
     play:    cycle     // starting a clip
     instr:   1beat    // instrument redefinitions
-    part:   1bar
+    clip:   1bar
     ctl:     now
     tempo:   1bar
   }
@@ -235,7 +214,7 @@ tempo 140bpm @ next 4bars over 8bars
 
 ```nml
 def motif(root) {
-  [root ~ root+7st ~]
+  stack([root ~ ~ ~], [~ ~ root ~].transpose(+7st))
 }
 
 def stairs(n) {
@@ -278,7 +257,7 @@ if 1 > 0 {
 - Evaluate block/line while performing; whole file when rendering.
 - Failed compile changes nothing.
 - Redefinition: new notes use new defs; sounding notes finish on old ones. Redefining a `def` updates every clip that uses it on the next eval.
-- Parts and effects keep delay/filter state across edits.
+- Instruments and effects keep delay/filter state across edits.
 
 ## External control
 
@@ -301,7 +280,7 @@ ctl filth = midi.cc(21).range(200hz..4khz)     // ...and the line becomes this
 
 With several `midi.learn` controls waiting, each takes the next control change in the order they appear. Enable MIDI on the live client (`--midi` in a terminal, `niminal.midi` in the editor) to listen to a controller.
 
-**Keyboards:** a clip with `keys:` instead of `notes:` is played from a MIDI keyboard. Start it like any part, then play:
+**Keyboards:** a clip with `keys:` instead of `notes:` is played from a MIDI keyboard. Start it like any clip, then play:
 
 ```nml
 clip pad {
@@ -312,7 +291,7 @@ clip pad {
 pad.start
 ```
 
-Each key plays the instrument's `freq` from the note number, with the velocity as the note's `gain` (-30db to 0db), and holds it until the key comes up. A part that is muted, soloed out or stopped doesn't answer the keys. Presses and releases are logged, so a set replays.
+Each key plays the instrument's `freq` from the note number, with the velocity as the note's `gain` (-30db to 0db), and holds it until the key comes up. A clip that is muted, soloed out or stopped doesn't answer the keys. Presses and releases are logged, so a set replays.
 
 **Expression:** the keyboard's pitch bend, pressure and sustain pedal are read too. An instrument takes them by having parameters with these names, and ignores them otherwise:
 

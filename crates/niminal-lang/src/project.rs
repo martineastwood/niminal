@@ -17,11 +17,11 @@ pub struct Project {
 }
 
 /// The kinds of definition that share one set of names.
-const SHARED: [&str; 13] = ["ctl", "instr", "fn", "const", "bus", "buffer", "node", "part", "processor", "kit", "sample", "arrangement", "def"];
+const SHARED: [&str; 12] = ["ctl", "instr", "fn", "const", "bus", "buffer", "node", "processor", "kit", "sample", "arrangement", "def"];
 
 /// A node may play the instrument of its own name, so the two may share it.
 fn is_instrument_and_node(a: &str, b: &str) -> bool {
-    matches!((a, b), ("instr", "node" | "part") | ("node" | "part", "instr"))
+    matches!((a, b), ("instr" | "sample" | "kit", "node") | ("node", "instr" | "sample" | "kit"))
 }
 
 impl Project {
@@ -279,6 +279,6 @@ mod tests {
         assert_eq!(project.entries.len(), 3, "a node and its instrument share a name; a clip may too");
         project.apply(&[entry("kit:drums")]);
         let keys: Vec<_> = project.entries.iter().map(|e| e.key.as_str()).collect();
-        assert_eq!(keys, ["clip:drums", "kit:drums"]);
+        assert_eq!(keys, ["node:drums", "clip:drums", "kit:drums"]);
     }
 }

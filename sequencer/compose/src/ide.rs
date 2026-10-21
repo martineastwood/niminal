@@ -57,7 +57,6 @@ pub const RESERVED_WORDS: &[&str] = &[
     "spawn",
     "state",
     "tempo",
-    "part",
     "processor",
     "true",
     "unsolo",
@@ -70,7 +69,6 @@ pub enum SymbolKind {
     Function,
     Control,
     Bus,
-    Part,
     Processor,
     Sample,
     Kit,
@@ -141,7 +139,6 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Control { name, .. } => (name, SymbolKind::Control, first_line()),
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
             Item::Buffer(d) => (&d.name, SymbolKind::Pattern, format!("buffer {}", d.name.name)),
-            Item::Part(d) => (&d.name, SymbolKind::Part, format!("part {}", d.name.name)),
             Item::Processor(d) => {
                 param_list = params(source, &d.params);
                 (&d.name, SymbolKind::Processor, format!("processor {}({})", d.name.name, labels(&param_list)))
@@ -351,7 +348,7 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         ),
         op(
             "rotate",
-            "Start a part later each cycle: `rotate(4)` moves the start on by a quarter every cycle, wrapping after four.",
+            "Start a clip later each cycle: `rotate(4)` moves the start on by a quarter every cycle, wrapping after four.",
             &[("parts", "number", true)],
         ),
         op(
@@ -454,7 +451,7 @@ mod tests {
 
     #[test]
     fn symbols_name_what_a_file_defines() {
-        let src = "ctl cutoff = 1khz\ninstr tone(freq: hz, amp: db = -6db) { osc(sine, freq) }\npart lead { instrument = tone }\nriff = [c4 e4]";
+        let src = "ctl cutoff = 1khz\ninstr tone(freq: hz, amp: db = -6db) { osc(sine, freq) }\nclip lead { instrument: tone }\nriff = [c4 e4]";
         let s = symbols(src).unwrap();
         let names: Vec<_> = s.iter().map(|s| (s.name.as_str(), s.kind)).collect();
         assert_eq!(
@@ -462,7 +459,7 @@ mod tests {
             [
                 ("cutoff", SymbolKind::Control),
                 ("tone", SymbolKind::Instrument),
-                ("lead", SymbolKind::Part),
+                ("lead", SymbolKind::Clip),
                 ("riff", SymbolKind::Pattern)
             ]
         );

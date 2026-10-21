@@ -15,7 +15,7 @@
   },
   "folding": {
     "markers": {
-      "start": "^\\s*(instr|mono|fn|def|node|part|processor|clip|scene|arrangement|config)\\b",
+      "start": "^\\s*(instr|mono|fn|def|node|processor|clip|scene|arrangement|config)\\b",
       "end": "^\\s*\\}"
     }
   }

@@ -13,11 +13,13 @@ instr tone(freq: hz) {
 }
 
 processor lead_fx {
-  out = it.gain(volume)
+  out = lead_fx_audio.gain(volume)
 }
-part lead {
-  instrument = tone
-  output = lead_fx
+bus lead_fx_audio: stereo
+instr lead_voice(freq: hz) {
+  voice = tone(freq: freq)
+  lead_fx_audio += voice
 }
+clip lead { instrument: lead_voice }
 
 lead.play([c4 e4 g4 b4])

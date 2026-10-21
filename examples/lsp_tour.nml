@@ -18,19 +18,21 @@ instr lead(freq: hz, amp: db = -12db) {
 bus space
 
 processor keys_fx {
-  out = it.gain(-3db)
+  out = keys_fx_audio.gain(-3db)
 }
-part keys {
-  instrument = lead
-  output = keys_fx
+bus keys_fx_audio: stereo
+instr keys_voice(freq: hz) {
+  voice = lead(freq: freq)
+  keys_fx_audio += voice
 }
+clip keys { instrument: keys_voice }
 
 keys.play([c3 e3 g3 b3])
 
 // 1. ERRORS: change `saw` above to `sawz`, or `lpf(cutoff: cutoff` to `lpf(cutof: cutoff`,
 //    or write `lpf(cutoff: 3)` (a plain number where hz is wanted). Undo clears them.
 // 2. HOVER: over `lead`, `lpf`, `drive`, `osc`, `saw`, `cutoff`, `keys`.
-// 3. DEFINITION (F12): on `lead` in `instrument = lead`, and `cutoff` in the lpf call.
+// 3. DEFINITION (F12): on `lead` in `instrument: lead`, and `cutoff` in the lpf call.
 // 4. OUTLINE (Cmd+Shift+O): lists cutoff, drive, lead, space, keys, play pattern.
 // 5. COMPLETION: on a new line inside lead's body type:
 //      osc(          -> waveforms (sine saw square tri)
@@ -40,7 +42,7 @@ keys.play([c3 e3 g3 b3])
 //      osc(saw, 440hz).drive(  -> amount:
 //      800   -> unit suffixes (hz khz db ms sec beat bar deg st)
 //      lea   -> lead (an instrument you defined) next to keywords and functions
-// 6. HALF-TYPED CODE: add a line `node bass { instrument = ` and ask for completion
+// 6. HALF-TYPED CODE: add a line `clip bass { instrument: ` and ask for completion
 //    after the `=`. `lead` should still be offered even though the file doesn't parse.
-// 7. DOC COMMENTS: add a `// text` line above `node keys` or edit the one above `lead`,
+// 7. DOC COMMENTS: add a `// text` line above `clip keys` or edit the one above `lead`,
 //    and hover to see it update.

@@ -1,11 +1,11 @@
-// What the performance panel shows for a part.
+// What the performance panel shows for a clip.
 
-function partDescription(part) {
-  const parts = [part.clip ? `▶ ${part.clip}` : "stopped"];
-  if (part.edits && part.edits.length) parts.push(part.edits.join(" → "));
-  if (part.muted) parts.push("muted");
-  if (part.soloed) parts.push("solo");
+function clipDescription(clip) {
+  const parts = [clip.clip ? `▶ ${clip.clip}` : "stopped"];
+  if (clip.edits && clip.edits.length) parts.push(clip.edits.join(" → "));
+  if (clip.muted) parts.push("muted");
+  if (clip.soloed) parts.push("solo");
   return parts.join(" · ");
 }
 
-module.exports = { partDescription };
+module.exports = { clipDescription };

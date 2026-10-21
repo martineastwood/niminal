@@ -25,8 +25,7 @@ pub enum Item {
     Bus(BusDecl),
     /// `buffer take = zeros(48000)` or `buffer take = 4bars`: shared writable table.
     Buffer(BufferDecl),
-    Part(PartDecl),
-    Processor(PartDecl),
+    Processor(ProcessorDecl),
     Sample(SampleDecl),
     MidiOut(MidiOutDecl),
     Arrangement(ArrangementDecl),
@@ -257,11 +256,11 @@ pub struct ConfigDecl {
     pub span: Span,
 }
 
-/// `part name { instrument = ...  out = ... }`
+/// `processor name { out = ... }`
 #[derive(Debug, Clone, PartialEq)]
-pub struct PartDecl {
+pub struct ProcessorDecl {
     pub name: Ident,
-    /// Live controls on processor declarations; musical parts have no DSP parameters.
+    /// Live controls on processor declarations.
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,

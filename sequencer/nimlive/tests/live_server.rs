@@ -12,7 +12,7 @@ use niminal_lang::Layout;
 use niminal_live::{Live, LiveServer};
 use serde_json::json;
 
-const SETUP: &str = "tempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart lead { instrument = pluck }";
+const SETUP: &str = "tempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip lead { instrument: pluck }";
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -230,7 +230,7 @@ fn websocket_controls_reach_the_live_renderer_and_appear_in_status() {
     let r = start(None);
     let mut c = connect(&r);
     c.call("eval", json!({
-        "source": "ctl level = 0.0.smooth(0ms)\ninstr flat(freq: hz) { level }\npart t { instrument = flat }\nt(freq: 440hz) for 100bars",
+        "source": "ctl level = 0.0.smooth(0ms)\ninstr flat(freq: hz) { level }\nclip t { instrument: flat }\nt(freq: 440hz) for 100bars",
         "quantize": "now"
     })).unwrap();
     // A second connection owns its definitions and controls.
@@ -258,7 +258,7 @@ fn osc_over_udp_moves_a_bound_control_and_is_logged() {
     let r = start(None);
     let mut c = connect(&r);
     c.call("eval", json!({
-        "source": "ctl level = osc_in(\"/level\").range(0..1).smooth(0ms)\ninstr flat(freq: hz) { level }\npart t { instrument = flat }\nt(freq: 440hz) for 100bars",
+        "source": "ctl level = osc_in(\"/level\").range(0..1).smooth(0ms)\ninstr flat(freq: hz) { level }\nclip t { instrument: flat }\nt(freq: 440hz) for 100bars",
         "quantize": "now"
     })).unwrap();
     let osc = OscInput::start(r.live.clone(), 0).unwrap();
@@ -321,7 +321,7 @@ fn an_edit_landing_now_is_heard_within_the_lookahead_and_a_window() {
 fn a_thousand_notes_in_a_batch_cross_the_websocket_quickly() {
     let r = start_at(None, 1.0, 0.1);
     let mut engine = Client::connect(r.engine_server.port(), None).unwrap();
-    engine.call("events.send", json!({"events": [{"op": "define", "at": "now", "source": SETUP.replace("tempo 120bpm\n", "").replace("part lead", "node lead")}]})).unwrap();
+    engine.call("events.send", json!({"events": [{"op": "define", "at": "now", "source": SETUP.replace("tempo 120bpm\n", "").replace("clip lead { instrument: pluck }", "node lead { instrument = pluck }")}]})).unwrap();
     let notes: Vec<_> = (0..1000)
         .map(|i| json!({"op": "note", "target": "lead", "at": 48_000 * 30 + i * 100, "dur": "50ms", "args": {"freq": "a4"}}))
         .collect();

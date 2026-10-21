@@ -401,8 +401,13 @@ impl Program {
                 controls.push((def.key.clone(), v, def.smooth_seconds));
             }
         }
-        // a pan belongs to the note, not to its instrument
-        let pan = match args.remove("pan") {
+        // An explicit pan parameter is wired by the instrument; otherwise pan the note output.
+        let note_pan = if self.instruments[instrument].params.iter().any(|p| p.name == "pan") {
+            None
+        } else {
+            args.remove("pan")
+        };
+        let pan = match note_pan {
             Some(value) => {
                 let azimuth = value
                     .as_angle()

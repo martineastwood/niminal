@@ -15,7 +15,7 @@ description: Comments, blocks, bindings, calls and control flow in the orchestra
 - **Destructuring:** `[l, r] = src`.
 - **Rebinding is not feedback:** `sig = sig.lpf(...)` rebinds the name. Feedback is always explicit with `prev(sig)`.
 - **Unbound names** are compile errors.
-- **No shadowing globals:** a local cannot share a name with a bus, instrument, processor, part, sample, function, constant or other top-level declaration. Inside a function only the names it could read count: buses, controls, functions and constants.
+- **No shadowing globals:** a local cannot share a name with a bus, instrument, processor, clip, sample, function, constant or other top-level declaration. Inside a function only the names it could read count: buses, controls, functions and constants.
 - **Blocks:** a block can read and change every name above it; a name first bound inside a block stays inside it.
 - **Private names:** top-level names starting with `_` are private to their module.
 
@@ -78,5 +78,5 @@ instr organ(freq: hz) {
   }
 }
 
-partials = for n in 1..8 { osc(sine, freq * n) / n }
+clipials = for n in 1..8 { osc(sine, freq * n) / n }
 ```

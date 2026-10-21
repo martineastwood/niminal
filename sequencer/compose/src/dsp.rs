@@ -1,7 +1,7 @@
 //! The part of a composition that is a sound-server definition: instruments, nodes, buses and the
 //! rest, with the client's musical time resolved to seconds.
 
-use crate::ast::{Arg, Expr, ExprKind, Item, Stmt};
+use crate::ast::{Arg, Expr, ExprKind, Item};
 use crate::lexer::{Tok, lex};
 use crate::parser::parse_spanned;
 use niminal_lang::{Diagnostic, Span};
@@ -103,7 +103,9 @@ struct Piece {
 /// never accepts the composition constructs it removes.
 pub fn dsp_source(source: &str, tempo: Tempo) -> Result<String, Diagnostic> {
     let items = parse_spanned(source)?;
-    Ok(project(source, &items, tempo, &[], false)?.text)
+    let definitions: Vec<_> = items.iter().map(|(item, _)| item.clone()).collect();
+    let implicit = crate::compile::implicit_nodes(&definitions);
+    Ok(project(source, &items, tempo, &implicit, false)?.text)
 }
 
 /// Like [`dsp_source`], for items already parsed. `implicit` names the instruments that are played
@@ -179,23 +181,6 @@ pub fn project(
                 if !entries.is_empty() {
                     pieces.push(derived(format!("config {{\n{}\n}}", entries.join("\n"))));
                 }
-            }
-            Item::Part(t) => {
-                // the client's own settings and its `notes` are not the server's
-                let mut cuts: Vec<(usize, usize)> = t
-                    .options
-                    .iter()
-                    .filter_map(|a| setting_range(a, "quantize"))
-                    .collect();
-                for stmt in &t.body {
-                    if let Stmt::Bind { name, value } = stmt
-                        && name.name == "notes"
-                    {
-                        cuts.push((name.span.start, value.span.end));
-                    }
-                }
-                let piece = without(text, span.start, cuts, verbatim, derived);
-                pieces.push(Piece { text: piece.text.replacen("part", "node", 1), verbatim_at: None, span: *span });
             }
             Item::Processor(p) => {
                 let cuts = p.options.iter().filter_map(|a| setting_range(a, "quantize")).collect();

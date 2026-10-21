@@ -134,7 +134,7 @@ Every `noise()` in an instrument, and every note of it, has its own noise, and a
 | Keyword | A new note… | Used by |
 | --- | --- | --- |
 | `instr` | Spawns a new voice (poly, default) | Most instruments |
-| `mono` | Ends the voice before it and starts its own (one voice at a time, per part) | Bass, leads |
+| `mono` | Ends the voice before it and starts its own (one voice at a time, per clip name) | Bass, leads |
 
 Continuous processors and generators use **`processor`** declarations (see [Routing](/reference/language/routing/)).
 
@@ -156,7 +156,7 @@ A name that isn't one of the settings is an ordinary local value, so a misspelt 
 | --- | --- | --- |
 | `choke = group` | New note ends other voices in the group, whichever instrument they are of | yes |
 | `same_note = release` | New note releases the previous voice at the same pitch | yes |
-| `max = n`, `steal = oldest` | Caps the voices of the instrument sounding on a part; the oldest end, with a short fade | yes |
+| `max = n`, `steal = oldest` | Caps the voices of the instrument sounding on a clip; the oldest end, with a short fade | yes |
 | `steal = quietest` | With `max`, ends the quietest voice instead of the oldest | yes |
 | `legato = true` (mono) | A note that starts while another is held takes over its voice: envelopes carry on, only the pitch moves | yes |
 | `priority = last`, `lowest`, or `highest` (mono, needs `legato`) | Which held note sounds; letting go of one goes back to another still held | yes |
@@ -166,7 +166,9 @@ A name that isn't one of the settings is an ordinary local value, so a misspelt 
 | `tail = 2sec` | How long the voice keeps sounding after its release | yes |
 | `quantize = 1beat` | When redefinitions land | yes |
 
-A setting that isn't built is rejected with a message, not ignored. `mono` is `max = 1`: the previous note fades out over a few milliseconds as the new one starts. Voices are counted per part, so two parts playing the same `mono` instrument each keep their own.
+A setting that isn't built is rejected with a message, not ignored. `mono` is `max = 1`: the previous note fades out over a few milliseconds as the new one starts. Voice policies and `quantize` belong to instrument definitions; calls such as `pluck(bright: 0.2)` supply note parameter defaults. Voices are counted per clip name, so two clips playing the same `mono` instrument each keep their own.
+
+An explicitly declared `gain: db` or `pan: deg` parameter is wired inside the instrument, so its lanes can affect bus sends as well as the direct output.
 
 ### Playing a mono instrument
 

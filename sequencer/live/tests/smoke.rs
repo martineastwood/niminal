@@ -1,7 +1,7 @@
 use niminal_lang::Layout;
 use niminal_live::Offline;
 
-const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart lead { instrument = pluck }\npart bass { instrument = pluck }\n";
+const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip lead { instrument: pluck }\nclip bass { instrument: pluck }\n";
 
 fn peak(x: &[f32]) -> f32 {
     x.iter().fold(0.0, |m, s| m.max(s.abs()))

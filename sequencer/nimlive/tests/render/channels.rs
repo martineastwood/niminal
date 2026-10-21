@@ -47,7 +47,7 @@ fn pan_places_the_sound_between_the_speakers() {
 /// A stereo render of a pattern played on a tone.
 fn played(pattern: &str) -> Vec<Vec<f32>> {
     let src = format!(
-        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\npart lead {{ instrument = tone }}\nlead.play({pattern})"
+        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\nclip lead {{ instrument: tone }}\nlead.play({pattern})"
     );
     render_with(&program(&src), &[], &RenderOptions { limiter: false, until: Some(1.9), ..Default::default() }).unwrap().channels
 }
@@ -75,22 +75,22 @@ fn a_note_can_have_a_pan_of_its_own() {
 /// A stereo render of a node with these extra lines, playing one middle C.
 fn mixed(lines: &str) -> Vec<Vec<f32>> {
     let src = format!(
-        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\npart lead {{ instrument = tone\n{lines}}}\nlead.play([c4])"
+        "tempo 120bpm\nconfig {{ channels: stereo }}\ninstr tone(freq: hz) {{ osc(sine, freq) * env[1 | 1ms 0] }}\nclip lead {{ instrument: tone\nnotes: [c4]\n{lines}}}\nlead.start"
     );
     render_with(&program(&src), &[], &RenderOptions { limiter: false, until: Some(1.9), ..Default::default() }).unwrap().channels
 }
 
 #[test]
-fn a_nodes_mixer_lines_set_its_level_and_place() {
+fn clip_gain_and_pan_lanes_set_each_notes_level_and_place() {
     let plain = mixed("");
-    let quiet = mixed("gain = -6db");
+    let quiet = mixed("gain: -6db");
     let ratio = peak(&quiet[0][..2000]) / peak(&plain[0][..2000]);
     assert!((ratio - 0.5012).abs() < 0.01, "-6db: {ratio}");
-    let left = mixed("pan = -30deg");
+    let left = mixed("pan: -30deg");
     assert!(peak(&left[0][..2000]) > 0.99 && peak(&left[1][..2000]) < 1e-6, "hard left, and as loud as the centred mono voice would be per channel");
-    let centre = mixed("pan = 0deg");
+    let centre = mixed("pan: 0deg");
     assert!((peak(&centre[0][..2000]) - peak(&plain[0][..2000])).abs() < 0.01, "a centred pan changes nothing");
-    let both = mixed("gain = -6db\n  pan = 30deg");
+    let both = mixed("gain: -6db\n  pan: 30deg");
     assert!(peak(&both[1][..2000]) > 0.49 && peak(&both[0][..2000]) < 1e-6);
 }
 
@@ -171,7 +171,7 @@ fn surround_folds_down_to_stereo_without_the_lfe() {
 
 #[test]
 fn routing_to_a_mono_bus_then_back_up() {
-    let out = raw("\nconfig { channels: stereo }\nbus m: mono\ninstr a() { osc(sine, 220hz).pan(azimuth: -30deg) * env[1 | 1ms 0] }\npart t { instrument = a\noutput = m }\nprocessor back { out = m }\nt() for 1beat");
+    let out = raw("\nconfig { channels: stereo }\nbus m: mono\ninstr a() { osc(sine, 220hz).pan(azimuth: -30deg) * env[1 | 1ms 0] }\ninstr t_voice() { voice = a()\nm += voice }\nclip t { instrument: t_voice }\nprocessor back { out = m }\nt() for 1beat");
     // hard-left stereo averaged to mono (half), then centred in stereo at -3db
     assert_eq!(out[0], out[1]);
     let expected = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
@@ -230,4 +230,11 @@ fn wav_files_interleave_the_channels() {
         assert_eq!(samples[2 * i + 1], out.channels[1][i]);
     }
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn explicit_gain_and_pan_parameters_apply_before_instrument_sends() {
+    let out = raw("config { channels: stereo }\nbus audio: stereo\ninstr tone(freq: hz, gain: db = 0db, pan: deg = 0deg) { audio += osc(sine, freq).gain(gain).pan(azimuth: pan) * env[1 | 1ms 0] }\nprocessor fx { out = audio }\nclip c { instrument: tone\nnotes: [c4]\ngain: -6db\npan: 30deg }\nc.start\nat 1bar hush");
+    assert!(peak(&out[0][..2000]) < 1e-6);
+    assert!((peak(&out[1][..2000]) - 10f32.powf(-6.0 / 20.0)).abs() < 0.01);
 }

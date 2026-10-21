@@ -131,7 +131,6 @@ pub(crate) struct Context<'a> {
     pub tempo: Tempo,
     pub names: &'a Names<'a>,
     /// The `notes` line of each node, which changes the notes of every clip played on it.
-    pub node_notes: &'a HashMap<String, Expr>,
     pub instruments: &'a [Instrument],
     pub nodes: &'a [NodeInfo],
     /// Nodes whose definition failed to compile; mentions of them are not
@@ -491,11 +490,13 @@ fn blend(lo: Value, hi: Value, x: f64) -> Option<Value> {
 
 impl Perform<'_> {
     fn define(&mut self, name: &Ident, value: PerfValue) -> Res<()> {
-        // `part` clips and `def`s are also registered in the project name table; that
-        // is the same binding, not a clash.
+        // Score functions are also registered in the project name table.
         if let Some(kind) = self.cx.names.kind_of(&name.name).filter(|k| {
-            !(*k == "part" && matches!(value, PerfValue::Clip(_)))
-                && !(*k == "score function" && matches!(value, PerfValue::Def(_)))
+            let own_instrument = matches!(*k, "instrument" | "sample" | "kit")
+                && matches!(value, PerfValue::Clip(_))
+                && self.cx.nodes.iter().any(|node| node.name == name.name
+                    && node.instrument.is_some_and(|i| self.cx.instruments[i].name == name.name));
+            !own_instrument && !(*k == "score function" && matches!(value, PerfValue::Def(_)))
         }) {
             return Err(Diagnostic::new(
                 format!("`{}` is already the name of a {kind}", name.name),
@@ -2337,7 +2338,7 @@ impl Perform<'_> {
             )
             .with_help("for example `clip c { notes: [c4] cut: env[300hz 1bar 3khz] }`")),
             PerfValue::Rest => Err(Diagnostic::new(
-                "`~` stops a part in a scene; to stop one, write `node.stop`",
+                "`~` stops a clip in a scene; to stop one, write `node.stop`",
                 span,
             )),
             PerfValue::List(_) => Err(Diagnostic::new(
@@ -2353,7 +2354,7 @@ impl Perform<'_> {
 
     // ---- commands ----------------------------------------------------------------
 
-    /// A part by name; the implicit node 0 can't be named.
+    /// A clip by name; the implicit node 0 can't be named.
     fn node(&self, id: &Ident) -> Res<usize> {
         match self
             .cx
@@ -2364,7 +2365,7 @@ impl Perform<'_> {
         {
             Some(i) => Ok(i + 1),
             None => {
-                let mut d = Diagnostic::new(format!("no part named `{}`", id.name), id.span);
+                let mut d = Diagnostic::new(format!("no clip named `{}`", id.name), id.span);
                 if let Some(c) = closest(
                     &id.name,
                     self.cx.nodes.iter().skip(1).map(|t| t.name.as_str()),
@@ -2428,7 +2429,7 @@ impl Perform<'_> {
                             .map(|(k, _)| k.as_str());
                         let parts = self.cx.nodes.iter().map(|t| t.name.as_str());
                         let mut d = Diagnostic::new(
-                            format!("no scene or part named `{}`", name.name),
+                            format!("no scene or clip named `{}`", name.name),
                             name.span,
                         );
                         if let Some(c) = closest(&name.name, scenes.chain(parts)) {
@@ -2536,7 +2537,7 @@ impl Perform<'_> {
     }
 
     /// The commands that launch the scene called `name`: its clips start, and
-    /// every other part with an instrument stops.
+    /// every other clip with an instrument stops.
     fn launch(&self, name: &Ident, schedule: &dyn Fn(Action) -> Scheduled) -> Res<Vec<Scheduled>> {
         let Some(PerfValue::Scene(scene)) = self.bindings.get(&name.name) else {
             let mut d = Diagnostic::new(format!("no scene named `{}`", name.name), name.span);
@@ -2656,7 +2657,7 @@ impl Perform<'_> {
         for lane in &decl.lanes {
             let (node, param) = (&lane.node, &lane.param);
             if !self.cx.nodes.iter().skip(1).any(|t| t.name == node.name) {
-                let mut d = Diagnostic::new(format!("no part named `{}`", node.name), node.span);
+                let mut d = Diagnostic::new(format!("no clip named `{}`", node.name), node.span);
                 if let Some(c) = closest(
                     &node.name,
                     self.cx.nodes.iter().skip(1).map(|t| t.name.as_str()),
@@ -2681,33 +2682,8 @@ impl Perform<'_> {
         })
     }
 
-    /// The clip as `node` plays it: its `notes` line, if it has one, changes the clip's notes. It also
-    /// has to make sense on the node's instrument.
+    /// Check the clip against its playback node and instrument.
     fn on_node(&self, mut clip: Clip, node: usize, id: &Ident, span: Span) -> Res<Clip> {
-        if let Some(effect) = self.cx.node_notes.get(&self.cx.nodes[node].name)
-            && let Some(at) = clip.lanes.iter().position(|(lane, _)| lane == "notes")
-        {
-            let it = PerfValue::Pattern(clip.lanes[at].1.clone());
-            match self.eval(effect, Some(&it)).map_err(|d| {
-                Diagnostic::new(
-                    format!("the `notes` line of part `{}`: {}", id.name, d.message),
-                    effect.span,
-                )
-            })? {
-                PerfValue::Pattern(p) => clip.lanes[at].1 = p,
-                other => {
-                    return Err(Diagnostic::new(
-                        format!(
-                            "the `notes` line of part `{}` makes {}, not a pattern",
-                            id.name,
-                            other.describe()
-                        ),
-                        effect.span,
-                    )
-                    .with_help("it should change `it`, as in `notes = it.thin(10%)`"));
-                }
-            }
-        }
         self.bind_curves(&mut clip, node, id, span)?;
         self.check_clip(&clip, node, id, span)?;
         Ok(clip)
@@ -2835,7 +2811,7 @@ impl Perform<'_> {
                     .params
                     .iter()
                     .any(|p| p.name == instrument.pitch && p.unit == Unit::Hz);
-                if !pitched {
+                if !pitched && instrument.members.is_empty() {
                     return Err(Diagnostic::new(
                         format!(
                             "`{}` has no `{}` parameter for the notes to set",
@@ -2934,7 +2910,7 @@ fn quantum_error(span: Span) -> Diagnostic {
         .with_help("for example `now`, `beat`, `bar`, `cycle`, `1beat` or `4bars`")
 }
 
-/// The one setting a clip, scene or part takes besides its body: `quantize: 1bar`.
+/// The one setting a clip or scene takes besides its body: `quantize: 1bar`.
 pub(crate) fn definition_quantum(options: &[Arg]) -> Res<Option<Quantize>> {
     options
         .iter()
@@ -2964,7 +2940,7 @@ fn at_offset(message: String, token: Span, offset: usize) -> Diagnostic {
     Diagnostic::new(message, Span::new(at, (at + 1).min(token.end)))
 }
 
-/// One row of `grid { ... }`: a sample or part name, optional note controls, and a body.
+/// One row of `grid { ... }`: a sample or clip name, optional note controls, and a body.
 struct GridRow<'a> {
     name: &'a str,
     name_offset: usize,
@@ -2995,13 +2971,13 @@ fn parse_grid_row(code: &str) -> Result<GridRow<'_>, (usize, String)> {
     if i == 0 {
         return Err(err(
             0,
-            "a grid row starts with a sample or part name".into(),
+            "a grid row starts with a sample or clip name".into(),
         ));
     }
     let name = &s[..i];
     let name_offset = trim_start;
     if name.starts_with('.') || name.ends_with('.') || name.matches('.').count() > 1 {
-        return Err(err(0, format!("`{name}` isn't a sample or part name")));
+        return Err(err(0, format!("`{name}` isn't a sample or clip name")));
     }
 
     let mut gain = None;

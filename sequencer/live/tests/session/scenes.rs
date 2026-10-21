@@ -11,7 +11,7 @@ fn rig_dir(rig: &str) -> std::path::PathBuf {
 #[test]
 fn used_modules_play_and_replay_without_their_files() {
     let dir = rig_dir(
-        "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart lead { instrument = pluck }\n",
+        "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip lead { instrument: pluck }\n",
     );
     let mut s = session();
     s.eval_parsed(niminal_live::ParsedEval::from_dir(
@@ -394,4 +394,14 @@ fn a_change_named_for_a_clip_goes_to_every_part_playing_it() {
         "{}",
         problems[0].message
     );
+}
+
+#[test]
+fn a_bare_instrument_plays_and_keeps_running_across_control_changes() {
+    let mut s = session();
+    s.eval("tempo 120bpm\nctl level = 0.2\ninstr tone(freq: hz) { osc(sine, freq) * level * env[1 | 1ms 0] }\ntone.play([c4])", Some("now")).unwrap();
+    assert!(peak(&run(&mut s, BAR)) > 0.1);
+    s.eval("ctl level = 0.4", Some("now")).unwrap();
+    assert!(peak(&run(&mut s, BAR)) > 0.3);
+    assert!(s.take_notices().is_empty());
 }

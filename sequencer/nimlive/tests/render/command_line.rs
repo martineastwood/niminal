@@ -10,7 +10,7 @@ fn scratch(name: &str) -> std::path::PathBuf {
     dir
 }
 
-const OPEN_ENDED: &str = "\ninstr p(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart t { instrument = p }\nt.play([c4 e4])\n";
+const OPEN_ENDED: &str = "\ninstr p(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip t { instrument: p }\nt.play([c4 e4])\n";
 
 #[test]
 fn bars_bound_a_piece_that_plays_until_stopped() {

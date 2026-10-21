@@ -50,7 +50,7 @@ impl Server {
         self.engine.lock().unwrap().session_mut().take_peaks()
     }
 }
-const SETUP: &str = "tempo 120bpm\\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\\npart lead { instrument = pluck }";
+const SETUP: &str = "tempo 120bpm\\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\\nclip lead { instrument: pluck }";
 
 fn server() -> Server {
     Server::new(Session::new(SR, Layout::Mono).without_limiter())
@@ -481,7 +481,7 @@ fn clients_share_one_session_and_a_disconnect_does_not_disturb_it() {
 fn status_lists_scenes_clips_and_what_each_node_is_doing() {
     let (mut d, c) = ready();
     let code = format!(
-        "{SETUP}\\npart bass {{ instrument = pluck }}\\nclip riff {{ notes: [c2 ~] }}\\nscene verse {{ lead: [c4 e4], bass: riff }}"
+        "{SETUP}\\nclip bass {{ instrument: pluck }}\\nclip riff {{ notes: [c2 ~] }}\\nscene verse {{ lead: [c4 e4], bass: riff }}"
     );
     assert!(
         call(
@@ -496,9 +496,9 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
 
     let before = call(&mut d, c, 3, "status", json!({}))["result"].clone();
     assert_eq!(before["scenes"], json!(["verse"]));
-    assert_eq!(before["clips"], json!(["riff"]));
+    assert_eq!(before["defined_clips"], json!(["lead", "bass", "riff"]));
     assert_eq!(
-        before["parts"][0],
+        before["clips"][0],
         json!({"name": "lead", "clip": null, "playing": null, "muted": false, "soloed": false, "edits": []})
     );
 
@@ -511,16 +511,16 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
     );
     let after = call(&mut d, c, 5, "status", json!({}))["result"].clone();
     assert_eq!(
-        after["parts"][0]["clip"], "lead",
+        after["clips"][0]["clip"], "lead",
         "a bare pattern is named for its node"
     );
-    assert_eq!(after["parts"][0]["soloed"], true);
-    assert_eq!(after["parts"][1]["name"], "bass");
-    assert_eq!(after["parts"][1]["clip"], "riff");
-    assert_eq!(after["parts"][1]["muted"], true);
-    assert_eq!(after["parts"][1]["soloed"], false);
-    assert_eq!(after["parts"][1]["edits"], json!([]));
-    assert!(after["parts"][1]["playing"].is_string() || after["parts"][1]["playing"].is_null());
+    assert_eq!(after["clips"][0]["soloed"], true);
+    assert_eq!(after["clips"][1]["name"], "bass");
+    assert_eq!(after["clips"][1]["clip"], "riff");
+    assert_eq!(after["clips"][1]["muted"], true);
+    assert_eq!(after["clips"][1]["soloed"], false);
+    assert_eq!(after["clips"][1]["edits"], json!([]));
+    assert!(after["clips"][1]["playing"].is_string() || after["clips"][1]["playing"].is_null());
 
     call(
         &mut d,
@@ -531,7 +531,7 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
     );
     let edited = call(&mut d, c, 7, "status", json!({}))["result"].clone();
     assert_eq!(
-        edited["parts"][1]["edits"],
+        edited["clips"][1]["edits"],
         json!(["reverse", "thin(25%)"])
     );
 }
@@ -687,12 +687,12 @@ fn typed_clip_define_launch_and_edit() {
         c,
         13,
         "edit",
-        json!({ "part": "riff", "change": "reverse", "quantize": "now" }),
+        json!({ "clip": "riff", "change": "reverse", "quantize": "now" }),
     );
     assert!(edited["result"].is_object(), "{edited}");
 
     let status = call(&mut d, c, 14, "status", json!({}));
-    let nodes = status["result"]["parts"].as_array().unwrap();
+    let nodes = status["result"]["clips"].as_array().unwrap();
     let riff = nodes.iter().find(|t| t["name"] == "riff").unwrap();
     assert!(
         riff["edits"]
@@ -703,7 +703,7 @@ fn typed_clip_define_launch_and_edit() {
         "{riff}"
     );
     assert!(
-        status["result"]["clips"]
+        status["result"]["defined_clips"]
             .as_array()
             .unwrap()
             .iter()

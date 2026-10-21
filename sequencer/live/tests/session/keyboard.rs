@@ -98,7 +98,7 @@ fn a_mono_instrument_sounds_one_note_at_a_time_and_max_caps_a_poly_one() {
     let sounding = |defs: &str, notes: &str| {
         let mut s = session();
         s.eval(
-            &format!("tempo 120bpm\n{defs}\npart t {{ instrument = x }}\n{notes}"),
+            &format!("tempo 120bpm\n{defs}\nclip t {{ instrument: x }}\n{notes}"),
             Some("now"),
         )
         .unwrap();

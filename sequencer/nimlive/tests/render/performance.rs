@@ -1,6 +1,6 @@
 use crate::common::*;
 
-const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) * env[1 | 20ms 0] }\npart lead { instrument = pluck }\npart bass { instrument = pluck(bright: 0.1) }\n";
+const STAGE: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: freq * (2 + bright * 6)) * env[1 | 20ms 0] }\nclip lead { instrument: pluck }\nclip bass { instrument: pluck(bright: 0.1) }\n";
 
 fn render_with_bars(body: &str, bars: Option<f64>) -> Result<Vec<f32>, nimlive::render::RenderError> {
     let p = program(&format!("{STAGE}{body}"));
@@ -36,7 +36,7 @@ fn lanes_become_note_parameters() {
 
 #[test]
 fn a_lane_can_set_a_node_parameter_as_each_note_starts() {
-    let stage = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}\n";
+    let stage = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }\n";
     let render = |body: &str| {
         let p = program(&format!("{stage}{body}"));
         render_with(&p, &[], &RenderOptions { limiter: false, until: Some(2.0), ..Default::default() }).map(mono).unwrap()
@@ -57,7 +57,7 @@ fn a_lane_can_set_a_node_parameter_as_each_note_starts() {
     assert!(e.to_string().contains("cut"), "{e}");
 }
 
-const SWEEP_STAGE: &str = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\npart pad { instrument = saw1\noutput = pad_audio}\n";
+const SWEEP_STAGE: &str = "tempo 120bpm\ninstr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }\n";
 
 fn sweep(body: &str, seconds: f64) -> Vec<f32> {
     let p = program(&format!("{SWEEP_STAGE}{body}"));
@@ -171,7 +171,7 @@ fn solo_isolates_a_node() {
 
 #[test]
 fn panic_cuts_everything_including_effect_tails() {
-    let base = "\nbus space\ninstr ping(freq: hz) { space += osc(sine, freq) * env[1 5ms 0] }\nprocessor echo { out = space.delay(time: 100ms, feedback: 0.9) }\npart src { instrument = ping }\nsrc.play([c4*2])\n";
+    let base = "\nbus space\ninstr ping(freq: hz) { space += osc(sine, freq) * env[1 5ms 0] }\nprocessor echo { out = space.delay(time: 100ms, feedback: 0.9) }\nclip src { instrument: ping }\nsrc.play([c4*2])\n";
     let ringing = raw(base, 2.0);
     let cut = raw(&format!("{base}at 1bar panic"), 2.0);
     assert!(ringing.len() > (4.0 * SR) as usize, "the echoes run on: {}", ringing.len() as f64 / SR);

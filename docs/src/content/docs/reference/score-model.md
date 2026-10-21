@@ -9,10 +9,10 @@ The engine can play **score events** that do not come from niminal source: a `.n
 
 | Element | Contents |
 | --- | --- |
-| **Event** | Target (instrument or part), start, duration, named arguments with units |
+| **Event** | Target (instrument or clip), start, duration, named arguments with units |
 | **Section** | Named finite list of events with a length (`.nms` version 1) |
 | **ClipDef** | Named clip: mini-notation lanes and/or a finite event list (`.nms` version 2 / wire API) |
-| **SceneDef** | Named set of clips, one per part |
+| **SceneDef** | Named set of clips, one per clip |
 | **Project** | Clips, scenes and an optional arrangement (`.nms` version 2) |
 | **Arrangement** | Scenes over time — in `.nml` or in a v2 project |
 
@@ -42,7 +42,7 @@ JSON. Values keep units as strings. Every file has a format **`version`**.
 
 | Field | Meaning |
 | --- | --- |
-| `target` | Instrument or part name in the `.nml` file / session |
+| `target` | Instrument or clip name in the `.nml` file / session |
 | `at`, `dur` | Start and hold time, with units |
 | `args` | Named parameters; strings with units or numbers, checked like orchestra code |
 

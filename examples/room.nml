@@ -10,12 +10,14 @@ processor room {
 }
 
 processor lead_fx {
-  out = it.gain(0.8)
+  out = lead_fx_audio.gain(0.8)
 }
-part lead {
-  instrument = pluck(bright: 0.6)
-  output = lead_fx
+bus lead_fx_audio: mono
+instr lead_voice(freq: hz) {
+  voice = pluck(bright: 0.6, freq: freq)
+  lead_fx_audio += voice
 }
+clip lead { instrument: lead_voice }
 
 instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {
   level = env[0 2ms 1 600ms.exp 0]

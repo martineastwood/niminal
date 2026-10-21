@@ -12,7 +12,7 @@ Mini-notation, grids, and envelopes share:
 | Symbol | Meaning |
 | --- | --- |
 | Space | One after another in time |
-| Comma | At the same time (chords, parallel parts, channels) |
+| Comma | At the same time (chords, parallel clips, channels) |
 | `~` | Rest or note off |
 | `.` | Hold — notes sustain, values stay |
 | `x*2`, `x/2` | Play the step twice as fast, or half as fast |

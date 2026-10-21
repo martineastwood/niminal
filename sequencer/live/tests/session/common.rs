@@ -6,7 +6,7 @@ pub use niminal_score::{Time, Value};
 pub const SR: f32 = 48_000.0;
 pub const BAR: usize = 96_000; // 120bpm in 4/4
 
-pub const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\npart lead { instrument = pluck }\npart bass { instrument = pluck }\n";
+pub const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip lead { instrument: pluck }\nclip bass { instrument: pluck }\n";
 
 pub fn session() -> Offline {
     Offline::new(SR, Layout::Mono).without_limiter()
@@ -50,4 +50,4 @@ pub const KEYBOARD: &str = "\ntempo 120bpm\ninstr organ(freq: hz) { osc(sine, fr
 
 pub const EXPRESSIVE: &str = "\ntempo 120bpm\ninstr organ(freq: hz, bend: st = 0st, pressure: 0..1 = 0) { osc(sine, freq + bend) * (0.2 + pressure * 0.6) * env[1 | 10ms 0] }\nclip pad { instrument: organ\n  keys: midi.keys(channel: 1) }\npad.start\n";
 
-pub const REVERB: &str = "\nbus space\ninstr click(freq: hz) { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor hall { out = space.reverb(room: 0.8, damp: 0.5) }\npart src { instrument = click }\n";
+pub const REVERB: &str = "\nbus space\ninstr click(freq: hz) { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor hall { out = space.reverb(room: 0.8, damp: 0.5) }\nclip src { instrument: click }\n";
