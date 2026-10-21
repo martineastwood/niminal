@@ -52,6 +52,10 @@ class LiveClient extends Client {
   hush() {
     return this.call("hush");
   }
+
+  cancel(id) {
+    return this.call("cancel", id !== undefined ? { id } : {});
+  }
 }
 
 module.exports = { LiveClient };

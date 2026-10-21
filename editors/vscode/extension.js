@@ -15,10 +15,17 @@ let status;
 let diagnostics;
 let channel;
 let transport = null;
+let peaks = null;
 let performance = { scenes: [], tracks: [] };
+let pendingChanges = [];
 const scenesChanged = new vscode.EventEmitter();
 const tracksChanged = new vscode.EventEmitter();
+const pendingChanged = new vscode.EventEmitter();
 let refreshTimer;
+let intentionalClose = false;
+let reconnectTimer = null;
+const MAX_RECONNECT_ATTEMPTS = 5;
+let reconnectAttempts = 0;
 
 const flash = vscode.window.createTextEditorDecorationType({
   backgroundColor: new vscode.ThemeColor("editor.findMatchHighlightBackground"),
@@ -29,11 +36,19 @@ function settings() {
   return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), path: c.get("path"), livePath: c.get("livePath"), midi: c.get("midi"), oscPort: c.get("oscPort") };
 }
 
+const METER_BLOCKS = " ▁▂▃▄▅▆▇█";
+
+function peakBar(values) {
+  if (!values || values.length === 0) return "";
+  return values.map((v) => METER_BLOCKS[Math.min(Math.round(Math.max(0, v) * 8), 8)]).join("");
+}
+
 function showStatus() {
   if (!client?.connected) {
-    status.text = "$(debug-disconnect) niminal";
-    status.tooltip = "Not connected. Click to connect to the server.";
-    status.command = "niminal.connect";
+    const reconnecting = reconnectTimer !== null;
+    status.text = reconnecting ? "$(sync~spin) niminal" : "$(debug-disconnect) niminal";
+    status.tooltip = reconnecting ? "Reconnecting…" : "Not connected. Click to connect to the server.";
+    status.command = reconnecting ? undefined : "niminal.connect";
     return;
   }
   status.command = "niminal.hush";
@@ -42,8 +57,9 @@ function showStatus() {
     status.text = "$(unmute) niminal";
     return;
   }
+  const meter = peakBar(peaks);
   const pending = transport.pending ? ` · ${transport.pending} pending` : "";
-  status.text = `$(unmute) ${transport.bar}.${Math.floor(transport.beat)} · ${Math.round(transport.bpm)} bpm · ${transport.voices} voices${pending}`;
+  status.text = `$(unmute) ${transport.bar}.${Math.floor(transport.beat)} · ${Math.round(transport.bpm)} bpm · ${transport.voices} voices${meter ? ` ${meter}` : ""}${pending}`;
 }
 
 /** The server heard a control change for `midi.learn`: write it into the code that asked. */
@@ -67,9 +83,11 @@ async function connect() {
   try {
     return await connecting;
   } catch (error) {
+    intentionalClose = true;
     client?.close();
     live?.dispose();
     live = null;
+    intentionalClose = false;
     throw error;
   } finally {
     connecting = null;
@@ -82,6 +100,7 @@ async function connectLive() {
   live?.dispose();
   live = startLive({ ...config, path: config.livePath }, (text) => channel.appendLine(`live: ${text}`));
   const port = await live.ready;
+  intentionalClose = false;
   client = new Client({
     port,
     token,
@@ -90,6 +109,11 @@ async function connectLive() {
       if (method === "transport") {
         transport = params;
         showStatus();
+      } else if (method === "meters") {
+        peaks = params.peaks;
+      } else if (method === "pending") {
+        pendingChanges = params.changes ?? [];
+        pendingChanged.fire();
       } else if (method === "landed") {
         refreshPerformance();
         channel.appendLine(`landed at bar ${params.position.bar} beat ${params.position.beat.toFixed(2)}`);
@@ -101,17 +125,52 @@ async function connectLive() {
     },
     onClose() {
       transport = null;
+      peaks = null;
       performance = { scenes: [], tracks: [] };
+      pendingChanges = [];
       scenesChanged.fire();
       tracksChanged.fire();
+      pendingChanged.fire();
       showStatus();
+      if (!intentionalClose) scheduleReconnect();
     },
   });
   await client.connect();
-  await client.subscribe(["transport", "landed", "notices", "learned"]);
+  await client.subscribe(["transport", "landed", "notices", "learned", "meters", "pending"]);
+  reconnectAttempts = 0;
+  clearReconnectTimer();
   showStatus();
   refreshPerformance();
   return client;
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer !== null) return;
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    channel.appendLine("gave up reconnecting after several attempts");
+    reconnectAttempts = 0;
+    return;
+  }
+  const delay = Math.min(1000 * 2 ** reconnectAttempts, 8000);
+  reconnectAttempts++;
+  channel.appendLine(`reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+  showStatus();
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    try {
+      await connect();
+      vscode.window.setStatusBarMessage("niminal: reconnected", 3000);
+    } catch {
+      scheduleReconnect();
+    }
+  }, delay);
 }
 
 async function refreshPerformance() {
@@ -354,7 +413,28 @@ function activate(context) {
         : sendApi(`${track.name}.solo`, (c, q) => c.solo(track.name, { quantize: q }));
     }),
     command("niminal.stopTrack", (track) => track && sendApi(`${track.name}.stop`, (c, q) => c.stop(track.name, { quantize: q }))),
+    command("niminal.cancelPending", async (change) => {
+      if (!change || !client?.connected) return;
+      try {
+        await client.cancel(change.id);
+        vscode.window.setStatusBarMessage(`niminal: cancelled change ${change.id}`, 2000);
+        refreshPerformance();
+      } catch (e) {
+        vscode.window.showErrorMessage(`niminal: ${e.message}`);
+      }
+    }),
+    vscode.window.registerTreeDataProvider("niminal.pending", {
+      onDidChangeTreeData: pendingChanged.event,
+      getChildren: () => pendingChanges,
+      getTreeItem: (change) => {
+        const item = new vscode.TreeItem(`#${change.id}`);
+        item.description = `bar ${change.position.bar} beat ${change.position.beat.toFixed(1)} · ${change.changes} change${change.changes === 1 ? "" : "s"}`;
+        item.iconPath = new vscode.ThemeIcon("clock");
+        return item;
+      },
+    }),
     { dispose: () => clearInterval(refreshTimer) },
+    { dispose: () => clearReconnectTimer() },
   );
   // Tracks change without any evaluation when a timeline command comes due.
   refreshTimer = setInterval(refreshPerformance, 2000);
@@ -362,6 +442,8 @@ function activate(context) {
 }
 
 function deactivate() {
+  intentionalClose = true;
+  clearReconnectTimer();
   client?.close();
   live?.dispose();
   return languageServer?.stop();

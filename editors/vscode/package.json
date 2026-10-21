@@ -121,6 +121,12 @@
         "command": "niminal.restartLanguageServer",
         "title": "Restart Language Server",
         "category": "niminal"
+      },
+      {
+        "command": "niminal.cancelPending",
+        "title": "Cancel Pending Change",
+        "category": "niminal",
+        "icon": "$(close)"
       }
     ],
     "keybindings": [
@@ -266,6 +272,10 @@
         {
           "id": "niminal.tracks",
           "name": "Tracks"
+        },
+        {
+          "id": "niminal.pending",
+          "name": "Pending"
         }
       ]
     },
@@ -290,6 +300,11 @@
           "command": "niminal.stopTrack",
           "when": "view == niminal.tracks",
           "group": "inline@3"
+        },
+        {
+          "command": "niminal.cancelPending",
+          "when": "view == niminal.pending",
+          "group": "inline"
         }
       ],
       "commandPalette": [
@@ -307,6 +322,10 @@
         },
         {
           "command": "niminal.stopTrack",
+          "when": "false"
+        },
+        {
+          "command": "niminal.cancelPending",
           "when": "false"
         }
       ]
