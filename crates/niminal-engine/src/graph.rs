@@ -282,7 +282,7 @@ impl GraphBuilder {
                 CONST_BASE + i
             }
             Src::Node(i) => {
-                assert!(i < self.results, "processor result {i} does not exist yet");
+                assert!(i < self.results, "DSP result {i} does not exist yet");
                 NODE_BASE + i
             }
             Src::Input(i) => {
@@ -493,8 +493,8 @@ pub struct Graph {
 }
 
 impl Graph {
-    /// Reuse a compiled processor after the surrounding bus registry changes.
-    /// Processor controls become ordinary live parameters, sharing note modulation machinery.
+    /// Reuse a compiled fx after the surrounding bus registry changes.
+    /// Fx controls become ordinary live parameters, sharing note modulation machinery.
     pub fn expose_controls(&self, keys: &[(&str, &str)]) -> Graph {
         let mut g = GraphBuilder::new();
         let mut slots = Vec::new();

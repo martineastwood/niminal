@@ -333,7 +333,7 @@ fn redefining_a_node_keeps_compatible_effect_memory() {
     let mut live = with_tail();
     run(&mut live, 5000);
     live.eval(
-        "processor hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }",
+        "fx hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }",
         Some("now"),
     )
     .unwrap();

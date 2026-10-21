@@ -4,9 +4,12 @@ use crate::opcode::{Opcode, Port, ProcessCtx};
 use crate::table::Table;
 
 const PORTS: &[Port] = &[
-    Port::optional("freq", 0.0), Port::optional("pitch", 0.0),
-    Port::optional("rate", 1.0), Port::optional("start", 0.0),
-    Port::optional("sample", 0.0), Port::optional("begin", 0.0),
+    Port::optional("freq", 0.0),
+    Port::optional("pitch", 0.0),
+    Port::optional("rate", 1.0),
+    Port::optional("start", 0.0),
+    Port::optional("sample", 0.0),
+    Port::optional("begin", 0.0),
 ];
 
 /// Frames over which a slice fades in and out.
@@ -144,13 +147,15 @@ impl Opcode for Sampler {
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         if !self.started {
             self.started = true;
-            let selected = self.member.is_none_or(|m| inputs[4][0].round() as i64 == m as i64);
+            let selected = self
+                .member
+                .is_none_or(|m| inputs[4][0].round() as i64 == m as i64);
             if selected && !self.data.is_empty() {
                 let length = (self.range.1 - self.range.0) as f32 / self.source_rate();
                 let begin = inputs.get(5).map_or(0.0, |input| input[0]);
                 let start = inputs[3][0] + begin * length;
-                self.position = self.range.0 as f64
-                    + f64::from(start.max(0.0)) * f64::from(self.source_rate());
+                self.position =
+                    self.range.0 as f64 + f64::from(start.max(0.0)) * f64::from(self.source_rate());
             } else {
                 self.done = true;
             }
@@ -217,31 +222,54 @@ pub struct KitSampler {
 
 impl KitSampler {
     pub fn new(players: Vec<Option<Sampler>>) -> Self {
-        Self { players: players.into(), selected: None, started: false, sample_rate: 48_000.0 }
+        Self {
+            players: players.into(),
+            selected: None,
+            started: false,
+            sample_rate: 48_000.0,
+        }
     }
 }
 
 impl Opcode for KitSampler {
-    fn name(&self) -> &str { "sample" }
-    fn ports(&self) -> &'static [Port] { PORTS }
+    fn name(&self) -> &str {
+        "sample"
+    }
+    fn ports(&self) -> &'static [Port] {
+        PORTS
+    }
     fn box_clone(&self) -> Box<dyn Opcode> {
-        Box::new(Self { selected: None, started: false, ..self.clone() })
+        Box::new(Self {
+            selected: None,
+            started: false,
+            ..self.clone()
+        })
     }
     fn reset(&mut self) {
         self.selected = None;
         self.started = false;
     }
-    fn prepare(&mut self, sample_rate: f32) { self.sample_rate = sample_rate; }
+    fn prepare(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+    }
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         if !self.started {
             self.started = true;
             let member = inputs[4][0].round() as i64;
-            self.selected = usize::try_from(member).ok()
-                .and_then(|i| self.players.get(i)).and_then(Option::as_ref).cloned();
-            if let Some(player) = &mut self.selected { player.prepare(self.sample_rate); }
+            self.selected = usize::try_from(member)
+                .ok()
+                .and_then(|i| self.players.get(i))
+                .and_then(Option::as_ref)
+                .cloned();
+            if let Some(player) = &mut self.selected {
+                player.prepare(self.sample_rate);
+            }
         }
-        if let Some(player) = &mut self.selected { player.process(ctx, inputs, out); }
-        else { out.fill(0.0); }
+        if let Some(player) = &mut self.selected {
+            player.process(ctx, inputs, out);
+        } else {
+            out.fill(0.0);
+        }
     }
     fn is_active(&self) -> bool {
         !self.started || self.selected.as_ref().is_some_and(Sampler::is_active)
@@ -303,7 +331,10 @@ mod tests {
 
     #[test]
     fn slice_fades_at_edges() {
-        let data = Arc::new(Table::from_f32(vec![1.0; 1000].into_boxed_slice(), Some(48_000.0)));
+        let data = Arc::new(Table::from_f32(
+            vec![1.0; 1000].into_boxed_slice(),
+            Some(48_000.0),
+        ));
         let mut s = sampler(data, None).slice(100, 200);
         let freq = vec![440.0f32; 1];
         let pitch = vec![0.0f32; 1];

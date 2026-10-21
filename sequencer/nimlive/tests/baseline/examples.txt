@@ -4,12 +4,12 @@ breakbeat.nml: 2x352614
 composition.nml: 1x105973
 drums.nml: 2x488426
 functions.nml: 2x293633
+fx.nml: 2x583652
 groove.nml: 2x570512
 instrument_scopes.nml: 1x100807
 live_controls.nml: 2x369682
 lsp_tour.nml: 2x369682
 midi_osc.nml: 2x369169
-processors.nml: 2x583652
 room.nml: 1x222063
 saw_lead.nml: 1x158399
 score_prog.nml: 1x360240

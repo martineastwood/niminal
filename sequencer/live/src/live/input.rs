@@ -42,7 +42,13 @@ pub enum ControlSignal<'a> {
 impl Live {
     /// Move a `ctl` now, to `value` in `unit` (the declaration's own if none), over `smooth_ms` (the
     /// control's own smoothing if none).
-    pub fn set_control(&mut self, name: &str, value: f64, unit: Option<&str>, smooth_ms: Option<f64>) -> Result<(), Vec<Problem>> {
+    pub fn set_control(
+        &mut self,
+        name: &str,
+        value: f64,
+        unit: Option<&str>,
+        smooth_ms: Option<f64>,
+    ) -> Result<(), Vec<Problem>> {
         let op = Op::Control {
             name: name.into(),
             at: At::Now,
@@ -54,31 +60,60 @@ impl Live {
         self.link
             .request(EngineRequest::EventsSend { events: vec![op] })
             .map(|_| ())
-            .map_err(|e| e.problems().into_iter().map(Problem::plain).chain(std::iter::once(Problem::plain(e.message))).take(1).collect())
+            .map_err(|e| {
+                e.problems()
+                    .into_iter()
+                    .map(Problem::plain)
+                    .chain(std::iter::once(Problem::plain(e.message)))
+                    .take(1)
+                    .collect()
+            })
     }
 
     /// A message from a MIDI device or OSC sender. Every control bound to it moves. Returns how many
     /// controls took it.
     pub fn control_input(&mut self, signal: &ControlSignal) -> usize {
         match signal {
-            ControlSignal::MidiNote { note, channel, velocity } => return self.key_input(*channel, *note, *velocity),
+            ControlSignal::MidiNote {
+                note,
+                channel,
+                velocity,
+            } => return self.key_input(*channel, *note, *velocity),
             // a bend of 2 semitones each way, or 48 for a note of its own on an MPE keyboard
             ControlSignal::MidiBend { channel, value } => {
-                let range = if *channel != 1 && self.plays_mpe() { MPE_BEND_RANGE } else { BEND_RANGE };
+                let range = if *channel != 1 && self.plays_mpe() {
+                    MPE_BEND_RANGE
+                } else {
+                    BEND_RANGE
+                };
                 let semitones = (f64::from(*value) - 8192.0) / 8192.0 * range;
-                return self.on_channels(*channel, |s, c| s.expression_input(c, Expression::Bend, semitones, None));
+                return self.on_channels(*channel, |s, c| {
+                    s.expression_input(c, Expression::Bend, semitones, None)
+                });
             }
-            ControlSignal::MidiPressure { channel, note, value } => {
+            ControlSignal::MidiPressure {
+                channel,
+                note,
+                value,
+            } => {
                 return self.on_channels(*channel, |s, c| {
                     s.expression_input(c, Expression::Pressure, f64::from(*value) / 127.0, *note)
                 });
             }
-            ControlSignal::MidiCc { cc: 74, channel, value } if self.plays_mpe() => {
+            ControlSignal::MidiCc {
+                cc: 74,
+                channel,
+                value,
+            } if self.plays_mpe() => {
                 return self.on_channels(*channel, |s, c| {
                     s.expression_input(c, Expression::Slide, f64::from(*value) / 127.0, None)
                 });
             }
-            ControlSignal::MidiCc { cc: 64, channel, value } => {
+            ControlSignal::MidiCc {
+                cc: 64,
+                channel,
+                value,
+            } => {
                 self.on_channels(*channel, |s, c| {
                     s.expression_input(c, Expression::Sustain, f64::from(*value) / 127.0, None)
                 });
@@ -93,18 +128,39 @@ impl Live {
             .filter_map(|def| {
                 let binding = self.program.input(&def.name)?;
                 // a learning control listens to the control change it was given
-                let learned = self.learned.get(&def.name).map(|&cc| InputSource::MidiCc { cc, channel: None });
-                let source = if binding.source == InputSource::MidiLearn { learned.as_ref()? } else { &binding.source };
+                let learned = self
+                    .learned
+                    .get(&def.name)
+                    .map(|&cc| InputSource::MidiCc { cc, channel: None });
+                let source = if binding.source == InputSource::MidiLearn {
+                    learned.as_ref()?
+                } else {
+                    &binding.source
+                };
                 let t = match (source, signal) {
-                    (InputSource::MidiCc { cc, channel }, ControlSignal::MidiCc { cc: got, channel: on, value }) => {
-                        (cc == got && channel.is_none_or(|c| c == *on)).then(|| f64::from(*value) / 127.0)?
-                    }
-                    (InputSource::Osc(address), ControlSignal::Osc { address: got, value }) => {
-                        (address == got && value.is_finite()).then_some(*value)?
-                    }
+                    (
+                        InputSource::MidiCc { cc, channel },
+                        ControlSignal::MidiCc {
+                            cc: got,
+                            channel: on,
+                            value,
+                        },
+                    ) => (cc == got && channel.is_none_or(|c| c == *on))
+                        .then(|| f64::from(*value) / 127.0)?,
+                    (
+                        InputSource::Osc(address),
+                        ControlSignal::Osc {
+                            address: got,
+                            value,
+                        },
+                    ) => (address == got && value.is_finite()).then_some(*value)?,
                     _ => return None,
                 };
-                Some((def.name.clone(), binding.map_input(def, t), def.unit.suffix()))
+                Some((
+                    def.name.clone(),
+                    binding.map_input(def, t),
+                    def.unit.suffix(),
+                ))
             })
             .collect();
         targets
@@ -132,7 +188,14 @@ impl Live {
     /// comes up. Returns how many parts took it.
     pub fn key_input(&mut self, channel: u8, note: u8, velocity: u8) -> usize {
         self.look();
-        self.log.push(LiveLogEntry { sample: self.clock, input: LiveInput::Key { channel, note, velocity } });
+        self.log.push(LiveLogEntry {
+            sample: self.clock,
+            input: LiveInput::Key {
+                channel,
+                note,
+                velocity,
+            },
+        });
         self.key_event(channel, note, velocity)
     }
 
@@ -140,9 +203,23 @@ impl Live {
     /// `pressure` (0 to 1) parameter changed if its instrument has one; keys played later start with the
     /// channel's current value. The pedal holds the notes of keys that come up until it does.
     /// Returns how many notes it reached.
-    pub fn expression_input(&mut self, channel: u8, what: Expression, value: f64, note: Option<u8>) -> usize {
+    pub fn expression_input(
+        &mut self,
+        channel: u8,
+        what: Expression,
+        value: f64,
+        note: Option<u8>,
+    ) -> usize {
         self.look();
-        self.log.push(LiveLogEntry { sample: self.clock, input: LiveInput::Expression { channel, what, value, note } });
+        self.log.push(LiveLogEntry {
+            sample: self.clock,
+            input: LiveInput::Expression {
+                channel,
+                what,
+                value,
+                note,
+            },
+        });
         match what {
             Expression::Sustain => {
                 let released = self.keyboard.pedal(channel, value >= 0.5);
@@ -172,8 +249,18 @@ impl Live {
                         .and_then(|name| self.program.instruments.iter().find(|i| i.name == *name))
                         .is_some_and(|i| i.params.iter().any(|p| p.name == name));
                     if has {
-                        let value = if what == Expression::Bend { Value::Semitones(value) } else { Value::Num(value) };
-                        ops.push(Op::Set { id, at: At::Now, args: [(name.to_string(), value)].into(), glide: None, tag: None });
+                        let value = if what == Expression::Bend {
+                            Value::Semitones(value)
+                        } else {
+                            Value::Num(value)
+                        };
+                        ops.push(Op::Set {
+                            id,
+                            at: At::Now,
+                            args: [(name.to_string(), value)].into(),
+                            glide: None,
+                            tag: None,
+                        });
                     }
                 }
                 self.send(ops);
@@ -199,7 +286,10 @@ impl Live {
         let now = self.seconds(self.clock);
         let gain = -30.0 + 30.0 * f64::from(velocity.min(127)) / 127.0;
         let events: Vec<Event> = (1..self.program.nodes.len())
-            .filter_map(|node| self.schedule.key_event(node, now, channel, i32::from(note), gain))
+            .filter_map(|node| {
+                self.schedule
+                    .key_event(node, now, channel, i32::from(note), gain)
+            })
             .collect();
         let mut keys = Vec::new();
         for mut event in events {
@@ -213,13 +303,24 @@ impl Live {
             // a note starts with the bend and pressure the channel is at
             let instrument = &self.program.instruments[plan.instrument];
             for (name, level) in self.keyboard.starting(channel) {
-                if let Some(level) = level.filter(|_| instrument.params.iter().any(|p| p.name == name)) {
-                    event.args.insert(name.into(), if name == "bend" { Value::Semitones(level) } else { Value::Num(level) });
+                if let Some(level) =
+                    level.filter(|_| instrument.params.iter().any(|p| p.name == name))
+                {
+                    event.args.insert(
+                        name.into(),
+                        if name == "bend" {
+                            Value::Semitones(level)
+                        } else {
+                            Value::Num(level)
+                        },
+                    );
                 }
             }
             let instrument = instrument.name.clone();
             let key = self.keyboard.new_key();
-            let start = self.samples(event.at.to_seconds(self.program.tempo)).max(self.clock);
+            let start = self
+                .samples(event.at.to_seconds(self.program.tempo))
+                .max(self.clock);
             let id = u64::from(key);
             self.held.insert(id, instrument);
             ops.push(Op::Note {
@@ -230,7 +331,11 @@ impl Live {
                     event.target.clone()
                 },
                 at: At::Sample(start),
-                args: event.args.iter().map(|(n,v)| (n.clone(), niminal_lang::dsp_value(*v, self.program.tempo))).collect(),
+                args: event
+                    .args
+                    .iter()
+                    .map(|(n, v)| (n.clone(), niminal_lang::dsp_value(*v, self.program.tempo)))
+                    .collect(),
                 dur: None,
                 id: Some(id),
                 tag: None,
@@ -247,7 +352,11 @@ impl Live {
     fn release_key(&mut self, key: u32) -> Option<Op> {
         let id = u64::from(key);
         self.held.remove(&id)?;
-        Some(Op::Off { id, at: At::Now, tag: None })
+        Some(Op::Off {
+            id,
+            at: At::Now,
+            tag: None,
+        })
     }
 
     /// The first control waiting on `midi.learn` takes the control change that just arrived.
@@ -260,7 +369,9 @@ impl Live {
             .controls
             .iter()
             .find(|d| {
-                self.program.input(&d.name).is_some_and(|i| i.source == InputSource::MidiLearn)
+                self.program
+                    .input(&d.name)
+                    .is_some_and(|i| i.source == InputSource::MidiLearn)
                     && !self.learned.contains_key(&d.name)
             })
             .map(|d| d.name.clone());
@@ -281,7 +392,10 @@ impl Live {
     /// Stop everything at once, including effect tails, and forget what was playing.
     pub fn panic(&mut self) {
         self.look();
-        self.log.push(LiveLogEntry { sample: self.clock, input: LiveInput::Panic });
+        self.log.push(LiveLogEntry {
+            sample: self.clock,
+            input: LiveInput::Panic,
+        });
         if let Err(e) = self.link.request(EngineRequest::Panic {}) {
             self.notify(describe(&e));
         }
@@ -289,11 +403,19 @@ impl Live {
         self.take_back(WRITTEN, 0);
         self.held.clear();
         let at = self.seconds(self.clock);
-        self.history.push(HistoryEntry { at, action: NamedAction::Panic });
+        self.history.push(HistoryEntry {
+            at,
+            action: NamedAction::Panic,
+        });
         self.playing.clear();
         self.rebuild_schedule(self.clock);
         // the panic just made is done
-        self.next_panic = self.schedule.panics().iter().take_while(|&&t| self.samples(t) <= self.clock).count();
+        self.next_panic = self
+            .schedule
+            .panics()
+            .iter()
+            .take_while(|&&t| self.samples(t) <= self.clock)
+            .count();
         self.advance();
     }
 

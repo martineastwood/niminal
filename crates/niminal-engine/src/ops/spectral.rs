@@ -415,7 +415,12 @@ pub struct SpectralDelay {
 }
 
 impl SpectralDelay {
-    pub fn new(fft_size: usize, chain: Arc<SpectralChain>, max_time: f32, sample_rate: f32) -> Self {
+    pub fn new(
+        fft_size: usize,
+        chain: Arc<SpectralChain>,
+        max_time: f32,
+        sample_rate: f32,
+    ) -> Self {
         assert!(valid_fft_size(fft_size));
         let nb = bins(fft_size);
         let hop = fft_size / 2;
@@ -453,7 +458,12 @@ impl Opcode for SpectralDelay {
         let fft_size = self.chain.fft_size();
         let max_time = self.max_hops as f32 * self.hop as f32 / self.sample_rate;
         let chain = Arc::new(SpectralChain::new(fft_size));
-        Box::new(SpectralDelay::new(fft_size, chain, max_time, self.sample_rate))
+        Box::new(SpectralDelay::new(
+            fft_size,
+            chain,
+            max_time,
+            self.sample_rate,
+        ))
     }
 
     fn reset(&mut self) {
@@ -485,7 +495,8 @@ impl Opcode for SpectralDelay {
                 let delay_frac = 1.0 - spread * (1.0 - frac);
                 let delay_hops = (time_hops * delay_frac)
                     .round()
-                    .clamp(1.0, (self.max_hops - 1) as f32) as usize;
+                    .clamp(1.0, (self.max_hops - 1) as f32)
+                    as usize;
 
                 let read_pos = (self.write_pos + self.max_hops - delay_hops) % self.max_hops;
                 let ri = bin * self.max_hops + read_pos;
@@ -634,7 +645,10 @@ mod tests {
 
         let inner = chain.get();
         for i in 0..nb {
-            assert_eq!(inner.mags[i], 0.0, "first hop should output zeros (delay line empty)");
+            assert_eq!(
+                inner.mags[i], 0.0,
+                "first hop should output zeros (delay line empty)"
+            );
         }
 
         for i in 0..nb {

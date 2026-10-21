@@ -13,13 +13,20 @@ pub struct Worker {
 
 impl Worker {
     pub fn wake_handle(&self) -> thread::Thread {
-        self.thread.as_ref().expect("a running worker").thread().clone()
+        self.thread
+            .as_ref()
+            .expect("a running worker")
+            .thread()
+            .clone()
     }
 
     pub fn spawn(body: impl FnOnce(&AtomicBool) + Send + 'static) -> Worker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        Worker { stop, thread: Some(thread::spawn(move || body(&flag))) }
+        Worker {
+            stop,
+            thread: Some(thread::spawn(move || body(&flag))),
+        }
     }
 }
 

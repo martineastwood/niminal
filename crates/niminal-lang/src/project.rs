@@ -17,11 +17,27 @@ pub struct Project {
 }
 
 /// The kinds of definition that share one set of names.
-const SHARED: [&str; 12] = ["ctl", "instr", "fn", "const", "bus", "buffer", "node", "processor", "kit", "sample", "arrangement", "def"];
+const SHARED: [&str; 12] = [
+    "ctl",
+    "instr",
+    "fn",
+    "const",
+    "bus",
+    "buffer",
+    "node",
+    "fx",
+    "kit",
+    "sample",
+    "arrangement",
+    "def",
+];
 
 /// A node may play the instrument of its own name, so the two may share it.
 fn is_instrument_and_node(a: &str, b: &str) -> bool {
-    matches!((a, b), ("instr" | "sample" | "kit", "node") | ("node", "instr" | "sample" | "kit"))
+    matches!(
+        (a, b),
+        ("instr" | "sample" | "kit", "node") | ("node", "instr" | "sample" | "kit")
+    )
 }
 
 impl Project {
@@ -37,11 +53,15 @@ impl Project {
         let mut dropped = Vec::new();
         for _ in 0..8 {
             let (full, map) = self.source(from_snippet, &[]);
-            let Err(diagnostics) = compile(&full) else { break };
+            let Err(diagnostics) = compile(&full) else {
+                break;
+            };
             let mut stale = Vec::new();
             for d in &diagnostics {
                 match map.locate(d.span) {
-                    Located::Earlier(key) if self.entries.iter().any(|e| e.key == key) => stale.push(key),
+                    Located::Earlier(key) if self.entries.iter().any(|e| e.key == key) => {
+                        stale.push(key)
+                    }
                     _ => return dropped,
                 }
             }
@@ -58,9 +78,12 @@ impl Project {
             // a name is used once: defining it as something else replaces what had it before
             if let Some((kind, name)) = e.key.split_once(':').filter(|(k, _)| SHARED.contains(k)) {
                 self.entries.retain(|x| {
-                    x.key
-                        .split_once(':')
-                        .is_none_or(|(k, n)| n != name || k == kind || !SHARED.contains(&k) || is_instrument_and_node(k, kind))
+                    x.key.split_once(':').is_none_or(|(k, n)| {
+                        n != name
+                            || k == kind
+                            || !SHARED.contains(&k)
+                            || is_instrument_and_node(k, kind)
+                    })
                 });
             }
             match self.entries.iter_mut().find(|x| x.key == e.key) {
@@ -270,13 +293,23 @@ mod tests {
         assert_eq!((problem.line, problem.column), (Some(3), Some(13)));
     }
 
-
     #[test]
     fn a_name_defined_as_something_else_replaces_what_had_it() {
-        let entry = |key: &str| Entry { key: key.into(), text: key.into() };
+        let entry = |key: &str| Entry {
+            key: key.into(),
+            text: key.into(),
+        };
         let mut project = Project::default();
-        project.apply(&[entry("node:drums"), entry("instr:drums"), entry("clip:drums")]);
-        assert_eq!(project.entries.len(), 3, "a node and its instrument share a name; a clip may too");
+        project.apply(&[
+            entry("node:drums"),
+            entry("instr:drums"),
+            entry("clip:drums"),
+        ]);
+        assert_eq!(
+            project.entries.len(),
+            3,
+            "a node and its instrument share a name; a clip may too"
+        );
         project.apply(&[entry("kit:drums")]);
         let keys: Vec<_> = project.entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(keys, ["node:drums", "clip:drums", "kit:drums"]);

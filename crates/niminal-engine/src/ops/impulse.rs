@@ -13,14 +13,16 @@ pub struct Impulse {
 }
 
 impl Opcode for Impulse {
-    fn reset(&mut self) { self.phase = 0.0; }
+    fn reset(&mut self) {
+        self.phase = 0.0;
+    }
 
-    fn name(&self) -> &str { "impulse" }
+    fn name(&self) -> &str {
+        "impulse"
+    }
 
     fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[
-            Port::required("freq"),
-        ];
+        const PORTS: &[Port] = &[Port::required("freq")];
         PORTS
     }
 

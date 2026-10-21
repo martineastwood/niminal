@@ -45,28 +45,48 @@ fn rings_out_cleanly(name: &str, graph: Arc<Graph>) {
     let out = render(&graph, 60 * SR as usize, None, 32);
     assert!(out.iter().any(|s| s.abs() > 1e-3), "{name} rang at all");
     if let Some(at) = out.iter().position(|s| s.is_subnormal()) {
-        panic!("{name} was a number too small to be normal at sample {at}: {:e}", out[at]);
+        panic!(
+            "{name} was a number too small to be normal at sample {at}: {:e}",
+            out[at]
+        );
     }
     let last_second = &out[out.len() - SR as usize..];
-    assert!(last_second.iter().all(|s| *s == 0.0), "{name} was still not silent after a minute");
+    assert!(
+        last_second.iter().all(|s| *s == 0.0),
+        "{name} was still not silent after a minute"
+    );
 }
 
 #[test]
 fn a_reverb_settles_to_silence() {
-    let reverb = after_an_impulse(Reverb::new(), &[("room", Src::Const(0.5)), ("damp", Src::Const(0.5))]);
+    let reverb = after_an_impulse(
+        Reverb::new(),
+        &[("room", Src::Const(0.5)), ("damp", Src::Const(0.5))],
+    );
     rings_out_cleanly("reverb", reverb);
 }
 
 #[test]
 fn a_resonant_filter_settles_to_silence() {
-    for mode in [FilterMode::Low, FilterMode::High, FilterMode::Band, FilterMode::Notch] {
-        let filter = after_an_impulse(Svf::new(mode), &[("cutoff", Src::Const(200.0)), ("res", Src::Const(1.0))]);
+    for mode in [
+        FilterMode::Low,
+        FilterMode::High,
+        FilterMode::Band,
+        FilterMode::Notch,
+    ] {
+        let filter = after_an_impulse(
+            Svf::new(mode),
+            &[("cutoff", Src::Const(200.0)), ("res", Src::Const(1.0))],
+        );
         rings_out_cleanly(&format!("{mode:?} filter"), filter);
     }
 }
 
 #[test]
 fn a_feedback_delay_settles_to_silence() {
-    let delay = after_an_impulse(Delay::new(1.0), &[("time", Src::Const(0.001)), ("feedback", Src::Const(0.995))]);
+    let delay = after_an_impulse(
+        Delay::new(1.0),
+        &[("time", Src::Const(0.001)), ("feedback", Src::Const(0.995))],
+    );
     rings_out_cleanly("delay", delay);
 }

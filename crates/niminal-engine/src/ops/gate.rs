@@ -15,14 +15,23 @@ pub struct Gate {
 
 impl Default for Gate {
     fn default() -> Self {
-        Gate { envelope: 0.0, gain: 0.0, sample_rate: 48_000.0 }
+        Gate {
+            envelope: 0.0,
+            gain: 0.0,
+            sample_rate: 48_000.0,
+        }
     }
 }
 
 impl Opcode for Gate {
-    fn reset(&mut self) { self.envelope = 0.0; self.gain = 0.0; }
+    fn reset(&mut self) {
+        self.envelope = 0.0;
+        self.gain = 0.0;
+    }
 
-    fn name(&self) -> &str { "gate" }
+    fn name(&self) -> &str {
+        "gate"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[
@@ -67,7 +76,11 @@ impl Opcode for Gate {
             };
             self.envelope = level + det_coeff * (self.envelope - level);
 
-            let target = if self.envelope > threshold { 1.0 } else { range };
+            let target = if self.envelope > threshold {
+                1.0
+            } else {
+                range
+            };
             let coeff = if target > self.gain {
                 (-1.0 / (attack * sr).max(1.0)).exp()
             } else {

@@ -80,7 +80,10 @@ impl Rational {
             n /= 2;
             d = (d / 2).max(1);
         }
-        Rational { n: n as i64, d: d as i64 }
+        Rational {
+            n: n as i64,
+            d: d as i64,
+        }
     }
 
     /// The closest simple fraction to `x`, for turning a decimal such as `0.25`
@@ -161,7 +164,10 @@ impl Sub for Rational {
 impl Mul for Rational {
     type Output = Rational;
     fn mul(self, o: Rational) -> Rational {
-        Rational::from_wide(i128::from(self.n) * i128::from(o.n), i128::from(self.d) * i128::from(o.d))
+        Rational::from_wide(
+            i128::from(self.n) * i128::from(o.n),
+            i128::from(self.d) * i128::from(o.d),
+        )
     }
 }
 
@@ -172,14 +178,20 @@ impl Div for Rational {
             // never reached by a program that checks its divisors; this keeps a live session alive if one slips through
             return Rational::ZERO;
         }
-        Rational::from_wide(i128::from(self.n) * i128::from(o.d), i128::from(self.d) * i128::from(o.n))
+        Rational::from_wide(
+            i128::from(self.n) * i128::from(o.d),
+            i128::from(self.d) * i128::from(o.n),
+        )
     }
 }
 
 impl Neg for Rational {
     type Output = Rational;
     fn neg(self) -> Rational {
-        Rational { n: self.n.saturating_neg(), d: self.d }
+        Rational {
+            n: self.n.saturating_neg(),
+            d: self.d,
+        }
     }
 }
 
@@ -197,7 +209,11 @@ impl Ord for Rational {
 
 impl fmt::Display for Rational {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.d == 1 { write!(f, "{}", self.n) } else { write!(f, "{}/{}", self.n, self.d) }
+        if self.d == 1 {
+            write!(f, "{}", self.n)
+        } else {
+            write!(f, "{}/{}", self.n, self.d)
+        }
     }
 }
 

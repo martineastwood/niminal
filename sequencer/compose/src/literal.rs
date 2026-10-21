@@ -131,7 +131,11 @@ fn literal_arg_value(
 
 /// A note's argument problem as a diagnostic at `span`.
 pub(crate) fn arg_error(e: niminal_lang::ArgError, span: Span) -> Diagnostic {
-    let d = Diagnostic::new(e.message.replace("instrument or node", "instrument or clip"), span);
+    let d = Diagnostic::new(
+        e.message
+            .replace("instrument or node", "instrument or clip"),
+        span,
+    );
     match e.help {
         Some(h) => d.with_help(h),
         None => d,
@@ -254,4 +258,3 @@ fn fold_div(a: Value, b: Value, span: Span) -> Res<Value> {
         _ => Err(Diagnostic::new("can't divide these note arguments", span)),
     }
 }
-

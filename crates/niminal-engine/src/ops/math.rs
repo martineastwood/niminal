@@ -71,7 +71,14 @@ impl Opcode for Compare {
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (i, o) in out.iter_mut().enumerate() {
-            *o = if self.0.holds(f64::from(inputs[0][i]), f64::from(inputs[1][i])) { 1.0 } else { 0.0 };
+            *o = if self
+                .0
+                .holds(f64::from(inputs[0][i]), f64::from(inputs[1][i]))
+            {
+                1.0
+            } else {
+                0.0
+            };
         }
     }
 }
@@ -86,7 +93,11 @@ impl Opcode for Select {
     }
 
     fn ports(&self) -> &'static [Port] {
-        const PORTS: &[Port] = &[Port::required("cond"), Port::required("a"), Port::required("b")];
+        const PORTS: &[Port] = &[
+            Port::required("cond"),
+            Port::required("a"),
+            Port::required("b"),
+        ];
         PORTS
     }
 
@@ -96,7 +107,11 @@ impl Opcode for Select {
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (i, o) in out.iter_mut().enumerate() {
-            *o = if inputs[0][i] != 0.0 { inputs[1][i] } else { inputs[2][i] };
+            *o = if inputs[0][i] != 0.0 {
+                inputs[1][i]
+            } else {
+                inputs[2][i]
+            };
         }
     }
 }
@@ -127,7 +142,9 @@ pub struct Hold {
 }
 
 impl Opcode for Hold {
-    fn reset(&mut self) { self.value = None; }
+    fn reset(&mut self) {
+        self.value = None;
+    }
     fn name(&self) -> &'static str {
         "hold"
     }
@@ -188,7 +205,9 @@ pub struct Delay1 {
 }
 
 impl Opcode for Delay1 {
-    fn reset(&mut self) { self.last = 0.0; }
+    fn reset(&mut self) {
+        self.last = 0.0;
+    }
     fn name(&self) -> &'static str {
         "prev"
     }
@@ -256,7 +275,9 @@ impl Opcode for TableRead {
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (o, p) in out.iter_mut().zip(inputs[0]) {
-            *o = self.data.read_at_edge(f64::from(*p), self.interp, self.edge) as f32;
+            *o = self
+                .data
+                .read_at_edge(f64::from(*p), self.interp, self.edge) as f32;
         }
     }
 }
@@ -269,7 +290,10 @@ pub struct Waveshape {
 
 impl Waveshape {
     pub fn new(data: std::sync::Arc<crate::Table>) -> Self {
-        assert!(!data.is_empty(), "a waveshaper table has at least one entry");
+        assert!(
+            !data.is_empty(),
+            "a waveshaper table has at least one entry"
+        );
         Waveshape { data }
     }
 }
@@ -292,7 +316,10 @@ impl Opcode for Waveshape {
         let last = (self.data.len() - 1) as f64;
         for (o, x) in out.iter_mut().zip(inputs[0]) {
             let t = (f64::from(*x).clamp(-1.0, 1.0) + 1.0) * 0.5 * last;
-            *o = self.data.read_at_edge(t, super::custom::Interp::Linear, crate::Edge::Clamp) as f32;
+            *o = self
+                .data
+                .read_at_edge(t, super::custom::Interp::Linear, crate::Edge::Clamp)
+                as f32;
         }
     }
 }
@@ -305,7 +332,9 @@ pub struct NoteTime {
 }
 
 impl Opcode for NoteTime {
-    fn reset(&mut self) { self.samples = 0; }
+    fn reset(&mut self) {
+        self.samples = 0;
+    }
     fn name(&self) -> &'static str {
         "note_time"
     }
@@ -343,7 +372,9 @@ pub struct NoteStart {
 }
 
 impl Opcode for NoteStart {
-    fn reset(&mut self) { self.started = false; }
+    fn reset(&mut self) {
+        self.started = false;
+    }
 
     fn name(&self) -> &'static str {
         "note_start"
@@ -489,27 +520,51 @@ impl ArrayRead {
     pub fn new(len: usize, interp: super::custom::Interp) -> Self {
         assert!(len > 0);
         let ports = std::iter::once(Port::named("pos", None))
-            .chain((0..len).map(|i| Port::named(format!("e{i}"), None))).collect();
+            .chain((0..len).map(|i| Port::named(format!("e{i}"), None)))
+            .collect();
         Self { ports, interp }
     }
 }
 
 impl Opcode for ArrayRead {
-    fn name(&self) -> &str { "array_read" }
-    fn ports(&self) -> &[Port] { &self.ports }
-    fn box_clone(&self) -> Box<dyn Opcode> { Box::new(self.clone()) }
+    fn name(&self) -> &str {
+        "array_read"
+    }
+    fn ports(&self) -> &[Port] {
+        &self.ports
+    }
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(self.clone())
+    }
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (i, value) in out.iter_mut().enumerate() {
-            *value = super::custom::read_array(inputs.len() - 1, f64::from(inputs[0][i]), self.interp,
-                |k| f64::from(inputs[k + 1][i])) as f32;
+            *value = super::custom::read_array(
+                inputs.len() - 1,
+                f64::from(inputs[0][i]),
+                self.interp,
+                |k| f64::from(inputs[k + 1][i]),
+            ) as f32;
         }
     }
-    fn max_inputs(&self) -> usize { self.ports().len() }
+    fn max_inputs(&self) -> usize {
+        self.ports().len()
+    }
 
-    fn process_slots(&mut self, _ctx: &ProcessCtx, slots: &[[f32; crate::BLOCK]], indices: &[usize], outs: &mut [[f32; crate::BLOCK]], frames: usize) {
+    fn process_slots(
+        &mut self,
+        _ctx: &ProcessCtx,
+        slots: &[[f32; crate::BLOCK]],
+        indices: &[usize],
+        outs: &mut [[f32; crate::BLOCK]],
+        frames: usize,
+    ) {
         for i in 0..frames {
-            outs[0][i] = super::custom::read_array(indices.len() - 1, f64::from(slots[indices[0]][i]), self.interp,
-                |k| f64::from(slots[indices[k + 1]][i])) as f32;
+            outs[0][i] = super::custom::read_array(
+                indices.len() - 1,
+                f64::from(slots[indices[0]][i]),
+                self.interp,
+                |k| f64::from(slots[indices[k + 1]][i]),
+            ) as f32;
         }
     }
 }

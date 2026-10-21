@@ -36,7 +36,11 @@ fn free_port() -> u16 {
     static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
     let mut given = GIVEN.lock().unwrap();
     loop {
-        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
         if !given.contains(&port) {
             given.push(port);
             return port;
@@ -64,18 +68,32 @@ impl Server {
             let mut engine = niminal()
                 .args(["server", "--no-audio", "--port", &engine_port.to_string()])
                 .args(engine_args)
-                .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
             let mut line = String::new();
-            BufReader::new(engine.stdout.as_mut().unwrap()).read_line(&mut line).unwrap();
+            BufReader::new(engine.stdout.as_mut().unwrap())
+                .read_line(&mut line)
+                .unwrap();
             if !line.contains("niminal engine listening") {
                 let _ = engine.kill();
                 let _ = engine.wait();
                 continue;
             }
             let mut child = nimlive()
-                .args(["live", "--port", &port.to_string(), "--engine-port", &engine_port.to_string()])
+                .args([
+                    "live",
+                    "--port",
+                    &port.to_string(),
+                    "--engine-port",
+                    &engine_port.to_string(),
+                ])
                 .args(live_args)
-                .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
             let mut reader = BufReader::new(child.stdout.as_mut().unwrap());
             loop {
                 line.clear();
@@ -84,7 +102,11 @@ impl Server {
                 }
             }
             if line.contains("nimlive listening on ws://127.0.0.1") {
-                return Server { child, engine, port };
+                return Server {
+                    child,
+                    engine,
+                    port,
+                };
             }
             let _ = engine.kill();
             let _ = engine.wait();
@@ -133,7 +155,11 @@ fn send_evaluates_code_in_a_running_server() {
     std::thread::sleep(Duration::from_millis(100));
     let waiting = d.send("lead.play([c4])", None);
     assert!(waiting.status.success());
-    assert!(stdout(&waiting).starts_with("lands at bar 2 beat 1.00"), "{}", stdout(&waiting));
+    assert!(
+        stdout(&waiting).starts_with("lands at bar 2 beat 1.00"),
+        "{}",
+        stdout(&waiting)
+    );
 
     let nothing = d.send("// just a comment", None);
     assert_eq!(stdout(&nothing).trim(), "nothing to do");
@@ -149,7 +175,10 @@ fn send_shows_what_is_wrong_with_the_code_sent() {
     assert!(text.contains("error: `riif` is not defined"), "{text}");
     assert!(text.contains("--> <code>:2:11"), "{text}");
     assert!(text.contains("lead.play(riif)"), "{text}");
-    assert!(text.contains("help: did you mean `riff`?") || !text.contains("help"), "{text}");
+    assert!(
+        text.contains("help: did you mean `riff`?") || !text.contains("help"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -159,7 +188,15 @@ fn send_reads_a_file_or_the_standard_input() {
     let file = dir.join("setup.nml");
     std::fs::write(&file, SETUP).unwrap();
     let out = nimlive()
-        .args(["send", "--file", file.to_str().unwrap(), "--port", &d.port.to_string(), "--quantize", "now"])
+        .args([
+            "send",
+            "--file",
+            file.to_str().unwrap(),
+            "--port",
+            &d.port.to_string(),
+            "--quantize",
+            "now",
+        ])
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
@@ -171,7 +208,12 @@ fn send_reads_a_file_or_the_standard_input() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(b"lead(freq: a4) for 1beat").unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"lead(freq: a4) for 1beat")
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     std::fs::remove_dir_all(dir).ok();
@@ -179,9 +221,16 @@ fn send_reads_a_file_or_the_standard_input() {
 
 #[test]
 fn sending_to_nothing_says_so() {
-    let out = nimlive().args(["send", "hush", "--port", &free_port().to_string()]).output().unwrap();
+    let out = nimlive()
+        .args(["send", "hush", "--port", &free_port().to_string()])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("can't reach the server"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("can't reach the server"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -192,7 +241,8 @@ fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
     let d = Server::start(&[project.to_str().unwrap()]);
 
     let mut c = Client::connect(d.port, None).unwrap();
-    c.call("subscribe", serde_json::json!({"topics": ["landed"]})).unwrap();
+    c.call("subscribe", serde_json::json!({"topics": ["landed"]}))
+        .unwrap();
     // the file was evaluated at once
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -200,7 +250,10 @@ fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
         if status["transport"]["voices"].as_u64().unwrap() >= 1 {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "the file was never evaluated: {status}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the file was never evaluated: {status}"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
 
@@ -213,7 +266,12 @@ fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
     // a mistake in the file is reported and changes nothing
     std::fs::write(&project, format!("{SETUP}\nlead.play(nothing_here)\n")).unwrap();
     std::thread::sleep(Duration::from_millis(800));
-    assert!(c.call("status", serde_json::json!({})).unwrap()["pending"].as_array().unwrap().is_empty());
+    assert!(
+        c.call("status", serde_json::json!({})).unwrap()["pending"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -221,27 +279,46 @@ fn a_project_file_is_loaded_and_loaded_again_when_it_is_saved() {
 fn repl_runs_multiline_blocks_and_reports_errors_without_stopping() {
     let server = Server::start(&[]);
     let mut repl = nimlive()
-        .args(["repl", "--port", &server.port.to_string(), "--quantize", "now"])
+        .args([
+            "repl",
+            "--port",
+            &server.port.to_string(),
+            "--quantize",
+            "now",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let input = "tempo 100bpm\ninstr tone(freq: hz) {\n  osc(sine, freq)\n}\nclip t { instrument: tone }\nt.play([c4 zz])\nt.play([c4])\n";
-    repl.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    repl.stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
     let out = repl.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{stderr}");
     assert!(stderr.contains("`zz` isn't a note"), "{stderr}");
     // The tempo, the instrument and node, and the final play all went through.
-    assert_eq!(stdout.matches("applied").count() + stdout.matches("lands at").count(), 4, "{stdout}");
+    assert_eq!(
+        stdout.matches("applied").count() + stdout.matches("lands at").count(),
+        4,
+        "{stdout}"
+    );
 }
 
 #[test]
 fn the_lsp_subcommand_answers_an_editor_over_stdio() {
     use std::io::Read;
-    let mut child = nimlive().arg("lsp").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut child = nimlive()
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
     let mut stdin = child.stdin.take().unwrap();
     for body in [
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
@@ -252,7 +329,12 @@ fn the_lsp_subcommand_answers_an_editor_over_stdio() {
     }
     drop(stdin);
     let mut out = String::new();
-    child.stdout.take().unwrap().read_to_string(&mut out).unwrap();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
     assert!(child.wait().unwrap().success());
     assert!(out.contains("hoverProvider"), "{out}");
 }

@@ -27,6 +27,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "false",
     "fn",
     "for",
+    "fx",
     "if",
     "in",
     "init",
@@ -47,7 +48,6 @@ pub const RESERVED_WORDS: &[&str] = &[
     "spawn",
     "state",
     "node",
-    "processor",
     "true",
     "use",
 ];
@@ -59,7 +59,7 @@ pub enum SymbolKind {
     Control,
     Bus,
     Node,
-    Processor,
+    Fx,
     Sample,
     Kit,
     Constant,
@@ -116,7 +116,11 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
                         FnResult::Unit(u) => format!(" -> {}", u.name),
                         FnResult::Named(outputs) => format!(
                             " -> ({})",
-                            outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>().join(", ")
+                            outputs
+                                .iter()
+                                .map(|o| o.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ),
                     };
                     format!("fn {}({}){arrow}", d.name.name, labels(&param_list))
@@ -125,12 +129,20 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Const { name, .. } => (name, SymbolKind::Constant, first_line()),
             Item::Control { name, .. } => (name, SymbolKind::Control, first_line()),
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
-            Item::Buffer(d) => (&d.name, SymbolKind::Constant, format!("buffer {}", d.name.name)),
+            Item::Buffer(d) => (
+                &d.name,
+                SymbolKind::Constant,
+                format!("buffer {}", d.name.name),
+            ),
             Item::Node(d) => (&d.name, SymbolKind::Node, format!("node {}", d.name.name)),
-            Item::Processor(d) => {
+            Item::Fx(d) => {
                 param_list = params(source, &d.params);
-                (&d.name, SymbolKind::Processor, format!("processor {}({})", d.name.name, labels(&param_list)))
-            },
+                (
+                    &d.name,
+                    SymbolKind::Fx,
+                    format!("fx {}({})", d.name.name, labels(&param_list)),
+                )
+            }
             Item::MidiOut(d) => (&d.name, SymbolKind::Instrument, first_line()),
             Item::Sample(d) => {
                 if d.is_kit {
@@ -163,17 +175,16 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
 /// Members of a kit known from the source: `amen.slices(16)` gives `s0`..`s15`.
 fn kit_members(d: &SampleDecl) -> Vec<SymbolParam> {
     match &d.source {
-        SampleSource::Slices { count, .. } if *count >= 1.0 && count.fract() == 0.0 => {
-            (0..*count as usize)
-                .map(|i| {
-                    let name = format!("s{i}");
-                    SymbolParam {
-                        name: name.clone(),
-                        label: name,
-                    }
-                })
-                .collect()
-        }
+        SampleSource::Slices { count, .. } if *count >= 1.0 && count.fract() == 0.0 => (0..*count
+            as usize)
+            .map(|i| {
+                let name = format!("s{i}");
+                SymbolParam {
+                    name: name.clone(),
+                    label: name,
+                }
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -323,40 +334,205 @@ pub fn builtin_ops() -> Vec<OpInfo> {
 fn array_ops() -> Vec<OpInfo> {
     let method = |name, doc, params| op_info(name, doc, true, params);
     vec![
-        method("len", "The fixed length of an array or number of signal channels.", &[]),
-        method("indices", "The array's indices as a range, from zero to its length (excluded).", &[]),
-        method("sum", "Add array elements or mix signal channels. Also works on writable buffers.", &[]),
-        method("min", "The smallest array element, or element-wise minimum with another value.", &[("other", "value", false)]),
-        method("max", "The largest array element, or element-wise maximum with another value.", &[("other", "value", false)]),
-        method("map", "Apply a function to each current array element: `xs.map(it * 2)`.", &[("function", "function", true)]),
-        method("step", "A range as an array, one entry each `amount`: `(0..1).step(0.25)`. The amount is in the range's unit.", &[("amount", "number", true)]),
-        method("active", "Keep the first `count` entries and silence the rest; `count` can change while playing.", &[("count", "number", true)]),
+        method(
+            "len",
+            "The fixed length of an array or number of signal channels.",
+            &[],
+        ),
+        method(
+            "indices",
+            "The array's indices as a range, from zero to its length (excluded).",
+            &[],
+        ),
+        method(
+            "sum",
+            "Add array elements or mix signal channels. Also works on writable buffers.",
+            &[],
+        ),
+        method(
+            "min",
+            "The smallest array element, or element-wise minimum with another value.",
+            &[("other", "value", false)],
+        ),
+        method(
+            "max",
+            "The largest array element, or element-wise maximum with another value.",
+            &[("other", "value", false)],
+        ),
+        method(
+            "map",
+            "Apply a function to each current array element: `xs.map(it * 2)`.",
+            &[("function", "function", true)],
+        ),
+        method(
+            "step",
+            "A range as an array, one entry each `amount`: `(0..1).step(0.25)`. The amount is in the range's unit.",
+            &[("amount", "number", true)],
+        ),
+        method(
+            "active",
+            "Keep the first `count` entries and silence the rest; `count` can change while playing.",
+            &[("count", "number", true)],
+        ),
         method("channels", "A signal's channels as an ordinary array.", &[]),
-        method("at", "Read a table at a fractional position. Interpolation: none, linear (default) or cubic; edge: wrap or clamp.", &[("position", "number", true), ("interp", "interpolation", false), ("edge", "wrap | clamp", false)]),
-        method("phase", "Read a table at a normalized 0..1 position.", &[("position", "number", true), ("interp", "interpolation", false)]),
-        method("waveshape", "Map a signal in -1..1 through a transfer table.", &[("table", "table", true)]),
-        method("normalize", "Scale a table so its peak absolute value is 1.", &[]),
+        method(
+            "at",
+            "Read a table at a fractional position. Interpolation: none, linear (default) or cubic; edge: wrap or clamp.",
+            &[
+                ("position", "number", true),
+                ("interp", "interpolation", false),
+                ("edge", "wrap | clamp", false),
+            ],
+        ),
+        method(
+            "phase",
+            "Read a table at a normalized 0..1 position.",
+            &[
+                ("position", "number", true),
+                ("interp", "interpolation", false),
+            ],
+        ),
+        method(
+            "waveshape",
+            "Map a signal in -1..1 through a transfer table.",
+            &[("table", "table", true)],
+        ),
+        method(
+            "normalize",
+            "Scale a table so its peak absolute value is 1.",
+            &[],
+        ),
         method("reverse", "Reverse a table.", &[]),
-        method("rotate", "Rotate a table by a whole number of samples.", &[("amount", "integer", true)]),
-        method("resample", "Resample a table to a new length.", &[("size", "integer", true)]),
-        method("concat", "Concatenate two tables.", &[("other", "table", true)]),
+        method(
+            "rotate",
+            "Rotate a table by a whole number of samples.",
+            &[("amount", "integer", true)],
+        ),
+        method(
+            "resample",
+            "Resample a table to a new length.",
+            &[("size", "integer", true)],
+        ),
+        method(
+            "concat",
+            "Concatenate two tables.",
+            &[("other", "table", true)],
+        ),
         method("integrate", "Running sum of a table, then normalize.", &[]),
-        method("mix", "Crossfade two tables.", &[("other", "table", true), ("amount", "number", false)]),
-        method("record", "Write a signal into a shared buffer.", &[("x", "number", true), ("loop", "bool", false)]),
+        method(
+            "mix",
+            "Crossfade two tables.",
+            &[("other", "table", true), ("amount", "number", false)],
+        ),
+        method(
+            "record",
+            "Write a signal into a shared buffer.",
+            &[("x", "number", true), ("loop", "bool", false)],
+        ),
         method("data", "The underlying table of a sample.", &[]),
-        op_info("zeros", "A fixed-length array of zeros, including an empty array for zero.", false, &[("count", "integer", true)]),
-        op_info("harmonics", "One cycle from harmonic amplitudes.", false, &[("amps", "array", true), ("size", "integer", false), ("phases", "array", false)]),
-        op_info("partials", "One cycle from inharmonic partials `[ratio, amp]` or `[ratio, amp, phase]`.", false, &[("partials", "array", true), ("size", "integer", false)]),
-        op_info("cosines", "One cycle from a cosine series.", false, &[("amps", "array", true), ("size", "integer", false)]),
-        op_info("curve", "Breakpoint curve through `[x, y]` points.", false, &[("points", "array", true), ("size", "integer", false), ("shape", "linear | exp | cubic | spline", false)]),
-        op_info("steps", "Step function from x and y arrays.", false, &[("xs", "array", true), ("ys", "array", true), ("size", "integer", false)]),
-        op_info("poly", "Polynomial over -1..1.", false, &[("coeffs", "array", true), ("size", "integer", false)]),
-        op_info("ramp", "Linear ramp from start to end.", false, &[("start", "number", true), ("end", "number", true), ("size", "integer", false)]),
-        op_info("cheby", "Chebyshev transfer function for waveshaping.", false, &[("amps", "array", true), ("size", "integer", false)]),
-        op_info("window", "Window function: hann, hamming, blackman, kaiser(beta), gauss, tukey, sinc, tri.", false, &[("kind", "window", true), ("size", "integer", false)]),
-        op_info("random", "Deterministic random table; seed is required.", false, &[("size", "integer", true), ("dist", "distribution", false), ("seed", "integer", true)]),
-        op_info("file", "Load one channel of a WAV, or one column of a .csv/.txt/.dat file of numbers, as a table. `{n}` or `{n:2}` in the path is a constant.", false, &[("path", "text", true), ("channel", "integer", false), ("start", "integer", false), ("end", "integer", false)]),
-        op_info("bank", "A wavetable bank for osc(..., position:).", false, &[("tables", "array", true)]),
+        op_info(
+            "zeros",
+            "A fixed-length array of zeros, including an empty array for zero.",
+            false,
+            &[("count", "integer", true)],
+        ),
+        op_info(
+            "harmonics",
+            "One cycle from harmonic amplitudes.",
+            false,
+            &[
+                ("amps", "array", true),
+                ("size", "integer", false),
+                ("phases", "array", false),
+            ],
+        ),
+        op_info(
+            "partials",
+            "One cycle from inharmonic partials `[ratio, amp]` or `[ratio, amp, phase]`.",
+            false,
+            &[("partials", "array", true), ("size", "integer", false)],
+        ),
+        op_info(
+            "cosines",
+            "One cycle from a cosine series.",
+            false,
+            &[("amps", "array", true), ("size", "integer", false)],
+        ),
+        op_info(
+            "curve",
+            "Breakpoint curve through `[x, y]` points.",
+            false,
+            &[
+                ("points", "array", true),
+                ("size", "integer", false),
+                ("shape", "linear | exp | cubic | spline", false),
+            ],
+        ),
+        op_info(
+            "steps",
+            "Step function from x and y arrays.",
+            false,
+            &[
+                ("xs", "array", true),
+                ("ys", "array", true),
+                ("size", "integer", false),
+            ],
+        ),
+        op_info(
+            "poly",
+            "Polynomial over -1..1.",
+            false,
+            &[("coeffs", "array", true), ("size", "integer", false)],
+        ),
+        op_info(
+            "ramp",
+            "Linear ramp from start to end.",
+            false,
+            &[
+                ("start", "number", true),
+                ("end", "number", true),
+                ("size", "integer", false),
+            ],
+        ),
+        op_info(
+            "cheby",
+            "Chebyshev transfer function for waveshaping.",
+            false,
+            &[("amps", "array", true), ("size", "integer", false)],
+        ),
+        op_info(
+            "window",
+            "Window function: hann, hamming, blackman, kaiser(beta), gauss, tukey, sinc, tri.",
+            false,
+            &[("kind", "window", true), ("size", "integer", false)],
+        ),
+        op_info(
+            "random",
+            "Deterministic random table; seed is required.",
+            false,
+            &[
+                ("size", "integer", true),
+                ("dist", "distribution", false),
+                ("seed", "integer", true),
+            ],
+        ),
+        op_info(
+            "file",
+            "Load one channel of a WAV, or one column of a .csv/.txt/.dat file of numbers, as a table. `{n}` or `{n:2}` in the path is a constant.",
+            false,
+            &[
+                ("path", "text", true),
+                ("channel", "integer", false),
+                ("start", "integer", false),
+                ("end", "integer", false),
+            ],
+        ),
+        op_info(
+            "bank",
+            "A wavetable bank for osc(..., position:).",
+            false,
+            &[("tables", "array", true)],
+        ),
     ]
 }
 
@@ -390,7 +566,7 @@ fn envelope_ops() -> Vec<OpInfo> {
         ),
         op(
             "osc_out",
-            "Pass an instrument or processor signal through and send its value over OSC: `out.osc_out(\"/vj/level\", port: 9000)`. `host` is this computer unless given; `rate` is 30hz unless given.",
+            "Pass an instrument or fx signal through and send its value over OSC: `out.osc_out(\"/vj/level\", port: 9000)`. `host` is this computer unless given; `rate` is 30hz unless given.",
             &[
                 ("x", "number", true),
                 ("address", "text", true),
@@ -402,7 +578,7 @@ fn envelope_ops() -> Vec<OpInfo> {
         ),
         op(
             "input",
-            "Channels of the audio input, in a processor: `input(1)` or `input(1..2)`.",
+            "Channels of the audio input, in an fx: `input(1)` or `input(1..2)`.",
             &[("first", "number", true), ("last", "number", false)],
         ),
     ]

@@ -74,9 +74,7 @@ fn a_tempo_change_can_name_when_it_lands_and_ramp_over_a_stretch() {
     let mut s = ready();
     s.eval("tempo 120bpm @ next bar", None).unwrap();
     assert_eq!(s.pending().len(), 1);
-    let accepted = s
-        .eval("tempo 180bpm @ now over 1bar", Some("now"))
-        .unwrap();
+    let accepted = s.eval("tempo 180bpm @ now over 1bar", Some("now")).unwrap();
     assert!(
         s.pending().len() >= 2,
         "a ramp is a run of changes: {}",
@@ -117,13 +115,8 @@ fn a_tempo_ramp_replays_to_the_same_audio() {
         .unwrap();
     original.extend(run(&mut s, 120_000));
     let log = from_lines(&to_lines(&s.log())).unwrap();
-    let replayed = niminal_server::Session::replay(
-        SR,
-        Layout::Mono,
-        &log,
-        original.len() as u64,
-        false,
-    );
+    let replayed =
+        niminal_server::Session::replay(SR, Layout::Mono, &log, original.len() as u64, false);
     assert_eq!(original, replayed[0]);
     assert_eq!(s.transport().bpm, 200.0);
 }

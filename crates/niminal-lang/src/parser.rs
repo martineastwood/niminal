@@ -223,9 +223,13 @@ impl Parser {
                 args,
                 span: start.to(self.prev_span()),
             }))
-        } else if (self.is_keyword("sample") || self.is_keyword("kit")) && matches!(self.peek_at(1), Tok::Ident(_)) {
+        } else if (self.is_keyword("sample") || self.is_keyword("kit"))
+            && matches!(self.peek_at(1), Tok::Ident(_))
+        {
             let word = self.bump();
-            let Tok::Ident(word_name) = word.tok else { unreachable!() };
+            let Tok::Ident(word_name) = word.tok else {
+                unreachable!()
+            };
             Err(Diagnostic::new(format!("`{word_name}` is no longer a keyword"), word.span)
                 .with_help(format!("write `name = {word_name}(\"drums/kick.wav\")`; settings are chained, as in `.beats(4)`")))
         } else if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
@@ -241,12 +245,12 @@ impl Parser {
                 tuning,
                 span: start.to(end),
             }))
-        } else if self.is_keyword("node") || self.is_keyword("processor") {
-            let processor = self.is_keyword("processor");
+        } else if self.is_keyword("node") || self.is_keyword("fx") {
+            let fx = self.is_keyword("fx");
             let start = self.bump().span;
             let name = self.ident("a node name")?;
             // `node bass = pluck(bright: 0.4)` is `node bass { instrument = pluck(bright: 0.4) }`
-            if !processor && self.eat(&Tok::Eq) {
+            if !fx && self.eat(&Tok::Eq) {
                 let value = self.expr()?;
                 let end = self.prev_span();
                 let key = Ident {
@@ -268,15 +272,21 @@ impl Parser {
             };
             if let Some(p) = params.iter().find(|p| p.default.is_none()) {
                 return Err(Diagnostic::new(
-                    format!("processor parameter `{}` needs a starting value", p.name.name),
+                    format!("fx parameter `{}` needs a starting value", p.name.name),
                     p.name.span,
                 )
-                .with_help("for example `processor bass(tone: hz = 2khz)`"));
+                .with_help("for example `fx bass(tone: hz = 2khz)`"));
             }
             let (mut body, end) = self.block()?;
             let options = take_options(&mut body, NODE_OPTIONS);
-            let decl = NodeDecl { name, params, body, options, span: start.to(end) };
-            Ok(if processor { Item::Processor(decl) } else { Item::Node(decl) })
+            let decl = NodeDecl {
+                name,
+                params,
+                body,
+                options,
+                span: start.to(end),
+            };
+            Ok(if fx { Item::Fx(decl) } else { Item::Node(decl) })
         } else if self.is_keyword("fn") {
             if !matches!(self.peek_at(1), Tok::Ident(_)) {
                 self.bump();
@@ -284,8 +294,11 @@ impl Parser {
             }
             self.function().map(Item::Fn)
         } else if self.is_keyword("opcode") {
-            Err(Diagnostic::new("`opcode` is now `fn`", self.span())
-                .with_help("write `fn name(x, ...) { ... }`; a function with `state` is a unit generator"))
+            Err(
+                Diagnostic::new("`opcode` is now `fn`", self.span()).with_help(
+                    "write `fn name(x, ...) { ... }`; a function with `state` is a unit generator",
+                ),
+            )
         } else if self.is_keyword("const") {
             self.bump();
             let name = self.ident("a name for the constant")?;
@@ -297,7 +310,9 @@ impl Parser {
         } else {
             Err(self
                 .unexpected("a definition such as `instr`, `node` or `bus`")
-                .with_help("the audio server takes DSP definitions only; sequencing belongs to the client"))
+                .with_help(
+                    "the audio server takes DSP definitions only; sequencing belongs to the client",
+                ))
         }
     }
 
@@ -345,8 +360,11 @@ impl Parser {
         let name = self.ident("an instrument name")?;
         let params = self.params()?;
         if self.peek() == &Tok::Arrow {
-            return Err(Diagnostic::new("an instrument's result is a signal, so it has no `->`", self.span())
-                .with_help("functions name their results with `->`"));
+            return Err(Diagnostic::new(
+                "an instrument's result is a signal, so it has no `->`",
+                self.span(),
+            )
+            .with_help("functions name their results with `->`"));
         }
         if self.is_keyword("with") {
             return Err(with_gone(self.span()));
@@ -394,7 +412,9 @@ impl Parser {
                 }
                 result = FnResult::Named(outputs);
             } else {
-                result = FnResult::Unit(self.ident("a unit such as `hz`, or `(a, b)` for several results")?);
+                result = FnResult::Unit(
+                    self.ident("a unit such as `hz`, or `(a, b)` for several results")?,
+                );
             }
         }
         let (body, end) = self.block()?;
@@ -494,7 +514,8 @@ impl Parser {
                 Tok::RBracket | Tok::RParen => {
                     depth -= 1;
                     if depth == 0 {
-                        return (self.tokens.get(i + 1).map(|t| &t.tok) == Some(&Tok::Eq)).then_some(i);
+                        return (self.tokens.get(i + 1).map(|t| &t.tok) == Some(&Tok::Eq))
+                            .then_some(i);
                     }
                 }
                 Tok::Newline | Tok::Eof | Tok::LBrace | Tok::RBrace => return None,
@@ -774,16 +795,27 @@ impl Parser {
                 // `a | b` matches either
                 loop {
                     let pattern = self.sum()?;
-                    let name = Expr { kind: ExprKind::Name(subject.name.clone()), span: subject_span };
+                    let name = Expr {
+                        kind: ExprKind::Name(subject.name.clone()),
+                        span: subject_span,
+                    };
                     let test = Expr {
                         span: pattern.span,
-                        kind: ExprKind::Compare { op: CmpOp::Eq, lhs: Box::new(name), rhs: Box::new(pattern) },
+                        kind: ExprKind::Compare {
+                            op: CmpOp::Eq,
+                            lhs: Box::new(name),
+                            rhs: Box::new(pattern),
+                        },
                     };
                     cond = Some(match cond {
                         None => test,
                         Some(prior) => Expr {
                             span: prior.span.to(test.span),
-                            kind: ExprKind::Logic { op: LogicOp::Or, lhs: Box::new(prior), rhs: Box::new(test) },
+                            kind: ExprKind::Logic {
+                                op: LogicOp::Or,
+                                lhs: Box::new(prior),
+                                rhs: Box::new(test),
+                            },
                         },
                     });
                     if !self.eat(&Tok::Bar) {
@@ -808,9 +840,20 @@ impl Parser {
             return Err(Diagnostic::new("a `match` needs an arm to test", span)
                 .with_help("list the choices to match, such as `match mode { low: 1, high: 2 }`"));
         };
-        let last = Expr { kind: ExprKind::If { cond: Box::new(cond), then, otherwise }, span };
+        let last = Expr {
+            kind: ExprKind::If {
+                cond: Box::new(cond),
+                then,
+                otherwise,
+            },
+            span,
+        };
         Ok(arms.fold(last, |rest, (cond, then)| Expr {
-            kind: ExprKind::If { cond: Box::new(cond), then, otherwise: Some(vec![Stmt::Expr(rest)]) },
+            kind: ExprKind::If {
+                cond: Box::new(cond),
+                then,
+                otherwise: Some(vec![Stmt::Expr(rest)]),
+            },
             span,
         }))
     }
@@ -908,13 +951,23 @@ impl Parser {
                 };
                 continue;
             }
-            if self.peek() == &Tok::LBrace && matches!(&e.kind, ExprKind::Call { name, .. } if matches!(name.name.as_str(), "reset_on" | "spawn" | "oversample")) {
+            if self.peek() == &Tok::LBrace
+                && matches!(&e.kind, ExprKind::Call { name, .. } if matches!(name.name.as_str(), "reset_on" | "spawn" | "oversample"))
+            {
                 let (body, end) = self.block()?;
                 let body_span = e.span.to(end);
                 if let ExprKind::Call { args, .. } = &mut e.kind {
-                    args.push(Arg { name: None, receiver: false, value: Expr {
-                        kind: ExprKind::Lambda { params: Vec::new(), body }, span: body_span,
-                    }});
+                    args.push(Arg {
+                        name: None,
+                        receiver: false,
+                        value: Expr {
+                            kind: ExprKind::Lambda {
+                                params: Vec::new(),
+                                body,
+                            },
+                            span: body_span,
+                        },
+                    });
                 }
                 e.span = body_span;
                 continue;
@@ -922,7 +975,13 @@ impl Parser {
             if self.peek() == &Tok::LBrace
                 && let ExprKind::Call { name, args } = &e.kind
                 && name.name == "after"
-                && let [Arg { name: None, value: delay, .. }] = args.as_slice()
+                && let [
+                    Arg {
+                        name: None,
+                        value: delay,
+                        ..
+                    },
+                ] = args.as_slice()
             {
                 e = self.after_block(e.span, name.span, delay.clone())?;
                 continue;
@@ -961,11 +1020,17 @@ impl Parser {
                 lhs: Box::new(Expr {
                     span: name,
                     kind: ExprKind::Call {
-                        name: Ident { name: "time".into(), span: name },
+                        name: Ident {
+                            name: "time".into(),
+                            span: name,
+                        },
                         args: vec![Arg {
                             name: None,
                             receiver: true,
-                            value: Expr { kind: ExprKind::Name("note".into()), span: name },
+                            value: Expr {
+                                kind: ExprKind::Name("note".into()),
+                                span: name,
+                            },
                         }],
                     },
                 }),
@@ -975,13 +1040,26 @@ impl Parser {
         let scope = Expr {
             span,
             kind: ExprKind::Call {
-                name: Ident { name: "reset_on".into(), span: name },
+                name: Ident {
+                    name: "reset_on".into(),
+                    span: name,
+                },
                 args: vec![
-                    Arg { name: None, receiver: false, value: reached() },
                     Arg {
                         name: None,
                         receiver: false,
-                        value: Expr { kind: ExprKind::Lambda { params: Vec::new(), body }, span },
+                        value: reached(),
+                    },
+                    Arg {
+                        name: None,
+                        receiver: false,
+                        value: Expr {
+                            kind: ExprKind::Lambda {
+                                params: Vec::new(),
+                                body,
+                            },
+                            span,
+                        },
                     },
                 ],
             },
@@ -1303,7 +1381,17 @@ fn binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
 
 /// The settings an `instr` or `mono` takes in its body, such as `tail = 3sec`.
 const INSTR_OPTIONS: &[&str] = &[
-    "max", "steal", "same_note", "legato", "priority", "glide", "pitch", "choke", "compensate", "tail", "quantize",
+    "max",
+    "steal",
+    "same_note",
+    "legato",
+    "priority",
+    "glide",
+    "pitch",
+    "choke",
+    "compensate",
+    "tail",
+    "quantize",
 ];
 
 /// The settings a `node` takes in its body.
@@ -1322,7 +1410,11 @@ fn take_options(body: &mut Vec<Stmt>, names: &[&str]) -> Vec<Arg> {
     for stmt in std::mem::take(body) {
         match stmt {
             Stmt::Bind { name, value } if names.contains(&name.name.as_str()) => {
-                options.push(Arg { name: Some(name), value, receiver: false });
+                options.push(Arg {
+                    name: Some(name),
+                    value,
+                    receiver: false,
+                });
             }
             other => rest.push(other),
         }
@@ -1344,7 +1436,11 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
     let mut cur = value;
     let (is_kit, source, source_span) = loop {
         let at = cur.span;
-        let ExprKind::Call { name: call, mut args } = cur.kind else {
+        let ExprKind::Call {
+            name: call,
+            mut args,
+        } = cur.kind
+        else {
             return Err(not_a_sample(at));
         };
         if !args.first().is_some_and(|a| a.receiver) {
@@ -1354,11 +1450,33 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
                 _ => return Err(not_a_sample(call.span)),
             };
             let source = match args.as_slice() {
-                [Arg { name: None, value: Expr { kind: ExprKind::Str(path), .. }, .. }] => SampleSource::Path(path.clone()),
-                [Arg { name: None, value, .. }] if !is_kit => SampleSource::Table(value.clone()),
+                [
+                    Arg {
+                        name: None,
+                        value:
+                            Expr {
+                                kind: ExprKind::Str(path),
+                                ..
+                            },
+                        ..
+                    },
+                ] => SampleSource::Path(path.clone()),
+                [
+                    Arg {
+                        name: None, value, ..
+                    },
+                ] if !is_kit => SampleSource::Table(value.clone()),
                 _ => {
                     return Err(Diagnostic::new(
-                        format!("`{}` takes {}", call.name, if is_kit { "a folder in quotes" } else { "a file path in quotes, or a table" }),
+                        format!(
+                            "`{}` takes {}",
+                            call.name,
+                            if is_kit {
+                                "a folder in quotes"
+                            } else {
+                                "a file path in quotes, or a table"
+                            }
+                        ),
                         at,
                     ));
                 }
@@ -1367,25 +1485,75 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
         }
         let receiver = args.remove(0).value;
         if call.name == "slices" {
-            let (ExprKind::Name(sample), [Arg { name: None, value: Expr { kind: ExprKind::Num { value: count, unit: None }, .. }, .. }]) =
-                (&receiver.kind, args.as_slice())
+            let (
+                ExprKind::Name(sample),
+                [
+                    Arg {
+                        name: None,
+                        value:
+                            Expr {
+                                kind:
+                                    ExprKind::Num {
+                                        value: count,
+                                        unit: None,
+                                    },
+                                ..
+                            },
+                        ..
+                    },
+                ],
+            ) = (&receiver.kind, args.as_slice())
             else {
-                return Err(Diagnostic::new("`slices` cuts a sample into equal pieces, as in `amen.slices(16)`", at));
+                return Err(Diagnostic::new(
+                    "`slices` cuts a sample into equal pieces, as in `amen.slices(16)`",
+                    at,
+                ));
             };
-            let sample = Ident { name: sample.clone(), span: receiver.span };
-            break (true, SampleSource::Slices { sample, count: *count }, at);
+            let sample = Ident {
+                name: sample.clone(),
+                span: receiver.span,
+            };
+            break (
+                true,
+                SampleSource::Slices {
+                    sample,
+                    count: *count,
+                },
+                at,
+            );
         }
-        let [Arg { name: None, value: arg, .. }] = args.as_slice() else {
+        let [
+            Arg {
+                name: None,
+                value: arg,
+                ..
+            },
+        ] = args.as_slice()
+        else {
             return Err(Diagnostic::new(
-                format!("`{}` takes one value, as in `.{}(...)`", call.name, call.name),
+                format!(
+                    "`{}` takes one value, as in `.{}(...)`",
+                    call.name, call.name
+                ),
                 at,
             ));
         };
-        options.push(Arg { name: Some(call), value: arg.clone(), receiver: false });
+        options.push(Arg {
+            name: Some(call),
+            value: arg.clone(),
+            receiver: false,
+        });
         cur = receiver;
     };
     options.reverse();
-    Ok(SampleDecl { is_kit, name, source, source_span, options, span })
+    Ok(SampleDecl {
+        is_kit,
+        name,
+        source,
+        source_span,
+        options,
+        span,
+    })
 }
 
 #[cfg(test)]
@@ -1408,6 +1576,16 @@ mod tests {
     }
 
     const SAW_LEAD: &str = "\ninstr saw_lead(freq: hz, amp: db = -6db) {\n  level = env[0 5ms 1 200ms 0.6 | 300ms 0]\n  osc(saw, freq)\n    .lpf(cutoff: 2khz, res: 0.2)\n    .gain(amp) * level\n}\n";
+
+    #[test]
+    fn fx_is_reserved_and_parses_as_a_persistent_declaration() {
+        let items = parse_ok("fx room { out = it }");
+        assert!(matches!(&items[0], Item::Fx(_)));
+        assert!(parse("fx = 1").is_err());
+        assert!(crate::ide::RESERVED_WORDS.contains(&"fx"));
+        assert!(!crate::ide::RESERVED_WORDS.contains(&"processor"));
+        assert!(parse("const processor = 1").is_ok());
+    }
 
     #[test]
     fn parses_the_basic_synth() {
@@ -1488,9 +1666,13 @@ mod tests {
         assert!(matches!(f.body[0], Stmt::State { .. }));
         assert_eq!(f.body.len(), 4);
         assert_eq!(f.result, FnResult::Inferred);
-        let Item::Fn(f) = &parse_ok("fn mtof(n: num) -> hz { 440hz }")[0] else { panic!() };
+        let Item::Fn(f) = &parse_ok("fn mtof(n: num) -> hz { 440hz }")[0] else {
+            panic!()
+        };
         assert!(matches!(&f.result, FnResult::Unit(u) if u.name == "hz"));
-        let Item::Fn(f) = &parse_ok("fn s(x) -> (low, high) { low = x\n high = x }")[0] else { panic!() };
+        let Item::Fn(f) = &parse_ok("fn s(x) -> (low, high) { low = x\n high = x }")[0] else {
+            panic!()
+        };
         assert!(matches!(&f.result, FnResult::Named(n) if n.len() == 2));
         assert_eq!(err("fn (x) {}"), "expected a function name, found `(`");
         assert_eq!(err("opcode o(x) { x }"), "`opcode` is now `fn`");
@@ -1515,10 +1697,46 @@ mod tests {
     #[test]
     fn ranges_logic_and_remainder() {
         let i = only_instr("instr a() { x = 0..<8\n y = 1..8\n z = a > 1 and not b or c\n z }");
-        assert!(matches!(&i.body[0], Stmt::Bind { value: Expr { kind: ExprKind::Range { inclusive: false, .. }, .. }, .. }));
-        assert!(matches!(&i.body[1], Stmt::Bind { value: Expr { kind: ExprKind::Range { inclusive: true, .. }, .. }, .. }));
+        assert!(matches!(
+            &i.body[0],
+            Stmt::Bind {
+                value: Expr {
+                    kind: ExprKind::Range {
+                        inclusive: false,
+                        ..
+                    },
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            &i.body[1],
+            Stmt::Bind {
+                value: Expr {
+                    kind: ExprKind::Range {
+                        inclusive: true,
+                        ..
+                    },
+                    ..
+                },
+                ..
+            }
+        ));
         // `or` binds loosest
-        assert!(matches!(&i.body[2], Stmt::Bind { value: Expr { kind: ExprKind::Logic { op: LogicOp::Or, .. }, .. }, .. }));
+        assert!(matches!(
+            &i.body[2],
+            Stmt::Bind {
+                value: Expr {
+                    kind: ExprKind::Logic {
+                        op: LogicOp::Or,
+                        ..
+                    },
+                    ..
+                },
+                ..
+            }
+        ));
         assert_eq!(err("instr a() { 3 % 2 }"), "`%` only means percent");
     }
 
@@ -1527,16 +1745,28 @@ mod tests {
         let i = only_instr(
             "instr a() {\n  if x > 0 {\n    y = 1\n    z = 2\n  }\n  for n in 1..8 { out += n }\n  buf[i + 1] = 3\n  v = if c { 1 } else if d { 2 } else { 3 }\n  v\n}",
         );
-        assert!(matches!(&i.body[0], Stmt::Expr(Expr { kind: ExprKind::If { otherwise: None, then, .. }, .. }) if then.len() == 2));
-        assert!(matches!(&i.body[1], Stmt::Expr(Expr { kind: ExprKind::For { .. }, .. })));
+        assert!(
+            matches!(&i.body[0], Stmt::Expr(Expr { kind: ExprKind::If { otherwise: None, then, .. }, .. }) if then.len() == 2)
+        );
+        assert!(matches!(
+            &i.body[1],
+            Stmt::Expr(Expr {
+                kind: ExprKind::For { .. },
+                ..
+            })
+        ));
         assert!(matches!(&i.body[2], Stmt::IndexAssign { .. }));
-        assert!(matches!(&i.body[3], Stmt::Bind { value: Expr { kind: ExprKind::If { otherwise: Some(o), .. }, .. }, .. } if o.len() == 1));
+        assert!(
+            matches!(&i.body[3], Stmt::Bind { value: Expr { kind: ExprKind::If { otherwise: Some(o), .. }, .. }, .. } if o.len() == 1)
+        );
     }
 
     #[test]
     fn constants_are_lists_not_patterns() {
         let items = parse_ok("const taps = [0.25, 0.5, 0.25]");
-        assert!(matches!(&items[0], Item::Const { value: Expr { kind: ExprKind::Array(v), .. }, .. } if v.len() == 3));
+        assert!(
+            matches!(&items[0], Item::Const { value: Expr { kind: ExprKind::Array(v), .. }, .. } if v.len() == 3)
+        );
     }
 
     fn env_of(src: &str) -> EnvLit {
@@ -1573,8 +1803,12 @@ mod tests {
     #[test]
     fn env_steps_from_names_and_expressions() {
         let e = env_of("env[0 attack 1 | (release * 2).exp 0]");
-        assert!(matches!(&e.segments[0].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Name(_))));
-        assert!(matches!(&e.segments[1].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Binary { .. })));
+        assert!(
+            matches!(&e.segments[0].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Name(_)))
+        );
+        assert!(
+            matches!(&e.segments[1].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Binary { .. }))
+        );
         assert_eq!(e.segments[1].curve, Some(CurveKind::Exp));
     }
 
@@ -1607,13 +1841,13 @@ mod tests {
     #[test]
     fn buses_nodes_and_add_assign() {
         let items = parse_ok(
-            "\nbus space\nbus hall: stereo\nbus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: 1khz)\n  space += out.gain(-12db)}\nnode lead {  instrument = pluck(bright: 0.6)\noutput = lead_audio}",
+            "\nbus space\nbus hall: stereo\nbus lead_audio\nfx lead_fx {out = lead_audio.lpf(cutoff: 1khz)\n  space += out.gain(-12db)}\nnode lead {  instrument = pluck(bright: 0.6)\noutput = lead_audio}",
         );
         let Item::Bus(b) = &items[0] else { panic!() };
         assert_eq!((b.name.name.as_str(), b.layout.is_none()), ("space", true));
         let Item::Bus(b) = &items[1] else { panic!() };
         assert!(matches!(&b.layout.as_ref().unwrap().kind, ExprKind::Name(n) if n == "stereo"));
-        let Item::Processor(t) = &items[3] else { panic!() };
+        let Item::Fx(t) = &items[3] else { panic!() };
         assert_eq!(t.name.name, "lead_fx");
         assert_eq!(t.body.len(), 2);
         assert!(matches!(&t.body[1], Stmt::AddAssign { name, .. } if name.name == "space"));
@@ -1652,7 +1886,13 @@ mod tests {
     #[test]
     fn a_match_needs_an_arm_to_test_and_ends_with_else() {
         assert!(parse("fn f(m: (a | b) = a) { match m { a: 1, b | c: 2, else: 3 } }").is_ok());
-        assert_eq!(err("fn f(m: (a | b) = a) { match m { else: 3 } }"), "a `match` needs an arm to test");
-        assert!(err("fn f(m: (a | b) = a) { match m { else: 3, a: 1 } }").contains("`else` is the last arm"));
+        assert_eq!(
+            err("fn f(m: (a | b) = a) { match m { else: 3 } }"),
+            "a `match` needs an arm to test"
+        );
+        assert!(
+            err("fn f(m: (a | b) = a) { match m { else: 3, a: 1 } }")
+                .contains("`else` is the last arm")
+        );
     }
 }

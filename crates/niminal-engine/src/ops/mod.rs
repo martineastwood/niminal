@@ -1,53 +1,65 @@
 //! Built-in opcodes.
 
+mod allpass;
 mod bitcrush;
 mod buffer;
 mod chorus;
+mod comb;
 mod compress;
 mod control;
+mod convolve;
 mod custom;
+mod dc_block;
 mod delay;
+mod distortion;
 mod env;
+mod eq;
 mod filter;
 mod fold;
+mod follow;
+mod formant;
+mod gate;
+mod impulse;
+mod lag;
+mod limiter;
 mod math;
 mod noise;
 mod osc;
 mod pan;
-mod reverb;
-mod sample;
-mod tap;
-mod lag;
-mod comb;
-mod allpass;
-mod eq;
-mod limiter;
-mod gate;
-mod sample_hold;
-mod impulse;
-mod dc_block;
-mod follow;
 mod phaser;
 mod pitch_shift;
-mod formant;
-mod distortion;
 mod resonator;
-mod convolve;
+mod reverb;
+mod sample;
+mod sample_hold;
 mod spectral;
+mod tap;
 
+pub use allpass::Allpass;
 pub use bitcrush::Bitcrush;
 pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
+pub use comb::Comb;
 pub use compress::Compressor;
 pub use control::Control;
+pub use convolve::{Convolve, IrSpectrum};
 pub use custom::{
     ArraySource, BinOp, Cmp, Custom, Fn1, Func, Instr, Interp, Kernel, Native, NativeInput,
     ResetScope, read_array, read_at, rem,
 };
+pub use dc_block::DcBlock;
 pub use delay::Delay;
+pub use distortion::Distortion;
 pub use env::{Curve, Env, EnvField, Segment, shape};
+pub use eq::{Eq, EqMode};
 pub use filter::{FilterMode, Svf};
 pub use fold::{Clip, Fold};
+pub use follow::Follow;
+pub use formant::Formant;
+pub use gate::Gate;
+pub use impulse::Impulse;
+pub use lag::Lag;
+pub use limiter::Limiter;
 pub use math::{
     Add, ArrayRead, BlockHold, Compare, Context, Delay1, Div, Gain, Hold, Max, Min, Mul, NoteStart,
     NoteTime, Pow, ReadContext, Released, Rem, SampleRate, Select, Sub, TableRead, Waveshape,
@@ -55,26 +67,14 @@ pub use math::{
 pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
 pub use pan::{PanChannel, pan_gains};
-pub use reverb::Reverb;
-pub use sample::{KitSampler, LoopMode, Sampler};
-pub use tap::{Tap, TapOut};
-pub use lag::Lag;
-pub use comb::Comb;
-pub use allpass::Allpass;
-pub use eq::{Eq, EqMode};
-pub use limiter::Limiter;
-pub use gate::Gate;
-pub use sample_hold::SampleHold;
-pub use impulse::Impulse;
-pub use dc_block::DcBlock;
-pub use follow::Follow;
 pub use phaser::Phaser;
 pub use pitch_shift::PitchShift;
-pub use formant::Formant;
-pub use distortion::Distortion;
 pub use resonator::Resonator;
-pub use convolve::{Convolve, IrSpectrum};
+pub use reverb::Reverb;
+pub use sample::{KitSampler, LoopMode, Sampler};
+pub use sample_hold::SampleHold;
 pub use spectral::{Fft, Ifft, SpectralChain, SpectralDelay, SpectralFreeze};
+pub use tap::{Tap, TapOut};
 
 mod lifetime;
 pub use lifetime::FinishWhen;

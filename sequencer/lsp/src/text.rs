@@ -44,13 +44,24 @@ fn is_word(c: char) -> bool {
 /// `alias::name` is one identifier.
 pub fn word_at(text: &str, offset: usize) -> Option<(&str, usize, usize)> {
     let offset = offset.min(text.len());
-    let mut start = text[..offset].char_indices().rev().take_while(|(_, c)| is_word(*c)).last().map_or(offset, |(i, _)| i);
-    let mut end = offset + text[offset..].char_indices().find(|(_, c)| !is_word(*c)).map_or(text.len() - offset, |(i, _)| i);
+    let mut start = text[..offset]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_word(*c))
+        .last()
+        .map_or(offset, |(i, _)| i);
+    let mut end = offset
+        + text[offset..]
+            .char_indices()
+            .find(|(_, c)| !is_word(*c))
+            .map_or(text.len() - offset, |(i, _)| i);
     if start >= end {
         return None;
     }
     if text[end..].starts_with("::") && text[end + 2..].starts_with(is_word) {
-        end += 2 + text[end + 2..].find(|c| !is_word(c)).unwrap_or(text.len() - end - 2);
+        end += 2 + text[end + 2..]
+            .find(|c| !is_word(c))
+            .unwrap_or(text.len() - end - 2);
     }
     if text[..start].ends_with("::") {
         let head = &text[..start - 2];
@@ -83,7 +94,9 @@ pub fn file_uri(path: &std::path::Path) -> String {
 }
 /// The directory a `file://` URI is in, for finding sample files.
 pub fn directory_of(uri: &str) -> std::path::PathBuf {
-    path_of(uri).and_then(|p| p.parent().map(std::path::Path::to_path_buf)).unwrap_or_else(|| ".".into())
+    path_of(uri)
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| ".".into())
 }
 
 /// The file a `file://` URI names.
@@ -94,7 +107,9 @@ pub fn path_of(uri: &str) -> Option<std::path::PathBuf> {
     let mut i = 0;
     while i < raw.len() {
         if raw[i] == b'%'
-            && let Some(byte) = path.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())
+            && let Some(byte) = path
+                .get(i + 1..i + 3)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
         {
             bytes.push(byte);
             i += 3;
@@ -103,7 +118,9 @@ pub fn path_of(uri: &str) -> Option<std::path::PathBuf> {
             i += 1;
         }
     }
-    Some(std::path::PathBuf::from(String::from_utf8_lossy(&bytes).into_owned()))
+    Some(std::path::PathBuf::from(
+        String::from_utf8_lossy(&bytes).into_owned(),
+    ))
 }
 
 #[cfg(test)]
@@ -117,7 +134,10 @@ mod tests {
             assert_eq!(offset_of(text, offset), offset, "{offset}");
         }
         assert_eq!(position(text, 8), json!({"line": 1, "character": 3}));
-        assert_eq!(offset(text, &json!({"line": 9, "character": 0})), text.len());
+        assert_eq!(
+            offset(text, &json!({"line": 9, "character": 0})),
+            text.len()
+        );
         assert_eq!(offset(text, &json!({"line": 0, "character": 99})), 2);
     }
 
@@ -137,7 +157,13 @@ mod tests {
         assert_eq!(qualifier("x.av"), None);
         assert_eq!(word_at("x.av::shimmer(", 8), Some(("av::shimmer", 2, 13)));
         assert_eq!(word_at("x.av::shimmer(", 3), Some(("av::shimmer", 2, 13)));
-        assert_eq!(directory_of("file:///home/me/my%20set/a.nml"), std::path::PathBuf::from("/home/me/my set"));
-        assert_eq!(directory_of("untitled:Untitled-1"), std::path::PathBuf::from("."));
+        assert_eq!(
+            directory_of("file:///home/me/my%20set/a.nml"),
+            std::path::PathBuf::from("/home/me/my set")
+        );
+        assert_eq!(
+            directory_of("untitled:Untitled-1"),
+            std::path::PathBuf::from(".")
+        );
     }
 }

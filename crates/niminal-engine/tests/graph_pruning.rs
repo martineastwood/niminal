@@ -74,9 +74,13 @@ fn nested_osc_taps_are_observable_even_when_the_kernel_output_is_unused() {
     use niminal_engine::ops::{Native, NativeInput};
     let tap = Tap::new();
     let kernel = Arc::new(Kernel {
-                latency: 0,
+        latency: 0,
         name: "tap".into(),
-        code: vec![Instr::Native { dst: 0, index: 0, guard: None }],
+        code: vec![Instr::Native {
+            dst: 0,
+            index: 0,
+            guard: None,
+        }],
         registers: 1,
         outputs: vec![("out".into(), 0)],
         natives: vec![Native {

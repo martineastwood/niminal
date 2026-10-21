@@ -364,7 +364,9 @@ pub(super) fn prepare_pending(
 
     let mut project = base.clone();
     project.apply(&delta);
-    project.drop_broken(&from_snippet, |full| compile_with(full, &options(cfg.layout, &cfg.samples)).map(|_| ()));
+    project.drop_broken(&from_snippet, |full| {
+        compile_with(full, &options(cfg.layout, &cfg.samples)).map(|_| ())
+    });
     let check = |project: &Project, extra: &[Piece]| -> Result<Composition, Vec<Problem>> {
         let (full, map) = project.source(&from_snippet, extra);
         compile_with(&full, &options(cfg.layout, &cfg.samples)).map_err(|diags| {
@@ -454,11 +456,16 @@ pub(super) fn prepare_pending(
     for action in &actions {
         for node in action.program.nodes.iter().skip(1) {
             if program.nodes.iter().any(|known| known.name == node.name)
-                || implicit.iter().any(|entry: &Entry| entry.key == format!("clip:{}", node.name))
+                || implicit
+                    .iter()
+                    .any(|entry: &Entry| entry.key == format!("clip:{}", node.name))
             {
                 continue;
             }
-            if node.instrument.is_some_and(|i| action.program.instruments[i].name == node.name) {
+            if node
+                .instrument
+                .is_some_and(|i| action.program.instruments[i].name == node.name)
+            {
                 implicit.push(Entry {
                     key: format!("clip:{}", node.name),
                     text: format!("clip {} {{ instrument: {} }}", node.name, node.name),
@@ -550,7 +557,9 @@ impl Live {
             }),
             Ok((mut statements, fallback)) => match self.expand_ramp(&mut statements) {
                 Ok(ramp) => {
-                    return Begin::Job(self.job(source, uses, quantize, fallback, statements, ramp));
+                    return Begin::Job(
+                        self.job(source, uses, quantize, fallback, statements, ramp),
+                    );
                 }
                 Err(problems) => Err(problems),
             },
@@ -649,7 +658,10 @@ impl Live {
 
     /// What is waiting to land becomes `queue`, after the changes that have been made here already.
     pub(super) fn replace_pending(&mut self, queue: Vec<Pending>) {
-        let mut kept: Vec<Pending> = std::mem::take(&mut self.pending).into_iter().filter(|p| p.done).collect();
+        let mut kept: Vec<Pending> = std::mem::take(&mut self.pending)
+            .into_iter()
+            .filter(|p| p.done)
+            .collect();
         kept.extend(queue);
         self.pending = kept;
     }

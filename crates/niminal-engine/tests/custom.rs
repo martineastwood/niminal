@@ -7,7 +7,7 @@ use std::sync::Arc;
 /// y = x * (1 - a) + y * a, with a = 0.9
 fn one_pole() -> Arc<Kernel> {
     Arc::new(Kernel {
-                latency: 0,
+        latency: 0,
         name: "one_pole".into(),
         ports: vec![Port::named("x", None)],
         code: vec![
@@ -15,9 +15,24 @@ fn one_pole() -> Arc<Kernel> {
             Instr::LoadState { dst: 1, slot: 0 },
             Instr::Const { dst: 2, value: 0.9 },
             Instr::Const { dst: 3, value: 0.1 },
-            Instr::Bin { dst: 4, op: BinOp::Mul, a: 0, b: 3 },
-            Instr::Bin { dst: 5, op: BinOp::Mul, a: 1, b: 2 },
-            Instr::Bin { dst: 6, op: BinOp::Add, a: 4, b: 5 },
+            Instr::Bin {
+                dst: 4,
+                op: BinOp::Mul,
+                a: 0,
+                b: 3,
+            },
+            Instr::Bin {
+                dst: 5,
+                op: BinOp::Mul,
+                a: 1,
+                b: 2,
+            },
+            Instr::Bin {
+                dst: 6,
+                op: BinOp::Add,
+                a: 4,
+                b: 5,
+            },
             Instr::StoreState { slot: 0, src: 6 },
         ],
         registers: 7,
@@ -29,7 +44,9 @@ fn one_pole() -> Arc<Kernel> {
 
 fn graph_with(kernel: Arc<Kernel>) -> Arc<niminal_engine::Graph> {
     let mut g = GraphBuilder::new();
-    let o = g.add(Osc::new(Wave::Saw), &[("freq", Src::Const(300.0))]).unwrap();
+    let o = g
+        .add(Osc::new(Wave::Saw), &[("freq", Src::Const(300.0))])
+        .unwrap();
     let f = g.add(Custom::new(kernel), &[("x", o)]).unwrap();
     Arc::new(g.build(f))
 }
@@ -37,11 +54,18 @@ fn graph_with(kernel: Arc<Kernel>) -> Arc<niminal_engine::Graph> {
 #[test]
 fn state_carries_from_sample_to_sample() {
     let out = render(&graph_with(one_pole()), 2000, None, 32);
-    let raw = render(&{
-        let mut g = GraphBuilder::new();
-        let o = g.add(Osc::new(Wave::Saw), &[("freq", Src::Const(300.0))]).unwrap();
-        Arc::new(g.build(o))
-    }, 2000, None, 32);
+    let raw = render(
+        &{
+            let mut g = GraphBuilder::new();
+            let o = g
+                .add(Osc::new(Wave::Saw), &[("freq", Src::Const(300.0))])
+                .unwrap();
+            Arc::new(g.build(o))
+        },
+        2000,
+        None,
+        32,
+    );
 
     let mut y = 0.0f64;
     for (i, (got, x)) in out.iter().zip(&raw).enumerate() {
@@ -59,7 +83,9 @@ fn each_voice_and_each_call_site_has_its_own_state() {
 
     // two call sites in one graph do not share state
     let mut gb = GraphBuilder::new();
-    let o = gb.add(Osc::new(Wave::Saw), &[("freq", Src::Const(300.0))]).unwrap();
+    let o = gb
+        .add(Osc::new(Wave::Saw), &[("freq", Src::Const(300.0))])
+        .unwrap();
     let k = one_pole();
     let first = gb.add(Custom::new(k.clone()), &[("x", o)]).unwrap();
     let second = gb.add(Custom::new(k), &[("x", first)]).unwrap();
@@ -79,20 +105,26 @@ fn ports_are_named_like_any_other_opcode() {
     let mut g = GraphBuilder::new();
     let e = g.add(Custom::new(one_pole()), &[]).unwrap_err();
     assert_eq!(e.to_string(), "`one_pole` needs an argument `x`");
-    let e = g.add(Custom::new(one_pole()), &[("y", Src::Const(1.0))]).unwrap_err();
+    let e = g
+        .add(Custom::new(one_pole()), &[("y", Src::Const(1.0))])
+        .unwrap_err();
     assert_eq!(e.to_string(), "`one_pole` has no argument named `y`");
 }
 
 #[test]
 fn func_applies_math_per_sample() {
     let mut g = GraphBuilder::new();
-    let o = g.add(Osc::new(Wave::Sine), &[("freq", Src::Const(100.0))]).unwrap();
+    let o = g
+        .add(Osc::new(Wave::Sine), &[("freq", Src::Const(100.0))])
+        .unwrap();
     let t = g.add(Func(Fn1::Tanh), &[("x", o)]).unwrap();
     let out = render(&Arc::new(g.build(t)), 480, None, 32);
     let mut v = Voice::new(
         {
             let mut g = GraphBuilder::new();
-            let o = g.add(Osc::new(Wave::Sine), &[("freq", Src::Const(100.0))]).unwrap();
+            let o = g
+                .add(Osc::new(Wave::Sine), &[("freq", Src::Const(100.0))])
+                .unwrap();
             Arc::new(g.build(o))
         },
         SR,

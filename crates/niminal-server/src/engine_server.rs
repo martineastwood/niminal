@@ -366,7 +366,7 @@ impl EngineReply {
                 "sample_rate": sample_rate,
                 "channels": channels,
                 "topics": ENGINE_TOPICS,
-                "capabilities": ["private_definitions", "routing", "transactions", "voices", "reports", "scopes", "multichannel_buffers", "late_buffer_binding", "processor_modulation", "file_transfer", "offline_render", "capture", "file_players", "audio_management"],
+                "capabilities": ["private_definitions", "routing", "transactions", "voices", "reports", "scopes", "multichannel_buffers", "late_buffer_binding", "fx_modulation", "file_transfer", "offline_render", "capture", "file_players", "audio_management"],
                 "limits": { "buffer_write_samples": 65536, "message_bytes": 4194304, "buffer_bytes":268435456,"file_chunk_bytes":262144,"report_values":64,"scope_frames":4096,"scopes_per_client":8 },
             }),
             EngineReply::Subscribed(topics) => json!({ "topics": topics }),
@@ -614,14 +614,15 @@ impl EngineServer {
                     if let Op::Routing { edits, .. } | Op::Transaction { edits, .. } = event {
                         for edit in edits {
                             if let crate::RoutingEdit::Player { player, .. } = edit
-                                && player.path.starts_with("file:") {
-                                    player.path = self
-                                        .files
-                                        .path(client, &player.path)
-                                        .map_err(|e| EngineError::new(INVALID_PARAMS, &e))?
-                                        .to_string_lossy()
-                                        .into_owned();
-                                }
+                                && player.path.starts_with("file:")
+                            {
+                                player.path = self
+                                    .files
+                                    .path(client, &player.path)
+                                    .map_err(|e| EngineError::new(INVALID_PARAMS, &e))?
+                                    .to_string_lossy()
+                                    .into_owned();
+                            }
                         }
                     }
                 }

@@ -11,8 +11,8 @@ use std::fmt;
 use niminal_pattern::{Rational, Span as CycleSpan};
 use niminal_score::{Event, Tempo, Time, Value};
 
-use crate::performance::{Action, Clip, EnvLane, Scheduled, Step};
 use crate::compile::Composition;
+use crate::performance::{Action, Clip, EnvLane, Scheduled, Step};
 
 /// The pattern queries and events one clip may spend in a search: a base
 /// amount plus more for a longer stretch of time.
@@ -489,11 +489,20 @@ impl Schedule {
                 problem.get_or_insert(e);
             }
             for (at, event) in &mut out[before..] {
-                for (name, unit, glide) in &segment.clip.processor_params {
+                for (name, unit, glide) in &segment.clip.fx_params {
                     if let Some(value) = event.args.remove(name) {
                         match niminal_lang::engine_value(*unit, value, segment.tempo) {
-                            Ok(target) => controls.push(ControlSet { at: *at, name: name.clone(), target, glide: *glide }),
-                            Err(e) => { problem.get_or_insert_with(|| ScheduleError(format!("processor lane `{name}`: {e}"))); }
+                            Ok(target) => controls.push(ControlSet {
+                                at: *at,
+                                name: name.clone(),
+                                target,
+                                glide: *glide,
+                            }),
+                            Err(e) => {
+                                problem.get_or_insert_with(|| {
+                                    ScheduleError(format!("fx lane `{name}`: {e}"))
+                                });
+                            }
                         }
                     }
                 }
@@ -619,9 +628,8 @@ impl Schedule {
                     event.args.insert(k.clone(), *v);
                 }
                 // scored notes carry their own duration
-                event.dur = Time::Seconds(
-                    clock.seconds_at(base + (note.at + note.dur).to_f64()) - onset,
-                );
+                event.dur =
+                    Time::Seconds(clock.seconds_at(base + (note.at + note.dur).to_f64()) - onset);
                 out.push((onset, event));
             }
         }
@@ -740,7 +748,11 @@ impl Schedule {
                     clip.name
                 ))
             };
-            let control = if lane.contains("::") { lane.clone() } else { format!("{name}::{lane}") };
+            let control = if lane.contains("::") {
+                lane.clone()
+            } else {
+                format!("{name}::{lane}")
+            };
             let first = ((window_start / SIGNAL_STEP).floor() * SIGNAL_STEP).max(segment.start);
             let mut at = first;
             while at < until {
@@ -790,8 +802,7 @@ impl Schedule {
                 .unit
                 .ok_or_else(|| fail("the envelope was never placed on a node".into()))?;
             let level = |v: Value| {
-                niminal_lang::engine_value(unit, v, segment.tempo)
-                    .map_err(|e| fail(e.to_string()))
+                niminal_lang::engine_value(unit, v, segment.tempo).map_err(|e| fail(e.to_string()))
             };
             let start = level(curve.start)?;
             let mut steps = Vec::with_capacity(curve.segments.len());
@@ -802,7 +813,11 @@ impl Schedule {
                     level(*to_level)?,
                 ));
             }
-            let control = if lane.contains("::") { lane.clone() } else { format!("{name}::{lane}") };
+            let control = if lane.contains("::") {
+                lane.clone()
+            } else {
+                format!("{name}::{lane}")
+            };
 
             for k in first_loop..last_loop {
                 let loop_start = if clip.endless {
@@ -1006,7 +1021,10 @@ mod tests {
     fn musical_durations_follow_the_tempo_of_the_sections_they_cross() {
         let tempo = Tempo::new(120.0);
         let quick = Tempo::new(240.0);
-        let waltz = Tempo { beats_per_bar: 3.0, ..Tempo::new(120.0) };
+        let waltz = Tempo {
+            beats_per_bar: 3.0,
+            ..Tempo::new(120.0)
+        };
         let s = Schedule::new(tempo, vec![], &[], &[(4.0, quick), (5.0, waltz)], &[]);
         // two bars at 120bpm are 4s, the next bar at 240bpm is 1s
         assert!((s.seconds_from(0.0, Time::Bars(3.0)) - 5.0).abs() < 1e-9);
@@ -1070,9 +1088,8 @@ mod tests {
     #[test]
     fn a_gradual_tempo_change_speeds_up_the_notes_of_the_clip_playing_through_it() {
         // 4 notes a bar, for 8bars, the tempo rising evenly from 60bpm to 240bpm
-        let s = song(
-            "arrangement song { sections: [s.over(8bars)]\n tempo: env[60bpm 8bars 240bpm] }",
-        );
+        let s =
+            song("arrangement song { sections: [s.over(8bars)]\n tempo: env[60bpm 8bars 240bpm] }");
         let at: Vec<f64> = s
             .events(0.0, 60.0)
             .unwrap()
@@ -1144,10 +1161,8 @@ mod tests {
                 .contains("positive number of bpm")
         );
         assert!(
-            error(
-                "arrangement song { sections: [s.over(8bars)]\n tempo: env[60bpm 8sec 240bpm] }"
-            )
-            .contains("lengths in bars")
+            error("arrangement song { sections: [s.over(8bars)]\n tempo: env[60bpm 8sec 240bpm] }")
+                .contains("lengths in bars")
         );
         assert!(error("arrangement song { sections: [s.over(8bars)]\n tempo: env[60bpm 8bars 240bpm].loop }").contains("runs once"));
         assert!(error("arrangement song { sections: [s.over(8bars)]\n tempo: [60bpm]\n tempo: env[60bpm 8bars 240bpm] }").contains("given twice"));
@@ -1363,9 +1378,7 @@ mod tests {
 
     #[test]
     fn commands_start_replace_and_stop_clips() {
-        let s = schedule(
-            "\nlead.play([c4])\nat 2bars lead.play([e4])\nat 3bars lead.stop",
-        );
+        let s = schedule("\nlead.play([c4])\nat 2bars lead.play([e4])\nat 3bars lead.stop");
         // bar = 2s: c4 for the first 4s, e4 for 4s..6s, then silence
         let n = notes(&s, 0.0, 20.0);
         assert_eq!(n.iter().map(|e| e.2).collect::<Vec<_>>(), [60, 60, 64]);
@@ -1413,8 +1426,7 @@ mod tests {
             5
         );
 
-        let solo =
-            schedule("lead.play([c4])\nbass.play([c2])\nat 1bar bass.solo\nat 2bars unsolo");
+        let solo = schedule("lead.play([c4])\nbass.play([c2])\nat 1bar bass.solo\nat 2bars unsolo");
         let who = |t0, t1| {
             notes(&solo, t0, t1)
                 .into_iter()
@@ -1424,9 +1436,8 @@ mod tests {
         assert_eq!(who(0.0, 2.0), ["lead", "bass"]);
         assert_eq!(who(2.0, 4.0), ["bass"], "only the soloed node");
         assert_eq!(who(4.0, 6.0), ["lead", "bass"]);
-        let one = schedule(
-            "lead.play([c4])\nbass.play([c2])\nlead.solo\nbass.solo\nat 1bar bass.unsolo",
-        );
+        let one =
+            schedule("lead.play([c4])\nbass.play([c2])\nlead.solo\nbass.solo\nat 1bar bass.unsolo");
         assert_eq!(
             notes(&one, 2.0, 4.0)
                 .iter()

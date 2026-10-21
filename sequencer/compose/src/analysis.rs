@@ -2,9 +2,9 @@
 //! applies a snippet to a running project.
 
 use crate::ast::*;
-use niminal_lang::Diagnostic;
 use crate::parser::parse_spanned;
 use crate::performance::Quantize;
+use niminal_lang::Diagnostic;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementKind {
@@ -340,14 +340,14 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             }
             Item::Bus(d) => simple_def(text, offset, format!("bus:{}", d.name.name)),
             Item::Buffer(d) => simple_def(text, offset, format!("buffer:{}", d.name.name)),
-            Item::Processor(d) => {
+            Item::Fx(d) => {
                 let dq = crate::perform::definition_quantum(&d.options)
                     .ok()
                     .flatten();
                 definition(
                     text,
                     offset,
-                    format!("processor:{}", d.name.name),
+                    format!("fx:{}", d.name.name),
                     DefParts {
                         definition_quantize: dq,
                         ..Default::default()

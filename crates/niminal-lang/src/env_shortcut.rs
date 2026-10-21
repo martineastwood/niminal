@@ -19,9 +19,11 @@ pub fn desugar(items: &mut [Item], fns: &HashMap<String, FnDef>) -> Vec<Diagnost
     for item in items {
         let stmts = match item {
             Item::Instr(d) => &mut d.body,
-            Item::Node(d) | Item::Processor(d) => &mut d.body,
+            Item::Node(d) | Item::Fx(d) => &mut d.body,
             Item::Fn(d) => &mut d.body,
-            Item::Control { value, .. } | Item::Const { value, .. } | Item::Buffer(BufferDecl { value, .. }) => {
+            Item::Control { value, .. }
+            | Item::Const { value, .. }
+            | Item::Buffer(BufferDecl { value, .. }) => {
                 rewrite_expr(value, &skip, &mut errors);
                 continue;
             }

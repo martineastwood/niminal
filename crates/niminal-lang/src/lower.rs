@@ -61,7 +61,7 @@ impl std::ops::Deref for Choices {
 }
 type BoundFnArgs = Vec<Option<(Datum, Expr)>>;
 
-enum ProcessorScope {
+enum DspScope {
     Spawn {
         max: usize,
         trigger: Sig,
@@ -3569,7 +3569,7 @@ impl<'a> Lower<'a> {
                     Ok(self.input_bundle(name, layout, |channel| ChainInput::Bus { bus, channel }))
                 }
                 _ => Err(Diagnostic::new(
-                    format!("`{name}` is a bus, and only a processor can read a bus"),
+                    format!("`{name}` is a bus, and only an fx can read a bus"),
                     span,
                 )
                 .with_help(format!("an instrument can send to it with `{name} += ...`"))),
@@ -3972,7 +3972,7 @@ impl<'a> Lower<'a> {
         }
         if self.mode != Mode::Node {
             return Err(Diagnostic::new("`input` is read in a node", name.span)
-                .with_help("for example `processor voice { out = input(1).lpf(cutoff: 2khz) }`"));
+                .with_help("for example `fx voice { out = input(1).lpf(cutoff: 2khz) }`"));
         }
         let channel = |arg: &Arg| -> Res<usize> {
             match &arg.value.kind {
@@ -4038,7 +4038,7 @@ impl<'a> Lower<'a> {
     fn report(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
         if self.in_fn {
             return Err(Diagnostic::new(
-                "report belongs in an instrument or processor",
+                "report belongs in an instrument or fx",
                 name.span,
             ));
         }
@@ -4386,7 +4386,7 @@ impl<'a> Lower<'a> {
             &params,
             given,
             span,
-            Some(ProcessorScope::Spawn {
+            Some(DspScope::Spawn {
                 max: max.unwrap_or(8),
                 trigger,
                 duration,
@@ -4394,7 +4394,7 @@ impl<'a> Lower<'a> {
         )
     }
 
-    /// Make free variables explicit ports; each processor decides when to read them.
+    /// Make free variables explicit ports; each fx decides when to read them.
     fn scope_kernel(&mut self, body: &[Stmt], span: Span) -> (FnDef, Vec<PParam>, BoundFnArgs) {
         let mut def = funcs::lambda(&[], body, span);
         let capture_it =
@@ -4493,7 +4493,7 @@ impl<'a> Lower<'a> {
                 &params,
                 given,
                 span,
-                Some(ProcessorScope::Oversample(factor as usize)),
+                Some(DspScope::Oversample(factor as usize)),
             );
         }
         if n == "spawn" {
@@ -5554,7 +5554,7 @@ impl Lower<'_> {
         params: &[PParam],
         given: BoundFnArgs,
         span: Span,
-        processor: Option<ProcessorScope>,
+        dsp_scope: Option<DspScope>,
     ) -> Res<Datum> {
         if self.mode == Mode::Plain {
             return Err(Diagnostic::new(
@@ -5585,7 +5585,7 @@ impl Lower<'_> {
                 at,
             )?);
         }
-        if processor.is_some() {
+        if dsp_scope.is_some() {
             // Shared reads hidden in a subvoice still participate in cross-node ordering.
             let mut pending = vec![def.clone()];
             let mut visited = std::collections::HashSet::new();
@@ -5616,7 +5616,7 @@ impl Lower<'_> {
                 }
             }
         }
-        let (kernel, shape) = if processor.is_some() {
+        let (kernel, shape) = if dsp_scope.is_some() {
             crate::kernel::compile_scoped_kernel(
                 def,
                 &kargs,
@@ -5637,8 +5637,8 @@ impl Lower<'_> {
                 .map(|(n, s)| (n.as_str(), s.pick(channel)))
                 .collect();
             let mut wired = wired;
-            let op: Box<dyn niminal_engine::Opcode> = match &processor {
-                Some(ProcessorScope::Spawn {
+            let op: Box<dyn niminal_engine::Opcode> = match &dsp_scope {
+                Some(DspScope::Spawn {
                     max,
                     trigger,
                     duration,
@@ -5650,7 +5650,7 @@ impl Lower<'_> {
                         *max,
                     ))
                 }
-                Some(ProcessorScope::Oversample(factor)) => {
+                Some(DspScope::Oversample(factor)) => {
                     Box::new(niminal_engine::ops::Oversample::new(
                         Box::new(Custom::new(kernel.clone())),
                         *factor,

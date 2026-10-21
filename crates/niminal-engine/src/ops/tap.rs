@@ -20,20 +20,31 @@ impl Tap {
     }
 
     pub fn triggered() -> Arc<Tap> {
-        Arc::new(Self { events: Some((0..256).map(|_| AtomicU64::new(0)).collect()), ..Self::default() })
+        Arc::new(Self {
+            events: Some((0..256).map(|_| AtomicU64::new(0)).collect()),
+            ..Self::default()
+        })
     }
 
-    pub fn is_triggered(&self) -> bool { self.events.is_some() }
+    pub fn is_triggered(&self) -> bool {
+        self.events.is_some()
+    }
 
     /// Drain a reader's cursor. Overflow discards the oldest events; rendering never waits.
     pub fn read_events(&self, cursor: &mut u32) -> Vec<f32> {
-        let Some(events) = &self.events else { return Vec::new(); };
+        let Some(events) = &self.events else {
+            return Vec::new();
+        };
         let end = self.cursor.load(Ordering::Acquire);
-        if end.wrapping_sub(*cursor) > events.len() as u32 { *cursor = end.wrapping_sub(events.len() as u32); }
+        if end.wrapping_sub(*cursor) > events.len() as u32 {
+            *cursor = end.wrapping_sub(events.len() as u32);
+        }
         let mut values = Vec::new();
         while *cursor != end {
             let packed = events[*cursor as usize % events.len()].load(Ordering::Acquire);
-            if (packed >> 32) as u32 != cursor.wrapping_add(1) { break; }
+            if (packed >> 32) as u32 != cursor.wrapping_add(1) {
+                break;
+            }
             values.push(f32::from_bits(packed as u32));
             *cursor = cursor.wrapping_add(1);
         }
@@ -64,7 +75,10 @@ pub struct TapOut {
 
 impl TapOut {
     pub fn new(tap: Arc<Tap>) -> Self {
-        TapOut { tap, positive: false }
+        TapOut {
+            tap,
+            positive: false,
+        }
     }
 }
 
@@ -76,23 +90,33 @@ impl Opcode for TapOut {
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[Port::required("x")];
         const TRIGGERED: &[Port] = &[Port::required("x"), Port::required("on")];
-        if self.tap.is_triggered() { TRIGGERED } else { PORTS }
+        if self.tap.is_triggered() {
+            TRIGGERED
+        } else {
+            PORTS
+        }
     }
 
     fn box_clone(&self) -> Box<dyn Opcode> {
         Box::new(Self::new(self.tap.clone()))
     }
 
-    fn reset(&mut self) { self.positive = false; }
+    fn reset(&mut self) {
+        self.positive = false;
+    }
 
-    fn has_side_effects(&self) -> bool { true }
+    fn has_side_effects(&self) -> bool {
+        true
+    }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         out.copy_from_slice(inputs[0]);
         if self.tap.is_triggered() {
             for (value, trigger) in out.iter().zip(inputs[1]) {
                 let positive = *trigger > 0.0;
-                if positive && !self.positive && value.is_finite() { self.tap.write(*value); }
+                if positive && !self.positive && value.is_finite() {
+                    self.tap.write(*value);
+                }
                 self.positive = positive;
             }
         } else if let Some(last) = out.last().filter(|v| v.is_finite()) {
@@ -107,9 +131,14 @@ mod tests {
     #[test]
     fn triggered_queue_is_bounded_and_keeps_the_latest_events_in_order() {
         let tap = Tap::triggered();
-        for i in 0..300 { tap.write(i as f32); }
+        for i in 0..300 {
+            tap.write(i as f32);
+        }
         let mut cursor = 0;
-        assert_eq!(tap.read_events(&mut cursor), (44..300).map(|i| i as f32).collect::<Vec<_>>());
+        assert_eq!(
+            tap.read_events(&mut cursor),
+            (44..300).map(|i| i as f32).collect::<Vec<_>>()
+        );
         assert!(tap.read_events(&mut cursor).is_empty());
         tap.write(299.0);
         assert_eq!(tap.read_events(&mut cursor), [299.0]);

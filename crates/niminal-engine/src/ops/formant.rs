@@ -10,11 +10,31 @@ struct Vowel {
 }
 
 const VOWELS: [Vowel; 5] = [
-    Vowel { freq: [800.0, 1150.0, 2800.0], bw: [80.0, 90.0, 120.0], amp: [1.0, 0.5, 0.25] },
-    Vowel { freq: [400.0, 1600.0, 2700.0], bw: [60.0, 80.0, 120.0], amp: [1.0, 0.5, 0.2] },
-    Vowel { freq: [350.0, 2300.0, 3000.0], bw: [50.0, 100.0, 120.0], amp: [1.0, 0.4, 0.15] },
-    Vowel { freq: [450.0, 800.0, 2830.0], bw: [70.0, 80.0, 100.0], amp: [1.0, 0.35, 0.15] },
-    Vowel { freq: [325.0, 700.0, 2530.0], bw: [50.0, 60.0, 100.0], amp: [1.0, 0.25, 0.1] },
+    Vowel {
+        freq: [800.0, 1150.0, 2800.0],
+        bw: [80.0, 90.0, 120.0],
+        amp: [1.0, 0.5, 0.25],
+    },
+    Vowel {
+        freq: [400.0, 1600.0, 2700.0],
+        bw: [60.0, 80.0, 120.0],
+        amp: [1.0, 0.5, 0.2],
+    },
+    Vowel {
+        freq: [350.0, 2300.0, 3000.0],
+        bw: [50.0, 100.0, 120.0],
+        amp: [1.0, 0.4, 0.15],
+    },
+    Vowel {
+        freq: [450.0, 800.0, 2830.0],
+        bw: [70.0, 80.0, 100.0],
+        amp: [1.0, 0.35, 0.15],
+    },
+    Vowel {
+        freq: [325.0, 700.0, 2530.0],
+        bw: [50.0, 60.0, 100.0],
+        amp: [1.0, 0.25, 0.1],
+    },
 ];
 
 /// Three parallel biquad bandpass filters for vowel formant synthesis.
@@ -48,15 +68,16 @@ fn bpf_coeffs(freq: f64, bw: f64, sr: f64) -> (f64, f64, f64, f64, f64) {
 }
 
 impl Opcode for Formant {
-    fn reset(&mut self) { self.state = [(0.0, 0.0, 0.0, 0.0); 3]; }
+    fn reset(&mut self) {
+        self.state = [(0.0, 0.0, 0.0, 0.0); 3];
+    }
 
-    fn name(&self) -> &str { "formant" }
+    fn name(&self) -> &str {
+        "formant"
+    }
 
     fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[
-            Port::required("x"),
-            Port::optional("vowel", 0.0),
-        ];
+        const PORTS: &[Port] = &[Port::required("x"), Port::optional("vowel", 0.0)];
         PORTS
     }
 
@@ -86,9 +107,11 @@ impl Opcode for Formant {
             let v0 = &VOWELS[idx];
             let v1 = &VOWELS[idx + 1];
 
-            let freqs: [f64; 3] = std::array::from_fn(|f| v0.freq[f] + (v1.freq[f] - v0.freq[f]) * frac);
+            let freqs: [f64; 3] =
+                std::array::from_fn(|f| v0.freq[f] + (v1.freq[f] - v0.freq[f]) * frac);
             let bws: [f64; 3] = std::array::from_fn(|f| v0.bw[f] + (v1.bw[f] - v0.bw[f]) * frac);
-            let amps: [f64; 3] = std::array::from_fn(|f| v0.amp[f] + (v1.amp[f] - v0.amp[f]) * frac);
+            let amps: [f64; 3] =
+                std::array::from_fn(|f| v0.amp[f] + (v1.amp[f] - v0.amp[f]) * frac);
 
             let mut result = 0.0;
             for f in 0..3 {

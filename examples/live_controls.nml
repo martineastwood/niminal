@@ -12,7 +12,7 @@ instr tone(freq: hz) {
   .pan(azimuth: 0deg) * env[0 2ms 1 200ms 0]
 }
 
-processor lead_fx {
+fx lead_fx {
   out = lead_fx_audio.gain(volume)
 }
 bus lead_fx_audio: stereo

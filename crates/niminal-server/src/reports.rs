@@ -33,7 +33,7 @@ impl Reports {
         for (name, graph) in graphs {
             let owner = if let Some(rest) = name
                 .strip_prefix("__routing_node_")
-                .or_else(|| name.strip_prefix("__routing_processor_"))
+                .or_else(|| name.strip_prefix("__routing_fx_"))
             {
                 rest.split_once('_')
                     .and_then(|(id, _)| id.parse().ok())

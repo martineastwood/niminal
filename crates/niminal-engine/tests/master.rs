@@ -4,7 +4,9 @@ const SR: f32 = 48_000.0;
 const CEILING: f32 = 0.966; // -0.3db
 
 fn sine(freq: f32, amp: f32, n: usize) -> Vec<f32> {
-    (0..n).map(|i| amp * (std::f32::consts::TAU * freq * i as f32 / SR).sin()).collect()
+    (0..n)
+        .map(|i| amp * (std::f32::consts::TAU * freq * i as f32 / SR).sin())
+        .collect()
 }
 
 fn run(input: &[f32]) -> (Vec<f32>, usize) {
@@ -24,8 +26,15 @@ fn peak(x: &[f32]) -> f32 {
 fn never_exceeds_the_ceiling() {
     for amp in [1.0, 2.0, 10.0, 100.0] {
         let (out, _) = run(&sine(220.0, amp, 48_000));
-        assert!(peak(&out) <= CEILING + 1e-6, "amp {amp}: peak {}", peak(&out));
-        assert!(peak(&out) > CEILING * 0.9, "amp {amp} should be limited to the ceiling, not crushed");
+        assert!(
+            peak(&out) <= CEILING + 1e-6,
+            "amp {amp}: peak {}",
+            peak(&out)
+        );
+        assert!(
+            peak(&out) > CEILING * 0.9,
+            "amp {amp} should be limited to the ceiling, not crushed"
+        );
     }
 }
 
@@ -44,7 +53,12 @@ fn quiet_signals_pass_unchanged() {
     let (out, _) = run(&x);
     // after the DC blocker has settled, output matches input
     for i in 4800..24_000 {
-        assert!((out[i] - x[i]).abs() < 0.01, "sample {i}: {} vs {}", out[i], x[i]);
+        assert!(
+            (out[i] - x[i]).abs() < 0.01,
+            "sample {i}: {} vs {}",
+            out[i],
+            x[i]
+        );
     }
 }
 
@@ -54,7 +68,11 @@ fn gain_recovers_after_a_loud_passage() {
     x.extend(sine(220.0, 0.5, 48_000));
     let (out, _) = run(&x);
     let tail = &out[out.len() - 4800..];
-    assert!(peak(tail) > 0.45, "back to full level after the release: {}", peak(tail));
+    assert!(
+        peak(tail) > 0.45,
+        "back to full level after the release: {}",
+        peak(tail)
+    );
 }
 
 #[test]
@@ -79,7 +97,11 @@ fn non_finite_input_becomes_silence() {
 #[test]
 fn latency_is_about_a_millisecond_and_silence_stays_silent() {
     let m = Master::new(SR, CEILING);
-    assert_eq!(m.latency(), 47 + 12, "a millisecond of lookahead, and a few samples to see between samples");
+    assert_eq!(
+        m.latency(),
+        47 + 12,
+        "a millisecond of lookahead, and a few samples to see between samples"
+    );
     let (out, _) = run(&vec![0.0; 1000]);
     assert!(out.iter().all(|s| *s == 0.0));
 }
@@ -115,7 +137,10 @@ fn linked_channels_share_one_gain_so_the_image_does_not_shift() {
     let window = 12_000..20_000;
     let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
     let ratio = rms(&r[window.clone()]) / rms(&orig_right[window]);
-    assert!(ratio < 0.5, "the quiet channel is ducked along with the loud one: {ratio}");
+    assert!(
+        ratio < 0.5,
+        "the quiet channel is ducked along with the loud one: {ratio}"
+    );
     let _ = orig_left;
 }
 
@@ -123,7 +148,11 @@ fn linked_channels_share_one_gain_so_the_image_does_not_shift() {
 fn a_multichannel_master_passes_quiet_audio_unchanged() {
     let mut master = Master::with_channels(SR, CEILING, 3);
     let latency = master.latency();
-    let src: Vec<Vec<f32>> = vec![sine(300.0, 0.3, 12_000), sine(500.0, 0.2, 12_000), sine(700.0, 0.1, 12_000)];
+    let src: Vec<Vec<f32>> = vec![
+        sine(300.0, 0.3, 12_000),
+        sine(500.0, 0.2, 12_000),
+        sine(700.0, 0.1, 12_000),
+    ];
     let mut bufs = src.clone();
     for b in &mut bufs {
         b.extend(vec![0.0; latency]);
@@ -167,7 +196,11 @@ fn true_peak(x: &[f32]) -> f32 {
             let mut sum = 0.0;
             for k in -SPAN..SPAN {
                 let d = frac - k as f64;
-                let sinc = if d == 0.0 { 1.0 } else { (std::f64::consts::PI * d).sin() / (std::f64::consts::PI * d) };
+                let sinc = if d == 0.0 {
+                    1.0
+                } else {
+                    (std::f64::consts::PI * d).sin() / (std::f64::consts::PI * d)
+                };
                 let window = 0.5 * (1.0 + (std::f64::consts::PI * d / SPAN as f64).cos());
                 sum += f64::from(x[(i as i64 + k) as usize]) * sinc * window;
             }
@@ -183,10 +216,21 @@ fn the_ceiling_holds_between_samples_too() {
     let input: Vec<f32> = (0..24_000)
         .map(|i| 1.1 * (std::f32::consts::FRAC_PI_2 * i as f32 + std::f32::consts::FRAC_PI_4).sin())
         .collect();
-    assert!(peak(&input) < CEILING, "the samples alone are under the ceiling");
+    assert!(
+        peak(&input) < CEILING,
+        "the samples alone are under the ceiling"
+    );
     assert!(true_peak(&input) > 1.05, "but the wave is over it");
     let (out, _) = run(&input);
     let settled = &out[4000..];
-    assert!(true_peak(settled) <= CEILING * 1.003, "true peak {} is over the ceiling", true_peak(settled));
-    assert!(true_peak(settled) > CEILING * 0.9, "limited, not crushed: {}", true_peak(settled));
+    assert!(
+        true_peak(settled) <= CEILING * 1.003,
+        "true peak {} is over the ceiling",
+        true_peak(settled)
+    );
+    assert!(
+        true_peak(settled) > CEILING * 0.9,
+        "limited, not crushed: {}",
+        true_peak(settled)
+    );
 }

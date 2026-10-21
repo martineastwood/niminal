@@ -10,7 +10,11 @@ use crate::opcode::{Opcode, Port, ProcessCtx};
 /// those two are more than 180 degrees apart (as the gap behind a stereo pair
 /// is) the source goes to the nearer one alone. `spread` (0..1) blends towards
 /// all speakers equally.
-pub fn pan_gains(speakers: &[Option<f32>], azimuth: f32, spread: f32) -> [f32; crate::mixer::MAX_CHANNELS] {
+pub fn pan_gains(
+    speakers: &[Option<f32>],
+    azimuth: f32,
+    spread: f32,
+) -> [f32; crate::mixer::MAX_CHANNELS] {
     let mut gains = [0.0f32; crate::mixer::MAX_CHANNELS];
     // the speakers that can be panned to, by angle (no allocation: this runs for every sample of a pan)
     let mut slots = [(0.0f32, 0usize); crate::mixer::MAX_CHANNELS];
@@ -29,19 +33,30 @@ pub fn pan_gains(speakers: &[Option<f32>], azimuth: f32, spread: f32) -> [f32; c
 
     let az = azimuth.rem_euclid(360.0);
     // The speaker at or before the source going round the circle, and the next.
-    let before = ring.iter().rposition(|(a, _)| *a <= az).unwrap_or(ring.len() - 1);
+    let before = ring
+        .iter()
+        .rposition(|(a, _)| *a <= az)
+        .unwrap_or(ring.len() - 1);
     let (a_angle, a_idx) = ring[before];
     let (b_angle, b_idx) = ring[(before + 1) % ring.len()];
 
     let gap = (b_angle - a_angle).rem_euclid(360.0);
-    let gap = if ring.len() == 1 || gap == 0.0 { 360.0 } else { gap };
+    let gap = if ring.len() == 1 || gap == 0.0 {
+        360.0
+    } else {
+        gap
+    };
     let into = (az - a_angle).rem_euclid(360.0);
 
     if ring.len() == 1 {
         gains[a_idx] = 1.0;
     } else if gap > 180.0 {
         // No pair to share between: the nearer speaker takes it all.
-        if into <= gap - into { gains[a_idx] = 1.0 } else { gains[b_idx] = 1.0 }
+        if into <= gap - into {
+            gains[a_idx] = 1.0
+        } else {
+            gains[b_idx] = 1.0
+        }
     } else {
         let t = (into / gap).clamp(0.0, 1.0);
         gains[a_idx] = (t * std::f32::consts::FRAC_PI_2).cos();
@@ -71,7 +86,11 @@ pub struct PanChannel {
 
 impl PanChannel {
     pub fn new(speakers: Arc<[Option<f32>]>, index: usize) -> Self {
-        PanChannel { speakers, index, last: None }
+        PanChannel {
+            speakers,
+            index,
+            last: None,
+        }
     }
 }
 
@@ -81,8 +100,11 @@ impl Opcode for PanChannel {
     }
 
     fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] =
-            &[Port::required("x"), Port::optional("azimuth", 0.0), Port::optional("spread", 0.0)];
+        const PORTS: &[Port] = &[
+            Port::required("x"),
+            Port::optional("azimuth", 0.0),
+            Port::optional("spread", 0.0),
+        ];
         PORTS
     }
 
@@ -94,7 +116,11 @@ impl Opcode for PanChannel {
         for (i, o) in out.iter_mut().enumerate() {
             let (azimuth, spread) = (inputs[1][i], inputs[2][i]);
             let gain = match self.last {
-                Some((a, s, gain)) if a.to_bits() == azimuth.to_bits() && s.to_bits() == spread.to_bits() => gain,
+                Some((a, s, gain))
+                    if a.to_bits() == azimuth.to_bits() && s.to_bits() == spread.to_bits() =>
+                {
+                    gain
+                }
                 _ => {
                     let gain = pan_gains(&self.speakers, azimuth, spread)[self.index];
                     self.last = Some((azimuth, spread, gain));

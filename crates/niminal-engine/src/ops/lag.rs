@@ -14,20 +14,24 @@ pub struct Lag {
 
 impl Default for Lag {
     fn default() -> Self {
-        Lag { y: 0.0, sample_rate: 48_000.0 }
+        Lag {
+            y: 0.0,
+            sample_rate: 48_000.0,
+        }
     }
 }
 
 impl Opcode for Lag {
-    fn reset(&mut self) { self.y = 0.0; }
+    fn reset(&mut self) {
+        self.y = 0.0;
+    }
 
-    fn name(&self) -> &str { "lag" }
+    fn name(&self) -> &str {
+        "lag"
+    }
 
     fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[
-            Port::required("x"),
-            Port::required("time"),
-        ];
+        const PORTS: &[Port] = &[Port::required("x"), Port::required("time")];
         PORTS
     }
 
@@ -51,7 +55,11 @@ impl Opcode for Lag {
             let x = f64::from(inputs[0][i]);
             let time = f64::from(inputs[1][i]).max(0.0);
             // coefficient for 60dB convergence in `time` seconds
-            let coeff = if time * sr < 1.0 { 0.0 } else { (-6.907_755_278_982_137 / (time * sr)).exp() };
+            let coeff = if time * sr < 1.0 {
+                0.0
+            } else {
+                (-6.907_755_278_982_137 / (time * sr)).exp()
+            };
             self.y = flush(x + coeff * (self.y - x));
             *o = self.y as f32;
         }

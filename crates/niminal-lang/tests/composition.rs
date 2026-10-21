@@ -245,7 +245,7 @@ fn named_callback_results_remain_accessible_inline() {
 }
 
 #[test]
-fn explicit_tail_can_end_effects_inside_a_custom_processor_after_completion() {
+fn explicit_tail_can_end_effects_inside_a_custom_fx_after_completion() {
     let source = "fn custom(t) { state unused = 0\n1.finish_when(t > 1ms).delay(10ms, feedback: 0.995) }\ninstr a() { tail = 2ms\n custom(note.time) }";
     let mut v = voice(source);
     v.release();

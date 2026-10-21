@@ -52,14 +52,8 @@ fn a_replay_reproduces_the_original_audio_exactly() {
             original.extend(s.process(block).remove(0));
         }
         let total = s.clock();
-        let replayed = niminal_server::Session::replay(
-            SR,
-            Layout::Mono,
-            &s.log(),
-            total,
-            true,
-        )
-        .remove(0);
+        let replayed =
+            niminal_server::Session::replay(SR, Layout::Mono, &s.log(), total, true).remove(0);
         assert_eq!(original.len(), replayed.len(), "block {block}");
         assert_eq!(
             original, replayed,
@@ -74,20 +68,8 @@ fn logs_survive_being_written_down() {
     let text = to_lines(&s.log());
     let back = from_lines(&text).unwrap();
     assert_eq!(back, s.log());
-    let a = niminal_server::Session::replay(
-        SR,
-        Layout::Mono,
-        &s.log(),
-        100_000,
-        true,
-    );
-    let b = niminal_server::Session::replay(
-        SR,
-        Layout::Mono,
-        &back,
-        100_000,
-        true,
-    );
+    let a = niminal_server::Session::replay(SR, Layout::Mono, &s.log(), 100_000, true);
+    let b = niminal_server::Session::replay(SR, Layout::Mono, &back, 100_000, true);
     assert_eq!(a, b);
 }
 
@@ -161,13 +143,7 @@ fn compiling_can_happen_away_from_the_session() {
     );
     assert!(rms(&run(&mut s, 12_000)[2000..]) > 0.1);
     // and what the session logged replays to the same sound
-    let replayed = niminal_server::Session::replay(
-        SR,
-        Layout::Mono,
-        &s.log(),
-        13_000,
-        false,
-    );
+    let replayed = niminal_server::Session::replay(SR, Layout::Mono, &s.log(), 13_000, false);
     assert!(rms(&replayed[0][3000..]) > 0.1);
 }
 
@@ -224,10 +200,7 @@ fn replacing_one_write_preserves_the_rest_of_an_older_transaction() {
     let mut s = ready();
     run(&mut s, 1000);
     let old = s
-        .eval(
-            "lead.play([c4])\nbass.play([c2])",
-            Some("next 4bars"),
-        )
+        .eval("lead.play([c4])\nbass.play([c2])", Some("next 4bars"))
         .unwrap();
     s.eval("lead.play([a4])", Some("now")).unwrap();
     assert_eq!(s.pending().len(), 1);
@@ -277,7 +250,7 @@ fn an_effect_parameter_edit_keeps_its_tail_and_uses_the_new_setting() {
     let mut live = with_tail();
     run(&mut live, 5000);
     live.eval(
-        "processor hall { out = space.reverb(room: 0.95, damp: 0.2) }",
+        "fx hall { out = space.reverb(room: 0.95, damp: 0.2) }",
         Some("now"),
     )
     .unwrap();
@@ -303,7 +276,7 @@ fn a_node_edit_keeps_memory_but_applies_the_new_output_gain() {
     run(&mut live, 5000);
     run(&mut reference, 5000);
     live.eval(
-        "processor hall { out = space.reverb(room: 0.8, damp: 0.5) * 0.5 }",
+        "fx hall { out = space.reverb(room: 0.8, damp: 0.5) * 0.5 }",
         Some("now"),
     )
     .unwrap();
@@ -343,10 +316,7 @@ fn replacing_a_pending_definition_moves_its_dependent_play_to_the_new_boundary()
     let mut reference = ready();
     run(&mut reference, 1000);
     reference
-        .eval(
-            "riff = [a4]\nlead.play(riff)",
-            Some("next 4bars"),
-        )
+        .eval("riff = [a4]\nlead.play(riff)", Some("next 4bars"))
         .unwrap();
     assert_eq!(run(&mut s, 5 * BAR), run(&mut reference, 5 * BAR));
 }
@@ -373,24 +343,12 @@ fn a_slow_compile_moves_to_the_next_boundary_and_reports_it() {
 fn superseded_pending_changes_replay_to_the_same_audio() {
     let mut s = ready();
     let mut original = run(&mut s, 1000);
-    s.eval(
-        "riff = [c4]\nbass.play([c2])",
-        Some("next 4bars"),
-    )
-    .unwrap();
-    s.eval(
-        "riff = [a4]\nlead.play(riff)",
-        Some("now"),
-    )
-    .unwrap();
+    s.eval("riff = [c4]\nbass.play([c2])", Some("next 4bars"))
+        .unwrap();
+    s.eval("riff = [a4]\nlead.play(riff)", Some("now")).unwrap();
     original.extend(run(&mut s, 5 * BAR));
-    let replayed = niminal_server::Session::replay(
-        SR,
-        Layout::Mono,
-        &s.log(),
-        original.len() as u64,
-        false,
-    );
+    let replayed =
+        niminal_server::Session::replay(SR, Layout::Mono, &s.log(), original.len() as u64, false);
     assert_eq!(original, replayed[0]);
 }
 

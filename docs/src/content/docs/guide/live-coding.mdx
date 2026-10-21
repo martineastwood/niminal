@@ -114,7 +114,7 @@ An instrument's signal can be sent over OSC too. `osc_out` passes the signal thr
 
 ```nml
 bus bass_audio
-processor bass_meter {
+fx bass_meter {
   out = bass_audio.osc_out("/vj/bass", port: 9000)
 }
 instr bass_voice(freq: hz) {
@@ -123,20 +123,20 @@ instr bass_voice(freq: hz) {
 }
 clip bass { instrument: bass_voice }
 ctl k = 0.5
-processor knob { out = k.osc_out("/vj/knob", host: "192.168.1.20", port: 9000, rate: 10hz) }
+fx knob { out = k.osc_out("/vj/knob", host: "192.168.1.20", port: 9000, rate: 10hz) }
 ```
 
 A message is sent when the value has changed and `rate` allows it; the first value goes at once. Sending happens whenever the server runs, and is not logged, so a replay does not send.
 
 ## Audio input
 
-A processor can read the sound card's input with `input(1)`, or `input(1..2)` for two channels:
+An fx can read the sound card's input with `input(1)`, or `input(1..2)` for two channels:
 
 ```nml
-processor voice { out = input(1).lpf(cutoff: 3khz) }
+fx voice { out = input(1).lpf(cutoff: 3khz) }
 ```
 
-Start the server with `--audio-input` to listen to the default input device (at the output's sample rate). `nimlive render file.nml --input take.wav` plays a WAV file into those processors instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
+Start the server with `--audio-input` to listen to the default input device (at the output's sample rate). `nimlive render file.nml --input take.wav` plays a WAV file into those fx declarations instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
 
 ## Session replay
 
@@ -152,6 +152,6 @@ Use `--no-log` on the server to skip recording, or `--log PATH` to choose the fi
 
 The server shares voices among threads. `--render-threads N` sets how many render together, counting the render thread itself (by default your cores, up to 4; `1` renders on one core). Voices are summed in fixed groups of 8, so the sound is bit-for-bit the same whatever the number, and a recorded session still replays to the same bytes.
 
-Groups of voices from clips that do not depend on each other (no bus or buffer passes between them) are shared out together, so ten clips of ten voices benefit as much as one clip of a hundred. Each processor's effect chain still runs on one thread, and a clip whose voices write a shared buffer runs its voices one at a time.
+Groups of voices from clips that do not depend on each other (no bus or buffer passes between them) are shared out together, so ten clips of ten voices benefit as much as one clip of a hundred. Each fx's effect chain still runs on one thread, and a clip whose voices write a shared buffer runs its voices one at a time.
 
 Whether sharing a block out is worth it is decided as the music plays: the server times its own voices, and measures what waking its threads costs when it starts. `--render-fork` overrides that: `always`, `never`, or a number of microseconds of work a block must have before it is shared. The sound is the same whichever you choose; only the speed changes.

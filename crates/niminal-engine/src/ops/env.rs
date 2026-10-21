@@ -59,7 +59,11 @@ fn shape_fast(a: f32, b: f32, t: f64, k: f64, inv_denom: f64) -> f32 {
     }
     let c = |x: f64| ((k * x).exp() - 1.0) * inv_denom;
     let s = if b >= a { c(t) } else { c(1.0 - t) };
-    if b >= a { a + (b - a) * s as f32 } else { b + (a - b) * s as f32 }
+    if b >= a {
+        a + (b - a) * s as f32
+    } else {
+        b + (a - b) * s as f32
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -135,7 +139,9 @@ impl Env {
     /// Take these parts of the envelope from inputs, read once when the note starts. The ports are
     /// named `v0`, `v1`... in the order given.
     pub fn with_inputs(mut self, fields: Vec<EnvField>) -> Self {
-        self.ports = (0..fields.len()).map(|i| Port::named(format!("v{i}"), None)).collect();
+        self.ports = (0..fields.len())
+            .map(|i| Port::named(format!("v{i}"), None))
+            .collect();
         self.read = fields.is_empty();
         self.fields = fields;
         self
@@ -144,7 +150,10 @@ impl Env {
     /// Start over from the first level each time the last segment ends, for as long as the note is
     /// held: after a release the pass in progress is the last. Has no sustain point.
     pub fn looped(mut self) -> Self {
-        assert!(self.sustain_at.is_none(), "a looping envelope has no sustain point");
+        assert!(
+            self.sustain_at.is_none(),
+            "a looping envelope has no sustain point"
+        );
         self.looped = true;
         self
     }
@@ -211,7 +220,9 @@ impl Env {
 
     fn release(&mut self) {
         self.released = true;
-        let Some(sustain) = self.sustain_at else { return };
+        let Some(sustain) = self.sustain_at else {
+            return;
+        };
         let before_sustain = match self.phase {
             Phase::Hold => true,
             Phase::Running { seg, .. } => seg < sustain,
@@ -239,8 +250,12 @@ impl Env {
 }
 
 impl Opcode for Env {
-    fn input_is_init(&self, _index: usize) -> bool { true }
-    fn reset(&mut self) { self.reset(self.sample_rate); }
+    fn input_is_init(&self, _index: usize) -> bool {
+        true
+    }
+    fn reset(&mut self) {
+        self.reset(self.sample_rate);
+    }
     fn name(&self) -> &'static str {
         "env"
     }
@@ -261,8 +276,11 @@ impl Opcode for Env {
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
-            && self.start == old.start && self.segments == old.segments
-            && self.sustain_at == old.sustain_at && self.looped == old.looped && self.lengths == old.lengths
+            && self.start == old.start
+            && self.segments == old.segments
+            && self.sustain_at == old.sustain_at
+            && self.looped == old.looped
+            && self.lengths == old.lengths
         {
             self.level = old.level;
             self.phase = old.phase;

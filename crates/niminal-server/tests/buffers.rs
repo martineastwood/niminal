@@ -1,6 +1,6 @@
-use niminal_server::{At, EngineRequest, EngineServer, Op, RealtimeConfig, Session};
 use niminal_lang::Layout;
 use niminal_score::Time;
+use niminal_server::{At, EngineRequest, EngineServer, Op, RealtimeConfig, Session};
 
 fn session() -> Session {
     let mut s = Session::new(48000.0, Layout::Mono).without_limiter();

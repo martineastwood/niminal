@@ -1,11 +1,12 @@
 //! The engine server: JSON-RPC over whatever carries the messages.
 
-use niminal_server::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
 use niminal_lang::Layout;
+use niminal_server::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
 use serde_json::{Value, json};
 
 const SR: f32 = 48_000.0;
-const SETUP: &str = "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nnode lead { instrument = pluck }";
+const SETUP: &str =
+    "instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nnode lead { instrument = pluck }";
 
 fn call(d: &mut EngineServer, client: ClientId, id: u64, method: &str, params: Value) -> Value {
     let request =

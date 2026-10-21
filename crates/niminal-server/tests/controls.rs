@@ -1,7 +1,7 @@
 use niminal_server::{Session, from_lines, to_lines};
 mod support;
-use support::{Eval, play, set_control};
 use niminal_lang::Layout;
+use support::{Eval, play, set_control};
 
 const SOURCE: &str = "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }";
 fn session(source: &str) -> Session {
@@ -34,8 +34,7 @@ fn controls_change_held_notes_on_the_exact_sample_without_recompiling() {
 #[test]
 fn smoothing_is_linear_and_reaches_the_target_at_the_requested_duration() {
     let mut s = held(SOURCE);
-    set_control(&mut s, "level", 1.0, None, Some(48), Some(1.0))
-        .unwrap();
+    set_control(&mut s, "level", 1.0, None, Some(48), Some(1.0)).unwrap();
     let out = s.process(100).remove(0);
     assert_eq!(out[..48], [0.0; 48]);
     for (i, &v) in out[48..96].iter().enumerate() {
@@ -48,7 +47,7 @@ fn smoothing_is_linear_and_reaches_the_target_at_the_requested_duration() {
 fn one_control_drives_instruments_and_effects_and_initializes_new_notes() {
     let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(
-        "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nbus t_audio\nprocessor t_fx {out = t_audio * level}\nnode t { instrument = flat\noutput = t_audio}",
+        "ctl level = 0.0.smooth(0ms)\ninstr flat() { level }\nbus t_audio\nfx t_fx {out = t_audio * level}\nnode t { instrument = flat\noutput = t_audio}",
         Some("now"),
     )
     .unwrap();
@@ -76,21 +75,11 @@ fn unrelated_edits_keep_control_values_and_redefinitions_glide() {
 fn units_smoothing_timestamps_and_unknown_controls_are_validated() {
     let mut s = session("ctl cutoff = 1khz\nctl gain = -6db");
     assert!(set_control(&mut s, "missing", 1.0, None, None, None).is_err());
-    assert!(
-        set_control(&mut s, "cutoff", 1.0, Some("db"), None, None)
-            .is_err()
-    );
+    assert!(set_control(&mut s, "cutoff", 1.0, Some("db"), None, None).is_err());
     assert!(set_control(&mut s, "cutoff", f64::NAN, None, None, None).is_err());
-    assert!(
-        set_control(&mut s, "cutoff", 1.0, None, None, Some(-1.0))
-            .is_err()
-    );
-    assert!(
-        set_control(&mut s, "cutoff", 1.0, None, None, Some(f64::INFINITY))
-            .is_err()
-    );
-    set_control(&mut s, "cutoff", 2.0, Some("khz"), None, Some(0.0))
-        .unwrap();
+    assert!(set_control(&mut s, "cutoff", 1.0, None, None, Some(-1.0)).is_err());
+    assert!(set_control(&mut s, "cutoff", 1.0, None, None, Some(f64::INFINITY)).is_err());
+    set_control(&mut s, "cutoff", 2.0, Some("khz"), None, Some(0.0)).unwrap();
     set_control(&mut s, "gain", -12.0, None, None, Some(0.0)).unwrap();
     s.process(1);
     let values = s.control_values();
@@ -115,8 +104,7 @@ fn out_of_order_updates_and_same_sample_updates_are_deterministic() {
 #[test]
 fn controls_replay_exactly_across_block_sizes_and_log_serialization() {
     let mut s = held(SOURCE);
-    set_control(&mut s, "level", 1.0, None, Some(37), Some(2.0))
-        .unwrap();
+    set_control(&mut s, "level", 1.0, None, Some(37), Some(2.0)).unwrap();
     let mut original = s.process(100).remove(0);
     set_control(&mut s, "level", 0.3, None, None, Some(1.0)).unwrap();
     let note = niminal_server::Op::Note {
@@ -131,11 +119,7 @@ fn controls_replay_exactly_across_block_sizes_and_log_serialization() {
     s.send_events(0, vec![note]).unwrap();
     original.extend(s.process(800).remove(0));
     let log = from_lines(&to_lines(s.log())).unwrap();
-    let replay = Session::replay(48_000.0, Layout::Mono,
-        &log,
-        900,
-        false,
-    );
+    let replay = Session::replay(48_000.0, Layout::Mono, &log, 900, false);
     assert_eq!(original, replay[0]);
 }
 
@@ -143,8 +127,7 @@ fn controls_replay_exactly_across_block_sizes_and_log_serialization() {
 fn queued_updates_are_bounded() {
     let mut s = held(SOURCE);
     for i in 0..1024 {
-        set_control(&mut s, "level", 1.0, None, Some(1000 + i), None)
-            .unwrap();
+        set_control(&mut s, "level", 1.0, None, Some(1000 + i), None).unwrap();
     }
     assert!(set_control(&mut s, "level", 1.0, None, Some(2000), None).is_err());
     s.process(2100);
@@ -192,10 +175,8 @@ fn negative_decibel_defaults_can_declare_smoothing() {
 #[test]
 fn smoothing_between_finite_extremes_remains_finite() {
     let mut s = held(SOURCE);
-    set_control(&mut s, "level", -3e38, None, Some(0), Some(0.0))
-        .unwrap();
-    set_control(&mut s, "level", 3e38, None, Some(1), Some(1.0))
-        .unwrap();
+    set_control(&mut s, "level", -3e38, None, Some(0), Some(0.0)).unwrap();
+    set_control(&mut s, "level", 3e38, None, Some(1), Some(1.0)).unwrap();
     let out = s.process(64).remove(0);
     assert!(out.iter().all(|v| v.is_finite()));
     assert!(out[1] < 0.0 && out[48] > 0.0);

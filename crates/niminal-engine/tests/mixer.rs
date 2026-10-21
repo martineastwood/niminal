@@ -1,5 +1,7 @@
 use niminal_engine::ops::{Gain, Mul};
-use niminal_engine::{BLOCK, ChainInput, GraphBuilder, Mixer, Route, Src, NodeDef, execution_order};
+use niminal_engine::{
+    BLOCK, ChainInput, GraphBuilder, Mixer, NodeDef, Route, Src, execution_order,
+};
 use std::sync::Arc;
 
 const SR: f32 = 48_000.0;
@@ -10,7 +12,9 @@ fn source(level: f32, send: Option<(usize, f32)>) -> Arc<niminal_engine::Graph> 
     if let Some((bus, amount)) = send {
         g.send(bus, Src::Const(amount));
     }
-    let out = g.add(Gain, &[("x", Src::Const(level)), ("gain", Src::Const(1.0))]).unwrap();
+    let out = g
+        .add(Gain, &[("x", Src::Const(level)), ("gain", Src::Const(1.0))])
+        .unwrap();
     Arc::new(g.build(out))
 }
 
@@ -18,12 +22,16 @@ fn source(level: f32, send: Option<(usize, f32)>) -> Arc<niminal_engine::Graph> 
 fn amp(factor: f32) -> Arc<niminal_engine::Graph> {
     let mut g = GraphBuilder::new();
     let input = g.input();
-    let out = g.add(Gain, &[("x", input), ("gain", Src::Const(factor))]).unwrap();
+    let out = g
+        .add(Gain, &[("x", input), ("gain", Src::Const(factor))])
+        .unwrap();
     Arc::new(g.build(out))
 }
 
 fn master_node() -> NodeDef {
-    NodeDef { meter: None, transition: (0,0.0),
+    NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         chain: None,
         inputs: vec![],
@@ -35,7 +43,9 @@ fn master_node() -> NodeDef {
 }
 
 fn reader(bus: usize, factor: f32) -> NodeDef {
-    NodeDef { meter: None, transition: (0,0.0),
+    NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         chain: Some(amp(factor)),
         inputs: vec![ChainInput::Bus { bus, channel: 0 }],
@@ -69,7 +79,9 @@ fn voices_sum_to_the_master() {
 
 #[test]
 fn a_chain_processes_its_nodes_summed_voices() {
-    let def = NodeDef { meter: None, transition: (0,0.0),
+    let def = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         chain: Some(amp(2.0)),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -87,7 +99,9 @@ fn a_chain_processes_its_nodes_summed_voices() {
 #[test]
 fn sends_reach_their_reader_in_the_same_block_whatever_the_declaration_order() {
     // The reader is declared first; it must still run after the writer.
-    let writer = NodeDef { meter: None, transition: (0,0.0),
+    let writer = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         voice_sends: vec![0],
         ..master_node()
@@ -95,24 +109,37 @@ fn sends_reach_their_reader_in_the_same_block_whatever_the_declaration_order() {
     let mut m = Mixer::new(vec![reader(0, 2.0), writer], vec![1], 1, SR).unwrap();
     m.note_on(1, source(0.0, Some((0, 0.25))), &[], None);
     let out = block(&mut m);
-    assert!(out.iter().all(|s| (s - 0.5).abs() < 1e-6), "{:?}", &out[..4]);
+    assert!(
+        out.iter().all(|s| (s - 0.5).abs() < 1e-6),
+        "{:?}",
+        &out[..4]
+    );
 }
 
 #[test]
 fn a_buffer_writer_runs_before_its_reader_whatever_the_declaration_order() {
-    let writer = NodeDef { meter: None, transition: (0,0.0),
+    let writer = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         voice_buffer_writes: vec![0],
         ..master_node()
     };
-    let reader = NodeDef { meter: None, transition: (0,0.0),
+    let reader = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         voice_buffer_reads: vec![0],
         ..master_node()
     };
-    assert_eq!(execution_order(&[reader.clone(), writer.clone()]).unwrap(), vec![1, 0]);
+    assert_eq!(
+        execution_order(&[reader.clone(), writer.clone()]).unwrap(),
+        vec![1, 0]
+    );
     // Writing and reading the same buffer on one node is fine.
-    let both = NodeDef { meter: None, transition: (0,0.0),
+    let both = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         voice_buffer_writes: vec![0],
         voice_buffer_reads: vec![0],
@@ -123,7 +150,9 @@ fn a_buffer_writer_runs_before_its_reader_whatever_the_declaration_order() {
 
 #[test]
 fn buses_are_cleared_every_block() {
-    let writer = NodeDef { meter: None, transition: (0,0.0),
+    let writer = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         voice_sends: vec![0],
         ..master_node()
@@ -139,7 +168,9 @@ fn buses_are_cleared_every_block() {
 
 #[test]
 fn several_sends_to_one_bus_are_summed() {
-    let writer = NodeDef { meter: None, transition: (0,0.0),
+    let writer = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         voice_sends: vec![0],
         ..master_node()
@@ -152,7 +183,9 @@ fn several_sends_to_one_bus_are_summed() {
 
 #[test]
 fn a_node_can_route_to_a_bus_instead_of_the_master() {
-    let to_bus = NodeDef { meter: None, transition: (0,0.0),
+    let to_bus = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         route: Route::Bus(0),
         ..master_node()
@@ -170,7 +203,9 @@ fn chains_can_send_too() {
     let input = g.input();
     g.send(0, input);
     let silent = g.add(Mul, &[("a", input), ("b", Src::Const(0.0))]).unwrap();
-    let chain = NodeDef { meter: None, transition: (0,0.0),
+    let chain = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         chain: Some(Arc::new(g.build(silent))),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -187,12 +222,16 @@ fn chains_can_send_too() {
 #[test]
 fn feedback_between_nodes_is_reported_with_the_nodes_involved() {
     // 0 reads bus 0 and routes to bus 1; 1 reads bus 1 and routes to bus 0
-    let a = NodeDef { meter: None, transition: (0,0.0),
+    let a = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         route: Route::Bus(1),
         ..reader(0, 1.0)
     };
-    let b = NodeDef { meter: None, transition: (0,0.0),
+    let b = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         route: Route::Bus(0),
         ..reader(1, 1.0)
@@ -203,7 +242,9 @@ fn feedback_between_nodes_is_reported_with_the_nodes_involved() {
     assert!(Mixer::new(vec![a, b], vec![1, 1], 1, SR).is_err());
 
     // a node that reads the bus it writes is a loop of one
-    let c = NodeDef { meter: None, transition: (0,0.0),
+    let c = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         route: Route::Bus(0),
         ..reader(0, 1.0)
@@ -215,12 +256,16 @@ fn feedback_between_nodes_is_reported_with_the_nodes_involved() {
 fn a_cycle_is_found_even_when_a_node_merely_sits_downstream_of_it() {
     // node 0 reads bus 1 only to listen; nodes 1 and 2 loop through buses 0 and 1.
     let listener = reader(1, 1.0);
-    let a = NodeDef { meter: None, transition: (0,0.0),
+    let a = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         route: Route::Bus(1),
         ..reader(0, 1.0)
     };
-    let b = NodeDef { meter: None, transition: (0,0.0),
+    let b = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         route: Route::Bus(0),
         ..reader(1, 1.0)
@@ -238,7 +283,9 @@ fn independent_nodes_keep_declaration_order() {
 
 #[test]
 fn nan_in_a_send_silences_the_voice_and_does_not_poison_the_bus() {
-    let writer = NodeDef { meter: None, transition: (0,0.0),
+    let writer = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         voice_sends: vec![0],
         ..master_node()
@@ -292,7 +339,9 @@ mod stereo {
 
     #[test]
     fn the_mixer_keeps_channels_apart() {
-        let master = NodeDef { meter: None, transition: (0,0.0),
+        let master = NodeDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             chain: None,
             inputs: vec![],
@@ -324,9 +373,15 @@ mod stereo {
 
         let mut gr = GraphBuilder::new();
         let (il, ir) = (gr.input(), gr.input());
-        let l = gr.add(Gain, &[("x", il), ("gain", Src::Const(2.0))]).unwrap();
-        let r = gr.add(Gain, &[("x", ir), ("gain", Src::Const(0.5))]).unwrap();
-        let reader = NodeDef { meter: None, transition: (0,0.0),
+        let l = gr
+            .add(Gain, &[("x", il), ("gain", Src::Const(2.0))])
+            .unwrap();
+        let r = gr
+            .add(Gain, &[("x", ir), ("gain", Src::Const(0.5))])
+            .unwrap();
+        let reader = NodeDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             chain: Some(Arc::new(gr.build_channels(&[l, r]))),
             inputs: vec![
@@ -338,7 +393,9 @@ mod stereo {
             voice_buffer_writes: vec![],
             voice_buffer_reads: vec![],
         };
-        let writer = NodeDef { meter: None, transition: (0,0.0),
+        let writer = NodeDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             voice_sends: vec![0],
             chain: None,
@@ -358,7 +415,9 @@ mod stereo {
     #[test]
     #[should_panic(expected = "master's channel count")]
     fn an_instrument_with_the_wrong_channel_count_is_rejected() {
-        let master = NodeDef { meter: None, transition: (0,0.0),
+        let master = NodeDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             chain: None,
             inputs: vec![],
@@ -374,8 +433,8 @@ mod stereo {
 
 mod panic {
     use super::*;
-    use niminal_engine::ops::Delay;
     use niminal_engine::Graph;
+    use niminal_engine::ops::Delay;
 
     /// A chain that delays its input by `samples` with feedback.
     fn echo_chain() -> Arc<Graph> {
@@ -384,7 +443,11 @@ mod panic {
         let d = g
             .add(
                 Delay::new(0.1),
-                &[("x", input), ("time", Src::Const(0.001)), ("feedback", Src::Const(0.9))],
+                &[
+                    ("x", input),
+                    ("time", Src::Const(0.001)),
+                    ("feedback", Src::Const(0.9)),
+                ],
             )
             .unwrap();
         Arc::new(g.build(d))
@@ -392,7 +455,9 @@ mod panic {
 
     #[test]
     fn panic_stops_voices_and_clears_the_echoes_in_a_chain() {
-        let node = NodeDef { meter: None, transition: (0,0.0),
+        let node = NodeDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             chain: Some(echo_chain()),
             inputs: vec![ChainInput::It { channel: 0 }],
@@ -406,23 +471,35 @@ mod panic {
         for _ in 0..10 {
             block(&mut m);
         }
-        assert!(block(&mut m).iter().any(|s| s.abs() > 0.1), "sounding, with echoes");
+        assert!(
+            block(&mut m).iter().any(|s| s.abs() > 0.1),
+            "sounding, with echoes"
+        );
 
         m.panic();
         assert_eq!(m.active_voices(), 0);
-        assert!(block(&mut m).iter().all(|s| *s == 0.0), "silence within the first block");
+        assert!(
+            block(&mut m).iter().all(|s| *s == 0.0),
+            "silence within the first block"
+        );
         for _ in 0..50 {
-            assert!(block(&mut m).iter().all(|s| *s == 0.0), "and the echoes are gone for good");
+            assert!(
+                block(&mut m).iter().all(|s| *s == 0.0),
+                "and the echoes are gone for good"
+            );
         }
 
         // the mixer still works afterwards
         m.note_on(0, source(0.25, None), &[], None);
         let later: Vec<f32> = (0..3).flat_map(|_| block(&mut m)).collect();
-        assert!(later.iter().any(|s| *s != 0.0), "the 1ms delay is 48 samples, more than one block");
+        assert!(
+            later.iter().any(|s| *s != 0.0),
+            "the 1ms delay is 48 samples, more than one block"
+        );
     }
 
     #[test]
-    fn panic_drops_both_processors_in_an_active_crossfade() {
+    fn panic_drops_both_fx_instances_in_an_active_crossfade() {
         use niminal_engine::Transfer;
         let mut old = Mixer::new(
             vec![NodeDef {
@@ -460,7 +537,7 @@ mod panic {
         for _ in 0..20 {
             assert!(
                 block(&mut new).iter().all(|v| *v == 0.0),
-                "panic must clear the outgoing processor's delay memory"
+                "panic must clear the outgoing fx's delay memory"
             );
         }
         new.note_on(0, source(0.25, None), &[], None);
@@ -484,7 +561,9 @@ mod panic {
 
     #[test]
     fn panic_empties_the_buses() {
-        let writer = NodeDef { meter: None, transition: (0,0.0),
+        let writer = NodeDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             voice_sends: vec![0],
             ..master_node()
@@ -506,9 +585,18 @@ mod adopting {
         let mut g = GraphBuilder::new();
         let input = g.input();
         let d = g
-            .add(Delay::new(0.1), &[("x", input), ("time", Src::Const(0.001)), ("feedback", Src::Const(0.9))])
+            .add(
+                Delay::new(0.1),
+                &[
+                    ("x", input),
+                    ("time", Src::Const(0.001)),
+                    ("feedback", Src::Const(0.9)),
+                ],
+            )
             .unwrap();
-        NodeDef { meter: None, transition: (0,0.0),
+        NodeDef {
+            meter: None,
+            transition: (0, 0.0),
             controls: Vec::new(),
             chain: Some(Arc::new(g.build(d))),
             inputs: vec![ChainInput::It { channel: 0 }],
@@ -568,7 +656,10 @@ mod adopting {
             }],
         );
         let echoes: Vec<f32> = (0..3).flat_map(|_| block(&mut kept)).collect();
-        assert!(echoes.iter().any(|s| s.abs() > 0.1), "the echoes carried over");
+        assert!(
+            echoes.iter().any(|s| s.abs() > 0.1),
+            "the echoes carried over"
+        );
 
         let mut fresh_old = Mixer::new(vec![delay_node()], vec![], 1, SR).unwrap();
         let id = fresh_old.note_on(0, source(0.5, None), &[], None);
@@ -580,7 +671,10 @@ mod adopting {
         let mut dropped = Mixer::new(vec![delay_node()], vec![], 1, SR).unwrap();
         dropped.adopt(&mut fresh_old, &[Transfer::default()]);
         let silent: Vec<f32> = (0..3).flat_map(|_| block(&mut dropped)).collect();
-        assert!(silent.iter().all(|s| *s == 0.0), "without the transfer the new chain starts empty");
+        assert!(
+            silent.iter().all(|s| *s == 0.0),
+            "without the transfer the new chain starts empty"
+        );
     }
 
     #[test]
@@ -600,7 +694,11 @@ mod adopting {
         assert_ne!(a, b);
         new.release(a);
         fade(&mut new);
-        assert_eq!(new.active_voices(), 1, "releasing the first left the second");
+        assert_eq!(
+            new.active_voices(),
+            1,
+            "releasing the first left the second"
+        );
     }
 }
 
@@ -619,9 +717,20 @@ fn a_new_note_in_a_choke_group_fades_out_the_old_one_without_touching_others() {
         total.extend(block(&mut m));
     }
     // 5ms is 240 samples: the choked 0.5 ramps down across the first ones and is gone by 8 blocks
-    assert!((total[0] - (0.5 + 0.25 + 0.125)).abs() < 1e-3, "{}", total[0]);
-    assert!(total.windows(2).all(|w| w[1] <= w[0] + 1e-6), "it only gets quieter, smoothly");
-    assert!((total[total.len() - 1] - 0.375).abs() < 1e-6, "{}", total[total.len() - 1]);
+    assert!(
+        (total[0] - (0.5 + 0.25 + 0.125)).abs() < 1e-3,
+        "{}",
+        total[0]
+    );
+    assert!(
+        total.windows(2).all(|w| w[1] <= w[0] + 1e-6),
+        "it only gets quieter, smoothly"
+    );
+    assert!(
+        (total[total.len() - 1] - 0.375).abs() < 1e-6,
+        "{}",
+        total[total.len() - 1]
+    );
     assert_eq!(m.active_voices(), 2, "the choked voice has been removed");
 }
 
@@ -635,7 +744,12 @@ fn a_choke_fade_also_covers_what_a_voice_sends_to_a_bus() {
     for _ in 0..12 {
         tail.extend(block(&mut m));
     }
-    assert!(tail[0] > 0.4 && tail[tail.len() - 1].abs() < 1e-6, "{} {}", tail[0], tail[tail.len() - 1]);
+    assert!(
+        tail[0] > 0.4 && tail[tail.len() - 1].abs() < 1e-6,
+        "{} {}",
+        tail[0],
+        tail[tail.len() - 1]
+    );
 }
 
 #[test]
@@ -648,14 +762,31 @@ fn a_delayed_send_arrives_exactly_one_block_of_samples_later_whatever_the_call_s
     for frames in [7usize, 32, 1, 20, 32, 9, 32, 32, 31, 32, 32, 32] {
         buses.begin_block(frames);
         seen.extend_from_slice(buses.get(0, 0, frames));
-        let send: Vec<f32> = (0..frames).map(|i| if (at + i).is_multiple_of(100) { 1.0 } else { 0.0 }).collect();
+        let send: Vec<f32> = (0..frames)
+            .map(|i| {
+                if (at + i).is_multiple_of(100) {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
         buses.add_delayed(0, 0, &send);
         buses.add(0, 0, &[0.0]);
         buses.end_block(frames);
         at += frames;
     }
-    let arrivals: Vec<usize> = seen.iter().enumerate().filter(|(_, v)| **v != 0.0).map(|(i, _)| i).collect();
-    assert_eq!(arrivals, [BLOCK, 100 + BLOCK, 200 + BLOCK], "each impulse comes out BLOCK samples after it went in");
+    let arrivals: Vec<usize> = seen
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| **v != 0.0)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        arrivals,
+        [BLOCK, 100 + BLOCK, 200 + BLOCK],
+        "each impulse comes out BLOCK samples after it went in"
+    );
 }
 
 /// Passes its input through, counting the samples it has been asked to process.
@@ -663,14 +794,19 @@ fn a_delayed_send_arrives_exactly_one_block_of_samples_later_whatever_the_call_s
 struct Counting(Arc<std::sync::atomic::AtomicUsize>);
 
 impl niminal_engine::Opcode for Counting {
-    fn name(&self) -> &str { "counting" }
+    fn name(&self) -> &str {
+        "counting"
+    }
     fn ports(&self) -> &[niminal_engine::Port] {
         const PORTS: &[niminal_engine::Port] = &[niminal_engine::Port::required("x")];
         PORTS
     }
-    fn box_clone(&self) -> Box<dyn niminal_engine::Opcode> { Box::new(self.clone()) }
+    fn box_clone(&self) -> Box<dyn niminal_engine::Opcode> {
+        Box::new(self.clone())
+    }
     fn process(&mut self, _ctx: &niminal_engine::ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        self.0.fetch_add(out.len(), std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .fetch_add(out.len(), std::sync::atomic::Ordering::Relaxed);
         out.copy_from_slice(inputs[0]);
     }
 }
@@ -682,7 +818,9 @@ fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arr
     let mut g = GraphBuilder::new();
     let input = g.input();
     let out = g.add(Counting(processed.clone()), &[("x", input)]).unwrap();
-    let def = NodeDef { meter: None, transition: (0,0.0),
+    let def = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         chain: Some(Arc::new(g.build(out))),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -693,7 +831,9 @@ fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arr
     };
     let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
     let seconds = |m: &mut Mixer, s: f32| -> f32 {
-        (0..(s * SR) as usize / BLOCK).flat_map(|_| block(m)).fold(0.0, |peak, x| peak.max(x.abs()))
+        (0..(s * SR) as usize / BLOCK)
+            .flat_map(|_| block(m))
+            .fold(0.0, |peak, x| peak.max(x.abs()))
     };
     let id = m.note_on(0, source(0.5, None), &[], None);
     assert!(seconds(&mut m, 0.5) > 0.4);
@@ -701,9 +841,16 @@ fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arr
     seconds(&mut m, 0.5);
     let resting = processed.load(Relaxed);
     assert_eq!(seconds(&mut m, 1.0), 0.0);
-    assert_eq!(processed.load(Relaxed), resting, "the chain was processed while nothing went through it");
+    assert_eq!(
+        processed.load(Relaxed),
+        resting,
+        "the chain was processed while nothing went through it"
+    );
     m.note_on(0, source(0.5, None), &[], None);
-    assert!(seconds(&mut m, 0.1) > 0.4, "the chain takes up again at once");
+    assert!(
+        seconds(&mut m, 0.1) > 0.4,
+        "the chain takes up again at once"
+    );
     assert!(processed.load(Relaxed) > resting);
 }
 
@@ -711,13 +858,24 @@ fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arr
 fn reverb_chain() -> Arc<niminal_engine::Graph> {
     let mut g = GraphBuilder::new();
     let input = g.input();
-    let out = g.add(niminal_engine::ops::Reverb::new(), &[("x", input), ("room", Src::Const(0.5)), ("damp", Src::Const(0.5))]).unwrap();
+    let out = g
+        .add(
+            niminal_engine::ops::Reverb::new(),
+            &[
+                ("x", input),
+                ("room", Src::Const(0.5)),
+                ("damp", Src::Const(0.5)),
+            ],
+        )
+        .unwrap();
     Arc::new(g.build(out))
 }
 
 #[test]
 fn a_resting_reverb_chain_still_rings_out_its_tail_and_wakes_for_the_next_note() {
-    let def = NodeDef { meter: None, transition: (0,0.0),
+    let def = NodeDef {
+        meter: None,
+        transition: (0, 0.0),
         controls: Vec::new(),
         chain: Some(reverb_chain()),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -729,15 +887,23 @@ fn a_resting_reverb_chain_still_rings_out_its_tail_and_wakes_for_the_next_note()
     let mut m = Mixer::new(vec![def], vec![], 1, SR).unwrap();
     let id = m.note_on(0, source(0.5, None), &[], None);
     let heard = |m: &mut Mixer, seconds: usize| -> Vec<f32> {
-        (0..seconds * SR as usize / BLOCK).flat_map(|_| block(m)).collect()
+        (0..seconds * SR as usize / BLOCK)
+            .flat_map(|_| block(m))
+            .collect()
     };
     let peak = |x: &[f32]| x.iter().fold(0.0f32, |p, s| p.max(s.abs()));
-    assert!(peak(&heard(&mut m, 1)) > 1e-3, "the reverb sounds while the note is held");
+    assert!(
+        peak(&heard(&mut m, 1)) > 1e-3,
+        "the reverb sounds while the note is held"
+    );
     m.release(id);
     // the tail is still audible a moment after the note ends, and fades out
     assert!(peak(&heard(&mut m, 1)) > 1e-3);
     heard(&mut m, 40);
     assert_eq!(peak(&heard(&mut m, 1)), 0.0);
     m.note_on(0, source(0.5, None), &[], None);
-    assert!(peak(&heard(&mut m, 1)) > 1e-3, "the next note is reverberated again");
+    assert!(
+        peak(&heard(&mut m, 1)) > 1e-3,
+        "the next note is reverberated again"
+    );
 }

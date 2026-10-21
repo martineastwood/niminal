@@ -139,7 +139,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 braces.last().copied().unwrap_or(false)
                     || matches!(
                         statement_keyword.as_deref(),
-                        Some("const" | "fn" | "instr" | "mono" | "processor")
+                        Some("const" | "fn" | "instr" | "mono" | "fx")
                     ),
             ) =>
             {
@@ -224,7 +224,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                                         | "mono"
                                         | "fn"
                                         | "const"
-                                        | "processor"
+                                        | "fx"
                                         | "arrangement"
                                         | "bus"
                                 )
@@ -504,7 +504,7 @@ mod tests {
             Tok::Pattern("a b".into())
         );
         // instruments, functions and nodes are
-        for head in ["instr a(f: hz)", "fn o(x)", "processor t"] {
+        for head in ["instr a(f: hz)", "fn o(x)", "fx t"] {
             let t = toks(&format!("{head} {{ [x, y] }}"));
             assert!(t.contains(&Tok::LBracket), "{head}: {t:?}");
             assert!(!t.iter().any(|t| matches!(t, Tok::Pattern(_))), "{head}");

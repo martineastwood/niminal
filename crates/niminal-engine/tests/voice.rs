@@ -13,7 +13,14 @@ fn saw_lead() -> Arc<niminal_engine::Graph> {
     let level = g.add(Env::adsr(0.005, 0.2, 0.6, 0.3), &[]).unwrap();
     let osc = g.add(Osc::new(Wave::Saw), &[("freq", freq)]).unwrap();
     let lpf = g
-        .add(Svf::new(FilterMode::Low), &[("x", osc), ("cutoff", Src::Const(2000.0)), ("res", Src::Const(0.2))])
+        .add(
+            Svf::new(FilterMode::Low),
+            &[
+                ("x", osc),
+                ("cutoff", Src::Const(2000.0)),
+                ("res", Src::Const(0.2)),
+            ],
+        )
         .unwrap();
     let gained = g.add(Gain, &[("x", lpf), ("gain", amp)]).unwrap();
     let out = g.add(Mul, &[("a", gained), ("b", level)]).unwrap();
@@ -94,8 +101,12 @@ fn a_voice_without_an_envelope_fades_out_after_its_tail() {
     let graph = |tail: f32| {
         let mut g = GraphBuilder::new();
         g.set_tail(tail);
-        let o = g.add(Osc::new(Wave::Saw), &[("freq", Src::Const(200.0))]).unwrap();
-        let d = g.add(Delay::new(1.0), &[("x", o), ("time", Src::Const(0.1))]).unwrap();
+        let o = g
+            .add(Osc::new(Wave::Saw), &[("freq", Src::Const(200.0))])
+            .unwrap();
+        let d = g
+            .add(Delay::new(1.0), &[("x", o), ("time", Src::Const(0.1))])
+            .unwrap();
         Arc::new(g.build(d))
     };
     let blocks_until_done = |tail: f32| {

@@ -49,7 +49,14 @@ pub fn parse_with<T: Clone + Send + Sync + 'static>(
 ) -> Res<Pattern<T>> {
     let convert: &dyn Fn(&str) -> Result<T, String> = &convert;
     let chars: Vec<(usize, char)> = src.char_indices().collect();
-    let mut p = Parser { src, chars: &chars, i: 0, depth: 0, seed: 0, convert };
+    let mut p = Parser {
+        src,
+        chars: &chars,
+        i: 0,
+        depth: 0,
+        seed: 0,
+        convert,
+    };
     let pattern = p.stack(None)?;
     p.skip_space();
     match p.peek() {
@@ -70,7 +77,9 @@ struct Parser<'a, T> {
 }
 
 /// Characters that end an atom.
-const ATOM_END: [char; 15] = ['[', ']', '<', '>', '{', '}', '(', ')', ',', '*', '?', '!', '@', '|', '/'];
+const ATOM_END: [char; 15] = [
+    '[', ']', '<', '>', '{', '}', '(', ')', ',', '*', '?', '!', '@', '|', '/',
+];
 
 impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     fn peek(&self) -> Option<char> {
@@ -86,7 +95,10 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     }
 
     fn error(&self, message: impl Into<String>) -> MiniError {
-        MiniError { message: message.into(), offset: self.offset() }
+        MiniError {
+            message: message.into(),
+            offset: self.offset(),
+        }
     }
 
     fn skip_space(&mut self) {
@@ -121,7 +133,9 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                     layers.push(self.sequence(close)?);
                 }
                 if self.peek() == Some('|') {
-                    return Err(self.error("`,` and `|` can't be mixed here; put one inside brackets"));
+                    return Err(
+                        self.error("`,` and `|` can't be mixed here; put one inside brackets")
+                    );
                 }
                 Ok(Pattern::stack(layers))
             }
@@ -132,7 +146,9 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                     options.push(self.sequence(close)?);
                 }
                 if self.peek() == Some(',') {
-                    return Err(self.error("`,` and `|` can't be mixed here; put one inside brackets"));
+                    return Err(
+                        self.error("`,` and `|` can't be mixed here; put one inside brackets")
+                    );
                 }
                 let seed = self.next_seed();
                 Ok(Pattern::randcat(options, seed))
@@ -156,14 +172,18 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                 Some(c) if Some(c) == close => break,
                 Some('.') if self.ends_token(1) => {
                     let Some(last) = steps.last_mut() else {
-                        return Err(self.error("a `.` holds the step before it, but there isn't one"));
+                        return Err(
+                            self.error("a `.` holds the step before it, but there isn't one")
+                        );
                     };
                     last.0 = last.0 + Rational::ONE;
                     self.i += 1;
                 }
                 Some('!') if self.ends_token(1) => {
                     let Some(last) = steps.last().cloned() else {
-                        return Err(self.error("a `!` repeats the step before it, but there isn't one"));
+                        return Err(
+                            self.error("a `!` repeats the step before it, but there isn't one")
+                        );
                     };
                     steps.push(last);
                     self.i += 1;
@@ -178,10 +198,14 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                                 self.i += 1;
                                 let at = self.offset();
                                 let text = self.literal();
-                                weight = parse_factor(&text).filter(|w| *w > Rational::ZERO).ok_or(MiniError {
-                                    message: format!("`@` needs a number above 0, found `{text}`"),
-                                    offset: at,
-                                })?;
+                                weight = parse_factor(&text)
+                                    .filter(|w| *w > Rational::ZERO)
+                                    .ok_or(MiniError {
+                                        message: format!(
+                                            "`@` needs a number above 0, found `{text}`"
+                                        ),
+                                        offset: at,
+                                    })?;
                             }
                             Some('!') => {
                                 self.i += 1;
@@ -210,7 +234,8 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
 
     /// Does the token starting `n` characters ago end here?
     fn ends_token(&self, n: usize) -> bool {
-        self.peek_at(n).is_none_or(|c| c.is_whitespace() || ATOM_END.contains(&c))
+        self.peek_at(n)
+            .is_none_or(|c| c.is_whitespace() || ATOM_END.contains(&c))
     }
 
     fn term(&mut self) -> Res<Pattern<T>> {
@@ -228,7 +253,8 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
             Some('[') => {
                 self.i += 1;
                 let inner = self.stack(Some(']'))?;
-                self.expect(']').map_err(|_| self.error("this `[` is never closed"))?;
+                self.expect(']')
+                    .map_err(|_| self.error("this `[` is never closed"))?;
                 inner
             }
             Some('<') => {
@@ -244,7 +270,9 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                 Pattern::silence()
             }
             Some('(') => self.grouped_atom()?,
-            Some(c @ (']' | '>' | '}' | ')')) => return Err(self.error(format!("unexpected `{c}`"))),
+            Some(c @ (']' | '>' | '}' | ')')) => {
+                return Err(self.error(format!("unexpected `{c}`")));
+            }
             _ => self.atom()?,
         };
 
@@ -253,7 +281,10 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                 Some(op @ ('*' | '/')) => {
                     self.i += 1;
                     let factor = self.number(op)?;
-                    term = factor.apply(&term, move |p, f| if op == '*' { p.fast(f) } else { p.slow(f) });
+                    term = factor.apply(
+                        &term,
+                        move |p, f| if op == '*' { p.fast(f) } else { p.slow(f) },
+                    );
                 }
                 Some('(') => {
                     self.i += 1;
@@ -268,12 +299,16 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                             break;
                         }
                     }
-                    self.expect(')').map_err(|_| self.error("this `(` is never closed"))?;
+                    self.expect(')')
+                        .map_err(|_| self.error("this `(` is never closed"))?;
                     if !(2..=3).contains(&args.len()) {
-                        return Err(self.error("a Euclidean rhythm is `(hits, steps)` or `(hits, steps, rotation)`"));
+                        return Err(self.error(
+                            "a Euclidean rhythm is `(hits, steps)` or `(hits, steps, rotation)`",
+                        ));
                     }
                     let rotation = args.get(2).cloned().unwrap_or(Param::Const(Rational::ZERO));
-                    term = term.rhythm(&Pattern::<bool>::euclid_with(&args[0], &args[1], &rotation));
+                    term =
+                        term.rhythm(&Pattern::<bool>::euclid_with(&args[0], &args[1], &rotation));
                 }
                 Some('?') => {
                     self.i += 1;
@@ -282,10 +317,13 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                     let drop = if text.is_empty() {
                         0.5
                     } else {
-                        parse_factor(&text).map(|r| r.to_f64()).filter(|d| (0.0..=1.0).contains(d)).ok_or(MiniError {
-                            message: format!("`?` takes a chance from 0 to 1, found `{text}`"),
-                            offset: at,
-                        })?
+                        parse_factor(&text)
+                            .map(|r| r.to_f64())
+                            .filter(|d| (0.0..=1.0).contains(d))
+                            .ok_or(MiniError {
+                                message: format!("`?` takes a chance from 0 to 1, found `{text}`"),
+                                offset: at,
+                            })?
                     };
                     let seed = self.next_seed();
                     term = term.thin(drop, seed);
@@ -303,7 +341,10 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
             text.push('-');
             self.i += 1;
         }
-        while let Some(c) = self.peek().filter(|c| c.is_ascii_digit() || matches!(c, '.' | '/')) {
+        while let Some(c) = self
+            .peek()
+            .filter(|c| c.is_ascii_digit() || matches!(c, '.' | '/'))
+        {
             text.push(c);
             self.i += 1;
         }
@@ -314,7 +355,14 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     fn number(&mut self, op: char) -> Res<Param<Rational>> {
         if matches!(self.peek(), Some('<' | '[')) {
             let convert = |a: &str| parse_factor(a).ok_or_else(|| format!("`{a}` isn't a number"));
-            let mut sub = Parser { src: self.src, chars: self.chars, i: self.i, depth: self.depth, seed: self.seed, convert: &convert };
+            let mut sub = Parser {
+                src: self.src,
+                chars: self.chars,
+                i: self.i,
+                depth: self.depth,
+                seed: self.seed,
+                convert: &convert,
+            };
             let pattern = sub.term()?;
             (self.i, self.seed) = (sub.i, sub.seed);
             return Ok(Param::Pat(pattern));
@@ -327,12 +375,15 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                 .filter(|f| *f > Rational::ZERO && *f <= Rational::int(MAX_REPEAT))
                 .map(Param::Const)
                 .ok_or(MiniError {
-                    message: format!("`{op}` needs a number from above 0 to {MAX_REPEAT}, found `{text}`"),
+                    message: format!(
+                        "`{op}` needs a number from above 0 to {MAX_REPEAT}, found `{text}`"
+                    ),
                     offset: start,
                 }),
-            _ => value
-                .map(Param::Const)
-                .ok_or(MiniError { message: format!("expected a number, found `{text}`"), offset: start }),
+            _ => value.map(Param::Const).ok_or(MiniError {
+                message: format!("expected a number, found `{text}`"),
+                offset: start,
+            }),
         }
     }
 
@@ -343,7 +394,10 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
             let open = self.offset();
             let steps = self.steps(Some('>'))?;
             if steps.is_empty() {
-                return Err(MiniError { message: "`< >` needs at least one alternative".into(), offset: open });
+                return Err(MiniError {
+                    message: "`< >` needs at least one alternative".into(),
+                    offset: open,
+                });
             }
             let total = steps.iter().fold(Rational::ZERO, |t, (w, _)| t + *w);
             layers.push(if steps.iter().all(|(w, _)| *w == Rational::ONE) {
@@ -361,7 +415,11 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                 _ => return Err(self.error("this `<` is never closed")),
             }
         }
-        Ok(if layers.len() == 1 { layers.remove(0) } else { Pattern::stack(layers) })
+        Ok(if layers.len() == 1 {
+            layers.remove(0)
+        } else {
+            Pattern::stack(layers)
+        })
     }
 
     /// `{a b c, d e}%4`: lists that each keep their own length, read at four
@@ -379,14 +437,22 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                     self.i += 1;
                     break;
                 }
-                _ => return Err(MiniError { message: "this `{` is never closed".into(), offset: open }),
+                _ => {
+                    return Err(MiniError {
+                        message: "this `{` is never closed".into(),
+                        offset: open,
+                    });
+                }
             }
         }
         let per_cycle = if self.peek() == Some('%') {
             self.i += 1;
             self.number('%')?
         } else if lists[0].0.is_zero() {
-            return Err(MiniError { message: "`{ }` needs at least one step".into(), offset: open });
+            return Err(MiniError {
+                message: "`{ }` needs at least one step".into(),
+                offset: open,
+            });
         } else {
             Param::Const(lists[0].0)
         };
@@ -404,7 +470,9 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
         while let Some(c) = self.peek() {
             if c.is_whitespace() || ATOM_END.contains(&c) {
                 // a fraction such as `1/8beat` is one atom; `bd/2` slows `bd`
-                let number = text.trim_start_matches(['+', '-']).starts_with(|d: char| d.is_ascii_digit() || d == '.');
+                let number = text
+                    .trim_start_matches(['+', '-'])
+                    .starts_with(|d: char| d.is_ascii_digit() || d == '.');
                 if c == '/' && number {
                     text.push(c);
                     self.i += 1;
@@ -445,11 +513,19 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
                     }
                     self.i += 1;
                 }
-                None => return Err(MiniError { message: "this `(` is never closed".into(), offset: open }),
+                None => {
+                    return Err(MiniError {
+                        message: "this `(` is never closed".into(),
+                        offset: open,
+                    });
+                }
             }
         }
         if text.is_empty() {
-            return Err(MiniError { message: "empty parentheses".into(), offset: open });
+            return Err(MiniError {
+                message: "empty parentheses".into(),
+                offset: open,
+            });
         }
         self.atom_value(text, open)
     }

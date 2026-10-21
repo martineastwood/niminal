@@ -50,7 +50,10 @@ impl Wavetable {
         let top = (n / 2).clamp(1, MAX_HARMONICS);
         let angle = |k: usize, size: usize| std::f64::consts::TAU * (k % size) as f64 / size as f64;
         // harmonic h: cos and sin parts, found by a direct transform
-        let (cos_n, sin_n): (Vec<f64>, Vec<f64>) = (0..n).map(|k| angle(k, n).sin_cos()).map(|(s, c)| (c, s)).unzip();
+        let (cos_n, sin_n): (Vec<f64>, Vec<f64>) = (0..n)
+            .map(|k| angle(k, n).sin_cos())
+            .map(|(s, c)| (c, s))
+            .unzip();
         let dc = cycle.iter().sum::<f64>() / n as f64;
         let parts: Vec<(f64, f64)> = (1..=top)
             .map(|h| {
@@ -62,8 +65,10 @@ impl Wavetable {
                 (2.0 * a / n as f64, 2.0 * b / n as f64)
             })
             .collect();
-        let (cos_l, sin_l): (Vec<f64>, Vec<f64>) =
-            (0..LEVEL_SIZE).map(|k| angle(k, LEVEL_SIZE).sin_cos()).map(|(s, c)| (c, s)).unzip();
+        let (cos_l, sin_l): (Vec<f64>, Vec<f64>) = (0..LEVEL_SIZE)
+            .map(|k| angle(k, LEVEL_SIZE).sin_cos())
+            .map(|(s, c)| (c, s))
+            .unzip();
         let count = top.ilog2() as usize + 1;
         let levels = (0..count)
             .map(|k| {
@@ -73,7 +78,10 @@ impl Wavetable {
                         let sum: f64 = parts[..keep]
                             .iter()
                             .enumerate()
-                            .map(|(j, (a, b))| a * cos_l[(j + 1) * i % LEVEL_SIZE] + b * sin_l[(j + 1) * i % LEVEL_SIZE])
+                            .map(|(j, (a, b))| {
+                                a * cos_l[(j + 1) * i % LEVEL_SIZE]
+                                    + b * sin_l[(j + 1) * i % LEVEL_SIZE]
+                            })
                             .sum();
                         (dc + sum) as f32
                     })
@@ -164,7 +172,9 @@ fn wrap(x: f64) -> f64 {
 }
 
 impl Opcode for Osc {
-    fn reset(&mut self) { self.phase = 0.0; }
+    fn reset(&mut self) {
+        self.phase = 0.0;
+    }
     fn name(&self) -> &'static str {
         "osc"
     }
@@ -208,7 +218,10 @@ impl Opcode for Osc {
             let t = wrap(self.phase + f64::from(inputs[1][i]));
 
             if let Some(bank) = &self.bank {
-                let pos = position.map(|p| f64::from(p[i])).unwrap_or(0.0).clamp(0.0, 1.0);
+                let pos = position
+                    .map(|p| f64::from(p[i]))
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0);
                 let slots = (bank.len() - 1) as f64;
                 let p = pos * slots;
                 let a = p as usize;
@@ -284,7 +297,11 @@ mod tests {
         let table = Wavetable::from_cycle(&cycle(512, |t| (t * std::f64::consts::TAU).sin()));
         let got = render(&mut Osc::with_table(Arc::new(table)), 440.0, 2000);
         let want = render(&mut Osc::new(Wave::Sine), 440.0, 2000);
-        let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+        let worst = got
+            .iter()
+            .zip(&want)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
         assert!(worst < 1e-3, "{worst}");
     }
 

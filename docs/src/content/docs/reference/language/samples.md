@@ -50,7 +50,7 @@ A kit member is an instrument too: `drums.snare` means the kit with that sample 
 ```nml
 drums = kit("drums")
 bus snare_audio
-processor snare_fx {out = snare_audio.reverb(room: 0.4).gain(-3db)}
+fx snare_fx {out = snare_audio.reverb(room: 0.4).gain(-3db)}
 instr snare_voice(freq: hz) {
   voice = drums.snare(freq: freq)
   snare_audio += voice
@@ -85,7 +85,7 @@ beat.start
 
 The `sample` parameter selects a kit member for each hit. Forward it as `sample: sample` to keep the kit's member names and choke groups. One wrapper can route the entire kit; separate wrappers are useful for different effects or sends per drum. A wrapper can also declare parameters such as `freq: hz`, `pitch: st`, or `gain: db` and pass them to the sampler. Playback settings omitted from the call use the sampler's defaults, including its root pitch, fitted duration, slices and looping. Voice policies belong to the wrapper instrument and count per clip name.
 
-Only instruments can call samplers. For an entirely wet route, send the sampler signal to a bus and omit `out` and a final value. The processor reading the bus keeps its effect state across notes.
+Only instruments can call samplers. For an entirely wet route, send the sampler signal to a bus and omit `out` and a final value. The fx reading the bus keeps its effect state across notes.
 
 In patterns, `drums.kick` names the sample when a bare name would clash with a note (`a`, `e`, `c4`).
 

@@ -3,8 +3,8 @@
 use std::sync::OnceLock;
 
 use crate::ast::*;
-use niminal_lang::{Diagnostic, OpInfo, ParamInfo, Span};
 use crate::parser::parse_spanned;
+use niminal_lang::{Diagnostic, OpInfo, ParamInfo, Span};
 
 /// Names that mean something to the language itself: reserved for rename checks,
 /// and offered as keyword completions in the editor.
@@ -57,7 +57,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "spawn",
     "state",
     "tempo",
-    "processor",
+    "fx",
     "true",
     "unsolo",
     "use",
@@ -69,7 +69,7 @@ pub enum SymbolKind {
     Function,
     Control,
     Bus,
-    Processor,
+    Fx,
     Sample,
     Kit,
     Clip,
@@ -129,7 +129,11 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
                         FnResult::Unit(u) => format!(" -> {}", u.name),
                         FnResult::Named(outputs) => format!(
                             " -> ({})",
-                            outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>().join(", ")
+                            outputs
+                                .iter()
+                                .map(|o| o.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ),
                     };
                     format!("fn {}({}){arrow}", d.name.name, labels(&param_list))
@@ -138,11 +142,19 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
             Item::Const { name, .. } => (name, SymbolKind::Pattern, first_line()),
             Item::Control { name, .. } => (name, SymbolKind::Control, first_line()),
             Item::Bus(d) => (&d.name, SymbolKind::Bus, first_line()),
-            Item::Buffer(d) => (&d.name, SymbolKind::Pattern, format!("buffer {}", d.name.name)),
-            Item::Processor(d) => {
+            Item::Buffer(d) => (
+                &d.name,
+                SymbolKind::Pattern,
+                format!("buffer {}", d.name.name),
+            ),
+            Item::Fx(d) => {
                 param_list = params(source, &d.params);
-                (&d.name, SymbolKind::Processor, format!("processor {}({})", d.name.name, labels(&param_list)))
-            },
+                (
+                    &d.name,
+                    SymbolKind::Fx,
+                    format!("fx {}({})", d.name.name, labels(&param_list)),
+                )
+            }
             Item::MidiOut(d) => (&d.name, SymbolKind::Instrument, first_line()),
             Item::Sample(d) => {
                 if d.is_kit {
@@ -186,17 +198,16 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
 /// Members of a kit known from the source: `amen.slices(16)` gives `s0`..`s15`.
 fn kit_members(d: &SampleDecl) -> Vec<SymbolParam> {
     match &d.source {
-        SampleSource::Slices { count, .. } if *count >= 1.0 && count.fract() == 0.0 => {
-            (0..*count as usize)
-                .map(|i| {
-                    let name = format!("s{i}");
-                    SymbolParam {
-                        name: name.clone(),
-                        label: name,
-                    }
-                })
-                .collect()
-        }
+        SampleSource::Slices { count, .. } if *count >= 1.0 && count.fract() == 0.0 => (0..*count
+            as usize)
+            .map(|i| {
+                let name = format!("s{i}");
+                SymbolParam {
+                    name: name.clone(),
+                    label: name,
+                }
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }

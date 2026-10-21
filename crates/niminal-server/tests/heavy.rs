@@ -3,9 +3,9 @@
 
 mod support;
 
-use niminal_server::{At, Op, Policy, Pool, Session};
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
+use niminal_server::{At, Op, Policy, Pool, Session};
 use std::sync::Arc;
 use std::time::Instant;
 use support::Eval;
@@ -32,7 +32,12 @@ fn note(node: &str, hz: f64) -> Op {
 }
 
 /// Render the piece with `workers` helper threads: how long it took, and what it sounded like.
-fn render(source: &str, notes: &[(String, usize)], workers: usize, policy: Policy) -> (f64, Vec<Vec<f32>>) {
+fn render(
+    source: &str,
+    notes: &[(String, usize)],
+    workers: usize,
+    policy: Policy,
+) -> (f64, Vec<Vec<f32>>) {
     let mut s = Session::new(SR, Layout::Stereo).without_limiter();
     if workers > 0 {
         s.set_fork(Some(Arc::new(Pool::new(workers, policy, || {}))));
@@ -61,7 +66,11 @@ fn time(label: &str, source: &str, notes: &[(String, usize)]) {
     ] {
         let (took, out) = render(source, notes, workers, policy);
         assert!(out == reference, "{label}: {name} sounds different");
-        print!("  {name} {:>6.1} ({:.1}x)", took * 1e6 / blocks, base / took);
+        print!(
+            "  {name} {:>6.1} ({:.1}x)",
+            took * 1e6 / blocks,
+            base / took
+        );
     }
     println!();
 }
@@ -70,53 +79,66 @@ fn time(label: &str, source: &str, notes: &[(String, usize)]) {
 #[ignore]
 fn heavy_pieces() {
     // 64 voices on one node
-    let pad = format!("{}node pad {{ instrument = voice }}", instrument("voice", ""));
+    let pad = format!(
+        "{}node pad {{ instrument = voice }}",
+        instrument("voice", "")
+    );
     time("1 node, 256 voices", &pad, &[("pad".into(), 256)]);
 
     // 8 nodes, 32 voices each
     let mut eight = instrument("voice", "");
     let mut notes = Vec::new();
     for t in 0..8 {
-        eight += &format!("processor t{t} {{ instrument = voice }}\n");
+        eight += &format!("fx t{t} {{ instrument = voice }}\n");
         notes.push((format!("t{t}"), 32));
     }
     time("8 nodes, 32 voices each", &eight, &notes);
 
     // 4 nodes sending to a delay + reverb bus node
-    let mut fx = String::from("bus space\n");
-    fx += &instrument("voice", "  space += out.gain(-9db)\n");
-    fx += "processor room {\n  echoes = space.delay(time: 280ms, feedback: 0.4).lpf(cutoff: 3khz)\n  out = (echoes + space.reverb(room: 0.8, damp: 0.4)).gain(0.8)\n}\n";
+    let mut effects = String::from("bus space\n");
+    effects += &instrument("voice", "  space += out.gain(-9db)\n");
+    effects += "fx room {\n  echoes = space.delay(time: 280ms, feedback: 0.4).lpf(cutoff: 3khz)\n  out = (echoes + space.reverb(room: 0.8, damp: 0.4)).gain(0.8)\n}\n";
     let mut notes = Vec::new();
     for t in 0..4 {
-        fx += &format!("processor t{t} {{ instrument = voice }}\n");
+        effects += &format!("fx t{t} {{ instrument = voice }}\n");
         notes.push((format!("t{t}"), 32));
     }
-    time("4 nodes + delay/reverb bus", &fx, &notes);
+    time("4 nodes + delay/reverb bus", &effects, &notes);
 
     // plenty of voices but each costs almost nothing: sharing them out should lose
-    let mut light = String::from("instr tone(freq: hz) { osc(sine, freq) * env[0 5ms 1 | 200ms 0] * 0.01 }\n");
+    let mut light =
+        String::from("instr tone(freq: hz) { osc(sine, freq) * env[0 5ms 1 | 200ms 0] * 0.01 }\n");
     let mut notes = Vec::new();
     for t in 0..16 {
-        light += &format!("processor t{t} {{ instrument = tone }}\n");
+        light += &format!("fx t{t} {{ instrument = tone }}\n");
         notes.push((format!("t{t}"), 6));
     }
     time("16 nodes, 6 sine voices each", &light, &notes);
     for (nodes, voices) in [(2, 2), (4, 2), (16, 1)] {
-        let mut tiny = String::from("instr tone(freq: hz) { osc(sine, freq) * env[0 5ms 1 | 200ms 0] * 0.01 }\n");
+        let mut tiny = String::from(
+            "instr tone(freq: hz) { osc(sine, freq) * env[0 5ms 1 | 200ms 0] * 0.01 }\n",
+        );
         let mut notes = Vec::new();
         for t in 0..nodes {
-            tiny += &format!("processor t{t} {{ instrument = tone }}\n");
+            tiny += &format!("fx t{t} {{ instrument = tone }}\n");
             notes.push((format!("t{t}"), voices));
         }
-        time(&format!("{nodes} nodes, {voices} sine voice(s) each"), &tiny, &notes);
+        time(
+            &format!("{nodes} nodes, {voices} sine voice(s) each"),
+            &tiny,
+            &notes,
+        );
     }
-    println!("pool overhead (with margin): {} ns", Pool::new(3, Policy::Auto, || {}).overhead_ns());
+    println!(
+        "pool overhead (with margin): {} ns",
+        Pool::new(3, Policy::Auto, || {}).overhead_ns()
+    );
 
     // many nodes, each with too few voices to be worth sharing out on its own
     let mut ten = instrument("voice", "");
     let mut notes = Vec::new();
     for t in 0..10 {
-        ten += &format!("processor t{t} {{ instrument = voice }}\n");
+        ten += &format!("fx t{t} {{ instrument = voice }}\n");
         notes.push((format!("t{t}"), 10));
     }
     time("10 nodes, 10 voices each", &ten, &notes);
@@ -127,9 +149,13 @@ fn heavy_pieces() {
         let mut src = instrument("voice", "");
         let mut notes = Vec::new();
         for t in 0..nodes {
-            src += &format!("processor t{t} {{ instrument = voice\n  out = {chain} }}\n");
+            src += &format!("fx t{t} {{ instrument = voice\n  out = {chain} }}\n");
             notes.push((format!("t{t}"), 4));
         }
-        time(&format!("{nodes} node(s), 4 voices, heavy chain"), &src, &notes);
+        time(
+            &format!("{nodes} node(s), 4 voices, heavy chain"),
+            &src,
+            &notes,
+        );
     }
 }

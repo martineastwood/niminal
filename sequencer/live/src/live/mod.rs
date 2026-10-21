@@ -12,15 +12,17 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use niminal_server::{
-    At, ClockInfo, Endpoint, EngineError, EngineReply, EngineRequest, Op, RoutingEdit,
-};
 use niminal_compose::{
     Action, Clip, CommandAction, Composition, InputSource, PlayInfo, Quantize, Schedule, Scheduled,
     Statement, StatementData, StatementKind, analyze, compile_with,
 };
-use niminal_lang::{CompileOptions, Entry, Expanded, Layout, Located, Origin, Piece, Problem, Project, Samples};
+use niminal_lang::{
+    CompileOptions, Entry, Expanded, Layout, Located, Origin, Piece, Problem, Project, Samples,
+};
 use niminal_score::{Event, Tempo, Time, Value};
+use niminal_server::{
+    At, ClockInfo, Endpoint, EngineError, EngineReply, EngineRequest, Op, RoutingEdit,
+};
 
 use crate::keyboard::Keyboard;
 use crate::link::EngineLink;
@@ -1017,7 +1019,7 @@ impl Live {
                 });
                 edits.push(RoutingEdit::Node {
                     id: id.clone(),
-                    processor: Some(id.clone()),
+                    fx: Some(id.clone()),
                     instrument: None,
                     args: BTreeMap::new(),
                 });
@@ -1040,7 +1042,7 @@ impl Live {
                 });
             }
             edits.push(RoutingEdit::Retain {
-                processors: nodes.clone(),
+                fx_decls: nodes.clone(),
                 nodes,
                 buses,
                 connections,

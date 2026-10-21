@@ -24,7 +24,7 @@ pub enum Item {
     /// `buffer take = zeros(48000)` or `buffer take = 4bars`: shared writable table.
     Buffer(BufferDecl),
     Node(NodeDecl),
-    Processor(NodeDecl),
+    Fx(NodeDecl),
     Sample(SampleDecl),
     MidiOut(MidiOutDecl),
     Config(ConfigDecl),
@@ -97,11 +97,11 @@ pub struct ConfigDecl {
     pub span: Span,
 }
 
-/// An audio collection (`node`) or persistent DSP instance (`processor`).
+/// An audio collection (`node`) or persistent DSP instance (`fx`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeDecl {
     pub name: Ident,
-    /// Processor parameters become live controls; collection nodes have none.
+    /// Fx parameters become live controls; collection nodes have none.
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,
@@ -332,9 +332,7 @@ impl Expr {
             }
         };
         match &mut self.kind {
-            ExprKind::Num { .. }
-            | ExprKind::Name(_)
-            | ExprKind::Str(_) => {}
+            ExprKind::Num { .. } | ExprKind::Name(_) | ExprKind::Str(_) => {}
             ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| f(&mut a.value)),
             ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
             ExprKind::Array(items) => items.iter_mut().for_each(&mut *f),
@@ -388,9 +386,7 @@ impl Expr {
             }
         };
         match &self.kind {
-            ExprKind::Num { .. }
-            | ExprKind::Name(_)
-            | ExprKind::Str(_) => {}
+            ExprKind::Num { .. } | ExprKind::Name(_) | ExprKind::Str(_) => {}
             ExprKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
             ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
             ExprKind::Array(items) => items.iter().for_each(&mut *f),
@@ -489,7 +485,6 @@ impl EnvValue {
             EnvValue::Expr(e) => e.span,
         }
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq)]

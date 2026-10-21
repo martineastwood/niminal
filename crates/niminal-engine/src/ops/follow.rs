@@ -13,14 +13,21 @@ pub struct Follow {
 
 impl Default for Follow {
     fn default() -> Self {
-        Follow { envelope: 0.0, sample_rate: 48_000.0 }
+        Follow {
+            envelope: 0.0,
+            sample_rate: 48_000.0,
+        }
     }
 }
 
 impl Opcode for Follow {
-    fn reset(&mut self) { self.envelope = 0.0; }
+    fn reset(&mut self) {
+        self.envelope = 0.0;
+    }
 
-    fn name(&self) -> &str { "follow" }
+    fn name(&self) -> &str {
+        "follow"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[

@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use clap::{Args, Parser, Subcommand};
-use nimlive::input::LiveShared;
-use niminal_live::{Live, LiveServer};
 use niminal_compose::ScoreFile;
+use niminal_live::{Live, LiveServer};
 use niminal_ws::{Client, Server, ServerConfig, lock};
+use nimlive::input::LiveShared;
 use nimlive::render::{End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav};
 use nimlive::report::{render_error, render_problems};
 use serde_json::json;
@@ -25,7 +25,7 @@ struct RenderArgs {
     /// The source to render.
     file: PathBuf,
     /// An `arrangement` in the file to render, in place of its `play` and `launch` commands.
-        arrangement: Option<String>,
+    arrangement: Option<String>,
     /// A .nms score whose events are played on the file's instruments.
     #[arg(long)]
     score: Option<PathBuf>,
@@ -35,7 +35,7 @@ struct RenderArgs {
     /// Write a file for every node and bus as well as the mix, into the folder given by `--out`.
     #[arg(long)]
     stems: bool,
-    /// A WAV file for processors that read `input(..)` to hear. The render lasts as long as it does,
+    /// A WAV file for fx declarations that read `input(..)` to hear. The render lasts as long as it does,
     /// unless `--bars` or `--seconds` says otherwise.
     #[arg(long)]
     input: Option<PathBuf>,
@@ -80,7 +80,6 @@ struct LiveArgs {
     #[arg(long, value_name = "PORT")]
     osc_port: Option<u16>,
 }
-
 
 #[derive(Subcommand)]
 enum Command {
@@ -134,7 +133,13 @@ fn main() -> ExitCode {
             port,
             quantize,
             token,
-        } => run_send(code, file.as_deref(), port, quantize.as_deref(), token.as_deref()),
+        } => run_send(
+            code,
+            file.as_deref(),
+            port,
+            quantize.as_deref(),
+            token.as_deref(),
+        ),
         Command::Repl {
             port,
             quantize,
@@ -236,7 +241,7 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
             instrument.name
         );
     }
-    // audio for processors that read `input(..)`
+    // audio for fx declarations that read `input(..)`
     let audio = match input {
         None => Vec::new(),
         Some(path) => {
@@ -340,10 +345,9 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
     write_output(&rendered, out, stems)
 }
 
-
 fn run_live(args: LiveArgs) -> Result<(), String> {
-    use niminal_server::{EngineReply, EngineRequest};
     use niminal_live::EngineLink;
+    use niminal_server::{EngineReply, EngineRequest};
     let LiveArgs {
         file,
         port,
@@ -592,7 +596,6 @@ fn run_repl(port: u16, mut quantize: Option<String>, token: Option<&str>) -> Res
     }
     Ok(())
 }
-
 
 /// Write a finished render: one WAV, or with `stems` a folder of them.
 fn write_output(

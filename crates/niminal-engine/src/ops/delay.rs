@@ -52,7 +52,11 @@ impl Opcode for Delay {
     }
 
     fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[Port::required("x"), Port::required("time"), Port::optional("feedback", 0.0)];
+        const PORTS: &[Port] = &[
+            Port::required("x"),
+            Port::required("time"),
+            Port::optional("feedback", 0.0),
+        ];
         PORTS
     }
 
@@ -73,7 +77,8 @@ impl Opcode for Delay {
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
-            && self.buf.len() == old.buf.len() && self.sample_rate == old.sample_rate
+            && self.buf.len() == old.buf.len()
+            && self.sample_rate == old.sample_rate
         {
             std::mem::swap(&mut self.buf, &mut old.buf);
             self.write = old.write;
@@ -90,7 +95,12 @@ impl Opcode for Delay {
             // A time like 10ms isn't exactly 480 samples in floating point; snap
             // when within a thousandth of a sample so round times land cleanly.
             let snapped = exact.round();
-            let samples = if (exact - snapped).abs() < 1e-3 { snapped } else { exact }.clamp(1.0, longest);
+            let samples = if (exact - snapped).abs() < 1e-3 {
+                snapped
+            } else {
+                exact
+            }
+            .clamp(1.0, longest);
             let whole = samples.floor();
             let frac = (samples - whole) as f32;
             let whole = whole as usize;
@@ -102,7 +112,11 @@ impl Opcode for Delay {
             let feedback = inputs[2][i].clamp(0.0, 0.995);
             let written = flush32(inputs[0][i] + feedback * delayed);
             self.buf[self.write] = written;
-            self.quiet_run = if written.abs() < TAIL_LEVEL { self.quiet_run.saturating_add(1) } else { 0 };
+            self.quiet_run = if written.abs() < TAIL_LEVEL {
+                self.quiet_run.saturating_add(1)
+            } else {
+                0
+            };
             self.in_flight = samples.ceil() as usize + 1;
             self.write = (self.write + 1) % len;
             *o = delayed;

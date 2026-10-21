@@ -233,7 +233,7 @@ fn compile_scope_depth(
 ) -> Res<(Kernel, KernelResult)> {
     if scope_depth > 16 {
         return Err(Diagnostic::new(
-            "processor scopes nest at most 16 levels",
+            "fx scopes nest at most 16 levels",
             def.span,
         ));
     }
@@ -1726,7 +1726,7 @@ impl Kb<'_> {
         }
         if fields.len() > niminal_engine::MAX_INPUTS {
             return Err(Diagnostic::new(
-                "too many envelope inputs in a processor scope",
+                "too many envelope inputs in an fx scope",
                 span,
             ));
         }
@@ -2409,7 +2409,7 @@ impl Kb<'_> {
         ))
     }
 
-    fn processor_scope(&mut self, name: &str, args: &[Arg], span: Span) -> Res<KVal> {
+    fn dsp_scope(&mut self, name: &str, args: &[Arg], span: Span) -> Res<KVal> {
         let usage = || {
             Diagnostic::new(
                 if name == "spawn" {
@@ -2601,7 +2601,7 @@ impl Kb<'_> {
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
         let n = name.name.as_str();
         if matches!(n, "spawn" | "oversample") {
-            return self.processor_scope(n, args, span);
+            return self.dsp_scope(n, args, span);
         }
         if n == "reset_on" {
             return self.reset_scope(args, span);

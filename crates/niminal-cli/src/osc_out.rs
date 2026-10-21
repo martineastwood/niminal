@@ -43,7 +43,10 @@ pub struct OscSender {
 
 impl OscSender {
     pub fn new() -> std::io::Result<OscSender> {
-        Ok(OscSender { socket: UdpSocket::bind("0.0.0.0:0")?, sent: Vec::new() })
+        Ok(OscSender {
+            socket: UdpSocket::bind("0.0.0.0:0")?,
+            sent: Vec::new(),
+        })
     }
 
     /// Send every tap whose value has moved since it was last sent, if its rate allows it. Returns how
@@ -55,15 +58,26 @@ impl OscSender {
             let index = match self.sent.iter().position(|s| s.key == key(tap)) {
                 Some(i) => i,
                 None => {
-                    let to = (tap.host.as_str(), tap.port).to_socket_addrs().ok().and_then(|mut a| a.next());
-                    self.sent.push(Sent { key: key(tap), to, at: None, bits: 0, cursor: 0 });
+                    let to = (tap.host.as_str(), tap.port)
+                        .to_socket_addrs()
+                        .ok()
+                        .and_then(|mut a| a.next());
+                    self.sent.push(Sent {
+                        key: key(tap),
+                        to,
+                        at: None,
+                        bits: 0,
+                        cursor: 0,
+                    });
                     self.sent.len() - 1
                 }
             };
             let state = &mut self.sent[index];
             let Some(to) = state.to else { continue };
             let value = tap.value.read();
-            let due = state.at.is_none_or(|at| now.duration_since(at).as_secs_f64() >= 1.0 / tap.rate);
+            let due = state
+                .at
+                .is_none_or(|at| now.duration_since(at).as_secs_f64() >= 1.0 / tap.rate);
             if tap.value.is_triggered() {
                 if due {
                     for value in tap.value.read_events(&mut state.cursor) {
@@ -86,7 +100,12 @@ impl OscSender {
 }
 
 fn key(tap: &OscTap) -> (String, String, u16, usize) {
-    (tap.address.clone(), tap.host.clone(), tap.port, std::sync::Arc::as_ptr(&tap.value) as usize)
+    (
+        tap.address.clone(),
+        tap.host.clone(),
+        tap.port,
+        std::sync::Arc::as_ptr(&tap.value) as usize,
+    )
 }
 
 /// Sends the running project's `osc_out` signals until dropped.
@@ -122,11 +141,20 @@ mod tests {
         let end = packet.iter().position(|&b| b == 0).unwrap();
         let address = std::str::from_utf8(&packet[..end]).unwrap();
         let args = &packet[(end / 4 + 1) * 4 + 4..];
-        out.push((address.to_string(), f64::from(f32::from_be_bytes(args[..4].try_into().unwrap()))));
+        out.push((
+            address.to_string(),
+            f64::from(f32::from_be_bytes(args[..4].try_into().unwrap())),
+        ));
     }
 
     fn tap(address: &str, port: u16, rate: f64) -> OscTap {
-        OscTap { address: address.into(), host: "127.0.0.1".into(), port, rate, value: Tap::new() }
+        OscTap {
+            address: address.into(),
+            host: "127.0.0.1".into(),
+            port,
+            rate,
+            value: Tap::new(),
+        }
     }
 
     #[test]
@@ -142,7 +170,9 @@ mod tests {
     #[test]
     fn values_are_sent_when_they_move_and_no_faster_than_asked() {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
-        receiver.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
         let port = receiver.local_addr().unwrap().port();
         let taps = vec![tap("/x", port, 10.0)];
         let mut sender = OscSender::new().unwrap();
@@ -164,11 +194,31 @@ mod tests {
         use niminal_engine::Opcode;
         let ctx = niminal_engine::ProcessCtx::new(48_000.0, true);
         tapped.process(&ctx, &[&[0.25, 0.75]], &mut [0.0, 0.0]);
-        assert_eq!(sender.poll(&taps, start + Duration::from_secs(5) + Duration::from_millis(50)), 1, "the rate counts from the last time it was sent");
+        assert_eq!(
+            sender.poll(
+                &taps,
+                start + Duration::from_secs(5) + Duration::from_millis(50)
+            ),
+            1,
+            "the rate counts from the last time it was sent"
+        );
         assert_eq!(get(), vec![("/x".to_string(), 0.75)]);
         tapped.process(&ctx, &[&[0.5]], &mut [0.0]);
-        assert_eq!(sender.poll(&taps, start + Duration::from_secs(5) + Duration::from_millis(60)), 0, "too soon");
-        assert_eq!(sender.poll(&taps, start + Duration::from_secs(5) + Duration::from_millis(160)), 1);
+        assert_eq!(
+            sender.poll(
+                &taps,
+                start + Duration::from_secs(5) + Duration::from_millis(60)
+            ),
+            0,
+            "too soon"
+        );
+        assert_eq!(
+            sender.poll(
+                &taps,
+                start + Duration::from_secs(5) + Duration::from_millis(160)
+            ),
+            1
+        );
         assert_eq!(get(), vec![("/x".to_string(), 0.5)]);
     }
 

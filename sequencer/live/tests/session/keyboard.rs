@@ -62,13 +62,8 @@ fn a_keyboard_set_replays_from_the_log() {
     s.key_input(1, 64, 0);
     original.extend(run(&mut s, 5000));
     let log = from_lines(&to_lines(&s.log())).unwrap();
-    let replayed = niminal_server::Session::replay(
-        SR,
-        Layout::Mono,
-        &log,
-        original.len() as u64,
-        false,
-    );
+    let replayed =
+        niminal_server::Session::replay(SR, Layout::Mono, &log, original.len() as u64, false);
     assert!(peak(&original) > 0.1);
     assert_eq!(original, replayed[0]);
 }

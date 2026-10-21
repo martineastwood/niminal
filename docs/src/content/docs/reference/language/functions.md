@@ -117,7 +117,7 @@ fn string(x, freq: init hz, decay: 0..1 = 0.996, size: const int = 4096) {
 
 ## Reset scopes
 
-`reset_on(trigger) { … }` evaluates a processor and restarts state created inside its body on every positive edge: when the trigger changes from zero or negative to positive. An initially positive trigger resets on the first sample. Holding it positive does not repeatedly reset it.
+`reset_on(trigger) { … }` evaluates a DSP block and restarts state created inside its body on every positive edge: when the trigger changes from zero or negative to positive. An initially positive trigger resets on the first sample. Holding it positive does not repeatedly reset it.
 
 ```nml
 instr pulse(freq: hz) {
@@ -128,7 +128,7 @@ instr pulse(freq: hz) {
 }
 ```
 
-Resets happen before processing that sample, including between block boundaries. They restart nested functions, built-in processors, `prev`, state arrays, and initialization inside the scope. State initializers read the current inputs again. Scopes may nest; resetting an outer scope also restarts the inner one. Resetting clears existing delay and reverb contents.
+Resets happen before processing that sample, including between block boundaries. They restart nested functions, built-in DSP effects, `prev`, state arrays, and initialization inside the scope. State initializers read the current inputs again. Scopes may nest; resetting an outer scope also restarts the inner one. Resetting clears existing delay and reverb contents.
 
 Signals calculated outside the scope keep running. Pass audio into a scope to reset only its processing, or create the generator inside to restart both. A scope returns its last expression or its own `out`, and its locals stay inside. It may declare `state` at the beginning, just like a function. Stateful scope bodies follow the function rules: bind note context outside and pass it in through a captured value. All storage is allocated before rendering; resetting does not allocate.
 
@@ -234,7 +234,7 @@ instr driven(freq: hz) {
 }
 ```
 
-Create generators and nonlinear processors inside the scope to run them at its sample rate. A signal calculated outside is upsampled; its generator still runs at the original rate. `sample_rate` inside is the higher rate, keeping oscillators, delays, filters and user-written DSP at the intended pitch and time scale. Input conversion preserves constant values. The conversion filters add 16 samples at the enclosing scope’s rate. The compiler aligns parallel paths automatically, including across instruments, nodes and feed-forward buses. See [Latency compensation](/reference/language/routing/#latency-compensation).
+Create generators and nonlinear DSP effects inside the scope to run them at its sample rate. A signal calculated outside is upsampled; its generator still runs at the original rate. `sample_rate` inside is the higher rate, keeping oscillators, delays, filters and user-written DSP at the intended pitch and time scale. Input conversion preserves constant values. The conversion filters add 16 samples at the enclosing scope’s rate. The compiler aligns parallel paths automatically, including across instruments, nodes and feed-forward buses. See [Latency compensation](/reference/language/routing/#latency-compensation).
 
 The body supports state, arrays, envelopes and DSP functions. It follows the sample DSP function restrictions on channel-layout processing and side effects. Scopes can nest up to 16 levels and return arrays or named results. An oversampled spawned voice keeps independent state and release behavior. Capture transport or other parent context in a local before entering the scope. Read slow controls with `.control` outside the scope when they must retain the parent's block cadence; processing inside is sample by sample.
 
@@ -248,4 +248,4 @@ instr cloud(freq: hz) {
 }
 ```
 
-A node can use `oversample(4) { it.tanh }` directly. Each nested scope uses the sample rate of its immediate parent; two nested 2x scopes run the inner DSP at 4x the project rate. `spawn` captures the values it reads when a layer starts; placing a processor inside that layer gives it independent state.
+A node can use `oversample(4) { it.tanh }` directly. Each nested scope uses the sample rate of its immediate parent; two nested 2x scopes run the inner DSP at 4x the project rate. `spawn` captures the values it reads when a layer starts; placing an effect inside that layer gives it independent state.

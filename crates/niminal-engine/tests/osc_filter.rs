@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 fn osc_graph(wave: Wave, freq: f32) -> Arc<niminal_engine::Graph> {
     let mut g = GraphBuilder::new();
-    let o = g.add(Osc::new(wave), &[("freq", Src::Const(freq))]).unwrap();
+    let o = g
+        .add(Osc::new(wave), &[("freq", Src::Const(freq))])
+        .unwrap();
     Arc::new(g.build(o))
 }
 
@@ -19,7 +21,10 @@ fn waves_have_the_right_frequency() {
     for wave in [Wave::Sine, Wave::Saw, Wave::Square, Wave::Tri] {
         let out = render(&osc_graph(wave, 440.0), SR as usize, None, 32);
         let n = rising_zero_crossings(&out);
-        assert!((439..=441).contains(&n), "{wave:?}: {n} cycles in one second");
+        assert!(
+            (439..=441).contains(&n),
+            "{wave:?}: {n} cycles in one second"
+        );
     }
 }
 
@@ -36,7 +41,11 @@ fn waves_stay_in_range_and_are_centred() {
 #[test]
 fn sine_has_unit_amplitude_and_starts_at_zero() {
     let out = render(&osc_graph(Wave::Sine, 100.0), 4800, None, 32);
-    assert!(out[0].abs() < 1e-6, "sine should start near zero, got {}", out[0]);
+    assert!(
+        out[0].abs() < 1e-6,
+        "sine should start near zero, got {}",
+        out[0]
+    );
     let peak = out.iter().cloned().fold(0.0, f32::max);
     assert!((peak - 1.0).abs() < 1e-3);
 }
@@ -45,7 +54,10 @@ fn sine_has_unit_amplitude_and_starts_at_zero() {
 fn pulse_width_sets_duty_cycle() {
     let mut g = GraphBuilder::new();
     let o = g
-        .add(Osc::new(Wave::Pulse), &[("freq", Src::Const(100.0)), ("width", Src::Const(0.25))])
+        .add(
+            Osc::new(Wave::Pulse),
+            &[("freq", Src::Const(100.0)), ("width", Src::Const(0.25))],
+        )
         .unwrap();
     let out = render(&Arc::new(g.build(o)), SR as usize, None, 32);
     let high = out.iter().filter(|v| **v > 0.0).count() as f32 / out.len() as f32;
@@ -74,16 +86,31 @@ fn saw_aliasing_is_suppressed() {
 
     let alias = bin_magnitude(&out, 2500.0);
     let alias_naive = bin_magnitude(&naive, 2500.0);
-    assert!(alias_naive > 0.1, "sanity: naive saw aliases ({alias_naive})");
-    assert!(alias < alias_naive / 4.0, "polyblep {alias} vs naive {alias_naive}");
+    assert!(
+        alias_naive > 0.1,
+        "sanity: naive saw aliases ({alias_naive})"
+    );
+    assert!(
+        alias < alias_naive / 4.0,
+        "polyblep {alias} vs naive {alias_naive}"
+    );
     assert!(bin_magnitude(&out, 9100.0) > 0.5, "fundamental intact");
 }
 
 fn filter_gain(mode: FilterMode, cutoff: f32, res: f32, freq: f32) -> f32 {
     let mut g = GraphBuilder::new();
-    let o = g.add(Osc::new(Wave::Sine), &[("freq", Src::Const(freq))]).unwrap();
+    let o = g
+        .add(Osc::new(Wave::Sine), &[("freq", Src::Const(freq))])
+        .unwrap();
     let f = g
-        .add(Svf::new(mode), &[("x", o), ("cutoff", Src::Const(cutoff)), ("res", Src::Const(res))])
+        .add(
+            Svf::new(mode),
+            &[
+                ("x", o),
+                ("cutoff", Src::Const(cutoff)),
+                ("res", Src::Const(res)),
+            ],
+        )
         .unwrap();
     let out = render(&Arc::new(g.build(f)), 24_000, None, 32);
     rms(&out[12_000..]) / (1.0 / 2f32.sqrt())
@@ -124,19 +151,33 @@ fn filter_survives_extreme_cutoffs() {
 fn builder_reports_port_errors() {
     let mut g = GraphBuilder::new();
     let e = g.add(Osc::new(Wave::Sine), &[]).unwrap_err();
-    assert_eq!(e, GraphError::MissingPort { opcode: "osc".into(), port: "freq".into() });
+    assert_eq!(
+        e,
+        GraphError::MissingPort {
+            opcode: "osc".into(),
+            port: "freq".into()
+        }
+    );
 
-    let e = g.add(Osc::new(Wave::Sine), &[("frequency", Src::Const(1.0))]).unwrap_err();
+    let e = g
+        .add(Osc::new(Wave::Sine), &[("frequency", Src::Const(1.0))])
+        .unwrap_err();
     assert!(matches!(e, GraphError::UnknownPort { .. }));
     assert!(e.to_string().contains("no argument named `frequency`"));
 
     let e = g
-        .add(Osc::new(Wave::Sine), &[("freq", Src::Const(1.0)), ("freq", Src::Const(2.0))])
+        .add(
+            Osc::new(Wave::Sine),
+            &[("freq", Src::Const(1.0)), ("freq", Src::Const(2.0))],
+        )
         .unwrap_err();
     assert!(matches!(e, GraphError::DuplicatePort { .. }));
 
     g.param("freq", 440.0).unwrap();
-    assert_eq!(g.param("freq", 1.0).unwrap_err(), GraphError::DuplicateParam("freq".into()));
+    assert_eq!(
+        g.param("freq", 1.0).unwrap_err(),
+        GraphError::DuplicateParam("freq".into())
+    );
 }
 
 #[test]

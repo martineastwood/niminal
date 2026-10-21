@@ -51,8 +51,18 @@ impl fmt::Display for UnitError {
 
 impl std::error::Error for UnitError {}
 
-const NOTE_LETTERS: [(char, i32); 7] = [('c', 0), ('d', 2), ('e', 4), ('f', 5), ('g', 7), ('a', 9), ('b', 11)];
-const NOTE_NAMES: [&str; 12] = ["c", "c#", "d", "d#", "e", "f", "f#", "g", "g#", "a", "a#", "b"];
+const NOTE_LETTERS: [(char, i32); 7] = [
+    ('c', 0),
+    ('d', 2),
+    ('e', 4),
+    ('f', 5),
+    ('g', 7),
+    ('a', 9),
+    ('b', 11),
+];
+const NOTE_NAMES: [&str; 12] = [
+    "c", "c#", "d", "d#", "e", "f", "f#", "g", "g#", "a", "a#", "b",
+];
 
 fn parse_note(s: &str) -> Option<i32> {
     let mut chars = s.chars();
@@ -99,7 +109,8 @@ impl FromStr for Value {
 
         let split = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
         let (number, unit) = s.split_at(split);
-        let n = parse_number(number).ok_or_else(|| ParseError(format!("`{s}` is not a number with a unit")))?;
+        let n = parse_number(number)
+            .ok_or_else(|| ParseError(format!("`{s}` is not a number with a unit")))?;
         Ok(match unit {
             "" => Value::Num(n),
             "hz" => Value::Hz(n),
@@ -131,14 +142,22 @@ impl fmt::Display for Value {
             Value::Semitones(n) => write!(f, "{n}st"),
             Value::Degrees(n) => write!(f, "{n}deg"),
             Value::Sample(id) => write!(f, "sample #{id}"),
-            Value::Note(m) => write!(f, "{}{}", NOTE_NAMES[m.rem_euclid(12) as usize], m.div_euclid(12) - 1),
+            Value::Note(m) => write!(
+                f,
+                "{}{}",
+                NOTE_NAMES[m.rem_euclid(12) as usize],
+                m.div_euclid(12) - 1
+            ),
         }
     }
 }
 
 impl Value {
     fn mismatch<T>(self, expected: &'static str) -> Result<T, UnitError> {
-        Err(UnitError { expected, got: self })
+        Err(UnitError {
+            expected,
+            got: self,
+        })
     }
 
     pub fn as_hz(self) -> Result<f64, UnitError> {
@@ -262,7 +281,12 @@ impl Default for Tuning {
         for (i, d) in degrees.iter_mut().enumerate().take(12) {
             *d = i as f64 * 100.0;
         }
-        Tuning { a4: 440.0, period: 1200.0, len: 12, degrees }
+        Tuning {
+            a4: 440.0,
+            period: 1200.0,
+            len: 12,
+            degrees,
+        }
     }
 }
 
@@ -271,7 +295,12 @@ impl Tuning {
     pub fn new(a4: f64, period: f64, cents: &[f64]) -> Self {
         let mut degrees = [0.0; MAX_DEGREES];
         degrees[..cents.len()].copy_from_slice(cents);
-        Tuning { a4, period, len: cents.len(), degrees }
+        Tuning {
+            a4,
+            period,
+            len: cents.len(),
+            degrees,
+        }
     }
 
     fn cents(&self, midi: i32) -> f64 {
@@ -299,7 +328,11 @@ pub struct Tempo {
 impl Tempo {
     /// `bpm` in 4/4.
     pub fn new(bpm: f64) -> Self {
-        Tempo { bpm, beats_per_bar: 4.0, tuning: Tuning::default() }
+        Tempo {
+            bpm,
+            beats_per_bar: 4.0,
+            tuning: Tuning::default(),
+        }
     }
 }
 
@@ -401,12 +434,18 @@ mod tests {
         for bad in ["", "hz", "440herz", "1/0beat", "x3", "4 bars"] {
             assert!(bad.parse::<Value>().is_err(), "{bad:?} should not parse");
         }
-        assert_eq!("440herz".parse::<Value>().unwrap_err().0, "unknown unit `herz` in `440herz`");
+        assert_eq!(
+            "440herz".parse::<Value>().unwrap_err().0,
+            "unknown unit `herz` in `440herz`"
+        );
     }
 
     #[test]
     fn display_round_trips() {
-        for s in ["440hz", "-6db", "0.25sec", "1beat", "2.5beats", "0.5", "c4", "a#2", "e-1", "-45deg", "16bars", "1bar", "7st"] {
+        for s in [
+            "440hz", "-6db", "0.25sec", "1beat", "2.5beats", "0.5", "c4", "a#2", "e-1", "-45deg",
+            "16bars", "1bar", "7st",
+        ] {
             assert_eq!(v(s).to_string(), s);
         }
     }
@@ -417,11 +456,17 @@ mod tests {
         assert!((v("a3").as_hz().unwrap() - 220.0).abs() < 1e-9);
         assert!((v("-6db").as_gain().unwrap() - 0.501_187).abs() < 1e-6);
         assert_eq!(v("0.5").as_gain().unwrap(), 0.5);
-        assert!(v("440").as_hz().is_err(), "bare numbers are not frequencies");
+        assert!(
+            v("440").as_hz().is_err(),
+            "bare numbers are not frequencies"
+        );
         assert!(v("-6db").as_hz().is_err());
         assert!(v("440hz").as_gain().is_err());
         assert_eq!(v("440hz").as_hz().unwrap(), 440.0);
-        assert_eq!(v("-6db").as_hz().unwrap_err().to_string(), "expected a frequency (hz or a note name), got `-6db`");
+        assert_eq!(
+            v("-6db").as_hz().unwrap_err().to_string(),
+            "expected a frequency (hz or a note name), got `-6db`"
+        );
     }
 
     #[test]
@@ -429,8 +474,15 @@ mod tests {
         let t = Tempo::new(120.0);
         assert_eq!(Time::Beats(1.0).to_seconds(t), 0.5);
         assert_eq!(Time::Seconds(1.0).to_seconds(t), 1.0);
-        assert_eq!(Time::Bars(2.0).to_seconds(t), 4.0, "two bars of 4/4 at 120bpm");
-        let waltz = Tempo { beats_per_bar: 3.0, ..t };
+        assert_eq!(
+            Time::Bars(2.0).to_seconds(t),
+            4.0,
+            "two bars of 4/4 at 120bpm"
+        );
+        let waltz = Tempo {
+            beats_per_bar: 3.0,
+            ..t
+        };
         assert_eq!(Time::Bars(2.0).to_seconds(waltz), 3.0);
         assert_eq!(Time::Bars(2.0).to_beats(waltz), Some(6.0));
         assert_eq!(Time::Seconds(1.0).to_beats(t), None);
@@ -439,10 +491,19 @@ mod tests {
 
     #[test]
     fn json_accepts_strings_and_numbers() {
-        assert_eq!(serde_json::from_str::<Value>("\"-6db\"").unwrap(), Value::Db(-6.0));
-        assert_eq!(serde_json::from_str::<Value>("0.5").unwrap(), Value::Num(0.5));
+        assert_eq!(
+            serde_json::from_str::<Value>("\"-6db\"").unwrap(),
+            Value::Db(-6.0)
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>("0.5").unwrap(),
+            Value::Num(0.5)
+        );
         assert_eq!(serde_json::from_str::<Value>("3").unwrap(), Value::Num(3.0));
-        assert_eq!(serde_json::to_string(&Value::Hz(440.0)).unwrap(), "\"440hz\"");
+        assert_eq!(
+            serde_json::to_string(&Value::Hz(440.0)).unwrap(),
+            "\"440hz\""
+        );
         assert!(serde_json::from_str::<Time>("\"440hz\"").is_err());
     }
 }

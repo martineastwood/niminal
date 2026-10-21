@@ -1,6 +1,5 @@
 //! Tests of compiling a whole composition, definitions and all.
 
-
 use crate::ast::*;
 use crate::compile::*;
 use niminal_lang::{Diagnostic, Layout, Param, Unit};
@@ -55,7 +54,10 @@ fn controls_can_be_driven_from_midi_and_osc() {
         InputSource::Osc("/fx/width".into())
     );
     let learning = ok("ctl drive = midi.learn.range(0..1)");
-    assert_eq!(learning.input("drive").unwrap().source, InputSource::MidiLearn);
+    assert_eq!(
+        learning.input("drive").unwrap().source,
+        InputSource::MidiLearn
+    );
     assert!((p.input("width").unwrap().map_input(width, 0.25) - 0.25).abs() < 1e-6);
     // db sweeps are even in decibels, and come back in db
     assert!((p.input("vol").unwrap().map_input(vol, 0.5) + 30.0).abs() < 1e-3);
@@ -400,8 +402,7 @@ fn function_arguments_are_checked_like_any_other() {
 
 #[test]
 fn function_body_errors() {
-    let body =
-        |b: &str| format!("fn f(x: num, amount: 0..1 = 0.5, cutoff: hz = 100hz) {{ {b} }}");
+    let body = |b: &str| format!("fn f(x: num, amount: 0..1 = 0.5, cutoff: hz = 100hz) {{ {b} }}");
     let state = |b: &str| body(&format!("state s = 0.0\n{b}"));
     assert_eq!(
         msg(&body("x * undefined_thing")),
@@ -501,9 +502,7 @@ fn rates_on_parameters_are_checked() {
         "`n` must be known while compiling"
     );
     assert_eq!(
-        msg(
-            "fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: 2.5) }"
-        ),
+        msg("fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: 2.5) }"),
         "`n` expects a whole number, found 2.5"
     );
     // Structural parameters need defaults; scalar parameters retain their rate.
@@ -606,7 +605,7 @@ fn db_gains_apply_to_plain_values() {
     ok("fn g(x, amp: db = -6db) { x * amp }\ninstr a(f: hz) { osc(saw, f).g(amp: -3db) }");
 }
 
-const ROUTING: &str = "\nbus space\n\ninstr pluck(freq: hz, bright: 0..1 = 0.5) {\n  out = osc(saw, freq).lpf(cutoff: 900hz + bright * 1khz)\n  space += out.gain(-14db)\n}\n\nprocessor room {\n  out = space.lpf(cutoff: 4khz).hpf(cutoff: 150hz)\n}\n\nbus lead_audio\nprocessor lead_fx {out = lead_audio.gain(0.5)\n  space += out.gain(-12db)}\nclip lead { instrument: pluck(bright: 0.6) }\n";
+const ROUTING: &str = "\nbus space\n\ninstr pluck(freq: hz, bright: 0..1 = 0.5) {\n  out = osc(saw, freq).lpf(cutoff: 900hz + bright * 1khz)\n  space += out.gain(-14db)\n}\n\nfx room {\n  out = space.lpf(cutoff: 4khz).hpf(cutoff: 150hz)\n}\n\nbus lead_audio\nfx lead_fx {out = lead_audio.gain(0.5)\n  space += out.gain(-12db)}\nclip lead { instrument: pluck(bright: 0.6) }\n";
 
 #[test]
 fn buses_and_nodes_compile() {
@@ -614,7 +613,11 @@ fn buses_and_nodes_compile() {
         "{ROUTING}\nlead(freq: c4) for 1beat\npluck(freq: c4) for 1beat"
     ));
     assert_eq!(p.buses, ["space", "lead_audio"]);
-    assert_eq!(p.nodes.len(), 4, "the implicit collection, two processors and the part");
+    assert_eq!(
+        p.nodes.len(),
+        4,
+        "the implicit collection, two fx instances and the clip"
+    );
     assert_eq!(p.nodes[3].name, "lead");
     assert_eq!(p.nodes[3].instrument, Some(0));
     assert_eq!(p.nodes[3].defaults["bright"], Value::Num(0.6));
@@ -654,7 +657,9 @@ fn buses_and_nodes_compile() {
 
 #[test]
 fn routing_a_node_to_a_bus() {
-    let p = ok("\nbus fx\nclip a { instrument: i }\nprocessor b { out = fx }\ninstr i(f: hz) { voice = osc(sine, f)\nfx += voice }\na(f: 100hz) for 1beat");
+    let p = ok(
+        "\nbus fx\nclip a { instrument: i }\nfx b { out = fx }\ninstr i(f: hz) { voice = osc(sine, f)\nfx += voice }\na(f: 100hz) for 1beat",
+    );
     assert_eq!(p.nodes[1].def.voice_sends, [0]);
     assert_eq!(
         p.nodes[2].def.inputs,
@@ -699,7 +704,7 @@ fn bus_rules() {
     let with = |body: &str| format!("bus space\n{body}");
     assert_eq!(
         msg(&with("instr a(f: hz) { osc(saw, space) }")),
-        "`space` is a bus, and only a processor can read a bus"
+        "`space` is a bus, and only an fx can read a bus"
     );
     assert_eq!(
         help(&with("instr a(f: hz) { osc(saw, space) }")).as_deref(),
@@ -757,12 +762,20 @@ fn locals_cannot_shadow_top_level_names() {
 }
 
 #[test]
-fn collections_and_processors_have_distinct_roles() {
+fn collections_and_fxs_have_distinct_roles() {
     let base = "instr tone(freq: hz = 440hz) { osc(sine, freq) }\n";
     ok(&format!("{base}clip lead {{ instrument: tone }}"));
-    ok("processor room(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }");
-    assert!(msg(&format!("{base}processor room {{ instrument = tone }}")).contains("cannot select an instrument"));
-    assert!(compile(&format!("{base}clip lead {{ instrument: tone\n output: room }}")).is_err());
+    ok("fx room(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }");
+    assert!(
+        msg(&format!("{base}fx room {{ instrument = tone }}"))
+            .contains("cannot select an instrument")
+    );
+    assert!(
+        compile(&format!(
+            "{base}clip lead {{ instrument: tone\n output: room }}"
+        ))
+        .is_err()
+    );
 
     assert!(compile("track lead { instrument = tone }").is_err());
     assert!(compile("bus room { out = it }").is_err());
@@ -770,7 +783,7 @@ fn collections_and_processors_have_distinct_roles() {
 
 #[test]
 fn feedback_between_nodes_is_an_error_naming_them() {
-    let src = "\nbus x\nbus y\nprocessor a { out = x.lpf(cutoff: 1khz).to(y) }\nprocessor b { out = y.lpf(cutoff: 1khz).to(x) }\n";
+    let src = "\nbus x\nbus y\nfx a { out = x.lpf(cutoff: 1khz).to(y) }\nfx b { out = y.lpf(cutoff: 1khz).to(x) }\n";
     let d = first_error(src);
     assert!(
         d.message == "nodes feed back through buses or buffers: a -> b -> a"
@@ -781,12 +794,10 @@ fn feedback_between_nodes_is_an_error_naming_them() {
     assert!(d.help.unwrap().contains("`late`"));
 
     // a late send breaks the loop
-    ok(
-        "bus x\nbus y\nprocessor a { out = x.lpf(cutoff: 1khz).to(y) }\nprocessor b { out = y\n x += late(out) }",
-    );
+    ok("bus x\nbus y\nfx a { out = x.lpf(cutoff: 1khz).to(y) }\nfx b { out = y\n x += late(out) }");
     // outside a send, `prev` is one sample earlier
-    ok("bus x\nprocessor a { out = prev(x) }");
-    let d = first_error("bus x\nprocessor a { out = x.to(x) }");
+    ok("bus x\nfx a { out = prev(x) }");
+    let d = first_error("bus x\nfx a { out = x.to(x) }");
     assert_eq!(
         d.message,
         "nodes feed back through buses or buffers: a -> a"
@@ -889,9 +900,8 @@ fn pan_places_a_mono_signal_in_the_master_layout() {
         "config { channels: stereo }\ninstr a(f: hz, az: deg = 10deg) { osc(saw, f).pan(azimuth: az) }",
     );
 
-    let d = first_error(
-        "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20) }",
-    );
+    let d =
+        first_error("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20) }");
     assert_eq!(
         d.message,
         "`azimuth` expects an angle, found a plain number"
@@ -926,8 +936,7 @@ fn angles_follow_the_unit_rules() {
 
 #[test]
 fn channel_lists_and_destructuring() {
-    let stereo =
-        |body: &str| format!("config {{ channels: stereo }}\ninstr a(f: hz) {{ {body} }}");
+    let stereo = |body: &str| format!("config {{ channels: stereo }}\ninstr a(f: hz) {{ {body} }}");
     let p = ok(&stereo("[osc(saw, f), osc(sine, f)]"));
     assert_eq!(p.instruments[0].graph.channels(), 2);
 
@@ -1090,7 +1099,7 @@ fn layouts_convert_automatically_where_the_spec_says_they_do() {
     ok("config { channels: surround(5.1) }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f)] }");
     // 5.1 bus read by a stereo master part folds down
     ok(
-        "config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\nprocessor t { out = hall }",
+        "config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\nfx t { out = hall }",
     );
     // unnamed channel lists are taken as whatever layout has that many
     ok(
@@ -1124,18 +1133,18 @@ fn to_layout_converts_explicitly() {
 
 #[test]
 fn buses_and_nodes_carry_their_layouts() {
-    let p = ok("\nconfig { channels: stereo }\nbus space: stereo\nbus lfe: mono\ninstr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }\nprocessor room { out = space.reverb(room: 0.8) }\nprocessor sub { out = lfe.lpf(cutoff: 100hz) }\na(f: 100hz) for 1beat");
-    assert_eq!(p.bus_layouts, [Layout::Stereo, Layout::Mono]);
-    assert_eq!(
-        p.nodes[1].def.inputs.len(),
-        2,
-        "a stereo bus is two inputs"
+    let p = ok(
+        "\nconfig { channels: stereo }\nbus space: stereo\nbus lfe: mono\ninstr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }\nfx room { out = space.reverb(room: 0.8) }\nfx sub { out = lfe.lpf(cutoff: 100hz) }\na(f: 100hz) for 1beat",
     );
+    assert_eq!(p.bus_layouts, [Layout::Stereo, Layout::Mono]);
+    assert_eq!(p.nodes[1].def.inputs.len(), 2, "a stereo bus is two inputs");
     assert_eq!(p.nodes[2].def.inputs.len(), 1);
     // the sub part works in mono but delivers stereo to the master
     assert_eq!(p.nodes[2].def.chain.as_ref().unwrap().channels(), 2);
     // routing to a bus delivers in that bus's layout
-    let routed = ok("\nconfig { channels: stereo }\nbus mono_bus: mono\nclip t { instrument: i }\nprocessor u { out = mono_bus }\ninstr i(f: hz) { voice = osc(saw, f).pan\nmono_bus += voice.to_layout(mono) }");
+    let routed = ok(
+        "\nconfig { channels: stereo }\nbus mono_bus: mono\nclip t { instrument: i }\nfx u { out = mono_bus }\ninstr i(f: hz) { voice = osc(saw, f).pan\nmono_bus += voice.to_layout(mono) }",
+    );
     assert_eq!(routed.nodes[1].def.voice_sends, [0]);
 }
 
@@ -1282,7 +1291,7 @@ fn new_pattern_operations() {
 fn osc_out_sends_a_nodes_signal() {
     let node = |body: &str| {
         format!(
-            "tempo 120bpm\ninstr pluck(freq: hz) {{ osc(saw, freq) }}\nbus lead_audio\nprocessor lead_fx {{{body}}}\nclip lead {{ instrument: pluck }}\n"
+            "tempo 120bpm\ninstr pluck(freq: hz) {{ osc(saw, freq) }}\nbus lead_audio\nfx lead_fx {{{body}}}\nclip lead {{ instrument: pluck }}\n"
         )
     };
     let p = ok(&node("out = it.osc_out(\"/vj/level\", port: 9000)"));
@@ -1422,10 +1431,16 @@ fn midi_out_is_an_instrument_that_sends_notes() {
 
 #[test]
 fn part_declarations_give_a_migration_error() {
-    for src in ["part lead { instrument = pluck }", "part lead = pluck(bright: 0.2)"] {
+    for src in [
+        "part lead { instrument = pluck }",
+        "part lead = pluck(bright: 0.2)",
+    ] {
         let d = first_error(src);
         assert_eq!(d.message, "`part` has been removed");
-        assert_eq!(d.help.as_deref(), Some("write `clip x { instrument: y }` instead"));
+        assert_eq!(
+            d.help.as_deref(),
+            Some("write `clip x { instrument: y }` instead")
+        );
         assert_eq!(&src[d.span.start..d.span.end], "part");
     }
 }
@@ -1484,9 +1499,7 @@ fn notes_carry_their_own_controls() {
             .map(|g| (g * 10.0).round()),
         Some(-60.0)
     );
-    assert!(
-        msg(&stage("lead.play([c4].pan(3hz))")).contains("`pan` takes a direction in degrees")
-    );
+    assert!(msg(&stage("lead.play([c4].pan(3hz))")).contains("`pan` takes a direction in degrees"));
     assert!(
         msg(&stage("lead.play([c4].begin(2))")).contains("`begin` takes a share of the sample")
     );
@@ -1768,9 +1781,8 @@ fn clips_have_a_length_and_lanes() {
 
 #[test]
 fn operations_apply_to_whole_clips() {
-    let sped = played(
-        "clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.fast(2))",
-    );
+    let sped =
+        played("clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.play(c.fast(2))");
     assert_eq!(sped.length, Rational::ONE, "fast shortens the clip");
     assert_eq!(
         events(sped.lane("notes").unwrap(), 1).len(),
@@ -1924,15 +1936,16 @@ fn clips_are_checked_against_the_node_they_play_on() {
         "the `to` lane isn't supported yet"
     );
 
-    let no_pitch = "instr drone(amp: db) { osc(sine, 100hz) }\nclip t { instrument: drone }\nt.play([c4])";
+    let no_pitch =
+        "instr drone(amp: db) { osc(sine, 100hz) }\nclip t { instrument: drone }\nt.play([c4])";
     assert_eq!(
         msg(no_pitch),
         "`drone` has no `freq` parameter for the notes to set"
     );
-    let silent = "instr a(freq: hz) { osc(sine, freq) }\nprocessor fx { out = it }\nfx.play([c4])";
+    let silent = "instr a(freq: hz) { osc(sine, freq) }\nfx room { out = it }\nroom.play([c4])";
     assert_eq!(
         msg(silent),
-        "node `fx` has no instrument to play a clip on"
+        "node `room` has no instrument to play a clip on"
     );
 }
 
@@ -2045,10 +2058,7 @@ fn performance_errors_are_clear_and_located() {
         msg(&stage("riff = [c4]\nriff = [e4]")),
         "`riff` is defined twice"
     );
-    assert_eq!(
-        msg(&stage("lead = [c4]")),
-        "`lead` is defined twice"
-    );
+    assert_eq!(msg(&stage("lead = [c4]")), "`lead` is defined twice");
     assert_eq!(msg(&stage("it = [c4]")), "`it` is a reserved word");
     assert_eq!(msg("at bar 0 hush"), "bars and beats count from 1");
     // a file starts at its tempo; how a live session gets there is not the compiler's concern
@@ -2060,9 +2070,8 @@ fn performance_errors_are_clear_and_located() {
 
 #[test]
 fn reports_errors_from_several_instruments_without_cascading() {
-    let errs = errors(
-        "\ninstr a() { osc(saw, 440) }\ninstr b() { osc(saw, 440) }\na() for 1beat\n",
-    );
+    let errs =
+        errors("\ninstr a() { osc(saw, 440) }\ninstr b() { osc(saw, 440) }\na() for 1beat\n");
     assert_eq!(
         errs.len(),
         2,
@@ -2072,25 +2081,29 @@ fn reports_errors_from_several_instruments_without_cascading() {
 
 #[test]
 fn a_node_parameter_is_a_control_the_node_can_read() {
-    let src = "instr p(freq: hz) { osc(saw, freq) }\nbus hall_audio\nprocessor hall_fx(tone: hz = 2khz, drive: 0..1 = 0.2) {out = hall_audio.lpf(cutoff: tone).gain(drive)}\nclip hall { instrument: p }\n";
+    let src = "instr p(freq: hz) { osc(saw, freq) }\nbus hall_audio\nfx hall_fx(tone: hz = 2khz, drive: 0..1 = 0.2) {out = hall_audio.lpf(cutoff: tone).gain(drive)}\nclip hall { instrument: p }\n";
     let p = ok(src);
     let names: Vec<&str> = p.controls.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["hall_fx::tone", "hall_fx::drive"]);
     assert_eq!(p.controls[0].initial, 2000.0);
     assert_eq!(
-        msg("processor t(tone: hz) { out = it }"),
-        "processor parameter `tone` needs a starting value"
+        msg("fx t(tone: hz) { out = it }"),
+        "fx parameter `tone` needs a starting value"
     );
     assert_eq!(
-        help("processor t(tone: hz) { out = it }").as_deref(),
-        Some("for example `processor bass(tone: hz = 2khz)`")
+        help("fx t(tone: hz) { out = it }").as_deref(),
+        Some("for example `fx bass(tone: hz = 2khz)`")
     );
 }
 
 #[test]
 fn clips_transform_their_own_notes() {
-    let p = ok(&format!("{STAGE}\nclip lead2 {{ instrument: pluck\n notes: [c4 e4 g4].reverse }}\nlead2.start"));
-    let Action::Play { clip, .. } = &p.performance[0].action else { panic!() };
+    let p = ok(&format!(
+        "{STAGE}\nclip lead2 {{ instrument: pluck\n notes: [c4 e4 g4].reverse }}\nlead2.start"
+    ));
+    let Action::Play { clip, .. } = &p.performance[0].action else {
+        panic!()
+    };
     assert_eq!(events(clip.lane("notes").unwrap(), 1)[0].1, midi(67));
 }
 
@@ -2131,10 +2144,17 @@ fn clips_select_instrument_defaults_and_bare_instruments_get_a_node() {
 
 #[test]
 fn scenes_resolve_clip_names_and_stop_clips_left_out() {
-    let p = ok("instr tone(freq: hz) { osc(sine, freq) }\nclip bass { instrument: tone\nnotes: [c2] }\nclip lead { instrument: tone\nnotes: [c4] }\nbass.start\nscene chorus { lead: lead.transpose(+5st) }\nchorus.start");
+    let p = ok(
+        "instr tone(freq: hz) { osc(sine, freq) }\nclip bass { instrument: tone\nnotes: [c2] }\nclip lead { instrument: tone\nnotes: [c4] }\nbass.start\nscene chorus { lead: lead.transpose(+5st) }\nchorus.start",
+    );
     assert_eq!(p.performance.len(), 3);
-    assert!(matches!(&p.performance[0].action, Action::Play { node: 1, .. }));
-    let Action::Play { node: 2, clip } = &p.performance[1].action else { panic!("scene starts lead") };
+    assert!(matches!(
+        &p.performance[0].action,
+        Action::Play { node: 1, .. }
+    ));
+    let Action::Play { node: 2, clip } = &p.performance[1].action else {
+        panic!("scene starts lead")
+    };
     assert_eq!(events(clip.lane("notes").unwrap(), 1)[0].1, midi(65));
     assert!(matches!(&p.performance[2].action, Action::Stop { node: 1 }));
 }

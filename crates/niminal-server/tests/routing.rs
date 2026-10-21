@@ -1,6 +1,6 @@
-use niminal_server::{At, Endpoint, Op, RoutingEdit as Edit, Session};
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
+use niminal_server::{At, Endpoint, Op, RoutingEdit as Edit, Session};
 use std::collections::BTreeMap;
 const RATE: f32 = 48_000.0;
 fn node(id: &str) -> Endpoint {
@@ -29,10 +29,10 @@ fn connect(id: &str, from: Endpoint, to: Endpoint, gain: f64) -> Edit {
         delayed: false,
     }
 }
-fn instance(id: &str, processor: Option<&str>, level: Option<f64>) -> Edit {
+fn instance(id: &str, fx: Option<&str>, level: Option<f64>) -> Edit {
     Edit::Node {
         id: id.into(),
-        processor: processor.map(str::to_string),
+        fx: fx.map(str::to_string),
         instrument: None,
         args: level
             .map(|n| [("level".into(), Value::Num(n))].into())
@@ -72,7 +72,7 @@ fn setup(session: &mut Session) {
             vec![route(
                 0,
                 vec![
-                    Edit::Processor {
+                    Edit::Fx {
                         name: "volume".into(),
                         source: "(level: num = 1) { out = it * level }".into(),
                     },
@@ -87,7 +87,7 @@ fn setup(session: &mut Session) {
 }
 
 #[test]
-fn one_processor_definition_has_independent_instances_and_sample_timed_parameters() {
+fn one_fx_definition_has_independent_instances_and_sample_timed_parameters() {
     let mut s = ready();
     setup(&mut s);
     s.send_events(
@@ -254,7 +254,7 @@ fn a_draining_effect_rings_out_and_an_immediate_free_cuts_it_off() {
                 route(
                     0,
                     vec![
-                        Edit::Processor {
+                        Edit::Fx {
                             name: "echo".into(),
                             source: "() { out = it.delay(time: 1ms, feedback: 0.5) }".into(),
                         },
@@ -354,13 +354,13 @@ fn redefining_or_freeing_a_template_does_not_change_existing_instances() {
             route(
                 10,
                 vec![
-                    Edit::Processor {
+                    Edit::Fx {
                         name: "volume".into(),
                         source: "(level: num = 1) { out = it * level * 0 }".into(),
                     },
                     instance("new", Some("volume"), None),
                     connect("new_out", node("new"), Endpoint::Master, 1.0),
-                    Edit::FreeProcessor {
+                    Edit::FreeFx {
                         name: "volume".into(),
                     },
                 ],
@@ -456,7 +456,7 @@ fn rejecting_a_batch_restores_previously_accepted_future_graph_changes() {
 }
 
 #[test]
-fn node_ids_cannot_alias_processor_instances_or_the_implicit_node() {
+fn node_ids_cannot_alias_fx_instances_or_the_implicit_node() {
     let mut s = ready();
     setup(&mut s);
     assert!(
@@ -478,12 +478,12 @@ fn node_ids_cannot_alias_processor_instances_or_the_implicit_node() {
             route(
                 0,
                 vec![
-                    instance("a__processor", None, None),
-                    connect("extra", node("a__processor"), Endpoint::Master, 0.5),
+                    instance("a__fx", None, None),
+                    connect("extra", node("a__fx"), Endpoint::Master, 0.5),
                 ],
             ),
             note("a", 0, 0.1),
-            note("a__processor", 0, 0.1),
+            note("a__fx", 0, 0.1),
         ],
     )
     .unwrap();
@@ -493,9 +493,9 @@ fn node_ids_cannot_alias_processor_instances_or_the_implicit_node() {
             1,
             vec![route(
                 32,
-                vec![Edit::Processor {
+                vec![Edit::Fx {
                     name: "bad".into(),
-                    source: "() { out = it }\nprocessor injected { out = 1 }".into()
+                    source: "() { out = it }\nfx injected { out = 1 }".into()
                 }]
             )]
         )
@@ -511,7 +511,7 @@ fn an_unrelated_graph_edit_preserves_effect_memory_when_bus_indices_change() {
             route(
                 0,
                 vec![
-                    Edit::Processor {
+                    Edit::Fx {
                         name: "echo".into(),
                         source: "() { out = it.delay(time: 1ms, feedback: 0.5) }".into(),
                     },
@@ -627,14 +627,14 @@ fn replacement_crossfades_survive_unrelated_graph_changes_and_replay() {
         1,
         vec![
             json_op(json!({"op":"routing","at":0,"edits":[
-                {"op":"processor","name":"one","source":"() { out = it }"},
-                {"op":"processor","name":"two","source":"() { out = it * 2 }"},
-                {"op":"node","id":"a","processor":"one"},
+                {"op":"fx","name":"one","source":"() { out = it }"},
+                {"op":"fx","name":"two","source":"() { out = it * 2 }"},
+                {"op":"node","id":"a","fx":"one"},
                 {"op":"connect","id":"out","from":{"kind":"node","id":"a"},"to":{"kind":"master"}}
             ]})),
             note("a", 0, 1.0),
             json_op(json!({"op":"routing","at":17,"edits":[
-                {"op":"replace","id":"a","processor":"two","fade":8.0/48000.0}
+                {"op":"replace","id":"a","fx":"two","fade":8.0/48000.0}
             ]})),
             route(
                 21,
@@ -669,9 +669,9 @@ fn replacement_preserves_matching_live_parameters_and_allows_explicit_overrides(
     let mut s = ready();
     setup(&mut s);
     s.send_events(1,vec![note("a",0,1.0),json_op(json!({"op":"routing","at":4,"edits":[{"op":"set","id":"a","args":{"level":0.6}}]})),json_op(json!({"op":"routing","at":12,"edits":[
-        {"op":"processor","name":"new","source":"(level: num = 0.1) { out = it * level * 2 }"},
-        {"op":"replace","id":"a","processor":"new"}
-    ]})),json_op(json!({"op":"routing","at":24,"edits":[{"op":"replace","id":"a","processor":"volume","args":{"level":0.8}}]}))]).unwrap();
+        {"op":"fx","name":"new","source":"(level: num = 0.1) { out = it * level * 2 }"},
+        {"op":"replace","id":"a","fx":"new"}
+    ]})),json_op(json!({"op":"routing","at":24,"edits":[{"op":"replace","id":"a","fx":"volume","args":{"level":0.8}}]}))]).unwrap();
     let out = s.process(40).remove(0);
     assert!((out[6] - 0.6).abs() < 1e-6);
     assert!((out[16] - 1.2).abs() < 1e-6);
@@ -728,8 +728,8 @@ fn replacement_resets_parameters_whose_units_changed() {
     let mut s = ready();
     setup(&mut s);
     s.send_events(1,vec![note("a",0,1.0),json_op(json!({"op":"routing","at":4,"edits":[{"op":"set","id":"a","args":{"level":0.6}}]})),json_op(json!({"op":"routing","at":12,"edits":[
-        {"op":"processor","name":"frequency","source":"(level: hz = 100hz) { out = it * (level / 100hz) }"},
-        {"op":"replace","id":"a","processor":"frequency"}
+        {"op":"fx","name":"frequency","source":"(level: hz = 100hz) { out = it * (level / 100hz) }"},
+        {"op":"replace","id":"a","fx":"frequency"}
     ]}))]).unwrap();
     let out = s.process(20).remove(0);
     assert!((out[16] - 1.0).abs() < 1e-6);
@@ -745,7 +745,7 @@ fn overlapping_crossfades_are_rejected_without_disturbing_the_accepted_fade() {
     setup(&mut s);
     let replace = |at| {
         json_op(
-            json!({"op":"routing","at":at,"edits":[{"op":"replace","id":"a","processor":"volume","fade":0.02}]}),
+            json!({"op":"routing","at":at,"edits":[{"op":"replace","id":"a","fx":"volume","fade":0.02}]}),
         )
     };
     let receipt = s.send_events(1, vec![replace(10)]).unwrap().transactions[0].id;

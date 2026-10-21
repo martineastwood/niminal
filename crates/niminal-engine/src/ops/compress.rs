@@ -14,7 +14,10 @@ pub struct Compressor {
 
 impl Default for Compressor {
     fn default() -> Self {
-        Self { envelope: 0.0, sample_rate: 48_000.0 }
+        Self {
+            envelope: 0.0,
+            sample_rate: 48_000.0,
+        }
     }
 }
 

@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use nimlive::render::{RenderOptions, SAMPLE_RATE, render};
 use niminal_compose::{Composition as Program, compile_with};
 use niminal_lang::{CompileOptions, Samples};
+use nimlive::render::{RenderOptions, SAMPLE_RATE, render};
 
 const SR: usize = SAMPLE_RATE as usize;
 
@@ -159,7 +159,7 @@ fn a_grid_row_that_names_a_node_goes_through_its_effects() {
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 80)]);
     write_wav(&dir.join("drums/snare.wav"), &[block(0.5, 80)]);
-    let src = "tempo 120bpm\ndrums = kit(\"drums\")\n               clip beat { instrument: drums }\n               bus snare_audio\nprocessor snare_fx {out = snare_audio.gain(-6db)}\ninstr snare_voice(sample, freq: hz = c4) { voice = drums(sample: sample, freq: freq)\nsnare_audio += voice }\nclip snare { instrument: snare_voice }\n               beat.play(grid {\n  kick:  x... ....\n  snare: .... x...\n})";
+    let src = "tempo 120bpm\ndrums = kit(\"drums\")\n               clip beat { instrument: drums }\n               bus snare_audio\nfx snare_fx {out = snare_audio.gain(-6db)}\ninstr snare_voice(sample, freq: hz = c4) { voice = drums(sample: sample, freq: freq)\nsnare_audio += voice }\nclip snare { instrument: snare_voice }\n               beat.play(grid {\n  kick:  x... ....\n  snare: .... x...\n})";
     let out = play(&dir, src);
     let at = |s: f64| {
         out[0]
@@ -599,10 +599,7 @@ fn a_loop_fitted_to_the_tempo_lasts_its_beats() {
         (at(120, ".beats(4)") - 2.0).abs() < 0.01,
         "four beats at 120bpm"
     );
-    assert!(
-        (at(60, ".beats(4)") - 4.0).abs() < 0.01,
-        "and at 60bpm"
-    );
+    assert!((at(60, ".beats(4)") - 4.0).abs() < 0.01, "and at 60bpm");
     assert!(
         (at(120, "") - 2.4).abs() < 0.01,
         "without beats it plays as recorded"
@@ -688,9 +685,7 @@ fn a_larger_slice_kit_does_not_build_a_larger_audio_graph() {
     let nodes = |slices| {
         let program = compile_in(
             &dir,
-            &format!(
-                "s = sample(\"s.wav\")\nk = s.slices({slices})\nclip t {{ instrument: k }}"
-            ),
+            &format!("s = sample(\"s.wav\")\nk = s.slices({slices})\nclip t {{ instrument: k }}"),
         )
         .unwrap();
         program
@@ -749,10 +744,23 @@ fn samples_kits_and_slices_play_by_name_without_a_clip_declaration() {
         ("s = kit(\"drums\")", "s", "[kick]"),
         ("s = sample(\"s.wav\")\nk = s.slices(4)", "k", "[s0]"),
     ] {
-        for launch in [format!("{name}.play({pattern})"), format!("scene verse {{ {name}: {pattern} }}\nverse.start")] {
+        for launch in [
+            format!("{name}.play({pattern})"),
+            format!("scene verse {{ {name}: {pattern} }}\nverse.start"),
+        ] {
             let implicit = play(&dir, &format!("tempo 120bpm\n{definition}\n{launch}"));
-            let explicit = play(&dir, &format!("tempo 120bpm\n{definition}\nclip c {{ instrument: {name} }}\nc.play({pattern})"));
-            assert!(implicit == explicit, "{definition}\n{launch}: implicit length {}, explicit length {}", implicit[0].len(), explicit[0].len());
+            let explicit = play(
+                &dir,
+                &format!(
+                    "tempo 120bpm\n{definition}\nclip c {{ instrument: {name} }}\nc.play({pattern})"
+                ),
+            );
+            assert!(
+                implicit == explicit,
+                "{definition}\n{launch}: implicit length {}, explicit length {}",
+                implicit[0].len(),
+                explicit[0].len()
+            );
             assert!(implicit[0].iter().any(|v| v.abs() > 0.1));
         }
     }
@@ -763,7 +771,10 @@ fn two_clips_share_a_kit_with_independent_gain_defaults() {
     let dir = scratch("clip-defaults");
     std::fs::create_dir_all(dir.join("drums")).unwrap();
     write_wav(&dir.join("drums/hat.wav"), &[block(0.5, 80)]);
-    let out = play(&dir, "tempo 120bpm\ndrums = kit(\"drums\")\nclip beat { instrument: drums\nnotes: [hat ~] }\nclip hats { instrument: drums(gain: -8db)\nnotes: [~ hat] }\nscene verse { beat, hats }\nverse.start");
+    let out = play(
+        &dir,
+        "tempo 120bpm\ndrums = kit(\"drums\")\nclip beat { instrument: drums\nnotes: [hat ~] }\nclip hats { instrument: drums(gain: -8db)\nnotes: [~ hat] }\nscene verse { beat, hats }\nverse.start",
+    );
     assert!((out[0][100] - 0.5).abs() < 1e-3);
     assert!((out[0][SR + 100] - 0.5 * 10f32.powf(-8.0 / 20.0)).abs() < 1e-3);
 }
@@ -777,12 +788,37 @@ fn samplers_called_inside_instruments_match_direct_playback() {
     write_wav(&dir.join("drums/snare.wav"), &[block(0.4, 100)]);
     for (definitions, call, selected, notes) in [
         ("s = sample(\"s.wav\")", "s(freq: freq)", "s", "[c4]"),
-        ("s = kit(\"drums\")", "s.snare(freq: freq)", "s.snare", "[c4]"),
-        ("s = sample(\"s.wav\")\nk = s.slices(4)", "k(sample: s2, freq: freq)", "k(sample: s2)", "[c4]"),
+        (
+            "s = kit(\"drums\")",
+            "s.snare(freq: freq)",
+            "s.snare",
+            "[c4]",
+        ),
+        (
+            "s = sample(\"s.wav\")\nk = s.slices(4)",
+            "k(sample: s2, freq: freq)",
+            "k(sample: s2)",
+            "[c4]",
+        ),
     ] {
-        let direct = play(&dir, &format!("tempo 120bpm\n{definitions}\nclip c {{ instrument: {selected} }}\nc.play({notes})"));
-        let nested = play(&dir, &format!("tempo 120bpm\n{definitions}\ninstr voice(freq: hz) {{ {call} }}\nclip c {{ instrument: voice }}\nc.play({notes})"));
-        assert!(direct == nested, "{call}: direct {}, nested {}", direct[0].len(), nested[0].len());
+        let direct = play(
+            &dir,
+            &format!(
+                "tempo 120bpm\n{definitions}\nclip c {{ instrument: {selected} }}\nc.play({notes})"
+            ),
+        );
+        let nested = play(
+            &dir,
+            &format!(
+                "tempo 120bpm\n{definitions}\ninstr voice(freq: hz) {{ {call} }}\nclip c {{ instrument: voice }}\nc.play({notes})"
+            ),
+        );
+        assert!(
+            direct == nested,
+            "{call}: direct {}, nested {}",
+            direct[0].len(),
+            nested[0].len()
+        );
         assert!(nested[0].iter().any(|v| v.abs() > 0.1));
     }
 }
@@ -798,9 +834,22 @@ fn one_instrument_wraps_a_whole_kit_and_forwards_grid_selections() {
     write_wav(&dir.join("drums/snare.wav"), &[block(0.4, 100)]);
     let definitions = "other = kit(\"other\")\ndrums = kit(\"drums\")";
     let notes = "grid { kick(gain: -6db): x...\n snare: ..x. }";
-    let direct = play(&dir, &format!("tempo 120bpm\n{definitions}\nclip c {{ instrument: drums }}\nc.play({notes})"));
-    let wrapped = play(&dir, &format!("tempo 120bpm\n{definitions}\nbus audio\ninstr drum_voice(sample, gain: db = 0db) {{ audio += drums(sample: sample, gain: gain) }}\nprocessor fx {{ out = audio }}\nclip beat {{ instrument: drum_voice }}\nbeat.play({notes})"));
-    assert!(direct == wrapped, "direct {}, wrapped {}", direct[0].len(), wrapped[0].len());
+    let direct = play(
+        &dir,
+        &format!("tempo 120bpm\n{definitions}\nclip c {{ instrument: drums }}\nc.play({notes})"),
+    );
+    let wrapped = play(
+        &dir,
+        &format!(
+            "tempo 120bpm\n{definitions}\nbus audio\ninstr drum_voice(sample, gain: db = 0db) {{ audio += drums(sample: sample, gain: gain) }}\nfx room {{ out = audio }}\nclip beat {{ instrument: drum_voice }}\nbeat.play({notes})"
+        ),
+    );
+    assert!(
+        direct == wrapped,
+        "direct {}, wrapped {}",
+        direct[0].len(),
+        wrapped[0].len()
+    );
     assert!((wrapped[0][100] - 0.2 * 10f32.powf(-6.0 / 20.0)).abs() < 1e-3);
     assert!((wrapped[0][SR + 100] - 0.4).abs() < 1e-3);
 }
@@ -813,8 +862,16 @@ fn a_whole_kit_wrapper_keeps_choke_groups() {
     write_wav(&dir.join("drums/closed.wav"), &[block(0.1, 80)]);
     let definitions = "drums = kit(\"drums\").choke(hats(open, closed))";
     let notes = "[open closed ~ ~]";
-    let direct = play(&dir, &format!("tempo 120bpm\n{definitions}\nclip c {{ instrument: drums }}\nc.play({notes})"));
-    let wrapped = play(&dir, &format!("tempo 120bpm\n{definitions}\ninstr drum_voice(sample) {{ drums(sample: sample) }}\nclip c {{ instrument: drum_voice }}\nc.play({notes})"));
+    let direct = play(
+        &dir,
+        &format!("tempo 120bpm\n{definitions}\nclip c {{ instrument: drums }}\nc.play({notes})"),
+    );
+    let wrapped = play(
+        &dir,
+        &format!(
+            "tempo 120bpm\n{definitions}\ninstr drum_voice(sample) {{ drums(sample: sample) }}\nclip c {{ instrument: drum_voice }}\nc.play({notes})"
+        ),
+    );
     assert!(direct == wrapped, "wrapping a kit preserves choking");
     assert!(wrapped[0][(0.4 * SR as f64) as usize] > 0.2);
     assert!(wrapped[0].get(SR).copied().unwrap_or(0.0).abs() < 1e-6);
@@ -830,11 +887,17 @@ fn nested_sampler_arguments_are_checked() {
         ("s(max: 2)", "no parameter `max`"),
         ("s(440hz)", "name the sampler arguments"),
     ] {
-        let message = errors(&dir, &format!("s = sample(\"s.wav\")\ninstr voice() {{ {body} }}"));
+        let message = errors(
+            &dir,
+            &format!("s = sample(\"s.wav\")\ninstr voice() {{ {body} }}"),
+        );
         assert!(message.contains(expected), "{body}: {message}");
     }
-    let message = errors(&dir, "s = sample(\"s.wav\")\nprocessor fx { out = s() }");
-    assert!(message.contains("only be played inside an instrument"), "{message}");
+    let message = errors(&dir, "s = sample(\"s.wav\")\nfx room { out = s() }");
+    assert!(
+        message.contains("only be played inside an instrument"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -848,12 +911,23 @@ fn implicit_sampler_clips_play_live_and_survive_later_evaluations() {
         ("s = kit(\"drums\")", "s", "[kick]"),
         ("s = sample(\"s.wav\")\nk = s.slices(2)", "k", "[s0]"),
     ] {
-        let mut live = niminal_live::Offline::new(SAMPLE_RATE as f32, niminal_lang::Layout::Mono).without_limiter();
+        let mut live = niminal_live::Offline::new(SAMPLE_RATE as f32, niminal_lang::Layout::Mono)
+            .without_limiter();
         live.set_sample_dir(&dir);
-        live.eval(&format!("tempo 120bpm\n{definition}\n{name}.play({notes})"), Some("now")).unwrap();
-        assert!(live.process(SR * 2)[0].iter().any(|v| v.abs() > 0.2), "{definition}");
+        live.eval(
+            &format!("tempo 120bpm\n{definition}\n{name}.play({notes})"),
+            Some("now"),
+        )
+        .unwrap();
+        assert!(
+            live.process(SR * 2)[0].iter().any(|v| v.abs() > 0.2),
+            "{definition}"
+        );
         live.eval("ctl level = 0.5", Some("now")).unwrap();
-        assert!(live.process(SR * 2)[0].iter().any(|v| v.abs() > 0.2), "keeps playing: {definition}");
+        assert!(
+            live.process(SR * 2)[0].iter().any(|v| v.abs() > 0.2),
+            "keeps playing: {definition}"
+        );
         assert!(live.take_notices().is_empty());
     }
 }

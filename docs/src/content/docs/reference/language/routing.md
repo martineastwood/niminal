@@ -3,13 +3,13 @@ title: Routing
 description: Buses, execution order, delay, and channel layouts.
 ---
 
-## Instruments and processors
+## Instruments and fx instances
 
-An instrument is a per-note template: every note gets its own DSP state. A clip selects the instrument and supplies notes and parameter lanes. A processor is a persistent audio instance: its state is shared across incoming notes and survives their release.
+An instrument is a per-note template: every note gets its own DSP state. A clip selects the instrument and supplies notes and parameter lanes. An fx is a persistent audio instance: its state is shared across incoming notes and survives their release.
 
 ## Buses and sends
 
-A bus sums audio and owns no effect state. Instruments send audio to it, and a processor reads it:
+A bus sums audio and owns no effect state. Instruments send audio to it, and an fx reads it:
 
 ```nml
 bus space: stereo
@@ -19,7 +19,7 @@ instr pluck(freq: hz) {
   space += out.gain(-14db)
 }
 
-processor room {
+fx room {
   out = space.reverb(room: 0.8, damp: 0.4)
 }
 
@@ -27,9 +27,9 @@ clip lead { instrument: pluck }
 lead.play([c4 e4 g4])
 ```
 
-`space += out` sends a copy while the instrument also outputs to master. For an entirely wet signal, send a local signal to the bus and omit `out` and a final value. Several instruments can send to the same bus to share one processor. Declare separate buses and processors for independent effect state.
+`space += out` sends a copy while the instrument also outputs to master. For an entirely wet signal, send a local signal to the bus and omit `out` and a final value. Several instruments can send to the same bus to share one fx instance. Declare separate buses and fx instances for independent effect state.
 
-A processor can also generate audio or process `input(1)`. Processor output goes to master unless its final `out` is routed with `.to(bus)`. Declaration order does not matter.
+An fx can also generate audio or process `input(1)`. Fx output goes to master unless its final `out` is routed with `.to(bus)`. Declaration order does not matter.
 
 ## Execution order
 
@@ -38,7 +38,7 @@ The compiler builds a dependency graph from bus reads and writes and sorts it: a
 **Feedback between buses** has no valid order — the compiler rejects it and names the loop. Break it with **`late`**, which costs one block (32 samples by default):
 
 ```nml
-processor room {
+fx room {
   out = space.reverb(room: 0.85)
   echo += late(out).gain(-20db)
 }
@@ -56,7 +56,7 @@ out = sig.delay(time: oscillated, feedback: 0.3, max: 2sec)   // changing time n
 ```
 ## Latency compensation
 
-Processing latency declared by DSP processors is propagated through the graph. Faster parallel paths receive exact sample delays before they combine. This includes nested processors, array outputs, instrument voices, processor effects and feed-forward bus sends. Conversion filters in `oversample` participate automatically.
+Processing latency declared by DSP operations is propagated through the graph. Faster parallel paths receive exact sample delays before they combine. This includes nested effects, array outputs, instrument voices, fx instances and feed-forward bus sends. Conversion filters in `oversample` participate automatically.
 
 ```nml
 bus wet_audio
@@ -64,7 +64,7 @@ instr tone(freq: hz) {
   out = osc(sine, freq)
   wet_audio += out
 }
-processor wet_fx { out = oversample(4) { wet_audio.tanh } }
+fx wet_fx { out = oversample(4) { wet_audio.tanh } }
 clip lead { instrument: tone }
 ```
 
@@ -86,4 +86,4 @@ The server’s `--channels` flag must match the layout you intend to hear (1, 2,
 
 ## Engine routing API
 
-Clips and processors are lowered by the live client into private processor instances and explicit output connections. Other clients can build their own graph with the [Engine API](/reference/engine-api/#processor-instances-buses-and-connections): collection nodes, reusable effects, buses and timed connection edits. DSP-defined sends above remain part of their compiled graph. Clips and sequencing stay client-owned.
+Clips and fx declarations are lowered by the live client into private fx instances and explicit output connections. Other clients can build their own graph with the [Engine API](/reference/engine-api/#fx-instances-buses-and-connections): collection nodes, reusable effects, buses and timed connection edits. DSP-defined sends above remain part of their compiled graph. Clips and sequencing stay client-owned.

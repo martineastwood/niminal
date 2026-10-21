@@ -208,7 +208,11 @@ impl Sends {
     fn drain_into(&mut self, buses: &mut Buses, frames: usize) {
         for (bus, touched) in self.touched.iter_mut().enumerate() {
             let (now, later) = std::mem::take(touched);
-            for (c, (data, staged)) in self.data[bus].iter_mut().zip(&mut self.staged[bus]).enumerate() {
+            for (c, (data, staged)) in self.data[bus]
+                .iter_mut()
+                .zip(&mut self.staged[bus])
+                .enumerate()
+            {
                 if now {
                     buses.add(bus, c, &data[..frames]);
                     *data = [0.0; BLOCK];
@@ -331,7 +335,10 @@ fn independent_runs(nodes: &[NodeDef], order: &[usize]) -> Vec<std::ops::Range<u
     let mut runs = Vec::new();
     let mut start = 0;
     for k in 0..order.len() {
-        if order[start..k].iter().any(|&w| edges[w].contains(&order[k])) {
+        if order[start..k]
+            .iter()
+            .any(|&w| edges[w].contains(&order[k]))
+        {
             runs.push(start..k);
             start = k;
         }
@@ -443,7 +450,7 @@ pub const DEFAULT_MAX_VOICES: usize = 256;
 /// How a new mixer's node takes over from an old mixer's nodes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Transfer {
-    /// Release transferred voices while keeping their processor tails.
+    /// Release transferred voices while keeping their DSP tails.
     pub release: bool,
     /// The old node whose sounding voices continue on this one.
     pub voices_from: Option<usize>,
@@ -621,7 +628,7 @@ impl Mixer {
             let got = def.chain.as_ref().map_or(channels, |g| g.channels());
             assert_eq!(
                 got, wanted,
-                "a processor produces {got} channels but its destination has {wanted}"
+                "an fx produces {got} channels but its destination has {wanted}"
             );
         }
         let nodes = defs
@@ -712,9 +719,9 @@ impl Mixer {
                 .voices
                 .iter_mut()
                 .find(|(s, v)| *s == id.serial || v.holds(id.serial))
-            {
-                voice.attach_activity(activity);
-            }
+        {
+            voice.attach_activity(activity);
+        }
     }
     pub fn finish_activities(&self, sample: u64, reason: u32) {
         for node in &self.nodes {
@@ -725,9 +732,10 @@ impl Mixer {
     }
     pub fn set_voice_owner(&mut self, id: VoiceId, owner: u64) {
         if let Some(node) = self.nodes.get_mut(id.node)
-            && let Some((_, voice)) = node.voices.iter_mut().find(|(s, _)| *s == id.serial) {
-                voice.set_owner(owner);
-            }
+            && let Some((_, voice)) = node.voices.iter_mut().find(|(s, _)| *s == id.serial)
+        {
+            voice.set_owner(owner);
+        }
     }
     pub fn set_voice_dur(&mut self, id: VoiceId, seconds: f32) {
         if let Some(node) = self.nodes.get_mut(id.node)
@@ -883,14 +891,9 @@ impl Mixer {
     pub fn merge_legato(&mut self, node: usize, note: &Voice) -> Option<VoiceId> {
         let rule = note.rule().filter(|r| r.legato && !self.muted)?;
         let serial = self.next_serial;
-        let (_, voice) = self
-            .nodes
-            .get_mut(node)?
-            .voices
-            .iter_mut()
-            .find(|(_, v)| {
-                v.is_legato_open() && v.rule().is_some_and(|r| r.instrument == rule.instrument)
-            })?;
+        let (_, voice) = self.nodes.get_mut(node)?.voices.iter_mut().find(|(_, v)| {
+            v.is_legato_open() && v.rule().is_some_and(|r| r.instrument == rule.instrument)
+        })?;
         voice.legato_on(serial, note);
         self.next_serial += 1;
         Some(VoiceId { node, serial })
@@ -1121,11 +1124,7 @@ impl Mixer {
         for node in &mut self.nodes {
             node.voices.clear();
             node.fade = ChainFade::default();
-            node.chain = node
-                .def
-                .chain
-                .as_ref()
-                .map(|g| Voice::new(g.clone(), rate));
+            node.chain = node.def.chain.as_ref().map(|g| Voice::new(g.clone(), rate));
             node.chain_silenced = false;
             node.chain_quiet = 0;
         }
@@ -1298,7 +1297,12 @@ impl Mixer {
                 let _flush = crate::denormals::FlushToZero::new();
                 let started = std::time::Instant::now();
                 // SAFETY: see `LaneCell`
-                let Lane { summed, scratch, sends, nanos } = unsafe { &mut *lanes[i].0.get() };
+                let Lane {
+                    summed,
+                    scratch,
+                    sends,
+                    nanos,
+                } = unsafe { &mut *lanes[i].0.get() };
                 summed[..n].iter_mut().for_each(|c| c[..frames].fill(0.0));
                 let r = refs[i];
                 // SAFETY: see `ChunkRef`
@@ -1319,7 +1323,12 @@ impl Mixer {
             }
         }
         for (i, r) in refs.iter().enumerate() {
-            let Lane { summed: lane_sum, sends, nanos, .. } = lanes[i].0.get_mut();
+            let Lane {
+                summed: lane_sum,
+                sends,
+                nanos,
+                ..
+            } = lanes[i].0.get_mut();
             let node = &mut nodes[r.node];
             for (sum, chunk) in node.summed[..n].iter_mut().zip(&lane_sum[..n]) {
                 for (s, v) in sum[..frames].iter_mut().zip(&chunk[..frames]) {
@@ -1368,158 +1377,158 @@ impl Mixer {
             let group = self.groups[g].clone();
             // the voices of every node in the run first, side by side, then each node's chain in turn
             self.render_voices(group.clone(), frames);
-        for k in group {
-            let t = self.order[k];
-            let (scratch, processed) = (&mut self.scratch, &mut self.processed);
-            let node = &mut self.nodes[t];
-            if node.fade.elapsed >= node.fade.frames && node.fade.previous.is_some() {
+            for k in group {
+                let t = self.order[k];
+                let (scratch, processed) = (&mut self.scratch, &mut self.processed);
+                let node = &mut self.nodes[t];
+                if node.fade.elapsed >= node.fade.frames && node.fade.previous.is_some() {
+                    if let Some(retired) = retired.as_deref_mut() {
+                        if retired.len() < retired.capacity() {
+                            retired.push(node.fade.previous.take().unwrap());
+                        }
+                    } else {
+                        node.fade.previous = None;
+                    }
+                }
+
                 if let Some(retired) = retired.as_deref_mut() {
-                    if retired.len() < retired.capacity() {
-                        retired.push(node.fade.previous.take().unwrap());
+                    let mut i = 0;
+                    while i < node.voices.len() {
+                        if node.voices[i].1.is_finished() && retired.len() < retired.capacity() {
+                            let (_, voice) = node.voices.remove(i);
+                            voice.finish_activities(
+                                self.buses.clock.sample + frames as u64,
+                                voice.end_reason(),
+                            );
+                            self.silenced += usize::from(voice.is_poisoned());
+                            retired.push(voice);
+                        } else {
+                            i += 1;
+                        }
                     }
                 } else {
-                    node.fade.previous = None;
+                    self.silenced += node.voices.iter().filter(|(_, v)| v.is_poisoned()).count();
+                    node.voices.retain(|(_, v)| {
+                        if v.is_finished() {
+                            v.finish_activities(
+                                self.buses.clock.sample + frames as u64,
+                                v.end_reason(),
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    });
                 }
-            }
 
-            if let Some(retired) = retired.as_deref_mut() {
-                let mut i = 0;
-                while i < node.voices.len() {
-                    if node.voices[i].1.is_finished() && retired.len() < retired.capacity() {
-                        let (_, voice) = node.voices.remove(i);
-                        voice.finish_activities(
-                            self.buses.clock.sample + frames as u64,
-                            voice.end_reason(),
-                        );
-                        self.silenced += usize::from(voice.is_poisoned());
-                        retired.push(voice);
-                    } else {
-                        i += 1;
-                    }
-                }
-            } else {
-                self.silenced += node.voices.iter().filter(|(_, v)| v.is_poisoned()).count();
-                node.voices.retain(|(_, v)| {
-                    if v.is_finished() {
-                        v.finish_activities(
-                            self.buses.clock.sample + frames as u64,
-                            v.end_reason(),
-                        );
-                        false
-                    } else {
-                        true
-                    }
-                });
-            }
-
-            let chain_started = std::time::Instant::now();
-            let result: &[[f32; BLOCK]] = match &mut node.chain {
-                None => &node.summed[..n],
-                Some(chain) => {
-                    let out_channels = chain.channels();
-                    let heard = |input: &ChainInput| -> &[f32] {
-                        match *input {
-                            ChainInput::It { channel } => &node.summed[channel][..frames],
-                            ChainInput::Audio { channel } => &self.audio_in[channel][..frames],
-                            ChainInput::Bus { bus, channel } => {
-                                self.buses.get(bus, channel, frames)
+                let chain_started = std::time::Instant::now();
+                let result: &[[f32; BLOCK]] = match &mut node.chain {
+                    None => &node.summed[..n],
+                    Some(chain) => {
+                        let out_channels = chain.channels();
+                        let heard = |input: &ChainInput| -> &[f32] {
+                            match *input {
+                                ChainInput::It { channel } => &node.summed[channel][..frames],
+                                ChainInput::Audio { channel } => &self.audio_in[channel][..frames],
+                                ChainInput::Bus { bus, channel } => {
+                                    self.buses.get(bus, channel, frames)
+                                }
                             }
-                        }
-                    };
-                    let silent_in = node
-                        .def
-                        .inputs
-                        .iter()
-                        .all(|input| heard(input).iter().all(|s| *s == 0.0));
-                    if silent_in
-                        && node.chain_quiet >= rest_after
-                        && !(node.fade.previous.is_some()
-                            && node.fade.elapsed < node.fade.frames)
-                    {
-                        // nothing to ring out and nothing coming in: the chain stays as it is, and says nothing
-                        processed[..out_channels]
-                            .iter_mut()
-                            .for_each(|c| c[..frames].fill(0.0));
-                    } else {
-                        for (i, input) in node.def.inputs.iter().enumerate() {
-                            chain.set_input(i, heard(input));
-                        }
-                        if let Some(previous) = &mut node.fade.previous {
-                            for (i, input) in node.fade.inputs.iter().enumerate() {
-                                previous.set_input(i, heard(input));
-                            }
-                        }
-                        chain.process_blocks(
-                            &mut processed[..out_channels],
-                            frames,
-                            &mut self.buses,
-                        );
-                        if node.fade.elapsed < node.fade.frames
-                            && let Some(previous) = &mut node.fade.previous
+                        };
+                        let silent_in = node
+                            .def
+                            .inputs
+                            .iter()
+                            .all(|input| heard(input).iter().all(|s| *s == 0.0));
+                        if silent_in
+                            && node.chain_quiet >= rest_after
+                            && !(node.fade.previous.is_some()
+                                && node.fade.elapsed < node.fade.frames)
                         {
-                            previous.process_blocks(
-                                &mut scratch[..out_channels],
+                            // nothing to ring out and nothing coming in: the chain stays as it is, and says nothing
+                            processed[..out_channels]
+                                .iter_mut()
+                                .for_each(|c| c[..frames].fill(0.0));
+                        } else {
+                            for (i, input) in node.def.inputs.iter().enumerate() {
+                                chain.set_input(i, heard(input));
+                            }
+                            if let Some(previous) = &mut node.fade.previous {
+                                for (i, input) in node.fade.inputs.iter().enumerate() {
+                                    previous.set_input(i, heard(input));
+                                }
+                            }
+                            chain.process_blocks(
+                                &mut processed[..out_channels],
                                 frames,
                                 &mut self.buses,
                             );
-                            for (next, old) in processed[..out_channels]
-                                .iter_mut()
-                                .zip(&scratch[..out_channels])
+                            if node.fade.elapsed < node.fade.frames
+                                && let Some(previous) = &mut node.fade.previous
                             {
-                                for i in 0..frames {
-                                    let mix = ((node.fade.elapsed + i) as f32
-                                        / node.fade.frames as f32)
-                                        .min(1.0);
-                                    next[i] = old[i] * (1.0 - mix) + next[i] * mix;
+                                previous.process_blocks(
+                                    &mut scratch[..out_channels],
+                                    frames,
+                                    &mut self.buses,
+                                );
+                                for (next, old) in processed[..out_channels]
+                                    .iter_mut()
+                                    .zip(&scratch[..out_channels])
+                                {
+                                    for i in 0..frames {
+                                        let mix = ((node.fade.elapsed + i) as f32
+                                            / node.fade.frames as f32)
+                                            .min(1.0);
+                                        next[i] = old[i] * (1.0 - mix) + next[i] * mix;
+                                    }
                                 }
+                                node.fade.elapsed = node.fade.elapsed.saturating_add(frames);
                             }
-                            node.fade.elapsed = node.fade.elapsed.saturating_add(frames);
+                            if chain.is_poisoned() && !node.chain_silenced {
+                                node.chain_silenced = true;
+                                self.silenced += 1;
+                            }
+                            node.chain_quiet = if silent_in && chain.is_quiet(frames) {
+                                node.chain_quiet + frames
+                            } else {
+                                0
+                            };
                         }
-                        if chain.is_poisoned() && !node.chain_silenced {
-                            node.chain_silenced = true;
-                            self.silenced += 1;
-                        }
-                        node.chain_quiet = if silent_in && chain.is_quiet(frames) {
-                            node.chain_quiet + frames
-                        } else {
-                            0
-                        };
+                        &processed[..out_channels]
                     }
-                    &processed[..out_channels]
-                }
-            };
-
-            if let Some(load) = self.profile.as_ref().and_then(|p| p.nodes.get(t))
-                && frames >= BLOCK / 2
-            {
-                let chain_nanos = if node.chain.is_some() {
-                    chain_started.elapsed().as_nanos() as u64
-                } else {
-                    0
                 };
-                load.observe(node.voices.len(), node.voice_nanos, chain_nanos);
-            }
-            if let Some(meter) = &node.def.meter {
-                meter.observe(result, frames, self.buses.clock.sample);
-            }
-            if let Some(stems) = &mut self.stems {
-                keep(&mut stems.nodes[t], result, frames);
-            }
-            match node.def.route {
-                Route::Master => {
-                    for (o, r) in out.iter_mut().zip(result) {
-                        for (d, s) in o[..frames].iter_mut().zip(&r[..frames]) {
-                            *d += s;
+
+                if let Some(load) = self.profile.as_ref().and_then(|p| p.nodes.get(t))
+                    && frames >= BLOCK / 2
+                {
+                    let chain_nanos = if node.chain.is_some() {
+                        chain_started.elapsed().as_nanos() as u64
+                    } else {
+                        0
+                    };
+                    load.observe(node.voices.len(), node.voice_nanos, chain_nanos);
+                }
+                if let Some(meter) = &node.def.meter {
+                    meter.observe(result, frames, self.buses.clock.sample);
+                }
+                if let Some(stems) = &mut self.stems {
+                    keep(&mut stems.nodes[t], result, frames);
+                }
+                match node.def.route {
+                    Route::Master => {
+                        for (o, r) in out.iter_mut().zip(result) {
+                            for (d, s) in o[..frames].iter_mut().zip(&r[..frames]) {
+                                *d += s;
+                            }
+                        }
+                    }
+                    Route::Bus(b) => {
+                        for (c, r) in result.iter().enumerate() {
+                            self.buses.add(b, c, &r[..frames]);
                         }
                     }
                 }
-                Route::Bus(b) => {
-                    for (c, r) in result.iter().enumerate() {
-                        self.buses.add(b, c, &r[..frames]);
-                    }
-                }
             }
-        }
         }
         for (bus, meter) in &self.bus_meters {
             meter.observe(&self.buses.data[*bus], frames, self.buses.clock.sample);
@@ -1597,8 +1606,7 @@ impl Mixer {
                     node.fade.inputs = std::mem::take(&mut previous.def.inputs);
                 } else {
                     // the same DSP, or one that cannot crossfade: its memory comes straight across
-                    if let (Some(chain), Some(old_chain)) = (&mut node.chain, &mut previous.chain)
-                    {
+                    if let (Some(chain), Some(old_chain)) = (&mut node.chain, &mut previous.chain) {
                         chain.carry_state(old_chain);
                     }
                     if !changed {

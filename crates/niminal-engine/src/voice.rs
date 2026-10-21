@@ -186,7 +186,11 @@ const CHOKE_FADE: f32 = 0.005;
 
 impl Voice {
     pub fn new(graph: Arc<Graph>, sample_rate: f32) -> Self {
-        let mut ops: Vec<Op> = graph.nodes.iter().map(|n| Op::from_boxed(n.op.box_clone())).collect();
+        let mut ops: Vec<Op> = graph
+            .nodes
+            .iter()
+            .map(|n| Op::from_boxed(n.op.box_clone()))
+            .collect();
         for op in &mut ops {
             op.prepare(sample_rate);
         }
@@ -246,14 +250,16 @@ impl Voice {
         }
         for (index, param) in self.graph.params.iter().enumerate() {
             if let Some(previous) = old.graph.param_index(&param.name)
-                && self.mappings[index].is_none() && old.mappings[previous].is_some() {
-                    self.mappings[index] = old.mappings[previous].take();
-                    self.mappings[index]
-                        .as_mut()
-                        .unwrap()
-                        .set_range(param.range);
-                    self.slots[index] = old.slots[previous];
-                }
+                && self.mappings[index].is_none()
+                && old.mappings[previous].is_some()
+            {
+                self.mappings[index] = old.mappings[previous].take();
+                self.mappings[index]
+                    .as_mut()
+                    .unwrap()
+                    .set_range(param.range);
+                self.slots[index] = old.slots[previous];
+            }
         }
         let old_keys = old.graph.state_keys();
         let keys = self.graph.state_keys();
@@ -685,13 +691,17 @@ impl Voice {
     /// to `buses`.
     pub fn process_blocks(&mut self, out: &mut [[f32; BLOCK]], frames: usize, buses: &mut Buses) {
         if let Some(fade) = self.render(out, frames, buses) {
-            self.send(frames, fade.as_ref(), &mut |bus, channel, delayed, samples| {
-                if delayed {
-                    buses.add_delayed(bus, channel, samples);
-                } else {
-                    buses.add(bus, channel, samples);
-                }
-            });
+            self.send(
+                frames,
+                fade.as_ref(),
+                &mut |bus, channel, delayed, samples| {
+                    if delayed {
+                        buses.add_delayed(bus, channel, samples);
+                    } else {
+                        buses.add(bus, channel, samples);
+                    }
+                },
+            );
             self.settle_ramps();
         }
     }
@@ -706,13 +716,17 @@ impl Voice {
         sends: &mut Sends,
     ) {
         if let Some(fade) = self.render(out, frames, buses) {
-            self.send(frames, fade.as_ref(), &mut |bus, channel, delayed, samples| {
-                if delayed {
-                    sends.add_delayed(bus, channel, samples);
-                } else {
-                    sends.add(bus, channel, samples);
-                }
-            });
+            self.send(
+                frames,
+                fade.as_ref(),
+                &mut |bus, channel, delayed, samples| {
+                    if delayed {
+                        sends.add_delayed(bus, channel, samples);
+                    } else {
+                        sends.add(bus, channel, samples);
+                    }
+                },
+            );
             self.settle_ramps();
         }
     }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use realfft::num_complex::Complex;
-use realfft::{RealFftPlanner, RealToComplex, ComplexToReal};
+use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 
 use crate::opcode::{BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL};
 use crate::table::Buffer;
@@ -192,7 +192,11 @@ impl Opcode for Convolve {
             *o = inputs[0][i] * (1.0 - mix) + wet * mix;
             loudest = loudest.max(wet.abs());
         }
-        self.quiet_run = if loudest < TAIL_LEVEL { self.quiet_run.saturating_add(1) } else { 0 };
+        self.quiet_run = if loudest < TAIL_LEVEL {
+            self.quiet_run.saturating_add(1)
+        } else {
+            0
+        };
 
         self.head = (self.head + 1) % np;
     }
@@ -228,11 +232,7 @@ mod tests {
         let mix = vec![1.0f32; PART];
         let mut out = vec![0.0f32; PART];
 
-        conv.process(
-            &ProcessCtx::new(48_000.0, true),
-            &[&input, &mix],
-            &mut out,
-        );
+        conv.process(&ProcessCtx::new(48_000.0, true), &[&input, &mix], &mut out);
 
         let max_err: f32 = out
             .iter()
@@ -255,11 +255,7 @@ mod tests {
         let mix = vec![0.0f32; PART];
         let mut out = vec![0.0f32; PART];
 
-        conv.process(
-            &ProcessCtx::new(48_000.0, true),
-            &[&input, &mix],
-            &mut out,
-        );
+        conv.process(&ProcessCtx::new(48_000.0, true), &[&input, &mix], &mut out);
 
         assert_eq!(out, input, "mix=0 should pass the dry signal unchanged");
     }

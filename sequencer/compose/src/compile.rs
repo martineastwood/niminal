@@ -3,7 +3,9 @@
 
 use std::ops::Deref;
 
-use niminal_lang::{CompileOptions, ControlDef, Diagnostic, Instrument, Program, NodeInfo, resolve_target};
+use niminal_lang::{
+    CompileOptions, ControlDef, Diagnostic, Instrument, NodeInfo, Program, resolve_target,
+};
 use niminal_score::{Event, Tempo, Time, Tuning};
 
 use crate::ast::*;
@@ -43,7 +45,11 @@ impl ControlBinding {
     pub fn map_input(&self, control: &ControlDef, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         let (lo, hi) = (f64::from(self.lo), f64::from(self.hi));
-        let geometric = matches!(control.unit, niminal_lang::Unit::Hz | niminal_lang::Unit::Db) && lo > 0.0 && hi > 0.0;
+        let geometric = matches!(
+            control.unit,
+            niminal_lang::Unit::Hz | niminal_lang::Unit::Db
+        ) && lo > 0.0
+            && hi > 0.0;
         let engine = if geometric {
             lo * (hi / lo).powf(t)
         } else {
@@ -86,7 +92,9 @@ impl Composition {
     /// Resolve a musical note while keeping engine graph terminology out of diagnostics.
     pub fn plan(&self, event: &Event) -> Result<niminal_lang::NotePlan, niminal_lang::ArgError> {
         self.program.plan(event).map_err(|mut error| {
-            error.message = error.message.replace("instrument or node", "instrument or clip");
+            error.message = error
+                .message
+                .replace("instrument or node", "instrument or clip");
             error
         })
     }
@@ -120,7 +128,7 @@ fn names_of<'a>(items: &[Item], controls: &'a [ControlDef]) -> Names<'a> {
             Item::Const { name, .. } => (name, "constant"),
             Item::Bus(d) => (&d.name, "bus"),
             Item::Buffer(d) => (&d.name, "buffer"),
-            Item::Processor(d) => (&d.name, "processor"),
+            Item::Fx(d) => (&d.name, "fx"),
             Item::Sample(d) => (&d.name, if d.is_kit { "kit" } else { "sample" }),
             Item::Arrangement(d) => (&d.name, "arrangement"),
             Item::Def(d) => (&d.name, "score function"),
@@ -137,7 +145,10 @@ pub fn compile(source: &str) -> Result<Composition, Vec<Diagnostic>> {
     compile_with(source, &CompileOptions::default())
 }
 
-pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Composition, Vec<Diagnostic>> {
+pub fn compile_with(
+    source: &str,
+    options: &CompileOptions,
+) -> Result<Composition, Vec<Diagnostic>> {
     let parsed = parse_spanned(source).map_err(|d| vec![d])?;
     let mut items: Vec<Item> = parsed.iter().map(|(item, _)| item.clone()).collect();
     items = expand_score_fors(items).map_err(|d| vec![d])?;
@@ -149,13 +160,20 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
     });
     let tempo = tempo_of(&items, beats_per_bar, Tuning::default()).unwrap_or_else(|d| {
         errors.push(d);
-        Tempo { bpm: DEFAULT_BPM, beats_per_bar, tuning: Tuning::default() }
+        Tempo {
+            bpm: DEFAULT_BPM,
+            beats_per_bar,
+            tuning: Tuning::default(),
+        }
     });
     let implicit = implicit_nodes(&items);
     // Instrument selection is lowered to DSP nodes, leaving just the clip lanes.
     for item in &mut items {
         if let Item::Clip(block) = item
-            && let Some(at) = block.entries.iter().position(|(key, _)| key.name == "instrument")
+            && let Some(at) = block
+                .entries
+                .iter()
+                .position(|(key, _)| key.name == "instrument")
         {
             block.entries.remove(at);
         }
@@ -169,7 +187,10 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
             return Err(errors);
         }
     };
-    let tempo = Tempo { tuning: program.tempo.tuning, ..tempo };
+    let tempo = Tempo {
+        tuning: program.tempo.tuning,
+        ..tempo
+    };
 
     let names = names_of(&items, &program.controls);
     let cx = Context {
@@ -213,13 +234,24 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Compositio
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok(Composition { program, source: source.to_string(), tempo, quantize, inputs, notes, performance, arrangements })
+    Ok(Composition {
+        program,
+        source: source.to_string(),
+        tempo,
+        quantize,
+        inputs,
+        notes,
+        performance,
+        arrangements,
+    })
 }
 
 /// A diagnostic about the DSP text, placed in the composition it was made from.
 fn locate(dsp: &DspSource, mut d: Diagnostic) -> Diagnostic {
     d.span = dsp.locate(d.span);
-    d.message = d.message.replace("a node has only one", "a clip has only one");
+    d.message = d
+        .message
+        .replace("a node has only one", "a clip has only one");
     d
 }
 
@@ -234,7 +266,11 @@ fn control_inputs(
     let driven: Vec<(&Ident, &ControlInput)> = items
         .iter()
         .filter_map(|item| match item {
-            Item::Control { name, input: Some(input), .. } => Some((name, input)),
+            Item::Control {
+                name,
+                input: Some(input),
+                ..
+            } => Some((name, input)),
             _ => None,
         })
         .collect();
@@ -244,8 +280,11 @@ fn control_inputs(
     // the upper ends of the ranges are worked out by the compiler, among the definitions they may use
     let mut text = String::new();
     for (n, (_, input)) in driven.iter().enumerate() {
-        text.push_str(&format!("
-ctl __input_hi_{n} = {}", &source[input.hi.span.start..input.hi.span.end]));
+        text.push_str(&format!(
+            "
+ctl __input_hi_{n} = {}",
+            &source[input.hi.span.start..input.hi.span.end]
+        ));
     }
     let base = &program.source;
     let found = niminal_lang::compile_with(&format!("{base}{text}"), options)
@@ -255,7 +294,11 @@ ctl __input_hi_{n} = {}", &source[input.hi.span.start..input.hi.span.end]));
             d
         })?;
     for (n, (name, input)) in driven.iter().enumerate() {
-        let def = program.controls.iter().find(|c| c.name == name.name).expect("a control is compiled");
+        let def = program
+            .controls
+            .iter()
+            .find(|c| c.name == name.name)
+            .expect("a control is compiled");
         let hi = found
             .controls
             .iter()
@@ -279,7 +322,11 @@ ctl __input_hi_{n} = {}", &source[input.hi.span.start..input.hi.span.end]));
         }
         out.push((
             name.name.clone(),
-            ControlBinding { source: input.source.clone(), lo: def.initial, hi: hi.initial },
+            ControlBinding {
+                source: input.source.clone(),
+                lo: def.initial,
+                hi: hi.initial,
+            },
         ));
     }
     Ok(out)
@@ -485,14 +532,12 @@ pub(crate) fn implicit_nodes(items: &[Item]) -> Vec<String> {
     }
     let mut names: Vec<String> = Vec::new();
     for name in used {
-        let is_instrument = items
-            .iter()
-            .any(|i| match i {
-                Item::Instr(d) => d.name.name == name.name,
-                Item::Sample(d) => d.name.name == name.name,
-                Item::MidiOut(d) => d.name.name == name.name,
-                _ => false,
-            });
+        let is_instrument = items.iter().any(|i| match i {
+            Item::Instr(d) => d.name.name == name.name,
+            Item::Sample(d) => d.name.name == name.name,
+            Item::MidiOut(d) => d.name.name == name.name,
+            _ => false,
+        });
         let taken = items.iter().any(|i| match i {
             Item::Clip(b) => b.name.name == name.name,
             Item::Scene(b) => b.name.name == name.name,
@@ -525,9 +570,8 @@ fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
                                 format!("unknown kind of change `{other}`"),
                                 key.span,
                             );
-                            d = d.with_help(
-                                "the kinds are: default, play, instr, clip, ctl, tempo",
-                            );
+                            d = d
+                                .with_help("the kinds are: default, play, instr, clip, ctl, tempo");
                             return Err(d);
                         }
                     };

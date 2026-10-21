@@ -82,8 +82,8 @@ pub struct Clip {
     /// Lanes that are signals (`cut: sine.range(300hz, 3khz)`), once placed on a node: the
     /// parameter's unit. They move the parameter continuously instead of stepping it at each note.
     pub signals: Vec<(String, niminal_lang::Unit)>,
-    /// Explicit processor parameter lanes, with their units and default smoothing.
-    pub processor_params: Vec<(String, niminal_lang::Unit, f64)>,
+    /// Explicit fx parameter lanes, with their units and default smoothing.
+    pub fx_params: Vec<(String, niminal_lang::Unit, f64)>,
 }
 
 /// An `env[...]` in a lane: a run of glides between levels, from the start of the clip.

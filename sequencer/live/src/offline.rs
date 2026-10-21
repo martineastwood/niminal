@@ -8,8 +8,8 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use niminal_server::{EngineServer, Session};
 use niminal_lang::Layout;
+use niminal_server::{EngineServer, Session};
 
 use crate::link::InProcess;
 use crate::live::Live;
@@ -124,7 +124,7 @@ impl Offline {
                     Some(0)
                 } else {
                     let name = format!(
-                        "__routing_processor_{}_{}",
+                        "__routing_fx_{}_{}",
                         self.client,
                         crate::live::routing_id(&node.name)
                     );

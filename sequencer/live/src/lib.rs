@@ -15,11 +15,10 @@ mod service;
 
 pub use link::{EngineLink, InProcess};
 pub use live::{
-    Accepted, Begin, CancelDone, CancelJob, ControlSignal, EvalDone, EvalJob, Landed, Live, ParsedEval,
-    PendingInfo, PartStatus, Transport,
+    Accepted, Begin, CancelDone, CancelJob, ControlSignal, EvalDone, EvalJob, Landed, Live,
+    ParsedEval, PartStatus, PendingInfo, Transport,
 };
 pub use log::{Expression, LiveInput, LiveLogEntry};
-
 
 pub use offline::Offline;
 pub use protocol::{CompileTicket, CompiledTicket, LiveServer, Request, TOPICS};

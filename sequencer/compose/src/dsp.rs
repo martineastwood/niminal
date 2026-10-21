@@ -49,7 +49,11 @@ impl DspSource {
             }
         };
         let start = at(span.start, false);
-        let end = if span.end > span.start { at(span.end - 1, true) } else { start };
+        let end = if span.end > span.start {
+            at(span.end - 1, true)
+        } else {
+            start
+        };
         Span::new(start, end.max(start))
     }
 }
@@ -182,12 +186,20 @@ pub fn project(
                     pieces.push(derived(format!("config {{\n{}\n}}", entries.join("\n"))));
                 }
             }
-            Item::Processor(p) => {
-                let cuts = p.options.iter().filter_map(|a| setting_range(a, "quantize")).collect();
+            Item::Fx(p) => {
+                let cuts = p
+                    .options
+                    .iter()
+                    .filter_map(|a| setting_range(a, "quantize"))
+                    .collect();
                 pieces.push(without(text, span.start, cuts, verbatim, derived));
-            },
+            }
             Item::Instr(i) => {
-                let cuts = i.options.iter().filter_map(|a| setting_range(a, "quantize")).collect();
+                let cuts = i
+                    .options
+                    .iter()
+                    .filter_map(|a| setting_range(a, "quantize"))
+                    .collect();
                 pieces.push(without(text, span.start, cuts, verbatim, derived));
             }
             Item::Sample(sample) => {
@@ -217,7 +229,11 @@ pub fn project(
                         changed = true;
                     }
                 }
-                pieces.push(if changed { derived(text) } else { verbatim(text) });
+                pieces.push(if changed {
+                    derived(text)
+                } else {
+                    verbatim(text)
+                });
             }
             _ => pieces.push(verbatim(text.to_string())),
         }
@@ -247,32 +263,53 @@ pub fn project(
             };
             d
         })?;
-        uses_clock |= edits.iter().any(|(_, replacement)| replacement.contains(LIVE_BPM));
+        uses_clock |= edits
+            .iter()
+            .any(|(_, replacement)| replacement.contains(LIVE_BPM));
         let mut at = 0;
-        let mut push = |out: &mut String, dsp_text: &str, from: usize, len: usize, replaced: bool| {
-            if dsp_text.is_empty() && !replaced {
-                return;
-            }
-            let (src, src_end, verbatim) = match piece.verbatim_at {
-                Some(base) if !replaced => (base + from, base + from + len, true),
-                Some(base) => (base + from, base + from + len, false),
-                None => (piece.span.start, piece.span.end, false),
+        let mut push =
+            |out: &mut String, dsp_text: &str, from: usize, len: usize, replaced: bool| {
+                if dsp_text.is_empty() && !replaced {
+                    return;
+                }
+                let (src, src_end, verbatim) = match piece.verbatim_at {
+                    Some(base) if !replaced => (base + from, base + from + len, true),
+                    Some(base) => (base + from, base + from + len, false),
+                    None => (piece.span.start, piece.span.end, false),
+                };
+                segments.push(Segment {
+                    dsp: out.len(),
+                    len: dsp_text.len(),
+                    src,
+                    src_end,
+                    verbatim,
+                });
+                out.push_str(dsp_text);
             };
-            segments.push(Segment {
-                dsp: out.len(),
-                len: dsp_text.len(),
-                src,
-                src_end,
-                verbatim,
-            });
-            out.push_str(dsp_text);
-        };
         for (edit, replacement) in &edits {
-            push(&mut text, &piece.text[at..edit.start], at, edit.start - at, false);
-            push(&mut text, replacement, edit.start, edit.end - edit.start, true);
+            push(
+                &mut text,
+                &piece.text[at..edit.start],
+                at,
+                edit.start - at,
+                false,
+            );
+            push(
+                &mut text,
+                replacement,
+                edit.start,
+                edit.end - edit.start,
+                true,
+            );
             at = edit.end;
         }
-        push(&mut text, &piece.text[at..], at, piece.text.len() - at, false);
+        push(
+            &mut text,
+            &piece.text[at..],
+            at,
+            piece.text.len() - at,
+            false,
+        );
     }
     if standalone && uses_clock {
         let own = Span::new(0, 0);
@@ -282,7 +319,13 @@ pub fn project(
             format!("ctl {LIVE_METER} = {}", tempo.beats_per_bar),
         ] {
             text.push('\n');
-            segments.push(Segment { dsp: text.len(), len: line.len(), src: own.start, src_end: own.end, verbatim: false });
+            segments.push(Segment {
+                dsp: text.len(),
+                len: line.len(),
+                src: own.start,
+                src_end: own.end,
+                verbatim: false,
+            });
             text.push_str(&line);
         }
     }
@@ -308,7 +351,10 @@ fn token_edits(text: &str, tempo: Tempo) -> Result<Vec<(Span, String)>, Diagnost
                 edits.push((token.span, format!("{seconds}sec")));
             }
             if unit == "bpm" {
-                return Err(Diagnostic::new("`bpm` can only be used with `tempo`", token.span));
+                return Err(Diagnostic::new(
+                    "`bpm` can only be used with `tempo`",
+                    token.span,
+                ));
             }
         }
         if matches!(&token.tok, Tok::Ident(n) if n == "clock")

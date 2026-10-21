@@ -18,9 +18,16 @@ pub(crate) enum Kind {
     Buffer,
     Function,
     /// A value of this unit. `whole` for `int`.
-    Unit { unit: Unit, whole: bool },
+    Unit {
+        unit: Unit,
+        whole: bool,
+    },
     /// A value of this unit between two ends, clamped to them.
-    Range { unit: Unit, lo: f64, hi: f64 },
+    Range {
+        unit: Unit,
+        lo: f64,
+        hi: f64,
+    },
     /// One of these names, known while compiling. Inside the body each name is its index.
     Choice(Vec<String>),
     /// A list whose entries have this kind.
@@ -176,23 +183,29 @@ pub(crate) fn signature(params: &[ParamDef], tempo: Tempo) -> Res<Vec<Param>> {
         if let (Kind::Function, Some((rate, span))) = (&kind, p.rate)
             && rate != Rate::Const
         {
-            return Err(Diagnostic::new("a function is always known while compiling", span));
+            return Err(Diagnostic::new(
+                "a function is always known while compiling",
+                span,
+            ));
         }
         if let (Kind::Choice(_), Some((rate, span))) = (&kind, p.rate)
             && rate != Rate::Const
         {
-            return Err(Diagnostic::new(
-                "a choice is always known while compiling",
-                span,
-            )
-            .with_help("leave out the rate: `mode: (low | high) = low`"));
+            return Err(
+                Diagnostic::new("a choice is always known while compiling", span)
+                    .with_help("leave out the rate: `mode: (low | high) = low`"),
+            );
         }
         if let (Kind::Choice(names), Some(default)) = (&kind, &p.default) {
             match &default.kind {
                 ExprKind::Name(n) if names.contains(n) => {}
                 _ => {
                     return Err(Diagnostic::new(
-                        format!("the default for `{}` is one of {}", p.name.name, names.join(", ")),
+                        format!(
+                            "the default for `{}` is one of {}",
+                            p.name.name,
+                            names.join(", ")
+                        ),
                         default.span,
                     ));
                 }
@@ -270,7 +283,10 @@ pub(crate) fn bind<'a>(
         };
         if bound[index].is_some() {
             return Err(Diagnostic::new(
-                format!("`{callee}` argument `{}` given more than once", params[index]),
+                format!(
+                    "`{callee}` argument `{}` given more than once",
+                    params[index]
+                ),
                 arg.value.span,
             ));
         }

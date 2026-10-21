@@ -116,7 +116,7 @@ instr cloud(freq: hz = 220hz) {
 
 Each positive trigger edge starts a fresh layer and captures the surrounding signal values it reads. `dur` is captured on that edge too. The layer has its own envelopes, state, `note.time`, `note.start`, `note.index`, and `note.released`. It releases after `dur`, then drains its envelopes and effects. Releasing the parent releases all its layers and stops new triggers. `max` is a compile-time integer from 1 to 64 (default 8); a full pool drops new triggers. Storage is prepared before playback.
 
-The body can call an instrument or a DSP function, and can read a shared buffer with `buf[i]` or `buf.at(pos)`. It follows the sample DSP function rules: channel-layout processors, bus sends, shared writes and OSC output belong outside the scope. `spawn`, `oversample` and `reset_on` scopes can compose; `spawn` and `oversample` nesting is limited to 16 levels. Use clips and `at` to schedule independent top-level notes.
+The body can call an instrument or a DSP function, and can read a shared buffer with `buf[i]` or `buf.at(pos)`. It follows the sample DSP function rules: channel-layout DSP operations, bus sends, shared writes and OSC output belong outside the scope. `spawn`, `oversample` and `reset_on` scopes can compose; `spawn` and `oversample` nesting is limited to 16 levels. Use clips and `at` to schedule independent top-level notes.
 
 ### Noise
 
@@ -136,7 +136,7 @@ Every `noise()` in an instrument, and every note of it, has its own noise, and a
 | `instr` | Spawns a new voice (poly, default) | Most instruments |
 | `mono` | Ends the voice before it and starts its own (one voice at a time, per clip name) | Bass, leads |
 
-Continuous processors and generators use **`processor`** declarations (see [Routing](/reference/language/routing/)).
+Continuous fx declarations and generators use **`fx`** (see [Routing](/reference/language/routing/)).
 
 ### Settings
 

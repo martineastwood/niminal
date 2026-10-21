@@ -19,8 +19,7 @@ use niminal_engine::{
     BLOCK, DEFAULT_CEILING, DEFAULT_MAX_VOICES, MAX_CHANNELS, Master, Mixer, Transfer,
 };
 use niminal_lang::{
-    CompileOptions, Expanded, Layout, Program, Samples, Statement, analyze,
-    compile_with,
+    CompileOptions, Expanded, Layout, Program, Samples, Statement, analyze, compile_with,
 };
 use niminal_score::{Event, Time, Value};
 
@@ -133,7 +132,7 @@ struct ChainMap {
 }
 impl ChainMap {
     fn node(&self) -> String {
-        format!("__routing_processor_{}_{}", self.client, self.node)
+        format!("__routing_fx_{}_{}", self.client, self.node)
     }
 }
 #[derive(Clone)]

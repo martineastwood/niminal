@@ -1,6 +1,6 @@
 use crate::opcode::{Opcode, Port, ProcessCtx};
 
-/// A custom processor's completion participates in the same lifetime rules as an envelope.
+/// A custom effect's completion participates in the same lifetime rules as an envelope.
 #[derive(Default)]
 pub struct FinishWhen {
     done: bool,

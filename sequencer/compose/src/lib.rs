@@ -20,7 +20,9 @@ mod score_prog;
 #[cfg(test)]
 mod tests;
 
-pub use analysis::{CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_entries};
+pub use analysis::{
+    CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_entries,
+};
 pub use ast::{ControlInput, InputSource};
 pub use compile::{Composition, ControlBinding, QuantizeConfig, compile, compile_with};
 pub use dsp::{LIVE_BPM, LIVE_METER, LIVE_ORIGIN, dsp_source};
@@ -29,10 +31,11 @@ pub use lexer::{Tok, Token, lex};
 pub use modules::expand;
 pub use perform::PITCH_PARAM;
 pub use performance::{
-    Action, Arrangement, Clip, EnvLane, Keys, Quantize, QuantizeRelation, QuantizeUnit, Scene, Scheduled,
+    Action, Arrangement, Clip, EnvLane, Keys, Quantize, QuantizeRelation, QuantizeUnit, Scene,
+    Scheduled,
 };
+pub use schedule::{ControlSet, Found, PartState, Schedule, ScheduleError};
 pub use score_file::{
-    ArrangementDef, ArrangementSection, ClipDef, ClipEvent, Project, SceneDef, SceneEntry, ScoreError, ScoreFile, Section,
-    VERSION, VERSION_2,
+    ArrangementDef, ArrangementSection, ClipDef, ClipEvent, Project, SceneDef, SceneEntry,
+    ScoreError, ScoreFile, Section, VERSION, VERSION_2,
 };
-pub use schedule::{ControlSet, Found, Schedule, ScheduleError, PartState};

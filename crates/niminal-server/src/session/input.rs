@@ -121,8 +121,9 @@ impl Session {
                         *target = definitions::scoped(client, target);
                     }
                 }
-                Op::Control { name, .. }
-                | Op::BufferWrite { name, .. } => *name = definitions::scoped(client, name),
+                Op::Control { name, .. } | Op::BufferWrite { name, .. } => {
+                    *name = definitions::scoped(client, name)
+                }
                 Op::BindBuffer { buffer, .. } => *buffer = definitions::scoped(client, buffer),
                 Op::Map {
                     source: Some(name), ..
@@ -590,9 +591,7 @@ impl Session {
                                     .find(|(n, _)| n == buffer && !self.buffer_is_hidden(n))
                                     .ok_or("no buffer")?;
                                 if data.channels() < width {
-                                    return Err(
-                                        "buffer has too few channels for the processor".into()
-                                    );
+                                    return Err("buffer has too few channels for the fx".into());
                                 }
                                 Ok(Plan::NodeBind {
                                     id: id.clone(),
@@ -1029,7 +1028,7 @@ impl Session {
                 } => {
                     let bind = BufferBind {
                         param,
-                        target: Some(format!("__routing_processor_{client}_{id}")),
+                        target: Some(format!("__routing_fx_{client}_{id}")),
                         key: 0,
                         resource,
                         bank,

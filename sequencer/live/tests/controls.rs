@@ -1,6 +1,6 @@
-use niminal_server::{from_lines, to_lines};
 use niminal_lang::Layout;
 use niminal_live::{ControlSignal, Offline};
+use niminal_server::{from_lines, to_lines};
 
 fn session(source: &str) -> Offline {
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -88,11 +88,7 @@ fn bound_controls_replay_from_the_log() {
         original.extend(s.process(100).remove(0));
     }
     let log = from_lines(&to_lines(&s.log())).unwrap();
-    let replay = niminal_server::Session::replay(48_000.0, Layout::Mono,
-        &log,
-        400,
-        false,
-    );
+    let replay = niminal_server::Session::replay(48_000.0, Layout::Mono, &log, 400, false);
     assert_eq!(original, replay[0]);
 }
 

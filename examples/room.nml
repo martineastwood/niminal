@@ -4,12 +4,12 @@ tempo 110bpm
 
 bus space
 
-processor room {
+fx room {
   echoes = space.delay(time: 3/16beat, feedback: 0.4).lpf(cutoff: 3khz)
   out = (echoes + space.reverb(room: 0.8, damp: 0.4)).gain(0.8)
 }
 
-processor lead_fx {
+fx lead_fx {
   out = lead_fx_audio.gain(0.8)
 }
 bus lead_fx_audio: mono

@@ -8,8 +8,8 @@ use clap::{Args, Parser, Subcommand};
 use niminal_cli::audio::{NullClock, Output, Shared};
 use niminal_cli::render::{DEFAULT_SAMPLE_RATE, write_wav};
 use niminal_cli::replay::replay;
-use niminal_server::{EngineServer, Session, from_lines, to_lines};
 use niminal_lang::Layout;
+use niminal_server::{EngineServer, Session, from_lines, to_lines};
 use niminal_ws::{Server, ServerConfig};
 
 #[derive(Parser)]
@@ -60,7 +60,7 @@ struct ServerArgs {
     /// The address to listen on. Only local addresses are accepted for now.
     #[arg(long, default_value = "127.0.0.1")]
     listen: IpAddr,
-    /// Listen to the default audio input device, for processors that read `input(1)`.
+    /// Listen to the default audio input device, for fx declarations that read `input(1)`.
     #[arg(long)]
     audio_input: bool,
     /// Threads that render audio together, counting the render thread itself: 1 renders on one core.
@@ -250,7 +250,7 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
     audio_control.publish_devices(niminal_cli::audio::devices());
     audio_control.publish_status(serde_json::json!({"state":if no_audio{"virtual"}else{"running"},"sample_rate":rate,"channels":channels,"output":where_to}));
     niminal_cli::audio::lock(&engine).set_audio_control(audio_control.clone());
-    // the default input device, if asked for, feeds processors that read `input(..)`
+    // the default input device, if asked for, feeds fx declarations that read `input(..)`
     let (mut listening, mut input) = (None, None);
     if audio_input {
         if no_audio {
@@ -439,4 +439,3 @@ fn opcode_reference() -> String {
     }
     out
 }
-

@@ -63,8 +63,8 @@ fn measured(r: &mut RealtimeRenderer, n: usize, out: &mut [f32]) {
 }
 
 fn streamed_notes(count: usize, seconds: f64) -> Vec<niminal_server::Op> {
-    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
+    use niminal_server::{At, Op};
     (0..count)
         .map(|i| Op::Note {
             to: None,
@@ -145,8 +145,8 @@ fn streamed_notes_inside_the_prepared_region_cause_no_replanning() {
 }
 
 fn voice_script() -> Vec<(u64, niminal_server::Op)> {
-    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
+    use niminal_server::{At, Op};
     let held = |id, at: u64, hz, dur: Option<f64>| {
         (
             at,
@@ -242,8 +242,8 @@ fn held_notes_sets_and_offs_sound_the_same_prepared_as_offline_wherever_they_are
 }
 
 fn bars(hz: f64, first: u32, count: u32, tag: &str) -> Vec<niminal_server::Op> {
-    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
+    use niminal_server::{At, Op};
     (first * 4..(first + count) * 4)
         .map(|beat| Op::Note {
             to: None,
@@ -294,8 +294,8 @@ fn cancelling_waiting_events_replans_without_building_a_mixer_even_inside_the_pr
 
 #[test]
 fn timestamped_definitions_and_notes_sound_the_same_prepared_as_offline() {
-    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
+    use niminal_server::{At, Op};
     const SINE: &str =
         "instr organ(freq: hz, cut: hz = 100hz) { osc(sine, freq) * env[1 | 100ms 0] * 0.3 }";
     const SAW: &str = "instr organ(freq: hz, cut: hz = 100hz) { osc(saw, freq).lpf(cutoff: 3000hz) * env[1 | 100ms 0] * 0.3 }";
@@ -399,8 +399,8 @@ fn a_timed_panic_sounds_the_same_prepared_as_offline() {
 
 #[test]
 fn instrument_scopes_and_buffer_events_allocate_nothing_while_rendering() {
-    use niminal_server::{At, Op};
     use niminal_score::Time;
+    use niminal_server::{At, Op};
     let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
     s.send_events(0, vec![Op::Define { source: "buffer data = zeros(4)\ninstr a() { oversample(4) { osc(sine, 440hz).tanh } + spawn(osc(square, 400hz), dur: 10ms, max: 8) { osc(sine, 220hz) * env[1 | 2ms 0] } + data[0] }".into(), at: At::Now, dir: None, tag: None }]).unwrap();
     s.send_events(
@@ -434,8 +434,8 @@ fn instrument_scopes_and_buffer_events_allocate_nothing_while_rendering() {
 
 #[test]
 fn rich_parameters_and_dynamic_mapping_allocate_nothing_on_audio() {
-    use niminal_server::{At, Op};
     use niminal_score::{Time, Value};
+    use niminal_server::{At, Op};
     let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
     s.send_events(0,vec![Op::Define{source:"buffer one = zeros(8)\nbuffer two = zeros(8)\nctl level = 0.25\ninstr a(weights: [num] = [0.1, 0.2], source: buffer = one, value: num = 0) { spawn(osc(square, 100hz), dur: 1ms) { oversample(4) { osc(sine, 440hz) * env[1 | 1ms 0] } } + weights.sum + source[0] + value }".into(),at:At::Now,dir:None,tag:None}]).unwrap();
     s.send_events(
@@ -515,7 +515,7 @@ fn routing_swaps_and_draining_held_voices_do_no_heap_work_in_the_renderer() {
                     edits: vec![
                         Edit::Node {
                             id: "channel".into(),
-                            processor: None,
+                            fx: None,
                             instrument: None,
                             args: Default::default(),
                         },
@@ -568,8 +568,8 @@ fn routing_session() -> Session {
         1,
         serde_json::from_value(json!([
             {"op":"transaction","at":0,"source":"instr flat() { 0.2 }","edits":[
-                {"op":"processor","name":"volume","source":"(level: num = 1) { out = it * level }"},
-                {"op":"node","id":"a","processor":"volume"},
+                {"op":"fx","name":"volume","source":"(level: num = 1) { out = it * level }"},
+                {"op":"node","id":"a","fx":"volume"},
                 {"op":"connect","id":"out","from":{"kind":"node","id":"a"},"to":{"kind":"master"}}
             ]},
             {"op":"note","target":"flat","to":"a","at":0,"dur":"1sec"}
@@ -622,8 +622,8 @@ fn crossfades_and_actual_transaction_acknowledgements_do_no_heap_work_on_audio()
     let mut r = s.start_realtime(RealtimeConfig::default());
     let ops: Vec<niminal_server::Op> = serde_json::from_value(json!([
         {"op":"transaction","at":17,"edits":[
-            {"op":"processor","name":"twice","source":"(level: num = 1) { out = it * level * 2 }"},
-            {"op":"replace","id":"a","processor":"twice","fade":8.0/48000.0}
+            {"op":"fx","name":"twice","source":"(level: num = 1) { out = it * level * 2 }"},
+            {"op":"replace","id":"a","fx":"twice","fade":8.0/48000.0}
         ]},
         {"op":"routing","at":21,"edits":[{"op":"bus","id":"unused","channels":1}]}
     ]))
@@ -670,8 +670,8 @@ fn a_graph_missed_during_starvation_is_applied_and_acknowledged_when_planning_re
         .send_events(
             1,
             serde_json::from_value(json!([{"op":"routing","at":32,"edits":[
-                {"op":"processor","name":"double","source":"() { out = it * 2 }"},
-                {"op":"replace","id":"a","processor":"double"}
+                {"op":"fx","name":"double","source":"() { out = it * 2 }"},
+                {"op":"replace","id":"a","fx":"double"}
             ]}]))
             .unwrap(),
         )
@@ -706,19 +706,19 @@ fn a_graph_missed_during_starvation_is_applied_and_acknowledged_when_planning_re
 }
 
 #[test]
-fn panic_during_a_processor_crossfade_matches_offline_without_heap_work_on_audio() {
+fn panic_during_a_fx_crossfade_matches_offline_without_heap_work_on_audio() {
     use niminal_server::{At, Op};
     use serde_json::json;
     let setup = |scheduled: bool| {
         let mut s = routing_session();
         s.send_events(1, serde_json::from_value(json!([
             {"op":"routing","at":0,"edits":[
-                {"op":"processor","name":"echo","source":"() { out = it.delay(time: 1ms, feedback: 0.9) }"},
-                {"op":"replace","id":"a","processor":"echo"}
+                {"op":"fx","name":"echo","source":"() { out = it.delay(time: 1ms, feedback: 0.9) }"},
+                {"op":"replace","id":"a","fx":"echo"}
             ]},
             {"op":"routing","at":128,"edits":[
-                {"op":"processor","name":"double","source":"() { out = it * 2 }"},
-                {"op":"replace","id":"a","processor":"double","fade":0.02}
+                {"op":"fx","name":"double","source":"() { out = it * 2 }"},
+                {"op":"replace","id":"a","fx":"double","fade":0.02}
             ]}
         ])).unwrap()).unwrap();
         if scheduled {

@@ -6,7 +6,7 @@ config { channels: stereo }
 tempo 100bpm
 
 bus room: stereo
-processor room_return {
+fx room_return {
   out = room.reverb(room: 0.35, damp: 0.5).gain(0.7)
 }
 
@@ -14,7 +14,7 @@ drums = kit("drums")
 
 instr drum_voice(sample, gain: db = 0db) { out = drums(sample: sample, gain: gain) }
 clip beat { instrument: drum_voice }
-processor snare_fx {
+fx snare_fx {
   out = snare_audio.gain(-1db)
   room += out.gain(-12db)
 }
@@ -24,7 +24,7 @@ instr snare_voice(sample, freq: hz = c4, gain: db = 0db, pan: deg = 0deg) {
   snare_audio += voice
 }
 clip snare { instrument: snare_voice }
-processor hat_fx {
+fx hat_fx {
   out = hat_audio.hpf(cutoff: 6khz)
 }
 bus hat_audio: stereo

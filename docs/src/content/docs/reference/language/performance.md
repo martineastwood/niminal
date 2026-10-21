@@ -3,7 +3,7 @@ title: Performance
 description: Clips, scenes, live commands, quantization, and control.
 ---
 
-The performance layer is built around **clips** and **scenes**: clips carry an instrument and lanes on a timeline, and scenes start sets of clips. Instruments route audio to buses and persistent processors. Arrangements sequence the same structures for offline renders.
+The performance layer is built around **clips** and **scenes**: clips carry an instrument and lanes on a timeline, and scenes start sets of clips. Instruments route audio to buses and persistent fx instances. Arrangements sequence the same structures for offline renders.
 
 ## Playing clips
 
@@ -30,11 +30,11 @@ bass.unmute
 verse.stop
 ```
 
-Shared effects live in processors. Buses collect audio from explicit sends:
+Shared effects live in fx declarations. Buses collect audio from explicit sends:
 
 ```nml
 bus space: stereo
-processor room {
+fx room {
   out = space.reverb(room: 0.8, damp: 0.4).gain(0.8)
 }
 ```
@@ -59,11 +59,11 @@ clip riff {
 }
 ```
 
-- An arrangement can carry envelope lanes on a processor's parameter, `bass_filter.tone: env[800hz 88bars 3khz]`, over the whole piece (applied when the arrangement is rendered).
-- Envelope lanes, such as `bass_filter.tone: env[300hz 1bar.exp 3khz]`, move a processor parameter over the clip's timeline with the same literal and curves as an instrument envelope; they hold their last level, `.loop` repeats them, and they need no `|`.
-- Lane targets: `notes`, instrument parameters, qualified processor parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Bare lanes target the clip’s notes. Qualified lanes can target a processor shared by several clips.
+- An arrangement can carry envelope lanes on an fx parameter, `bass_filter.tone: env[800hz 88bars 3khz]`, over the whole piece (applied when the arrangement is rendered).
+- Envelope lanes, such as `bass_filter.tone: env[300hz 1bar.exp 3khz]`, move an fx parameter over the clip's timeline with the same literal and curves as an instrument envelope; they hold their last level, `.loop` repeats them, and they need no `|`.
+- Lane targets: `notes`, instrument parameters, qualified fx parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Bare lanes target the clip’s notes. Qualified lanes can target an fx shared by several clips.
 - **Step lanes** read at note start and cycle (polymeter); **`.per_note`** maps nth note → nth value.
-- Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip. A signal lane is a signal naming a processor parameter, as in `bass_filter.tone: sine.range(300hz, 3khz)`: the parameter follows it continuously (50 readings a second), one cycle per clip length, with or without notes.
+- Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip. A signal lane is a signal naming an fx parameter, as in `bass_filter.tone: sine.range(300hz, 3khz)`: the parameter follows it continuously (50 readings a second), one cycle per clip length, with or without notes.
 - Shorthand: `[c2 ~ eb2]` → `clip { notes: [...] }`.
 - **`riff.set(bright: [0.9])`** — lanes are fields.
 - **Longer than a bar:** with `length: 2bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`). Without a `length:` a lane's cycle is one bar. `riff.over(4bars)` stretches the whole clip, and `riff.set(...)` lanes span it too.
@@ -91,7 +91,7 @@ arrangement song {
 }
 ```
 
-A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move a processor's parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
+A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move an fx parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
 
 See [Score model](/reference/score-model/) for arrangement-level lanes.
 
@@ -268,7 +268,7 @@ ctl filth  = midi.cc(21)
 ctl volume = midi.cc(7).range(-60db..0db)
 ctl drive  = 0.3
 
-processor bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
+fx bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
 ```
 
 **Learning a controller:** write `midi.learn` and move the knob you want. The next control change binds to it, and the server tells the editor to rewrite the line to what it heard.

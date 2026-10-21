@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use niminal_engine::{Route, NodeDef, execution_order};
+use niminal_engine::{NodeDef, Route, execution_order};
 use niminal_score::{MAX_DEGREES, Tempo, Time, Tuning, Value};
 
 use crate::ast::*;
@@ -16,7 +16,7 @@ use crate::lower::{
 };
 use crate::opcodes::Registry;
 use crate::parser;
-use crate::program::{Instrument, Program, NodeInfo};
+use crate::program::{Instrument, NodeInfo, Program};
 use crate::sample::Samples;
 
 type Res<T> = Result<T, Diagnostic>;
@@ -32,7 +32,7 @@ pub struct CompileOptions {
     pub sample_rate: f32,
     pub buffer_budgets: HashMap<String, usize>,
     pub retained_buffer_bytes: HashMap<String, usize>,
-    /// Defer topology-dependent compensation until the host has connected processor instances.
+    /// Defer topology-dependent compensation until the host has connected fx instances.
     pub defer_latency: bool,
     /// The output layout when the source has no `config { channels: ... }`.
     pub default_layout: Layout,
@@ -58,12 +58,12 @@ impl Default for CompileOptions {
     }
 }
 
-/// Lower processor parameters to named controls.
+/// Lower fx parameters to named controls.
 fn desugar(items: Vec<Item>) -> Vec<Item> {
     let mut out = Vec::with_capacity(items.len());
     for mut item in items {
         match &mut item {
-            Item::Node(node) | Item::Processor(node) => {
+            Item::Node(node) | Item::Fx(node) => {
                 // a parameter is a control called `node::param`, and the body reads it by its short name
                 for param in std::mem::take(&mut node.params) {
                     let Some(default) = param.default else {
@@ -92,24 +92,24 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
 }
 
 fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
-    // Collections own note defaults and routing. Persistent DSP belongs to processors.
-    let processor_names: Vec<String> = parsed
+    // Collections own note defaults and routing. Persistent DSP belongs to fx declarations.
+    let fx_names: Vec<String> = parsed
         .iter()
         .filter_map(|item| match item {
-            Item::Processor(d) => Some(d.name.name.clone()),
+            Item::Fx(d) => Some(d.name.name.clone()),
             _ => None,
         })
         .collect();
-    let mut processor_inputs = BTreeMap::new();
+    let mut fx_inputs = BTreeMap::new();
     for item in parsed.iter_mut() {
         match item {
-            Item::Processor(d) => {
+            Item::Fx(d) => {
                 if d.body
                     .iter()
                     .any(|s| matches!(s, Stmt::Bind { name, .. } if name.name == "instrument"))
                 {
                     return Err(Diagnostic::new(
-                        "a processor cannot select an instrument; select it on the clip or note",
+                        "an fx cannot select an instrument; select it on the clip or note",
                         d.span,
                     ));
                 }
@@ -117,14 +117,14 @@ fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
             Item::Node(d) => {
                 if !d.params.is_empty() {
                     return Err(Diagnostic::new(
-                        "collection nodes have no DSP parameters; declare them on a processor",
+                        "collection nodes have no DSP parameters; declare them on an fx",
                         d.span,
                     ));
                 }
                 for stmt in &mut d.body {
                     let Stmt::Bind { name, value } = stmt else {
                         return Err(Diagnostic::new(
-                            "a collection accepts instrument, output, gain and pan; put DSP in a processor",
+                            "a collection accepts instrument, output, gain and pan; put DSP in an fx",
                             d.span,
                         ));
                     };
@@ -133,12 +133,12 @@ fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
                         "output" => {
                             let ExprKind::Name(destination) = &value.kind else {
                                 return Err(Diagnostic::new(
-                                    "output is the name of a bus or processor",
+                                    "output is the name of a bus or fx",
                                     value.span,
                                 ));
                             };
-                            let destination = if processor_names.contains(destination) {
-                                processor_inputs
+                            let destination = if fx_names.contains(destination) {
+                                fx_inputs
                                     .entry(destination.clone())
                                     .or_insert_with(|| format!("{destination}.__input"))
                                     .clone()
@@ -176,7 +176,7 @@ fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
                         }
                         _ => {
                             return Err(Diagnostic::new(
-                                "a collection accepts instrument, output, gain and pan; put DSP in a processor",
+                                "a collection accepts instrument, output, gain and pan; put DSP in an fx",
                                 name.span,
                             ));
                         }
@@ -186,7 +186,7 @@ fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
             _ => {}
         }
     }
-    for input in processor_inputs.values() {
+    for input in fx_inputs.values() {
         parsed.push(Item::Bus(BusDecl {
             name: Ident {
                 name: input.clone(),
@@ -195,7 +195,7 @@ fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
             layout: None,
         }));
     }
-    Ok(processor_inputs)
+    Ok(fx_inputs)
 }
 
 /// A collection may share the name of its default instrument.
@@ -283,28 +283,27 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
                     .namespaces
                     .iter()
                     .any(|(start, end, _)| config.span.start >= *start && config.span.start < *end)
-                {
-                    for (key, value) in &config.entries {
-                        if key.name == "channels"
-                            && layout_from_expr(value).map_err(|d| vec![d])?
-                                != options.default_layout
-                        {
-                            return Err(vec![Diagnostic::new(
-                                "client output layout must match the running engine",
-                                value.span,
-                            )]);
-                        }
+            {
+                for (key, value) in &config.entries {
+                    if key.name == "channels"
+                        && layout_from_expr(value).map_err(|d| vec![d])? != options.default_layout
+                    {
+                        return Err(vec![Diagnostic::new(
+                            "client output layout must match the running engine",
+                            value.span,
+                        )]);
                     }
                 }
+            }
         }
         parsed.retain(|item|!matches!(item,Item::Config(config) if options.namespaces.iter().any(|(start,end,_)|config.span.start>=*start&&config.span.start<*end)));
     }
-    let processor_inputs = prepare_routing(&mut parsed).map_err(|d| vec![d])?;
+    let fx_inputs = prepare_routing(&mut parsed).map_err(|d| vec![d])?;
     let mut buffer_controls = Vec::new();
     let mut array_controls = BTreeMap::new();
     let mut control_types = BTreeMap::new();
     for item in &mut parsed {
-        if let Item::Node(node) | Item::Processor(node) = item {
+        if let Item::Node(node) | Item::Fx(node) = item {
             let mut params = Vec::new();
             for mut param in std::mem::take(&mut node.params) {
                 if matches!(&param.ty,Some(TypeSpec::Unit(t)) if t.name=="buffer") {
@@ -395,12 +394,13 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             }
             for param in &params {
                 if let Some(ty) = &param.ty
-                    && !matches!(ty,TypeSpec::Unit(t) if t.name=="buffer") {
-                        control_types.insert(
-                            format!("{}::{}", node.name.name, param.name.name),
-                            ty.clone(),
-                        );
-                    }
+                    && !matches!(ty,TypeSpec::Unit(t) if t.name=="buffer")
+                {
+                    control_types.insert(
+                        format!("{}::{}", node.name.name, param.name.name),
+                        ty.clone(),
+                    );
+                }
             }
             node.params = params;
         }
@@ -432,14 +432,15 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             Item::Bus(d) => (&d.name, "bus"),
             Item::Buffer(d) => (&d.name, "buffer"),
             Item::Node(d) => (&d.name, "node"),
-            Item::Processor(d) => (&d.name, "processor"),
+            Item::Fx(d) => (&d.name, "fx"),
             Item::Sample(d) => (&d.name, if d.is_kit { "kit" } else { "sample" }),
             _ => continue,
         };
         match names.kind_of(&ident.name) {
             None => names.add(&ident.name, kind),
             // a node may play the instrument of its own name, and share it
-            Some("instrument" | "sample" | "kit") if matches!(item, Item::Node(t) if plays_its_namesake(t)) => {}
+            Some("instrument" | "sample" | "kit") if matches!(item, Item::Node(t) if plays_its_namesake(t)) =>
+                {}
             Some(existing) if existing != kind => {
                 errors.push(Diagnostic::new(
                     format!(
@@ -588,10 +589,10 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
     }
 
-    // Unlike a declared bus (mono by default), a processor's input preserves the
+    // Unlike a declared bus (mono by default), an fx's input preserves the
     // complete incoming layout, including every channel read by its graph.
-    for input in processor_inputs.values() {
-        let bus = names.bus(input).expect("processor input bus was registered");
+    for input in fx_inputs.values() {
+        let bus = names.bus(input).expect("fx input bus was registered");
         names.bus_layouts[bus] = names.master;
     }
 
@@ -753,7 +754,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let mut nodes = vec![implicit];
     let mut node_spans = vec![Span::default()];
     for item in &items {
-        let (Item::Node(decl) | Item::Processor(decl)) = item else { continue };
+        let (Item::Node(decl) | Item::Fx(decl)) = item else {
+            continue;
+        };
         let name = decl.name.name.as_str();
         if nodes.iter().skip(1).any(|t| t.name == name) || failed.contains(&name) {
             errors.push(Diagnostic::new(
@@ -773,8 +776,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             &names,
         ) {
             Ok(Some(mut t)) => {
-                if let Some(input) = processor_inputs.get(&decl.name.name) {
-                    let bus = names.bus(input).expect("processor input bus was declared");
+                if let Some(input) = fx_inputs.get(&decl.name.name) {
+                    let bus = names.bus(input).expect("fx input bus was declared");
                     for source in &mut t.def.inputs {
                         if let niminal_engine::ChainInput::It { channel } = *source {
                             *source = niminal_engine::ChainInput::Bus { bus, channel };
@@ -868,8 +871,8 @@ fn compile_node(
 ) -> Res<Option<NodeInfo>> {
     let (decl, collection) = match item {
         Item::Node(decl) => (decl, true),
-        Item::Processor(decl) => (decl, false),
-        _ => unreachable!("only nodes and processors have playback chains"),
+        Item::Fx(decl) => (decl, false),
+        _ => unreachable!("only nodes and fx declarations have playback chains"),
     };
     let mut instrument_line: Option<&Expr> = None;
     let mut mixer = Mixer::default();
@@ -892,10 +895,7 @@ fn compile_node(
             }
             Stmt::Bind { name, value } if name.name == "instrument" => {
                 if instrument_line.is_some() {
-                    return Err(Diagnostic::new(
-                        "a node has only one instrument",
-                        name.span,
-                    ));
+                    return Err(Diagnostic::new("a node has only one instrument", name.span));
                 }
                 instrument_line = Some(value);
             }
@@ -916,13 +916,7 @@ fn compile_node(
     }
 
     let chain = compile_chain(
-        &decl.name,
-        &rest,
-        collection,
-        &mixer,
-        tempo,
-        registry,
-        names,
+        &decl.name, &rest, collection, &mixer, tempo, registry, names,
     )?;
     let voice_sends = instrument
         .map(|i| instruments[i].graph.send_buses())
@@ -1135,8 +1129,12 @@ fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut Sample
             "tail" => {}
             "pitch" => {
                 let ExprKind::Name(name) = &value.kind else {
-                    return Err(Diagnostic::new("`pitch` is the name of a parameter", value.span)
-                        .with_help("for example `pitch = tone`, for `instr bass(tone: hz = 55hz)`"));
+                    return Err(
+                        Diagnostic::new("`pitch` is the name of a parameter", value.span)
+                            .with_help(
+                                "for example `pitch = tone`, for `instr bass(tone: hz = 55hz)`",
+                            ),
+                    );
                 };
                 let Some(param) = instrument.params.iter().find(|p| p.name == *name) else {
                     return Err(Diagnostic::new(
@@ -1468,7 +1466,11 @@ fn compile_sample(
     }
     names.samplers.insert(
         decl.name.name.clone(),
-        SamplerDef { members, root_hz: root, instrument: instrument.clone() },
+        SamplerDef {
+            members,
+            root_hz: root,
+            instrument: instrument.clone(),
+        },
     );
     Ok(instrument)
 }
@@ -1537,44 +1539,42 @@ fn compile_buffer(
     options: &CompileOptions,
 ) -> Res<(String, Arc<niminal_engine::Buffer>)> {
     if let ExprKind::Call { name, args } = &decl.value.kind
-        && name.name == "zeros" {
-            let mut frames = None;
-            let mut channels = 1usize;
-            for arg in args {
-                let Datum::Sig(value) = compile_const(&arg.value, tempo, registry, names)? else {
+        && name.name == "zeros"
+    {
+        let mut frames = None;
+        let mut channels = 1usize;
+        for arg in args {
+            let Datum::Sig(value) = compile_const(&arg.value, tempo, registry, names)? else {
+                return Err(Diagnostic::new(
+                    "buffer size is a constant number",
+                    arg.value.span,
+                ));
+            };
+            let Some(n) = value.konst() else {
+                return Err(Diagnostic::new("buffer size is constant", arg.value.span));
+            };
+            if value.unit() != crate::unit::Unit::Num || !n.is_finite() || n < 1. || n.fract() != 0.
+            {
+                return Err(Diagnostic::new(
+                    "buffer dimensions are positive integers",
+                    arg.value.span,
+                ));
+            }
+            match arg.name.as_ref().map(|a| a.name.as_str()) {
+                None if frames.is_none() => frames = Some(n as usize),
+                Some("channels") if n <= 16. => channels = n as usize,
+                _ => {
                     return Err(Diagnostic::new(
-                        "buffer size is a constant number",
+                        "zeros takes frames and channels: 1–16",
                         arg.value.span,
                     ));
-                };
-                let Some(n) = value.konst() else {
-                    return Err(Diagnostic::new("buffer size is constant", arg.value.span));
-                };
-                if value.unit() != crate::unit::Unit::Num
-                    || !n.is_finite()
-                    || n < 1.
-                    || n.fract() != 0.
-                {
-                    return Err(Diagnostic::new(
-                        "buffer dimensions are positive integers",
-                        arg.value.span,
-                    ));
-                }
-                match arg.name.as_ref().map(|a| a.name.as_str()) {
-                    None if frames.is_none() => frames = Some(n as usize),
-                    Some("channels") if n <= 16. => channels = n as usize,
-                    _ => {
-                        return Err(Diagnostic::new(
-                            "zeros takes frames and channels: 1–16",
-                            arg.value.span,
-                        ));
-                    }
                 }
             }
-            let frames =
-                frames.ok_or_else(|| Diagnostic::new("zeros needs a frame count", decl.span))?;
-            return allocate_buffer(decl, frames, channels, None, names, options);
         }
+        let frames =
+            frames.ok_or_else(|| Diagnostic::new("zeros needs a frame count", decl.span))?;
+        return allocate_buffer(decl, frames, channels, None, names, options);
+    }
     let value = compile_const(&decl.value, tempo, registry, names)?;
     let buffer = match value {
         Datum::Table(t) => niminal_engine::Buffer::from_table(&t),
@@ -2086,9 +2086,7 @@ fn fold_add(a: Value, b: Value, span: Span) -> Res<Value> {
 
 fn fold_sub(a: Value, b: Value, span: Span) -> Res<Value> {
     match (a, b) {
-        (Value::Note(n), Value::Semitones(st)) => {
-            Ok(transpose(Value::Note(n), -st))
-        }
+        (Value::Note(n), Value::Semitones(st)) => Ok(transpose(Value::Note(n), -st)),
         (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a - b)),
         (Value::Semitones(a), Value::Semitones(b)) => Ok(Value::Semitones(a - b)),
         _ => Err(Diagnostic::new("can't subtract these note arguments", span)),
@@ -2205,7 +2203,6 @@ mod tests {
     fn help(src: &str) -> Option<String> {
         first_error(src).help
     }
-
 
     #[test]
     fn arithmetic_with_units() {
@@ -2380,7 +2377,6 @@ mod tests {
         );
     }
 
-
     const SPEC_OPCODES: &str = "\nfn one_pole(x, cutoff: hz) {\n  state y = 0.0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}\n\nfn drive(x, amount: 0..1 = 0.5) {\n  (x * (1 + amount * 9)).tanh\n}\n\nfn my_dc_block(x) {\n  state x1 = 0.0\n  state y1 = 0.0\n  y = x - x1 + 0.995 * y1\n  x1 = x\n  y1 = y\n  y\n}\n\nfn fold(x, amount: 0..1 = 0.5) {\n  (x * (1 + amount * 8)).sin\n}\n";
 
     #[test]
@@ -2495,9 +2491,8 @@ mod tests {
 
     #[test]
     fn a_broken_function_is_reported_once_even_if_it_is_used() {
-        let errs = errors(
-            "\nfn bad(x) { x + undefined_thing }\ninstr a(f: hz) { osc(saw, f).bad }\n",
-        );
+        let errs =
+            errors("\nfn bad(x) { x + undefined_thing }\ninstr a(f: hz) { osc(saw, f).bad }\n");
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert_eq!(errs[0].message, "`undefined_thing` is not defined");
         // even when nothing calls it
@@ -2609,8 +2604,14 @@ mod tests {
     #[test]
     fn settings_are_written_in_the_body_and_with_is_gone() {
         ok("mono a(freq: hz) { legato = true\nglide = 50ms\n osc(saw, freq) }");
-        assert!(msg("instr a(f: hz) { quantize = 1bar\n osc(saw, f) }").contains("belong to the client"));
-        assert_eq!(msg("instr a(f: hz) with(tail: 2sec) { osc(saw, f) }"), "`with` is gone");
+        assert!(
+            msg("instr a(f: hz) { quantize = 1bar\n osc(saw, f) }")
+                .contains("belong to the client")
+        );
+        assert_eq!(
+            msg("instr a(f: hz) with(tail: 2sec) { osc(saw, f) }"),
+            "`with` is gone"
+        );
         assert_eq!(
             msg("sample kick = \"kick.wav\""),
             "`sample` is no longer a keyword"
@@ -2619,14 +2620,8 @@ mod tests {
 
     #[test]
     fn samples_are_bindings_with_chained_settings() {
-        assert_eq!(
-            msg("kick = \"kick.wav\""),
-            "expected a sample or a kit"
-        );
-        assert_eq!(
-            msg("drums = kit(organ)"),
-            "`kit` takes a folder in quotes"
-        );
+        assert_eq!(msg("kick = \"kick.wav\""), "expected a sample or a kit");
+        assert_eq!(msg("drums = kit(organ)"), "`kit` takes a folder in quotes");
         assert_eq!(
             msg("kick = sample(\"kick.wav\").root(c4, 2)"),
             "`root` takes one value, as in `.root(...)`"
@@ -2654,7 +2649,9 @@ mod tests {
 
     #[test]
     fn routing_a_node_to_a_bus() {
-        let p = ok("\nbus fx\nnode a { instrument = i\n output = fx }\nprocessor b { out = fx }\ninstr i(f: hz) { osc(sine, f) }");
+        let p = ok(
+            "\nbus send\nnode a { instrument = i\n output = send }\nfx b { out = send }\ninstr i(f: hz) { osc(sine, f) }",
+        );
         assert_eq!(p.nodes[1].def.route, niminal_engine::Route::Bus(0));
         assert_eq!(
             p.nodes[2].def.inputs,
@@ -2699,7 +2696,7 @@ mod tests {
         let with = |body: &str| format!("bus space\n{body}");
         assert_eq!(
             msg(&with("instr a(f: hz) { osc(saw, space) }")),
-            "`space` is a bus, and only a processor can read a bus"
+            "`space` is a bus, and only an fx can read a bus"
         );
         assert_eq!(
             help(&with("instr a(f: hz) { osc(saw, space) }")).as_deref(),
@@ -2757,20 +2754,33 @@ mod tests {
     }
 
     #[test]
-    fn collections_and_processors_have_distinct_roles() {
+    fn collections_and_fx_declarations_have_distinct_roles() {
         let base = "instr tone(freq: hz = 440hz) { osc(sine, freq) }\n";
         ok(&format!("{base}node lead {{ instrument = tone }}"));
-        ok("processor room(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }");
-        assert!(msg(&format!("{base}processor room {{ instrument = tone }}")).contains("cannot select an instrument"));
-        assert!(msg(&format!("{base}node lead {{ instrument = tone\n out = it.lpf(cutoff: 2khz) }}")).contains("put DSP in a processor"));
-        assert!(msg(&format!("{base}node lead(cut: hz = 2khz) {{ instrument = tone }}")).contains("no DSP parameters"));
+        ok("fx room(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }");
+        assert!(
+            msg(&format!("{base}fx room {{ instrument = tone }}"))
+                .contains("cannot select an instrument")
+        );
+        assert!(
+            msg(&format!(
+                "{base}node lead {{ instrument = tone\n out = it.lpf(cutoff: 2khz) }}"
+            ))
+            .contains("put DSP in an fx")
+        );
+        assert!(
+            msg(&format!(
+                "{base}node lead(cut: hz = 2khz) {{ instrument = tone }}"
+            ))
+            .contains("no DSP parameters")
+        );
         assert!(compile("track lead { instrument = tone }").is_err());
         assert!(compile("bus room { out = it }").is_err());
     }
 
     #[test]
     fn feedback_between_nodes_is_an_error_naming_them() {
-        let src = "\nbus x\nbus y\nprocessor a { out = x.lpf(cutoff: 1khz).to(y) }\nprocessor b { out = y.lpf(cutoff: 1khz).to(x) }\n";
+        let src = "\nbus x\nbus y\nfx a { out = x.lpf(cutoff: 1khz).to(y) }\nfx b { out = y.lpf(cutoff: 1khz).to(x) }\n";
         let d = first_error(src);
         assert!(
             d.message == "nodes feed back through buses or buffers: a -> b -> a"
@@ -2782,11 +2792,11 @@ mod tests {
 
         // a late send breaks the loop
         ok(
-            "bus x\nbus y\nprocessor a { out = x.lpf(cutoff: 1khz).to(y) }\nprocessor b { out = y\n x += late(out) }",
+            "bus x\nbus y\nfx a { out = x.lpf(cutoff: 1khz).to(y) }\nfx b { out = y\n x += late(out) }",
         );
         // outside a send, `prev` is one sample earlier
-        ok("bus x\nprocessor a { out = prev(x) }");
-        let d = first_error("bus x\nprocessor a { out = x.to(x) }");
+        ok("bus x\nfx a { out = prev(x) }");
+        let d = first_error("bus x\nfx a { out = x.to(x) }");
         assert_eq!(
             d.message,
             "nodes feed back through buses or buffers: a -> a"
@@ -2795,9 +2805,7 @@ mod tests {
 
     #[test]
     fn a_broken_instrument_does_not_cascade_into_its_nodes_and_notes() {
-        let errs = errors(
-            "\ninstr bad(f: hz) { osc(saw, 440) }\nnode t { instrument = bad }\n",
-        );
+        let errs = errors("\ninstr bad(f: hz) { osc(saw, 440) }\nnode t { instrument = bad }\n");
         assert_eq!(errs.len(), 1, "{errs:?}");
     }
 
@@ -3074,7 +3082,7 @@ mod tests {
         ok("config { channels: surround(5.1) }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f)] }");
         // 5.1 bus read by a stereo master node folds down
         ok(
-            "config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\nprocessor t { out = hall }",
+            "config { channels: stereo }\nbus hall: surround(5.1)\ninstr a(f: hz) { out = osc(saw, f)\nhall += out }\nfx t { out = hall }",
         );
         // unnamed channel lists are taken as whatever layout has that many
         ok(
@@ -3108,34 +3116,30 @@ mod tests {
 
     #[test]
     fn buses_and_nodes_carry_their_layouts() {
-        let p = ok("\nconfig { channels: stereo }\nbus space: stereo\nbus lfe: mono\ninstr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }\nprocessor room { out = space.reverb(room: 0.8) }\nprocessor sub { out = lfe.lpf(cutoff: 100hz) }");
-        assert_eq!(p.bus_layouts, [Layout::Stereo, Layout::Mono]);
-        assert_eq!(
-            p.nodes[1].def.inputs.len(),
-            2,
-            "a stereo bus is two inputs"
+        let p = ok(
+            "\nconfig { channels: stereo }\nbus space: stereo\nbus lfe: mono\ninstr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }\nfx room { out = space.reverb(room: 0.8) }\nfx sub { out = lfe.lpf(cutoff: 100hz) }",
         );
+        assert_eq!(p.bus_layouts, [Layout::Stereo, Layout::Mono]);
+        assert_eq!(p.nodes[1].def.inputs.len(), 2, "a stereo bus is two inputs");
         assert_eq!(p.nodes[2].def.inputs.len(), 1);
         // the sub node works in mono but delivers stereo to the master
         assert_eq!(p.nodes[2].def.chain.as_ref().unwrap().channels(), 2);
         // routing to a bus delivers in that bus's layout
-        let routed = ok("\nconfig { channels: stereo }\nbus mono_bus: mono\nnode t { instrument = i\noutput = mono_bus }\nprocessor u { out = mono_bus }\ninstr i(f: hz) { osc(saw, f).pan }");
+        let routed = ok(
+            "\nconfig { channels: stereo }\nbus mono_bus: mono\nnode t { instrument = i\noutput = mono_bus }\nfx u { out = mono_bus }\ninstr i(f: hz) { osc(saw, f).pan }",
+        );
         assert_eq!(routed.nodes[1].def.chain.as_ref().unwrap().channels(), 1);
     }
 
-
     // ---- the performance layer ------------------------------------------------
 
-
     /// (start in cycles, value) of every event beginning in the first `cycles` cycles.
-
-
 
     #[test]
     fn osc_out_sends_a_nodes_signal() {
         let node = |body: &str| {
             format!(
-                "instr pluck(freq: hz) {{ osc(saw, freq) }}\nbus lead_audio\nprocessor lead_fx {{{body}}}\nnode lead {{ instrument = pluck\noutput = lead_audio}}\n"
+                "instr pluck(freq: hz) {{ osc(saw, freq) }}\nbus lead_audio\nfx lead_fx {{{body}}}\nnode lead {{ instrument = pluck\noutput = lead_audio}}\n"
             )
         };
         let p = ok(&node("out = it.osc_out(\"/vj/level\", port: 9000)"));
@@ -3194,22 +3198,26 @@ mod tests {
         );
     }
 
-
     #[test]
     fn mixer_lines_are_checked() {
-        let collection = |body: &str| format!("instr pluck(freq: hz) {{ osc(saw, freq) }}\nnode lead {{ instrument = pluck\n{body}\n}}");
+        let collection = |body: &str| {
+            format!(
+                "instr pluck(freq: hz) {{ osc(saw, freq) }}\nnode lead {{ instrument = pluck\n{body}\n}}"
+            )
+        };
         ok(&collection("gain = -3db\n pan = 20deg"));
-        assert!(msg(&collection("out = it.lpf(cutoff: 2khz)")).contains("put DSP in a processor"));
-        assert_eq!(msg(&collection("gain = -3db\n gain = -1db")), "a node has only one `gain` line");
+        assert!(msg(&collection("out = it.lpf(cutoff: 2khz)")).contains("put DSP in an fx"));
+        assert_eq!(
+            msg(&collection("gain = -3db\n gain = -1db")),
+            "a node has only one `gain` line"
+        );
         assert!(msg(&collection("gain = 20deg")).contains("expects"));
         assert!(msg(&collection("pan = 20")).contains("azimuth"));
     }
 
     #[test]
     fn reports_errors_from_several_instruments_without_cascading() {
-        let errs = errors(
-            "\ninstr a() { osc(saw, 440) }\ninstr b() { osc(saw, 440) }\n",
-        );
+        let errs = errors("\ninstr a() { osc(saw, 440) }\ninstr b() { osc(saw, 440) }\n");
         assert_eq!(
             errs.len(),
             2,
@@ -3219,20 +3227,18 @@ mod tests {
 
     #[test]
     fn a_node_parameter_is_a_control_the_node_can_read() {
-        let src = "instr p(freq: hz) { osc(saw, freq) }\nbus hall_audio\nprocessor hall_fx(tone: hz = 2khz, drive: 0..1 = 0.2) {out = hall_audio.lpf(cutoff: tone).gain(drive)}\nnode hall {  instrument = p\noutput = hall_audio}\n";
+        let src = "instr p(freq: hz) { osc(saw, freq) }\nbus hall_audio\nfx hall_fx(tone: hz = 2khz, drive: 0..1 = 0.2) {out = hall_audio.lpf(cutoff: tone).gain(drive)}\nnode hall {  instrument = p\noutput = hall_audio}\n";
         let p = ok(src);
         let names: Vec<&str> = p.controls.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["hall_fx::tone", "hall_fx::drive"]);
         assert_eq!(p.controls[0].initial, 2000.0);
         assert_eq!(
-            msg("processor t(tone: hz) { out = it }"),
-            "processor parameter `tone` needs a starting value"
+            msg("fx t(tone: hz) { out = it }"),
+            "fx parameter `tone` needs a starting value"
         );
         assert_eq!(
-            help("processor t(tone: hz) { out = it }").as_deref(),
-            Some("for example `processor bass(tone: hz = 2khz)`")
+            help("fx t(tone: hz) { out = it }").as_deref(),
+            Some("for example `fx bass(tone: hz = 2khz)`")
         );
     }
-
-
 }

@@ -6,7 +6,7 @@ fn name(item: &mut Item) -> Option<&mut Ident> {
     match item {
         Item::Instr(d) => Some(&mut d.name),
         Item::Fn(d) => Some(&mut d.name),
-        Item::Node(d) | Item::Processor(d) => Some(&mut d.name),
+        Item::Node(d) | Item::Fx(d) => Some(&mut d.name),
         Item::Bus(d) => Some(&mut d.name),
         Item::Buffer(d) => Some(&mut d.name),
         Item::Sample(d) => Some(&mut d.name),
@@ -27,18 +27,18 @@ pub(crate) fn qualify(items: &mut [Item], ranges: &[(usize, usize, String)]) {
             && let Some((_, _, owner)) = ranges
                 .iter()
                 .find(|(a, b, _)| id.span.start >= *a && id.span.start < *b)
-            {
-                symbols
-                    .entry(owner.clone())
-                    .or_default()
-                    .insert(id.name.clone(), format!("{owner}::{}", id.name));
-                if function {
-                    symbols.entry(owner.clone()).or_default().insert(
-                        format!("@method:{}", id.name),
-                        format!("{owner}::{}", id.name),
-                    );
-                }
+        {
+            symbols
+                .entry(owner.clone())
+                .or_default()
+                .insert(id.name.clone(), format!("{owner}::{}", id.name));
+            if function {
+                symbols.entry(owner.clone()).or_default().insert(
+                    format!("@method:{}", id.name),
+                    format!("{owner}::{}", id.name),
+                );
             }
+        }
     }
     for item in items {
         let Some(id) = name(item) else { continue };
@@ -56,9 +56,13 @@ pub(crate) fn qualify(items: &mut [Item], ranges: &[(usize, usize, String)]) {
         match item {
             Item::Instr(d) => body(&mut d.params, &mut d.body, &mut d.options, globals),
             Item::Fn(d) => body(&mut d.params, &mut d.body, &mut [], globals),
-            Item::Node(d) | Item::Processor(d) => body(&mut d.params, &mut d.body, &mut d.options, globals),
+            Item::Node(d) | Item::Fx(d) => {
+                body(&mut d.params, &mut d.body, &mut d.options, globals)
+            }
             Item::Bus(d) => {
-                if let Some(layout) = &mut d.layout { expr(layout, &HashSet::new(), globals); }
+                if let Some(layout) = &mut d.layout {
+                    expr(layout, &HashSet::new(), globals);
+                }
             }
             Item::Buffer(d) => expr(&mut d.value, &locals, globals),
             Item::Control { value, .. } => expr(value, &locals, globals),
@@ -86,9 +90,10 @@ fn reference(n: &mut String, locals: &HashSet<String>, globals: &HashMap<String,
             *n = long.clone();
         } else if let Some((base, member)) = n.split_once('.')
             && !locals.contains(base)
-                && let Some(long) = globals.get(base) {
-                    *n = format!("{long}.{member}");
-                }
+            && let Some(long) = globals.get(base)
+        {
+            *n = format!("{long}.{member}");
+        }
     }
 }
 fn body(

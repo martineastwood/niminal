@@ -23,13 +23,7 @@ fn used_modules_play_and_replay_without_their_files() {
     let original = run(&mut s, BAR);
     assert!(peak(&original) > 0.1);
     std::fs::remove_dir_all(&dir).unwrap();
-    let replayed = niminal_server::Session::replay(
-        SR,
-        Layout::Mono,
-        &s.log(),
-        BAR as u64,
-        false,
-    );
+    let replayed = niminal_server::Session::replay(SR, Layout::Mono, &s.log(), BAR as u64, false);
     assert_eq!(original, replayed[0]);
 }
 
@@ -301,7 +295,7 @@ fn a_bus_with_a_body_processes_what_instruments_send_to_it() {
     let heard = |gain: &str| {
         let mut s = Offline::new(SR, Layout::Stereo).without_limiter();
         let code = format!(
-            "tempo 120bpm\nbus space: stereo\nprocessor space_return {{ out = space.gain({gain}) }}\ninstr ping(freq: hz) {{ out = osc(sine, freq) * env[1 | 10ms 0]\n space += out }}\nclip p {{ instrument: ping\n notes: [c4] }}\np.start"
+            "tempo 120bpm\nbus space: stereo\nfx space_return {{ out = space.gain({gain}) }}\ninstr ping(freq: hz) {{ out = osc(sine, freq) * env[1 | 10ms 0]\n space += out }}\nclip p {{ instrument: ping\n notes: [c4] }}\np.start"
         );
         s.eval(&code, Some("now")).unwrap();
         let out = s.process(BAR);

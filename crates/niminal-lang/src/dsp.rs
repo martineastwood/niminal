@@ -24,12 +24,23 @@ pub fn dsp_value(value: Value, tempo: Tempo) -> Value {
 pub fn validate_dsp(source: &str) -> Result<(), Diagnostic> {
     for (item, span) in parse_spanned(source)? {
         let allowed = match &item {
-            Item::Instr(i) => !i.options.iter().any(|a| a.name.as_ref().is_some_and(|n| n.name == "quantize")),
-            Item::Node(t) | Item::Processor(t) => {
-                !t.options.iter().any(|a| a.name.as_ref().is_some_and(|n| n.name == "quantize"))
-                    && !t.body.iter().any(|s| matches!(s, Stmt::Bind { name, .. } if name.name == "notes"))
+            Item::Instr(i) => !i
+                .options
+                .iter()
+                .any(|a| a.name.as_ref().is_some_and(|n| n.name == "quantize")),
+            Item::Node(t) | Item::Fx(t) => {
+                !t.options
+                    .iter()
+                    .any(|a| a.name.as_ref().is_some_and(|n| n.name == "quantize"))
+                    && !t
+                        .body
+                        .iter()
+                        .any(|s| matches!(s, Stmt::Bind { name, .. } if name.name == "notes"))
             }
-            Item::Sample(s) => !s.options.iter().any(|a| a.name.as_ref().is_some_and(|n| n.name == "beats")),
+            Item::Sample(s) => !s
+                .options
+                .iter()
+                .any(|a| a.name.as_ref().is_some_and(|n| n.name == "beats")),
             _ => true,
         };
         if !allowed {

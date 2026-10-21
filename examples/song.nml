@@ -13,7 +13,7 @@ instr pluck(freq: hz, bright: 0..1 = 0.5) {
   space += out.gain(-12db)
 }
 
-processor hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
+fx hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
 clip beat { instrument: drums }
 clip hats { instrument: drums(gain: -8db) }
 clip bass { instrument: pluck(bright: 0.2) }

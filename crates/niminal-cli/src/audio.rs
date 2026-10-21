@@ -7,8 +7,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use niminal_server::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
 use niminal_engine::{BLOCK, MAX_CHANNELS};
+use niminal_server::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 /// Control and event preparation share the server. DSP owns its state and
@@ -879,8 +879,8 @@ mod tests {
     }
 
     fn play_tone(session: &mut niminal_server::Session) {
-        use niminal_server::{At, Op};
         use niminal_score::{Time, Value};
+        use niminal_server::{At, Op};
         let define = Op::Define {
             source: "instr tone(freq: hz) { osc(sine, freq) }".into(),
             at: At::Sample(0),

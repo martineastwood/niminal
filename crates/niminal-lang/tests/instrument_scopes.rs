@@ -232,7 +232,7 @@ fn buffer_parameters_work_through_stateful_functions_and_nested_scopes() {
 }
 
 #[test]
-fn resetting_a_nested_processor_clears_its_compensation_history() {
+fn resetting_a_nested_fx_clears_its_compensation_history() {
     let source = "fn pair(trigger) { state keep = 0\nreset_on(trigger) { x = osc(sine, 440hz)\nx + oversample(2) { x } } }\ninstr a(trigger: num = 0) { pair(trigger) }";
     let mut running = voice(source, "a");
     render(&mut running, 100, 25);

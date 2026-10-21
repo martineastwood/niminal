@@ -1,9 +1,9 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
-use niminal_server::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
 use niminal_lang::Layout;
 use niminal_live::{InProcess, Live, LiveServer};
+use niminal_server::{ClientId, EngineServer, PROTOCOL_VERSION, Session};
 use serde_json::{Value, json};
 
 const SR: f32 = 48_000.0;
@@ -530,10 +530,7 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
         json!({"source": "bass.reverse\nbass.thin(25%)", "quantize": "now"}),
     );
     let edited = call(&mut d, c, 7, "status", json!({}))["result"].clone();
-    assert_eq!(
-        edited["clips"][1]["edits"],
-        json!(["reverse", "thin(25%)"])
-    );
+    assert_eq!(edited["clips"][1]["edits"], json!(["reverse", "thin(25%)"]));
 }
 
 #[test]

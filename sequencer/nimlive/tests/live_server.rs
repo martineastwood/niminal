@@ -3,13 +3,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use niminal_cli::audio::{NullClock, Shared};
-use nimlive::input::LiveShared;
-use nimlive::link::WsLink;
-use niminal_ws::{Client, Server, ServerConfig, lock};
-use niminal_ws::worker::Worker;
-use niminal_server::{EngineServer, Session};
 use niminal_lang::Layout;
 use niminal_live::{Live, LiveServer};
+use niminal_server::{EngineServer, Session};
+use niminal_ws::worker::Worker;
+use niminal_ws::{Client, Server, ServerConfig, lock};
+use nimlive::input::LiveShared;
+use nimlive::link::WsLink;
 use serde_json::json;
 
 const SETUP: &str = "tempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip lead { instrument: pluck }";
@@ -220,7 +220,10 @@ fn the_audio_the_clock_produces_is_the_sessions() {
         if peaks[0] > 0.5 {
             break;
         }
-        assert!(started.elapsed() < WAIT, "the note never reached the mixer: {peaks:?}");
+        assert!(
+            started.elapsed() < WAIT,
+            "the note never reached the mixer: {peaks:?}"
+        );
         std::thread::sleep(Duration::from_millis(2));
     }
 }

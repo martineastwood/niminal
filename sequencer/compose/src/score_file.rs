@@ -64,7 +64,11 @@ impl Section {
         if file.version != VERSION {
             return Err(ScoreError::UnsupportedVersion(file.version));
         }
-        Ok(Section { name: file.section, length: file.length, events: file.events })
+        Ok(Section {
+            name: file.section,
+            length: file.length,
+            events: file.events,
+        })
     }
 
     pub fn to_json(&self) -> String {
@@ -114,20 +118,25 @@ mod tests {
     #[test]
     fn rejects_other_versions_and_bad_fields() {
         let v2 = PHI.replace("\"version\": 1", "\"version\": 2");
-        assert!(matches!(Section::from_json(&v2), Err(ScoreError::UnsupportedVersion(2))));
+        assert!(matches!(
+            Section::from_json(&v2),
+            Err(ScoreError::UnsupportedVersion(2))
+        ));
 
         let no_version = PHI.replace("\"version\": 1,", "");
         assert!(Section::from_json(&no_version).is_err());
 
         let typo = PHI.replace("\"dur\": \"1/4beat\"", "\"duration\": \"1/4beat\"");
-        assert!(Section::from_json(&typo).is_err(), "unknown event fields are errors");
+        assert!(
+            Section::from_json(&typo).is_err(),
+            "unknown event fields are errors"
+        );
 
         let bad_unit = PHI.replace("\"1/4beat\", \"target\"", "\"440hz\", \"target\"");
         let e = Section::from_json(&bad_unit).unwrap_err().to_string();
         assert!(e.contains("expected a time"), "{e}");
     }
 }
-
 
 /// The project (`.nms` v2) format version.
 pub const VERSION_2: u32 = 2;
@@ -458,7 +467,11 @@ mod project_tests {
         assert!(src.contains("notes: [c4 e4 g4]"), "{src}");
         assert!(src.contains("gain: [0db -6db]"), "{src}");
         assert!(src.contains("events {"), "{src}");
-        assert!(src.contains("0beats c4 for 1/2beat gain: -6db") || src.contains("0beats c4 for 0.5beats gain: -6db"), "{src}");
+        assert!(
+            src.contains("0beats c4 for 1/2beat gain: -6db")
+                || src.contains("0beats c4 for 0.5beats gain: -6db"),
+            "{src}"
+        );
     }
 
     #[test]

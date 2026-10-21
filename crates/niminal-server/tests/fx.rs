@@ -19,7 +19,7 @@ fn render(source: &str, targets: &[&str]) -> Vec<f32> {
         id: None,
         tag: None,
     }));
-    // Exercise private definitions and the generated processor input buses too.
+    // Exercise private definitions and the generated fx input buses too.
     session.send_events(7, events).unwrap();
     session.process(3_840).remove(0)
 }
@@ -29,10 +29,10 @@ fn peak(samples: &[f32]) -> f32 {
 }
 
 #[test]
-fn collections_share_one_persistent_processor_and_its_tail_outlives_the_notes() {
+fn collections_share_one_persistent_fx_and_its_tail_outlives_the_notes() {
     let audio = render(
         "instr flat() { 0.25 }
-         processor echo { out = it.delay(time: 20ms, feedback: 0) }
+         fx echo { out = it.delay(time: 20ms, feedback: 0) }
          node a { instrument = flat
                   output = echo }
          node b { instrument = flat
@@ -45,11 +45,11 @@ fn collections_share_one_persistent_processor_and_its_tail_outlives_the_notes() 
 }
 
 #[test]
-fn separate_processors_have_independent_state() {
+fn separate_fx_instances_have_independent_state() {
     let audio = render(
         "instr flat() { 0.25 }
-         processor first { out = it.delay(time: 20ms, feedback: 0) }
-         processor second { out = it.delay(time: 40ms, feedback: 0) }
+         fx first { out = it.delay(time: 20ms, feedback: 0) }
+         fx second { out = it.delay(time: 40ms, feedback: 0) }
          node a { instrument = flat
                   output = first }
          node b { instrument = flat

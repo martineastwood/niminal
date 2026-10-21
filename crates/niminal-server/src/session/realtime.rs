@@ -549,8 +549,7 @@ impl Session {
         while let Ok(applied) = planner.control_applied.pop() {
             if let Some(entry) = self.log.get_mut(applied.log_index)
                 && let LogInput::Send { ops, .. } = &mut entry.input
-                && let Some(Op::Control { at, .. }) =
-                    ops.get_mut(applied.log_op)
+                && let Some(Op::Control { at, .. }) = ops.get_mut(applied.log_op)
             {
                 if *at != At::Sample(applied.at) {
                     self.log_corrections += 1;
@@ -1088,7 +1087,7 @@ impl Session {
             .filter_map(|bind| {
                 let render_node = bind.target.as_ref()?;
                 let node = render_node
-                    .strip_prefix("__routing_processor_")?
+                    .strip_prefix("__routing_fx_")?
                     .split_once('_')?
                     .1;
                 let (key, count, _) = self
@@ -1565,7 +1564,8 @@ impl RealtimeRenderer {
                 }
                 super::plan_transfers(&self.program, &change.program, transfers);
                 self.mixer.silence_owner(*client);
-                for (render_node, transfer) in change.program.nodes.iter().zip(transfers.iter_mut()) {
+                for (render_node, transfer) in change.program.nodes.iter().zip(transfers.iter_mut())
+                {
                     if !render_node.name.is_empty()
                         && super::definitions::owns_node(*client, &render_node.name)
                     {
@@ -1584,11 +1584,10 @@ impl RealtimeRenderer {
                 if let Some(index) = self.program.node_index(render_node) {
                     if mapping.is_none()
                         && let Some(value) = self.mixer.chain_param_value(index, param)
-                            && let Some(control) =
-                                self.controls.iter_mut().find(|c| c.key == *param)
-                            {
-                                control.set(self.clock, value, 0);
-                            }
+                        && let Some(control) = self.controls.iter_mut().find(|c| c.key == *param)
+                    {
+                        control.set(self.clock, value, 0);
+                    }
                     self.mixer.swap_chain_mapping(index, param, mapping);
                     crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
                 }

@@ -7,8 +7,8 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
-use niminal_live::Offline;
 use niminal_lang::Layout;
+use niminal_live::Offline;
 
 struct Rng(u64);
 

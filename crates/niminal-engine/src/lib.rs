@@ -26,14 +26,14 @@ pub use array::{Array, wrapped_index};
 pub use graph::{Graph, GraphBuilder, GraphError, Src};
 pub use master::{DEFAULT_CEILING, Master};
 pub use mixer::{
-    Buses, ChainInput, DEFAULT_MAX_VOICES, Fork, MAX_CHANNELS, Meter, Mixer, Profile, NodeLoad, Route, Stems, NodeDef,
-    Transfer, VoiceId, execution_order,
+    Buses, ChainInput, DEFAULT_MAX_VOICES, Fork, MAX_CHANNELS, Meter, Mixer, NodeDef, NodeLoad,
+    Profile, Route, Stems, Transfer, VoiceId, execution_order,
 };
 pub use opcode::{BLOCK, Clock, MAX_INPUTS, Opcode, Port, ProcessCtx, TAIL_LEVEL};
 pub use table::{Buffer, Edge, Table};
 pub use voice::{Priority, Voice, VoiceRule};
 
-/// Stable identity for a processor source across prepared graph replacements.
+/// Stable identity for an fx source across prepared graph replacements.
 pub fn instance_id(name: &str) -> u64 {
     name.bytes().fold(14695981039346656037u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(1099511628211)

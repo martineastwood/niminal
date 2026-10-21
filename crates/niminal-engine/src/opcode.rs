@@ -177,7 +177,7 @@ pub trait Opcode: Send + Sync + std::any::Any {
         false
     }
 
-    /// Envelope activity separately from effect tails in compound processors.
+    /// Envelope activity separately from effect tails in compound DSP graphs.
     fn has_active_envelope(&self) -> bool {
         self.is_envelope() && self.is_active()
     }
@@ -189,7 +189,7 @@ pub trait Opcode: Send + Sync + std::any::Any {
     /// Apply a named control target, with a linear ramp measured in samples.
     fn set_control(&mut self, _key: &str, _start: f32, _target: f32, _frames: u64, _elapsed: u64) {}
 
-    /// Whether this input is sampled during processor initialization.
+    /// Whether this input is sampled during effect initialization.
     fn input_is_init(&self, _index: usize) -> bool {
         false
     }

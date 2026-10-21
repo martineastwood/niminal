@@ -75,11 +75,21 @@ impl Master {
     pub fn with_channels(sample_rate: f32, ceiling: f32, channels: usize) -> Self {
         let sr = f64::from(sample_rate);
         let window = ((LOOKAHEAD_SECONDS * sample_rate).round() as usize).max(2);
-        let between: [[f64; TAPS]; PHASES.len()] = std::array::from_fn(|i| interpolation_weights(PHASES[i]));
-        let between_reach = between.iter().map(|w| w.iter().map(|w| w.abs()).sum::<f64>()).fold(1.0, f64::max);
+        let between: [[f64; TAPS]; PHASES.len()] =
+            std::array::from_fn(|i| interpolation_weights(PHASES[i]));
+        let between_reach = between
+            .iter()
+            .map(|w| w.iter().map(|w| w.abs()).sum::<f64>())
+            .fold(1.0, f64::max);
         Master {
             channels: (0..channels)
-                .map(|_| ChannelState { dc_x1: 0.0, dc_y1: 0.0, delay: vec![0.0; window], recent: [0.0; TAPS], interpolation_candidates: 0 })
+                .map(|_| ChannelState {
+                    dc_x1: 0.0,
+                    dc_y1: 0.0,
+                    delay: vec![0.0; window],
+                    recent: [0.0; TAPS],
+                    interpolation_candidates: 0,
+                })
                 .collect(),
             dc_r: 1.0 - std::f64::consts::TAU * DC_CUTOFF_HZ / sr,
             ceiling: f64::from(ceiling),
@@ -122,7 +132,10 @@ impl Master {
     fn at_rest(&self) -> bool {
         self.gain == 1.0
             && self.channels.iter().all(|c| {
-                c.dc_x1 == 0.0 && c.dc_y1.abs() < 1e-18 && c.delay.iter().all(|d| *d == 0.0) && c.recent.iter().all(|r| *r == 0.0)
+                c.dc_x1 == 0.0
+                    && c.dc_y1.abs() < 1e-18
+                    && c.delay.iter().all(|d| *d == 0.0)
+                    && c.recent.iter().all(|r| *r == 0.0)
             })
             && self.required.iter().all(|r| *r == 1.0)
             && self.windowed_min.iter().all(|m| *m == 1.0)
@@ -135,7 +148,12 @@ impl Master {
 
     /// Process a one-channel master in place.
     pub fn process(&mut self, buf: &mut [f32]) {
-        assert_eq!(self.channels.len(), 1, "this master has {} channels; use process_linked", self.channels.len());
+        assert_eq!(
+            self.channels.len(),
+            1,
+            "this master has {} channels; use process_linked",
+            self.channels.len()
+        );
         for sample in buf.iter_mut() {
             let mut frame = [*sample];
             self.process_frame(&mut frame);
@@ -200,7 +218,8 @@ impl Master {
             state.dc_y1 = x;
             let candidate = |sample: f64| sample.abs() * self.between_reach > self.ceiling;
             state.interpolation_candidates = state.interpolation_candidates
-                + usize::from(candidate(x)) - usize::from(candidate(state.recent[TAPS - 1]));
+                + usize::from(candidate(x))
+                - usize::from(candidate(state.recent[TAPS - 1]));
             state.recent.rotate_right(1);
             state.recent[0] = x;
             // The sample from `HALF` ago is the one going into the lookahead, so the stretch after it
@@ -210,18 +229,38 @@ impl Master {
             peak = peak.max(sample.abs());
             // the stretches between samples need looking at only if they could reach the ceiling
             if state.interpolation_candidates > 0 {
-                let between = self.between.iter().map(|w| w.iter().zip(&state.recent).map(|(w, r)| w * r).sum::<f64>().abs());
+                let between = self.between.iter().map(|w| {
+                    w.iter()
+                        .zip(&state.recent)
+                        .map(|(w, r)| w * r)
+                        .sum::<f64>()
+                        .abs()
+                });
                 peak = between.fold(peak, f64::max);
             }
         }
-        let required = if peak > self.ceiling { self.ceiling / peak } else { 1.0 };
-        self.reduced = self.reduced + usize::from(required < 1.0) - usize::from(self.required[p] < 1.0);
+        let required = if peak > self.ceiling {
+            self.ceiling / peak
+        } else {
+            1.0
+        };
+        self.reduced =
+            self.reduced + usize::from(required < 1.0) - usize::from(self.required[p] < 1.0);
         self.required[p] = required;
 
-        let min = if self.reduced == 0 { 1.0 } else { self.required.iter().fold(1.0f64, |m, r| m.min(*r)) };
-        self.reduced_min = self.reduced_min + usize::from(min < 1.0) - usize::from(self.windowed_min[p] < 1.0);
+        let min = if self.reduced == 0 {
+            1.0
+        } else {
+            self.required.iter().fold(1.0f64, |m, r| m.min(*r))
+        };
+        self.reduced_min =
+            self.reduced_min + usize::from(min < 1.0) - usize::from(self.windowed_min[p] < 1.0);
         // the running sum drifts a little with every change, so when nothing is reduced it is set exactly
-        self.min_sum = if self.reduced_min == 0 { n as f64 } else { self.min_sum + min - self.windowed_min[p] };
+        self.min_sum = if self.reduced_min == 0 {
+            n as f64
+        } else {
+            self.min_sum + min - self.windowed_min[p]
+        };
         self.windowed_min[p] = min;
         let smoothed = (self.min_sum / n as f64).min(1.0);
 
@@ -230,7 +269,11 @@ impl Master {
         } else {
             let gain = self.gain + (smoothed - self.gain) * self.release_coeff;
             // recovery only ever gets nearer to 1: the last inaudible sliver is dropped so the limiter can rest
-            if smoothed == 1.0 && 1.0 - gain < 1e-12 { 1.0 } else { gain }
+            if smoothed == 1.0 && 1.0 - gain < 1e-12 {
+                1.0
+            } else {
+                gain
+            }
         };
 
         // The oldest entry in each ring is the sample from `latency` ago.
@@ -248,9 +291,17 @@ fn interpolation_weights(phase: f64) -> [f64; TAPS] {
     for (k, weight) in weights.iter_mut().enumerate() {
         // samples are `k` back; the point looked for is `HALF - phase` back
         let distance = k as f64 - (HALF as f64 - phase);
-        let sinc = if distance == 0.0 { 1.0 } else { (std::f64::consts::PI * distance).sin() / (std::f64::consts::PI * distance) };
+        let sinc = if distance == 0.0 {
+            1.0
+        } else {
+            (std::f64::consts::PI * distance).sin() / (std::f64::consts::PI * distance)
+        };
         let window = 0.5 * (1.0 + (std::f64::consts::PI * distance / HALF as f64).cos());
-        *weight = if distance.abs() < HALF as f64 { sinc * window } else { 0.0 };
+        *weight = if distance.abs() < HALF as f64 {
+            sinc * window
+        } else {
+            0.0
+        };
     }
     let sum: f64 = weights.iter().sum();
     weights.iter_mut().for_each(|w| *w /= sum);
@@ -275,6 +326,10 @@ mod tests {
             block = [[0.0; crate::opcode::BLOCK]; 2];
             master.process_block(&mut block, crate::opcode::BLOCK);
         }
-        assert!(master.at_rest(), "gain {} after {seconds}s of silence", master.gain);
+        assert!(
+            master.at_rest(),
+            "gain {} after {seconds}s of silence",
+            master.gain
+        );
     }
 }

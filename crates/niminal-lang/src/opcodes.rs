@@ -82,7 +82,9 @@ impl WaveArg {
             return Err("a table can't be empty".into());
         }
         if cycle.len() > MAX_TABLE {
-            return Err(format!("a table to play can have at most {MAX_TABLE} entries"));
+            return Err(format!(
+                "a table to play can have at most {MAX_TABLE} entries"
+            ));
         }
         Ok(WaveArg::Table(cached_wavetable(cycle)))
     }
@@ -92,7 +94,9 @@ impl WaveArg {
             return Err("a table can't be empty".into());
         }
         if table.len() > MAX_TABLE {
-            return Err(format!("a table to play can have at most {MAX_TABLE} entries"));
+            return Err(format!(
+                "a table to play can have at most {MAX_TABLE} entries"
+            ));
         }
         Ok(WaveArg::Table(cached_wavetable(&table.as_f64())))
     }
@@ -108,7 +112,9 @@ impl WaveArg {
                     return Err("a table can't be empty".into());
                 }
                 if t.len() > MAX_TABLE {
-                    return Err(format!("a table to play can have at most {MAX_TABLE} entries"));
+                    return Err(format!(
+                        "a table to play can have at most {MAX_TABLE} entries"
+                    ));
                 }
                 Ok(cached_wavetable(&t.as_f64()))
             })
@@ -119,7 +125,8 @@ impl WaveArg {
 
 /// Tables are shared while any program still plays them, so the same cycle is analysed once.
 fn cached_wavetable(cycle: &[f64]) -> Arc<Wavetable> {
-    static MADE: LazyLock<Mutex<HashMap<Vec<u64>, Weak<Wavetable>>>> = LazyLock::new(Mutex::default);
+    static MADE: LazyLock<Mutex<HashMap<Vec<u64>, Weak<Wavetable>>>> =
+        LazyLock::new(Mutex::default);
     let key: Vec<u64> = cycle.iter().map(|v| v.to_bits()).collect();
     let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(table) = made.get(&key).and_then(Weak::upgrade) {
@@ -198,7 +205,11 @@ impl OpSpec {
         match &self.build {
             Build::Builtin(f) => f(args).map(Some),
             Build::Pan | Build::ToLayout => Ok(None),
-            Build::Convolve | Build::Fft | Build::Ifft | Build::SpectralFreeze | Build::SpectralDelay => Ok(None),
+            Build::Convolve
+            | Build::Fft
+            | Build::Ifft
+            | Build::SpectralFreeze
+            | Build::SpectralDelay => Ok(None),
         }
     }
 }
@@ -251,10 +262,26 @@ impl Registry {
                     }))
                 }),
             ),
-            filter("lpf", "A low-pass filter: lets frequencies below `cutoff` through. `res` adds resonance.", |_| Ok(Box::new(Svf::new(FilterMode::Low)))),
-            filter("hpf", "A high-pass filter: lets frequencies above `cutoff` through. `res` adds resonance.", |_| Ok(Box::new(Svf::new(FilterMode::High)))),
-            filter("bpf", "A band-pass filter: lets frequencies around `cutoff` through. `res` narrows the band.", |_| Ok(Box::new(Svf::new(FilterMode::Band)))),
-            filter("notch", "A notch filter: removes frequencies around `cutoff`. `res` narrows the notch.", |_| Ok(Box::new(Svf::new(FilterMode::Notch)))),
+            filter(
+                "lpf",
+                "A low-pass filter: lets frequencies below `cutoff` through. `res` adds resonance.",
+                |_| Ok(Box::new(Svf::new(FilterMode::Low))),
+            ),
+            filter(
+                "hpf",
+                "A high-pass filter: lets frequencies above `cutoff` through. `res` adds resonance.",
+                |_| Ok(Box::new(Svf::new(FilterMode::High))),
+            ),
+            filter(
+                "bpf",
+                "A band-pass filter: lets frequencies around `cutoff` through. `res` narrows the band.",
+                |_| Ok(Box::new(Svf::new(FilterMode::Band))),
+            ),
+            filter(
+                "notch",
+                "A notch filter: removes frequencies around `cutoff`. `res` narrows the notch.",
+                |_| Ok(Box::new(Svf::new(FilterMode::Notch))),
+            ),
             OpSpec::new(
                 "gain",
                 "Scales a signal by a gain in db or a plain factor.",
@@ -275,7 +302,9 @@ impl Registry {
                         "`delay` needs a constant `time`, or a `max:` that bounds a changing one".to_string()
                     })?;
                     if max > MAX_DELAY_SECONDS {
-                        return Err(format!("a delay can be at most {MAX_DELAY_SECONDS} seconds long"));
+                        return Err(format!(
+                            "a delay can be at most {MAX_DELAY_SECONDS} seconds long"
+                        ));
                     }
                     Ok(Box::new(Delay::new(max.max(0.0) as f32)))
                 }),
@@ -349,7 +378,11 @@ impl Registry {
             OpSpec::new(
                 "pan",
                 "Places a signal in the master layout. `azimuth` is in degrees (0 is straight ahead, positive is right); `spread` widens it.",
-                vec![req("x", SIGNAL), opt("azimuth", Kind::Signal(Unit::Angle)), opt("spread", SIGNAL)],
+                vec![
+                    req("x", SIGNAL),
+                    opt("azimuth", Kind::Signal(Unit::Angle)),
+                    opt("spread", SIGNAL),
+                ],
                 Build::Pan,
             ),
             OpSpec::new(
@@ -358,18 +391,50 @@ impl Registry {
                 vec![req("x", SIGNAL), req("layout", Kind::Layout)],
                 Build::ToLayout,
             ),
-            math("sin", "Sine of a signal (radians).", |_| Ok(Box::new(Func(Fn1::Sin)))),
-            math("cos", "Cosine of a signal (radians).", |_| Ok(Box::new(Func(Fn1::Cos)))),
-            math("tanh", "Soft-clips a signal into -1..1; a classic saturator.", |_| Ok(Box::new(Func(Fn1::Tanh)))),
-            math("exp", "e raised to a signal.", |_| Ok(Box::new(Func(Fn1::Exp)))),
-            math("abs", "Absolute value of a signal.", |_| Ok(Box::new(Func(Fn1::Abs)))),
-            math("tan", "Tangent of a signal (radians).", |_| Ok(Box::new(Func(Fn1::Tan)))),
-            math("floor", "The whole number at or below a signal.", |_| Ok(Box::new(Func(Fn1::Floor)))),
-            math("ceil", "The whole number at or above a signal.", |_| Ok(Box::new(Func(Fn1::Ceil)))),
-            math("sqrt", "Square root of a signal (0 for a negative one).", |_| Ok(Box::new(Func(Fn1::Sqrt)))),
-            math("log", "Natural logarithm of a signal.", |_| Ok(Box::new(Func(Fn1::Log)))),
-            math("sign", "1 for a positive signal, -1 for a negative one, 0 for zero.", |_| Ok(Box::new(Func(Fn1::Sign)))),
-            math("fract", "The part of a signal after the point: `x - floor(x)`.", |_| Ok(Box::new(Func(Fn1::Fract)))),
+            math("sin", "Sine of a signal (radians).", |_| {
+                Ok(Box::new(Func(Fn1::Sin)))
+            }),
+            math("cos", "Cosine of a signal (radians).", |_| {
+                Ok(Box::new(Func(Fn1::Cos)))
+            }),
+            math(
+                "tanh",
+                "Soft-clips a signal into -1..1; a classic saturator.",
+                |_| Ok(Box::new(Func(Fn1::Tanh))),
+            ),
+            math("exp", "e raised to a signal.", |_| {
+                Ok(Box::new(Func(Fn1::Exp)))
+            }),
+            math("abs", "Absolute value of a signal.", |_| {
+                Ok(Box::new(Func(Fn1::Abs)))
+            }),
+            math("tan", "Tangent of a signal (radians).", |_| {
+                Ok(Box::new(Func(Fn1::Tan)))
+            }),
+            math("floor", "The whole number at or below a signal.", |_| {
+                Ok(Box::new(Func(Fn1::Floor)))
+            }),
+            math("ceil", "The whole number at or above a signal.", |_| {
+                Ok(Box::new(Func(Fn1::Ceil)))
+            }),
+            math(
+                "sqrt",
+                "Square root of a signal (0 for a negative one).",
+                |_| Ok(Box::new(Func(Fn1::Sqrt))),
+            ),
+            math("log", "Natural logarithm of a signal.", |_| {
+                Ok(Box::new(Func(Fn1::Log)))
+            }),
+            math(
+                "sign",
+                "1 for a positive signal, -1 for a negative one, 0 for zero.",
+                |_| Ok(Box::new(Func(Fn1::Sign))),
+            ),
+            math(
+                "fract",
+                "The part of a signal after the point: `x - floor(x)`.",
+                |_| Ok(Box::new(Func(Fn1::Fract))),
+            ),
             // --- new opcodes ---
             OpSpec::new(
                 "lag",
@@ -389,11 +454,19 @@ impl Registry {
                     setting("max", Kind::Signal(Unit::Time)),
                 ],
                 Build::Builtin(|a| {
-                    let max = a.consts.get("max").or_else(|| a.consts.get("time")).copied().ok_or_else(|| {
-                        "`comb` needs a constant `time`, or a `max:` that bounds a changing one".to_string()
-                    })?;
+                    let max = a
+                        .consts
+                        .get("max")
+                        .or_else(|| a.consts.get("time"))
+                        .copied()
+                        .ok_or_else(|| {
+                            "`comb` needs a constant `time`, or a `max:` that bounds a changing one"
+                                .to_string()
+                        })?;
                     if max > MAX_DELAY_SECONDS {
-                        return Err(format!("a comb can be at most {MAX_DELAY_SECONDS} seconds long"));
+                        return Err(format!(
+                            "a comb can be at most {MAX_DELAY_SECONDS} seconds long"
+                        ));
                     }
                     Ok(Box::new(Comb::new(max.max(0.0) as f32)))
                 }),
@@ -412,7 +485,9 @@ impl Registry {
                         "`allpass` needs a constant `time`, or a `max:` that bounds a changing one".to_string()
                     })?;
                     if max > MAX_DELAY_SECONDS {
-                        return Err(format!("an allpass can be at most {MAX_DELAY_SECONDS} seconds long"));
+                        return Err(format!(
+                            "an allpass can be at most {MAX_DELAY_SECONDS} seconds long"
+                        ));
                     }
                     Ok(Box::new(Allpass::new(max.max(0.0) as f32)))
                 }),
@@ -484,7 +559,11 @@ impl Registry {
                 vec![req("freq", Kind::Signal(Unit::Hz))],
                 Build::Builtin(|_| Ok(Box::new(Impulse::default()))),
             ),
-            math("dc_block", "Removes DC offset from a signal without touching anything audible.", |_| Ok(Box::new(DcBlock::default()))),
+            math(
+                "dc_block",
+                "Removes DC offset from a signal without touching anything audible.",
+                |_| Ok(Box::new(DcBlock::default())),
+            ),
             OpSpec::new(
                 "follow",
                 "Nodes the amplitude envelope of a signal. Use it for sidechain effects, reactive visuals, and ducking.",
@@ -521,10 +600,7 @@ impl Registry {
             OpSpec::new(
                 "formant",
                 "Vowel formant filter. `vowel` morphs through A(0) E(0.25) I(0.5) O(0.75) U(1): `saw.formant(vowel: lfo)`.",
-                vec![
-                    req("x", SIGNAL),
-                    opt("vowel", SIGNAL),
-                ],
+                vec![req("x", SIGNAL), opt("vowel", SIGNAL)],
                 Build::Builtin(|_| Ok(Box::new(Formant::default()))),
             ),
             OpSpec::new(
@@ -551,36 +627,25 @@ impl Registry {
             OpSpec::new(
                 "convolve",
                 "Convolution with an impulse response buffer: `x.convolve(ir)`. Partitioned for real-time use; `mix` blends wet with dry. Latency is one block.",
-                vec![
-                    req("x", SIGNAL),
-                    opt("mix", SIGNAL),
-                ],
+                vec![req("x", SIGNAL), opt("mix", SIGNAL)],
                 Build::Convolve,
             ),
             OpSpec::new(
                 "fft",
                 "Forward STFT: `x.fft(1024)`. Analyses the signal into spectral bins for downstream spectral ops. The output is passed to `ifft` or spectral ops like `freeze`. Size must be a power of two, 128\u{2013}8192.",
-                vec![
-                    req("x", SIGNAL),
-                    setting("size", SIGNAL),
-                ],
+                vec![req("x", SIGNAL), setting("size", SIGNAL)],
                 Build::Fft,
             ),
             OpSpec::new(
                 "ifft",
                 "Inverse STFT: resynthesises a spectral chain back to audio. `chain.ifft()` where `chain` is the output of `fft` or a spectral op.",
-                vec![
-                    req("chain", SIGNAL),
-                ],
+                vec![req("chain", SIGNAL)],
                 Build::Ifft,
             ),
             OpSpec::new(
                 "freeze",
                 "Holds the current spectral frame when `freeze` > 0: `chain.freeze(trigger)`. While frozen, magnitudes are locked but phases keep advancing to avoid clicks.",
-                vec![
-                    req("chain", SIGNAL),
-                    opt("freeze", SIGNAL),
-                ],
+                vec![req("chain", SIGNAL), opt("freeze", SIGNAL)],
                 Build::SpectralFreeze,
             ),
             OpSpec::new(
@@ -630,11 +695,16 @@ mod tests {
     #[test]
     fn the_same_cycle_is_analysed_once_while_it_is_in_use() {
         let cycle = [0.0, 0.5, 1.0, 0.5, 0.0, -0.5, -1.0, -0.5, 0.123];
-        let (WaveArg::Table(a), WaveArg::Table(b)) = (WaveArg::table(&cycle).unwrap(), WaveArg::table(&cycle).unwrap()) else {
+        let (WaveArg::Table(a), WaveArg::Table(b)) = (
+            WaveArg::table(&cycle).unwrap(),
+            WaveArg::table(&cycle).unwrap(),
+        ) else {
             panic!("tables")
         };
         assert!(Arc::ptr_eq(&a, &b));
-        let WaveArg::Table(other) = WaveArg::table(&cycle[..8]).unwrap() else { panic!("table") };
+        let WaveArg::Table(other) = WaveArg::table(&cycle[..8]).unwrap() else {
+            panic!("table")
+        };
         assert!(!Arc::ptr_eq(&a, &other));
     }
 }

@@ -4,7 +4,7 @@ config { channels: stereo }
 tempo 96bpm
 
 bus space: stereo
-processor space_return {
+fx space_return {
   out = space.reverb(room: 0.8, damp: 0.4)
 }
 

@@ -64,7 +64,7 @@ impl QuantizeDefaults {
             StatementKind::Command => self.default,
             StatementKind::Definition => match s.key().and_then(|k| k.split(':').next()) {
                 Some("instr") => self.instrument,
-                Some("clip" | "processor") => self.clip,
+                Some("clip" | "fx") => self.clip,
                 Some("tempo") => self.tempo,
                 Some("ctl") => self.control.unwrap_or(self.default),
                 _ => self.default,
@@ -217,7 +217,7 @@ mod tests {
         let first = |src: &str| analyze(src).unwrap().remove(0);
         let unit = |src: &str| d.for_statement(&first(src), None).unit;
         assert_eq!(unit("instr a(f: hz) { osc(sine, f) }"), QuantizeUnit::Beat);
-        assert_eq!(unit("processor t { out = it }"), QuantizeUnit::Bar);
+        assert_eq!(unit("fx t { out = it }"), QuantizeUnit::Bar);
         assert_eq!(unit("t.play([c4])"), QuantizeUnit::Cycle);
         assert_eq!(unit("t.mute"), QuantizeUnit::Bar);
         assert_eq!(unit("a(f: 1hz) for 1beat"), QuantizeUnit::Now);

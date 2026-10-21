@@ -1,5 +1,5 @@
-use niminal_engine::{BLOCK, Buses, Voice};
 use niminal_compose::compile;
+use niminal_engine::{BLOCK, Buses, Voice};
 
 fn render(voice: &mut Voice, frames: usize, block: usize) -> Vec<f32> {
     let mut buses = Buses::new(&[]);

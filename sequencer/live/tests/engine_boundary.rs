@@ -1,6 +1,6 @@
-use niminal_server::{At, EngineServer, LogInput, Op, Session};
 use niminal_lang::Layout;
 use niminal_live::{InProcess, Live, Offline};
+use niminal_server::{At, EngineServer, LogInput, Op, Session};
 use std::sync::{Arc, Mutex};
 
 #[test]

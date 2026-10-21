@@ -17,7 +17,7 @@ instr lead(freq: hz, amp: db = -12db) {
 
 bus space
 
-processor keys_fx {
+fx keys_fx {
   out = keys_fx_audio.gain(-3db)
 }
 bus keys_fx_audio: stereo

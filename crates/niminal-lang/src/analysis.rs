@@ -24,11 +24,15 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Fn(d) => format!("fn:{}", d.name.name),
             Item::Const { name, .. } => format!("const:{}", name.name),
             Item::MidiOut(d) => format!("instr:{}", d.name.name),
-            Item::Sample(d) => format!("{}:{}", if d.is_kit { "kit" } else { "sample" }, d.name.name),
+            Item::Sample(d) => format!(
+                "{}:{}",
+                if d.is_kit { "kit" } else { "sample" },
+                d.name.name
+            ),
             Item::Bus(d) => format!("bus:{}", d.name.name),
             Item::Buffer(d) => format!("buffer:{}", d.name.name),
             Item::Node(d) => format!("node:{}", d.name.name),
-            Item::Processor(d) => format!("processor:{}", d.name.name),
+            Item::Fx(d) => format!("fx:{}", d.name.name),
             Item::Config(_) => "config".into(),
         };
         out.push(Statement {
@@ -46,7 +50,8 @@ mod tests {
 
     #[test]
     fn statements_are_classified_with_their_source() {
-        let src = "\ninstr a(f: hz) { osc(sine, f) }\nctl bright = 3khz\nnode t { instrument = a }\n";
+        let src =
+            "\ninstr a(f: hz) { osc(sine, f) }\nctl bright = 3khz\nnode t { instrument = a }\n";
         let s = analyze(src).unwrap();
         assert_eq!(s.len(), 3);
         assert_eq!(s[0].key, "instr:a");

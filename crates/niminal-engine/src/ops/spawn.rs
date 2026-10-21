@@ -9,7 +9,7 @@ struct Layer {
     active: bool,
 }
 
-/// A fixed pool of independently reset processors. Inputs are captured on a rising edge.
+/// A fixed pool of independently reset DSP effects. Inputs are captured on a rising edge.
 pub struct Spawn {
     template: Box<dyn Opcode>,
     layers: Vec<Layer>,

@@ -133,7 +133,11 @@ impl Samples {
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "csv" | "txt" | "dat"));
-        let tables = if is_text { read_text(path)? } else { read_wav(path)? };
+        let tables = if is_text {
+            read_text(path)?
+        } else {
+            read_wav(path)?
+        };
         let data = tables.into_iter().map(Arc::new).collect::<Vec<_>>();
         cache.insert(path.to_path_buf(), (modified, data.clone()));
         Ok(data)
@@ -259,14 +263,31 @@ mod tests {
     fn a_csv_is_a_table_for_each_column() {
         let dir = std::env::temp_dir().join(format!("niminal-csv-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("d.csv"), "time, level\n0, 0.5\n# a comment\n1, -0.25\n2, 1\n").unwrap();
+        std::fs::write(
+            dir.join("d.csv"),
+            "time, level\n0, 0.5\n# a comment\n1, -0.25\n2, 1\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("bad.csv"), "1 2\n3\n").unwrap();
         let samples = Samples::new(&dir);
         let level = samples.load_channel("d.csv", 1, None, None).unwrap();
         assert_eq!(level.len(), 3);
-        assert_eq!((level.get(0), level.get(1), level.get(2)), (0.5, -0.25, 1.0));
-        assert!(samples.load_channel("d.csv", 2, None, None).unwrap_err().contains("2 channels"));
-        assert!(samples.load("bad.csv").unwrap_err().contains("line 2 has 1 values"));
+        assert_eq!(
+            (level.get(0), level.get(1), level.get(2)),
+            (0.5, -0.25, 1.0)
+        );
+        assert!(
+            samples
+                .load_channel("d.csv", 2, None, None)
+                .unwrap_err()
+                .contains("2 channels")
+        );
+        assert!(
+            samples
+                .load("bad.csv")
+                .unwrap_err()
+                .contains("line 2 has 1 values")
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -7,11 +7,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use niminal_server::{ClientId, PROTOCOL_VERSION, Problem, problem_json};
 use niminal_compose::{ClipDef, SceneDef};
+use niminal_server::{ClientId, PROTOCOL_VERSION, Problem, problem_json};
 use serde_json::{Value, json};
 
-use crate::live::{Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, Live, ParsedEval, PendingInfo, Transport};
+use crate::live::{
+    Accepted, Begin, CancelDone, CancelJob, EvalDone, EvalJob, Landed, Live, ParsedEval,
+    PendingInfo, Transport,
+};
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -213,7 +216,8 @@ impl LiveServer {
         let eval = parsed.as_ref().filter(|r| {
             r.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
                 && is_api
-                && (method == Some("eval") && r["params"].get("source").is_some_and(Value::is_string)
+                && (method == Some("eval")
+                    && r["params"].get("source").is_some_and(Value::is_string)
                     || method != Some("eval") && prepared.is_some())
                 && self.clients.get(&client).is_some_and(|c| c.greeted)
         });
@@ -270,9 +274,7 @@ impl LiveServer {
                         let result = self.live.finish_eval(done);
                         self.eval_outcome(result)
                     }
-                    Done::Cancel(done) => {
-                        Ok(json!({ "cancelled": self.live.finish_cancel(done) }))
-                    }
+                    Done::Cancel(done) => Ok(json!({ "cancelled": self.live.finish_cancel(done) })),
                 })) {
                     Ok(result) => result,
                     Err(_) => Err(internal_error()),
@@ -332,7 +334,10 @@ impl LiveServer {
     /// Typed performance calls: build canonical source and evaluate it.
     fn api_eval(&mut self, method: &str, params: &Value) -> Result<Value, RpcError> {
         let source = api_source(method, params)?;
-        let quantize = params.get("quantize").and_then(Value::as_str).or(Some("now"));
+        let quantize = params
+            .get("quantize")
+            .and_then(Value::as_str)
+            .or(Some("now"));
         let result = self.live.eval(&source, quantize);
         self.eval_outcome(result)
     }
@@ -622,10 +627,12 @@ fn decode_def<T: serde::de::DeserializeOwned>(params: &Value, kind: &str) -> Res
 /// Build canonical `.nml` source for a typed performance RPC.
 fn api_source(method: &str, params: &Value) -> Result<String, RpcError> {
     let target = || {
-        params
-            .get("target")
-            .and_then(Value::as_str)
-            .ok_or_else(|| RpcError::new(INVALID_PARAMS, &format!("`{method}` needs a string `target`")))
+        params.get("target").and_then(Value::as_str).ok_or_else(|| {
+            RpcError::new(
+                INVALID_PARAMS,
+                &format!("`{method}` needs a string `target`"),
+            )
+        })
     };
     Ok(match method {
         "clip.define" => {
@@ -639,18 +646,15 @@ fn api_source(method: &str, params: &Value) -> Result<String, RpcError> {
         "launch" => {
             let mut src = format!("{}.start", target()?);
             if let Some(then) = params.get("then") {
-                let next = then
-                    .get("target")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        RpcError::new(INVALID_PARAMS, "`then` needs a string `target`")
-                    })?;
-                let after = then
-                    .get("after")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        RpcError::new(INVALID_PARAMS, "`then` needs a string `after`, as in `4bars`")
-                    })?;
+                let next = then.get("target").and_then(Value::as_str).ok_or_else(|| {
+                    RpcError::new(INVALID_PARAMS, "`then` needs a string `target`")
+                })?;
+                let after = then.get("after").and_then(Value::as_str).ok_or_else(|| {
+                    RpcError::new(
+                        INVALID_PARAMS,
+                        "`then` needs a string `after`, as in `4bars`",
+                    )
+                })?;
                 src.push_str(&format!(" then {next} after {after}"));
             }
             src

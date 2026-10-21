@@ -51,9 +51,8 @@ mod tests {
 
     #[test]
     fn top_level_for_expands_notes() {
-        let src = format!(
-            "{STAGE}\nfor i in 0..<4 {{\n  at i * 1beat pluck(freq: c4) for 1/2beat\n}}\n"
-        );
+        let src =
+            format!("{STAGE}\nfor i in 0..<4 {{\n  at i * 1beat pluck(freq: c4) for 1/2beat\n}}\n");
         let p = compile(&src).unwrap_or_else(|e| {
             panic!(
                 "{}",
@@ -75,9 +74,8 @@ mod tests {
 
     #[test]
     fn anonymous_clip_from_def() {
-        let s = schedule(
-            "\ndef make() {\n  clip {\n    notes: [c4 e4]\n  }\n}\nlead.play(make())\n",
-        );
+        let s =
+            schedule("\ndef make() {\n  clip {\n    notes: [c4 e4]\n  }\n}\nlead.play(make())\n");
         assert_eq!(midis(&s, 0.0, 2.0), vec![60, 64]);
     }
 

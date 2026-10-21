@@ -4,7 +4,7 @@ config { channels: stereo }
 tempo 128bpm
 
 bus glue: stereo
-processor glue_return {
+fx glue_return {
   out = glue.compress(threshold: -18db, ratio: 3, attack: 5ms, release: 80ms, makeup: 2db)
 }
 

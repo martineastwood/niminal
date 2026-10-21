@@ -8,9 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
-use niminal_lang::{Diagnostic, Expanded, Module, Span};
 use crate::ide::{SymbolKind, symbols};
 use crate::lexer::{Tok, lex};
+use niminal_lang::{Diagnostic, Expanded, Module, Span};
 
 /// Resolve the `use` lines of `source`, which lives in `dir`. A module is
 /// found next to the file that uses it, then in `lib` under `dir`, then among

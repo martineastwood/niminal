@@ -213,7 +213,10 @@ impl Session {
             return Err(vec![Problem::plain("there is nothing to define")]);
         }
         for statement in &statements {
-            let (kind, name) = statement.key.split_once(':').unwrap_or((&statement.key, ""));
+            let (kind, name) = statement
+                .key
+                .split_once(':')
+                .unwrap_or((&statement.key, ""));
             if name.starts_with("__routing_") {
                 return Err(vec![Problem::plain(
                     "names starting with __routing_ are reserved for private routing resources",
@@ -221,11 +224,21 @@ impl Session {
             }
             let allowed = matches!(
                 kind,
-                "instr" | "fn" | "const" | "ctl" | "bus" | "buffer" | "node" | "processor" | "sample" | "kit" | "config"
+                "instr"
+                    | "fn"
+                    | "const"
+                    | "ctl"
+                    | "bus"
+                    | "buffer"
+                    | "node"
+                    | "fx"
+                    | "sample"
+                    | "kit"
+                    | "config"
             );
             if !allowed {
                 let mut problem = Problem::plain(format!(
-                    "`{}` can't be sent here: `define` takes definitions such as instruments, processors, collection nodes, buses and controls",
+                    "`{}` can't be sent here: `define` takes definitions such as instruments, fx declarations, collection nodes, buses and controls",
                     first_line(&statement.text)
                 ));
                 problem.span = Some(niminal_lang::Span::new(
@@ -269,12 +282,7 @@ impl Session {
                 .collect();
             let from_snippet: HashMap<String, usize> = definitions
                 .iter()
-                .map(|s| {
-                    (
-                        scoped_key(meta.client, &s.key),
-                        s.offset,
-                    )
-                })
+                .map(|s| (scoped_key(meta.client, &s.key), s.offset))
                 .collect();
 
             // `new` forgets everything sent before this snippet; the output layout stays, since it can only be
@@ -407,7 +415,7 @@ impl Session {
                     )
             {
                 return Err(vec![Problem::plain(
-                    "unmap incompatible processor parameters in the same transaction before replacing DSP",
+                    "unmap incompatible fx parameters in the same transaction before replacing DSP",
                 )]);
             }
         }

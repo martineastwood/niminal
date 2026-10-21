@@ -68,10 +68,10 @@ The language server (`nimlive lsp`) works without a server for hover, completion
 ## What you get
 
 - **Live** — WebSocket server, REPL, `send`, and editor integration; quantize changes to musical time. `niminal server` is the audio server (the engine), with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
-- **Frontend API** — Browser, Node and Python clients can own private DSP definitions, route and modulate processors, stream WAV files, inspect voice lifecycle and DSP reports, view waveform scopes, capture live output and run independent offline exports. See the [engine API](docs/src/content/docs/reference/engine-api.md) and [client examples](clients/examples/).
+- **Frontend API** — Browser, Node and Python clients can own private fx definitions and instances, route and modulate them, stream WAV files, inspect voice lifecycle and DSP reports, view waveform scopes, capture live output and run independent offline exports. See the [engine API](docs/src/content/docs/reference/engine-api.md) and [client examples](clients/examples/).
 - **Offline** — `nimlive render` renders a piece to audio; `niminal replay` plays a log of timestamped engine events to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
-- **Routing** — Independent processor instances, private buses and sample-timed connection edits; client-owned mixer models.
+- **Routing** — Independent fx instances, private buses and sample-timed connection edits; client-owned mixer models.
 - **Extensible** — Write functions (down to the sample, with state) and instruments in the language, with the same tooling as built-ins.
 
 ## Repository layout

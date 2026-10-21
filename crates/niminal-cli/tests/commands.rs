@@ -11,7 +11,11 @@ fn niminal() -> Command {
 }
 
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 fn stdout(o: &std::process::Output) -> String {
@@ -41,7 +45,9 @@ impl Server {
                 .spawn()
                 .unwrap();
             let mut line = String::new();
-            BufReader::new(child.stdout.as_mut().unwrap()).read_line(&mut line).unwrap();
+            BufReader::new(child.stdout.as_mut().unwrap())
+                .read_line(&mut line)
+                .unwrap();
             if line.contains("niminal engine listening") {
                 return Server { child, port };
             }
@@ -84,15 +90,29 @@ fn a_recorded_session_replays_to_audio() {
     let text = std::fs::read_to_string(&log).unwrap();
     // the log is of what the engine was sent: the definition and the notes
     assert!(text.lines().next().unwrap().contains("\"send\""), "{text}");
-    assert!(text.contains("\"define\"") && text.contains("\"note\""), "{text}");
+    assert!(
+        text.contains("\"define\"") && text.contains("\"note\""),
+        "{text}"
+    );
 
     let wav = dir.join("set.wav");
     let out = niminal()
-        .args(["replay", log.to_str().unwrap(), "--out", wav.to_str().unwrap(), "--channels", "2"])
+        .args([
+            "replay",
+            log.to_str().unwrap(),
+            "--out",
+            wav.to_str().unwrap(),
+            "--channels",
+            "2",
+        ])
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).contains("replayed 1 input"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("replayed 1 input"),
+        "{}",
+        stdout(&out)
+    );
     let mut reader = hound::WavReader::open(&wav).unwrap();
     assert_eq!(reader.spec().channels, 2);
     let samples: Vec<f32> = reader.samples::<f32>().map(Result::unwrap).collect();
@@ -103,26 +123,53 @@ fn a_recorded_session_replays_to_audio() {
 
     // an unlimited replay can be asked for, and a bad layout is refused
     let raw = niminal()
-        .args(["replay", log.to_str().unwrap(), "--out", wav.to_str().unwrap(), "--no-limiter"])
+        .args([
+            "replay",
+            log.to_str().unwrap(),
+            "--out",
+            wav.to_str().unwrap(),
+            "--no-limiter",
+        ])
         .output()
         .unwrap();
     assert!(raw.status.success());
     let bad = niminal()
-        .args(["replay", log.to_str().unwrap(), "--out", wav.to_str().unwrap(), "--channels", "3"])
+        .args([
+            "replay",
+            log.to_str().unwrap(),
+            "--out",
+            wav.to_str().unwrap(),
+            "--channels",
+            "3",
+        ])
         .output()
         .unwrap();
-    assert!(stderr(&bad).contains("no standard layout"), "{}", stderr(&bad));
+    assert!(
+        stderr(&bad).contains("no standard layout"),
+        "{}",
+        stderr(&bad)
+    );
     std::fs::remove_dir_all(dir).ok();
 }
 
 #[test]
 fn the_server_refuses_what_it_cannot_do() {
-    let out = niminal().args(["server", "--no-audio", "--channels", "3"]).output().unwrap();
+    let out = niminal()
+        .args(["server", "--no-audio", "--channels", "3"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     assert!(stderr(&out).contains("no standard layout"));
 
     let out = niminal()
-        .args(["server", "--no-audio", "--listen", "0.0.0.0", "--port", &free_port().to_string()])
+        .args([
+            "server",
+            "--no-audio",
+            "--listen",
+            "0.0.0.0",
+            "--port",
+            &free_port().to_string(),
+        ])
         .output()
         .unwrap();
     assert!(!out.status.success());

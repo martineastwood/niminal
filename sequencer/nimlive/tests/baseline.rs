@@ -12,7 +12,11 @@ const SR: f32 = 48_000.0;
 const BAR: u64 = 96_000; // 120bpm in 4/4
 
 fn dimensions(channels: &[Vec<f32>]) -> String {
-    format!("{}x{}", channels.len(), channels.first().map_or(0, Vec::len))
+    format!(
+        "{}x{}",
+        channels.len(),
+        channels.first().map_or(0, Vec::len)
+    )
 }
 
 /// How loud each stretch of a render is: the RMS of every `DIGEST_BLOCK` samples of each channel. It is what
@@ -25,7 +29,14 @@ fn digest(channels: &[Vec<f32>]) -> String {
         .iter()
         .map(|c| {
             c.chunks(DIGEST_BLOCK)
-                .map(|b| format!("{:.5e}", (b.iter().map(|s| f64::from(*s) * f64::from(*s)).sum::<f64>() / b.len() as f64).sqrt()))
+                .map(|b| {
+                    format!(
+                        "{:.5e}",
+                        (b.iter().map(|s| f64::from(*s) * f64::from(*s)).sum::<f64>()
+                            / b.len() as f64)
+                            .sqrt()
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(" ")
         })
@@ -34,7 +45,10 @@ fn digest(channels: &[Vec<f32>]) -> String {
 }
 
 fn close(a: &str, b: &str) -> bool {
-    let (a, b): (Vec<&str>, Vec<&str>) = (a.split_whitespace().collect(), b.split_whitespace().collect());
+    let (a, b): (Vec<&str>, Vec<&str>) = (
+        a.split_whitespace().collect(),
+        b.split_whitespace().collect(),
+    );
     a.len() == b.len()
         && a.iter().zip(&b).all(|(x, y)| {
             if x == y {
@@ -55,19 +69,25 @@ fn check_reference(name: &str, lines: Vec<(String, String)>) {
         std::fs::write(&path, &text).unwrap();
         return;
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("no reference {}; run with REFERENCE=1", path.display()));
+    let expected = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("no reference {}; run with REFERENCE=1", path.display()));
     let (got, want): (Vec<_>, Vec<_>) = (text.lines().collect(), expected.lines().collect());
     assert_eq!(got.len(), want.len(), "{name}: different number of renders");
     for (g, w) in got.iter().zip(&want) {
         let (gn, gv) = g.split_once(": ").unwrap();
         let (wn, wv) = w.split_once(": ").unwrap();
         assert_eq!(gn, wn);
-        assert!(close(gv, wv), "{name}: {gn} no longer sounds like its reference");
+        assert!(
+            close(gv, wv),
+            "{name}: {gn} no longer sounds like its reference"
+        );
     }
 }
 
 fn baseline_file(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/baseline").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/baseline")
+        .join(name)
 }
 
 fn check(name: &str, lines: Vec<(String, String)>) {
@@ -77,7 +97,8 @@ fn check(name: &str, lines: Vec<(String, String)>) {
         std::fs::write(&path, &text).unwrap();
         return;
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("no baseline {}; run with BLESS=1", path.display()));
+    let expected = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("no baseline {}; run with BLESS=1", path.display()));
     assert_eq!(text, expected, "audio differs from {}", path.display());
 }
 
@@ -85,13 +106,19 @@ fn read_wav(path: &Path) -> Vec<Vec<f32>> {
     let mut r = hound::WavReader::open(path).unwrap();
     let n = usize::from(r.spec().channels);
     let samples: Vec<f32> = r.samples::<f32>().map(Result::unwrap).collect();
-    (0..n).map(|c| samples.iter().skip(c).step_by(n).copied().collect()).collect()
+    (0..n)
+        .map(|c| samples.iter().skip(c).step_by(n).copied().collect())
+        .collect()
 }
 
 #[test]
 fn examples_render_as_they_did() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let mut files: Vec<_> = std::fs::read_dir(&examples).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "nml")).collect();
+    let mut files: Vec<_> = std::fs::read_dir(&examples)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "nml"))
+        .collect();
     files.sort();
     let dir = std::env::temp_dir().join(format!("niminal-baseline-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -104,7 +131,11 @@ fn examples_render_as_they_did() {
         if file.file_name().is_some_and(|name| name == "song.nml") {
             command.arg("song");
         }
-        let run = command.args(["--bars", "4", "--out"]).arg(&out).output().unwrap();
+        let run = command
+            .args(["--bars", "4", "--out"])
+            .arg(&out)
+            .output()
+            .unwrap();
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
         let (value, sound) = if run.status.success() {
             let audio = read_wav(&out);
@@ -128,21 +159,45 @@ enum Step {
 }
 use Step::*;
 
-const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, cut: hz = 3khz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 120ms 0] * 0.3 }\ninstr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] * 0.3 }\nbus space\ninstr click(freq: hz) { space += osc(sine, freq) * env[1 0.5ms 0] * 0.3 }\nprocessor hall { out = space.reverb(room: 0.6, damp: 0.5) }\nclip lead { instrument: pluck }\nclip bass { instrument: pluck(cut: 800hz) }\nclip clicks { instrument: click }\nclip pad { instrument: organ\n  keys: midi.keys(channel: 1) }\nctl bright = 3khz\n";
+const SETUP: &str = "\ntempo 120bpm\ninstr pluck(freq: hz, cut: hz = 3khz) { osc(saw, freq).lpf(cutoff: cut) * env[1 | 120ms 0] * 0.3 }\ninstr organ(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] * 0.3 }\nbus space\ninstr click(freq: hz) { space += osc(sine, freq) * env[1 0.5ms 0] * 0.3 }\nfx hall { out = space.reverb(room: 0.6, damp: 0.5) }\nclip lead { instrument: pluck }\nclip bass { instrument: pluck(cut: 800hz) }\nclip clicks { instrument: click }\nclip pad { instrument: organ\n  keys: midi.keys(channel: 1) }\nctl bright = 3khz\n";
 
 /// Quantized evals, `launch ... then`, live commands, undo, a tempo ramp, cancel, hush, reset, held keys.
 fn live_script() -> Vec<(u64, Step)> {
     vec![
         (0, Eval(SETUP, Some("now"))),
-        (0, Eval("lead.play([c4 e4 g4 b4])\nbass.play([c2 ~ g2 ~])", Some("next beat"))),
-        (BAR / 2, Eval("clicks.play([a5 a5 a5 a5])", Some("next bar"))),
+        (
+            0,
+            Eval(
+                "lead.play([c4 e4 g4 b4])\nbass.play([c2 ~ g2 ~])",
+                Some("next beat"),
+            ),
+        ),
+        (
+            BAR / 2,
+            Eval("clicks.play([a5 a5 a5 a5])", Some("next bar")),
+        ),
         (BAR, Eval("lead.reverse", Some("next beat"))),
         (BAR + BAR / 3, Eval("lead.undo", Some("next bar"))),
-        (2 * BAR, Eval("scene one { lead: [c5 e5], bass: [c2] }\nscene two { lead: [g4 b4], bass: [g2] }\none.start then two after 1bar", Some("next bar"))),
+        (
+            2 * BAR,
+            Eval(
+                "scene one { lead: [c5 e5], bass: [c2] }\nscene two { lead: [g4 b4], bass: [g2] }\none.start then two after 1bar",
+                Some("next bar"),
+            ),
+        ),
         (2 * BAR + 1234, Eval("bass.mute", Some("next beat"))),
-        (3 * BAR, Eval("tempo 141bpm @ next bar over 2bars", Some("now"))),
-        (3 * BAR + 5000, Eval("lead.play([c4 d4 e4 f4 g4 a4 b4 c5])", Some("next bar"))),
-        (3 * BAR + 5100, Eval("bass.unmute\nbass.play([c3 c3])", Some("next 2bars"))),
+        (
+            3 * BAR,
+            Eval("tempo 141bpm @ next bar over 2bars", Some("now")),
+        ),
+        (
+            3 * BAR + 5000,
+            Eval("lead.play([c4 d4 e4 f4 g4 a4 b4 c5])", Some("next bar")),
+        ),
+        (
+            3 * BAR + 5100,
+            Eval("bass.unmute\nbass.play([c3 c3])", Some("next 2bars")),
+        ),
         (4 * BAR, Eval("clicks.play([a5 a5])", Some("next 4bars"))),
         (4 * BAR + 100, Cancel(None)),
         (4 * BAR + 20_000, Key(1, 60, 100)),
@@ -155,7 +210,10 @@ fn live_script() -> Vec<(u64, Step)> {
         (6 * BAR, Eval("hush", Some("next beat"))),
         (7 * BAR, Eval("lead.play([c4 e4])", Some("now"))),
         (7 * BAR + 10_000, Eval("reset", Some("now"))),
-        (7 * BAR + 40_000, Eval("lead.play([g4 g4])", Some("next bar"))),
+        (
+            7 * BAR + 40_000,
+            Eval("lead.play([g4 g4])", Some("next bar")),
+        ),
         (8 * BAR, Panic),
     ]
 }
@@ -194,7 +252,16 @@ fn play(script: &[(u64, Step)], frames: u64) -> Vec<Vec<f32>> {
 #[test]
 fn a_scripted_live_session_sounds_as_it_did() {
     let audio = play(&live_script(), 10 * BAR);
-    assert!(audio[0].iter().any(|s| s.abs() > 0.01), "the session made sound");
-    check("live_session.txt", vec![("live_session".into(), dimensions(&audio))]);
-    check_reference("live_reference.txt", vec![("live_session".into(), digest(&audio))]);
+    assert!(
+        audio[0].iter().any(|s| s.abs() > 0.01),
+        "the session made sound"
+    );
+    check(
+        "live_session.txt",
+        vec![("live_session".into(), dimensions(&audio))],
+    );
+    check_reference(
+        "live_reference.txt",
+        vec![("live_session".into(), digest(&audio))],
+    );
 }

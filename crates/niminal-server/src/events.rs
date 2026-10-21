@@ -56,7 +56,7 @@ pub enum Op {
         #[serde(default)]
         tag: Option<String>,
     },
-    /// Atomically edit this connection's processor instances, buses and audio connections.
+    /// Atomically edit this connection's fx instances, buses and audio connections.
     Routing {
         at: At,
         edits: Vec<crate::RoutingEdit>,
@@ -113,7 +113,7 @@ pub enum Op {
     /// no `dur` it is held until an `off`. With both it is held for at most `dur`.
     Note {
         target: String,
-        /// Optional collection/processor node, scoped to this connection.
+        /// Optional collection/fx node, scoped to this connection.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<String>,
         at: At,
@@ -180,7 +180,6 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },
-
 }
 
 /// What came of a batch.

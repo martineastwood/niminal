@@ -14,7 +14,11 @@ pub struct Bitcrush {
 
 impl Default for Bitcrush {
     fn default() -> Self {
-        Self { held: 0.0, phase: 0.0, sample_rate: 48_000.0 }
+        Self {
+            held: 0.0,
+            phase: 0.0,
+            sample_rate: 48_000.0,
+        }
     }
 }
 

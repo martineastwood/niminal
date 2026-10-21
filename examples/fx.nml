@@ -1,5 +1,5 @@
-// Clips select instruments. Processors own persistent effects. Buses collect shared sends.
-// Render with:  nimlive render examples/processors.nml --out processors.wav
+// Clips select instruments. Fx declarations own persistent effects. Buses collect shared sends.
+// Render with:  nimlive render examples/fx.nml --out fx.wav
 config { channels: stereo }
 tempo 110bpm
 
@@ -11,12 +11,12 @@ instr pluck(freq: hz, bright: 0..1 = 0.5) {
   voice.pan(azimuth: 0deg)
 }
 
-// Persistent processors read the shared buses.
-processor hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
-processor slap { out = echo.lpf(cutoff: 6khz).gain(-1db) }
+// Persistent fx declarations read the shared buses.
+fx hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
+fx slap { out = echo.lpf(cutoff: 6khz).gain(-1db) }
 
-// Each instrument routes its summed voices through a dedicated processor.
-processor bass_fx {
+// Each instrument routes its summed voices through a dedicated fx.
+fx bass_fx {
   out        = bass_fx_audio.lpf(cutoff: 1500hz).gain(-3db)
   space     += out.gain(-16db)
 }
@@ -27,7 +27,7 @@ instr bass_voice(freq: hz) {
 }
 clip bass { instrument: bass_voice }
 
-processor lead_fx {
+fx lead_fx {
   out        = lead_fx_audio.gain(-6db)
   space     += out.gain(-1db)
   echo      += out.delay(time: 3/8beat, feedback: 0.6).gain(-8db)

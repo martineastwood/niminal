@@ -1,8 +1,8 @@
 //! Sharing a block's voices among threads changes nothing about the sound, and costs no allocation.
 
-use niminal_server::{At, Op, Policy, Pool, RealtimeConfig, Session};
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
+use niminal_server::{At, Op, Policy, Pool, RealtimeConfig, Session};
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
 use std::cell::Cell;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ unsafe impl GlobalAlloc for Allocator {
 }
 
 /// Voices that send to a bus, one with a tail that dies away into tiny numbers, and a bus effect.
-const SETUP: &str = "bus space\ninstr pad(freq: hz) {\n  out = (osc(saw, freq) + osc(saw, freq * 1.01)).lpf(cutoff: freq * 4, res: 0.3) * env[0 3ms 1 | 400ms.exp 0]\n  space += out.gain(-9db)\n}\nnode pads { instrument = pad }\nprocessor room {\n  out = space.delay(time: 130ms, feedback: 0.5).lpf(cutoff: 3khz)\n}\n";
+const SETUP: &str = "bus space\ninstr pad(freq: hz) {\n  out = (osc(saw, freq) + osc(saw, freq * 1.01)).lpf(cutoff: freq * 4, res: 0.3) * env[0 3ms 1 | 400ms.exp 0]\n  space += out.gain(-9db)\n}\nnode pads { instrument = pad }\nfx room {\n  out = space.delay(time: 130ms, feedback: 0.5).lpf(cutoff: 3khz)\n}\n";
 
 fn notes(node: &str, count: usize) -> Vec<Op> {
     (0..count)
@@ -120,7 +120,10 @@ fn the_sound_is_the_same_however_many_threads_share_the_voices() {
         ACTIVE.store(false, SeqCst);
     }
     let frames = out[0].len();
-    assert!(out.iter().zip(&serial).all(|(o, s)| o[..] == s[..frames]), "live rendering with workers sounds different");
+    assert!(
+        out.iter().zip(&serial).all(|(o, s)| o[..] == s[..frames]),
+        "live rendering with workers sounds different"
+    );
     let (renderer_thread, workers) = (HEAP_WORK[0].load(Relaxed), HEAP_WORK[1].load(Relaxed));
     assert_eq!(renderer_thread, 0, "the rendering thread used the heap");
     assert_eq!(workers, 0, "the workers used the heap");
@@ -134,12 +137,15 @@ fn chunks_of_different_nodes_share_waves_without_changing_the_sound() {
     for t in &nodes {
         source += &format!("node {t} {{ instrument = pad }}\n");
     }
-    source += "processor room {\n  out = space.delay(time: 130ms, feedback: 0.5).lpf(cutoff: 3khz)\n}\n";
+    source += "fx room {\n  out = space.delay(time: 130ms, feedback: 0.5).lpf(cutoff: 3khz)\n}\n";
     let names: Vec<&str> = nodes.iter().map(String::as_str).collect();
     let serial = render(&source, &names, 10, 0);
     assert!(serial[0].iter().any(|x| x.abs() > 0.05), "silent");
     for workers in [1, 3, 7] {
-        assert!(render(&source, &names, 10, workers) == serial, "{workers} workers sound different");
+        assert!(
+            render(&source, &names, 10, workers) == serial,
+            "{workers} workers sound different"
+        );
     }
 }
 

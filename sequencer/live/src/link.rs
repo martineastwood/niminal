@@ -3,7 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use niminal_server::{ClientId, EngineError, EngineReply, EngineRequest, EngineServer, PROTOCOL_VERSION};
+use niminal_server::{
+    ClientId, EngineError, EngineReply, EngineRequest, EngineServer, PROTOCOL_VERSION,
+};
 use serde_json::Value;
 
 pub trait EngineLink: Send {
@@ -29,10 +31,16 @@ impl InProcess {
         let client = {
             let mut s = lock(&server);
             let client = s.connect_local();
-            let hello = EngineRequest::Hello { protocol: PROTOCOL_VERSION, client: Some("niminal-live".into()), token: None };
-            s.request(client, hello).expect("an engine in this process takes a hello");
+            let hello = EngineRequest::Hello {
+                protocol: PROTOCOL_VERSION,
+                client: Some("niminal-live".into()),
+                token: None,
+            };
+            s.request(client, hello)
+                .expect("an engine in this process takes a hello");
             let topics = vec!["notices".to_string()];
-            s.request(client, EngineRequest::Subscribe { topics }).expect("the notices topic exists");
+            s.request(client, EngineRequest::Subscribe { topics })
+                .expect("the notices topic exists");
             client
         };
         InProcess { server, client }
@@ -55,7 +63,10 @@ impl EngineLink for InProcess {
             .into_iter()
             .filter_map(|(_, text)| {
                 let message: Value = serde_json::from_str(&text).ok()?;
-                Some((message["method"].as_str()?.to_string(), message["params"].clone()))
+                Some((
+                    message["method"].as_str()?.to_string(),
+                    message["params"].clone(),
+                ))
             })
             .collect()
     }

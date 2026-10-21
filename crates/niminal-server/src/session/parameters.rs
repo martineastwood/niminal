@@ -156,11 +156,10 @@ impl Session {
                 if let Some(node) = self.program.node_index(&map.node()) {
                     if map.mapping.source.is_none()
                         && let Some(value) = self.mixer.chain_param_value(node, &map.param)
-                            && let Some(control) =
-                                self.controls.iter_mut().find(|c| c.key == map.param)
-                            {
-                                control.set(self.clock, value, 0);
-                            }
+                        && let Some(control) = self.controls.iter_mut().find(|c| c.key == map.param)
+                    {
+                        control.set(self.clock, value, 0);
+                    }
                     let mut prepared = prepare_mapping(&self.program, &map.mapping);
                     self.mixer
                         .swap_chain_mapping(node, &map.param, &mut prepared);
@@ -241,11 +240,12 @@ impl Session {
         }
         for map in latest.values() {
             if map.mapping.source.is_some()
-                && let Some(node) = self.program.node_index(&map.node()) {
-                    let mut mapping = prepare_mapping(&self.program, &map.mapping);
-                    self.mixer
-                        .swap_chain_mapping(node, &map.param, &mut mapping);
-                }
+                && let Some(node) = self.program.node_index(&map.node())
+            {
+                let mut mapping = prepare_mapping(&self.program, &map.mapping);
+                self.mixer
+                    .swap_chain_mapping(node, &map.param, &mut mapping);
+            }
         }
         let mut latest = std::collections::BTreeMap::new();
         for bind in &self.buffer_binds {
@@ -265,7 +265,7 @@ impl Session {
                 continue;
             };
             let Some(node) = node
-                .strip_prefix("__routing_processor_")
+                .strip_prefix("__routing_fx_")
                 .and_then(|r| r.split_once('_'))
                 .map(|(_, id)| id)
             else {

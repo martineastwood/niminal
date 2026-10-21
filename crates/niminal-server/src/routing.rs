@@ -1,8 +1,6 @@
 //! Client-owned instances and connections, independent of the DSP definitions they use.
-use niminal_engine::{ChainInput, GraphBuilder, Route, Src, NodeDef, execution_order};
-use niminal_lang::{
-    CompileOptions, ControlDef, Layout, Program, NodeInfo, Unit, compile_with,
-};
+use niminal_engine::{ChainInput, GraphBuilder, NodeDef, Route, Src, execution_order};
+use niminal_lang::{CompileOptions, ControlDef, Layout, NodeInfo, Program, Unit, compile_with};
 use niminal_score::{Tempo, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,12 +57,12 @@ pub enum RoutingEdit {
         #[serde(default)]
         offset: f32,
     },
-    /// A reusable processor signature and body, e.g. `(wet: num = 0.5) { out = it * wet }`.
-    Processor {
+    /// A reusable fx signature and body, e.g. `(wet: num = 0.5) { out = it * wet }`.
+    Fx {
         name: String,
         source: String,
     },
-    /// Use a compiled processor or collection as a template, removing its implicit instance.
+    /// Use a compiled fx or collection as a template, removing its implicit instance.
     Import {
         name: String,
         node: String,
@@ -80,7 +78,7 @@ pub enum RoutingEdit {
     Node {
         id: String,
         #[serde(default)]
-        processor: Option<String>,
+        fx: Option<String>,
         #[serde(default)]
         instrument: Option<String>,
         #[serde(default)]
@@ -100,7 +98,7 @@ pub enum RoutingEdit {
     /// Replace this instance's DSP, preserving matching parameters unless overridden.
     Replace {
         id: String,
-        processor: String,
+        fx: String,
         #[serde(default)]
         args: BTreeMap<String, Value>,
         #[serde(default)]
@@ -132,13 +130,13 @@ pub enum RoutingEdit {
     FreeBus {
         id: String,
     },
-    FreeProcessor {
+    FreeFx {
         name: String,
     },
     /// Reconcile a client's graph after a project edit without recreating retained instances.
     Retain {
         nodes: Vec<String>,
-        processors: Vec<String>,
+        fx_decls: Vec<String>,
         buses: Vec<String>,
         connections: Vec<String>,
     },
@@ -169,7 +167,7 @@ fn unity() -> f64 {
 }
 
 #[derive(Clone)]
-struct Processor {
+struct Fx {
     resources: BTreeMap<String, u64>,
     arrays: BTreeMap<String, Vec<String>>,
     node: NodeInfo,
@@ -191,7 +189,7 @@ struct Node {
     generation: u64,
     fade: f64,
     fade_until: u64,
-    processor: Option<(String, Processor)>,
+    fx: Option<(String, Fx)>,
     instrument: Option<String>,
     args: BTreeMap<String, Value>,
     glide: f64,
@@ -207,7 +205,7 @@ struct Connection {
 }
 #[derive(Clone, Default)]
 struct Patch {
-    processors: BTreeMap<String, Processor>,
+    fx_decls: BTreeMap<String, Fx>,
     buses: BTreeMap<String, Bus>,
     nodes: BTreeMap<String, Node>,
     connections: BTreeMap<String, Connection>,
@@ -265,7 +263,7 @@ fn control_value(control: &ControlDef, value: Value, tempo: Tempo) -> Result<f32
     if value.is_finite() {
         Ok(value)
     } else {
-        Err("processor parameters must be finite".into())
+        Err("fx parameters must be finite".into())
     }
 }
 
@@ -279,7 +277,7 @@ impl Routing {
                     .nodes
                     .iter()
                     .filter(|(_, node)| {
-                        node.processor
+                        node.fx
                             .as_ref()
                             .is_some_and(|(name, _)| name == "file_player")
                     })
@@ -293,18 +291,15 @@ impl Routing {
         id: &str,
         param: &str,
     ) -> Result<(u64, usize, usize), String> {
-        let processor = &self
+        let fx = &self
             .clients
             .get(&client)
             .and_then(|p| p.nodes.get(id))
-            .and_then(|n| n.processor.as_ref())
-            .ok_or("no processor node")?
+            .and_then(|n| n.fx.as_ref())
+            .ok_or("no fx node")?
             .1;
-        let key = *processor
-            .resources
-            .get(param)
-            .ok_or("no buffer parameter")?;
-        let count = processor
+        let key = *fx.resources.get(param).ok_or("no buffer parameter")?;
+        let count = fx
             .node
             .def
             .chain
@@ -313,8 +308,7 @@ impl Routing {
         Ok((
             key,
             count,
-            processor
-                .node
+            fx.node
                 .def
                 .chain
                 .as_ref()
@@ -326,7 +320,7 @@ impl Routing {
             .get(&client)?
             .nodes
             .get(id)?
-            .processor
+            .fx
             .as_ref()?
             .1
             .controls
@@ -340,17 +334,17 @@ impl Routing {
             .get(&client)
             .and_then(|p| p.nodes.get(id))
             .ok_or("no such node")?;
-        let processor = node
-            .processor
+        let fx = node
+            .fx
             .as_ref()
             .ok_or("collection node has no parameters")?;
-        if processor.0 == "file_player" && param != "rate" {
+        if fx.0 == "file_player" && param != "rate" {
             return Err("only file-player rate supports modulation".into());
         }
-        if processor.1.resources.contains_key(param) {
+        if fx.1.resources.contains_key(param) {
             return Err("use bind_buffer for resource parameters".into());
         }
-        if !processor.1.controls.iter().any(|c| param_name(c) == param) {
+        if !fx.1.controls.iter().any(|c| param_name(c) == param) {
             return Err(format!("no parameter `{param}`"));
         }
         Ok(format!("{}::{param}", node_name(client, id)))
@@ -407,7 +401,7 @@ impl Routing {
         self.clients.get(&client).is_none_or(|p| {
             p.nodes.is_empty()
                 && p.buses.is_empty()
-                && p.processors.is_empty()
+                && p.fx_decls.is_empty()
                 && p.connections.is_empty()
         })
     }
@@ -428,7 +422,7 @@ impl Routing {
                     valid(id)?;
                     let prefix = format!("__routing_template_{client}_{id}");
                     let (graph, controls) = crate::streaming::prepare(player, &prefix)?;
-                    let processor = Processor {
+                    let fx = Fx {
                         resources: BTreeMap::new(),
                         arrays: BTreeMap::new(),
                         node: NodeInfo {
@@ -449,7 +443,7 @@ impl Routing {
                         generation: previous.map_or(1, |n| n.generation + 1),
                         fade: 0.,
                         fade_until: 0,
-                        processor: Some(("file_player".into(), processor)),
+                        fx: Some(("file_player".into(), fx)),
                         instrument: None,
                         args: BTreeMap::new(),
                         glide: 0.,
@@ -464,11 +458,7 @@ impl Routing {
                     let node = patch
                         .nodes
                         .get_mut(id)
-                        .filter(|n| {
-                            n.processor
-                                .as_ref()
-                                .is_some_and(|(name, _)| name == "file_player")
-                        })
+                        .filter(|n| n.fx.as_ref().is_some_and(|(name, _)| name == "file_player"))
                         .ok_or("seek requires a file player")?;
                     node.generation += 1;
                     node.args.insert("seek".into(), Value::Seconds(*seconds));
@@ -480,15 +470,13 @@ impl Routing {
                 RoutingEdit::Map { .. }
                 | RoutingEdit::Array { .. }
                 | RoutingEdit::BindBuffer { .. } => {}
-                RoutingEdit::Processor { name, source } => {
+                RoutingEdit::Fx { name, source } => {
                     valid(name)?;
                     let internal = format!("__routing_template_{client}_{name}");
-                    let declaration = format!("processor {internal}{source}");
+                    let declaration = format!("fx {internal}{source}");
                     let statements = niminal_lang::analyze(&declaration).map_err(|d| d.message)?;
-                    if statements.len() != 1
-                        || statements[0].key != format!("processor:{internal}")
-                    {
-                        return Err("processor source must be one signature and body".into());
+                    if statements.len() != 1 || statements[0].key != format!("fx:{internal}") {
+                        return Err("fx source must be one signature and body".into());
                     }
                     let text = format!("{}\n{declaration}", definitions.source);
                     let mut options = options.clone();
@@ -512,9 +500,9 @@ impl Routing {
                         .nodes
                         .iter()
                         .find(|t| t.name == internal)
-                        .expect("the validated processor declaration compiled");
+                        .expect("the validated fx declaration compiled");
                     if template.instrument.is_some() {
-                        return Err("a processor processes audio; select instruments when creating nodes or sending notes".into());
+                        return Err("an fx processes audio; select instruments when creating nodes or sending notes".into());
                     }
                     let controls = compiled
                         .controls
@@ -522,9 +510,9 @@ impl Routing {
                         .filter(|c| c.name.starts_with(&format!("{internal}::")))
                         .cloned()
                         .collect();
-                    patch.processors.insert(
+                    patch.fx_decls.insert(
                         name.clone(),
-                        Processor {
+                        Fx {
                             resources: compiled
                                 .resource_controls
                                 .iter()
@@ -549,23 +537,26 @@ impl Routing {
                         },
                     );
                 }
-                RoutingEdit::Import { name, node: render_node } => {
+                RoutingEdit::Import {
+                    name,
+                    node: render_node,
+                } => {
                     valid(name)?;
                     let template = definitions
                         .nodes
                         .iter()
                         .skip(1)
                         .find(|t| t.name == *render_node)
-                        .ok_or_else(|| format!("no processor or collection template `{render_node}`"))?;
+                        .ok_or_else(|| format!("no fx or collection template `{render_node}`"))?;
                     let controls = definitions
                         .controls
                         .iter()
                         .filter(|c| c.name.starts_with(&format!("{render_node}::")))
                         .cloned()
                         .collect();
-                    patch.processors.insert(
+                    patch.fx_decls.insert(
                         name.clone(),
-                        Processor {
+                        Fx {
                             resources: definitions
                                 .resource_controls
                                 .iter()
@@ -633,19 +624,19 @@ impl Routing {
                 }
                 RoutingEdit::Node {
                     id,
-                    processor,
+                    fx,
                     instrument,
                     args,
                 } => {
                     valid(id)?;
-                    let template = processor
+                    let template = fx
                         .as_ref()
                         .map(|name| {
                             patch
-                                .processors
+                                .fx_decls
                                 .get(name)
                                 .cloned()
-                                .ok_or_else(|| format!("no processor `{name}`"))
+                                .ok_or_else(|| format!("no fx `{name}`"))
                         })
                         .transpose()?;
                     patch.nodes.insert(
@@ -659,7 +650,7 @@ impl Routing {
                             generation: patch.nodes.get(id).map_or(1, |n| n.generation + 1),
                             fade: 0.0,
                             fade_until: 0,
-                            processor: processor.clone().zip(template),
+                            fx: fx.clone().zip(template),
                             instrument: instrument.clone(),
                             args: args.clone(),
                             glide: 0.0,
@@ -689,30 +680,25 @@ impl Routing {
                         },
                     );
                 }
-                RoutingEdit::Replace {
-                    id,
-                    processor,
-                    args,
-                    fade,
-                } => {
+                RoutingEdit::Replace { id, fx, args, fade } => {
                     smoothing(*fade)?;
                     let mut template = patch
-                        .processors
-                        .get(processor)
+                        .fx_decls
+                        .get(fx)
                         .cloned()
-                        .ok_or_else(|| format!("no processor `{processor}`"))?;
+                        .ok_or_else(|| format!("no fx `{fx}`"))?;
                     let node = patch
                         .nodes
                         .get_mut(id)
                         .ok_or_else(|| format!("no node `{id}`"))?;
                     if *fade > 0.0 {
                         if at < node.fade_until {
-                            return Err("this processor is still crossfading; schedule its next replacement after the fade".into());
+                            return Err("this fx is still crossfading; schedule its next replacement after the fade".into());
                         }
                         let previous = node
-                            .processor
+                            .fx
                             .as_ref()
-                            .ok_or("crossfade requires an existing processor")?;
+                            .ok_or("crossfade requires an existing fx")?;
                         for p in [&previous.1, &template] {
                             if p.node
                                 .def
@@ -725,19 +711,20 @@ impl Routing {
                                     .as_ref()
                                     .is_some_and(|g| !g.send_buses().is_empty())
                             {
-                                return Err("crossfaded processors must use only incoming audio and explicit output connections".into());
+                                return Err("crossfaded fx declarations must use only incoming audio and explicit output connections".into());
                             }
                         }
                         if previous.1.node.def.chain.as_ref().map(|g| g.channels())
                             != template.node.def.chain.as_ref().map(|g| g.channels())
                         {
                             return Err(
-                                "crossfaded processors must have the same output layout".into()
+                                "crossfaded fx declarations must have the same output layout"
+                                    .into(),
                             );
                         }
                     }
-                    if let Some((_, previous)) = &node.processor {
-                        // a parameter the new processor shares keeps the value it holds now
+                    if let Some((_, previous)) = &node.fx {
+                        // a parameter the new fx shares keeps the value it holds now
                         for next in &mut template.controls {
                             if let Some(old) = previous.controls.iter().find(|old| {
                                 param_name(old) == param_name(next) && old.unit == next.unit
@@ -746,8 +733,8 @@ impl Routing {
                             }
                         }
                     }
-                    // explicit values survive only where the new processor has that parameter in the same unit
-                    let previous = node.processor.as_ref().map(|(_, processor)| processor);
+                    // explicit values survive only where the new fx has that parameter in the same unit
+                    let previous = node.fx.as_ref().map(|(_, fx)| fx);
                     node.args.retain(|param, _| {
                         let unit = template
                             .controls
@@ -761,7 +748,7 @@ impl Routing {
                         })
                     });
                     node.args.extend(args.clone());
-                    node.processor = Some((processor.clone(), template));
+                    node.fx = Some((fx.clone(), template));
                     node.generation += 1;
                     node.fade = *fade;
                     node.fade_until =
@@ -815,19 +802,19 @@ impl Routing {
                         return Err(format!("no bus `{id}`"));
                     }
                 }
-                RoutingEdit::FreeProcessor { name } => {
-                    if patch.processors.remove(name).is_none() {
-                        return Err(format!("no processor `{name}`"));
+                RoutingEdit::FreeFx { name } => {
+                    if patch.fx_decls.remove(name).is_none() {
+                        return Err(format!("no fx `{name}`"));
                     }
                 }
                 RoutingEdit::Retain {
                     nodes,
-                    processors,
+                    fx_decls,
                     buses,
                     connections,
                 } => {
                     patch.nodes.retain(|id, _| nodes.contains(id));
-                    patch.processors.retain(|id, _| processors.contains(id));
+                    patch.fx_decls.retain(|id, _| fx_decls.contains(id));
                     patch.buses.retain(|id, _| buses.contains(id));
                     patch.connections.retain(|id, _| connections.contains(id));
                 }
@@ -836,7 +823,7 @@ impl Routing {
         }
         if patch.nodes.len() + patch.connections.len() > 4096
             || patch.buses.len() > 1024
-            || patch.processors.len() > 1024
+            || patch.fx_decls.len() > 1024
         {
             return Err("routing capacity exceeded".into());
         }
@@ -858,10 +845,10 @@ impl Routing {
             .clients
             .values()
             .flat_map(|p| {
-                p.processors.values().chain(
+                p.fx_decls.values().chain(
                     p.nodes
                         .values()
-                        .filter_map(|n| n.processor.as_ref().map(|(_, template)| template)),
+                        .filter_map(|n| n.fx.as_ref().map(|(_, template)| template)),
                 )
             })
             .filter_map(|p| p.imported.as_deref())
@@ -914,7 +901,7 @@ impl Routing {
                     add_bus(
                         &mut program,
                         format!("{}__out", node_name(owner, id)),
-                        node.processor
+                        node.fx
                             .as_ref()
                             .map(|(_, template)| template)
                             .and_then(|p| p.node.def.chain.as_ref())
@@ -926,9 +913,9 @@ impl Routing {
         for (&owner, patch) in &self.clients {
             for (id, node) in &patch.nodes {
                 let name = node_name(owner, id);
-                let mut render_node = if let Some((_, processor)) = &node.processor {
-                    let mut render_node = processor.node.clone();
-                    let mapping: Vec<_> = processor
+                let mut render_node = if let Some((_, fx)) = &node.fx {
+                    let mut render_node = fx.node.clone();
+                    let mapping: Vec<_> = fx
                         .buses
                         .iter()
                         .map(|b| program.buses.iter().position(|n| n == b))
@@ -939,13 +926,13 @@ impl Routing {
                                 .get(*bus)
                                 .copied()
                                 .flatten()
-                                .ok_or("processor input bus was removed")?;
+                                .ok_or("fx input bus was removed")?;
                         }
                     }
                     if let Some(graph) = &render_node.def.chain {
                         render_node.def.chain = Some(Arc::new(graph.with_bus_mapping(&mapping)));
                     }
-                    render_node.instrument = processor
+                    render_node.instrument = fx
                         .instrument
                         .as_ref()
                         .map(|name| {
@@ -953,9 +940,7 @@ impl Routing {
                                 .instruments
                                 .iter()
                                 .position(|i| i.name == *name)
-                                .ok_or_else(|| {
-                                    format!("processor's instrument `{name}` was removed")
-                                })
+                                .ok_or_else(|| format!("fx's instrument `{name}` was removed"))
                         })
                         .transpose()?;
                     render_node.def.voice_sends = render_node
@@ -965,7 +950,7 @@ impl Routing {
                         .filter_map(|&b| mapping.get(b).copied().flatten())
                         .collect();
                     render_node.def.controls.clear();
-                    for control in &processor.controls {
+                    for control in &fx.controls {
                         let param = param_name(control);
                         let mut exposed = control.clone();
                         exposed.name = format!("{name}::{param}");
@@ -982,8 +967,7 @@ impl Routing {
                     }
                     if let Some(graph) = &render_node.def.chain {
                         let mut graph = graph.expose_controls(
-                            &processor
-                                .controls
+                            &fx.controls
                                 .iter()
                                 .map(|c| {
                                     (
@@ -1002,7 +986,7 @@ impl Routing {
                                 })
                                 .collect::<Vec<_>>(),
                         );
-                        for control in &processor.controls {
+                        for control in &fx.controls {
                             graph.set_param_range(
                                 &format!("{name}::{}", param_name(control)),
                                 control.range.map(|(lo, hi)| (lo as f32, hi as f32)),
@@ -1011,18 +995,18 @@ impl Routing {
                         render_node.def.chain = Some(Arc::new(graph));
                     }
                     for arg in node.args.keys() {
-                        if !processor
+                        if !fx
                             .controls
                             .iter()
                             .any(|control| param_name(control) == arg.as_str())
                         {
-                            return Err(format!("unknown processor parameter `{arg}`"));
+                            return Err(format!("unknown fx parameter `{arg}`"));
                         }
                     }
                     render_node
                 } else {
                     if !node.args.is_empty() {
-                        return Err("a collection node has no processor parameters".into());
+                        return Err("a collection node has no fx parameters".into());
                     }
                     NodeInfo::default()
                 };
@@ -1035,7 +1019,7 @@ impl Routing {
                             .ok_or_else(|| format!("no instrument `{instrument}`"))?,
                     );
                 }
-                // Voice collection is independent of the processor instance. Both feed the same input bus.
+                // Voice collection is independent of the fx instance. Both feed the same input bus.
                 let incoming = inputs[&(owner, id.clone())];
                 let collector = NodeInfo {
                     name: name.clone(),
@@ -1052,7 +1036,7 @@ impl Routing {
                     ..Default::default()
                 };
                 program.nodes.push(collector);
-                render_node.name = format!("__routing_processor_{owner}_{id}");
+                render_node.name = format!("__routing_fx_{owner}_{id}");
                 render_node.instrument = None;
                 render_node.def.meter = Some(node.meter.clone());
                 render_node.def.transition = (node.generation, node.fade);
@@ -1100,8 +1084,7 @@ impl Routing {
                 )?;
                 if from_channels != to_channels {
                     return Err(
-                        "connection channel layouts must match; insert a conversion processor"
-                            .into(),
+                        "connection channel layouts must match; insert a conversion fx".into(),
                     );
                 }
                 let source = source.expect("master was rejected as a source");
@@ -1230,8 +1213,8 @@ impl Routing {
                     .get(&client)
                     .and_then(|p| p.nodes.get(id))
                     .ok_or("no node")?;
-                let processor = &node.processor.as_ref().ok_or("no processor")?.1;
-                let paths = processor.arrays.get(param).ok_or("no array parameter")?;
+                let fx = &node.fx.as_ref().ok_or("no fx")?.1;
+                let paths = fx.arrays.get(param).ok_or("no array parameter")?;
                 if paths.len() != values.len() {
                     return Err("array shape differs".into());
                 }
@@ -1261,7 +1244,7 @@ impl Routing {
                             .controls
                             .iter()
                             .find(|c| c.key == key)
-                            .ok_or_else(|| format!("unknown processor parameter `{name}`"))?;
+                            .ok_or_else(|| format!("unknown fx parameter `{name}`"))?;
                         let value = control_value(def, *value, program.tempo)?;
                         updates.push((key, value, *glide));
                     }
@@ -1298,8 +1281,8 @@ impl Routing {
                 .nodes
                 .iter()
                 .map(|(id, node)| {
-                    let params = node.processor.as_ref().map(|(_, processor)| {
-                        processor
+                    let params = node.fx.as_ref().map(|(_, fx)| {
+                        fx
                             .controls
                             .iter()
                             .map(|c| {
@@ -1314,12 +1297,12 @@ impl Routing {
                             .collect::<Vec<_>>()
                     });
                     serde_json::json!({
-                        "id": id, "processor": node.processor.as_ref().map(|(name, _)| name),
-                        "player":node.processor.as_ref().and_then(|(_,p)|p.node.def.chain.as_ref()).and_then(|g|g.stream_cache()).map(|cache|serde_json::json!({"frames":cache.frames,"channels":cache.channels,"sample_rate":cache.sample_rate,"position":cache.requested.load(std::sync::atomic::Ordering::Relaxed)as f64/cache.sample_rate as f64,"underrun_frames":cache.underruns.load(std::sync::atomic::Ordering::Relaxed),"failed":cache.failed.load(std::sync::atomic::Ordering::Acquire)})),
+                        "id": id, "fx": node.fx.as_ref().map(|(name, _)| name),
+                        "player":node.fx.as_ref().and_then(|(_,p)|p.node.def.chain.as_ref()).and_then(|g|g.stream_cache()).map(|cache|serde_json::json!({"frames":cache.frames,"channels":cache.channels,"sample_rate":cache.sample_rate,"position":cache.requested.load(std::sync::atomic::Ordering::Relaxed)as f64/cache.sample_rate as f64,"underrun_frames":cache.underruns.load(std::sync::atomic::Ordering::Relaxed),"failed":cache.failed.load(std::sync::atomic::Ordering::Acquire)})),
                         "instrument": node.instrument, "args": node.args, "draining": node.draining,
                         "params": params.unwrap_or_default(),
-                        "arrays":node.processor.as_ref().map(|(_,p)|&p.arrays),
-                        "buffers":node.processor.as_ref().map(|(_,p)|p.resources.keys().collect::<Vec<_>>()),
+                        "arrays":node.fx.as_ref().map(|(_,p)|&p.arrays),
+                        "buffers":node.fx.as_ref().map(|(_,p)|p.resources.keys().collect::<Vec<_>>()),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1336,7 +1319,7 @@ impl Routing {
                 .collect::<Vec<_>>();
             serde_json::json!({
                 "client": client,
-                "processors": patch.processors.keys().collect::<Vec<_>>(),
+                "fx_decls": patch.fx_decls.keys().collect::<Vec<_>>(),
                 "buses": patch.buses.iter().map(|(id, b)| serde_json::json!({ "id": id, "channels": b.channels, "shared": b.shared })).collect::<Vec<_>>(),
                 "nodes": nodes,
                 "connections": connections,

@@ -13,15 +13,17 @@ pub struct SampleHold {
 }
 
 impl Opcode for SampleHold {
-    fn reset(&mut self) { self.value = 0.0; self.prev_trig = 0.0; }
+    fn reset(&mut self) {
+        self.value = 0.0;
+        self.prev_trig = 0.0;
+    }
 
-    fn name(&self) -> &str { "sample_hold" }
+    fn name(&self) -> &str {
+        "sample_hold"
+    }
 
     fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[
-            Port::required("x"),
-            Port::required("trigger"),
-        ];
+        const PORTS: &[Port] = &[Port::required("x"), Port::required("trigger")];
         PORTS
     }
 

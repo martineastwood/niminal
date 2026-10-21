@@ -15,7 +15,14 @@ fn main() {
     let level = g.add(Env::adsr(0.005, 0.2, 0.6, 0.3), &[]).unwrap();
     let osc = g.add(Osc::new(Wave::Saw), &[("freq", freq)]).unwrap();
     let lpf = g
-        .add(Svf::new(FilterMode::Low), &[("x", osc), ("cutoff", Src::Const(2000.0)), ("res", Src::Const(0.2))])
+        .add(
+            Svf::new(FilterMode::Low),
+            &[
+                ("x", osc),
+                ("cutoff", Src::Const(2000.0)),
+                ("res", Src::Const(0.2)),
+            ],
+        )
         .unwrap();
     let gained = g.add(Gain, &[("x", lpf), ("gain", amp)]).unwrap();
     let out = g.add(Mul, &[("a", gained), ("b", level)]).unwrap();
@@ -23,7 +30,12 @@ fn main() {
 
     let mut writer = hound::WavWriter::create(
         "saw_lead.wav",
-        hound::WavSpec { channels: 1, sample_rate: SR, bits_per_sample: 32, sample_format: hound::SampleFormat::Float },
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: SR,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        },
     )
     .unwrap();
 
@@ -33,9 +45,15 @@ fn main() {
     let mut buf = [0.0f32; BLOCK];
     while !voice.is_finished() {
         // Split the block at the note-off so the release is sample-accurate.
-        let n = if pos < note_off { BLOCK.min(note_off - pos) } else { BLOCK };
+        let n = if pos < note_off {
+            BLOCK.min(note_off - pos)
+        } else {
+            BLOCK
+        };
         voice.process(&mut buf[..n]);
-        buf[..n].iter().for_each(|s| writer.write_sample(*s).unwrap());
+        buf[..n]
+            .iter()
+            .for_each(|s| writer.write_sample(*s).unwrap());
         pos += n;
         if pos == note_off {
             voice.release();

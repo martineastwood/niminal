@@ -2,8 +2,8 @@
 
 #![allow(dead_code)]
 
-use niminal_server::{At, Op, Problem, Session};
 use niminal_score::Time;
+use niminal_server::{At, Op, Problem, Session};
 
 /// Put definitions in place at once, with the engine's own `define` event.
 pub trait Eval {

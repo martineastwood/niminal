@@ -33,7 +33,7 @@ One batched method for every timed thing a client can do. The whole batch is che
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
-| `note` | `target`, `at`, optional `to`, `args`, `dur`, `id`, `tag` | Play a note on a node or instrument. With `to`, play the named instrument into that connection’s collection/processor node. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
+| `note` | `target`, `at`, optional `to`, `args`, `dur`, `id`, `tag` | Play a note on a node or instrument. With `to`, play the named instrument into that connection’s collection/fx node. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
 | `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide` the parameter moves in a straight line to its new value. |
 | `off` | `id`, `at` | Release a note, so its envelope runs its release stage. An `off` before the note starts makes it a short blip. |
 | `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
@@ -51,16 +51,16 @@ Notes, controls and the rest in a batch are checked against the definitions in f
 
 Anything wrong in the batch → **-32001** and nothing is queued; each entry of **`problems`** has an **`event`** field with the index of the event it is about. A batch that doesn't parse → **-32602**.
 
-### Processor instances, buses and connections
+### Fx instances, buses and connections
 
-Protocol **4** includes a timed `routing` operation inside `events.send`. Each connection owns its routing IDs, processor definitions and instances. Two clients can use the same IDs without collisions. `hello` returns `client_id`; a client can deliberately expose a bus with `shared: true`, and another client can address it using that owner ID. All definitions and buffers sent through `define` are private to the connection, including functions, instruments, samples and controls. Reconnecting starts a fresh namespace. Only buses explicitly marked `shared` cross that boundary.
+Protocol **5** includes a timed `routing` operation inside `events.send`. Each connection owns its routing IDs, fx definitions and instances. Two clients can use the same IDs without collisions. `hello` returns `client_id`; a client can deliberately expose a bus with `shared: true`, and another client can address it using that owner ID. All definitions and buffers sent through `define` are private to the connection, including functions, instruments, samples and controls. Reconnecting starts a fresh namespace. Only buses explicitly marked `shared` cross that boundary.
 
 ```json
 { "method": "events.send", "params": { "events": [
   { "op": "routing", "at": 96000, "edits": [
-    { "op": "processor", "name": "echo", "source": "(feedback: num = 0.3) { out = it.delay(time: 120ms, feedback: feedback) }" },
+    { "op": "fx", "name": "echo", "source": "(feedback: num = 0.3) { out = it.delay(time: 120ms, feedback: feedback) }" },
     { "op": "node", "id": "channel" },
-    { "op": "node", "id": "return", "processor": "echo", "args": { "feedback": 0.5 } },
+    { "op": "node", "id": "return", "fx": "echo", "args": { "feedback": 0.5 } },
     { "op": "connect", "id": "send", "from": { "kind": "node", "id": "channel" }, "to": { "kind": "node", "id": "return" }, "gain": 0.25 },
     { "op": "connect", "id": "wet", "from": { "kind": "node", "id": "return" }, "to": { "kind": "master" } }
   ] },
@@ -68,31 +68,31 @@ Protocol **4** includes a timed `routing` operation inside `events.send`. Each c
 ] } }
 ```
 
-`processor` defines reusable DSP with a parameter signature and body. `it` is incoming audio. A node without a processor is a voice collection and audio pass-through. Notes choose their instrument independently with `target`, and their destination with `to`. Node output is silent until connected. Add a second channel-to-master connection for a dry path.
+`fx` defines reusable DSP with a parameter signature and body. `it` is incoming audio. A node without an fx instance is a voice collection and audio pass-through. Notes choose their instrument independently with `target`, and their destination with `to`. Node output is silent until connected. Add a second channel-to-master connection for a dry path.
 
 | Routing edit | Fields | Meaning |
 | --- | --- | --- |
-| `processor` | `name`, `source` | Compile a reusable processor. Updating or freeing the definition leaves existing instances on their original graph; creating/updating a node selects the current definition. |
+| `fx` | `name`, `source` | Compile a reusable fx definition. Updating or freeing it leaves existing instances on their original graph; creating/updating a node selects the current definition. |
 | `bus` | `id`, `channels`, optional `shared` | Create an audio bus, private by default. Channel count is 1–16 and remains fixed until freed. |
-| `node` | `id`, optional `processor`, `instrument`, `args` | Create or update an instance, preserving compatible DSP state. `instrument` is an optional default for notes targeting the node directly. |
-| `replace` | `id`, `processor`, optional `args`, `fade` | Replace instance DSP, optionally crossfading; see [live updates](#replacing-a-processor-live). |
+| `node` | `id`, optional `fx`, `instrument`, `args` | Create or update an instance, preserving compatible DSP state. `instrument` is an optional default for notes targeting the node directly. |
+| `replace` | `id`, `fx`, optional `args`, `fade` | Replace instance DSP, optionally crossfading; see [live updates](#replacing-an-fx-live). |
 | `gain` | `id`, `value`, optional `glide` | Move a connection gain using the lightweight control path. |
 | `set` | `id`, `args`, optional `glide` | Change instance parameters. `glide` is seconds, defaults to zero and is at most 60. |
 | `connect` | `id`, `from`, `to`, optional `gain`, `glide`, `delayed` | Create/update a connection. Gain defaults to 1; glide is seconds. A delayed connection arrives exactly one engine block later, allowing feedback. |
 | `disconnect` | `id` | Remove a connection while retaining both endpoints and their state. |
-| `drain` | `id` | Disconnect incoming connections, release held voices and refuse new notes. The processor and outgoing connections remain active so tails can ring. |
+| `drain` | `id` | Disconnect incoming connections, release held voices and refuse new notes. The fx and outgoing connections remain active so tails can ring. |
 | `free_node` | `id` | Immediately remove the node, its voices and attached connections. |
 | `free_bus` | `id` | Free an unused bus. A remaining connection/reference makes the batch fail. |
-| `free_processor` | `name` | Remove a reusable definition; existing instances continue. |
+| `free_fx` | `name` | Remove a reusable fx definition; existing instances continue. |
 | `clear` | none | Remove this connection’s graph. |
 
 Endpoints are `{ "kind": "node", "id": "…" }`, `{ "kind": "bus", "id": "…", "owner": 7 }` or `{ "kind": "master" }`. Omit a bus’s `owner` for your own bus. The master is an output, not a source. Routing IDs use 1–128 ASCII letters, digits or underscores. Channel widths must match; the compiler’s existing DSP layout conversions remain available when defining processing. Collection-node input uses the engine output layout.
 
-Changes are validated together, including cycle detection and ownership, before anything is queued. Non-delayed feedback is rejected. Connections reuse compiled DSP graphs; topology preparation and allocation happen outside rendering. Existing voices, compatible processor state and unchanged control values survive graph edits. Timing, cancellation, tags and replay work as for other engine events.
+Changes are validated together, including cycle detection and ownership, before anything is queued. Non-delayed feedback is rejected. Connections reuse compiled DSP graphs; topology preparation and allocation happen outside rendering. Existing voices, compatible fx state and unchanged control values survive graph edits. Timing, cancellation, tags and replay work as for other engine events.
 
 To remove an effect gracefully, send `drain` at the cutoff, then `free_node` later after the tail you want. There is no inferred tail deadline. Disconnecting the owning client removes its graph and records the cleanup for replay; other clients’ private graphs remain.
 
-The live client lowers each compiled node into a processor template plus a collection and processor instance, then submits explicit output connections. Two lowering edits are also available: `import` (`name`, `node`) imports a compiled DSP node template and consumes its implicit instance; `bus` can take `source` to use a named DSP bus. `retain` (`nodes`, `processors`, `buses`, `connections`, each an ID list) reconciles the owner’s graph without recreating retained instances. DSP expressions may still contain bus sends; those stay part of their compiled processor graph.
+The live client lowers each compiled node into an fx template plus a collection and fx instance, then submits explicit output connections. Two lowering edits are also available: `import` (`name`, `node`) imports a compiled DSP node template and consumes its implicit instance; `bus` can take `source` to use a named DSP bus. `retain` (`nodes`, `fx_decls`, `buses`, `connections`, each an ID list) reconciles the owner’s graph without recreating retained instances. DSP expressions may still contain bus sends; those stay part of their compiled fx graph.
 
 Send routing edits as a `routing` op through `events.send`.
 
@@ -159,7 +159,7 @@ In DSP, `buffer take = zeros(48000, channels: 2)` allocates stereo storage. Read
 
 ### Reports, scopes and voice lifecycle
 
-Subscribe to `reports`, then use a signal tap in an instrument or processor:
+Subscribe to `reports`, then use a signal tap in an instrument or fx:
 
 ```nml
 instr tone(freq: hz) {
@@ -173,9 +173,9 @@ instr tone(freq: hz) {
 
 Every accepted note returns a server `token` in the `events.send` result’s `notes` list, paired with its input `event` index. Subscribe to `voices` for `voice` notifications: `state` (`started`, `released`, `ended`, `dropped`), actual renderer `sample`, `token`, optional client `id`, `target`, `reason` and connection-local `sequence`. Reasons distinguish normal completion, choke, panic, invalid DSP, graph removal and capacity drops. `status.active_voices` supplies the current snapshot and sequence for resynchronization. A notification describes actual playback rather than acceptance into the queue.
 
-### Processor resource controls and file players
+### Fx resource controls and file players
 
-Processor signatures accept scalar, range, fixed array and buffer parameters. Routing edits `array {id,param,values,glide?}`, `bind_buffer {id,param,buffer}` and `map {id,param,source?,channel?,scale?,offset?}` update a node at the enclosing routing event’s sample. Mapping sources are `{kind:"control",name:"lfo"}` or `{kind:"bus",id:"mod",owner?:7}`. A null source unmaps and holds the last rendered value. Bus modulation has the same 32-sample delay as note modulation. Bindings accept resources created after the processor, and compatible bindings survive replacement. A replacement that removes or changes the unit of a mapped parameter requires an explicit unmap in the same transaction.
+Fx signatures accept scalar, range, fixed array and buffer parameters. Routing edits `array {id,param,values,glide?}`, `bind_buffer {id,param,buffer}` and `map {id,param,source?,channel?,scale?,offset?}` update a node at the enclosing routing event’s sample. Mapping sources are `{kind:"control",name:"lfo"}` or `{kind:"bus",id:"mod",owner?:7}`. A null source unmaps and holds the last rendered value. Bus modulation has the same 32-sample delay as note modulation. Bindings accept resources created after the fx, and compatible bindings survive replacement. A replacement that removes or changes the unit of a mapped parameter requires an explicit unmap in the same transaction.
 
 A routing `player` edit creates a disk-backed source node:
 
@@ -240,7 +240,7 @@ The engine's state. **Result** includes:
 - **`instruments`** — each instrument's `name` and `params` (`name`, `unit`, `default`, `range`)
 - **`nodes`**, **`buses`** — their names
 - **`load`** — what each of this connection's nodes costs to render: `name`, `voices` (sounding now), `voice_cpu` and `chain_cpu`, each a share of the time one block has (smoothed over recent blocks; `voice_cpu` sums every render thread's work, so it can pass 1). Collecting it costs the audio thread a clock read per node per block and never allocates or locks.
-- **`routing`** — this connection’s processor definitions, buses, instances and connections
+- **`routing`** — this connection’s fx definitions, buses, instances and connections
 - **`clients`** — this connection, when it has something going: `id`, `voices` (the ids of its held notes) and `waiting` (how many of its events are still waiting)
 
 ## Error codes
@@ -306,8 +306,8 @@ Use one `transaction` operation for coordinated definition and topology changes 
 { "op": "transaction", "at": 96000, "tag": "edit-42",
   "source": "instr tone(freq: hz) { osc(sine, freq) * env[0.1 | 100ms 0] }",
   "edits": [
-    { "op": "processor", "name": "echo", "source": "() { out = it.delay(time: 120ms, feedback: 0.3) }" },
-    { "op": "node", "id": "return", "processor": "echo" },
+    { "op": "fx", "name": "echo", "source": "() { out = it.delay(time: 120ms, feedback: 0.3) }" },
+    { "op": "node", "id": "return", "fx": "echo" },
     { "op": "connect", "id": "wet", "from": { "kind": "node", "id": "return" }, "to": { "kind": "master" } }
   ]
 }
@@ -317,20 +317,20 @@ Use one `transaction` operation for coordinated definition and topology changes 
 
 The JavaScript and Python clients expose `transaction(...)`. The live sequencer also uses transactions when submitting its definitions and routing.
 
-### Replacing a processor live
+### Replacing an fx live
 
-`replace` changes the processor of an existing node, retaining its connections and sounding voices:
+`replace` changes the fx of an existing node, retaining its connections and sounding voices:
 
 ```json
 { "op": "routing", "at": 96000, "edits": [
-  { "op": "processor", "name": "new_echo", "source": "(feedback: num = 0.3) { out = it.delay(time: 180ms, feedback: feedback) }" },
-  { "op": "replace", "id": "return", "processor": "new_echo", "fade": 0.02, "args": { "feedback": 0.45 } }
+  { "op": "fx", "name": "new_echo", "source": "(feedback: num = 0.3) { out = it.delay(time: 180ms, feedback: feedback) }" },
+  { "op": "replace", "id": "return", "fx": "new_echo", "fade": 0.02, "args": { "feedback": 0.45 } }
 ] }
 ```
 
-Matching parameter names and units retain their current values and smoothing trajectories unless overridden in `args`. New parameters use their defaults; removed parameters disappear. A zero `fade` (the default) preserves compatible DSP memory. A positive fade starts the new DSP fresh and linearly blends the old and new outputs for that duration, in seconds (maximum 60). The old processor receives the same incoming audio during the fade; its remaining tail is discarded at the end. Retired DSP storage is destroyed off the audio thread. To keep a longer independent tail, use separate instances and `drain` instead.
+Matching parameter names and units retain their current values and smoothing trajectories unless overridden in `args`. New parameters use their defaults; removed parameters disappear. A zero `fade` (the default) preserves compatible DSP memory. A positive fade starts the new DSP fresh and linearly blends the old and new outputs for that duration, in seconds (maximum 60). The old fx receives the same incoming audio during the fade; its remaining tail is discarded at the end. Retired DSP storage is destroyed off the audio thread. To keep a longer independent tail, use separate instances and `drain` instead.
 
-Crossfades require the same output width and processors whose audio inputs come only from `it`, with sends represented by explicit connections. Schedule successive crossfaded replacements after the preceding fade finishes. An unrelated graph edit preserves an ongoing fade. Panic cancels the fade and clears both processors' memory; subsequent notes use the replacement immediately.
+Crossfades require the same output width and fx definitions whose audio inputs come only from `it`, with sends represented by explicit connections. Schedule successive crossfaded replacements after the preceding fade finishes. An unrelated graph edit preserves an ongoing fade. Panic cancels the fade and clears both fx instances' memory; subsequent notes use the replacement immediately.
 
 ### Graph inspection and meters
 

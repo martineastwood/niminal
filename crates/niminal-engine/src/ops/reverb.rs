@@ -51,7 +51,13 @@ impl Reverb {
     /// The reverb for one channel of a multichannel signal. Each channel gets
     /// slightly different delay lengths, so they don't ring in lockstep.
     pub fn for_channel(channel: usize) -> Self {
-        let mut r = Reverb { combs: Vec::new(), allpasses: Vec::new(), quiet_run: 0, longest: 0, channel };
+        let mut r = Reverb {
+            combs: Vec::new(),
+            allpasses: Vec::new(),
+            quiet_run: 0,
+            longest: 0,
+            channel,
+        };
         r.prepare(48_000.0);
         r
     }
@@ -81,7 +87,11 @@ impl Opcode for Reverb {
     }
 
     fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[Port::required("x"), Port::optional("room", 0.5), Port::optional("damp", 0.5)];
+        const PORTS: &[Port] = &[
+            Port::required("x"),
+            Port::optional("room", 0.5),
+            Port::optional("damp", 0.5),
+        ];
         PORTS
     }
 
@@ -91,16 +101,31 @@ impl Opcode for Reverb {
 
     fn prepare(&mut self, sample_rate: f32) {
         let offset = self.channel * CHANNEL_SPREAD;
-        let scale = |n: usize| (((n + offset) as f32 * sample_rate / 44_100.0).round() as usize).max(1);
-        self.combs = COMB_LENGTHS.iter().map(|&n| Comb { buf: vec![0.0; scale(n)], pos: 0, store: 0.0 }).collect();
-        self.allpasses = ALLPASS_LENGTHS.iter().map(|&n| Allpass { buf: vec![0.0; scale(n)], pos: 0 }).collect();
+        let scale =
+            |n: usize| (((n + offset) as f32 * sample_rate / 44_100.0).round() as usize).max(1);
+        self.combs = COMB_LENGTHS
+            .iter()
+            .map(|&n| Comb {
+                buf: vec![0.0; scale(n)],
+                pos: 0,
+                store: 0.0,
+            })
+            .collect();
+        self.allpasses = ALLPASS_LENGTHS
+            .iter()
+            .map(|&n| Allpass {
+                buf: vec![0.0; scale(n)],
+                pos: 0,
+            })
+            .collect();
         self.longest = self.combs.iter().map(|c| c.buf.len()).max().unwrap_or(0);
         self.quiet_run = self.longest;
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
-            && self.channel == old.channel && self.longest == old.longest
+            && self.channel == old.channel
+            && self.longest == old.longest
         {
             std::mem::swap(&mut self.combs, &mut old.combs);
             std::mem::swap(&mut self.allpasses, &mut old.allpasses);
@@ -123,7 +148,9 @@ impl Opcode for Reverb {
                 c.buf[c.pos] = input + c.store * feedback;
                 loudest = loudest.max(c.buf[c.pos].abs());
                 c.pos += 1;
-                if c.pos == c.buf.len() { c.pos = 0; }
+                if c.pos == c.buf.len() {
+                    c.pos = 0;
+                }
                 sum += y;
             }
             for a in &mut self.allpasses {
@@ -131,11 +158,17 @@ impl Opcode for Reverb {
                 let y = buffered - sum;
                 a.buf[a.pos] = flush(sum + buffered * ALLPASS_FEEDBACK);
                 a.pos += 1;
-                if a.pos == a.buf.len() { a.pos = 0; }
+                if a.pos == a.buf.len() {
+                    a.pos = 0;
+                }
                 sum = y;
             }
             *o = sum * WET_SCALE;
-            self.quiet_run = if loudest < TAIL_LEVEL / OUTPUT_GAIN_BOUND { self.quiet_run + 1 } else { 0 };
+            self.quiet_run = if loudest < TAIL_LEVEL / OUTPUT_GAIN_BOUND {
+                self.quiet_run + 1
+            } else {
+                0
+            };
         }
     }
 

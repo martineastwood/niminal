@@ -1,7 +1,7 @@
 use std::fmt;
 
-use niminal_engine::{BLOCK, DEFAULT_CEILING, Master};
 use niminal_compose::Composition;
+use niminal_engine::{BLOCK, DEFAULT_CEILING, Master};
 use niminal_lang::Layout;
 use niminal_live::Offline;
 use niminal_score::Event;
@@ -239,7 +239,11 @@ fn finish(
 
 /// The captured stems, named for their node or bus and cut to `len` samples. The node that plays
 /// bare instruments is left out if it was never heard.
-fn name_stems(program: &Composition, captured: Option<niminal_engine::Stems>, len: usize) -> Vec<Stem> {
+fn name_stems(
+    program: &Composition,
+    captured: Option<niminal_engine::Stems>,
+    len: usize,
+) -> Vec<Stem> {
     let Some(captured) = captured else {
         return Vec::new();
     };

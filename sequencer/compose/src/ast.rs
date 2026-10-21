@@ -1,5 +1,5 @@
-use niminal_lang::Span;
 use crate::performance::Quantize;
+use niminal_lang::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ident {
@@ -25,7 +25,7 @@ pub enum Item {
     Bus(BusDecl),
     /// `buffer take = zeros(48000)` or `buffer take = 4bars`: shared writable table.
     Buffer(BufferDecl),
-    Processor(ProcessorDecl),
+    Fx(FxDecl),
     Sample(SampleDecl),
     MidiOut(MidiOutDecl),
     Arrangement(ArrangementDecl),
@@ -256,11 +256,11 @@ pub struct ConfigDecl {
     pub span: Span,
 }
 
-/// `processor name { out = ... }`
+/// `fx name { out = ... }`
 #[derive(Debug, Clone, PartialEq)]
-pub struct ProcessorDecl {
+pub struct FxDecl {
     pub name: Ident,
-    /// Live controls on processor declarations.
+    /// Live controls on fx declarations.
     pub params: Vec<ParamDef>,
     pub body: Vec<Stmt>,
     pub span: Span,

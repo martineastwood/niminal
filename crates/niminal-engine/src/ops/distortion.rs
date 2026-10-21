@@ -16,14 +16,21 @@ pub struct Distortion {
 
 impl Default for Distortion {
     fn default() -> Self {
-        Distortion { sample_rate: 48_000.0, tone_state: 0.0 }
+        Distortion {
+            sample_rate: 48_000.0,
+            tone_state: 0.0,
+        }
     }
 }
 
 impl Opcode for Distortion {
-    fn reset(&mut self) { self.tone_state = 0.0; }
+    fn reset(&mut self) {
+        self.tone_state = 0.0;
+    }
 
-    fn name(&self) -> &str { "distortion" }
+    fn name(&self) -> &str {
+        "distortion"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[

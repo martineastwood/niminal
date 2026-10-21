@@ -29,7 +29,12 @@ pub struct Pump {
 impl Pump {
     /// Send every waiting event the sound card has played up to (`played` is how many samples it has played),
     /// taking new ones from `incoming` first. Returns how many went.
-    pub fn run(&mut self, played: u64, incoming: &mut Consumer<MidiEvent>, ports: &mut impl Ports) -> usize {
+    pub fn run(
+        &mut self,
+        played: u64,
+        incoming: &mut Consumer<MidiEvent>,
+        ports: &mut impl Ports,
+    ) -> usize {
         while let Ok(event) = incoming.pop() {
             self.waiting.push_back(event);
         }
@@ -56,7 +61,18 @@ impl Pump {
     /// End every note that is still sounding, as when the server stops.
     pub fn all_off(&mut self, ports: &mut impl Ports) {
         for (port, channel, note) in self.sounding.drain(..) {
-            ports.send(&port, MidiEvent { at: 0, on: false, port: port.clone(), channel, note, velocity: 0 }.bytes());
+            ports.send(
+                &port,
+                MidiEvent {
+                    at: 0,
+                    on: false,
+                    port: port.clone(),
+                    channel,
+                    note,
+                    velocity: 0,
+                }
+                .bytes(),
+            );
         }
     }
 }
@@ -70,15 +86,22 @@ struct Devices {
 impl Devices {
     fn connect(name: &str) -> Result<MidiOutputConnection, String> {
         let output = Midir::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
-        let found = output.ports().into_iter().find(|p| output.port_name(p).is_ok_and(|n| n.contains(name)));
+        let found = output
+            .ports()
+            .into_iter()
+            .find(|p| output.port_name(p).is_ok_and(|n| n.contains(name)));
         match found {
-            Some(port) => output.connect(&port, "niminal-out").map_err(|e| format!("can't open MIDI output `{name}`: {e}")),
+            Some(port) => output
+                .connect(&port, "niminal-out")
+                .map_err(|e| format!("can't open MIDI output `{name}`: {e}")),
             None => {
                 // no such port: make one of that name for other software to listen to
                 #[cfg(unix)]
                 {
                     use midir::os::unix::VirtualOutput;
-                    output.create_virtual(name).map_err(|e| format!("can't make a MIDI output called `{name}`: {e}"))
+                    output
+                        .create_virtual(name)
+                        .map_err(|e| format!("can't make a MIDI output called `{name}`: {e}"))
                 }
                 #[cfg(not(unix))]
                 {
@@ -107,7 +130,9 @@ pub struct MidiOutput {
 }
 
 impl MidiOutput {
-    pub fn wake_handle(&self) -> thread::Thread { self.worker.wake_handle() }
+    pub fn wake_handle(&self) -> thread::Thread {
+        self.worker.wake_handle()
+    }
 
     /// `played` counts the samples the sound card has played; `incoming` brings the events.
     pub fn start(played: Arc<AtomicU64>, mut incoming: Consumer<MidiEvent>) -> MidiOutput {
@@ -118,8 +143,11 @@ impl MidiOutput {
                     pump.run(played.load(Ordering::Acquire), &mut incoming, &mut devices);
                     // New events wake this worker. Only poll the playback clock while a message
                     // is actually waiting for its timestamp, so unused MIDI has no timer churn.
-                    if pump.is_waiting() { thread::sleep(Duration::from_millis(1)); }
-                    else { thread::park(); }
+                    if pump.is_waiting() {
+                        thread::sleep(Duration::from_millis(1));
+                    } else {
+                        thread::park();
+                    }
                 }
                 pump.all_off(&mut devices);
             }),
@@ -141,7 +169,14 @@ mod tests {
     }
 
     fn event(at: u64, on: bool, note: u8) -> MidiEvent {
-        MidiEvent { at, on, port: "IAC".into(), channel: 1, note, velocity: 100 }
+        MidiEvent {
+            at,
+            on,
+            port: "IAC".into(),
+            channel: 1,
+            note,
+            velocity: 100,
+        }
     }
 
     #[test]
@@ -168,6 +203,10 @@ mod tests {
         pump.run(100, &mut rx, &mut ports);
         ports.0.clear();
         pump.all_off(&mut ports);
-        assert_eq!(ports.0, [("IAC".to_string(), [0x80, 60, 0])], "only the note still held");
+        assert_eq!(
+            ports.0,
+            [("IAC".to_string(), [0x80, 60, 0])],
+            "only the note still held"
+        );
     }
 }

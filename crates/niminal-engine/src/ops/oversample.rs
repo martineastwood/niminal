@@ -33,7 +33,7 @@ impl Fir {
     }
 }
 
-/// Band-limited rate conversion around a processor running at 2x, 4x or 8x.
+/// Band-limited rate conversion around DSP effects running at 2x, 4x or 8x.
 /// Both FIRs have eight base-rate samples of group delay.
 pub struct Oversample {
     op: Box<dyn Opcode>,

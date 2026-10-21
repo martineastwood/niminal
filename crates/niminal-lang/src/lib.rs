@@ -30,20 +30,17 @@ mod unit;
 pub use analysis::{Statement, analyze};
 
 pub use compile::{CompileOptions, compile, compile_with};
-pub use lower::{GAIN_PARAM, unknown_unit};
 pub use diag::{Diagnostic, Span, closest};
 pub use ide::{
-    OpInfo, ParamInfo, RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, builtin_ops,
-    symbols, waves,
+    OpInfo, ParamInfo, RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, builtin_ops, symbols, waves,
 };
 pub use layout::Layout;
 pub use lexer::{Tok, Token, lex};
+pub use lower::{GAIN_PARAM, unknown_unit};
 pub use modules::{Expanded, Import, Module, expand};
 pub use program::{
-    ArgError, ControlDef, Instrument, MidiNote, MidiTarget, NotePlan, OscTap, PITCH_PARAM, Param,
-    Program, NodeInfo, engine_value, resolve_target,
+    ArgError, ControlDef, Instrument, MidiNote, MidiTarget, NodeInfo, NotePlan, OscTap,
+    PITCH_PARAM, Param, Program, engine_value, resolve_target,
 };
 pub use sample::Samples;
 pub use unit::Unit;
-
-

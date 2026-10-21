@@ -1,5 +1,5 @@
-use niminal_server::{EngineServer, PROTOCOL_VERSION, RealtimeConfig, Session};
 use niminal_lang::Layout;
+use niminal_server::{EngineServer, PROTOCOL_VERSION, RealtimeConfig, Session};
 use serde_json::{Value, json};
 fn call(s: &mut EngineServer, c: u64, method: &str, params: Value) -> Value {
     let replies = s.handle(
@@ -140,14 +140,14 @@ fn running_voice_binds_new_stereo_buffer_in_realtime() {
     assert!(out[17..].iter().all(|v| *v == 0.5), "{out:?}");
 }
 #[test]
-fn processor_arrays_buffers_and_modulation_share_live_controls() {
+fn fx_arrays_buffers_and_modulation_share_live_controls() {
     let (mut s, a, _) = setup();
     send(
         &mut s,
         a,
         json!([{"op":"transaction","at":"now","source":"buffer first = zeros(8)\nbuffer second = zeros(8)\nctl level = 0.5.smooth(0ms)","edits":[
-            {"op":"processor","name":"fx","source":"(weights: [num] = [0.25, 0.5], source: buffer = first, level: num = 1) { out = weights.sum + source[0] + level }"},
-            {"op":"node","id":"fx","processor":"fx"},{"op":"connect","id":"out","from":{"kind":"node","id":"fx"},"to":{"kind":"master"}}
+            {"op":"fx","name":"fx","source":"(weights: [num] = [0.25, 0.5], source: buffer = first, level: num = 1) { out = weights.sum + source[0] + level }"},
+            {"op":"node","id":"fx","fx":"fx"},{"op":"connect","id":"out","from":{"kind":"node","id":"fx"},"to":{"kind":"master"}}
         ]}]),
     );
     assert!(s.session_mut().process(16)[0].iter().all(|v| *v == 1.75));

@@ -8,7 +8,7 @@ use support::Eval;
 
 const SR: f32 = 48_000.0;
 
-const SETUP: &str = "\nctl level = 0.0.smooth(0ms)\ninstr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ninstr flat(freq: hz) { level }\nnode lead { instrument = tone }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\nnode pad { instrument = tone\noutput = pad_audio}\nnode held { instrument = flat }\n";
+const SETUP: &str = "\nctl level = 0.0.smooth(0ms)\ninstr tone(freq: hz) { osc(sine, freq) * env[1 | 5ms 0] }\ninstr flat(freq: hz) { level }\nnode lead { instrument = tone }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\nnode pad { instrument = tone\noutput = pad_audio}\nnode held { instrument = flat }\n";
 
 /// A note on the `held` node that lasts the whole test.
 fn hold(s: &mut Session) {
@@ -138,7 +138,7 @@ fn a_control_moves_at_its_sample_with_a_glide() {
 }
 
 #[test]
-fn a_control_op_sets_a_processor_parameter() {
+fn a_control_op_sets_a_fx_parameter() {
     let render = |cutoff: f64| {
         let mut s = session();
         s.send_events(
@@ -664,8 +664,7 @@ fn tone(at: At, hz: f64) -> Op {
 #[test]
 fn a_define_lands_at_its_sample_and_the_next_note_uses_it() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(SINE, Some("now"))
-        .unwrap();
+    s.eval(SINE, Some("now")).unwrap();
     // beat 2 at 120bpm is sample 48000
     s.send_events(
         0,
@@ -679,9 +678,7 @@ fn a_define_lands_at_its_sample_and_the_next_note_uses_it() {
     let out = s.process(70_000).remove(0);
 
     let mut reference = Session::new(SR, Layout::Mono).without_limiter();
-    reference
-        .eval(SAW, Some("now"))
-        .unwrap();
+    reference.eval(SAW, Some("now")).unwrap();
     reference
         .send_events(0, vec![tone(At::Sample(48_000), 110.0)])
         .unwrap();
@@ -713,9 +710,7 @@ fn a_define_can_be_cancelled_by_its_tag_and_performance_statements_are_refused()
         .unwrap();
     let out = s.process(60_000).remove(0);
     let mut reference = Session::new(SR, Layout::Mono).without_limiter();
-    reference
-        .eval(SINE, Some("now"))
-        .unwrap();
+    reference.eval(SINE, Some("now")).unwrap();
     reference
         .send_events(0, vec![tone(At::Sample(48_000), 110.0)])
         .unwrap();
@@ -732,8 +727,7 @@ fn a_define_can_be_cancelled_by_its_tag_and_performance_statements_are_refused()
 #[test]
 fn a_batch_that_fails_leaves_nothing_behind() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(SINE, Some("now"))
-        .unwrap();
+    s.eval(SINE, Some("now")).unwrap();
     let problems = s
         .send_events(
             1,
@@ -766,8 +760,7 @@ fn a_batch_that_fails_leaves_nothing_behind() {
 #[test]
 fn notes_after_a_define_are_checked_against_the_program_it_makes() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(SINE, Some("now"))
-        .unwrap();
+    s.eval(SINE, Some("now")).unwrap();
     let new_node =
         "instr b(freq: hz) { osc(saw, freq) * env[1 | 5ms 0] }\nnode extra { instrument = b }";
     let note = |at| Op::Note {
@@ -818,8 +811,7 @@ fn a_forget_drops_every_definition_when_it_lands() {
 #[test]
 fn timestamped_definitions_and_notes_replay_to_the_same_audio() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval(SINE, Some("now"))
-        .unwrap();
+    s.eval(SINE, Some("now")).unwrap();
     s.send_events(
         1,
         vec![

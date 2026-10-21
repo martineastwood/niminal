@@ -1,6 +1,6 @@
-use niminal_server::{RealtimeConfig, RealtimeRenderer};
-use niminal_live::Offline;
 use niminal_lang::Layout;
+use niminal_live::Offline;
+use niminal_server::{RealtimeConfig, RealtimeRenderer};
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
 use std::cell::Cell;
 
@@ -88,7 +88,7 @@ fn live_graph_edits_and_panic_do_no_heap_work() {
     let mut out = [0.0; 256];
     measured(&mut r, 256, &mut out);
     s.eval(
-        "bus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: 2000hz)}\ninstr lead_voice(freq: hz) { voice = tone(freq: freq)\nlead_audio += voice }\nclip lead { instrument: lead_voice }",
+        "bus lead_audio\nfx lead_fx {out = lead_audio.lpf(cutoff: 2000hz)}\ninstr lead_voice(freq: hz) { voice = tone(freq: freq)\nlead_audio += voice }\nclip lead { instrument: lead_voice }",
         Some("now"),
     )
     .unwrap();
@@ -212,7 +212,7 @@ fn quantized_definitions_and_notes_land_inside_prepared_windows() {
 
 #[test]
 fn compatible_effect_memory_survives_a_prepared_swap() {
-    const SOURCE: &str = "bus space\ninstr click(freq: hz) { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nprocessor hall { out = space.reverb(room: 0.8, damp: 0.5) }\nclip src { instrument: click }\nsrc(freq: 100hz) for 1/8beat";
+    const SOURCE: &str = "bus space\ninstr click(freq: hz) { space += osc(sine, 1000hz) * env[1 0.5ms 0] }\nfx hall { out = space.reverb(room: 0.8, damp: 0.5) }\nclip src { instrument: click }\nsrc(freq: 100hz) for 1/8beat";
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(SOURCE, Some("now")).unwrap();
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -224,7 +224,7 @@ fn compatible_effect_memory_survives_a_prepared_swap() {
     while pos < actual.len() {
         if pos == 4096 {
             s.eval(
-                "processor hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }",
+                "fx hall { out = space.reverb(room: 0.8, damp: 0.5) * 1.0 }",
                 Some("now"),
             )
             .unwrap();
@@ -240,12 +240,8 @@ fn compatible_effect_memory_survives_a_prepared_swap() {
 #[test]
 fn overload_is_bounded_and_does_no_heap_work_during_rendering() {
     let mut s = session();
-    s.eval(
-        &"lead(freq: 440hz) for 1beat\n"
-        .repeat(32),
-        Some("now"),
-    )
-    .unwrap();
+    s.eval(&"lead(freq: 440hz) for 1beat\n".repeat(32), Some("now"))
+        .unwrap();
     let mut r = s.start_realtime(RealtimeConfig {
         max_voices: 2,
         ..RealtimeConfig::default()
@@ -270,7 +266,7 @@ fn repeated_edits_keep_audio_finite_and_render_without_heap_work() {
         if i % 5 == 0 {
             s.eval(
                 &format!(
-                    "bus lead_audio\nprocessor lead_fx {{out = lead_audio.lpf(cutoff: {}hz)}}\ninstr lead_voice(freq: hz) {{ voice = tone(freq: freq)\nlead_audio += voice }}\nclip lead {{ instrument: lead_voice }}",
+                    "bus lead_audio\nfx lead_fx {{out = lead_audio.lpf(cutoff: {}hz)}}\ninstr lead_voice(freq: hz) {{ voice = tone(freq: freq)\nlead_audio += voice }}\nclip lead {{ instrument: lead_voice }}",
                     1000 + i * 20
                 ),
                 Some("now"),
@@ -308,7 +304,7 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
         "ctl level = 1.0\nk = kit(\"kit\")\ninstr poly(freq: hz) { osc(saw, freq) * 0.001 * level }\n",
     );
     for i in 0..8 {
-        source.push_str(&format!("bus audio{i}\nprocessor fx{i} {{ out = audio{i}.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\ninstr voice{i}(freq: hz) {{ v = poly(freq: freq)\naudio{i} += v }}\nclip lead{i} {{ instrument: voice{i} }}\nlead{i}.play([c4 e4 g4 b4].fast(64))\n"));
+        source.push_str(&format!("bus audio{i}\nfx room{i} {{ out = audio{i}.lpf(cutoff: 2000hz).reverb(room: 0.5, damp: 0.5) }}\ninstr voice{i}(freq: hz) {{ v = poly(freq: freq)\naudio{i} += v }}\nclip lead{i} {{ instrument: voice{i} }}\nlead{i}.play([c4 e4 g4 b4].fast(64))\n"));
     }
     for i in 0..4 {
         source.push_str(&format!(
@@ -325,7 +321,7 @@ fn samples_polyphony_effects_and_quantized_edits_share_the_prepared_path() {
                 .unwrap();
         }
         if i % 50 == 0 {
-            s.eval(&format!("bus lead0_audio\nprocessor lead0_fx {{out = lead0_audio.lpf(cutoff: {}hz).reverb(room: 0.5, damp: 0.5)}}\ninstr lead0_voice(freq: hz) {{ voice = poly(freq: freq)\nlead0_audio += voice }}\nclip lead0 {{ instrument: lead0_voice }}", 2000 + i), Some("next beat")).unwrap();
+            s.eval(&format!("bus lead0_audio\nfx lead0_fx {{out = lead0_audio.lpf(cutoff: {}hz).reverb(room: 0.5, damp: 0.5)}}\ninstr lead0_voice(freq: hz) {{ voice = poly(freq: freq)\nlead0_audio += voice }}\nclip lead0 {{ instrument: lead0_voice }}", 2000 + i), Some("next beat")).unwrap();
         }
         s.prepare_realtime();
         measured(&mut r, 256, &mut out);
@@ -408,20 +404,14 @@ fn timestamped_controls_match_offline_audio_and_do_no_heap_work() {
     assert_eq!(out.as_slice(), expected);
     assert_eq!(r.metrics().late_events, 0);
     s.sync_realtime();
-    let replay = niminal_server::Session::replay(
-        48_000.0,
-        Layout::Mono,
-        &s.log(),
-        512,
-        false,
-    );
+    let replay = niminal_server::Session::replay(48_000.0, Layout::Mono, &s.log(), 512, false);
     assert_eq!(replay[0], out);
 }
 
 #[test]
 fn turning_controls_does_not_invalidate_prepared_notes_or_allocate_in_render() {
     let mut s = session();
-    s.eval("ctl cutoff = 2000hz\nbus lead_audio\nprocessor lead_fx {out = lead_audio.lpf(cutoff: cutoff)}\ninstr lead_voice(freq: hz) { voice = tone(freq: freq)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nlead.play([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
+    s.eval("ctl cutoff = 2000hz\nbus lead_audio\nfx lead_fx {out = lead_audio.lpf(cutoff: cutoff)}\ninstr lead_voice(freq: hz) { voice = tone(freq: freq)\nlead_audio += voice }\nclip lead { instrument: lead_voice }\nlead.play([c4 e4 g4 b4].fast(32))", Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = [0.0; 256];
     for i in 0..100 {
@@ -472,14 +462,17 @@ fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
     let niminal_server::LogInput::Send { ops, .. } = &log.last().unwrap().input else {
         panic!("the control is in the log");
     };
-    assert!(matches!(ops[0], niminal_server::Op::Control { at: niminal_server::At::Sample(64), .. }), "{ops:?}");
-    let replay = niminal_server::Session::replay(
-        48_000.0,
-        Layout::Mono,
-        &s.log(),
-        128,
-        false,
+    assert!(
+        matches!(
+            ops[0],
+            niminal_server::Op::Control {
+                at: niminal_server::At::Sample(64),
+                ..
+            }
+        ),
+        "{ops:?}"
     );
+    let replay = niminal_server::Session::replay(48_000.0, Layout::Mono, &s.log(), 128, false);
     assert_eq!(out, replay[0]);
 }
 
@@ -672,7 +665,7 @@ fn bend_pressure_and_the_pedal_sound_the_same_through_the_prepared_path() {
 
 #[test]
 fn a_lane_that_sets_a_node_parameter_sounds_the_same_prepared_as_direct_and_without_heap_work() {
-    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
     let play = |lane: &str| format!("clip c {{ notes: [c5 c5]\n{lane} }}\npad.play(c)");
     let direct = |lane: &str| {
         let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -684,7 +677,8 @@ fn a_lane_that_sets_a_node_parameter_sounds_the_same_prepared_as_direct_and_with
 
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(setup, Some("now")).unwrap();
-    s.eval(&play("pad_fx.cut: [300hz 8khz]"), Some("now")).unwrap();
+    s.eval(&play("pad_fx.cut: [300hz 8khz]"), Some("now"))
+        .unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut actual = vec![0.0; 96_000];
     for chunk in actual.chunks_mut(256) {
@@ -701,7 +695,7 @@ fn a_lane_that_sets_a_node_parameter_sounds_the_same_prepared_as_direct_and_with
 
 #[test]
 fn an_envelope_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_without_heap_work() {
-    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
     // a looping, curved sweep so that many short glides and restarts cross window edges
     let play = "clip c { notes: [c5 c5 c5 c5]\npad_fx.cut: env[300hz 1/4bar.exp 6khz 1/8bar.log 300hz].loop }\npad.play(c)";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -718,7 +712,14 @@ fn an_envelope_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_witho
         s.prepare_realtime();
         measured(&mut r, chunk.len(), chunk);
     }
-    assert_eq!(actual.iter().zip(&expected).position(|(a,b)| a!=b).map(|i|(i,actual[i],expected[i])), None);
+    assert_eq!(
+        actual
+            .iter()
+            .zip(&expected)
+            .position(|(a, b)| a != b)
+            .map(|i| (i, actual[i], expected[i])),
+        None
+    );
     assert_eq!(r.metrics().late_events, 0);
     let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
     assert!(rms(&expected) > 0.1);
@@ -726,7 +727,7 @@ fn an_envelope_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_witho
 
 #[test]
 fn a_signal_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_without_heap_work() {
-    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nprocessor pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
+    let setup = "instr saw1(freq: hz) { osc(saw, freq) * env[1 | 20ms 0] }\nbus pad_audio\nfx pad_fx(cut: hz = 300hz) {out = pad_audio.lpf(cutoff: cut)}\ninstr pad_voice(freq: hz) { voice = saw1(freq: freq)\npad_audio += voice }\nclip pad { instrument: pad_voice }";
     // an LFO across a bar, with no notes of its own to step on, under a held pad
     let play = "clip c { notes: [c5 c5 c5 c5]\npad_fx.cut: sine.range(300hz, 6khz) }\npad.play(c)";
     let mut direct = Offline::new(48_000.0, Layout::Mono).without_limiter();
@@ -743,7 +744,14 @@ fn a_signal_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_without_
         s.prepare_realtime();
         measured(&mut r, chunk.len(), chunk);
     }
-    assert_eq!(actual.iter().zip(&expected).position(|(a,b)| a!=b).map(|i|(i,actual[i],expected[i])), None);
+    assert_eq!(
+        actual
+            .iter()
+            .zip(&expected)
+            .position(|(a, b)| a != b)
+            .map(|i| (i, actual[i], expected[i])),
+        None
+    );
     assert_eq!(r.metrics().late_events, 0);
     let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
     assert!(rms(&expected) > 0.05);
@@ -751,7 +759,7 @@ fn a_signal_lane_moves_a_node_parameter_the_same_prepared_as_direct_and_without_
 
 #[test]
 fn a_device_input_reaches_a_node_that_reads_it_through_the_prepared_path() {
-    let code = "tempo 120bpm\nprocessor mic { out = input(1) * 0.5 }";
+    let code = "tempo 120bpm\nfx mic { out = input(1) * 0.5 }";
     let mut s = Offline::new(48_000.0, Layout::Mono).without_limiter();
     s.eval(code, Some("now")).unwrap();
     let mut r = s.start_realtime(RealtimeConfig::default());
@@ -901,4 +909,3 @@ fn random_live_edits_sound_the_same_prepared_as_direct() {
         "only {audible} of 12 seeds made sound, so the comparison proves little"
     );
 }
-

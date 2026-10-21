@@ -39,14 +39,25 @@ impl Noise {
     }
 
     pub fn new(color: NoiseColor, seed: Option<u32>, salt: u32) -> Self {
-        Noise { color, rng: 0xDEAD_BEEF, seed, salt, started: false, b0: 0.0, b1: 0.0, b2: 0.0 }
+        Noise {
+            color,
+            rng: 0xDEAD_BEEF,
+            seed,
+            salt,
+            started: false,
+            b0: 0.0,
+            b1: 0.0,
+            b2: 0.0,
+        }
     }
 
     /// Start the stream: from the seed, or from this source and note.
     fn start(&mut self, note: u32) {
         let mut x = match self.seed {
             Some(seed) => seed ^ 0xDEAD_BEEF,
-            None => 0xDEAD_BEEF ^ self.salt.wrapping_mul(0x9E37_79B1) ^ note.wrapping_mul(0x85EB_CA6B),
+            None => {
+                0xDEAD_BEEF ^ self.salt.wrapping_mul(0x9E37_79B1) ^ note.wrapping_mul(0x85EB_CA6B)
+            }
         };
         // murmur3's finalizer, so that neighbouring numbers don't start alike
         x ^= x >> 16;
