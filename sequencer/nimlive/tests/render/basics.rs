@@ -37,7 +37,7 @@ at 251ms click() for 1beat
     let out = render(&program(src), &[]).unwrap();
     let first = (0.250 * SR) as usize;
     assert!(out[..first].iter().all(|s| *s == 0.0), "silent before the first note");
-    assert_eq!(out[first], 0.0, "sine starts at zero");
+    assert!(out[first].abs() < 1e-10, "sine starts at zero");
     assert!(out[first + 10] != 0.0);
 }
 

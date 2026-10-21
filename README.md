@@ -4,7 +4,7 @@
 
 niminal is an audio server with its own DSP language. It compiles instruments, effects and routing, and plays timestamped events sent to it by any client. It knows nothing of clips, scenes, patterns or tempo.
 
-`nimlive` is the first client: a live-coding sequencer (the text-based Ableton) that adds clips, scenes, mini-notation patterns, tempo and quantized changes on top, and a VS Code extension to drive it. A tracker or a richer UI would be other clients of the same API.
+`nimlive` is the first client: a live-coding sequencer that adds clips, scenes, mini-notation patterns, tempo and quantized changes on top, and a VS Code extension to drive it. A tracker or a richer UI would be other clients of the same API.
 
 ```
 crates/      the audio server: engine, DSP language, WebSocket API, `niminal` CLI

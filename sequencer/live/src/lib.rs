@@ -1,4 +1,4 @@
-//! The niminal live sequencer: the text-based Ableton. Clips, scenes, patterns, quantized changes, live
+//! The niminal live sequencer. Clips, scenes, patterns, quantized changes, live
 //! commands and keyboards, played by sending timestamped events to the engine through its public API.
 //!
 //! A [`Live`] knows nothing of the engine's insides. It reads the engine's clock through an
